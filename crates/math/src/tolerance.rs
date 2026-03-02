@@ -58,3 +58,53 @@ impl Default for Tolerance {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_tolerance() {
+        let tol = Tolerance::new();
+        assert!((tol.linear - 1e-7).abs() < 1e-20);
+        assert!((tol.angular - 1e-12).abs() < 1e-20);
+    }
+
+    #[test]
+    fn loose_tolerance() {
+        let tol = Tolerance::loose();
+        assert!(tol.linear > Tolerance::new().linear);
+    }
+
+    #[test]
+    fn tight_tolerance() {
+        let tol = Tolerance::tight();
+        assert!(tol.linear < Tolerance::new().linear);
+    }
+
+    #[test]
+    fn approx_eq_within_tolerance() {
+        let tol = Tolerance::new();
+        assert!(tol.approx_eq(1.0, 1.0 + 1e-8));
+        assert!(tol.approx_eq(0.0, 1e-8));
+    }
+
+    #[test]
+    fn approx_eq_outside_tolerance() {
+        let tol = Tolerance::new();
+        assert!(!tol.approx_eq(1.0, 1.001));
+        assert!(!tol.approx_eq(0.0, 0.001));
+    }
+
+    #[test]
+    fn approx_eq_exact() {
+        let tol = Tolerance::new();
+        assert!(tol.approx_eq(42.0, 42.0));
+        assert!(tol.approx_eq(0.0, 0.0));
+    }
+
+    #[test]
+    fn default_matches_new() {
+        assert_eq!(Tolerance::default(), Tolerance::new());
+    }
+}

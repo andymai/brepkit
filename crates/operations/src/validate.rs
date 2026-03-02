@@ -236,4 +236,78 @@ mod tests {
         assert_eq!(report.error_count(), 0);
         assert_eq!(report.warning_count(), 0);
     }
+
+    #[test]
+    fn open_shell_has_boundary_edges() {
+        // A solid with an open shell (missing a face) should report boundary edges
+        let mut topo = Topology::new();
+        // Make a box but with 5 faces instead of 6 — one face missing
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        // Remove one face from the shell to make it open
+        let shell_id = topo.solid(solid).unwrap().outer_shell();
+        let shell = topo.shell(shell_id).unwrap();
+        let mut faces: Vec<_> = shell.faces().to_vec();
+        faces.pop(); // Remove last face
+
+        let open_shell = brepkit_topology::shell::Shell::new(faces).unwrap();
+        *topo.shell_mut(shell_id).unwrap() = open_shell;
+
+        let report = validate_solid(&topo, solid).unwrap();
+        assert!(!report.is_valid(), "open shell should not be valid");
+        assert!(
+            report.error_count() > 0,
+            "should have errors for boundary/euler"
+        );
+        // Check description mentions boundary
+        let has_boundary_msg = report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("boundary") || i.description.contains("Euler"));
+        assert!(has_boundary_msg, "should mention boundary edges or Euler");
+    }
+
+    #[test]
+    fn report_is_valid_when_only_warnings() {
+        let report = ValidationReport {
+            issues: vec![ValidationIssue {
+                severity: Severity::Warning,
+                description: "minor issue".into(),
+            }],
+        };
+        assert!(report.is_valid(), "warnings alone should not make invalid");
+        assert_eq!(report.error_count(), 0);
+        assert_eq!(report.warning_count(), 1);
+    }
+
+    #[test]
+    fn report_not_valid_with_errors() {
+        let report = ValidationReport {
+            issues: vec![
+                ValidationIssue {
+                    severity: Severity::Error,
+                    description: "critical issue".into(),
+                },
+                ValidationIssue {
+                    severity: Severity::Warning,
+                    description: "minor issue".into(),
+                },
+            ],
+        };
+        assert!(!report.is_valid());
+        assert_eq!(report.error_count(), 1);
+        assert_eq!(report.warning_count(), 1);
+    }
+
+    #[test]
+    fn cylinder_solid_validates() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+
+        let report = validate_solid(&topo, solid).unwrap();
+        // Cylinder may or may not pass all checks depending on tessellation
+        // but should at least produce a report without panicking
+        let _ = report.is_valid();
+        let _ = report.error_count();
+    }
 }

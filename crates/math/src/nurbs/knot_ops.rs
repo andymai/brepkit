@@ -391,6 +391,110 @@ mod tests {
         assert!((pr.x() - pc_end.x()).abs() < 1e-12);
     }
 
+    #[test]
+    fn knot_insert_zero_times_returns_clone() {
+        let c = cubic_bezier();
+        let inserted = curve_knot_insert(&c, 0.5, 0).expect("valid");
+        assert_eq!(inserted.knots().len(), c.knots().len());
+    }
+
+    #[test]
+    fn surface_knot_insert_u_preserves_shape() {
+        // Bilinear surface
+        let surf = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+                vec![Point3::new(0.0, 1.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .expect("valid surface");
+
+        let refined = surface_knot_insert_u(&surf, 0.5, 1).expect("valid insert");
+
+        // The shape should be preserved at sample points
+        for i in 0..=4 {
+            for j in 0..=4 {
+                let u = i as f64 / 4.0;
+                let v = j as f64 / 4.0;
+                let p1 = surf.evaluate(u, v);
+                let p2 = refined.evaluate(u, v);
+                assert!(
+                    (p1.x() - p2.x()).abs() < 1e-10
+                        && (p1.y() - p2.y()).abs() < 1e-10
+                        && (p1.z() - p2.z()).abs() < 1e-10,
+                    "shape mismatch at ({u}, {v})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn surface_knot_insert_v_preserves_shape() {
+        let surf = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+                vec![Point3::new(0.0, 1.0, 0.5), Point3::new(1.0, 1.0, 0.5)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .expect("valid surface");
+
+        let refined = surface_knot_insert_v(&surf, 0.5, 1).expect("valid insert");
+
+        for i in 0..=4 {
+            for j in 0..=4 {
+                let u = i as f64 / 4.0;
+                let v = j as f64 / 4.0;
+                let p1 = surf.evaluate(u, v);
+                let p2 = refined.evaluate(u, v);
+                assert!(
+                    (p1.x() - p2.x()).abs() < 1e-10
+                        && (p1.y() - p2.y()).abs() < 1e-10
+                        && (p1.z() - p2.z()).abs() < 1e-10,
+                    "shape mismatch at ({u}, {v})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn curve_split_preserves_endpoints() {
+        let c = cubic_bezier();
+        let (left, right) = curve_split(&c, 0.5).expect("valid split");
+
+        // Left half should start where original starts
+        let l_start = left.evaluate(0.0);
+        let c_start = c.evaluate(0.0);
+        assert!(
+            (l_start.x() - c_start.x()).abs() < 1e-10,
+            "left start should match original start"
+        );
+
+        // Right half should end where original ends
+        let r_end = right.evaluate(1.0);
+        let c_end = c.evaluate(1.0);
+        assert!(
+            (r_end.x() - c_end.x()).abs() < 1e-10,
+            "right end should match original end"
+        );
+    }
+
+    #[test]
+    fn knot_refine_empty_list() {
+        let c = cubic_bezier();
+        let refined = curve_knot_refine(&c, &[]).expect("valid");
+        assert_eq!(refined.knots().len(), c.knots().len());
+    }
+
     use proptest::prelude::*;
 
     proptest! {

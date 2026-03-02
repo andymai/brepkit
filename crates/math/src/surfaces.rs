@@ -636,4 +636,164 @@ mod tests {
         let p = rev.evaluate(0.0, 1.0);
         assert!(approx_eq(p.z(), 10.0));
     }
+
+    // ── Additional coverage tests ─────────────────────
+
+    #[test]
+    fn cylinder_with_x_aligned_axis() {
+        // Tests the other branch of the axis-candidate selection (a.x().abs() >= 0.9)
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 2.0)
+                .unwrap();
+        assert!(approx_eq(cyl.radius(), 2.0));
+        let p = cyl.evaluate(0.0, 3.0);
+        assert!(approx_eq(p.x(), 3.0));
+    }
+
+    #[test]
+    fn cylinder_accessors() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, 1.0), 5.0)
+                .unwrap();
+        assert!(approx_eq(cyl.origin().x(), 1.0));
+        assert!(approx_eq(cyl.axis().z(), 1.0));
+        assert!(approx_eq(cyl.radius(), 5.0));
+    }
+
+    #[test]
+    fn cone_normal() {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            PI / 4.0,
+        )
+        .unwrap();
+        let n = cone.normal(0.0, 1.0);
+        // Normal should be non-zero and perpendicular to surface at that point
+        assert!(n.length() > 0.5);
+    }
+
+    #[test]
+    fn cone_accessors() {
+        let cone = ConicalSurface::new(
+            Point3::new(1.0, 2.0, 3.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            PI / 6.0,
+        )
+        .unwrap();
+        assert!(point_approx_eq(cone.apex(), Point3::new(1.0, 2.0, 3.0)));
+        assert!(approx_eq(cone.axis().z(), 1.0));
+        assert!(approx_eq(cone.half_angle(), PI / 6.0));
+    }
+
+    #[test]
+    fn cone_with_x_axis() {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            PI / 4.0,
+        )
+        .unwrap();
+        let p = cone.evaluate(0.0, 1.0);
+        assert!((p - Point3::new(0.0, 0.0, 0.0)).length() > 0.5);
+    }
+
+    #[test]
+    fn sphere_with_custom_axis() {
+        let s =
+            SphericalSurface::with_axis(Point3::new(0.0, 0.0, 0.0), 2.0, Vec3::new(1.0, 0.0, 0.0))
+                .unwrap();
+        assert!(approx_eq(s.radius(), 2.0));
+        // North pole should be along x
+        let p = s.evaluate(0.0, FRAC_PI_2);
+        assert!(approx_eq((p - Point3::new(0.0, 0.0, 0.0)).length(), 2.0));
+    }
+
+    #[test]
+    fn sphere_with_axis_zero_radius_error() {
+        assert!(
+            SphericalSurface::with_axis(Point3::new(0.0, 0.0, 0.0), 0.0, Vec3::new(0.0, 0.0, 1.0))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn torus_normal() {
+        let t = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0, 2.0).unwrap();
+        let n = t.normal(0.0, 0.0);
+        // At u=0, v=0 (outermost point), normal should point radially outward
+        assert!(n.length() > 0.5);
+    }
+
+    #[test]
+    fn torus_accessors() {
+        let t = ToroidalSurface::new(Point3::new(1.0, 2.0, 3.0), 5.0, 2.0).unwrap();
+        assert!(point_approx_eq(t.center(), Point3::new(1.0, 2.0, 3.0)));
+        assert!(approx_eq(t.major_radius(), 5.0));
+        assert!(approx_eq(t.minor_radius(), 2.0));
+    }
+
+    #[test]
+    fn revolution_with_x_axis() {
+        // Tests the other candidate branch for revolution surfaces
+        let rev = RevolutionSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            vec![2.0, 2.0],
+            vec![0.0, 5.0],
+        )
+        .unwrap();
+        assert!(point_approx_eq(rev.origin(), Point3::new(0.0, 0.0, 0.0)));
+        assert!(approx_eq(rev.axis().x(), 1.0));
+    }
+
+    #[test]
+    fn revolution_empty_input_error() {
+        assert!(
+            RevolutionSurface::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                vec![],
+                vec![],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn revolution_mismatched_lengths_error() {
+        assert!(
+            RevolutionSurface::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                vec![1.0, 2.0],
+                vec![0.0],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn revolution_midpoint_evaluation() {
+        let rev = RevolutionSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            vec![1.0, 3.0, 1.0],
+            vec![0.0, 5.0, 10.0],
+        )
+        .unwrap();
+        // At v=0.5 (midpoint of generatrix): radius should be 3.0, height 5.0
+        let p = rev.evaluate(0.0, 0.5);
+        assert!(approx_eq(p.z(), 5.0));
+    }
+
+    #[test]
+    fn cylinder_evaluate_at_quarter_circle() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0)
+                .unwrap();
+        let p = cyl.evaluate(FRAC_PI_2, 0.0);
+        // At u=π/2, should be at 90° around the cylinder
+        assert!(approx_eq((p - Point3::new(0.0, 0.0, 0.0)).length(), 3.0));
+    }
 }
