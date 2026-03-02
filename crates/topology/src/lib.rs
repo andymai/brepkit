@@ -11,6 +11,7 @@
 //! reference counting overhead and enables efficient traversal.
 
 pub mod arena;
+pub mod builder;
 pub mod compound;
 pub mod edge;
 pub mod face;
