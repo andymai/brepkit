@@ -7,6 +7,7 @@ pub mod basis;
 pub mod curve;
 pub mod decompose;
 pub mod fitting;
+pub mod intersection;
 pub mod knot_ops;
 pub mod projection;
 pub mod surface;
