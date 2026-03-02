@@ -15,6 +15,7 @@ pub mod fillet;
 pub mod loft;
 pub mod measure;
 pub mod mirror;
+pub mod pattern;
 pub mod primitives;
 pub mod revolve;
 pub mod section;
