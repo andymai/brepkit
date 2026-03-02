@@ -5,6 +5,8 @@
 //!
 //! This is layer L2, depending on `brepkit-math` and `brepkit-topology`.
 
+use brepkit_math::vec::{Point3, Vec3};
+
 pub mod boolean;
 pub mod chamfer;
 pub mod extrude;
@@ -13,6 +15,14 @@ pub mod revolve;
 pub mod sweep;
 pub mod tessellate;
 pub mod transform;
+
+/// Compute `n · p` treating a `Point3` as a direction vector.
+///
+/// Equivalent to the dot product `n.x*p.x + n.y*p.y + n.z*p.z`, used
+/// for the plane equation `n · point = d`.
+fn dot_normal_point(n: Vec3, p: Point3) -> f64 {
+    n.dot(Vec3::new(p.x(), p.y(), p.z()))
+}
 
 /// Errors from modeling operations.
 #[derive(Debug, thiserror::Error)]

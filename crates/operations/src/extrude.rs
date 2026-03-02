@@ -10,11 +10,7 @@ use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
-/// Helper to compute the dot product of a `Vec3` with a `Point3` treated as a
-/// position vector (equivalent to `n.x*p.x + n.y*p.y + n.z*p.z`).
-fn dot_normal_point(n: Vec3, p: Point3) -> f64 {
-    n.dot(Vec3::new(p.x(), p.y(), p.z()))
-}
+use crate::dot_normal_point;
 
 /// Extrude a planar face along a direction to produce a solid.
 ///

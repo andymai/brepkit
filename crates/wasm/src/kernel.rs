@@ -9,6 +9,7 @@ use std::f64::consts::PI;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::extrude::extrude;
+use brepkit_operations::revolve::revolve;
 use brepkit_operations::tessellate::{self, TriangleMesh};
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
@@ -181,6 +182,54 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid_id))
     }
 
+    /// Revolve a planar face around an axis to create a solid of revolution.
+    ///
+    /// The axis is defined by an origin point `(ox, oy, oz)` and a direction
+    /// `(dx, dy, dz)`. The angle is in degrees and must be in (0, 360].
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any input is non-finite, the face handle is
+    /// invalid, or the revolve operation fails.
+    #[wasm_bindgen(js_name = "revolve")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn revolve_face(
+        &mut self,
+        face: u32,
+        ox: f64,
+        oy: f64,
+        oz: f64,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        angle_degrees: f64,
+    ) -> Result<u32, JsError> {
+        validate_finite(ox, "ox")?;
+        validate_finite(oy, "oy")?;
+        validate_finite(oz, "oz")?;
+        validate_finite(dx, "dx")?;
+        validate_finite(dy, "dy")?;
+        validate_finite(dz, "dz")?;
+        validate_finite(angle_degrees, "angle_degrees")?;
+        if angle_degrees <= 0.0 || angle_degrees > 360.0 {
+            return Err(WasmError::InvalidInput {
+                reason: format!("angle_degrees must be in (0, 360], got {angle_degrees}"),
+            }
+            .into());
+        }
+
+        let face_id = self.resolve_face(face)?;
+        let origin = Point3::new(ox, oy, oz);
+        let direction = Vec3::new(dx, dy, dz);
+        let angle_radians = angle_degrees.to_radians();
+
+        let solid_id = revolve(&mut self.topo, face_id, origin, direction, angle_radians)?;
+
+        Ok(solid_id_to_u32(solid_id))
+    }
+
     /// Apply a 4×4 affine transform to a solid (in place).
     ///
     /// The `matrix` must contain exactly 16 values in row-major order.
@@ -246,18 +295,12 @@ impl BrepKernel {
         let solid_id = self.resolve_solid(solid)?;
         let solid_data = self.topo.solid(solid_id)?;
 
-        // Collect all shell IDs (outer + inner voids).
-        let shell_ids: Vec<_> = std::iter::once(solid_data.outer_shell())
+        let mut merged = TriangleMesh::default();
+
+        // Iterate all shells (outer + inner voids).
+        for shell_id in std::iter::once(solid_data.outer_shell())
             .chain(solid_data.inner_shells().iter().copied())
-            .collect();
-
-        let mut merged = TriangleMesh {
-            positions: Vec::new(),
-            normals: Vec::new(),
-            indices: Vec::new(),
-        };
-
-        for shell_id in shell_ids {
+        {
             let shell = self.topo.shell(shell_id)?;
             for &face_id in shell.faces() {
                 let face_mesh = tessellate::tessellate(&self.topo, face_id, deflection)?;
