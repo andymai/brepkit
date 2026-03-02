@@ -9,6 +9,7 @@ use brepkit_math::vec::{Point3, Vec3};
 
 pub mod boolean;
 pub mod chamfer;
+pub mod compound_ops;
 pub mod copy;
 pub mod distance;
 pub mod draft;
