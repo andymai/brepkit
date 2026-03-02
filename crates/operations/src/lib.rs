@@ -24,6 +24,7 @@ pub mod pipe;
 pub mod primitives;
 pub mod revolve;
 pub mod section;
+pub mod sew;
 pub mod shell_op;
 pub mod split;
 pub mod sweep;
