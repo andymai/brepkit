@@ -13,6 +13,7 @@ pub mod copy;
 pub mod draft;
 pub mod extrude;
 pub mod fillet;
+pub mod heal;
 pub mod loft;
 pub mod measure;
 pub mod mirror;
@@ -27,6 +28,7 @@ pub mod split;
 pub mod sweep;
 pub mod tessellate;
 pub mod transform;
+pub mod validate;
 
 /// Compute `n · p` treating a `Point3` as a direction vector.
 ///
