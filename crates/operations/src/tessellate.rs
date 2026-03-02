@@ -39,7 +39,10 @@ pub fn tessellate(
     }
 }
 
-/// Tessellate a planar face via fan triangulation.
+/// Tessellate a planar face via ear-clipping triangulation.
+///
+/// Works for both convex and non-convex (simple) polygons by
+/// projecting to 2D and using the ear-clipping algorithm.
 fn tessellate_planar(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -65,23 +68,169 @@ fn tessellate_planar(
         });
     }
 
-    let normals = vec![normal; n];
-
-    let num_triangles = n - 2;
-    let mut indices = Vec::with_capacity(num_triangles * 3);
-    for i in 1..n - 1 {
-        indices.push(0);
-        #[allow(clippy::cast_possible_truncation)]
-        indices.push(i as u32);
-        #[allow(clippy::cast_possible_truncation)]
-        indices.push((i + 1) as u32);
-    }
+    let normals_out = vec![normal; n];
+    let indices = ear_clip_triangulate(&positions, normal);
 
     Ok(TriangleMesh {
         positions,
-        normals,
+        normals: normals_out,
         indices,
     })
+}
+
+/// Ear-clipping triangulation for a simple polygon in 3D.
+///
+/// Projects the polygon to 2D (dropping the coordinate corresponding to
+/// the dominant normal component), then applies the ear-clipping algorithm.
+fn ear_clip_triangulate(positions: &[Point3], normal: Vec3) -> Vec<u32> {
+    let n = positions.len();
+    if n < 3 {
+        return vec![];
+    }
+    if n == 3 {
+        return vec![0, 1, 2];
+    }
+
+    // Project to 2D by dropping the dominant normal axis.
+    let ax = normal.x().abs();
+    let ay = normal.y().abs();
+    let az = normal.z().abs();
+
+    let project = |p: Point3| -> (f64, f64) {
+        if az >= ax && az >= ay {
+            (p.x(), p.y())
+        } else if ay >= ax {
+            (p.x(), p.z())
+        } else {
+            (p.y(), p.z())
+        }
+    };
+
+    let pts2d: Vec<(f64, f64)> = positions.iter().map(|&p| project(p)).collect();
+
+    // Ensure CCW winding in 2D.
+    let signed_area = polygon_signed_area_2d(&pts2d);
+    let ccw = signed_area > 0.0;
+
+    // Active vertex list (indices into the original positions array).
+    let mut active: Vec<usize> = if ccw {
+        (0..n).collect()
+    } else {
+        (0..n).rev().collect()
+    };
+
+    let mut indices = Vec::with_capacity((n - 2) * 3);
+    let mut safety = n * n; // prevent infinite loop on degenerate input
+
+    while active.len() > 3 && safety > 0 {
+        safety -= 1;
+        let len = active.len();
+        let mut found_ear = false;
+
+        for i in 0..len {
+            let prev = active[(i + len - 1) % len];
+            let curr = active[i];
+            let next = active[(i + 1) % len];
+
+            // Check if this vertex forms a convex (left-turn) ear.
+            let (ax2, ay2) = pts2d[prev];
+            let (bx, by) = pts2d[curr];
+            let (cx, cy) = pts2d[next];
+
+            let cross = (bx - ax2).mul_add(cy - ay2, -(by - ay2) * (cx - ax2));
+            if cross <= 0.0 {
+                continue; // reflex vertex, not an ear
+            }
+
+            // Check that no other active vertex lies inside this triangle.
+            let mut contains_point = false;
+            for j in 0..len {
+                if j == (i + len - 1) % len || j == i || j == (i + 1) % len {
+                    continue;
+                }
+                let (px, py) = pts2d[active[j]];
+                if point_in_triangle_2d(px, py, ax2, ay2, bx, by, cx, cy) {
+                    contains_point = true;
+                    break;
+                }
+            }
+
+            if !contains_point {
+                // This is an ear — emit the triangle.
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    indices.push(prev as u32);
+                    indices.push(curr as u32);
+                    indices.push(next as u32);
+                }
+                active.remove(i);
+                found_ear = true;
+                break;
+            }
+        }
+
+        if !found_ear {
+            // Fallback: no ear found (degenerate polygon).
+            // Use fan triangulation as best-effort.
+            break;
+        }
+    }
+
+    // Handle remaining triangle.
+    if active.len() == 3 {
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            indices.push(active[0] as u32);
+            indices.push(active[1] as u32);
+            indices.push(active[2] as u32);
+        }
+    } else if active.len() > 3 {
+        // Fallback fan triangulation for degenerate cases.
+        for i in 1..active.len() - 1 {
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                indices.push(active[0] as u32);
+                indices.push(active[i] as u32);
+                indices.push(active[i + 1] as u32);
+            }
+        }
+    }
+
+    indices
+}
+
+/// Signed area of a 2D polygon (positive = CCW).
+fn polygon_signed_area_2d(pts: &[(f64, f64)]) -> f64 {
+    let n = pts.len();
+    let mut area = 0.0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        area += pts[i].0 * pts[j].1;
+        area -= pts[j].0 * pts[i].1;
+    }
+    area / 2.0
+}
+
+/// Test if point (px,py) is inside triangle (ax,ay)-(bx,by)-(cx,cy).
+#[allow(clippy::too_many_arguments)]
+fn point_in_triangle_2d(
+    px: f64,
+    py: f64,
+    ax: f64,
+    ay: f64,
+    bx: f64,
+    by: f64,
+    cx: f64,
+    cy: f64,
+) -> bool {
+    let d1 = (px - bx).mul_add(ay - by, -(ax - bx) * (py - by));
+    let d2 = (px - cx).mul_add(by - cy, -(bx - cx) * (py - cy));
+    let d3 = (px - ax).mul_add(cy - ay, -(cx - ax) * (py - ay));
+
+    let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
+    let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
+
+    !(has_neg && has_pos)
 }
 
 /// Tessellate a NURBS surface via uniform parameter sampling.
@@ -255,5 +404,77 @@ mod tests {
             assert!(pos.y() >= -1e-10 && pos.y() <= 1.0 + 1e-10);
             assert!((pos.z()).abs() < 1e-10);
         }
+    }
+
+    /// Test tessellation of an L-shaped (non-convex) polygon.
+    #[test]
+    fn tessellate_l_shape_nonconvex() {
+        let mut topo = Topology::new();
+
+        // L-shaped polygon on XY plane:
+        //  (0,0) → (2,0) → (2,1) → (1,1) → (1,2) → (0,2) → (0,0)
+        let points = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(2.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(1.0, 2.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+        ];
+
+        let verts: Vec<_> = points
+            .iter()
+            .map(|&p| topo.vertices.alloc(Vertex::new(p, 1e-7)))
+            .collect();
+
+        let n = verts.len();
+        let edges: Vec<_> = (0..n)
+            .map(|i| {
+                let next = (i + 1) % n;
+                topo.edges
+                    .alloc(Edge::new(verts[i], verts[next], EdgeCurve::Line))
+            })
+            .collect();
+
+        let wire = Wire::new(
+            edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.wires.alloc(wire);
+
+        let face = topo.faces.alloc(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        let mesh = tessellate(&topo, face, 0.1).unwrap();
+
+        assert_eq!(mesh.positions.len(), 6, "should have 6 vertices");
+        // 6-gon → 4 triangles
+        assert_eq!(
+            mesh.indices.len(),
+            12,
+            "L-shape should have 4 triangles (12 indices)"
+        );
+
+        // Verify area: L-shape is 2×2 minus 1×1 = 3.0
+        let mut total_area = 0.0;
+        for t in 0..mesh.indices.len() / 3 {
+            let i0 = mesh.indices[t * 3] as usize;
+            let i1 = mesh.indices[t * 3 + 1] as usize;
+            let i2 = mesh.indices[t * 3 + 2] as usize;
+            let a = mesh.positions[i1] - mesh.positions[i0];
+            let b = mesh.positions[i2] - mesh.positions[i0];
+            total_area += 0.5 * a.cross(b).length();
+        }
+        assert!(
+            (total_area - 3.0).abs() < 0.01,
+            "L-shape area should be ~3.0, got {total_area}"
+        );
     }
 }
