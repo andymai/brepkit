@@ -1,7 +1,8 @@
 //! Boolean operations on solids: fuse, cut, and intersect.
 //!
-//! This implementation handles planar faces only. Solids with NURBS faces
-//! are rejected with [`OperationsError::InvalidInput`].
+//! Supports both planar and NURBS faces. NURBS faces are tessellated
+//! into planar triangles before clipping, enabling approximate boolean
+//! operations on any solid geometry.
 
 use std::collections::HashMap;
 
@@ -229,7 +230,12 @@ const fn select_fragment(source: Source, class: FaceClass, op: BooleanOp) -> Opt
 /// Extracted face data: `(FaceId, vertices, normal, d)`.
 type FaceData = Vec<(FaceId, Vec<Point3>, Vec3, f64)>;
 
-/// Collect face polygons and plane data for a solid, rejecting NURBS.
+/// Collect face polygons and plane data for a solid.
+///
+/// For planar faces, returns the face polygon directly.
+/// For NURBS faces, tessellates into triangles and returns each triangle
+/// as a separate planar "face" entry. This allows the existing planar
+/// boolean clipping algorithm to handle NURBS solids.
 fn collect_face_data(
     topo: &Topology,
     solid_id: SolidId,
@@ -240,17 +246,37 @@ fn collect_face_data(
 
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
-        let (normal, d) = match face.surface() {
-            FaceSurface::Plane { normal, d } => (*normal, *d),
-            FaceSurface::Nurbs(_) => {
-                return Err(crate::OperationsError::InvalidInput {
-                    reason: "boolean operations on NURBS faces not yet supported".into(),
-                });
+        match face.surface() {
+            FaceSurface::Plane { normal, d } => {
+                let verts = face_vertices(topo, fid)?;
+                result.push((fid, verts, *normal, *d));
             }
-        };
+            FaceSurface::Nurbs(_) => {
+                // Tessellate NURBS face into triangles and treat each as planar.
+                // Use very coarse tessellation for boolean performance.
+                // The planar clipping algorithm is O(n²) in face count.
+                let mesh = crate::tessellate::tessellate(topo, fid, 1.0)?;
+                for tri in mesh.indices.chunks_exact(3) {
+                    let i0 = tri[0] as usize;
+                    let i1 = tri[1] as usize;
+                    let i2 = tri[2] as usize;
 
-        let verts = face_vertices(topo, fid)?;
-        result.push((fid, verts, normal, d));
+                    let v0 = mesh.positions[i0];
+                    let v1 = mesh.positions[i1];
+                    let v2 = mesh.positions[i2];
+
+                    let edge1 = v1 - v0;
+                    let edge2 = v2 - v0;
+                    let normal = edge1
+                        .cross(edge2)
+                        .normalize()
+                        .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                    let d = crate::dot_normal_point(normal, v0);
+
+                    result.push((fid, vec![v0, v1, v2], normal, d));
+                }
+            }
+        }
     }
 
     Ok(result)
@@ -946,5 +972,30 @@ mod tests {
 
         let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
         assert!(check_result(&topo, result) > 0);
+    }
+
+    // ── NURBS face data collection test ─────────────────────────
+
+    #[test]
+    fn collect_face_data_handles_nurbs() {
+        // Verify that collect_face_data no longer rejects NURBS solids.
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 0.5, 1.0).unwrap();
+
+        let result = collect_face_data(&topo, cyl);
+        assert!(
+            result.is_ok(),
+            "collect_face_data should handle NURBS: {:?}",
+            result.err()
+        );
+
+        let faces = result.unwrap();
+        // Cylinder has planar top/bottom + NURBS side → should produce
+        // multiple face entries (tessellated triangles for NURBS).
+        assert!(
+            faces.len() > 2,
+            "cylinder should produce more than 2 face entries, got {}",
+            faces.len()
+        );
     }
 }
