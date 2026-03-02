@@ -5,3 +5,6 @@
 
 pub mod reader;
 pub mod writer;
+
+pub use reader::read_stl;
+pub use writer::write_stl;

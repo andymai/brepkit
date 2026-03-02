@@ -2,3 +2,5 @@
 
 pub mod reader;
 pub mod writer;
+
+pub use writer::write_step;

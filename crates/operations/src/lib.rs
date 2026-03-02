@@ -19,6 +19,7 @@ pub mod heal;
 pub mod loft;
 pub mod measure;
 pub mod mirror;
+pub mod offset_face;
 pub mod offset_wire;
 pub mod pattern;
 pub mod pipe;
