@@ -344,8 +344,8 @@ fn refine_line_surface_point(
             break;
         }
 
-        let du = (b1 * a22 - b2 * a12) / det;
-        let dv = (a11 * b2 - a12 * b1) / det;
+        let du = b1.mul_add(a22, -(b2 * a12)) / det;
+        let dv = a11.mul_add(b2, -(a12 * b1)) / det;
 
         u -= du;
         v -= dv;
@@ -613,8 +613,8 @@ fn surface_newton_step(surface: &NurbsSurface, u: f64, v: f64, target: Point3) -
         return (0.0, 0.0);
     }
 
-    let du = (b1 * a22 - b2 * a12) / det;
-    let dv = (a11 * b2 - a12 * b1) / det;
+    let du = b1.mul_add(a22, -(b2 * a12)) / det;
+    let dv = a11.mul_add(b2, -(a12 * b1)) / det;
 
     (du, dv)
 }
@@ -672,22 +672,34 @@ fn march_direction(
 
         let sign = if forward { 1.0 } else { -1.0 };
 
-        // Step along tangent.
-        let next_pt = Point3::new(
-            tangent.x().mul_add(step_size * sign, current.point.x()),
-            tangent.y().mul_add(step_size * sign, current.point.y()),
-            tangent.z().mul_add(step_size * sign, current.point.z()),
+        // Step along tangent in 3D, then estimate parameter shifts.
+        let step = step_size * sign;
+
+        // Compute parameter shifts by projecting the tangent onto each
+        // surface's parameter space using the surface derivatives.
+        let d1 = s1.derivatives(current.param1.0, current.param1.1, 1);
+        let d2 = s2.derivatives(current.param2.0, current.param2.1, 1);
+
+        let (du1, dv1) = project_tangent_to_params(&d1, tangent, step);
+        let (du2, dv2) = project_tangent_to_params(&d2, tangent, step);
+
+        let next_params_1 = (
+            (current.param1.0 + du1).clamp(0.0, 1.0),
+            (current.param1.1 + dv1).clamp(0.0, 1.0),
+        );
+        let next_params_2 = (
+            (current.param2.0 + du2).clamp(0.0, 1.0),
+            (current.param2.1 + dv2).clamp(0.0, 1.0),
         );
 
-        // Project back onto both surfaces and refine.
-        let _ = next_pt; // marching direction is encoded in the parameter shift
+        // Refine from the shifted parameters.
         if let Some(refined) = refine_ssi_point(
             s1,
             s2,
-            current.param1.0,
-            current.param1.1,
-            current.param2.0,
-            current.param2.1,
+            next_params_1.0,
+            next_params_1.1,
+            next_params_2.0,
+            next_params_2.1,
             tolerance,
         ) {
             // Check that we actually moved.
@@ -717,6 +729,35 @@ fn march_direction(
     }
 
     points
+}
+
+/// Project a 3D tangent vector onto surface parameter space.
+///
+/// Given surface derivatives `derivs` (from `surface.derivatives(u, v, 1)`)
+/// and a 3D tangent direction scaled by `step`, compute the parameter
+/// increments (du, dv) that move along the tangent on the surface.
+fn project_tangent_to_params(derivs: &[Vec<Vec3>], tangent: Vec3, step: f64) -> (f64, f64) {
+    let su = derivs[1][0]; // ∂S/∂u
+    let sv = derivs[0][1]; // ∂S/∂v
+
+    let t = Vec3::new(tangent.x() * step, tangent.y() * step, tangent.z() * step);
+
+    // Solve [su·su, su·sv; su·sv, sv·sv] [du; dv] = [su·t; sv·t]
+    let a11 = su.dot(su);
+    let a12 = su.dot(sv);
+    let a22 = sv.dot(sv);
+    let b1 = su.dot(t);
+    let b2 = sv.dot(t);
+
+    let det = a11.mul_add(a22, -(a12 * a12));
+    if det.abs() < 1e-20 {
+        return (0.0, 0.0);
+    }
+
+    let du = b1.mul_add(a22, -(b2 * a12)) / det;
+    let dv = a11.mul_add(b2, -(a12 * b1)) / det;
+
+    (du, dv)
 }
 
 #[cfg(test)]
@@ -968,13 +1009,13 @@ mod tests {
         let s2 = tilted_surface();
 
         // First verify seed finding works.
-        let seeds = find_ssi_seeds(&s1, &s2, 20, 1e-6);
+        let seeds = find_ssi_seeds(&s1, &s2, 10, 1e-6);
         assert!(
             !seeds.is_empty(),
             "should find at least one seed point, got 0"
         );
 
-        let result = intersect_nurbs_nurbs(&s1, &s2, 20, 0.05).unwrap();
+        let result = intersect_nurbs_nurbs(&s1, &s2, 10, 0.05).unwrap();
 
         assert!(
             !result.is_empty(),
@@ -997,7 +1038,7 @@ mod tests {
     fn ssi_points_lie_on_both_surfaces() {
         let s1 = flat_surface();
         let s2 = tilted_surface();
-        let result = intersect_nurbs_nurbs(&s1, &s2, 20, 0.02).unwrap();
+        let result = intersect_nurbs_nurbs(&s1, &s2, 10, 0.02).unwrap();
 
         for curve in &result {
             for pt in &curve.points {

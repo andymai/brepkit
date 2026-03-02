@@ -781,6 +781,80 @@ impl BrepKernel {
         Ok(face_id_to_u32(result))
     }
 
+    // ── IGES Import/Export ────────────────────────────────────────
+
+    /// Export a solid to IGES format.
+    ///
+    /// Returns the IGES file as a UTF-8 encoded byte vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or export fails.
+    #[wasm_bindgen(js_name = "exportIges")]
+    pub fn export_iges(&self, solid: u32) -> Result<Vec<u8>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let iges_str = brepkit_io::iges::writer::write_iges(&self.topo, &[solid_id])?;
+        Ok(iges_str.into_bytes())
+    }
+
+    /// Import an IGES file and return solid handles.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the IGES data is malformed.
+    #[wasm_bindgen(js_name = "importIges")]
+    pub fn import_iges(&mut self, data: &[u8]) -> Result<Vec<u32>, JsError> {
+        let text = std::str::from_utf8(data)
+            .map_err(|e| JsError::new(&format!("IGES data is not valid UTF-8: {e}")))?;
+        let solid_ids = brepkit_io::iges::reader::read_iges(text, &mut self.topo)?;
+        Ok(solid_ids.iter().map(|id| solid_id_to_u32(*id)).collect())
+    }
+
+    // ── Helical Sweep ───────────────────────────────────────────
+
+    /// Create a helical sweep of a profile face.
+    ///
+    /// Sweeps the profile along a helix defined by axis, radius, pitch,
+    /// and number of turns. Used for generating thread geometry.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if parameters are invalid or the sweep fails.
+    #[wasm_bindgen(js_name = "helicalSweep")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn helical_sweep_wasm(
+        &mut self,
+        profile: u32,
+        axis_origin_x: f64,
+        axis_origin_y: f64,
+        axis_origin_z: f64,
+        axis_dir_x: f64,
+        axis_dir_y: f64,
+        axis_dir_z: f64,
+        radius: f64,
+        pitch: f64,
+        turns: f64,
+    ) -> Result<u32, JsError> {
+        validate_positive(radius, "radius")?;
+        validate_positive(pitch, "pitch")?;
+        let face_id = self.resolve_face(profile)?;
+
+        let origin = brepkit_math::vec::Point3::new(axis_origin_x, axis_origin_y, axis_origin_z);
+        let axis_dir = brepkit_math::vec::Vec3::new(axis_dir_x, axis_dir_y, axis_dir_z);
+
+        let solid_id = brepkit_operations::helix::helical_sweep(
+            &mut self.topo,
+            face_id,
+            origin,
+            axis_dir,
+            radius,
+            pitch,
+            turns,
+            8,
+        )?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
     // ── Copy / Mirror / Pattern ───────────────────────────────────
 
     /// Deep copy a solid, returning a new independent solid handle.

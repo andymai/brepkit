@@ -119,7 +119,7 @@ impl StepWriteContext {
             id,
             "CARTESIAN_POINT",
             &format!(
-                "'', ({}, {}, {})",
+                "'', ({}, {}, {}))",
                 fmt_f64(p.x()),
                 fmt_f64(p.y()),
                 fmt_f64(p.z())
@@ -134,7 +134,7 @@ impl StepWriteContext {
             id,
             "DIRECTION",
             &format!(
-                "'', ({}, {}, {})",
+                "'', ({}, {}, {}))",
                 fmt_f64(d.x()),
                 fmt_f64(d.y()),
                 fmt_f64(d.z())
@@ -294,7 +294,7 @@ impl StepWriteContext {
                 self.write_entity(
                     vector,
                     "VECTOR",
-                    &format!("'', #{dir_id}, {}))", fmt_f64(length)),
+                    &format!("'', #{dir_id}, {})", fmt_f64(length)),
                 );
 
                 let line = self.next_id();
