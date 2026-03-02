@@ -70,6 +70,7 @@ pub enum MathError {
 
 pub mod aabb;
 pub mod bvh;
+pub mod curves;
 pub mod mat;
 pub mod nurbs;
 pub mod plane;
