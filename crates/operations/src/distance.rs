@@ -47,9 +47,9 @@ pub fn point_to_solid_distance(
         let face = topo.face(fid)?;
         let (normal, d) = match face.surface() {
             FaceSurface::Plane { normal, d } => (*normal, *d),
-            FaceSurface::Nurbs(_) => {
+            _ => {
                 return Err(crate::OperationsError::InvalidInput {
-                    reason: "distance to NURBS faces not yet supported".into(),
+                    reason: "distance to non-planar faces not yet supported".into(),
                 });
             }
         };
@@ -113,9 +113,9 @@ pub fn solid_to_solid_distance(
             let face = topo.face(fid)?;
             let (normal, d) = match face.surface() {
                 FaceSurface::Plane { normal, d } => (*normal, *d),
-                FaceSurface::Nurbs(_) => {
+                _ => {
                     return Err(crate::OperationsError::InvalidInput {
-                        reason: "distance to NURBS faces not yet supported".into(),
+                        reason: "distance to non-planar faces not yet supported".into(),
                     });
                 }
             };
@@ -140,9 +140,9 @@ pub fn solid_to_solid_distance(
             let face = topo.face(fid)?;
             let (normal, d) = match face.surface() {
                 FaceSurface::Plane { normal, d } => (*normal, *d),
-                FaceSurface::Nurbs(_) => {
+                _ => {
                     return Err(crate::OperationsError::InvalidInput {
-                        reason: "distance to NURBS faces not yet supported".into(),
+                        reason: "distance to non-planar faces not yet supported".into(),
                     });
                 }
             };

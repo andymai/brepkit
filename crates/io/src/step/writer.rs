@@ -406,6 +406,11 @@ impl StepWriteContext {
                 plane
             }
             FaceSurface::Nurbs(nurbs) => self.write_nurbs_surface(nurbs)?,
+            _ => {
+                return Err(IoError::UnsupportedEntity {
+                    entity: "analytic surface in STEP export".into(),
+                });
+            }
         };
 
         let bound_refs: Vec<String> = bound_ids.iter().map(|id| format!("#{id}")).collect();

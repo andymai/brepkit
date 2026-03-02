@@ -50,9 +50,9 @@ pub fn extrude(
     let face_data = topo.face(face)?;
     let input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
-        FaceSurface::Nurbs(_) => {
+        _ => {
             return Err(crate::OperationsError::InvalidInput {
-                reason: "extrusion of NURBS faces is not yet supported".into(),
+                reason: "extrusion of non-planar faces is not yet supported".into(),
             });
         }
     };

@@ -296,6 +296,215 @@ impl Ellipse3D {
     }
 }
 
+/// A 3D parabola defined by vertex, axis direction, and focal length.
+///
+/// Parameterized as `P(t) = vertex + (t²/(4f)) * axis_dir + t * u_axis`
+/// where `f` is the focal length and `u_axis` is perpendicular to the axis
+/// in the parabola plane.
+///
+/// The parameter `t` ranges over all reals; `t = 0` is the vertex.
+#[derive(Debug, Clone)]
+pub struct Parabola3D {
+    vertex: Point3,
+    axis_dir: Vec3,
+    focal_length: f64,
+    u_axis: Vec3,
+}
+
+impl Parabola3D {
+    /// Creates a new parabola.
+    ///
+    /// `axis_dir` is the direction from vertex toward the interior of the
+    /// parabola (the axis of symmetry). `focal_length` is the distance
+    /// from vertex to focus.
+    ///
+    /// # Errors
+    /// Returns an error if `focal_length` is not positive or `axis_dir` is zero.
+    pub fn new(vertex: Point3, axis_dir: Vec3, focal_length: f64) -> Result<Self, MathError> {
+        if focal_length <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: focal_length,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        let axis = axis_dir.normalize()?;
+        let candidate = if axis.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let u = axis.cross(candidate).normalize()?;
+        Ok(Self {
+            vertex,
+            axis_dir: axis,
+            focal_length,
+            u_axis: u,
+        })
+    }
+
+    /// Evaluates the parabola at parameter `t`.
+    ///
+    /// At `t = 0` this returns the vertex.
+    #[must_use]
+    pub fn evaluate(&self, t: f64) -> Point3 {
+        let along_axis = (t * t) / (4.0 * self.focal_length);
+        self.vertex + self.axis_dir * along_axis + self.u_axis * t
+    }
+
+    /// Returns the tangent vector at parameter `t`.
+    #[must_use]
+    pub fn tangent(&self, t: f64) -> Vec3 {
+        let d_axis = t / (2.0 * self.focal_length);
+        self.axis_dir * d_axis + self.u_axis
+    }
+
+    /// Returns the curvature at parameter `t`.
+    #[must_use]
+    pub fn curvature(&self, t: f64) -> f64 {
+        let two_f = 2.0 * self.focal_length;
+        let ratio = t / two_f;
+        let denom = ratio.mul_add(ratio, 1.0);
+        1.0 / (two_f * denom.powf(1.5))
+    }
+
+    /// Returns the vertex.
+    #[must_use]
+    pub const fn vertex(&self) -> Point3 {
+        self.vertex
+    }
+
+    /// Returns the focal length.
+    #[must_use]
+    pub const fn focal_length(&self) -> f64 {
+        self.focal_length
+    }
+
+    /// Returns the axis direction (normalized).
+    #[must_use]
+    pub const fn axis_dir(&self) -> Vec3 {
+        self.axis_dir
+    }
+
+    /// Returns the focus point.
+    #[must_use]
+    pub fn focus(&self) -> Point3 {
+        self.vertex + self.axis_dir * self.focal_length
+    }
+}
+
+/// A 3D hyperbola defined by center, axis, and two semi-axis lengths.
+///
+/// Parameterized as `P(t) = center + a * cosh(t) * u_axis + b * sinh(t) * v_axis`.
+///
+/// The parameter `t` ranges over all reals; `t = 0` gives the vertex
+/// closest to center on the positive branch.
+#[derive(Debug, Clone)]
+pub struct Hyperbola3D {
+    center: Point3,
+    normal: Vec3,
+    semi_major: f64,
+    semi_minor: f64,
+    u_axis: Vec3,
+    v_axis: Vec3,
+}
+
+impl Hyperbola3D {
+    /// Creates a new hyperbola.
+    ///
+    /// `semi_major` is the real semi-axis (distance from center to vertex),
+    /// `semi_minor` is the imaginary semi-axis.
+    ///
+    /// # Errors
+    /// Returns an error if either semi-axis is non-positive.
+    pub fn new(
+        center: Point3,
+        normal: Vec3,
+        semi_major: f64,
+        semi_minor: f64,
+    ) -> Result<Self, MathError> {
+        if semi_major <= 0.0 || semi_minor <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: semi_major.min(semi_minor),
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        let n = normal.normalize()?;
+        let candidate = if n.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let u = n.cross(candidate).normalize()?;
+        let v = n.cross(u);
+
+        Ok(Self {
+            center,
+            normal: n,
+            semi_major,
+            semi_minor,
+            u_axis: u,
+            v_axis: v,
+        })
+    }
+
+    /// Evaluates the hyperbola at parameter `t`.
+    #[must_use]
+    pub fn evaluate(&self, t: f64) -> Point3 {
+        self.center
+            + self.u_axis * (self.semi_major * t.cosh())
+            + self.v_axis * (self.semi_minor * t.sinh())
+    }
+
+    /// Returns the tangent vector at parameter `t`.
+    #[must_use]
+    pub fn tangent(&self, t: f64) -> Vec3 {
+        self.u_axis * (self.semi_major * t.sinh()) + self.v_axis * (self.semi_minor * t.cosh())
+    }
+
+    /// Returns the center.
+    #[must_use]
+    pub const fn center(&self) -> Point3 {
+        self.center
+    }
+
+    /// Returns the semi-major axis (real axis).
+    #[must_use]
+    pub const fn semi_major(&self) -> f64 {
+        self.semi_major
+    }
+
+    /// Returns the semi-minor axis (imaginary axis).
+    #[must_use]
+    pub const fn semi_minor(&self) -> f64 {
+        self.semi_minor
+    }
+
+    /// Returns the normal (axis perpendicular to the hyperbola plane).
+    #[must_use]
+    pub const fn normal(&self) -> Vec3 {
+        self.normal
+    }
+
+    /// Returns the eccentricity: `e = sqrt(1 + (b/a)²)`.
+    #[must_use]
+    pub fn eccentricity(&self) -> f64 {
+        let ratio = self.semi_minor / self.semi_major;
+        ratio.mul_add(ratio, 1.0).sqrt()
+    }
+
+    /// Returns the two foci.
+    #[must_use]
+    pub fn foci(&self) -> (Point3, Point3) {
+        let c = self.semi_major.hypot(self.semi_minor);
+        (
+            self.center + self.u_axis * c,
+            self.center + self.u_axis * (-c),
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -451,6 +660,129 @@ mod tests {
                 Vec3::new(0.0, 0.0, 1.0),
                 0.0,
                 1.0
+            )
+            .is_err()
+        );
+    }
+
+    // ── Parabola tests ──────────────────────────────────────────
+
+    #[test]
+    fn parabola_vertex() {
+        let p = Parabola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let v = p.evaluate(0.0);
+        assert!(Tolerance::default().approx_eq(v.x(), 0.0));
+        assert!(Tolerance::default().approx_eq(v.y(), 0.0));
+        assert!(Tolerance::default().approx_eq(v.z(), 0.0));
+    }
+
+    #[test]
+    fn parabola_symmetry() {
+        let p = Parabola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        // z-component should be the same for +t and -t (symmetric about axis)
+        let pos = p.evaluate(2.0);
+        let neg = p.evaluate(-2.0);
+        assert!(Tolerance::default().approx_eq(pos.z(), neg.z()));
+    }
+
+    #[test]
+    fn parabola_tangent_at_vertex() {
+        let p = Parabola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let tang = p.tangent(0.0);
+        // At vertex, tangent should be purely along u_axis (perpendicular to axis)
+        assert!(Tolerance::default().approx_eq(tang.z(), 0.0));
+        assert!(tang.length() > 0.5);
+    }
+
+    #[test]
+    fn parabola_curvature_at_vertex() {
+        let f = 2.0;
+        let p = Parabola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), f).unwrap();
+        // Curvature at vertex = 1/(2f)
+        let k = p.curvature(0.0);
+        assert!(Tolerance::default().approx_eq(k, 1.0 / (2.0 * f)));
+    }
+
+    #[test]
+    fn parabola_focus() {
+        let f = 3.0;
+        let p = Parabola3D::new(Point3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, 1.0), f).unwrap();
+        let focus = p.focus();
+        assert!(Tolerance::default().approx_eq(focus.z(), 3.0 + f));
+    }
+
+    #[test]
+    fn parabola_zero_focal_length_error() {
+        assert!(
+            Parabola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.0,).is_err()
+        );
+    }
+
+    // ── Hyperbola tests ─────────────────────────────────────────
+
+    #[test]
+    fn hyperbola_vertex() {
+        let h = Hyperbola3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            2.0,
+        )
+        .unwrap();
+        // At t=0: P = center + a*cosh(0)*u + b*sinh(0)*v = center + a*u
+        let p = h.evaluate(0.0);
+        let dist = (p - h.center()).length();
+        assert!(Tolerance::default().approx_eq(dist, 3.0));
+    }
+
+    #[test]
+    fn hyperbola_tangent_at_vertex() {
+        let h = Hyperbola3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            2.0,
+        )
+        .unwrap();
+        // At t=0: tangent = a*sinh(0)*u + b*cosh(0)*v = b*v
+        let tang = h.tangent(0.0);
+        assert!(Tolerance::default().approx_eq(tang.length(), 2.0));
+    }
+
+    #[test]
+    fn hyperbola_eccentricity() {
+        let h = Hyperbola3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            4.0,
+        )
+        .unwrap();
+        // e = sqrt(1 + (b/a)^2) = sqrt(1 + 16/9) = sqrt(25/9) = 5/3
+        assert!(Tolerance::default().approx_eq(h.eccentricity(), 5.0 / 3.0));
+    }
+
+    #[test]
+    fn hyperbola_foci_distance() {
+        let a = 3.0;
+        let b = 4.0;
+        let h =
+            Hyperbola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), a, b).unwrap();
+        let (f1, f2) = h.foci();
+        // Distance from center to each focus = c = sqrt(a^2 + b^2) = 5
+        let c = a.hypot(b);
+        assert!(Tolerance::default().approx_eq((f1 - h.center()).length(), c));
+        assert!(Tolerance::default().approx_eq((f2 - h.center()).length(), c));
+    }
+
+    #[test]
+    fn hyperbola_zero_axis_error() {
+        assert!(
+            Hyperbola3D::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                0.0,
+                1.0,
             )
             .is_err()
         );

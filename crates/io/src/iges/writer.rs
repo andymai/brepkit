@@ -86,6 +86,11 @@ impl IgesWriteContext {
             FaceSurface::Nurbs(nurbs) => {
                 self.write_nurbs_surface_entity(nurbs);
             }
+            _ => {
+                return Err(IoError::UnsupportedEntity {
+                    entity: "analytic surface in IGES export".into(),
+                });
+            }
         }
 
         // Write edges as line or NURBS curve entities.

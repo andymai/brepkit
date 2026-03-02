@@ -71,9 +71,9 @@ pub fn fillet(
         let face = topo.face(face_id)?;
         let (normal, d) = match face.surface() {
             FaceSurface::Plane { normal, d } => (*normal, *d),
-            FaceSurface::Nurbs(_) => {
+            _ => {
                 return Err(crate::OperationsError::InvalidInput {
-                    reason: "fillet on NURBS faces is not supported".into(),
+                    reason: "fillet on non-planar faces is not supported".into(),
                 });
             }
         };

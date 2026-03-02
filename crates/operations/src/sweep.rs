@@ -167,9 +167,9 @@ pub fn sweep(
     let face_data = topo.face(profile)?;
     let input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
-        FaceSurface::Nurbs(_) => {
+        _ => {
             return Err(crate::OperationsError::InvalidInput {
-                reason: "sweep of NURBS faces is not supported".into(),
+                reason: "sweep of non-planar faces is not supported".into(),
             });
         }
     };

@@ -48,9 +48,9 @@ pub fn offset_wire(
     let face = topo.face(face_id)?;
     let face_normal = match face.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
-        FaceSurface::Nurbs(_) => {
+        _ => {
             return Err(crate::OperationsError::InvalidInput {
-                reason: "wire offset on NURBS faces is not supported".into(),
+                reason: "wire offset on non-planar faces is not supported".into(),
             });
         }
     };

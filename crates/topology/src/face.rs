@@ -1,6 +1,9 @@
 //! Face — a bounded region of a surface.
 
 use brepkit_math::nurbs::surface::NurbsSurface;
+use brepkit_math::surfaces::{
+    ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
+};
 use brepkit_math::vec::Vec3;
 
 use crate::arena;
@@ -22,6 +25,14 @@ pub enum FaceSurface {
     },
     /// A NURBS surface.
     Nurbs(NurbsSurface),
+    /// A cylindrical surface.
+    Cylinder(CylindricalSurface),
+    /// A conical surface.
+    Cone(ConicalSurface),
+    /// A spherical surface.
+    Sphere(SphericalSurface),
+    /// A toroidal surface.
+    Torus(ToroidalSurface),
 }
 
 /// A topological face: a bounded region of a surface.

@@ -62,9 +62,9 @@ pub fn draft(
         let face = topo.face(fid)?;
         let (face_normal, _face_d) = match face.surface() {
             FaceSurface::Plane { normal, d } => (*normal, *d),
-            FaceSurface::Nurbs(_) => {
+            _ => {
                 return Err(crate::OperationsError::InvalidInput {
-                    reason: "draft on NURBS faces is not supported".into(),
+                    reason: "draft on non-planar faces is not supported".into(),
                 });
             }
         };

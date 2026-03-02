@@ -51,6 +51,12 @@ pub fn offset_face(
             offset_planar_face(topo, outer_wire, &inner_wires, normal, d, distance)
         }
         FaceSurface::Nurbs(ref nurbs) => offset_nurbs_face(topo, face_id, nurbs, distance, samples),
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => Err(OperationsError::InvalidInput {
+            reason: "offset of analytic surface faces is not yet supported".into(),
+        }),
     }
 }
 
@@ -349,7 +355,7 @@ mod tests {
                 assert!((normal.z() - 1.0).abs() < 1e-6);
                 assert!((d - 1.0).abs() < 1e-6);
             }
-            FaceSurface::Nurbs(_) => panic!("expected planar surface"),
+            _ => panic!("expected planar surface"),
         }
     }
 
@@ -365,7 +371,7 @@ mod tests {
             FaceSurface::Plane { d, .. } => {
                 assert!((d - (-0.5)).abs() < 1e-6);
             }
-            FaceSurface::Nurbs(_) => panic!("expected planar surface"),
+            _ => panic!("expected planar surface"),
         }
     }
 

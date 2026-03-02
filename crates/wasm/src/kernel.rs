@@ -1215,7 +1215,7 @@ impl BrepKernel {
             brepkit_topology::face::FaceSurface::Plane { normal, .. } => {
                 Ok(vec![normal.x(), normal.y(), normal.z()])
             }
-            brepkit_topology::face::FaceSurface::Nurbs(_) => Err(WasmError::InvalidInput {
+            _ => Err(WasmError::InvalidInput {
                 reason: "getFaceNormal only works on planar faces".into(),
             }
             .into()),

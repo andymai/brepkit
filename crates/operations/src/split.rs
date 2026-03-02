@@ -62,9 +62,9 @@ pub fn split(
         let face = topo.face(fid)?;
         let (face_normal, face_d) = match face.surface() {
             brepkit_topology::face::FaceSurface::Plane { normal: fn_, d: fd } => (*fn_, *fd),
-            brepkit_topology::face::FaceSurface::Nurbs(_) => {
+            _ => {
                 return Err(crate::OperationsError::InvalidInput {
-                    reason: "split of NURBS faces not supported".into(),
+                    reason: "split of non-planar faces not supported".into(),
                 });
             }
         };

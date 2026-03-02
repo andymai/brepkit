@@ -92,6 +92,14 @@ pub fn section(
                     }
                 }
             }
+            FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "section of analytic surface faces is not yet supported".into(),
+                });
+            }
         }
     }
 

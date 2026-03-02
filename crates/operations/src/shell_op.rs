@@ -67,9 +67,9 @@ pub fn shell(
         let face = topo.face(fid)?;
         let (normal, d) = match face.surface() {
             FaceSurface::Plane { normal, d } => (*normal, *d),
-            FaceSurface::Nurbs(_) => {
+            _ => {
                 return Err(crate::OperationsError::InvalidInput {
-                    reason: "shell operation on NURBS faces is not supported".into(),
+                    reason: "shell operation on non-planar faces is not supported".into(),
                 });
             }
         };

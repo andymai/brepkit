@@ -246,35 +246,30 @@ fn collect_face_data(
 
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
-        match face.surface() {
-            FaceSurface::Plane { normal, d } => {
-                let verts = face_vertices(topo, fid)?;
-                result.push((fid, verts, *normal, *d));
-            }
-            FaceSurface::Nurbs(_) => {
-                // Tessellate NURBS face into triangles and treat each as planar.
-                // Use very coarse tessellation for boolean performance.
-                // The planar clipping algorithm is O(n²) in face count.
-                let mesh = crate::tessellate::tessellate(topo, fid, 1.0)?;
-                for tri in mesh.indices.chunks_exact(3) {
-                    let i0 = tri[0] as usize;
-                    let i1 = tri[1] as usize;
-                    let i2 = tri[2] as usize;
+        if let FaceSurface::Plane { normal, d } = face.surface() {
+            let verts = face_vertices(topo, fid)?;
+            result.push((fid, verts, *normal, *d));
+        } else {
+            // Tessellate non-planar face into triangles and treat each as planar.
+            let mesh = crate::tessellate::tessellate(topo, fid, 1.0)?;
+            for tri in mesh.indices.chunks_exact(3) {
+                let i0 = tri[0] as usize;
+                let i1 = tri[1] as usize;
+                let i2 = tri[2] as usize;
 
-                    let v0 = mesh.positions[i0];
-                    let v1 = mesh.positions[i1];
-                    let v2 = mesh.positions[i2];
+                let v0 = mesh.positions[i0];
+                let v1 = mesh.positions[i1];
+                let v2 = mesh.positions[i2];
 
-                    let edge1 = v1 - v0;
-                    let edge2 = v2 - v0;
-                    let normal = edge1
-                        .cross(edge2)
-                        .normalize()
-                        .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
-                    let d = crate::dot_normal_point(normal, v0);
+                let edge1 = v1 - v0;
+                let edge2 = v2 - v0;
+                let normal = edge1
+                    .cross(edge2)
+                    .normalize()
+                    .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                let d = crate::dot_normal_point(normal, v0);
 
-                    result.push((fid, vec![v0, v1, v2], normal, d));
-                }
+                result.push((fid, vec![v0, v1, v2], normal, d));
             }
         }
     }

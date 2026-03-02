@@ -35,9 +35,9 @@ pub fn thicken(
     let face_data = topo.face(face)?;
     let normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
-        FaceSurface::Nurbs(_) => {
+        _ => {
             return Err(crate::OperationsError::InvalidInput {
-                reason: "thicken of NURBS faces is not supported".into(),
+                reason: "thicken of non-planar faces is not supported".into(),
             });
         }
     };

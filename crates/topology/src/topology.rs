@@ -8,6 +8,7 @@ use crate::arena::Arena;
 use crate::compound::{Compound, CompoundId};
 use crate::edge::{Edge, EdgeId};
 use crate::face::{Face, FaceId};
+use crate::pcurve::PCurveRegistry;
 use crate::shell::{Shell, ShellId};
 use crate::solid::{Solid, SolidId};
 use crate::vertex::{Vertex, VertexId};
@@ -34,6 +35,8 @@ pub struct Topology {
     pub solids: Arena<Solid>,
     /// All compounds in the model.
     pub compounds: Arena<Compound>,
+    /// `PCurves`: 2D parametric curves mapping edges to face surface parameters.
+    pub pcurves: PCurveRegistry,
 }
 
 /// Generates an immutable arena accessor method on [`Topology`].

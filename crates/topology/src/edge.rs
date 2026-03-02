@@ -61,4 +61,9 @@ impl Edge {
     pub fn is_closed(&self) -> bool {
         self.start == self.end
     }
+
+    /// Sets the curve geometry of this edge.
+    pub fn set_curve(&mut self, curve: EdgeCurve) {
+        self.curve = curve;
+    }
 }

@@ -71,9 +71,11 @@ pub enum MathError {
 pub mod aabb;
 pub mod bvh;
 pub mod curves;
+pub mod curves2d;
 pub mod mat;
 pub mod nurbs;
 pub mod plane;
 pub mod predicates;
+pub mod surfaces;
 pub mod tolerance;
 pub mod vec;

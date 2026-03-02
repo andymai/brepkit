@@ -69,9 +69,9 @@ pub fn chamfer(
         let face = topo.face(face_id)?;
         let (normal, _d) = match face.surface() {
             FaceSurface::Plane { normal, d } => (*normal, *d),
-            FaceSurface::Nurbs(_) => {
+            _ => {
                 return Err(crate::OperationsError::InvalidInput {
-                    reason: "chamfer on NURBS faces is not supported".into(),
+                    reason: "chamfer on non-planar faces is not supported".into(),
                 });
             }
         };

@@ -1,0 +1,639 @@
+//! Analytic surface types for exact geometric computations.
+//!
+//! These surfaces complement NURBS surfaces by providing exact parameterizations
+//! for common shapes (cylinder, cone, sphere, torus). This enables exact
+//! intersection algorithms (e.g., plane-cylinder = ellipse) without sampling.
+
+use crate::MathError;
+use crate::vec::{Point3, Vec3};
+
+/// An infinite cylindrical surface.
+///
+/// Parameterized as `P(u, v) = origin + radius*(cos(u)*x_axis + sin(u)*y_axis) + v*axis`
+/// where `u ∈ [0, 2π)` and `v ∈ (-∞, +∞)`.
+#[derive(Debug, Clone)]
+pub struct CylindricalSurface {
+    origin: Point3,
+    axis: Vec3,
+    radius: f64,
+    x_axis: Vec3,
+    y_axis: Vec3,
+}
+
+impl CylindricalSurface {
+    /// Creates a new cylindrical surface.
+    ///
+    /// # Errors
+    /// Returns an error if radius is not positive or axis is zero.
+    pub fn new(origin: Point3, axis: Vec3, radius: f64) -> Result<Self, MathError> {
+        if radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        let a = axis.normalize()?;
+        let candidate = if a.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let x = a.cross(candidate).normalize()?;
+        let y = a.cross(x);
+        Ok(Self {
+            origin,
+            axis: a,
+            radius,
+            x_axis: x,
+            y_axis: y,
+        })
+    }
+
+    /// Evaluates the surface at parameters `(u, v)`.
+    #[must_use]
+    pub fn evaluate(&self, u: f64, v: f64) -> Point3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        self.origin
+            + self.x_axis * (self.radius * cos_u)
+            + self.y_axis * (self.radius * sin_u)
+            + self.axis * v
+    }
+
+    /// Returns the surface normal at parameters `(u, v)`.
+    #[must_use]
+    pub fn normal(&self, u: f64, _v: f64) -> Vec3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        self.x_axis * cos_u + self.y_axis * sin_u
+    }
+
+    /// Returns the origin.
+    #[must_use]
+    pub const fn origin(&self) -> Point3 {
+        self.origin
+    }
+
+    /// Returns the axis direction.
+    #[must_use]
+    pub const fn axis(&self) -> Vec3 {
+        self.axis
+    }
+
+    /// Returns the radius.
+    #[must_use]
+    pub const fn radius(&self) -> f64 {
+        self.radius
+    }
+}
+
+/// An infinite conical surface.
+///
+/// Parameterized as `P(u, v) = apex + v*(cos(half_angle)*(cos(u)*x_axis + sin(u)*y_axis) + sin(half_angle)*axis)`
+/// where `u ∈ [0, 2π)` and `v ∈ [0, +∞)`.
+#[derive(Debug, Clone)]
+pub struct ConicalSurface {
+    apex: Point3,
+    axis: Vec3,
+    half_angle: f64,
+    x_axis: Vec3,
+    y_axis: Vec3,
+}
+
+impl ConicalSurface {
+    /// Creates a new conical surface.
+    ///
+    /// `half_angle` is the angle between the axis and the cone's surface (radians).
+    ///
+    /// # Errors
+    /// Returns an error if half-angle is not in `(0, π/2)` or axis is zero.
+    pub fn new(apex: Point3, axis: Vec3, half_angle: f64) -> Result<Self, MathError> {
+        if half_angle <= 0.0 || half_angle >= std::f64::consts::FRAC_PI_2 {
+            return Err(MathError::ParameterOutOfRange {
+                value: half_angle,
+                min: f64::EPSILON,
+                max: std::f64::consts::FRAC_PI_2,
+            });
+        }
+        let a = axis.normalize()?;
+        let candidate = if a.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let x = a.cross(candidate).normalize()?;
+        let y = a.cross(x);
+        Ok(Self {
+            apex,
+            axis: a,
+            half_angle,
+            x_axis: x,
+            y_axis: y,
+        })
+    }
+
+    /// Evaluates the surface at parameters `(u, v)`.
+    #[must_use]
+    pub fn evaluate(&self, u: f64, v: f64) -> Point3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let (sin_a, cos_a) = self.half_angle.sin_cos();
+        let radial = self.x_axis * cos_u + self.y_axis * sin_u;
+        self.apex + (radial * cos_a + self.axis * sin_a) * v
+    }
+
+    /// Returns the surface normal at parameters `(u, v)`.
+    #[must_use]
+    pub fn normal(&self, u: f64, _v: f64) -> Vec3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let (sin_a, cos_a) = self.half_angle.sin_cos();
+        let radial = self.x_axis * cos_u + self.y_axis * sin_u;
+        // Normal points outward: radial * sin(a) - axis * cos(a)
+        radial * sin_a + self.axis * (-cos_a)
+    }
+
+    /// Returns the apex point.
+    #[must_use]
+    pub const fn apex(&self) -> Point3 {
+        self.apex
+    }
+
+    /// Returns the axis direction.
+    #[must_use]
+    pub const fn axis(&self) -> Vec3 {
+        self.axis
+    }
+
+    /// Returns the half-angle in radians.
+    #[must_use]
+    pub const fn half_angle(&self) -> f64 {
+        self.half_angle
+    }
+
+    /// Returns the radius at a given distance `v` along the axis from the apex.
+    #[must_use]
+    pub fn radius_at(&self, v: f64) -> f64 {
+        v * self.half_angle.cos()
+    }
+}
+
+/// An infinite spherical surface (actually a sphere).
+///
+/// Parameterized as `P(u, v) = center + radius*(cos(v)*cos(u)*x + cos(v)*sin(u)*y + sin(v)*z)`
+/// where `u ∈ [0, 2π)` (longitude) and `v ∈ [-π/2, π/2]` (latitude).
+#[derive(Debug, Clone)]
+pub struct SphericalSurface {
+    center: Point3,
+    radius: f64,
+    x_axis: Vec3,
+    y_axis: Vec3,
+    z_axis: Vec3,
+}
+
+impl SphericalSurface {
+    /// Creates a new spherical surface.
+    ///
+    /// # Errors
+    /// Returns an error if radius is not positive.
+    pub fn new(center: Point3, radius: f64) -> Result<Self, MathError> {
+        if radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        Ok(Self {
+            center,
+            radius,
+            x_axis: Vec3::new(1.0, 0.0, 0.0),
+            y_axis: Vec3::new(0.0, 1.0, 0.0),
+            z_axis: Vec3::new(0.0, 0.0, 1.0),
+        })
+    }
+
+    /// Creates a spherical surface with a custom orientation.
+    ///
+    /// # Errors
+    /// Returns an error if radius is not positive or the z-axis is zero.
+    pub fn with_axis(center: Point3, radius: f64, z_axis: Vec3) -> Result<Self, MathError> {
+        if radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        let z = z_axis.normalize()?;
+        let candidate = if z.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let x = z.cross(candidate).normalize()?;
+        let y = z.cross(x);
+        Ok(Self {
+            center,
+            radius,
+            x_axis: x,
+            y_axis: y,
+            z_axis: z,
+        })
+    }
+
+    /// Evaluates the surface at parameters `(u, v)`.
+    #[must_use]
+    pub fn evaluate(&self, u: f64, v: f64) -> Point3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let (sin_v, cos_v) = v.sin_cos();
+        self.center
+            + self.x_axis * (self.radius * cos_v * cos_u)
+            + self.y_axis * (self.radius * cos_v * sin_u)
+            + self.z_axis * (self.radius * sin_v)
+    }
+
+    /// Returns the outward normal at parameters `(u, v)`.
+    #[must_use]
+    pub fn normal(&self, u: f64, v: f64) -> Vec3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let (sin_v, cos_v) = v.sin_cos();
+        self.x_axis * (cos_v * cos_u) + self.y_axis * (cos_v * sin_u) + self.z_axis * sin_v
+    }
+
+    /// Returns the center.
+    #[must_use]
+    pub const fn center(&self) -> Point3 {
+        self.center
+    }
+
+    /// Returns the radius.
+    #[must_use]
+    pub const fn radius(&self) -> f64 {
+        self.radius
+    }
+}
+
+/// A toroidal surface.
+///
+/// Parameterized as `P(u, v) = center + (R + r*cos(v))*(cos(u)*x + sin(u)*y) + r*sin(v)*z`
+/// where `R` is the major radius, `r` is the minor radius,
+/// `u ∈ [0, 2π)` (around the tube) and `v ∈ [0, 2π)` (around the cross-section).
+#[derive(Debug, Clone)]
+pub struct ToroidalSurface {
+    center: Point3,
+    major_radius: f64,
+    minor_radius: f64,
+    x_axis: Vec3,
+    y_axis: Vec3,
+    z_axis: Vec3,
+}
+
+impl ToroidalSurface {
+    /// Creates a new toroidal surface.
+    ///
+    /// # Errors
+    /// Returns an error if either radius is not positive or `minor_radius > major_radius`.
+    pub fn new(center: Point3, major_radius: f64, minor_radius: f64) -> Result<Self, MathError> {
+        if major_radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: major_radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        if minor_radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: minor_radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        Ok(Self {
+            center,
+            major_radius,
+            minor_radius,
+            x_axis: Vec3::new(1.0, 0.0, 0.0),
+            y_axis: Vec3::new(0.0, 1.0, 0.0),
+            z_axis: Vec3::new(0.0, 0.0, 1.0),
+        })
+    }
+
+    /// Evaluates the surface at parameters `(u, v)`.
+    #[must_use]
+    pub fn evaluate(&self, u: f64, v: f64) -> Point3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let (sin_v, cos_v) = v.sin_cos();
+        let tube_radius = self.minor_radius.mul_add(cos_v, self.major_radius);
+        self.center
+            + self.x_axis * (tube_radius * cos_u)
+            + self.y_axis * (tube_radius * sin_u)
+            + self.z_axis * (self.minor_radius * sin_v)
+    }
+
+    /// Returns the outward surface normal at parameters `(u, v)`.
+    #[must_use]
+    pub fn normal(&self, u: f64, v: f64) -> Vec3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let (sin_v, cos_v) = v.sin_cos();
+        let radial = self.x_axis * cos_u + self.y_axis * sin_u;
+        radial * cos_v + self.z_axis * sin_v
+    }
+
+    /// Returns the center.
+    #[must_use]
+    pub const fn center(&self) -> Point3 {
+        self.center
+    }
+
+    /// Returns the major radius (distance from center to tube center).
+    #[must_use]
+    pub const fn major_radius(&self) -> f64 {
+        self.major_radius
+    }
+
+    /// Returns the minor radius (tube cross-section radius).
+    #[must_use]
+    pub const fn minor_radius(&self) -> f64 {
+        self.minor_radius
+    }
+}
+
+/// A surface of revolution created by revolving a curve around an axis.
+///
+/// Parameterized as `P(u, v) = origin + (curve(v) ⊗ rotation(u, axis))`
+/// where `u ∈ [0, 2π)` is the revolution angle and `v` parameterizes
+/// the generatrix curve.
+#[derive(Debug, Clone)]
+pub struct RevolutionSurface {
+    origin: Point3,
+    axis: Vec3,
+    x_axis: Vec3,
+    y_axis: Vec3,
+    /// The generatrix (meridian) curve in the `(distance_from_axis, height)` plane.
+    generatrix_radii: Vec<f64>,
+    generatrix_heights: Vec<f64>,
+}
+
+impl RevolutionSurface {
+    /// Creates a surface of revolution from a set of meridian profile points.
+    ///
+    /// Each point `(radius, height)` defines the generatrix in the rotation plane.
+    ///
+    /// # Errors
+    /// Returns an error if the profile is empty or the axis is zero.
+    pub fn new(
+        origin: Point3,
+        axis: Vec3,
+        radii: Vec<f64>,
+        heights: Vec<f64>,
+    ) -> Result<Self, MathError> {
+        if radii.is_empty() || heights.is_empty() {
+            return Err(MathError::EmptyInput);
+        }
+        if radii.len() != heights.len() {
+            return Err(MathError::InvalidWeights {
+                expected: radii.len(),
+                got: heights.len(),
+            });
+        }
+        let a = axis.normalize()?;
+        let candidate = if a.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let x = a.cross(candidate).normalize()?;
+        let y = a.cross(x);
+        Ok(Self {
+            origin,
+            axis: a,
+            x_axis: x,
+            y_axis: y,
+            generatrix_radii: radii,
+            generatrix_heights: heights,
+        })
+    }
+
+    /// Evaluates at `(u, v)` where `u` is the revolution angle and `v ∈ [0, 1]`
+    /// parameterizes the generatrix via linear interpolation.
+    #[must_use]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss
+    )]
+    pub fn evaluate(&self, u: f64, v: f64) -> Point3 {
+        let num_pts = self.generatrix_radii.len();
+        let param = v.clamp(0.0, 1.0) * (num_pts - 1) as f64;
+        let idx = (param as usize).min(num_pts - 2);
+        let frac = param - idx as f64;
+
+        let r = frac.mul_add(
+            self.generatrix_radii[idx + 1] - self.generatrix_radii[idx],
+            self.generatrix_radii[idx],
+        );
+        let height = frac.mul_add(
+            self.generatrix_heights[idx + 1] - self.generatrix_heights[idx],
+            self.generatrix_heights[idx],
+        );
+
+        let (sin_u, cos_u) = u.sin_cos();
+        self.origin + self.x_axis * (r * cos_u) + self.y_axis * (r * sin_u) + self.axis * height
+    }
+
+    /// Returns the origin.
+    #[must_use]
+    pub const fn origin(&self) -> Point3 {
+        self.origin
+    }
+
+    /// Returns the axis.
+    #[must_use]
+    pub const fn axis(&self) -> Vec3 {
+        self.axis
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use std::f64::consts::{FRAC_PI_2, PI};
+
+    const TOL: f64 = 1e-10;
+
+    fn approx_eq(a: f64, b: f64) -> bool {
+        (a - b).abs() < TOL
+    }
+
+    fn point_approx_eq(a: Point3, b: Point3) -> bool {
+        approx_eq(a.x(), b.x()) && approx_eq(a.y(), b.y()) && approx_eq(a.z(), b.z())
+    }
+
+    // ── Cylinder tests ────────────────────────────────
+
+    #[test]
+    fn cylinder_at_origin() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+
+        let p = cyl.evaluate(0.0, 0.0);
+        assert!(approx_eq((p - Point3::new(0.0, 0.0, 0.0)).length(), 2.0));
+
+        let p = cyl.evaluate(0.0, 5.0);
+        assert!(approx_eq(p.z(), 5.0));
+    }
+
+    #[test]
+    fn cylinder_normal_is_radial() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+
+        let n = cyl.normal(0.0, 0.0);
+        // Normal should be perpendicular to axis
+        assert!(approx_eq(n.dot(Vec3::new(0.0, 0.0, 1.0)), 0.0));
+        // And unit length
+        assert!(approx_eq(n.length(), 1.0));
+    }
+
+    #[test]
+    fn cylinder_zero_radius_error() {
+        assert!(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.0,)
+                .is_err()
+        );
+    }
+
+    // ── Cone tests ────────────────────────────────────
+
+    #[test]
+    fn cone_apex() {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            PI / 4.0,
+        )
+        .unwrap();
+
+        // At v=0, all points should be at the apex
+        let p = cone.evaluate(0.0, 0.0);
+        assert!(point_approx_eq(p, Point3::new(0.0, 0.0, 0.0)));
+    }
+
+    #[test]
+    fn cone_radius_at() {
+        let half_angle = PI / 6.0; // 30 degrees
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            half_angle,
+        )
+        .unwrap();
+
+        let r = cone.radius_at(10.0);
+        assert!(approx_eq(r, 10.0 * half_angle.cos()));
+    }
+
+    #[test]
+    fn cone_invalid_half_angle() {
+        assert!(
+            ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.0,)
+                .is_err()
+        );
+
+        assert!(
+            ConicalSurface::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                FRAC_PI_2,
+            )
+            .is_err()
+        );
+    }
+
+    // ── Sphere tests ──────────────────────────────────
+
+    #[test]
+    fn sphere_north_pole() {
+        let s = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0).unwrap();
+        let p = s.evaluate(0.0, FRAC_PI_2);
+        assert!(point_approx_eq(p, Point3::new(0.0, 0.0, 3.0)));
+    }
+
+    #[test]
+    fn sphere_equator() {
+        let s = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 2.0).unwrap();
+
+        // u=0, v=0 → along x-axis
+        let p = s.evaluate(0.0, 0.0);
+        assert!(approx_eq(p.x(), 2.0));
+        assert!(approx_eq(p.y(), 0.0));
+        assert!(approx_eq(p.z(), 0.0));
+    }
+
+    #[test]
+    fn sphere_normal_is_radial() {
+        let sphere = SphericalSurface::new(Point3::new(1.0, 2.0, 3.0), 5.0).unwrap();
+
+        let param_u = 1.0;
+        let param_v = 0.5;
+        let point = sphere.evaluate(param_u, param_v);
+        let normal = sphere.normal(param_u, param_v);
+
+        // Normal should point from center to surface point
+        let expected_dir = point - sphere.center();
+        let expected_norm = expected_dir.normalize().expect("non-zero");
+        assert!(approx_eq(normal.dot(expected_norm), 1.0));
+    }
+
+    #[test]
+    fn sphere_zero_radius_error() {
+        assert!(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 0.0).is_err());
+    }
+
+    // ── Torus tests ───────────────────────────────────
+
+    #[test]
+    fn torus_outer_point() {
+        let t = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0, 2.0).unwrap();
+
+        // u=0, v=0 → outermost point at (R+r, 0, 0) = (7, 0, 0) along x
+        let p = t.evaluate(0.0, 0.0);
+        assert!(approx_eq((p - Point3::new(0.0, 0.0, 0.0)).length(), 7.0));
+    }
+
+    #[test]
+    fn torus_inner_point() {
+        let t = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0, 2.0).unwrap();
+
+        // v=π → innermost point at distance R-r = 3
+        let p = t.evaluate(0.0, PI);
+        assert!(approx_eq((p - Point3::new(0.0, 0.0, 0.0)).length(), 3.0));
+    }
+
+    #[test]
+    fn torus_zero_radius_error() {
+        assert!(ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 0.0, 1.0).is_err());
+        assert!(ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0, 0.0).is_err());
+    }
+
+    // ── Revolution surface tests ──────────────────────
+
+    #[test]
+    fn revolution_cylinder_like() {
+        // A revolution surface with constant radius = cylinder
+        let rev = RevolutionSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            vec![3.0, 3.0],
+            vec![0.0, 10.0],
+        )
+        .unwrap();
+
+        let p = rev.evaluate(0.0, 0.0);
+        assert!(approx_eq((p - Point3::new(0.0, 0.0, 0.0)).length(), 3.0));
+
+        let p = rev.evaluate(0.0, 1.0);
+        assert!(approx_eq(p.z(), 10.0));
+    }
+}

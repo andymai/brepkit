@@ -36,6 +36,12 @@ pub fn tessellate(
     match face_data.surface() {
         FaceSurface::Plane { normal, .. } => tessellate_planar(topo, face_data, *normal),
         FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection)),
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => Err(crate::OperationsError::InvalidInput {
+            reason: "tessellation of analytic surface faces is not yet supported".into(),
+        }),
     }
 }
 

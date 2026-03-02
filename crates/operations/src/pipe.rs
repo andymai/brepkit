@@ -50,9 +50,9 @@ pub fn pipe(
     let face_data = topo.face(profile)?;
     let input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
-        FaceSurface::Nurbs(_) => {
+        _ => {
             return Err(crate::OperationsError::InvalidInput {
-                reason: "pipe of NURBS faces is not supported".into(),
+                reason: "pipe of non-planar faces is not supported".into(),
             });
         }
     };

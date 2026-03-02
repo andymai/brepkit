@@ -191,9 +191,9 @@ pub fn revolve(
     let face_data = topo.face(face)?;
     let input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
-        FaceSurface::Nurbs(_) => {
+        _ => {
             return Err(crate::OperationsError::InvalidInput {
-                reason: "revolve of NURBS faces is not supported".into(),
+                reason: "revolve of non-planar faces is not supported".into(),
             });
         }
     };
@@ -490,7 +490,7 @@ mod tests {
             let f = topo.face(fid).unwrap();
             match f.surface() {
                 FaceSurface::Plane { .. } => planar_count += 1,
-                FaceSurface::Nurbs(_) => nurbs_count += 1,
+                _ => nurbs_count += 1,
             }
         }
         assert_eq!(planar_count, 2, "should have 2 planar end caps");

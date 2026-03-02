@@ -51,12 +51,11 @@ pub fn face_area(
 ) -> Result<f64, crate::OperationsError> {
     let face = topo.face(face_id)?;
 
-    match face.surface() {
-        FaceSurface::Plane { .. } => planar_face_area(topo, face_id),
-        FaceSurface::Nurbs(_) => {
-            let mesh = tessellate::tessellate(topo, face_id, deflection)?;
-            Ok(triangle_mesh_area(&mesh))
-        }
+    if matches!(face.surface(), FaceSurface::Plane { .. }) {
+        planar_face_area(topo, face_id)
+    } else {
+        let mesh = tessellate::tessellate(topo, face_id, deflection)?;
+        Ok(triangle_mesh_area(&mesh))
     }
 }
 

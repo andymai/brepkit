@@ -46,9 +46,9 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         let face = topo.face(fid)?;
         match face.surface() {
             FaceSurface::Plane { .. } => {}
-            FaceSurface::Nurbs(_) => {
+            _ => {
                 return Err(crate::OperationsError::InvalidInput {
-                    reason: "loft of NURBS faces is not supported".into(),
+                    reason: "loft of non-planar faces is not supported".into(),
                 });
             }
         }
@@ -125,9 +125,9 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         let face_data = topo.face(profiles[0])?;
         let cap_normal = match face_data.surface() {
             FaceSurface::Plane { normal, .. } => -*normal,
-            FaceSurface::Nurbs(_) => {
+            _ => {
                 return Err(crate::OperationsError::InvalidInput {
-                    reason: "unexpected NURBS face".into(),
+                    reason: "unexpected non-planar face".into(),
                 });
             }
         };
@@ -195,9 +195,9 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         let face_data = topo.face(profiles[num_profiles - 1])?;
         let cap_normal = match face_data.surface() {
             FaceSurface::Plane { normal, .. } => *normal,
-            FaceSurface::Nurbs(_) => {
+            _ => {
                 return Err(crate::OperationsError::InvalidInput {
-                    reason: "unexpected NURBS face".into(),
+                    reason: "unexpected non-planar face".into(),
                 });
             }
         };
