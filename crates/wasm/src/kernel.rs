@@ -953,6 +953,125 @@ impl BrepKernel {
         Ok(merged.into())
     }
 
+    // ── Topology queries ──────────────────────────────────────────
+
+    /// Get all face handles of a solid.
+    ///
+    /// Returns an array of face handles (`u32[]`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "getSolidFaces")]
+    pub fn get_solid_faces(&self, solid: u32) -> Result<Vec<u32>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let faces = brepkit_topology::explorer::solid_faces(&self.topo, solid_id)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(faces.iter().map(|f| f.index() as u32).collect())
+    }
+
+    /// Get all edge handles of a solid.
+    ///
+    /// Returns an array of unique edge handles (`u32[]`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "getSolidEdges")]
+    pub fn get_solid_edges(&self, solid: u32) -> Result<Vec<u32>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let edges = brepkit_topology::explorer::solid_edges(&self.topo, solid_id)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(edges.iter().map(|e| e.index() as u32).collect())
+    }
+
+    /// Get all vertex handles of a solid.
+    ///
+    /// Returns an array of unique vertex handles (`u32[]`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "getSolidVertices")]
+    pub fn get_solid_vertices(&self, solid: u32) -> Result<Vec<u32>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let verts = brepkit_topology::explorer::solid_vertices(&self.topo, solid_id)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(verts.iter().map(|v| v.index() as u32).collect())
+    }
+
+    /// Get the vertex positions of an edge.
+    ///
+    /// Returns `[start_x, start_y, start_z, end_x, end_y, end_z]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the edge handle is invalid.
+    #[wasm_bindgen(js_name = "getEdgeVertices")]
+    pub fn get_edge_vertices(&self, edge: u32) -> Result<Vec<f64>, JsError> {
+        let edge_id = self.resolve_edge(edge)?;
+        let edge_data = self.topo.edge(edge_id)?;
+        let start = self.topo.vertex(edge_data.start())?.point();
+        let end = self.topo.vertex(edge_data.end())?.point();
+        Ok(vec![
+            start.x(),
+            start.y(),
+            start.z(),
+            end.x(),
+            end.y(),
+            end.z(),
+        ])
+    }
+
+    /// Get the position of a vertex.
+    ///
+    /// Returns `[x, y, z]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the vertex handle is invalid.
+    #[wasm_bindgen(js_name = "getVertexPosition")]
+    pub fn get_vertex_position(&self, vertex: u32) -> Result<Vec<f64>, JsError> {
+        let vertex_id = self.resolve_vertex(vertex)?;
+        let point = self.topo.vertex(vertex_id)?.point();
+        Ok(vec![point.x(), point.y(), point.z()])
+    }
+
+    /// Get the face normal of a planar face.
+    ///
+    /// Returns `[nx, ny, nz]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face is invalid or NURBS.
+    #[wasm_bindgen(js_name = "getFaceNormal")]
+    pub fn get_face_normal(&self, face: u32) -> Result<Vec<f64>, JsError> {
+        let face_id = self.resolve_face(face)?;
+        let face_data = self.topo.face(face_id)?;
+        match face_data.surface() {
+            brepkit_topology::face::FaceSurface::Plane { normal, .. } => {
+                Ok(vec![normal.x(), normal.y(), normal.z()])
+            }
+            brepkit_topology::face::FaceSurface::Nurbs(_) => Err(WasmError::InvalidInput {
+                reason: "getFaceNormal only works on planar faces".into(),
+            }
+            .into()),
+        }
+    }
+
+    /// Get entity counts of a solid: `[faces, edges, vertices]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "getEntityCounts")]
+    pub fn get_entity_counts(&self, solid: u32) -> Result<Vec<u32>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&self.topo, solid_id)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(vec![f as u32, e as u32, v as u32])
+    }
+
     // ── Measurement ───────────────────────────────────────────────
 
     /// Compute the axis-aligned bounding box of a solid.
@@ -1093,6 +1212,18 @@ impl BrepKernel {
             .id_from_index(index)
             .ok_or(WasmError::InvalidHandle {
                 entity: "face",
+                index,
+            })
+    }
+
+    /// Resolve a `u32` vertex handle to a typed `VertexId`.
+    fn resolve_vertex(&self, handle: u32) -> Result<brepkit_topology::vertex::VertexId, WasmError> {
+        let index = handle as usize;
+        self.topo
+            .vertices
+            .id_from_index(index)
+            .ok_or(WasmError::InvalidHandle {
+                entity: "vertex",
                 index,
             })
     }

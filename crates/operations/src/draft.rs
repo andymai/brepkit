@@ -117,7 +117,12 @@ pub fn draft(
         if new_verts.len() >= 3 {
             let a = new_verts[1] - new_verts[0];
             let b = new_verts[2] - new_verts[0];
-            let new_normal = a.cross(b).normalize().unwrap_or(face_normal);
+            let new_normal =
+                a.cross(b)
+                    .normalize()
+                    .map_err(|_| crate::OperationsError::InvalidInput {
+                        reason: "draft produced degenerate face geometry".into(),
+                    })?;
             let new_d = dot_normal_point(new_normal, new_verts[0]);
             result_faces.push((new_verts, new_normal, new_d));
         }

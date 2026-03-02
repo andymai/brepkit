@@ -115,12 +115,12 @@ pub fn split(
     let cap = build_cap_polygon(&cap_points, normal, d, tol);
 
     if let Some((cap_verts, cap_normal, cap_d)) = cap {
-        // Positive half gets cap with normal pointing inward (negative normal).
+        // Positive half: cap face normal points toward negative side (-cap_normal)
+        // to close the positive half from below.
         positive_faces.push((cap_verts.clone(), -cap_normal, -cap_d));
-        // Negative half gets cap with original normal.
-        let reversed: Vec<Point3> = cap_verts.into_iter().rev().collect();
-        let neg_cap_d = dot_normal_point(cap_normal, reversed[0]);
-        negative_faces.push((reversed, cap_normal, neg_cap_d));
+        // Negative half: cap face normal points toward positive side (cap_normal)
+        // to close the negative half from above. Same vertex winding.
+        negative_faces.push((cap_verts, cap_normal, cap_d));
     }
 
     let pos_solid = assemble_solid(topo, &positive_faces, tol)?;

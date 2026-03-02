@@ -187,10 +187,7 @@ pub fn pipe(
             let p_next = topo.vertex(ring_verts[seg + 1][i])?.point();
             let edge_dir = p1 - p0;
             let path_dir = p_next - p0;
-            let side_normal = edge_dir
-                .cross(path_dir)
-                .normalize()
-                .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+            let side_normal = edge_dir.cross(path_dir).normalize()?;
             let side_d = dot_normal_point(side_normal, p0);
 
             let side_wire = Wire::new(
@@ -277,6 +274,8 @@ fn compute_scale_factors(
 }
 
 /// Project `v` to be perpendicular to `tangent`, then normalize.
+///
+/// Precondition: `tangent` must be unit-length (from `NurbsCurve::tangent`).
 fn orthogonalize(v: Vec3, tangent: Vec3) -> Vec3 {
     let projected = v - tangent * tangent.dot(v);
     projected.normalize().unwrap_or_else(|_| {
