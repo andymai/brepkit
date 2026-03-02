@@ -13,6 +13,7 @@
 pub mod arena;
 pub mod builder;
 pub mod compound;
+pub mod compsolid;
 pub mod edge;
 pub mod explorer;
 pub mod face;
@@ -60,6 +61,10 @@ pub enum TopologyError {
     /// A referenced compound ID does not exist in the arena.
     #[error("compound {0:?} not found")]
     CompoundNotFound(compound::CompoundId),
+
+    /// A referenced comp-solid ID does not exist in the arena.
+    #[error("compsolid {0:?} not found")]
+    CompSolidNotFound(compsolid::CompSolidId),
 
     /// A wire does not form a closed loop.
     #[error("wire is not closed")]

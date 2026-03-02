@@ -6,6 +6,7 @@
 use crate::TopologyError;
 use crate::arena::Arena;
 use crate::compound::{Compound, CompoundId};
+use crate::compsolid::{CompSolid, CompSolidId};
 use crate::edge::{Edge, EdgeId};
 use crate::face::{Face, FaceId};
 use crate::pcurve::PCurveRegistry;
@@ -35,6 +36,8 @@ pub struct Topology {
     pub solids: Arena<Solid>,
     /// All compounds in the model.
     pub compounds: Arena<Compound>,
+    /// All comp-solids in the model.
+    pub compsolids: Arena<CompSolid>,
     /// `PCurves`: 2D parametric curves mapping edges to face surface parameters.
     pub pcurves: PCurveRegistry,
 }
@@ -103,6 +106,21 @@ impl Topology {
         Compound,
         CompoundId,
         CompoundNotFound
+    );
+
+    arena_get!(
+        compsolid,
+        compsolids,
+        CompSolid,
+        CompSolidId,
+        CompSolidNotFound
+    );
+    arena_get_mut!(
+        compsolid_mut,
+        compsolids,
+        CompSolid,
+        CompSolidId,
+        CompSolidNotFound
     );
 }
 
