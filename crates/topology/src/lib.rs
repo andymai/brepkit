@@ -14,6 +14,7 @@ pub mod arena;
 pub mod builder;
 pub mod compound;
 pub mod edge;
+pub mod explorer;
 pub mod face;
 pub mod graph;
 pub mod shell;

@@ -213,20 +213,20 @@ fn assemble_wires(
         let mut changed = true;
         while changed {
             changed = false;
-            let chain_end = *chain.last().unwrap_or(&chain[0]);
+            let chain_end = chain[chain.len() - 1];
 
             for i in 0..remaining.len() {
                 let (a, b) = remaining[i];
                 let dist_a = (a - chain_end).length_squared();
                 let dist_b = (b - chain_end).length_squared();
-                let threshold = tol.linear * 1000.0;
+                let threshold_sq = (tol.linear * 1000.0) * (tol.linear * 1000.0);
 
-                if dist_a < threshold {
+                if dist_a < threshold_sq {
                     chain.push(b);
                     remaining.remove(i);
                     changed = true;
                     break;
-                } else if dist_b < threshold {
+                } else if dist_b < threshold_sq {
                     chain.push(a);
                     remaining.remove(i);
                     changed = true;
@@ -242,7 +242,8 @@ fn assemble_wires(
 
         let start = chain[0];
         let end = chain[chain.len() - 1];
-        let closed = (start - end).length_squared() < tol.linear * 1000.0;
+        let close_tol = tol.linear * 1000.0;
+        let closed = (start - end).length_squared() < close_tol * close_tol;
 
         if !closed {
             // Not a closed wire — skip (partial section).
