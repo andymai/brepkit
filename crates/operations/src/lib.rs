@@ -24,6 +24,7 @@ pub mod helix;
 pub mod loft;
 pub mod measure;
 pub mod mirror;
+pub mod nurbs_boolean;
 pub mod offset_face;
 pub mod offset_wire;
 pub mod pattern;
