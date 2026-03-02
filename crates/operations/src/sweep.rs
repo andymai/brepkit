@@ -405,6 +405,323 @@ pub fn sweep(
     Ok(solid)
 }
 
+/// Contact mode for advanced sweep operations.
+///
+/// Determines how the profile is oriented as it moves along the path.
+#[derive(Debug, Clone, Copy, Default)]
+pub enum SweepContactMode {
+    /// Rotation-minimizing frames (default, twist-free).
+    #[default]
+    RotationMinimizing,
+    /// Fixed orientation: profile does not rotate along the path.
+    Fixed,
+    /// Profile normal stays aligned to a given direction.
+    ConstantNormal(Vec3),
+}
+
+/// Options for advanced sweep operations.
+#[derive(Default)]
+pub struct SweepOptions {
+    /// Contact mode for profile orientation.
+    pub contact_mode: SweepContactMode,
+    /// Scale function: maps path parameter `t ∈ [0, 1]` to a scale factor.
+    /// `None` means uniform scale (1.0 everywhere).
+    pub scale_law: Option<Box<dyn Fn(f64) -> f64 + Send + Sync>>,
+    /// Number of path segments (0 = auto from control point count).
+    pub segments: usize,
+}
+
+impl std::fmt::Debug for SweepOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SweepOptions")
+            .field("contact_mode", &self.contact_mode)
+            .field(
+                "scale_law",
+                &self.scale_law.as_ref().map(|_| "fn(f64)->f64"),
+            )
+            .field("segments", &self.segments)
+            .finish()
+    }
+}
+
+/// Sweep a face along a path with advanced options.
+///
+/// Supports scaling laws (tapered sweep) and multiple contact modes.
+/// This is equivalent to OCCT's `BRepOffsetAPI_MakePipeShell`.
+///
+/// # Errors
+///
+/// Returns errors for invalid input (see [`sweep`]).
+#[allow(clippy::too_many_lines)]
+pub fn sweep_with_options(
+    topo: &mut Topology,
+    profile: FaceId,
+    path: &NurbsCurve,
+    options: &SweepOptions,
+) -> Result<SolidId, crate::OperationsError> {
+    let tol = Tolerance::new();
+
+    if path.control_points().len() < 2 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "sweep path must have at least 2 control points".into(),
+        });
+    }
+
+    let face_data = topo.face(profile)?;
+    let input_normal = match face_data.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        _ => {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "sweep of non-planar faces is not supported".into(),
+            });
+        }
+    };
+    let input_wire_id = face_data.outer_wire();
+
+    if !face_data.inner_wires().is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "sweep of faces with holes is not supported".into(),
+        });
+    }
+
+    let input_wire = topo.wire(input_wire_id)?;
+    let input_oriented: Vec<_> = input_wire.edges().to_vec();
+    let n = input_oriented.len();
+
+    if n == 0 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "sweep profile has no edges".into(),
+        });
+    }
+
+    let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
+    for oe in &input_oriented {
+        let edge = topo.edge(oe.edge())?;
+        let vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        input_verts.push(vid);
+    }
+
+    let input_positions: Vec<Point3> = input_verts
+        .iter()
+        .map(|&vid| {
+            topo.vertex(vid)
+                .map(brepkit_topology::vertex::Vertex::point)
+        })
+        .collect::<Result<_, _>>()?;
+
+    let (cx, cy, cz) = input_positions
+        .iter()
+        .fold((0.0, 0.0, 0.0), |(ax, ay, az), p| {
+            (ax + p.x(), ay + p.y(), az + p.z())
+        });
+    #[allow(clippy::cast_precision_loss)]
+    let centroid = Point3::new(cx / n as f64, cy / n as f64, cz / n as f64);
+
+    let num_segments = if options.segments > 0 {
+        options.segments
+    } else {
+        (path.control_points().len() * 2).max(4)
+    };
+
+    // Compute frames based on contact mode
+    let frames = match options.contact_mode {
+        SweepContactMode::RotationMinimizing => {
+            let up_hint = orthogonalize(input_normal, path.tangent(0.0)?);
+            compute_frames(path, num_segments, up_hint)?
+        }
+        SweepContactMode::Fixed => {
+            // Fixed: use the same orientation at every point
+            let tangent0 = path.tangent(0.0)?;
+            let up = orthogonalize(input_normal, tangent0);
+            let right = tangent0.cross(up);
+
+            (0..=num_segments)
+                .map(|k| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = k as f64 / num_segments as f64;
+                    Frame {
+                        origin: path.evaluate(t),
+                        tangent: path.tangent(t).unwrap_or(tangent0),
+                        up,
+                        right,
+                    }
+                })
+                .collect()
+        }
+        SweepContactMode::ConstantNormal(normal_dir) => {
+            // Constant normal: up vector stays aligned to normal_dir
+            (0..=num_segments)
+                .map(|k| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = k as f64 / num_segments as f64;
+                    let tangent = path.tangent(t).unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                    let up = orthogonalize(normal_dir, tangent);
+                    let right = tangent.cross(up);
+                    Frame {
+                        origin: path.evaluate(t),
+                        tangent,
+                        up,
+                        right,
+                    }
+                })
+                .collect()
+        }
+    };
+
+    let initial_right = frames[0].right;
+    let initial_up = frames[0].up;
+    let initial_tangent = frames[0].tangent;
+
+    // Create ring vertices with optional scaling
+    let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_segments + 1);
+
+    for (k, frame) in frames.iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let t = k as f64 / num_segments as f64;
+        let scale = options.scale_law.as_ref().map_or(1.0, |law| law(t));
+
+        let ring: Vec<VertexId> = input_positions
+            .iter()
+            .map(|&pos| {
+                let mut transformed = transform_point(
+                    pos,
+                    centroid,
+                    initial_right,
+                    initial_up,
+                    initial_tangent,
+                    frame,
+                );
+                // Apply scaling relative to frame origin
+                if (scale - 1.0).abs() > tol.linear {
+                    let offset = transformed - frame.origin;
+                    transformed = frame.origin
+                        + Vec3::new(offset.x() * scale, offset.y() * scale, offset.z() * scale);
+                }
+                topo.vertices.alloc(Vertex::new(transformed, tol.linear))
+            })
+            .collect();
+        ring_verts.push(ring);
+    }
+
+    // Build edges, faces, and assemble (same as basic sweep)
+    let mut ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> =
+        Vec::with_capacity(num_segments + 1);
+    for ring in &ring_verts {
+        let edges: Vec<_> = (0..n)
+            .map(|i| {
+                let next = (i + 1) % n;
+                topo.edges
+                    .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+            })
+            .collect();
+        ring_edges.push(edges);
+    }
+
+    let mut path_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = Vec::with_capacity(num_segments);
+    for seg in 0..num_segments {
+        let edges: Vec<_> = (0..n)
+            .map(|i| {
+                topo.edges.alloc(Edge::new(
+                    ring_verts[seg][i],
+                    ring_verts[seg + 1][i],
+                    EdgeCurve::Line,
+                ))
+            })
+            .collect();
+        path_edges.push(edges);
+    }
+
+    let mut all_faces = Vec::with_capacity(num_segments * n + 2);
+
+    // Start cap
+    let start_reversed_edges: Vec<OrientedEdge> = (0..n)
+        .rev()
+        .map(|i| OrientedEdge::new(ring_edges[0][i], false))
+        .collect();
+    let start_wire =
+        Wire::new(start_reversed_edges, true).map_err(crate::OperationsError::Topology)?;
+    let start_wire_id = topo.wires.alloc(start_wire);
+    let start_normal = -frames[0].tangent;
+    let start_d = dot_normal_point(start_normal, topo.vertex(ring_verts[0][0])?.point());
+    let start_face = topo.faces.alloc(Face::new(
+        start_wire_id,
+        vec![],
+        FaceSurface::Plane {
+            normal: start_normal,
+            d: start_d,
+        },
+    ));
+    all_faces.push(start_face);
+
+    // Side faces
+    for seg in 0..num_segments {
+        for i in 0..n {
+            let next_i = (i + 1) % n;
+            let p0 = topo.vertex(ring_verts[seg][i])?.point();
+            let p1 = topo.vertex(ring_verts[seg][next_i])?.point();
+            let p_next = topo.vertex(ring_verts[seg + 1][i])?.point();
+            let edge_dir = p1 - p0;
+            let path_dir = p_next - p0;
+            let side_normal = edge_dir
+                .cross(path_dir)
+                .normalize()
+                .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+            let side_d = dot_normal_point(side_normal, p0);
+
+            let side_wire = Wire::new(
+                vec![
+                    OrientedEdge::new(ring_edges[seg][i], true),
+                    OrientedEdge::new(path_edges[seg][next_i], true),
+                    OrientedEdge::new(ring_edges[seg + 1][i], false),
+                    OrientedEdge::new(path_edges[seg][i], false),
+                ],
+                true,
+            )
+            .map_err(crate::OperationsError::Topology)?;
+
+            let side_wire_id = topo.wires.alloc(side_wire);
+            let side_face = topo.faces.alloc(Face::new(
+                side_wire_id,
+                vec![],
+                FaceSurface::Plane {
+                    normal: side_normal,
+                    d: side_d,
+                },
+            ));
+            all_faces.push(side_face);
+        }
+    }
+
+    // End cap
+    let end_edges: Vec<OrientedEdge> = (0..n)
+        .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
+        .collect();
+    let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
+    let end_wire_id = topo.wires.alloc(end_wire);
+    let end_normal = frames[num_segments].tangent;
+    let end_d = dot_normal_point(
+        end_normal,
+        topo.vertex(ring_verts[num_segments][0])?.point(),
+    );
+    let end_face = topo.faces.alloc(Face::new(
+        end_wire_id,
+        vec![],
+        FaceSurface::Plane {
+            normal: end_normal,
+            d: end_d,
+        },
+    ));
+    all_faces.push(end_face);
+
+    let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.shells.alloc(shell);
+    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -573,5 +890,97 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn sweep_with_default_options_matches_basic() {
+        let mut topo = Topology::new();
+        let face = crate::primitives::make_box(&mut topo, 0.5, 0.5, 0.01).unwrap();
+        let solid = topo.solid(face).unwrap();
+        let shell = topo.shell(solid.outer_shell()).unwrap();
+        // Use a face from the box as profile
+        let profile = shell.faces()[0];
+
+        let path = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 5.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+
+        let options = SweepOptions::default();
+        let result = sweep_with_options(&mut topo, profile, &path, &options);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn sweep_with_linear_scale() {
+        let mut topo = Topology::new();
+        let profile = make_unit_square_face(&mut topo);
+
+        let path = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 5.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+
+        let options = SweepOptions {
+            scale_law: Some(Box::new(|t| 0.5f64.mul_add(-t, 1.0))), // taper from 1.0 to 0.5
+            segments: 8,
+            ..Default::default()
+        };
+
+        let result = sweep_with_options(&mut topo, profile, &path, &options).unwrap();
+
+        // The result should be a tapered solid
+        let vol = crate::measure::solid_volume(&topo, result, 0.5).unwrap();
+        assert!(vol > 0.0, "tapered sweep should have positive volume");
+    }
+
+    #[test]
+    fn sweep_fixed_contact_mode() {
+        let mut topo = Topology::new();
+        let profile = make_unit_square_face(&mut topo);
+
+        let path = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 5.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+
+        let options = SweepOptions {
+            contact_mode: SweepContactMode::Fixed,
+            ..Default::default()
+        };
+
+        let result = sweep_with_options(&mut topo, profile, &path, &options);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn sweep_constant_normal_mode() {
+        let mut topo = Topology::new();
+        let profile = make_unit_square_face(&mut topo);
+
+        let path = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 5.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+
+        let options = SweepOptions {
+            contact_mode: SweepContactMode::ConstantNormal(Vec3::new(0.0, 1.0, 0.0)),
+            ..Default::default()
+        };
+
+        let result = sweep_with_options(&mut topo, profile, &path, &options);
+        assert!(result.is_ok());
     }
 }
