@@ -1184,6 +1184,76 @@ impl BrepKernel {
         #[allow(clippy::cast_possible_truncation)]
         Ok(report.error_count() as u32)
     }
+
+    // ── Distance ──────────────────────────────────────────────────
+
+    /// Compute minimum distance from a point to a solid.
+    ///
+    /// Returns `[distance, closest_x, closest_y, closest_z]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "pointToSolidDistance")]
+    pub fn point_to_solid_distance_wasm(
+        &self,
+        px: f64,
+        py: f64,
+        pz: f64,
+        solid: u32,
+    ) -> Result<Vec<f64>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let result = brepkit_operations::distance::point_to_solid_distance(
+            &self.topo,
+            Point3::new(px, py, pz),
+            solid_id,
+        )?;
+        Ok(vec![
+            result.distance,
+            result.point_b.x(),
+            result.point_b.y(),
+            result.point_b.z(),
+        ])
+    }
+
+    /// Compute minimum distance between two solids.
+    ///
+    /// Returns `[distance]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid.
+    #[wasm_bindgen(js_name = "solidToSolidDistance")]
+    pub fn solid_to_solid_distance_wasm(&self, a: u32, b: u32) -> Result<f64, JsError> {
+        let a_id = self.resolve_solid(a)?;
+        let b_id = self.resolve_solid(b)?;
+        let result = brepkit_operations::distance::solid_to_solid_distance(&self.topo, a_id, b_id)?;
+        Ok(result.distance)
+    }
+
+    // ── Sewing ────────────────────────────────────────────────────
+
+    /// Sew loose faces into a connected solid.
+    ///
+    /// `face_handles` is an array of face handles. Returns a solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fewer than 2 faces or sewing fails.
+    #[wasm_bindgen(js_name = "sewFaces")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn sew_faces_wasm(
+        &mut self,
+        face_handles: Vec<u32>,
+        tolerance: f64,
+    ) -> Result<u32, JsError> {
+        let face_ids: Vec<brepkit_topology::face::FaceId> = face_handles
+            .iter()
+            .map(|&h| self.resolve_face(h))
+            .collect::<Result<_, _>>()?;
+        let solid = brepkit_operations::sew::sew_faces(&mut self.topo, &face_ids, tolerance)?;
+        Ok(solid_id_to_u32(solid))
+    }
 }
 
 // ── Private helpers ────────────────────────────────────────────────
