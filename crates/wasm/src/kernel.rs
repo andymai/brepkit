@@ -775,6 +775,133 @@ impl BrepKernel {
         Ok(compound.index() as u32)
     }
 
+    // ── Split ─────────────────────────────────────────────────────
+
+    /// Split a solid into two halves along a plane.
+    ///
+    /// Returns `[positive_solid_handle, negative_solid_handle]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the plane doesn't intersect the solid.
+    #[wasm_bindgen(js_name = "split")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn split_solid(
+        &mut self,
+        solid: u32,
+        px: f64,
+        py: f64,
+        pz: f64,
+        nx: f64,
+        ny: f64,
+        nz: f64,
+    ) -> Result<Vec<u32>, JsError> {
+        validate_finite(px, "px")?;
+        validate_finite(py, "py")?;
+        validate_finite(pz, "pz")?;
+        validate_finite(nx, "nx")?;
+        validate_finite(ny, "ny")?;
+        validate_finite(nz, "nz")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let result = brepkit_operations::split::split(
+            &mut self.topo,
+            solid_id,
+            Point3::new(px, py, pz),
+            Vec3::new(nx, ny, nz),
+        )?;
+        Ok(vec![
+            solid_id_to_u32(result.positive),
+            solid_id_to_u32(result.negative),
+        ])
+    }
+
+    // ── Draft ─────────────────────────────────────────────────────
+
+    /// Apply draft angle to faces of a solid.
+    ///
+    /// `face_handles` is an array of face handles to draft.
+    /// Returns a solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if angle is zero or faces are invalid.
+    #[wasm_bindgen(js_name = "draft")]
+    #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+    pub fn draft_solid(
+        &mut self,
+        solid: u32,
+        face_handles: Vec<u32>,
+        pull_x: f64,
+        pull_y: f64,
+        pull_z: f64,
+        neutral_x: f64,
+        neutral_y: f64,
+        neutral_z: f64,
+        angle_degrees: f64,
+    ) -> Result<u32, JsError> {
+        validate_finite(angle_degrees, "angle_degrees")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let face_ids: Vec<brepkit_topology::face::FaceId> = face_handles
+            .iter()
+            .map(|&h| self.resolve_face(h))
+            .collect::<Result<_, _>>()?;
+        let result = brepkit_operations::draft::draft(
+            &mut self.topo,
+            solid_id,
+            &face_ids,
+            Vec3::new(pull_x, pull_y, pull_z),
+            Point3::new(neutral_x, neutral_y, neutral_z),
+            angle_degrees.to_radians(),
+        )?;
+        Ok(solid_id_to_u32(result))
+    }
+
+    // ── Pipe ──────────────────────────────────────────────────────
+
+    /// Pipe sweep: sweep a profile along a NURBS path (no guide).
+    ///
+    /// Returns a solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face or path is invalid.
+    #[wasm_bindgen(js_name = "pipe")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn pipe_solid(
+        &mut self,
+        face: u32,
+        path_degree: u32,
+        path_knots: Vec<f64>,
+        path_control_points: Vec<f64>,
+        path_weights: Vec<f64>,
+    ) -> Result<u32, JsError> {
+        if path_control_points.len() % 3 != 0 {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "path_control_points length must be a multiple of 3, got {}",
+                    path_control_points.len()
+                ),
+            }
+            .into());
+        }
+
+        let face_id = self.resolve_face(face)?;
+        let control_points: Vec<Point3> = path_control_points
+            .chunks_exact(3)
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect();
+
+        let path_curve = NurbsCurve::new(
+            path_degree as usize,
+            path_knots,
+            control_points,
+            path_weights,
+        )?;
+
+        let solid_id = brepkit_operations::pipe::pipe(&mut self.topo, face_id, &path_curve, None)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
     // ── Tessellation ───────────────────────────────────────────────
 
     /// Tessellate a single face into a triangle mesh.
