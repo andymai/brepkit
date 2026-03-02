@@ -116,6 +116,22 @@ impl NurbsSurface {
         self.degree_v
     }
 
+    /// Return the valid parameter domain in u: `[u_min, u_max]`.
+    #[must_use]
+    pub fn domain_u(&self) -> (f64, f64) {
+        let u_min = self.knots_u[self.degree_u];
+        let u_max = self.knots_u[self.knots_u.len() - self.degree_u - 1];
+        (u_min, u_max)
+    }
+
+    /// Return the valid parameter domain in v: `[v_min, v_max]`.
+    #[must_use]
+    pub fn domain_v(&self) -> (f64, f64) {
+        let v_min = self.knots_v[self.degree_v];
+        let v_max = self.knots_v[self.knots_v.len() - self.degree_v - 1];
+        (v_min, v_max)
+    }
+
     /// Knot vector in the u direction.
     #[must_use]
     pub fn knots_u(&self) -> &[f64] {

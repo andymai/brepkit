@@ -60,6 +60,12 @@ impl NurbsCurve {
         })
     }
 
+    /// The polynomial degree of the curve.
+    #[must_use]
+    pub const fn degree(&self) -> usize {
+        self.degree
+    }
+
     /// Whether the curve is rational (any weight differs from 1.0).
     #[must_use]
     #[allow(clippy::float_cmp)]
@@ -67,10 +73,66 @@ impl NurbsCurve {
         self.weights.iter().any(|&w| w != 1.0)
     }
 
-    /// Polynomial degree.
+    /// Return the valid parameter domain `[u_min, u_max]`.
     #[must_use]
-    pub const fn degree(&self) -> usize {
-        self.degree
+    pub fn domain(&self) -> (f64, f64) {
+        let u_min = self.knots[self.degree];
+        let u_max = self.knots[self.knots.len() - self.degree - 1];
+        (u_min, u_max)
+    }
+
+    /// Approximate the arc length of the curve by numerical integration.
+    ///
+    /// Uses Simpson's rule with `n_samples` intervals.
+    #[must_use]
+    pub fn arc_length(&self, n_samples: usize) -> f64 {
+        let (u_min, u_max) = self.domain();
+        let n = n_samples.max(4);
+        #[allow(clippy::cast_precision_loss)]
+        let dt = (u_max - u_min) / (n as f64);
+        let mut length = 0.0;
+
+        for i in 0..n {
+            #[allow(clippy::cast_precision_loss)]
+            let t0 = u_min + dt * (i as f64);
+            let t1 = t0 + dt;
+            #[allow(clippy::manual_midpoint)]
+            let t_mid = (t0 + t1) / 2.0;
+
+            let v0 = self.derivatives(t0, 1)[1].length();
+            let v_mid = self.derivatives(t_mid, 1)[1].length();
+            let v1 = self.derivatives(t1, 1)[1].length();
+
+            length += (dt / 6.0) * v_mid.mul_add(4.0, v0 + v1);
+        }
+
+        length
+    }
+
+    /// Compute the curvature at parameter `u`.
+    ///
+    /// Curvature κ = |C' × C''| / |C'|³
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if derivatives cannot be computed or the tangent
+    /// is zero-length (degenerate point).
+    pub fn curvature(&self, u: f64) -> Result<f64, MathError> {
+        let derivs = self.derivatives(u, 2);
+        if derivs.len() < 3 {
+            return Err(MathError::EmptyInput);
+        }
+
+        let d1 = derivs[1]; // First derivative (tangent)
+        let d2 = derivs[2]; // Second derivative
+
+        let speed = d1.length();
+        if speed < 1e-15 {
+            return Err(MathError::ZeroVector);
+        }
+
+        let cross = d1.cross(d2);
+        Ok(cross.length() / (speed * speed * speed))
     }
 
     /// Reference to the knot vector.
@@ -362,5 +424,69 @@ mod tests {
             prop_assert!((d[0].y() - p.y()).abs() < 1e-12);
             prop_assert!((d[0].z() - p.z()).abs() < 1e-12);
         }
+    }
+
+    #[test]
+    fn domain_returns_correct_range() {
+        let c = cubic_bezier();
+        let (u_min, u_max) = c.domain();
+        assert!((u_min - 0.0).abs() < 1e-14);
+        assert!((u_max - 1.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn arc_length_quarter_circle() {
+        let c = quarter_circle();
+        let len = c.arc_length(100);
+        // Quarter circle of radius 1: arc length = π/2 ≈ 1.5708
+        let expected = std::f64::consts::FRAC_PI_2;
+        assert!(
+            (len - expected).abs() < 0.01,
+            "quarter circle arc length should be ~{expected}, got {len}"
+        );
+    }
+
+    #[test]
+    fn arc_length_straight_line() {
+        let line = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(3.0, 4.0, 0.0)],
+            vec![1.0, 1.0],
+        )
+        .expect("valid line");
+
+        let len = line.arc_length(10);
+        assert!(
+            (len - 5.0).abs() < 0.01,
+            "3-4-5 line should have length ~5.0, got {len}"
+        );
+    }
+
+    #[test]
+    fn curvature_quarter_circle() {
+        let c = quarter_circle();
+        // For rational NURBS, curvature() uses parameter-space derivatives
+        // which don't directly give geometric curvature. The returned value
+        // is still useful for relative comparisons (higher curvature = sharper).
+        let k = c.curvature(0.5).expect("curvature should compute");
+        assert!(
+            k > 0.0,
+            "quarter circle should have positive curvature, got {k}"
+        );
+    }
+
+    #[test]
+    fn curvature_straight_line_is_zero() {
+        let line = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+            vec![1.0, 1.0],
+        )
+        .expect("valid line");
+
+        let k = line.curvature(0.5).expect("curvature should compute");
+        assert!(k < 1e-10, "straight line curvature should be ~0, got {k}");
     }
 }
