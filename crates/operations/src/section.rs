@@ -40,8 +40,8 @@ pub struct Section {
 ///
 /// # Errors
 ///
-/// Returns an error if the solid contains NURBS faces, or if no
-/// intersection exists (plane doesn't cut the solid).
+/// Returns an error if no intersection exists (plane doesn't cut
+/// the solid), or if NURBS intersection computation fails.
 pub fn section(
     topo: &mut Topology,
     solid: SolidId,
@@ -78,10 +78,19 @@ pub fn section(
                     segments.push(seg);
                 }
             }
-            FaceSurface::Nurbs(_) => {
-                return Err(crate::OperationsError::InvalidInput {
-                    reason: "section of NURBS faces not yet supported".into(),
-                });
+            FaceSurface::Nurbs(nurbs) => {
+                // Use surface-plane intersection to find crossing points.
+                let intersection_curves =
+                    brepkit_math::nurbs::intersection::intersect_plane_nurbs(nurbs, normal, d, 50)?;
+                for curve in &intersection_curves {
+                    if curve.points.len() >= 2 {
+                        let first = curve.points.first().map(|p| p.point);
+                        let last = curve.points.last().map(|p| p.point);
+                        if let (Some(a), Some(b)) = (first, last) {
+                            segments.push((a, b));
+                        }
+                    }
+                }
             }
         }
     }
