@@ -5,6 +5,7 @@
 //! This is layer L2, depending on `brepkit-math` and `brepkit-topology`.
 
 pub mod step;
+pub mod stl;
 pub mod threemf;
 
 /// Errors from data exchange operations.
@@ -30,6 +31,10 @@ pub enum IoError {
         /// Description of the topology issue.
         reason: String,
     },
+
+    /// A topology lookup failed.
+    #[error(transparent)]
+    Topology(#[from] brepkit_topology::TopologyError),
 
     /// An I/O error occurred.
     #[error(transparent)]
