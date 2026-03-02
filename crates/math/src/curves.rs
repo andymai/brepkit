@@ -787,4 +787,219 @@ mod tests {
             .is_err()
         );
     }
+
+    // ── Line3D::tangent tests ──────────────────────────
+
+    #[test]
+    fn line3d_tangent_is_unit_vector() {
+        // Even when constructed with a non-unit direction, tangent() must return a unit vector.
+        let line = Line3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(3.0, 4.0, 0.0)).unwrap();
+        let tang = line.tangent();
+        let tol = Tolerance::new();
+        assert!(
+            tol.approx_eq(tang.length(), 1.0),
+            "tangent should be unit length, got {}",
+            tang.length()
+        );
+    }
+
+    #[test]
+    fn line3d_tangent_matches_direction() {
+        let line = Line3D::new(Point3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, 5.0)).unwrap();
+        let tang = line.tangent();
+        let dir = line.direction();
+        let tol = Tolerance::new();
+        assert!(tol.approx_eq(tang.x(), dir.x()));
+        assert!(tol.approx_eq(tang.y(), dir.y()));
+        assert!(tol.approx_eq(tang.z(), dir.z()));
+    }
+
+    // ── Circle3D::project tests ────────────────────────
+
+    #[test]
+    fn circle3d_project_at_pi() {
+        // At t=π, evaluate gives the antipodal point; projecting back should return π.
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let pt = circle.evaluate(PI);
+        let t_proj = circle.project(pt);
+        let tol = Tolerance::new();
+        // project returns atan2, which is in (-π, π]; -π and π are the same angle
+        assert!(tol.approx_eq(t_proj.abs(), PI), "expected ±π, got {t_proj}");
+    }
+
+    #[test]
+    fn circle3d_project_at_negative_angle() {
+        // project should recover a negative angle correctly (atan2 range is (-π, π])
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let t_orig = -1.0_f64;
+        let pt = circle.evaluate(t_orig);
+        let t_proj = circle.project(pt);
+        let tol = Tolerance::new();
+        assert!(
+            tol.approx_eq(t_orig, t_proj),
+            "expected {t_orig}, got {t_proj}"
+        );
+    }
+
+    #[test]
+    fn circle3d_project_at_three_quarter() {
+        // t = 3π/2 maps to -π/2 under atan2; round-trip through evaluate→project
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 5.0).unwrap();
+        let t_orig = 3.0 * PI / 2.0;
+        let pt = circle.evaluate(t_orig);
+        let t_proj = circle.project(pt);
+        // atan2 wraps to -π/2, so recovered angle differs by 2π
+        let tol = Tolerance::new();
+        let diff = (t_proj - t_orig).abs() % (2.0 * PI);
+        let diff_wrapped = diff.min(2.0f64.mul_add(PI, -diff));
+        assert!(
+            diff_wrapped < tol.linear * 1000.0,
+            "angle mismatch after wrapping: t_orig={t_orig}, t_proj={t_proj}"
+        );
+    }
+
+    // ── Parabola3D::evaluate at non-zero t ─────────────
+
+    #[test]
+    fn parabola_evaluate_nonzero_t() {
+        // P(t) = vertex + (t²/4f)*axis + t*u_axis
+        // For axis = (0,0,1), focal_length=1, at t=2:
+        //   along_axis = 4/4 = 1   → z-component = 1
+        //   u_axis component = 2    → in the plane perpendicular to z
+        let p = Parabola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let pt = p.evaluate(2.0);
+        let tol = Tolerance::new();
+        // z (along-axis) component
+        assert!(
+            tol.approx_eq(pt.z(), 1.0),
+            "z-component should be 1.0, got {}",
+            pt.z()
+        );
+        // distance from axis in the XY plane should be |t| = 2
+        let radial = pt.x().hypot(pt.y());
+        assert!(
+            tol.approx_eq(radial, 2.0),
+            "radial distance should be 2.0, got {radial}"
+        );
+    }
+
+    #[test]
+    fn parabola_evaluate_negative_t() {
+        // Symmetry: z-component the same for +t and -t, radial same, u_axis direction flips
+        let p = Parabola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let pos = p.evaluate(3.0);
+        let neg = p.evaluate(-3.0);
+        let tol = Tolerance::new();
+        assert!(tol.approx_eq(pos.z(), neg.z()), "z should match for ±t");
+        // The x/y components should be opposite in sign (u_axis flips)
+        let radial_pos = pos.x().hypot(pos.y());
+        let radial_neg = neg.x().hypot(neg.y());
+        assert!(
+            tol.approx_eq(radial_pos, radial_neg),
+            "radial distance should match"
+        );
+    }
+
+    #[test]
+    fn parabola_tangent_nonzero_t() {
+        // tangent(t) = (t / 2f) * axis + u_axis
+        // For focal_length=2, axis=(0,0,1), t=4:
+        //   d_axis = 4/(2*2) = 1  → z-component of tangent = 1
+        //   u_axis component = 1
+        let p = Parabola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let tang = p.tangent(4.0);
+        let tol = Tolerance::new();
+        assert!(
+            tol.approx_eq(tang.z(), 1.0),
+            "z-component of tangent should be 1.0, got {}",
+            tang.z()
+        );
+        // u_axis is in XY plane, its component should give length 1
+        let radial = tang.x().hypot(tang.y());
+        assert!(
+            tol.approx_eq(radial, 1.0),
+            "XY component of tangent should have length 1, got {radial}"
+        );
+    }
+
+    // ── Hyperbola3D::evaluate away from vertex ─────────
+
+    #[test]
+    fn hyperbola_evaluate_nonzero_t() {
+        // P(t) = center + a*cosh(t)*u + b*sinh(t)*v
+        // The distance from center at parameter t satisfies:
+        //   |P - center|² = a²*cosh²(t) + b²*sinh²(t)
+        let a = 2.0_f64;
+        let b = 1.0_f64;
+        let t = 1.0_f64;
+        let h =
+            Hyperbola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), a, b).unwrap();
+        let pt = h.evaluate(t);
+        let dist_sq = (pt - h.center()).length_squared();
+        let expected_sq = (a * t.cosh()).mul_add(a * t.cosh(), (b * t.sinh()).powi(2));
+        assert!(
+            (dist_sq - expected_sq).abs() < 1e-10,
+            "|P-center|² should be {expected_sq}, got {dist_sq}"
+        );
+    }
+
+    #[test]
+    fn hyperbola_evaluate_large_t_stays_on_curve() {
+        // Verify the hyperbolic identity: (x/a)² - (y/b)² = 1
+        // where x, y are the in-plane u/v components.
+        // We use a finite-difference approximation to recover u/v components.
+        let a = 3.0_f64;
+        let b = 2.0_f64;
+        let h =
+            Hyperbola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), a, b).unwrap();
+        // The distance from center equals sqrt(a²cosh²(t) + b²sinh²(t))
+        for t in [0.5_f64, 1.0, 2.0] {
+            let pt = h.evaluate(t);
+            let dist = (pt - h.center()).length();
+            let expected = (a * t.cosh()).hypot(b * t.sinh());
+            assert!(
+                (dist - expected).abs() < 1e-10,
+                "distance at t={t}: expected {expected}, got {dist}"
+            );
+        }
+    }
+
+    #[test]
+    fn hyperbola_tangent_nonzero_t() {
+        // Check tangent via finite difference: tangent ≈ (P(t+ε) - P(t-ε)) / (2ε)
+        let h = Hyperbola3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+            1.0,
+        )
+        .unwrap();
+        let t = 1.0_f64;
+        let eps = 1e-6;
+        let tang_analytic = h.tangent(t);
+        let pt_plus = h.evaluate(t + eps);
+        let pt_minus = h.evaluate(t - eps);
+        let tang_fd_x = (pt_plus.x() - pt_minus.x()) / (2.0 * eps);
+        let tang_fd_y = (pt_plus.y() - pt_minus.y()) / (2.0 * eps);
+        let tang_fd_z = (pt_plus.z() - pt_minus.z()) / (2.0 * eps);
+        let tol = 1e-5;
+        assert!(
+            (tang_analytic.x() - tang_fd_x).abs() < tol,
+            "x: analytic={}, fd={tang_fd_x}",
+            tang_analytic.x()
+        );
+        assert!(
+            (tang_analytic.y() - tang_fd_y).abs() < tol,
+            "y: analytic={}, fd={tang_fd_y}",
+            tang_analytic.y()
+        );
+        assert!(
+            (tang_analytic.z() - tang_fd_z).abs() < tol,
+            "z: analytic={}, fd={tang_fd_z}",
+            tang_analytic.z()
+        );
+    }
 }

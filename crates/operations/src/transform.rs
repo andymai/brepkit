@@ -324,6 +324,307 @@ mod tests {
         assert!(has_neg_z, "should have -Z normal after Z rotation");
     }
 
+    // ── Analytic surface transform helpers ───────────────────────────────────
+
+    /// Build a minimal solid containing a single face with the given surface.
+    ///
+    /// The wire is a unit square in XY; only the face surface type varies.
+    fn make_single_face_solid(
+        topo: &mut Topology,
+        surface: FaceSurface,
+    ) -> brepkit_topology::solid::SolidId {
+        use brepkit_math::vec::Point3;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::shell::Shell;
+        use brepkit_topology::solid::Solid;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let tol = 1e-7;
+        let v0 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol));
+        let v1 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol));
+        let v2 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), tol));
+        let v3 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 1.0, 0.0), tol));
+
+        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.wires.alloc(wire);
+        let fid = topo.faces.alloc(Face::new(wid, vec![], surface));
+        let shell = Shell::new(vec![fid]).unwrap();
+        let shell_id = topo.shells.alloc(shell);
+        topo.solids.alloc(Solid::new(shell_id, vec![]))
+    }
+
+    // ── Cylinder surface transform ────────────────────────────────────────────
+
+    #[test]
+    fn translate_cylinder_face_updates_origin() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Point3;
+
+        let mut topo = Topology::new();
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+        let solid = make_single_face_solid(&mut topo, FaceSurface::Cylinder(cyl));
+
+        let matrix = Mat4::translation(5.0, 3.0, 1.0);
+        transform_solid(&mut topo, solid, &matrix).unwrap();
+
+        // Find the (now-transformed) cylinder face.
+        let tol = Tolerance::new();
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+        let mut found = false;
+        for &fid in shell.faces() {
+            if let FaceSurface::Cylinder(c) = topo.face(fid).unwrap().surface() {
+                assert!(
+                    tol.approx_eq(c.origin().x(), 5.0),
+                    "cylinder origin x should be 5.0, got {}",
+                    c.origin().x()
+                );
+                assert!(
+                    tol.approx_eq(c.origin().y(), 3.0),
+                    "cylinder origin y should be 3.0, got {}",
+                    c.origin().y()
+                );
+                assert!(
+                    tol.approx_eq(c.origin().z(), 1.0),
+                    "cylinder origin z should be 1.0, got {}",
+                    c.origin().z()
+                );
+                // The axis (0,0,1) should be unchanged by a pure translation.
+                assert!(
+                    tol.approx_eq(c.axis().z(), 1.0),
+                    "cylinder axis z should still be 1.0"
+                );
+                assert!(
+                    tol.approx_eq(c.radius(), 2.0),
+                    "cylinder radius should be unchanged"
+                );
+                found = true;
+            }
+        }
+        assert!(found, "cylinder face not found after transform");
+    }
+
+    #[test]
+    fn rotate_cylinder_face_updates_axis() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Point3;
+
+        let mut topo = Topology::new();
+        // Cylinder with axis along +Z.
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let solid = make_single_face_solid(&mut topo, FaceSurface::Cylinder(cyl));
+
+        // 90° rotation around Y: Z-axis → X-axis
+        let matrix = Mat4::rotation_y(std::f64::consts::FRAC_PI_2);
+        transform_solid(&mut topo, solid, &matrix).unwrap();
+
+        let tol = Tolerance::loose();
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+        let mut found = false;
+        for &fid in shell.faces() {
+            if let FaceSurface::Cylinder(c) = topo.face(fid).unwrap().surface() {
+                // After 90° Y rotation, original Z-axis should point along +X.
+                assert!(
+                    tol.approx_eq(c.axis().x().abs(), 1.0),
+                    "cylinder axis should be along X after Y rotation, got {:?}",
+                    c.axis()
+                );
+                found = true;
+            }
+        }
+        assert!(found, "cylinder face not found after rotation");
+    }
+
+    // ── Cone surface transform ────────────────────────────────────────────────
+
+    #[test]
+    fn translate_cone_face_updates_apex() {
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_math::vec::Point3;
+
+        let mut topo = Topology::new();
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let solid = make_single_face_solid(&mut topo, FaceSurface::Cone(cone));
+
+        let matrix = Mat4::translation(2.0, 4.0, 6.0);
+        transform_solid(&mut topo, solid, &matrix).unwrap();
+
+        let tol = Tolerance::new();
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+        let mut found = false;
+        for &fid in shell.faces() {
+            if let FaceSurface::Cone(c) = topo.face(fid).unwrap().surface() {
+                assert!(
+                    tol.approx_eq(c.apex().x(), 2.0),
+                    "cone apex x should be 2.0, got {}",
+                    c.apex().x()
+                );
+                assert!(
+                    tol.approx_eq(c.apex().y(), 4.0),
+                    "cone apex y should be 4.0"
+                );
+                assert!(
+                    tol.approx_eq(c.apex().z(), 6.0),
+                    "cone apex z should be 6.0"
+                );
+                // Axis should be unchanged by a translation.
+                assert!(
+                    tol.approx_eq(c.axis().z(), 1.0),
+                    "cone axis z should still be 1.0"
+                );
+                found = true;
+            }
+        }
+        assert!(found, "cone face not found after transform");
+    }
+
+    // ── Sphere surface transform ──────────────────────────────────────────────
+
+    #[test]
+    fn translate_sphere_face_updates_center() {
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_math::vec::Point3;
+
+        let mut topo = Topology::new();
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0).unwrap();
+        let solid = make_single_face_solid(&mut topo, FaceSurface::Sphere(sphere));
+
+        let matrix = Mat4::translation(-1.0, 2.0, 5.0);
+        transform_solid(&mut topo, solid, &matrix).unwrap();
+
+        let tol = Tolerance::new();
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+        let mut found = false;
+        for &fid in shell.faces() {
+            if let FaceSurface::Sphere(s) = topo.face(fid).unwrap().surface() {
+                assert!(
+                    tol.approx_eq(s.center().x(), -1.0),
+                    "sphere center x should be -1.0"
+                );
+                assert!(
+                    tol.approx_eq(s.center().y(), 2.0),
+                    "sphere center y should be 2.0"
+                );
+                assert!(
+                    tol.approx_eq(s.center().z(), 5.0),
+                    "sphere center z should be 5.0"
+                );
+                assert!(
+                    tol.approx_eq(s.radius(), 3.0),
+                    "sphere radius should be unchanged"
+                );
+                found = true;
+            }
+        }
+        assert!(found, "sphere face not found after transform");
+    }
+
+    // ── Torus surface transform ───────────────────────────────────────────────
+
+    #[test]
+    fn translate_torus_face_updates_center() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_math::vec::Point3;
+
+        let mut topo = Topology::new();
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0, 1.5).unwrap();
+        let solid = make_single_face_solid(&mut topo, FaceSurface::Torus(torus));
+
+        let matrix = Mat4::translation(10.0, -3.0, 0.5);
+        transform_solid(&mut topo, solid, &matrix).unwrap();
+
+        let tol = Tolerance::new();
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+        let mut found = false;
+        for &fid in shell.faces() {
+            if let FaceSurface::Torus(t) = topo.face(fid).unwrap().surface() {
+                assert!(
+                    tol.approx_eq(t.center().x(), 10.0),
+                    "torus center x should be 10.0"
+                );
+                assert!(
+                    tol.approx_eq(t.center().y(), -3.0),
+                    "torus center y should be -3.0"
+                );
+                assert!(
+                    tol.approx_eq(t.center().z(), 0.5),
+                    "torus center z should be 0.5"
+                );
+                assert!(
+                    tol.approx_eq(t.major_radius(), 5.0),
+                    "torus major radius should be unchanged"
+                );
+                assert!(
+                    tol.approx_eq(t.minor_radius(), 1.5),
+                    "torus minor radius should be unchanged"
+                );
+                found = true;
+            }
+        }
+        assert!(found, "torus face not found after transform");
+    }
+
+    // ── transform_direction degenerate case ───────────────────────────────────
+
+    #[test]
+    fn transform_direction_zero_vector_is_error() {
+        // A zero direction vector cannot be normalized and must return an error.
+        // This exercises the normalize() error branch in transform_direction.
+        let result = super::transform_direction(&Mat4::identity(), Vec3::new(0.0, 0.0, 0.0));
+        assert!(
+            result.is_err(),
+            "transform_direction with zero vector should return an error"
+        );
+    }
+
+    #[test]
+    fn transform_direction_unit_z_identity_unchanged() {
+        // Identity matrix should leave a unit direction unchanged.
+        let dir = Vec3::new(0.0, 0.0, 1.0);
+        let result = super::transform_direction(&Mat4::identity(), dir).unwrap();
+        let tol = Tolerance::new();
+        assert!(tol.approx_eq(result.z(), 1.0), "z should remain 1.0");
+        assert!(tol.approx_eq(result.x(), 0.0), "x should remain 0.0");
+        assert!(tol.approx_eq(result.y(), 0.0), "y should remain 0.0");
+    }
+
     /// Revolving a face produces NURBS surfaces; translating the result
     /// should move both vertices and NURBS control points.
     #[test]

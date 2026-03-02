@@ -441,4 +441,220 @@ mod tests {
             vert.point().z()
         );
     }
+
+    // ── NURBS face helpers ────────────────────────────────────────────────────
+
+    /// Build a flat bilinear NURBS face on the XY plane (z = `z_height`).
+    ///
+    /// Degree-1 in both u and v, 2×2 control points, clamped knot vectors.
+    /// The wire has 4 line-edges forming a unit square at `z_height`.
+    fn make_flat_nurbs_face(topo: &mut Topology, z_height: f64) -> FaceId {
+        use brepkit_math::nurbs::NurbsSurface;
+        use brepkit_math::vec::Point3 as P;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        // 2×2 control-point grid spanning [0,1]×[0,1] at given z.
+        let ctrl = vec![
+            vec![P::new(0.0, 0.0, z_height), P::new(1.0, 0.0, z_height)],
+            vec![P::new(0.0, 1.0, z_height), P::new(1.0, 1.0, z_height)],
+        ];
+        let weights = vec![vec![1.0_f64, 1.0], vec![1.0, 1.0]];
+        // Clamped knot vector for degree 1, 2 control points: [0,0,1,1]
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let nurbs = NurbsSurface::new(1, 1, knots.clone(), knots, ctrl, weights).unwrap();
+
+        // Wire: unit square in XY at z_height.
+        let tol = 1e-7;
+        let v0 = topo
+            .vertices
+            .alloc(Vertex::new(P::new(0.0, 0.0, z_height), tol));
+        let v1 = topo
+            .vertices
+            .alloc(Vertex::new(P::new(1.0, 0.0, z_height), tol));
+        let v2 = topo
+            .vertices
+            .alloc(Vertex::new(P::new(1.0, 1.0, z_height), tol));
+        let v3 = topo
+            .vertices
+            .alloc(Vertex::new(P::new(0.0, 1.0, z_height), tol));
+
+        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.wires.alloc(wire);
+
+        topo.faces
+            .alloc(Face::new(wid, vec![], FaceSurface::Nurbs(nurbs)))
+    }
+
+    // ── NURBS face offset tests ───────────────────────────────────────────────
+
+    #[test]
+    fn offset_nurbs_face_outward_produces_nurbs_surface() {
+        let mut topo = Topology::new();
+        let face = make_flat_nurbs_face(&mut topo, 0.0);
+
+        let offset_id = offset_face(&mut topo, face, 1.0, 6).unwrap();
+
+        // The result must carry a NURBS surface.
+        let off_face = topo.face(offset_id).unwrap();
+        assert!(
+            matches!(off_face.surface(), FaceSurface::Nurbs(_)),
+            "expected NURBS surface after NURBS offset"
+        );
+    }
+
+    #[test]
+    fn offset_nurbs_face_new_id_differs_from_original() {
+        let mut topo = Topology::new();
+        let face = make_flat_nurbs_face(&mut topo, 0.0);
+
+        let offset_id = offset_face(&mut topo, face, 0.5, 6).unwrap();
+
+        assert_ne!(face, offset_id, "offset should return a new face ID");
+    }
+
+    #[test]
+    fn offset_nurbs_face_wire_has_same_edge_count() {
+        let mut topo = Topology::new();
+        let face = make_flat_nurbs_face(&mut topo, 0.0);
+
+        let offset_id = offset_face(&mut topo, face, 1.0, 6).unwrap();
+
+        let orig_wire = topo.wire(topo.face(face).unwrap().outer_wire()).unwrap();
+        let off_wire = topo
+            .wire(topo.face(offset_id).unwrap().outer_wire())
+            .unwrap();
+        assert_eq!(
+            orig_wire.edges().len(),
+            off_wire.edges().len(),
+            "offset wire should have the same edge count as the original"
+        );
+    }
+
+    #[test]
+    fn offset_nurbs_face_negative_distance() {
+        let mut topo = Topology::new();
+        // Place the surface at z=2 so a negative offset moves it toward z=1.
+        let face = make_flat_nurbs_face(&mut topo, 0.0);
+
+        let offset_id = offset_face(&mut topo, face, -0.5, 6).unwrap();
+
+        // Result is still a valid NURBS face.
+        let off_face = topo.face(offset_id).unwrap();
+        assert!(matches!(off_face.surface(), FaceSurface::Nurbs(_)));
+    }
+
+    #[test]
+    fn offset_nurbs_face_very_small_distance() {
+        let mut topo = Topology::new();
+        let face = make_flat_nurbs_face(&mut topo, 0.0);
+
+        // A distance well above the linear tolerance (1e-7) but very small.
+        let offset_id = offset_face(&mut topo, face, 1e-4, 6).unwrap();
+
+        let off_face = topo.face(offset_id).unwrap();
+        assert!(matches!(off_face.surface(), FaceSurface::Nurbs(_)));
+    }
+
+    #[test]
+    fn offset_nurbs_face_zero_returns_copy() {
+        let mut topo = Topology::new();
+        let face = make_flat_nurbs_face(&mut topo, 0.0);
+
+        // Exactly zero: should go through the copy_face path, keeping NURBS.
+        let copy_id = offset_face(&mut topo, face, 0.0, 6).unwrap();
+
+        assert_ne!(face, copy_id);
+        let copy_face = topo.face(copy_id).unwrap();
+        assert!(
+            matches!(copy_face.surface(), FaceSurface::Nurbs(_)),
+            "zero offset of NURBS face should still be NURBS"
+        );
+    }
+
+    #[test]
+    fn offset_analytic_surface_returns_error() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::{Point3 as P, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+
+        // Build a minimal face with a Cylinder surface (not yet supported by offset).
+        let tol = 1e-7;
+        let v0 = topo.vertices.alloc(Vertex::new(P::new(0.0, 0.0, 0.0), tol));
+        let v1 = topo.vertices.alloc(Vertex::new(P::new(1.0, 0.0, 0.0), tol));
+        let v2 = topo.vertices.alloc(Vertex::new(P::new(1.0, 1.0, 0.0), tol));
+        let v3 = topo.vertices.alloc(Vertex::new(P::new(0.0, 1.0, 0.0), tol));
+        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.wires.alloc(wire);
+        let cyl =
+            CylindricalSurface::new(P::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let face_id = topo
+            .faces
+            .alloc(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
+
+        let result = offset_face(&mut topo, face_id, 1.0, 6);
+        assert!(
+            result.is_err(),
+            "offset of analytic surface should return an error"
+        );
+    }
+
+    #[test]
+    fn offset_nurbs_face_large_distance() {
+        let mut topo = Topology::new();
+        let face = make_flat_nurbs_face(&mut topo, 0.0);
+
+        // A large positive offset should still succeed (the surface is flat so
+        // normals are uniform and well-defined everywhere).
+        let offset_id = offset_face(&mut topo, face, 100.0, 8).unwrap();
+
+        let off_face = topo.face(offset_id).unwrap();
+        assert!(matches!(off_face.surface(), FaceSurface::Nurbs(_)));
+    }
+
+    #[test]
+    fn offset_nurbs_face_minimum_samples_clamped() {
+        let mut topo = Topology::new();
+        let face = make_flat_nurbs_face(&mut topo, 0.0);
+
+        // Passing samples=1 should be clamped to 4 internally and still succeed.
+        let offset_id = offset_face(&mut topo, face, 1.0, 1).unwrap();
+
+        let off_face = topo.face(offset_id).unwrap();
+        assert!(matches!(off_face.surface(), FaceSurface::Nurbs(_)));
+    }
 }

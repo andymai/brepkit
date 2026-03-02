@@ -684,4 +684,179 @@ mod tests {
             Point2::new(1.0, 0.0)
         ));
     }
+
+    // ── Ellipse2D additional tests ────────────────────
+
+    #[test]
+    fn ellipse2d_tangent_no_rotation() {
+        // At t=0, no rotation: tangent = (dx*cos_r - dy*sin_r, dx*sin_r + dy*cos_r)
+        // dx = -a*sin(0) = 0, dy = b*cos(0) = b, rotation=0 → tangent = (0, b)
+        let ellipse = Ellipse2D::new(Point2::new(0.0, 0.0), 3.0, 2.0, 0.0).expect("valid ellipse");
+        let tang = ellipse.tangent(0.0);
+        assert!(approx_eq(tang.x(), 0.0));
+        assert!(approx_eq(tang.y(), 2.0));
+    }
+
+    #[test]
+    fn ellipse2d_tangent_at_quarter() {
+        // At t=π/2, no rotation: dx = -a*sin(π/2) = -a, dy = b*cos(π/2) = 0
+        // tangent = (-a, 0)
+        let ellipse = Ellipse2D::new(Point2::new(0.0, 0.0), 3.0, 2.0, 0.0).expect("valid ellipse");
+        let tang = ellipse.tangent(PI / 2.0);
+        assert!(approx_eq(tang.x(), -3.0));
+        assert!(approx_eq(tang.y(), 0.0));
+    }
+
+    #[test]
+    fn ellipse2d_minor_exceeds_major_error() {
+        // semi_minor > semi_major must be rejected
+        assert!(Ellipse2D::new(Point2::new(0.0, 0.0), 2.0, 5.0, 0.0).is_err());
+    }
+
+    // ── Circle2D tangent tests ────────────────────────
+
+    #[test]
+    fn circle2d_tangent_at_zero() {
+        // Tangent at t=0: (-r*sin(0), r*cos(0)) = (0, r)
+        let circle = Circle2D::new(Point2::new(0.0, 0.0), 3.0).expect("valid circle");
+        let tang = circle.tangent(0.0);
+        assert!(approx_eq(tang.x(), 0.0));
+        assert!(approx_eq(tang.y(), 3.0));
+    }
+
+    #[test]
+    fn circle2d_tangent_at_quarter() {
+        // Tangent at t=π/2: (-r*sin(π/2), r*cos(π/2)) = (-r, 0)
+        let circle = Circle2D::new(Point2::new(0.0, 0.0), 2.0).expect("valid circle");
+        let tang = circle.tangent(PI / 2.0);
+        assert!(approx_eq(tang.x(), -2.0));
+        assert!(approx_eq(tang.y(), 0.0));
+    }
+
+    #[test]
+    fn circle2d_tangent_perpendicular_to_radius() {
+        // The tangent should always be perpendicular to the radius direction
+        let circle = Circle2D::new(Point2::new(1.0, 2.0), 4.0).expect("valid circle");
+        for i in 0..8 {
+            let t = f64::from(i) * PI / 4.0;
+            let pt = circle.evaluate(t);
+            let tang = circle.tangent(t);
+            let radius_vec_x = pt.x() - circle.center().x();
+            let radius_vec_y = pt.y() - circle.center().y();
+            let dot = radius_vec_x * tang.x() + radius_vec_y * tang.y();
+            assert!(
+                approx_eq(dot, 0.0),
+                "tangent not perpendicular to radius at t={t}: dot={dot}"
+            );
+        }
+    }
+
+    // ── NurbsCurve2D additional tests ─────────────────
+
+    #[test]
+    fn nurbs2d_tangent_quadratic_bezier() {
+        // Quadratic Bezier: P0=(0,0), P1=(0.5,1), P2=(1,0)
+        // Endpoint tangents: B'(0) = 2*(P1-P0) = (1, 2), B'(1) = 2*(P2-P1) = (1, -2)
+        let curve = NurbsCurve2D::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point2::new(0.0, 0.0),
+                Point2::new(0.5, 1.0),
+                Point2::new(1.0, 0.0),
+            ],
+            vec![1.0, 1.0, 1.0],
+        )
+        .expect("valid curve");
+
+        let tang_start = curve.tangent(0.0);
+        assert!(
+            (tang_start.x() - 1.0).abs() < 1e-8,
+            "start tangent x: {}",
+            tang_start.x()
+        );
+        assert!(
+            (tang_start.y() - 2.0).abs() < 1e-8,
+            "start tangent y: {}",
+            tang_start.y()
+        );
+
+        let tang_end = curve.tangent(1.0);
+        assert!(
+            (tang_end.x() - 1.0).abs() < 1e-8,
+            "end tangent x: {}",
+            tang_end.x()
+        );
+        assert!(
+            (tang_end.y() + 2.0).abs() < 1e-8,
+            "end tangent y: {}",
+            tang_end.y()
+        );
+    }
+
+    #[test]
+    fn nurbs2d_tangent_midpoint_is_horizontal() {
+        // Symmetric arch P0=(0,0), P1=(0.5,1), P2=(1,0) — tangent at t=0.5 has zero y-component
+        let curve = NurbsCurve2D::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point2::new(0.0, 0.0),
+                Point2::new(0.5, 1.0),
+                Point2::new(1.0, 0.0),
+            ],
+            vec![1.0, 1.0, 1.0],
+        )
+        .expect("valid curve");
+
+        let tang = curve.tangent(0.5);
+        assert!(
+            tang.y().abs() < 1e-10,
+            "midpoint tangent y should be zero, got {}",
+            tang.y()
+        );
+        assert!(tang.x() > 0.0, "midpoint tangent x should be positive");
+    }
+
+    #[test]
+    fn nurbs2d_empty_input_error() {
+        // degree=0, expected_knots = 0+0+1 = 1; provide 1 knot, 0 control points, 0 weights.
+        // The weights length check passes (both 0), then the EmptyInput guard fires.
+        let result = NurbsCurve2D::new(0, vec![0.0], vec![], vec![]);
+        assert!(
+            matches!(result, Err(MathError::EmptyInput)),
+            "expected EmptyInput, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn curve2d_tangent_dispatch_all_variants() {
+        // Line: constant direction (1, 0)
+        let line =
+            Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).expect("valid"));
+        let tang = line.tangent(7.0);
+        assert!(approx_eq(tang.x(), 1.0));
+        assert!(approx_eq(tang.y(), 0.0));
+
+        // Circle (r=1): tangent at t=0 is (0, 1)
+        let circle = Curve2D::Circle(Circle2D::new(Point2::new(0.0, 0.0), 1.0).expect("valid"));
+        let tang = circle.tangent(0.0);
+        assert!(approx_eq(tang.x(), 0.0));
+        assert!(approx_eq(tang.y(), 1.0));
+
+        // Ellipse (a=4, b=2, rotation=0): tangent at t=0 is (0, b) = (0, 2)
+        let ellipse =
+            Curve2D::Ellipse(Ellipse2D::new(Point2::new(0.0, 0.0), 4.0, 2.0, 0.0).expect("valid"));
+        let tang = ellipse.tangent(0.0);
+        assert!(approx_eq(tang.x(), 0.0));
+        assert!(approx_eq(tang.y(), 2.0));
+
+        // NURBS line segment (0,0)→(2,3): tangent = (2, 3)
+        let nurbs = Curve2D::Nurbs(
+            NurbsCurve2D::from_line(Point2::new(0.0, 0.0), Point2::new(2.0, 3.0)).expect("valid"),
+        );
+        let tang = nurbs.tangent(0.5);
+        assert!(approx_eq(tang.x(), 2.0));
+        assert!(approx_eq(tang.y(), 3.0));
+    }
 }
