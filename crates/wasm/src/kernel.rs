@@ -705,6 +705,19 @@ impl BrepKernel {
         Ok(obj_str.into_bytes())
     }
 
+    /// Export a solid to glTF binary (.glb) format.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or tessellation fails.
+    #[wasm_bindgen(js_name = "exportGlb")]
+    pub fn export_glb(&self, solid: u32, deflection: f64) -> Result<Vec<u8>, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let glb = brepkit_io::gltf::write_glb(&self.topo, &[solid_id], deflection)?;
+        Ok(glb)
+    }
+
     // ── Import ──────────────────────────────────────────────────────
 
     /// Import an OBJ file and return a solid handle.
