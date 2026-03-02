@@ -1,0 +1,6 @@
+//! IGES (Initial Graphics Exchange Specification) import and export.
+//!
+//! Supports basic B-Rep geometry entities: lines, NURBS curves,
+//! planes, and NURBS surfaces.
+
+pub mod writer;

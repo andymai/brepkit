@@ -4,6 +4,7 @@
 //!
 //! This is layer L2, depending on `brepkit-math` and `brepkit-topology`.
 
+pub mod iges;
 pub mod step;
 pub mod stl;
 pub mod threemf;
