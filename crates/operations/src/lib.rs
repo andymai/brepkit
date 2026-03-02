@@ -16,6 +16,7 @@ pub mod draft;
 pub mod extrude;
 pub mod fillet;
 pub mod heal;
+pub mod helix;
 pub mod loft;
 pub mod measure;
 pub mod mirror;
