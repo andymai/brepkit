@@ -692,7 +692,36 @@ impl BrepKernel {
         Ok(bytes)
     }
 
+    /// Export a solid to OBJ format (UTF-8 string as bytes).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or tessellation fails.
+    #[wasm_bindgen(js_name = "exportObj")]
+    pub fn export_obj(&self, solid: u32, deflection: f64) -> Result<Vec<u8>, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let obj_str = brepkit_io::obj::write_obj(&self.topo, &[solid_id], deflection)?;
+        Ok(obj_str.into_bytes())
+    }
+
     // ── Import ──────────────────────────────────────────────────────
+
+    /// Import an OBJ file and return a solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file is malformed or mesh import fails.
+    #[wasm_bindgen(js_name = "importObj")]
+    pub fn import_obj(&mut self, data: &[u8]) -> Result<u32, JsError> {
+        let text = std::str::from_utf8(data).map_err(|e| WasmError::InvalidInput {
+            reason: format!("OBJ must be valid UTF-8: {e}"),
+        })?;
+        let mesh = brepkit_io::obj::read_obj(text)?;
+        let solid_id = brepkit_io::stl::import::import_mesh(&mut self.topo, &mesh, 1e-7)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(solid_id.index() as u32)
+    }
 
     /// Import an STL file (binary or ASCII) and return a solid handle.
     ///
