@@ -40,8 +40,29 @@ pub enum MathError {
     /// Cannot normalize a zero-length vector.
     #[error("cannot normalize zero vector")]
     ZeroVector,
+
+    /// Matrix is singular and cannot be inverted.
+    #[error("singular matrix cannot be inverted")]
+    SingularMatrix,
+
+    /// Input collection is empty where at least one element is required.
+    #[error("empty input where at least one element is required")]
+    EmptyInput,
+
+    /// Parameter is outside the valid range.
+    #[error("parameter {value} out of range [{min}, {max}]")]
+    ParameterOutOfRange {
+        /// The out-of-range value.
+        value: f64,
+        /// Lower bound of the valid range.
+        min: f64,
+        /// Upper bound of the valid range.
+        max: f64,
+    },
 }
 
+pub mod aabb;
+pub mod bvh;
 pub mod mat;
 pub mod nurbs;
 pub mod predicates;

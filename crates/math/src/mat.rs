@@ -4,6 +4,7 @@
 
 use std::ops::Mul;
 
+use crate::MathError;
 use crate::vec::Point3;
 
 // ---------------------------------------------------------------------------
@@ -186,6 +187,72 @@ impl Mat4 {
             ),
         )
     }
+
+    /// Compute the inverse of the matrix using the adjugate method.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MathError::SingularMatrix`] if the determinant is approximately zero.
+    #[allow(clippy::similar_names)]
+    pub fn inverse(self) -> Result<Self, MathError> {
+        let m = &self.0;
+
+        // Reuse the 2x2 minor pattern from determinant().
+        let s0 = m[0][0].mul_add(m[1][1], -(m[1][0] * m[0][1]));
+        let s1 = m[0][0].mul_add(m[1][2], -(m[1][0] * m[0][2]));
+        let s2 = m[0][0].mul_add(m[1][3], -(m[1][0] * m[0][3]));
+        let s3 = m[0][1].mul_add(m[1][2], -(m[1][1] * m[0][2]));
+        let s4 = m[0][1].mul_add(m[1][3], -(m[1][1] * m[0][3]));
+        let s5 = m[0][2].mul_add(m[1][3], -(m[1][2] * m[0][3]));
+
+        let c5 = m[2][2].mul_add(m[3][3], -(m[3][2] * m[2][3]));
+        let c4 = m[2][1].mul_add(m[3][3], -(m[3][1] * m[2][3]));
+        let c3 = m[2][1].mul_add(m[3][2], -(m[3][1] * m[2][2]));
+        let c2 = m[2][0].mul_add(m[3][3], -(m[3][0] * m[2][3]));
+        let c1 = m[2][0].mul_add(m[3][2], -(m[3][0] * m[2][2]));
+        let c0 = m[2][0].mul_add(m[3][1], -(m[3][0] * m[2][1]));
+
+        let det = s0.mul_add(
+            c5,
+            (-s1).mul_add(
+                c4,
+                s2.mul_add(c3, s3.mul_add(c2, (-s4).mul_add(c1, s5 * c0))),
+            ),
+        );
+
+        if det.abs() < 1e-15 {
+            return Err(MathError::SingularMatrix);
+        }
+
+        let inv_det = 1.0 / det;
+
+        Ok(Self([
+            [
+                m[1][1].mul_add(c5, m[1][3].mul_add(c3, -(m[1][2] * c4))) * inv_det,
+                (-m[0][1]).mul_add(c5, m[0][2].mul_add(c4, -(m[0][3] * c3))) * inv_det,
+                m[3][1].mul_add(s5, m[3][3].mul_add(s3, -(m[3][2] * s4))) * inv_det,
+                (-m[2][1]).mul_add(s5, m[2][2].mul_add(s4, -(m[2][3] * s3))) * inv_det,
+            ],
+            [
+                (-m[1][0]).mul_add(c5, m[1][2].mul_add(c2, -(m[1][3] * c1))) * inv_det,
+                m[0][0].mul_add(c5, m[0][3].mul_add(c1, -(m[0][2] * c2))) * inv_det,
+                (-m[3][0]).mul_add(s5, m[3][2].mul_add(s2, -(m[3][3] * s1))) * inv_det,
+                m[2][0].mul_add(s5, m[2][3].mul_add(s1, -(m[2][2] * s2))) * inv_det,
+            ],
+            [
+                m[1][0].mul_add(c4, m[1][3].mul_add(c0, -(m[1][1] * c2))) * inv_det,
+                (-m[0][0]).mul_add(c4, m[0][1].mul_add(c2, -(m[0][3] * c0))) * inv_det,
+                m[3][0].mul_add(s4, m[3][3].mul_add(s0, -(m[3][1] * s2))) * inv_det,
+                (-m[2][0]).mul_add(s4, m[2][1].mul_add(s2, -(m[2][3] * s0))) * inv_det,
+            ],
+            [
+                (-m[1][0]).mul_add(c3, m[1][1].mul_add(c1, -(m[1][2] * c0))) * inv_det,
+                m[0][0].mul_add(c3, m[0][2].mul_add(c0, -(m[0][1] * c1))) * inv_det,
+                (-m[3][0]).mul_add(s3, m[3][1].mul_add(s1, -(m[3][2] * s0))) * inv_det,
+                m[2][0].mul_add(s3, m[2][2].mul_add(s0, -(m[2][1] * s1))) * inv_det,
+            ],
+        ]))
+    }
 }
 
 impl Mul for Mat4 {
@@ -204,5 +271,85 @@ impl Mul for Mat4 {
             }
         }
         Self(out)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn approx_eq_mat4(a: &Mat4, b: &Mat4, tol: f64) -> bool {
+        for i in 0..4 {
+            for j in 0..4 {
+                if (a.0[i][j] - b.0[i][j]).abs() > tol {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn identity_inverse() {
+        let inv = Mat4::identity().inverse().expect("invertible");
+        assert!(approx_eq_mat4(&inv, &Mat4::identity(), 1e-14));
+    }
+
+    #[test]
+    fn translation_inverse() {
+        let m = Mat4::translation(1.0, 2.0, 3.0);
+        let inv = m.inverse().expect("invertible");
+        let product = m * inv;
+        assert!(approx_eq_mat4(&product, &Mat4::identity(), 1e-12));
+    }
+
+    #[test]
+    fn rotation_inverse() {
+        let m = Mat4::rotation_x(0.7) * Mat4::rotation_y(1.2) * Mat4::rotation_z(0.3);
+        let inv = m.inverse().expect("invertible");
+        let product = m * inv;
+        assert!(approx_eq_mat4(&product, &Mat4::identity(), 1e-12));
+    }
+
+    #[test]
+    fn scale_inverse() {
+        let m = Mat4::scale(2.0, 3.0, 4.0);
+        let inv = m.inverse().expect("invertible");
+        let product = m * inv;
+        assert!(approx_eq_mat4(&product, &Mat4::identity(), 1e-12));
+    }
+
+    #[test]
+    fn singular_matrix() {
+        let m = Mat4([[1.0, 0.0, 0.0, 0.0]; 4]);
+        assert!(m.inverse().is_err());
+    }
+
+    #[test]
+    fn combined_transform_inverse() {
+        let m = Mat4::translation(5.0, -3.0, 2.0)
+            * Mat4::rotation_z(std::f64::consts::FRAC_PI_4)
+            * Mat4::scale(2.0, 0.5, 1.0);
+        let inv = m.inverse().expect("invertible");
+        let product = m * inv;
+        assert!(approx_eq_mat4(&product, &Mat4::identity(), 1e-10));
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn prop_inverse_roundtrip(
+            tx in -10.0f64..10.0,
+            ty in -10.0f64..10.0,
+            tz in -10.0f64..10.0,
+            angle in 0.0f64..std::f64::consts::TAU,
+        ) {
+            let m = Mat4::translation(tx, ty, tz) * Mat4::rotation_z(angle);
+            let inv = m.inverse().expect("invertible");
+            let product = m * inv;
+            prop_assert!(approx_eq_mat4(&product, &Mat4::identity(), 1e-10));
+        }
     }
 }

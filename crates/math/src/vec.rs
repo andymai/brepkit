@@ -322,3 +322,84 @@ impl Sub for Point3 {
         ])
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vec3_dot() {
+        let a = Vec3::new(1.0, 2.0, 3.0);
+        let b = Vec3::new(4.0, 5.0, 6.0);
+        assert!((a.dot(b) - 32.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn vec3_cross() {
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let y = Vec3::new(0.0, 1.0, 0.0);
+        let z = x.cross(y);
+        assert!((z.x()).abs() < 1e-14);
+        assert!((z.y()).abs() < 1e-14);
+        assert!((z.z() - 1.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn vec3_normalize() {
+        let v = Vec3::new(3.0, 4.0, 0.0);
+        let n = v.normalize().expect("non-zero");
+        assert!((n.length() - 1.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn vec3_zero_normalize_fails() {
+        let v = Vec3::new(0.0, 0.0, 0.0);
+        assert!(v.normalize().is_err());
+    }
+
+    #[test]
+    fn point3_sub_gives_vec3() {
+        let a = Point3::new(3.0, 4.0, 5.0);
+        let b = Point3::new(1.0, 1.0, 1.0);
+        let v = a - b;
+        assert!((v.x() - 2.0).abs() < 1e-14);
+        assert!((v.y() - 3.0).abs() < 1e-14);
+        assert!((v.z() - 4.0).abs() < 1e-14);
+    }
+
+    #[test]
+    fn point3_add_vec3() {
+        let p = Point3::new(1.0, 2.0, 3.0);
+        let v = Vec3::new(1.0, 1.0, 1.0);
+        let q = p + v;
+        assert!((q.x() - 2.0).abs() < 1e-14);
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn prop_normalize_unit_length(x in -10.0f64..10.0, y in -10.0f64..10.0, z in -10.0f64..10.0) {
+            let v = Vec3::new(x, y, z);
+            if let Ok(n) = v.normalize() {
+                prop_assert!((n.length() - 1.0).abs() < 1e-12, "length = {}", n.length());
+            }
+        }
+
+        #[test]
+        fn prop_cross_anticommutative(
+            ax in -10.0f64..10.0, ay in -10.0f64..10.0, az in -10.0f64..10.0,
+            bx in -10.0f64..10.0, by in -10.0f64..10.0, bz in -10.0f64..10.0,
+        ) {
+            let a = Vec3::new(ax, ay, az);
+            let b = Vec3::new(bx, by, bz);
+            let ab = a.cross(b);
+            let ba = b.cross(a);
+            // a×b = -(b×a)
+            prop_assert!((ab.x() + ba.x()).abs() < 1e-10);
+            prop_assert!((ab.y() + ba.y()).abs() < 1e-10);
+            prop_assert!((ab.z() + ba.z()).abs() < 1e-10);
+        }
+    }
+}
