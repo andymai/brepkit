@@ -131,6 +131,19 @@ impl<T> Arena<T> {
         })
     }
 
+    /// Reconstructs a typed [`Id`] from a raw index, returning `None`
+    /// if the index is out of bounds.
+    ///
+    /// This is intended for FFI boundaries (e.g. WASM) where handles
+    /// are passed as plain integers.
+    #[must_use]
+    pub fn id_from_index(&self, index: usize) -> Option<Id<T>> {
+        self.items.get(index).map(|_| Id {
+            index,
+            _marker: PhantomData,
+        })
+    }
+
     /// Returns a mutable iterator over all `(Id<T>, &mut T)` pairs.
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (Id<T>, &mut T)> {
         self.items.iter_mut().enumerate().map(|(i, v)| {
@@ -142,5 +155,36 @@ impl<T> Arena<T> {
                 v,
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn id_from_index_valid() {
+        let mut arena: Arena<String> = Arena::new();
+        let id0 = arena.alloc("hello".into());
+        let id1 = arena.alloc("world".into());
+
+        let reconstructed = arena.id_from_index(0).unwrap();
+        assert_eq!(reconstructed, id0);
+
+        let reconstructed = arena.id_from_index(1).unwrap();
+        assert_eq!(reconstructed, id1);
+    }
+
+    #[test]
+    fn id_from_index_out_of_bounds() {
+        let arena: Arena<String> = Arena::new();
+        assert!(arena.id_from_index(0).is_none());
+
+        let mut arena: Arena<String> = Arena::new();
+        arena.alloc("one".into());
+        assert!(arena.id_from_index(1).is_none());
+        assert!(arena.id_from_index(100).is_none());
     }
 }

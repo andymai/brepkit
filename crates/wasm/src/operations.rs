@@ -1,6 +1,7 @@
 //! JS-facing modeling operations via `wasm-bindgen`.
 //!
-//! This module will expose boolean operations, filleting, extrusion,
-//! and other CAD operations to JavaScript consumers.
-
-// Operations will be exposed here once brepkit-operations is implemented.
+//! Individual operations (extrude, transform, tessellate) are currently
+//! exposed as methods on [`super::kernel::BrepKernel`].
+//!
+//! This module is reserved for future standalone operation bindings
+//! (e.g. boolean operations) that may not fit the kernel pattern.
