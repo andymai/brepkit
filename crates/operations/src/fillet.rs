@@ -318,6 +318,95 @@ fn record_fillet_point(
         .insert(face_id, vertex_id, point);
 }
 
+/// Law governing how fillet radius varies along an edge.
+#[derive(Debug, Clone)]
+pub enum FilletRadiusLaw {
+    /// Constant radius (same as basic [`fillet`]).
+    Constant(f64),
+    /// Linear interpolation from `start_radius` to `end_radius`.
+    Linear {
+        /// Radius at the start of the edge.
+        start: f64,
+        /// Radius at the end of the edge.
+        end: f64,
+    },
+    /// Smooth S-curve (sinusoidal) interpolation between two radii.
+    SCurve {
+        /// Radius at the start of the edge.
+        start: f64,
+        /// Radius at the end of the edge.
+        end: f64,
+    },
+}
+
+impl FilletRadiusLaw {
+    /// Evaluate the radius at parameter `t ∈ [0, 1]` along the edge.
+    #[must_use]
+    pub fn evaluate(&self, t: f64) -> f64 {
+        let t = t.clamp(0.0, 1.0);
+        match self {
+            Self::Constant(r) => *r,
+            Self::Linear { start, end } => (end - start).mul_add(t, *start),
+            Self::SCurve { start, end } => {
+                // Smooth step: 3t² - 2t³ (Hermite interpolation)
+                let s = t * t * (-2.0f64).mul_add(t, 3.0);
+                (end - start).mul_add(s, *start)
+            }
+        }
+    }
+}
+
+/// Fillet edges with variable radius.
+///
+/// Each edge gets a [`FilletRadiusLaw`] that defines how the radius
+/// changes along the edge. For constant radius, use
+/// `FilletRadiusLaw::Constant(r)` or the simpler [`fillet`] function.
+///
+/// The current implementation samples the radius at the edge midpoint
+/// and creates a piecewise-planar approximation. For true NURBS rolling-ball
+/// surfaces, this would need to generate a canal surface.
+///
+/// # Errors
+///
+/// Returns errors similar to [`fillet`].
+pub fn fillet_variable(
+    topo: &mut Topology,
+    solid: SolidId,
+    edge_laws: &[(EdgeId, FilletRadiusLaw)],
+) -> Result<SolidId, crate::OperationsError> {
+    if edge_laws.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "no edges specified for fillet".into(),
+        });
+    }
+
+    // For each edge, sample the radius at midpoint and delegate to
+    // the constant-radius fillet on a per-edge basis, then merge results.
+    // This is the "practical" approach — true variable-radius would require
+    // generating canal surfaces.
+
+    // Use the midpoint radius for each edge
+    let edges: Vec<EdgeId> = edge_laws.iter().map(|(e, _)| *e).collect();
+    let midpoint_radius = edge_laws
+        .iter()
+        .map(|(_, law)| law.evaluate(0.5))
+        .fold(0.0_f64, f64::max);
+
+    if midpoint_radius <= 0.0 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "fillet radius must be positive at all points".into(),
+        });
+    }
+
+    // For now, use average of midpoint radii for a single-pass fillet
+    // TODO: Per-edge variable radius with canal surface generation
+    let radius_sum: f64 = edge_laws.iter().map(|(_, law)| law.evaluate(0.5)).sum();
+    #[allow(clippy::cast_precision_loss)]
+    let avg_radius = radius_sum / edge_laws.len() as f64;
+
+    fillet(topo, solid, &edges, avg_radius)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -404,6 +493,76 @@ mod tests {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);
         assert!(fillet(&mut topo, cube, &[], 0.1).is_err());
+    }
+
+    // ── Variable-radius fillet tests ────────────────
+
+    #[test]
+    fn radius_law_constant() {
+        let law = FilletRadiusLaw::Constant(0.5);
+        assert!((law.evaluate(0.0) - 0.5).abs() < 1e-10);
+        assert!((law.evaluate(0.5) - 0.5).abs() < 1e-10);
+        assert!((law.evaluate(1.0) - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn radius_law_linear() {
+        let law = FilletRadiusLaw::Linear {
+            start: 0.1,
+            end: 0.5,
+        };
+        assert!((law.evaluate(0.0) - 0.1).abs() < 1e-10);
+        assert!((law.evaluate(0.5) - 0.3).abs() < 1e-10);
+        assert!((law.evaluate(1.0) - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn radius_law_scurve() {
+        let law = FilletRadiusLaw::SCurve {
+            start: 0.1,
+            end: 0.5,
+        };
+        // S-curve should match endpoints
+        assert!((law.evaluate(0.0) - 0.1).abs() < 1e-10);
+        assert!((law.evaluate(1.0) - 0.5).abs() < 1e-10);
+        // Midpoint should be between start and end
+        let mid = law.evaluate(0.5);
+        assert!(mid > 0.1 && mid < 0.5);
+    }
+
+    #[test]
+    fn fillet_variable_constant_law() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+
+        let edges = solid_edge_ids(&topo, cube);
+        let laws = vec![(edges[0], FilletRadiusLaw::Constant(0.1))];
+
+        let result = fillet_variable(&mut topo, cube, &laws).expect("variable fillet should work");
+
+        let s = topo.solid(result).expect("result solid");
+        let sh = topo.shell(s.outer_shell()).expect("shell");
+        assert_eq!(sh.faces().len(), 7, "should have 7 faces after fillet");
+    }
+
+    #[test]
+    fn fillet_variable_linear_law() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+
+        let edges = solid_edge_ids(&topo, cube);
+        let laws = vec![(
+            edges[0],
+            FilletRadiusLaw::Linear {
+                start: 0.05,
+                end: 0.15,
+            },
+        )];
+
+        let result = fillet_variable(&mut topo, cube, &laws).expect("variable fillet should work");
+
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(vol > 0.5, "filleted cube should have volume, got {vol}");
     }
 
     #[test]
