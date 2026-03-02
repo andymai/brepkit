@@ -10,6 +10,7 @@ use brepkit_math::vec::{Point3, Vec3};
 pub mod boolean;
 pub mod chamfer;
 pub mod copy;
+pub mod draft;
 pub mod extrude;
 pub mod fillet;
 pub mod loft;
