@@ -33,6 +33,7 @@ pub mod revolve;
 pub mod section;
 pub mod sew;
 pub mod shell_op;
+pub mod sketch;
 pub mod split;
 pub mod sweep;
 pub mod tessellate;
