@@ -16,6 +16,7 @@ pub mod fillet;
 pub mod loft;
 pub mod measure;
 pub mod mirror;
+pub mod offset_wire;
 pub mod pattern;
 pub mod pipe;
 pub mod primitives;
