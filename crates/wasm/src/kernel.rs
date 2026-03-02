@@ -1311,6 +1311,34 @@ impl BrepKernel {
         Ok(vec![com.x(), com.y(), com.z()])
     }
 
+    /// Classify a point relative to a solid: inside, outside, or on boundary.
+    ///
+    /// Returns `"inside"`, `"outside"`, or `"boundary"`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "classifyPoint")]
+    pub fn classify_point(
+        &self,
+        solid: u32,
+        x: f64,
+        y: f64,
+        z: f64,
+        tolerance: f64,
+    ) -> Result<String, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let point = brepkit_math::vec::Point3::new(x, y, z);
+        let result = brepkit_operations::classify::classify_point(
+            &self.topo, solid_id, point, 0.1, tolerance,
+        )?;
+        Ok(match result {
+            brepkit_operations::classify::PointClassification::Inside => "inside".into(),
+            brepkit_operations::classify::PointClassification::Outside => "outside".into(),
+            brepkit_operations::classify::PointClassification::OnBoundary => "boundary".into(),
+        })
+    }
+
     /// Compute the length of an edge.
     ///
     /// # Errors
