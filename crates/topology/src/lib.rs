@@ -10,18 +10,22 @@
 //! via typed index handles ([`VertexId`], [`EdgeId`], etc.). This avoids
 //! reference counting overhead and enables efficient traversal.
 
-mod arena;
+pub mod arena;
 pub mod compound;
 pub mod edge;
 pub mod face;
 pub mod graph;
 pub mod shell;
 pub mod solid;
+#[cfg(feature = "test-utils")]
+pub mod test_utils;
+pub mod topology;
 pub mod validation;
 pub mod vertex;
 pub mod wire;
 
 pub use arena::Arena;
+pub use topology::Topology;
 
 /// Errors from topology operations.
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +53,10 @@ pub enum TopologyError {
     /// A referenced solid ID does not exist in the arena.
     #[error("solid {0:?} not found")]
     SolidNotFound(solid::SolidId),
+
+    /// A referenced compound ID does not exist in the arena.
+    #[error("compound {0:?} not found")]
+    CompoundNotFound(compound::CompoundId),
 
     /// A wire does not form a closed loop.
     #[error("wire is not closed")]

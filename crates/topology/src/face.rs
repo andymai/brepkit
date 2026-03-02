@@ -66,4 +66,9 @@ impl Face {
     pub const fn surface(&self) -> &FaceSurface {
         &self.surface
     }
+
+    /// Sets the surface geometry of this face.
+    pub fn set_surface(&mut self, surface: FaceSurface) {
+        self.surface = surface;
+    }
 }

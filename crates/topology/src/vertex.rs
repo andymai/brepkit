@@ -37,4 +37,9 @@ impl Vertex {
     pub const fn tolerance(&self) -> f64 {
         self.tolerance
     }
+
+    /// Sets the position of this vertex.
+    pub const fn set_point(&mut self, point: Point3) {
+        self.point = point;
+    }
 }

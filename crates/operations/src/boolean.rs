@@ -1,5 +1,6 @@
 //! Boolean operations on solids: fuse, cut, and intersect.
 
+use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
 
 /// The type of boolean operation.
@@ -19,9 +20,12 @@ pub enum BooleanOp {
 ///
 /// Returns an error if the operation fails (e.g., non-manifold result).
 pub fn boolean(
+    _topo: &mut Topology,
     _op: BooleanOp,
     _a: SolidId,
     _b: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
-    todo!("boolean operations not yet implemented")
+    Err(crate::OperationsError::InvalidInput {
+        reason: "boolean operations not yet implemented".into(),
+    })
 }

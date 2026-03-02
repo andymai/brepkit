@@ -130,4 +130,17 @@ impl<T> Arena<T> {
             )
         })
     }
+
+    /// Returns a mutable iterator over all `(Id<T>, &mut T)` pairs.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (Id<T>, &mut T)> {
+        self.items.iter_mut().enumerate().map(|(i, v)| {
+            (
+                Id {
+                    index: i,
+                    _marker: PhantomData,
+                },
+                v,
+            )
+        })
+    }
 }
