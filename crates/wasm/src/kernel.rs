@@ -1147,6 +1147,43 @@ impl BrepKernel {
         let com = measure::solid_center_of_mass(&self.topo, solid_id, deflection)?;
         Ok(vec![com.x(), com.y(), com.z()])
     }
+
+    /// Compute the length of an edge.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the edge handle is invalid.
+    #[wasm_bindgen(js_name = "edgeLength")]
+    pub fn edge_length_wasm(&self, edge: u32) -> Result<f64, JsError> {
+        let edge_id = self.resolve_edge(edge)?;
+        Ok(measure::edge_length(&self.topo, edge_id)?)
+    }
+
+    /// Compute the perimeter of a face.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid.
+    #[wasm_bindgen(js_name = "facePerimeter")]
+    pub fn face_perimeter_wasm(&self, face: u32) -> Result<f64, JsError> {
+        let face_id = self.resolve_face(face)?;
+        Ok(measure::face_perimeter(&self.topo, face_id)?)
+    }
+
+    /// Validate a solid, returning the number of errors found.
+    ///
+    /// Returns 0 if the solid is valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "validateSolid")]
+    pub fn validate_solid_wasm(&self, solid: u32) -> Result<u32, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let report = brepkit_operations::validate::validate_solid(&self.topo, solid_id)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(report.error_count() as u32)
+    }
 }
 
 // ── Private helpers ────────────────────────────────────────────────
