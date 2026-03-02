@@ -12,6 +12,7 @@ pub mod chamfer;
 pub mod classify;
 pub mod compound_ops;
 pub mod copy;
+pub mod defeature;
 pub mod distance;
 pub mod draft;
 pub mod extrude;
