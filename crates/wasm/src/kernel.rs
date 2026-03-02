@@ -7,9 +7,11 @@
 use std::f64::consts::PI;
 
 use brepkit_math::mat::Mat4;
+use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::revolve::revolve;
+use brepkit_operations::sweep::sweep;
 use brepkit_operations::tessellate::{self, TriangleMesh};
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
@@ -226,6 +228,91 @@ impl BrepKernel {
         let angle_radians = angle_degrees.to_radians();
 
         let solid_id = revolve(&mut self.topo, face_id, origin, direction, angle_radians)?;
+
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Sweep a planar face along a NURBS curve path to create a solid.
+    ///
+    /// The path is specified as flat arrays for JS interop:
+    /// - `path_degree` — polynomial degree of the path curve
+    /// - `path_knots` — knot vector
+    /// - `path_control_points` — flat `[x,y,z, ...]` control point coordinates
+    /// - `path_weights` — per-control-point weights
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid, the NURBS arrays have
+    /// inconsistent lengths, or the sweep operation fails.
+    #[wasm_bindgen(js_name = "sweep")]
+    #[allow(clippy::needless_pass_by_value)] // wasm-bindgen requires owned Vec
+    pub fn sweep_face(
+        &mut self,
+        face: u32,
+        path_degree: u32,
+        path_knots: Vec<f64>,
+        path_control_points: Vec<f64>,
+        path_weights: Vec<f64>,
+    ) -> Result<u32, JsError> {
+        // Validate coordinate array length.
+        if path_control_points.len() % 3 != 0 {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "path_control_points length must be a multiple of 3, got {}",
+                    path_control_points.len()
+                ),
+            }
+            .into());
+        }
+        let num_pts = path_control_points.len() / 3;
+
+        if path_weights.len() != num_pts {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "path_weights length ({}) must match number of control points ({num_pts})",
+                    path_weights.len()
+                ),
+            }
+            .into());
+        }
+
+        // Validate all values are finite.
+        if let Some(pos) = path_knots.iter().position(|v| !v.is_finite()) {
+            return Err(WasmError::InvalidInput {
+                reason: format!("path_knots[{pos}] is not finite"),
+            }
+            .into());
+        }
+        if let Some(pos) = path_control_points.iter().position(|v| !v.is_finite()) {
+            return Err(WasmError::InvalidInput {
+                reason: format!("path_control_points[{pos}] is not finite"),
+            }
+            .into());
+        }
+        if let Some(pos) = path_weights.iter().position(|v| !v.is_finite()) {
+            return Err(WasmError::InvalidInput {
+                reason: format!("path_weights[{pos}] is not finite"),
+            }
+            .into());
+        }
+
+        let face_id = self.resolve_face(face)?;
+
+        let control_points: Vec<Point3> = path_control_points
+            .chunks_exact(3)
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect();
+
+        let path_curve = NurbsCurve::new(
+            path_degree as usize,
+            path_knots,
+            control_points,
+            path_weights,
+        )?;
+
+        let solid_id = sweep(&mut self.topo, face_id, &path_curve)?;
 
         Ok(solid_id_to_u32(solid_id))
     }
