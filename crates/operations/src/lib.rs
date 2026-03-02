@@ -29,6 +29,7 @@ pub mod shell_op;
 pub mod split;
 pub mod sweep;
 pub mod tessellate;
+pub mod thicken;
 pub mod transform;
 pub mod validate;
 

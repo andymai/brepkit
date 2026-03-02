@@ -113,7 +113,11 @@ pub fn solid_to_solid_distance(
             let face = topo.face(fid)?;
             let (normal, d) = match face.surface() {
                 FaceSurface::Plane { normal, d } => (*normal, *d),
-                FaceSurface::Nurbs(_) => continue,
+                FaceSurface::Nurbs(_) => {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: "distance to NURBS faces not yet supported".into(),
+                    });
+                }
             };
             let face_verts = face_vertices(topo, fid)?;
             if let Some((dist, closest)) =
@@ -136,7 +140,11 @@ pub fn solid_to_solid_distance(
             let face = topo.face(fid)?;
             let (normal, d) = match face.surface() {
                 FaceSurface::Plane { normal, d } => (*normal, *d),
-                FaceSurface::Nurbs(_) => continue,
+                FaceSurface::Nurbs(_) => {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: "distance to NURBS faces not yet supported".into(),
+                    });
+                }
             };
             let face_verts = face_vertices(topo, fid)?;
             if let Some((dist, closest)) =

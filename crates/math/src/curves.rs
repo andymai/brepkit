@@ -218,6 +218,13 @@ impl Ellipse3D {
                 max: f64::INFINITY,
             });
         }
+        if semi_minor > semi_major {
+            return Err(MathError::ParameterOutOfRange {
+                value: semi_minor,
+                min: 0.0,
+                max: semi_major,
+            });
+        }
         let n = normal.normalize()?;
         let candidate = if n.x().abs() < 0.9 {
             Vec3::new(1.0, 0.0, 0.0)
