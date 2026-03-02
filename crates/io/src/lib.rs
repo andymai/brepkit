@@ -7,6 +7,7 @@
 pub mod gltf;
 pub mod iges;
 pub mod obj;
+pub mod ply;
 pub mod step;
 pub mod stl;
 pub mod threemf;

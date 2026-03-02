@@ -718,6 +718,24 @@ impl BrepKernel {
         Ok(glb)
     }
 
+    /// Export a solid to PLY format (binary little-endian).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or tessellation fails.
+    #[wasm_bindgen(js_name = "exportPly")]
+    pub fn export_ply(&self, solid: u32, deflection: f64) -> Result<Vec<u8>, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let ply = brepkit_io::ply::write_ply(
+            &self.topo,
+            &[solid_id],
+            deflection,
+            brepkit_io::ply::writer::PlyFormat::BinaryLittleEndian,
+        )?;
+        Ok(ply)
+    }
+
     // ── Import ──────────────────────────────────────────────────────
 
     /// Import an OBJ file and return a solid handle.
