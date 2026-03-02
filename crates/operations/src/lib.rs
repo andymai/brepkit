@@ -7,6 +7,7 @@
 
 use brepkit_math::vec::{Point3, Vec3};
 
+pub mod assembly;
 pub mod boolean;
 pub mod chamfer;
 pub mod classify;
