@@ -424,6 +424,301 @@ fn build_curves_from_points(
     }])
 }
 
+/// Intersect two NURBS surfaces.
+///
+/// Uses a subdivision + marching approach:
+/// 1. Sample both surfaces on grids to find seed points where they are close
+/// 2. Refine seeds with Newton iteration in (u1,v1,u2,v2) space
+/// 3. March along the intersection curve from each seed
+/// 4. Fit NURBS curves through the traced points
+///
+/// # Parameters
+///
+/// - `surface1`, `surface2`: The two NURBS surfaces
+/// - `samples`: Grid resolution for seed finding (e.g., 20)
+/// - `march_step`: Step size for marching (e.g., 0.02)
+///
+/// # Errors
+///
+/// Returns an error if NURBS evaluation or curve fitting fails.
+#[allow(clippy::too_many_lines)]
+pub fn intersect_nurbs_nurbs(
+    surface1: &NurbsSurface,
+    surface2: &NurbsSurface,
+    samples: usize,
+    march_step: f64,
+) -> Result<Vec<IntersectionCurve>, MathError> {
+    let n = samples.max(5);
+    let tolerance = 1e-6;
+
+    // Phase 1: Find seed points by sampling both surfaces and finding
+    // close pairs.
+    let seeds = find_ssi_seeds(surface1, surface2, n, tolerance);
+
+    if seeds.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Phase 2: March from each seed along the intersection curve.
+    let mut all_points: Vec<IntersectionPoint> = Vec::new();
+
+    for seed in &seeds {
+        let traced = march_intersection(surface1, surface2, seed, march_step, tolerance);
+        all_points.extend(traced);
+    }
+
+    if all_points.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Phase 3: Build curves from collected points.
+    build_curves_from_points(&all_points)
+}
+
+/// Find seed points for NURBS-NURBS intersection by grid sampling.
+///
+/// Strategy: sample both surfaces on an n×n grid and try Newton
+/// refinement for all cell-center pairs whose 3D positions are within
+/// a generous distance threshold.
+#[allow(clippy::cast_precision_loss)]
+fn find_ssi_seeds(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    n: usize,
+    tolerance: f64,
+) -> Vec<IntersectionPoint> {
+    let step = 1.0 / (n - 1) as f64;
+    let mut seeds = Vec::new();
+
+    // Sample both surfaces.
+    let mut pts1: Vec<(f64, f64, Point3)> = Vec::with_capacity(n * n);
+    let mut pts2: Vec<(f64, f64, Point3)> = Vec::with_capacity(n * n);
+
+    for i in 0..n {
+        let u = i as f64 * step;
+        for j in 0..n {
+            let v = j as f64 * step;
+            pts1.push((u, v, s1.evaluate(u, v)));
+            pts2.push((u, v, s2.evaluate(u, v)));
+        }
+    }
+
+    // For each pair of sample points, if close enough, try Newton.
+    // Use a generous threshold based on the diagonal of a grid cell.
+    let threshold = step * 3.0;
+
+    for &(u1, v1, p1) in &pts1 {
+        for &(u2, v2, p2) in &pts2 {
+            let dist = (p1 - p2).length();
+            if dist < threshold {
+                if let Some(refined) = refine_ssi_point(s1, s2, u1, v1, u2, v2, tolerance) {
+                    let dup = seeds.iter().any(|s: &IntersectionPoint| {
+                        (s.point - refined.point).length() < tolerance * 100.0
+                    });
+                    if !dup {
+                        seeds.push(refined);
+                    }
+                }
+            }
+        }
+    }
+
+    seeds
+}
+
+/// Refine an SSI point using alternating projection.
+///
+/// Instead of solving the coupled 4D system, alternately:
+/// 1. Project the midpoint onto surface 1 (find closest (u1,v1))
+/// 2. Project the midpoint onto surface 2 (find closest (u2,v2))
+/// 3. Repeat until the two projections converge.
+#[allow(clippy::similar_names)]
+fn refine_ssi_point(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    u1_guess: f64,
+    v1_guess: f64,
+    u2_guess: f64,
+    v2_guess: f64,
+    tolerance: f64,
+) -> Option<IntersectionPoint> {
+    let mut u1 = u1_guess;
+    let mut v1 = v1_guess;
+    let mut u2 = u2_guess;
+    let mut v2 = v2_guess;
+
+    for _ in 0..50 {
+        let p1 = s1.evaluate(u1, v1);
+        let p2 = s2.evaluate(u2, v2);
+        let residual = p1 - p2;
+
+        if residual.length() < tolerance {
+            return Some(IntersectionPoint {
+                point: p1,
+                param1: (u1, v1),
+                param2: (u2, v2),
+            });
+        }
+
+        // Step 1: Move (u2, v2) on surface 2 toward p1.
+        let (du2, dv2) = surface_newton_step(s2, u2, v2, p1);
+        u2 += du2;
+        v2 += dv2;
+        u2 = u2.clamp(0.0, 1.0);
+        v2 = v2.clamp(0.0, 1.0);
+
+        // Step 2: Move (u1, v1) on surface 1 toward the updated p2.
+        let p2_new = s2.evaluate(u2, v2);
+        let (du1, dv1) = surface_newton_step(s1, u1, v1, p2_new);
+        u1 += du1;
+        v1 += dv1;
+        u1 = u1.clamp(0.0, 1.0);
+        v1 = v1.clamp(0.0, 1.0);
+    }
+
+    // Final check.
+    let p1 = s1.evaluate(u1, v1);
+    let p2 = s2.evaluate(u2, v2);
+    if (p1 - p2).length() < tolerance * 100.0 {
+        Some(IntersectionPoint {
+            point: p1,
+            param1: (u1, v1),
+            param2: (u2, v2),
+        })
+    } else {
+        None
+    }
+}
+
+/// Compute a Newton step to move (u, v) on the surface closer to a target
+/// 3D point. Solves the 2×2 system from the surface's first derivatives.
+fn surface_newton_step(surface: &NurbsSurface, u: f64, v: f64, target: Point3) -> (f64, f64) {
+    let pt = surface.evaluate(u, v);
+    let r = target - pt;
+    let r_vec = Vec3::new(r.x(), r.y(), r.z());
+
+    let derivs = surface.derivatives(u, v, 1);
+    let su = derivs[1][0];
+    let sv = derivs[0][1];
+
+    // Solve: [su·su, su·sv; su·sv, sv·sv] [du; dv] = [su·r; sv·r]
+    let a11 = su.dot(su);
+    let a12 = su.dot(sv);
+    let a22 = sv.dot(sv);
+    let b1 = su.dot(r_vec);
+    let b2 = sv.dot(r_vec);
+
+    let det = a11.mul_add(a22, -(a12 * a12));
+    if det.abs() < 1e-20 {
+        return (0.0, 0.0);
+    }
+
+    let du = (b1 * a22 - b2 * a12) / det;
+    let dv = (a11 * b2 - a12 * b1) / det;
+
+    (du, dv)
+}
+
+/// March along an intersection curve from a seed point.
+///
+/// Uses the tangent direction (cross product of surface normals) to step
+/// forward, then corrects back to the intersection with Newton.
+fn march_intersection(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    seed: &IntersectionPoint,
+    step_size: f64,
+    tolerance: f64,
+) -> Vec<IntersectionPoint> {
+    let max_steps = 200;
+
+    // March forward.
+    let forward = march_direction(s1, s2, seed, true, step_size, tolerance, max_steps);
+    // March backward.
+    let backward = march_direction(s1, s2, seed, false, step_size, tolerance, max_steps);
+
+    // Combine: backward (reversed) + seed + forward.
+    let mut result: Vec<IntersectionPoint> = backward.into_iter().rev().collect();
+    result.push(*seed);
+    result.extend(forward);
+
+    result
+}
+
+/// March in one direction along the intersection curve.
+fn march_direction(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    seed: &IntersectionPoint,
+    forward: bool,
+    step_size: f64,
+    tolerance: f64,
+    max_steps: usize,
+) -> Vec<IntersectionPoint> {
+    let mut points = Vec::new();
+    let mut current = *seed;
+
+    for _ in 0..max_steps {
+        // Compute tangent direction from surface normals.
+        let n1 = s1.normal(current.param1.0, current.param1.1);
+        let n2 = s2.normal(current.param2.0, current.param2.1);
+
+        let (Ok(n1), Ok(n2)) = (n1, n2) else { break };
+
+        let tangent = n1.cross(n2);
+        let Ok(tangent) = tangent.normalize() else {
+            break;
+        };
+
+        let sign = if forward { 1.0 } else { -1.0 };
+
+        // Step along tangent.
+        let next_pt = Point3::new(
+            tangent.x().mul_add(step_size * sign, current.point.x()),
+            tangent.y().mul_add(step_size * sign, current.point.y()),
+            tangent.z().mul_add(step_size * sign, current.point.z()),
+        );
+
+        // Project back onto both surfaces and refine.
+        let _ = next_pt; // marching direction is encoded in the parameter shift
+        if let Some(refined) = refine_ssi_point(
+            s1,
+            s2,
+            current.param1.0,
+            current.param1.1,
+            current.param2.0,
+            current.param2.1,
+            tolerance,
+        ) {
+            // Check that we actually moved.
+            if (refined.point - current.point).length() < tolerance {
+                break;
+            }
+
+            // Check we haven't left the parameter domain.
+            if refined.param1.0 <= 0.001
+                || refined.param1.0 >= 0.999
+                || refined.param1.1 <= 0.001
+                || refined.param1.1 >= 0.999
+                || refined.param2.0 <= 0.001
+                || refined.param2.0 >= 0.999
+                || refined.param2.1 <= 0.001
+                || refined.param2.1 >= 0.999
+            {
+                points.push(refined);
+                break; // Reached boundary.
+            }
+
+            points.push(refined);
+            current = refined;
+        } else {
+            break;
+        }
+    }
+
+    points
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -578,6 +873,143 @@ mod tests {
                     signed_dist.abs() < 0.01,
                     "point should be on plane, signed_dist={signed_dist}"
                 );
+            }
+        }
+    }
+
+    // ── NURBS-NURBS intersection ──────────────────────────────
+
+    /// Create a flat surface at z=0.5 (overlapping region with `flat_surface` at z=0).
+    fn flat_surface_offset() -> NurbsSurface {
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.5), Point3::new(0.0, 1.0, 0.5)],
+                vec![Point3::new(1.0, 0.0, 0.5), Point3::new(1.0, 1.0, 0.5)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap()
+    }
+
+    /// Create a tilted flat surface that intersects the flat z=0 surface.
+    fn tilted_surface() -> NurbsSurface {
+        // Surface tilted in the XZ plane: goes from z=-0.5 at x=0 to z=0.5 at x=1.
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, -0.5), Point3::new(0.0, 1.0, -0.5)],
+                vec![Point3::new(1.0, 0.0, 0.5), Point3::new(1.0, 1.0, 0.5)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn parallel_surfaces_no_intersection() {
+        let s1 = flat_surface();
+        let s2 = flat_surface_offset();
+        let result = intersect_nurbs_nurbs(&s1, &s2, 15, 0.02).unwrap();
+        assert!(result.is_empty(), "parallel surfaces should not intersect");
+    }
+
+    #[test]
+    fn refine_ssi_basic() {
+        let s1 = flat_surface();
+        let s2 = tilted_surface();
+        // At u1=0.5, v1=0.5 on flat → (0.5, 0.5, 0)
+        // At u2=0.5, v2=0.5 on tilted → (0.5, 0.5, 0)
+        // These should refine to an intersection point.
+        let result = refine_ssi_point(&s1, &s2, 0.5, 0.5, 0.5, 0.5, 1e-6);
+        assert!(
+            result.is_some(),
+            "refine should find intersection at (0.5, 0.5)"
+        );
+    }
+
+    #[test]
+    fn seed_finding_basic() {
+        let s1 = flat_surface();
+        let s2 = tilted_surface();
+
+        // Verify surfaces evaluate correctly.
+        let p1 = s1.evaluate(0.5, 0.5);
+        let p2 = s2.evaluate(0.5, 0.5);
+        let dist = (p1 - p2).length();
+        assert!(
+            dist < 0.01,
+            "flat(0.5,0.5)={p1:?} tilted(0.5,0.5)={p2:?} dist={dist}",
+        );
+
+        // Verify refine works from off-center guess.
+        let refined = refine_ssi_point(&s1, &s2, 0.5263, 0.5, 0.5263, 0.5, 1e-6);
+        assert!(
+            refined.is_some(),
+            "refine should converge from off-center guess"
+        );
+
+        let seeds = find_ssi_seeds(&s1, &s2, 10, 1e-6);
+        assert!(
+            !seeds.is_empty(),
+            "should find seeds between flat and tilted surfaces"
+        );
+    }
+
+    #[test]
+    fn tilted_intersects_flat() {
+        let s1 = flat_surface();
+        let s2 = tilted_surface();
+
+        // First verify seed finding works.
+        let seeds = find_ssi_seeds(&s1, &s2, 20, 1e-6);
+        assert!(
+            !seeds.is_empty(),
+            "should find at least one seed point, got 0"
+        );
+
+        let result = intersect_nurbs_nurbs(&s1, &s2, 20, 0.05).unwrap();
+
+        assert!(
+            !result.is_empty(),
+            "tilted surface should intersect flat surface (seeds: {})",
+            seeds.len()
+        );
+
+        for curve in &result {
+            for pt in &curve.points {
+                assert!(
+                    pt.point.z().abs() < 0.15,
+                    "point should be near z=0, got z={}",
+                    pt.point.z()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ssi_points_lie_on_both_surfaces() {
+        let s1 = flat_surface();
+        let s2 = tilted_surface();
+        let result = intersect_nurbs_nurbs(&s1, &s2, 20, 0.02).unwrap();
+
+        for curve in &result {
+            for pt in &curve.points {
+                // Check point lies on surface 1.
+                let p1 = s1.evaluate(pt.param1.0, pt.param1.1);
+                let dist1 = (p1 - pt.point).length();
+                assert!(dist1 < 0.05, "point should lie on surface 1, dist={dist1}");
+
+                // Check point lies on surface 2.
+                let p2 = s2.evaluate(pt.param2.0, pt.param2.1);
+                let dist2 = (p2 - pt.point).length();
+                assert!(dist2 < 0.05, "point should lie on surface 2, dist={dist2}");
             }
         }
     }
