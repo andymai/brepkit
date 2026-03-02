@@ -1,0 +1,26 @@
+{
+  "name": "@brepkit/wasm",
+  "version": "0.1.0",
+  "description": "TypeScript bindings for the brepkit CAD kernel",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist", "pkg"],
+  "scripts": {
+    "build:wasm": "cd ../.. && cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release && wasm-bindgen target/wasm32-unknown-unknown/release/brepkit_wasm.wasm --out-dir bindings/ts/pkg --typescript",
+    "build:ts": "tsc",
+    "build": "npm run build:wasm && npm run build:ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "license": "Apache-2.0"
+}

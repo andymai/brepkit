@@ -1,0 +1,20 @@
+[package]
+name = "brepkit-operations"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "CAD modeling operations (booleans, fillets, extrusions) for brepkit"
+
+[dependencies]
+brepkit-math.workspace = true
+brepkit-topology.workspace = true
+thiserror.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

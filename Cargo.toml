@@ -1,0 +1,50 @@
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0"
+repository = "https://github.com/andymai/brepkit"
+
+[workspace.dependencies]
+# Math
+robust = "1"
+
+# Error handling
+thiserror = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Parallelism
+rayon = "1.10"
+
+# WASM
+wasm-bindgen = "0.2"
+
+# Testing
+proptest = "1"
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Workspace crates
+brepkit-math = { path = "crates/math" }
+brepkit-topology = { path = "crates/topology" }
+brepkit-operations = { path = "crates/operations" }
+brepkit-io = { path = "crates/io" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"

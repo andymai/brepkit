@@ -1,0 +1,37 @@
+//! # brepkit-io
+//!
+//! Data exchange for brepkit: STEP (ISO 10303) and 3MF import/export.
+//!
+//! This is layer L2, depending on `brepkit-math` and `brepkit-topology`.
+
+pub mod step;
+pub mod threemf;
+
+/// Errors from data exchange operations.
+#[derive(Debug, thiserror::Error)]
+pub enum IoError {
+    /// The input file format is invalid or malformed.
+    #[error("parse error: {reason}")]
+    ParseError {
+        /// Description of the parse failure.
+        reason: String,
+    },
+
+    /// An unsupported STEP entity was encountered.
+    #[error("unsupported STEP entity: {entity}")]
+    UnsupportedEntity {
+        /// The entity type name.
+        entity: String,
+    },
+
+    /// The topology is incomplete or inconsistent for export.
+    #[error("invalid topology for export: {reason}")]
+    InvalidTopology {
+        /// Description of the topology issue.
+        reason: String,
+    },
+
+    /// An I/O error occurred.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}

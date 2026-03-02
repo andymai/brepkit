@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - name: Coverage
+        run: |
+          cargo install cargo-llvm-cov --locked || true
+          cargo llvm-cov --workspace --lcov --output-path lcov.info || echo "Coverage skipped"
+      - uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: lcov.info
+        continue-on-error: true
+
+  wasm-build:
+    name: WASM Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build -p brepkit-wasm --target wasm32-unknown-unknown
+
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  ci-pass:
+    name: CI Pass
+    if: always()
+    needs: [fmt, clippy, test, wasm-build, deny]
+    runs-on: ubuntu-latest
+    env:
+      FMT_RESULT: ${{ needs.fmt.result }}
+      CLIPPY_RESULT: ${{ needs.clippy.result }}
+      TEST_RESULT: ${{ needs.test.result }}
+      WASM_RESULT: ${{ needs.wasm-build.result }}
+      DENY_RESULT: ${{ needs.deny.result }}
+    steps:
+      - name: Check all jobs
+        run: |
+          if [[ "$FMT_RESULT" != "success" ]] ||
+             [[ "$CLIPPY_RESULT" != "success" ]] ||
+             [[ "$TEST_RESULT" != "success" ]] ||
+             [[ "$WASM_RESULT" != "success" ]] ||
+             [[ "$DENY_RESULT" != "success" ]]; then
+            echo "One or more CI jobs failed"
+            exit 1
+          fi

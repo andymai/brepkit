@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+
+# Full test suite + dependency audit before push
+echo "🔍 Running pre-push checks..."
+
+cargo test --workspace || {
+  echo "❌ Tests failed."
+  exit 1
+}
+
+cargo deny check 2>/dev/null || {
+  echo "⚠️  cargo-deny not installed, skipping license/advisory check."
+  echo "   Install with: cargo install cargo-deny"
+}
+
+echo "✅ Pre-push checks passed."

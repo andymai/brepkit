@@ -1,0 +1,208 @@
+//! Matrix types for geometric transforms.
+//!
+//! [`Mat3`] is a 3x3 matrix and [`Mat4`] is a 4x4 affine transform matrix.
+
+use std::ops::Mul;
+
+use crate::vec::Point3;
+
+// ---------------------------------------------------------------------------
+// Mat3
+// ---------------------------------------------------------------------------
+
+/// A 3x3 matrix stored in row-major order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Mat3(pub [[f64; 3]; 3]);
+
+impl Mat3 {
+    /// The 3x3 identity matrix.
+    #[must_use]
+    pub const fn identity() -> Self {
+        Self([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    }
+
+    /// Transpose the matrix.
+    #[must_use]
+    pub const fn transpose(self) -> Self {
+        let m = &self.0;
+        Self([
+            [m[0][0], m[1][0], m[2][0]],
+            [m[0][1], m[1][1], m[2][1]],
+            [m[0][2], m[1][2], m[2][2]],
+        ])
+    }
+
+    /// Compute the determinant of the matrix.
+    #[must_use]
+    pub fn determinant(self) -> f64 {
+        let m = &self.0;
+        m[0][0].mul_add(
+            m[1][1].mul_add(m[2][2], -(m[1][2] * m[2][1])),
+            m[0][1].mul_add(
+                m[1][2].mul_add(m[2][0], -(m[1][0] * m[2][2])),
+                m[0][2] * m[1][0].mul_add(m[2][1], -(m[1][1] * m[2][0])),
+            ),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mat4
+// ---------------------------------------------------------------------------
+
+/// A 4x4 matrix stored in row-major order, typically used for affine transforms.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Mat4(pub [[f64; 4]; 4]);
+
+impl Mat4 {
+    /// The 4x4 identity matrix.
+    #[must_use]
+    pub const fn identity() -> Self {
+        Self([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
+    }
+
+    /// Create a translation matrix.
+    #[must_use]
+    pub const fn translation(tx: f64, ty: f64, tz: f64) -> Self {
+        Self([
+            [1.0, 0.0, 0.0, tx],
+            [0.0, 1.0, 0.0, ty],
+            [0.0, 0.0, 1.0, tz],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
+    }
+
+    /// Create a uniform or non-uniform scale matrix.
+    #[must_use]
+    pub const fn scale(sx: f64, sy: f64, sz: f64) -> Self {
+        Self([
+            [sx, 0.0, 0.0, 0.0],
+            [0.0, sy, 0.0, 0.0],
+            [0.0, 0.0, sz, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
+    }
+
+    /// Create a rotation matrix around the X axis by `angle` radians.
+    #[must_use]
+    pub fn rotation_x(angle: f64) -> Self {
+        let (s, c) = angle.sin_cos();
+        Self([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, c, -s, 0.0],
+            [0.0, s, c, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
+    }
+
+    /// Create a rotation matrix around the Y axis by `angle` radians.
+    #[must_use]
+    pub fn rotation_y(angle: f64) -> Self {
+        let (s, c) = angle.sin_cos();
+        Self([
+            [c, 0.0, s, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [-s, 0.0, c, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
+    }
+
+    /// Create a rotation matrix around the Z axis by `angle` radians.
+    #[must_use]
+    pub fn rotation_z(angle: f64) -> Self {
+        let (s, c) = angle.sin_cos();
+        Self([
+            [c, -s, 0.0, 0.0],
+            [s, c, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ])
+    }
+
+    /// Transform a 3D point by this matrix (assumes w = 1).
+    #[must_use]
+    pub fn mul_point(self, p: Point3) -> Point3 {
+        let m = &self.0;
+        Point3::new(
+            m[0][0].mul_add(
+                p.x(),
+                m[0][1].mul_add(p.y(), m[0][2].mul_add(p.z(), m[0][3])),
+            ),
+            m[1][0].mul_add(
+                p.x(),
+                m[1][1].mul_add(p.y(), m[1][2].mul_add(p.z(), m[1][3])),
+            ),
+            m[2][0].mul_add(
+                p.x(),
+                m[2][1].mul_add(p.y(), m[2][2].mul_add(p.z(), m[2][3])),
+            ),
+        )
+    }
+
+    /// Transpose the matrix.
+    #[must_use]
+    pub const fn transpose(self) -> Self {
+        let m = &self.0;
+        Self([
+            [m[0][0], m[1][0], m[2][0], m[3][0]],
+            [m[0][1], m[1][1], m[2][1], m[3][1]],
+            [m[0][2], m[1][2], m[2][2], m[3][2]],
+            [m[0][3], m[1][3], m[2][3], m[3][3]],
+        ])
+    }
+
+    /// Compute the determinant using cofactor expansion along the first row.
+    #[must_use]
+    #[allow(clippy::similar_names)]
+    pub fn determinant(self) -> f64 {
+        let m = &self.0;
+
+        let s0 = m[0][0].mul_add(m[1][1], -(m[1][0] * m[0][1]));
+        let s1 = m[0][0].mul_add(m[1][2], -(m[1][0] * m[0][2]));
+        let s2 = m[0][0].mul_add(m[1][3], -(m[1][0] * m[0][3]));
+        let s3 = m[0][1].mul_add(m[1][2], -(m[1][1] * m[0][2]));
+        let s4 = m[0][1].mul_add(m[1][3], -(m[1][1] * m[0][3]));
+        let s5 = m[0][2].mul_add(m[1][3], -(m[1][2] * m[0][3]));
+
+        let c5 = m[2][2].mul_add(m[3][3], -(m[3][2] * m[2][3]));
+        let c4 = m[2][1].mul_add(m[3][3], -(m[3][1] * m[2][3]));
+        let c3 = m[2][1].mul_add(m[3][2], -(m[3][1] * m[2][2]));
+        let c2 = m[2][0].mul_add(m[3][3], -(m[3][0] * m[2][3]));
+        let c1 = m[2][0].mul_add(m[3][2], -(m[3][0] * m[2][2]));
+        let c0 = m[2][0].mul_add(m[3][1], -(m[3][0] * m[2][1]));
+
+        s0.mul_add(
+            c5,
+            (-s1).mul_add(
+                c4,
+                s2.mul_add(c3, s3.mul_add(c2, (-s4).mul_add(c1, s5 * c0))),
+            ),
+        )
+    }
+}
+
+impl Mul for Mat4 {
+    type Output = Self;
+
+    fn mul(self, rhs: Self) -> Self {
+        let a = &self.0;
+        let b = &rhs.0;
+        let mut out = [[0.0_f64; 4]; 4];
+        for i in 0..4 {
+            for j in 0..4 {
+                out[i][j] = a[i][0].mul_add(
+                    b[0][j],
+                    a[i][1].mul_add(b[1][j], a[i][2].mul_add(b[2][j], a[i][3] * b[3][j])),
+                );
+            }
+        }
+        Self(out)
+    }
+}
