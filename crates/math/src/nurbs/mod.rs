@@ -10,6 +10,7 @@ pub mod fitting;
 pub mod knot_ops;
 pub mod projection;
 pub mod surface;
+pub mod surface_fitting;
 
 pub use curve::NurbsCurve;
 pub use decompose::{curve_degree_elevate, curve_to_bezier_segments};
@@ -21,3 +22,4 @@ pub use projection::{
     CurveProjection, SurfaceProjection, project_point_to_curve, project_point_to_surface,
 };
 pub use surface::NurbsSurface;
+pub use surface_fitting::interpolate_surface;
