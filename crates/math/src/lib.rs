@@ -59,6 +59,13 @@ pub enum MathError {
         /// Upper bound of the valid range.
         max: f64,
     },
+
+    /// Newton iteration did not converge within the allowed iterations.
+    #[error("Newton iteration did not converge after {iterations} iterations")]
+    ConvergenceFailure {
+        /// Number of iterations attempted.
+        iterations: usize,
+    },
 }
 
 pub mod aabb;
