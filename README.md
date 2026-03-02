@@ -1,17 +1,17 @@
 # brepkit
 
-A modern, pure-Rust B-Rep CAD kernel compiled to WebAssembly.
+The B-Rep modeling engine behind [brepjs](https://github.com/andymai/brepjs), written in Rust and compiled to WebAssembly.
 
 ## Overview
 
-brepkit is a boundary representation (B-Rep) solid modeling kernel designed as a
-modern alternative to legacy C++ CAD kernels. It provides NURBS-native geometry,
-boolean operations, filleting, and data exchange — all in memory-safe Rust with
-first-class WASM support.
+brepkit is the computational backend that powers brepjs. It handles the heavy
+lifting — NURBS geometry, boolean operations, filleting, tessellation, and data
+exchange — in memory-safe Rust with first-class WASM support. brepjs provides
+the developer-facing TypeScript API; brepkit provides the engine underneath.
 
 ## Architecture
 
-The kernel is organized as a layered Cargo workspace:
+brepkit is organized as a layered Cargo workspace:
 
 | Layer | Crate | Purpose |
 |-------|-------|---------|

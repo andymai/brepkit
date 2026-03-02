@@ -1,5 +1,10 @@
 # Architecture
 
+brepkit is the computational engine behind brepjs. While brepjs provides the
+TypeScript API that developers interact with, brepkit handles the underlying
+B-Rep modeling: geometry evaluation, boolean operations, tessellation, and
+data exchange.
+
 brepkit uses a strict layered architecture. Each layer may only depend on
 layers below it, never above or sideways.
 

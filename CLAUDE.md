@@ -1,5 +1,9 @@
 # brepkit — Project Guidelines
 
+brepkit is the B-Rep modeling engine behind brepjs. It provides the computational
+backend (geometry, booleans, tessellation, I/O) while brepjs provides the
+developer-facing TypeScript API.
+
 ## Architecture
 
 Strict layered Cargo workspace. Each layer depends only on layers below it.

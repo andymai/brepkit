@@ -1,7 +1,7 @@
 {
   "name": "@brepkit/wasm",
   "version": "0.1.0",
-  "description": "TypeScript bindings for the brepkit CAD kernel",
+  "description": "TypeScript bindings for the brepkit modeling engine",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
