@@ -354,6 +354,23 @@ impl BrepKernel {
         Ok(())
     }
 
+    // ── Export ─────────────────────────────────────────────────────
+
+    /// Export a solid to 3MF format (ZIP archive as bytes).
+    ///
+    /// Returns a `Uint8Array` in JavaScript containing the `.3mf` file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or export fails.
+    #[wasm_bindgen(js_name = "export3mf")]
+    pub fn export_3mf(&self, solid: u32, deflection: f64) -> Result<Vec<u8>, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let bytes = brepkit_io::threemf::write_threemf(&self.topo, &[solid_id], deflection)?;
+        Ok(bytes)
+    }
+
     // ── Tessellation ───────────────────────────────────────────────
 
     /// Tessellate a single face into a triangle mesh.
@@ -384,7 +401,6 @@ impl BrepKernel {
 
         let mut merged = TriangleMesh::default();
 
-        // Iterate all shells (outer + inner voids).
         for shell_id in std::iter::once(solid_data.outer_shell())
             .chain(solid_data.inner_shells().iter().copied())
         {
@@ -392,7 +408,6 @@ impl BrepKernel {
             for &face_id in shell.faces() {
                 let face_mesh = tessellate::tessellate(&self.topo, face_id, deflection)?;
 
-                // Offset indices by the current vertex count in the merged mesh.
                 #[allow(clippy::cast_possible_truncation)]
                 let offset = merged.positions.len() as u32;
 

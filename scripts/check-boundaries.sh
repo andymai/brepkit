@@ -49,7 +49,7 @@ echo "Checking crate boundary rules..."
 check_deps "math"       ""
 check_deps "topology"   "brepkit-math"
 check_deps "operations" "brepkit-math" "brepkit-topology"
-check_deps "io"         "brepkit-math" "brepkit-topology"
+check_deps "io"         "brepkit-math" "brepkit-topology" "brepkit-operations"
 check_deps "wasm"       "brepkit-math" "brepkit-topology" "brepkit-operations" "brepkit-io"
 
 if [ $FAIL -ne 0 ]; then

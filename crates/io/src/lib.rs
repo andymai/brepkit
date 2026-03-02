@@ -34,4 +34,12 @@ pub enum IoError {
     /// An I/O error occurred.
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    /// An error from a modeling operation (e.g. tessellation).
+    #[error(transparent)]
+    Operations(#[from] brepkit_operations::OperationsError),
+
+    /// An error writing the ZIP archive.
+    #[error(transparent)]
+    Zip(#[from] zip::result::ZipError),
 }

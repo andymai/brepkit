@@ -31,6 +31,10 @@ proptest = "1"
 # Benchmarking
 criterion = { version = "0.5", features = ["html_reports"] }
 
+# IO formats
+zip = { version = "2", default-features = false, features = ["deflate"] }
+quick-xml = "0.37"
+
 # Workspace crates
 brepkit-math = { path = "crates/math" }
 brepkit-topology = { path = "crates/topology" }

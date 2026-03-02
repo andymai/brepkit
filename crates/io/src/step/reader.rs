@@ -1,10 +1,13 @@
-//! STEP file reader.
+//! STEP file reader (not yet implemented).
 
 /// Read a STEP file and produce topology.
 ///
 /// # Errors
 ///
-/// Returns an error if the file format is invalid or unsupported.
+/// Currently always returns [`IoError::ParseError`](crate::IoError::ParseError)
+/// because the STEP reader is not yet implemented.
 pub fn read_step(_input: &str) -> Result<(), crate::IoError> {
-    todo!("STEP reader not yet implemented")
+    Err(crate::IoError::ParseError {
+        reason: "STEP reader not yet implemented".to_string(),
+    })
 }

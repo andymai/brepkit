@@ -1,10 +1,13 @@
-//! STEP file writer.
+//! STEP file writer (not yet implemented).
 
 /// Write topology to STEP format.
 ///
 /// # Errors
 ///
-/// Returns an error if the topology cannot be serialized.
+/// Currently always returns [`IoError::ParseError`](crate::IoError::ParseError)
+/// because the STEP writer is not yet implemented.
 pub fn write_step() -> Result<String, crate::IoError> {
-    todo!("STEP writer not yet implemented")
+    Err(crate::IoError::ParseError {
+        reason: "STEP writer not yet implemented".to_string(),
+    })
 }
