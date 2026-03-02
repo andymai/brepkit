@@ -72,6 +72,7 @@ pub mod aabb;
 pub mod bvh;
 pub mod mat;
 pub mod nurbs;
+pub mod plane;
 pub mod predicates;
 pub mod tolerance;
 pub mod vec;
