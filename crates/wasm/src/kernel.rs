@@ -692,6 +692,95 @@ impl BrepKernel {
         Ok(bytes)
     }
 
+    // ── Import ──────────────────────────────────────────────────────
+
+    /// Import an STL file (binary or ASCII) and return a solid handle.
+    ///
+    /// The mesh triangles are converted to planar B-Rep faces with
+    /// vertex merging.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the STL data is malformed or empty.
+    #[wasm_bindgen(js_name = "importStl")]
+    pub fn import_stl(&mut self, data: &[u8]) -> Result<u32, JsError> {
+        let mesh = brepkit_io::stl::reader::read_stl(data)?;
+        let solid_id = brepkit_io::stl::import::import_mesh(&mut self.topo, &mesh, TOL)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Import a 3MF file and return solid handles.
+    ///
+    /// Returns handles for each object found in the 3MF archive.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the 3MF data is malformed.
+    #[wasm_bindgen(js_name = "import3mf")]
+    pub fn import_3mf(&mut self, data: &[u8]) -> Result<Vec<u32>, JsError> {
+        let meshes = brepkit_io::threemf::reader::read_threemf(data)?;
+        let mut handles = Vec::new();
+        for mesh in &meshes {
+            let solid_id = brepkit_io::stl::import::import_mesh(&mut self.topo, mesh, TOL)?;
+            handles.push(solid_id_to_u32(solid_id));
+        }
+        Ok(handles)
+    }
+
+    /// Export a solid to STEP AP203 format.
+    ///
+    /// Returns the STEP file as a UTF-8 encoded byte vector.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or export fails.
+    #[wasm_bindgen(js_name = "exportStep")]
+    pub fn export_step(&self, solid: u32) -> Result<Vec<u8>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let step_str = brepkit_io::step::writer::write_step(&self.topo, &[solid_id])?;
+        Ok(step_str.into_bytes())
+    }
+
+    /// Import a STEP file and return solid handles.
+    ///
+    /// Returns handles for each solid found in the STEP file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the STEP data is malformed.
+    #[wasm_bindgen(js_name = "importStep")]
+    pub fn import_step(&mut self, data: &[u8]) -> Result<Vec<u32>, JsError> {
+        let text = std::str::from_utf8(data)
+            .map_err(|e| JsError::new(&format!("STEP data is not valid UTF-8: {e}")))?;
+        let solid_ids = brepkit_io::step::reader::read_step(text, &mut self.topo)?;
+        Ok(solid_ids.iter().map(|id| solid_id_to_u32(*id)).collect())
+    }
+
+    /// Offset a face by a distance along its surface normal.
+    ///
+    /// Returns the new offset face handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid or the operation fails.
+    #[wasm_bindgen(js_name = "offsetFace")]
+    pub fn offset_face_wasm(
+        &mut self,
+        face: u32,
+        distance: f64,
+        samples: u32,
+    ) -> Result<u32, JsError> {
+        validate_finite(distance, "distance")?;
+        let face_id = self.resolve_face(face)?;
+        let result = brepkit_operations::offset_face::offset_face(
+            &mut self.topo,
+            face_id,
+            distance,
+            samples as usize,
+        )?;
+        Ok(face_id_to_u32(result))
+    }
+
     // ── Copy / Mirror / Pattern ───────────────────────────────────
 
     /// Deep copy a solid, returning a new independent solid handle.
