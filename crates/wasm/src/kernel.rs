@@ -11,6 +11,7 @@ use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::extrude::extrude;
+use brepkit_operations::measure;
 use brepkit_operations::revolve::revolve;
 use brepkit_operations::sweep::sweep;
 use brepkit_operations::tessellate::{self, TriangleMesh};
@@ -153,6 +154,255 @@ impl BrepKernel {
 
         let face_id = self.make_planar_face(&points)?;
         Ok(face_id_to_u32(face_id))
+    }
+
+    // ── Primitive shapes ─────────────────────────────────────────
+
+    /// Create a box solid with the given dimensions, centered at the origin.
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any dimension is non-positive or non-finite.
+    #[wasm_bindgen(js_name = "makeBox")]
+    pub fn make_box_solid(&mut self, dx: f64, dy: f64, dz: f64) -> Result<u32, JsError> {
+        validate_positive(dx, "dx")?;
+        validate_positive(dy, "dy")?;
+        validate_positive(dz, "dz")?;
+        let solid_id = brepkit_operations::primitives::make_box(&mut self.topo, dx, dy, dz)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Create a cylinder solid centered at the origin, axis along +Z.
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if radius or height is non-positive.
+    #[wasm_bindgen(js_name = "makeCylinder")]
+    pub fn make_cylinder_solid(&mut self, radius: f64, height: f64) -> Result<u32, JsError> {
+        validate_positive(radius, "radius")?;
+        validate_positive(height, "height")?;
+        let solid_id =
+            brepkit_operations::primitives::make_cylinder(&mut self.topo, radius, height)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Create a sphere solid centered at the origin.
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if radius is non-positive or segments < 4.
+    #[wasm_bindgen(js_name = "makeSphere")]
+    pub fn make_sphere_solid(&mut self, radius: f64, segments: u32) -> Result<u32, JsError> {
+        validate_positive(radius, "radius")?;
+        let solid_id =
+            brepkit_operations::primitives::make_sphere(&mut self.topo, radius, segments as usize)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Create a cone or frustum solid centered at the origin, axis along +Z.
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if height is non-positive or both radii are zero.
+    #[wasm_bindgen(js_name = "makeCone")]
+    pub fn make_cone_solid(
+        &mut self,
+        bottom_radius: f64,
+        top_radius: f64,
+        height: f64,
+    ) -> Result<u32, JsError> {
+        validate_finite(bottom_radius, "bottom_radius")?;
+        validate_finite(top_radius, "top_radius")?;
+        validate_positive(height, "height")?;
+        let solid_id = brepkit_operations::primitives::make_cone(
+            &mut self.topo,
+            bottom_radius,
+            top_radius,
+            height,
+        )?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Create a torus solid centered at the origin in the XY plane.
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if radii are non-positive or minor >= major.
+    #[wasm_bindgen(js_name = "makeTorus")]
+    pub fn make_torus_solid(
+        &mut self,
+        major_radius: f64,
+        minor_radius: f64,
+        segments: u32,
+    ) -> Result<u32, JsError> {
+        validate_positive(major_radius, "major_radius")?;
+        validate_positive(minor_radius, "minor_radius")?;
+        let solid_id = brepkit_operations::primitives::make_torus(
+            &mut self.topo,
+            major_radius,
+            minor_radius,
+            segments as usize,
+        )?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    // ── Section ───────────────────────────────────────────────────
+
+    /// Section a solid with a plane, returning cross-section face handles.
+    ///
+    /// Returns an array of face handles (`u32[]`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or the plane doesn't
+    /// intersect the solid.
+    #[wasm_bindgen(js_name = "section")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn section_solid(
+        &mut self,
+        solid: u32,
+        px: f64,
+        py: f64,
+        pz: f64,
+        nx: f64,
+        ny: f64,
+        nz: f64,
+    ) -> Result<Vec<u32>, JsError> {
+        validate_finite(px, "px")?;
+        validate_finite(py, "py")?;
+        validate_finite(pz, "pz")?;
+        validate_finite(nx, "nx")?;
+        validate_finite(ny, "ny")?;
+        validate_finite(nz, "nz")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let result = brepkit_operations::section::section(
+            &mut self.topo,
+            solid_id,
+            Point3::new(px, py, pz),
+            Vec3::new(nx, ny, nz),
+        )?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(result.faces.iter().map(|f| f.index() as u32).collect())
+    }
+
+    // ── Loft ──────────────────────────────────────────────────────
+
+    /// Loft two or more profile faces into a solid.
+    ///
+    /// Takes an array of face handles. Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fewer than 2 faces or profiles have
+    /// different vertex counts.
+    #[wasm_bindgen(js_name = "loft")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn loft_faces(&mut self, faces: Vec<u32>) -> Result<u32, JsError> {
+        let face_ids: Vec<brepkit_topology::face::FaceId> = faces
+            .iter()
+            .map(|&h| self.resolve_face(h))
+            .collect::<Result<_, _>>()?;
+        let solid_id = brepkit_operations::loft::loft(&mut self.topo, &face_ids)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    // ── Shell ─────────────────────────────────────────────────────
+
+    /// Hollow a solid with uniform wall thickness.
+    ///
+    /// `open_faces` is an array of face handles to remove (creating openings).
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if thickness is non-positive or the solid is invalid.
+    #[wasm_bindgen(js_name = "shell")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn shell_solid(
+        &mut self,
+        solid: u32,
+        thickness: f64,
+        open_faces: Vec<u32>,
+    ) -> Result<u32, JsError> {
+        validate_positive(thickness, "thickness")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let open_face_ids: Vec<brepkit_topology::face::FaceId> = open_faces
+            .iter()
+            .map(|&h| self.resolve_face(h))
+            .collect::<Result<_, _>>()?;
+        let result = brepkit_operations::shell_op::shell(
+            &mut self.topo,
+            solid_id,
+            thickness,
+            &open_face_ids,
+        )?;
+        Ok(solid_id_to_u32(result))
+    }
+
+    // ── Chamfer ───────────────────────────────────────────────────
+
+    /// Chamfer edges of a solid.
+    ///
+    /// `edge_handles` is an array of edge handles. Returns a solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if distance is non-positive or edges are invalid.
+    #[wasm_bindgen(js_name = "chamfer")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn chamfer_solid(
+        &mut self,
+        solid: u32,
+        edge_handles: Vec<u32>,
+        distance: f64,
+    ) -> Result<u32, JsError> {
+        validate_positive(distance, "distance")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let edge_ids: Vec<brepkit_topology::edge::EdgeId> = edge_handles
+            .iter()
+            .map(|&h| self.resolve_edge(h))
+            .collect::<Result<_, _>>()?;
+        let result =
+            brepkit_operations::chamfer::chamfer(&mut self.topo, solid_id, &edge_ids, distance)?;
+        Ok(solid_id_to_u32(result))
+    }
+
+    // ── Fillet ────────────────────────────────────────────────────
+
+    /// Fillet (round) edges of a solid.
+    ///
+    /// `edge_handles` is an array of edge handles. Returns a solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if radius is non-positive or edges are invalid.
+    #[wasm_bindgen(js_name = "fillet")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn fillet_solid(
+        &mut self,
+        solid: u32,
+        edge_handles: Vec<u32>,
+        radius: f64,
+    ) -> Result<u32, JsError> {
+        validate_positive(radius, "radius")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let edge_ids: Vec<brepkit_topology::edge::EdgeId> = edge_handles
+            .iter()
+            .map(|&h| self.resolve_edge(h))
+            .collect::<Result<_, _>>()?;
+        let result =
+            brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)?;
+        Ok(solid_id_to_u32(result))
     }
 
     // ── Operations ─────────────────────────────────────────────────
@@ -472,6 +722,82 @@ impl BrepKernel {
 
         Ok(merged.into())
     }
+
+    // ── Measurement ───────────────────────────────────────────────
+
+    /// Compute the axis-aligned bounding box of a solid.
+    ///
+    /// Returns `[min_x, min_y, min_z, max_x, max_y, max_z]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or has no vertices.
+    #[wasm_bindgen(js_name = "boundingBox")]
+    pub fn bounding_box(&self, solid: u32) -> Result<Vec<f64>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let aabb = measure::solid_bounding_box(&self.topo, solid_id)?;
+        Ok(vec![
+            aabb.min.x(),
+            aabb.min.y(),
+            aabb.min.z(),
+            aabb.max.x(),
+            aabb.max.y(),
+            aabb.max.z(),
+        ])
+    }
+
+    /// Compute the volume of a solid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or tessellation fails.
+    #[wasm_bindgen(js_name = "volume")]
+    pub fn volume(&self, solid: u32, deflection: f64) -> Result<f64, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        Ok(measure::solid_volume(&self.topo, solid_id, deflection)?)
+    }
+
+    /// Compute the total surface area of a solid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or tessellation fails.
+    #[wasm_bindgen(js_name = "surfaceArea")]
+    pub fn surface_area(&self, solid: u32, deflection: f64) -> Result<f64, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        Ok(measure::solid_surface_area(
+            &self.topo, solid_id, deflection,
+        )?)
+    }
+
+    /// Compute the area of a single face.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid or tessellation fails.
+    #[wasm_bindgen(js_name = "faceArea")]
+    pub fn face_area_wasm(&self, face: u32, deflection: f64) -> Result<f64, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let face_id = self.resolve_face(face)?;
+        Ok(measure::face_area(&self.topo, face_id, deflection)?)
+    }
+
+    /// Compute the center of mass of a solid (uniform density).
+    ///
+    /// Returns `[x, y, z]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid has zero volume or tessellation fails.
+    #[wasm_bindgen(js_name = "centerOfMass")]
+    pub fn center_of_mass(&self, solid: u32, deflection: f64) -> Result<Vec<f64>, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let com = measure::solid_center_of_mass(&self.topo, solid_id, deflection)?;
+        Ok(vec![com.x(), com.y(), com.z()])
+    }
 }
 
 // ── Private helpers ────────────────────────────────────────────────
@@ -537,6 +863,18 @@ impl BrepKernel {
             .id_from_index(index)
             .ok_or(WasmError::InvalidHandle {
                 entity: "face",
+                index,
+            })
+    }
+
+    /// Resolve a `u32` edge handle to a typed `EdgeId`.
+    fn resolve_edge(&self, handle: u32) -> Result<brepkit_topology::edge::EdgeId, WasmError> {
+        let index = handle as usize;
+        self.topo
+            .edges
+            .id_from_index(index)
+            .ok_or(WasmError::InvalidHandle {
+                entity: "edge",
                 index,
             })
     }
