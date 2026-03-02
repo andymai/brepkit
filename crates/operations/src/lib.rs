@@ -16,6 +16,7 @@ pub mod defeature;
 pub mod distance;
 pub mod draft;
 pub mod extrude;
+pub mod feature_recognition;
 pub mod fillet;
 pub mod heal;
 pub mod helix;
