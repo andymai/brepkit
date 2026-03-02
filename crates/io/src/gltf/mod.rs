@@ -1,8 +1,10 @@
-//! glTF 2.0 binary (.glb) export.
+//! glTF 2.0 binary (.glb) import and export.
 //!
-//! Exports tessellated B-Rep geometry as a glTF binary file suitable
-//! for web viewers, game engines, and real-time 3D applications.
+//! Imports and exports tessellated B-Rep geometry as glTF binary files
+//! suitable for web viewers, game engines, and real-time 3D applications.
 
+pub mod reader;
 pub mod writer;
 
+pub use reader::read_glb;
 pub use writer::write_glb;

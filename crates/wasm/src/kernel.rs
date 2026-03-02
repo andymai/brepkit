@@ -754,6 +754,19 @@ impl BrepKernel {
         Ok(solid_id.index() as u32)
     }
 
+    /// Import a GLB (glTF binary) file and return a solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file is malformed or mesh import fails.
+    #[wasm_bindgen(js_name = "importGlb")]
+    pub fn import_glb(&mut self, data: &[u8]) -> Result<u32, JsError> {
+        let mesh = brepkit_io::gltf::read_glb(data)?;
+        let solid_id = brepkit_io::stl::import::import_mesh(&mut self.topo, &mesh, 1e-7)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(solid_id.index() as u32)
+    }
+
     /// Import an STL file (binary or ASCII) and return a solid handle.
     ///
     /// The mesh triangles are converted to planar B-Rep faces with
