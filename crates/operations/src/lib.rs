@@ -9,10 +9,12 @@ use brepkit_math::vec::{Point3, Vec3};
 
 pub mod boolean;
 pub mod chamfer;
+pub mod copy;
 pub mod extrude;
 pub mod fillet;
 pub mod loft;
 pub mod measure;
+pub mod mirror;
 pub mod primitives;
 pub mod revolve;
 pub mod section;
