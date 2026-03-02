@@ -9,6 +9,7 @@ use std::f64::consts::PI;
 use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point3, Vec3};
+use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::revolve::revolve;
 use brepkit_operations::sweep::sweep;
@@ -352,6 +353,56 @@ impl BrepKernel {
 
         transform_solid(&mut self.topo, solid_id, &mat)?;
         Ok(())
+    }
+
+    // ── Boolean operations ──────────────────────────────────────────
+
+    /// Fuse (union) two solids into one.
+    ///
+    /// Returns a new solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid or the operation
+    /// produces an empty or non-manifold result.
+    #[wasm_bindgen(js_name = "fuse")]
+    pub fn fuse(&mut self, a: u32, b: u32) -> Result<u32, JsError> {
+        let a_id = self.resolve_solid(a)?;
+        let b_id = self.resolve_solid(b)?;
+        let result = boolean(&mut self.topo, BooleanOp::Fuse, a_id, b_id)?;
+        Ok(solid_id_to_u32(result))
+    }
+
+    /// Cut (subtract) solid `b` from solid `a`.
+    ///
+    /// Returns a new solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid or the operation
+    /// produces an empty or non-manifold result.
+    #[wasm_bindgen(js_name = "cut")]
+    pub fn cut(&mut self, a: u32, b: u32) -> Result<u32, JsError> {
+        let a_id = self.resolve_solid(a)?;
+        let b_id = self.resolve_solid(b)?;
+        let result = boolean(&mut self.topo, BooleanOp::Cut, a_id, b_id)?;
+        Ok(solid_id_to_u32(result))
+    }
+
+    /// Intersect two solids, keeping only their common volume.
+    ///
+    /// Returns a new solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid or the operation
+    /// produces an empty result.
+    #[wasm_bindgen(js_name = "intersect")]
+    pub fn intersect_solids(&mut self, a: u32, b: u32) -> Result<u32, JsError> {
+        let a_id = self.resolve_solid(a)?;
+        let b_id = self.resolve_solid(b)?;
+        let result = boolean(&mut self.topo, BooleanOp::Intersect, a_id, b_id)?;
+        Ok(solid_id_to_u32(result))
     }
 
     // ── Export ─────────────────────────────────────────────────────

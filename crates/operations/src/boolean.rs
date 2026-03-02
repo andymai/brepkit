@@ -257,7 +257,10 @@ fn collect_face_data(
 }
 
 /// Get the ordered vertices of a face by traversing its outer wire.
-fn face_vertices(topo: &Topology, face_id: FaceId) -> Result<Vec<Point3>, crate::OperationsError> {
+pub(crate) fn face_vertices(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<Vec<Point3>, crate::OperationsError> {
     let face = topo.face(face_id)?;
     let wire = topo.wire(face.outer_wire())?;
     let mut verts = Vec::with_capacity(wire.edges().len());
@@ -739,7 +742,7 @@ fn quantize(v: f64, resolution: f64) -> i64 {
 /// Assemble a solid from a set of face polygons with normals.
 ///
 /// Uses spatial hashing for vertex dedup and edge sharing.
-fn assemble_solid(
+pub(crate) fn assemble_solid(
     topo: &mut Topology,
     faces: &[(Vec<Point3>, Vec3, f64)],
     tol: Tolerance,
