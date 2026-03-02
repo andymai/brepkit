@@ -16,6 +16,7 @@ pub mod measure;
 pub mod primitives;
 pub mod revolve;
 pub mod section;
+pub mod shell_op;
 pub mod sweep;
 pub mod tessellate;
 pub mod transform;
