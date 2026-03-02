@@ -672,6 +672,109 @@ impl BrepKernel {
         Ok(bytes)
     }
 
+    /// Export a solid to binary STL format.
+    ///
+    /// Returns a `Uint8Array` containing the `.stl` file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or export fails.
+    #[wasm_bindgen(js_name = "exportStl")]
+    pub fn export_stl(&self, solid: u32, deflection: f64) -> Result<Vec<u8>, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let bytes = brepkit_io::stl::writer::write_stl(
+            &self.topo,
+            &[solid_id],
+            deflection,
+            brepkit_io::stl::writer::StlFormat::Binary,
+        )?;
+        Ok(bytes)
+    }
+
+    // ── Copy / Mirror / Pattern ───────────────────────────────────
+
+    /// Deep copy a solid, returning a new independent solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "copySolid")]
+    pub fn copy_solid_wasm(&mut self, solid: u32) -> Result<u32, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let copy = brepkit_operations::copy::copy_solid(&mut self.topo, solid_id)?;
+        Ok(solid_id_to_u32(copy))
+    }
+
+    /// Mirror a solid across a plane.
+    ///
+    /// Returns a new solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or the normal is zero.
+    #[wasm_bindgen(js_name = "mirror")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn mirror_solid(
+        &mut self,
+        solid: u32,
+        px: f64,
+        py: f64,
+        pz: f64,
+        nx: f64,
+        ny: f64,
+        nz: f64,
+    ) -> Result<u32, JsError> {
+        validate_finite(px, "px")?;
+        validate_finite(py, "py")?;
+        validate_finite(pz, "pz")?;
+        validate_finite(nx, "nx")?;
+        validate_finite(ny, "ny")?;
+        validate_finite(nz, "nz")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let result = brepkit_operations::mirror::mirror(
+            &mut self.topo,
+            solid_id,
+            Point3::new(px, py, pz),
+            Vec3::new(nx, ny, nz),
+        )?;
+        Ok(solid_id_to_u32(result))
+    }
+
+    /// Create a linear pattern of a solid.
+    ///
+    /// Returns a compound handle containing all copies.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if inputs are invalid.
+    #[wasm_bindgen(js_name = "linearPattern")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn linear_pattern_wasm(
+        &mut self,
+        solid: u32,
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        spacing: f64,
+        count: u32,
+    ) -> Result<u32, JsError> {
+        validate_finite(dx, "dx")?;
+        validate_finite(dy, "dy")?;
+        validate_finite(dz, "dz")?;
+        validate_positive(spacing, "spacing")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let compound = brepkit_operations::pattern::linear_pattern(
+            &mut self.topo,
+            solid_id,
+            Vec3::new(dx, dy, dz),
+            spacing,
+            count as usize,
+        )?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(compound.index() as u32)
+    }
+
     // ── Tessellation ───────────────────────────────────────────────
 
     /// Tessellate a single face into a triangle mesh.
