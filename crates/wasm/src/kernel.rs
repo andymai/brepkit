@@ -2663,6 +2663,21 @@ impl BrepKernel {
                 index,
             })
     }
+
+    /// Resolve a `u32` compound handle to a typed `CompoundId`.
+    fn resolve_compound(
+        &self,
+        handle: u32,
+    ) -> Result<brepkit_topology::compound::CompoundId, WasmError> {
+        let index = handle as usize;
+        self.topo
+            .compounds
+            .id_from_index(index)
+            .ok_or(WasmError::InvalidHandle {
+                entity: "compound",
+                index,
+            })
+    }
 }
 
 // ── New WASM bindings (Batches 1–6) ─────────────────────────────────
@@ -2955,6 +2970,48 @@ impl BrepKernel {
         let face_id = self.resolve_face(face)?;
         let wires = brepkit_topology::explorer::face_wires(&self.topo, face_id)?;
         Ok(wires.iter().map(|w| wire_id_to_u32(*w)).collect())
+    }
+
+    /// Get the solid handles within a compound.
+    ///
+    /// Returns an array of solid handles (`u32[]`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the compound handle is invalid.
+    #[wasm_bindgen(js_name = "getCompoundSolids")]
+    pub fn get_compound_solids(&self, compound: u32) -> Result<Vec<u32>, JsError> {
+        let compound_id = self.resolve_compound(compound)?;
+        let compound_data = self.topo.compound(compound_id)?;
+        Ok(compound_data.solids().iter().map(|s| solid_id_to_u32(*s)).collect())
+    }
+
+    /// Get the face handles of a shell.
+    ///
+    /// Returns an array of face handles (`u32[]`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the shell handle is invalid.
+    #[wasm_bindgen(js_name = "getShellFaces")]
+    pub fn get_shell_faces(&self, shell: u32) -> Result<Vec<u32>, JsError> {
+        let shell_id = self.resolve_shell(shell)?;
+        let shell_data = self.topo.shell(shell_id)?;
+        Ok(shell_data.faces().iter().map(|f| face_id_to_u32(*f)).collect())
+    }
+
+    /// Get the edge handles of a wire.
+    ///
+    /// Returns an array of unique edge handles (`u32[]`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the wire handle is invalid.
+    #[wasm_bindgen(js_name = "getWireEdges")]
+    pub fn get_wire_edges(&self, wire: u32) -> Result<Vec<u32>, JsError> {
+        let wire_id = self.resolve_wire(wire)?;
+        let wire_data = self.topo.wire(wire_id)?;
+        Ok(wire_data.edges().iter().map(|oe| edge_id_to_u32(oe.edge())).collect())
     }
 
     // ── Batch 3: Simple operations bindings ──────────────────────────
@@ -4168,6 +4225,12 @@ const fn wire_id_to_u32(id: brepkit_topology::wire::WireId) -> u32 {
 /// Convert a `ShellId` to a `u32` handle for JavaScript.
 #[allow(clippy::cast_possible_truncation)]
 const fn shell_id_to_u32(id: brepkit_topology::shell::ShellId) -> u32 {
+    id.index() as u32
+}
+
+/// Convert a `CompoundId` to a `u32` handle for JavaScript.
+#[allow(clippy::cast_possible_truncation)]
+const fn compound_id_to_u32(id: brepkit_topology::compound::CompoundId) -> u32 {
     id.index() as u32
 }
 
