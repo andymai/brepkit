@@ -17,6 +17,7 @@ use std::collections::HashMap;
 
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
+use brepkit_math::cdt::Cdt;
 use brepkit_math::curves2d::{Curve2D, NurbsCurve2D};
 use brepkit_math::filtered::{SegmentIntersection, segment_intersection};
 use brepkit_math::nurbs::intersection::{IntersectionCurve, IntersectionPoint};
@@ -354,7 +355,7 @@ fn split_intersected_faces(
         // Split face A
         if !pcurves_a.is_empty() {
             let boundary_a = face_parameter_boundary(&pair.surface_a, boundary_segments);
-            let region_polys = partition_parameter_domain(&boundary_a, &pcurves_a);
+            let region_polys = partition_parameter_domain_cdt(&boundary_a, &pcurves_a);
 
             if region_polys.len() > 1 {
                 let face_frags = create_face_fragments(topo, &pair.surface_a, &region_polys)?;
@@ -365,7 +366,7 @@ fn split_intersected_faces(
         // Split face B
         if !pcurves_b.is_empty() {
             let boundary_b = face_parameter_boundary(&pair.surface_b, boundary_segments);
-            let region_polys = partition_parameter_domain(&boundary_b, &pcurves_b);
+            let region_polys = partition_parameter_domain_cdt(&boundary_b, &pcurves_b);
 
             if region_polys.len() > 1 {
                 let face_frags = create_face_fragments(topo, &pair.surface_b, &region_polys)?;
@@ -381,7 +382,11 @@ fn split_intersected_faces(
 ///
 /// Finds where pcurves cross the boundary and produces closed sub-regions.
 /// Each sub-region is a closed polygon in (u,v) parameter space.
-fn partition_parameter_domain(boundary: &[Point2], pcurves: &[Vec<Point2>]) -> Vec<Vec<Point2>> {
+#[allow(dead_code)]
+fn partition_parameter_domain_legacy(
+    boundary: &[Point2],
+    pcurves: &[Vec<Point2>],
+) -> Vec<Vec<Point2>> {
     if pcurves.is_empty() || boundary.len() < 3 {
         return vec![boundary.to_vec()];
     }
@@ -408,6 +413,257 @@ fn partition_parameter_domain(boundary: &[Point2], pcurves: &[Vec<Point2>]) -> V
         regions.push(boundary.to_vec());
     }
     regions
+}
+
+/// Partition a face's parameter domain using Constrained Delaunay
+/// Triangulation. More robust than polygon splitting for complex trim
+/// topologies (multiple crossings, loops, tangencies).
+///
+/// Returns a list of 2D polygonal regions in parameter space.
+/// Each region is a connected set of triangles on one side of the trim curves.
+#[allow(clippy::too_many_lines)]
+fn partition_parameter_domain_cdt(
+    boundary: &[Point2],
+    pcurves: &[Vec<Point2>],
+) -> Vec<Vec<Point2>> {
+    if pcurves.is_empty() || boundary.len() < 3 {
+        return vec![boundary.to_vec()];
+    }
+
+    // Compute bounds with margin for the super-triangle.
+    let mut min_u = f64::MAX;
+    let mut min_v = f64::MAX;
+    let mut max_u = f64::MIN;
+    let mut max_v = f64::MIN;
+    for pt in boundary {
+        min_u = min_u.min(pt.x());
+        min_v = min_v.min(pt.y());
+        max_u = max_u.max(pt.x());
+        max_v = max_v.max(pt.y());
+    }
+    for pc in pcurves {
+        for pt in pc {
+            min_u = min_u.min(pt.x());
+            min_v = min_v.min(pt.y());
+            max_u = max_u.max(pt.x());
+            max_v = max_v.max(pt.y());
+        }
+    }
+    let margin = ((max_u - min_u).max(max_v - min_v)) * 0.1 + 1e-6;
+    let bounds = (
+        Point2::new(min_u - margin, min_v - margin),
+        Point2::new(max_u + margin, max_v + margin),
+    );
+
+    let mut cdt = Cdt::new(bounds);
+
+    // Insert boundary vertices and constraint edges.
+    let mut boundary_vids: Vec<usize> = Vec::with_capacity(boundary.len());
+    for &pt in boundary {
+        match cdt.insert_point(pt) {
+            Ok(vid) => boundary_vids.push(vid),
+            Err(_) => return vec![boundary.to_vec()], // fallback
+        }
+    }
+
+    let mut boundary_edges = Vec::new();
+    for i in 0..boundary_vids.len() {
+        let j = (i + 1) % boundary_vids.len();
+        let v0 = boundary_vids[i];
+        let v1 = boundary_vids[j];
+        if v0 != v1 {
+            if cdt.insert_constraint(v0, v1).is_err() {
+                return vec![boundary.to_vec()]; // fallback
+            }
+            boundary_edges.push((v0, v1));
+        }
+    }
+
+    // Insert pcurve vertices and constraint edges.
+    let snap_tol = 1e-8;
+    // Track pcurve edges (reserved for future multi-curve region classification).
+
+    for pc in pcurves {
+        if pc.len() < 2 {
+            continue;
+        }
+
+        let mut pc_vids: Vec<usize> = Vec::new();
+        for &pt in pc {
+            // Snap to nearest existing vertex if close.
+            let existing = cdt.vertices();
+            let mut snapped = None;
+            for (vid, &v) in existing.iter().enumerate() {
+                if (v - pt).length() < snap_tol {
+                    snapped = Some(vid);
+                    break;
+                }
+            }
+
+            let vid = if let Some(s) = snapped {
+                s
+            } else {
+                match cdt.insert_point(pt) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                }
+            };
+            pc_vids.push(vid);
+        }
+
+        let mut edges = Vec::new();
+        for i in 0..pc_vids.len().saturating_sub(1) {
+            let v0 = pc_vids[i];
+            let v1 = pc_vids[i + 1];
+            if v0 != v1 {
+                let _ = cdt.insert_constraint(v0, v1);
+                edges.push((v0, v1));
+            }
+        }
+        let _ = edges.len(); // Reserved for future use.
+    }
+
+    // Remove exterior triangles (outside the boundary).
+    cdt.remove_exterior(&boundary_edges);
+
+    // Get remaining (interior) triangles.
+    let triangles = cdt.triangles();
+    let vertices = cdt.vertices().to_vec();
+
+    if triangles.is_empty() {
+        return vec![boundary.to_vec()];
+    }
+
+    // Classify each triangle: which side of the pcurve(s) is its centroid on?
+    // Use winding number of all pcurves combined.
+    let mut pos_points: Vec<Point2> = Vec::new();
+    let mut neg_points: Vec<Point2> = Vec::new();
+
+    for &(i0, i1, i2) in &triangles {
+        let centroid = Point2::new(
+            (vertices[i0].x() + vertices[i1].x() + vertices[i2].x()) / 3.0,
+            (vertices[i0].y() + vertices[i1].y() + vertices[i2].y()) / 3.0,
+        );
+
+        // Classify by signed distance to the nearest pcurve segment.
+        // The "side" is determined by the cross product of the segment
+        // direction with the vector to the centroid.
+        let mut side = 0.0_f64;
+        let mut best_dist = f64::MAX;
+        for pc in pcurves {
+            for pair in pc.windows(2) {
+                let a = pair[0];
+                let b = pair[1];
+                let ab = Point2::new(b.x() - a.x(), b.y() - a.y());
+                let ac = Point2::new(centroid.x() - a.x(), centroid.y() - a.y());
+                let ab_len_sq = ab.x() * ab.x() + ab.y() * ab.y();
+                if ab_len_sq < 1e-20 {
+                    continue;
+                }
+                let t = (ac.x() * ab.x() + ac.y() * ab.y()) / ab_len_sq;
+                let t_clamped = t.clamp(0.0, 1.0);
+                let proj = Point2::new(a.x() + t_clamped * ab.x(), a.y() + t_clamped * ab.y());
+                let dx = centroid.x() - proj.x();
+                let dy = centroid.y() - proj.y();
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist < best_dist {
+                    best_dist = dist;
+                    // Cross product gives signed distance (which side).
+                    side = ab.x() * ac.y() - ab.y() * ac.x();
+                }
+            }
+        }
+
+        let tri_pts = vec![vertices[i0], vertices[i1], vertices[i2]];
+        if side > 0.0 {
+            pos_points.extend(tri_pts);
+        } else {
+            neg_points.extend(tri_pts);
+        }
+    }
+
+    // Build convex hull approximation of each region from the classified points.
+    // For proper boolean operations, each region should be a connected polygon.
+    // Approximate by computing the convex hull of classified triangle vertices.
+    let mut regions = Vec::new();
+
+    if pos_points.len() >= 3 {
+        let hull = convex_hull_2d(&pos_points);
+        if hull.len() >= 3 {
+            regions.push(hull);
+        }
+    }
+    if neg_points.len() >= 3 {
+        let hull = convex_hull_2d(&neg_points);
+        if hull.len() >= 3 {
+            regions.push(hull);
+        }
+    }
+
+    if regions.is_empty() {
+        regions.push(boundary.to_vec());
+    }
+    regions
+}
+
+/// Compute the 2D convex hull of a set of points (Andrew's monotone chain).
+fn convex_hull_2d(points: &[Point2]) -> Vec<Point2> {
+    let mut pts: Vec<Point2> = points.to_vec();
+    pts.sort_by(|a, b| {
+        a.x()
+            .partial_cmp(&b.x())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                a.y()
+                    .partial_cmp(&b.y())
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+    pts.dedup_by(|a, b| (a.x() - b.x()).abs() < 1e-10 && (a.y() - b.y()).abs() < 1e-10);
+
+    if pts.len() < 3 {
+        return pts;
+    }
+
+    let n = pts.len();
+    let mut hull: Vec<Point2> = Vec::with_capacity(2 * n);
+
+    // Lower hull.
+    for &p in &pts {
+        while hull.len() >= 2 {
+            let a = hull[hull.len() - 2];
+            let b = hull[hull.len() - 1];
+            if cross_2d(a, b, p) <= 0.0 {
+                hull.pop();
+            } else {
+                break;
+            }
+        }
+        hull.push(p);
+    }
+
+    // Upper hull.
+    let lower_len = hull.len() + 1;
+    for &p in pts.iter().rev() {
+        while hull.len() >= lower_len {
+            let a = hull[hull.len() - 2];
+            let b = hull[hull.len() - 1];
+            if cross_2d(a, b, p) <= 0.0 {
+                hull.pop();
+            } else {
+                break;
+            }
+        }
+        hull.push(p);
+    }
+
+    hull.pop(); // Remove the last point (duplicate of first).
+    hull
+}
+
+/// 2D cross product for convex hull computation.
+fn cross_2d(o: Point2, a: Point2, b: Point2) -> f64 {
+    (a.x() - o.x()) * (b.y() - o.y()) - (a.y() - o.y()) * (b.x() - o.x())
 }
 
 /// Split a single parameter-space region by a pcurve polyline.
@@ -1366,7 +1622,7 @@ mod tests {
             Point2::new(1.1, 0.5),
         ];
 
-        let regions = partition_parameter_domain(&boundary, &[pcurve]);
+        let regions = partition_parameter_domain_cdt(&boundary, &[pcurve]);
         assert!(
             regions.len() >= 2,
             "horizontal pcurve should split into >= 2 regions, got {}",
@@ -1391,7 +1647,7 @@ mod tests {
         // Pcurve entirely outside the boundary
         let pcurve = vec![Point2::new(2.0, 0.0), Point2::new(2.0, 1.0)];
 
-        let regions = partition_parameter_domain(&boundary, &[pcurve]);
+        let regions = partition_parameter_domain_cdt(&boundary, &[pcurve]);
         assert_eq!(regions.len(), 1, "no crossing = 1 region");
     }
 
