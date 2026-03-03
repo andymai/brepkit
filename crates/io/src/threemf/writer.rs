@@ -84,27 +84,9 @@ fn tessellate_solid(
     solid_id: SolidId,
     deflection: f64,
 ) -> Result<TriangleMesh, IoError> {
-    let solid = topo.solid(solid_id).map_err(topo_err)?;
-    let mut merged = TriangleMesh::default();
-
-    for shell_id in std::iter::once(solid.outer_shell()).chain(solid.inner_shells().iter().copied())
-    {
-        let shell = topo.shell(shell_id).map_err(topo_err)?;
-        for &face_id in shell.faces() {
-            let face_mesh = tessellate::tessellate(topo, face_id, deflection)?;
-
-            #[allow(clippy::cast_possible_truncation)]
-            let offset = merged.positions.len() as u32;
-
-            merged.positions.extend_from_slice(&face_mesh.positions);
-            merged.normals.extend_from_slice(&face_mesh.normals);
-            merged
-                .indices
-                .extend(face_mesh.indices.iter().map(|i| i + offset));
-        }
-    }
-
-    Ok(merged)
+    // Use watertight tessellation that shares edge vertices between
+    // adjacent faces, producing gap-free meshes for 3MF export.
+    tessellate::tessellate_solid(topo, solid_id, deflection).map_err(IoError::Operations)
 }
 
 /// Build the `3dmodel.model` XML document.
@@ -185,12 +167,6 @@ fn write_object(
 fn format_f64(v: f64) -> String {
     // Use enough digits for sub-micron precision in millimeters.
     format!("{v:.6}")
-}
-
-/// Convert a [`TopologyError`](brepkit_topology::TopologyError) into an [`IoError`]
-/// by routing through [`OperationsError`](brepkit_operations::OperationsError).
-fn topo_err(e: brepkit_topology::TopologyError) -> IoError {
-    IoError::Operations(brepkit_operations::OperationsError::from(e))
 }
 
 /// Static content for `[Content_Types].xml`.
@@ -357,8 +333,8 @@ mod tests {
         let bytes = write_threemf(&topo, &[solid], 0.1).unwrap();
         let xml = extract_model_xml(&bytes);
 
-        // Unit cube: 6 faces × 4 vertices = 24 vertices (not shared across faces).
-        assert_eq!(count_elements(&xml, "vertex"), 24);
+        // Unit cube: 8 corner vertices (shared across faces via watertight tessellation).
+        assert_eq!(count_elements(&xml, "vertex"), 8);
         // Unit cube: 6 faces × 2 triangles = 12 triangles.
         assert_eq!(count_elements(&xml, "triangle"), 12);
     }

@@ -24,7 +24,7 @@ use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure;
 use brepkit_operations::revolve::revolve;
 use brepkit_operations::sweep::sweep;
-use brepkit_operations::tessellate::{self, TriangleMesh};
+use brepkit_operations::tessellate;
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -1327,27 +1327,10 @@ impl BrepKernel {
     pub fn tessellate_solid(&self, solid: u32, deflection: f64) -> Result<JsMesh, JsError> {
         validate_positive(deflection, "deflection")?;
         let solid_id = self.resolve_solid(solid)?;
-        let solid_data = self.topo.solid(solid_id)?;
 
-        let mut merged = TriangleMesh::default();
-
-        for shell_id in std::iter::once(solid_data.outer_shell())
-            .chain(solid_data.inner_shells().iter().copied())
-        {
-            let shell = self.topo.shell(shell_id)?;
-            for &face_id in shell.faces() {
-                let face_mesh = tessellate::tessellate(&self.topo, face_id, deflection)?;
-
-                #[allow(clippy::cast_possible_truncation)]
-                let offset = merged.positions.len() as u32;
-
-                merged.positions.extend_from_slice(&face_mesh.positions);
-                merged.normals.extend_from_slice(&face_mesh.normals);
-                merged
-                    .indices
-                    .extend(face_mesh.indices.iter().map(|i| i + offset));
-            }
-        }
+        // Use watertight tessellation that shares edge vertices between
+        // adjacent faces, eliminating cracks at face boundaries.
+        let merged = tessellate::tessellate_solid(&self.topo, solid_id, deflection)?;
 
         Ok(merged.into())
     }

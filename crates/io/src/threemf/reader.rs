@@ -269,8 +269,8 @@ mod tests {
         assert_eq!(meshes.len(), 1);
         let mesh = &meshes[0];
 
-        // Unit cube: 6 faces × 4 vertices = 24 vertices (not shared).
-        assert_eq!(mesh.positions.len(), 24);
+        // Unit cube: 8 corner vertices (shared across faces via watertight tessellation).
+        assert_eq!(mesh.positions.len(), 8);
         // 12 triangles × 3 indices = 36.
         assert_eq!(mesh.indices.len(), 36);
     }
