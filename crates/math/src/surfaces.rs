@@ -191,6 +191,40 @@ impl ConicalSurface {
     pub fn radius_at(&self, v: f64) -> f64 {
         v * self.half_angle.cos()
     }
+
+    /// Project a 3D point onto the cone surface, returning `(u, v)` parameters.
+    ///
+    /// `u` is the angular parameter `[0, 2π)`, `v` is the distance from the
+    /// apex along the cone surface generator line.
+    #[must_use]
+    pub fn project_point(&self, point: Point3) -> (f64, f64) {
+        let to_pt = Vec3::new(
+            point.x() - self.apex.x(),
+            point.y() - self.apex.y(),
+            point.z() - self.apex.z(),
+        );
+
+        let h = self.axis.dot(to_pt);
+        let radial = to_pt - self.axis * h;
+        let x = self.x_axis.dot(radial);
+        let y = self.y_axis.dot(radial);
+
+        let u = y.atan2(x).rem_euclid(std::f64::consts::TAU);
+
+        let sin_a = self.half_angle.sin();
+        let v = if sin_a.abs() > 1e-15 {
+            h / sin_a
+        } else {
+            let cos_a = self.half_angle.cos();
+            if cos_a.abs() > 1e-15 {
+                radial.length() / cos_a
+            } else {
+                0.0
+            }
+        };
+
+        (u, v)
+    }
 }
 
 /// An infinite spherical surface (actually a sphere).
@@ -399,6 +433,41 @@ impl ToroidalSurface {
     #[must_use]
     pub const fn z_axis(&self) -> Vec3 {
         self.z_axis
+    }
+
+    /// Project a 3D point onto the torus surface, returning `(u, v)` parameters.
+    ///
+    /// `u ∈ [0, 2π)` is the angle around the major circle.
+    /// `v ∈ [0, 2π)` is the angle around the tube cross-section.
+    #[must_use]
+    pub fn project_point(&self, point: Point3) -> (f64, f64) {
+        let to_pt = Vec3::new(
+            point.x() - self.center.x(),
+            point.y() - self.center.y(),
+            point.z() - self.center.z(),
+        );
+
+        let x_comp = self.x_axis.dot(to_pt);
+        let y_comp = self.y_axis.dot(to_pt);
+        let u = y_comp.atan2(x_comp).rem_euclid(std::f64::consts::TAU);
+
+        let (sin_u, cos_u) = u.sin_cos();
+        let tube_center = self.center
+            + self.x_axis * (self.major_radius * cos_u)
+            + self.y_axis * (self.major_radius * sin_u);
+
+        let to_tube = Vec3::new(
+            point.x() - tube_center.x(),
+            point.y() - tube_center.y(),
+            point.z() - tube_center.z(),
+        );
+
+        let radial_dir = self.x_axis * cos_u + self.y_axis * sin_u;
+        let r_comp = radial_dir.dot(to_tube);
+        let z_comp = self.z_axis.dot(to_tube);
+
+        let v = z_comp.atan2(r_comp).rem_euclid(std::f64::consts::TAU);
+        (u, v)
     }
 }
 
@@ -907,6 +976,83 @@ mod tests {
         assert!(
             approx_eq(v_proj, v_orig),
             "v should roundtrip: expected {v_orig}, got {v_proj}"
+        );
+    }
+
+    #[test]
+    fn cone_project_point_roundtrip() {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            PI / 6.0, // 30° half-angle
+        )
+        .unwrap();
+
+        let (u_orig, v_orig) = (1.2, 2.5);
+        let pt = cone.evaluate(u_orig, v_orig);
+        let (u_proj, v_proj) = cone.project_point(pt);
+
+        assert!(
+            approx_eq(u_proj, u_orig),
+            "cone u should roundtrip: expected {u_orig}, got {u_proj}"
+        );
+        assert!(
+            approx_eq(v_proj, v_orig),
+            "cone v should roundtrip: expected {v_orig}, got {v_proj}"
+        );
+    }
+
+    #[test]
+    fn cone_project_external_point() {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            PI / 4.0, // 45° half-angle
+        )
+        .unwrap();
+
+        // A point above the cone should project with correct v.
+        let (_, v) = cone.project_point(Point3::new(5.0, 0.0, 5.0));
+        assert!(v > 0.0, "v should be positive above cone apex, got {v}");
+    }
+
+    #[test]
+    fn torus_project_point_roundtrip() {
+        let torus = ToroidalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            3.0, // major radius
+            1.0, // minor radius
+        )
+        .unwrap();
+
+        let (u_orig, v_orig) = (0.8, 1.5);
+        let pt = torus.evaluate(u_orig, v_orig);
+        let (u_proj, v_proj) = torus.project_point(pt);
+
+        assert!(
+            approx_eq(u_proj, u_orig),
+            "torus u should roundtrip: expected {u_orig}, got {u_proj}"
+        );
+        assert!(
+            approx_eq(v_proj, v_orig),
+            "torus v should roundtrip: expected {v_orig}, got {v_proj}"
+        );
+    }
+
+    #[test]
+    fn torus_project_external_point() {
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0, 1.0).unwrap();
+
+        // Point on the outer equator (x=6, y=0, z=0) should project to u=0, v=0.
+        let (u, v) = torus.project_point(Point3::new(6.0, 0.0, 0.0));
+        assert!(approx_eq(u, 0.0), "outer equator u should be 0, got {u}");
+        assert!(approx_eq(v, 0.0), "outer equator v should be 0, got {v}");
+
+        // Point directly above the tube center at u=0 → v=π/2.
+        let (_, v) = torus.project_point(Point3::new(5.0, 0.0, 1.5));
+        assert!(
+            approx_eq(v, FRAC_PI_2),
+            "above tube center v should be π/2, got {v}"
         );
     }
 }

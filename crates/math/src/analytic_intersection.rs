@@ -983,36 +983,6 @@ fn march_analytic_intersection(
     result
 }
 
-/// Project a 3D point onto a parametric surface by grid search.
-#[allow(clippy::cast_precision_loss)]
-fn project_to_surface(
-    surface_fn: &dyn Fn(f64, f64) -> Point3,
-    point: Point3,
-    u_range: (f64, f64),
-    v_range: (f64, f64),
-    res: usize,
-) -> (f64, f64) {
-    let mut best_u = u_range.0;
-    let mut best_v = v_range.0;
-    let mut best_dist = f64::MAX;
-
-    for i in 0..=res {
-        let u = u_range.0 + (u_range.1 - u_range.0) * (i as f64) / (res as f64);
-        for j in 0..=res {
-            let v = v_range.0 + (v_range.1 - v_range.0) * (j as f64) / (res as f64);
-            let p = surface_fn(u, v);
-            let dist = (p - point).length_squared();
-            if dist < best_dist {
-                best_dist = dist;
-                best_u = u;
-                best_v = v;
-            }
-        }
-    }
-
-    (best_u, best_v)
-}
-
 /// Project a 3D point onto an analytic surface using the surface's
 /// analytical projection method. Falls back to grid search for surface
 /// types without analytical projection.
@@ -1031,14 +1001,13 @@ fn project_analytic(
             let (u, v) = sphere.project_point(point);
             (u.clamp(u_range.0, u_range.1), v.clamp(v_range.0, v_range.1))
         }
-        _ => {
-            // Fallback to grid search for cone/torus (no project_point yet).
-            let eval: Box<dyn Fn(f64, f64) -> Point3> = match surface {
-                AnalyticSurface::Cone(c) => Box::new(|u, v| c.evaluate(u, v)),
-                AnalyticSurface::Torus(t) => Box::new(|u, v| t.evaluate(u, v)),
-                _ => unreachable!(),
-            };
-            project_to_surface(&*eval, point, u_range, v_range, 32)
+        AnalyticSurface::Cone(cone) => {
+            let (u, v) = cone.project_point(point);
+            (u.clamp(u_range.0, u_range.1), v.clamp(v_range.0, v_range.1))
+        }
+        AnalyticSurface::Torus(torus) => {
+            let (u, v) = torus.project_point(point);
+            (u.clamp(u_range.0, u_range.1), v.clamp(v_range.0, v_range.1))
         }
     }
 }
