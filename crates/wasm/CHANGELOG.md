@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/andymai/brepkit/compare/v0.2.0...v0.3.0) (2026-03-03)
+
+
+### Features
+
+* **fillet:** rolling-ball fillet with G1-continuous NURBS blend surfaces ([#11](https://github.com/andymai/brepkit/issues/11)) ([098966c](https://github.com/andymai/brepkit/commit/098966cd868d203b1131ea33897da9c198339e70))
+* **operations:** exact analytic booleans preserving surface types ([e9e4a40](https://github.com/andymai/brepkit/commit/e9e4a40eeabb5f997455079212b186d61fe42705))
+* **operations:** exact analytic booleans preserving surface types ([b110646](https://github.com/andymai/brepkit/commit/b11064666fcdf2fbc81aecdb2e563d27de1acafe))
+* **sweep,wasm:** smooth NURBS sweep + WASM bindings for loftSmooth/sweepSmooth ([#15](https://github.com/andymai/brepkit/issues/15)) ([9741de3](https://github.com/andymai/brepkit/commit/9741de3023b12c1a5075fc373aa0672e4f50d8a6))
+* **tessellate:** watertight solid tessellation with shared edge vertices ([#9](https://github.com/andymai/brepkit/issues/9)) ([25e2a17](https://github.com/andymai/brepkit/commit/25e2a176978b0f3fc8c50c6713b39a18ad244859))
+
 ## [0.2.0](https://github.com/andymai/brepkit/compare/v0.1.0...v0.2.0) (2026-03-03)
 
 
