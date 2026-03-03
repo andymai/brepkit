@@ -1258,7 +1258,7 @@ fn analytic_boolean(
     tol: Tolerance,
 ) -> Result<SolidId, crate::OperationsError> {
     use brepkit_math::analytic_intersection::{
-        AnalyticSurface, ExactIntersectionCurve, exact_plane_analytic,
+        AnalyticSurface, ExactIntersectionCurve, exact_plane_analytic, intersect_analytic_analytic,
     };
 
     // Collect face info for both solids.
@@ -1531,8 +1531,41 @@ fn analytic_boolean(
                     }
                 }
             } else {
-                // Analytic-analytic: bail to tessellated path.
-                has_analytic_analytic = true;
+                // Analytic-analytic: compute intersection via marching.
+                let surf_a_opt = match &snap_a.surface {
+                    FaceSurface::Cylinder(c) => Some(AnalyticSurface::Cylinder(c)),
+                    FaceSurface::Cone(c) => Some(AnalyticSurface::Cone(c)),
+                    FaceSurface::Sphere(s) => Some(AnalyticSurface::Sphere(s)),
+                    FaceSurface::Torus(t) => Some(AnalyticSurface::Torus(t)),
+                    _ => None,
+                };
+                let surf_b_opt = match &snap_b.surface {
+                    FaceSurface::Cylinder(c) => Some(AnalyticSurface::Cylinder(c)),
+                    FaceSurface::Cone(c) => Some(AnalyticSurface::Cone(c)),
+                    FaceSurface::Sphere(s) => Some(AnalyticSurface::Sphere(s)),
+                    FaceSurface::Torus(t) => Some(AnalyticSurface::Torus(t)),
+                    _ => None,
+                };
+
+                if let (Some(surf_a_an), Some(surf_b_an)) = (surf_a_opt, surf_b_opt) {
+                    if let Ok(curves) = intersect_analytic_analytic(surf_a_an, surf_b_an, 32) {
+                        for ic in &curves {
+                            let pts: Vec<Point3> = ic.points.iter().map(|ip| ip.point).collect();
+                            for pair in pts.windows(2) {
+                                face_intersections_a
+                                    .entry(ia)
+                                    .or_default()
+                                    .push((pair[0], pair[1], None));
+                                face_intersections_b
+                                    .entry(ib)
+                                    .or_default()
+                                    .push((pair[0], pair[1], None));
+                            }
+                        }
+                    }
+                } else {
+                    has_analytic_analytic = true;
+                }
             }
         }
     }
