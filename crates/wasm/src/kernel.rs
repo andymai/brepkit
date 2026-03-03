@@ -1323,6 +1323,23 @@ impl BrepKernel {
         ])
     }
 
+    /// Get the vertex *handles* (not positions) of an edge.
+    ///
+    /// Returns `[start_vertex_handle, end_vertex_handle]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the edge handle is invalid.
+    #[wasm_bindgen(js_name = "getEdgeVertexHandles")]
+    pub fn get_edge_vertex_handles(&self, edge: u32) -> Result<Vec<u32>, JsError> {
+        let edge_id = self.resolve_edge(edge)?;
+        let edge_data = self.topo.edge(edge_id)?;
+        Ok(vec![
+            vertex_id_to_u32(edge_data.start()),
+            vertex_id_to_u32(edge_data.end()),
+        ])
+    }
+
     /// Get the position of a vertex.
     ///
     /// Returns `[x, y, z]`.
@@ -4229,7 +4246,7 @@ const fn shell_id_to_u32(id: brepkit_topology::shell::ShellId) -> u32 {
 }
 
 /// Convert a `CompoundId` to a `u32` handle for JavaScript.
-#[allow(clippy::cast_possible_truncation)]
+#[allow(clippy::cast_possible_truncation, dead_code)]
 const fn compound_id_to_u32(id: brepkit_topology::compound::CompoundId) -> u32 {
     id.index() as u32
 }
