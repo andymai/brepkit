@@ -938,12 +938,62 @@ fn quantize(v: f64, resolution: f64) -> i64 {
     (v * resolution).round() as i64
 }
 
-/// Assemble a solid from a set of face polygons with normals.
+/// Assemble a solid from a set of planar face polygons with normals.
 ///
 /// Uses spatial hashing for vertex dedup and edge sharing.
+/// This is a convenience wrapper around [`assemble_solid_mixed`] for the
+/// common case where all faces are planar.
 pub(crate) fn assemble_solid(
     topo: &mut Topology,
     faces: &[(Vec<Point3>, Vec3, f64)],
+    tol: Tolerance,
+) -> Result<SolidId, crate::OperationsError> {
+    let specs: Vec<FaceSpec> = faces
+        .iter()
+        .map(|(verts, normal, d)| FaceSpec::Planar {
+            vertices: verts.clone(),
+            normal: *normal,
+            d: *d,
+        })
+        .collect();
+    assemble_solid_mixed(topo, &specs, tol)
+}
+
+/// A face specification for mixed-surface solid assembly.
+///
+/// Used by [`assemble_solid_mixed`] to build solids with faces of any
+/// surface type — not just planar.
+#[derive(Clone)]
+pub enum FaceSpec {
+    /// A planar face defined by vertex positions and plane equation.
+    Planar {
+        /// Vertex positions (at least 3).
+        vertices: Vec<Point3>,
+        /// Outward-facing normal.
+        normal: Vec3,
+        /// Plane equation signed distance (n · p = d).
+        d: f64,
+    },
+    /// A face with a pre-built surface and vertex positions for the boundary wire.
+    Surface {
+        /// Vertex positions for the outer wire (at least 3).
+        vertices: Vec<Point3>,
+        /// The surface geometry.
+        surface: FaceSurface,
+    },
+}
+
+/// Assemble a solid from a set of face specifications with mixed surface types.
+///
+/// Like [`assemble_solid`], but supports faces with NURBS, analytic, or any
+/// other surface type. Uses the same spatial-hashing vertex dedup and edge
+/// sharing as the planar variant.
+///
+/// This is the general-purpose solid assembly function that unblocks operations
+/// on non-planar faces.
+pub(crate) fn assemble_solid_mixed(
+    topo: &mut Topology,
+    face_specs: &[FaceSpec],
     tol: Tolerance,
 ) -> Result<SolidId, crate::OperationsError> {
     let resolution = 1e7;
@@ -951,9 +1001,24 @@ pub(crate) fn assemble_solid(
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
 
-    let mut face_ids = Vec::with_capacity(faces.len());
+    let mut face_ids = Vec::with_capacity(face_specs.len());
 
-    for (verts, normal, d) in faces {
+    for spec in face_specs {
+        let (verts, surface) = match spec {
+            FaceSpec::Planar {
+                vertices,
+                normal,
+                d,
+            } => (
+                vertices.clone(),
+                FaceSurface::Plane {
+                    normal: *normal,
+                    d: *d,
+                },
+            ),
+            FaceSpec::Surface { vertices, surface } => (vertices.clone(), surface.clone()),
+        };
+
         let n = verts.len();
         if n < 3 {
             continue;
@@ -995,28 +1060,19 @@ pub(crate) fn assemble_solid(
 
         let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
         let wire_id = topo.wires.alloc(wire);
-        let face = topo.faces.alloc(Face::new(
-            wire_id,
-            vec![],
-            FaceSurface::Plane {
-                normal: *normal,
-                d: *d,
-            },
-        ));
+        let face = topo.faces.alloc(Face::new(wire_id, vec![], surface));
         face_ids.push(face);
     }
 
     if face_ids.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
-            reason: "boolean operation produced no faces".into(),
+            reason: "solid assembly produced no faces".into(),
         });
     }
 
     let shell = Shell::new(face_ids).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.shells.alloc(shell);
-    let solid = topo.solids.alloc(Solid::new(shell_id, vec![]));
-
-    Ok(solid)
+    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
 }
 
 // ---------------------------------------------------------------------------
@@ -2183,5 +2239,139 @@ mod tests {
             }
         }
         assert!(has_circle, "cone should have Circle edges");
+    }
+
+    // ── Mixed-surface assembly tests ────────────────────
+
+    #[test]
+    fn assemble_mixed_planar_only() {
+        // Planar-only via FaceSpec should produce the same result as assemble_solid.
+        let mut topo = Topology::new();
+        let specs = vec![
+            FaceSpec::Planar {
+                vertices: vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(1.0, 0.0, 0.0),
+                    Point3::new(1.0, 1.0, 0.0),
+                    Point3::new(0.0, 1.0, 0.0),
+                ],
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+            FaceSpec::Planar {
+                vertices: vec![
+                    Point3::new(0.0, 0.0, 1.0),
+                    Point3::new(1.0, 0.0, 1.0),
+                    Point3::new(1.0, 1.0, 1.0),
+                    Point3::new(0.0, 1.0, 1.0),
+                ],
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 1.0,
+            },
+            FaceSpec::Planar {
+                vertices: vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(1.0, 0.0, 0.0),
+                    Point3::new(1.0, 0.0, 1.0),
+                    Point3::new(0.0, 0.0, 1.0),
+                ],
+                normal: Vec3::new(0.0, -1.0, 0.0),
+                d: 0.0,
+            },
+            FaceSpec::Planar {
+                vertices: vec![
+                    Point3::new(0.0, 1.0, 0.0),
+                    Point3::new(1.0, 1.0, 0.0),
+                    Point3::new(1.0, 1.0, 1.0),
+                    Point3::new(0.0, 1.0, 1.0),
+                ],
+                normal: Vec3::new(0.0, 1.0, 0.0),
+                d: 1.0,
+            },
+            FaceSpec::Planar {
+                vertices: vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(0.0, 1.0, 0.0),
+                    Point3::new(0.0, 1.0, 1.0),
+                    Point3::new(0.0, 0.0, 1.0),
+                ],
+                normal: Vec3::new(-1.0, 0.0, 0.0),
+                d: 0.0,
+            },
+            FaceSpec::Planar {
+                vertices: vec![
+                    Point3::new(1.0, 0.0, 0.0),
+                    Point3::new(1.0, 1.0, 0.0),
+                    Point3::new(1.0, 1.0, 1.0),
+                    Point3::new(1.0, 0.0, 1.0),
+                ],
+                normal: Vec3::new(1.0, 0.0, 0.0),
+                d: 1.0,
+            },
+        ];
+
+        let solid = assemble_solid_mixed(&mut topo, &specs, Tolerance::new()).unwrap();
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        assert_eq!(
+            sh.faces().len(),
+            6,
+            "mixed assembly box should have 6 faces"
+        );
+    }
+
+    #[test]
+    fn assemble_mixed_with_nurbs() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+
+        let mut topo = Topology::new();
+
+        // Create a mix of planar and NURBS faces.
+        let nurbs = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 1.0), Point3::new(1.0, 0.0, 1.0)],
+                vec![Point3::new(0.0, 1.0, 1.0), Point3::new(1.0, 1.0, 1.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+
+        let specs = vec![
+            FaceSpec::Planar {
+                vertices: vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(1.0, 0.0, 0.0),
+                    Point3::new(1.0, 1.0, 0.0),
+                    Point3::new(0.0, 1.0, 0.0),
+                ],
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+            FaceSpec::Surface {
+                vertices: vec![
+                    Point3::new(0.0, 0.0, 1.0),
+                    Point3::new(1.0, 0.0, 1.0),
+                    Point3::new(1.0, 1.0, 1.0),
+                    Point3::new(0.0, 1.0, 1.0),
+                ],
+                surface: FaceSurface::Nurbs(nurbs),
+            },
+        ];
+
+        let solid = assemble_solid_mixed(&mut topo, &specs, Tolerance::new()).unwrap();
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        assert_eq!(sh.faces().len(), 2, "mixed assembly should have 2 faces");
+
+        // Verify the NURBS face exists.
+        let has_nurbs = sh
+            .faces()
+            .iter()
+            .any(|&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)));
+        assert!(has_nurbs, "mixed assembly should contain a NURBS face");
     }
 }
