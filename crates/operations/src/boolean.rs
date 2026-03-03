@@ -85,6 +85,11 @@ struct FacePairSide<'a> {
 
 /// Perform a boolean operation on two solids.
 ///
+/// When both solids are composed entirely of analytic faces (planes,
+/// cylinders, cones, spheres), uses an exact analytic path that preserves
+/// surface types through the boolean. Falls back to the tessellated path
+/// for NURBS faces or analytic-analytic face pairs.
+///
 /// # Errors
 ///
 /// Returns an error if either solid contains NURBS faces, or if the operation
@@ -97,6 +102,14 @@ pub fn boolean(
     b: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
+
+    // ── Try analytic fast path ──────────────────────────────────────────
+    if is_all_analytic(topo, a)? && is_all_analytic(topo, b)? {
+        if let Ok(solid) = analytic_boolean(topo, op, a, b, tol) {
+            return Ok(solid);
+        }
+        // Fall through to tessellated path on error.
+    }
 
     // ── Phase 0: Guard + Precompute ──────────────────────────────────────
 
@@ -1033,9 +1046,8 @@ pub fn boolean_with_evolution(
     let input_faces_a = collect_face_signatures(topo, a)?;
     let input_faces_b = collect_face_signatures(topo, b)?;
 
-    let mut input_faces: Vec<(usize, Vec3, Point3)> = Vec::with_capacity(
-        input_faces_a.len() + input_faces_b.len(),
-    );
+    let mut input_faces: Vec<(usize, Vec3, Point3)> =
+        Vec::with_capacity(input_faces_a.len() + input_faces_b.len());
     input_faces.extend(input_faces_a);
     input_faces.extend(input_faces_b);
 
@@ -1118,9 +1130,7 @@ fn collect_face_signatures(
             if verts.len() >= 3 {
                 let e1 = verts[1] - verts[0];
                 let e2 = verts[2] - verts[0];
-                e1.cross(e2)
-                    .normalize()
-                    .unwrap_or(Vec3::new(0.0, 0.0, 1.0))
+                e1.cross(e2).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0))
             } else {
                 Vec3::new(0.0, 0.0, 1.0)
             }
@@ -1132,6 +1142,683 @@ fn collect_face_signatures(
     }
 
     Ok(result)
+}
+
+// ── Analytic boolean fast path ─────────────────────────────────────────
+
+/// Check if a solid is composed entirely of analytic surfaces (no NURBS).
+fn is_all_analytic(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
+    let s = topo.solid(solid)?;
+    let shell = topo.shell(s.outer_shell())?;
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        if matches!(face.surface(), FaceSurface::Nurbs(_)) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Snapshot of face data for analytic boolean processing.
+struct FaceSnapshot {
+    id: FaceId,
+    surface: FaceSurface,
+    vertices: Vec<Point3>,
+    normal: Vec3,
+    d: f64,
+}
+
+/// Analytic face fragment preserving the original surface type.
+struct AnalyticFragment {
+    /// Polygon boundary in 3D (for classification and planar assembly fallback).
+    vertices: Vec<Point3>,
+    /// The original surface type of the face.
+    surface: FaceSurface,
+    /// Normal of the face (for planar) or of the polygon approximation.
+    normal: Vec3,
+    /// Plane d coefficient (for planar faces).
+    d: f64,
+    /// Which operand this fragment came from.
+    source: Source,
+    /// Edge curve types for the boundary segments.
+    /// `None` = straight line, `Some(curve)` = exact curve (circle, ellipse).
+    edge_curves: Vec<Option<EdgeCurve>>,
+}
+
+/// Perform an analytic boolean preserving exact surface types.
+///
+/// This is the fast path for solids with only analytic faces. It computes
+/// exact plane-analytic intersections and preserves `FaceSurface::Cylinder`,
+/// `FaceSurface::Sphere`, etc. in the result.
+///
+/// Returns `Err` to signal fallback to the tessellated path.
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::single_match_else)]
+fn analytic_boolean(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+    tol: Tolerance,
+) -> Result<SolidId, crate::OperationsError> {
+    use brepkit_math::analytic_intersection::{
+        AnalyticSurface, ExactIntersectionCurve, exact_plane_analytic,
+    };
+
+    // Collect face info for both solids.
+    let solid_a = topo.solid(a)?;
+    let shell_a = topo.shell(solid_a.outer_shell())?;
+    let face_ids_a: Vec<FaceId> = shell_a.faces().to_vec();
+
+    let solid_b = topo.solid(b)?;
+    let shell_b = topo.shell(solid_b.outer_shell())?;
+    let face_ids_b: Vec<FaceId> = shell_b.faces().to_vec();
+
+    let mut snaps_a = Vec::new();
+    for &fid in &face_ids_a {
+        let face = topo.face(fid)?;
+        let surface = face.surface().clone();
+        let verts = face_vertices(topo, fid)?;
+        let (normal, d) = match &surface {
+            FaceSurface::Plane { normal, d } => (*normal, *d),
+            _ => {
+                // For non-planar faces, compute a representative normal from tessellation.
+                let mesh = crate::tessellate::tessellate(topo, fid, 1.0)?;
+                let avg_normal = if mesh.normals.is_empty() {
+                    Vec3::new(0.0, 0.0, 1.0)
+                } else {
+                    mesh.normals[0]
+                };
+                let d_val = if mesh.positions.is_empty() {
+                    0.0
+                } else {
+                    dot_normal_point(avg_normal, mesh.positions[0])
+                };
+                (avg_normal, d_val)
+            }
+        };
+        snaps_a.push(FaceSnapshot {
+            id: fid,
+            surface,
+            vertices: verts,
+            normal,
+            d,
+        });
+    }
+
+    let mut snaps_b = Vec::new();
+    for &fid in &face_ids_b {
+        let face = topo.face(fid)?;
+        let surface = face.surface().clone();
+        let verts = face_vertices(topo, fid)?;
+        let (normal, d) = match &surface {
+            FaceSurface::Plane { normal, d } => (*normal, *d),
+            _ => {
+                let mesh = crate::tessellate::tessellate(topo, fid, 1.0)?;
+                let avg_normal = if mesh.normals.is_empty() {
+                    Vec3::new(0.0, 0.0, 1.0)
+                } else {
+                    mesh.normals[0]
+                };
+                let d_val = if mesh.positions.is_empty() {
+                    0.0
+                } else {
+                    dot_normal_point(avg_normal, mesh.positions[0])
+                };
+                (avg_normal, d_val)
+            }
+        };
+        snaps_b.push(FaceSnapshot {
+            id: fid,
+            surface,
+            vertices: verts,
+            normal,
+            d,
+        });
+    }
+
+    // Compute AABBs for face pairs.
+    let aabbs_a: Vec<Aabb3> = snaps_a
+        .iter()
+        .map(|s| Aabb3::from_points(s.vertices.iter().copied()).expanded(tol.linear))
+        .collect();
+    let aabbs_b: Vec<Aabb3> = snaps_b
+        .iter()
+        .map(|s| Aabb3::from_points(s.vertices.iter().copied()).expanded(tol.linear))
+        .collect();
+
+    // Find intersection curves for each face pair.
+    // For each face that gets split, store the intersection points.
+    let mut face_intersections_a: HashMap<usize, Vec<(Point3, Point3, Option<EdgeCurve>)>> =
+        HashMap::new();
+    let mut face_intersections_b: HashMap<usize, Vec<(Point3, Point3, Option<EdgeCurve>)>> =
+        HashMap::new();
+
+    // Track which faces have non-planar intersection partners (analytic-analytic).
+    let mut has_analytic_analytic = false;
+
+    for (ia, snap_a) in snaps_a.iter().enumerate() {
+        for (ib, snap_b) in snaps_b.iter().enumerate() {
+            // Skip non-overlapping AABBs.
+            if !aabbs_a[ia].intersects(aabbs_b[ib]) {
+                continue;
+            }
+
+            let is_plane_a = matches!(snap_a.surface, FaceSurface::Plane { .. });
+            let is_plane_b = matches!(snap_b.surface, FaceSurface::Plane { .. });
+
+            if is_plane_a && is_plane_b {
+                // Plane-plane: use existing logic (chord intersection).
+                if let Some(seg) = plane_plane_chord_analytic(
+                    snap_a.normal,
+                    snap_a.d,
+                    &snap_a.vertices,
+                    snap_b.normal,
+                    snap_b.d,
+                    &snap_b.vertices,
+                    tol,
+                ) {
+                    face_intersections_a
+                        .entry(ia)
+                        .or_default()
+                        .push((seg.0, seg.1, None));
+                    face_intersections_b
+                        .entry(ib)
+                        .or_default()
+                        .push((seg.0, seg.1, None));
+                }
+            } else if is_plane_a && !is_plane_b {
+                // Plane cuts analytic surface.
+                let analytic_surf = match &snap_b.surface {
+                    FaceSurface::Cylinder(c) => AnalyticSurface::Cylinder(c),
+                    FaceSurface::Cone(c) => AnalyticSurface::Cone(c),
+                    FaceSurface::Sphere(s) => AnalyticSurface::Sphere(s),
+                    FaceSurface::Torus(t) => AnalyticSurface::Torus(t),
+                    _ => {
+                        has_analytic_analytic = true;
+                        continue;
+                    }
+                };
+
+                if let Ok(curves) = exact_plane_analytic(analytic_surf, snap_a.normal, snap_a.d) {
+                    for curve in curves {
+                        match curve {
+                            ExactIntersectionCurve::Circle(ref circle) => {
+                                // Sample the circle for chord splitting of the planar face.
+                                let samples = sample_curve_clipped(
+                                    &curve,
+                                    &snap_a.vertices,
+                                    snap_a.normal,
+                                    tol,
+                                );
+                                let edge_curve = Some(EdgeCurve::Circle(circle.clone()));
+                                for pair in samples.windows(2) {
+                                    face_intersections_a.entry(ia).or_default().push((
+                                        pair[0],
+                                        pair[1],
+                                        edge_curve.clone(),
+                                    ));
+                                    face_intersections_b.entry(ib).or_default().push((
+                                        pair[0],
+                                        pair[1],
+                                        edge_curve.clone(),
+                                    ));
+                                }
+                            }
+                            ExactIntersectionCurve::Ellipse(ref ellipse) => {
+                                let samples = sample_curve_clipped(
+                                    &curve,
+                                    &snap_a.vertices,
+                                    snap_a.normal,
+                                    tol,
+                                );
+                                let edge_curve = Some(EdgeCurve::Ellipse(ellipse.clone()));
+                                for pair in samples.windows(2) {
+                                    face_intersections_a.entry(ia).or_default().push((
+                                        pair[0],
+                                        pair[1],
+                                        edge_curve.clone(),
+                                    ));
+                                    face_intersections_b.entry(ib).or_default().push((
+                                        pair[0],
+                                        pair[1],
+                                        edge_curve.clone(),
+                                    ));
+                                }
+                            }
+                            ExactIntersectionCurve::Points(ref pts) => {
+                                for pair in pts.windows(2) {
+                                    face_intersections_a
+                                        .entry(ia)
+                                        .or_default()
+                                        .push((pair[0], pair[1], None));
+                                    face_intersections_b
+                                        .entry(ib)
+                                        .or_default()
+                                        .push((pair[0], pair[1], None));
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if !is_plane_a && is_plane_b {
+                // Analytic surface cut by plane (symmetric case).
+                let analytic_surf = match &snap_a.surface {
+                    FaceSurface::Cylinder(c) => AnalyticSurface::Cylinder(c),
+                    FaceSurface::Cone(c) => AnalyticSurface::Cone(c),
+                    FaceSurface::Sphere(s) => AnalyticSurface::Sphere(s),
+                    FaceSurface::Torus(t) => AnalyticSurface::Torus(t),
+                    _ => {
+                        has_analytic_analytic = true;
+                        continue;
+                    }
+                };
+
+                if let Ok(curves) = exact_plane_analytic(analytic_surf, snap_b.normal, snap_b.d) {
+                    for curve in curves {
+                        match curve {
+                            ExactIntersectionCurve::Circle(ref circle) => {
+                                let samples = sample_curve_clipped(
+                                    &curve,
+                                    &snap_b.vertices,
+                                    snap_b.normal,
+                                    tol,
+                                );
+                                let edge_curve = Some(EdgeCurve::Circle(circle.clone()));
+                                for pair in samples.windows(2) {
+                                    face_intersections_a.entry(ia).or_default().push((
+                                        pair[0],
+                                        pair[1],
+                                        edge_curve.clone(),
+                                    ));
+                                    face_intersections_b.entry(ib).or_default().push((
+                                        pair[0],
+                                        pair[1],
+                                        edge_curve.clone(),
+                                    ));
+                                }
+                            }
+                            ExactIntersectionCurve::Ellipse(ref ellipse) => {
+                                let samples = sample_curve_clipped(
+                                    &curve,
+                                    &snap_b.vertices,
+                                    snap_b.normal,
+                                    tol,
+                                );
+                                let edge_curve = Some(EdgeCurve::Ellipse(ellipse.clone()));
+                                for pair in samples.windows(2) {
+                                    face_intersections_a.entry(ia).or_default().push((
+                                        pair[0],
+                                        pair[1],
+                                        edge_curve.clone(),
+                                    ));
+                                    face_intersections_b.entry(ib).or_default().push((
+                                        pair[0],
+                                        pair[1],
+                                        edge_curve.clone(),
+                                    ));
+                                }
+                            }
+                            ExactIntersectionCurve::Points(ref pts) => {
+                                for pair in pts.windows(2) {
+                                    face_intersections_a
+                                        .entry(ia)
+                                        .or_default()
+                                        .push((pair[0], pair[1], None));
+                                    face_intersections_b
+                                        .entry(ib)
+                                        .or_default()
+                                        .push((pair[0], pair[1], None));
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Analytic-analytic: bail to tessellated path.
+                has_analytic_analytic = true;
+            }
+        }
+    }
+
+    // If we encountered analytic-analytic pairs, fall back.
+    if has_analytic_analytic {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "analytic-analytic intersection not supported, falling back".into(),
+        });
+    }
+
+    // ── Split faces into fragments ───────────────────────────────────────
+
+    let mut fragments: Vec<AnalyticFragment> = Vec::new();
+
+    // Process solid A faces.
+    for (ia, snap) in snaps_a.iter().enumerate() {
+        if let Some(chords) = face_intersections_a.get(&ia) {
+            let chord_pairs: Vec<(Point3, Point3)> =
+                chords.iter().map(|&(p0, p1, _)| (p0, p1)).collect();
+            let edge_curve_for_face = chords.first().and_then(|c| c.2.clone());
+
+            // Use existing polygon splitting for the face boundary.
+            let mut chord_map_local: HashMap<usize, Vec<(Point3, Point3)>> = HashMap::new();
+            chord_map_local.insert(snap.id.index(), chord_pairs);
+
+            let planar_frags = split_face(
+                snap.id,
+                &snap.vertices,
+                snap.normal,
+                snap.d,
+                Source::A,
+                &chord_map_local,
+                tol,
+            );
+
+            for frag in planar_frags {
+                let edge_curves = vec![None; frag.vertices.len()];
+                fragments.push(AnalyticFragment {
+                    vertices: frag.vertices,
+                    surface: snap.surface.clone(),
+                    normal: frag.normal,
+                    d: frag.d,
+                    source: Source::A,
+                    edge_curves,
+                });
+            }
+
+            // For non-planar faces (cylinder, etc.), also create an analytic fragment
+            // representing the portion of the analytic surface inside/outside.
+            if !matches!(snap.surface, FaceSurface::Plane { .. }) {
+                // The analytic face itself becomes a fragment.
+                // Its boundary is the intersection curve (circle/ellipse).
+                if let Some(ref ec) = edge_curve_for_face {
+                    let curve_verts = sample_edge_curve(ec, 32);
+                    if curve_verts.len() >= 3 {
+                        let avg_normal = snap.normal;
+                        let d_val = snap.d;
+                        fragments.push(AnalyticFragment {
+                            vertices: curve_verts,
+                            surface: snap.surface.clone(),
+                            normal: avg_normal,
+                            d: d_val,
+                            source: Source::A,
+                            edge_curves: vec![Some(ec.clone())],
+                        });
+                    }
+                }
+            }
+        } else {
+            // Unsplit face — keep as-is.
+            fragments.push(AnalyticFragment {
+                vertices: snap.vertices.clone(),
+                surface: snap.surface.clone(),
+                normal: snap.normal,
+                d: snap.d,
+                source: Source::A,
+                edge_curves: vec![None; snap.vertices.len()],
+            });
+        }
+    }
+
+    // Process solid B faces (same logic).
+    for (ib, snap) in snaps_b.iter().enumerate() {
+        if let Some(chords) = face_intersections_b.get(&ib) {
+            let chord_pairs: Vec<(Point3, Point3)> =
+                chords.iter().map(|&(p0, p1, _)| (p0, p1)).collect();
+            let edge_curve_for_face = chords.first().and_then(|c| c.2.clone());
+
+            let mut chord_map_local: HashMap<usize, Vec<(Point3, Point3)>> = HashMap::new();
+            chord_map_local.insert(snap.id.index(), chord_pairs);
+
+            let planar_frags = split_face(
+                snap.id,
+                &snap.vertices,
+                snap.normal,
+                snap.d,
+                Source::B,
+                &chord_map_local,
+                tol,
+            );
+
+            for frag in planar_frags {
+                let edge_curves = vec![None; frag.vertices.len()];
+                fragments.push(AnalyticFragment {
+                    vertices: frag.vertices,
+                    surface: snap.surface.clone(),
+                    normal: frag.normal,
+                    d: frag.d,
+                    source: Source::B,
+                    edge_curves,
+                });
+            }
+
+            if !matches!(snap.surface, FaceSurface::Plane { .. }) {
+                if let Some(ref ec) = edge_curve_for_face {
+                    let curve_verts = sample_edge_curve(ec, 32);
+                    if curve_verts.len() >= 3 {
+                        fragments.push(AnalyticFragment {
+                            vertices: curve_verts,
+                            surface: snap.surface.clone(),
+                            normal: snap.normal,
+                            d: snap.d,
+                            source: Source::B,
+                            edge_curves: vec![Some(ec.clone())],
+                        });
+                    }
+                }
+            }
+        } else {
+            fragments.push(AnalyticFragment {
+                vertices: snap.vertices.clone(),
+                surface: snap.surface.clone(),
+                normal: snap.normal,
+                d: snap.d,
+                source: Source::B,
+                edge_curves: vec![None; snap.vertices.len()],
+            });
+        }
+    }
+
+    // ── Classification ───────────────────────────────────────────────────
+
+    // Build FaceData for classification (tessellated faces of opposite solid).
+    let face_data_a = collect_face_data(topo, a)?;
+    let face_data_b = collect_face_data(topo, b)?;
+
+    let classes: Vec<FaceClass> = fragments
+        .iter()
+        .map(|frag| {
+            let opposite = match frag.source {
+                Source::A => &face_data_b,
+                Source::B => &face_data_a,
+            };
+            let pseudo = FaceFragment {
+                vertices: frag.vertices.clone(),
+                normal: frag.normal,
+                d: frag.d,
+                source: frag.source,
+            };
+            classify_fragment(&pseudo, opposite, tol)
+        })
+        .collect();
+
+    // ── Selection + Assembly ─────────────────────────────────────────────
+
+    let resolution = 1e7;
+    let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
+    let mut face_ids_out = Vec::new();
+
+    for (frag, &class) in fragments.iter().zip(classes.iter()) {
+        let Some(flip) = select_fragment(frag.source, class, op) else {
+            continue;
+        };
+
+        let (verts, normal, d_val) = if flip {
+            let rev: Vec<_> = frag.vertices.iter().copied().rev().collect();
+            (rev, -frag.normal, -frag.d)
+        } else {
+            (frag.vertices.clone(), frag.normal, frag.d)
+        };
+
+        let n = verts.len();
+        if n < 3 {
+            continue;
+        }
+
+        // Allocate vertices.
+        let vert_ids: Vec<VertexId> = verts
+            .iter()
+            .map(|p| {
+                let key = (
+                    quantize(p.x(), resolution),
+                    quantize(p.y(), resolution),
+                    quantize(p.z(), resolution),
+                );
+                *vertex_map
+                    .entry(key)
+                    .or_insert_with(|| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+            })
+            .collect();
+
+        // Build edges — use exact curve types where available.
+        let mut oriented_edges = Vec::with_capacity(n);
+        for i in 0..n {
+            let j = (i + 1) % n;
+
+            // Check if this edge segment has an exact curve from the intersection.
+            let edge_curve = if frag.edge_curves.len() == 1 {
+                // Single curve for entire boundary (analytic face fragment).
+                frag.edge_curves[0].clone().unwrap_or(EdgeCurve::Line)
+            } else if i < frag.edge_curves.len() {
+                frag.edge_curves[i].clone().unwrap_or(EdgeCurve::Line)
+            } else {
+                EdgeCurve::Line
+            };
+
+            let vi = vert_ids[i];
+            let vj = vert_ids[j];
+            let eid = topo.edges.alloc(Edge::new(vi, vj, edge_curve));
+            oriented_edges.push(OrientedEdge::new(eid, true));
+        }
+
+        let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
+        let wire_id = topo.wires.alloc(wire);
+
+        let surface = match &frag.surface {
+            FaceSurface::Plane { .. } => FaceSurface::Plane { normal, d: d_val },
+            other => other.clone(),
+        };
+
+        let face = topo.faces.alloc(Face::new(wire_id, vec![], surface));
+        face_ids_out.push(face);
+    }
+
+    if face_ids_out.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "analytic boolean produced no faces".into(),
+        });
+    }
+
+    let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.shells.alloc(shell);
+    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+}
+
+/// Compute a plane-plane intersection chord clipped to both face polygons.
+fn plane_plane_chord_analytic(
+    normal_a: Vec3,
+    d_a: f64,
+    verts_a: &[Point3],
+    normal_b: Vec3,
+    d_b: f64,
+    verts_b: &[Point3],
+    tol: Tolerance,
+) -> Option<(Point3, Point3)> {
+    let (line_origin, line_dir) =
+        plane_plane_intersection(normal_a, d_a, normal_b, d_b, tol.angular)?;
+
+    let t_range_a = cyrus_beck_clip(&line_origin, &line_dir, verts_a, &normal_a, tol);
+    let t_range_b = cyrus_beck_clip(&line_origin, &line_dir, verts_b, &normal_b, tol);
+
+    let (t_min_a, t_max_a) = t_range_a?;
+    let (t_min_b, t_max_b) = t_range_b?;
+
+    let t_min = t_min_a.max(t_min_b);
+    let t_max = t_max_a.min(t_max_b);
+
+    if t_max - t_min < tol.linear {
+        return None;
+    }
+
+    Some((
+        point_along_line(&line_origin, &line_dir, t_min),
+        point_along_line(&line_origin, &line_dir, t_max),
+    ))
+}
+
+/// Sample an exact intersection curve, keeping only points inside a planar face polygon.
+fn sample_curve_clipped(
+    curve: &brepkit_math::analytic_intersection::ExactIntersectionCurve,
+    face_verts: &[Point3],
+    face_normal: Vec3,
+    _tol: Tolerance,
+) -> Vec<Point3> {
+    use brepkit_math::analytic_intersection::ExactIntersectionCurve;
+
+    let n_samples = 64;
+    let raw_points: Vec<Point3> = match curve {
+        ExactIntersectionCurve::Circle(c) => (0..=n_samples)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                c.evaluate(t)
+            })
+            .collect(),
+        ExactIntersectionCurve::Ellipse(e) => (0..=n_samples)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                e.evaluate(t)
+            })
+            .collect(),
+        ExactIntersectionCurve::Points(pts) => pts.clone(),
+    };
+
+    // Filter to points inside the face polygon (project to face plane).
+    raw_points
+        .into_iter()
+        .filter(|pt| point_in_face_3d(*pt, face_verts, &face_normal))
+        .collect()
+}
+
+/// Sample an `EdgeCurve` into N points.
+fn sample_edge_curve(curve: &EdgeCurve, n: usize) -> Vec<Point3> {
+    match curve {
+        EdgeCurve::Circle(c) => (0..n)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let t = std::f64::consts::TAU * (i as f64) / (n as f64);
+                c.evaluate(t)
+            })
+            .collect(),
+        EdgeCurve::Ellipse(e) => (0..n)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let t = std::f64::consts::TAU * (i as f64) / (n as f64);
+                e.evaluate(t)
+            })
+            .collect(),
+        EdgeCurve::NurbsCurve(nc) => {
+            let (u0, u1) = nc.domain();
+            (0..n)
+                .map(|i| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = u0 + (u1 - u0) * (i as f64) / ((n - 1) as f64);
+                    nc.evaluate(t)
+                })
+                .collect()
+        }
+        EdgeCurve::Line => vec![],
+    }
 }
 
 #[cfg(test)]
@@ -1285,5 +1972,216 @@ mod tests {
             "cylinder should produce more than 2 face entries, got {}",
             faces.len()
         );
+    }
+
+    // ── Analytic boolean tests ──────────────────────────────────────────
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn cylinder_circle_edges() {
+        // make_cylinder should produce Circle edges for the boundary circles.
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+        let solid = topo.solid(cyl).unwrap();
+        let shell = topo.shell(solid.outer_shell()).unwrap();
+
+        let mut has_circle_edge = false;
+        for &fid in shell.faces() {
+            let face = topo.face(fid).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge()).unwrap();
+                if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_)) {
+                    has_circle_edge = true;
+                }
+            }
+        }
+        assert!(has_circle_edge, "cylinder should have Circle edges");
+    }
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn circle_edge_length() {
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+        let solid = topo.solid(cyl).unwrap();
+        let shell = topo.shell(solid.outer_shell()).unwrap();
+
+        // Find a Circle edge and check its length.
+        for &fid in shell.faces() {
+            let face = topo.face(fid).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge()).unwrap();
+                if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_)) {
+                    let len = crate::measure::edge_length(&topo, oe.edge()).unwrap();
+                    let expected = 2.0 * std::f64::consts::PI * 1.0; // circumference
+                    assert!(
+                        (len - expected).abs() < 1e-6,
+                        "circle edge length should be 2πr = {expected}, got {len}"
+                    );
+                    return;
+                }
+            }
+        }
+        panic!("no Circle edge found");
+    }
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn exact_plane_cylinder_circle() {
+        use brepkit_math::analytic_intersection::{
+            AnalyticSurface, ExactIntersectionCurve, exact_plane_analytic,
+        };
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::{Point3 as P3, Vec3 as V3};
+
+        let cyl =
+            CylindricalSurface::new(P3::new(0.0, 0.0, 0.0), V3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let curves =
+            exact_plane_analytic(AnalyticSurface::Cylinder(&cyl), V3::new(0.0, 0.0, 1.0), 3.0)
+                .unwrap();
+        assert_eq!(curves.len(), 1);
+        match &curves[0] {
+            ExactIntersectionCurve::Circle(c) => {
+                assert!((c.radius() - 2.0).abs() < 1e-10, "radius should be 2.0");
+                assert!(
+                    (c.center().z() - 3.0).abs() < 1e-10,
+                    "center z should be 3.0"
+                );
+            }
+            _ => panic!("expected Circle, got {:?}", curves[0]),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn exact_plane_sphere_circle() {
+        use brepkit_math::analytic_intersection::{
+            AnalyticSurface, ExactIntersectionCurve, exact_plane_analytic,
+        };
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_math::vec::{Point3 as P3, Vec3 as V3};
+
+        let sphere = SphericalSurface::new(P3::new(0.0, 0.0, 0.0), 3.0).unwrap();
+        let curves = exact_plane_analytic(
+            AnalyticSurface::Sphere(&sphere),
+            V3::new(0.0, 0.0, 1.0),
+            0.0,
+        )
+        .unwrap();
+        assert_eq!(curves.len(), 1);
+        match &curves[0] {
+            ExactIntersectionCurve::Circle(c) => {
+                assert!(
+                    (c.radius() - 3.0).abs() < 1e-10,
+                    "equator radius = sphere radius"
+                );
+            }
+            _ => panic!("expected Circle"),
+        }
+    }
+
+    #[test]
+    #[allow(clippy::panic)]
+    fn exact_plane_cylinder_ellipse() {
+        use brepkit_math::analytic_intersection::{
+            AnalyticSurface, ExactIntersectionCurve, exact_plane_analytic,
+        };
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::{Point3 as P3, Vec3 as V3};
+
+        let cyl =
+            CylindricalSurface::new(P3::new(0.0, 0.0, 0.0), V3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        // Oblique plane (45 degrees)
+        let n = V3::new(0.0, 1.0, 1.0).normalize().unwrap();
+        let curves = exact_plane_analytic(AnalyticSurface::Cylinder(&cyl), n, 0.0).unwrap();
+        assert_eq!(curves.len(), 1);
+        match &curves[0] {
+            ExactIntersectionCurve::Ellipse(e) => {
+                assert!((e.semi_minor() - 1.0).abs() < 1e-10, "semi_minor = radius");
+                let expected_major = 1.0 / (std::f64::consts::FRAC_1_SQRT_2);
+                assert!(
+                    (e.semi_major() - expected_major).abs() < 1e-6,
+                    "semi_major = r/cos(45°) = {expected_major}, got {}",
+                    e.semi_major()
+                );
+            }
+            _ => panic!("expected Ellipse, got {:?}", curves[0]),
+        }
+    }
+
+    #[test]
+    fn box_fuse_box_unchanged() {
+        // Pure planar case should still work correctly through analytic path.
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+        // Translate b by (1,0,0)
+        crate::transform::transform_solid(
+            &mut topo,
+            b,
+            &brepkit_math::mat::Mat4::translation(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let s = topo.solid(result).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        assert!(!sh.faces().is_empty(), "fuse should produce faces");
+    }
+
+    #[test]
+    fn cylinder_tessellates_with_circle_edges() {
+        // Verify that tessellation of a cylinder's cap (which has Circle edges) works.
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+        let solid = topo.solid(cyl).unwrap();
+        let shell = topo.shell(solid.outer_shell()).unwrap();
+
+        for &fid in shell.faces() {
+            let face = topo.face(fid).unwrap();
+            if matches!(face.surface(), FaceSurface::Plane { .. }) {
+                // This is a cap face — tessellate it.
+                let mesh = crate::tessellate::tessellate(&topo, fid, 1.0).unwrap();
+                assert!(
+                    mesh.positions.len() >= 3,
+                    "cap face should tessellate to at least 3 positions, got {}",
+                    mesh.positions.len()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn is_all_analytic_detection() {
+        let mut topo = Topology::new();
+        let box_s = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        assert!(is_all_analytic(&topo, box_s).unwrap());
+
+        let cyl = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+        assert!(is_all_analytic(&topo, cyl).unwrap());
+    }
+
+    #[test]
+    fn cone_has_circle_edges() {
+        let mut topo = Topology::new();
+        let cone = crate::primitives::make_cone(&mut topo, 2.0, 0.0, 3.0).unwrap();
+        let solid = topo.solid(cone).unwrap();
+        let shell = topo.shell(solid.outer_shell()).unwrap();
+
+        let mut has_circle = false;
+        for &fid in shell.faces() {
+            let face = topo.face(fid).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            for oe in wire.edges() {
+                if matches!(
+                    topo.edge(oe.edge()).unwrap().curve(),
+                    brepkit_topology::edge::EdgeCurve::Circle(_)
+                ) {
+                    has_circle = true;
+                }
+            }
+        }
+        assert!(has_circle, "cone should have Circle edges");
     }
 }

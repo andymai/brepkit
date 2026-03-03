@@ -361,6 +361,47 @@ pub fn edge_length(
             Ok((end - start).length())
         }
         brepkit_topology::edge::EdgeCurve::NurbsCurve(curve) => Ok(curve.arc_length(50)),
+        brepkit_topology::edge::EdgeCurve::Circle(circle) => {
+            if edge.is_closed() {
+                Ok(circle.circumference())
+            } else {
+                let start = topo.vertex(edge.start())?.point();
+                let end = topo.vertex(edge.end())?.point();
+                let t0 = circle.project(start);
+                let t1 = circle.project(end);
+                let mut angle = t1 - t0;
+                if angle < 0.0 {
+                    angle += std::f64::consts::TAU;
+                }
+                Ok(angle * circle.radius())
+            }
+        }
+        brepkit_topology::edge::EdgeCurve::Ellipse(ellipse) => {
+            if edge.is_closed() {
+                Ok(ellipse.approximate_circumference())
+            } else {
+                // Approximate arc length via sampling
+                let start = topo.vertex(edge.start())?.point();
+                let end = topo.vertex(edge.end())?.point();
+                let t0 = ellipse.project(start);
+                let t1 = ellipse.project(end);
+                let mut angle = t1 - t0;
+                if angle < 0.0 {
+                    angle += std::f64::consts::TAU;
+                }
+                let n = 50;
+                let dt = angle / n as f64;
+                let mut length = 0.0;
+                let mut prev = ellipse.evaluate(t0);
+                for i in 1..=n {
+                    let t = t0 + dt * i as f64;
+                    let curr = ellipse.evaluate(t);
+                    length += (curr - prev).length();
+                    prev = curr;
+                }
+                Ok(length)
+            }
+        }
     }
 }
 

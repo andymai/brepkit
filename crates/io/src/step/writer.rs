@@ -302,6 +302,35 @@ impl StepWriteContext {
                 line
             }
             EdgeCurve::NurbsCurve(nurbs) => self.write_nurbs_curve(nurbs),
+            EdgeCurve::Circle(circle) => {
+                let placement =
+                    self.write_axis2_placement(circle.center(), circle.normal(), circle.u_axis());
+                let cid = self.next_id();
+                self.write_entity(
+                    cid,
+                    "CIRCLE",
+                    &format!("'', #{placement}, {}", fmt_f64(circle.radius())),
+                );
+                cid
+            }
+            EdgeCurve::Ellipse(ellipse) => {
+                let placement = self.write_axis2_placement(
+                    ellipse.center(),
+                    ellipse.normal(),
+                    ellipse.u_axis(),
+                );
+                let eid = self.next_id();
+                self.write_entity(
+                    eid,
+                    "ELLIPSE",
+                    &format!(
+                        "'', #{placement}, {}, {}",
+                        fmt_f64(ellipse.semi_major()),
+                        fmt_f64(ellipse.semi_minor())
+                    ),
+                );
+                eid
+            }
         };
 
         let edge_curve = self.next_id();

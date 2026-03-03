@@ -57,6 +57,25 @@ struct SketchState {
     constraints: Vec<brepkit_operations::sketch::Constraint>,
 }
 
+/// Sample a closed periodic curve (period = TAU) into a flat `[x, y, z, ...]` buffer.
+///
+/// Produces `n` evenly-spaced points in `[0, TAU)` using the supplied `evaluate` function.
+fn sample_full_period_curve(
+    n: usize,
+    evaluate: impl Fn(f64) -> brepkit_math::vec::Point3,
+) -> Vec<f64> {
+    let mut result = Vec::with_capacity(n * 3);
+    for i in 0..n {
+        #[allow(clippy::cast_precision_loss)]
+        let t = std::f64::consts::TAU * (i as f64) / ((n - 1) as f64);
+        let p = evaluate(t);
+        result.push(p.x());
+        result.push(p.y());
+        result.push(p.z());
+    }
+    result
+}
+
 #[wasm_bindgen]
 impl BrepKernel {
     // ── Construction ────────────────────────────────────────────────
@@ -690,10 +709,12 @@ impl BrepKernel {
     pub fn fuse_with_evolution(&mut self, a: u32, b: u32) -> Result<JsValue, JsError> {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
-        let (result, evo) =
-            brepkit_operations::boolean::boolean_with_evolution(
-                &mut self.topo, BooleanOp::Fuse, a_id, b_id,
-            )?;
+        let (result, evo) = brepkit_operations::boolean::boolean_with_evolution(
+            &mut self.topo,
+            BooleanOp::Fuse,
+            a_id,
+            b_id,
+        )?;
         let json = format!(
             "{{\"solid\":{},\"evolution\":{}}}",
             solid_id_to_u32(result),
@@ -714,10 +735,12 @@ impl BrepKernel {
     pub fn cut_with_evolution(&mut self, a: u32, b: u32) -> Result<JsValue, JsError> {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
-        let (result, evo) =
-            brepkit_operations::boolean::boolean_with_evolution(
-                &mut self.topo, BooleanOp::Cut, a_id, b_id,
-            )?;
+        let (result, evo) = brepkit_operations::boolean::boolean_with_evolution(
+            &mut self.topo,
+            BooleanOp::Cut,
+            a_id,
+            b_id,
+        )?;
         let json = format!(
             "{{\"solid\":{},\"evolution\":{}}}",
             solid_id_to_u32(result),
@@ -738,10 +761,12 @@ impl BrepKernel {
     pub fn intersect_with_evolution(&mut self, a: u32, b: u32) -> Result<JsValue, JsError> {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
-        let (result, evo) =
-            brepkit_operations::boolean::boolean_with_evolution(
-                &mut self.topo, BooleanOp::Intersect, a_id, b_id,
-            )?;
+        let (result, evo) = brepkit_operations::boolean::boolean_with_evolution(
+            &mut self.topo,
+            BooleanOp::Intersect,
+            a_id,
+            b_id,
+        )?;
         let json = format!(
             "{{\"solid\":{},\"evolution\":{}}}",
             solid_id_to_u32(result),
@@ -1876,6 +1901,8 @@ impl BrepKernel {
         Ok(match edge_data.curve() {
             EdgeCurve::Line => "line",
             EdgeCurve::NurbsCurve(_) => "bspline",
+            EdgeCurve::Circle(_) => "circle",
+            EdgeCurve::Ellipse(_) => "ellipse",
         }
         .into())
     }
@@ -1900,6 +1927,7 @@ impl BrepKernel {
                 let (u_start, u_end) = curve.domain();
                 Ok(vec![u_start, u_end])
             }
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => Ok(vec![0.0, std::f64::consts::TAU]),
         }
     }
 
@@ -1929,6 +1957,8 @@ impl BrepKernel {
                 }
             }
             EdgeCurve::NurbsCurve(curve) => curve.evaluate(t),
+            EdgeCurve::Circle(circle) => circle.evaluate(t),
+            EdgeCurve::Ellipse(ellipse) => ellipse.evaluate(t),
         };
         Ok(vec![point.x(), point.y(), point.z()])
     }
@@ -1975,6 +2005,30 @@ impl BrepKernel {
                 } else {
                     Vec3::new(1.0, 0.0, 0.0)
                 };
+                Ok(vec![
+                    point.x(),
+                    point.y(),
+                    point.z(),
+                    tangent.x(),
+                    tangent.y(),
+                    tangent.z(),
+                ])
+            }
+            EdgeCurve::Circle(circle) => {
+                let point = circle.evaluate(t);
+                let tangent = circle.tangent(t);
+                Ok(vec![
+                    point.x(),
+                    point.y(),
+                    point.z(),
+                    tangent.x(),
+                    tangent.y(),
+                    tangent.z(),
+                ])
+            }
+            EdgeCurve::Ellipse(ellipse) => {
+                let point = ellipse.evaluate(t);
+                let tangent = ellipse.tangent(t);
                 Ok(vec![
                     point.x(),
                     point.y(),
@@ -2117,6 +2171,14 @@ impl BrepKernel {
                     result.push(p.z());
                 }
                 Ok(result)
+            }
+            EdgeCurve::Circle(circle) => {
+                let n = std::cmp::max(2, num_points as usize);
+                Ok(sample_full_period_curve(n, |t| circle.evaluate(t)))
+            }
+            EdgeCurve::Ellipse(ellipse) => {
+                let n = std::cmp::max(2, num_points as usize);
+                Ok(sample_full_period_curve(n, |t| ellipse.evaluate(t)))
             }
         }
     }
@@ -2358,16 +2420,35 @@ impl BrepKernel {
                 points.push(start);
             }
 
-            // For NURBS edges, sample interior points for better fidelity.
-            if let EdgeCurve::NurbsCurve(curve) = edge_data.curve() {
-                let (u0, u1) = curve.domain();
-                let n_samples = 4;
-                for i in 1..n_samples {
-                    #[allow(clippy::cast_precision_loss)]
-                    let frac = i as f64 / n_samples as f64;
-                    let u = u0 + frac * (u1 - u0);
-                    points.push(curve.evaluate(u));
+            // For non-line edges, sample interior points for better fidelity.
+            match edge_data.curve() {
+                EdgeCurve::NurbsCurve(curve) => {
+                    let (u0, u1) = curve.domain();
+                    let n_samples = 4;
+                    for i in 1..n_samples {
+                        #[allow(clippy::cast_precision_loss)]
+                        let frac = i as f64 / n_samples as f64;
+                        let u = u0 + frac * (u1 - u0);
+                        points.push(curve.evaluate(u));
+                    }
                 }
+                EdgeCurve::Circle(circle) => {
+                    let n_samples = 8;
+                    for i in 1..n_samples {
+                        #[allow(clippy::cast_precision_loss)]
+                        let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                        points.push(circle.evaluate(t));
+                    }
+                }
+                EdgeCurve::Ellipse(ellipse) => {
+                    let n_samples = 8;
+                    for i in 1..n_samples {
+                        #[allow(clippy::cast_precision_loss)]
+                        let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                        points.push(ellipse.evaluate(t));
+                    }
+                }
+                EdgeCurve::Line => {}
             }
 
             let end = self.topo.vertex(edge_data.end())?.point();
@@ -2557,7 +2638,7 @@ impl BrepKernel {
         let edge_id = self.resolve_edge(edge)?;
         let edge_data = self.topo.edge(edge_id)?;
         match edge_data.curve() {
-            EdgeCurve::Line => Ok(JsValue::NULL),
+            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => Ok(JsValue::NULL),
             EdgeCurve::NurbsCurve(curve) => {
                 let cp_flat: Vec<f64> = curve
                     .control_points()
@@ -3074,7 +3155,11 @@ impl BrepKernel {
     pub fn get_compound_solids(&self, compound: u32) -> Result<Vec<u32>, JsError> {
         let compound_id = self.resolve_compound(compound)?;
         let compound_data = self.topo.compound(compound_id)?;
-        Ok(compound_data.solids().iter().map(|s| solid_id_to_u32(*s)).collect())
+        Ok(compound_data
+            .solids()
+            .iter()
+            .map(|s| solid_id_to_u32(*s))
+            .collect())
     }
 
     /// Get the face handles of a shell.
@@ -3088,7 +3173,11 @@ impl BrepKernel {
     pub fn get_shell_faces(&self, shell: u32) -> Result<Vec<u32>, JsError> {
         let shell_id = self.resolve_shell(shell)?;
         let shell_data = self.topo.shell(shell_id)?;
-        Ok(shell_data.faces().iter().map(|f| face_id_to_u32(*f)).collect())
+        Ok(shell_data
+            .faces()
+            .iter()
+            .map(|f| face_id_to_u32(*f))
+            .collect())
     }
 
     /// Get the edge handles of a wire.
@@ -3102,7 +3191,11 @@ impl BrepKernel {
     pub fn get_wire_edges(&self, wire: u32) -> Result<Vec<u32>, JsError> {
         let wire_id = self.resolve_wire(wire)?;
         let wire_data = self.topo.wire(wire_id)?;
-        Ok(wire_data.edges().iter().map(|oe| edge_id_to_u32(oe.edge())).collect())
+        Ok(wire_data
+            .edges()
+            .iter()
+            .map(|oe| edge_id_to_u32(oe.edge()))
+            .collect())
     }
 
     // ── Batch 3: Simple operations bindings ──────────────────────────
@@ -3807,7 +3900,7 @@ impl BrepKernel {
     ///
     /// Returns `"forward"` for all faces (brepkit faces don't have an
     /// independent orientation flag; the normal direction is canonical).
-            #[allow(clippy::unused_self)]
+    #[allow(clippy::unused_self)]
     #[must_use]
     #[wasm_bindgen(js_name = "getShapeOrientation")]
     pub fn get_shape_orientation(&self, _id: u32) -> String {
@@ -3866,10 +3959,12 @@ impl BrepKernel {
         let edge_data = self.topo.edge(edge_id)?;
         match edge_data.curve() {
             EdgeCurve::NurbsCurve(c) => Ok(c.clone()),
-            EdgeCurve::Line => Err(WasmError::InvalidInput {
-                reason: "edge is a line, not a NURBS curve".into(),
+            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                Err(WasmError::InvalidInput {
+                    reason: "edge is not a NURBS curve".into(),
+                }
+                .into())
             }
-            .into()),
         }
     }
 
@@ -4166,7 +4261,9 @@ impl BrepKernel {
                 let edge_data = self.topo.edge(edge_id).map_err(|e| e.to_string())?;
                 let curve = match edge_data.curve() {
                     EdgeCurve::NurbsCurve(c) => c.clone(),
-                    EdgeCurve::Line => return Err("sweep path must be a NURBS edge".into()),
+                    EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                        return Err("sweep path must be a NURBS edge".into());
+                    }
                 };
                 let solid = sweep(&mut self.topo, face_id, &curve).map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))

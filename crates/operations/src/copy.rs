@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -375,6 +376,64 @@ pub fn copy_and_transform_solid(
                     c.knots().to_vec(),
                     new_cps,
                     c.weights().to_vec(),
+                )?)
+            }
+            EdgeCurve::Circle(c) => {
+                let new_center = matrix.mul_point(c.center());
+                let origin = matrix.mul_point(Point3::new(0.0, 0.0, 0.0));
+                let transform_dir = |d: brepkit_math::vec::Vec3| -> brepkit_math::vec::Vec3 {
+                    matrix.mul_point(Point3::new(d.x(), d.y(), d.z())) - origin
+                };
+                let new_u = transform_dir(c.u_axis());
+                let new_v = transform_dir(c.v_axis());
+                let su = new_u.length();
+                let sv = new_v.length();
+                let new_normal = new_u.cross(new_v).normalize()?;
+                if (su - sv).abs() < 1e-12 * su.max(sv).max(1.0) {
+                    EdgeCurve::Circle(Circle3D::with_axes(
+                        new_center,
+                        new_normal,
+                        c.radius() * su,
+                        new_u.normalize()?,
+                        new_v.normalize()?,
+                    )?)
+                } else {
+                    let (semi_major, semi_minor, u_dir, v_dir) = if su >= sv {
+                        (
+                            c.radius() * su,
+                            c.radius() * sv,
+                            new_u.normalize()?,
+                            new_v.normalize()?,
+                        )
+                    } else {
+                        (
+                            c.radius() * sv,
+                            c.radius() * su,
+                            new_v.normalize()?,
+                            new_u.normalize()?,
+                        )
+                    };
+                    EdgeCurve::Ellipse(Ellipse3D::with_axes(
+                        new_center, new_normal, semi_major, semi_minor, u_dir, v_dir,
+                    )?)
+                }
+            }
+            EdgeCurve::Ellipse(e) => {
+                let new_center = matrix.mul_point(e.center());
+                let origin = matrix.mul_point(Point3::new(0.0, 0.0, 0.0));
+                let transform_dir = |d: brepkit_math::vec::Vec3| -> brepkit_math::vec::Vec3 {
+                    matrix.mul_point(Point3::new(d.x(), d.y(), d.z())) - origin
+                };
+                let new_u = transform_dir(e.u_axis());
+                let new_v = transform_dir(e.v_axis());
+                let new_normal = new_u.cross(new_v).normalize()?;
+                EdgeCurve::Ellipse(Ellipse3D::with_axes(
+                    new_center,
+                    new_normal,
+                    e.semi_major() * new_u.length(),
+                    e.semi_minor() * new_v.length(),
+                    new_u.normalize()?,
+                    new_v.normalize()?,
                 )?)
             }
         };
