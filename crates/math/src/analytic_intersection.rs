@@ -766,6 +766,8 @@ pub fn intersect_analytic_analytic(
         (p00 - p11).length()
     };
     let seed_threshold = diag_a.max(diag_b).max(1.0) * 0.5;
+    // fine_threshold reserved for future Newton refinement of seeds.
+    #[allow(unused_variables)]
     let fine_threshold = 1e-6;
 
     #[allow(clippy::cast_precision_loss)]
@@ -802,14 +804,15 @@ pub fn intersect_analytic_analytic(
         return Ok(vec![]);
     }
 
-    // Deduplicate seeds.
+    // Aggressively deduplicate seeds — we only need 1-2 per intersection
+    // branch. Use a large dedup radius (10× step size) to avoid redundant
+    // marches from nearby seeds.
+    let dedup_radius = 0.2; // 10× the march step size (0.02)
     let mut unique_seeds = Vec::new();
     for seed in &seeds {
         let dominated = unique_seeds
             .iter()
-            .any(|s: &(Point3, (f64, f64), (f64, f64))| {
-                (s.0 - seed.0).length() < fine_threshold * 100.0
-            });
+            .any(|s: &(Point3, (f64, f64), (f64, f64))| (s.0 - seed.0).length() < dedup_radius);
         if !dominated {
             unique_seeds.push(*seed);
         }
@@ -825,7 +828,9 @@ pub fn intersect_analytic_analytic(
         }
         used_seeds[si] = true;
 
-        let march_result = march_intersection(
+        let march_result = march_analytic_intersection(
+            &a,
+            &b,
             surf_a.as_ref(),
             norm_a.as_ref(),
             surf_b.as_ref(),
@@ -842,7 +847,7 @@ pub fn intersect_analytic_analytic(
                 if !used_seeds[sj]
                     && march_result
                         .iter()
-                        .any(|p| (*p - other.0).length() < fine_threshold * 200.0)
+                        .any(|p| (*p - other.0).length() < dedup_radius)
                 {
                     used_seeds[sj] = true;
                 }
@@ -873,9 +878,12 @@ pub fn intersect_analytic_analytic(
 /// March along the intersection of two surfaces from a seed point.
 ///
 /// Uses the cross product of surface normals as the tangent direction
-/// and projects back onto both surfaces via Newton iteration.
+/// and projects back onto both surfaces using analytical projection
+/// (for cylinders/spheres) or grid search (fallback).
 #[allow(clippy::too_many_arguments)]
-fn march_intersection(
+fn march_analytic_intersection(
+    a: &AnalyticSurface<'_>,
+    b: &AnalyticSurface<'_>,
     surf_a: &dyn Fn(f64, f64) -> Point3,
     norm_a: &dyn Fn(f64, f64) -> Vec3,
     surf_b: &dyn Fn(f64, f64) -> Point3,
@@ -890,12 +898,12 @@ fn march_intersection(
     let max_steps = 500;
     let mut result = vec![seed];
 
-    // March in both directions.
     for direction in &[1.0_f64, -1.0] {
         let mut current = seed;
         for _ in 0..max_steps {
-            let (ua, va) = project_to_surface(surf_a, current, u_range_a, v_range_a, 16);
-            let (ub, vb) = project_to_surface(surf_b, current, u_range_b, v_range_b, 16);
+            // Use analytical projection for precise parameter recovery.
+            let (ua, va) = project_analytic(a, current, u_range_a, v_range_a);
+            let (ub, vb) = project_analytic(b, current, u_range_b, v_range_b);
 
             let na = norm_a(ua, va);
             let nb = norm_b(ub, vb);
@@ -913,8 +921,9 @@ fn march_intersection(
                 step_size.mul_add(t_dir.z(), current.z()),
             );
 
-            let (ua2, va2) = project_to_surface(surf_a, next, u_range_a, v_range_a, 16);
-            let (ub2, vb2) = project_to_surface(surf_b, next, u_range_b, v_range_b, 16);
+            // Project the predicted point back onto both surfaces.
+            let (ua2, va2) = project_analytic(a, next, u_range_a, v_range_a);
+            let (ub2, vb2) = project_analytic(b, next, u_range_b, v_range_b);
 
             let pa = surf_a(ua2, va2);
             let pb = surf_b(ub2, vb2);
@@ -1148,6 +1157,36 @@ mod tests {
         )
         .unwrap();
         assert!(!curves.is_empty());
+    }
+
+    #[test]
+    fn perpendicular_cylinders_intersect() {
+        let cyl_z =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let cyl_x =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 1.0)
+                .unwrap();
+
+        let curves = intersect_analytic_analytic(
+            AnalyticSurface::Cylinder(&cyl_z),
+            AnalyticSurface::Cylinder(&cyl_x),
+            16,
+        )
+        .unwrap();
+
+        assert!(
+            !curves.is_empty(),
+            "perpendicular cylinders should intersect"
+        );
+
+        for c in &curves {
+            assert!(
+                c.points.len() >= 2,
+                "intersection curve should have >= 2 points, got {}",
+                c.points.len()
+            );
+        }
     }
 
     #[test]
