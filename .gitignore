@@ -28,5 +28,8 @@ Thumbs.db
 lcov.info
 tarpaulin-report.html
 
+# Benchmark results
+/bench-results/
+
 # mdBook
 /book/book/
