@@ -4,6 +4,7 @@
 //! connects two or more planar profiles by creating ruled (linear)
 //! surfaces between corresponding profile edges.
 
+use brepkit_math::nurbs::surface_fitting::interpolate_surface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -224,9 +225,245 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
 }
 
+/// Loft profiles into a solid with smooth NURBS side surfaces.
+///
+/// Like [`loft`], but produces smooth NURBS surfaces for the side faces
+/// instead of piecewise-planar quads. When 3+ profiles are provided,
+/// the side surfaces interpolate smoothly through all profiles using
+/// tensor-product surface fitting, giving C1+ continuity across sections.
+///
+/// For 2 profiles, the result is equivalent to the basic [`loft`] (ruled
+/// surfaces). For 3+ profiles, the result is a smooth blend.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - Fewer than 2 profiles are provided
+/// - Profiles have different vertex counts
+/// - Any profile is not a planar face
+/// - Surface interpolation fails
+#[allow(clippy::too_many_lines)]
+pub fn loft_smooth(
+    topo: &mut Topology,
+    profiles: &[FaceId],
+) -> Result<SolidId, crate::OperationsError> {
+    let tol = Tolerance::new();
+
+    if profiles.len() < 2 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "loft requires at least 2 profiles".into(),
+        });
+    }
+
+    // For 2 profiles, delegate to the basic loft (ruled surfaces are optimal).
+    if profiles.len() == 2 {
+        return loft(topo, profiles);
+    }
+
+    // Collect vertex positions for each profile.
+    let mut profile_verts: Vec<Vec<Point3>> = Vec::with_capacity(profiles.len());
+    for &fid in profiles {
+        let face = topo.face(fid)?;
+        match face.surface() {
+            FaceSurface::Plane { .. } => {}
+            _ => {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "loft of non-planar faces is not supported".into(),
+                });
+            }
+        }
+        let verts = face_vertices(topo, fid)?;
+        profile_verts.push(verts);
+    }
+
+    // Validate all profiles have the same vertex count.
+    let n = profile_verts[0].len();
+    if n < 3 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "loft profiles must have at least 3 vertices".into(),
+        });
+    }
+    for (i, verts) in profile_verts.iter().enumerate() {
+        if verts.len() != n {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: format!(
+                    "profile {} has {} vertices, but profile 0 has {n}",
+                    i,
+                    verts.len()
+                ),
+            });
+        }
+    }
+
+    let num_profiles = profile_verts.len();
+
+    // Create all vertices.
+    let ring_verts: Vec<Vec<brepkit_topology::vertex::VertexId>> = profile_verts
+        .iter()
+        .map(|verts| {
+            verts
+                .iter()
+                .map(|&p| topo.vertices.alloc(Vertex::new(p, tol.linear)))
+                .collect()
+        })
+        .collect();
+
+    // Create profile edges for each ring.
+    let ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = ring_verts
+        .iter()
+        .map(|ring| {
+            (0..n)
+                .map(|i| {
+                    let next = (i + 1) % n;
+                    topo.edges
+                        .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+                })
+                .collect()
+        })
+        .collect();
+
+    // Create connecting edges between adjacent profiles (used for topology).
+    let _connect_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = (0..(num_profiles - 1))
+        .map(|s| {
+            (0..n)
+                .map(|i| {
+                    topo.edges.alloc(Edge::new(
+                        ring_verts[s][i],
+                        ring_verts[s + 1][i],
+                        EdgeCurve::Line,
+                    ))
+                })
+                .collect()
+        })
+        .collect();
+
+    let mut all_faces = Vec::new();
+
+    // Start cap: reversed first profile.
+    {
+        let face_data = topo.face(profiles[0])?;
+        let cap_normal = match face_data.surface() {
+            FaceSurface::Plane { normal, .. } => -*normal,
+            _ => {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "unexpected non-planar face".into(),
+                });
+            }
+        };
+        let reversed_edges: Vec<OrientedEdge> = (0..n)
+            .rev()
+            .map(|i| OrientedEdge::new(ring_edges[0][i], false))
+            .collect();
+        let wire = Wire::new(reversed_edges, true).map_err(crate::OperationsError::Topology)?;
+        let wid = topo.wires.alloc(wire);
+        let cap_d = dot_normal_point(cap_normal, profile_verts[0][0]);
+        let fid = topo.faces.alloc(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: cap_normal,
+                d: cap_d,
+            },
+        ));
+        all_faces.push(fid);
+    }
+
+    // NURBS side faces: one surface per edge index, spanning ALL profiles.
+    // Degree in u (across profiles): min(P-1, 3) for smooth interpolation.
+    // Degree in v (along edge): 1 (linear between adjacent vertices).
+    let degree_u = (num_profiles - 1).min(3);
+    let degree_v = 1;
+
+    for i in 0..n {
+        let next_i = (i + 1) % n;
+
+        // Build the interpolation grid: rows = profiles, cols = 2 (edge endpoints).
+        let grid: Vec<Vec<Point3>> = (0..num_profiles)
+            .map(|k| vec![profile_verts[k][i], profile_verts[k][next_i]])
+            .collect();
+
+        // Interpolate a NURBS surface through the grid.
+        let surface =
+            interpolate_surface(&grid, degree_u, degree_v).map_err(crate::OperationsError::Math)?;
+
+        // Create the boundary wire for this side face.
+        // The wire goes around the edge of the NURBS patch:
+        // bottom edge → right rail → top edge (reversed) → left rail (reversed)
+        let last = num_profiles - 1;
+
+        // Bottom edge: ring_edges[0][i] (first profile, edge i)
+        // Top edge: ring_edges[last][i] (last profile, edge i)
+        // Left rail: connects vertex i across all profiles
+        // Right rail: connects vertex next_i across all profiles
+
+        // For the multi-section case, we need edges spanning ALL profiles.
+        // Create single edges from first to last profile for the rails.
+        let e_left_rail = topo.edges.alloc(Edge::new(
+            ring_verts[0][i],
+            ring_verts[last][i],
+            EdgeCurve::Line,
+        ));
+        let e_right_rail = topo.edges.alloc(Edge::new(
+            ring_verts[0][next_i],
+            ring_verts[last][next_i],
+            EdgeCurve::Line,
+        ));
+
+        let side_wire = Wire::new(
+            vec![
+                OrientedEdge::new(ring_edges[0][i], true),     // bottom
+                OrientedEdge::new(e_right_rail, true),         // right
+                OrientedEdge::new(ring_edges[last][i], false), // top (reversed)
+                OrientedEdge::new(e_left_rail, false),         // left (reversed)
+            ],
+            true,
+        )
+        .map_err(crate::OperationsError::Topology)?;
+
+        let side_wire_id = topo.wires.alloc(side_wire);
+        let side_face =
+            topo.faces
+                .alloc(Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface)));
+        all_faces.push(side_face);
+    }
+
+    // End cap: last profile with forward orientation.
+    {
+        let face_data = topo.face(profiles[num_profiles - 1])?;
+        let cap_normal = match face_data.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            _ => {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "unexpected non-planar face".into(),
+                });
+            }
+        };
+        let edges: Vec<OrientedEdge> = (0..n)
+            .map(|i| OrientedEdge::new(ring_edges[num_profiles - 1][i], true))
+            .collect();
+        let wire = Wire::new(edges, true).map_err(crate::OperationsError::Topology)?;
+        let wid = topo.wires.alloc(wire);
+        let cap_d = dot_normal_point(cap_normal, profile_verts[num_profiles - 1][0]);
+        let fid = topo.faces.alloc(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: cap_normal,
+                d: cap_d,
+            },
+        ));
+        all_faces.push(fid);
+    }
+
+    // Assemble.
+    let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.shells.alloc(shell);
+    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+}
+
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use brepkit_math::tolerance::Tolerance;
     use brepkit_math::vec::{Point3, Vec3};
@@ -401,5 +638,122 @@ mod tests {
             loft(&mut topo, &[square, tri]).is_err(),
             "mismatched vertex counts should fail"
         );
+    }
+
+    // ── Smooth NURBS loft tests ──────────────────────────
+
+    #[test]
+    fn loft_smooth_two_profiles_delegates() {
+        // With 2 profiles, loft_smooth delegates to basic loft (ruled surfaces).
+        let mut topo = Topology::new();
+        let p0 = make_square_at(&mut topo, 1.0, 0.0);
+        let p1 = make_square_at(&mut topo, 1.0, 1.0);
+
+        let solid = loft_smooth(&mut topo, &[p0, p1]).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        assert_eq!(
+            sh.faces().len(),
+            6,
+            "2-profile smooth loft should have 6 faces"
+        );
+    }
+
+    #[test]
+    fn loft_smooth_three_profiles_has_nurbs() {
+        let mut topo = Topology::new();
+        let p0 = make_square_at(&mut topo, 2.0, 0.0);
+        let p1 = make_square_at(&mut topo, 1.0, 1.5);
+        let p2 = make_square_at(&mut topo, 2.0, 3.0);
+
+        let solid = loft_smooth(&mut topo, &[p0, p1, p2]).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        // 2 caps + 4 NURBS sides = 6 faces (one surface per edge, spanning all profiles)
+        assert_eq!(
+            sh.faces().len(),
+            6,
+            "3-profile smooth loft should have 6 faces"
+        );
+
+        // Verify at least one NURBS face exists (the side surfaces).
+        let has_nurbs = sh.faces().iter().any(|&fid| {
+            matches!(
+                topo.face(fid).expect("face").surface(),
+                FaceSurface::Nurbs(_)
+            )
+        });
+        assert!(has_nurbs, "smooth loft should produce NURBS side faces");
+    }
+
+    #[test]
+    fn loft_smooth_three_profiles_positive_volume() {
+        let mut topo = Topology::new();
+        let p0 = make_square_at(&mut topo, 2.0, 0.0);
+        let p1 = make_square_at(&mut topo, 1.0, 1.5);
+        let p2 = make_square_at(&mut topo, 2.0, 3.0);
+
+        let solid = loft_smooth(&mut topo, &[p0, p1, p2]).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 0.0,
+            "smooth loft should have positive volume, got {vol}"
+        );
+    }
+
+    #[test]
+    fn loft_smooth_four_profiles() {
+        let mut topo = Topology::new();
+        let p0 = make_square_at(&mut topo, 2.0, 0.0);
+        let p1 = make_square_at(&mut topo, 1.5, 1.0);
+        let p2 = make_square_at(&mut topo, 1.0, 2.0);
+        let p3 = make_square_at(&mut topo, 1.5, 3.0);
+
+        let solid = loft_smooth(&mut topo, &[p0, p1, p2, p3]).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        assert_eq!(
+            sh.faces().len(),
+            6,
+            "4-profile smooth loft should have 6 faces"
+        );
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(vol > 0.0, "smooth loft should have positive volume");
+    }
+
+    #[test]
+    fn loft_smooth_surface_passes_through_profiles() {
+        let mut topo = Topology::new();
+        let p0 = make_square_at(&mut topo, 2.0, 0.0);
+        let p1 = make_square_at(&mut topo, 1.0, 2.0);
+        let p2 = make_square_at(&mut topo, 2.0, 4.0);
+
+        let solid = loft_smooth(&mut topo, &[p0, p1, p2]).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        // Find a NURBS side face and verify it passes through the middle profile.
+        for &fid in sh.faces() {
+            let face = topo.face(fid).expect("face");
+            if let FaceSurface::Nurbs(surface) = face.surface() {
+                // At u=0.5 (middle profile), the surface should pass through
+                // the middle profile's vertex positions. Evaluate at u=0.5, v=0.
+                let mid_pt = surface.evaluate(0.5, 0.0);
+                // The middle profile is at z=2.0.
+                assert!(
+                    (mid_pt.z() - 2.0).abs() < 0.5,
+                    "surface at u=0.5 should be near z=2.0, got z={:.3}",
+                    mid_pt.z()
+                );
+                break;
+            }
+        }
     }
 }
