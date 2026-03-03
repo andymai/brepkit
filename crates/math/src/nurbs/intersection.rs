@@ -519,7 +519,9 @@ fn estimate_chain_threshold(points: &[IntersectionPoint]) -> f64 {
 ///
 /// - `surface1`, `surface2`: The two NURBS surfaces
 /// - `samples`: Grid resolution for seed finding (e.g., 20)
-/// - `march_step`: Step size for marching (e.g., 0.02)
+/// - `march_step`: Step size for marching. If `0.0`, an adaptive initial
+///   step is computed from the parameter domain extents and control polygon
+///   diagonals.
 ///
 /// # Errors
 ///
@@ -533,6 +535,25 @@ pub fn intersect_nurbs_nurbs(
 ) -> Result<Vec<IntersectionCurve>, MathError> {
     let n = samples.max(5);
     let tolerance = 1e-6;
+
+    // Compute adaptive initial step if not explicitly provided.
+    let march_step = if march_step <= 0.0 || march_step > 1.0 {
+        // Use parameter domain extent — step is a fraction of the smallest
+        // domain dimension. This ensures roughly consistent point density
+        // regardless of surface parameterization scale.
+        let (u1_min, u1_max) = surface1.domain_u();
+        let (v1_min, v1_max) = surface1.domain_v();
+        let (u2_min, u2_max) = surface2.domain_u();
+        let (v2_min, v2_max) = surface2.domain_v();
+        let extent1 = (u1_max - u1_min).min(v1_max - v1_min);
+        let extent2 = (u2_max - u2_min).min(v2_max - v2_min);
+        let min_extent = extent1.min(extent2);
+        // Start with 1/50th of the smallest domain dimension — the RKF45
+        // and curvature adaptation will refine from there.
+        (min_extent / 50.0).max(1e-4)
+    } else {
+        march_step
+    };
 
     // Phase 1: Find seed points using Bezier subdivision (robust, can't miss branches).
     // Falls back to grid sampling if decomposition fails.
@@ -1186,6 +1207,12 @@ fn surface_newton_step(surface: &NurbsSurface, u: f64, v: f64, target: Point3) -
 ///
 /// Uses the tangent direction (cross product of surface normals) to step
 /// forward, then corrects back to the intersection with Newton.
+///
+/// The `step_size` is the *initial* step size. The marcher adapts it based
+/// on both RKF45 integration error and geometric curvature (angular
+/// deviation between successive tangent vectors). This ensures fine
+/// resolution on high-curvature portions and efficient large steps on
+/// flat portions.
 fn march_intersection(
     s1: &NurbsSurface,
     s2: &NurbsSurface,
@@ -1459,7 +1486,15 @@ fn at_boundary(state: &[f64; 4]) -> bool {
 }
 
 /// March in one direction along the intersection curve using RKF45
-/// adaptive stepping with closed-loop detection.
+/// adaptive stepping with closed-loop detection and curvature-based
+/// step adaptation.
+///
+/// Combines two adaptation strategies:
+/// - **RKF45 error control**: halves step when integration error exceeds tolerance
+/// - **Angular deviation**: halves step when the tangent turns more than 10° per
+///   step, doubles when less than 2°. This ensures fine resolution on
+///   high-curvature regions (tight bends) and efficient large steps on
+///   straight portions.
 #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
 fn march_direction(
     s1: &NurbsSurface,
@@ -1479,8 +1514,27 @@ fn march_direction(
     let max_h = step_size * 4.0;
     let seed_state = [seed.param1.0, seed.param1.1, seed.param2.0, seed.param2.1];
 
+    // Angular thresholds in radians for curvature adaptation.
+    let max_angle = 10.0_f64.to_radians(); // halve step if tangent turns > 10°
+    let min_angle = 2.0_f64.to_radians(); // double step if tangent turns < 2°
+
+    // Track previous 3D tangent for angular deviation.
+    let mut prev_tangent: Option<Vec3> = {
+        let n1 = s1.normal(seed.param1.0, seed.param1.1).ok();
+        let n2 = s2.normal(seed.param2.0, seed.param2.1).ok();
+        match (n1, n2) {
+            (Some(n1), Some(n2)) => {
+                let t = n1.cross(n2);
+                t.normalize()
+                    .ok()
+                    .map(|t| Vec3::new(t.x() * sign, t.y() * sign, t.z() * sign))
+            }
+            _ => None,
+        }
+    };
+
     let mut total_evals = 0_usize;
-    let max_evals = max_steps * 3; // Allow some retries but bound total work.
+    let max_evals = max_steps * 3;
 
     for _ in 0..max_steps {
         let y = [
@@ -1519,7 +1573,7 @@ fn march_direction(
             // Accept this step.
             let accepted = h;
 
-            // Adjust h for next step.
+            // Adjust h for next step based on integration error.
             if err < tolerance / 10.0 {
                 h = (h * 2.0).min(max_h);
             }
@@ -1544,6 +1598,38 @@ fn march_direction(
             if (refined.point - current.point).length() < tolerance {
                 break;
             }
+
+            // Curvature-based step adaptation: compute tangent at the new
+            // point and check angular deviation from the previous tangent.
+            let cur_tangent = {
+                let n1 = s1.normal(refined.param1.0, refined.param1.1).ok();
+                let n2 = s2.normal(refined.param2.0, refined.param2.1).ok();
+                match (n1, n2) {
+                    (Some(n1), Some(n2)) => {
+                        let t = n1.cross(n2);
+                        t.normalize()
+                            .ok()
+                            .map(|t| Vec3::new(t.x() * sign, t.y() * sign, t.z() * sign))
+                    }
+                    _ => None,
+                }
+            };
+
+            if let (Some(prev_t), Some(cur_t)) = (prev_tangent, cur_tangent) {
+                let cos_angle = prev_t.dot(cur_t).clamp(-1.0, 1.0);
+                let angle = cos_angle.acos();
+
+                if angle > max_angle && h > h_min {
+                    // High curvature — reduce step size for next iteration.
+                    h = (h * 0.5).max(h_min);
+                } else if angle < min_angle {
+                    // Low curvature — increase step size.
+                    h = (h * 2.0).min(max_h);
+                }
+                // Otherwise keep current step size.
+            }
+
+            prev_tangent = cur_tangent;
 
             // Check boundary.
             let ref_state = [

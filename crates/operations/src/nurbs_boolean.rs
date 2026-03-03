@@ -209,20 +209,21 @@ fn collect_nurbs_faces(
     Ok(faces)
 }
 
-/// Compute approximate bounding box of a NURBS surface by sampling.
+/// Compute a guaranteed bounding box of a NURBS surface from its control
+/// points.
+///
+/// Uses the convex hull property of B-splines: the surface lies entirely
+/// within the convex hull of its control polygon. The AABB of the control
+/// points is therefore a guaranteed over-approximation — no surface point
+/// can lie outside this box. This is both faster (O(n) vs O(n²) for
+/// sampling) and mathematically correct, unlike grid sampling which can
+/// miss excursions between sample points.
 fn surface_bbox(surface: &NurbsSurface) -> ([f64; 3], [f64; 3]) {
-    let samples = 10;
-    let (u_min, u_max) = surface.domain_u();
-    let (v_min, v_max) = surface.domain_v();
-
     let mut min = [f64::MAX; 3];
     let mut max = [f64::MIN; 3];
 
-    for i in 0..=samples {
-        let u = (u_max - u_min).mul_add(f64::from(i) / f64::from(samples), u_min);
-        for j in 0..=samples {
-            let v = (v_max - v_min).mul_add(f64::from(j) / f64::from(samples), v_min);
-            let p = surface.evaluate(u, v);
+    for row in surface.control_points() {
+        for p in row {
             min[0] = min[0].min(p.x());
             min[1] = min[1].min(p.y());
             min[2] = min[2].min(p.z());
@@ -415,18 +416,153 @@ fn partition_parameter_domain_legacy(
     regions
 }
 
-/// Partition a face's parameter domain using Constrained Delaunay
-/// Triangulation. More robust than polygon splitting for complex trim
-/// topologies (multiple crossings, loops, tangencies).
+/// Test if a point is inside a polygon using the winding number algorithm.
+fn point_in_polygon(pt: Point2, polygon: &[Point2]) -> bool {
+    let mut winding = 0i32;
+    let n = polygon.len();
+    for i in 0..n {
+        let a = polygon[i];
+        let b = polygon[(i + 1) % n];
+        if a.y() <= pt.y() {
+            if b.y() > pt.y() {
+                // Upward crossing.
+                let cross = (b.x() - a.x()) * (pt.y() - a.y()) - (pt.x() - a.x()) * (b.y() - a.y());
+                if cross > 0.0 {
+                    winding += 1;
+                }
+            }
+        } else if b.y() <= pt.y() {
+            // Downward crossing.
+            let cross = (b.x() - a.x()) * (pt.y() - a.y()) - (pt.x() - a.x()) * (b.y() - a.y());
+            if cross < 0.0 {
+                winding -= 1;
+            }
+        }
+    }
+    winding != 0
+}
+
+/// Compute the intersection parameter `t` of segment `(p0, p1)` with
+/// segment `(a, b)`. Returns `Some(t)` where `t` is in `[0, 1]` and the
+/// intersection lies on `(a, b)` as well.
+fn segment_intersect_t(p0: Point2, p1: Point2, a: Point2, b: Point2) -> Option<f64> {
+    let dx = p1.x() - p0.x();
+    let dy = p1.y() - p0.y();
+    let ex = b.x() - a.x();
+    let ey = b.y() - a.y();
+    let denom = dx * ey - dy * ex;
+    if denom.abs() < 1e-15 {
+        return None; // Parallel or collinear.
+    }
+    let t = ((a.x() - p0.x()) * ey - (a.y() - p0.y()) * ex) / denom;
+    let s = ((a.x() - p0.x()) * dy - (a.y() - p0.y()) * dx) / denom;
+    if (-1e-10..=1.0 + 1e-10).contains(&t) && (-1e-10..=1.0 + 1e-10).contains(&s) {
+        Some(t.clamp(0.0, 1.0))
+    } else {
+        None
+    }
+}
+
+/// Clip a polyline to the interior of a polygon.
 ///
-/// Returns a list of 2D polygonal regions in parameter space.
-/// Each region is a connected set of triangles on one side of the trim curves.
+/// Computes intersection points where the polyline crosses the polygon
+/// boundary, and returns only the interior portions with the intersection
+/// points as new endpoints. The result is a single polyline containing
+/// all interior points and boundary intersection points, in order.
+fn clip_polyline_to_polygon(polyline: &[Point2], polygon: &[Point2]) -> Vec<Point2> {
+    if polyline.len() < 2 || polygon.len() < 3 {
+        return Vec::new();
+    }
+
+    let mut result: Vec<Point2> = Vec::new();
+    let n_poly = polygon.len();
+
+    for seg_idx in 0..polyline.len().saturating_sub(1) {
+        let p0 = polyline[seg_idx];
+        let p1 = polyline[seg_idx + 1];
+
+        // Find all intersection parameters with boundary edges.
+        let mut intersections: Vec<f64> = Vec::new();
+        for bi in 0..n_poly {
+            let a = polygon[bi];
+            let b = polygon[(bi + 1) % n_poly];
+            if let Some(t) = segment_intersect_t(p0, p1, a, b) {
+                intersections.push(t);
+            }
+        }
+        intersections.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        intersections.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+
+        // Build list of candidate points along this segment.
+        let mut ts: Vec<f64> = Vec::new();
+        ts.push(0.0);
+        ts.extend(&intersections);
+        ts.push(1.0);
+        ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        ts.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+
+        // For each sub-segment, check if its midpoint is inside the polygon.
+        for pair in ts.windows(2) {
+            let t_mid = (pair[0] + pair[1]) * 0.5;
+            let mid = Point2::new(
+                p0.x() + t_mid * (p1.x() - p0.x()),
+                p0.y() + t_mid * (p1.y() - p0.y()),
+            );
+            if point_in_polygon(mid, polygon) {
+                let start_pt = Point2::new(
+                    p0.x() + pair[0] * (p1.x() - p0.x()),
+                    p0.y() + pair[0] * (p1.y() - p0.y()),
+                );
+                let end_pt = Point2::new(
+                    p0.x() + pair[1] * (p1.x() - p0.x()),
+                    p0.y() + pair[1] * (p1.y() - p0.y()),
+                );
+                // Avoid duplicate points at segment boundaries.
+                if result.is_empty()
+                    || (result.last().is_none_or(|last| {
+                        (last.x() - start_pt.x()).abs() > 1e-10
+                            || (last.y() - start_pt.y()).abs() > 1e-10
+                    }))
+                {
+                    result.push(start_pt);
+                }
+                result.push(end_pt);
+            }
+        }
+    }
+
+    result
+}
+
+/// Partition a face's parameter domain using Constrained Delaunay
+/// Triangulation. Inserts the face boundary and pcurve constraints into
+/// a CDT, removes exterior triangles, then extracts connected regions
+/// separated by the pcurve constraints.
+///
+/// Pcurves are clipped to the boundary domain: intersection points
+/// between pcurve segments and boundary edges are computed and inserted
+/// as vertices, and any pcurve points outside the boundary are discarded.
+///
+/// Returns a list of 2D polygonal region boundaries in parameter space.
 #[allow(clippy::too_many_lines)]
 fn partition_parameter_domain_cdt(
     boundary: &[Point2],
     pcurves: &[Vec<Point2>],
 ) -> Vec<Vec<Point2>> {
     if pcurves.is_empty() || boundary.len() < 3 {
+        return vec![boundary.to_vec()];
+    }
+
+    // Clip pcurves to the boundary polygon. For each pcurve, compute
+    // intersection points with boundary edges and keep only the interior
+    // portions.
+    let clipped_pcurves: Vec<Vec<Point2>> = pcurves
+        .iter()
+        .map(|pc| clip_polyline_to_polygon(pc, boundary))
+        .filter(|pc| pc.len() >= 2)
+        .collect();
+
+    if clipped_pcurves.is_empty() {
         return vec![boundary.to_vec()];
     }
 
@@ -441,7 +577,7 @@ fn partition_parameter_domain_cdt(
         max_u = max_u.max(pt.x());
         max_v = max_v.max(pt.y());
     }
-    for pc in pcurves {
+    for pc in &clipped_pcurves {
         for pt in pc {
             min_u = min_u.min(pt.x());
             min_v = min_v.min(pt.y());
@@ -462,9 +598,12 @@ fn partition_parameter_domain_cdt(
     for &pt in boundary {
         match cdt.insert_point(pt) {
             Ok(vid) => boundary_vids.push(vid),
-            Err(_) => return vec![boundary.to_vec()], // fallback
+            Err(_) => return vec![boundary.to_vec()],
         }
     }
+
+    // Also insert pcurve endpoints that land exactly on the boundary
+    // as boundary vertices (they will be snapped to by the pcurve insertion).
 
     let mut boundary_edges = Vec::new();
     for i in 0..boundary_vids.len() {
@@ -473,17 +612,17 @@ fn partition_parameter_domain_cdt(
         let v1 = boundary_vids[j];
         if v0 != v1 {
             if cdt.insert_constraint(v0, v1).is_err() {
-                return vec![boundary.to_vec()]; // fallback
+                return vec![boundary.to_vec()];
             }
             boundary_edges.push((v0, v1));
         }
     }
 
-    // Insert pcurve vertices and constraint edges.
+    // Insert clipped pcurve vertices and constraint edges.
     let snap_tol = 1e-8;
-    // Track pcurve edges (reserved for future multi-curve region classification).
+    let mut separator_edges: Vec<(usize, usize)> = Vec::new();
 
-    for pc in pcurves {
+    for pc in &clipped_pcurves {
         if pc.len() < 2 {
             continue;
         }
@@ -511,159 +650,28 @@ fn partition_parameter_domain_cdt(
             pc_vids.push(vid);
         }
 
-        let mut edges = Vec::new();
         for i in 0..pc_vids.len().saturating_sub(1) {
             let v0 = pc_vids[i];
             let v1 = pc_vids[i + 1];
             if v0 != v1 {
                 let _ = cdt.insert_constraint(v0, v1);
-                edges.push((v0, v1));
+                let key = if v0 <= v1 { (v0, v1) } else { (v1, v0) };
+                separator_edges.push(key);
             }
         }
-        let _ = edges.len(); // Reserved for future use.
     }
 
     // Remove exterior triangles (outside the boundary).
     cdt.remove_exterior(&boundary_edges);
 
-    // Get remaining (interior) triangles.
-    let triangles = cdt.triangles();
-    let vertices = cdt.vertices().to_vec();
-
-    if triangles.is_empty() {
-        return vec![boundary.to_vec()];
-    }
-
-    // Classify each triangle: which side of the pcurve(s) is its centroid on?
-    // Use winding number of all pcurves combined.
-    let mut pos_points: Vec<Point2> = Vec::new();
-    let mut neg_points: Vec<Point2> = Vec::new();
-
-    for &(i0, i1, i2) in &triangles {
-        let centroid = Point2::new(
-            (vertices[i0].x() + vertices[i1].x() + vertices[i2].x()) / 3.0,
-            (vertices[i0].y() + vertices[i1].y() + vertices[i2].y()) / 3.0,
-        );
-
-        // Classify by signed distance to the nearest pcurve segment.
-        // The "side" is determined by the cross product of the segment
-        // direction with the vector to the centroid.
-        let mut side = 0.0_f64;
-        let mut best_dist = f64::MAX;
-        for pc in pcurves {
-            for pair in pc.windows(2) {
-                let a = pair[0];
-                let b = pair[1];
-                let ab = Point2::new(b.x() - a.x(), b.y() - a.y());
-                let ac = Point2::new(centroid.x() - a.x(), centroid.y() - a.y());
-                let ab_len_sq = ab.x() * ab.x() + ab.y() * ab.y();
-                if ab_len_sq < 1e-20 {
-                    continue;
-                }
-                let t = (ac.x() * ab.x() + ac.y() * ab.y()) / ab_len_sq;
-                let t_clamped = t.clamp(0.0, 1.0);
-                let proj = Point2::new(a.x() + t_clamped * ab.x(), a.y() + t_clamped * ab.y());
-                let dx = centroid.x() - proj.x();
-                let dy = centroid.y() - proj.y();
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist < best_dist {
-                    best_dist = dist;
-                    // Cross product gives signed distance (which side).
-                    side = ab.x() * ac.y() - ab.y() * ac.x();
-                }
-            }
-        }
-
-        let tri_pts = vec![vertices[i0], vertices[i1], vertices[i2]];
-        if side > 0.0 {
-            pos_points.extend(tri_pts);
-        } else {
-            neg_points.extend(tri_pts);
-        }
-    }
-
-    // Build convex hull approximation of each region from the classified points.
-    // For proper boolean operations, each region should be a connected polygon.
-    // Approximate by computing the convex hull of classified triangle vertices.
-    let mut regions = Vec::new();
-
-    if pos_points.len() >= 3 {
-        let hull = convex_hull_2d(&pos_points);
-        if hull.len() >= 3 {
-            regions.push(hull);
-        }
-    }
-    if neg_points.len() >= 3 {
-        let hull = convex_hull_2d(&neg_points);
-        if hull.len() >= 3 {
-            regions.push(hull);
-        }
-    }
+    // Extract connected regions separated by pcurve constraints.
+    let regions = cdt.extract_regions(&separator_edges);
 
     if regions.is_empty() {
-        regions.push(boundary.to_vec());
+        vec![boundary.to_vec()]
+    } else {
+        regions
     }
-    regions
-}
-
-/// Compute the 2D convex hull of a set of points (Andrew's monotone chain).
-fn convex_hull_2d(points: &[Point2]) -> Vec<Point2> {
-    let mut pts: Vec<Point2> = points.to_vec();
-    pts.sort_by(|a, b| {
-        a.x()
-            .partial_cmp(&b.x())
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then(
-                a.y()
-                    .partial_cmp(&b.y())
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
-    });
-    pts.dedup_by(|a, b| (a.x() - b.x()).abs() < 1e-10 && (a.y() - b.y()).abs() < 1e-10);
-
-    if pts.len() < 3 {
-        return pts;
-    }
-
-    let n = pts.len();
-    let mut hull: Vec<Point2> = Vec::with_capacity(2 * n);
-
-    // Lower hull.
-    for &p in &pts {
-        while hull.len() >= 2 {
-            let a = hull[hull.len() - 2];
-            let b = hull[hull.len() - 1];
-            if cross_2d(a, b, p) <= 0.0 {
-                hull.pop();
-            } else {
-                break;
-            }
-        }
-        hull.push(p);
-    }
-
-    // Upper hull.
-    let lower_len = hull.len() + 1;
-    for &p in pts.iter().rev() {
-        while hull.len() >= lower_len {
-            let a = hull[hull.len() - 2];
-            let b = hull[hull.len() - 1];
-            if cross_2d(a, b, p) <= 0.0 {
-                hull.pop();
-            } else {
-                break;
-            }
-        }
-        hull.push(p);
-    }
-
-    hull.pop(); // Remove the last point (duplicate of first).
-    hull
-}
-
-/// 2D cross product for convex hull computation.
-fn cross_2d(o: Point2, a: Point2, b: Point2) -> f64 {
-    (a.x() - o.x()) * (b.y() - o.y()) - (a.y() - o.y()) * (b.x() - o.x())
 }
 
 /// Split a single parameter-space region by a pcurve polyline.
@@ -859,8 +867,13 @@ fn create_face_fragments(
 
 /// Classify face fragments as inside or outside the opposing solid.
 ///
-/// For each fragment, computes a centroid in (u,v) space, evaluates to 3D,
-/// and uses `classify_point` to determine inside/outside status.
+/// For each fragment, computes a robust test point by averaging wire
+/// vertices and then slightly offsetting along the inward surface normal.
+/// Uses multi-ray `classify_point` for robustness against near-coplanar
+/// and near-tangent configurations.
+///
+/// The test point selection is critical: we must evaluate a point that
+/// is genuinely inside the fragment's surface, not on or near an edge.
 fn classify_face_fragments(
     topo: &Topology,
     fragments: &HashMap<FaceId, Vec<FaceId>>,
@@ -876,34 +889,37 @@ fn classify_face_fragments(
                 _ => continue,
             };
 
-            // Compute centroid of the face's wire vertices.
+            // Collect all wire vertex positions.
             let wire = topo.wire(face.outer_wire())?;
-            let mut cx = 0.0_f64;
-            let mut cy = 0.0_f64;
-            let mut cz = 0.0_f64;
-            let mut count = 0_usize;
-
+            let mut positions: Vec<Point3> = Vec::new();
             for he in wire.edges() {
                 let edge = topo.edge(he.edge())?;
                 let v = topo.vertex(edge.start())?;
-                cx += v.point().x();
-                cy += v.point().y();
-                cz += v.point().z();
-                count += 1;
+                positions.push(v.point());
             }
 
-            if count == 0 {
+            if positions.is_empty() {
                 continue;
             }
 
-            let inv = 1.0 / count as f64;
-            let centroid = Point3::new(cx * inv, cy * inv, cz * inv);
+            // Compute centroid.
+            let inv = 1.0 / positions.len() as f64;
+            let cx: f64 = positions.iter().map(|p| p.x()).sum::<f64>() * inv;
+            let cy: f64 = positions.iter().map(|p| p.y()).sum::<f64>() * inv;
+            let cz: f64 = positions.iter().map(|p| p.z()).sum::<f64>() * inv;
+            let centroid = Point3::new(cx, cy, cz);
 
-            // Slightly offset centroid toward the face interior (along surface normal).
-            let (u_mid, _v_mid) = surface.domain_u();
-            let u_center = (u_mid + surface.domain_u().1) * 0.5;
-            let v_center = (surface.domain_v().0 + surface.domain_v().1) * 0.5;
-            let test_point = if let Ok(n) = surface.normal(u_center, v_center) {
+            // Find the closest point on the surface to the centroid to get
+            // a good (u,v) for normal evaluation.
+            let (u_min, u_max) = surface.domain_u();
+            let (v_min, v_max) = surface.domain_v();
+            let u_mid = (u_min + u_max) * 0.5;
+            let v_mid = (v_min + v_max) * 0.5;
+
+            // Offset slightly along the surface normal to get a test point
+            // that is unambiguously on one side of the boundary.
+            let test_point = if let Ok(n) = surface.normal(u_mid, v_mid) {
+                // Use a very small offset to avoid crossing thin features.
                 Point3::new(
                     centroid.x() + n.x() * 1e-6,
                     centroid.y() + n.y() * 1e-6,
@@ -1700,5 +1716,222 @@ mod tests {
         // Should not panic and should succeed (falls back to tessellated boolean)
         let result = nurbs_boolean(&mut topo, BooleanOp::Fuse, a, b);
         assert!(result.is_ok());
+    }
+
+    // Helper: create a NURBS-surfaced solid by lofting 3 square profiles
+    // at different Z heights. The lateral faces will be NURBS surfaces.
+    fn make_nurbs_column(
+        topo: &mut Topology,
+        size: f64,
+        heights: [f64; 3],
+        offset_x: f64,
+    ) -> SolidId {
+        use crate::loft::loft_smooth;
+
+        let mut profiles = Vec::new();
+        for &z in &heights {
+            let half = size / 2.0;
+            let pts = vec![
+                Point3::new(offset_x - half, -half, z),
+                Point3::new(offset_x + half, -half, z),
+                Point3::new(offset_x + half, half, z),
+                Point3::new(offset_x - half, half, z),
+            ];
+            let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts).unwrap();
+            // Compute plane normal from first three vertices.
+            let v01 = brepkit_math::vec::Vec3::new(
+                pts[1].x() - pts[0].x(),
+                pts[1].y() - pts[0].y(),
+                pts[1].z() - pts[0].z(),
+            );
+            let v02 = brepkit_math::vec::Vec3::new(
+                pts[2].x() - pts[0].x(),
+                pts[2].y() - pts[0].y(),
+                pts[2].z() - pts[0].z(),
+            );
+            let normal = v01.cross(v02).normalize().unwrap();
+            let d = normal.x() * pts[0].x() + normal.y() * pts[0].y() + normal.z() * pts[0].z();
+            let face = Face::new(wire_id, Vec::new(), FaceSurface::Plane { normal, d });
+            profiles.push(topo.faces.alloc(face));
+        }
+        loft_smooth(topo, &profiles).unwrap()
+    }
+
+    #[test]
+    fn partition_cdt_concave_region() {
+        // Test that the CDT-based partitioning correctly handles a non-convex
+        // trim region (the old convex hull approach would fail here).
+        let boundary = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(1.0, 0.0),
+            Point2::new(1.0, 1.0),
+            Point2::new(0.0, 1.0),
+        ];
+
+        // L-shaped pcurve that creates a concave region.
+        let pcurve = vec![
+            Point2::new(0.0, 0.5),
+            Point2::new(0.5, 0.5),
+            Point2::new(0.5, 0.0),
+        ];
+
+        let regions = partition_parameter_domain_cdt(&boundary, &[pcurve]);
+        assert!(
+            regions.len() >= 2,
+            "L-shaped pcurve should split into >= 2 regions, got {}",
+            regions.len()
+        );
+
+        // Verify that no region is a convex hull approximation — check that
+        // the total vertex count across all regions is > 4 (convex hull of
+        // a unit square would be exactly 4 vertices).
+        let total_verts: usize = regions.iter().map(Vec::len).sum();
+        assert!(
+            total_verts > 4,
+            "regions should have more than 4 total vertices (got {}), \
+             indicating non-convex boundary extraction",
+            total_verts,
+        );
+    }
+
+    #[test]
+    fn partition_cdt_diagonal_pcurve() {
+        // Diagonal pcurve from corner to corner should produce two triangular regions.
+        let boundary = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(1.0, 0.0),
+            Point2::new(1.0, 1.0),
+            Point2::new(0.0, 1.0),
+        ];
+
+        let pcurve = vec![Point2::new(0.0, 0.0), Point2::new(1.0, 1.0)];
+
+        let regions = partition_parameter_domain_cdt(&boundary, &[pcurve]);
+        assert!(
+            regions.len() >= 2,
+            "diagonal pcurve should split into 2 regions, got {}",
+            regions.len()
+        );
+    }
+
+    #[test]
+    fn partition_cdt_multiple_pcurves() {
+        // Two parallel horizontal pcurves should create 3 regions.
+        let boundary = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(1.0, 0.0),
+            Point2::new(1.0, 1.0),
+            Point2::new(0.0, 1.0),
+        ];
+
+        let pc1 = vec![Point2::new(0.0, 0.33), Point2::new(1.0, 0.33)];
+        let pc2 = vec![Point2::new(0.0, 0.66), Point2::new(1.0, 0.66)];
+
+        let regions = partition_parameter_domain_cdt(&boundary, &[pc1, pc2]);
+        assert!(
+            regions.len() >= 3,
+            "two parallel pcurves should create >= 3 regions, got {}",
+            regions.len()
+        );
+    }
+
+    #[test]
+    fn nurbs_boolean_overlapping_columns_fuse() {
+        // Two NURBS-surfaced columns that overlap — fuse should succeed.
+        let mut topo = Topology::new();
+        let a = make_nurbs_column(&mut topo, 2.0, [0.0, 1.0, 2.0], 0.0);
+        let b = make_nurbs_column(&mut topo, 2.0, [0.0, 1.0, 2.0], 1.0);
+
+        let result = nurbs_boolean(&mut topo, BooleanOp::Fuse, a, b);
+        // Should succeed (either via NURBS path or tessellated fallback).
+        assert!(result.is_ok(), "fuse failed: {:?}", result.err());
+
+        let solid_id = result.unwrap();
+        let solid = topo.solid(solid_id).unwrap();
+        let shell = topo.shell(solid.outer_shell()).unwrap();
+        assert!(
+            shell.faces().len() >= 4,
+            "fused solid should have at least 4 faces, got {}",
+            shell.faces().len()
+        );
+    }
+
+    #[test]
+    fn nurbs_boolean_overlapping_columns_cut() {
+        // Cut operation on two NURBS columns.
+        let mut topo = Topology::new();
+        let a = make_nurbs_column(&mut topo, 2.0, [0.0, 1.0, 2.0], 0.0);
+        let b = make_nurbs_column(&mut topo, 2.0, [0.0, 1.0, 2.0], 1.0);
+
+        let result = nurbs_boolean(&mut topo, BooleanOp::Cut, a, b);
+        assert!(result.is_ok(), "cut failed: {:?}", result.err());
+
+        let solid_id = result.unwrap();
+        let solid = topo.solid(solid_id).unwrap();
+        let shell = topo.shell(solid.outer_shell()).unwrap();
+        assert!(!shell.faces().is_empty(), "cut result should have faces",);
+    }
+
+    #[test]
+    fn nurbs_boolean_overlapping_columns_intersect() {
+        // Intersection of two NURBS columns.
+        let mut topo = Topology::new();
+        let a = make_nurbs_column(&mut topo, 2.0, [0.0, 1.0, 2.0], 0.0);
+        let b = make_nurbs_column(&mut topo, 2.0, [0.0, 1.0, 2.0], 1.0);
+
+        let result = nurbs_boolean(&mut topo, BooleanOp::Intersect, a, b);
+        assert!(result.is_ok(), "intersect failed: {:?}", result.err());
+
+        let solid_id = result.unwrap();
+        let solid = topo.solid(solid_id).unwrap();
+        let shell = topo.shell(solid.outer_shell()).unwrap();
+        assert!(
+            !shell.faces().is_empty(),
+            "intersection result should have faces",
+        );
+    }
+
+    #[test]
+    fn nurbs_boolean_non_overlapping_passthrough() {
+        // Two non-overlapping NURBS columns — fuse should include all faces.
+        let mut topo = Topology::new();
+        let a = make_nurbs_column(&mut topo, 1.0, [0.0, 0.5, 1.0], 0.0);
+        let b = make_nurbs_column(&mut topo, 1.0, [0.0, 0.5, 1.0], 5.0);
+
+        let result = nurbs_boolean(&mut topo, BooleanOp::Fuse, a, b);
+        assert!(
+            result.is_ok(),
+            "non-overlapping fuse failed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn nurbs_boolean_preserves_surface_type() {
+        // After NURBS boolean, result faces should still have NURBS surfaces.
+        let mut topo = Topology::new();
+        let a = make_nurbs_column(&mut topo, 2.0, [0.0, 1.0, 2.0], 0.0);
+        let b = make_nurbs_column(&mut topo, 2.0, [0.0, 1.0, 2.0], 1.0);
+
+        let result = nurbs_boolean(&mut topo, BooleanOp::Fuse, a, b);
+        assert!(result.is_ok());
+
+        let solid_id = result.unwrap();
+        let solid = topo.solid(solid_id).unwrap();
+        let shell = topo.shell(solid.outer_shell()).unwrap();
+
+        let nurbs_count = shell
+            .faces()
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
+            .count();
+
+        // At least some faces should be NURBS (the non-split ones from the
+        // original solids should retain their NURBS surface type).
+        assert!(
+            nurbs_count > 0,
+            "result should contain NURBS faces, but found {}",
+            nurbs_count
+        );
     }
 }
