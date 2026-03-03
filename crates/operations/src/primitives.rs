@@ -145,54 +145,6 @@ pub fn make_box(
 
 // ── Cylinder ───────────────────────────────────────────────────────
 
-/// Number of segments for circular polygon approximation in cap faces.
-///
-/// This controls the quality of planar disc tessellation on cylinder/cone caps.
-/// The value 32 gives < 0.5% chord error for any radius.
-const CAP_SEGMENTS: usize = 32;
-
-/// Build a closed circular polygon wire at height `z` with the given `radius`.
-///
-/// Returns `(wire_id, vertex_ids)` — the vertex IDs are useful if the caller
-/// needs to reference the seam vertex.
-#[allow(clippy::cast_precision_loss)]
-fn make_circle_wire(
-    topo: &mut Topology,
-    radius: f64,
-    z: f64,
-    n: usize,
-) -> Result<brepkit_topology::wire::WireId, crate::OperationsError> {
-    use std::f64::consts::TAU;
-    let tol = Tolerance::new();
-
-    let verts: Vec<_> = (0..n)
-        .map(|i| {
-            let angle = TAU * (i as f64) / (n as f64);
-            let (sin_a, cos_a) = angle.sin_cos();
-            topo.vertices.alloc(Vertex::new(
-                Point3::new(radius * cos_a, radius * sin_a, z),
-                tol.linear,
-            ))
-        })
-        .collect();
-
-    let edges: Vec<_> = (0..n)
-        .map(|i| {
-            let next = (i + 1) % n;
-            topo.edges
-                .alloc(Edge::new(verts[i], verts[next], EdgeCurve::Line))
-        })
-        .collect();
-
-    let oriented: Vec<_> = edges
-        .iter()
-        .map(|&eid| OrientedEdge::new(eid, true))
-        .collect();
-
-    let wire = Wire::new(oriented, true).map_err(crate::OperationsError::Topology)?;
-    Ok(topo.wires.alloc(wire))
-}
-
 /// Create a cylinder solid centered at the origin, with its axis along +Z.
 ///
 /// The cylinder extends from `z = -height/2` to `z = height/2`.
@@ -276,7 +228,11 @@ pub fn make_cylinder(
     ));
 
     // --- Bottom cap (z = -hz, normal pointing down) ---
-    let bot_wid = make_circle_wire(topo, radius, -hz, CAP_SEGMENTS)?;
+    // Reuse the same circle edge as the lateral face for watertight topology.
+    // Reversed orientation: CW from +z corresponds to outward normal -z.
+    let bot_cap_wire = Wire::new(vec![OrientedEdge::new(e_bot_circle, false)], true)
+        .map_err(crate::OperationsError::Topology)?;
+    let bot_wid = topo.wires.alloc(bot_cap_wire);
     let bot_face = topo.faces.alloc(Face::new(
         bot_wid,
         vec![],
@@ -287,7 +243,10 @@ pub fn make_cylinder(
     ));
 
     // --- Top cap (z = +hz, normal pointing up) ---
-    let top_wid = make_circle_wire(topo, radius, hz, CAP_SEGMENTS)?;
+    // Reuse the same circle edge; forward orientation gives outward normal +z.
+    let top_cap_wire = Wire::new(vec![OrientedEdge::new(e_top_circle, true)], true)
+        .map_err(crate::OperationsError::Topology)?;
+    let top_wid = topo.wires.alloc(top_cap_wire);
     let top_face = topo.faces.alloc(Face::new(
         top_wid,
         vec![],
@@ -421,8 +380,11 @@ pub fn make_cone(
             FaceSurface::Cone(cone_surface),
         )));
 
-        // Base cap (circular polygon)
-        let cap_wid = make_circle_wire(topo, r_big, big_z, CAP_SEGMENTS)?;
+        // Base cap: reuse the same circle edge for watertight topology.
+        let cap_forward = big_z >= 0.0; // +z cap needs forward, -z needs reversed
+        let cap_wire = Wire::new(vec![OrientedEdge::new(e_circle, cap_forward)], true)
+            .map_err(crate::OperationsError::Topology)?;
+        let cap_wid = topo.wires.alloc(cap_wire);
         let cap_normal = Vec3::new(0.0, 0.0, if big_z < 0.0 { -1.0 } else { 1.0 });
         faces.push(topo.faces.alloc(Face::new(
             cap_wid,
@@ -479,8 +441,10 @@ pub fn make_cone(
             FaceSurface::Cone(cone_surface),
         )));
 
-        // Bottom cap (circular polygon)
-        let bot_wid = make_circle_wire(topo, bottom_radius, -hz, CAP_SEGMENTS)?;
+        // Bottom cap: reuse the same circle edge for watertight topology.
+        let bot_cap_wire = Wire::new(vec![OrientedEdge::new(e_bot, false)], true)
+            .map_err(crate::OperationsError::Topology)?;
+        let bot_wid = topo.wires.alloc(bot_cap_wire);
         faces.push(topo.faces.alloc(Face::new(
             bot_wid,
             vec![],
@@ -490,8 +454,10 @@ pub fn make_cone(
             },
         )));
 
-        // Top cap (circular polygon)
-        let top_wid = make_circle_wire(topo, top_radius, hz, CAP_SEGMENTS)?;
+        // Top cap: reuse the same circle edge for watertight topology.
+        let top_cap_wire = Wire::new(vec![OrientedEdge::new(e_top, true)], true)
+            .map_err(crate::OperationsError::Topology)?;
+        let top_wid = topo.wires.alloc(top_cap_wire);
         faces.push(topo.faces.alloc(Face::new(
             top_wid,
             vec![],
