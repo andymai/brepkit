@@ -660,55 +660,265 @@ impl FilletRadiusLaw {
     }
 }
 
-/// Fillet edges with variable radius.
+/// Fillet edges with variable radius using canal surface generation.
 ///
 /// Each edge gets a [`FilletRadiusLaw`] that defines how the radius
-/// changes along the edge. For constant radius, use
-/// `FilletRadiusLaw::Constant(r)` or the simpler [`fillet`] function.
+/// changes along the edge. The fillet surface is a canal surface:
+/// the envelope of a sphere of varying radius moving along the edge.
 ///
-/// The current implementation samples the radius at the edge midpoint
-/// and creates a piecewise-planar approximation. For true NURBS rolling-ball
-/// surfaces, this would need to generate a canal surface.
+/// The implementation samples the radius law at multiple points along
+/// each edge, computes rolling-ball arc cross-sections at each sample,
+/// and interpolates a NURBS surface through all cross-sections using
+/// tensor-product surface fitting.
+///
+/// For constant radius, use `FilletRadiusLaw::Constant(r)` or the
+/// simpler [`fillet_rolling_ball`] function.
 ///
 /// # Errors
 ///
-/// Returns errors similar to [`fillet`].
+/// Returns errors similar to [`fillet_rolling_ball`].
+#[allow(clippy::too_many_lines)]
 pub fn fillet_variable(
     topo: &mut Topology,
     solid: SolidId,
     edge_laws: &[(EdgeId, FilletRadiusLaw)],
 ) -> Result<SolidId, crate::OperationsError> {
+    use brepkit_math::nurbs::surface_fitting::interpolate_surface;
+
+    let tol = Tolerance::new();
+
     if edge_laws.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "no edges specified for fillet".into(),
         });
     }
 
-    // For each edge, sample the radius at midpoint and delegate to
-    // the constant-radius fillet on a per-edge basis, then merge results.
-    // This is the "practical" approach — true variable-radius would require
-    // generating canal surfaces.
+    // Validate all radii are positive.
+    for (_, law) in edge_laws {
+        for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            if law.evaluate(t) <= tol.linear {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "fillet radius must be positive at all points".into(),
+                });
+            }
+        }
+    }
 
-    // Use the midpoint radius for each edge
-    let edges: Vec<EdgeId> = edge_laws.iter().map(|(e, _)| *e).collect();
-    let midpoint_radius = edge_laws
+    // Collect face data (same as fillet_rolling_ball).
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+    let shell_face_ids: Vec<FaceId> = shell.faces().to_vec();
+
+    let mut edge_to_faces: std::collections::HashMap<usize, Vec<FaceId>> =
+        std::collections::HashMap::new();
+    let mut face_polygons: std::collections::HashMap<usize, FacePolygon> =
+        std::collections::HashMap::new();
+    let target_set: std::collections::HashSet<usize> =
+        edge_laws.iter().map(|(e, _)| e.index()).collect();
+
+    for &face_id in &shell_face_ids {
+        let face = topo.face(face_id)?;
+        let normal = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            _ => continue,
+        };
+
+        let wire = topo.wire(face.outer_wire())?;
+        let mut vertex_ids = Vec::new();
+        let mut positions = Vec::new();
+        let mut wire_edge_ids = Vec::new();
+
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            vertex_ids.push(vid);
+            positions.push(topo.vertex(vid)?.point());
+            wire_edge_ids.push(oe.edge());
+            edge_to_faces
+                .entry(oe.edge().index())
+                .or_default()
+                .push(face_id);
+        }
+
+        face_polygons.insert(
+            face_id.index(),
+            FacePolygon {
+                vertex_ids,
+                positions,
+                wire_edge_ids,
+                normal,
+                d: 0.0,
+            },
+        );
+    }
+
+    // Build trimmed planar faces (using average radius for trimming).
+    let avg_radius: f64 = edge_laws
         .iter()
         .map(|(_, law)| law.evaluate(0.5))
-        .fold(0.0_f64, f64::max);
+        .sum::<f64>()
+        / edge_laws.len() as f64;
+    // Placeholder: edges_only will be used for per-edge trimming.
+    let _ = edge_laws.len();
 
-    if midpoint_radius <= 0.0 {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "fillet radius must be positive at all points".into(),
+    // Use the constant-radius trimming from the basic fillet for the planar faces.
+    // The NURBS canal surface replaces the fillet face.
+    let mut all_specs: Vec<FaceSpec> = Vec::new();
+
+    for &face_id in &shell_face_ids {
+        let Some(poly) = face_polygons.get(&face_id.index()) else {
+            let face = topo.face(face_id)?;
+            let verts = crate::boolean::face_vertices(topo, face_id)?;
+            all_specs.push(FaceSpec::Surface {
+                vertices: verts,
+                surface: face.surface().clone(),
+            });
+            continue;
+        };
+        let n = poly.positions.len();
+        let mut new_verts: Vec<Point3> = Vec::with_capacity(n + target_set.len());
+
+        for i in 0..n {
+            let prev_i = if i == 0 { n - 1 } else { i - 1 };
+            let next_i = (i + 1) % n;
+            let before_filleted = target_set.contains(&poly.wire_edge_ids[prev_i].index());
+            let after_filleted = target_set.contains(&poly.wire_edge_ids[i].index());
+            let pos = poly.positions[i];
+            let prev_pos = poly.positions[prev_i];
+            let next_pos = poly.positions[next_i];
+
+            match (before_filleted, after_filleted) {
+                (false, false) => new_verts.push(pos),
+                (true, false) => {
+                    let dir = (next_pos - pos).normalize()?;
+                    new_verts.push(pos + dir * avg_radius);
+                }
+                (false, true) => {
+                    let dir = (prev_pos - pos).normalize()?;
+                    new_verts.push(pos + dir * avg_radius);
+                }
+                (true, true) => {
+                    let dir_prev = (prev_pos - pos).normalize()?;
+                    new_verts.push(pos + dir_prev * avg_radius);
+                    let dir_next = (next_pos - pos).normalize()?;
+                    new_verts.push(pos + dir_next * avg_radius);
+                }
+            }
+        }
+
+        let new_d = dot_normal_point(poly.normal, new_verts[0]);
+        all_specs.push(FaceSpec::Planar {
+            vertices: new_verts,
+            normal: poly.normal,
+            d: new_d,
         });
     }
 
-    // For now, use average of midpoint radii for a single-pass fillet
-    // TODO: Per-edge variable radius with canal surface generation
-    let radius_sum: f64 = edge_laws.iter().map(|(_, law)| law.evaluate(0.5)).sum();
-    #[allow(clippy::cast_precision_loss)]
-    let avg_radius = radius_sum / edge_laws.len() as f64;
+    // Build variable-radius NURBS canal surfaces for each edge.
+    let n_samples = 5; // Number of cross-sections along each edge
 
-    fillet(topo, solid, &edges, avg_radius)
+    for (edge_id, law) in edge_laws {
+        let edge = topo.edge(*edge_id)?;
+        let p_start = topo.vertex(edge.start())?.point();
+        let p_end = topo.vertex(edge.end())?.point();
+
+        let face_list = edge_to_faces.get(&edge_id.index());
+        if face_list.is_none() || face_list.is_some_and(|f| f.len() < 2) {
+            continue;
+        }
+        let empty_faces = vec![];
+        let face_list = face_list.unwrap_or(&empty_faces);
+        let f1 = face_list[0];
+        let f2 = face_list[1];
+
+        let (n1, n2) = match (
+            face_polygons.get(&f1.index()),
+            face_polygons.get(&f2.index()),
+        ) {
+            (Some(p1), Some(p2)) => (p1.normal, p2.normal),
+            _ => continue,
+        };
+
+        let edge_vec = p_end - p_start;
+        let edge_len = edge_vec.length();
+        if edge_len < tol.linear {
+            continue;
+        }
+        let edge_dir = edge_vec.normalize()?;
+
+        // Compute cross-section geometry at each sample point.
+        let cross1 = edge_dir.cross(n1);
+        let cross2 = edge_dir.cross(n2);
+        let d1 = if cross1.dot(n2) > 0.0 {
+            cross1
+        } else {
+            -cross1
+        };
+        let d2 = if cross2.dot(n1) > 0.0 {
+            cross2
+        } else {
+            -cross2
+        };
+        let d1 = d1.normalize().unwrap_or(d1);
+        let d2 = d2.normalize().unwrap_or(d2);
+        let bisector = (d1 + d2).normalize()?;
+        let cos_half = d1.dot(d2).clamp(-1.0, 1.0);
+        let half_angle = cos_half.acos() / 2.0;
+
+        if half_angle.abs() < tol.angular {
+            continue;
+        }
+
+        // Build interpolation grid: n_samples rows × 3 columns (arc CPs).
+        let mut grid: Vec<Vec<Point3>> = Vec::with_capacity(n_samples);
+        let arc_half = half_angle;
+
+        #[allow(clippy::cast_precision_loss)]
+        for s in 0..n_samples {
+            let t = s as f64 / (n_samples - 1).max(1) as f64;
+            let r = law.evaluate(t);
+            let p = Point3::new(
+                p_start.x().mul_add(1.0 - t, p_end.x() * t),
+                p_start.y().mul_add(1.0 - t, p_end.y() * t),
+                p_start.z().mul_add(1.0 - t, p_end.z() * t),
+            );
+
+            let contact1 = p + d1 * r;
+            let contact2 = p + d2 * r;
+            let mid_dist = r / arc_half.cos();
+            let mid_cp = p + bisector * mid_dist;
+
+            grid.push(vec![contact1, mid_cp, contact2]);
+        }
+
+        // Transpose grid for interpolate_surface convention:
+        // rows = arc CPs (3), columns = samples along edge (n_samples).
+        let n_arc = 3;
+        let transposed: Vec<Vec<Point3>> = (0..n_arc)
+            .map(|col| (0..n_samples).map(|row| grid[row][col]).collect())
+            .collect();
+        let degree_u = 2.min(n_arc - 1);
+        let degree_v = (n_samples - 1).min(3);
+        let surface = interpolate_surface(&transposed, degree_u, degree_v)
+            .map_err(crate::OperationsError::Math)?;
+
+        // Boundary vertices for the canal surface.
+        let c1s = grid[0][0];
+        let c2s = grid[0][2];
+        let c1e = grid[n_samples - 1][0];
+        let c2e = grid[n_samples - 1][2];
+
+        all_specs.push(FaceSpec::Surface {
+            vertices: vec![c1s, c2s, c2e, c1e],
+            surface: FaceSurface::Nurbs(surface),
+        });
+    }
+
+    crate::boolean::assemble_solid_mixed(topo, &all_specs, tol)
 }
 
 #[cfg(test)]
