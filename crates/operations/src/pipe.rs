@@ -17,6 +17,14 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::dot_normal_point;
 
+/// Data from sweeping a single inner wire through pipe frames.
+struct InnerPipeData {
+    ring_verts: Vec<Vec<brepkit_topology::vertex::VertexId>>,
+    ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
+    path_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
+    n: usize,
+}
+
 /// Sweep a profile along a path with scaling controlled by a guide curve.
 ///
 /// The guide curve defines how the profile scales at each point along
@@ -57,12 +65,7 @@ pub fn pipe(
         }
     };
     let input_wire_id = face_data.outer_wire();
-
-    if !face_data.inner_wires().is_empty() {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "pipe of faces with holes is not supported".into(),
-        });
-    }
+    let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
 
     // Collect profile vertices.
     let input_wire = topo.wire(input_wire_id)?;
@@ -129,6 +132,85 @@ pub fn pipe(
         ring_verts.push(ring);
     }
 
+    let mut inner_pipe_data: Vec<InnerPipeData> = Vec::new();
+
+    for &iw_id in &inner_wire_ids {
+        let iw = topo.wire(iw_id)?;
+        let iw_oriented: Vec<_> = iw.edges().to_vec();
+        let iw_n = iw_oriented.len();
+
+        let mut iw_verts = Vec::with_capacity(iw_n);
+        for oe in &iw_oriented {
+            let edge = topo.edge(oe.edge())?;
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            iw_verts.push(topo.vertex(vid)?.point());
+        }
+
+        let mut iw_ring_verts: Vec<Vec<brepkit_topology::vertex::VertexId>> =
+            Vec::with_capacity(num_segments + 1);
+
+        for (k, &scale) in scale_factors.iter().enumerate() {
+            #[allow(clippy::cast_precision_loss)]
+            let t_param = (k as f64) / (num_segments as f64);
+            let origin = path.evaluate(t_param);
+            let tangent = path.tangent(t_param)?;
+            let up = orthogonalize(initial_up, tangent);
+            let right = tangent.cross(up);
+
+            let ring: Vec<_> = iw_verts
+                .iter()
+                .map(|&pos| {
+                    let offset = pos - centroid;
+                    let local_r = initial_right.dot(offset) * scale;
+                    let local_u = initial_up.dot(offset) * scale;
+                    let local_t = initial_tangent.dot(offset);
+                    let transformed = origin + right * local_r + up * local_u + tangent * local_t;
+                    topo.vertices.alloc(Vertex::new(transformed, tol.linear))
+                })
+                .collect();
+            iw_ring_verts.push(ring);
+        }
+
+        let mut iw_ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> =
+            Vec::with_capacity(num_segments + 1);
+        for ring in &iw_ring_verts {
+            let edges: Vec<_> = (0..iw_n)
+                .map(|i| {
+                    let next = (i + 1) % iw_n;
+                    topo.edges
+                        .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+                })
+                .collect();
+            iw_ring_edges.push(edges);
+        }
+
+        let mut iw_path_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> =
+            Vec::with_capacity(num_segments);
+        for seg in 0..num_segments {
+            let edges: Vec<_> = (0..iw_n)
+                .map(|i| {
+                    topo.edges.alloc(Edge::new(
+                        iw_ring_verts[seg][i],
+                        iw_ring_verts[seg + 1][i],
+                        EdgeCurve::Line,
+                    ))
+                })
+                .collect();
+            iw_path_edges.push(edges);
+        }
+
+        inner_pipe_data.push(InnerPipeData {
+            ring_verts: iw_ring_verts,
+            ring_edges: iw_ring_edges,
+            path_edges: iw_path_edges,
+            n: iw_n,
+        });
+    }
+
     // Build edges and faces (same topology as regular sweep).
     let mut ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> =
         Vec::with_capacity(num_segments + 1);
@@ -168,9 +250,18 @@ pub fn pipe(
     let start_wire_id = topo.wires.alloc(start_wire);
     let start_normal = -(path.tangent(0.0)?);
     let start_d = dot_normal_point(start_normal, topo.vertex(ring_verts[0][0])?.point());
+    let mut start_inner_wires = Vec::new();
+    for ipd in &inner_pipe_data {
+        let iw_edges: Vec<OrientedEdge> = (0..ipd.n)
+            .rev()
+            .map(|i| OrientedEdge::new(ipd.ring_edges[0][i], false))
+            .collect();
+        let iw = Wire::new(iw_edges, true).map_err(crate::OperationsError::Topology)?;
+        start_inner_wires.push(topo.wires.alloc(iw));
+    }
     let start_face = topo.faces.alloc(Face::new(
         start_wire_id,
-        vec![],
+        start_inner_wires,
         FaceSurface::Plane {
             normal: start_normal,
             d: start_d,
@@ -214,12 +305,61 @@ pub fn pipe(
         }
     }
 
-    // End cap.
+    // Inner side faces for pipe.
+    for ipd in &inner_pipe_data {
+        for seg in 0..num_segments {
+            for i in 0..ipd.n {
+                let next_i = (i + 1) % ipd.n;
+                let p0 = topo.vertex(ipd.ring_verts[seg][i])?.point();
+                let p1 = topo.vertex(ipd.ring_verts[seg][next_i])?.point();
+                let p_next = topo.vertex(ipd.ring_verts[seg + 1][i])?.point();
+                let edge_dir = p1 - p0;
+                let path_dir = p_next - p0;
+                let side_normal = path_dir
+                    .cross(edge_dir)
+                    .normalize()
+                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                let side_d = dot_normal_point(side_normal, p0);
+
+                let side_wire = Wire::new(
+                    vec![
+                        OrientedEdge::new(ipd.path_edges[seg][i], true),
+                        OrientedEdge::new(ipd.ring_edges[seg + 1][i], true),
+                        OrientedEdge::new(ipd.path_edges[seg][next_i], false),
+                        OrientedEdge::new(ipd.ring_edges[seg][i], false),
+                    ],
+                    true,
+                )
+                .map_err(crate::OperationsError::Topology)?;
+
+                let side_wire_id = topo.wires.alloc(side_wire);
+                let fid = topo.faces.alloc(Face::new(
+                    side_wire_id,
+                    vec![],
+                    FaceSurface::Plane {
+                        normal: side_normal,
+                        d: side_d,
+                    },
+                ));
+                all_faces.push(fid);
+            }
+        }
+    }
+
+    // End cap with inner wire holes.
     let end_edges: Vec<OrientedEdge> = (0..n)
         .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
         .collect();
     let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
     let end_wire_id = topo.wires.alloc(end_wire);
+    let mut end_inner_wires = Vec::new();
+    for ipd in &inner_pipe_data {
+        let iw_edges: Vec<OrientedEdge> = (0..ipd.n)
+            .map(|i| OrientedEdge::new(ipd.ring_edges[num_segments][i], true))
+            .collect();
+        let iw = Wire::new(iw_edges, true).map_err(crate::OperationsError::Topology)?;
+        end_inner_wires.push(topo.wires.alloc(iw));
+    }
     let end_normal = path.tangent(1.0)?;
     let end_d = dot_normal_point(
         end_normal,
@@ -227,7 +367,7 @@ pub fn pipe(
     );
     let end_face = topo.faces.alloc(Face::new(
         end_wire_id,
-        vec![],
+        end_inner_wires,
         FaceSurface::Plane {
             normal: end_normal,
             d: end_d,
