@@ -748,10 +748,27 @@ pub fn intersect_analytic_analytic(
     let (surf_a, norm_a, u_range_a, v_range_a) = surface_closures(&a);
     let (surf_b, norm_b, u_range_b, v_range_b) = surface_closures(&b);
 
-    // Sample surface A on a grid and find closest points on surface B.
+    // Sample surface A on a grid. For each grid point, project it
+    // analytically onto surface B to find the closest point, then check
+    // if the distance is below threshold (indicating near-intersection).
     let mut seeds: Vec<(Point3, (f64, f64), (f64, f64))> = Vec::new();
-    let threshold = 1e-4;
+    // Coarse threshold scales with the surface size — the distance from
+    // a grid point on A to its projection on B can be large even near
+    // the intersection (e.g., sphere R=2 and cylinder R=1 → gap ≈ 1).
+    let diag_a = {
+        let p00 = surf_a(u_range_a.0, v_range_a.0);
+        let p11 = surf_a(u_range_a.1, v_range_a.1);
+        (p00 - p11).length()
+    };
+    let diag_b = {
+        let p00 = surf_b(u_range_b.0, v_range_b.0);
+        let p11 = surf_b(u_range_b.1, v_range_b.1);
+        (p00 - p11).length()
+    };
+    let seed_threshold = diag_a.max(diag_b).max(1.0) * 0.5;
+    let fine_threshold = 1e-6;
 
+    #[allow(clippy::cast_precision_loss)]
     for ia in 0..grid_res {
         for ja in 0..grid_res {
             let ua =
@@ -761,29 +778,22 @@ pub fn intersect_analytic_analytic(
 
             let pa = surf_a(ua, va);
 
-            let mut best_dist = f64::MAX;
-            let mut best_ub = 0.0;
-            let mut best_vb = 0.0;
+            // Analytically project onto surface B.
+            let (ub, vb) = project_analytic(&b, pa, u_range_b, v_range_b);
+            let pb = surf_b(ub, vb);
+            let dist = (pa - pb).length();
 
-            for ib in 0..grid_res {
-                for jb in 0..grid_res {
-                    let ub = u_range_b.0
-                        + (u_range_b.1 - u_range_b.0) * (ib as f64 + 0.5) / (grid_res as f64);
-                    let vb = v_range_b.0
-                        + (v_range_b.1 - v_range_b.0) * (jb as f64 + 0.5) / (grid_res as f64);
-
-                    let pb = surf_b(ub, vb);
-                    let dist = (pa - pb).length();
-                    if dist < best_dist {
-                        best_dist = dist;
-                        best_ub = ub;
-                        best_vb = vb;
-                    }
-                }
-            }
-
-            if best_dist < threshold {
-                seeds.push((pa, (ua, va), (best_ub, best_vb)));
+            if dist < seed_threshold {
+                // Use the coarse seed directly. The marching algorithm
+                // corrects positions at each step via projection, so seeds
+                // don't need to be on the exact intersection — they just
+                // need to be close enough for the marcher to converge.
+                let mid = Point3::new(
+                    (pa.x() + pb.x()) * 0.5,
+                    (pa.y() + pb.y()) * 0.5,
+                    (pa.z() + pb.z()) * 0.5,
+                );
+                seeds.push((mid, (ua, va), (ub, vb)));
             }
         }
     }
@@ -797,7 +807,9 @@ pub fn intersect_analytic_analytic(
     for seed in &seeds {
         let dominated = unique_seeds
             .iter()
-            .any(|s: &(Point3, (f64, f64), (f64, f64))| (s.0 - seed.0).length() < threshold * 5.0);
+            .any(|s: &(Point3, (f64, f64), (f64, f64))| {
+                (s.0 - seed.0).length() < fine_threshold * 100.0
+            });
         if !dominated {
             unique_seeds.push(*seed);
         }
@@ -830,7 +842,7 @@ pub fn intersect_analytic_analytic(
                 if !used_seeds[sj]
                     && march_result
                         .iter()
-                        .any(|p| (*p - other.0).length() < threshold * 10.0)
+                        .any(|p| (*p - other.0).length() < fine_threshold * 200.0)
                 {
                     used_seeds[sj] = true;
                 }
@@ -973,6 +985,36 @@ fn project_to_surface(
     (best_u, best_v)
 }
 
+/// Project a 3D point onto an analytic surface using the surface's
+/// analytical projection method. Falls back to grid search for surface
+/// types without analytical projection.
+fn project_analytic(
+    surface: &AnalyticSurface<'_>,
+    point: Point3,
+    u_range: (f64, f64),
+    v_range: (f64, f64),
+) -> (f64, f64) {
+    match surface {
+        AnalyticSurface::Cylinder(cyl) => {
+            let (u, v) = cyl.project_point(point);
+            (u.clamp(u_range.0, u_range.1), v.clamp(v_range.0, v_range.1))
+        }
+        AnalyticSurface::Sphere(sphere) => {
+            let (u, v) = sphere.project_point(point);
+            (u.clamp(u_range.0, u_range.1), v.clamp(v_range.0, v_range.1))
+        }
+        _ => {
+            // Fallback to grid search for cone/torus (no project_point yet).
+            let eval: Box<dyn Fn(f64, f64) -> Point3> = match surface {
+                AnalyticSurface::Cone(c) => Box::new(|u, v| c.evaluate(u, v)),
+                AnalyticSurface::Torus(t) => Box::new(|u, v| t.evaluate(u, v)),
+                _ => unreachable!(),
+            };
+            project_to_surface(&*eval, point, u_range, v_range, 32)
+        }
+    }
+}
+
 /// Extract closures and parameter ranges for an analytic surface.
 #[allow(clippy::type_complexity)]
 fn surface_closures<'a>(
@@ -1106,5 +1148,44 @@ mod tests {
         )
         .unwrap();
         assert!(!curves.is_empty());
+    }
+
+    #[test]
+    fn sphere_cylinder_intersect() {
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 2.0).unwrap();
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+
+        let curves = intersect_analytic_analytic(
+            AnalyticSurface::Sphere(&sphere),
+            AnalyticSurface::Cylinder(&cyl),
+            16,
+        )
+        .unwrap();
+
+        // A sphere of radius 2 and a cylinder of radius 1, both centered
+        // at the origin, should intersect (the cylinder passes through
+        // the sphere).
+        assert!(!curves.is_empty(), "sphere and cylinder should intersect");
+    }
+
+    #[test]
+    fn disjoint_cylinders_no_intersection() {
+        let cyl_a =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.5)
+                .unwrap();
+        let cyl_b =
+            CylindricalSurface::new(Point3::new(5.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.5)
+                .unwrap();
+
+        let curves = intersect_analytic_analytic(
+            AnalyticSurface::Cylinder(&cyl_a),
+            AnalyticSurface::Cylinder(&cyl_b),
+            16,
+        )
+        .unwrap();
+
+        assert!(curves.is_empty(), "disjoint cylinders should not intersect");
     }
 }
