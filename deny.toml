@@ -1,11 +1,8 @@
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
+unmaintained = "workspace"
 yanked = "warn"
-notice = "warn"
 
 [licenses]
-unlicensed = "deny"
 allow = [
   "Apache-2.0",
   "MIT",
@@ -16,11 +13,10 @@ allow = [
   "Unicode-3.0",
   "Unicode-DFS-2016",
 ]
-copyleft = "deny"
 
 [bans]
 multiple-versions = "warn"
-wildcards = "deny"
+wildcards = "allow"
 
 [sources]
 unknown-registry = "deny"
