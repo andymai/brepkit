@@ -239,6 +239,122 @@ impl Cdt {
         // (holes within the boundary). For simple polygons, the exterior
         // flood-fill is sufficient.
     }
+
+    /// Partition remaining (non-removed) interior triangles into connected
+    /// regions separated by the given separator edges.
+    ///
+    /// After calling [`remove_exterior`], this method groups interior
+    /// triangles into connected components. Two adjacent triangles belong
+    /// to the same region unless the shared edge is in `separators`.
+    ///
+    /// Returns a list of polygonal boundaries, one per connected region,
+    /// ordered as closed loops in parameter space. Each polygon is the
+    /// boundary of the union of triangles in that region.
+    ///
+    /// # Arguments
+    ///
+    /// * `separators` — edges that act as region boundaries (typically the
+    ///   pcurve constraint edges inserted during NURBS boolean splitting).
+    ///   Stored as sorted `(min, max)` pairs.
+    #[must_use]
+    pub fn extract_regions(&self, separators: &[(usize, usize)]) -> Vec<Vec<Point2>> {
+        let sep_set: HashSet<(usize, usize)> =
+            separators.iter().map(|&(a, b)| sorted_pair(a, b)).collect();
+
+        let sc = self.super_count;
+
+        // Collect indices of all live interior triangles.
+        let live_tris: Vec<usize> = self
+            .triangles
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| !t.removed)
+            .filter(|(_, t)| t.v[0] >= sc && t.v[1] >= sc && t.v[2] >= sc)
+            .map(|(i, _)| i)
+            .collect();
+
+        if live_tris.is_empty() {
+            return Vec::new();
+        }
+
+        // Map from triangle index → position in live_tris (for visited tracking).
+        let mut tri_to_idx: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::with_capacity(live_tris.len());
+        for (idx, &ti) in live_tris.iter().enumerate() {
+            tri_to_idx.insert(ti, idx);
+        }
+
+        let mut visited = vec![false; live_tris.len()];
+        let mut regions: Vec<Vec<usize>> = Vec::new();
+
+        // Flood-fill to find connected components.
+        for start_idx in 0..live_tris.len() {
+            if visited[start_idx] {
+                continue;
+            }
+
+            let mut component: Vec<usize> = Vec::new();
+            let mut stack: Vec<usize> = vec![live_tris[start_idx]];
+
+            while let Some(ti) = stack.pop() {
+                let Some(&idx) = tri_to_idx.get(&ti) else {
+                    continue;
+                };
+                if visited[idx] {
+                    continue;
+                }
+                visited[idx] = true;
+                component.push(ti);
+
+                // Traverse to adjacent triangles, stopping at separator edges.
+                let tri = &self.triangles[ti];
+                for local in 0..3 {
+                    let va = tri.v[(local + 1) % 3];
+                    let vb = tri.v[(local + 2) % 3];
+                    let edge_key = sorted_pair(va, vb);
+
+                    // Don't cross separator edges.
+                    if sep_set.contains(&edge_key) {
+                        continue;
+                    }
+
+                    if let Some(adj) = tri.adj[local] {
+                        if let Some(&adj_idx) = tri_to_idx.get(&adj) {
+                            if !visited[adj_idx] {
+                                stack.push(adj);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !component.is_empty() {
+                regions.push(component);
+            }
+        }
+
+        // Extract boundary polygon for each region.
+        regions
+            .iter()
+            .filter_map(|component| {
+                let polygon = walk_region_boundary(component, &self.triangles, &self.vertices, sc);
+                if polygon.len() >= 3 {
+                    Some(polygon)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Get the set of constraint edges (sorted pairs).
+    ///
+    /// Useful for distinguishing boundary constraints from interior
+    /// (separator) constraints in callers like NURBS boolean splitting.
+    #[must_use]
+    pub fn constraint_edges(&self) -> &HashSet<(usize, usize)> {
+        &self.constraints
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +566,14 @@ impl Cdt {
         };
         // adj_e1_opp = neighbor across edge (e1, opp) — will be external adj of t1
         // adj_opp_e0 = neighbor across edge (opp, e0) — will be external adj of t0
+
+        // If the split edge (e0, e1) was constrained, replace the constraint
+        // with two sub-constraints: (e0, vi) and (vi, e1).
+        let split_key = sorted_pair(e0, e1);
+        if self.constraints.remove(&split_key) {
+            self.constraints.insert(sorted_pair(e0, vi));
+            self.constraints.insert(sorted_pair(vi, e1));
+        }
 
         let t0 = tri_idx;
         let t1 = self.triangles.len();
@@ -995,6 +1119,71 @@ impl Cdt {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Walk the boundary edges of a set of triangles, producing an ordered polygon.
+///
+/// Given a set of triangle indices and the full triangle list + vertices,
+/// finds edges that appear exactly once in the set (boundary edges) and
+/// orders them into a polygon loop.
+fn walk_region_boundary(
+    region_tris: &[usize],
+    triangles: &[CdtTriangle],
+    vertices: &[Point2],
+    super_count: usize,
+) -> Vec<Point2> {
+    use std::collections::HashMap;
+
+    // Count how many times each edge appears in the region.
+    // An edge appearing once is a boundary edge.
+    let mut edge_count: HashMap<(usize, usize), Vec<(usize, usize)>> = HashMap::new();
+    for &ti in region_tris {
+        let tri = &triangles[ti];
+        for local in 0..3 {
+            let va = tri.v[(local + 1) % 3];
+            let vb = tri.v[(local + 2) % 3];
+            let key = sorted_pair(va, vb);
+            // Store the directed edge (va, vb) — CCW winding of the triangle.
+            edge_count.entry(key).or_default().push((va, vb));
+        }
+    }
+
+    // Boundary edges: appear exactly once. Keep them directed (CCW winding).
+    let mut next_map: HashMap<usize, usize> = HashMap::new();
+    for directed_edges in edge_count.values() {
+        if directed_edges.len() == 1 {
+            let (va, vb) = directed_edges[0];
+            // Skip super-triangle vertices.
+            if va < super_count || vb < super_count {
+                continue;
+            }
+            next_map.insert(va, vb);
+        }
+    }
+
+    if next_map.is_empty() {
+        return Vec::new();
+    }
+
+    // Walk the boundary loop starting from any vertex.
+    let &start = next_map.keys().next().unwrap_or(&0);
+    let mut polygon = Vec::with_capacity(next_map.len());
+    let mut current = start;
+    let max_steps = next_map.len() + 1;
+    for _ in 0..max_steps {
+        polygon.push(vertices[current]);
+        match next_map.get(&current) {
+            Some(&next) => {
+                if next == start {
+                    break;
+                }
+                current = next;
+            }
+            None => break,
+        }
+    }
+
+    polygon
+}
 
 /// Return a sorted pair `(min, max)`.
 fn sorted_pair(a: usize, b: usize) -> (usize, usize) {
