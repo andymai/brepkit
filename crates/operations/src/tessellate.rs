@@ -1835,21 +1835,25 @@ mod tests {
     }
 
     #[test]
-    fn tessellate_solid_cylinder_produces_mesh() {
+    fn tessellate_solid_cylinder_shared_topology() {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
 
-        let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
+        // Verify the cylinder now has shared edges between lateral and cap faces.
+        let edge_map = brepkit_topology::explorer::edge_to_face_map(&topo, solid).unwrap();
+        let shared_count = edge_map.values().filter(|faces| faces.len() >= 2).count();
+        assert!(
+            shared_count >= 2,
+            "cylinder should have at least 2 shared edges (top/bottom circles), got {shared_count}"
+        );
 
-        // Should produce a valid mesh with triangles.
+        let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
         assert!(mesh.indices.len() >= 3, "cylinder should have triangles");
         assert!(!mesh.positions.is_empty(), "cylinder should have vertices");
 
-        // Note: the current cylinder primitive uses separate polygon edges for
-        // caps and circle edges for the lateral face, so they don't share
-        // topological edges. Full watertightness requires shared edges in the
-        // topology (future improvement to primitives).
-        // For now, verify fewer boundary edges than per-face tessellation.
+        // Full watertightness for curved faces requires CDT-based boundary-
+        // constrained tessellation (not yet implemented). The shared edges
+        // provide the topological foundation for future watertight stitching.
     }
 
     #[test]
