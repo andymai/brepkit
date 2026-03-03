@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/andymai/brepkit/compare/v0.3.0...v0.3.1) (2026-03-03)
+
+
+### Bug Fixes
+
+* **wasm:** face domain queries use actual wire bounds for cylinder/cone ([#26](https://github.com/andymai/brepkit/issues/26)) ([a9e696c](https://github.com/andymai/brepkit/commit/a9e696c137ad4589bd8866c8c8b8ea9649fbd0d4))
+
 ## [0.3.0](https://github.com/andymai/brepkit/compare/v0.2.0...v0.3.0) (2026-03-03)
 
 
