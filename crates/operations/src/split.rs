@@ -292,10 +292,11 @@ mod tests {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
+        // Box extends from (0,0,0) to (2,2,2). Cut at z=0.5 (quarter height).
         let result = split(
             &mut topo,
             solid,
-            Point3::new(0.0, 0.0, -0.5), // z=-0.5 cuts box at quarter height
+            Point3::new(0.0, 0.0, 0.5),
             Vec3::new(0.0, 0.0, 1.0),
         )
         .unwrap();
@@ -303,7 +304,7 @@ mod tests {
         let vol_pos = crate::measure::solid_volume(&topo, result.positive, 0.1).unwrap();
         let vol_neg = crate::measure::solid_volume(&topo, result.negative, 0.1).unwrap();
 
-        // Box from -1 to +1. Cut at z=-0.5: positive is 3/4, negative is 1/4.
+        // Box from 0 to 2. Cut at z=0.5: positive is 3/4, negative is 1/4.
         let total = vol_pos + vol_neg;
         let tol = Tolerance::loose();
         assert!(

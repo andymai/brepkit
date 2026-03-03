@@ -1,0 +1,68 @@
+name: Release & Publish
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: Release Please
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs['crates/wasm--release_created'] }}
+      tag_name: ${{ steps.release.outputs['crates/wasm--tag_name'] }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          manifest-file: .release-please-manifest.json
+          config-file: release-please-config.json
+
+  publish:
+    name: Build WASM & Publish
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+
+      - name: Build WASM package
+        run: wasm-pack build crates/wasm --target nodejs --release
+
+      - name: Verify version
+        working-directory: crates/wasm/pkg
+        run: |
+          PKG_VERSION=$(jq -r .version package.json)
+          TAG_VERSION="${TAG_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Version mismatch: package.json=$PKG_VERSION tag=$TAG_VERSION"
+            exit 1
+          fi
+          echo "Publishing brepkit-wasm@$PKG_VERSION"
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+
+      - name: Publish to npm
+        working-directory: crates/wasm/pkg
+        run: npm publish --provenance --access public

@@ -406,8 +406,8 @@ mod tests {
 
         let bbox = asm.bounding_box(&topo).unwrap();
 
-        // box_a at origin: [-1, 1]³, box_b translated by 10: [9, 11] in x
-        assert!(bbox.min.x() < -0.5);
-        assert!(bbox.max.x() > 10.5);
+        // box_a at origin: [0, 2]³, box_b translated by 10: [10, 12] in x
+        assert!(bbox.min.x() < 0.5);
+        assert!(bbox.max.x() > 11.5);
     }
 }

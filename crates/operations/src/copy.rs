@@ -569,12 +569,12 @@ mod tests {
 
         let tol = Tolerance::loose();
         assert!(
-            tol.approx_eq(bbox_orig.min.x(), -0.5),
+            tol.approx_eq(bbox_orig.min.x(), 0.0),
             "original should be unchanged, min_x = {}",
             bbox_orig.min.x()
         );
         assert!(
-            tol.approx_eq(bbox_copy.min.x(), 9.5),
+            tol.approx_eq(bbox_copy.min.x(), 10.0),
             "copy should be shifted, min_x = {}",
             bbox_copy.min.x()
         );
