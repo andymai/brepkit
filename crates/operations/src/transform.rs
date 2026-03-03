@@ -47,24 +47,88 @@ pub fn transform_solid(
         vertex.set_point(new_point);
     }
 
-    // Mutate phase 2: transform NURBS edge curves.
+    // Mutate phase 2: transform edge curves (NURBS, Circle, Ellipse).
     // Line edges need no update — their geometry is defined by vertices.
+    let origin = matrix.mul_point(brepkit_math::vec::Point3::new(0.0, 0.0, 0.0));
+    let transform_dir = |d: brepkit_math::vec::Vec3| -> brepkit_math::vec::Vec3 {
+        matrix.mul_point(brepkit_math::vec::Point3::new(d.x(), d.y(), d.z())) - origin
+    };
     for eid in edge_ids {
         let edge = topo.edge(eid)?;
-        if let EdgeCurve::NurbsCurve(c) = edge.curve() {
-            let new_control_points: Vec<_> = c
-                .control_points()
-                .iter()
-                .map(|pt| matrix.mul_point(*pt))
-                .collect();
-            let new_curve = NurbsCurve::new(
-                c.degree(),
-                c.knots().to_vec(),
-                new_control_points,
-                c.weights().to_vec(),
-            );
-            topo.edge_mut(eid)?
-                .set_curve(EdgeCurve::NurbsCurve(new_curve?));
+        let new_curve = match edge.curve() {
+            EdgeCurve::Line => None,
+            EdgeCurve::NurbsCurve(c) => {
+                let new_control_points: Vec<_> = c
+                    .control_points()
+                    .iter()
+                    .map(|pt| matrix.mul_point(*pt))
+                    .collect();
+                Some(EdgeCurve::NurbsCurve(NurbsCurve::new(
+                    c.degree(),
+                    c.knots().to_vec(),
+                    new_control_points,
+                    c.weights().to_vec(),
+                )?))
+            }
+            EdgeCurve::Circle(c) => {
+                let new_center = matrix.mul_point(c.center());
+                let new_u = transform_dir(c.u_axis());
+                let new_v = transform_dir(c.v_axis());
+                let su = new_u.length();
+                let sv = new_v.length();
+                let new_normal = new_u.cross(new_v).normalize()?;
+                if (su - sv).abs() < 1e-12 * su.max(sv).max(1.0) {
+                    Some(EdgeCurve::Circle(
+                        brepkit_math::curves::Circle3D::with_axes(
+                            new_center,
+                            new_normal,
+                            c.radius() * su,
+                            new_u.normalize()?,
+                            new_v.normalize()?,
+                        )?,
+                    ))
+                } else {
+                    let (semi_major, semi_minor, u_dir, v_dir) = if su >= sv {
+                        (
+                            c.radius() * su,
+                            c.radius() * sv,
+                            new_u.normalize()?,
+                            new_v.normalize()?,
+                        )
+                    } else {
+                        (
+                            c.radius() * sv,
+                            c.radius() * su,
+                            new_v.normalize()?,
+                            new_u.normalize()?,
+                        )
+                    };
+                    Some(EdgeCurve::Ellipse(
+                        brepkit_math::curves::Ellipse3D::with_axes(
+                            new_center, new_normal, semi_major, semi_minor, u_dir, v_dir,
+                        )?,
+                    ))
+                }
+            }
+            EdgeCurve::Ellipse(e) => {
+                let new_center = matrix.mul_point(e.center());
+                let new_u = transform_dir(e.u_axis());
+                let new_v = transform_dir(e.v_axis());
+                let new_normal = new_u.cross(new_v).normalize()?;
+                Some(EdgeCurve::Ellipse(
+                    brepkit_math::curves::Ellipse3D::with_axes(
+                        new_center,
+                        new_normal,
+                        e.semi_major() * new_u.length(),
+                        e.semi_minor() * new_v.length(),
+                        new_u.normalize()?,
+                        new_v.normalize()?,
+                    )?,
+                ))
+            }
+        };
+        if let Some(curve) = new_curve {
+            topo.edge_mut(eid)?.set_curve(curve);
         }
     }
 

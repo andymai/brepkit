@@ -7,10 +7,194 @@
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use crate::MathError;
+use crate::curves::{Circle3D, Ellipse3D};
 use crate::nurbs::fitting::interpolate;
 use crate::nurbs::intersection::{IntersectionCurve, IntersectionPoint};
 use crate::surfaces::{ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface};
 use crate::vec::{Point3, Vec3};
+
+/// Exact curve type resulting from plane-analytic surface intersection.
+#[derive(Debug, Clone)]
+pub enum ExactIntersectionCurve {
+    /// A circle (plane perpendicular to axis of cylinder/cone/sphere).
+    Circle(Circle3D),
+    /// An ellipse (plane oblique to cylinder/cone axis).
+    Ellipse(Ellipse3D),
+    /// Fallback to sampled point chain (torus, degenerate cases).
+    Points(Vec<Point3>),
+}
+
+/// Compute exact intersection curves between a plane and an analytic surface.
+///
+/// Returns exact `Circle3D` or `Ellipse3D` where possible, falling back to
+/// sampled points for complex cases (torus).
+///
+/// The plane is defined by `dot(normal, p) = d`.
+///
+/// # Errors
+///
+/// Returns an error if the intersection computation fails.
+pub fn exact_plane_analytic(
+    surface: AnalyticSurface<'_>,
+    plane_normal: Vec3,
+    plane_d: f64,
+) -> Result<Vec<ExactIntersectionCurve>, MathError> {
+    match surface {
+        AnalyticSurface::Cylinder(cyl) => exact_plane_cylinder(cyl, plane_normal, plane_d),
+        AnalyticSurface::Sphere(sphere) => exact_plane_sphere(sphere, plane_normal, plane_d),
+        AnalyticSurface::Cone(cone) => exact_plane_cone(cone, plane_normal, plane_d),
+        AnalyticSurface::Torus(torus) => {
+            // Torus intersections are degree-4 — fall back to sampling.
+            let chains = sample_plane_torus(torus, plane_normal, plane_d)?;
+            Ok(chains
+                .into_iter()
+                .map(ExactIntersectionCurve::Points)
+                .collect())
+        }
+    }
+}
+
+/// Exact plane-cylinder intersection.
+///
+/// - Plane perpendicular to axis → `Circle3D`
+/// - Plane oblique to axis → `Ellipse3D`
+/// - Plane parallel to axis → `Points` fallback (0 or 2 lines)
+fn exact_plane_cylinder(
+    cyl: &CylindricalSurface,
+    normal: Vec3,
+    d: f64,
+) -> Result<Vec<ExactIntersectionCurve>, MathError> {
+    let axis = cyl.axis();
+    let cos_theta = normal.dot(axis).abs();
+    let r = cyl.radius();
+
+    if cos_theta < 1e-10 {
+        // Plane parallel to cylinder axis → 0 or 2 line segments.
+        // Fall back to sampled points.
+        let chains = sample_plane_cylinder(cyl, normal, d)?;
+        return Ok(chains
+            .into_iter()
+            .map(ExactIntersectionCurve::Points)
+            .collect());
+    }
+
+    // Find where axis intersects the plane: axis_point + t*axis, dot(normal, P) = d
+    // t = (d - dot(normal, origin)) / dot(normal, axis)
+    let n_dot_axis = normal.dot(axis);
+    let n_dot_origin = dot_np(normal, cyl.origin());
+    let t = (d - n_dot_origin) / n_dot_axis;
+    let center_on_axis = Point3::new(
+        cyl.origin().x() + t * axis.x(),
+        cyl.origin().y() + t * axis.y(),
+        cyl.origin().z() + t * axis.z(),
+    );
+
+    if cos_theta > 1.0 - 1e-10 {
+        // Plane perpendicular to axis → Circle
+        let circle = Circle3D::new(center_on_axis, normal, r)?;
+        Ok(vec![ExactIntersectionCurve::Circle(circle)])
+    } else {
+        // Oblique plane → Ellipse
+        // Semi-minor = r (the cylinder radius, unchanged)
+        // Semi-major = r / cos(θ) where θ = angle between plane normal and axis
+        let semi_minor = r;
+        let semi_major = r / cos_theta;
+
+        // The major axis direction lies in the intersection of the plane
+        // with the plane containing the axis and the plane normal.
+        // It's the projection of the axis onto the cutting plane, normalized.
+        let axis_proj = Vec3::new(
+            axis.x() - n_dot_axis * normal.x(),
+            axis.y() - n_dot_axis * normal.y(),
+            axis.z() - n_dot_axis * normal.z(),
+        );
+        let u_axis = axis_proj.normalize()?;
+        let v_axis = normal.cross(u_axis);
+
+        let ellipse = Ellipse3D::with_axes(
+            center_on_axis,
+            normal,
+            semi_major,
+            semi_minor,
+            u_axis,
+            v_axis,
+        )?;
+        Ok(vec![ExactIntersectionCurve::Ellipse(ellipse)])
+    }
+}
+
+/// Exact plane-sphere intersection.
+///
+/// Always produces a `Circle3D` (or empty if no intersection).
+fn exact_plane_sphere(
+    sphere: &SphericalSurface,
+    normal: Vec3,
+    d: f64,
+) -> Result<Vec<ExactIntersectionCurve>, MathError> {
+    let h = dot_np(normal, sphere.center()) - d;
+    let r = sphere.radius();
+
+    if h.abs() > r - 1e-10 {
+        return Ok(vec![]);
+    }
+
+    let circle_r = (r.mul_add(r, -(h * h))).sqrt();
+    let circle_center = Point3::new(
+        h.mul_add(-normal.x(), sphere.center().x()),
+        h.mul_add(-normal.y(), sphere.center().y()),
+        h.mul_add(-normal.z(), sphere.center().z()),
+    );
+
+    let circle = Circle3D::new(circle_center, normal, circle_r)?;
+    Ok(vec![ExactIntersectionCurve::Circle(circle)])
+}
+
+/// Exact plane-cone intersection.
+///
+/// - Plane perpendicular to axis → `Circle3D`
+/// - Otherwise → `Points` fallback (could be ellipse, parabola, or hyperbola)
+fn exact_plane_cone(
+    cone: &ConicalSurface,
+    normal: Vec3,
+    d: f64,
+) -> Result<Vec<ExactIntersectionCurve>, MathError> {
+    let axis = cone.axis();
+    let cos_theta = normal.dot(axis).abs();
+    let half_angle = cone.half_angle();
+
+    if cos_theta > 1.0 - 1e-10 {
+        // Plane perpendicular to axis → Circle
+        // Find where axis meets the plane
+        let n_dot_axis = normal.dot(axis);
+        let n_dot_apex = dot_np(normal, cone.apex());
+        let t = (d - n_dot_apex) / n_dot_axis;
+
+        if t < 1e-10 {
+            return Ok(vec![]);
+        }
+
+        let center = Point3::new(
+            cone.apex().x() + t * axis.x(),
+            cone.apex().y() + t * axis.y(),
+            cone.apex().z() + t * axis.z(),
+        );
+        let circle_r = t * half_angle.tan();
+        if circle_r < 1e-15 {
+            return Ok(vec![]);
+        }
+
+        let circle = Circle3D::new(center, normal, circle_r)?;
+        Ok(vec![ExactIntersectionCurve::Circle(circle)])
+    } else {
+        // Oblique → could be ellipse, parabola, or hyperbola depending on angle vs half_angle.
+        // For MVP, fall back to sampling.
+        let chains = sample_plane_cone(cone, normal, d)?;
+        Ok(chains
+            .into_iter()
+            .map(ExactIntersectionCurve::Points)
+            .collect())
+    }
+}
 
 /// Reference to an analytic surface for intersection dispatch.
 #[derive(Clone, Copy)]

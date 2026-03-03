@@ -1,5 +1,6 @@
 //! Edge — a curve bounded by two vertices.
 
+use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::nurbs::curve::NurbsCurve;
 
 use crate::arena;
@@ -15,6 +16,10 @@ pub enum EdgeCurve {
     Line,
     /// A NURBS curve defining the edge geometry.
     NurbsCurve(NurbsCurve),
+    /// A circular arc (or full circle when the edge is closed).
+    Circle(Circle3D),
+    /// An elliptical arc (or full ellipse when the edge is closed).
+    Ellipse(Ellipse3D),
 }
 
 /// A topological edge: a curve bounded by a start and end vertex.

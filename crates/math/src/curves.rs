@@ -179,6 +179,46 @@ impl Circle3D {
         let v_comp = self.v_axis.dot(v);
         v_comp.atan2(u_comp)
     }
+
+    /// The u-axis direction (major axis in the circle plane).
+    #[must_use]
+    pub const fn u_axis(&self) -> Vec3 {
+        self.u_axis
+    }
+
+    /// The v-axis direction (minor axis in the circle plane).
+    #[must_use]
+    pub const fn v_axis(&self) -> Vec3 {
+        self.v_axis
+    }
+
+    /// Create a circle with explicit basis vectors (for transform/copy).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `radius` is non-positive.
+    pub fn with_axes(
+        center: Point3,
+        normal: Vec3,
+        radius: f64,
+        u_axis: Vec3,
+        v_axis: Vec3,
+    ) -> Result<Self, MathError> {
+        if radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: radius,
+                min: 0.0,
+                max: f64::INFINITY,
+            });
+        }
+        Ok(Self {
+            center,
+            normal,
+            radius,
+            u_axis,
+            v_axis,
+        })
+    }
 }
 
 // ── Ellipse3D ──────────────────────────────────────────────────────
@@ -293,6 +333,57 @@ impl Ellipse3D {
         let b = self.semi_minor;
         let h = (a - b) * (a - b) / ((a + b) * (a + b));
         PI * (a + b) * (1.0 + 3.0 * h / (10.0 + (3.0f64.mul_add(-h, 4.0)).sqrt()))
+    }
+
+    /// Project a point onto the ellipse, returning the angle parameter.
+    #[must_use]
+    pub fn project(&self, point: Point3) -> f64 {
+        let v = point - self.center;
+        let u_comp = self.u_axis.dot(v) / self.semi_major;
+        let v_comp = self.v_axis.dot(v) / self.semi_minor;
+        v_comp.atan2(u_comp)
+    }
+
+    /// The u-axis direction (major axis direction).
+    #[must_use]
+    pub const fn u_axis(&self) -> Vec3 {
+        self.u_axis
+    }
+
+    /// The v-axis direction (minor axis direction).
+    #[must_use]
+    pub const fn v_axis(&self) -> Vec3 {
+        self.v_axis
+    }
+
+    /// Create an ellipse with explicit basis vectors (for transform/copy).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either semi-axis is non-positive.
+    pub fn with_axes(
+        center: Point3,
+        normal: Vec3,
+        semi_major: f64,
+        semi_minor: f64,
+        u_axis: Vec3,
+        v_axis: Vec3,
+    ) -> Result<Self, MathError> {
+        if semi_major <= 0.0 || semi_minor <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: semi_major.min(semi_minor),
+                min: 0.0,
+                max: f64::INFINITY,
+            });
+        }
+        Ok(Self {
+            center,
+            normal,
+            semi_major,
+            semi_minor,
+            u_axis,
+            v_axis,
+        })
     }
 }
 

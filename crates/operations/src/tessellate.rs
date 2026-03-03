@@ -212,17 +212,123 @@ fn tessellate_planar(
     face_data: &brepkit_topology::face::Face,
     normal: Vec3,
 ) -> Result<TriangleMesh, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+
     let wire = topo.wire(face_data.outer_wire())?;
     let mut positions = Vec::new();
+    let tol = 1e-10;
+
+    // Sample a parametric curve into `positions`, skipping consecutive duplicates.
+    // `t_for_index(i)` maps a sample index to a parameter value.
+    // Iterates forward when `forward` is true, reversed otherwise.
+    let sample_curve = |evaluate: &dyn Fn(f64) -> Point3,
+                        t_for_index: &dyn Fn(usize) -> f64,
+                        n_samples: usize,
+                        forward: bool,
+                        positions: &mut Vec<Point3>| {
+        let indices: Box<dyn Iterator<Item = usize>> = if forward {
+            Box::new(0..n_samples)
+        } else {
+            Box::new((0..n_samples).rev())
+        };
+        for i in indices {
+            #[allow(clippy::cast_precision_loss)]
+            let t = t_for_index(i);
+            let pt = evaluate(t);
+            if positions
+                .last()
+                .is_none_or(|p: &Point3| (*p - pt).length() > tol)
+            {
+                positions.push(pt);
+            }
+        }
+    };
 
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
-        positions.push(topo.vertex(vid)?.point());
+        match edge.curve() {
+            EdgeCurve::Circle(circle) => {
+                let n_samples = 32;
+                let (t_start, t_end) = if edge.is_closed() {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    let sp = topo.vertex(edge.start())?.point();
+                    let ep = topo.vertex(edge.end())?.point();
+                    let ts = circle.project(sp);
+                    let mut te = circle.project(ep);
+                    if te <= ts {
+                        te += std::f64::consts::TAU;
+                    }
+                    (ts, te)
+                };
+                #[allow(clippy::cast_precision_loss)]
+                sample_curve(
+                    &|t| circle.evaluate(t),
+                    &|i| t_start + (t_end - t_start) * (i as f64) / (n_samples as f64),
+                    n_samples,
+                    oe.is_forward(),
+                    &mut positions,
+                );
+            }
+            EdgeCurve::Ellipse(ellipse) => {
+                let n_samples = 32;
+                let (t_start, t_end) = if edge.is_closed() {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    let sp = topo.vertex(edge.start())?.point();
+                    let ep = topo.vertex(edge.end())?.point();
+                    let ts = ellipse.project(sp);
+                    let mut te = ellipse.project(ep);
+                    if te <= ts {
+                        te += std::f64::consts::TAU;
+                    }
+                    (ts, te)
+                };
+                #[allow(clippy::cast_precision_loss)]
+                sample_curve(
+                    &|t| ellipse.evaluate(t),
+                    &|i| t_start + (t_end - t_start) * (i as f64) / (n_samples as f64),
+                    n_samples,
+                    oe.is_forward(),
+                    &mut positions,
+                );
+            }
+            EdgeCurve::NurbsCurve(nurbs) => {
+                let n_samples = 16;
+                let (u0, u1) = nurbs.domain();
+                #[allow(clippy::cast_precision_loss)]
+                sample_curve(
+                    &|t| nurbs.evaluate(t),
+                    &|i| u0 + (u1 - u0) * (i as f64) / (n_samples as f64),
+                    n_samples,
+                    oe.is_forward(),
+                    &mut positions,
+                );
+            }
+            EdgeCurve::Line => {
+                let vid = if oe.is_forward() {
+                    edge.start()
+                } else {
+                    edge.end()
+                };
+                let pt = topo.vertex(vid)?.point();
+                if positions
+                    .last()
+                    .is_none_or(|p: &Point3| (*p - pt).length() > tol)
+                {
+                    positions.push(pt);
+                }
+            }
+        }
+    }
+
+    // Remove last point if it duplicates the first (closed wire).
+    if positions.len() > 2 {
+        if let (Some(first), Some(last)) = (positions.first(), positions.last()) {
+            if (*last - *first).length() < tol {
+                positions.pop();
+            }
+        }
     }
 
     let n = positions.len();

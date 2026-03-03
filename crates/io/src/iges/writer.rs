@@ -107,6 +107,43 @@ impl IgesWriteContext {
                 EdgeCurve::NurbsCurve(nurbs) => {
                     self.write_nurbs_curve_entity(nurbs);
                 }
+                EdgeCurve::Circle(circle) => {
+                    // IGES entity 100: Circular Arc (in the circle's local plane)
+                    // For simplicity, write as a polyline approximation using entity 110 (lines)
+                    let n = 32;
+                    let t0 = circle.project(start_pt);
+                    let mut t1 = circle.project(end_pt);
+                    if (start_pt - end_pt).length() < 1e-10 {
+                        t1 = t0 + std::f64::consts::TAU;
+                    } else if t1 <= t0 {
+                        t1 += std::f64::consts::TAU;
+                    }
+                    let dt = (t1 - t0) / n as f64;
+                    let mut prev = circle.evaluate(t0);
+                    for i in 1..=n {
+                        let cur = circle.evaluate(t0 + dt * i as f64);
+                        self.write_line_entity(prev, cur);
+                        prev = cur;
+                    }
+                }
+                EdgeCurve::Ellipse(ellipse) => {
+                    // Approximate as polyline segments
+                    let n = 32;
+                    let t0 = ellipse.project(start_pt);
+                    let mut t1 = ellipse.project(end_pt);
+                    if (start_pt - end_pt).length() < 1e-10 {
+                        t1 = t0 + std::f64::consts::TAU;
+                    } else if t1 <= t0 {
+                        t1 += std::f64::consts::TAU;
+                    }
+                    let dt = (t1 - t0) / n as f64;
+                    let mut prev = ellipse.evaluate(t0);
+                    for i in 1..=n {
+                        let cur = ellipse.evaluate(t0 + dt * i as f64);
+                        self.write_line_entity(prev, cur);
+                        prev = cur;
+                    }
+                }
             }
         }
 

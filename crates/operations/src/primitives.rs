@@ -237,8 +237,25 @@ pub fn make_cylinder(
         .vertices
         .alloc(Vertex::new(Point3::new(radius, 0.0, hz), tol.linear));
 
-    let e_bot_circle = topo.edges.alloc(Edge::new(v_bot, v_bot, EdgeCurve::Line));
-    let e_top_circle = topo.edges.alloc(Edge::new(v_top, v_top, EdgeCurve::Line));
+    let bot_circle = brepkit_math::curves::Circle3D::new(
+        Point3::new(0.0, 0.0, -hz),
+        Vec3::new(0.0, 0.0, 1.0),
+        radius,
+    )
+    .map_err(crate::OperationsError::Math)?;
+    let top_circle = brepkit_math::curves::Circle3D::new(
+        Point3::new(0.0, 0.0, hz),
+        Vec3::new(0.0, 0.0, 1.0),
+        radius,
+    )
+    .map_err(crate::OperationsError::Math)?;
+
+    let e_bot_circle = topo
+        .edges
+        .alloc(Edge::new(v_bot, v_bot, EdgeCurve::Circle(bot_circle)));
+    let e_top_circle = topo
+        .edges
+        .alloc(Edge::new(v_top, v_top, EdgeCurve::Circle(top_circle)));
     let e_seam = topo.edges.alloc(Edge::new(v_bot, v_top, EdgeCurve::Line));
 
     let lateral_wire = Wire::new(
@@ -377,7 +394,15 @@ pub fn make_cone(
             .vertices
             .alloc(Vertex::new(Point3::new(r_big, 0.0, big_z), tol.linear));
 
-        let e_circle = topo.edges.alloc(Edge::new(v_base, v_base, EdgeCurve::Line));
+        let base_circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(0.0, 0.0, big_z),
+            Vec3::new(0.0, 0.0, 1.0),
+            r_big,
+        )
+        .map_err(crate::OperationsError::Math)?;
+        let e_circle = topo
+            .edges
+            .alloc(Edge::new(v_base, v_base, EdgeCurve::Circle(base_circle)));
         let e_seam = topo.edges.alloc(Edge::new(v_base, v_apex, EdgeCurve::Line));
 
         let lateral_wire = Wire::new(
@@ -417,8 +442,24 @@ pub fn make_cone(
             .vertices
             .alloc(Vertex::new(Point3::new(top_radius, 0.0, hz), tol.linear));
 
-        let e_bot = topo.edges.alloc(Edge::new(v_bot, v_bot, EdgeCurve::Line));
-        let e_top = topo.edges.alloc(Edge::new(v_top, v_top, EdgeCurve::Line));
+        let bot_circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(0.0, 0.0, -hz),
+            Vec3::new(0.0, 0.0, 1.0),
+            bottom_radius,
+        )
+        .map_err(crate::OperationsError::Math)?;
+        let top_circle = brepkit_math::curves::Circle3D::new(
+            Point3::new(0.0, 0.0, hz),
+            Vec3::new(0.0, 0.0, 1.0),
+            top_radius,
+        )
+        .map_err(crate::OperationsError::Math)?;
+        let e_bot = topo
+            .edges
+            .alloc(Edge::new(v_bot, v_bot, EdgeCurve::Circle(bot_circle)));
+        let e_top = topo
+            .edges
+            .alloc(Edge::new(v_top, v_top, EdgeCurve::Circle(top_circle)));
         let e_seam = topo.edges.alloc(Edge::new(v_bot, v_top, EdgeCurve::Line));
 
         let lateral_wire = Wire::new(
