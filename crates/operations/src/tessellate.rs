@@ -59,23 +59,27 @@ pub fn tessellate(
         FaceSurface::Plane { normal, .. } => tessellate_planar(topo, face_data, *normal),
         FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection)),
         FaceSurface::Cylinder(cyl) => {
+            // Compute the v-range from face wire boundary vertices by
+            // projecting them onto the cylinder axis.
+            let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
             let cyl = cyl.clone();
             Ok(tessellate_analytic(
                 |u, v| cyl.evaluate(u, v),
                 |u, v| cyl.normal(u, v),
                 (0.0, std::f64::consts::TAU),
-                (-1.0, 1.0),
+                v_range,
                 deflection,
                 AnalyticKind::General,
             ))
         }
         FaceSurface::Cone(cone) => {
+            let v_range = compute_axial_range(topo, face_data, cone.apex(), cone.axis());
             let cone = cone.clone();
             Ok(tessellate_analytic(
                 |u, v| cone.evaluate(u, v),
                 |u, v| cone.normal(u, v),
                 (0.0, std::f64::consts::TAU),
-                (0.0, 1.0),
+                v_range,
                 deflection,
                 AnalyticKind::ConeApex,
             ))
@@ -522,6 +526,47 @@ const MAX_DEPTH: u8 = 6;
 
 /// Initial grid resolution (cells per direction).
 const INITIAL_CELLS: usize = 4;
+
+/// Compute the v-range (axial extent) for an analytic surface from its face
+/// wire boundary vertices.
+///
+/// Projects all wire vertices onto the surface axis and returns (v_min, v_max).
+/// Falls back to (-1.0, 1.0) if the face has no usable vertices.
+fn compute_axial_range(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    origin: Point3,
+    axis: Vec3,
+) -> (f64, f64) {
+    let mut v_min = f64::MAX;
+    let mut v_max = f64::MIN;
+
+    if let Ok(wire) = topo.wire(face_data.outer_wire()) {
+        for oe in wire.edges() {
+            if let Ok(edge) = topo.edge(oe.edge()) {
+                for &vid in &[edge.start(), edge.end()] {
+                    if let Ok(vertex) = topo.vertex(vid) {
+                        let pt = vertex.point();
+                        let to_pt = Vec3::new(
+                            pt.x() - origin.x(),
+                            pt.y() - origin.y(),
+                            pt.z() - origin.z(),
+                        );
+                        let v = axis.dot(to_pt);
+                        v_min = v_min.min(v);
+                        v_max = v_max.max(v);
+                    }
+                }
+            }
+        }
+    }
+
+    if v_min < v_max {
+        (v_min, v_max)
+    } else {
+        (-1.0, 1.0) // fallback
+    }
+}
 
 /// Evaluate the surface normal at `(u, v)`, returning a fallback for degenerate points.
 fn safe_normal(surface: &brepkit_math::nurbs::surface::NurbsSurface, u: f64, v: f64) -> Vec3 {

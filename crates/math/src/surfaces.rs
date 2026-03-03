@@ -84,6 +84,24 @@ impl CylindricalSurface {
     pub const fn radius(&self) -> f64 {
         self.radius
     }
+
+    /// Project a 3D point onto the cylinder surface, returning (u, v) parameters.
+    ///
+    /// `u` is the angular parameter [0, 2π), `v` is the axial parameter.
+    #[must_use]
+    pub fn project_point(&self, point: Point3) -> (f64, f64) {
+        let to_pt = Vec3::new(
+            point.x() - self.origin.x(),
+            point.y() - self.origin.y(),
+            point.z() - self.origin.z(),
+        );
+        let v = self.axis.dot(to_pt);
+        let radial = to_pt - self.axis * v;
+        let x = self.x_axis.dot(radial);
+        let y = self.y_axis.dot(radial);
+        let u = y.atan2(x).rem_euclid(std::f64::consts::TAU);
+        (u, v)
+    }
 }
 
 /// An infinite conical surface.
@@ -268,6 +286,28 @@ impl SphericalSurface {
     #[must_use]
     pub const fn radius(&self) -> f64 {
         self.radius
+    }
+
+    /// Project a 3D point onto the sphere, returning (u, v) parameters.
+    ///
+    /// `u` is the longitudinal angle [0, 2π), `v` is the latitude [-π/2, π/2].
+    #[must_use]
+    pub fn project_point(&self, point: Point3) -> (f64, f64) {
+        let to_pt = Vec3::new(
+            point.x() - self.center.x(),
+            point.y() - self.center.y(),
+            point.z() - self.center.z(),
+        );
+        let r = to_pt.length();
+        if r < 1e-15 {
+            return (0.0, 0.0);
+        }
+        let x = self.x_axis.dot(to_pt);
+        let y = self.y_axis.dot(to_pt);
+        let z = self.z_axis.dot(to_pt);
+        let u = y.atan2(x).rem_euclid(std::f64::consts::TAU);
+        let v = (z / r).clamp(-1.0, 1.0).asin();
+        (u, v)
     }
 }
 
@@ -801,5 +841,72 @@ mod tests {
         let p = cyl.evaluate(FRAC_PI_2, 0.0);
         // At u=π/2, should be at 90° around the cylinder
         assert!(approx_eq((p - Point3::new(0.0, 0.0, 0.0)).length(), 3.0));
+    }
+
+    #[test]
+    fn cylinder_project_point_roundtrip() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+
+        // Evaluate at known parameters, then project back.
+        let (u_orig, v_orig) = (1.0, 3.0);
+        let pt = cyl.evaluate(u_orig, v_orig);
+        let (u_proj, v_proj) = cyl.project_point(pt);
+
+        assert!(
+            approx_eq(u_proj, u_orig),
+            "u should roundtrip: expected {u_orig}, got {u_proj}"
+        );
+        assert!(
+            approx_eq(v_proj, v_orig),
+            "v should roundtrip: expected {v_orig}, got {v_proj}"
+        );
+    }
+
+    #[test]
+    fn cylinder_project_external_point() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+
+        // Project a point and verify its v-parameter (axial position).
+        let (_, v) = cyl.project_point(Point3::new(5.0, 0.0, 2.0));
+        assert!(approx_eq(v, 2.0), "v should be 2, got {v}");
+
+        // Verify that evaluating at the projected parameters gives a point
+        // on the cylinder surface closest to the original point.
+        let (u, v) = cyl.project_point(Point3::new(3.0, 4.0, 7.0));
+        let on_surface = cyl.evaluate(u, v);
+        assert!(
+            approx_eq(on_surface.z(), 7.0),
+            "projected z should be 7.0, got {}",
+            on_surface.z()
+        );
+        // The surface point should be at distance = radius from the axis.
+        let radial_dist =
+            (on_surface.x() * on_surface.x() + on_surface.y() * on_surface.y()).sqrt();
+        assert!(
+            approx_eq(radial_dist, 1.0),
+            "surface point should be at radius 1.0, got {radial_dist}"
+        );
+    }
+
+    #[test]
+    fn sphere_project_point_roundtrip() {
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0).unwrap();
+
+        let (u_orig, v_orig) = (1.5, 0.3);
+        let pt = sphere.evaluate(u_orig, v_orig);
+        let (u_proj, v_proj) = sphere.project_point(pt);
+
+        assert!(
+            approx_eq(u_proj, u_orig),
+            "u should roundtrip: expected {u_orig}, got {u_proj}"
+        );
+        assert!(
+            approx_eq(v_proj, v_orig),
+            "v should roundtrip: expected {v_orig}, got {v_proj}"
+        );
     }
 }
