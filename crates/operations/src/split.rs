@@ -8,7 +8,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
 
-use crate::boolean::assemble_solid;
+use crate::boolean::{FaceSpec, assemble_solid_mixed};
 use crate::dot_normal_point;
 
 /// Result of splitting a solid: two halves.
@@ -54,21 +54,13 @@ pub fn split(
     let shell = topo.shell(solid_data.outer_shell())?;
     let face_ids: Vec<brepkit_topology::face::FaceId> = shell.faces().to_vec();
 
-    let mut positive_faces: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
-    let mut negative_faces: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
+    let mut positive_specs: Vec<FaceSpec> = Vec::new();
+    let mut negative_specs: Vec<FaceSpec> = Vec::new();
     let mut cap_points: Vec<Point3> = Vec::new();
 
     for &fid in &face_ids {
         let face = topo.face(fid)?;
-        let (face_normal, face_d) = match face.surface() {
-            brepkit_topology::face::FaceSurface::Plane { normal: fn_, d: fd } => (*fn_, *fd),
-            _ => {
-                return Err(crate::OperationsError::InvalidInput {
-                    reason: "split of non-planar faces not supported".into(),
-                });
-            }
-        };
-
+        let surface = face.surface().clone();
         let verts = crate::boolean::face_vertices(topo, fid)?;
         let dists: Vec<f64> = verts
             .iter()
@@ -79,52 +71,86 @@ pub fn split(
         let all_pos = dists.iter().all(|&di| di > -tol.linear);
         let all_neg = dists.iter().all(|&di| di < tol.linear);
 
+        // Helper to create FaceSpec preserving the surface type.
+        let make_spec = |v: Vec<Point3>, surf: &brepkit_topology::face::FaceSurface| -> FaceSpec {
+            match surf {
+                brepkit_topology::face::FaceSurface::Plane { normal: fn_, d: fd } => {
+                    FaceSpec::Planar {
+                        vertices: v,
+                        normal: *fn_,
+                        d: *fd,
+                    }
+                }
+                other => FaceSpec::Surface {
+                    vertices: v,
+                    surface: other.clone(),
+                },
+            }
+        };
+
         if all_pos && !all_neg {
-            positive_faces.push((verts, face_normal, face_d));
+            positive_specs.push(make_spec(verts, &surface));
         } else if all_neg && !all_pos {
-            negative_faces.push((verts, face_normal, face_d));
+            negative_specs.push(make_spec(verts, &surface));
         } else if all_pos && all_neg {
-            // Face lies on the plane — add to both sides.
-            positive_faces.push((verts.clone(), face_normal, face_d));
-            negative_faces.push((verts, face_normal, face_d));
+            positive_specs.push(make_spec(verts.clone(), &surface));
+            negative_specs.push(make_spec(verts, &surface));
         } else {
-            // Mixed: clip the face into positive and negative fragments.
+            // Mixed: clip the face polygon. Clipped fragments are planar
+            // approximations (proper curved-face splitting requires exact
+            // surface-plane intersection curves — future work).
+            let face_normal = match &surface {
+                brepkit_topology::face::FaceSurface::Plane { normal: fn_, .. } => *fn_,
+                _ => normal, // Fallback for non-planar straddling faces
+            };
+
             let (pos_verts, neg_verts, crossings) = clip_polygon(&verts, &dists, tol);
 
             if pos_verts.len() >= 3 {
                 let pos_d = dot_normal_point(face_normal, pos_verts[0]);
-                positive_faces.push((pos_verts, face_normal, pos_d));
+                positive_specs.push(FaceSpec::Planar {
+                    vertices: pos_verts,
+                    normal: face_normal,
+                    d: pos_d,
+                });
             }
             if neg_verts.len() >= 3 {
                 let neg_d = dot_normal_point(face_normal, neg_verts[0]);
-                negative_faces.push((neg_verts, face_normal, neg_d));
+                negative_specs.push(FaceSpec::Planar {
+                    vertices: neg_verts,
+                    normal: face_normal,
+                    d: neg_d,
+                });
             }
 
-            // Collect crossing points for the cap face.
             cap_points.extend(crossings);
         }
     }
 
-    if positive_faces.is_empty() || negative_faces.is_empty() {
+    if positive_specs.is_empty() || negative_specs.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "cutting plane does not split the solid (entirely on one side)".into(),
         });
     }
 
-    // Build cap faces from crossing points (deduplicated).
+    // Build cap faces from crossing points.
     let cap = build_cap_polygon(&cap_points, normal, d, tol);
 
     if let Some((cap_verts, cap_normal, cap_d)) = cap {
-        // Positive half: cap face normal points toward negative side (-cap_normal)
-        // to close the positive half from below.
-        positive_faces.push((cap_verts.clone(), -cap_normal, -cap_d));
-        // Negative half: cap face normal points toward positive side (cap_normal)
-        // to close the negative half from above. Same vertex winding.
-        negative_faces.push((cap_verts, cap_normal, cap_d));
+        positive_specs.push(FaceSpec::Planar {
+            vertices: cap_verts.clone(),
+            normal: -cap_normal,
+            d: -cap_d,
+        });
+        negative_specs.push(FaceSpec::Planar {
+            vertices: cap_verts,
+            normal: cap_normal,
+            d: cap_d,
+        });
     }
 
-    let pos_solid = assemble_solid(topo, &positive_faces, tol)?;
-    let neg_solid = assemble_solid(topo, &negative_faces, tol)?;
+    let pos_solid = assemble_solid_mixed(topo, &positive_specs, tol)?;
+    let neg_solid = assemble_solid_mixed(topo, &negative_specs, tol)?;
 
     Ok(SplitResult {
         positive: pos_solid,
