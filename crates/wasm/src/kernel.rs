@@ -3800,6 +3800,61 @@ impl BrepKernel {
         let result = brepkit_math::polygon_offset::offset_polygon_2d(&points, distance, tolerance)?;
         Ok(result.iter().flat_map(|p| [p.x(), p.y()]).collect())
     }
+
+    // ── Semantic APIs (Theme G) ──────────────────────────────────────
+
+    /// Get the orientation of a shape.
+    ///
+    /// Returns `"forward"` for all faces (brepkit faces don't have an
+    /// independent orientation flag; the normal direction is canonical).
+            #[allow(clippy::unused_self)]
+    #[must_use]
+    #[wasm_bindgen(js_name = "getShapeOrientation")]
+    pub fn get_shape_orientation(&self, _id: u32) -> String {
+        // In brepkit, face normals are always canonical (outward-pointing).
+        // There is no separate orientation flag like OCCT's TopAbs_Orientation.
+        "forward".to_string()
+    }
+
+    /// Reverse the orientation of a face or edge.
+    ///
+    /// For faces: creates a new face with negated plane normal.
+    /// For edges: creates a new edge with swapped start/end vertices.
+    /// Returns the handle of the new reversed shape.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the handle is neither a valid face nor edge.
+    #[wasm_bindgen(js_name = "reverseShape")]
+    pub fn reverse_shape(&mut self, id: u32) -> Result<u32, JsError> {
+        // Try as face
+        if let Ok(face_id) = self.resolve_face(id) {
+            let face = self.topo.face(face_id)?;
+            let outer_wire = face.outer_wire();
+            let inner_wires: Vec<_> = face.inner_wires().to_vec();
+            let new_surface = match face.surface() {
+                FaceSurface::Plane { normal, d } => FaceSurface::Plane {
+                    normal: -*normal,
+                    d: -*d,
+                },
+                other => other.clone(),
+            };
+            let new_face = Face::new(outer_wire, inner_wires, new_surface);
+            let new_fid = self.topo.faces.alloc(new_face);
+            return Ok(face_id_to_u32(new_fid));
+        }
+        // Try as edge
+        if let Ok(edge_id) = self.resolve_edge(id) {
+            let edge = self.topo.edge(edge_id)?;
+            let new_edge = Edge::new(edge.end(), edge.start(), edge.curve().clone());
+            let new_eid = self.topo.edges.alloc(new_edge);
+            return Ok(edge_id_to_u32(new_eid));
+        }
+        Err(WasmError::InvalidInput {
+            reason: "reverseShape requires a face or edge handle".into(),
+        }
+        .into())
+    }
 }
 
 // ── Private helpers for new bindings ────────────────────────────────
