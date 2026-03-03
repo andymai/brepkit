@@ -186,19 +186,20 @@ mod tests {
         let bbox1 = crate::measure::solid_bounding_box(&topo, comp.solids()[1]).unwrap();
         let bbox2 = crate::measure::solid_bounding_box(&topo, comp.solids()[2]).unwrap();
 
+        // Box goes from [0,1], copies shifted by 3 and 6 along x.
         assert!(
-            tol.approx_eq(bbox0.min.x(), -0.5),
-            "first copy min_x should be ~-0.5, got {}",
+            tol.approx_eq(bbox0.min.x(), 0.0),
+            "first copy min_x should be ~0.0, got {}",
             bbox0.min.x()
         );
         assert!(
-            tol.approx_eq(bbox1.min.x(), 2.5),
-            "second copy min_x should be ~2.5, got {}",
+            tol.approx_eq(bbox1.min.x(), 3.0),
+            "second copy min_x should be ~3.0, got {}",
             bbox1.min.x()
         );
         assert!(
-            tol.approx_eq(bbox2.min.x(), 5.5),
-            "third copy min_x should be ~5.5, got {}",
+            tol.approx_eq(bbox2.min.x(), 6.0),
+            "third copy min_x should be ~6.0, got {}",
             bbox2.min.x()
         );
     }

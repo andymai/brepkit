@@ -139,8 +139,9 @@ mod tests {
         let bb = compound_bounding_box(&topo, cid).unwrap();
 
         let tol = Tolerance::loose();
-        assert!(tol.approx_eq(bb.min.x(), -0.5));
-        assert!(tol.approx_eq(bb.max.x(), 5.5));
+        // s1 is [0,1], s2 translated by 5 is [5,6]
+        assert!(tol.approx_eq(bb.min.x(), 0.0));
+        assert!(tol.approx_eq(bb.max.x(), 6.0));
     }
 
     #[test]

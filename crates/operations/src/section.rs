@@ -454,11 +454,11 @@ mod tests {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
 
-        // Cut at z=0 (middle of the box).
+        // Box extends from (0,0,0) to (2,3,4). Cut at z=2 (middle of the box).
         let result = section(
             &mut topo,
             solid,
-            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 2.0),
             Vec3::new(0.0, 0.0, 1.0),
         )
         .unwrap();

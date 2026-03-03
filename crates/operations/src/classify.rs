@@ -380,7 +380,8 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
-        let result = classify_point(&topo, solid, Point3::new(0.0, 0.0, 0.0), 0.1, 1e-6).unwrap();
+        // Box extends from (0,0,0) to (2,2,2); center is (1,1,1).
+        let result = classify_point(&topo, solid, Point3::new(1.0, 1.0, 1.0), 0.1, 1e-6).unwrap();
         assert_eq!(result, PointClassification::Inside);
     }
 
@@ -398,8 +399,8 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
-        // Box is centered at origin, so face at z=1.0
-        let result = classify_point(&topo, solid, Point3::new(0.0, 0.0, 1.0), 0.1, 1e-3).unwrap();
+        // Box extends from (0,0,0) to (2,2,2), so face at z=2.0
+        let result = classify_point(&topo, solid, Point3::new(1.0, 1.0, 2.0), 0.1, 1e-3).unwrap();
         assert_eq!(result, PointClassification::OnBoundary);
     }
 
@@ -490,8 +491,9 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
+        // Box extends from (0,0,0) to (2,2,2); center is (1,1,1).
         let result =
-            classify_point_winding(&topo, solid, Point3::new(0.0, 0.0, 0.0), 0.1, 1e-6).unwrap();
+            classify_point_winding(&topo, solid, Point3::new(1.0, 1.0, 1.0), 0.1, 1e-6).unwrap();
         assert_eq!(result, PointClassification::Inside);
     }
 
@@ -512,8 +514,9 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
+        // Box extends from (0,0,0) to (2,2,2); center is (1,1,1).
         let result =
-            classify_point_robust(&topo, solid, Point3::new(0.0, 0.0, 0.0), 0.1, 1e-6).unwrap();
+            classify_point_robust(&topo, solid, Point3::new(1.0, 1.0, 1.0), 0.1, 1e-6).unwrap();
         assert_eq!(result, PointClassification::Inside);
     }
 

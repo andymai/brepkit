@@ -21,9 +21,10 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 
 // ── Box ────────────────────────────────────────────────────────────
 
-/// Create a box solid with the given dimensions, centered at the origin.
+/// Create a box solid with one corner at the origin.
 ///
-/// The box extends from `(-dx/2, -dy/2, -dz/2)` to `(dx/2, dy/2, dz/2)`.
+/// The box extends from `(0, 0, 0)` to `(dx, dy, dz)`.
+/// This matches OCCT's `BRepPrimAPI_MakeBox` convention.
 ///
 /// # Errors
 ///
@@ -42,37 +43,33 @@ pub fn make_box(
         });
     }
 
-    let hx = dx / 2.0;
-    let hy = dy / 2.0;
-    let hz = dz / 2.0;
-
-    // 8 vertices
+    // 8 vertices: corner at origin, extending to (dx, dy, dz)
     let v = [
         topo.vertices
-            .alloc(Vertex::new(Point3::new(-hx, -hy, -hz), tol.linear)),
+            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol.linear)),
         topo.vertices
-            .alloc(Vertex::new(Point3::new(hx, -hy, -hz), tol.linear)),
+            .alloc(Vertex::new(Point3::new(dx, 0.0, 0.0), tol.linear)),
         topo.vertices
-            .alloc(Vertex::new(Point3::new(hx, hy, -hz), tol.linear)),
+            .alloc(Vertex::new(Point3::new(dx, dy, 0.0), tol.linear)),
         topo.vertices
-            .alloc(Vertex::new(Point3::new(-hx, hy, -hz), tol.linear)),
+            .alloc(Vertex::new(Point3::new(0.0, dy, 0.0), tol.linear)),
         topo.vertices
-            .alloc(Vertex::new(Point3::new(-hx, -hy, hz), tol.linear)),
+            .alloc(Vertex::new(Point3::new(0.0, 0.0, dz), tol.linear)),
         topo.vertices
-            .alloc(Vertex::new(Point3::new(hx, -hy, hz), tol.linear)),
+            .alloc(Vertex::new(Point3::new(dx, 0.0, dz), tol.linear)),
         topo.vertices
-            .alloc(Vertex::new(Point3::new(hx, hy, hz), tol.linear)),
+            .alloc(Vertex::new(Point3::new(dx, dy, dz), tol.linear)),
         topo.vertices
-            .alloc(Vertex::new(Point3::new(-hx, hy, hz), tol.linear)),
+            .alloc(Vertex::new(Point3::new(0.0, dy, dz), tol.linear)),
     ];
 
     // 12 edges (shared between faces)
-    // Bottom ring (z=-hz)
+    // Bottom ring (z=0)
     let eb0 = topo.edges.alloc(Edge::new(v[0], v[1], EdgeCurve::Line));
     let eb1 = topo.edges.alloc(Edge::new(v[1], v[2], EdgeCurve::Line));
     let eb2 = topo.edges.alloc(Edge::new(v[2], v[3], EdgeCurve::Line));
     let eb3 = topo.edges.alloc(Edge::new(v[3], v[0], EdgeCurve::Line));
-    // Top ring (z=+hz)
+    // Top ring (z=dz)
     let et0 = topo.edges.alloc(Edge::new(v[4], v[5], EdgeCurve::Line));
     let et1 = topo.edges.alloc(Edge::new(v[5], v[6], EdgeCurve::Line));
     let et2 = topo.edges.alloc(Edge::new(v[6], v[7], EdgeCurve::Line));
@@ -102,41 +99,42 @@ pub fn make_box(
             .alloc(Face::new(wid, vec![], FaceSurface::Plane { normal, d })))
     };
 
+    // Plane 'd' values: signed distance from origin along normal
     let bottom = mk_face(
         topo,
         [(eb0, false), (eb3, false), (eb2, false), (eb1, false)],
         Vec3::new(0.0, 0.0, -1.0),
-        hz,
+        0.0,
     )?;
     let top = mk_face(
         topo,
         [(et0, true), (et1, true), (et2, true), (et3, true)],
         Vec3::new(0.0, 0.0, 1.0),
-        hz,
+        dz,
     )?;
     let front = mk_face(
         topo,
         [(eb0, true), (ev1, true), (et0, false), (ev0, false)],
         Vec3::new(0.0, -1.0, 0.0),
-        hy,
+        0.0,
     )?;
     let back = mk_face(
         topo,
         [(eb2, true), (ev3, true), (et2, false), (ev2, false)],
         Vec3::new(0.0, 1.0, 0.0),
-        hy,
+        dy,
     )?;
     let left = mk_face(
         topo,
         [(eb3, true), (ev0, true), (et3, false), (ev3, false)],
         Vec3::new(-1.0, 0.0, 0.0),
-        hx,
+        0.0,
     )?;
     let right = mk_face(
         topo,
         [(eb1, true), (ev2, true), (et1, false), (ev1, false)],
         Vec3::new(1.0, 0.0, 0.0),
-        hx,
+        dx,
     )?;
 
     let shell = Shell::new(vec![bottom, top, front, back, left, right])
@@ -742,25 +740,26 @@ mod tests {
     }
 
     #[test]
-    fn make_box_centered_at_origin() {
+    fn make_box_corner_at_origin() {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
+        // Box extends from (0,0,0) to (2,2,2), so center of mass is at (1,1,1).
         let com = crate::measure::solid_center_of_mass(&topo, solid, 0.1).unwrap();
         let tol = Tolerance::loose();
         assert!(
-            tol.approx_eq(com.x(), 0.0),
-            "com x should be ~0, got {}",
+            tol.approx_eq(com.x(), 1.0),
+            "com x should be ~1, got {}",
             com.x()
         );
         assert!(
-            tol.approx_eq(com.y(), 0.0),
-            "com y should be ~0, got {}",
+            tol.approx_eq(com.y(), 1.0),
+            "com y should be ~1, got {}",
             com.y()
         );
         assert!(
-            tol.approx_eq(com.z(), 0.0),
-            "com z should be ~0, got {}",
+            tol.approx_eq(com.z(), 1.0),
+            "com z should be ~1, got {}",
             com.z()
         );
     }
