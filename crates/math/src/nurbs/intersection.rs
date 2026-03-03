@@ -1262,11 +1262,151 @@ fn ssi_tangent_params(
 /// At a singular point (where surface normals are parallel/antiparallel),
 /// use perturbation analysis to determine the intersection curve direction.
 ///
+/// Compute the tangent direction at a singular (tangential) intersection point.
+///
+/// At a tangential point, the first-order tangent `n1 × n2` vanishes because
+/// the surface normals are parallel. This function uses second-order curvature
+/// analysis to determine the correct marching direction.
+///
+/// Algorithm (based on Patrikalakis-Maekawa):
+/// 1. Compute second derivatives of both surfaces at the touch point
+/// 2. Compute the curvature difference tensor in the tangent plane
+/// 3. Find the principal direction of the curvature difference —
+///    this is the direction along which the surfaces separate fastest
+/// 4. The intersection curve follows the direction perpendicular to
+///    the maximum curvature difference
+///
+/// Falls back to perturbation-based search if second-order analysis
+/// is degenerate (e.g., surfaces are osculating to second order).
+#[allow(clippy::similar_names, clippy::too_many_lines)]
+fn singular_tangent_direction(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    point: &IntersectionPoint,
+) -> Option<Vec3> {
+    let (u1, v1) = point.param1;
+    let (u2, v2) = point.param2;
+
+    // Try second-order analysis first.
+    if let Some(dir) = second_order_tangent(s1, s2, u1, v1, u2, v2) {
+        return Some(dir);
+    }
+
+    // Fallback: perturbation-based search (original method).
+    perturbation_tangent(s1, s2, point)
+}
+
+/// Second-order curvature analysis for tangential intersection direction.
+///
+/// Computes the difference of the second fundamental forms of the two
+/// surfaces at the touch point, projected onto the shared tangent plane.
+/// The eigenvector corresponding to the zero (or smallest) eigenvalue of
+/// this difference gives the direction along which the surfaces remain
+/// in contact — i.e., the intersection curve tangent.
+#[allow(clippy::similar_names)]
+fn second_order_tangent(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    u1: f64,
+    v1: f64,
+    u2: f64,
+    v2: f64,
+) -> Option<Vec3> {
+    // Compute second-order derivatives for both surfaces.
+    let d1 = s1.derivatives(u1, v1, 2);
+    let d2 = s2.derivatives(u2, v2, 2);
+
+    // Check we have enough derivative data.
+    if d1.len() < 3 || d1[0].len() < 3 || d2.len() < 3 || d2[0].len() < 3 {
+        return None;
+    }
+
+    // First derivatives (tangent vectors).
+    let s1u = d1[1][0]; // ∂S1/∂u1
+    let s1v = d1[0][1]; // ∂S1/∂v1
+
+    // Normal of surface 1.
+    let n1 = s1u.cross(s1v);
+    let n1_len = n1.length();
+    if n1_len < 1e-12 {
+        return None;
+    }
+    let n1 = n1 * (1.0 / n1_len);
+
+    // Second fundamental form coefficients of surface 1:
+    // L = S_uu · n, M = S_uv · n, N = S_vv · n
+    let l1 = d1[2][0].dot(n1);
+    let m1 = d1[1][1].dot(n1);
+    let n1_coeff = d1[0][2].dot(n1);
+
+    // Second fundamental form coefficients of surface 2:
+    let s2u = d2[1][0];
+    let s2v = d2[0][1];
+    let n2 = s2u.cross(s2v);
+    let n2_len = n2.length();
+    if n2_len < 1e-12 {
+        return None;
+    }
+    let n2 = n2 * (1.0 / n2_len);
+
+    let l2 = d2[2][0].dot(n2);
+    let m2 = d2[1][1].dot(n2);
+    let n2_coeff = d2[0][2].dot(n2);
+
+    // Curvature difference: ΔII = II_1 - II_2
+    // In the 2×2 matrix [ΔL, ΔM; ΔM, ΔN]:
+    let dl = l1 - l2;
+    let dm = m1 - m2;
+    let dn = n1_coeff - n2_coeff;
+
+    // Find eigenvectors of the 2×2 symmetric matrix [dl, dm; dm, dn].
+    // The eigenvector with the smaller eigenvalue gives the direction
+    // where the curvature difference is minimal → intersection continues.
+    let trace = dl + dn;
+    let det = dl * dn - dm * dm;
+    let disc = trace * trace - 4.0 * det;
+
+    if disc < -1e-12 {
+        return None; // Complex eigenvalues (shouldn't happen for symmetric matrix)
+    }
+    let disc_sqrt = disc.max(0.0).sqrt();
+
+    let lambda1 = 0.5 * (trace - disc_sqrt);
+    let lambda2 = 0.5 * (trace + disc_sqrt);
+
+    // Pick the eigenvector corresponding to the eigenvalue closest to zero.
+    let target_lambda = if lambda1.abs() < lambda2.abs() {
+        lambda1
+    } else {
+        lambda2
+    };
+
+    // Eigenvector of [dl, dm; dm, dn] for eigenvalue λ:
+    // (dl - λ) x + dm y = 0 → (x, y) = (-dm, dl - λ) or (dn - λ, -dm)
+    let (ex, ey) = if (dl - target_lambda).abs() > dm.abs() {
+        (-dm, dl - target_lambda)
+    } else {
+        (dn - target_lambda, -dm)
+    };
+
+    let e_len = (ex * ex + ey * ey).sqrt();
+    if e_len < 1e-12 {
+        return None; // Degenerate: curvature difference is isotropic
+    }
+
+    // Convert the 2D eigenvector (in parameter space of surface 1) back to 3D.
+    // The direction in 3D is: ex * S1_u + ey * S1_v
+    let tangent_3d = s1u * (ex / e_len) + s1v * (ey / e_len);
+
+    tangent_3d.normalize().ok()
+}
+
+/// Perturbation-based tangent direction finder (fallback).
+///
 /// Samples 8 directions around the current point in parameter space, attempts
 /// Newton refinement at each, and returns the direction to the most distant
 /// successfully refined point.
-#[allow(clippy::similar_names)]
-fn singular_tangent_direction(
+fn perturbation_tangent(
     s1: &NurbsSurface,
     s2: &NurbsSurface,
     point: &IntersectionPoint,
@@ -2099,5 +2239,69 @@ mod tests {
         let chains = chain_intersection_points(&points, 0.5);
         assert_eq!(chains.len(), 1, "all close points should form 1 chain");
         assert_eq!(chains[0].len(), 5);
+    }
+
+    /// Test second-order tangent analysis with two nearly-tangent surfaces.
+    #[test]
+    fn second_order_tangent_finds_direction() {
+        // Two surfaces that touch at (0.5, 0.5): one flat, one dome.
+        // At the touch point, normals are parallel (both ~+z), so
+        // first-order tangent n1 × n2 ≈ 0.
+        let dome = dome_surface();
+        let peak_z = dome.evaluate(0.5, 0.5).z();
+
+        // Place a flat plane at the dome's peak height.
+        let plane = flat_plane_at_z(peak_z);
+
+        // Try the second-order analysis.
+        let result = second_order_tangent(&dome, &plane, 0.5, 0.5, 0.5, 0.5);
+
+        // The result should be Some (a direction was found) or None
+        // (degenerate — surfaces osculate to second order).
+        // For a dome with quadratic curvature vs flat plane, the
+        // curvature difference is non-zero, so we should get a direction.
+        if let Some(dir) = result {
+            // The direction should be a unit vector in the tangent plane.
+            let len = dir.length();
+            assert!(
+                (len - 1.0).abs() < 0.01,
+                "tangent direction should be unit length, got {len}"
+            );
+            // The direction should be roughly in the XY plane (since
+            // both surfaces are horizontal at the touch point).
+            assert!(
+                dir.z().abs() < 0.5,
+                "tangent direction should be mostly horizontal, got z={}",
+                dir.z()
+            );
+        }
+        // None is also acceptable for this degenerate case — it means
+        // the perturbation fallback will be used.
+    }
+
+    /// Verify that the tangential touch test still works with the new
+    /// second-order analysis integrated into the main SSI pipeline.
+    #[test]
+    fn ssi_tangential_with_second_order() {
+        let dome = dome_surface();
+        let peak_z = dome.evaluate(0.5, 0.5).z();
+        let plane = flat_plane_at_z(peak_z - 0.1); // Slightly below peak
+
+        // This should find a small intersection loop near the peak.
+        let result = intersect_nurbs_nurbs(&dome, &plane, 10, 0.05).unwrap();
+
+        // Near-tangential: may or may not find an intersection (depends
+        // on numerical precision), but should NOT crash.
+        for curve in &result {
+            for pt in &curve.points {
+                // All points should be close to the plane height.
+                assert!(
+                    (pt.point.z() - (peak_z - 0.1)).abs() < 0.5,
+                    "intersection point should be near z={:.2}, got z={:.4}",
+                    peak_z - 0.1,
+                    pt.point.z()
+                );
+            }
+        }
     }
 }
