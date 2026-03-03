@@ -138,6 +138,189 @@ fn transform_point(
     frame.origin + frame.right * local_r + frame.up * local_u + frame.tangent * local_t
 }
 
+/// Data from sweeping a single wire through frames.
+struct SweptWireData {
+    ring_verts: Vec<Vec<VertexId>>,
+    ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
+    path_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
+    n: usize,
+}
+
+/// Sweep a wire's vertices through the given frames, creating ring vertices,
+/// ring edges, and path edges.
+///
+/// `centroid`, `initial_right/up/tangent` define the local coordinate system
+/// from which profile offsets are measured.
+#[allow(clippy::too_many_arguments)]
+fn sweep_wire_through_frames(
+    topo: &mut Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    centroid: Point3,
+    initial_right: Vec3,
+    initial_up: Vec3,
+    initial_tangent: Vec3,
+    frames: &[Frame],
+    num_segments: usize,
+) -> Result<SweptWireData, crate::OperationsError> {
+    let tol = Tolerance::new();
+
+    let wire = topo.wire(wire_id)?;
+    let oriented: Vec<_> = wire.edges().to_vec();
+    let n = oriented.len();
+
+    let mut verts: Vec<VertexId> = Vec::with_capacity(n);
+    for oe in &oriented {
+        let edge = topo.edge(oe.edge())?;
+        let vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        verts.push(vid);
+    }
+
+    let positions: Vec<Point3> = verts
+        .iter()
+        .map(|&vid| {
+            topo.vertex(vid)
+                .map(brepkit_topology::vertex::Vertex::point)
+        })
+        .collect::<Result<_, _>>()?;
+
+    // Create ring vertices by transforming through frames.
+    let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_segments + 1);
+    for frame in frames {
+        let ring: Vec<VertexId> = positions
+            .iter()
+            .map(|&pos| {
+                let transformed = transform_point(
+                    pos,
+                    centroid,
+                    initial_right,
+                    initial_up,
+                    initial_tangent,
+                    frame,
+                );
+                topo.vertices.alloc(Vertex::new(transformed, tol.linear))
+            })
+            .collect();
+        ring_verts.push(ring);
+    }
+
+    // Create ring edges (profile edges within each ring).
+    let mut ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> =
+        Vec::with_capacity(num_segments + 1);
+    for ring in &ring_verts {
+        let edges: Vec<_> = (0..n)
+            .map(|i| {
+                let next = (i + 1) % n;
+                topo.edges
+                    .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+            })
+            .collect();
+        ring_edges.push(edges);
+    }
+
+    // Create path edges (between consecutive rings).
+    let mut path_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = Vec::with_capacity(num_segments);
+    for seg in 0..num_segments {
+        let edges: Vec<_> = (0..n)
+            .map(|i| {
+                topo.edges.alloc(Edge::new(
+                    ring_verts[seg][i],
+                    ring_verts[seg + 1][i],
+                    EdgeCurve::Line,
+                ))
+            })
+            .collect();
+        path_edges.push(edges);
+    }
+
+    Ok(SweptWireData {
+        ring_verts,
+        ring_edges,
+        path_edges,
+        n,
+    })
+}
+
+/// Build inward-facing side faces for an inner wire swept through frames.
+fn build_inner_side_faces(
+    topo: &mut Topology,
+    iwd: &SweptWireData,
+    num_segments: usize,
+) -> Result<Vec<FaceId>, crate::OperationsError> {
+    let mut faces = Vec::new();
+
+    for seg in 0..num_segments {
+        for i in 0..iwd.n {
+            let next_i = (i + 1) % iwd.n;
+
+            let p0 = topo.vertex(iwd.ring_verts[seg][i])?.point();
+            let p1 = topo.vertex(iwd.ring_verts[seg][next_i])?.point();
+            let p_next = topo.vertex(iwd.ring_verts[seg + 1][i])?.point();
+            let edge_dir = p1 - p0;
+            let path_dir = p_next - p0;
+            // Reversed normal (inward-facing).
+            let side_normal = path_dir
+                .cross(edge_dir)
+                .normalize()
+                .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+            let side_d = dot_normal_point(side_normal, p0);
+
+            // Reversed winding compared to outer side faces.
+            let side_wire = Wire::new(
+                vec![
+                    OrientedEdge::new(iwd.path_edges[seg][i], true),
+                    OrientedEdge::new(iwd.ring_edges[seg + 1][i], true),
+                    OrientedEdge::new(iwd.path_edges[seg][next_i], false),
+                    OrientedEdge::new(iwd.ring_edges[seg][i], false),
+                ],
+                true,
+            )
+            .map_err(crate::OperationsError::Topology)?;
+
+            let side_wire_id = topo.wires.alloc(side_wire);
+            let fid = topo.faces.alloc(Face::new(
+                side_wire_id,
+                vec![],
+                FaceSurface::Plane {
+                    normal: side_normal,
+                    d: side_d,
+                },
+            ));
+            faces.push(fid);
+        }
+    }
+
+    Ok(faces)
+}
+
+/// Build inner wire loops for a cap face at the given ring index.
+fn build_inner_cap_wires(
+    topo: &mut Topology,
+    inner_data: &[SweptWireData],
+    ring_idx: usize,
+    reversed: bool,
+) -> Result<Vec<brepkit_topology::wire::WireId>, crate::OperationsError> {
+    let mut wires = Vec::new();
+    for iwd in inner_data {
+        let edges: Vec<OrientedEdge> = if reversed {
+            (0..iwd.n)
+                .rev()
+                .map(|i| OrientedEdge::new(iwd.ring_edges[ring_idx][i], false))
+                .collect()
+        } else {
+            (0..iwd.n)
+                .map(|i| OrientedEdge::new(iwd.ring_edges[ring_idx][i], true))
+                .collect()
+        };
+        let wire = Wire::new(edges, true).map_err(crate::OperationsError::Topology)?;
+        wires.push(topo.wires.alloc(wire));
+    }
+    Ok(wires)
+}
+
 /// Sweep a face along a path curve to produce a solid.
 ///
 /// Creates a solid by moving a planar profile along a NURBS curve, with the
@@ -175,12 +358,7 @@ pub fn sweep(
         }
     };
     let input_wire_id = face_data.outer_wire();
-
-    if !face_data.inner_wires().is_empty() {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "sweep of faces with holes is not supported".into(),
-        });
-    }
+    let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
 
     // Validate path has non-zero length.
     if tol.approx_eq(
@@ -306,12 +484,27 @@ pub fn sweep(
         path_edges.push(edges);
     }
 
+    // --- Sweep inner wires ---
+
+    let mut inner_swept: Vec<SweptWireData> = Vec::new();
+    for &iw_id in &inner_wire_ids {
+        inner_swept.push(sweep_wire_through_frames(
+            topo,
+            iw_id,
+            centroid,
+            initial_right,
+            initial_up,
+            initial_tangent,
+            &frames,
+            num_segments,
+        )?);
+    }
+
     // --- Build faces ---
 
     let mut all_faces = Vec::with_capacity(num_segments * n + 2);
 
-    // Start cap: reversed first ring (outward normal pointing opposite to
-    // path direction at the start).
+    // Start cap with inner wire holes.
     let start_reversed_edges: Vec<OrientedEdge> = (0..n)
         .rev()
         .map(|i| OrientedEdge::new(ring_edges[0][i], false))
@@ -319,12 +512,13 @@ pub fn sweep(
     let start_wire =
         Wire::new(start_reversed_edges, true).map_err(crate::OperationsError::Topology)?;
     let start_wire_id = topo.wires.alloc(start_wire);
+    let start_inner_wires = build_inner_cap_wires(topo, &inner_swept, 0, true)?;
 
     let start_normal = -frames[0].tangent;
     let start_d = dot_normal_point(start_normal, topo.vertex(ring_verts[0][0])?.point());
     let start_face = topo.faces.alloc(Face::new(
         start_wire_id,
-        vec![],
+        start_inner_wires,
         FaceSurface::Plane {
             normal: start_normal,
             d: start_d,
@@ -375,13 +569,19 @@ pub fn sweep(
         }
     }
 
-    // End cap: last ring with forward orientation (outward normal along
-    // path tangent at the end).
+    // Inner side faces.
+    for iwd in &inner_swept {
+        let inner_faces = build_inner_side_faces(topo, iwd, num_segments)?;
+        all_faces.extend(inner_faces);
+    }
+
+    // End cap with inner wire holes.
     let end_edges: Vec<OrientedEdge> = (0..n)
         .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
         .collect();
     let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
     let end_wire_id = topo.wires.alloc(end_wire);
+    let end_inner_wires = build_inner_cap_wires(topo, &inner_swept, num_segments, false)?;
 
     let end_normal = frames[num_segments].tangent;
     let end_d = dot_normal_point(
@@ -390,7 +590,7 @@ pub fn sweep(
     );
     let end_face = topo.faces.alloc(Face::new(
         end_wire_id,
-        vec![],
+        end_inner_wires,
         FaceSurface::Plane {
             normal: end_normal,
             d: end_d,
@@ -445,12 +645,8 @@ pub fn sweep_smooth(
         }
     };
     let input_wire_id = face_data.outer_wire();
-
-    if !face_data.inner_wires().is_empty() {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "sweep of faces with holes is not supported".into(),
-        });
-    }
+    let inner_wire_ids_smooth: Vec<brepkit_topology::wire::WireId> =
+        face_data.inner_wires().to_vec();
 
     if tol.approx_eq(
         (path.evaluate(1.0) - path.evaluate(0.0)).length_squared(),
@@ -555,20 +751,36 @@ pub fn sweep_smooth(
         })
         .collect();
 
+    // Sweep inner wires for smooth variant.
+    let mut inner_swept_smooth: Vec<SweptWireData> = Vec::new();
+    for &iw_id in &inner_wire_ids_smooth {
+        inner_swept_smooth.push(sweep_wire_through_frames(
+            topo,
+            iw_id,
+            centroid,
+            initial_right,
+            initial_up,
+            initial_tangent,
+            &frames,
+            num_segments,
+        )?);
+    }
+
     let mut all_faces = Vec::with_capacity(n + 2);
 
-    // Start cap.
+    // Start cap with inner wire holes.
     let start_reversed: Vec<OrientedEdge> = (0..n)
         .rev()
         .map(|i| OrientedEdge::new(first_ring_edges[i], false))
         .collect();
     let start_wire = Wire::new(start_reversed, true).map_err(crate::OperationsError::Topology)?;
     let start_wire_id = topo.wires.alloc(start_wire);
+    let start_inner_wires_smooth = build_inner_cap_wires(topo, &inner_swept_smooth, 0, true)?;
     let start_normal = -frames[0].tangent;
     let start_d = dot_normal_point(start_normal, ring_positions[0][0]);
     all_faces.push(topo.faces.alloc(Face::new(
         start_wire_id,
-        vec![],
+        start_inner_wires_smooth,
         FaceSurface::Plane {
             normal: start_normal,
             d: start_d,
@@ -619,17 +831,25 @@ pub fn sweep_smooth(
         )));
     }
 
-    // End cap.
+    // Inner side faces for smooth variant.
+    for iwd in &inner_swept_smooth {
+        let inner_faces = build_inner_side_faces(topo, iwd, num_segments)?;
+        all_faces.extend(inner_faces);
+    }
+
+    // End cap with inner wire holes.
     let end_edges: Vec<OrientedEdge> = (0..n)
         .map(|i| OrientedEdge::new(last_ring_edges[i], true))
         .collect();
     let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
     let end_wire_id = topo.wires.alloc(end_wire);
+    let end_inner_wires_smooth =
+        build_inner_cap_wires(topo, &inner_swept_smooth, num_segments, false)?;
     let end_normal = frames[num_segments].tangent;
     let end_d = dot_normal_point(end_normal, ring_positions[num_rings - 1][0]);
     all_faces.push(topo.faces.alloc(Face::new(
         end_wire_id,
-        vec![],
+        end_inner_wires_smooth,
         FaceSurface::Plane {
             normal: end_normal,
             d: end_d,
@@ -713,12 +933,7 @@ pub fn sweep_with_options(
         }
     };
     let input_wire_id = face_data.outer_wire();
-
-    if !face_data.inner_wires().is_empty() {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "sweep of faces with holes is not supported".into(),
-        });
-    }
+    let inner_wire_ids_opts: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
 
     let input_wire = topo.wire(input_wire_id)?;
     let input_oriented: Vec<_> = input_wire.edges().to_vec();
@@ -871,9 +1086,24 @@ pub fn sweep_with_options(
         path_edges.push(edges);
     }
 
+    // Sweep inner wires for options variant.
+    let mut inner_swept_opts: Vec<SweptWireData> = Vec::new();
+    for &iw_id in &inner_wire_ids_opts {
+        inner_swept_opts.push(sweep_wire_through_frames(
+            topo,
+            iw_id,
+            centroid,
+            initial_right,
+            initial_up,
+            initial_tangent,
+            &frames,
+            num_segments,
+        )?);
+    }
+
     let mut all_faces = Vec::with_capacity(num_segments * n + 2);
 
-    // Start cap
+    // Start cap with inner wire holes.
     let start_reversed_edges: Vec<OrientedEdge> = (0..n)
         .rev()
         .map(|i| OrientedEdge::new(ring_edges[0][i], false))
@@ -881,11 +1111,12 @@ pub fn sweep_with_options(
     let start_wire =
         Wire::new(start_reversed_edges, true).map_err(crate::OperationsError::Topology)?;
     let start_wire_id = topo.wires.alloc(start_wire);
+    let start_inner_wires_opts = build_inner_cap_wires(topo, &inner_swept_opts, 0, true)?;
     let start_normal = -frames[0].tangent;
     let start_d = dot_normal_point(start_normal, topo.vertex(ring_verts[0][0])?.point());
     let start_face = topo.faces.alloc(Face::new(
         start_wire_id,
-        vec![],
+        start_inner_wires_opts,
         FaceSurface::Plane {
             normal: start_normal,
             d: start_d,
@@ -932,12 +1163,19 @@ pub fn sweep_with_options(
         }
     }
 
-    // End cap
+    // Inner side faces for options variant.
+    for iwd in &inner_swept_opts {
+        let inner_faces = build_inner_side_faces(topo, iwd, num_segments)?;
+        all_faces.extend(inner_faces);
+    }
+
+    // End cap with inner wire holes.
     let end_edges: Vec<OrientedEdge> = (0..n)
         .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
         .collect();
     let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
     let end_wire_id = topo.wires.alloc(end_wire);
+    let end_inner_wires_opts = build_inner_cap_wires(topo, &inner_swept_opts, num_segments, false)?;
     let end_normal = frames[num_segments].tangent;
     let end_d = dot_normal_point(
         end_normal,
@@ -945,7 +1183,7 @@ pub fn sweep_with_options(
     );
     let end_face = topo.faces.alloc(Face::new(
         end_wire_id,
-        vec![],
+        end_inner_wires_opts,
         FaceSurface::Plane {
             normal: end_normal,
             d: end_d,
