@@ -146,19 +146,32 @@ const fn next_ring_index(seg: usize, num_segs: usize, is_full: bool) -> usize {
     }
 }
 
+/// Data produced by revolving a single wire (outer or inner).
+struct WireRevolveData {
+    ring_verts: Vec<Vec<VertexId>>,
+    arc_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
+    ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>>,
+    input_oriented: Vec<OrientedEdge>,
+    n: usize,
+}
+
 /// Revolve a planar face around an axis to produce a solid of revolution.
 ///
 /// # Parameters
 ///
-/// - `face` — a planar face whose outer wire defines the profile (no holes)
+/// - `face` — a planar face whose outer wire defines the profile
 /// - `axis_origin` — a point on the rotation axis
 /// - `axis_direction` — direction of the rotation axis (will be normalized)
 /// - `angle_radians` — rotation angle in radians, must be in (0, 2π]
 ///
+/// When the input face has inner wires (holes), they are propagated:
+/// inner wire edges generate inward-facing revolution surfaces, and
+/// start/end cap faces include the inner wires as holes.
+///
 /// # Errors
 ///
 /// Returns an error if the axis is zero-length, the angle is out of range,
-/// the face has inner wires (holes), or the face surface is not a plane.
+/// or the face surface is not a plane.
 #[allow(clippy::too_many_lines)]
 pub fn revolve(
     topo: &mut Topology,
@@ -198,30 +211,120 @@ pub fn revolve(
         }
     };
     let input_wire_id = face_data.outer_wire();
+    let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
 
-    if !face_data.inner_wires().is_empty() {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "revolve of faces with holes is not supported".into(),
-        });
+    // --- Arc segmentation ---
+
+    let (num_segs, seg_angle) = arc_segmentation(angle);
+    let num_boundaries = if is_full { num_segs } else { num_segs + 1 };
+
+    // --- Revolve a single wire, returning ring data ---
+
+    let revolve_wire = |topo: &mut Topology,
+                        wire_id: brepkit_topology::wire::WireId|
+     -> Result<WireRevolveData, crate::OperationsError> {
+        let wire = topo.wire(wire_id)?;
+        let input_oriented: Vec<_> = wire.edges().to_vec();
+        let n = input_oriented.len();
+
+        let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
+        for oe in &input_oriented {
+            let edge = topo.edge(oe.edge())?;
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            input_verts.push(vid);
+        }
+
+        let input_positions: Vec<Point3> = input_verts
+            .iter()
+            .map(|&vid| {
+                topo.vertex(vid)
+                    .map(brepkit_topology::vertex::Vertex::point)
+            })
+            .collect::<Result<_, _>>()?;
+
+        // Create rotated vertices.
+        let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_boundaries);
+        ring_verts.push(input_verts.clone());
+
+        for k in 1..num_boundaries {
+            #[allow(clippy::cast_precision_loss)]
+            let theta = seg_angle * (k as f64);
+            let ring: Vec<VertexId> = input_positions
+                .iter()
+                .map(|&pos| {
+                    let rotated = rotate_point(pos, axis_origin, axis, theta);
+                    topo.vertices.alloc(Vertex::new(rotated, tol.linear))
+                })
+                .collect();
+            ring_verts.push(ring);
+        }
+
+        // Create arc edges.
+        let mut arc_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = Vec::with_capacity(num_segs);
+
+        for seg in 0..num_segs {
+            let next = next_ring_index(seg, num_segs, is_full);
+            let mut seg_edges = Vec::with_capacity(n);
+            for (&start_vid, &end_vid) in ring_verts[seg].iter().zip(&ring_verts[next]) {
+                let start_pos = topo.vertex(start_vid)?.point();
+                let end_pos = topo.vertex(end_vid)?.point();
+                let curve = make_arc_curve(start_pos, end_pos, axis_origin, axis, seg_angle)?;
+                seg_edges.push(topo.edges.alloc(Edge::new(
+                    start_vid,
+                    end_vid,
+                    EdgeCurve::NurbsCurve(curve),
+                )));
+            }
+            arc_edges.push(seg_edges);
+        }
+
+        // Create ring edges.
+        let input_edge_ids: Vec<_> = input_oriented
+            .iter()
+            .map(brepkit_topology::wire::OrientedEdge::edge)
+            .collect();
+
+        let mut ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> =
+            Vec::with_capacity(num_boundaries);
+        ring_edges.push(input_edge_ids);
+
+        for ring in ring_verts.iter().skip(1) {
+            let edges: Vec<_> = (0..n)
+                .map(|i| {
+                    let next_i = (i + 1) % n;
+                    topo.edges
+                        .alloc(Edge::new(ring[i], ring[next_i], EdgeCurve::Line))
+                })
+                .collect();
+            ring_edges.push(edges);
+        }
+
+        Ok(WireRevolveData {
+            ring_verts,
+            arc_edges,
+            ring_edges,
+            input_oriented,
+            n,
+        })
+    };
+
+    // --- Revolve outer wire ---
+
+    let outer = revolve_wire(topo, input_wire_id)?;
+
+    // --- Revolve inner wires ---
+
+    let mut inner_data: Vec<WireRevolveData> = Vec::new();
+    for &iw_id in &inner_wire_ids {
+        inner_data.push(revolve_wire(topo, iw_id)?);
     }
 
-    // Collect profile vertices and positions.
-    let input_wire = topo.wire(input_wire_id)?;
-    let input_oriented: Vec<_> = input_wire.edges().to_vec();
-    let n = input_oriented.len();
-
-    let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
-    for oe in &input_oriented {
-        let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
-        input_verts.push(vid);
-    }
-
-    let input_positions: Vec<Point3> = input_verts
+    // Collect input positions for outer wire (needed for cap face normals).
+    let input_positions: Vec<Point3> = outer.ring_verts[0]
         .iter()
         .map(|&vid| {
             topo.vertex(vid)
@@ -229,99 +332,39 @@ pub fn revolve(
         })
         .collect::<Result<_, _>>()?;
 
-    // --- Arc segmentation ---
-
-    let (num_segs, seg_angle) = arc_segmentation(angle);
-
-    // --- Create rotated vertices ---
-    //
-    // ring_verts[k][i] = vertex at boundary k, profile vertex i.
-    // ring_verts[0] reuses the original input vertices.
-    // For a full revolution the last boundary wraps to ring 0.
-
-    let num_boundaries = if is_full { num_segs } else { num_segs + 1 };
-
-    let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_boundaries);
-    ring_verts.push(input_verts.clone());
-
-    for k in 1..num_boundaries {
-        #[allow(clippy::cast_precision_loss)]
-        let theta = seg_angle * (k as f64);
-        let ring: Vec<VertexId> = input_positions
-            .iter()
-            .map(|&pos| {
-                let rotated = rotate_point(pos, axis_origin, axis, theta);
-                topo.vertices.alloc(Vertex::new(rotated, tol.linear))
-            })
-            .collect();
-        ring_verts.push(ring);
-    }
-
-    // --- Create arc edges (circular direction) ---
-    //
-    // arc_edges[seg][i] = NURBS edge from ring_verts[seg][i] to ring_verts[next][i].
-
-    let mut arc_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = Vec::with_capacity(num_segs);
-
-    for seg in 0..num_segs {
-        let next = next_ring_index(seg, num_segs, is_full);
-        let mut seg_edges = Vec::with_capacity(n);
-        for (&start_vid, &end_vid) in ring_verts[seg].iter().zip(&ring_verts[next]) {
-            let start_pos = topo.vertex(start_vid)?.point();
-            let end_pos = topo.vertex(end_vid)?.point();
-            let curve = make_arc_curve(start_pos, end_pos, axis_origin, axis, seg_angle)?;
-            seg_edges.push(topo.edges.alloc(Edge::new(
-                start_vid,
-                end_vid,
-                EdgeCurve::NurbsCurve(curve),
-            )));
-        }
-        arc_edges.push(seg_edges);
-    }
-
-    // --- Create profile edges for each ring ---
-    //
-    // ring_edges[k][i] = straight edge from ring_verts[k][i] to ring_verts[k][(i+1)%n].
-    // ring_edges[0] reuses the original input edges.
-
-    let input_edge_ids: Vec<_> = input_oriented
-        .iter()
-        .map(brepkit_topology::wire::OrientedEdge::edge)
-        .collect();
-
-    let mut ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> =
-        Vec::with_capacity(num_boundaries);
-    ring_edges.push(input_edge_ids);
-
-    for ring in ring_verts.iter().skip(1) {
-        let edges: Vec<_> = (0..n)
-            .map(|i| {
-                let next = (i + 1) % n;
-                topo.edges
-                    .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
-            })
-            .collect();
-        ring_edges.push(edges);
-    }
-
     // --- Build faces ---
 
     let mut all_faces = Vec::new();
 
     // Start cap (bottom): reversed copy of input face for partial revolution.
     if !is_full {
-        let reversed_edges: Vec<OrientedEdge> = input_oriented
+        let reversed_edges: Vec<OrientedEdge> = outer
+            .input_oriented
             .iter()
             .rev()
             .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
             .collect();
         let wire = Wire::new(reversed_edges, true).map_err(crate::OperationsError::Topology)?;
         let wid = topo.wires.alloc(wire);
+
+        // Create inner wire holes for the bottom cap.
+        let mut bottom_inner_wires = Vec::new();
+        for iwd in &inner_data {
+            let inner_reversed: Vec<OrientedEdge> = iwd
+                .input_oriented
+                .iter()
+                .rev()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect();
+            let iw = Wire::new(inner_reversed, true).map_err(crate::OperationsError::Topology)?;
+            bottom_inner_wires.push(topo.wires.alloc(iw));
+        }
+
         let bottom_normal = -input_normal;
         let bottom_d = dot_normal_point(bottom_normal, input_positions[0]);
         let fid = topo.faces.alloc(Face::new(
             wid,
-            vec![],
+            bottom_inner_wires,
             FaceSurface::Plane {
                 normal: bottom_normal,
                 d: bottom_d,
@@ -330,32 +373,30 @@ pub fn revolve(
         all_faces.push(fid);
     }
 
-    // Side NURBS faces: one per profile edge × arc segment.
+    // Outer side NURBS faces.
     for seg in 0..num_segs {
         let next = next_ring_index(seg, num_segs, is_full);
 
-        for i in 0..n {
-            let next_i = (i + 1) % n;
+        for i in 0..outer.n {
+            let next_i = (i + 1) % outer.n;
 
-            // Edges created for rings > 0 are always stored forward (i → next_i).
-            // Only ring 0's original input edges may have non-forward orientation.
             let fwd_seg = if seg == 0 {
-                input_oriented[i].is_forward()
+                outer.input_oriented[i].is_forward()
             } else {
                 true
             };
             let fwd_next = if next == 0 {
-                input_oriented[i].is_forward()
+                outer.input_oriented[i].is_forward()
             } else {
                 true
             };
 
             let side_wire = Wire::new(
                 vec![
-                    OrientedEdge::new(ring_edges[seg][i], fwd_seg),
-                    OrientedEdge::new(arc_edges[seg][next_i], true),
-                    OrientedEdge::new(ring_edges[next][i], !fwd_next),
-                    OrientedEdge::new(arc_edges[seg][i], false),
+                    OrientedEdge::new(outer.ring_edges[seg][i], fwd_seg),
+                    OrientedEdge::new(outer.arc_edges[seg][next_i], true),
+                    OrientedEdge::new(outer.ring_edges[next][i], !fwd_next),
+                    OrientedEdge::new(outer.arc_edges[seg][i], false),
                 ],
                 true,
             )
@@ -363,10 +404,10 @@ pub fn revolve(
 
             let side_wire_id = topo.wires.alloc(side_wire);
 
-            let p0_start = topo.vertex(ring_verts[seg][i])?.point();
-            let p0_end = topo.vertex(ring_verts[next][i])?.point();
-            let p1_start = topo.vertex(ring_verts[seg][next_i])?.point();
-            let p1_end = topo.vertex(ring_verts[next][next_i])?.point();
+            let p0_start = topo.vertex(outer.ring_verts[seg][i])?.point();
+            let p0_end = topo.vertex(outer.ring_verts[next][i])?.point();
+            let p1_start = topo.vertex(outer.ring_verts[seg][next_i])?.point();
+            let p1_end = topo.vertex(outer.ring_verts[next][next_i])?.point();
 
             let surface = make_revolution_surface(
                 p0_start,
@@ -385,11 +426,67 @@ pub fn revolve(
         }
     }
 
+    // Inner side NURBS faces (reversed winding for inward-facing normals).
+    for iwd in &inner_data {
+        for seg in 0..num_segs {
+            let next = next_ring_index(seg, num_segs, is_full);
+
+            for i in 0..iwd.n {
+                let next_i = (i + 1) % iwd.n;
+
+                let fwd_seg = if seg == 0 {
+                    iwd.input_oriented[i].is_forward()
+                } else {
+                    true
+                };
+                let fwd_next = if next == 0 {
+                    iwd.input_oriented[i].is_forward()
+                } else {
+                    true
+                };
+
+                // Reversed winding: swap the order so normals point inward.
+                let side_wire = Wire::new(
+                    vec![
+                        OrientedEdge::new(iwd.arc_edges[seg][i], true),
+                        OrientedEdge::new(iwd.ring_edges[next][i], fwd_next),
+                        OrientedEdge::new(iwd.arc_edges[seg][next_i], false),
+                        OrientedEdge::new(iwd.ring_edges[seg][i], !fwd_seg),
+                    ],
+                    true,
+                )
+                .map_err(crate::OperationsError::Topology)?;
+
+                let side_wire_id = topo.wires.alloc(side_wire);
+
+                let p0_start = topo.vertex(iwd.ring_verts[seg][i])?.point();
+                let p0_end = topo.vertex(iwd.ring_verts[next][i])?.point();
+                let p1_start = topo.vertex(iwd.ring_verts[seg][next_i])?.point();
+                let p1_end = topo.vertex(iwd.ring_verts[next][next_i])?.point();
+
+                let surface = make_revolution_surface(
+                    p0_start,
+                    p0_end,
+                    p1_start,
+                    p1_end,
+                    axis_origin,
+                    axis,
+                    seg_angle,
+                )?;
+
+                let fid =
+                    topo.faces
+                        .alloc(Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface)));
+                all_faces.push(fid);
+            }
+        }
+    }
+
     // End cap (top): rotated copy of the profile for partial revolution.
     if !is_full {
         let last_ring = num_boundaries - 1;
         let top_wire = Wire::new(
-            ring_edges[last_ring]
+            outer.ring_edges[last_ring]
                 .iter()
                 .map(|&eid| OrientedEdge::new(eid, true))
                 .collect(),
@@ -398,13 +495,24 @@ pub fn revolve(
         .map_err(crate::OperationsError::Topology)?;
         let top_wire_id = topo.wires.alloc(top_wire);
 
+        // Create inner wire holes for the top cap.
+        let mut top_inner_wires = Vec::new();
+        for iwd in &inner_data {
+            let inner_top_edges: Vec<OrientedEdge> = iwd.ring_edges[last_ring]
+                .iter()
+                .map(|&eid| OrientedEdge::new(eid, true))
+                .collect();
+            let iw = Wire::new(inner_top_edges, true).map_err(crate::OperationsError::Topology)?;
+            top_inner_wires.push(topo.wires.alloc(iw));
+        }
+
         let rotated_normal = rotate_vec(input_normal, axis, angle);
-        let top_pos = topo.vertex(ring_verts[last_ring][0])?.point();
+        let top_pos = topo.vertex(outer.ring_verts[last_ring][0])?.point();
         let top_d = dot_normal_point(rotated_normal, top_pos);
 
         let fid = topo.faces.alloc(Face::new(
             top_wire_id,
-            vec![],
+            top_inner_wires,
             FaceSurface::Plane {
                 normal: rotated_normal,
                 d: top_d,
@@ -562,5 +670,122 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Helper: create a square face with a smaller square hole.
+    fn make_face_with_hole(topo: &mut Topology) -> FaceId {
+        // Outer: 2×1 rectangle at x=1..3, y=0..1 (offset from Y axis).
+        let outer_pts = vec![
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(3.0, 0.0, 0.0),
+            Point3::new(3.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        ];
+        let outer_wire = brepkit_topology::builder::make_polygon_wire(topo, &outer_pts).unwrap();
+
+        // Inner: small 0.5×0.5 hole (CW winding).
+        let inner_pts = vec![
+            Point3::new(1.5, 0.25, 0.0),
+            Point3::new(1.5, 0.75, 0.0),
+            Point3::new(2.5, 0.75, 0.0),
+            Point3::new(2.5, 0.25, 0.0),
+        ];
+        let inner_wire = brepkit_topology::builder::make_polygon_wire(topo, &inner_pts).unwrap();
+
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let d = 0.0;
+        let face = Face::new(
+            outer_wire,
+            vec![inner_wire],
+            FaceSurface::Plane { normal, d },
+        );
+        topo.faces.alloc(face)
+    }
+
+    #[test]
+    fn revolve_face_with_hole_full_circle() {
+        let mut topo = Topology::new();
+        let face = make_face_with_hole(&mut topo);
+
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0 * PI,
+        )
+        .unwrap();
+
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+
+        // Outer: 4 edges × 4 segments = 16 faces.
+        // Inner: 4 edges × 4 segments = 16 faces.
+        // No caps for full revolution. Total = 32.
+        assert_eq!(
+            shell.faces().len(),
+            32,
+            "full revolve with hole: 16 outer + 16 inner = 32 faces"
+        );
+    }
+
+    #[test]
+    fn revolve_face_with_hole_partial() {
+        let mut topo = Topology::new();
+        let face = make_face_with_hole(&mut topo);
+
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            PI, // half revolution
+        )
+        .unwrap();
+
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+
+        // Outer: 4 edges × 2 segments = 8 NURBS side faces.
+        // Inner: 4 edges × 2 segments = 8 NURBS side faces.
+        // 2 planar caps (start + end) = 2.
+        // Total = 18.
+        assert_eq!(
+            shell.faces().len(),
+            18,
+            "half revolve with hole: 8 outer + 8 inner + 2 caps = 18 faces"
+        );
+
+        // Caps should have inner wires (holes).
+        let faces_with_holes = shell
+            .faces()
+            .iter()
+            .filter(|&&fid| !topo.face(fid).unwrap().inner_wires().is_empty())
+            .count();
+        assert_eq!(
+            faces_with_holes, 2,
+            "start and end caps should both have inner wire holes"
+        );
+    }
+
+    #[test]
+    fn revolve_face_with_hole_positive_volume() {
+        let mut topo = Topology::new();
+        let face = make_face_with_hole(&mut topo);
+
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0 * PI,
+        )
+        .unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 0.0,
+            "revolved hollow solid should have positive volume"
+        );
     }
 }
