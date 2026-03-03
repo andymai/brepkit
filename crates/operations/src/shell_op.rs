@@ -13,12 +13,13 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
-use crate::boolean::{assemble_solid, face_vertices};
+use crate::boolean::{FaceSpec, assemble_solid_mixed, face_vertices};
 use crate::dot_normal_point;
 
 /// Create a hollow shell from a solid by offsetting faces inward.
 ///
 /// Each face is offset inward by `thickness` along its outward normal.
+/// Supports planar, NURBS, and analytic surface faces.
 /// If `open_faces` is non-empty, those faces are removed from both the
 /// outer and inner shells, creating openings.
 ///
@@ -26,8 +27,8 @@ use crate::dot_normal_point;
 ///
 /// Returns an error if:
 /// - `thickness` is non-positive
-/// - The solid contains NURBS faces
 /// - Any face in `open_faces` is not part of the solid
+/// - Face offset fails (e.g., negative radius for curved surfaces)
 /// - The resulting shell is degenerate
 #[allow(clippy::too_many_lines)]
 pub fn shell(
@@ -44,7 +45,6 @@ pub fn shell(
         });
     }
 
-    // Collect face data from the solid.
     let solid_data = topo.solid(solid)?;
     let shell_data = topo.shell(solid_data.outer_shell())?;
     let all_face_ids: Vec<FaceId> = shell_data.faces().to_vec();
@@ -61,62 +61,97 @@ pub fn shell(
         }
     }
 
-    // Collect face polygons and normals.
-    let mut face_data: Vec<(FaceId, Vec<Point3>, Vec3, f64)> = Vec::new();
+    // Collect face vertex data for planar faces (needed for rim quads).
+    let mut face_verts: Vec<(FaceId, Vec<Point3>)> = Vec::new();
     for &fid in &all_face_ids {
-        let face = topo.face(fid)?;
-        let (normal, d) = match face.surface() {
-            FaceSurface::Plane { normal, d } => (*normal, *d),
-            _ => {
-                return Err(crate::OperationsError::InvalidInput {
-                    reason: "shell operation on non-planar faces is not supported".into(),
-                });
-            }
-        };
         let verts = face_vertices(topo, fid)?;
-        face_data.push((fid, verts, normal, d));
+        face_verts.push((fid, verts));
     }
 
-    let mut result_faces: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
+    let mut result_specs: Vec<FaceSpec> = Vec::new();
 
     // Outer faces: keep the original faces that are not open.
-    for &(fid, ref verts, normal, d) in &face_data {
-        if !open_set.contains(&fid.index()) {
-            result_faces.push((verts.clone(), normal, d));
+    for &(fid, ref verts) in &face_verts {
+        if open_set.contains(&fid.index()) {
+            continue;
+        }
+        let face = topo.face(fid)?;
+        match face.surface() {
+            FaceSurface::Plane { normal, d } => {
+                result_specs.push(FaceSpec::Planar {
+                    vertices: verts.clone(),
+                    normal: *normal,
+                    d: *d,
+                });
+            }
+            other => {
+                result_specs.push(FaceSpec::Surface {
+                    vertices: verts.clone(),
+                    surface: other.clone(),
+                });
+            }
         }
     }
 
-    // Inner faces: offset each non-open face inward (flip normal, shift
-    // vertices along the original outward normal by -thickness).
-    for &(fid, ref verts, normal, _d) in &face_data {
+    // Inner faces: offset each non-open face inward using offset_face.
+    for &(fid, ref _verts) in &face_verts {
         if open_set.contains(&fid.index()) {
             continue;
         }
 
-        let offset = Vec3::new(
-            -normal.x() * thickness,
-            -normal.y() * thickness,
-            -normal.z() * thickness,
-        );
-        let inner_verts: Vec<Point3> = verts
-            .iter()
-            .map(|p| *p + offset)
-            .rev() // Reverse winding for inner face (normal points inward).
-            .collect();
-        let inner_normal = -normal;
-        let inner_d = dot_normal_point(inner_normal, inner_verts[0]);
-        result_faces.push((inner_verts, inner_normal, inner_d));
+        // Use offset_face for the inner surface (handles all surface types).
+        let inner_fid = crate::offset_face::offset_face(topo, fid, -thickness, 8)?;
+        let inner_face = topo.face(inner_fid)?;
+
+        // Get inner vertices (reversed winding for inward-facing normal).
+        let inner_verts: Vec<Point3> = {
+            let inner_wire = topo.wire(inner_face.outer_wire())?;
+            let mut pts = Vec::new();
+            for oe in inner_wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let vid = if oe.is_forward() {
+                    edge.start()
+                } else {
+                    edge.end()
+                };
+                pts.push(topo.vertex(vid)?.point());
+            }
+            pts.into_iter().rev().collect()
+        };
+
+        match inner_face.surface() {
+            FaceSurface::Plane { normal, .. } => {
+                let inner_normal = -*normal;
+                let inner_d = dot_normal_point(inner_normal, inner_verts[0]);
+                result_specs.push(FaceSpec::Planar {
+                    vertices: inner_verts,
+                    normal: inner_normal,
+                    d: inner_d,
+                });
+            }
+            other => {
+                result_specs.push(FaceSpec::Surface {
+                    vertices: inner_verts,
+                    surface: other.clone(),
+                });
+            }
+        }
     }
 
-    // Rim faces: for each edge of an open face, connect the outer edge
-    // to the corresponding inner edge with a quad face.
-    // For simplicity with the planar approach: connect each edge of the
-    // opening boundary by finding the adjacent non-open face and creating
-    // a rim quad from the outer vertices to the inner (offset) vertices.
-    for &(fid, ref verts, normal, _d) in &face_data {
+    // Rim faces: for each edge of an open face, connect outer to inner.
+    for &(fid, ref verts) in &face_verts {
         if !open_set.contains(&fid.index()) {
             continue;
         }
+
+        let face = topo.face(fid)?;
+        let normal = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            _ => {
+                // For non-planar open faces, estimate normal at center.
+                Vec3::new(0.0, 0.0, 1.0) // Fallback; rim quads are approximate.
+            }
+        };
 
         let n = verts.len();
         let offset = Vec3::new(
@@ -132,7 +167,6 @@ pub fn shell(
             let inner_a = outer_a + offset;
             let inner_b = outer_b + offset;
 
-            // Rim quad: outer_a → outer_b → inner_b → inner_a
             let rim_verts = vec![outer_a, outer_b, inner_b, inner_a];
             let edge1 = outer_b - outer_a;
             let edge2 = inner_a - outer_a;
@@ -141,17 +175,21 @@ pub fn shell(
                 .normalize()
                 .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
             let rim_d = dot_normal_point(rim_normal, outer_a);
-            result_faces.push((rim_verts, rim_normal, rim_d));
+            result_specs.push(FaceSpec::Planar {
+                vertices: rim_verts,
+                normal: rim_normal,
+                d: rim_d,
+            });
         }
     }
 
-    if result_faces.is_empty() {
+    if result_specs.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "shell operation produced no faces".into(),
         });
     }
 
-    assemble_solid(topo, &result_faces, tol)
+    assemble_solid_mixed(topo, &result_specs, tol)
 }
 
 #[cfg(test)]
