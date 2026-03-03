@@ -1006,6 +1006,134 @@ pub(crate) fn assemble_solid(
     Ok(solid)
 }
 
+// ---------------------------------------------------------------------------
+// Evolution-tracking wrapper
+// ---------------------------------------------------------------------------
+
+/// Perform a boolean operation and return an [`EvolutionMap`] tracking face
+/// provenance.
+///
+/// This wraps [`boolean`] and uses a heuristic (normal + centroid similarity)
+/// to match output faces back to their input faces. Faces whose best match
+/// score exceeds the similarity threshold are classified as "modified";
+/// unmatched input faces are classified as "deleted".
+///
+/// # Errors
+///
+/// Returns the same errors as [`boolean`].
+pub fn boolean_with_evolution(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+) -> Result<(SolidId, crate::evolution::EvolutionMap), crate::OperationsError> {
+    use crate::evolution::EvolutionMap;
+
+    // Collect input face normals + centroids before the operation mutates topology.
+    let input_faces_a = collect_face_signatures(topo, a)?;
+    let input_faces_b = collect_face_signatures(topo, b)?;
+
+    let mut input_faces: Vec<(usize, Vec3, Point3)> = Vec::with_capacity(
+        input_faces_a.len() + input_faces_b.len(),
+    );
+    input_faces.extend(input_faces_a);
+    input_faces.extend(input_faces_b);
+
+    // Run the actual boolean.
+    let result = boolean(topo, op, a, b)?;
+
+    // Collect output face normals + centroids.
+    let output_faces = collect_face_signatures(topo, result)?;
+
+    // Build evolution map via heuristic matching.
+    let mut evo = EvolutionMap::new();
+    let mut matched_inputs: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+    // Normal dot threshold: cos(30deg) — faces with normals diverging more
+    // than ~30 degrees are not considered matches.
+    let normal_threshold = 0.866;
+    // Maximum centroid distance squared for a match (generous, scaled to unit).
+    let centroid_dist_sq_max = 10.0;
+
+    for &(out_idx, out_normal, out_centroid) in &output_faces {
+        let mut best_score = f64::NEG_INFINITY;
+        let mut best_input: Option<usize> = None;
+
+        for &(in_idx, in_normal, in_centroid) in &input_faces {
+            let dot = out_normal.dot(in_normal);
+            if dot < normal_threshold {
+                continue;
+            }
+
+            let dx = out_centroid.x() - in_centroid.x();
+            let dy = out_centroid.y() - in_centroid.y();
+            let dz = out_centroid.z() - in_centroid.z();
+            let dist_sq = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
+
+            if dist_sq > centroid_dist_sq_max {
+                continue;
+            }
+
+            // Score: higher normal alignment + closer centroid = better.
+            // Normalize distance contribution to [0, 1] range.
+            let score = dot - dist_sq / centroid_dist_sq_max;
+            if score > best_score {
+                best_score = score;
+                best_input = Some(in_idx);
+            }
+        }
+
+        if let Some(in_idx) = best_input {
+            evo.add_modified(in_idx, out_idx);
+            matched_inputs.insert(in_idx);
+        }
+    }
+
+    // Any input face not matched to any output is deleted.
+    for &(in_idx, _, _) in &input_faces {
+        if !matched_inputs.contains(&in_idx) {
+            evo.add_deleted(in_idx);
+        }
+    }
+
+    Ok((result, evo))
+}
+
+/// Collect `(FaceId.index(), normal, centroid)` for each face in a solid.
+fn collect_face_signatures(
+    topo: &Topology,
+    solid_id: SolidId,
+) -> Result<Vec<(usize, Vec3, Point3)>, crate::OperationsError> {
+    let solid = topo.solid(solid_id)?;
+    let shell = topo.shell(solid.outer_shell())?;
+    let mut result = Vec::with_capacity(shell.faces().len());
+
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        let normal = if let FaceSurface::Plane { normal, .. } = face.surface() {
+            *normal
+        } else {
+            // For non-planar faces, approximate normal from first triangle.
+            let verts = face_vertices(topo, fid)?;
+            if verts.len() >= 3 {
+                let e1 = verts[1] - verts[0];
+                let e2 = verts[2] - verts[0];
+                e1.cross(e2)
+                    .normalize()
+                    .unwrap_or(Vec3::new(0.0, 0.0, 1.0))
+            } else {
+                Vec3::new(0.0, 0.0, 1.0)
+            }
+        };
+
+        let verts = face_vertices(topo, fid)?;
+        let centroid = polygon_centroid(&verts);
+        result.push((fid.index(), normal, centroid));
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

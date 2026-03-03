@@ -676,6 +676,80 @@ impl BrepKernel {
         Ok(solid_id_to_u32(result))
     }
 
+    // ── Boolean operations with evolution tracking ─────────────────
+
+    /// Fuse (union) two solids and return evolution tracking data.
+    ///
+    /// Returns a JSON string: `{"solid": <u32>, "evolution": {...}}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid or the operation
+    /// produces an empty or non-manifold result.
+    #[wasm_bindgen(js_name = "fuseWithEvolution")]
+    pub fn fuse_with_evolution(&mut self, a: u32, b: u32) -> Result<JsValue, JsError> {
+        let a_id = self.resolve_solid(a)?;
+        let b_id = self.resolve_solid(b)?;
+        let (result, evo) =
+            brepkit_operations::boolean::boolean_with_evolution(
+                &mut self.topo, BooleanOp::Fuse, a_id, b_id,
+            )?;
+        let json = format!(
+            "{{\"solid\":{},\"evolution\":{}}}",
+            solid_id_to_u32(result),
+            evo.to_json()
+        );
+        Ok(JsValue::from_str(&json))
+    }
+
+    /// Cut (subtract) solid `b` from solid `a` and return evolution tracking data.
+    ///
+    /// Returns a JSON string: `{"solid": <u32>, "evolution": {...}}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid or the operation
+    /// produces an empty or non-manifold result.
+    #[wasm_bindgen(js_name = "cutWithEvolution")]
+    pub fn cut_with_evolution(&mut self, a: u32, b: u32) -> Result<JsValue, JsError> {
+        let a_id = self.resolve_solid(a)?;
+        let b_id = self.resolve_solid(b)?;
+        let (result, evo) =
+            brepkit_operations::boolean::boolean_with_evolution(
+                &mut self.topo, BooleanOp::Cut, a_id, b_id,
+            )?;
+        let json = format!(
+            "{{\"solid\":{},\"evolution\":{}}}",
+            solid_id_to_u32(result),
+            evo.to_json()
+        );
+        Ok(JsValue::from_str(&json))
+    }
+
+    /// Intersect two solids and return evolution tracking data.
+    ///
+    /// Returns a JSON string: `{"solid": <u32>, "evolution": {...}}`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid or the operation
+    /// produces an empty result.
+    #[wasm_bindgen(js_name = "intersectWithEvolution")]
+    pub fn intersect_with_evolution(&mut self, a: u32, b: u32) -> Result<JsValue, JsError> {
+        let a_id = self.resolve_solid(a)?;
+        let b_id = self.resolve_solid(b)?;
+        let (result, evo) =
+            brepkit_operations::boolean::boolean_with_evolution(
+                &mut self.topo, BooleanOp::Intersect, a_id, b_id,
+            )?;
+        let json = format!(
+            "{{\"solid\":{},\"evolution\":{}}}",
+            solid_id_to_u32(result),
+            evo.to_json()
+        );
+        Ok(JsValue::from_str(&json))
+    }
+
     // ── Export ─────────────────────────────────────────────────────
 
     /// Export a solid to 3MF format (ZIP archive as bytes).
