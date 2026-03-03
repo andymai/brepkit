@@ -15,7 +15,7 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::VertexId;
 
-use crate::boolean::assemble_solid;
+use crate::boolean::{FaceSpec, assemble_solid_mixed};
 use crate::dot_normal_point;
 
 // ---------------------------------------------------------------------------
@@ -67,14 +67,6 @@ pub fn chamfer(
 
     for &face_id in &shell_face_ids {
         let face = topo.face(face_id)?;
-        let (normal, _d) = match face.surface() {
-            FaceSurface::Plane { normal, d } => (*normal, *d),
-            _ => {
-                return Err(crate::OperationsError::InvalidInput {
-                    reason: "chamfer on non-planar faces is not supported".into(),
-                });
-            }
-        };
 
         let wire = topo.wire(face.outer_wire())?;
         let mut vertex_ids = Vec::with_capacity(wire.edges().len());
@@ -97,6 +89,13 @@ pub fn chamfer(
                 .or_default()
                 .push(face_id);
         }
+
+        // Only build polygon data for planar faces. Non-planar faces
+        // will be passed through unchanged if they don't contain target edges.
+        let normal = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            _ => continue, // Skip non-planar faces for polygon data
+        };
 
         face_polygons.insert(
             face_id.index(),
@@ -133,10 +132,19 @@ pub fn chamfer(
 
     // For each target edge, we collect the chamfer points from both faces.
     let mut chamfer_data: HashMap<usize, ChamferEdgeData> = HashMap::new();
-    let mut result_faces: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
+    let mut result_specs: Vec<FaceSpec> = Vec::new();
 
     for &face_id in &shell_face_ids {
-        let poly = &face_polygons[&face_id.index()];
+        // Non-planar faces pass through unchanged.
+        let Some(poly) = face_polygons.get(&face_id.index()) else {
+            let face = topo.face(face_id)?;
+            let verts = crate::boolean::face_vertices(topo, face_id)?;
+            result_specs.push(FaceSpec::Surface {
+                vertices: verts,
+                surface: face.surface().clone(),
+            });
+            continue;
+        };
         let n = poly.positions.len();
         let mut new_verts: Vec<Point3> = Vec::with_capacity(n + target_set.len());
 
@@ -220,7 +228,11 @@ pub fn chamfer(
         // Recompute plane d from the (possibly shifted) polygon.
         // Normal stays the same since vertices only moved within the face plane.
         let new_d = dot_normal_point(poly.normal, new_verts[0]);
-        result_faces.push((new_verts, poly.normal, new_d));
+        result_specs.push(FaceSpec::Planar {
+            vertices: new_verts,
+            normal: poly.normal,
+            d: new_d,
+        });
     }
 
     // -- Phase 4: Build chamfer faces --
@@ -273,11 +285,15 @@ pub fn chamfer(
         };
 
         let d = dot_normal_point(normal, quad[0]);
-        result_faces.push((quad, normal, d));
+        result_specs.push(FaceSpec::Planar {
+            vertices: quad,
+            normal,
+            d,
+        });
     }
 
     // -- Phase 5: Assemble result solid --
-    assemble_solid(topo, &result_faces, tol)
+    assemble_solid_mixed(topo, &result_specs, tol)
 }
 
 // ---------------------------------------------------------------------------

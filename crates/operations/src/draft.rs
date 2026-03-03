@@ -11,7 +11,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
-use crate::boolean::{assemble_solid, face_vertices};
+use crate::boolean::{FaceSpec, assemble_solid_mixed, face_vertices};
 use crate::dot_normal_point;
 
 /// Apply a draft angle to selected faces of a solid.
@@ -56,27 +56,42 @@ pub fn draft(
 
     let draft_set: HashSet<usize> = draft_faces.iter().map(|f| f.index()).collect();
 
-    let mut result_faces: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
+    let mut result_specs: Vec<FaceSpec> = Vec::new();
 
     for &fid in &all_face_ids {
         let face = topo.face(fid)?;
-        let (face_normal, _face_d) = match face.surface() {
-            FaceSurface::Plane { normal, d } => (*normal, *d),
-            _ => {
-                return Err(crate::OperationsError::InvalidInput {
-                    reason: "draft on non-planar faces is not supported".into(),
-                });
-            }
-        };
-
         let verts = face_vertices(topo, fid)?;
 
         if !draft_set.contains(&fid.index()) {
-            // Non-draft face: keep as-is.
-            let d = dot_normal_point(face_normal, verts[0]);
-            result_faces.push((verts, face_normal, d));
+            // Non-draft face: keep as-is (supports any surface type).
+            match face.surface() {
+                FaceSurface::Plane { normal, .. } => {
+                    let d = dot_normal_point(*normal, verts[0]);
+                    result_specs.push(FaceSpec::Planar {
+                        vertices: verts,
+                        normal: *normal,
+                        d,
+                    });
+                }
+                other => {
+                    result_specs.push(FaceSpec::Surface {
+                        vertices: verts,
+                        surface: other.clone(),
+                    });
+                }
+            }
             continue;
         }
+
+        // Draft target face must be planar (vertex manipulation requires plane).
+        let _face_normal = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            _ => {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "draft target faces must be planar".into(),
+                });
+            }
+        };
 
         // Draft this face: for each vertex, compute its signed height
         // above the neutral plane, then offset it perpendicular to the
@@ -124,11 +139,15 @@ pub fn draft(
                         reason: "draft produced degenerate face geometry".into(),
                     })?;
             let new_d = dot_normal_point(new_normal, new_verts[0]);
-            result_faces.push((new_verts, new_normal, new_d));
+            result_specs.push(FaceSpec::Planar {
+                vertices: new_verts,
+                normal: new_normal,
+                d: new_d,
+            });
         }
     }
 
-    assemble_solid(topo, &result_faces, tol)
+    assemble_solid_mixed(topo, &result_specs, tol)
 }
 
 #[cfg(test)]
