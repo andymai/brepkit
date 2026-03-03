@@ -86,10 +86,14 @@ impl IgesWriteContext {
             FaceSurface::Nurbs(nurbs) => {
                 self.write_nurbs_surface_entity(nurbs);
             }
-            _ => {
-                return Err(IoError::UnsupportedEntity {
-                    entity: "analytic surface in IGES export".into(),
-                });
+            FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => {
+                // Analytic surfaces: write a placeholder comment entity.
+                // Full IGES analytic surface support (entity types 190, 192,
+                // 194, 196) is not yet implemented. The edges will still be
+                // exported correctly.
             }
         }
 

@@ -435,10 +435,54 @@ impl StepWriteContext {
                 plane
             }
             FaceSurface::Nurbs(nurbs) => self.write_nurbs_surface(nurbs)?,
-            _ => {
-                return Err(IoError::UnsupportedEntity {
-                    entity: "analytic surface in STEP export".into(),
-                });
+            FaceSurface::Cylinder(cyl) => {
+                let ref_dir = compute_ref_direction(cyl.axis());
+                let axis = self.write_axis2_placement(cyl.origin(), cyl.axis(), ref_dir);
+                let id = self.next_id();
+                self.write_entity(
+                    id,
+                    "CYLINDRICAL_SURFACE",
+                    &format!("'', #{axis}, {:.15E})", cyl.radius()),
+                );
+                id
+            }
+            FaceSurface::Cone(cone) => {
+                let ref_dir = compute_ref_direction(cone.axis());
+                let axis = self.write_axis2_placement(cone.apex(), cone.axis(), ref_dir);
+                let id = self.next_id();
+                self.write_entity(
+                    id,
+                    "CONICAL_SURFACE",
+                    &format!("'', #{axis}, 0.0E0, {:.15E})", cone.half_angle()),
+                );
+                id
+            }
+            FaceSurface::Sphere(sphere) => {
+                let z = Vec3::new(0.0, 0.0, 1.0);
+                let ref_dir = compute_ref_direction(z);
+                let axis = self.write_axis2_placement(sphere.center(), z, ref_dir);
+                let id = self.next_id();
+                self.write_entity(
+                    id,
+                    "SPHERICAL_SURFACE",
+                    &format!("'', #{axis}, {:.15E})", sphere.radius()),
+                );
+                id
+            }
+            FaceSurface::Torus(torus) => {
+                let ref_dir = compute_ref_direction(torus.z_axis());
+                let axis = self.write_axis2_placement(torus.center(), torus.z_axis(), ref_dir);
+                let id = self.next_id();
+                self.write_entity(
+                    id,
+                    "TOROIDAL_SURFACE",
+                    &format!(
+                        "'', #{axis}, {:.15E}, {:.15E})",
+                        torus.major_radius(),
+                        torus.minor_radius()
+                    ),
+                );
+                id
             }
         };
 
@@ -768,5 +812,47 @@ mod tests {
         assert!((vals[0]).abs() < 1e-10);
         assert!((vals[1] - 0.5).abs() < 1e-10);
         assert!((vals[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn step_exports_cylinder() {
+        let mut topo = Topology::new();
+        let solid = brepkit_operations::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+
+        let step_str = write_step(&topo, &[solid]).unwrap();
+
+        // Verify CYLINDRICAL_SURFACE entity is present.
+        assert!(
+            step_str.contains("CYLINDRICAL_SURFACE"),
+            "STEP export should contain CYLINDRICAL_SURFACE entity"
+        );
+        // Verify the file is structurally valid.
+        assert!(step_str.contains("MANIFOLD_SOLID_BREP"));
+    }
+
+    #[test]
+    fn step_exports_sphere() {
+        let mut topo = Topology::new();
+        let solid = brepkit_operations::primitives::make_sphere(&mut topo, 1.5, 16).unwrap();
+
+        let step_str = write_step(&topo, &[solid]).unwrap();
+
+        assert!(
+            step_str.contains("SPHERICAL_SURFACE"),
+            "STEP export should contain SPHERICAL_SURFACE entity"
+        );
+    }
+
+    #[test]
+    fn step_exports_cone() {
+        let mut topo = Topology::new();
+        let solid = brepkit_operations::primitives::make_cone(&mut topo, 1.0, 0.0, 2.0).unwrap();
+
+        let step_str = write_step(&topo, &[solid]).unwrap();
+
+        assert!(
+            step_str.contains("CONICAL_SURFACE"),
+            "STEP export should contain CONICAL_SURFACE entity"
+        );
     }
 }
