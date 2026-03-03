@@ -2295,7 +2295,14 @@ impl BrepKernel {
                 let (v0, v1) = surface.domain_v();
                 Ok(vec![u0, u1, v0, v1])
             }
-            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => Ok(vec![0.0, 2.0 * PI, -1e6, 1e6]),
+            FaceSurface::Cylinder(cyl) => {
+                let v_range = self.compute_axial_v_range(face_id, cyl.origin(), cyl.axis())?;
+                Ok(vec![0.0, 2.0 * PI, v_range.0, v_range.1])
+            }
+            FaceSurface::Cone(cone) => {
+                let v_range = self.compute_axial_v_range(face_id, cone.apex(), cone.axis())?;
+                Ok(vec![0.0, 2.0 * PI, v_range.0, v_range.1])
+            }
             FaceSurface::Sphere(_) => Ok(vec![0.0, 2.0 * PI, -PI / 2.0, PI / 2.0]),
             FaceSurface::Torus(_) => Ok(vec![0.0, 2.0 * PI, 0.0, 2.0 * PI]),
         }
@@ -2842,6 +2849,42 @@ impl BrepKernel {
     }
 
     /// Resolve a `u32` face handle to a typed `FaceId`.
+    /// Compute the v-range for an analytic surface by projecting face wire
+    /// vertices onto the surface axis.
+    fn compute_axial_v_range(
+        &self,
+        face_id: brepkit_topology::face::FaceId,
+        origin: Point3,
+        axis: Vec3,
+    ) -> Result<(f64, f64), JsError> {
+        let face_data = self.topo.face(face_id)?;
+        let wire = self.topo.wire(face_data.outer_wire())?;
+
+        let mut v_min = f64::MAX;
+        let mut v_max = f64::MIN;
+
+        for oe in wire.edges() {
+            let edge = self.topo.edge(oe.edge())?;
+            for vid in [edge.start(), edge.end()] {
+                let pt = self.topo.vertex(vid)?.point();
+                let to_pt = Vec3::new(
+                    pt.x() - origin.x(),
+                    pt.y() - origin.y(),
+                    pt.z() - origin.z(),
+                );
+                let v = axis.dot(to_pt);
+                v_min = v_min.min(v);
+                v_max = v_max.max(v);
+            }
+        }
+
+        if v_min < v_max {
+            Ok((v_min, v_max))
+        } else {
+            Ok((-1.0, 1.0))
+        }
+    }
+
     fn resolve_face(&self, handle: u32) -> Result<brepkit_topology::face::FaceId, WasmError> {
         let index = handle as usize;
         self.topo
