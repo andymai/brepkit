@@ -51,12 +51,18 @@ pub fn offset_face(
             offset_planar_face(topo, outer_wire, &inner_wires, normal, d, distance)
         }
         FaceSurface::Nurbs(ref nurbs) => offset_nurbs_face(topo, face_id, nurbs, distance, samples),
-        FaceSurface::Cylinder(_)
-        | FaceSurface::Cone(_)
-        | FaceSurface::Sphere(_)
-        | FaceSurface::Torus(_) => Err(OperationsError::InvalidInput {
-            reason: "offset of analytic surface faces is not yet supported".into(),
-        }),
+        FaceSurface::Cylinder(ref cyl) => {
+            offset_cylinder_face(topo, outer_wire, &inner_wires, cyl, distance)
+        }
+        FaceSurface::Cone(ref cone) => {
+            offset_cone_face(topo, outer_wire, &inner_wires, cone, distance)
+        }
+        FaceSurface::Sphere(ref sphere) => {
+            offset_sphere_face(topo, outer_wire, &inner_wires, sphere, distance)
+        }
+        FaceSurface::Torus(ref torus) => {
+            offset_torus_face(topo, outer_wire, &inner_wires, torus, distance)
+        }
     }
 }
 
@@ -170,6 +176,273 @@ fn offset_nurbs_face(
         new_surface,
     ));
     Ok(face_id)
+}
+
+/// Offset a cylindrical face: create a new cylinder with adjusted radius.
+///
+/// Cylinder offset: radius R → R + distance. The surface type is preserved.
+fn offset_cylinder_face(
+    topo: &mut Topology,
+    outer_wire: brepkit_topology::wire::WireId,
+    inner_wires: &[brepkit_topology::wire::WireId],
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+    distance: f64,
+) -> Result<FaceId, OperationsError> {
+    let new_radius = cyl.radius() + distance;
+    if new_radius <= 0.0 {
+        return Err(OperationsError::InvalidInput {
+            reason: format!(
+                "cylinder offset by {distance} would produce negative radius \
+                 (original radius = {})",
+                cyl.radius()
+            ),
+        });
+    }
+
+    let new_cyl =
+        brepkit_math::surfaces::CylindricalSurface::new(cyl.origin(), cyl.axis(), new_radius)
+            .map_err(OperationsError::Math)?;
+
+    // Offset wire vertices radially outward from the cylinder axis.
+    let radial_offset = |pt: Point3| -> Point3 {
+        let to_axis = Vec3::new(
+            pt.x() - cyl.origin().x(),
+            pt.y() - cyl.origin().y(),
+            pt.z() - cyl.origin().z(),
+        );
+        // Project out the axis component to get the radial direction.
+        let along_axis = cyl.axis() * cyl.axis().dot(to_axis);
+        let radial = to_axis - along_axis;
+        if let Ok(dir) = radial.normalize() {
+            pt + dir * distance
+        } else {
+            pt // Point is on the axis; can't determine radial direction.
+        }
+    };
+
+    let new_outer = offset_wire_by_fn(topo, outer_wire, &radial_offset)?;
+    let mut new_inner = Vec::new();
+    for &iw in inner_wires {
+        new_inner.push(offset_wire_by_fn(topo, iw, &radial_offset)?);
+    }
+
+    let face_id = topo.faces.alloc(brepkit_topology::face::Face::new(
+        new_outer,
+        new_inner,
+        FaceSurface::Cylinder(new_cyl),
+    ));
+    Ok(face_id)
+}
+
+/// Offset a spherical face: create a new sphere with adjusted radius.
+///
+/// Sphere offset: radius R → R + distance. The surface type is preserved.
+fn offset_sphere_face(
+    topo: &mut Topology,
+    outer_wire: brepkit_topology::wire::WireId,
+    inner_wires: &[brepkit_topology::wire::WireId],
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    distance: f64,
+) -> Result<FaceId, OperationsError> {
+    let new_radius = sphere.radius() + distance;
+    if new_radius <= 0.0 {
+        return Err(OperationsError::InvalidInput {
+            reason: format!(
+                "sphere offset by {distance} would produce negative radius \
+                 (original radius = {})",
+                sphere.radius()
+            ),
+        });
+    }
+
+    let new_sphere = brepkit_math::surfaces::SphericalSurface::new(sphere.center(), new_radius)
+        .map_err(OperationsError::Math)?;
+
+    // Offset vertices radially from sphere center.
+    let radial_offset = |pt: Point3| -> Point3 {
+        let to_center = pt - sphere.center();
+        if let Ok(dir) = to_center.normalize() {
+            pt + dir * distance
+        } else {
+            pt
+        }
+    };
+
+    let new_outer = offset_wire_by_fn(topo, outer_wire, &radial_offset)?;
+    let mut new_inner = Vec::new();
+    for &iw in inner_wires {
+        new_inner.push(offset_wire_by_fn(topo, iw, &radial_offset)?);
+    }
+
+    let face_id = topo.faces.alloc(brepkit_topology::face::Face::new(
+        new_outer,
+        new_inner,
+        FaceSurface::Sphere(new_sphere),
+    ));
+    Ok(face_id)
+}
+
+/// Offset a conical face: shift apex along axis, preserve half-angle.
+///
+/// Cone offset: the apex moves along the axis by distance / sin(half_angle),
+/// preserving the half-angle. The new cone has the same shape but is larger
+/// (positive offset) or smaller (negative offset).
+fn offset_cone_face(
+    topo: &mut Topology,
+    outer_wire: brepkit_topology::wire::WireId,
+    inner_wires: &[brepkit_topology::wire::WireId],
+    cone: &brepkit_math::surfaces::ConicalSurface,
+    distance: f64,
+) -> Result<FaceId, OperationsError> {
+    // The offset of a cone is another cone with the same half-angle.
+    // The apex shifts along the axis by d / sin(α).
+    let sin_ha = cone.half_angle().sin();
+    if sin_ha.abs() < 1e-12 {
+        return Err(OperationsError::InvalidInput {
+            reason: "cone half-angle is degenerate (sin ≈ 0)".into(),
+        });
+    }
+
+    let apex_shift = distance / sin_ha;
+    let new_apex = cone.apex() + cone.axis() * apex_shift;
+
+    let new_cone =
+        brepkit_math::surfaces::ConicalSurface::new(new_apex, cone.axis(), cone.half_angle())
+            .map_err(OperationsError::Math)?;
+
+    // Offset wire vertices along the cone's radial direction.
+    let radial_offset = |pt: Point3| -> Point3 {
+        let to_apex = Vec3::new(
+            pt.x() - cone.apex().x(),
+            pt.y() - cone.apex().y(),
+            pt.z() - cone.apex().z(),
+        );
+        let along_axis = cone.axis() * cone.axis().dot(to_apex);
+        let radial = to_apex - along_axis;
+        if let Ok(dir) = radial.normalize() {
+            pt + dir * distance
+        } else {
+            pt
+        }
+    };
+
+    let new_outer = offset_wire_by_fn(topo, outer_wire, &radial_offset)?;
+    let mut new_inner = Vec::new();
+    for &iw in inner_wires {
+        new_inner.push(offset_wire_by_fn(topo, iw, &radial_offset)?);
+    }
+
+    let face_id = topo.faces.alloc(brepkit_topology::face::Face::new(
+        new_outer,
+        new_inner,
+        FaceSurface::Cone(new_cone),
+    ));
+    Ok(face_id)
+}
+
+/// Offset a toroidal face: adjust the minor radius.
+///
+/// Torus offset: minor radius r → r + distance. Major radius unchanged.
+fn offset_torus_face(
+    topo: &mut Topology,
+    outer_wire: brepkit_topology::wire::WireId,
+    inner_wires: &[brepkit_topology::wire::WireId],
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    distance: f64,
+) -> Result<FaceId, OperationsError> {
+    let new_minor = torus.minor_radius() + distance;
+    if new_minor <= 0.0 {
+        return Err(OperationsError::InvalidInput {
+            reason: format!(
+                "torus offset by {distance} would produce negative minor radius \
+                 (original minor = {})",
+                torus.minor_radius()
+            ),
+        });
+    }
+
+    let new_torus = brepkit_math::surfaces::ToroidalSurface::new(
+        torus.center(),
+        torus.major_radius(),
+        new_minor,
+    )
+    .map_err(OperationsError::Math)?;
+
+    // Offset wire vertices radially from the torus center, in the tube direction.
+    let z_axis = torus.z_axis();
+    let center = torus.center();
+    let radial_offset = |pt: Point3| -> Point3 {
+        let to_center = Vec3::new(
+            pt.x() - center.x(),
+            pt.y() - center.y(),
+            pt.z() - center.z(),
+        );
+        // Project to the plane perpendicular to the torus axis.
+        let in_plane = to_center - z_axis * z_axis.dot(to_center);
+        // Direction from the tube center circle to the point.
+        if let Ok(ring_dir) = in_plane.normalize() {
+            let tube_center = center + ring_dir * torus.major_radius();
+            let to_tube = Vec3::new(
+                pt.x() - tube_center.x(),
+                pt.y() - tube_center.y(),
+                pt.z() - tube_center.z(),
+            );
+            if let Ok(tube_dir) = to_tube.normalize() {
+                pt + tube_dir * distance
+            } else {
+                pt
+            }
+        } else {
+            pt
+        }
+    };
+
+    let new_outer = offset_wire_by_fn(topo, outer_wire, &radial_offset)?;
+    let mut new_inner = Vec::new();
+    for &iw in inner_wires {
+        new_inner.push(offset_wire_by_fn(topo, iw, &radial_offset)?);
+    }
+
+    let face_id = topo.faces.alloc(brepkit_topology::face::Face::new(
+        new_outer,
+        new_inner,
+        FaceSurface::Torus(new_torus),
+    ));
+    Ok(face_id)
+}
+
+/// Offset all vertices in a wire using a position-dependent function.
+fn offset_wire_by_fn(
+    topo: &mut Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    offset_fn: &dyn Fn(Point3) -> Point3,
+) -> Result<brepkit_topology::wire::WireId, OperationsError> {
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let wire = topo.wire(wire_id)?;
+    let edges = wire.edges().to_vec();
+
+    // Snapshot then allocate.
+    let mut snaps: Vec<(Point3, Point3, EdgeCurve, bool)> = Vec::new();
+    for oe in &edges {
+        let edge = topo.edge(oe.edge())?;
+        let start_pt = topo.vertex(edge.start())?.point();
+        let end_pt = topo.vertex(edge.end())?.point();
+        snaps.push((start_pt, end_pt, edge.curve().clone(), oe.is_forward()));
+    }
+
+    let mut new_oriented = Vec::new();
+    for (start_pt, end_pt, curve, forward) in snaps {
+        let new_start = topo.vertices.alloc(Vertex::new(offset_fn(start_pt), 1e-7));
+        let new_end = topo.vertices.alloc(Vertex::new(offset_fn(end_pt), 1e-7));
+        let new_edge = topo.edges.alloc(Edge::new(new_start, new_end, curve));
+        new_oriented.push(OrientedEdge::new(new_edge, forward));
+    }
+
+    let new_wire = topo.wires.alloc(Wire::new(new_oriented, true)?);
+    Ok(new_wire)
 }
 
 /// Copy a face with new IDs.
@@ -595,7 +868,7 @@ mod tests {
     }
 
     #[test]
-    fn offset_analytic_surface_returns_error() {
+    fn offset_cylinder_face_preserves_type() {
         use brepkit_math::surfaces::CylindricalSurface;
         use brepkit_math::vec::{Point3 as P, Vec3};
         use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -605,12 +878,11 @@ mod tests {
 
         let mut topo = Topology::new();
 
-        // Build a minimal face with a Cylinder surface (not yet supported by offset).
         let tol = 1e-7;
-        let v0 = topo.vertices.alloc(Vertex::new(P::new(0.0, 0.0, 0.0), tol));
-        let v1 = topo.vertices.alloc(Vertex::new(P::new(1.0, 0.0, 0.0), tol));
-        let v2 = topo.vertices.alloc(Vertex::new(P::new(1.0, 1.0, 0.0), tol));
-        let v3 = topo.vertices.alloc(Vertex::new(P::new(0.0, 1.0, 0.0), tol));
+        let v0 = topo.vertices.alloc(Vertex::new(P::new(1.0, 0.0, 0.0), tol));
+        let v1 = topo.vertices.alloc(Vertex::new(P::new(0.0, 1.0, 0.0), tol));
+        let v2 = topo.vertices.alloc(Vertex::new(P::new(0.0, 1.0, 1.0), tol));
+        let v3 = topo.vertices.alloc(Vertex::new(P::new(1.0, 0.0, 1.0), tol));
         let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
         let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
         let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
@@ -632,10 +904,54 @@ mod tests {
             .faces
             .alloc(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
 
-        let result = offset_face(&mut topo, face_id, 1.0, 6);
+        // Offset should succeed and produce a cylinder with larger radius.
+        let result = offset_face(&mut topo, face_id, 0.5, 6).unwrap();
+        let off_face = topo.face(result).unwrap();
+        match off_face.surface() {
+            FaceSurface::Cylinder(cyl) => {
+                assert!(
+                    (cyl.radius() - 1.5).abs() < 1e-10,
+                    "offset cylinder radius should be 1.5, got {}",
+                    cyl.radius()
+                );
+            }
+            _ => panic!("expected cylinder surface after offset"),
+        }
+    }
+
+    #[test]
+    fn offset_cylinder_negative_radius_error() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::{Point3 as P, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+
+        let tol = 1e-7;
+        let v0 = topo.vertices.alloc(Vertex::new(P::new(0.5, 0.0, 0.0), tol));
+        let v1 = topo.vertices.alloc(Vertex::new(P::new(0.0, 0.5, 0.0), tol));
+        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.edges.alloc(Edge::new(v1, v0, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![OrientedEdge::new(e0, true), OrientedEdge::new(e1, true)],
+            true,
+        )
+        .unwrap();
+        let wid = topo.wires.alloc(wire);
+        let cyl =
+            CylindricalSurface::new(P::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.5).unwrap();
+        let face_id = topo
+            .faces
+            .alloc(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
+
+        // Offset by -0.6 would produce negative radius.
+        let result = offset_face(&mut topo, face_id, -0.6, 6);
         assert!(
             result.is_err(),
-            "offset of analytic surface should return an error"
+            "negative-radius cylinder offset should fail"
         );
     }
 

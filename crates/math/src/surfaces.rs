@@ -354,6 +354,12 @@ impl ToroidalSurface {
     pub const fn minor_radius(&self) -> f64 {
         self.minor_radius
     }
+
+    /// Returns the torus axis direction (perpendicular to the ring plane).
+    #[must_use]
+    pub const fn z_axis(&self) -> Vec3 {
+        self.z_axis
+    }
 }
 
 /// A surface of revolution created by revolving a curve around an axis.
