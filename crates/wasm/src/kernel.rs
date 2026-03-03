@@ -440,8 +440,17 @@ impl BrepKernel {
             .iter()
             .map(|&h| self.resolve_edge(h))
             .collect::<Result<_, _>>()?;
-        let result =
-            brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)?;
+        // Use the rolling-ball fillet algorithm for true G1-continuous NURBS
+        // blend surfaces. Falls back to the planar fillet if rolling-ball fails.
+        let result = brepkit_operations::fillet::fillet_rolling_ball(
+            &mut self.topo,
+            solid_id,
+            &edge_ids,
+            radius,
+        )
+        .or_else(|_| {
+            brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)
+        })?;
         Ok(solid_id_to_u32(result))
     }
 
