@@ -206,6 +206,299 @@ pub fn copy_solid(
     Ok(topo.solids.alloc(Solid::new(new_outer, new_inner)))
 }
 
+/// Create a deep copy of a solid with a simultaneous affine transform.
+///
+/// Equivalent to `copy_solid` followed by `transform_solid`, but performs both
+/// in a single traversal — applying the matrix during the write phase instead
+/// of allocating untransformed entities and then mutating them.
+///
+/// # Errors
+///
+/// Returns an error if any topology lookup fails or the matrix is degenerate.
+#[allow(clippy::too_many_lines)]
+pub fn copy_and_transform_solid(
+    topo: &mut Topology,
+    solid_id: SolidId,
+    matrix: &brepkit_math::mat::Mat4,
+) -> Result<SolidId, crate::OperationsError> {
+    use brepkit_math::nurbs::{NurbsCurve, NurbsSurface};
+    use brepkit_math::vec::Vec3;
+
+    let tol = brepkit_math::tolerance::Tolerance::new();
+    if tol.approx_eq(matrix.determinant(), 0.0) {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "transform matrix is degenerate (zero determinant)".into(),
+        });
+    }
+    let normal_matrix = matrix.inverse()?.transpose();
+
+    // Helper: transform a direction vector by applying the matrix.
+    let transform_dir = |dir: Vec3| -> Result<Vec3, crate::OperationsError> {
+        let origin = matrix.mul_point(Point3::new(0.0, 0.0, 0.0));
+        let tip = matrix.mul_point(Point3::new(dir.x(), dir.y(), dir.z()));
+        let raw = Vec3::new(
+            tip.x() - origin.x(),
+            tip.y() - origin.y(),
+            tip.z() - origin.z(),
+        );
+        Ok(raw.normalize()?)
+    };
+
+    // Helper: transform a plane normal via inverse transpose.
+    let transform_normal = |n: Vec3| -> Result<Vec3, crate::OperationsError> {
+        let transformed = normal_matrix.mul_point(Point3::new(n.x(), n.y(), n.z()));
+        let origin = normal_matrix.mul_point(Point3::new(0.0, 0.0, 0.0));
+        let raw = Vec3::new(
+            transformed.x() - origin.x(),
+            transformed.y() - origin.y(),
+            transformed.z() - origin.z(),
+        );
+        Ok(raw.normalize()?)
+    };
+
+    // ── Read phase: snapshot all data (identical to copy_solid) ────
+
+    let solid = topo.solid(solid_id)?;
+    let outer_shell_id = solid.outer_shell();
+    let inner_shell_ids: Vec<_> = solid.inner_shells().to_vec();
+
+    let all_shell_ids: Vec<_> = std::iter::once(outer_shell_id)
+        .chain(inner_shell_ids.iter().copied())
+        .collect();
+
+    let mut vertex_snaps: Vec<VertexSnap> = Vec::new();
+    let mut edge_snaps: Vec<EdgeSnap> = Vec::new();
+    let mut wire_snaps: Vec<WireSnap> = Vec::new();
+    let mut shell_snaps: Vec<ShellSnap> = Vec::new();
+
+    let mut seen_vertices = std::collections::HashSet::new();
+    let mut seen_edges = std::collections::HashSet::new();
+    let mut seen_wires = std::collections::HashSet::new();
+
+    for &shell_id in &all_shell_ids {
+        let shell = topo.shell(shell_id)?;
+        let mut face_snaps = Vec::new();
+
+        for &face_id in shell.faces() {
+            let face = topo.face(face_id)?;
+            let surface = face.surface().clone();
+            let outer_wire_index = face.outer_wire().index();
+            let inner_wire_indices: Vec<usize> =
+                face.inner_wires().iter().map(|w| w.index()).collect();
+
+            for wire_id_val in
+                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                if !seen_wires.insert(wire_id_val.index()) {
+                    continue;
+                }
+                let wire = topo.wire(wire_id_val)?;
+                let mut edge_refs = Vec::new();
+
+                for oe in wire.edges() {
+                    let edge_idx = oe.edge().index();
+                    edge_refs.push((edge_idx, oe.is_forward()));
+
+                    if !seen_edges.insert(edge_idx) {
+                        continue;
+                    }
+                    let edge = topo.edge(oe.edge())?;
+                    let start_idx = edge.start().index();
+                    let end_idx = edge.end().index();
+
+                    for &vid_idx in &[start_idx, end_idx] {
+                        if seen_vertices.insert(vid_idx) {
+                            let vid = if vid_idx == start_idx {
+                                edge.start()
+                            } else {
+                                edge.end()
+                            };
+                            let v = topo.vertex(vid)?;
+                            vertex_snaps.push(VertexSnap {
+                                old_index: vid_idx,
+                                point: v.point(),
+                                tol: v.tolerance(),
+                            });
+                        }
+                    }
+
+                    edge_snaps.push(EdgeSnap {
+                        old_index: edge_idx,
+                        start_index: start_idx,
+                        end_index: end_idx,
+                        curve: edge.curve().clone(),
+                    });
+                }
+
+                wire_snaps.push(WireSnap {
+                    old_index: wire_id_val.index(),
+                    edges: edge_refs,
+                    closed: wire.is_closed(),
+                });
+            }
+
+            face_snaps.push(FaceSnap {
+                outer_wire_index,
+                inner_wire_indices,
+                surface,
+            });
+        }
+
+        shell_snaps.push(ShellSnap { faces: face_snaps });
+    }
+
+    // ── Write phase: allocate transformed entities ─────────────────
+
+    // Vertices: apply matrix during allocation.
+    let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
+    for vsnap in &vertex_snaps {
+        let new_point = matrix.mul_point(vsnap.point);
+        let new_vid = topo.vertices.alloc(Vertex::new(new_point, vsnap.tol));
+        vertex_map.insert(vsnap.old_index, new_vid);
+    }
+
+    // Edges: transform NURBS control points inline.
+    let mut edge_map: HashMap<usize, brepkit_topology::edge::EdgeId> = HashMap::new();
+    for esnap in &edge_snaps {
+        let new_start = vertex_map[&esnap.start_index];
+        let new_end = vertex_map[&esnap.end_index];
+        let new_curve = match &esnap.curve {
+            EdgeCurve::Line => EdgeCurve::Line,
+            EdgeCurve::NurbsCurve(c) => {
+                let new_cps: Vec<_> = c
+                    .control_points()
+                    .iter()
+                    .map(|pt| matrix.mul_point(*pt))
+                    .collect();
+                EdgeCurve::NurbsCurve(NurbsCurve::new(
+                    c.degree(),
+                    c.knots().to_vec(),
+                    new_cps,
+                    c.weights().to_vec(),
+                )?)
+            }
+        };
+        let copied_edge = topo.edges.alloc(Edge::new(new_start, new_end, new_curve));
+        edge_map.insert(esnap.old_index, copied_edge);
+    }
+
+    // Wires: no geometry to transform.
+    let mut wire_map: HashMap<usize, WireId> = HashMap::new();
+    for wsnap in &wire_snaps {
+        let new_edges: Vec<OrientedEdge> = wsnap
+            .edges
+            .iter()
+            .map(|&(edge_idx, fwd)| OrientedEdge::new(edge_map[&edge_idx], fwd))
+            .collect();
+        let new_wire =
+            Wire::new(new_edges, wsnap.closed).map_err(crate::OperationsError::Topology)?;
+        wire_map.insert(wsnap.old_index, topo.wires.alloc(new_wire));
+    }
+
+    // Shells + faces: transform surfaces inline.
+    let mut new_shell_ids = Vec::new();
+    for ssnap in &shell_snaps {
+        let mut new_face_ids = Vec::new();
+        for fsnap in &ssnap.faces {
+            let new_outer = wire_map[&fsnap.outer_wire_index];
+            let new_inner: Vec<WireId> = fsnap
+                .inner_wire_indices
+                .iter()
+                .map(|idx| wire_map[idx])
+                .collect();
+
+            let new_surface = match &fsnap.surface {
+                FaceSurface::Plane { normal, .. } => {
+                    let new_normal = transform_normal(*normal)?;
+                    // Recompute d from a transformed vertex on this face.
+                    let wire_ow = &wire_snaps
+                        .iter()
+                        .find(|w| w.old_index == fsnap.outer_wire_index);
+                    let first_edge_idx = wire_ow.map(|w| w.edges[0].0).ok_or_else(|| {
+                        crate::OperationsError::InvalidInput {
+                            reason: "face has no outer wire edges".into(),
+                        }
+                    })?;
+                    let esnap = edge_snaps.iter().find(|e| e.old_index == first_edge_idx);
+                    let ref_old_vertex = esnap.map(|e| e.start_index).ok_or_else(|| {
+                        crate::OperationsError::InvalidInput {
+                            reason: "wire references unknown edge".into(),
+                        }
+                    })?;
+                    let ref_vid = vertex_map[&ref_old_vertex];
+                    let ref_point = topo.vertex(ref_vid)?.point();
+                    let new_d =
+                        new_normal.dot(Vec3::new(ref_point.x(), ref_point.y(), ref_point.z()));
+                    FaceSurface::Plane {
+                        normal: new_normal,
+                        d: new_d,
+                    }
+                }
+                FaceSurface::Nurbs(s) => {
+                    let new_cps: Vec<Vec<_>> = s
+                        .control_points()
+                        .iter()
+                        .map(|row| row.iter().map(|pt| matrix.mul_point(*pt)).collect())
+                        .collect();
+                    FaceSurface::Nurbs(NurbsSurface::new(
+                        s.degree_u(),
+                        s.degree_v(),
+                        s.knots_u().to_vec(),
+                        s.knots_v().to_vec(),
+                        new_cps,
+                        s.weights().to_vec(),
+                    )?)
+                }
+                FaceSurface::Cylinder(cyl) => {
+                    let new_origin = matrix.mul_point(cyl.origin());
+                    let new_axis = transform_dir(cyl.axis())?;
+                    FaceSurface::Cylinder(brepkit_math::surfaces::CylindricalSurface::new(
+                        new_origin,
+                        new_axis,
+                        cyl.radius(),
+                    )?)
+                }
+                FaceSurface::Cone(cone) => {
+                    let new_apex = matrix.mul_point(cone.apex());
+                    let new_axis = transform_dir(cone.axis())?;
+                    FaceSurface::Cone(brepkit_math::surfaces::ConicalSurface::new(
+                        new_apex,
+                        new_axis,
+                        cone.half_angle(),
+                    )?)
+                }
+                FaceSurface::Sphere(sph) => {
+                    let new_center = matrix.mul_point(sph.center());
+                    FaceSurface::Sphere(brepkit_math::surfaces::SphericalSurface::new(
+                        new_center,
+                        sph.radius(),
+                    )?)
+                }
+                FaceSurface::Torus(tor) => {
+                    let new_center = matrix.mul_point(tor.center());
+                    FaceSurface::Torus(brepkit_math::surfaces::ToroidalSurface::new(
+                        new_center,
+                        tor.major_radius(),
+                        tor.minor_radius(),
+                    )?)
+                }
+            };
+
+            let new_fid = topo
+                .faces
+                .alloc(Face::new(new_outer, new_inner, new_surface));
+            new_face_ids.push(new_fid);
+        }
+        let new_shell = Shell::new(new_face_ids).map_err(crate::OperationsError::Topology)?;
+        new_shell_ids.push(topo.shells.alloc(new_shell));
+    }
+
+    let new_outer = new_shell_ids[0];
+    let new_inner: Vec<_> = new_shell_ids[1..].to_vec();
+
+    Ok(topo.solids.alloc(Solid::new(new_outer, new_inner)))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

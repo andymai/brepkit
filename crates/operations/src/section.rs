@@ -4,6 +4,8 @@
 //! producing face(s) representing the intersection. This is the
 //! equivalent of `BRepAlgoAPI_Section` in `OpenCascade`.
 
+#![allow(clippy::too_many_lines, clippy::doc_markdown)]
+
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -92,13 +94,61 @@ pub fn section(
                     }
                 }
             }
-            FaceSurface::Cylinder(_)
-            | FaceSurface::Cone(_)
-            | FaceSurface::Sphere(_)
-            | FaceSurface::Torus(_) => {
-                return Err(crate::OperationsError::InvalidInput {
-                    reason: "section of analytic surface faces is not yet supported".into(),
-                });
+            FaceSurface::Cylinder(cyl) => {
+                let curves =
+                    brepkit_math::analytic_intersection::intersect_plane_cylinder(cyl, normal, d)?;
+                for curve in &curves {
+                    if curve.points.len() >= 2 {
+                        if let (Some(a), Some(b)) = (
+                            curve.points.first().map(|p| p.point),
+                            curve.points.last().map(|p| p.point),
+                        ) {
+                            segments.push((a, b));
+                        }
+                    }
+                }
+            }
+            FaceSurface::Cone(cone) => {
+                let curves =
+                    brepkit_math::analytic_intersection::intersect_plane_cone(cone, normal, d)?;
+                for curve in &curves {
+                    if curve.points.len() >= 2 {
+                        if let (Some(a), Some(b)) = (
+                            curve.points.first().map(|p| p.point),
+                            curve.points.last().map(|p| p.point),
+                        ) {
+                            segments.push((a, b));
+                        }
+                    }
+                }
+            }
+            FaceSurface::Sphere(sphere) => {
+                let curves =
+                    brepkit_math::analytic_intersection::intersect_plane_sphere(sphere, normal, d)?;
+                for curve in &curves {
+                    if curve.points.len() >= 2 {
+                        if let (Some(a), Some(b)) = (
+                            curve.points.first().map(|p| p.point),
+                            curve.points.last().map(|p| p.point),
+                        ) {
+                            segments.push((a, b));
+                        }
+                    }
+                }
+            }
+            FaceSurface::Torus(torus) => {
+                let curves =
+                    brepkit_math::analytic_intersection::intersect_plane_torus(torus, normal, d)?;
+                for curve in &curves {
+                    if curve.points.len() >= 2 {
+                        if let (Some(a), Some(b)) = (
+                            curve.points.first().map(|p| p.point),
+                            curve.points.last().map(|p| p.point),
+                        ) {
+                            segments.push((a, b));
+                        }
+                    }
+                }
             }
         }
     }

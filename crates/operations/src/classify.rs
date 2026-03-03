@@ -1,12 +1,19 @@
-//! Point-in-solid classification via ray casting.
+//! Point-in-solid classification via ray casting and generalized winding numbers.
 //!
 //! Determines whether a 3D point is inside, outside, or on the boundary
 //! of a solid. This is equivalent to OCCT's `BRepClass3d_SolidClassifier`.
+//!
+//! Three classifiers are provided:
+//! - [`classify_point`]: ray casting (fast, fragile on mesh defects)
+//! - [`classify_point_winding`]: generalized winding numbers (robust to gaps)
+//! - [`classify_point_robust`]: winding numbers with ray-casting fallback
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
+
+use std::f64::consts::PI;
 
 use crate::OperationsError;
 
@@ -47,21 +54,185 @@ pub fn classify_point(
         return Ok(PointClassification::OnBoundary);
     }
 
-    // Ray direction chosen to be unlikely to hit edges/vertices exactly.
-    // Using an irrational direction avoids alignment with common geometry.
-    let ray_dir = Vec3::new(
-        0.573_576_436_351_046,   // 1/sqrt(3) + small offset
-        0.740_535_693_464_567_5, // golden ratio / sqrt(5) + offset
-        0.350_889_803_483_932_2, // 1/e + offset
-    );
+    // Two perpendicular irrational ray directions for dual-ray consensus.
+    // Using two directions handles edge-on degeneracies where a single ray
+    // might give an ambiguous count due to tangent faces.
+    let ray_dirs = [
+        Vec3::new(
+            0.573_576_436_351_046,
+            0.740_535_693_464_567_5,
+            0.350_889_803_483_932_2,
+        ),
+        Vec3::new(
+            -0.350_889_803_483_932_2,
+            0.573_576_436_351_046,
+            0.740_535_693_464_567_5,
+        ),
+    ];
 
-    let crossings = count_ray_crossings(topo, shell.faces(), point, ray_dir, deflection)?;
+    let mut inside_votes = 0u32;
+    for &dir in &ray_dirs {
+        let crossings = count_ray_crossings(topo, shell.faces(), point, dir, deflection)?;
+        if crossings % 2 == 1 {
+            inside_votes += 1;
+        }
+    }
 
-    if crossings % 2 == 1 {
+    // Majority vote: both rays must agree the point is inside
+    if inside_votes >= 2 {
         Ok(PointClassification::Inside)
     } else {
         Ok(PointClassification::Outside)
     }
+}
+
+/// Classifies a point relative to a solid using generalized winding numbers.
+///
+/// For each triangle on the solid's boundary, computes the signed solid angle
+/// subtended at the query point. The sum divided by 4pi gives the winding
+/// number: > 0.5 means inside, < 0.5 means outside.
+///
+/// This method is inherently robust to mesh defects (small gaps, non-manifold
+/// edges) because it integrates a continuous function rather than counting
+/// discrete crossings.
+///
+/// `deflection` controls tessellation quality for NURBS faces.
+/// `tolerance` is the distance threshold for "on boundary" classification.
+///
+/// # Errors
+/// Returns an error if the solid or its faces are invalid.
+pub fn classify_point_winding(
+    topo: &Topology,
+    solid: SolidId,
+    point: Point3,
+    deflection: f64,
+    tolerance: f64,
+) -> Result<PointClassification, OperationsError> {
+    let (winding, on_boundary) = compute_winding_number(topo, solid, point, deflection, tolerance)?;
+    if on_boundary {
+        return Ok(PointClassification::OnBoundary);
+    }
+    if winding > 0.5 {
+        Ok(PointClassification::Inside)
+    } else {
+        Ok(PointClassification::Outside)
+    }
+}
+
+/// Robust point classification combining winding numbers and ray casting.
+///
+/// Tries generalized winding numbers first (more robust to mesh defects),
+/// then falls back to ray casting if the winding number is ambiguous
+/// (within 0.1 of the 0.5 threshold).
+///
+/// # Errors
+/// Returns an error if the solid or its faces are invalid.
+pub fn classify_point_robust(
+    topo: &Topology,
+    solid: SolidId,
+    point: Point3,
+    deflection: f64,
+    tolerance: f64,
+) -> Result<PointClassification, OperationsError> {
+    let (winding, on_boundary) = compute_winding_number(topo, solid, point, deflection, tolerance)?;
+    if on_boundary {
+        return Ok(PointClassification::OnBoundary);
+    }
+
+    // Confident classification: winding number is far from the 0.5 threshold
+    if winding > 0.6 {
+        return Ok(PointClassification::Inside);
+    }
+    if winding < 0.4 {
+        return Ok(PointClassification::Outside);
+    }
+
+    // Ambiguous region (0.4..=0.6): fall back to ray casting
+    classify_point(topo, solid, point, deflection, tolerance)
+}
+
+/// Computes the generalized winding number of a point relative to a solid.
+///
+/// Returns `(winding_number, is_on_boundary)`. The winding number is the sum
+/// of signed solid angles subtended by each boundary triangle, divided by 4pi.
+/// A value near 1.0 indicates the point is inside; near 0.0 indicates outside.
+///
+/// Uses the formula from Jacobson, Kavan, and Sorkine-Hornung (2013).
+#[allow(clippy::similar_names)]
+fn compute_winding_number(
+    topo: &Topology,
+    solid: SolidId,
+    point: Point3,
+    deflection: f64,
+    tolerance: f64,
+) -> Result<(f64, bool), OperationsError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    // First check: is the point within tolerance of any face?
+    if is_on_boundary(topo, shell.faces(), point, deflection, tolerance)? {
+        return Ok((0.0, true));
+    }
+
+    let mut total_omega = 0.0;
+
+    for &fid in shell.faces() {
+        let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
+
+        for tri in mesh.indices.chunks_exact(3) {
+            let i0 = tri[0] as usize;
+            let i1 = tri[1] as usize;
+            let i2 = tri[2] as usize;
+
+            let a = mesh.positions[i0];
+            let mut b = mesh.positions[i1];
+            let mut c = mesh.positions[i2];
+
+            // Ensure consistent outward winding by comparing the triangle's
+            // geometric normal with the tessellation's vertex normal.
+            let tri_normal = (b - a).cross(c - a);
+            let mesh_normal = mesh.normals[i0];
+            if tri_normal.dot(mesh_normal) < 0.0 {
+                std::mem::swap(&mut b, &mut c);
+            }
+
+            // Vectors from point to triangle vertices
+            let pa = a - point;
+            let pb = b - point;
+            let pc = c - point;
+
+            let la = pa.length();
+            let lb = pb.length();
+            let lc = pc.length();
+
+            // Point coincides with a vertex — treat as on boundary
+            if la < tolerance || lb < tolerance || lc < tolerance {
+                return Ok((0.0, true));
+            }
+
+            // Normalize
+            let pa_n = pa * (1.0 / la);
+            let pb_n = pb * (1.0 / lb);
+            let pc_n = pc * (1.0 / lc);
+
+            // Signed solid angle via the Van Oosterom-Strackee formula
+            let numerator = pa_n.dot(pb_n.cross(pc_n));
+            let denominator = 1.0 + pa_n.dot(pb_n) + pb_n.dot(pc_n) + pc_n.dot(pa_n);
+
+            let omega = 2.0 * f64::atan2(numerator, denominator);
+            total_omega += omega;
+        }
+    }
+
+    // Use absolute value: face orientation (inward vs outward normals) affects
+    // the sign, but the magnitude tells us whether the point is enclosed.
+    let winding = (total_omega / (4.0 * PI)).abs();
+    #[cfg(test)]
+    eprintln!(
+        "DEBUG winding={winding}, total_omega={total_omega}, faces={}",
+        shell.faces().len()
+    );
+    Ok((winding, false))
 }
 
 /// Checks if a point is within `tolerance` of any face boundary.
@@ -127,10 +298,11 @@ fn count_ray_crossings(
     Ok(crossings)
 }
 
-/// Möller–Trumbore ray-triangle intersection test.
+/// Watertight ray-triangle intersection test.
 ///
 /// Returns true if the ray `origin + t * direction` (t > 0) intersects
-/// the triangle (v0, v1, v2).
+/// the triangle (v0, v1, v2). Delegates to the watertight algorithm from
+/// `brepkit_math` which guarantees no cracks or double-hits on shared edges.
 fn ray_triangle_intersect(
     origin: Point3,
     direction: Vec3,
@@ -138,35 +310,8 @@ fn ray_triangle_intersect(
     v1: Point3,
     v2: Point3,
 ) -> bool {
-    let edge1 = v1 - v0;
-    let edge2 = v2 - v0;
-    let pvec = direction.cross(edge2);
-    let det = edge1.dot(pvec);
-
-    // Ray is parallel to triangle.
-    if det.abs() < 1e-12 {
-        return false;
-    }
-
-    let inv_det = 1.0 / det;
-    let tvec = origin - v0;
-    let bary_u = inv_det * tvec.dot(pvec);
-
-    if !(0.0..=1.0).contains(&bary_u) {
-        return false;
-    }
-
-    let qvec = tvec.cross(edge1);
-    let bary_v = inv_det * direction.dot(qvec);
-
-    if bary_v < 0.0 || bary_u + bary_v > 1.0 {
-        return false;
-    }
-
-    let ray_t = inv_det * edge2.dot(qvec);
-
-    // Only count forward intersections
-    ray_t > 1e-10
+    brepkit_math::ray_triangle::watertight_ray_triangle_intersect(origin, direction, v0, v1, v2)
+        .is_some()
 }
 
 /// Computes the squared distance from a point to a triangle.
@@ -336,5 +481,49 @@ mod tests {
             Point3::new(0.0, 1.0, 0.0),
         );
         assert!((dist - 9.0).abs() < 1e-10);
+    }
+
+    // ── Winding number tests ─────────────────────────
+
+    #[test]
+    fn winding_point_inside_box() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+
+        let result =
+            classify_point_winding(&topo, solid, Point3::new(0.0, 0.0, 0.0), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Inside);
+    }
+
+    #[test]
+    fn winding_point_outside_box() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+
+        let result =
+            classify_point_winding(&topo, solid, Point3::new(5.0, 5.0, 5.0), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Outside);
+    }
+
+    // ── Robust classifier tests ──────────────────────
+
+    #[test]
+    fn robust_point_inside_box() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+
+        let result =
+            classify_point_robust(&topo, solid, Point3::new(0.0, 0.0, 0.0), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Inside);
+    }
+
+    #[test]
+    fn robust_point_outside_box() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+
+        let result =
+            classify_point_robust(&topo, solid, Point3::new(5.0, 5.0, 5.0), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Outside);
     }
 }

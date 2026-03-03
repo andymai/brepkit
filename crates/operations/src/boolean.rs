@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 
 use brepkit_math::aabb::Aabb3;
+use brepkit_math::bvh::Bvh;
 use brepkit_math::plane::plane_plane_intersection;
 use brepkit_math::predicates::{orient3d, point_in_polygon};
 use brepkit_math::tolerance::Tolerance;
@@ -110,9 +111,16 @@ pub fn boolean(
         return handle_disjoint(topo, op, &faces_a, &faces_b);
     }
 
-    // ── Phase 1-2: Face-pair intersection + chord map ────────────────────
+    // ── Phase 1a: Analytic fast path ───────────────────────────────────
 
-    let segments = compute_intersection_segments(&faces_a, &faces_b, tol);
+    let (analytic_segs, analytic_pairs) = compute_analytic_segments(topo, a, b, tol)?;
+
+    // ── Phase 1b: Tessellated intersection (skip analytic pairs) ────────
+
+    let tess_segs = compute_intersection_segments(&faces_a, &faces_b, tol, &analytic_pairs);
+
+    let mut segments = analytic_segs;
+    segments.extend(tess_segs);
 
     // Build chord map: FaceId → Vec<(Point3, Point3)>
     let mut chord_map: HashMap<usize, Vec<(Point3, Point3)>> = HashMap::new();
@@ -346,19 +354,176 @@ fn handle_disjoint(
 // Phase 1-2: Intersection
 // ---------------------------------------------------------------------------
 
+/// Try analytic (closed-form) intersection for plane+analytic face pairs.
+///
+/// Returns intersection segments and the set of original `(face_a_idx, face_b_idx)`
+/// pairs that were handled, so the tessellated path can skip them.
+///
+/// This is the "fast path" for booleans involving analytic solids: a box-sphere
+/// boolean only needs 6 plane-sphere tests (each O(1)) instead of ~5000
+/// triangle-triangle tests.
+#[allow(clippy::too_many_lines, clippy::type_complexity)]
+fn compute_analytic_segments(
+    topo: &Topology,
+    solid_a: SolidId,
+    solid_b: SolidId,
+    tol: Tolerance,
+) -> Result<
+    (
+        Vec<IntersectionSegment>,
+        std::collections::HashSet<(usize, usize)>,
+    ),
+    crate::OperationsError,
+> {
+    use std::collections::HashSet;
+
+    let mut segments = Vec::new();
+    let mut handled = HashSet::new();
+
+    // Collect original face IDs + surfaces for both solids.
+    let faces_a = collect_original_faces(topo, solid_a)?;
+    let faces_b = collect_original_faces(topo, solid_b)?;
+
+    for &(fid_a, ref surf_a) in &faces_a {
+        for &(fid_b, ref surf_b) in &faces_b {
+            // Try plane (A) + analytic (B).
+            if let Some(segs) = try_plane_analytic_pair(fid_a, surf_a, fid_b, surf_b, tol) {
+                segments.extend(segs);
+                handled.insert((fid_a.index(), fid_b.index()));
+                continue;
+            }
+            // Try plane (B) + analytic (A).
+            if let Some(segs) = try_plane_analytic_pair(fid_b, surf_b, fid_a, surf_a, tol) {
+                // Note: segments store face_a/face_b in the order the pair was tested.
+                // Re-tag with correct face IDs.
+                for seg in segs {
+                    segments.push(IntersectionSegment {
+                        face_a: fid_a,
+                        face_b: fid_b,
+                        p0: seg.p0,
+                        p1: seg.p1,
+                    });
+                }
+                handled.insert((fid_a.index(), fid_b.index()));
+            }
+        }
+    }
+
+    Ok((segments, handled))
+}
+
+/// Collect the original `(FaceId, FaceSurface)` pairs for a solid's outer shell.
+fn collect_original_faces(
+    topo: &Topology,
+    solid_id: SolidId,
+) -> Result<Vec<(FaceId, FaceSurface)>, crate::OperationsError> {
+    let solid = topo.solid(solid_id)?;
+    let shell = topo.shell(solid.outer_shell())?;
+    let mut result = Vec::with_capacity(shell.faces().len());
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        result.push((fid, face.surface().clone()));
+    }
+    Ok(result)
+}
+
+/// Try to compute intersection segments for a plane + analytic surface pair.
+///
+/// Returns `None` if the pair isn't plane + analytic, or if the closed-form
+/// intersection fails. The returned segments have `face_a = plane_fid` and
+/// `face_b = analytic_fid`.
+#[allow(clippy::cast_precision_loss)]
+fn try_plane_analytic_pair(
+    plane_fid: FaceId,
+    plane_surf: &FaceSurface,
+    analytic_fid: FaceId,
+    analytic_surf: &FaceSurface,
+    tol: Tolerance,
+) -> Option<Vec<IntersectionSegment>> {
+    use brepkit_math::analytic_intersection::{AnalyticSurface, sample_plane_analytic};
+
+    // Extract plane normal + d.
+    let (normal, d) = match plane_surf {
+        FaceSurface::Plane { normal, d } => (*normal, *d),
+        _ => return None,
+    };
+
+    // Extract analytic surface reference.
+    let analytic = match analytic_surf {
+        FaceSurface::Cylinder(c) => AnalyticSurface::Cylinder(c),
+        FaceSurface::Cone(c) => AnalyticSurface::Cone(c),
+        FaceSurface::Sphere(s) => AnalyticSurface::Sphere(s),
+        FaceSurface::Torus(t) => AnalyticSurface::Torus(t),
+        _ => return None,
+    };
+
+    // Get sample points without NURBS curve fitting.
+    let chains = sample_plane_analytic(analytic, normal, d).ok()?;
+
+    // Convert sampled point chains to consecutive segments.
+    let mut segments = Vec::new();
+    for chain in &chains {
+        if chain.len() < 2 {
+            continue;
+        }
+        for window in chain.windows(2) {
+            let p0 = window[0];
+            let p1 = window[1];
+            // Skip degenerate segments.
+            let dx = p1.x() - p0.x();
+            let dy = p1.y() - p0.y();
+            let dz = p1.z() - p0.z();
+            if dx * dx + dy * dy + dz * dz < tol.linear * tol.linear {
+                continue;
+            }
+            segments.push(IntersectionSegment {
+                face_a: plane_fid,
+                face_b: analytic_fid,
+                p0,
+                p1,
+            });
+        }
+    }
+
+    if segments.is_empty() {
+        None
+    } else {
+        Some(segments)
+    }
+}
+
 /// Compute all intersection segments between face pairs of two solids.
+///
+/// Uses a BVH over solid B's faces for O(n log m) broad-phase filtering
+/// instead of brute-force O(n * m).
+///
+/// Face pairs in `skip_pairs` (original face IDs handled by analytic path)
+/// are excluded from tessellated intersection.
 fn compute_intersection_segments(
     faces_a: &FaceData,
     faces_b: &FaceData,
     tol: Tolerance,
+    skip_pairs: &std::collections::HashSet<(usize, usize)>,
 ) -> Vec<IntersectionSegment> {
     let mut segments = Vec::new();
 
+    // Build BVH over solid B's faces.
+    let b_entries: Vec<(usize, Aabb3)> = faces_b
+        .iter()
+        .enumerate()
+        .map(|(i, (_, verts, _, _))| (i, Aabb3::from_points(verts.iter().copied())))
+        .collect();
+    let bvh = Bvh::build(&b_entries);
+
     for &(fid_a, ref verts_a, n_a, d_a) in faces_a {
         let aabb_a = Aabb3::from_points(verts_a.iter().copied());
-        for &(fid_b, ref verts_b, n_b, d_b) in faces_b {
-            let aabb_b = Aabb3::from_points(verts_b.iter().copied());
-            if !aabb_a.intersects(aabb_b) {
+        let candidates = bvh.query_overlap(&aabb_a);
+
+        for &b_idx in &candidates {
+            let (fid_b, ref verts_b, n_b, d_b) = faces_b[b_idx];
+
+            // Skip face pairs already handled by the analytic fast path.
+            if skip_pairs.contains(&(fid_a.index(), fid_b.index())) {
                 continue;
             }
 

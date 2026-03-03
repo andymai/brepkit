@@ -24,10 +24,12 @@ pub mod heal;
 pub mod helix;
 pub mod loft;
 pub mod measure;
+pub mod mesh_boolean;
 pub mod mirror;
 pub mod nurbs_boolean;
 pub mod offset_face;
 pub mod offset_solid;
+pub mod offset_trim;
 pub mod offset_wire;
 pub mod pattern;
 pub mod pipe;
@@ -42,6 +44,7 @@ pub mod sweep;
 pub mod tessellate;
 pub mod thicken;
 pub mod transform;
+pub mod untrim;
 pub mod validate;
 
 /// Compute `n · p` treating a `Point3` as a direction vector.

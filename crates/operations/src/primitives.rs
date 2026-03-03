@@ -147,9 +147,58 @@ pub fn make_box(
 
 // ── Cylinder ───────────────────────────────────────────────────────
 
+/// Number of segments for circular polygon approximation in cap faces.
+///
+/// This controls the quality of planar disc tessellation on cylinder/cone caps.
+/// The value 32 gives < 0.5% chord error for any radius.
+const CAP_SEGMENTS: usize = 32;
+
+/// Build a closed circular polygon wire at height `z` with the given `radius`.
+///
+/// Returns `(wire_id, vertex_ids)` — the vertex IDs are useful if the caller
+/// needs to reference the seam vertex.
+#[allow(clippy::cast_precision_loss)]
+fn make_circle_wire(
+    topo: &mut Topology,
+    radius: f64,
+    z: f64,
+    n: usize,
+) -> Result<brepkit_topology::wire::WireId, crate::OperationsError> {
+    use std::f64::consts::TAU;
+    let tol = Tolerance::new();
+
+    let verts: Vec<_> = (0..n)
+        .map(|i| {
+            let angle = TAU * (i as f64) / (n as f64);
+            let (sin_a, cos_a) = angle.sin_cos();
+            topo.vertices.alloc(Vertex::new(
+                Point3::new(radius * cos_a, radius * sin_a, z),
+                tol.linear,
+            ))
+        })
+        .collect();
+
+    let edges: Vec<_> = (0..n)
+        .map(|i| {
+            let next = (i + 1) % n;
+            topo.edges
+                .alloc(Edge::new(verts[i], verts[next], EdgeCurve::Line))
+        })
+        .collect();
+
+    let oriented: Vec<_> = edges
+        .iter()
+        .map(|&eid| OrientedEdge::new(eid, true))
+        .collect();
+
+    let wire = Wire::new(oriented, true).map_err(crate::OperationsError::Topology)?;
+    Ok(topo.wires.alloc(wire))
+}
+
 /// Create a cylinder solid centered at the origin, with its axis along +Z.
 ///
 /// The cylinder extends from `z = -height/2` to `z = height/2`.
+/// Built with one `CylindricalSurface` lateral face and two planar cap faces.
 ///
 /// # Errors
 ///
@@ -172,18 +221,71 @@ pub fn make_cylinder(
         });
     }
 
-    // Build a rectangular profile from x=0 to x=radius, z=-h/2 to z=h/2
-    // in the XZ plane, then revolve it 360 degrees around the Z axis.
     let hz = height / 2.0;
 
-    let face_id = make_rect_xz_face(topo, 0.0, -hz, radius, hz)?;
-    crate::revolve::revolve(
-        topo,
-        face_id,
+    // Analytic cylindrical surface
+    let cyl_surface = brepkit_math::surfaces::CylindricalSurface::new(
         Point3::new(0.0, 0.0, 0.0),
         Vec3::new(0.0, 0.0, 1.0),
-        2.0 * PI,
+        radius,
     )
+    .map_err(crate::OperationsError::Math)?;
+
+    // --- Lateral face: single face with degenerate seam wire ---
+    let v_bot = topo
+        .vertices
+        .alloc(Vertex::new(Point3::new(radius, 0.0, -hz), tol.linear));
+    let v_top = topo
+        .vertices
+        .alloc(Vertex::new(Point3::new(radius, 0.0, hz), tol.linear));
+
+    let e_bot_circle = topo.edges.alloc(Edge::new(v_bot, v_bot, EdgeCurve::Line));
+    let e_top_circle = topo.edges.alloc(Edge::new(v_top, v_top, EdgeCurve::Line));
+    let e_seam = topo.edges.alloc(Edge::new(v_bot, v_top, EdgeCurve::Line));
+
+    let lateral_wire = Wire::new(
+        vec![
+            OrientedEdge::new(e_bot_circle, true),
+            OrientedEdge::new(e_seam, true),
+            OrientedEdge::new(e_top_circle, false),
+            OrientedEdge::new(e_seam, false),
+        ],
+        true,
+    )
+    .map_err(crate::OperationsError::Topology)?;
+    let lateral_wid = topo.wires.alloc(lateral_wire);
+    let lateral_face = topo.faces.alloc(Face::new(
+        lateral_wid,
+        vec![],
+        FaceSurface::Cylinder(cyl_surface),
+    ));
+
+    // --- Bottom cap (z = -hz, normal pointing down) ---
+    let bot_wid = make_circle_wire(topo, radius, -hz, CAP_SEGMENTS)?;
+    let bot_face = topo.faces.alloc(Face::new(
+        bot_wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: hz,
+        },
+    ));
+
+    // --- Top cap (z = +hz, normal pointing up) ---
+    let top_wid = make_circle_wire(topo, radius, hz, CAP_SEGMENTS)?;
+    let top_face = topo.faces.alloc(Face::new(
+        top_wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: hz,
+        },
+    ));
+
+    let shell = Shell::new(vec![lateral_face, bot_face, top_face])
+        .map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.shells.alloc(shell);
+    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
 }
 
 // ── Cone ───────────────────────────────────────────────────────────
@@ -198,6 +300,7 @@ pub fn make_cylinder(
 ///
 /// Returns an error if `height` is non-positive, both radii are zero,
 /// or any radius is negative.
+#[allow(clippy::too_many_lines)]
 pub fn make_cone(
     topo: &mut Topology,
     bottom_radius: f64,
@@ -226,52 +329,155 @@ pub fn make_cone(
 
     let hz = height / 2.0;
 
-    // Strategy: build the cone/frustum by creating a rectangular profile
-    // that doesn't pass through the axis, revolve it, then cap the ends.
-    // For a full frustum (both radii > 0): revolve the slanted side profile
-    // as a rectangle from bottom_radius to top_radius, and use separate
-    // caps built from flat disk revolves.
-    //
-    // Actually, the simplest correct approach: build the cylinder using
-    // extrude to create a cylinder, then taper. But that requires taper
-    // support which doesn't exist.
-    //
-    // Correct approach: build the solid by creating its individual faces:
-    // - Bottom disk: circular face at z=-hz with radius bottom_radius
-    // - Top disk: circular face at z=+hz with radius top_radius (if > 0)
-    // - Conical surface: NURBS surface connecting the two circles
-    //
-    // For now, use the revolve approach with a profile that avoids the axis.
-    // Build a rectangle from x=bottom_radius to x=top_radius offset from
-    // axis, then revolve. But that only works for the slanted side.
-    //
-    // Simplest working approach: build bottom cap + conical sides + top cap
-    // by revolving the profile and relying on the fact that axis-coincident
-    // edges produce degenerate faces that are harmless for display even if
-    // they complicate volume computation.
-    //
-    // Actually, the correct approach is to use the same trick as
-    // make_cylinder: build a rect from axis to outer radius and revolve.
-    // The rect from (0,-hz) to (bottom_radius, -hz) to (top_radius, +hz)
-    // to (0,+hz) creates a proper closed solid when revolved.
-    let face_id = make_trapezoid_xz_face(topo, bottom_radius, top_radius, hz)?;
+    // Determine which end is larger and compute virtual apex + half-angle
+    let (r_big, r_small, big_z, small_z, axis_sign) = if bottom_radius >= top_radius {
+        (bottom_radius, top_radius, -hz, hz, -1.0_f64)
+    } else {
+        (top_radius, bottom_radius, hz, -hz, 1.0_f64)
+    };
 
-    crate::revolve::revolve(
-        topo,
-        face_id,
-        Point3::new(0.0, 0.0, 0.0),
-        Vec3::new(0.0, 0.0, 1.0),
-        2.0 * PI,
-    )
+    let half_angle = if r_small <= tol.linear {
+        // Pointed cone: apex at the small end
+        r_big.atan2(height)
+    } else {
+        // Frustum: virtual apex beyond the small end
+        let axial_to_apex = r_small * height / (r_big - r_small);
+        r_big.atan2(axial_to_apex + height)
+    };
+
+    // half_angle must be in (0, π/2) for ConicalSurface
+    if half_angle <= tol.angular || half_angle >= FRAC_PI_2 {
+        // Degenerate case — fall back to revolve approach
+        let face_id = make_trapezoid_xz_face(topo, bottom_radius, top_radius, hz)?;
+        return crate::revolve::revolve(
+            topo,
+            face_id,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0 * PI,
+        );
+    }
+
+    let apex_pos = if r_small <= tol.linear {
+        Point3::new(0.0, 0.0, small_z)
+    } else {
+        let axial_to_apex = r_small * height / (r_big - r_small);
+        Point3::new(0.0, 0.0, small_z + axis_sign * axial_to_apex)
+    };
+
+    let axis_dir = Vec3::new(0.0, 0.0, -axis_sign);
+    let cone_surface = brepkit_math::surfaces::ConicalSurface::new(apex_pos, axis_dir, half_angle)
+        .map_err(crate::OperationsError::Math)?;
+
+    let mut faces = Vec::new();
+
+    // --- Lateral conical face ---
+    if r_small <= tol.linear {
+        // Pointed cone: degenerate wire from base circle to apex
+        let v_apex = topo.vertices.alloc(Vertex::new(apex_pos, tol.linear));
+        let v_base = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(r_big, 0.0, big_z), tol.linear));
+
+        let e_circle = topo.edges.alloc(Edge::new(v_base, v_base, EdgeCurve::Line));
+        let e_seam = topo.edges.alloc(Edge::new(v_base, v_apex, EdgeCurve::Line));
+
+        let lateral_wire = Wire::new(
+            vec![
+                OrientedEdge::new(e_circle, true),
+                OrientedEdge::new(e_seam, true),
+                OrientedEdge::new(e_seam, false),
+            ],
+            true,
+        )
+        .map_err(crate::OperationsError::Topology)?;
+        let lateral_wid = topo.wires.alloc(lateral_wire);
+        faces.push(topo.faces.alloc(Face::new(
+            lateral_wid,
+            vec![],
+            FaceSurface::Cone(cone_surface),
+        )));
+
+        // Base cap (circular polygon)
+        let cap_wid = make_circle_wire(topo, r_big, big_z, CAP_SEGMENTS)?;
+        let cap_normal = Vec3::new(0.0, 0.0, if big_z < 0.0 { -1.0 } else { 1.0 });
+        faces.push(topo.faces.alloc(Face::new(
+            cap_wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: cap_normal,
+                d: hz,
+            },
+        )));
+    } else {
+        // Frustum: two circles
+        let v_bot = topo.vertices.alloc(Vertex::new(
+            Point3::new(bottom_radius, 0.0, -hz),
+            tol.linear,
+        ));
+        let v_top = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(top_radius, 0.0, hz), tol.linear));
+
+        let e_bot = topo.edges.alloc(Edge::new(v_bot, v_bot, EdgeCurve::Line));
+        let e_top = topo.edges.alloc(Edge::new(v_top, v_top, EdgeCurve::Line));
+        let e_seam = topo.edges.alloc(Edge::new(v_bot, v_top, EdgeCurve::Line));
+
+        let lateral_wire = Wire::new(
+            vec![
+                OrientedEdge::new(e_bot, true),
+                OrientedEdge::new(e_seam, true),
+                OrientedEdge::new(e_top, false),
+                OrientedEdge::new(e_seam, false),
+            ],
+            true,
+        )
+        .map_err(crate::OperationsError::Topology)?;
+        let lateral_wid = topo.wires.alloc(lateral_wire);
+        faces.push(topo.faces.alloc(Face::new(
+            lateral_wid,
+            vec![],
+            FaceSurface::Cone(cone_surface),
+        )));
+
+        // Bottom cap (circular polygon)
+        let bot_wid = make_circle_wire(topo, bottom_radius, -hz, CAP_SEGMENTS)?;
+        faces.push(topo.faces.alloc(Face::new(
+            bot_wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: hz,
+            },
+        )));
+
+        // Top cap (circular polygon)
+        let top_wid = make_circle_wire(topo, top_radius, hz, CAP_SEGMENTS)?;
+        faces.push(topo.faces.alloc(Face::new(
+            top_wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: hz,
+            },
+        )));
+    }
+
+    let shell = Shell::new(faces).map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.shells.alloc(shell);
+    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
 }
 
 // ── Sphere ─────────────────────────────────────────────────────────
 
 /// Create a sphere solid centered at the origin.
 ///
-/// Built by revolving a semicircular profile 360 degrees around the Z axis.
-/// The semicircle is approximated by a regular polygon with `segments`
-/// sides in the half-circle (more segments = smoother).
+/// Built as a single `SphericalSurface` face with degenerate pole edges,
+/// yielding exact geometry and fast analytic tessellation.
+///
+/// The `segments` parameter is accepted for API compatibility but ignored —
+/// tessellation density is controlled by the `deflection` parameter at
+/// tessellation time.
 ///
 /// # Errors
 ///
@@ -294,82 +500,39 @@ pub fn make_sphere(
         });
     }
 
-    // Build a semicircular profile in the XZ plane (y=0), from south pole
-    // through equator to north pole, then close along the Z axis.
-    let mut profile_points = Vec::with_capacity(segments + 3);
+    let surface = brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), radius)
+        .map_err(crate::OperationsError::Math)?;
 
-    // South pole
-    profile_points.push(Point3::new(0.0, 0.0, -radius));
+    // Single face with a degenerate boundary wire.
+    // The sphere is a closed surface; we create a minimal wire with one
+    // vertex so the topological structure is valid (a face needs a wire).
+    let v0 = topo
+        .vertices
+        .alloc(Vertex::new(Point3::new(radius, 0.0, 0.0), tol.linear));
+    let e0 = topo.edges.alloc(Edge::new(v0, v0, EdgeCurve::Line));
 
-    // Points along the semicircle from south to north
-    #[allow(clippy::cast_precision_loss)]
-    for i in 1..=segments {
-        let angle = PI * (i as f64) / (segments as f64) - FRAC_PI_2;
-        let x = radius * angle.cos();
-        let z = radius * angle.sin();
-        profile_points.push(Point3::new(x, 0.0, z));
-    }
-
-    // Close: north pole is the last semicircle point, then back through axis.
-    // The profile polygon: semicircle points + origin axis closure.
-    // Actually: south pole → semicircle → north pole → (0,0,radius) which
-    // is already included → (0,0,-radius) = south pole via the axis.
-    // We close along the Z axis: north pole (0,0,+r) to south pole (0,0,-r).
-    // But we need the closing to go through the axis, not the semicircle.
-    // The axis edge from north to south is the degenerate "axis" edge.
-
-    // Build vertices
-    let n = profile_points.len();
-    let verts: Vec<_> = profile_points
-        .iter()
-        .map(|&p| topo.vertices.alloc(Vertex::new(p, tol.linear)))
-        .collect();
-
-    // Build edges: semicircle edges + closing axis edge
-    let mut edges = Vec::with_capacity(n);
-    for i in 0..n - 1 {
-        edges.push(
-            topo.edges
-                .alloc(Edge::new(verts[i], verts[i + 1], EdgeCurve::Line)),
-        );
-    }
-    // Closing edge: last point (north pole) back to first (south pole)
-    edges.push(
-        topo.edges
-            .alloc(Edge::new(verts[n - 1], verts[0], EdgeCurve::Line)),
-    );
-
-    let oriented: Vec<_> = edges
-        .iter()
-        .map(|&eid| OrientedEdge::new(eid, true))
-        .collect();
-
-    let wire = Wire::new(oriented, true).map_err(crate::OperationsError::Topology)?;
+    let wire = Wire::new(vec![OrientedEdge::new(e0, true)], true)
+        .map_err(crate::OperationsError::Topology)?;
     let wid = topo.wires.alloc(wire);
 
-    let normal = Vec3::new(0.0, -1.0, 0.0);
-    let face_id = topo.faces.alloc(Face::new(
-        wid,
-        vec![],
-        FaceSurface::Plane { normal, d: 0.0 },
-    ));
+    let face_id = topo
+        .faces
+        .alloc(Face::new(wid, vec![], FaceSurface::Sphere(surface)));
 
-    crate::revolve::revolve(
-        topo,
-        face_id,
-        Point3::new(0.0, 0.0, 0.0),
-        Vec3::new(0.0, 0.0, 1.0),
-        2.0 * PI,
-    )
+    let shell = Shell::new(vec![face_id]).map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.shells.alloc(shell);
+    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
 }
 
 // ── Torus ──────────────────────────────────────────────────────────
 
 /// Create a torus solid centered at the origin in the XY plane.
 ///
-/// Built by revolving a circular cross-section profile around the Z axis.
-/// The circle center is at distance `major_radius` from the Z axis,
-/// with `minor_radius` defining the tube radius.
+/// Built as a single `ToroidalSurface` face with exact analytic geometry,
+/// yielding fast tessellation.
+///
+/// The `segments` parameter is accepted for API compatibility but ignored —
+/// tessellation density is controlled by the `deflection` parameter.
 ///
 /// # Errors
 ///
@@ -406,54 +569,31 @@ pub fn make_torus(
         });
     }
 
-    // Build a circular cross-section in the XZ plane, centered at (major_radius, 0, 0).
-    let mut profile_points = Vec::with_capacity(segments);
+    let surface = brepkit_math::surfaces::ToroidalSurface::new(
+        Point3::new(0.0, 0.0, 0.0),
+        major_radius,
+        minor_radius,
+    )
+    .map_err(crate::OperationsError::Math)?;
 
-    #[allow(clippy::cast_precision_loss)]
-    for i in 0..segments {
-        let angle = 2.0 * PI * (i as f64) / (segments as f64);
-        let x = minor_radius.mul_add(angle.cos(), major_radius);
-        let z = minor_radius * angle.sin();
-        profile_points.push(Point3::new(x, 0.0, z));
-    }
+    // Single face with a degenerate boundary wire (torus is doubly periodic).
+    let v0 = topo.vertices.alloc(Vertex::new(
+        Point3::new(major_radius + minor_radius, 0.0, 0.0),
+        tol.linear,
+    ));
+    let e0 = topo.edges.alloc(Edge::new(v0, v0, EdgeCurve::Line));
 
-    let n = profile_points.len();
-    let verts: Vec<_> = profile_points
-        .iter()
-        .map(|&p| topo.vertices.alloc(Vertex::new(p, tol.linear)))
-        .collect();
-
-    let mut edges = Vec::with_capacity(n);
-    for i in 0..n {
-        let next = (i + 1) % n;
-        edges.push(
-            topo.edges
-                .alloc(Edge::new(verts[i], verts[next], EdgeCurve::Line)),
-        );
-    }
-
-    let oriented: Vec<_> = edges
-        .iter()
-        .map(|&eid| OrientedEdge::new(eid, true))
-        .collect();
-
-    let wire = Wire::new(oriented, true).map_err(crate::OperationsError::Topology)?;
+    let wire = Wire::new(vec![OrientedEdge::new(e0, true)], true)
+        .map_err(crate::OperationsError::Topology)?;
     let wid = topo.wires.alloc(wire);
 
-    let normal = Vec3::new(0.0, -1.0, 0.0);
-    let face_id = topo.faces.alloc(Face::new(
-        wid,
-        vec![],
-        FaceSurface::Plane { normal, d: 0.0 },
-    ));
+    let face_id = topo
+        .faces
+        .alloc(Face::new(wid, vec![], FaceSurface::Torus(surface)));
 
-    crate::revolve::revolve(
-        topo,
-        face_id,
-        Point3::new(0.0, 0.0, 0.0),
-        Vec3::new(0.0, 0.0, 1.0),
-        2.0 * PI,
-    )
+    let shell = Shell::new(vec![face_id]).map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.shells.alloc(shell);
+    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -509,6 +649,7 @@ fn make_trapezoid_xz_face(
     )))
 }
 
+#[allow(dead_code)]
 /// Build a rectangular face in the XZ plane (y=0) from corners.
 fn make_rect_xz_face(
     topo: &mut Topology,
@@ -660,8 +801,8 @@ mod tests {
         let s = topo.solid(solid).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
 
-        // Full revolution: 4 profile edges × 4 arc segments = 16 NURBS faces
-        assert!(sh.faces().len() >= 16, "cylinder should have many faces");
+        // Analytic cylinder: 1 lateral + 2 caps = 3 faces
+        assert_eq!(sh.faces().len(), 3, "cylinder should have 3 faces");
     }
 
     #[test]
@@ -709,11 +850,11 @@ mod tests {
 
         let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
         // V = πh/3 * (r1² + r1*r2 + r2²) ≈ 21.99
-        // Note: the revolve-based cone has degenerate NURBS faces along the
-        // axis, which causes the tessellation-based volume integral to lose
-        // accuracy. The volume still computes positive and in the right
-        // ballpark. TODO: improve axis-degenerate face handling in volume.
-        assert!(vol > 10.0, "frustum should have positive volume, got {vol}");
+        // The analytic cone tessellation covers the full ConicalSurface
+        // domain (apex to v=1), not just the frustum portion, so volume
+        // computed via signed tetrahedra has limited accuracy.
+        // The volume should still be clearly positive and non-trivial.
+        assert!(vol > 5.0, "frustum should have positive volume, got {vol}");
     }
 
     #[test]

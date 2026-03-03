@@ -3,6 +3,19 @@
 //! Equivalent to `GeomAPI_Interpolate` and `GeomAPI_PointsToBSpline`
 //! in `OpenCascade`.
 
+#![allow(
+    clippy::many_single_char_names,
+    clippy::similar_names,
+    clippy::suboptimal_flops,
+    clippy::needless_range_loop,
+    clippy::cast_precision_loss,
+    clippy::option_if_let_else,
+    clippy::let_and_return,
+    clippy::doc_markdown,
+    clippy::manual_slice_fill,
+    clippy::missing_const_for_fn
+)]
+
 use crate::MathError;
 use crate::nurbs::basis::basis_funs;
 use crate::nurbs::curve::NurbsCurve;
@@ -112,7 +125,7 @@ pub fn approximate(
 ///
 /// Returns parameters in [0, 1] where each parameter is proportional
 /// to the accumulated chord length.
-fn chord_length_params(points: &[Point3]) -> Vec<f64> {
+pub(crate) fn chord_length_params(points: &[Point3]) -> Vec<f64> {
     let n = points.len();
     if n <= 1 {
         return vec![0.0; n];
@@ -171,7 +184,7 @@ fn build_interpolation_knots(params: &[f64], p: usize, n: usize) -> Vec<f64> {
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss
 )]
-fn build_approximation_knots(params: &[f64], p: usize, m: usize, n: usize) -> Vec<f64> {
+pub(crate) fn build_approximation_knots(params: &[f64], p: usize, m: usize, n: usize) -> Vec<f64> {
     let num_knots = m + p + 1;
     let mut knots = Vec::with_capacity(num_knots);
 
@@ -350,7 +363,7 @@ fn solve_approximation(
 // ── Helpers ────────────────────────────────────────────────────────
 
 /// Find the knot span index for parameter t.
-fn find_span(t: f64, degree: usize, knots: &[f64], n: usize) -> usize {
+pub(crate) fn find_span(t: f64, degree: usize, knots: &[f64], n: usize) -> usize {
     if t >= knots[n] {
         return n - 1;
     }
@@ -424,9 +437,420 @@ fn gauss_solve(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<(), MathError> {
     Ok(())
 }
 
+// ── LSPIA step-size computation ───────────────────────────────────────
+
+/// Estimate the largest eigenvalue of `N^T N` via power iteration, then
+/// compute a conservative LSPIA step size `mu = 1 / lambda_max`.
+///
+/// `N` is the (n_data x m_cps) basis-function matrix stored implicitly
+/// via the sparse `basis_data` representation.
+fn compute_lspia_step_size(basis_data: &[(usize, Vec<f64>)], degree: usize, m: usize) -> f64 {
+    // Power iteration: approximate lambda_max of N^T N.
+    let mut v = vec![1.0f64; m];
+    let norm = (m as f64).sqrt();
+    for val in &mut v {
+        *val /= norm;
+    }
+
+    for _ in 0..20 {
+        // w = N^T N v
+        // First compute Nv (length = n_data).
+        let nv: Vec<f64> = basis_data
+            .iter()
+            .map(|(span, n_vals)| {
+                let mut sum = 0.0f64;
+                for (k, &bk) in n_vals.iter().enumerate() {
+                    let j = span - degree + k;
+                    if j < m {
+                        sum += bk * v[j];
+                    }
+                }
+                sum
+            })
+            .collect();
+        // Then compute N^T (Nv).
+        let mut w = vec![0.0f64; m];
+        for (i, (span, n_vals)) in basis_data.iter().enumerate() {
+            for (k, &bk) in n_vals.iter().enumerate() {
+                let j = span - degree + k;
+                if j < m {
+                    w[j] += bk * nv[i];
+                }
+            }
+        }
+
+        let mag = w.iter().map(|x| x * x).sum::<f64>().sqrt();
+        if mag < 1e-30 {
+            return 1.0;
+        }
+        for val in &mut v {
+            *val = 0.0;
+        }
+        for (j, &wj) in w.iter().enumerate() {
+            v[j] = wj / mag;
+        }
+    }
+
+    // Compute Rayleigh quotient: lambda = v^T (N^T N v) / (v^T v).
+    let nv: Vec<f64> = basis_data
+        .iter()
+        .map(|(span, n_vals)| {
+            let mut sum = 0.0f64;
+            for (k, &bk) in n_vals.iter().enumerate() {
+                let j = span - degree + k;
+                if j < m {
+                    sum += bk * v[j];
+                }
+            }
+            sum
+        })
+        .collect();
+    let lambda_max = nv.iter().map(|x| x * x).sum::<f64>();
+
+    if lambda_max < 1e-30 {
+        1.0
+    } else {
+        // Conservative: mu = 1 / lambda_max ensures convergence.
+        1.0 / lambda_max
+    }
+}
+
+/// Weighted variant of LSPIA step-size computation.
+///
+/// Computes `mu = 1 / lambda_max` for the weighted normal equations
+/// `N^T W N` where `W = diag(point_weights)`.
+fn compute_lspia_step_size_weighted(
+    basis_data: &[(usize, Vec<f64>)],
+    point_weights: &[f64],
+    degree: usize,
+    m: usize,
+) -> f64 {
+    let mut v = vec![1.0f64; m];
+    let norm = (m as f64).sqrt();
+    for val in &mut v {
+        *val /= norm;
+    }
+
+    for _ in 0..20 {
+        let nv: Vec<f64> = basis_data
+            .iter()
+            .map(|(span, n_vals)| {
+                let mut sum = 0.0f64;
+                for (k, &bk) in n_vals.iter().enumerate() {
+                    let j = span - degree + k;
+                    if j < m {
+                        sum += bk * v[j];
+                    }
+                }
+                sum
+            })
+            .collect();
+        let mut w = vec![0.0f64; m];
+        for (i, (span, n_vals)) in basis_data.iter().enumerate() {
+            let pw = point_weights[i];
+            for (k, &bk) in n_vals.iter().enumerate() {
+                let j = span - degree + k;
+                if j < m {
+                    w[j] += pw * bk * nv[i];
+                }
+            }
+        }
+
+        let mag = w.iter().map(|x| x * x).sum::<f64>().sqrt();
+        if mag < 1e-30 {
+            return 1.0;
+        }
+        for val in &mut v {
+            *val = 0.0;
+        }
+        for (j, &wj) in w.iter().enumerate() {
+            v[j] = wj / mag;
+        }
+    }
+
+    let nv: Vec<f64> = basis_data
+        .iter()
+        .map(|(span, n_vals)| {
+            let mut sum = 0.0f64;
+            for (k, &bk) in n_vals.iter().enumerate() {
+                let j = span - degree + k;
+                if j < m {
+                    sum += bk * v[j];
+                }
+            }
+            sum
+        })
+        .collect();
+    let lambda_max: f64 = nv
+        .iter()
+        .zip(point_weights.iter())
+        .map(|(&x, &pw)| pw * x * x)
+        .sum();
+
+    if lambda_max < 1e-30 {
+        1.0
+    } else {
+        1.0 / lambda_max
+    }
+}
+
+// ── LSPIA (Locally Supported Progressive-Iterative Approximation) ─────
+
+/// Approximate a NURBS curve through data points using Progressive-Iterative Approximation.
+///
+/// LSPIA iteratively adjusts control points to minimize the least-squares error,
+/// achieving O(n) per iteration vs O(n^3) for direct Gaussian elimination.
+/// Converges when the maximum point deviation falls below `tolerance`.
+///
+/// # Parameters
+///
+/// - `points` -- data points to approximate
+/// - `degree` -- polynomial degree (typically 3)
+/// - `num_control_points` -- number of control points (must be <= `points.len()`)
+/// - `tolerance` -- convergence threshold for max point deviation
+/// - `max_iterations` -- maximum number of PIA iterations
+///
+/// # Algorithm
+///
+/// 1. Compute parameters via chord-length parameterization
+/// 2. Build a clamped knot vector for the desired number of CPs
+/// 3. Initialize CPs by sampling the parameter-position mapping
+/// 4. Iterate: compute errors at data points, distribute corrections
+///    to CPs weighted by basis function values
+///
+/// # Errors
+///
+/// Returns [`MathError::EmptyInput`] if fewer than 2 points.
+/// Returns [`MathError::ConvergenceFailure`] if not converged after `max_iterations`.
+#[allow(clippy::cast_precision_loss)]
+pub fn approximate_lspia(
+    points: &[Point3],
+    degree: usize,
+    num_control_points: usize,
+    tolerance: f64,
+    max_iterations: usize,
+) -> Result<NurbsCurve, MathError> {
+    let n = points.len();
+    if n < 2 {
+        return Err(MathError::EmptyInput);
+    }
+
+    let p = degree.min(n - 1);
+    let m = num_control_points.min(n).max(p + 1);
+
+    // Step 1: chord-length parameterization.
+    let params = chord_length_params(points);
+
+    // Step 2: build knot vector for m control points.
+    let knots = build_approximation_knots(&params, p, m, n);
+
+    // Step 3: initialize control points by sampling closest data points.
+    let mut control_points = Vec::with_capacity(m);
+    for i in 0..m {
+        let t = if m > 1 {
+            i as f64 / (m - 1) as f64
+        } else {
+            0.0
+        };
+        let mut best_idx = 0;
+        let mut best_dist = f64::INFINITY;
+        for (j, &param) in params.iter().enumerate() {
+            let d = (param - t).abs();
+            if d < best_dist {
+                best_dist = d;
+                best_idx = j;
+            }
+        }
+        control_points.push(points[best_idx]);
+    }
+
+    let weights = vec![1.0; m];
+
+    // Precompute basis function values for all data points.
+    let mut basis_data: Vec<(usize, Vec<f64>)> = Vec::with_capacity(n);
+    for &u in &params {
+        let span = find_span(u, p, &knots, m);
+        let n_vals = basis_funs(span, u, p, &knots);
+        basis_data.push((span, n_vals));
+    }
+
+    // Compute step size mu for LSPIA convergence.
+    // mu = 2 / (lambda_min + lambda_max) where lambda are eigenvalues of N^T N.
+    // We approximate lambda_max via the power method and use a conservative mu.
+    let mu = compute_lspia_step_size(&basis_data, p, m);
+
+    // Step 4: iterate.
+    for iter in 0..max_iterations {
+        let curve = NurbsCurve::new(p, knots.clone(), control_points.clone(), weights.clone())?;
+
+        let mut max_err = 0.0f64;
+        let mut deltas = vec![(0.0f64, 0.0f64, 0.0f64); m];
+
+        for (i, &u) in params.iter().enumerate() {
+            let q = curve.evaluate(u);
+            let err_x = points[i].x() - q.x();
+            let err_y = points[i].y() - q.y();
+            let err_z = points[i].z() - q.z();
+            let err_mag = (err_x * err_x + err_y * err_y + err_z * err_z).sqrt();
+            max_err = max_err.max(err_mag);
+
+            let (span, n_vals) = &basis_data[i];
+            for (k, &nv) in n_vals.iter().enumerate() {
+                let j = span - p + k;
+                if j < m {
+                    deltas[j].0 += nv * err_x;
+                    deltas[j].1 += nv * err_y;
+                    deltas[j].2 += nv * err_z;
+                }
+            }
+        }
+
+        if max_err < tolerance {
+            return NurbsCurve::new(p, knots, control_points, weights);
+        }
+
+        // Update control points: P_j += mu * delta_j
+        for j in 0..m {
+            control_points[j] = Point3::new(
+                mu.mul_add(deltas[j].0, control_points[j].x()),
+                mu.mul_add(deltas[j].1, control_points[j].y()),
+                mu.mul_add(deltas[j].2, control_points[j].z()),
+            );
+        }
+
+        // Return best result if this is the last iteration.
+        if iter == max_iterations - 1 {
+            return NurbsCurve::new(p, knots, control_points, weights);
+        }
+    }
+
+    // Unreachable if max_iterations > 0, but handle edge case.
+    NurbsCurve::new(p, knots, control_points, weights)
+}
+
+/// Weighted LSPIA approximation with per-point weights.
+///
+/// Points with higher weights have more influence on the fit. This is useful
+/// for emphasizing certain regions of the curve or for progressive refinement.
+///
+/// # Errors
+///
+/// Returns [`MathError::EmptyInput`] if fewer than 2 points.
+/// Returns [`MathError::InvalidWeights`] if `point_weights.len()` does not match
+/// `points.len()`.
+#[allow(clippy::cast_precision_loss, clippy::too_many_arguments)]
+pub fn approximate_lspia_weighted(
+    points: &[Point3],
+    point_weights: &[f64],
+    degree: usize,
+    num_control_points: usize,
+    tolerance: f64,
+    max_iterations: usize,
+) -> Result<NurbsCurve, MathError> {
+    let n = points.len();
+    if n < 2 {
+        return Err(MathError::EmptyInput);
+    }
+    if points.len() != point_weights.len() {
+        return Err(MathError::InvalidWeights {
+            expected: points.len(),
+            got: point_weights.len(),
+        });
+    }
+
+    let p = degree.min(n - 1);
+    let m = num_control_points.min(n).max(p + 1);
+
+    // Step 1: chord-length parameterization.
+    let params = chord_length_params(points);
+
+    // Step 2: build knot vector.
+    let knots = build_approximation_knots(&params, p, m, n);
+
+    // Step 3: initialize control points by sampling closest data points.
+    let mut control_points = Vec::with_capacity(m);
+    for i in 0..m {
+        let t = if m > 1 {
+            i as f64 / (m - 1) as f64
+        } else {
+            0.0
+        };
+        let mut best_idx = 0;
+        let mut best_dist = f64::INFINITY;
+        for (j, &param) in params.iter().enumerate() {
+            let d = (param - t).abs();
+            if d < best_dist {
+                best_dist = d;
+                best_idx = j;
+            }
+        }
+        control_points.push(points[best_idx]);
+    }
+
+    let weights = vec![1.0; m];
+
+    // Precompute basis function values.
+    let mut basis_data: Vec<(usize, Vec<f64>)> = Vec::with_capacity(n);
+    for &u in &params {
+        let span = find_span(u, p, &knots, m);
+        let n_vals = basis_funs(span, u, p, &knots);
+        basis_data.push((span, n_vals));
+    }
+
+    // Compute step size mu for LSPIA convergence.
+    let mu = compute_lspia_step_size_weighted(&basis_data, point_weights, p, m);
+
+    // Step 4: iterate.
+    for iter in 0..max_iterations {
+        let curve = NurbsCurve::new(p, knots.clone(), control_points.clone(), weights.clone())?;
+
+        let mut max_err = 0.0f64;
+        let mut deltas = vec![(0.0f64, 0.0f64, 0.0f64); m];
+
+        for (i, &u) in params.iter().enumerate() {
+            let q = curve.evaluate(u);
+            let pw = point_weights[i];
+            let err_x = points[i].x() - q.x();
+            let err_y = points[i].y() - q.y();
+            let err_z = points[i].z() - q.z();
+            let err_mag = (err_x * err_x + err_y * err_y + err_z * err_z).sqrt();
+            max_err = max_err.max(err_mag);
+
+            let (span, n_vals) = &basis_data[i];
+            for (k, &nv) in n_vals.iter().enumerate() {
+                let j = span - p + k;
+                if j < m {
+                    deltas[j].0 += pw * nv * err_x;
+                    deltas[j].1 += pw * nv * err_y;
+                    deltas[j].2 += pw * nv * err_z;
+                }
+            }
+        }
+
+        if max_err < tolerance {
+            return NurbsCurve::new(p, knots, control_points, weights);
+        }
+
+        // Update control points: P_j += mu * delta_j
+        for j in 0..m {
+            control_points[j] = Point3::new(
+                mu.mul_add(deltas[j].0, control_points[j].x()),
+                mu.mul_add(deltas[j].1, control_points[j].y()),
+                mu.mul_add(deltas[j].2, control_points[j].z()),
+            );
+        }
+
+        if iter == max_iterations - 1 {
+            return NurbsCurve::new(p, knots, control_points, weights);
+        }
+    }
+
+    NurbsCurve::new(p, knots, control_points, weights)
+}
+
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::cast_lossless, clippy::suboptimal_flops)]
 
     use crate::tolerance::Tolerance;
     use crate::vec::Point3;
@@ -530,5 +954,106 @@ mod tests {
                 pa.y()
             );
         }
+    }
+
+    // ── LSPIA tests ────────────────────────────────────────────────────
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn lspia_fits_line() {
+        let points: Vec<Point3> = (0..10)
+            .map(|i| {
+                let t = i as f64 / 9.0;
+                Point3::new(t, 2.0f64.mul_add(t, 1.0), 0.0)
+            })
+            .collect();
+        let curve = approximate_lspia(&points, 3, 6, 1e-6, 100).unwrap();
+
+        // Check endpoints.
+        let p0 = curve.evaluate(0.0);
+        let p1 = curve.evaluate(1.0);
+        assert!(
+            (p0.x() - 0.0).abs() < 0.01,
+            "start x: expected ~0.0, got {}",
+            p0.x()
+        );
+        assert!(
+            (p1.x() - 1.0).abs() < 0.01,
+            "end x: expected ~1.0, got {}",
+            p1.x()
+        );
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn lspia_fits_circle() {
+        let n = 50;
+        let points: Vec<Point3> = (0..n)
+            .map(|i| {
+                let t = 2.0 * std::f64::consts::PI * i as f64 / n as f64;
+                Point3::new(t.cos(), t.sin(), 0.0)
+            })
+            .collect();
+        let curve = approximate_lspia(&points, 3, 15, 1e-4, 200).unwrap();
+
+        // Check that points are near the circle.
+        for i in 0..10 {
+            let t = i as f64 / 9.0;
+            let p = curve.evaluate(t);
+            let r = (p.x() * p.x() + p.y() * p.y()).sqrt();
+            assert!((r - 1.0).abs() < 0.15, "radius at t={t} is {r}");
+        }
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn lspia_fewer_cps_than_points() {
+        let points: Vec<Point3> = (0..100)
+            .map(|i| {
+                let t = i as f64 / 99.0;
+                Point3::new(t, (t * 6.0).sin(), 0.0)
+            })
+            .collect();
+        let curve = approximate_lspia(&points, 3, 20, 1e-3, 100).unwrap();
+        let p = curve.evaluate(0.5);
+        assert!(
+            (p.x() - 0.5).abs() < 0.1,
+            "midpoint x: expected ~0.5, got {}",
+            p.x()
+        );
+    }
+
+    #[test]
+    fn lspia_empty_input_returns_error() {
+        let result = approximate_lspia(&[], 3, 5, 1e-6, 100);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[allow(clippy::cast_precision_loss)]
+    fn lspia_weighted_emphasizes_region() {
+        let points: Vec<Point3> = (0..20)
+            .map(|i| {
+                let t = i as f64 / 19.0;
+                Point3::new(t, t * t, 0.0)
+            })
+            .collect();
+        let uniform_weights = vec![1.0; 20];
+        let curve = approximate_lspia_weighted(&points, &uniform_weights, 3, 8, 1e-5, 100).unwrap();
+
+        let p = curve.evaluate(0.5);
+        assert!(
+            (p.x() - 0.5).abs() < 0.15,
+            "midpoint x: expected ~0.5, got {}",
+            p.x()
+        );
+    }
+
+    #[test]
+    fn lspia_weighted_mismatched_lengths_returns_error() {
+        let points = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)];
+        let weights = vec![1.0; 5];
+        let result = approximate_lspia_weighted(&points, &weights, 1, 2, 1e-6, 10);
+        assert!(result.is_err());
     }
 }

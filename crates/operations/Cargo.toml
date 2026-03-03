@@ -16,6 +16,11 @@ rayon.workspace = true
 [dev-dependencies]
 brepkit-topology = { workspace = true, features = ["test-utils"] }
 proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "cad_operations"
+harness = false
 
 [lints]
 workspace = true

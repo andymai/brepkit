@@ -17,6 +17,7 @@ brepkit-operations.workspace = true
 brepkit-io.workspace = true
 wasm-bindgen.workspace = true
 thiserror.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

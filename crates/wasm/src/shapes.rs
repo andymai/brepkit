@@ -106,6 +106,45 @@ impl JsMesh {
     pub fn triangle_count(&self) -> u32 {
         (self.indices.len() / 3) as u32
     }
+
+    /// Return all mesh data in a single packed buffer for efficient FFI transfer.
+    ///
+    /// Layout: `[pos_bytes: u32 LE, norm_bytes: u32 LE, idx_bytes: u32 LE,
+    ///          positions: f64 LE..., normals: f64 LE..., indices: u32 LE...]`
+    ///
+    /// This avoids three separate `.clone()` + FFI copies that the individual
+    /// getters (`positions`, `normals`, `indices`) would incur.
+    #[wasm_bindgen(js_name = "packedBuffer")]
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn packed_buffer(&self) -> Vec<u8> {
+        let pos_bytes = self.positions.len() * 8; // f64 = 8 bytes
+        let norm_bytes = self.normals.len() * 8;
+        let idx_bytes = self.indices.len() * 4; // u32 = 4 bytes
+        let header_size = 12; // 3 × u32
+
+        let mut buf = Vec::with_capacity(header_size + pos_bytes + norm_bytes + idx_bytes);
+
+        // Header: byte lengths of each section
+        buf.extend_from_slice(&(pos_bytes as u32).to_le_bytes());
+        buf.extend_from_slice(&(norm_bytes as u32).to_le_bytes());
+        buf.extend_from_slice(&(idx_bytes as u32).to_le_bytes());
+
+        // Positions (f64 LE)
+        for &v in &self.positions {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        // Normals (f64 LE)
+        for &v in &self.normals {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        // Indices (u32 LE)
+        for &i in &self.indices {
+            buf.extend_from_slice(&i.to_le_bytes());
+        }
+
+        buf
+    }
 }
 
 impl From<TriangleMesh> for JsMesh {

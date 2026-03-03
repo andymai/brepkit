@@ -69,13 +69,22 @@ pub enum MathError {
 }
 
 pub mod aabb;
+pub mod analytic_intersection;
 pub mod bvh;
+pub mod cdt;
+pub mod convex_hull;
 pub mod curves;
 pub mod curves2d;
+pub mod filtered;
 pub mod mat;
 pub mod nurbs;
 pub mod plane;
+pub mod polygon_offset;
 pub mod predicates;
+pub mod ray_triangle;
 pub mod surfaces;
 pub mod tolerance;
 pub mod vec;
+
+#[cfg(feature = "simd")]
+pub mod simd;

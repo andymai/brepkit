@@ -137,11 +137,17 @@ fn offset_nurbs_face(
 
     // Fit a new NURBS surface through the offset points.
     let degree = nurbs.degree_u().min(nurbs.degree_v()).min(3);
-    let offset_surface = interpolate_surface(&offset_grid, degree, degree).map_err(|e| {
+    let raw_offset = interpolate_surface(&offset_grid, degree, degree).map_err(|e| {
         OperationsError::InvalidInput {
             reason: format!("offset surface interpolation failed: {e}"),
         }
     })?;
+
+    // Attempt self-intersection detection and trimming. If trimming fails,
+    // fall back to the raw offset (best-effort improvement).
+    let offset_surface =
+        crate::offset_trim::trim_offset_self_intersections(nurbs, &raw_offset, distance, 1e-7)
+            .unwrap_or(raw_offset);
 
     // Copy the wire topology from the original face, offsetting vertices.
     let face = topo.face(face_id)?;

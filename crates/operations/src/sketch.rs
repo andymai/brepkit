@@ -1,8 +1,10 @@
 //! 2D constraint solver for sketch-mode parametric design.
 //!
-//! Implements a basic geometric constraint system that solves for point
-//! positions satisfying distance, angle, coincidence, and alignment
-//! constraints. Uses Newton-Raphson iteration on the constraint residuals.
+//! Implements a geometric constraint system that solves for point
+//! positions satisfying distance, angle, coincidence, alignment,
+//! and curve-intersection constraints. Uses Newton-Raphson iteration
+//! on the constraint residuals with graph-based decomposition into
+//! independent connected components for scalability.
 //!
 //! This is the foundation for parametric sketch mode, similar to
 //! `FreeCAD`'s [`PlaneGCS`] or [`SolveSpace`].
@@ -37,6 +39,15 @@ impl SketchPoint {
 /// Index into the sketch's point array.
 pub type PointIdx = usize;
 
+/// A reference to a 2D curve for intersection constraints.
+#[derive(Debug, Clone)]
+pub enum CurveRef {
+    /// Line through two points: signed distance = 0.
+    Line(PointIdx, PointIdx),
+    /// Circle centered at a point with given radius.
+    Circle(PointIdx, f64),
+}
+
 /// A geometric constraint in the sketch.
 #[derive(Debug, Clone)]
 pub enum Constraint {
@@ -58,6 +69,16 @@ pub enum Constraint {
     Perpendicular(PointIdx, PointIdx, PointIdx, PointIdx),
     /// The line p1-p2 must be parallel to line p3-p4.
     Parallel(PointIdx, PointIdx, PointIdx, PointIdx),
+    /// The point must lie at the intersection of two 2D curves.
+    /// Produces two residual equations (one per curve).
+    CurveIntersection {
+        /// The point constrained to lie on both curves.
+        point: PointIdx,
+        /// First curve.
+        curve1: CurveRef,
+        /// Second curve.
+        curve2: CurveRef,
+    },
 }
 
 /// A 2D constraint sketch that can be solved.
@@ -78,6 +99,60 @@ pub struct SolveResult {
     pub iterations: usize,
     /// Maximum constraint residual after solving.
     pub max_residual: f64,
+}
+
+/// A connected component of the constraint graph.
+struct ConstraintComponent {
+    /// Indices into `Sketch::constraints` for this component's constraints.
+    constraint_indices: Vec<usize>,
+    /// All point indices involved in this component.
+    point_indices: Vec<usize>,
+}
+
+/// Extract all point indices referenced by a constraint.
+fn constraint_points(c: &Constraint) -> Vec<PointIdx> {
+    match c {
+        Constraint::Coincident(a, b)
+        | Constraint::Distance(a, b, _)
+        | Constraint::Vertical(a, b)
+        | Constraint::Horizontal(a, b)
+        | Constraint::Angle(a, b, _) => vec![*a, *b],
+        Constraint::FixX(a, _) | Constraint::FixY(a, _) => vec![*a],
+        Constraint::Perpendicular(a, b, c, d) | Constraint::Parallel(a, b, c, d) => {
+            vec![*a, *b, *c, *d]
+        }
+        Constraint::CurveIntersection {
+            point,
+            curve1,
+            curve2,
+        } => {
+            let mut pts = vec![*point];
+            collect_curve_ref_points(curve1, &mut pts);
+            collect_curve_ref_points(curve2, &mut pts);
+            pts
+        }
+    }
+}
+
+/// Collect point indices referenced by a `CurveRef`.
+fn collect_curve_ref_points(cr: &CurveRef, pts: &mut Vec<PointIdx>) {
+    match cr {
+        CurveRef::Line(a, b) => {
+            pts.push(*a);
+            pts.push(*b);
+        }
+        CurveRef::Circle(c, _) => {
+            pts.push(*c);
+        }
+    }
+}
+
+/// Number of residual equations produced by a constraint.
+const fn constraint_residual_count(c: &Constraint) -> usize {
+    match c {
+        Constraint::CurveIntersection { .. } => 2,
+        _ => 1,
+    }
 }
 
 impl Sketch {
@@ -101,22 +176,127 @@ impl Sketch {
 
     /// Solve the constraint system using Newton-Raphson iteration.
     ///
+    /// Decomposes the constraint graph into independent connected components
+    /// and solves each separately for improved scalability.
+    ///
     /// Modifies point positions in-place to satisfy constraints.
     ///
     /// # Errors
     /// Returns `MathError::ConvergenceFailure` if the solver doesn't converge.
+    #[allow(clippy::too_many_lines)]
     pub fn solve(
         &mut self,
         max_iterations: usize,
         tolerance: f64,
     ) -> Result<SolveResult, MathError> {
-        // Build variable vector (only free point coordinates)
-        let var_map = self.build_variable_map();
+        let components = self.decompose_components();
+
+        // If there's only one component (or zero), use it directly.
+        // If multiple, solve each independently.
+        let mut total_iterations = 0;
+        let mut total_max_residual = 0.0_f64;
+        let mut all_converged = true;
+
+        for comp in &components {
+            let result = self.solve_component(comp, max_iterations, tolerance)?;
+            total_iterations = total_iterations.max(result.iterations);
+            total_max_residual = total_max_residual.max(result.max_residual);
+            if !result.converged {
+                all_converged = false;
+            }
+        }
+
+        // Handle case with no constraints
+        if components.is_empty() {
+            return Ok(SolveResult {
+                converged: true,
+                iterations: 0,
+                max_residual: 0.0,
+            });
+        }
+
+        Ok(SolveResult {
+            converged: all_converged,
+            iterations: total_iterations,
+            max_residual: total_max_residual,
+        })
+    }
+
+    /// Decompose the constraint system into independent connected components
+    /// using union-find.
+    fn decompose_components(&self) -> Vec<ConstraintComponent> {
+        let n = self.points.len();
+        if n == 0 {
+            return Vec::new();
+        }
+
+        // Union-Find with path compression and union by rank
+        let mut parent: Vec<usize> = (0..n).collect();
+        let mut rank: Vec<usize> = vec![0; n];
+
+        // For each constraint, union all points it references
+        for constraint in &self.constraints {
+            let pts = constraint_points(constraint);
+            for i in 1..pts.len() {
+                union(&mut parent, &mut rank, pts[0], pts[i]);
+            }
+        }
+
+        // Group constraints by component root
+        let mut component_map: std::collections::HashMap<usize, Vec<usize>> =
+            std::collections::HashMap::new();
+
+        for (ci, constraint) in self.constraints.iter().enumerate() {
+            let pts = constraint_points(constraint);
+            if let Some(&first_pt) = pts.first() {
+                let root = find(&mut parent, first_pt);
+                component_map.entry(root).or_default().push(ci);
+            }
+        }
+
+        // Build components
+        let mut components = Vec::new();
+        for (_, constraint_indices) in component_map {
+            // Collect unique point indices for this component
+            let mut point_set = std::collections::HashSet::new();
+            for &ci in &constraint_indices {
+                let pts = constraint_points(&self.constraints[ci]);
+                for p in pts {
+                    point_set.insert(p);
+                }
+            }
+            let mut point_indices: Vec<usize> = point_set.into_iter().collect();
+            point_indices.sort_unstable();
+
+            components.push(ConstraintComponent {
+                constraint_indices,
+                point_indices,
+            });
+        }
+
+        components
+    }
+
+    /// Solve a single connected component of the constraint graph.
+    fn solve_component(
+        &mut self,
+        comp: &ConstraintComponent,
+        max_iterations: usize,
+        tolerance: f64,
+    ) -> Result<SolveResult, MathError> {
+        // Build variable map: only free points in this component
+        let var_map: Vec<(usize, bool)> = comp
+            .point_indices
+            .iter()
+            .filter(|&&pi| !self.points[pi].fixed)
+            .flat_map(|&pi| [(pi, false), (pi, true)])
+            .collect();
+
         let num_vars = var_map.len();
 
         if num_vars == 0 {
-            // All points fixed — just check constraints
-            let residual = self.max_residual();
+            // All points in this component are fixed — just check residuals
+            let residual = self.max_residual_for(&comp.constraint_indices);
             return Ok(SolveResult {
                 converged: residual < tolerance,
                 iterations: 0,
@@ -129,7 +309,7 @@ impl Sketch {
         for iteration in 0..max_iterations {
             self.apply_variables(&var_map, &vars);
 
-            let residuals = self.compute_residuals();
+            let residuals = self.compute_residuals_for(&comp.constraint_indices);
             let max_res = residuals.iter().fold(0.0_f64, |a, &b| a.max(b.abs()));
 
             if max_res < tolerance {
@@ -141,7 +321,7 @@ impl Sketch {
             }
 
             // Compute Jacobian
-            let jacobian = self.compute_jacobian(&var_map, &vars);
+            let jacobian = self.compute_jacobian_for(&comp.constraint_indices, &var_map, &vars);
 
             // Solve J * delta = -residuals using least-squares (J^T J delta = -J^T r)
             let delta = solve_least_squares(&jacobian, &residuals, num_vars);
@@ -153,7 +333,7 @@ impl Sketch {
         }
 
         self.apply_variables(&var_map, &vars);
-        let max_res = self.max_residual();
+        let max_res = self.max_residual_for(&comp.constraint_indices);
 
         if max_res < tolerance {
             Ok(SolveResult {
@@ -166,18 +346,6 @@ impl Sketch {
                 iterations: max_iterations,
             })
         }
-    }
-
-    /// Build a mapping from variable index to (`point_idx`, `is_y`).
-    fn build_variable_map(&self) -> Vec<(usize, bool)> {
-        let mut map = Vec::new();
-        for (i, p) in self.points.iter().enumerate() {
-            if !p.fixed {
-                map.push((i, false)); // x
-                map.push((i, true)); // y
-            }
-        }
-        map
     }
 
     /// Extract current variable values.
@@ -205,76 +373,115 @@ impl Sketch {
         }
     }
 
-    /// Compute constraint residuals.
-    fn compute_residuals(&self) -> Vec<f64> {
-        self.constraints
+    /// Compute constraint residuals for a subset of constraints (by index).
+    fn compute_residuals_for(&self, constraint_indices: &[usize]) -> Vec<f64> {
+        constraint_indices
             .iter()
-            .map(|c| self.constraint_residual(c))
+            .flat_map(|&ci| self.constraint_residuals(&self.constraints[ci]))
             .collect()
     }
 
-    /// Maximum absolute residual.
-    fn max_residual(&self) -> f64 {
-        self.compute_residuals()
+    /// Maximum absolute residual for a subset of constraints.
+    fn max_residual_for(&self, constraint_indices: &[usize]) -> f64 {
+        self.compute_residuals_for(constraint_indices)
             .iter()
             .fold(0.0_f64, |a, &b| a.max(b.abs()))
     }
 
-    /// Compute the residual of a single constraint.
-    fn constraint_residual(&self, c: &Constraint) -> f64 {
+    /// Compute the residuals of a single constraint.
+    ///
+    /// Most constraints produce one residual; `CurveIntersection` produces two.
+    fn constraint_residuals(&self, c: &Constraint) -> Vec<f64> {
         match c {
             Constraint::Coincident(a, b) => {
                 let pa = &self.points[*a];
                 let pb = &self.points[*b];
                 let dx = pa.x - pb.x;
                 let dy = pa.y - pb.y;
-                dx.hypot(dy)
+                vec![dx.hypot(dy)]
             }
             Constraint::Distance(a, b, d) => {
                 let pa = &self.points[*a];
                 let pb = &self.points[*b];
                 let dx = pa.x - pb.x;
                 let dy = pa.y - pb.y;
-                dx.hypot(dy) - d
+                vec![dx.hypot(dy) - d]
             }
-            Constraint::FixX(a, val) => self.points[*a].x - val,
-            Constraint::FixY(a, val) => self.points[*a].y - val,
-            Constraint::Vertical(a, b) => self.points[*a].x - self.points[*b].x,
-            Constraint::Horizontal(a, b) => self.points[*a].y - self.points[*b].y,
+            Constraint::FixX(a, val) => vec![self.points[*a].x - val],
+            Constraint::FixY(a, val) => vec![self.points[*a].y - val],
+            Constraint::Vertical(a, b) => vec![self.points[*a].x - self.points[*b].x],
+            Constraint::Horizontal(a, b) => vec![self.points[*a].y - self.points[*b].y],
             Constraint::Angle(a, b, angle) => {
                 let pa = &self.points[*a];
                 let pb = &self.points[*b];
                 let actual = (pb.y - pa.y).atan2(pb.x - pa.x);
-                // Normalize angle difference to [-π, π]
                 let diff = actual - angle;
-                diff.sin() // Use sin for smooth zero-crossing
+                vec![diff.sin()]
             }
             Constraint::Perpendicular(a, b, c, d) => {
                 let dx1 = self.points[*b].x - self.points[*a].x;
                 let dy1 = self.points[*b].y - self.points[*a].y;
                 let dx2 = self.points[*d].x - self.points[*c].x;
                 let dy2 = self.points[*d].y - self.points[*c].y;
-                dx1.mul_add(dx2, dy1 * dy2) // dot product = 0 for perpendicular
+                vec![dx1.mul_add(dx2, dy1 * dy2)]
             }
             Constraint::Parallel(a, b, c, d) => {
                 let dx1 = self.points[*b].x - self.points[*a].x;
                 let dy1 = self.points[*b].y - self.points[*a].y;
                 let dx2 = self.points[*d].x - self.points[*c].x;
                 let dy2 = self.points[*d].y - self.points[*c].y;
-                dx1.mul_add(dy2, -(dy1 * dx2)) // cross product = 0 for parallel
+                vec![dx1.mul_add(dy2, -(dy1 * dx2))]
+            }
+            Constraint::CurveIntersection {
+                point,
+                curve1,
+                curve2,
+            } => {
+                let p = &self.points[*point];
+                vec![
+                    self.curve_ref_residual(curve1, p.x, p.y),
+                    self.curve_ref_residual(curve2, p.x, p.y),
+                ]
             }
         }
     }
 
-    /// Compute the Jacobian matrix using finite differences.
-    fn compute_jacobian(&mut self, var_map: &[(usize, bool)], vars: &[f64]) -> Vec<Vec<f64>> {
-        let num_constraints = self.constraints.len();
+    /// Evaluate the implicit curve function for a `CurveRef` at point (px, py).
+    fn curve_ref_residual(&self, cr: &CurveRef, px: f64, py: f64) -> f64 {
+        match cr {
+            CurveRef::Line(a, b) => {
+                let pa = &self.points[*a];
+                let pb = &self.points[*b];
+                // Signed distance (un-normalized) from p to line through a, b:
+                // (b.y - a.y) * (p.x - a.x) - (b.x - a.x) * (p.y - a.y)
+                (pb.y - pa.y).mul_add(px - pa.x, -(pb.x - pa.x) * (py - pa.y))
+            }
+            CurveRef::Circle(c, r) => {
+                let pc = &self.points[*c];
+                let dx = px - pc.x;
+                let dy = py - pc.y;
+                dx.mul_add(dx, dy * dy) - r * r
+            }
+        }
+    }
+
+    /// Compute the Jacobian matrix using finite differences for a subset of constraints.
+    fn compute_jacobian_for(
+        &mut self,
+        constraint_indices: &[usize],
+        var_map: &[(usize, bool)],
+        vars: &[f64],
+    ) -> Vec<Vec<f64>> {
+        let num_residuals: usize = constraint_indices
+            .iter()
+            .map(|&ci| constraint_residual_count(&self.constraints[ci]))
+            .sum();
         let num_vars = vars.len();
         let eps = 1e-8;
 
-        let mut jacobian = vec![vec![0.0; num_vars]; num_constraints];
+        let mut jacobian = vec![vec![0.0; num_vars]; num_residuals];
 
-        let base_residuals = self.compute_residuals();
+        let base_residuals = self.compute_residuals_for(constraint_indices);
 
         for j in 0..num_vars {
             let (pi, is_y) = var_map[j];
@@ -291,9 +498,9 @@ impl Sketch {
                 self.points[pi].x = original + eps;
             }
 
-            let perturbed = self.compute_residuals();
+            let perturbed = self.compute_residuals_for(constraint_indices);
 
-            for i in 0..num_constraints {
+            for i in 0..num_residuals {
                 jacobian[i][j] = (perturbed[i] - base_residuals[i]) / eps;
             }
 
@@ -306,6 +513,31 @@ impl Sketch {
         }
 
         jacobian
+    }
+}
+
+/// Union-Find: find with path compression.
+fn find(parent: &mut [usize], i: usize) -> usize {
+    if parent[i] != i {
+        parent[i] = find(parent, parent[i]);
+    }
+    parent[i]
+}
+
+/// Union-Find: union by rank.
+fn union(parent: &mut [usize], rank: &mut [usize], a: usize, b: usize) {
+    let ra = find(parent, a);
+    let rb = find(parent, b);
+    if ra == rb {
+        return;
+    }
+    match rank[ra].cmp(&rank[rb]) {
+        std::cmp::Ordering::Less => parent[ra] = rb,
+        std::cmp::Ordering::Greater => parent[rb] = ra,
+        std::cmp::Ordering::Equal => {
+            parent[rb] = ra;
+            rank[ra] += 1;
+        }
     }
 }
 
@@ -556,5 +788,118 @@ mod tests {
         let d01 = (sketch.points[p1].x - sketch.points[p0].x)
             .hypot(sketch.points[p1].y - sketch.points[p0].y);
         assert!((d01 - 3.0).abs() < TOL, "d01 should be 3, got {d01}");
+    }
+
+    #[test]
+    fn constraint_decomposition_two_groups() {
+        // Two completely disconnected groups of points with constraints.
+        let mut sketch = Sketch::new();
+
+        // Group A: p0 (fixed), p1 (free) with distance = 5
+        let p0 = sketch.add_point(SketchPoint::fixed(0.0, 0.0));
+        let p1 = sketch.add_point(SketchPoint::new(1.0, 0.0));
+        sketch.add_constraint(Constraint::Distance(p0, p1, 5.0));
+        sketch.add_constraint(Constraint::Horizontal(p0, p1));
+
+        // Group B: p2 (fixed), p3 (free) with FixX and FixY
+        let _p2 = sketch.add_point(SketchPoint::fixed(10.0, 10.0));
+        let p3 = sketch.add_point(SketchPoint::new(20.0, 20.0));
+        sketch.add_constraint(Constraint::FixX(p3, 7.0));
+        sketch.add_constraint(Constraint::FixY(p3, 8.0));
+
+        // Verify decomposition finds two components
+        let components = sketch.decompose_components();
+        assert_eq!(components.len(), 2, "should have 2 independent components");
+
+        // Solve and verify both groups converge
+        let result = sketch.solve(100, TOL).unwrap();
+        assert!(result.converged);
+
+        // Group A: p1 should be at distance 5 from origin on x-axis
+        let d01 = sketch.points[p1].x.hypot(sketch.points[p1].y);
+        assert!(
+            (d01 - 5.0).abs() < TOL,
+            "group A distance should be 5, got {d01}"
+        );
+        assert!(
+            (sketch.points[p1].y).abs() < TOL,
+            "group A should be horizontal"
+        );
+
+        // Group B: p3 should be at (7, 8)
+        assert!((sketch.points[p3].x - 7.0).abs() < TOL);
+        assert!((sketch.points[p3].y - 8.0).abs() < TOL);
+    }
+
+    #[test]
+    fn constraint_decomposition_single_group() {
+        // All points connected — should produce a single component
+        // and behave identically to the original monolithic solver.
+        let mut sketch = Sketch::new();
+        let p0 = sketch.add_point(SketchPoint::fixed(0.0, 0.0));
+        let p1 = sketch.add_point(SketchPoint::new(0.5, 0.0));
+
+        sketch.add_constraint(Constraint::Distance(p0, p1, 3.0));
+
+        let components = sketch.decompose_components();
+        assert_eq!(components.len(), 1, "should have 1 component");
+
+        let result = sketch.solve(100, TOL).unwrap();
+        assert!(result.converged);
+
+        let dx = sketch.points[p1].x - sketch.points[p0].x;
+        let dy = sketch.points[p1].y - sketch.points[p0].y;
+        let dist = dx.hypot(dy);
+        assert!(
+            (dist - 3.0).abs() < TOL,
+            "distance should be 3.0, got {dist}"
+        );
+    }
+
+    #[test]
+    fn curve_intersection_line_circle() {
+        // Line through (0,0) and (10,0) — the x-axis
+        // Circle centered at (5,0) with radius 3
+        // Intersection points: (2, 0) and (8, 0)
+        let mut sketch = Sketch::new();
+
+        let line_a = sketch.add_point(SketchPoint::fixed(0.0, 0.0));
+        let line_b = sketch.add_point(SketchPoint::fixed(10.0, 0.0));
+        let circle_center = sketch.add_point(SketchPoint::fixed(5.0, 0.0));
+
+        // Start the intersection point near one of the solutions
+        let p = sketch.add_point(SketchPoint::new(2.5, 0.5));
+
+        sketch.add_constraint(Constraint::CurveIntersection {
+            point: p,
+            curve1: CurveRef::Line(line_a, line_b),
+            curve2: CurveRef::Circle(circle_center, 3.0),
+        });
+
+        let result = sketch.solve(100, TOL).unwrap();
+        assert!(result.converged, "line-circle intersection should converge");
+
+        // The point should be on the x-axis (line constraint)
+        assert!(
+            sketch.points[p].y.abs() < TOL,
+            "point should be on x-axis, y = {}",
+            sketch.points[p].y
+        );
+
+        // The point should be on the circle
+        let dx = sketch.points[p].x - 5.0;
+        let dy = sketch.points[p].y;
+        let dist_from_center = dx.hypot(dy);
+        assert!(
+            (dist_from_center - 3.0).abs() < TOL,
+            "point should be on circle, dist = {dist_from_center}"
+        );
+
+        // Should converge to (2, 0) since we started near it
+        assert!(
+            (sketch.points[p].x - 2.0).abs() < TOL,
+            "should converge to x=2, got x={}",
+            sketch.points[p].x
+        );
     }
 }
