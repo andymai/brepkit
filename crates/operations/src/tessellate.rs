@@ -974,9 +974,13 @@ fn edge_sample_count(
             // Angular step: acos(1 - deflection/radius), clamped for safety.
             let ratio = (deflection / radius).min(1.0);
             let angle_step = (1.0 - ratio).acos().max(0.01);
-            let (t_start, t_end) = circle_param_range(topo, edge, c);
-            let arc_angle = (t_end - t_start).abs();
-            (arc_angle / angle_step).ceil() as usize + 1
+            if let Ok((t_start, t_end)) = circle_param_range(topo, edge, c) {
+                let arc_angle = (t_end - t_start).abs();
+                (arc_angle / angle_step).ceil() as usize + 1
+            } else {
+                // Fallback: assume full circle if vertex lookup fails.
+                (std::f64::consts::TAU / angle_step).ceil() as usize + 1
+            }
         }
         EdgeCurve::Ellipse(_) => {
             // Conservative: use higher count for ellipses due to varying curvature.
@@ -984,40 +988,36 @@ fn edge_sample_count(
             n.max(16)
         }
         EdgeCurve::NurbsCurve(nurbs) => {
-            let (u0, u1) = nurbs.domain();
             let n_cp = nurbs.control_points().len();
             // Sample proportional to control points and inversely to deflection.
             let base = n_cp * 4;
             let adaptive = (1.0 / deflection.sqrt()).ceil() as usize;
-            let _ = (u0, u1);
             base.max(adaptive).max(8)
         }
     }
 }
 
 /// Get the parameter range for a circle edge.
+///
+/// # Errors
+///
+/// Returns an error if vertex lookup fails.
 fn circle_param_range(
     topo: &Topology,
     edge: &brepkit_topology::edge::Edge,
     circle: &brepkit_math::curves::Circle3D,
-) -> (f64, f64) {
+) -> Result<(f64, f64), crate::OperationsError> {
     if edge.is_closed() {
-        (0.0, std::f64::consts::TAU)
+        Ok((0.0, std::f64::consts::TAU))
     } else {
-        let sp = topo
-            .vertex(edge.start())
-            .map(brepkit_topology::vertex::Vertex::point)
-            .unwrap_or(Point3::new(0.0, 0.0, 0.0));
-        let ep = topo
-            .vertex(edge.end())
-            .map(brepkit_topology::vertex::Vertex::point)
-            .unwrap_or(Point3::new(0.0, 0.0, 0.0));
+        let sp = topo.vertex(edge.start())?.point();
+        let ep = topo.vertex(edge.end())?.point();
         let ts = circle.project(sp);
         let mut te = circle.project(ep);
         if te <= ts {
             te += std::f64::consts::TAU;
         }
-        (ts, te)
+        Ok((ts, te))
     }
 }
 
@@ -1026,11 +1026,15 @@ fn circle_param_range(
 /// The sampling density is driven by `deflection`. For a `Line`, only the
 /// two endpoints are returned. For curves, the point count is proportional
 /// to curvature.
+///
+/// # Errors
+///
+/// Returns an error if vertex lookup fails for edge endpoints.
 fn sample_edge(
     topo: &Topology,
     edge: &brepkit_topology::edge::Edge,
     deflection: f64,
-) -> Vec<Point3> {
+) -> Result<Vec<Point3>, crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
 
     let n = edge_sample_count(topo, edge, deflection);
@@ -1038,13 +1042,11 @@ fn sample_edge(
 
     match edge.curve() {
         EdgeCurve::Line => {
-            if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
-                points.push(sv.point());
-                points.push(ev.point());
-            }
+            points.push(topo.vertex(edge.start())?.point());
+            points.push(topo.vertex(edge.end())?.point());
         }
         EdgeCurve::Circle(circle) => {
-            let (t_start, t_end) = circle_param_range(topo, edge, circle);
+            let (t_start, t_end) = circle_param_range(topo, edge, circle)?;
             #[allow(clippy::cast_precision_loss)]
             for i in 0..n {
                 let t = t_start + (t_end - t_start) * (i as f64) / ((n - 1).max(1) as f64);
@@ -1055,14 +1057,8 @@ fn sample_edge(
             let (t_start, t_end) = if edge.is_closed() {
                 (0.0, std::f64::consts::TAU)
             } else {
-                let sp = topo
-                    .vertex(edge.start())
-                    .map(brepkit_topology::vertex::Vertex::point)
-                    .unwrap_or(Point3::new(0.0, 0.0, 0.0));
-                let ep = topo
-                    .vertex(edge.end())
-                    .map(brepkit_topology::vertex::Vertex::point)
-                    .unwrap_or(Point3::new(0.0, 0.0, 0.0));
+                let sp = topo.vertex(edge.start())?.point();
+                let ep = topo.vertex(edge.end())?.point();
                 let ts = ellipse.project(sp);
                 let mut te = ellipse.project(ep);
                 if te <= ts {
@@ -1086,7 +1082,7 @@ fn sample_edge(
         }
     }
 
-    points
+    Ok(points)
 }
 
 /// Tessellate all faces of a solid into a single watertight triangle mesh.
@@ -1130,7 +1126,7 @@ pub fn tessellate_solid(
         // Reconstruct EdgeId from arena index.
         if let Some(edge_id) = topo.edges.id_from_index(edge_idx) {
             if let Ok(edge_data) = topo.edge(edge_id) {
-                let points = sample_edge(topo, edge_data, deflection);
+                let points = sample_edge(topo, edge_data, deflection)?;
                 edge_points.insert(edge_idx, points);
             }
         }
@@ -1276,7 +1272,7 @@ fn tessellate_face_with_shared_edges(
                 // Edge not in the shared pool (shouldn't happen for valid solids,
                 // but handle gracefully by inserting points directly).
                 let edge_data = topo.edge(oe.edge())?;
-                let points = sample_edge(topo, edge_data, deflection);
+                let points = sample_edge(topo, edge_data, deflection)?;
                 let ordered: Vec<Point3> = if oe.is_forward() {
                     points
                 } else {
@@ -1397,7 +1393,10 @@ fn tessellate_face_with_shared_edges(
             }
         }
 
-        let snap_tol = deflection * 0.5; // snap distance for boundary stitching
+        // Fixed geometric tolerance for snapping boundary vertices to shared
+        // edge points. Independent of deflection to avoid being too tight at
+        // high quality or too loose at low quality.
+        let snap_tol = 1e-6;
 
         for (i, &pos) in face_mesh.positions.iter().enumerate() {
             // Try to snap to a shared edge vertex.
