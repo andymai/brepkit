@@ -894,14 +894,22 @@ fn march_analytic_intersection(
     u_range_b: (f64, f64),
     v_range_b: (f64, f64),
 ) -> Vec<Point3> {
-    let step_size: f64 = 0.02;
+    let initial_step: f64 = 0.02;
     let max_steps = 500;
+    let h_min = 1e-6;
+    let h_max = initial_step * 4.0;
+    // Angular thresholds for curvature-adaptive stepping.
+    let max_angle = 10.0_f64.to_radians();
+    let min_angle = 2.0_f64.to_radians();
+
     let mut result = vec![seed];
 
     for direction in &[1.0_f64, -1.0] {
         let mut current = seed;
+        let mut h = initial_step;
+        let mut prev_tangent: Option<Vec3> = None;
+
         for _ in 0..max_steps {
-            // Use analytical projection for precise parameter recovery.
             let (ua, va) = project_analytic(a, current, u_range_a, v_range_a);
             let (ub, vb) = project_analytic(b, current, u_range_b, v_range_b);
 
@@ -915,13 +923,24 @@ fn march_analytic_intersection(
             }
             let t_dir = tangent * (direction / t_len);
 
+            // Curvature-adaptive step: check angular deviation from previous tangent.
+            if let Some(prev_t) = prev_tangent {
+                let cos_angle = prev_t.dot(t_dir).clamp(-1.0, 1.0);
+                let angle = cos_angle.acos();
+                if angle > max_angle && h > h_min {
+                    h = (h * 0.5).max(h_min);
+                } else if angle < min_angle {
+                    h = (h * 2.0).min(h_max);
+                }
+            }
+            prev_tangent = Some(t_dir);
+
             let next = Point3::new(
-                step_size.mul_add(t_dir.x(), current.x()),
-                step_size.mul_add(t_dir.y(), current.y()),
-                step_size.mul_add(t_dir.z(), current.z()),
+                h.mul_add(t_dir.x(), current.x()),
+                h.mul_add(t_dir.y(), current.y()),
+                h.mul_add(t_dir.z(), current.z()),
             );
 
-            // Project the predicted point back onto both surfaces.
             let (ua2, va2) = project_analytic(a, next, u_range_a, v_range_a);
             let (ub2, vb2) = project_analytic(b, next, u_range_b, v_range_b);
 
@@ -946,8 +965,8 @@ fn march_analytic_intersection(
                 break;
             }
 
-            // Check for loop closure.
-            if result.len() > 3 && (mid - result[0]).length() < step_size * 2.0 {
+            // Check for loop closure (use adaptive step for threshold).
+            if result.len() > 3 && (mid - result[0]).length() < h * 2.0 {
                 result.push(result[0]);
                 break;
             }

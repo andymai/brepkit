@@ -305,6 +305,42 @@ impl<'a> StepBuilder<'a> {
                     })?;
                 Ok(FaceSurface::Torus(torus))
             }
+            "B_SPLINE_SURFACE_WITH_KNOTS" | "BOUNDED_SURFACE" | "B_SPLINE_SURFACE" => {
+                let parsed =
+                    parse_bspline_surface_attrs(&attrs).ok_or_else(|| IoError::ParseError {
+                        reason: format!(
+                            "B_SPLINE_SURFACE_WITH_KNOTS #{surface_ref} could not parse attributes"
+                        ),
+                    })?;
+                let (degree_u, degree_v, cp_grid_refs, u_mults, v_mults, u_knots, v_knots) = parsed;
+
+                // Resolve control point grid.
+                let mut cp_grid: Vec<Vec<Point3>> = Vec::new();
+                for row_refs in &cp_grid_refs {
+                    let mut row: Vec<Point3> = Vec::new();
+                    for &cp_ref in row_refs {
+                        row.push(self.build_cartesian_point(cp_ref)?);
+                    }
+                    cp_grid.push(row);
+                }
+
+                // Expand knots from (multiplicity, value) pairs to flat vectors.
+                let knots_u = expand_knots(&u_mults, &u_knots);
+                let knots_v = expand_knots(&v_mults, &v_knots);
+
+                // Default weights: all 1.0 (non-rational).
+                let n_rows = cp_grid.len();
+                let n_cols = cp_grid.first().map_or(0, Vec::len);
+                let weights: Vec<Vec<f64>> = vec![vec![1.0; n_cols]; n_rows];
+
+                let nurbs = brepkit_math::nurbs::NurbsSurface::new(
+                    degree_u, degree_v, knots_u, knots_v, cp_grid, weights,
+                )
+                .map_err(|e| IoError::ParseError {
+                    reason: format!("B_SPLINE_SURFACE_WITH_KNOTS #{surface_ref}: {e}"),
+                })?;
+                Ok(FaceSurface::Nurbs(nurbs))
+            }
             _ => Err(IoError::UnsupportedEntity {
                 entity: entity_type,
             }),
@@ -359,13 +395,94 @@ impl<'a> StepBuilder<'a> {
 
         let start_vp = self.build_vertex_point(refs[0])?;
         let end_vp = self.build_vertex_point(refs[1])?;
-        let edge_id = self
-            .topo
-            .edges
-            .alloc(Edge::new(start_vp, end_vp, EdgeCurve::Line));
+
+        // Resolve the actual curve geometry from the third reference.
+        let curve = self
+            .build_curve_geometry(refs[2])
+            .unwrap_or(EdgeCurve::Line);
+
+        let edge_id = self.topo.edges.alloc(Edge::new(start_vp, end_vp, curve));
 
         self.edge_cache.insert(ec_ref, edge_id);
         Ok(edge_id)
+    }
+
+    /// Build the curve geometry for an edge from a curve entity reference.
+    ///
+    /// Dispatches on the entity type: LINE, CIRCLE, ELLIPSE,
+    /// `B_SPLINE_CURVE_WITH_KNOTS`.
+    fn build_curve_geometry(&self, curve_ref: u64) -> Result<EdgeCurve, IoError> {
+        let entity = self.get_entity(curve_ref)?;
+        let entity_type = entity.entity_type.clone();
+        let attrs = entity.attrs.clone();
+
+        match entity_type.as_str() {
+            "LINE" => Ok(EdgeCurve::Line),
+            "CIRCLE" => {
+                let refs = parse_refs(&attrs);
+                let floats = parse_floats(&attrs);
+                let axis_ref = refs.first().copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("CIRCLE #{curve_ref} missing axis reference"),
+                })?;
+                let radius = floats.first().copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("CIRCLE #{curve_ref} missing radius"),
+                })?;
+                let (center, normal, _u_axis) = self.build_axis2_placement(axis_ref)?;
+                let circle =
+                    brepkit_math::curves::Circle3D::new(center, normal, radius).map_err(|e| {
+                        IoError::ParseError {
+                            reason: format!("CIRCLE #{curve_ref}: {e}"),
+                        }
+                    })?;
+                Ok(EdgeCurve::Circle(circle))
+            }
+            "ELLIPSE" => {
+                let refs = parse_refs(&attrs);
+                let floats = parse_floats(&attrs);
+                let axis_ref = refs.first().copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("ELLIPSE #{curve_ref} missing axis reference"),
+                })?;
+                if floats.len() < 2 {
+                    return Err(IoError::ParseError {
+                        reason: format!("ELLIPSE #{curve_ref} needs semi_major and semi_minor"),
+                    });
+                }
+                let (center, normal, _u_axis) = self.build_axis2_placement(axis_ref)?;
+                let ellipse =
+                    brepkit_math::curves::Ellipse3D::new(center, normal, floats[0], floats[1])
+                        .map_err(|e| IoError::ParseError {
+                            reason: format!("ELLIPSE #{curve_ref}: {e}"),
+                        })?;
+                Ok(EdgeCurve::Ellipse(ellipse))
+            }
+            "B_SPLINE_CURVE_WITH_KNOTS" => {
+                let parsed =
+                    parse_bspline_curve_attrs(&attrs).ok_or_else(|| IoError::ParseError {
+                        reason: format!(
+                            "B_SPLINE_CURVE_WITH_KNOTS #{curve_ref} could not parse attributes"
+                        ),
+                    })?;
+                let (degree, cp_refs, mults, knot_vals) = parsed;
+
+                // Resolve control points.
+                let mut control_points = Vec::with_capacity(cp_refs.len());
+                for &cp_ref in &cp_refs {
+                    control_points.push(self.build_cartesian_point(cp_ref)?);
+                }
+
+                let knots = expand_knots(&mults, &knot_vals);
+                let weights = vec![1.0; control_points.len()];
+
+                let nurbs =
+                    brepkit_math::nurbs::NurbsCurve::new(degree, knots, control_points, weights)
+                        .map_err(|e| IoError::ParseError {
+                            reason: format!("B_SPLINE_CURVE_WITH_KNOTS #{curve_ref}: {e}"),
+                        })?;
+                Ok(EdgeCurve::NurbsCurve(nurbs))
+            }
+            // Unknown curve types fall back to Line.
+            _ => Ok(EdgeCurve::Line),
+        }
     }
 
     fn build_vertex_point(
@@ -505,6 +622,253 @@ fn parse_floats(attrs: &str) -> Vec<f64> {
         }
     }
     result
+}
+
+/// Parse integers from a parenthesized list like `(4, 4)`.
+fn parse_ints_in_parens(s: &str) -> Vec<u32> {
+    let mut result = Vec::new();
+    for part in s.split(',') {
+        let trimmed = part.trim().trim_matches('(').trim_matches(')').trim();
+        if let Ok(v) = trimmed.parse::<u32>() {
+            result.push(v);
+        }
+    }
+    result
+}
+
+/// Parse a B_SPLINE_SURFACE_WITH_KNOTS attribute string into its components.
+///
+/// Format: `'', degree_u, degree_v, ((#cp, ...), ...), .XXX., .F., .F., .F.,
+///          (mult_u, ...), (mult_v, ...), (knot_u, ...), (knot_v, ...), .XXX.`
+///
+/// Returns: `(degree_u, degree_v, cp_grid_refs, u_mults, v_mults, u_knots, v_knots)`
+#[allow(clippy::type_complexity)]
+fn parse_bspline_surface_attrs(
+    attrs: &str,
+) -> Option<(
+    usize,
+    usize,
+    Vec<Vec<u64>>,
+    Vec<u32>,
+    Vec<u32>,
+    Vec<f64>,
+    Vec<f64>,
+)> {
+    // Strategy: parse the attribute string by finding the nested parenthesized
+    // structures. The format has a specific sequence of tokens.
+
+    // 1. Parse degrees: skip the name string, find the first two bare integers.
+    let mut tokens = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+    let mut groups: Vec<String> = Vec::new();
+
+    for ch in attrs.chars() {
+        match ch {
+            '(' => {
+                if depth == 0 && !current.trim().is_empty() {
+                    tokens.push(current.trim().to_string());
+                    current.clear();
+                }
+                depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                current.push(ch);
+                depth -= 1;
+                if depth == 0 {
+                    groups.push(current.clone());
+                    current.clear();
+                }
+            }
+            ',' if depth == 0 => {
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    tokens.push(trimmed);
+                }
+                current.clear();
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+    if !current.trim().is_empty() {
+        tokens.push(current.trim().to_string());
+    }
+
+    // tokens: bare values between top-level commas (name, degrees, enums)
+    // groups: parenthesized structures at depth 0 (cp grid, mult lists, knot lists)
+
+    // Extract degrees from tokens (skip '' name string and .XXX. enum values).
+    let mut degrees: Vec<usize> = Vec::new();
+    for tok in &tokens {
+        if tok.starts_with('\'') || tok.starts_with('.') {
+            continue;
+        }
+        if let Ok(d) = tok.parse::<usize>() {
+            degrees.push(d);
+        }
+    }
+
+    if degrees.len() < 2 {
+        return None;
+    }
+    let degree_u = degrees[0];
+    let degree_v = degrees[1];
+
+    // groups should have at least 5 items:
+    // [0]: control point grid ((#cp, ...), ...)
+    // [1]: u multiplicities (m1, m2, ...)
+    // [2]: v multiplicities (m1, m2, ...)
+    // [3]: u knots (k1, k2, ...)
+    // [4]: v knots (k1, k2, ...)
+    if groups.len() < 5 {
+        return None;
+    }
+
+    // Parse control point grid: nested ((#1, #2), (#3, #4))
+    let cp_grid = parse_nested_refs(&groups[0]);
+
+    // Parse multiplicities (integers).
+    let u_mults = parse_ints_in_parens(&groups[1]);
+    let v_mults = parse_ints_in_parens(&groups[2]);
+
+    // Parse knot values (floats).
+    let u_knots = parse_floats(&groups[3]);
+    let v_knots = parse_floats(&groups[4]);
+
+    Some((
+        degree_u, degree_v, cp_grid, u_mults, v_mults, u_knots, v_knots,
+    ))
+}
+
+/// Parse nested `((#1, #2), (#3, #4))` into a Vec of Vec of entity refs.
+fn parse_nested_refs(s: &str) -> Vec<Vec<u64>> {
+    let mut rows: Vec<Vec<u64>> = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+
+    for ch in s.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                if depth >= 2 {
+                    current.push(ch);
+                }
+            }
+            ')' => {
+                if depth >= 2 {
+                    current.push(ch);
+                }
+                depth -= 1;
+                if depth == 1 && !current.is_empty() {
+                    // End of an inner row.
+                    rows.push(parse_refs(&current));
+                    current.clear();
+                }
+            }
+            ',' if depth == 1 => {
+                // Separator between rows — flush current if non-empty.
+                if !current.is_empty() {
+                    rows.push(parse_refs(&current));
+                    current.clear();
+                }
+            }
+            _ => {
+                if depth >= 2 {
+                    current.push(ch);
+                }
+            }
+        }
+    }
+
+    rows
+}
+
+/// Expand knot multiplicities and unique values into a flat knot vector.
+///
+/// Given `mults = [3, 1, 3]` and `vals = [0.0, 0.5, 1.0]`, produces
+/// `[0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]`.
+fn expand_knots(mults: &[u32], vals: &[f64]) -> Vec<f64> {
+    let mut knots = Vec::new();
+    for (&m, &v) in mults.iter().zip(vals.iter()) {
+        for _ in 0..m {
+            knots.push(v);
+        }
+    }
+    knots
+}
+
+/// Parse a B_SPLINE_CURVE_WITH_KNOTS attribute string.
+///
+/// Format: `'', degree, (#cp, ...), .XXX., .F., (mults), (knots), .XXX.`
+///
+/// Returns: `(degree, cp_refs, mults, knots)`
+#[allow(clippy::type_complexity)]
+fn parse_bspline_curve_attrs(attrs: &str) -> Option<(usize, Vec<u64>, Vec<u32>, Vec<f64>)> {
+    let mut tokens = Vec::new();
+    let mut depth = 0i32;
+    let mut current = String::new();
+    let mut groups: Vec<String> = Vec::new();
+
+    for ch in attrs.chars() {
+        match ch {
+            '(' => {
+                if depth == 0 && !current.trim().is_empty() {
+                    tokens.push(current.trim().to_string());
+                    current.clear();
+                }
+                depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                current.push(ch);
+                depth -= 1;
+                if depth == 0 {
+                    groups.push(current.clone());
+                    current.clear();
+                }
+            }
+            ',' if depth == 0 => {
+                let trimmed = current.trim().to_string();
+                if !trimmed.is_empty() {
+                    tokens.push(trimmed);
+                }
+                current.clear();
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+    if !current.trim().is_empty() {
+        tokens.push(current.trim().to_string());
+    }
+
+    // Extract degree.
+    let mut degree = None;
+    for tok in &tokens {
+        if tok.starts_with('\'') || tok.starts_with('.') {
+            continue;
+        }
+        if let Ok(d) = tok.parse::<usize>() {
+            degree = Some(d);
+            break;
+        }
+    }
+    let degree = degree?;
+
+    // groups: [0] = control points, [1] = multiplicities, [2] = knots
+    if groups.len() < 3 {
+        return None;
+    }
+
+    let cp_refs = parse_refs(&groups[0]);
+    let mults = parse_ints_in_parens(&groups[1]);
+    let knots = parse_floats(&groups[2]);
+
+    Some((degree, cp_refs, mults, knots))
 }
 
 #[cfg(test)]
@@ -676,5 +1040,225 @@ mod tests {
             has_cylinder,
             "imported cylinder should have a cylindrical face"
         );
+    }
+
+    #[test]
+    fn roundtrip_nurbs_surface_loft() {
+        // Create a NURBS-surfaced solid via loft_smooth (3 profiles → NURBS sides).
+        let mut write_topo = Topology::new();
+
+        let mut profiles = Vec::new();
+        for &z in &[0.0, 1.0, 2.0] {
+            let pts = vec![
+                Point3::new(-1.0, -1.0, z),
+                Point3::new(1.0, -1.0, z),
+                Point3::new(1.0, 1.0, z),
+                Point3::new(-1.0, 1.0, z),
+            ];
+            let wire_id =
+                brepkit_topology::builder::make_polygon_wire(&mut write_topo, &pts).unwrap();
+            let v01 = Vec3::new(
+                pts[1].x() - pts[0].x(),
+                pts[1].y() - pts[0].y(),
+                pts[1].z() - pts[0].z(),
+            );
+            let v02 = Vec3::new(
+                pts[2].x() - pts[0].x(),
+                pts[2].y() - pts[0].y(),
+                pts[2].z() - pts[0].z(),
+            );
+            let normal = v01.cross(v02).normalize().unwrap();
+            let d = normal.x() * pts[0].x() + normal.y() * pts[0].y() + normal.z() * pts[0].z();
+            let face = Face::new(wire_id, Vec::new(), FaceSurface::Plane { normal, d });
+            profiles.push(write_topo.faces.alloc(face));
+        }
+        let solid = brepkit_operations::loft::loft_smooth(&mut write_topo, &profiles).unwrap();
+
+        // Verify the original has NURBS faces.
+        let orig_solid = write_topo.solid(solid).unwrap();
+        let orig_shell = write_topo.shell(orig_solid.outer_shell()).unwrap();
+        let orig_nurbs_count = orig_shell
+            .faces()
+            .iter()
+            .filter(|&&fid| {
+                matches!(
+                    write_topo.face(fid).unwrap().surface(),
+                    FaceSurface::Nurbs(_)
+                )
+            })
+            .count();
+        assert!(orig_nurbs_count > 0, "lofted solid should have NURBS faces");
+
+        // Write to STEP.
+        let step_str = writer::write_step(&write_topo, &[solid]).unwrap();
+        assert!(
+            step_str.contains("B_SPLINE_SURFACE_WITH_KNOTS"),
+            "STEP output should contain B_SPLINE_SURFACE_WITH_KNOTS"
+        );
+
+        // Read back.
+        let mut read_topo = Topology::new();
+        let solids = read_step(&step_str, &mut read_topo).unwrap();
+        assert!(!solids.is_empty(), "should import at least one solid");
+
+        // Verify the imported solid has NURBS faces.
+        let read_solid = read_topo.solid(solids[0]).unwrap();
+        let shell = read_topo.shell(read_solid.outer_shell()).unwrap();
+
+        let nurbs_count = shell
+            .faces()
+            .iter()
+            .filter(|&&fid| {
+                matches!(
+                    read_topo.face(fid).unwrap().surface(),
+                    FaceSurface::Nurbs(_)
+                )
+            })
+            .count();
+        assert!(
+            nurbs_count > 0,
+            "imported solid should have NURBS faces (got {nurbs_count})"
+        );
+        assert_eq!(
+            nurbs_count, orig_nurbs_count,
+            "NURBS face count should be preserved: {orig_nurbs_count} → {nurbs_count}"
+        );
+    }
+
+    #[test]
+    fn roundtrip_nurbs_curve_preserved() {
+        // Create a solid with NURBS edge curves (e.g., via loft_smooth).
+        let mut write_topo = Topology::new();
+
+        let mut profiles = Vec::new();
+        for &z in &[0.0, 1.0, 2.0] {
+            let pts = vec![
+                Point3::new(-1.0, -1.0, z),
+                Point3::new(1.0, -1.0, z),
+                Point3::new(1.0, 1.0, z),
+                Point3::new(-1.0, 1.0, z),
+            ];
+            let wire_id =
+                brepkit_topology::builder::make_polygon_wire(&mut write_topo, &pts).unwrap();
+            let v01 = Vec3::new(
+                pts[1].x() - pts[0].x(),
+                pts[1].y() - pts[0].y(),
+                pts[1].z() - pts[0].z(),
+            );
+            let v02 = Vec3::new(
+                pts[2].x() - pts[0].x(),
+                pts[2].y() - pts[0].y(),
+                pts[2].z() - pts[0].z(),
+            );
+            let normal = v01.cross(v02).normalize().unwrap();
+            let d = normal.x() * pts[0].x() + normal.y() * pts[0].y() + normal.z() * pts[0].z();
+            let face = Face::new(wire_id, Vec::new(), FaceSurface::Plane { normal, d });
+            profiles.push(write_topo.faces.alloc(face));
+        }
+        let solid = brepkit_operations::loft::loft_smooth(&mut write_topo, &profiles).unwrap();
+
+        let step_str = writer::write_step(&write_topo, &[solid]).unwrap();
+
+        // Check that B_SPLINE_CURVE_WITH_KNOTS is in the output.
+        let has_bspline_curve = step_str.contains("B_SPLINE_CURVE_WITH_KNOTS");
+
+        if has_bspline_curve {
+            // Read back and verify NURBS curves are imported.
+            let mut read_topo = Topology::new();
+            let solids = read_step(&step_str, &mut read_topo).unwrap();
+            assert!(!solids.is_empty());
+
+            let read_solid = read_topo.solid(solids[0]).unwrap();
+            let shell = read_topo.shell(read_solid.outer_shell()).unwrap();
+
+            let has_nurbs_curve = shell.faces().iter().any(|&fid| {
+                let face = read_topo.face(fid).unwrap();
+                let wire = read_topo.wire(face.outer_wire()).unwrap();
+                wire.edges().iter().any(|he| {
+                    matches!(
+                        read_topo.edge(he.edge()).unwrap().curve(),
+                        EdgeCurve::NurbsCurve(_)
+                    )
+                })
+            });
+            assert!(
+                has_nurbs_curve,
+                "imported solid should have NURBS edge curves"
+            );
+        }
+        // If no B_SPLINE_CURVE_WITH_KNOTS in output, the loft only produces
+        // Line edges (which is valid for square profiles). Skip the curve check.
+    }
+
+    #[test]
+    fn roundtrip_circle_edge_preserved() {
+        // Cylinder has circle edges — they should round-trip.
+        let mut write_topo = Topology::new();
+        let solid =
+            brepkit_operations::primitives::make_cylinder(&mut write_topo, 1.0, 2.0).unwrap();
+
+        let step_str = writer::write_step(&write_topo, &[solid]).unwrap();
+        assert!(step_str.contains("CIRCLE"));
+
+        let mut read_topo = Topology::new();
+        let solids = read_step(&step_str, &mut read_topo).unwrap();
+        assert!(!solids.is_empty());
+
+        let read_solid = read_topo.solid(solids[0]).unwrap();
+        let shell = read_topo.shell(read_solid.outer_shell()).unwrap();
+
+        let has_circle = shell.faces().iter().any(|&fid| {
+            let face = read_topo.face(fid).unwrap();
+            let wire = read_topo.wire(face.outer_wire()).unwrap();
+            wire.edges().iter().any(|he| {
+                matches!(
+                    read_topo.edge(he.edge()).unwrap().curve(),
+                    EdgeCurve::Circle(_)
+                )
+            })
+        });
+        assert!(
+            has_circle,
+            "imported cylinder should have circle edge curves"
+        );
+    }
+
+    #[test]
+    fn parse_bspline_surface_attrs_basic() {
+        // Minimal B_SPLINE_SURFACE_WITH_KNOTS attribute string.
+        let attrs = "'', 1, 1, ((#10, #11), (#12, #13)), .UNSPECIFIED., .F., .F., .F., \
+                     (2, 2), (2, 2), (0.0, 1.0), (0.0, 1.0), .UNSPECIFIED.";
+        let result = parse_bspline_surface_attrs(attrs);
+        assert!(result.is_some(), "should parse B_SPLINE_SURFACE attributes");
+        let (deg_u, deg_v, cp_grid, u_mults, v_mults, u_knots, v_knots) = result.unwrap();
+        assert_eq!(deg_u, 1);
+        assert_eq!(deg_v, 1);
+        assert_eq!(cp_grid.len(), 2);
+        assert_eq!(cp_grid[0].len(), 2);
+        assert_eq!(u_mults, vec![2, 2]);
+        assert_eq!(v_mults, vec![2, 2]);
+        assert_eq!(u_knots, vec![0.0, 1.0]);
+        assert_eq!(v_knots, vec![0.0, 1.0]);
+    }
+
+    #[test]
+    fn parse_bspline_curve_attrs_basic() {
+        let attrs = "'', 3, (#1, #2, #3, #4), .UNSPECIFIED., .F., .F., \
+                     (4, 4), (0.0, 1.0), .UNSPECIFIED.";
+        let result = parse_bspline_curve_attrs(attrs);
+        assert!(result.is_some(), "should parse B_SPLINE_CURVE attributes");
+        let (degree, cp_refs, mults, knots) = result.unwrap();
+        assert_eq!(degree, 3);
+        assert_eq!(cp_refs.len(), 4);
+        assert_eq!(mults, vec![4, 4]);
+        assert_eq!(knots, vec![0.0, 1.0]);
+    }
+
+    #[test]
+    fn expand_knots_basic() {
+        let mults = [3, 1, 3];
+        let vals = [0.0, 0.5, 1.0];
+        let flat = expand_knots(&mults, &vals);
+        assert_eq!(flat, vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]);
     }
 }
