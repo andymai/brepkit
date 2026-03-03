@@ -7,14 +7,111 @@
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::{Edge, EdgeCurve};
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::{Vertex, VertexId};
+use brepkit_topology::wire::WireId;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::dot_normal_point;
+
+/// Data from extruding a single inner wire, needed for creating side faces.
+struct InnerWireData {
+    positions: Vec<Point3>,
+    oriented: Vec<OrientedEdge>,
+    edge_ids: Vec<EdgeId>,
+    top_edge_ids: Vec<EdgeId>,
+    vertical_edge_ids: Vec<EdgeId>,
+}
+
+/// Extract vertices, create offset (top) vertices and edges for a wire.
+///
+/// Returns: `(input_verts, input_positions, input_oriented, input_edge_ids,
+///            top_verts, top_edge_ids, vertical_edge_ids)`
+#[allow(clippy::type_complexity)]
+fn extrude_wire_vertices(
+    topo: &mut Topology,
+    wire_id: WireId,
+    offset: Vec3,
+) -> Result<
+    (
+        Vec<VertexId>,
+        Vec<Point3>,
+        Vec<OrientedEdge>,
+        Vec<EdgeId>,
+        Vec<VertexId>,
+        Vec<EdgeId>,
+        Vec<EdgeId>,
+    ),
+    crate::OperationsError,
+> {
+    let tol = Tolerance::new();
+    let wire = topo.wire(wire_id)?;
+    let oriented: Vec<_> = wire.edges().to_vec();
+
+    let mut verts: Vec<VertexId> = Vec::with_capacity(oriented.len());
+    for oe in &oriented {
+        let edge = topo.edge(oe.edge())?;
+        let vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        verts.push(vid);
+    }
+
+    let n = verts.len();
+
+    let positions: Vec<Point3> = verts
+        .iter()
+        .map(|&vid| {
+            topo.vertex(vid)
+                .map(brepkit_topology::vertex::Vertex::point)
+        })
+        .collect::<Result<_, _>>()?;
+
+    let top_verts: Vec<VertexId> = positions
+        .iter()
+        .map(|p| {
+            let top_point = *p + offset;
+            topo.vertices.alloc(Vertex::new(top_point, tol.linear))
+        })
+        .collect();
+
+    let edge_ids: Vec<EdgeId> = oriented
+        .iter()
+        .map(brepkit_topology::wire::OrientedEdge::edge)
+        .collect();
+
+    let mut top_edge_ids = Vec::with_capacity(n);
+    for i in 0..n {
+        let next = (i + 1) % n;
+        let top_edge = topo
+            .edges
+            .alloc(Edge::new(top_verts[i], top_verts[next], EdgeCurve::Line));
+        top_edge_ids.push(top_edge);
+    }
+
+    let mut vertical_edge_ids = Vec::with_capacity(n);
+    for i in 0..n {
+        let vert_edge = topo
+            .edges
+            .alloc(Edge::new(verts[i], top_verts[i], EdgeCurve::Line));
+        vertical_edge_ids.push(vert_edge);
+    }
+
+    Ok((
+        verts,
+        positions,
+        oriented,
+        edge_ids,
+        top_verts,
+        top_edge_ids,
+        vertical_edge_ids,
+    ))
+}
 
 /// Extrude a planar face along a direction to produce a solid.
 ///
@@ -22,6 +119,11 @@ use crate::dot_normal_point;
 /// the original face becomes the bottom (outward normal pointing opposite to
 /// the extrusion direction), an offset copy becomes the top, and rectangular
 /// side faces connect them.
+///
+/// When the input face has inner wires (holes), they are propagated:
+/// - Both bottom and top cap faces include the inner wires as holes.
+/// - Additional inward-facing side faces are created for each inner wire
+///   edge, forming the interior walls of the hollow extrusion.
 ///
 /// # Errors
 ///
@@ -54,33 +156,7 @@ pub fn extrude(
     let face_data = topo.face(face)?;
     let input_surface = face_data.surface().clone();
     let input_wire_id = face_data.outer_wire();
-
-    // Read input wire oriented edges.
-    let input_wire = topo.wire(input_wire_id)?;
-    let input_oriented: Vec<_> = input_wire.edges().to_vec();
-
-    // Collect start vertices of each oriented edge (traversal order).
-    let mut input_verts: Vec<VertexId> = Vec::with_capacity(input_oriented.len());
-    for oe in &input_oriented {
-        let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
-        input_verts.push(vid);
-    }
-
-    let n = input_verts.len();
-
-    // Read input vertex positions.
-    let input_positions: Vec<Point3> = input_verts
-        .iter()
-        .map(|&vid| {
-            topo.vertex(vid)
-                .map(brepkit_topology::vertex::Vertex::point)
-        })
-        .collect::<Result<_, _>>()?;
+    let inner_wire_ids: Vec<WireId> = face_data.inner_wires().to_vec();
 
     // Compute offset vector.
     let offset = Vec3::new(
@@ -89,44 +165,21 @@ pub fn extrude(
         direction.z() * distance,
     );
 
-    // Create top vertices at offset positions.
-    let top_verts: Vec<VertexId> = input_positions
-        .iter()
-        .map(|p| {
-            let top_point = *p + offset;
-            topo.vertices.alloc(Vertex::new(top_point, tol.linear))
-        })
-        .collect();
+    // --- Process outer wire ---
+    let (
+        input_verts,
+        input_positions,
+        input_oriented,
+        input_edge_ids,
+        _top_verts,
+        top_edge_ids,
+        vertical_edge_ids,
+    ) = extrude_wire_vertices(topo, input_wire_id, offset)?;
+    let n = input_verts.len();
 
-    // Original edge IDs from the input wire (used by side faces).
-    let input_edge_ids: Vec<_> = input_oriented
-        .iter()
-        .map(brepkit_topology::wire::OrientedEdge::edge)
-        .collect();
-
-    // Create top edges mirroring input edges (same winding as input).
-    let mut top_edge_ids = Vec::with_capacity(n);
-    for i in 0..n {
-        let next = (i + 1) % n;
-        let top_edge = topo
-            .edges
-            .alloc(Edge::new(top_verts[i], top_verts[next], EdgeCurve::Line));
-        top_edge_ids.push(top_edge);
-    }
-
-    // Create vertical edges: input_vert[i] → top_vert[i].
-    let mut vertical_edge_ids = Vec::with_capacity(n);
-    for i in 0..n {
-        let vert_edge = topo
-            .edges
-            .alloc(Edge::new(input_verts[i], top_verts[i], EdgeCurve::Line));
-        vertical_edge_ids.push(vert_edge);
-    }
-
-    let mut all_faces = Vec::with_capacity(n + 2);
+    let mut all_faces = Vec::with_capacity(n + 2 + inner_wire_ids.len() * 4);
 
     // --- Bottom face: reversed copy of input face ---
-    // The bottom face normal points opposite to the extrusion direction.
     let reversed_bottom_edges: Vec<OrientedEdge> = input_oriented
         .iter()
         .rev()
@@ -135,6 +188,54 @@ pub fn extrude(
     let bottom_wire =
         Wire::new(reversed_bottom_edges, true).map_err(crate::OperationsError::Topology)?;
     let bottom_wire_id = topo.wires.alloc(bottom_wire);
+
+    // --- Process inner wires and create inner wire data ---
+    let mut bottom_inner_wire_ids = Vec::with_capacity(inner_wire_ids.len());
+    let mut top_inner_wire_ids = Vec::with_capacity(inner_wire_ids.len());
+
+    let mut inner_wire_data: Vec<InnerWireData> = Vec::new();
+
+    for &iw_id in &inner_wire_ids {
+        let (
+            iw_verts,
+            iw_positions,
+            iw_oriented,
+            iw_edge_ids,
+            iw_top_verts,
+            iw_top_edge_ids,
+            iw_vert_edge_ids,
+        ) = extrude_wire_vertices(topo, iw_id, offset)?;
+        let iw_n = iw_verts.len();
+
+        // Bottom inner wire: reversed winding (same as outer wire reversal).
+        let reversed_inner_edges: Vec<OrientedEdge> = iw_oriented
+            .iter()
+            .rev()
+            .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+            .collect();
+        let bottom_inner_wire =
+            Wire::new(reversed_inner_edges, true).map_err(crate::OperationsError::Topology)?;
+        bottom_inner_wire_ids.push(topo.wires.alloc(bottom_inner_wire));
+
+        // Top inner wire: same winding as bottom inner (reversed from original).
+        let top_inner_edges: Vec<OrientedEdge> = iw_top_edge_ids
+            .iter()
+            .map(|&eid| OrientedEdge::new(eid, true))
+            .collect();
+        let top_inner_wire =
+            Wire::new(top_inner_edges, true).map_err(crate::OperationsError::Topology)?;
+        top_inner_wire_ids.push(topo.wires.alloc(top_inner_wire));
+
+        let _ = iw_top_verts;
+        let _ = iw_n;
+        inner_wire_data.push(InnerWireData {
+            positions: iw_positions,
+            oriented: iw_oriented,
+            edge_ids: iw_edge_ids,
+            top_edge_ids: iw_top_edge_ids,
+            vertical_edge_ids: iw_vert_edge_ids,
+        });
+    }
 
     let bottom_surface = match &input_surface {
         FaceSurface::Plane { normal, .. } => {
@@ -145,19 +246,17 @@ pub fn extrude(
                 d: bottom_d,
             }
         }
-        FaceSurface::Nurbs(nurbs) => {
-            // For NURBS bottom, reverse the surface orientation.
-            // We keep the same surface (the bottom IS the original surface).
-            FaceSurface::Nurbs(nurbs.clone())
-        }
+        FaceSurface::Nurbs(nurbs) => FaceSurface::Nurbs(nurbs.clone()),
         other => other.clone(),
     };
-    let bottom_face = topo
-        .faces
-        .alloc(Face::new(bottom_wire_id, vec![], bottom_surface));
+    let bottom_face = topo.faces.alloc(Face::new(
+        bottom_wire_id,
+        bottom_inner_wire_ids,
+        bottom_surface,
+    ));
     all_faces.push(bottom_face);
 
-    // --- Side faces ---
+    // --- Outer side faces ---
     for i in 0..n {
         let next = (i + 1) % n;
 
@@ -174,7 +273,6 @@ pub fn extrude(
 
         let side_wire_id = topo.wires.alloc(side_wire);
 
-        // Side normal = cross(edge_direction, extrusion_offset), normalized.
         let p0 = input_positions[i];
         let p1 = input_positions[next];
         let edge_dir = p1 - p0;
@@ -193,6 +291,51 @@ pub fn extrude(
             },
         ));
         all_faces.push(side_face);
+    }
+
+    // --- Inner wire side faces (reversed normals) ---
+    for iwd in &inner_wire_data {
+        let iw_n = iwd.positions.len();
+        for i in 0..iw_n {
+            let next = (i + 1) % iw_n;
+
+            // Inner side face winding is reversed relative to outer: the
+            // inner wire runs CW (when viewed from outside), so the side
+            // quads' normals point inward. We reverse the quad winding to
+            // achieve outward-facing normals on the inner tube.
+            let side_wire = Wire::new(
+                vec![
+                    OrientedEdge::new(iwd.vertical_edge_ids[i], true),
+                    OrientedEdge::new(iwd.top_edge_ids[i], true),
+                    OrientedEdge::new(iwd.vertical_edge_ids[next], false),
+                    OrientedEdge::new(iwd.edge_ids[i], !iwd.oriented[i].is_forward()),
+                ],
+                true,
+            )
+            .map_err(crate::OperationsError::Topology)?;
+
+            let side_wire_id = topo.wires.alloc(side_wire);
+
+            let p0 = iwd.positions[i];
+            let p1 = iwd.positions[next];
+            let edge_dir = p1 - p0;
+            // Reversed: inner side faces have normals pointing INWARD.
+            let side_normal = offset
+                .cross(edge_dir)
+                .normalize()
+                .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+            let side_d = dot_normal_point(side_normal, p0);
+
+            let side_face = topo.faces.alloc(Face::new(
+                side_wire_id,
+                vec![],
+                FaceSurface::Plane {
+                    normal: side_normal,
+                    d: side_d,
+                },
+            ));
+            all_faces.push(side_face);
+        }
     }
 
     // --- Top face ---
@@ -215,7 +358,6 @@ pub fn extrude(
             }
         }
         FaceSurface::Nurbs(nurbs) => {
-            // Translate all NURBS control points by the offset vector.
             let translated_cps: Vec<Vec<Point3>> = nurbs
                 .control_points()
                 .iter()
@@ -236,7 +378,7 @@ pub fn extrude(
     };
     let top_face = topo
         .faces
-        .alloc(Face::new(top_wire_id, vec![], top_surface));
+        .alloc(Face::new(top_wire_id, top_inner_wire_ids, top_surface));
     all_faces.push(top_face);
 
     // Assemble shell and solid.
@@ -499,6 +641,109 @@ mod tests {
         assert!(
             vol > 0.0,
             "extruded NURBS solid should have positive volume, got {vol}"
+        );
+    }
+
+    /// Helper: create a square face with a smaller square hole in the center.
+    fn make_face_with_hole(topo: &mut Topology) -> FaceId {
+        // Outer wire: 2×2 square centered at origin.
+        let outer_pts = vec![
+            Point3::new(-1.0, -1.0, 0.0),
+            Point3::new(1.0, -1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(-1.0, 1.0, 0.0),
+        ];
+        let outer_wire = brepkit_topology::builder::make_polygon_wire(topo, &outer_pts).unwrap();
+
+        // Inner wire: 0.5×0.5 square hole (CW winding = hole).
+        let inner_pts = vec![
+            Point3::new(-0.25, -0.25, 0.0),
+            Point3::new(-0.25, 0.25, 0.0),
+            Point3::new(0.25, 0.25, 0.0),
+            Point3::new(0.25, -0.25, 0.0),
+        ];
+        let inner_wire = brepkit_topology::builder::make_polygon_wire(topo, &inner_pts).unwrap();
+
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let d = 0.0;
+        let face = Face::new(
+            outer_wire,
+            vec![inner_wire],
+            FaceSurface::Plane { normal, d },
+        );
+        topo.faces.alloc(face)
+    }
+
+    #[test]
+    fn extrude_face_with_hole_produces_more_faces() {
+        let mut topo = Topology::new();
+        let face = make_face_with_hole(&mut topo);
+
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+
+        // Outer: 4 sides + top + bottom = 6
+        // Inner: 4 inward-facing sides = 4
+        // Total: 10 faces
+        assert_eq!(
+            shell.faces().len(),
+            10,
+            "extruded face with hole should have 10 faces (6 outer + 4 inner)"
+        );
+    }
+
+    #[test]
+    fn extrude_face_with_hole_caps_have_inner_wires() {
+        let mut topo = Topology::new();
+        let face = make_face_with_hole(&mut topo);
+
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+
+        // The bottom and top faces should have inner wires (holes).
+        let faces_with_holes_count = shell
+            .faces()
+            .iter()
+            .filter(|&&fid| !topo.face(fid).unwrap().inner_wires().is_empty())
+            .count();
+
+        assert_eq!(
+            faces_with_holes_count, 2,
+            "bottom and top caps should both have inner wire holes"
+        );
+    }
+
+    #[test]
+    fn extrude_face_with_hole_has_less_volume_than_solid() {
+        let mut topo_solid = Topology::new();
+        let solid_face = make_unit_square_face(&mut topo_solid);
+        let solid_box =
+            extrude(&mut topo_solid, solid_face, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+
+        let mut topo_hollow = Topology::new();
+        let hollow_face = make_face_with_hole(&mut topo_hollow);
+        let hollow_solid =
+            extrude(&mut topo_hollow, hollow_face, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+
+        let vol_solid = crate::measure::solid_volume(&topo_solid, solid_box, 0.1).unwrap();
+        let vol_hollow = crate::measure::solid_volume(&topo_hollow, hollow_solid, 0.1).unwrap();
+
+        // The hollow solid (2×2 outer - 0.5×0.5 inner) should have volume ~3.75.
+        // The solid box (1×1×1) has volume 1.0.
+        // Both should have positive volume and the hollow should be > solid_box
+        // since the outer is larger.
+        assert!(vol_solid > 0.0, "solid box should have positive volume");
+        assert!(vol_hollow > 0.0, "hollow solid should have positive volume");
+
+        // The outer is 2×2×1 = 4, minus 0.5×0.5×1 = 0.25, so ~3.75.
+        // The vol_solid is 1×1×1 = 1. So vol_hollow > vol_solid.
+        assert!(
+            vol_hollow > vol_solid,
+            "hollow (2x2-0.5x0.5) should be larger than unit box"
         );
     }
 }
