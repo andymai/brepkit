@@ -16,6 +16,7 @@ pub mod copy;
 pub mod defeature;
 pub mod distance;
 pub mod draft;
+pub mod evolution;
 pub mod extrude;
 pub mod feature_recognition;
 pub mod fill_face;
