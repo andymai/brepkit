@@ -356,6 +356,29 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid_id))
     }
 
+    /// Loft profiles with smooth NURBS interpolation.
+    ///
+    /// Like `loft()`, but produces smooth NURBS side surfaces for 3+
+    /// profiles instead of piecewise-planar quads. The surfaces
+    /// interpolate through all intermediate profiles with C1+ continuity.
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if fewer than 2 profiles are given, profiles have
+    /// different vertex counts, or surface fitting fails.
+    #[wasm_bindgen(js_name = "loftSmooth")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn loft_smooth_faces(&mut self, faces: Vec<u32>) -> Result<u32, JsError> {
+        let face_ids: Vec<brepkit_topology::face::FaceId> = faces
+            .iter()
+            .map(|&h| self.resolve_face(h))
+            .collect::<Result<_, _>>()?;
+        let solid_id = brepkit_operations::loft::loft_smooth(&mut self.topo, &face_ids)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
     // ── Shell ─────────────────────────────────────────────────────
 
     /// Hollow a solid with uniform wall thickness.
@@ -614,6 +637,68 @@ impl BrepKernel {
 
         let solid_id = sweep(&mut self.topo, face_id, &path_curve)?;
 
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Sweep a face along a path with smooth NURBS side surfaces.
+    ///
+    /// Like `sweep()`, but produces a single NURBS surface per edge strip
+    /// instead of multiple flat quads, giving smooth geometry that
+    /// tessellates to arbitrary quality.
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face or path is invalid, or surface fitting fails.
+    #[wasm_bindgen(js_name = "sweepSmooth")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn sweep_smooth_face(
+        &mut self,
+        face: u32,
+        path_degree: u32,
+        path_knots: Vec<f64>,
+        path_control_points: Vec<f64>,
+        path_weights: Vec<f64>,
+    ) -> Result<u32, JsError> {
+        if path_control_points.len() % 3 != 0 {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "path_control_points length must be a multiple of 3, got {}",
+                    path_control_points.len()
+                ),
+            }
+            .into());
+        }
+
+        let face_id = self.resolve_face(face)?;
+        let n_cp = path_control_points.len() / 3;
+        let control_points: Vec<Point3> = (0..n_cp)
+            .map(|i| {
+                Point3::new(
+                    path_control_points[i * 3],
+                    path_control_points[i * 3 + 1],
+                    path_control_points[i * 3 + 2],
+                )
+            })
+            .collect();
+
+        let weights = if path_weights.is_empty() {
+            vec![1.0; n_cp]
+        } else {
+            path_weights
+        };
+
+        #[allow(clippy::cast_possible_truncation)]
+        let path_curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            path_degree as usize,
+            path_knots,
+            control_points,
+            weights,
+        )?;
+
+        let solid_id =
+            brepkit_operations::sweep::sweep_smooth(&mut self.topo, face_id, &path_curve)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -4381,6 +4466,23 @@ impl BrepKernel {
                     .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
                     .collect::<Result<Vec<_>, _>>()?;
                 let result = brepkit_operations::loft::loft(&mut self.topo, &face_ids)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
+            "loftSmooth" => {
+                let face_handles: Vec<u32> = args["faces"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let face_ids: Vec<_> = face_handles
+                    .iter()
+                    .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let result = brepkit_operations::loft::loft_smooth(&mut self.topo, &face_ids)
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }

@@ -6,6 +6,7 @@
 //! Frenet-frame singularities on straight segments and inflection points.
 
 use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::nurbs::surface_fitting::interpolate_surface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -403,6 +404,241 @@ pub fn sweep(
     let solid = topo.solids.alloc(Solid::new(shell_id, vec![]));
 
     Ok(solid)
+}
+
+/// Sweep a face along a path with smooth NURBS side surfaces.
+///
+/// Like [`sweep`], but produces a single NURBS surface per edge strip
+/// instead of `N` flat quads. The side surfaces interpolate through all
+/// ring positions using tensor-product surface fitting, giving smooth
+/// geometry that tessellates to arbitrary quality.
+///
+/// This produces `n + 2` faces (n NURBS sides + 2 caps) instead of
+/// `num_segments × n + 2` flat faces, making the topology significantly
+/// more compact while improving geometric quality.
+///
+/// # Errors
+///
+/// Returns an error if the profile is not planar, has inner wires (holes),
+/// the path has fewer than 2 control points, or surface fitting fails.
+#[allow(clippy::too_many_lines)]
+pub fn sweep_smooth(
+    topo: &mut Topology,
+    profile: FaceId,
+    path: &NurbsCurve,
+) -> Result<SolidId, crate::OperationsError> {
+    let tol = Tolerance::new();
+
+    if path.control_points().len() < 2 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "sweep path must have at least 2 control points".into(),
+        });
+    }
+
+    let face_data = topo.face(profile)?;
+    let input_normal = match face_data.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        _ => {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "sweep of non-planar faces is not supported".into(),
+            });
+        }
+    };
+    let input_wire_id = face_data.outer_wire();
+
+    if !face_data.inner_wires().is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "sweep of faces with holes is not supported".into(),
+        });
+    }
+
+    if tol.approx_eq(
+        (path.evaluate(1.0) - path.evaluate(0.0)).length_squared(),
+        0.0,
+    ) {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "sweep path has zero length".into(),
+        });
+    }
+
+    // Collect profile vertices.
+    let input_wire = topo.wire(input_wire_id)?;
+    let input_oriented: Vec<_> = input_wire.edges().to_vec();
+    let n = input_oriented.len();
+
+    if n == 0 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "sweep profile has no edges".into(),
+        });
+    }
+
+    let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
+    for oe in &input_oriented {
+        let edge = topo.edge(oe.edge())?;
+        let vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        input_verts.push(vid);
+    }
+
+    let input_positions: Vec<Point3> = input_verts
+        .iter()
+        .map(|&vid| {
+            topo.vertex(vid)
+                .map(brepkit_topology::vertex::Vertex::point)
+        })
+        .collect::<Result<_, _>>()?;
+
+    // Compute centroid and frames.
+    let (cx, cy, cz) = input_positions
+        .iter()
+        .fold((0.0, 0.0, 0.0), |(ax, ay, az), p| {
+            (ax + p.x(), ay + p.y(), az + p.z())
+        });
+    #[allow(clippy::cast_precision_loss)]
+    let centroid = Point3::new(cx / n as f64, cy / n as f64, cz / n as f64);
+
+    let num_segments = (path.control_points().len() * 2).max(4);
+    let up_hint = orthogonalize(input_normal, path.tangent(0.0)?);
+    let frames = compute_frames(path, num_segments, up_hint)?;
+
+    let initial_right = frames[0].right;
+    let initial_up = frames[0].up;
+    let initial_tangent = frames[0].tangent;
+
+    // Compute all ring positions (without allocating vertices yet).
+    let num_rings = num_segments + 1;
+    let ring_positions: Vec<Vec<Point3>> = frames
+        .iter()
+        .map(|frame| {
+            input_positions
+                .iter()
+                .map(|&pos| {
+                    transform_point(
+                        pos,
+                        centroid,
+                        initial_right,
+                        initial_up,
+                        initial_tangent,
+                        frame,
+                    )
+                })
+                .collect()
+        })
+        .collect();
+
+    // Create vertices for first and last rings only (for edge topology).
+    let first_ring: Vec<VertexId> = ring_positions[0]
+        .iter()
+        .map(|&p| topo.vertices.alloc(Vertex::new(p, tol.linear)))
+        .collect();
+    let last_ring: Vec<VertexId> = ring_positions[num_rings - 1]
+        .iter()
+        .map(|&p| topo.vertices.alloc(Vertex::new(p, tol.linear)))
+        .collect();
+
+    // Create profile edges for first and last rings.
+    let first_ring_edges: Vec<_> = (0..n)
+        .map(|i| {
+            let next = (i + 1) % n;
+            topo.edges
+                .alloc(Edge::new(first_ring[i], first_ring[next], EdgeCurve::Line))
+        })
+        .collect();
+    let last_ring_edges: Vec<_> = (0..n)
+        .map(|i| {
+            let next = (i + 1) % n;
+            topo.edges
+                .alloc(Edge::new(last_ring[i], last_ring[next], EdgeCurve::Line))
+        })
+        .collect();
+
+    let mut all_faces = Vec::with_capacity(n + 2);
+
+    // Start cap.
+    let start_reversed: Vec<OrientedEdge> = (0..n)
+        .rev()
+        .map(|i| OrientedEdge::new(first_ring_edges[i], false))
+        .collect();
+    let start_wire = Wire::new(start_reversed, true).map_err(crate::OperationsError::Topology)?;
+    let start_wire_id = topo.wires.alloc(start_wire);
+    let start_normal = -frames[0].tangent;
+    let start_d = dot_normal_point(start_normal, ring_positions[0][0]);
+    all_faces.push(topo.faces.alloc(Face::new(
+        start_wire_id,
+        vec![],
+        FaceSurface::Plane {
+            normal: start_normal,
+            d: start_d,
+        },
+    )));
+
+    // NURBS side faces: one surface per edge index spanning all rings.
+    let degree_u = (num_rings - 1).min(3);
+    let degree_v = 1;
+
+    for i in 0..n {
+        let next_i = (i + 1) % n;
+
+        // Build interpolation grid: rings × 2 (edge endpoints).
+        let grid: Vec<Vec<Point3>> = (0..num_rings)
+            .map(|k| vec![ring_positions[k][i], ring_positions[k][next_i]])
+            .collect();
+
+        let surface =
+            interpolate_surface(&grid, degree_u, degree_v).map_err(crate::OperationsError::Math)?;
+
+        // Rail edges from first to last ring.
+        let e_left_rail = topo
+            .edges
+            .alloc(Edge::new(first_ring[i], last_ring[i], EdgeCurve::Line));
+        let e_right_rail = topo.edges.alloc(Edge::new(
+            first_ring[next_i],
+            last_ring[next_i],
+            EdgeCurve::Line,
+        ));
+
+        let side_wire = Wire::new(
+            vec![
+                OrientedEdge::new(first_ring_edges[i], true),
+                OrientedEdge::new(e_right_rail, true),
+                OrientedEdge::new(last_ring_edges[i], false),
+                OrientedEdge::new(e_left_rail, false),
+            ],
+            true,
+        )
+        .map_err(crate::OperationsError::Topology)?;
+
+        let side_wire_id = topo.wires.alloc(side_wire);
+        all_faces.push(topo.faces.alloc(Face::new(
+            side_wire_id,
+            vec![],
+            FaceSurface::Nurbs(surface),
+        )));
+    }
+
+    // End cap.
+    let end_edges: Vec<OrientedEdge> = (0..n)
+        .map(|i| OrientedEdge::new(last_ring_edges[i], true))
+        .collect();
+    let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
+    let end_wire_id = topo.wires.alloc(end_wire);
+    let end_normal = frames[num_segments].tangent;
+    let end_d = dot_normal_point(end_normal, ring_positions[num_rings - 1][0]);
+    all_faces.push(topo.faces.alloc(Face::new(
+        end_wire_id,
+        vec![],
+        FaceSurface::Plane {
+            normal: end_normal,
+            d: end_d,
+        },
+    )));
+
+    let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.shells.alloc(shell);
+    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
 }
 
 /// Contact mode for advanced sweep operations.
@@ -982,5 +1218,77 @@ mod tests {
 
         let result = sweep_with_options(&mut topo, profile, &path, &options);
         assert!(result.is_ok());
+    }
+
+    // ── Smooth sweep tests ──────────────────────────
+
+    #[test]
+    fn sweep_smooth_produces_nurbs_sides() {
+        let mut topo = Topology::new();
+        let profile = make_unit_square_face(&mut topo);
+        let path = straight_z_path(2.0);
+
+        let solid = sweep_smooth(&mut topo, profile, &path).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        // Should have N NURBS sides + 2 planar caps.
+        let nurbs_count = sh
+            .faces()
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
+            .count();
+
+        assert!(
+            nurbs_count > 0,
+            "smooth sweep should produce NURBS side faces"
+        );
+
+        // Fewer faces than the basic sweep (N sides vs N*segments sides).
+        let profile_edge_count = 4; // square has 4 edges
+        let expected_face_count = profile_edge_count + 2; // N sides + 2 caps
+        assert_eq!(
+            sh.faces().len(),
+            expected_face_count,
+            "smooth sweep should have {expected_face_count} faces, got {}",
+            sh.faces().len()
+        );
+    }
+
+    #[test]
+    fn sweep_smooth_positive_volume() {
+        let mut topo = Topology::new();
+        let profile = make_unit_square_face(&mut topo);
+        let path = straight_z_path(3.0);
+
+        let solid = sweep_smooth(&mut topo, profile, &path).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 0.0,
+            "smooth sweep should have positive volume, got {vol}"
+        );
+    }
+
+    #[test]
+    fn sweep_smooth_curved_path() {
+        let mut topo = Topology::new();
+        let profile = make_unit_square_face(&mut topo);
+        let path = quarter_circle_xz_path(5.0);
+
+        let solid = sweep_smooth(&mut topo, profile, &path).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        assert_eq!(
+            sh.faces().len(),
+            6,
+            "smooth curved sweep should have 6 faces"
+        );
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(vol > 0.0, "curved smooth sweep should have positive volume");
     }
 }
