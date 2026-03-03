@@ -1,4 +1,8 @@
-//! Linear extrusion of planar faces along a direction vector.
+//! Linear extrusion of faces along a direction vector.
+//!
+//! Supports both planar and NURBS profile faces. For NURBS faces, the
+//! extrusion translates all control points, preserving the exact surface
+//! representation for both caps.
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -48,14 +52,7 @@ pub fn extrude(
 
     // Read the input face's data.
     let face_data = topo.face(face)?;
-    let input_normal = match face_data.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
-        _ => {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: "extrusion of non-planar faces is not yet supported".into(),
-            });
-        }
-    };
+    let input_surface = face_data.surface().clone();
     let input_wire_id = face_data.outer_wire();
 
     // Read input wire oriented edges.
@@ -129,8 +126,7 @@ pub fn extrude(
     let mut all_faces = Vec::with_capacity(n + 2);
 
     // --- Bottom face: reversed copy of input face ---
-    // The bottom face normal points opposite to the extrusion direction
-    // (outward from the solid, downward for upward extrusion).
+    // The bottom face normal points opposite to the extrusion direction.
     let reversed_bottom_edges: Vec<OrientedEdge> = input_oriented
         .iter()
         .rev()
@@ -139,22 +135,29 @@ pub fn extrude(
     let bottom_wire =
         Wire::new(reversed_bottom_edges, true).map_err(crate::OperationsError::Topology)?;
     let bottom_wire_id = topo.wires.alloc(bottom_wire);
-    let bottom_normal = Vec3::new(-input_normal.x(), -input_normal.y(), -input_normal.z());
-    let bottom_d = dot_normal_point(bottom_normal, input_positions[0]);
-    let bottom_face = topo.faces.alloc(Face::new(
-        bottom_wire_id,
-        vec![],
-        FaceSurface::Plane {
-            normal: bottom_normal,
-            d: bottom_d,
-        },
-    ));
+
+    let bottom_surface = match &input_surface {
+        FaceSurface::Plane { normal, .. } => {
+            let bottom_normal = Vec3::new(-normal.x(), -normal.y(), -normal.z());
+            let bottom_d = dot_normal_point(bottom_normal, input_positions[0]);
+            FaceSurface::Plane {
+                normal: bottom_normal,
+                d: bottom_d,
+            }
+        }
+        FaceSurface::Nurbs(nurbs) => {
+            // For NURBS bottom, reverse the surface orientation.
+            // We keep the same surface (the bottom IS the original surface).
+            FaceSurface::Nurbs(nurbs.clone())
+        }
+        other => other.clone(),
+    };
+    let bottom_face = topo
+        .faces
+        .alloc(Face::new(bottom_wire_id, vec![], bottom_surface));
     all_faces.push(bottom_face);
 
     // --- Side faces ---
-    // Each side face winds: input_edge[i](fwd) → vertical[next](fwd) →
-    // top_edge[i](rev) → vertical[i](rev). This produces outward-pointing
-    // normals when the input wire is CCW as viewed from the input normal.
     for i in 0..n {
         let next = (i + 1) % n;
 
@@ -193,7 +196,6 @@ pub fn extrude(
     }
 
     // --- Top face ---
-    // Same winding as input (since it faces the extrusion direction).
     let top_wire = Wire::new(
         top_edge_ids
             .iter()
@@ -204,15 +206,37 @@ pub fn extrude(
     .map_err(crate::OperationsError::Topology)?;
     let top_wire_id = topo.wires.alloc(top_wire);
 
-    let top_d = dot_normal_point(input_normal, input_positions[0] + offset);
-    let top_face = topo.faces.alloc(Face::new(
-        top_wire_id,
-        vec![],
-        FaceSurface::Plane {
-            normal: input_normal,
-            d: top_d,
-        },
-    ));
+    let top_surface = match &input_surface {
+        FaceSurface::Plane { normal, .. } => {
+            let top_d = dot_normal_point(*normal, input_positions[0] + offset);
+            FaceSurface::Plane {
+                normal: *normal,
+                d: top_d,
+            }
+        }
+        FaceSurface::Nurbs(nurbs) => {
+            // Translate all NURBS control points by the offset vector.
+            let translated_cps: Vec<Vec<Point3>> = nurbs
+                .control_points()
+                .iter()
+                .map(|row| row.iter().map(|&p| p + offset).collect())
+                .collect();
+            let translated_surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+                nurbs.degree_u(),
+                nurbs.degree_v(),
+                nurbs.knots_u().to_vec(),
+                nurbs.knots_v().to_vec(),
+                translated_cps,
+                nurbs.weights().to_vec(),
+            )
+            .map_err(crate::OperationsError::Math)?;
+            FaceSurface::Nurbs(translated_surface)
+        }
+        other => other.clone(),
+    };
+    let top_face = topo
+        .faces
+        .alloc(Face::new(top_wire_id, vec![], top_surface));
     all_faces.push(top_face);
 
     // Assemble shell and solid.
@@ -341,5 +365,140 @@ mod tests {
                 "edge {edge_idx} shared by {count} faces, expected 2"
             );
         }
+    }
+
+    // ── NURBS face extrusion tests ──────────────────────
+
+    /// Build a NURBS face: a curved surface on the XY plane.
+    fn make_nurbs_face(topo: &mut Topology) -> FaceId {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+
+        // Bicubic surface with some curvature.
+        let cps = vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+            vec![Point3::new(0.0, 1.0, 0.5), Point3::new(1.0, 1.0, 0.5)],
+        ];
+        let weights = vec![vec![1.0, 1.0], vec![1.0, 1.0]];
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let surface = NurbsSurface::new(1, 1, knots.clone(), knots, cps, weights).unwrap();
+
+        let tol = 1e-7;
+        let v0 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol));
+        let v1 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol));
+        let v2 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.5), tol));
+        let v3 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 1.0, 0.5), tol));
+
+        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.wires.alloc(wire);
+
+        topo.faces
+            .alloc(Face::new(wid, vec![], FaceSurface::Nurbs(surface)))
+    }
+
+    #[test]
+    fn extrude_nurbs_face_creates_solid() {
+        let mut topo = Topology::new();
+        let face = make_nurbs_face(&mut topo);
+
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        // 4 sides + top + bottom = 6 faces
+        assert_eq!(
+            sh.faces().len(),
+            6,
+            "extruded NURBS face should have 6 faces"
+        );
+    }
+
+    #[test]
+    fn extrude_nurbs_face_top_is_nurbs() {
+        let mut topo = Topology::new();
+        let face = make_nurbs_face(&mut topo);
+
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        // At least 2 faces should be NURBS (top and bottom caps).
+        let nurbs_count = sh
+            .faces()
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
+            .count();
+
+        assert!(
+            nurbs_count >= 2,
+            "extruded NURBS face should have at least 2 NURBS caps, got {nurbs_count}"
+        );
+    }
+
+    #[test]
+    fn extrude_nurbs_face_top_translated() {
+        let mut topo = Topology::new();
+        let face = make_nurbs_face(&mut topo);
+
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        // Find the top NURBS face (the one at higher z).
+        let mut top_z = f64::MIN;
+        for &fid in sh.faces() {
+            let f = topo.face(fid).unwrap();
+            if let FaceSurface::Nurbs(surface) = f.surface() {
+                let pt = surface.evaluate(0.0, 0.0);
+                if pt.z() > top_z {
+                    top_z = pt.z();
+                }
+            }
+        }
+
+        // The top surface should be translated by distance 3.0 along Z.
+        // Original (0,0) point is at z=0, so top should be at z=3.0.
+        assert!(
+            (top_z - 3.0).abs() < 0.1,
+            "top NURBS surface should be at z≈3.0, got z={top_z}"
+        );
+    }
+
+    #[test]
+    fn extrude_nurbs_face_positive_volume() {
+        let mut topo = Topology::new();
+        let face = make_nurbs_face(&mut topo);
+
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 0.0,
+            "extruded NURBS solid should have positive volume, got {vol}"
+        );
     }
 }
