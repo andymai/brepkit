@@ -236,6 +236,75 @@ impl<'a> StepBuilder<'a> {
                 let d = normal.dot(Vec3::new(origin.x(), origin.y(), origin.z()));
                 Ok(FaceSurface::Plane { normal, d })
             }
+            "CYLINDRICAL_SURFACE" => {
+                let refs = parse_refs(&attrs);
+                let floats = parse_floats(&attrs);
+                let axis_ref = refs.first().copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("CYLINDRICAL_SURFACE #{surface_ref} missing axis"),
+                })?;
+                let radius = floats.first().copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("CYLINDRICAL_SURFACE #{surface_ref} missing radius"),
+                })?;
+                let (origin, axis, _ref_dir) = self.build_axis2_placement(axis_ref)?;
+                let cyl = brepkit_math::surfaces::CylindricalSurface::new(origin, axis, radius)
+                    .map_err(|e| IoError::ParseError {
+                        reason: format!("CYLINDRICAL_SURFACE #{surface_ref}: {e}"),
+                    })?;
+                Ok(FaceSurface::Cylinder(cyl))
+            }
+            "CONICAL_SURFACE" => {
+                let refs = parse_refs(&attrs);
+                let floats = parse_floats(&attrs);
+                let axis_ref = refs.first().copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("CONICAL_SURFACE #{surface_ref} missing axis"),
+                })?;
+                // STEP: CONICAL_SURFACE('', #axis, base_radius, half_angle)
+                // half_angle is in radians in STEP AP203.
+                let half_angle = floats.last().copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("CONICAL_SURFACE #{surface_ref} missing half_angle"),
+                })?;
+                let (apex, axis, _ref_dir) = self.build_axis2_placement(axis_ref)?;
+                let cone = brepkit_math::surfaces::ConicalSurface::new(apex, axis, half_angle)
+                    .map_err(|e| IoError::ParseError {
+                        reason: format!("CONICAL_SURFACE #{surface_ref}: {e}"),
+                    })?;
+                Ok(FaceSurface::Cone(cone))
+            }
+            "SPHERICAL_SURFACE" => {
+                let refs = parse_refs(&attrs);
+                let floats = parse_floats(&attrs);
+                let axis_ref = refs.first().copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("SPHERICAL_SURFACE #{surface_ref} missing axis"),
+                })?;
+                let radius = floats.first().copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("SPHERICAL_SURFACE #{surface_ref} missing radius"),
+                })?;
+                let (center, _axis, _ref_dir) = self.build_axis2_placement(axis_ref)?;
+                let sphere = brepkit_math::surfaces::SphericalSurface::new(center, radius)
+                    .map_err(|e| IoError::ParseError {
+                        reason: format!("SPHERICAL_SURFACE #{surface_ref}: {e}"),
+                    })?;
+                Ok(FaceSurface::Sphere(sphere))
+            }
+            "TOROIDAL_SURFACE" => {
+                let refs = parse_refs(&attrs);
+                let floats = parse_floats(&attrs);
+                let axis_ref = refs.first().copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("TOROIDAL_SURFACE #{surface_ref} missing axis"),
+                })?;
+                let major_r = floats.first().copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("TOROIDAL_SURFACE #{surface_ref} missing major_radius"),
+                })?;
+                let minor_r = floats.get(1).copied().ok_or_else(|| IoError::ParseError {
+                    reason: format!("TOROIDAL_SURFACE #{surface_ref} missing minor_radius"),
+                })?;
+                let (center, _axis, _ref_dir) = self.build_axis2_placement(axis_ref)?;
+                let torus = brepkit_math::surfaces::ToroidalSurface::new(center, major_r, minor_r)
+                    .map_err(|e| IoError::ParseError {
+                        reason: format!("TOROIDAL_SURFACE #{surface_ref}: {e}"),
+                    })?;
+                Ok(FaceSurface::Torus(torus))
+            }
             _ => Err(IoError::UnsupportedEntity {
                 entity: entity_type,
             }),
@@ -407,8 +476,11 @@ fn parse_list_refs(attrs: &str) -> Vec<u64> {
 }
 
 /// Extract floating-point numbers from an attribute string.
+///
+/// Handles both nested `(1.0, 2.0)` and flat `'', #ref, 1.5E+00` formats.
 fn parse_floats(attrs: &str) -> Vec<f64> {
     let mut result = Vec::new();
+    // Try nested parentheses first.
     if let Some(start) = attrs.find('(') {
         if let Some(end) = attrs[start..].find(')') {
             let inner = &attrs[start + 1..start + end];
@@ -417,6 +489,18 @@ fn parse_floats(attrs: &str) -> Vec<f64> {
                 if let Ok(v) = trimmed.parse::<f64>() {
                     result.push(v);
                 }
+            }
+        }
+    }
+    // If no nested parens found, parse top-level comma-separated tokens.
+    if result.is_empty() {
+        for part in attrs.split(',') {
+            let trimmed = part.trim().trim_matches('\'').trim_end_matches(')');
+            if trimmed.starts_with('#') || trimmed.starts_with('.') || trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(v) = trimmed.parse::<f64>() {
+                result.push(v);
             }
         }
     }
@@ -561,5 +645,36 @@ mod tests {
         assert_eq!(floats.len(), 3);
         assert!((floats[0] - 1.0).abs() < 1e-10);
         assert!((floats[1] - (-0.5)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn roundtrip_cylinder_preserves_surface() {
+        let mut write_topo = Topology::new();
+        let solid =
+            brepkit_operations::primitives::make_cylinder(&mut write_topo, 1.5, 3.0).unwrap();
+
+        let step_str = writer::write_step(&write_topo, &[solid]).unwrap();
+
+        // Verify STEP contains CYLINDRICAL_SURFACE.
+        assert!(step_str.contains("CYLINDRICAL_SURFACE"));
+
+        let mut read_topo = Topology::new();
+        let solids = read_step(&step_str, &mut read_topo).unwrap();
+        assert!(!solids.is_empty(), "should import at least one solid");
+
+        // Verify the imported solid has a cylindrical face.
+        let read_solid = read_topo.solid(solids[0]).unwrap();
+        let shell = read_topo.shell(read_solid.outer_shell()).unwrap();
+
+        let has_cylinder = shell.faces().iter().any(|&fid| {
+            matches!(
+                read_topo.face(fid).unwrap().surface(),
+                FaceSurface::Cylinder(_)
+            )
+        });
+        assert!(
+            has_cylinder,
+            "imported cylinder should have a cylindrical face"
+        );
     }
 }
