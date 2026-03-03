@@ -59,50 +59,94 @@ pub fn tessellate(
         FaceSurface::Plane { normal, .. } => tessellate_planar(topo, face_data, *normal),
         FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection)),
         FaceSurface::Cylinder(cyl) => {
-            // Compute the v-range from face wire boundary vertices by
-            // projecting them onto the cylinder axis.
             let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
+            let u_range = (0.0, std::f64::consts::TAU);
+            // Angular resolution from chord deviation on the circular cross-section.
+            let nu = segments_for_chord_deviation(cyl.radius(), u_range.1 - u_range.0, deflection);
+            // Axial resolution: uniform spacing at roughly the same density.
+            let v_extent = (v_range.1 - v_range.0).abs();
+            let nv = 4_usize.max(
+                (v_extent / (cyl.radius() * std::f64::consts::TAU / nu as f64)).ceil() as usize,
+            );
             let cyl = cyl.clone();
             Ok(tessellate_analytic(
                 |u, v| cyl.evaluate(u, v),
                 |u, v| cyl.normal(u, v),
-                (0.0, std::f64::consts::TAU),
+                u_range,
                 v_range,
-                deflection,
+                nu,
+                nv,
                 AnalyticKind::General,
             ))
         }
         FaceSurface::Cone(cone) => {
             let v_range = compute_axial_range(topo, face_data, cone.apex(), cone.axis());
+            let u_range = (0.0, std::f64::consts::TAU);
+            // Use the max radius (at the far end) for angular resolution.
+            let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
+            let nu = segments_for_chord_deviation(
+                max_radius.max(0.01),
+                u_range.1 - u_range.0,
+                deflection,
+            );
+            let v_extent = (v_range.1 - v_range.0).abs();
+            let nv = 4_usize.max(
+                (v_extent / (max_radius.max(0.01) * std::f64::consts::TAU / nu as f64)).ceil()
+                    as usize,
+            );
             let cone = cone.clone();
             Ok(tessellate_analytic(
                 |u, v| cone.evaluate(u, v),
                 |u, v| cone.normal(u, v),
-                (0.0, std::f64::consts::TAU),
+                u_range,
                 v_range,
-                deflection,
+                nu,
+                nv,
                 AnalyticKind::ConeApex,
             ))
         }
         FaceSurface::Sphere(sphere) => {
+            let u_range = (0.0, std::f64::consts::TAU);
+            let v_range = (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
+            let nu =
+                segments_for_chord_deviation(sphere.radius(), u_range.1 - u_range.0, deflection);
+            // Latitude resolution: same chord deviation criterion.
+            let nv =
+                segments_for_chord_deviation(sphere.radius(), v_range.1 - v_range.0, deflection);
             let sphere = sphere.clone();
             Ok(tessellate_analytic(
                 |u, v| sphere.evaluate(u, v),
                 |u, v| sphere.normal(u, v),
-                (0.0, std::f64::consts::TAU),
-                (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
-                deflection,
+                u_range,
+                v_range,
+                nu,
+                nv,
                 AnalyticKind::SpherePole,
             ))
         }
         FaceSurface::Torus(torus) => {
+            let u_range = (0.0, std::f64::consts::TAU);
+            let v_range = (0.0, std::f64::consts::TAU);
+            // Major circle resolution: use (R + r) as the effective radius.
+            let nu = segments_for_chord_deviation(
+                torus.major_radius() + torus.minor_radius(),
+                u_range.1 - u_range.0,
+                deflection,
+            );
+            // Minor circle (tube cross-section) resolution.
+            let nv = segments_for_chord_deviation(
+                torus.minor_radius(),
+                v_range.1 - v_range.0,
+                deflection,
+            );
             let torus = torus.clone();
             Ok(tessellate_analytic(
                 |u, v| torus.evaluate(u, v),
                 |u, v| torus.normal(u, v),
-                (0.0, std::f64::consts::TAU),
-                (0.0, std::f64::consts::TAU),
-                deflection,
+                u_range,
+                v_range,
+                nu,
+                nv,
                 AnalyticKind::General,
             ))
         }
@@ -119,11 +163,40 @@ enum AnalyticKind {
     ConeApex,
 }
 
-/// Tessellate an analytic surface on a uniform `(u, v)` grid.
+/// Compute the angular resolution needed for a circular arc to achieve
+/// a given chord deviation (sag).
 ///
-/// The grid density is derived from `deflection`: smaller values yield finer meshes.
-/// Special handling is applied at poles (sphere) and apexes (cone) to avoid degenerate
-/// triangles by using triangle fans instead of quads.
+/// For a circle of radius `r`, the chord deviation at the midpoint of
+/// an arc subtending angle `θ` is `r*(1 - cos(θ/2))`. Solving for the
+/// number of segments `n` over an arc range: `n = ceil(range / θ)` where
+/// `θ = 2*acos(1 - deflection/r)`.
+fn segments_for_chord_deviation(radius: f64, arc_range: f64, deflection: f64) -> usize {
+    if radius <= 0.0 || deflection <= 0.0 || arc_range <= 0.0 {
+        return 8;
+    }
+    let ratio = (deflection / radius).min(0.5); // clamp to avoid near-degenerate arcs
+    let theta = 2.0 * (1.0 - ratio).acos(); // max angle per segment
+    if theta <= 0.0 {
+        return 8;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let n = (arc_range / theta).ceil() as usize;
+    // Also apply a fallback formula for very coarse deflection (where the
+    // geometric formula gives too few segments for downstream accuracy):
+    // n_fallback = ceil(range / sqrt(deflection)), matching the legacy behavior
+    // for small surfaces where deflection >> radius.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let n_fallback = (arc_range / deflection.sqrt()).ceil() as usize;
+    n.max(n_fallback).max(4)
+}
+
+/// Tessellate an analytic surface on a `(nu × nv)` grid.
+///
+/// The grid densities `nu` and `nv` should be computed by the caller
+/// based on the surface geometry and the deflection target (see
+/// `segments_for_chord_deviation`). Special handling is applied at poles
+/// (sphere) and apexes (cone) to avoid degenerate triangles by using
+/// triangle fans instead of quads.
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -134,19 +207,16 @@ fn tessellate_analytic(
     normal_fn: impl Fn(f64, f64) -> Vec3,
     u_range: (f64, f64),
     v_range: (f64, f64),
-    deflection: f64,
+    nu: usize,
+    nv: usize,
     kind: AnalyticKind,
 ) -> TriangleMesh {
-    use std::f64::consts::TAU;
-
-    let n = 8_usize.max((TAU / deflection.sqrt()).ceil() as usize);
-
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut indices = Vec::new();
 
-    let nu = n;
-    let nv = n;
+    let nu = nu.max(4);
+    let nv = nv.max(4);
 
     // Build (nu+1) x (nv+1) vertex grid.
     let mut grid = vec![0u32; (nu + 1) * (nv + 1)];
