@@ -1349,34 +1349,48 @@ fn surface_aware_aabb(surface: &FaceSurface, vertices: &[Point3], tol: Tolerance
             }
         }
         FaceSurface::Cone(c) => {
-            // Conservative: use wire BB expanded by the max cone radius visible.
-            let half_angle = c.half_angle();
-            // The max radius in the face region is proportional to the max
-            // distance from the apex along the axis. Use wire extent as proxy.
-            let wire_extent = wire_bb.max.z() - wire_bb.min.z() + wire_bb.max.y() - wire_bb.min.y()
-                + wire_bb.max.x()
-                - wire_bb.min.x();
-            let r_max = wire_extent * half_angle.tan().abs();
+            // Expand the wire BB perpendicular to the cone axis by the
+            // cone radius at the wire boundary (same approach as cylinder).
+            let ax = c.axis();
+            // Max distance from apex along the axis within the wire region.
+            let apex = c.apex();
+            let max_dist = vertices
+                .iter()
+                .map(|v| {
+                    let d = *v - apex;
+                    (d.x() * ax.x() + d.y() * ax.y() + d.z() * ax.z()).abs()
+                })
+                .fold(0.0_f64, f64::max);
+            let r_max = max_dist * c.half_angle().tan().abs();
+            let dx = r_max * (1.0 - ax.x() * ax.x()).sqrt();
+            let dy = r_max * (1.0 - ax.y() * ax.y()).sqrt();
+            let dz = r_max * (1.0 - ax.z() * ax.z()).sqrt();
             Aabb3 {
                 min: Point3::new(
-                    wire_bb.min.x() - r_max,
-                    wire_bb.min.y() - r_max,
-                    wire_bb.min.z() - r_max,
+                    wire_bb.min.x() - dx,
+                    wire_bb.min.y() - dy,
+                    wire_bb.min.z() - dz,
                 ),
                 max: Point3::new(
-                    wire_bb.max.x() + r_max,
-                    wire_bb.max.y() + r_max,
-                    wire_bb.max.z() + r_max,
+                    wire_bb.max.x() + dx,
+                    wire_bb.max.y() + dy,
+                    wire_bb.max.z() + dz,
                 ),
             }
         }
         FaceSurface::Torus(t) => {
-            // Conservative: center ± (major_radius + minor_radius).
+            // The torus extends R+r in the ring plane and r along the axis.
             let c = t.center();
-            let r = t.major_radius() + t.minor_radius();
+            let ring_r = t.major_radius() + t.minor_radius();
+            let tube_r = t.minor_radius();
+            let ax = t.z_axis();
+            // Expand by ring_r perpendicular to axis, tube_r along axis.
+            let dx = ring_r * (1.0 - ax.x() * ax.x()).sqrt() + tube_r * ax.x().abs();
+            let dy = ring_r * (1.0 - ax.y() * ax.y()).sqrt() + tube_r * ax.y().abs();
+            let dz = ring_r * (1.0 - ax.z() * ax.z()).sqrt() + tube_r * ax.z().abs();
             Aabb3 {
-                min: Point3::new(c.x() - r, c.y() - r, c.z() - r),
-                max: Point3::new(c.x() + r, c.y() + r, c.z() + r),
+                min: Point3::new(c.x() - dx, c.y() - dy, c.z() - dz),
+                max: Point3::new(c.x() + dx, c.y() + dy, c.z() + dz),
             }
         }
         FaceSurface::Nurbs(_) => {
@@ -2107,18 +2121,6 @@ fn curve_boundary_crossings(
             }
             in_run = false;
         }
-    }
-
-    // If the curve is still inside at the end (closed curve wrapping),
-    // check if the first point was also inside (loop-around).
-    if in_run && !inside.is_empty() && inside[0] && crossings.len() >= 2 {
-        // The run wraps around — merge with the first crossing.
-        // The last entry and first entry form a continuous arc.
-        // Remove the last entry and first entry, replace with the
-        // proper wrap-around endpoints.
-        // Actually, for a closed curve that's entirely inside, we get
-        // just entry at index 0 — no chord needed (face is fully inside).
-        // For partial overlap, we already have the crossings.
     }
 
     crossings
