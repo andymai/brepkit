@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0](https://github.com/andymai/brepkit/compare/v0.3.1...v0.4.0) (2026-03-04)
+
+
+### Features
+
+* **heal,validate:** P2.4 healing & validation hardening ([#44](https://github.com/andymai/brepkit/issues/44)) ([72a9dbd](https://github.com/andymai/brepkit/commit/72a9dbd1078fe3b205fc234edf8c3299e543248b))
+* implement Phase 1 roadmap items (P1.1, P1.3, P1.4, P1.6) ([#40](https://github.com/andymai/brepkit/issues/40)) ([4d14169](https://github.com/andymai/brepkit/commit/4d14169a05db7e70d886d0d05ea8e3195906d0a5))
+* **wasm:** feature-gate IO for core-only bundle under 400KB ([#46](https://github.com/andymai/brepkit/issues/46)) ([b3d72eb](https://github.com/andymai/brepkit/commit/b3d72ebda3fb0ab7cd47e45fbefa394b57f6f76e))
+
 ## [0.3.1](https://github.com/andymai/brepkit/compare/v0.3.0...v0.3.1) (2026-03-03)
 
 
