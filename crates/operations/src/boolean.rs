@@ -33,6 +33,27 @@ pub enum BooleanOp {
     Intersect,
 }
 
+/// Default tessellation deflection for non-planar faces in boolean operations.
+const DEFAULT_BOOLEAN_DEFLECTION: f64 = 0.1;
+
+/// Options for boolean operations.
+#[derive(Debug, Clone, Copy)]
+pub struct BooleanOptions {
+    /// Tessellation deflection for non-planar faces.
+    ///
+    /// Lower values produce more triangles (more accurate but slower).
+    /// Default: 0.1.
+    pub deflection: f64,
+}
+
+impl Default for BooleanOptions {
+    fn default() -> Self {
+        Self {
+            deflection: DEFAULT_BOOLEAN_DEFLECTION,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Internal data structures
 // ---------------------------------------------------------------------------
@@ -101,26 +122,62 @@ pub fn boolean(
     a: SolidId,
     b: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
+    boolean_with_options(topo, op, a, b, BooleanOptions::default())
+}
+
+/// Perform a boolean operation with custom options.
+///
+/// See [`boolean`] for details. The `opts` parameter allows configuring
+/// tessellation quality for non-planar faces.
+///
+/// # Errors
+///
+/// Returns an error if either solid is invalid or the operation produces
+/// an empty or non-manifold result.
+#[allow(clippy::too_many_lines)]
+pub fn boolean_with_options(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+    opts: BooleanOptions,
+) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
 
+    log::debug!(
+        "boolean {op:?}: solids ({}, {}), deflection={}",
+        a.index(),
+        b.index(),
+        opts.deflection
+    );
+
     // ── Try analytic fast path ──────────────────────────────────────────
-    if is_all_analytic(topo, a)? && is_all_analytic(topo, b)? {
-        if let Ok(solid) = analytic_boolean(topo, op, a, b, tol) {
+    let both_analytic = is_all_analytic(topo, a)? && is_all_analytic(topo, b)?;
+    if both_analytic {
+        if let Ok(solid) = analytic_boolean(topo, op, a, b, tol, opts.deflection) {
+            validate_boolean_result(topo, solid)?;
+            log::info!(
+                "boolean {op:?}: analytic path succeeded → solid {}",
+                solid.index()
+            );
             return Ok(solid);
         }
-        // Fall through to tessellated path on error.
+        log::info!("boolean {op:?}: analytic path failed, falling back to tessellated");
+    } else {
+        log::info!("boolean {op:?}: using tessellated path (non-analytic faces)");
     }
 
     // ── Phase 0: Guard + Precompute ──────────────────────────────────────
 
-    let faces_a = collect_face_data(topo, a)?;
-    let faces_b = collect_face_data(topo, b)?;
+    let faces_a = collect_face_data(topo, a, opts.deflection)?;
+    let faces_b = collect_face_data(topo, b, opts.deflection)?;
 
     let aabb_a = solid_aabb(&faces_a, tol)?;
     let aabb_b = solid_aabb(&faces_b, tol)?;
 
     // Disjoint AABB shortcut.
     if !aabb_a.intersects(aabb_b) {
+        log::debug!("boolean {op:?}: disjoint AABBs, shortcut");
         return handle_disjoint(topo, op, &faces_a, &faces_b);
     }
 
@@ -213,7 +270,17 @@ pub fn boolean(
 
     // ── Phase 6: Assembly ────────────────────────────────────────────────
 
-    assemble_solid(topo, &selected, tol)
+    let result = assemble_solid(topo, &selected, tol)?;
+
+    // ── Phase 7: Degenerate result check ──────────────────────────────
+    validate_boolean_result(topo, result)?;
+
+    log::info!(
+        "boolean {op:?}: tessellated path succeeded → solid {} ({} faces)",
+        result.index(),
+        selected.len()
+    );
+    Ok(result)
 }
 
 /// Determine whether a fragment should be kept and whether to flip its normal.
@@ -239,7 +306,9 @@ const fn select_fragment(source: Source, class: FaceClass, op: BooleanOp) -> Opt
         // Coplanar same — keep only from A to avoid duplicates.
         (Source::A, FaceClass::CoplanarSame, BooleanOp::Fuse | BooleanOp::Intersect) => Some(false),
         (_, FaceClass::CoplanarSame, _) => None,
-        // Coplanar opposite
+        // Coplanar opposite — for Cut, A's face facing opposite B should be kept
+        // (it forms the "skin" at the cut boundary). In all other cases, discard.
+        (Source::A, FaceClass::CoplanarOpposite, BooleanOp::Cut) => Some(false),
         (_, FaceClass::CoplanarOpposite, _) => None,
     }
 }
@@ -260,6 +329,7 @@ type FaceData = Vec<(FaceId, Vec<Point3>, Vec3, f64)>;
 fn collect_face_data(
     topo: &Topology,
     solid_id: SolidId,
+    deflection: f64,
 ) -> Result<FaceData, crate::OperationsError> {
     let solid = topo.solid(solid_id)?;
     let shell = topo.shell(solid.outer_shell())?;
@@ -272,7 +342,7 @@ fn collect_face_data(
             result.push((fid, verts, *normal, *d));
         } else {
             // Tessellate non-planar face into triangles and treat each as planar.
-            let mesh = crate::tessellate::tessellate(topo, fid, 1.0)?;
+            let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
             for tri in mesh.indices.chunks_exact(3) {
                 let i0 = tri[0] as usize;
                 let i1 = tri[1] as usize;
@@ -840,10 +910,14 @@ fn classify_fragment(frag: &FaceFragment, opposite: &FaceData, tol: Tolerance) -
         let dist = dot_normal_point(n_opp, centroid) - d_opp;
         if dist.abs() < tol.linear && point_in_face_3d(centroid, verts, &n_opp) {
             let dot = frag.normal.dot(n_opp);
-            return if dot > 0.0 {
+            return if dot > tol.angular {
                 FaceClass::CoplanarSame
-            } else {
+            } else if dot < -tol.angular {
                 FaceClass::CoplanarOpposite
+            } else {
+                // Normals are nearly perpendicular — treat as non-coplanar.
+                // Fall through to ray-cast classification.
+                continue;
             };
         }
     }
@@ -1076,6 +1150,34 @@ pub(crate) fn assemble_solid_mixed(
 }
 
 // ---------------------------------------------------------------------------
+// Degenerate result detection
+// ---------------------------------------------------------------------------
+
+/// Minimum face count for a valid solid (tetrahedron = 4 faces).
+const MIN_SOLID_FACES: usize = 4;
+
+/// Validate that a boolean result is not degenerate.
+///
+/// Checks for:
+/// - Too few faces (< 4, which can't form a closed solid)
+/// - Open shell (boundary edges)
+fn validate_boolean_result(topo: &Topology, solid: SolidId) -> Result<(), crate::OperationsError> {
+    let s = topo.solid(solid)?;
+    let shell = topo.shell(s.outer_shell())?;
+    let face_count = shell.faces().len();
+
+    if face_count < MIN_SOLID_FACES {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!(
+                "boolean result has only {face_count} faces (minimum {MIN_SOLID_FACES} required for a closed solid)"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Evolution-tracking wrapper
 // ---------------------------------------------------------------------------
 
@@ -1256,6 +1358,7 @@ fn analytic_boolean(
     a: SolidId,
     b: SolidId,
     tol: Tolerance,
+    deflection: f64,
 ) -> Result<SolidId, crate::OperationsError> {
     use brepkit_math::analytic_intersection::{
         AnalyticSurface, ExactIntersectionCurve, exact_plane_analytic, intersect_analytic_analytic,
@@ -1279,7 +1382,7 @@ fn analytic_boolean(
             FaceSurface::Plane { normal, d } => (*normal, *d),
             _ => {
                 // For non-planar faces, compute a representative normal from tessellation.
-                let mesh = crate::tessellate::tessellate(topo, fid, 1.0)?;
+                let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
                 let avg_normal = if mesh.normals.is_empty() {
                     Vec3::new(0.0, 0.0, 1.0)
                 } else {
@@ -1310,7 +1413,7 @@ fn analytic_boolean(
         let (normal, d) = match &surface {
             FaceSurface::Plane { normal, d } => (*normal, *d),
             _ => {
-                let mesh = crate::tessellate::tessellate(topo, fid, 1.0)?;
+                let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
                 let avg_normal = if mesh.normals.is_empty() {
                     Vec3::new(0.0, 0.0, 1.0)
                 } else {
@@ -1710,8 +1813,8 @@ fn analytic_boolean(
     // ── Classification ───────────────────────────────────────────────────
 
     // Build FaceData for classification (tessellated faces of opposite solid).
-    let face_data_a = collect_face_data(topo, a)?;
-    let face_data_b = collect_face_data(topo, b)?;
+    let face_data_a = collect_face_data(topo, a, deflection)?;
+    let face_data_b = collect_face_data(topo, b, deflection)?;
 
     let classes: Vec<FaceClass> = fragments
         .iter()
@@ -2046,7 +2149,7 @@ mod tests {
         let mut topo = Topology::new();
         let cyl = crate::primitives::make_cylinder(&mut topo, 0.5, 1.0).unwrap();
 
-        let result = collect_face_data(&topo, cyl);
+        let result = collect_face_data(&topo, cyl, DEFAULT_BOOLEAN_DEFLECTION);
         assert!(
             result.is_ok(),
             "collect_face_data should handle NURBS: {:?}",

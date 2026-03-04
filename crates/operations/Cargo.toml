@@ -12,6 +12,7 @@ brepkit-math.workspace = true
 brepkit-topology.workspace = true
 thiserror.workspace = true
 rayon.workspace = true
+log.workspace = true
 
 [dev-dependencies]
 brepkit-topology = { workspace = true, features = ["test-utils"] }
