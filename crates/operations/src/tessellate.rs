@@ -1675,6 +1675,50 @@ pub fn boundary_edge_count(mesh: &TriangleMesh) -> usize {
         .count()
 }
 
+/// Edge polyline data for wireframe visualization.
+///
+/// Contains flattened position data for all edges in a solid, plus offsets
+/// to identify where each edge's polyline starts.
+#[derive(Debug, Clone, Default)]
+pub struct EdgeLines {
+    /// Vertex positions for all edge polylines (concatenated).
+    pub positions: Vec<Point3>,
+    /// Start index (in vertex count, not float count) of each edge polyline.
+    /// The i-th edge's points are `positions[offsets[i]..offsets[i+1]]`
+    /// (or `..positions.len()` for the last edge).
+    pub offsets: Vec<usize>,
+}
+
+/// Sample all edges of a solid into polylines for wireframe rendering.
+///
+/// Each edge is sampled according to the given `deflection` tolerance.
+/// Returns [`EdgeLines`] containing the polyline data for all unique edges.
+///
+/// # Errors
+///
+/// Returns an error if topology traversal or edge sampling fails.
+pub fn sample_solid_edges(
+    topo: &Topology,
+    solid: SolidId,
+    deflection: f64,
+) -> Result<EdgeLines, crate::OperationsError> {
+    let edges = brepkit_topology::explorer::solid_edges(topo, solid)?;
+
+    let mut result = EdgeLines {
+        positions: Vec::new(),
+        offsets: Vec::with_capacity(edges.len()),
+    };
+
+    for edge_id in &edges {
+        result.offsets.push(result.positions.len());
+        let edge = topo.edge(*edge_id)?;
+        let points = sample_edge(topo, edge, deflection)?;
+        result.positions.extend(points);
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -2198,5 +2242,42 @@ mod tests {
             let area = 0.5 * a.cross(b).length();
             assert!(area > 0.0, "triangle {t} has zero area");
         }
+    }
+
+    #[test]
+    fn sample_solid_edges_box() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 2.0, 3.0).unwrap();
+
+        let edge_lines = sample_solid_edges(&topo, solid, 0.1).unwrap();
+
+        // A box has 12 edges, each with 2 points (line segments).
+        assert_eq!(edge_lines.offsets.len(), 12, "box should have 12 edges");
+        assert_eq!(
+            edge_lines.positions.len(),
+            24,
+            "12 line edges × 2 points = 24 points"
+        );
+    }
+
+    #[test]
+    fn sample_solid_edges_cylinder() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 3.0).unwrap();
+
+        let edge_lines = sample_solid_edges(&topo, solid, 0.1).unwrap();
+
+        // Cylinder has at least 3 edges (2 circles + 1 seam line, or similar).
+        assert!(
+            edge_lines.offsets.len() >= 3,
+            "cylinder should have at least 3 edges, got {}",
+            edge_lines.offsets.len()
+        );
+        // Circle edges should have many sample points.
+        assert!(
+            edge_lines.positions.len() > 10,
+            "cylinder edges should have many sample points, got {}",
+            edge_lines.positions.len()
+        );
     }
 }

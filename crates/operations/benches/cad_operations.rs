@@ -15,12 +15,15 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::Vec3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::chamfer::chamfer;
 use brepkit_operations::copy::copy_solid;
 use brepkit_operations::fillet::fillet;
 use brepkit_operations::measure;
+use brepkit_operations::pattern;
 use brepkit_operations::primitives;
+use brepkit_operations::shell_op;
 use brepkit_operations::tessellate;
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
@@ -382,6 +385,131 @@ fn bench_intersect_box_sphere_single(c: &mut Criterion) {
 }
 
 // ===========================================================================
+// Shell — hollow solid creation
+// ===========================================================================
+
+/// `shell(box(20,20,20), thickness=1, open_top)` — gridfinity bin base shape.
+fn bench_shell_box(c: &mut Criterion) {
+    c.bench_function("shell(box, t=1, open_top)", |b| {
+        b.iter(|| {
+            let mut topo = Topology::new();
+            let solid = primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+            // Find top face (highest z normal).
+            let shell_id = topo.solid(solid).unwrap().outer_shell();
+            let faces: Vec<_> = topo.shell(shell_id).unwrap().faces().to_vec();
+            let top_face = *faces.last().unwrap(); // convention: top face is last
+            black_box(shell_op::shell(&mut topo, solid, 1.0, &[top_face]).unwrap());
+        });
+    });
+}
+
+// ===========================================================================
+// Patterns — linear, circular, grid
+// ===========================================================================
+
+/// `linear_pattern(box, +X, spacing=5, count=10)`.
+fn bench_linear_pattern_10(c: &mut Criterion) {
+    c.bench_function("linearPattern(box, 10)", |b| {
+        b.iter(|| {
+            let mut topo = Topology::new();
+            let solid = primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+            black_box(
+                pattern::linear_pattern(&mut topo, solid, Vec3::new(1.0, 0.0, 0.0), 5.0, 10)
+                    .unwrap(),
+            );
+        });
+    });
+}
+
+/// `grid_pattern(box, 3×3, spacing=5)` — baseplate-like grid.
+fn bench_grid_pattern_3x3(c: &mut Criterion) {
+    c.bench_function("gridPattern(box, 3x3)", |b| {
+        b.iter(|| {
+            let mut topo = Topology::new();
+            let solid = primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+            black_box(
+                pattern::grid_pattern(
+                    &mut topo,
+                    solid,
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0, 0.0),
+                    5.0,
+                    5.0,
+                    3,
+                    3,
+                )
+                .unwrap(),
+            );
+        });
+    });
+}
+
+// ===========================================================================
+// Gridfinity — end-to-end bin/baseplate generation
+// ===========================================================================
+
+/// Simplified 1×1 gridfinity bin: box + shell + chamfer base edges.
+fn bench_gridfinity_1x1_bin(c: &mut Criterion) {
+    c.bench_function("gridfinity 1x1 bin (box+shell+chamfer)", |b| {
+        b.iter(|| {
+            let mut topo = Topology::new();
+            // 42mm × 42mm × 21mm (1u height)
+            let solid = primitives::make_box(&mut topo, 42.0, 42.0, 21.0).unwrap();
+
+            // Open-top shell (thickness 1.6mm wall)
+            let shell_id = topo.solid(solid).unwrap().outer_shell();
+            let faces: Vec<_> = topo.shell(shell_id).unwrap().faces().to_vec();
+            let top_face = *faces.last().unwrap();
+            let shelled = shell_op::shell(&mut topo, solid, 1.6, &[top_face]).unwrap();
+
+            // Chamfer bottom edges (substitute for fillet until vertex blending lands)
+            let bottom_edges = collect_edges(&topo, shelled);
+            if let Ok(result) = chamfer(&mut topo, shelled, &bottom_edges[..4], 0.8) {
+                black_box(result);
+            } else {
+                black_box(shelled);
+            }
+        });
+    });
+}
+
+/// 3×3 baseplate: box + grid pattern + cylinder holes (boolean cuts).
+fn bench_gridfinity_3x3_baseplate(c: &mut Criterion) {
+    c.bench_function("gridfinity 3x3 baseplate (grid+holes)", |b| {
+        b.iter(|| {
+            let mut topo = Topology::new();
+            // Single baseplate unit: 42mm × 42mm × 4.65mm
+            let unit = primitives::make_box(&mut topo, 42.0, 42.0, 4.65).unwrap();
+
+            // 3×3 grid (spacing = 42mm)
+            let grid = pattern::grid_pattern(
+                &mut topo,
+                unit,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                42.0,
+                42.0,
+                3,
+                3,
+            )
+            .unwrap();
+
+            // Punch 4 magnet holes in the first unit
+            let first_solid = topo.compound(grid).unwrap().solids()[0];
+            let mut result = first_solid;
+            let hole_offsets: &[(f64, f64)] = &[(4.0, 4.0), (38.0, 4.0), (4.0, 38.0), (38.0, 38.0)];
+            for &(x, y) in hole_offsets {
+                let cyl = primitives::make_cylinder(&mut topo, 3.0, 5.0).unwrap();
+                let mat = Mat4::translation(x, y, -0.5);
+                transform_solid(&mut topo, cyl, &mat).unwrap();
+                result = boolean(&mut topo, BooleanOp::Cut, result, cyl).unwrap();
+            }
+            black_box(result);
+        });
+    });
+}
+
+// ===========================================================================
 // Criterion groups — organized to mirror JS benchmark sections
 // ===========================================================================
 
@@ -411,11 +539,25 @@ criterion_group!(
     bench_bounding_box_x100,
 );
 
+criterion_group!(shell_bench, bench_shell_box,);
+
+criterion_group!(
+    pattern_bench,
+    bench_linear_pattern_10,
+    bench_grid_pattern_3x3,
+);
+
 criterion_group!(
     endtoend_bench,
     bench_box_chamfer_all,
     bench_box_fillet_all,
     bench_multi_boolean,
+);
+
+criterion_group!(
+    gridfinity_bench,
+    bench_gridfinity_1x1_bin,
+    bench_gridfinity_3x3_baseplate,
 );
 
 criterion_group!(
@@ -430,6 +572,9 @@ criterion_main!(
     transforms_bench,
     meshing_bench,
     measurement_bench,
+    shell_bench,
+    pattern_bench,
     endtoend_bench,
+    gridfinity_bench,
     optimization_bench,
 );

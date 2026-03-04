@@ -30,31 +30,47 @@ pub fn write_stl(
     deflection: f64,
     format: StlFormat,
 ) -> Result<Vec<u8>, crate::IoError> {
-    // Tessellate all solids into a single merged mesh.
+    // Tessellate all solids using shared-edge tessellation for watertight output,
+    // then merge into a single mesh.
     let mut merged = TriangleMesh::default();
 
     for &solid_id in solids {
-        let solid = topo.solid(solid_id)?;
-        let shell = topo.shell(solid.outer_shell())?;
+        let mesh = tessellate::tessellate_solid(topo, solid_id, deflection)?;
 
-        for &face_id in shell.faces() {
-            let mesh = tessellate::tessellate(topo, face_id, deflection)?;
+        #[allow(clippy::cast_possible_truncation)]
+        let offset = merged.positions.len() as u32;
 
-            #[allow(clippy::cast_possible_truncation)]
-            let offset = merged.positions.len() as u32;
-
-            merged.positions.extend_from_slice(&mesh.positions);
-            merged.normals.extend_from_slice(&mesh.normals);
-            merged
-                .indices
-                .extend(mesh.indices.iter().map(|i| i + offset));
-        }
+        merged.positions.extend_from_slice(&mesh.positions);
+        merged.normals.extend_from_slice(&mesh.normals);
+        merged
+            .indices
+            .extend(mesh.indices.iter().map(|i| i + offset));
     }
 
     match format {
         StlFormat::Binary => Ok(write_binary_stl(&merged)),
         StlFormat::Ascii => write_ascii_stl(&merged),
     }
+}
+
+/// Resolve the vertices and face normal for the `t`-th triangle in a mesh.
+fn triangle_data(mesh: &TriangleMesh, t: usize) -> (Vec3, Point3, Point3, Point3) {
+    let i0 = mesh.indices[t * 3] as usize;
+    let i1 = mesh.indices[t * 3 + 1] as usize;
+    let i2 = mesh.indices[t * 3 + 2] as usize;
+
+    let v0 = mesh.positions[i0];
+    let v1 = mesh.positions[i1];
+    let v2 = mesh.positions[i2];
+
+    let edge1 = v1 - v0;
+    let edge2 = v2 - v0;
+    let normal = edge1
+        .cross(edge2)
+        .normalize()
+        .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+
+    (normal, v0, v1, v2)
 }
 
 /// Write a binary STL file.
@@ -82,41 +98,17 @@ fn write_binary_stl(mesh: &TriangleMesh) -> Vec<u8> {
     buf.extend_from_slice(&(tri_count as u32).to_le_bytes());
 
     for t in 0..tri_count {
-        let i0 = mesh.indices[t * 3] as usize;
-        let i1 = mesh.indices[t * 3 + 1] as usize;
-        let i2 = mesh.indices[t * 3 + 2] as usize;
+        let (normal, v0, v1, v2) = triangle_data(mesh, t);
 
-        let v0 = mesh.positions[i0];
-        let v1 = mesh.positions[i1];
-        let v2 = mesh.positions[i2];
-
-        // Compute face normal from triangle edges.
-        let edge1 = v1 - v0;
-        let edge2 = v2 - v0;
-        let normal = edge1
-            .cross(edge2)
-            .normalize()
-            .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
-
-        // Normal (3 × f32 LE).
         write_f32_le(&mut buf, normal.x());
         write_f32_le(&mut buf, normal.y());
         write_f32_le(&mut buf, normal.z());
 
-        // Vertex 0.
-        write_f32_le(&mut buf, v0.x());
-        write_f32_le(&mut buf, v0.y());
-        write_f32_le(&mut buf, v0.z());
-
-        // Vertex 1.
-        write_f32_le(&mut buf, v1.x());
-        write_f32_le(&mut buf, v1.y());
-        write_f32_le(&mut buf, v1.z());
-
-        // Vertex 2.
-        write_f32_le(&mut buf, v2.x());
-        write_f32_le(&mut buf, v2.y());
-        write_f32_le(&mut buf, v2.z());
+        for v in [v0, v1, v2] {
+            write_f32_le(&mut buf, v.x());
+            write_f32_le(&mut buf, v.y());
+            write_f32_le(&mut buf, v.z());
+        }
 
         // Attribute byte count (always 0).
         buf.extend_from_slice(&[0u8, 0u8]);
@@ -133,20 +125,7 @@ fn write_ascii_stl(mesh: &TriangleMesh) -> Result<Vec<u8>, crate::IoError> {
     writeln!(buf, "solid brepkit").map_err(crate::IoError::Io)?;
 
     for t in 0..tri_count {
-        let i0 = mesh.indices[t * 3] as usize;
-        let i1 = mesh.indices[t * 3 + 1] as usize;
-        let i2 = mesh.indices[t * 3 + 2] as usize;
-
-        let v0 = mesh.positions[i0];
-        let v1 = mesh.positions[i1];
-        let v2 = mesh.positions[i2];
-
-        let edge1 = v1 - v0;
-        let edge2 = v2 - v0;
-        let normal = edge1
-            .cross(edge2)
-            .normalize()
-            .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+        let (normal, v0, v1, v2) = triangle_data(mesh, t);
 
         writeln!(
             buf,
@@ -248,5 +227,36 @@ mod tests {
         let tri_count = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]) as usize;
 
         assert_eq!(tri_count, 24, "two boxes should have 24 triangles");
+    }
+
+    #[test]
+    fn write_stl_watertight_box() {
+        let mut topo = Topology::new();
+        let solid = brepkit_operations::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+
+        // Tessellate the same way write_stl does internally (via tessellate_solid).
+        let mesh = brepkit_operations::tessellate::tessellate_solid(&topo, solid, 0.1).unwrap();
+
+        // A watertight mesh has 0 boundary edges: every half-edge (a,b) has a twin (b,a).
+        let boundary = brepkit_operations::tessellate::boundary_edge_count(&mesh);
+        assert_eq!(
+            boundary, 0,
+            "STL mesh should have 0 boundary edges (watertight)"
+        );
+    }
+
+    #[test]
+    fn write_stl_shared_vertices_box() {
+        // With tessellate_solid, a box should have exactly 8 unique vertices
+        // (one per corner), not 24 (4 per face × 6 faces) as with per-face tessellation.
+        let mut topo = Topology::new();
+        let solid = brepkit_operations::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let mesh = brepkit_operations::tessellate::tessellate_solid(&topo, solid, 0.1).unwrap();
+        assert_eq!(
+            mesh.positions.len(),
+            8,
+            "box should share vertices at corners"
+        );
     }
 }

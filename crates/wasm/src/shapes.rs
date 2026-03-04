@@ -1,6 +1,6 @@
 //! JS-facing shape types via `wasm-bindgen`.
 
-use brepkit_operations::tessellate::TriangleMesh;
+use brepkit_operations::tessellate::{EdgeLines, TriangleMesh};
 use wasm_bindgen::prelude::*;
 
 /// A 3D point exposed to JavaScript.
@@ -144,6 +144,87 @@ impl JsMesh {
         }
 
         buf
+    }
+}
+
+/// Edge polylines for wireframe rendering, exposed to JavaScript.
+///
+/// Positions are flattened to `[x, y, z, x, y, z, ...]` format.
+/// Offsets are float-array indices into `positions` (already multiplied by 3).
+#[wasm_bindgen]
+pub struct JsEdgeLines {
+    positions: Vec<f64>,
+    offsets: Vec<u32>,
+}
+
+#[wasm_bindgen]
+impl JsEdgeLines {
+    /// Flattened vertex positions as `[x, y, z, ...]`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn positions(&self) -> Vec<f64> {
+        self.positions.clone()
+    }
+
+    /// Start index into the flattened positions array for each edge polyline.
+    ///
+    /// The i-th edge's positions span from `positions[offsets[i]]` to
+    /// `positions[offsets[i+1]]` (or to the end for the last edge).
+    /// Each offset is already a float-array index (vertex index × 3).
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn offsets(&self) -> Vec<u32> {
+        self.offsets.clone()
+    }
+
+    /// Number of edges.
+    #[wasm_bindgen(getter, js_name = "edgeCount")]
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn edge_count(&self) -> u32 {
+        self.offsets.len() as u32
+    }
+
+    /// Return all data in a single packed buffer for efficient FFI transfer.
+    ///
+    /// Layout: `[pos_bytes: u32 LE, off_bytes: u32 LE,
+    ///          positions: f64 LE..., offsets: u32 LE...]`
+    #[wasm_bindgen(js_name = "packedBuffer")]
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn packed_buffer(&self) -> Vec<u8> {
+        let pos_bytes = self.positions.len() * 8;
+        let off_bytes = self.offsets.len() * 4;
+        let header_size = 8; // 2 × u32
+
+        let mut buf = Vec::with_capacity(header_size + pos_bytes + off_bytes);
+
+        buf.extend_from_slice(&(pos_bytes as u32).to_le_bytes());
+        buf.extend_from_slice(&(off_bytes as u32).to_le_bytes());
+
+        for &v in &self.positions {
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        for &o in &self.offsets {
+            buf.extend_from_slice(&o.to_le_bytes());
+        }
+
+        buf
+    }
+}
+
+impl From<EdgeLines> for JsEdgeLines {
+    #[allow(clippy::cast_possible_truncation)]
+    fn from(edge_lines: EdgeLines) -> Self {
+        let positions = edge_lines
+            .positions
+            .iter()
+            .flat_map(|p| [p.x(), p.y(), p.z()])
+            .collect();
+
+        let offsets = edge_lines.offsets.iter().map(|&o| (o * 3) as u32).collect();
+
+        Self { positions, offsets }
     }
 }
 
