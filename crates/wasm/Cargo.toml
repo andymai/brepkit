@@ -10,11 +10,15 @@ description = "WebAssembly bindings for brepkit"
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["io"]
+io = ["dep:brepkit-io"]
+
 [dependencies]
 brepkit-math.workspace = true
 brepkit-topology.workspace = true
 brepkit-operations.workspace = true
-brepkit-io.workspace = true
+brepkit-io = { workspace = true, optional = true }
 wasm-bindgen.workspace = true
 thiserror.workspace = true
 serde_json.workspace = true

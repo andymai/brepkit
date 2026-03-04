@@ -878,6 +878,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the solid handle is invalid or export fails.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "export3mf")]
     pub fn export_3mf(&self, solid: u32, deflection: f64) -> Result<Vec<u8>, JsError> {
         validate_positive(deflection, "deflection")?;
@@ -893,6 +894,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the solid handle is invalid or export fails.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "exportStl")]
     pub fn export_stl(&self, solid: u32, deflection: f64) -> Result<Vec<u8>, JsError> {
         validate_positive(deflection, "deflection")?;
@@ -911,6 +913,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the solid handle is invalid or tessellation fails.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "exportObj")]
     pub fn export_obj(&self, solid: u32, deflection: f64) -> Result<Vec<u8>, JsError> {
         validate_positive(deflection, "deflection")?;
@@ -924,6 +927,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the solid handle is invalid or tessellation fails.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "exportGlb")]
     pub fn export_glb(&self, solid: u32, deflection: f64) -> Result<Vec<u8>, JsError> {
         validate_positive(deflection, "deflection")?;
@@ -937,6 +941,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the solid handle is invalid or tessellation fails.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "exportPly")]
     pub fn export_ply(&self, solid: u32, deflection: f64) -> Result<Vec<u8>, JsError> {
         validate_positive(deflection, "deflection")?;
@@ -957,6 +962,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the file is malformed or mesh import fails.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "importObj")]
     pub fn import_obj(&mut self, data: &[u8]) -> Result<u32, JsError> {
         let text = std::str::from_utf8(data).map_err(|e| WasmError::InvalidInput {
@@ -973,6 +979,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the file is malformed or mesh import fails.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "importGlb")]
     pub fn import_glb(&mut self, data: &[u8]) -> Result<u32, JsError> {
         let mesh = brepkit_io::gltf::read_glb(data)?;
@@ -989,6 +996,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the STL data is malformed or empty.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "importStl")]
     pub fn import_stl(&mut self, data: &[u8]) -> Result<u32, JsError> {
         let mesh = brepkit_io::stl::reader::read_stl(data)?;
@@ -1003,6 +1011,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the 3MF data is malformed.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "import3mf")]
     pub fn import_3mf(&mut self, data: &[u8]) -> Result<Vec<u32>, JsError> {
         let meshes = brepkit_io::threemf::reader::read_threemf(data)?;
@@ -1021,6 +1030,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the solid handle is invalid or export fails.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "exportStep")]
     pub fn export_step(&self, solid: u32) -> Result<Vec<u8>, JsError> {
         let solid_id = self.resolve_solid(solid)?;
@@ -1035,6 +1045,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the STEP data is malformed.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "importStep")]
     pub fn import_step(&mut self, data: &[u8]) -> Result<Vec<u32>, JsError> {
         let text = std::str::from_utf8(data)
@@ -1077,6 +1088,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the solid handle is invalid or export fails.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "exportIges")]
     pub fn export_iges(&self, solid: u32) -> Result<Vec<u8>, JsError> {
         let solid_id = self.resolve_solid(solid)?;
@@ -1089,6 +1101,7 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the IGES data is malformed.
+    #[cfg(feature = "io")]
     #[wasm_bindgen(js_name = "importIges")]
     pub fn import_iges(&mut self, data: &[u8]) -> Result<Vec<u32>, JsError> {
         let text = std::str::from_utf8(data)
