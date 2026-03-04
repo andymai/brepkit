@@ -8,6 +8,15 @@
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         "crates/wasm/Cargo.toml"
+      ],
+      "exclude-paths": [
+        ".github",
+        "book",
+        "scripts",
+        "benches",
+        "bench-results",
+        "examples",
+        "bindings"
       ]
     }
   }
