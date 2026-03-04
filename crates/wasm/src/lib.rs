@@ -8,6 +8,7 @@
 //! state and exposes shape creation, operations, and tessellation to JS.
 
 pub mod error;
+#[cfg(feature = "io")]
 pub mod io;
 pub mod kernel;
 pub mod operations;
