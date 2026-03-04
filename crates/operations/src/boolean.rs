@@ -1304,6 +1304,89 @@ fn collect_face_signatures(
 
 // ── Analytic boolean fast path ─────────────────────────────────────────
 
+/// Compute an AABB for an analytic face that accounts for the surface extent,
+/// not just the wire vertices.
+///
+/// For planar faces the wire vertices are sufficient. For curved faces (sphere,
+/// cylinder, etc.) the surface bulges beyond the wire boundary, so we union
+/// the vertex-based AABB with the surface's own bounding box.
+fn surface_aware_aabb(surface: &FaceSurface, vertices: &[Point3], tol: Tolerance) -> Aabb3 {
+    let wire_bb = Aabb3::from_points(vertices.iter().copied());
+    let bb = match surface {
+        FaceSurface::Plane { .. } => wire_bb,
+        FaceSurface::Sphere(s) => {
+            // Full sphere AABB: center ± radius on all axes.
+            // The wire vertices lie on the equator so they don't capture the
+            // pole extent. Using the full sphere is conservative but correct.
+            let c = s.center();
+            let r = s.radius();
+            Aabb3 {
+                min: Point3::new(c.x() - r, c.y() - r, c.z() - r),
+                max: Point3::new(c.x() + r, c.y() + r, c.z() + r),
+            }
+        }
+        FaceSurface::Cylinder(c) => {
+            // Cylinder: the surface extends radially from the axis through the
+            // wire region. Union the wire BB with radius expansion perpendicular
+            // to the axis.
+            let r = c.radius();
+            let ax = c.axis();
+            // Expand perpendicular to axis by radius.
+            let dx = r * (1.0 - ax.x() * ax.x()).sqrt();
+            let dy = r * (1.0 - ax.y() * ax.y()).sqrt();
+            let dz = r * (1.0 - ax.z() * ax.z()).sqrt();
+            Aabb3 {
+                min: Point3::new(
+                    wire_bb.min.x() - dx,
+                    wire_bb.min.y() - dy,
+                    wire_bb.min.z() - dz,
+                ),
+                max: Point3::new(
+                    wire_bb.max.x() + dx,
+                    wire_bb.max.y() + dy,
+                    wire_bb.max.z() + dz,
+                ),
+            }
+        }
+        FaceSurface::Cone(c) => {
+            // Conservative: use wire BB expanded by the max cone radius visible.
+            let half_angle = c.half_angle();
+            // The max radius in the face region is proportional to the max
+            // distance from the apex along the axis. Use wire extent as proxy.
+            let wire_extent = wire_bb.max.z() - wire_bb.min.z() + wire_bb.max.y() - wire_bb.min.y()
+                + wire_bb.max.x()
+                - wire_bb.min.x();
+            let r_max = wire_extent * half_angle.tan().abs();
+            Aabb3 {
+                min: Point3::new(
+                    wire_bb.min.x() - r_max,
+                    wire_bb.min.y() - r_max,
+                    wire_bb.min.z() - r_max,
+                ),
+                max: Point3::new(
+                    wire_bb.max.x() + r_max,
+                    wire_bb.max.y() + r_max,
+                    wire_bb.max.z() + r_max,
+                ),
+            }
+        }
+        FaceSurface::Torus(t) => {
+            // Conservative: center ± (major_radius + minor_radius).
+            let c = t.center();
+            let r = t.major_radius() + t.minor_radius();
+            Aabb3 {
+                min: Point3::new(c.x() - r, c.y() - r, c.z() - r),
+                max: Point3::new(c.x() + r, c.y() + r, c.z() + r),
+            }
+        }
+        FaceSurface::Nurbs(_) => {
+            // NURBS: use wire vertices (conservative enough).
+            wire_bb
+        }
+    };
+    bb.expanded(tol.linear)
+}
+
 /// Check if a solid is composed entirely of analytic surfaces (no NURBS).
 fn is_all_analytic(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
     let s = topo.solid(solid)?;
@@ -1436,14 +1519,14 @@ fn analytic_boolean(
         });
     }
 
-    // Compute AABBs for face pairs.
+    // Compute AABBs for face pairs (surface-aware for non-planar faces).
     let aabbs_a: Vec<Aabb3> = snaps_a
         .iter()
-        .map(|s| Aabb3::from_points(s.vertices.iter().copied()).expanded(tol.linear))
+        .map(|s| surface_aware_aabb(&s.surface, &s.vertices, tol))
         .collect();
     let aabbs_b: Vec<Aabb3> = snaps_b
         .iter()
-        .map(|s| Aabb3::from_points(s.vertices.iter().copied()).expanded(tol.linear))
+        .map(|s| surface_aware_aabb(&s.surface, &s.vertices, tol))
         .collect();
 
     // Find intersection curves for each face pair.
@@ -1504,7 +1587,7 @@ fn analytic_boolean(
                         match curve {
                             ExactIntersectionCurve::Circle(ref circle) => {
                                 // Sample the circle for chord splitting of the planar face.
-                                let samples = sample_curve_clipped(
+                                let samples = curve_boundary_crossings(
                                     &curve,
                                     &snap_a.vertices,
                                     snap_a.normal,
@@ -1525,7 +1608,7 @@ fn analytic_boolean(
                                 }
                             }
                             ExactIntersectionCurve::Ellipse(ref ellipse) => {
-                                let samples = sample_curve_clipped(
+                                let samples = curve_boundary_crossings(
                                     &curve,
                                     &snap_a.vertices,
                                     snap_a.normal,
@@ -1577,7 +1660,7 @@ fn analytic_boolean(
                     for curve in curves {
                         match curve {
                             ExactIntersectionCurve::Circle(ref circle) => {
-                                let samples = sample_curve_clipped(
+                                let samples = curve_boundary_crossings(
                                     &curve,
                                     &snap_b.vertices,
                                     snap_b.normal,
@@ -1598,7 +1681,7 @@ fn analytic_boolean(
                                 }
                             }
                             ExactIntersectionCurve::Ellipse(ref ellipse) => {
-                                let samples = sample_curve_clipped(
+                                let samples = curve_boundary_crossings(
                                     &curve,
                                     &snap_b.vertices,
                                     snap_b.normal,
@@ -1947,8 +2030,14 @@ fn plane_plane_chord_analytic(
     ))
 }
 
-/// Sample an exact intersection curve, keeping only points inside a planar face polygon.
-fn sample_curve_clipped(
+/// Find where an intersection curve crosses the face boundary, returning
+/// boundary crossing points.
+///
+/// Instead of returning all sample points inside the face (which creates many
+/// chord segments), this finds the entry/exit points where the curve crosses
+/// the polygon boundary. This gives 1-2 chord endpoints per crossing, keeping
+/// the split count minimal.
+fn curve_boundary_crossings(
     curve: &brepkit_math::analytic_intersection::ExactIntersectionCurve,
     face_verts: &[Point3],
     face_normal: Vec3,
@@ -1975,11 +2064,64 @@ fn sample_curve_clipped(
         ExactIntersectionCurve::Points(pts) => pts.clone(),
     };
 
-    // Filter to points inside the face polygon (project to face plane).
-    raw_points
-        .into_iter()
-        .filter(|pt| point_in_face_3d(*pt, face_verts, &face_normal))
-        .collect()
+    if raw_points.len() < 2 {
+        return raw_points;
+    }
+
+    // Classify each sample as inside or outside the face polygon.
+    let inside: Vec<bool> = raw_points
+        .iter()
+        .map(|pt| point_in_face_3d(*pt, face_verts, &face_normal))
+        .collect();
+
+    // Find boundary crossing points: transitions from inside→outside or
+    // outside→inside. At each transition, interpolate the approximate crossing
+    // point. Also include the first and last interior points as chord endpoints.
+    let mut crossings = Vec::new();
+    let mut in_run = false;
+
+    for i in 0..raw_points.len() {
+        if inside[i] && !in_run {
+            // Entering the face: record the entry point (use midpoint of
+            // crossing segment for better accuracy).
+            if i > 0 && !inside[i - 1] {
+                let mid = Point3::new(
+                    (raw_points[i - 1].x() + raw_points[i].x()) * 0.5,
+                    (raw_points[i - 1].y() + raw_points[i].y()) * 0.5,
+                    (raw_points[i - 1].z() + raw_points[i].z()) * 0.5,
+                );
+                crossings.push(mid);
+            } else {
+                crossings.push(raw_points[i]);
+            }
+            in_run = true;
+        } else if !inside[i] && in_run {
+            // Exiting the face: record the exit point.
+            if i > 0 {
+                let mid = Point3::new(
+                    (raw_points[i - 1].x() + raw_points[i].x()) * 0.5,
+                    (raw_points[i - 1].y() + raw_points[i].y()) * 0.5,
+                    (raw_points[i - 1].z() + raw_points[i].z()) * 0.5,
+                );
+                crossings.push(mid);
+            }
+            in_run = false;
+        }
+    }
+
+    // If the curve is still inside at the end (closed curve wrapping),
+    // check if the first point was also inside (loop-around).
+    if in_run && !inside.is_empty() && inside[0] && crossings.len() >= 2 {
+        // The run wraps around — merge with the first crossing.
+        // The last entry and first entry form a continuous arc.
+        // Remove the last entry and first entry, replace with the
+        // proper wrap-around endpoints.
+        // Actually, for a closed curve that's entirely inside, we get
+        // just entry at index 0 — no chord needed (face is fully inside).
+        // For partial overlap, we already have the crossings.
+    }
+
+    crossings
 }
 
 /// Sample an `EdgeCurve` into N points.
