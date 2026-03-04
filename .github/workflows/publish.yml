@@ -13,8 +13,8 @@ jobs:
     name: Release Please
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs['crates/wasm--release_created'] }}
-      tag_name: ${{ steps.release.outputs['crates/wasm--tag_name'] }}
+      release_created: ${{ steps.release.outputs['release_created'] }}
+      tag_name: ${{ steps.release.outputs['tag_name'] }}
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
@@ -48,7 +48,11 @@ jobs:
         run: cargo install wasm-pack --locked
 
       - name: Build WASM package
-        run: wasm-pack build crates/wasm --target nodejs --release
+        run: wasm-pack build crates/wasm --target bundler --release
+
+      - name: Set package name
+        working-directory: crates/wasm/pkg
+        run: npm pkg set name="@andymai/brepkit-wasm"
 
       - name: Verify version
         working-directory: crates/wasm/pkg
@@ -59,10 +63,12 @@ jobs:
             echo "::error::Version mismatch: package.json=$PKG_VERSION tag=$TAG_VERSION"
             exit 1
           fi
-          echo "Publishing brepkit-wasm@$PKG_VERSION"
+          echo "Publishing @andymai/brepkit-wasm@$PKG_VERSION"
         env:
           TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
 
       - name: Publish to npm
         working-directory: crates/wasm/pkg
         run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
