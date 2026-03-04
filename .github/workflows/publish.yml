@@ -70,5 +70,3 @@ jobs:
       - name: Publish to npm
         working-directory: crates/wasm/pkg
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
