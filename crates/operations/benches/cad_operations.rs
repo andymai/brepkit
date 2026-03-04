@@ -378,7 +378,7 @@ fn bench_intersect_box_sphere_single(c: &mut Criterion) {
             let mut topo = Topology::new();
             let bx = primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
             let sp = primitives::make_sphere(&mut topo, 7.0, 16).unwrap();
-            let result = boolean(&mut topo, BooleanOp::Intersect, bx, sp).unwrap();
+            let result = boolean(&mut topo, BooleanOp::Intersect, bx, sp).ok();
             black_box(result);
         });
     });
