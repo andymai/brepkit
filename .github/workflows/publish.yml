@@ -83,7 +83,7 @@ jobs:
 
       - name: Set package name
         working-directory: crates/wasm/pkg
-        run: npm pkg set name="@andymai/brepkit-wasm"
+        run: npm pkg set name="brepkit-wasm"
 
       - name: Verify version
         working-directory: crates/wasm/pkg
@@ -94,7 +94,7 @@ jobs:
             echo "::error::Version mismatch: package.json=$PKG_VERSION tag=$TAG_VERSION"
             exit 1
           fi
-          echo "Publishing @andymai/brepkit-wasm@$PKG_VERSION"
+          echo "Publishing brepkit-wasm@$PKG_VERSION"
         env:
           TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
 
