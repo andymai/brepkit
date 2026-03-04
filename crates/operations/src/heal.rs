@@ -12,6 +12,61 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::VertexId;
 
+/// Combined result of [`repair_solid`]: validation before, healing, validation after.
+#[derive(Debug, Clone)]
+pub struct RepairReport {
+    /// Validation issues found before healing.
+    pub before: crate::validate::ValidationReport,
+    /// Healing actions performed.
+    pub healing: HealingReport,
+    /// Validation issues remaining after healing.
+    pub after: crate::validate::ValidationReport,
+}
+
+impl RepairReport {
+    /// Whether the solid is valid after repair (no remaining errors).
+    #[must_use]
+    pub fn is_valid_after(&self) -> bool {
+        self.after.is_valid()
+    }
+
+    /// Total number of repairs performed.
+    #[must_use]
+    pub fn total_repairs(&self) -> usize {
+        self.healing.vertices_merged
+            + self.healing.degenerate_edges_removed
+            + self.healing.orientations_fixed
+            + self.healing.wire_gaps_closed
+            + self.healing.small_faces_removed
+            + self.healing.duplicate_faces_removed
+    }
+}
+
+/// Validate, heal, and re-validate a solid in one pass.
+///
+/// This is the top-level convenience function for repairing imported models.
+/// It chains: `validate_solid` → `heal_solid` → `validate_solid`, returning
+/// all three reports so the caller can see what was found, what was fixed,
+/// and what remains.
+///
+/// # Errors
+/// Returns an error if topology lookups fail.
+pub fn repair_solid(
+    topo: &mut Topology,
+    solid: SolidId,
+    tolerance: f64,
+) -> Result<RepairReport, crate::OperationsError> {
+    let before = crate::validate::validate_solid(topo, solid)?;
+    let healing = heal_solid(topo, solid, tolerance)?;
+    let after = crate::validate::validate_solid(topo, solid)?;
+
+    Ok(RepairReport {
+        before,
+        healing,
+        after,
+    })
+}
+
 /// Summary of repairs performed by [`heal_solid`].
 #[derive(Debug, Default, Clone)]
 pub struct HealingReport {
