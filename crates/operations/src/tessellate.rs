@@ -107,12 +107,14 @@ pub fn tessellate(
         }
         FaceSurface::Sphere(sphere) => {
             let u_range = (0.0, std::f64::consts::TAU);
-            let v_range = (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
+            let v_range = compute_sphere_v_range(topo, face_data, sphere);
             let nu =
                 segments_for_chord_deviation(sphere.radius(), u_range.1 - u_range.0, deflection);
             // Latitude resolution: same chord deviation criterion.
             let nv =
                 segments_for_chord_deviation(sphere.radius(), v_range.1 - v_range.0, deflection);
+            // Determine pole handling from the v-range.
+            let kind = sphere_analytic_kind(v_range);
             let sphere = sphere.clone();
             Ok(tessellate_analytic(
                 |u, v| sphere.evaluate(u, v),
@@ -121,7 +123,7 @@ pub fn tessellate(
                 v_range,
                 nu,
                 nv,
-                AnalyticKind::SpherePole,
+                kind,
             ))
         }
         FaceSurface::Torus(torus) => {
@@ -161,6 +163,8 @@ enum AnalyticKind {
     SpherePole,
     /// Triangle fan at v_min (cone apex at v = 0).
     ConeApex,
+    /// Triangle fan at v_max only (sphere north pole for a hemisphere face).
+    VMaxPole,
 }
 
 /// Compute the angular resolution needed for a circular arc to achieve
@@ -238,7 +242,7 @@ fn tessellate_analytic(
     };
 
     let v_min_degenerate = matches!(kind, AnalyticKind::SpherePole | AnalyticKind::ConeApex);
-    let v_max_degenerate = matches!(kind, AnalyticKind::SpherePole);
+    let v_max_degenerate = matches!(kind, AnalyticKind::SpherePole | AnalyticKind::VMaxPole);
 
     for iv in 0..nv {
         let is_bottom = iv == 0;
@@ -635,6 +639,86 @@ fn compute_axial_range(
         (v_min, v_max)
     } else {
         (-1.0, 1.0) // fallback
+    }
+}
+
+/// Compute the latitude (v) range for a sphere face from its wire boundary.
+///
+/// For a full sphere (degenerate wire with < 3 vertices), returns the full
+/// range `[-π/2, π/2]`. For hemisphere faces with a proper equatorial wire,
+/// computes the boundary latitude from the wire vertices, then uses the
+/// wire winding direction to determine which hemisphere the face covers.
+fn compute_sphere_v_range(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+) -> (f64, f64) {
+    use std::f64::consts::FRAC_PI_2;
+
+    // Collect wire vertex positions and their v-parameters.
+    let mut wire_pts = Vec::new();
+    if let Ok(wire) = topo.wire(face_data.outer_wire()) {
+        for oe in wire.edges() {
+            if let Ok(edge) = topo.edge(oe.edge()) {
+                if let Ok(vertex) = topo.vertex(edge.start()) {
+                    wire_pts.push(vertex.point());
+                }
+            }
+        }
+    }
+
+    if wire_pts.len() < 3 {
+        // Degenerate wire — full sphere (legacy single-face sphere).
+        return (-FRAC_PI_2, FRAC_PI_2);
+    }
+
+    // Average v-parameter of boundary vertices.
+    let avg_v: f64 = wire_pts
+        .iter()
+        .map(|pt| sphere.project_point(*pt).1)
+        .sum::<f64>()
+        / wire_pts.len() as f64;
+
+    // Determine which side of the boundary the face interior is on
+    // by computing the signed area of the wire projected onto the
+    // sphere's equatorial plane (XY plane for default z-axis).
+    let signed_area = projected_signed_area(&wire_pts);
+    if signed_area > 0.0 {
+        // CCW from +Z → north hemisphere (toward +v pole).
+        (avg_v, FRAC_PI_2)
+    } else {
+        // CW from +Z → south hemisphere (toward -v pole).
+        (-FRAC_PI_2, avg_v)
+    }
+}
+
+/// Signed area of a polygon projected onto the XY plane.
+/// Positive = CCW winding from +Z, negative = CW.
+fn projected_signed_area(pts: &[Point3]) -> f64 {
+    let n = pts.len();
+    let mut area = 0.0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        area += pts[i].x() * pts[j].y() - pts[j].x() * pts[i].y();
+    }
+    area * 0.5
+}
+
+/// Determine the [`AnalyticKind`] for sphere tessellation based on v-range.
+///
+/// If the range covers both poles, use `SpherePole` (fan at both extremes).
+/// If it covers only one pole, use `ConeApex` (fan at one extreme).
+/// If it covers neither pole (a band), use `General`.
+fn sphere_analytic_kind(v_range: (f64, f64)) -> AnalyticKind {
+    use std::f64::consts::FRAC_PI_2;
+    let eps = 1e-6;
+    let has_south_pole = (v_range.0 + FRAC_PI_2).abs() < eps;
+    let has_north_pole = (v_range.1 - FRAC_PI_2).abs() < eps;
+    match (has_south_pole, has_north_pole) {
+        (true, true) => AnalyticKind::SpherePole,
+        (true, false) => AnalyticKind::ConeApex,
+        (false, true) => AnalyticKind::VMaxPole,
+        (false, false) => AnalyticKind::General,
     }
 }
 

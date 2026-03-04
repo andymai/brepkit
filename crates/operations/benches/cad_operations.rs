@@ -371,15 +371,15 @@ fn bench_translate_fused_x1000(c: &mut Criterion) {
     group.finish();
 }
 
-/// Phase 3: intersect(box, sphere) — single iteration to see analytic fast path
+/// Phase 3: intersect(box, sphere) — single iteration (was `.ok()` before sphere
+/// topology fix; now succeeds with proper two-hemisphere representation).
 fn bench_intersect_box_sphere_single(c: &mut Criterion) {
     c.bench_function("intersect(box,sphere) single", |b| {
         b.iter(|| {
             let mut topo = Topology::new();
             let bx = primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
             let sp = primitives::make_sphere(&mut topo, 7.0, 16).unwrap();
-            let result = boolean(&mut topo, BooleanOp::Intersect, bx, sp).ok();
-            black_box(result);
+            black_box(boolean(&mut topo, BooleanOp::Intersect, bx, sp).unwrap());
         });
     });
 }

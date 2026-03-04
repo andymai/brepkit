@@ -2510,4 +2510,43 @@ mod tests {
             .any(|&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)));
         assert!(has_nurbs, "mixed assembly should contain a NURBS face");
     }
+
+    #[test]
+    fn intersect_box_sphere_succeeds() {
+        let mut topo = Topology::new();
+        let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let sp = crate::primitives::make_sphere(&mut topo, 7.0, 16).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Intersect, bx, sp);
+        assert!(
+            result.is_ok(),
+            "intersect(box, sphere) should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn fuse_box_sphere_succeeds() {
+        let mut topo = Topology::new();
+        let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let sp = crate::primitives::make_sphere(&mut topo, 7.0, 16).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Fuse, bx, sp);
+        assert!(
+            result.is_ok(),
+            "fuse(box, sphere) should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn cut_box_by_sphere_succeeds() {
+        let mut topo = Topology::new();
+        let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let sp = crate::primitives::make_sphere(&mut topo, 7.0, 16).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Cut, bx, sp);
+        assert!(
+            result.is_ok(),
+            "cut(box, sphere) should succeed: {:?}",
+            result.err()
+        );
+    }
 }
