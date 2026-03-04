@@ -111,7 +111,7 @@ JS_JSON="$RESULTS_DIR/js-bench.json"
 (
     cd "$BREPJS_DIR"
     BENCH_OUTPUT_JSON=1 npx vitest run benchmarks/kernel-comparison.bench.test.ts \
-        --reporter=verbose 2>&1
+        --config vitest.bench.config.ts --reporter=verbose 2>&1
 ) | tee "$JS_LOG"
 
 # Extract JSON from sentinel markers
