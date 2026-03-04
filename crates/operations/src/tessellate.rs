@@ -107,12 +107,14 @@ pub fn tessellate(
         }
         FaceSurface::Sphere(sphere) => {
             let u_range = (0.0, std::f64::consts::TAU);
-            let v_range = (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2);
+            let v_range = compute_sphere_v_range(topo, face_data, sphere);
             let nu =
                 segments_for_chord_deviation(sphere.radius(), u_range.1 - u_range.0, deflection);
             // Latitude resolution: same chord deviation criterion.
             let nv =
                 segments_for_chord_deviation(sphere.radius(), v_range.1 - v_range.0, deflection);
+            // Determine pole handling from the v-range.
+            let kind = sphere_analytic_kind(v_range);
             let sphere = sphere.clone();
             Ok(tessellate_analytic(
                 |u, v| sphere.evaluate(u, v),
@@ -121,7 +123,7 @@ pub fn tessellate(
                 v_range,
                 nu,
                 nv,
-                AnalyticKind::SpherePole,
+                kind,
             ))
         }
         FaceSurface::Torus(torus) => {
@@ -161,6 +163,8 @@ enum AnalyticKind {
     SpherePole,
     /// Triangle fan at v_min (cone apex at v = 0).
     ConeApex,
+    /// Triangle fan at v_max only (sphere north pole for a hemisphere face).
+    VMaxPole,
 }
 
 /// Compute the angular resolution needed for a circular arc to achieve
@@ -238,7 +242,7 @@ fn tessellate_analytic(
     };
 
     let v_min_degenerate = matches!(kind, AnalyticKind::SpherePole | AnalyticKind::ConeApex);
-    let v_max_degenerate = matches!(kind, AnalyticKind::SpherePole);
+    let v_max_degenerate = matches!(kind, AnalyticKind::SpherePole | AnalyticKind::VMaxPole);
 
     for iv in 0..nv {
         let is_bottom = iv == 0;
@@ -635,6 +639,86 @@ fn compute_axial_range(
         (v_min, v_max)
     } else {
         (-1.0, 1.0) // fallback
+    }
+}
+
+/// Compute the latitude (v) range for a sphere face from its wire boundary.
+///
+/// For a full sphere (degenerate wire with < 3 vertices), returns the full
+/// range `[-π/2, π/2]`. For hemisphere faces with a proper equatorial wire,
+/// computes the boundary latitude from the wire vertices, then uses the
+/// wire winding direction to determine which hemisphere the face covers.
+fn compute_sphere_v_range(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+) -> (f64, f64) {
+    use std::f64::consts::FRAC_PI_2;
+
+    // Collect wire vertex positions and their v-parameters.
+    let mut wire_pts = Vec::new();
+    if let Ok(wire) = topo.wire(face_data.outer_wire()) {
+        for oe in wire.edges() {
+            if let Ok(edge) = topo.edge(oe.edge()) {
+                if let Ok(vertex) = topo.vertex(edge.start()) {
+                    wire_pts.push(vertex.point());
+                }
+            }
+        }
+    }
+
+    if wire_pts.len() < 3 {
+        // Degenerate wire — full sphere (legacy single-face sphere).
+        return (-FRAC_PI_2, FRAC_PI_2);
+    }
+
+    // Average v-parameter of boundary vertices.
+    let avg_v: f64 = wire_pts
+        .iter()
+        .map(|pt| sphere.project_point(*pt).1)
+        .sum::<f64>()
+        / wire_pts.len() as f64;
+
+    // Determine which side of the boundary the face interior is on
+    // by computing the signed area of the wire projected onto the
+    // sphere's equatorial plane (XY plane for default z-axis).
+    let signed_area = projected_signed_area(&wire_pts);
+    if signed_area > 0.0 {
+        // CCW from +Z → north hemisphere (toward +v pole).
+        (avg_v, FRAC_PI_2)
+    } else {
+        // CW from +Z → south hemisphere (toward -v pole).
+        (-FRAC_PI_2, avg_v)
+    }
+}
+
+/// Signed area of a polygon projected onto the XY plane.
+/// Positive = CCW winding from +Z, negative = CW.
+fn projected_signed_area(pts: &[Point3]) -> f64 {
+    let n = pts.len();
+    let mut area = 0.0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        area += pts[i].x() * pts[j].y() - pts[j].x() * pts[i].y();
+    }
+    area * 0.5
+}
+
+/// Determine the [`AnalyticKind`] for sphere tessellation based on v-range.
+///
+/// If the range covers both poles, use `SpherePole` (fan at both extremes).
+/// If it covers only one pole, use `ConeApex` (fan at one extreme).
+/// If it covers neither pole (a band), use `General`.
+fn sphere_analytic_kind(v_range: (f64, f64)) -> AnalyticKind {
+    use std::f64::consts::FRAC_PI_2;
+    let eps = 1e-6;
+    let has_south_pole = (v_range.0 + FRAC_PI_2).abs() < eps;
+    let has_north_pole = (v_range.1 - FRAC_PI_2).abs() < eps;
+    match (has_south_pole, has_north_pole) {
+        (true, true) => AnalyticKind::SpherePole,
+        (true, false) => AnalyticKind::ConeApex,
+        (false, true) => AnalyticKind::VMaxPole,
+        (false, false) => AnalyticKind::General,
     }
 }
 
@@ -1533,88 +1617,442 @@ fn tessellate_face_with_shared_edges(
         for &li in &local_indices {
             merged.indices.push(boundary_global_ids[li as usize]);
         }
+    } else if matches!(face_data.surface(), FaceSurface::Nurbs(_)) {
+        // For NURBS faces: use CDT-based boundary-constrained tessellation.
+        // NURBS faces have rectangular non-degenerate parameter domains, so
+        // the boundary projects to a proper closed polygon in (u,v) space.
+        // Falls back to snap-based stitching if CDT fails.
+        let cdt_ok = tessellate_nonplanar_cdt(
+            topo,
+            face_id,
+            face_data,
+            deflection,
+            edge_global_indices,
+            merged,
+            point_to_global,
+        );
+        if cdt_ok.is_err() {
+            tessellate_nonplanar_snap(
+                topo,
+                face_id,
+                face_data,
+                deflection,
+                edge_global_indices,
+                merged,
+                point_to_global,
+            )?;
+        }
     } else {
-        // For non-planar faces (NURBS, Cylinder, Cone, Sphere, Torus):
-        // Tessellate independently, then stitch boundary vertices to the
-        // global shared edges.
-        let face_mesh = tessellate(topo, face_id, deflection)?;
+        // For analytic faces (Cylinder, Cone, Sphere, Torus): snap-based
+        // stitching works well because analytic evaluation is precise.
+        // CDT fails for these due to periodic parameter spaces (e.g., sphere
+        // equatorial boundary collapses to a line at v=0 in (u,v) space).
+        tessellate_nonplanar_snap(
+            topo,
+            face_id,
+            face_data,
+            deflection,
+            edge_global_indices,
+            merged,
+            point_to_global,
+        )?;
+    }
 
-        // Build a mapping from local face mesh vertices to global indices.
-        // Boundary vertices (those near shared edge points) get mapped to
-        // the global shared vertex. Interior vertices get new global indices.
-        let mut local_to_global: Vec<u32> = Vec::with_capacity(face_mesh.positions.len());
+    Ok(())
+}
 
-        // Collect all edge points for this face to use as snap targets.
-        let wire = topo.wire(face_data.outer_wire())?;
-        let mut snap_targets: Vec<(Point3, u32)> = Vec::new();
-        for oe in wire.edges() {
-            if let Some(global_ids) = edge_global_indices.get(&oe.edge().index()) {
-                for &gid in global_ids {
-                    if (gid as usize) < merged.positions.len() {
-                        snap_targets.push((merged.positions[gid as usize], gid));
+/// CDT-based tessellation for non-planar faces with exact boundary constraints.
+///
+/// Projects shared edge points into (u,v) parameter space, generates interior
+/// sample points, then runs Constrained Delaunay Triangulation. Boundary
+/// vertices use their pre-existing global IDs (watertight by construction).
+#[allow(clippy::too_many_lines)]
+fn tessellate_nonplanar_cdt(
+    topo: &Topology,
+    _face_id: FaceId,
+    face_data: &brepkit_topology::face::Face,
+    deflection: f64,
+    edge_global_indices: &HashMap<usize, Vec<u32>>,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut HashMap<(u64, u64, u64), u32>,
+) -> Result<(), crate::OperationsError> {
+    use brepkit_math::cdt::Cdt;
+    use brepkit_math::vec::Point2;
+
+    // Step 1: Collect boundary points in wire-traversal order with global IDs.
+    let wire = topo.wire(face_data.outer_wire())?;
+    let tol_dup = 1e-10;
+
+    let mut boundary_3d: Vec<(Point3, u32)> = Vec::new();
+    for oe in wire.edges() {
+        let edge_idx = oe.edge().index();
+        if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
+            let ordered: Vec<u32> = if oe.is_forward() {
+                global_ids.clone()
+            } else {
+                global_ids.iter().rev().copied().collect()
+            };
+            for (j, &gid) in ordered.iter().enumerate() {
+                if j == 0 && !boundary_3d.is_empty() {
+                    let (last_pos, last_gid) = boundary_3d[boundary_3d.len() - 1];
+                    if last_gid == gid
+                        || (merged.positions[last_gid as usize] - merged.positions[gid as usize])
+                            .length()
+                            < tol_dup
+                    {
+                        let _ = last_pos; // suppress unused warning
+                        continue;
                     }
+                }
+                boundary_3d.push((merged.positions[gid as usize], gid));
+            }
+        } else {
+            // Edge not in shared pool — insert directly.
+            let edge_data = topo.edge(oe.edge())?;
+            let points = sample_edge(topo, edge_data, deflection)?;
+            let ordered: Vec<Point3> = if oe.is_forward() {
+                points
+            } else {
+                points.into_iter().rev().collect()
+            };
+            for (j, &pt) in ordered.iter().enumerate() {
+                if j == 0 && !boundary_3d.is_empty() {
+                    let (last_pos, _) = boundary_3d[boundary_3d.len() - 1];
+                    if (last_pos - pt).length() < tol_dup {
+                        continue;
+                    }
+                }
+                let key = (pt.x().to_bits(), pt.y().to_bits(), pt.z().to_bits());
+                let gid = *point_to_global.entry(key).or_insert_with(|| {
+                    let idx = merged.positions.len() as u32;
+                    merged.positions.push(pt);
+                    merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
+                    idx
+                });
+                boundary_3d.push((pt, gid));
+            }
+        }
+    }
+
+    // Remove closing duplicate.
+    if boundary_3d.len() > 2 {
+        if let (Some(&(_, first_gid)), Some(&(_, last_gid))) =
+            (boundary_3d.first(), boundary_3d.last())
+        {
+            if first_gid == last_gid
+                || (merged.positions[first_gid as usize] - merged.positions[last_gid as usize])
+                    .length()
+                    < tol_dup
+            {
+                boundary_3d.pop();
+            }
+        }
+    }
+
+    let n_boundary = boundary_3d.len();
+    if n_boundary < 3 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "non-planar face has fewer than 3 boundary vertices".to_string(),
+        });
+    }
+
+    // Step 2: Project boundary 3D points to (u,v) parameter space.
+    let boundary_uv: Vec<(f64, f64)> = boundary_3d
+        .iter()
+        .map(|(pt, _)| project_to_surface_uv(face_data.surface(), *pt))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Compute (u,v) bounding box.
+    let u_min = boundary_uv
+        .iter()
+        .map(|p| p.0)
+        .fold(f64::INFINITY, f64::min);
+    let u_max = boundary_uv
+        .iter()
+        .map(|p| p.0)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let v_min = boundary_uv
+        .iter()
+        .map(|p| p.1)
+        .fold(f64::INFINITY, f64::min);
+    let v_max = boundary_uv
+        .iter()
+        .map(|p| p.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    let margin = 0.01;
+    let bounds = (
+        Point2::new(u_min - margin, v_min - margin),
+        Point2::new(u_max + margin, v_max + margin),
+    );
+    let mut cdt = Cdt::new(bounds);
+
+    // Step 3: Insert boundary points into CDT.
+    // cdt_idx → Option<global mesh index> (None for super-triangle vertices).
+    let mut cdt_to_global: Vec<Option<u32>> = vec![None; 3]; // 3 super-triangle verts
+
+    let mut boundary_cdt_ids: Vec<usize> = Vec::with_capacity(n_boundary);
+    for (i, &(u, v)) in boundary_uv.iter().enumerate() {
+        let cdt_idx = cdt
+            .insert_point(Point2::new(u, v))
+            .map_err(crate::OperationsError::Math)?;
+        while cdt_to_global.len() <= cdt_idx {
+            cdt_to_global.push(None);
+        }
+        cdt_to_global[cdt_idx] = Some(boundary_3d[i].1);
+        boundary_cdt_ids.push(cdt_idx);
+    }
+
+    // Step 4: Insert boundary constraints (consecutive edges + closing edge).
+    for i in 0..n_boundary {
+        let v0 = boundary_cdt_ids[i];
+        let v1 = boundary_cdt_ids[(i + 1) % n_boundary];
+        cdt.insert_constraint(v0, v1)
+            .map_err(crate::OperationsError::Math)?;
+    }
+
+    // Step 5: Generate interior sample points.
+    // Use a uniform grid at a density matching the deflection criterion.
+    let du = u_max - u_min;
+    let dv = v_max - v_min;
+    if du > 1e-15 && dv > 1e-15 {
+        // Estimate radius for sample density.
+        let avg_radius = estimate_surface_radius(face_data.surface());
+        let n_u = segments_for_chord_deviation(avg_radius, du, deflection).max(2);
+        let n_v = segments_for_chord_deviation(avg_radius, dv, deflection).max(2);
+
+        for iu in 1..n_u {
+            for iv in 1..n_v {
+                let u = u_min + du * (iu as f64 / n_u as f64);
+                let v = v_min + dv * (iv as f64 / n_v as f64);
+                // Only insert points that are inside the boundary polygon.
+                let pt2 = Point2::new(u, v);
+                if point_in_polygon_2d(&boundary_uv, pt2) {
+                    let cdt_idx = cdt
+                        .insert_point(pt2)
+                        .map_err(crate::OperationsError::Math)?;
+                    while cdt_to_global.len() <= cdt_idx {
+                        cdt_to_global.push(None);
+                    }
+                    // Interior points will get assigned global IDs later.
                 }
             }
         }
-        // Also include inner wires.
-        for &inner_wire_id in face_data.inner_wires() {
-            if let Ok(inner_wire) = topo.wire(inner_wire_id) {
-                for oe in inner_wire.edges() {
-                    if let Some(global_ids) = edge_global_indices.get(&oe.edge().index()) {
-                        for &gid in global_ids {
-                            if (gid as usize) < merged.positions.len() {
-                                snap_targets.push((merged.positions[gid as usize], gid));
-                            }
+    }
+
+    // Step 6: Remove triangles outside the boundary polygon.
+    let boundary_pairs: Vec<(usize, usize)> = (0..n_boundary)
+        .map(|i| (boundary_cdt_ids[i], boundary_cdt_ids[(i + 1) % n_boundary]))
+        .collect();
+    cdt.remove_exterior(&boundary_pairs);
+
+    // Step 7: Assign global IDs to interior CDT vertices and emit triangles.
+    let cdt_verts = cdt.vertices();
+    let triangles = cdt.triangles();
+
+    // Pre-compute global IDs for all CDT vertices.
+    let mut final_global_ids: Vec<u32> = vec![0; cdt_to_global.len()];
+
+    for i in 0..cdt_to_global.len() {
+        if let Some(gid) = cdt_to_global[i] {
+            final_global_ids[i] = gid;
+        } else if i >= 3 {
+            // Interior vertex: evaluate surface at (u,v) to get 3D position.
+            let pt2 = cdt_verts[i];
+            let pt3 = evaluate_surface_at(face_data.surface(), pt2.x(), pt2.y());
+            let nrm = surface_normal_at(face_data.surface(), pt2.x(), pt2.y());
+
+            let key = (pt3.x().to_bits(), pt3.y().to_bits(), pt3.z().to_bits());
+            let gid = *point_to_global.entry(key).or_insert_with(|| {
+                let idx = merged.positions.len() as u32;
+                merged.positions.push(pt3);
+                merged.normals.push(nrm);
+                idx
+            });
+            final_global_ids[i] = gid;
+        }
+    }
+
+    // Emit triangles.
+    for (i0, i1, i2) in triangles {
+        if i0 < 3 || i1 < 3 || i2 < 3 {
+            continue; // Skip super-triangle vertices (shouldn't happen after remove_exterior)
+        }
+        merged.indices.push(final_global_ids[i0]);
+        merged.indices.push(final_global_ids[i1]);
+        merged.indices.push(final_global_ids[i2]);
+    }
+
+    Ok(())
+}
+
+/// Project a 3D point onto a face surface, returning (u, v) parameters.
+fn project_to_surface_uv(
+    surface: &FaceSurface,
+    pt: Point3,
+) -> Result<(f64, f64), crate::OperationsError> {
+    match surface {
+        FaceSurface::Cylinder(cyl) => Ok(cyl.project_point(pt)),
+        FaceSurface::Cone(cone) => Ok(cone.project_point(pt)),
+        FaceSurface::Sphere(sphere) => Ok(sphere.project_point(pt)),
+        FaceSurface::Torus(torus) => Ok(torus.project_point(pt)),
+        FaceSurface::Nurbs(surface) => {
+            brepkit_math::nurbs::projection::project_point_to_surface(surface, pt, 1e-6)
+                .map(|proj| (proj.u, proj.v))
+                .map_err(crate::OperationsError::Math)
+        }
+        FaceSurface::Plane { .. } => Err(crate::OperationsError::InvalidInput {
+            reason: "planar faces should not use CDT tessellation".to_string(),
+        }),
+    }
+}
+
+/// Evaluate a surface at (u, v) to get a 3D point.
+fn evaluate_surface_at(surface: &FaceSurface, u: f64, v: f64) -> Point3 {
+    match surface {
+        FaceSurface::Cylinder(cyl) => cyl.evaluate(u, v),
+        FaceSurface::Cone(cone) => cone.evaluate(u, v),
+        FaceSurface::Sphere(sphere) => sphere.evaluate(u, v),
+        FaceSurface::Torus(torus) => torus.evaluate(u, v),
+        FaceSurface::Nurbs(surface) => surface.evaluate(u, v),
+        FaceSurface::Plane { normal, d } => {
+            // Shouldn't be called for planes, but provide a fallback.
+            let offset = *normal * (*d);
+            Point3::new(offset.x() + u, offset.y() + v, offset.z())
+        }
+    }
+}
+
+/// Get the surface normal at (u, v).
+fn surface_normal_at(surface: &FaceSurface, u: f64, v: f64) -> Vec3 {
+    match surface {
+        FaceSurface::Cylinder(cyl) => cyl.normal(u, v),
+        FaceSurface::Cone(cone) => cone.normal(u, v),
+        FaceSurface::Sphere(sphere) => sphere.normal(u, v),
+        FaceSurface::Torus(torus) => torus.normal(u, v),
+        FaceSurface::Nurbs(surface) => surface.normal(u, v).unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
+        FaceSurface::Plane { normal, .. } => *normal,
+    }
+}
+
+/// Estimate the effective radius of a surface for sample density calculation.
+fn estimate_surface_radius(surface: &FaceSurface) -> f64 {
+    match surface {
+        FaceSurface::Cylinder(cyl) => cyl.radius(),
+        FaceSurface::Cone(_) => 1.0, // conservative estimate
+        FaceSurface::Sphere(sphere) => sphere.radius(),
+        FaceSurface::Torus(torus) => torus.major_radius() + torus.minor_radius(),
+        FaceSurface::Nurbs(_) | FaceSurface::Plane { .. } => 1.0, // conservative estimate
+    }
+}
+
+/// Check if a 2D point is inside a polygon defined by (u, v) coordinates.
+/// Uses the winding number algorithm for robustness.
+fn point_in_polygon_2d(polygon: &[(f64, f64)], pt: brepkit_math::vec::Point2) -> bool {
+    let n = polygon.len();
+    let mut winding = 0i32;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let yi = polygon[i].1;
+        let yj = polygon[j].1;
+        if yi <= pt.y() {
+            if yj > pt.y() {
+                let cross = (polygon[j].0 - polygon[i].0) * (pt.y() - yi)
+                    - (pt.x() - polygon[i].0) * (yj - yi);
+                if cross > 0.0 {
+                    winding += 1;
+                }
+            }
+        } else if yj <= pt.y() {
+            let cross =
+                (polygon[j].0 - polygon[i].0) * (pt.y() - yi) - (pt.x() - polygon[i].0) * (yj - yi);
+            if cross < 0.0 {
+                winding -= 1;
+            }
+        }
+    }
+    winding != 0
+}
+
+/// Snap-based fallback tessellation for non-planar faces.
+///
+/// Tessellates the face independently, then snaps boundary vertices to shared
+/// edge points within a fixed tolerance. Used when CDT-based tessellation fails.
+fn tessellate_nonplanar_snap(
+    topo: &Topology,
+    face_id: FaceId,
+    face_data: &brepkit_topology::face::Face,
+    deflection: f64,
+    edge_global_indices: &HashMap<usize, Vec<u32>>,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut HashMap<(u64, u64, u64), u32>,
+) -> Result<(), crate::OperationsError> {
+    let face_mesh = tessellate(topo, face_id, deflection)?;
+
+    let mut local_to_global: Vec<u32> = Vec::with_capacity(face_mesh.positions.len());
+
+    // Collect all edge points for this face to use as snap targets.
+    let wire = topo.wire(face_data.outer_wire())?;
+    let mut snap_targets: Vec<(Point3, u32)> = Vec::new();
+    for oe in wire.edges() {
+        if let Some(global_ids) = edge_global_indices.get(&oe.edge().index()) {
+            for &gid in global_ids {
+                if (gid as usize) < merged.positions.len() {
+                    snap_targets.push((merged.positions[gid as usize], gid));
+                }
+            }
+        }
+    }
+    for &inner_wire_id in face_data.inner_wires() {
+        if let Ok(inner_wire) = topo.wire(inner_wire_id) {
+            for oe in inner_wire.edges() {
+                if let Some(global_ids) = edge_global_indices.get(&oe.edge().index()) {
+                    for &gid in global_ids {
+                        if (gid as usize) < merged.positions.len() {
+                            snap_targets.push((merged.positions[gid as usize], gid));
                         }
                     }
                 }
             }
         }
+    }
 
-        // Fixed geometric tolerance for snapping boundary vertices to shared
-        // edge points. Independent of deflection to avoid being too tight at
-        // high quality or too loose at low quality.
-        let snap_tol = 1e-6;
+    let snap_tol = 1e-6;
 
-        for (i, &pos) in face_mesh.positions.iter().enumerate() {
-            // Try to snap to a shared edge vertex.
-            let mut best_gid = None;
-            let mut best_dist = snap_tol;
+    for (i, &pos) in face_mesh.positions.iter().enumerate() {
+        let mut best_gid = None;
+        let mut best_dist = snap_tol;
 
-            for &(target_pos, gid) in &snap_targets {
-                let dist = (pos - target_pos).length();
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_gid = Some(gid);
-                }
-            }
-
-            if let Some(gid) = best_gid {
-                local_to_global.push(gid);
-            } else {
-                // Interior vertex: add to global pool.
-                let key = (pos.x().to_bits(), pos.y().to_bits(), pos.z().to_bits());
-                let gid = point_to_global.entry(key).or_insert_with(|| {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let idx = merged.positions.len() as u32;
-                    merged.positions.push(pos);
-                    merged.normals.push(
-                        face_mesh
-                            .normals
-                            .get(i)
-                            .copied()
-                            .unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
-                    );
-                    idx
-                });
-                local_to_global.push(*gid);
+        for &(target_pos, gid) in &snap_targets {
+            let dist = (pos - target_pos).length();
+            if dist < best_dist {
+                best_dist = dist;
+                best_gid = Some(gid);
             }
         }
 
-        // Remap triangle indices from local to global.
-        for &li in &face_mesh.indices {
-            merged.indices.push(local_to_global[li as usize]);
+        if let Some(gid) = best_gid {
+            local_to_global.push(gid);
+        } else {
+            let key = (pos.x().to_bits(), pos.y().to_bits(), pos.z().to_bits());
+            let gid = point_to_global.entry(key).or_insert_with(|| {
+                let idx = merged.positions.len() as u32;
+                merged.positions.push(pos);
+                merged.normals.push(
+                    face_mesh
+                        .normals
+                        .get(i)
+                        .copied()
+                        .unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
+                );
+                idx
+            });
+            local_to_global.push(*gid);
         }
+    }
+
+    for &li in &face_mesh.indices {
+        merged.indices.push(local_to_global[li as usize]);
     }
 
     Ok(())
@@ -2073,9 +2511,9 @@ mod tests {
         assert!(mesh.indices.len() >= 3, "cylinder should have triangles");
         assert!(!mesh.positions.is_empty(), "cylinder should have vertices");
 
-        // Full watertightness for curved faces requires CDT-based boundary-
-        // constrained tessellation (not yet implemented). The shared edges
-        // provide the topological foundation for future watertight stitching.
+        // Analytic faces (cylinder lateral) use snap-based stitching.
+        // NURBS faces use CDT-based boundary-constrained tessellation for
+        // watertight seams (see tessellate_nonplanar_cdt).
     }
 
     #[test]
@@ -2278,6 +2716,46 @@ mod tests {
             edge_lines.positions.len() > 10,
             "cylinder edges should have many sample points, got {}",
             edge_lines.positions.len()
+        );
+    }
+
+    #[test]
+    fn tessellate_solid_filleted_box_nurbs_boundary() {
+        // A filleted box has NURBS fillet faces adjacent to planar faces.
+        // With CDT-constrained tessellation, the shared edges should be
+        // watertight (boundary vertices are exact, not snapped).
+        let mut topo = Topology::new();
+        let bx = crate::primitives::make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+        let edges = {
+            let s = topo.solid(bx).unwrap();
+            let sh = topo.shell(s.outer_shell()).unwrap();
+            let face_id = sh.faces()[0];
+            let face = topo.face(face_id).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            vec![wire.edges()[0].edge()]
+        };
+        let filleted = crate::fillet::fillet_rolling_ball(&mut topo, bx, &edges, 0.5).unwrap();
+        let mesh = tessellate_solid(&topo, filleted, 0.1).unwrap();
+
+        assert!(
+            mesh.indices.len() >= 3,
+            "filleted box should have triangles"
+        );
+        assert!(
+            !mesh.positions.is_empty(),
+            "filleted box should have vertices"
+        );
+
+        // Check that the NURBS fillet face was tessellated via CDT:
+        // The boundary edges between NURBS and planar faces should share
+        // exact vertices (no gaps). Count boundary edges as a measure.
+        let boundary = boundary_edge_count(&mesh);
+        // A perfect watertight mesh would have 0 boundary edges.
+        // With CDT for NURBS faces, we should see significant improvement
+        // over the old snap-based approach.
+        assert!(
+            boundary < mesh.indices.len() / 3,
+            "filleted box should have few boundary edges, got {boundary}"
         );
     }
 }

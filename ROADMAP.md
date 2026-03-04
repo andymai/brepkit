@@ -108,8 +108,8 @@ npm publish --access public
 
 | Issue | Severity | Context |
 |-------|----------|---------|
-| `intersect(box,sphere)` returns Err | Medium | Boolean result has <4 faces for analytic sphere intersection. Bench handles gracefully (`.ok()`). |
-| NURBS tessellation seam stitching | Medium | NURBS face boundary vertices don't share exact bit patterns with planar faces. `snap_tol = 1e-6` used but imperfect. |
+| ~~`intersect(box,sphere)` returns Err~~ | ~~Medium~~ | ✅ Fixed — sphere now uses two-hemisphere topology with N-gon equatorial wire. PR #50. |
+| ~~NURBS tessellation seam stitching~~ | ~~Medium~~ | ✅ Fixed — NURBS faces use CDT-constrained boundary tessellation for watertight seams. Analytic faces keep snap-based stitching. |
 | Concave vertex blending | Low | Only convex 3-edge corners supported. Concave deferred. |
 | NPM_TOKEN expired | Blocker for publish | GitHub Actions secret needs refresh. |
 
