@@ -361,8 +361,9 @@ pub fn fillet_rolling_ball(
         );
     }
 
-    // Phase 2: Validate target edges.
+    // Phase 2: Validate target edges and build vertex-to-edge adjacency.
     let target_set: HashSet<usize> = edges.iter().map(|e| e.index()).collect();
+    let mut vertex_fillet_edges: HashMap<usize, Vec<EdgeId>> = HashMap::new();
 
     for &edge_id in edges {
         let faces = edge_to_faces.get(&edge_id.index()).ok_or_else(|| {
@@ -379,6 +380,16 @@ pub fn fillet_rolling_ball(
                 ),
             });
         }
+
+        let edge = topo.edge(edge_id)?;
+        vertex_fillet_edges
+            .entry(edge.start().index())
+            .or_default()
+            .push(edge_id);
+        vertex_fillet_edges
+            .entry(edge.end().index())
+            .or_default()
+            .push(edge_id);
     }
 
     // Phase 3: Build modified (trimmed) planar faces.
@@ -437,6 +448,10 @@ pub fn fillet_rolling_ball(
         .collect();
 
     // Phase 5: Build NURBS fillet faces for each target edge.
+    // Also collect contact points per vertex for vertex blend patches.
+    // vertex_contacts maps vertex_index → list of (face_index, contact_point) pairs.
+    let mut vertex_contacts: HashMap<usize, Vec<(usize, Point3)>> = HashMap::new();
+
     for &edge_id in edges {
         let edge = topo.edge(edge_id)?;
         let p_start = topo.vertex(edge.start())?.point();
@@ -558,6 +573,145 @@ pub fn fillet_rolling_ball(
         all_specs.push(FaceSpec::Surface {
             vertices: vec![contact1_start, contact2_start, contact2_end, contact1_end],
             surface: FaceSurface::Nurbs(fillet_surface),
+        });
+
+        // Record contact points at each vertex for vertex blend detection.
+        // Each edge contributes two contact points per endpoint (one on each face).
+        let start_vi = edge.start().index();
+        let end_vi = edge.end().index();
+        vertex_contacts
+            .entry(start_vi)
+            .or_default()
+            .push((f1.index(), contact1_start));
+        vertex_contacts
+            .entry(start_vi)
+            .or_default()
+            .push((f2.index(), contact2_start));
+        vertex_contacts
+            .entry(end_vi)
+            .or_default()
+            .push((f1.index(), contact1_end));
+        vertex_contacts
+            .entry(end_vi)
+            .or_default()
+            .push((f2.index(), contact2_end));
+    }
+
+    // Phase 5b: Build vertex blend patches at junctions where 3+ fillet edges meet.
+    // At such a vertex, each fillet strip contributes contact points on two faces.
+    // Two fillet strips that share a face will have contact points on that face that
+    // are at the same position (both offset R from the vertex along the face).
+    // We deduplicate by face, giving exactly N unique contact points for N fillet edges.
+    // These points form a polygon (typically a triangle for 3-edge corners) that we
+    // close with a planar blend face.
+    for (&vi, contacts) in &vertex_contacts {
+        let fillet_count = vertex_fillet_edges.get(&vi).map_or(0, Vec::len);
+        if fillet_count < 3 {
+            continue;
+        }
+
+        // Deduplicate contact points by spatial proximity.
+        // At a 3-edge box corner, 6 contact entries collapse to 3 unique positions
+        // (each position is shared by two fillet strips on different faces).
+        let mut blend_points: Vec<Point3> = Vec::new();
+        for &(_face_idx, pt) in contacts {
+            let already = blend_points
+                .iter()
+                .any(|existing| (*existing - pt).length() < tol.linear);
+            if !already {
+                blend_points.push(pt);
+            }
+        }
+        if blend_points.len() < 3 {
+            continue;
+        }
+
+        // Compute the outward normal for the blend patch.
+        // The vertex's original position is "inside" the fillet region, so the normal
+        // should point away from the original vertex.
+        // Use the cross product of two edges of the polygon.
+        let e1 = blend_points[1] - blend_points[0];
+        let e2 = blend_points[2] - blend_points[0];
+        let cross = e1.cross(e2);
+        let blend_normal = if let Ok(n) = cross.normalize() {
+            n
+        } else {
+            continue; // Degenerate (collinear points)
+        };
+
+        // Orient the normal to point outward (away from the original vertex position).
+        // The original vertex is at the centroid of the face normals, offset inward.
+        // We can use any face polygon vertex to get the original vertex position.
+        let original_vertex = face_polygons
+            .values()
+            .flat_map(|fp| {
+                fp.vertex_ids
+                    .iter()
+                    .zip(fp.positions.iter())
+                    .filter(|(vid, _)| vid.index() == vi)
+                    .map(|(_, pos)| *pos)
+            })
+            .next();
+
+        let blend_normal = if let Some(v_pos) = original_vertex {
+            let centroid = blend_points
+                .iter()
+                .fold(Vec3::new(0.0, 0.0, 0.0), |acc, p| {
+                    Vec3::new(acc.x() + p.x(), acc.y() + p.y(), acc.z() + p.z())
+                });
+            let centroid = Point3::new(
+                centroid.x() / blend_points.len() as f64,
+                centroid.y() / blend_points.len() as f64,
+                centroid.z() / blend_points.len() as f64,
+            );
+            // Normal should point away from the original vertex
+            let to_vertex = v_pos - centroid;
+            if to_vertex.dot(blend_normal) > 0.0 {
+                Vec3::new(-blend_normal.x(), -blend_normal.y(), -blend_normal.z())
+            } else {
+                blend_normal
+            }
+        } else {
+            blend_normal
+        };
+
+        // Order the blend points consistently (counter-clockwise when viewed from
+        // the outward normal direction).
+        let centroid = blend_points
+            .iter()
+            .fold(Vec3::new(0.0, 0.0, 0.0), |acc, p| {
+                Vec3::new(acc.x() + p.x(), acc.y() + p.y(), acc.z() + p.z())
+            });
+        let centroid = Point3::new(
+            centroid.x() / blend_points.len() as f64,
+            centroid.y() / blend_points.len() as f64,
+            centroid.z() / blend_points.len() as f64,
+        );
+
+        // Build a local reference frame: normal + two tangent axes
+        let ref_dir = (blend_points[0] - centroid)
+            .normalize()
+            .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+        let tangent_u = ref_dir;
+        let tangent_v = blend_normal.cross(tangent_u);
+
+        let mut indexed_points: Vec<(f64, Point3)> = blend_points
+            .iter()
+            .map(|p| {
+                let d = *p - centroid;
+                let angle = d.dot(tangent_v).atan2(d.dot(tangent_u));
+                (angle, *p)
+            })
+            .collect();
+        indexed_points.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let ordered_points: Vec<Point3> = indexed_points.into_iter().map(|(_, p)| p).collect();
+
+        let blend_d = dot_normal_point(blend_normal, ordered_points[0]);
+        all_specs.push(FaceSpec::Planar {
+            vertices: ordered_points,
+            normal: blend_normal,
+            d: blend_d,
         });
     }
 
@@ -1226,5 +1380,122 @@ mod tests {
         assert!(fillet_rolling_ball(&mut topo, cube, &[edges[0]], 0.0).is_err());
         assert!(fillet_rolling_ball(&mut topo, cube, &[edges[0]], -0.1).is_err());
         assert!(fillet_rolling_ball(&mut topo, cube, &[], 0.1).is_err());
+    }
+
+    // ── Vertex blend tests ───────────────────────────────
+
+    #[test]
+    fn vertex_blend_all_edges_box() {
+        // Fillet all 12 edges of a unit cube → 8 vertex blend patches should
+        // close the corners, giving a watertight mesh.
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let edges = solid_edge_ids(&topo, cube);
+        assert_eq!(edges.len(), 12, "unit cube should have 12 edges");
+
+        let result = fillet_rolling_ball(&mut topo, cube, &edges, 0.1)
+            .expect("all-edges fillet should succeed");
+
+        let s = topo.solid(result).expect("result solid");
+        let sh = topo.shell(s.outer_shell()).expect("shell");
+
+        // 6 trimmed planar faces + 12 NURBS fillet strips + 8 vertex blend triangles = 26
+        assert_eq!(
+            sh.faces().len(),
+            26,
+            "expected 26 faces (6 planar + 12 fillet + 8 blend)"
+        );
+    }
+
+    #[test]
+    fn vertex_blend_tessellates_successfully() {
+        // Verify the fully-filleted box can be tessellated without error.
+        // Watertight stitching at NURBS-to-planar seams is a tessellation-level
+        // concern tracked separately.
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let edges = solid_edge_ids(&topo, cube);
+
+        let result = fillet_rolling_ball(&mut topo, cube, &edges, 0.1)
+            .expect("all-edges fillet should succeed");
+
+        let mesh = crate::tessellate::tessellate_solid(&topo, result, 0.05).unwrap();
+        // Should produce a non-trivial mesh.
+        assert!(mesh.positions.len() > 20, "should have many vertices");
+        assert!(mesh.indices.len() > 60, "should have many triangles");
+    }
+
+    #[test]
+    fn vertex_blend_positive_volume() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let edges = solid_edge_ids(&topo, cube);
+
+        let result = fillet_rolling_ball(&mut topo, cube, &edges, 0.1)
+            .expect("all-edges fillet should succeed");
+
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        // Unit cube volume = 1.0. Filleting removes corner material, so volume < 1.0 but > 0.5.
+        assert!(vol > 0.5, "filleted cube volume should be > 0.5, got {vol}");
+        assert!(vol < 1.0, "filleted cube volume should be < 1.0, got {vol}");
+    }
+
+    #[test]
+    fn vertex_blend_box_primitive() {
+        // Test with make_box (2×3×4) to verify non-unit dimensions work.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+        assert_eq!(edges.len(), 12);
+
+        let result = fillet_rolling_ball(&mut topo, solid, &edges, 0.2)
+            .expect("box primitive all-edges fillet should succeed");
+
+        let s = topo.solid(result).expect("result solid");
+        let sh = topo.shell(s.outer_shell()).expect("shell");
+        assert_eq!(sh.faces().len(), 26);
+    }
+
+    #[test]
+    fn vertex_blend_three_edges_at_corner() {
+        // Fillet just the 3 edges meeting at one corner vertex to test minimal
+        // vertex blend (produces one blend triangle).
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let all_edges = solid_edge_ids(&topo, cube);
+
+        // Find 3 edges sharing a common vertex.
+        let mut vertex_to_edges: HashMap<usize, Vec<EdgeId>> = HashMap::new();
+        for &eid in &all_edges {
+            let e = topo.edge(eid).unwrap();
+            vertex_to_edges
+                .entry(e.start().index())
+                .or_default()
+                .push(eid);
+            vertex_to_edges
+                .entry(e.end().index())
+                .or_default()
+                .push(eid);
+        }
+
+        let (&_vi, corner_edges) = vertex_to_edges
+            .iter()
+            .find(|(_, edges)| edges.len() >= 3)
+            .expect("box should have vertices with 3 edges");
+
+        let targets: Vec<EdgeId> = corner_edges.iter().take(3).copied().collect();
+
+        let result = fillet_rolling_ball(&mut topo, cube, &targets, 0.1)
+            .expect("3-edge corner fillet should succeed");
+
+        let s = topo.solid(result).expect("result solid");
+        let sh = topo.shell(s.outer_shell()).expect("shell");
+
+        // 6 original faces + 3 NURBS fillets + at least 1 vertex blend triangle
+        assert!(
+            sh.faces().len() >= 10,
+            "expected at least 10 faces (6 + 3 + 1 blend), got {}",
+            sh.faces().len()
+        );
     }
 }
