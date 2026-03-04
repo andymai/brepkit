@@ -27,7 +27,7 @@ pub enum Severity {
 }
 
 /// Result of validating a solid.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ValidationReport {
     /// All issues found.
     pub issues: Vec<ValidationIssue>,
@@ -177,7 +177,86 @@ pub fn validate_solid(
         }
     }
 
+    // 6. Wire closure: every wire must form a closed loop.
+    for fid in &faces {
+        let face = topo.face(*fid)?;
+        let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+
+        for wire_id in wire_ids {
+            let wire = topo.wire(wire_id)?;
+            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, &topo.edges) {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!(
+                        "wire {} on face {} is not closed",
+                        wire_id.index(),
+                        fid.index()
+                    ),
+                });
+            }
+        }
+    }
+
+    // 7. Degenerate face area: faces with near-zero area are likely slivers.
+    let area_tol_sq = tol.linear * tol.linear;
+    for fid in &faces {
+        let face = topo.face(*fid)?;
+        let wire = topo.wire(face.outer_wire())?;
+
+        // Collect wire vertex positions.
+        let mut positions = Vec::new();
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            positions.push(topo.vertex(vid)?.point());
+        }
+
+        // Compute face area using the shoelace formula generalized to 3D
+        // (sum of cross products of consecutive edge vectors from centroid).
+        if positions.len() >= 3 {
+            let area = polygon_area_3d(&positions);
+            if area < area_tol_sq {
+                issues.push(ValidationIssue {
+                    severity: Severity::Warning,
+                    description: format!(
+                        "face {} has near-zero area ({area:.2e} < {area_tol_sq:.2e})",
+                        fid.index()
+                    ),
+                });
+            }
+        }
+    }
+
     Ok(ValidationReport { issues })
+}
+
+/// Compute the area of a 3D polygon using the cross-product method.
+///
+/// For a planar polygon with vertices `p0, p1, ..., pN`, the area is
+/// half the magnitude of the sum of cross products `(p[i] - p[0]) × (p[i+1] - p[0])`.
+fn polygon_area_3d(positions: &[brepkit_math::vec::Point3]) -> f64 {
+    use brepkit_math::vec::Vec3;
+
+    if positions.len() < 3 {
+        return 0.0;
+    }
+
+    let p0 = positions[0];
+    let mut sum = Vec3::new(0.0, 0.0, 0.0);
+
+    for i in 1..positions.len() - 1 {
+        let a = positions[i] - p0;
+        let b = positions[i + 1] - p0;
+        sum = sum + a.cross(b);
+    }
+
+    sum.length() * 0.5
 }
 
 #[cfg(test)]
@@ -420,5 +499,131 @@ mod tests {
             report.error_count(),
             report.issues
         );
+    }
+
+    // ── Wire closure validation ──────────────────────
+
+    #[test]
+    fn wire_closure_check_on_valid_box() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let report = validate_solid(&topo, solid).unwrap();
+        // No wire closure errors on a properly-built box.
+        let wire_issues: Vec<_> = report
+            .issues
+            .iter()
+            .filter(|i| i.description.contains("wire"))
+            .collect();
+        assert!(
+            wire_issues.is_empty(),
+            "valid box should have no wire issues: {wire_issues:?}"
+        );
+    }
+
+    // ── Degenerate face area ─────────────────────────
+
+    #[test]
+    fn polygon_area_unit_square() {
+        use brepkit_math::vec::Point3;
+        let pts = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        let area = polygon_area_3d(&pts);
+        assert!(
+            (area - 1.0).abs() < 1e-10,
+            "unit square area should be 1.0, got {area}"
+        );
+    }
+
+    #[test]
+    fn polygon_area_triangle() {
+        use brepkit_math::vec::Point3;
+        let pts = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(0.0, 3.0, 0.0),
+        ];
+        let area = polygon_area_3d(&pts);
+        assert!(
+            (area - 3.0).abs() < 1e-10,
+            "triangle area should be 3.0, got {area}"
+        );
+    }
+
+    #[test]
+    fn polygon_area_degenerate() {
+        use brepkit_math::vec::Point3;
+        // Collinear points → area 0.
+        let pts = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        ];
+        let area = polygon_area_3d(&pts);
+        assert!(
+            area < 1e-15,
+            "collinear points should have zero area, got {area}"
+        );
+    }
+
+    #[test]
+    fn no_area_warnings_on_valid_box() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let report = validate_solid(&topo, solid).unwrap();
+        let area_warnings: Vec<_> = report
+            .issues
+            .iter()
+            .filter(|i| i.description.contains("area"))
+            .collect();
+        assert!(
+            area_warnings.is_empty(),
+            "valid box should have no area warnings: {area_warnings:?}"
+        );
+    }
+
+    // ── repair_solid ─────────────────────────────────
+
+    #[test]
+    fn repair_clean_box() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+
+        let report = crate::heal::repair_solid(&mut topo, solid, 1e-7).unwrap();
+        assert!(
+            report.is_valid_after(),
+            "clean box should be valid after repair"
+        );
+        assert_eq!(report.total_repairs(), 0, "clean box needs no repairs");
+    }
+
+    #[test]
+    fn repair_preserves_volume() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+
+        let vol_before = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        let _report = crate::heal::repair_solid(&mut topo, solid, 1e-7).unwrap();
+        let vol_after = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+
+        assert!(
+            (vol_before - vol_after).abs() < 0.01,
+            "repair should preserve volume: {vol_before} vs {vol_after}"
+        );
+    }
+
+    #[test]
+    fn repair_cylinder_no_crash() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+
+        let report = crate::heal::repair_solid(&mut topo, solid, 1e-7).unwrap();
+        // Should not crash; may or may not be valid depending on cylinder topology
+        let _ = report.is_valid_after();
     }
 }

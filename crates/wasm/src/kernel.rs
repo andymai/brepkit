@@ -2265,10 +2265,28 @@ impl BrepKernel {
         let solid_id = self.resolve_solid(solid)?;
         let report = brepkit_operations::heal::heal_solid(&mut self.topo, solid_id, TOL)?;
         #[allow(clippy::cast_possible_truncation)]
-        Ok(
-            (report.vertices_merged + report.degenerate_edges_removed + report.orientations_fixed)
-                as u32,
-        )
+        Ok((report.vertices_merged
+            + report.degenerate_edges_removed
+            + report.orientations_fixed
+            + report.wire_gaps_closed
+            + report.small_faces_removed
+            + report.duplicate_faces_removed) as u32)
+    }
+
+    /// Validate, heal, and re-validate a solid in one pass.
+    ///
+    /// Returns the number of remaining validation errors after repair.
+    /// A return value of 0 means the solid is valid after repair.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "repairSolid")]
+    pub fn repair_solid_wasm(&mut self, solid: u32) -> Result<u32, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let report = brepkit_operations::heal::repair_solid(&mut self.topo, solid_id, TOL)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(report.after.error_count() as u32)
     }
 
     /// Tessellate an edge curve into polyline segments.
@@ -4539,6 +4557,19 @@ impl BrepKernel {
                 brepkit_operations::heal::heal_solid(&mut self.topo, solid_id, tol)
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid_id)))
+            }
+            "repairSolid" => {
+                let s = get_u32(args, "solid")?;
+                let tol = get_f64(args, "tolerance").unwrap_or(1e-7);
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let report = brepkit_operations::heal::repair_solid(&mut self.topo, solid_id, tol)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "solid": solid_id_to_u32(solid_id),
+                    "errorsBefore": report.before.error_count(),
+                    "errorsAfter": report.after.error_count(),
+                    "totalRepairs": report.total_repairs(),
+                }))
             }
             "classifyPoint" => {
                 let s = get_u32(args, "solid")?;
