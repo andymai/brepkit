@@ -21,3 +21,12 @@
 - `robust` crate only has 2D; `robust-predicates` has all 4 Shewchuk predicates
 - Watertight ray-triangle (Woop-Benthin-Wald 2013) should replace Moller-Trumbore for classification
 - Graph-based decomposition is the standard for production constraint solvers (SolveSpace, PlaneGCS)
+
+## SSI / Boolean Deep Dive (2026-03-03) - see `ssi-boolean-research.md`
+- Canonical step size formula: h = sqrt(8*epsilon/kappa) from osculating circle deviation
+- GWN for trimmed NURBS: Spainhour et al. 2025 (arxiv 2504.11435), Stokes' theorem boundary integral
+- OCCT face splitting uses BOPAlgo_WireSplitter: min clockwise angle walk in 2D param space
+- brepkit march_intersection: fixed step + Newton corrector, no adaptive curvature step yet
+- Self-intersection NURBS: Li, Jia, Chen 2025 ACM TOG - algebraic signature approach
+- Topology-guaranteed SSI: Yang, Jia, Yan SIGGRAPH Asia 2023 (dl.acm.org/doi/10.1145/3618349)
+- Fast winding numbers (meshes): Barill et al. SIGGRAPH 2018 - BVH with multipole expansion
