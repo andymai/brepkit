@@ -1264,8 +1264,50 @@ impl BrepKernel {
             spacing,
             count as usize,
         )?;
-        #[allow(clippy::cast_possible_truncation)]
-        Ok(compound.index() as u32)
+        Ok(compound_id_to_u32(compound))
+    }
+
+    // ── Grid Pattern ──────────────────────────────────────────────
+
+    /// Create a 2D grid pattern of a solid.
+    ///
+    /// Produces `count_x × count_y` copies arranged in a rectangular grid.
+    #[wasm_bindgen(js_name = "gridPattern")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn grid_pattern(
+        &mut self,
+        solid: u32,
+        dir_x_x: f64,
+        dir_x_y: f64,
+        dir_x_z: f64,
+        dir_y_x: f64,
+        dir_y_y: f64,
+        dir_y_z: f64,
+        spacing_x: f64,
+        spacing_y: f64,
+        count_x: u32,
+        count_y: u32,
+    ) -> Result<u32, JsError> {
+        validate_finite(dir_x_x, "dir_x_x")?;
+        validate_finite(dir_x_y, "dir_x_y")?;
+        validate_finite(dir_x_z, "dir_x_z")?;
+        validate_finite(dir_y_x, "dir_y_x")?;
+        validate_finite(dir_y_y, "dir_y_y")?;
+        validate_finite(dir_y_z, "dir_y_z")?;
+        validate_positive(spacing_x, "spacing_x")?;
+        validate_positive(spacing_y, "spacing_y")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let compound = brepkit_operations::pattern::grid_pattern(
+            &mut self.topo,
+            solid_id,
+            Vec3::new(dir_x_x, dir_x_y, dir_x_z),
+            Vec3::new(dir_y_x, dir_y_y, dir_y_z),
+            spacing_x,
+            spacing_y,
+            count_x as usize,
+            count_y as usize,
+        )?;
+        Ok(compound_id_to_u32(compound))
     }
 
     // ── Split ─────────────────────────────────────────────────────
@@ -1427,6 +1469,24 @@ impl BrepKernel {
         let merged = tessellate::tessellate_solid(&self.topo, solid_id, deflection)?;
 
         Ok(merged.into())
+    }
+
+    // ── Edge wireframe ────────────────────────────────────────────
+
+    /// Sample all edges of a solid into polylines for wireframe rendering.
+    ///
+    /// Returns a `JsEdgeLines` containing flattened positions and per-edge
+    /// offset indices. The `deflection` parameter controls sampling density.
+    #[wasm_bindgen(js_name = "meshEdges")]
+    pub fn mesh_edges(
+        &self,
+        solid: u32,
+        deflection: f64,
+    ) -> Result<crate::shapes::JsEdgeLines, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let edge_lines = tessellate::sample_solid_edges(&self.topo, solid_id, deflection)?;
+        Ok(edge_lines.into())
     }
 
     // ── Topology queries ──────────────────────────────────────────
@@ -3340,8 +3400,7 @@ impl BrepKernel {
             axis,
             count as usize,
         )?;
-        #[allow(clippy::cast_possible_truncation)]
-        Ok(compound.index() as u32)
+        Ok(compound_id_to_u32(compound))
     }
 
     /// Merge coincident vertices in a solid.
@@ -4544,8 +4603,33 @@ impl BrepKernel {
                     count as usize,
                 )
                 .map_err(|e| e.to_string())?;
-                #[allow(clippy::cast_possible_truncation)]
-                Ok(serde_json::json!(compound.index() as u32))
+                Ok(serde_json::json!(compound_id_to_u32(compound)))
+            }
+            "gridPattern" => {
+                let s = get_u32(args, "solid")?;
+                let dxx = get_f64(args, "dirXx").unwrap_or(1.0);
+                let dxy = get_f64(args, "dirXy").unwrap_or(0.0);
+                let dxz = get_f64(args, "dirXz").unwrap_or(0.0);
+                let dyx = get_f64(args, "dirYx").unwrap_or(0.0);
+                let dyy = get_f64(args, "dirYy").unwrap_or(1.0);
+                let dyz = get_f64(args, "dirYz").unwrap_or(0.0);
+                let sx = get_f64(args, "spacingX")?;
+                let sy = get_f64(args, "spacingY")?;
+                let cx = get_u32(args, "countX")?;
+                let cy = get_u32(args, "countY")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let compound = brepkit_operations::pattern::grid_pattern(
+                    &mut self.topo,
+                    solid_id,
+                    Vec3::new(dxx, dxy, dxz),
+                    Vec3::new(dyx, dyy, dyz),
+                    sx,
+                    sy,
+                    cx as usize,
+                    cy as usize,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(compound_id_to_u32(compound)))
             }
             "defeature" => {
                 let s = get_u32(args, "solid")?;
@@ -4609,7 +4693,7 @@ const fn shell_id_to_u32(id: brepkit_topology::shell::ShellId) -> u32 {
 }
 
 /// Convert a `CompoundId` to a `u32` handle for JavaScript.
-#[allow(clippy::cast_possible_truncation, dead_code)]
+#[allow(clippy::cast_possible_truncation)]
 const fn compound_id_to_u32(id: brepkit_topology::compound::CompoundId) -> u32 {
     id.index() as u32
 }

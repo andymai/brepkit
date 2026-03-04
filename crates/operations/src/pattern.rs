@@ -52,8 +52,8 @@ pub fn linear_pattern(
     for i in 1..count {
         let copy = copy_solid(topo, solid)?;
         #[allow(clippy::cast_precision_loss)]
-        let offset = spacing * (i as f64);
-        let matrix = Mat4::translation(dir.x() * offset, dir.y() * offset, dir.z() * offset);
+        let offset = dir * (spacing * i as f64);
+        let matrix = Mat4::translation(offset.x(), offset.y(), offset.z());
         transform_solid(topo, copy, &matrix)?;
         solids.push(copy);
     }
@@ -102,6 +102,80 @@ pub fn circular_pattern(
         let matrix = rotation_matrix(axis, angle);
         transform_solid(topo, copy, &matrix)?;
         solids.push(copy);
+    }
+
+    let compound = Compound::new(solids);
+    Ok(topo.compounds.alloc(compound))
+}
+
+/// Create a 2D grid pattern of a solid.
+///
+/// Produces `count_x × count_y` copies arranged in a rectangular grid.
+/// Each row is offset by `spacing_x` along `dir_x`, each column by
+/// `spacing_y` along `dir_y`. The original solid occupies position (0, 0).
+///
+/// Returns a compound containing all copies.
+///
+/// # Errors
+///
+/// Returns an error if either count is less than 1, either spacing is
+/// non-positive, either direction is zero-length, or copy/transform fails.
+#[allow(clippy::too_many_arguments)]
+pub fn grid_pattern(
+    topo: &mut Topology,
+    solid: SolidId,
+    dir_x: Vec3,
+    dir_y: Vec3,
+    spacing_x: f64,
+    spacing_y: f64,
+    count_x: usize,
+    count_y: usize,
+) -> Result<CompoundId, crate::OperationsError> {
+    let tol = Tolerance::new();
+
+    if count_x < 1 || count_y < 1 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "grid pattern counts must be at least 1".into(),
+        });
+    }
+    if spacing_x <= tol.linear {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!("grid spacing_x must be positive, got {spacing_x}"),
+        });
+    }
+    if spacing_y <= tol.linear {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!("grid spacing_y must be positive, got {spacing_y}"),
+        });
+    }
+
+    let dx = dir_x.normalize()?;
+    let dy = dir_y.normalize()?;
+
+    if dx.cross(dy).length() < tol.linear {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "dir_x and dir_y must not be parallel".into(),
+        });
+    }
+
+    let mut solids = Vec::with_capacity(count_x * count_y);
+
+    for iy in 0..count_y {
+        for ix in 0..count_x {
+            if ix == 0 && iy == 0 {
+                solids.push(solid);
+                continue;
+            }
+
+            let copy = copy_solid(topo, solid)?;
+
+            #[allow(clippy::cast_precision_loss)]
+            let offset = dx * (spacing_x * ix as f64) + dy * (spacing_y * iy as f64);
+
+            let matrix = Mat4::translation(offset.x(), offset.y(), offset.z());
+            transform_solid(topo, copy, &matrix)?;
+            solids.push(copy);
+        }
     }
 
     let compound = Compound::new(solids);
@@ -252,5 +326,151 @@ mod tests {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
         assert!(circular_pattern(&mut topo, solid, Vec3::new(0.0, 0.0, 1.0), 1).is_err());
+    }
+
+    #[test]
+    fn grid_pattern_3x2() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let compound = grid_pattern(
+            &mut topo,
+            solid,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0,
+            3.0,
+            3,
+            2,
+        )
+        .unwrap();
+
+        let comp = topo.compound(compound).unwrap();
+        assert_eq!(comp.solids().len(), 6, "3×2 grid should have 6 copies");
+
+        let tol = Tolerance::loose();
+        for &sid in comp.solids() {
+            let vol = crate::measure::solid_volume(&topo, sid, 0.1).unwrap();
+            assert!(
+                tol.approx_eq(vol, 1.0),
+                "each copy should have volume ~1.0, got {vol}"
+            );
+        }
+    }
+
+    #[test]
+    fn grid_pattern_positions() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let compound = grid_pattern(
+            &mut topo,
+            solid,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            5.0,
+            5.0,
+            2,
+            2,
+        )
+        .unwrap();
+
+        let comp = topo.compound(compound).unwrap();
+        let tol = Tolerance::loose();
+
+        // (0,0), (5,0), (0,5), (5,5)
+        let bbox00 = crate::measure::solid_bounding_box(&topo, comp.solids()[0]).unwrap();
+        let bbox10 = crate::measure::solid_bounding_box(&topo, comp.solids()[1]).unwrap();
+        let bbox01 = crate::measure::solid_bounding_box(&topo, comp.solids()[2]).unwrap();
+        let bbox11 = crate::measure::solid_bounding_box(&topo, comp.solids()[3]).unwrap();
+
+        assert!(tol.approx_eq(bbox00.min.x(), 0.0));
+        assert!(tol.approx_eq(bbox00.min.y(), 0.0));
+        assert!(tol.approx_eq(bbox10.min.x(), 5.0));
+        assert!(tol.approx_eq(bbox10.min.y(), 0.0));
+        assert!(tol.approx_eq(bbox01.min.x(), 0.0));
+        assert!(tol.approx_eq(bbox01.min.y(), 5.0));
+        assert!(tol.approx_eq(bbox11.min.x(), 5.0));
+        assert!(tol.approx_eq(bbox11.min.y(), 5.0));
+    }
+
+    #[test]
+    fn grid_pattern_1x1_returns_original() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let compound = grid_pattern(
+            &mut topo,
+            solid,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            1.0,
+            1.0,
+            1,
+            1,
+        )
+        .unwrap();
+
+        let comp = topo.compound(compound).unwrap();
+        assert_eq!(comp.solids().len(), 1);
+        assert_eq!(comp.solids()[0].index(), solid.index());
+    }
+
+    #[test]
+    fn grid_pattern_zero_count_error() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        assert!(
+            grid_pattern(
+                &mut topo,
+                solid,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                1.0,
+                1.0,
+                0,
+                3
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn grid_pattern_zero_spacing_error() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        assert!(
+            grid_pattern(
+                &mut topo,
+                solid,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                0.0,
+                1.0,
+                3,
+                3
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn grid_pattern_parallel_directions_error() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        // Both directions along X — should fail.
+        assert!(
+            grid_pattern(
+                &mut topo,
+                solid,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(2.0, 0.0, 0.0),
+                1.0,
+                1.0,
+                3,
+                3
+            )
+            .is_err()
+        );
     }
 }
