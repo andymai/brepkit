@@ -5,7 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "WebAssembly bindings for brepkit"
+description = "WebAssembly bindings for brepkit — browser-native B-Rep solid modeling"
+keywords = ["cad", "brep", "wasm", "geometry", "solid-modeling"]
+categories = ["wasm", "mathematics", "science"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
