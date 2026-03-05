@@ -167,8 +167,12 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
                 plane_face_ids.push(fid);
             }
             FaceSurface::Sphere(s) => {
-                if sphere_r.is_none() {
-                    sphere_r = Some(s.radius());
+                let r = s.radius();
+                match sphere_r {
+                    None => sphere_r = Some(r),
+                    // Multiple sphere faces must all share the same radius.
+                    Some(existing) if (r - existing).abs() > existing * 1e-6 => return None,
+                    Some(_) => {}
                 }
             }
             FaceSurface::Cylinder(c) => {
@@ -230,6 +234,12 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
                 }
             }
 
+            // If any cap face did not yield a circle, the cone is degenerate or
+            // unsupported — fall back to tessellation rather than silently wrong answer.
+            if cap_circles.len() != plane_face_ids.len() {
+                return None;
+            }
+
             match cap_circles.as_slice() {
                 [(c, r)] => {
                     // Pointed cone: h = distance from apex to cap center along axis.
@@ -259,8 +269,12 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     None
 }
 
+/// Minimum |n · axis| for a plane to be considered a perpendicular cap face
+/// (i.e. the plane normal is within ~8° of the axis direction).
+const AXIS_PARALLEL_MIN_DOT: f64 = 0.99;
+
 /// Compute signed distances along `axis` from `ref_pt` to cap planes that are
-/// roughly perpendicular to the axis (`|n · axis| > 0.99`).
+/// roughly perpendicular to the axis (`|n · axis| > AXIS_PARALLEL_MIN_DOT`).
 ///
 /// For a plane `n · P = d`, the intersection with the line `ref_pt + t * axis`
 /// satisfies `t = (d − n · ref_pt) / (n · axis)`.
@@ -268,7 +282,7 @@ fn cap_t_values(ref_pt: Vec3, axis: Vec3, planes: &[(Vec3, f64)]) -> Vec<f64> {
     let mut ts = Vec::new();
     for &(n, d) in planes {
         let nd = n.dot(axis);
-        if nd.abs() > 0.99 {
+        if nd.abs() > AXIS_PARALLEL_MIN_DOT {
             ts.push((d - n.dot(ref_pt)) / nd);
         }
     }
@@ -283,7 +297,11 @@ fn find_cap_circle(topo: &Topology, face_id: FaceId) -> Option<(Point3, f64)> {
     let face = topo.face(face_id).ok()?;
     let wire = topo.wire(face.outer_wire()).ok()?;
     for oe in wire.edges() {
-        let edge = topo.edge(oe.edge()).ok()?;
+        // Use let-else so a missing edge skips to the next iteration
+        // rather than returning None for the whole face.
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
         if let brepkit_topology::edge::EdgeCurve::Circle(c) = edge.curve() {
             return Some((c.center(), c.radius()));
         }
