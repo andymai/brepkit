@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/andymai/brepkit/compare/v0.4.2...v0.4.3) (2026-03-05)
+
+
+### Bug Fixes
+
+* **operations:** analytic boolean for contained curves ([#65](https://github.com/andymai/brepkit/issues/65)) ([49a7568](https://github.com/andymai/brepkit/commit/49a7568236ef8e621e2aa495e29250478eaa0e8c))
+
 ## [0.4.2](https://github.com/andymai/brepkit/compare/v0.4.1...v0.4.2) (2026-03-05)
 
 
