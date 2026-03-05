@@ -174,6 +174,7 @@ fn sweep_wire_through_frames(
     initial_tangent: Vec3,
     frames: &[Frame],
     num_segments: usize,
+    is_closed: bool,
 ) -> Result<SweptWireData, crate::OperationsError> {
     let tol = Tolerance::new();
 
@@ -220,10 +221,20 @@ fn sweep_wire_through_frames(
         ring_verts.push(ring);
     }
 
+    // For closed paths, alias first ring as last so indexing works unchanged.
+    if is_closed {
+        ring_verts.push(ring_verts[0].clone());
+    }
+
     // Create ring edges (profile edges within each ring).
+    let real_ring_count = if is_closed {
+        ring_verts.len() - 1
+    } else {
+        ring_verts.len()
+    };
     let mut ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> =
         Vec::with_capacity(num_segments + 1);
-    for ring in &ring_verts {
+    for ring in &ring_verts[..real_ring_count] {
         let edges: Vec<_> = (0..n)
             .map(|i| {
                 let next = (i + 1) % n;
@@ -232,6 +243,9 @@ fn sweep_wire_through_frames(
             })
             .collect();
         ring_edges.push(edges);
+    }
+    if is_closed {
+        ring_edges.push(ring_edges[0].clone());
     }
 
     // Create path edges (between consecutive rings).
@@ -537,6 +551,7 @@ pub fn sweep(
             initial_tangent,
             &frames,
             num_segments,
+            is_closed,
         )?);
     }
 
@@ -823,6 +838,7 @@ pub fn sweep_smooth(
             initial_tangent,
             &frames,
             num_segments,
+            is_closed,
         )?);
     }
 
@@ -1164,6 +1180,7 @@ pub fn sweep_with_options(
     }
 
     // Sweep inner wires for options variant.
+    // Note: closed paths are delegated to sweep() earlier, so is_closed is always false here.
     let mut inner_swept_opts: Vec<SweptWireData> = Vec::new();
     for &iw_id in &inner_wire_ids_opts {
         inner_swept_opts.push(sweep_wire_through_frames(
@@ -1175,6 +1192,7 @@ pub fn sweep_with_options(
             initial_tangent,
             &frames,
             num_segments,
+            false,
         )?);
     }
 
@@ -1680,6 +1698,105 @@ mod tests {
         assert!(
             vol > 0.0,
             "closed sweep should have positive volume, got {vol}"
+        );
+    }
+
+    /// Helper: create a square face with a smaller square hole (inner wire).
+    fn make_square_face_with_hole(topo: &mut Topology) -> FaceId {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let lin = Tolerance::new().linear;
+
+        // Outer square: 2x2 centered at origin in XY plane
+        let ov0 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(-1.0, -1.0, 0.0), lin));
+        let ov1 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, -1.0, 0.0), lin));
+        let ov2 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), lin));
+        let ov3 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(-1.0, 1.0, 0.0), lin));
+
+        let oe0 = topo.edges.alloc(Edge::new(ov0, ov1, EdgeCurve::Line));
+        let oe1 = topo.edges.alloc(Edge::new(ov1, ov2, EdgeCurve::Line));
+        let oe2 = topo.edges.alloc(Edge::new(ov2, ov3, EdgeCurve::Line));
+        let oe3 = topo.edges.alloc(Edge::new(ov3, ov0, EdgeCurve::Line));
+
+        let outer_wire = topo.wires.alloc(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(oe0, true),
+                    OrientedEdge::new(oe1, true),
+                    OrientedEdge::new(oe2, true),
+                    OrientedEdge::new(oe3, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+
+        // Inner square: 0.5x0.5 centered at origin (hole)
+        let iv0 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(-0.25, -0.25, 0.0), lin));
+        let iv1 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.25, -0.25, 0.0), lin));
+        let iv2 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.25, 0.25, 0.0), lin));
+        let iv3 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(-0.25, 0.25, 0.0), lin));
+
+        let ie0 = topo.edges.alloc(Edge::new(iv0, iv1, EdgeCurve::Line));
+        let ie1 = topo.edges.alloc(Edge::new(iv1, iv2, EdgeCurve::Line));
+        let ie2 = topo.edges.alloc(Edge::new(iv2, iv3, EdgeCurve::Line));
+        let ie3 = topo.edges.alloc(Edge::new(iv3, iv0, EdgeCurve::Line));
+
+        let inner_wire = topo.wires.alloc(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(ie0, true),
+                    OrientedEdge::new(ie1, true),
+                    OrientedEdge::new(ie2, true),
+                    OrientedEdge::new(ie3, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+
+        topo.faces.alloc(Face::new(
+            outer_wire,
+            vec![inner_wire],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    #[test]
+    fn sweep_closed_path_with_inner_hole() {
+        // Sweeping a profile with inner holes along a closed path should not panic.
+        let mut topo = Topology::new();
+        let profile = make_square_face_with_hole(&mut topo);
+        let path = closed_circle_path(5.0);
+
+        let solid = sweep(&mut topo, profile, &path).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 0.0,
+            "closed sweep with inner hole should have positive volume, got {vol}"
         );
     }
 
