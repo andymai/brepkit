@@ -1199,10 +1199,9 @@ pub(crate) fn assemble_solid_mixed(
 
 /// Minimum face count for a valid solid.
 ///
-/// A sphere (2 hemisphere faces) is the minimal closed solid. Previously
-/// this was 4 (tetrahedron), but boolean operations between boxes and
-/// curved primitives can legitimately produce 2- or 3-face results.
-const MIN_SOLID_FACES: usize = 2;
+/// A cylinder (2 caps + 1 barrel = 3 faces) is the minimal closed solid
+/// produced by boolean operations between boxes and curved primitives.
+const MIN_SOLID_FACES: usize = 3;
 
 /// Validate that a boolean result is not degenerate.
 ///

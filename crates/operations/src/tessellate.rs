@@ -707,7 +707,11 @@ fn tessellate_planar_with_holes(
         cy /= count as f64;
 
         // Flood-fill remove from the hole centroid, stopping at constraints.
-        cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
+        let removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
+        debug_assert!(
+            removed,
+            "hole centroid fell outside CDT triangulation — concave inner wire?"
+        );
     }
 
     // Extract triangles and build mesh.
@@ -717,6 +721,12 @@ fn tessellate_planar_with_holes(
     let mut normals_out = Vec::new();
     let mut indices_out = Vec::new();
 
+    // Build O(1) reverse map: CDT vertex index → original position index.
+    let mut vi_to_orig: HashMap<usize, usize> = HashMap::new();
+    for (orig_idx, &cdt_vi) in cdt_indices.iter().enumerate() {
+        vi_to_orig.entry(cdt_vi).or_insert(orig_idx);
+    }
+
     // Map CDT point indices → output mesh indices.
     let mut cdt_to_mesh: HashMap<usize, u32> = HashMap::new();
     for &(v0, v1, v2) in &cdt_triangles {
@@ -725,7 +735,7 @@ fn tessellate_planar_with_holes(
                 #[allow(clippy::cast_possible_truncation)]
                 let mesh_idx = positions_out.len() as u32;
                 // Find the original 3D point for this CDT vertex.
-                if let Some(orig_idx) = cdt_indices.iter().position(|&ci| ci == vi) {
+                if let Some(&orig_idx) = vi_to_orig.get(&vi) {
                     positions_out.push(all_positions[orig_idx]);
                 } else {
                     // Steiner point inserted by CDT — reconstruct 3D from 2D.
@@ -943,7 +953,11 @@ fn tessellate_planar_shared_with_holes(
         }
         cx /= count as f64;
         cy /= count as f64;
-        cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
+        let removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
+        debug_assert!(
+            removed,
+            "hole centroid fell outside CDT triangulation — concave inner wire?"
+        );
     }
 
     let cdt_triangles = cdt.triangles();

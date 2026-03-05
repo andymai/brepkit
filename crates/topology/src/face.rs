@@ -74,7 +74,7 @@ impl Face {
     /// flipped winding (e.g., a cylinder face from the tool solid that becomes
     /// part of the result with opposite orientation).
     #[must_use]
-    pub const fn new_reversed(
+    pub fn new_reversed(
         outer_wire: WireId,
         inner_wires: Vec<WireId>,
         surface: FaceSurface,
