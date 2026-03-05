@@ -474,15 +474,21 @@ fn fuse_cylinder_and_box() {
 }
 
 #[test]
-#[ignore = "cylinder-box intersect produces degenerate result (known P2.1 limitation)"]
 fn intersect_cylinder_and_box() {
+    // Cylinder r=1, h=6 centered at origin (z=-3..3), translated to (2,2,2)
+    // → z=-1..5, fully through box (z=0..4). Intersection = cylinder section
+    // from z=0..4, expected volume = π·r²·h = π·1·4 ≈ 12.566.
     let mut topo = Topology::new();
     let base = box_at(&mut topo, 0.0, 0.0, 0.0, 4.0, 4.0, 4.0);
     let cyl = make_cylinder(&mut topo, 1.0, 6.0).unwrap();
-    transform_solid(&mut topo, cyl, &Mat4::translation(2.0, 2.0, -1.0)).unwrap();
+    transform_solid(&mut topo, cyl, &Mat4::translation(2.0, 2.0, 2.0)).unwrap();
 
     let result = boolean(&mut topo, BooleanOp::Intersect, base, cyl).unwrap();
     check_manifold(&topo, result);
+
+    let expected = std::f64::consts::PI * 1.0 * 1.0 * 4.0;
+    // Analytic boolean with exact cylinder surface — tighter tolerance.
+    assert_volume(&topo, result, expected, 0.05);
 }
 
 // ===========================================================================
@@ -825,4 +831,52 @@ fn volume_large_boxes() {
     let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
     check_manifold(&topo, result);
     assert_volume(&topo, result, 1_500_000.0, 0.01);
+}
+
+// ===========================================================================
+// 26. Cylinder-box volume verification
+// ===========================================================================
+
+#[test]
+fn cut_cylinder_from_box_volume() {
+    // Box 4×4×4 at origin (z=0..4), cylinder r=1, h=6 centered at origin
+    // (z=-3..3), translated to (2,2,2) → z=-1..5, fully through box.
+    // Overlap height = 4 (clamped to box z=0..4).
+    // Expected: box_vol - π·r²·h = 64 - π·1²·4 ≈ 64 - 12.566 ≈ 51.434
+    let mut topo = Topology::new();
+    let base = box_at(&mut topo, 0.0, 0.0, 0.0, 4.0, 4.0, 4.0);
+    let cyl = make_cylinder(&mut topo, 1.0, 6.0).unwrap();
+    transform_solid(&mut topo, cyl, &Mat4::translation(2.0, 2.0, 2.0)).unwrap();
+
+    let result = boolean(&mut topo, BooleanOp::Cut, base, cyl).unwrap();
+    check_manifold(&topo, result);
+
+    let box_vol = 64.0;
+    let cyl_overlap = std::f64::consts::PI * 1.0 * 1.0 * 4.0; // π·r²·h
+    let expected = box_vol - cyl_overlap;
+    // Analytic boolean with exact cylinder surface — tighter tolerance.
+    assert_volume(&topo, result, expected, 0.05);
+}
+
+#[test]
+fn fuse_cylinder_and_box_volume() {
+    // Box 4×4×2 at origin (z=0..2), cylinder r=1, h=4 centered at origin
+    // (z=-2..2), translated to (2,2,1) → z=-1..3, sticks out 1 above + 1 below.
+    // Overlap height = 2 (z=0..2).
+    // Expected: box_vol + cylinder_vol - overlap
+    //         = 32 + π·1²·4 - π·1²·2 ≈ 32 + 12.566 - 6.283 ≈ 38.283
+    let mut topo = Topology::new();
+    let base = box_at(&mut topo, 0.0, 0.0, 0.0, 4.0, 4.0, 2.0);
+    let cyl = make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+    transform_solid(&mut topo, cyl, &Mat4::translation(2.0, 2.0, 1.0)).unwrap();
+
+    let result = boolean(&mut topo, BooleanOp::Fuse, base, cyl).unwrap();
+    check_manifold(&topo, result);
+
+    let box_vol = 32.0;
+    let cyl_vol = std::f64::consts::PI * 1.0 * 1.0 * 4.0;
+    let overlap = std::f64::consts::PI * 1.0 * 1.0 * 2.0;
+    let expected = box_vol + cyl_vol - overlap;
+    // Analytic boolean with exact cylinder surface — tighter tolerance.
+    assert_volume(&topo, result, expected, 0.05);
 }

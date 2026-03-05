@@ -54,8 +54,9 @@ pub fn tessellate(
     deflection: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
     let face_data = topo.face(face)?;
+    let is_reversed = face_data.is_reversed();
 
-    match face_data.surface() {
+    let mut mesh = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => tessellate_planar(topo, face_data, *normal),
         FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection)),
         FaceSurface::Cylinder(cyl) => {
@@ -152,7 +153,21 @@ pub fn tessellate(
                 AnalyticKind::General,
             ))
         }
+    }?;
+
+    // If the face is reversed, flip triangle winding and normals so that
+    // volume computation (divergence theorem) gets the correct sign.
+    if is_reversed {
+        for n in &mut mesh.normals {
+            *n = -*n;
+        }
+        let tri_count = mesh.indices.len() / 3;
+        for t in 0..tri_count {
+            mesh.indices.swap(t * 3 + 1, t * 3 + 2);
+        }
     }
+
+    Ok(mesh)
 }
 
 /// Kind of special handling needed for analytic surface tessellation.
@@ -419,14 +434,585 @@ fn tessellate_planar(
         });
     }
 
-    let normals_out = vec![normal; n];
-    let indices = ear_clip_triangulate(&positions, normal);
+    if face_data.inner_wires().is_empty() {
+        let normals_out = vec![normal; n];
+        let indices = ear_clip_triangulate(&positions, normal);
+
+        Ok(TriangleMesh {
+            positions,
+            normals: normals_out,
+            indices,
+        })
+    } else {
+        // CDT path for faces with holes.
+        tessellate_planar_with_holes(topo, face_data, &positions, normal)
+    }
+}
+
+/// Sample a wire into a list of 3D positions, skipping consecutive duplicates.
+fn sample_wire_positions(
+    topo: &Topology,
+    wire: &brepkit_topology::wire::Wire,
+    tol: f64,
+) -> Result<Vec<Point3>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+
+    let mut positions = Vec::new();
+
+    let sample_curve_into = |evaluate: &dyn Fn(f64) -> Point3,
+                             t_for_index: &dyn Fn(usize) -> f64,
+                             n_samples: usize,
+                             forward: bool,
+                             positions: &mut Vec<Point3>| {
+        let indices: Box<dyn Iterator<Item = usize>> = if forward {
+            Box::new(0..n_samples)
+        } else {
+            Box::new((0..n_samples).rev())
+        };
+        for i in indices {
+            #[allow(clippy::cast_precision_loss)]
+            let t = t_for_index(i);
+            let pt = evaluate(t);
+            if positions
+                .last()
+                .is_none_or(|p: &Point3| (*p - pt).length() > tol)
+            {
+                positions.push(pt);
+            }
+        }
+    };
+
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        match edge.curve() {
+            EdgeCurve::Circle(circle) => {
+                let n_samples = 32;
+                let (t_start, t_end) = if edge.is_closed() {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    let sp = topo.vertex(edge.start())?.point();
+                    let ep = topo.vertex(edge.end())?.point();
+                    let ts = circle.project(sp);
+                    let mut te = circle.project(ep);
+                    if te <= ts {
+                        te += std::f64::consts::TAU;
+                    }
+                    (ts, te)
+                };
+                #[allow(clippy::cast_precision_loss)]
+                sample_curve_into(
+                    &|t| circle.evaluate(t),
+                    &|i| t_start + (t_end - t_start) * (i as f64) / (n_samples as f64),
+                    n_samples,
+                    oe.is_forward(),
+                    &mut positions,
+                );
+            }
+            EdgeCurve::Ellipse(ellipse) => {
+                let n_samples = 32;
+                let (t_start, t_end) = if edge.is_closed() {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    let sp = topo.vertex(edge.start())?.point();
+                    let ep = topo.vertex(edge.end())?.point();
+                    let ts = ellipse.project(sp);
+                    let mut te = ellipse.project(ep);
+                    if te <= ts {
+                        te += std::f64::consts::TAU;
+                    }
+                    (ts, te)
+                };
+                #[allow(clippy::cast_precision_loss)]
+                sample_curve_into(
+                    &|t| ellipse.evaluate(t),
+                    &|i| t_start + (t_end - t_start) * (i as f64) / (n_samples as f64),
+                    n_samples,
+                    oe.is_forward(),
+                    &mut positions,
+                );
+            }
+            EdgeCurve::NurbsCurve(nurbs) => {
+                let n_samples = 16;
+                let (u0, u1) = nurbs.domain();
+                #[allow(clippy::cast_precision_loss)]
+                sample_curve_into(
+                    &|t| nurbs.evaluate(t),
+                    &|i| u0 + (u1 - u0) * (i as f64) / (n_samples as f64),
+                    n_samples,
+                    oe.is_forward(),
+                    &mut positions,
+                );
+            }
+            EdgeCurve::Line => {
+                let vid = if oe.is_forward() {
+                    edge.start()
+                } else {
+                    edge.end()
+                };
+                let pt = topo.vertex(vid)?.point();
+                if positions
+                    .last()
+                    .is_none_or(|p: &Point3| (*p - pt).length() > tol)
+                {
+                    positions.push(pt);
+                }
+            }
+        }
+    }
+
+    // Remove closing duplicate.
+    if positions.len() > 2 {
+        if let (Some(first), Some(last)) = (positions.first(), positions.last()) {
+            if (*last - *first).length() < tol {
+                positions.pop();
+            }
+        }
+    }
+
+    Ok(positions)
+}
+
+/// Tessellate a planar face with inner wires (holes) using CDT.
+#[allow(clippy::too_many_lines)]
+fn tessellate_planar_with_holes(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    outer_positions: &[Point3],
+    normal: Vec3,
+) -> Result<TriangleMesh, crate::OperationsError> {
+    use brepkit_math::cdt::Cdt;
+    use brepkit_math::vec::Point2;
+    use std::collections::HashSet;
+
+    // Project to 2D by dropping the dominant normal axis.
+    let ax = normal.x().abs();
+    let ay = normal.y().abs();
+    let az = normal.z().abs();
+    let project = |p: Point3| -> Point2 {
+        if az >= ax && az >= ay {
+            Point2::new(p.x(), p.y())
+        } else if ay >= ax {
+            Point2::new(p.x(), p.z())
+        } else {
+            Point2::new(p.y(), p.z())
+        }
+    };
+
+    // Collect all positions: outer + inner wires.
+    let mut all_positions: Vec<Point3> = outer_positions.to_vec();
+    let outer_count = all_positions.len();
+    let mut inner_wire_ranges: Vec<(usize, usize)> = Vec::new();
+
+    let tol = 1e-10;
+    for &iw_id in face_data.inner_wires() {
+        let iw = topo.wire(iw_id)?;
+        let inner_pts = sample_wire_positions(topo, iw, tol)?;
+        let start = all_positions.len();
+        all_positions.extend_from_slice(&inner_pts);
+        let end = all_positions.len();
+        inner_wire_ranges.push((start, end));
+    }
+
+    let pts2d: Vec<Point2> = all_positions.iter().map(|&p| project(p)).collect();
+
+    // Compute bounding box for CDT.
+    let mut min_x = f64::MAX;
+    let mut min_y = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut max_y = f64::MIN;
+    for &p in &pts2d {
+        min_x = min_x.min(p.x());
+        min_y = min_y.min(p.y());
+        max_x = max_x.max(p.x());
+        max_y = max_y.max(p.y());
+    }
+    let margin = ((max_x - min_x).max(max_y - min_y)) * 0.1 + 1e-6;
+    let bounds = (
+        Point2::new(min_x - margin, min_y - margin),
+        Point2::new(max_x + margin, max_y + margin),
+    );
+
+    let mut cdt = Cdt::new(bounds);
+
+    // Insert all points.
+    let mut cdt_indices: Vec<usize> = Vec::with_capacity(pts2d.len());
+    for &p in &pts2d {
+        let idx = cdt.insert_point(p).map_err(crate::OperationsError::Math)?;
+        cdt_indices.push(idx);
+    }
+
+    // Insert outer boundary constraints.
+    let mut all_constraints: Vec<(usize, usize)> = Vec::new();
+    for i in 0..outer_count {
+        let j = (i + 1) % outer_count;
+        let ci = cdt_indices[i];
+        let cj = cdt_indices[j];
+        if ci != cj {
+            cdt.insert_constraint(ci, cj)
+                .map_err(crate::OperationsError::Math)?;
+            all_constraints.push((ci, cj));
+        }
+    }
+
+    // Insert inner wire constraints (holes).
+    for &(start, end) in &inner_wire_ranges {
+        let count = end - start;
+        for i in 0..count {
+            let j = (i + 1) % count;
+            let ci = cdt_indices[start + i];
+            let cj = cdt_indices[start + j];
+            if ci != cj {
+                cdt.insert_constraint(ci, cj)
+                    .map_err(crate::OperationsError::Math)?;
+                all_constraints.push((ci, cj));
+            }
+        }
+    }
+
+    // Remove exterior triangles (using only outer boundary constraints).
+    let outer_constraints: Vec<(usize, usize)> = (0..outer_count)
+        .filter_map(|i| {
+            let j = (i + 1) % outer_count;
+            let ci = cdt_indices[i];
+            let cj = cdt_indices[j];
+            (ci != cj).then_some((ci, cj))
+        })
+        .collect();
+    cdt.remove_exterior(&outer_constraints);
+
+    // Remove hole interiors by seeding from each hole's centroid.
+    // Build a set of all constraint edges for flood-fill stopping.
+    let constraint_set: HashSet<(usize, usize)> = all_constraints
+        .iter()
+        .flat_map(|&(a, b)| {
+            let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+            [(lo, hi), (hi, lo)]
+        })
+        .collect();
+
+    for &(start, end) in &inner_wire_ranges {
+        let count = end - start;
+        if count < 3 {
+            continue;
+        }
+        // Compute centroid of hole polygon in 2D.
+        let mut cx = 0.0;
+        let mut cy = 0.0;
+        #[allow(clippy::cast_precision_loss)]
+        for idx in start..end {
+            cx += pts2d[idx].x();
+            cy += pts2d[idx].y();
+        }
+        cx /= count as f64;
+        cy /= count as f64;
+
+        // Flood-fill remove from the hole centroid, stopping at constraints.
+        let removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
+        debug_assert!(
+            removed,
+            "hole centroid fell outside CDT triangulation — concave inner wire?"
+        );
+    }
+
+    // Extract triangles and build mesh.
+    let cdt_triangles = cdt.triangles();
+    let cdt_verts = cdt.vertices();
+    let mut positions_out = Vec::new();
+    let mut normals_out = Vec::new();
+    let mut indices_out = Vec::new();
+
+    // Build O(1) reverse map: CDT vertex index → original position index.
+    let mut vi_to_orig: HashMap<usize, usize> = HashMap::new();
+    for (orig_idx, &cdt_vi) in cdt_indices.iter().enumerate() {
+        vi_to_orig.entry(cdt_vi).or_insert(orig_idx);
+    }
+
+    // Map CDT point indices → output mesh indices.
+    let mut cdt_to_mesh: HashMap<usize, u32> = HashMap::new();
+    for &(v0, v1, v2) in &cdt_triangles {
+        for &vi in &[v0, v1, v2] {
+            if let std::collections::hash_map::Entry::Vacant(e) = cdt_to_mesh.entry(vi) {
+                #[allow(clippy::cast_possible_truncation)]
+                let mesh_idx = positions_out.len() as u32;
+                // Find the original 3D point for this CDT vertex.
+                if let Some(&orig_idx) = vi_to_orig.get(&vi) {
+                    positions_out.push(all_positions[orig_idx]);
+                } else {
+                    // Steiner point inserted by CDT — reconstruct 3D from 2D.
+                    let p2d = cdt_verts[vi];
+                    let p3d = unproject_point(p2d, normal, &all_positions[0]);
+                    positions_out.push(p3d);
+                }
+                normals_out.push(normal);
+                e.insert(mesh_idx);
+            }
+        }
+    }
+
+    for &(v0, v1, v2) in &cdt_triangles {
+        let i0 = cdt_to_mesh[&v0];
+        let i1 = cdt_to_mesh[&v1];
+        let i2 = cdt_to_mesh[&v2];
+        indices_out.push(i0);
+        indices_out.push(i1);
+        indices_out.push(i2);
+    }
+
+    // Ensure winding matches face normal.
+    if indices_out.len() >= 3 {
+        let i0 = indices_out[0] as usize;
+        let i1 = indices_out[1] as usize;
+        let i2 = indices_out[2] as usize;
+        let a = positions_out[i1] - positions_out[i0];
+        let b = positions_out[i2] - positions_out[i0];
+        let tri_normal = a.cross(b);
+        if tri_normal.dot(normal) < 0.0 {
+            for t in 0..indices_out.len() / 3 {
+                indices_out.swap(t * 3 + 1, t * 3 + 2);
+            }
+        }
+    }
 
     Ok(TriangleMesh {
-        positions,
+        positions: positions_out,
         normals: normals_out,
-        indices,
+        indices: indices_out,
     })
+}
+
+/// Reconstruct a 3D point from a 2D projection, using the face plane.
+fn unproject_point(p2d: brepkit_math::vec::Point2, normal: Vec3, reference: &Point3) -> Point3 {
+    let ax = normal.x().abs();
+    let ay = normal.y().abs();
+    let az = normal.z().abs();
+
+    // The "dropped" coordinate is reconstructed from the plane equation.
+    let d = normal.x() * reference.x() + normal.y() * reference.y() + normal.z() * reference.z();
+    if az >= ax && az >= ay {
+        // Dropped z: z = (d - nx*x - ny*y) / nz
+        let z = (d - normal.x() * p2d.x() - normal.y() * p2d.y()) / normal.z();
+        Point3::new(p2d.x(), p2d.y(), z)
+    } else if ay >= ax {
+        // Dropped y: y = (d - nx*x - nz*z) / ny
+        let y = (d - normal.x() * p2d.x() - normal.z() * p2d.y()) / normal.y();
+        Point3::new(p2d.x(), y, p2d.y())
+    } else {
+        // Dropped x: x = (d - ny*y - nz*z) / nx
+        let x = (d - normal.y() * p2d.x() - normal.z() * p2d.y()) / normal.x();
+        Point3::new(x, p2d.x(), p2d.y())
+    }
+}
+
+/// CDT tessellation for a planar face with inner wires, writing into a shared mesh.
+///
+/// `boundary_global_ids` and `outer_positions` describe the outer wire (already
+/// collected by the caller). Inner wires are sampled here and added as CDT
+/// constraint loops.
+#[allow(clippy::too_many_lines)]
+fn tessellate_planar_shared_with_holes(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    boundary_global_ids: &[u32],
+    outer_positions: &[Point3],
+    normal: Vec3,
+    merged: &mut TriangleMesh,
+    point_to_global: &mut HashMap<(u64, u64, u64), u32>,
+) -> Result<(), crate::OperationsError> {
+    use brepkit_math::cdt::Cdt;
+    use brepkit_math::vec::Point2;
+    use std::collections::HashSet;
+
+    let ax = normal.x().abs();
+    let ay = normal.y().abs();
+    let az = normal.z().abs();
+    let project = |p: Point3| -> Point2 {
+        if az >= ax && az >= ay {
+            Point2::new(p.x(), p.y())
+        } else if ay >= ax {
+            Point2::new(p.x(), p.z())
+        } else {
+            Point2::new(p.y(), p.z())
+        }
+    };
+
+    // Collect all 3D positions and their global mesh IDs.
+    let mut all_positions: Vec<Point3> = outer_positions.to_vec();
+    let mut all_global_ids: Vec<Option<u32>> =
+        boundary_global_ids.iter().map(|&g| Some(g)).collect();
+    let outer_count = all_positions.len();
+    let mut inner_wire_ranges: Vec<(usize, usize)> = Vec::new();
+
+    let tol = 1e-10;
+    for &iw_id in face_data.inner_wires() {
+        let iw = topo.wire(iw_id)?;
+        let inner_pts = sample_wire_positions(topo, iw, tol)?;
+        let start = all_positions.len();
+        for &pt in &inner_pts {
+            all_positions.push(pt);
+            // Allocate or reuse global mesh vertices for inner wire points.
+            let key = (pt.x().to_bits(), pt.y().to_bits(), pt.z().to_bits());
+            let gid = point_to_global.entry(key).or_insert_with(|| {
+                #[allow(clippy::cast_possible_truncation)]
+                let idx = merged.positions.len() as u32;
+                merged.positions.push(pt);
+                merged.normals.push(normal);
+                idx
+            });
+            all_global_ids.push(Some(*gid));
+        }
+        let end = all_positions.len();
+        inner_wire_ranges.push((start, end));
+    }
+
+    let pts2d: Vec<Point2> = all_positions.iter().map(|&p| project(p)).collect();
+
+    // Compute bounding box for CDT.
+    let mut min_x = f64::MAX;
+    let mut min_y = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut max_y = f64::MIN;
+    for &p in &pts2d {
+        min_x = min_x.min(p.x());
+        min_y = min_y.min(p.y());
+        max_x = max_x.max(p.x());
+        max_y = max_y.max(p.y());
+    }
+    let margin = ((max_x - min_x).max(max_y - min_y)) * 0.1 + 1e-6;
+    let bounds = (
+        Point2::new(min_x - margin, min_y - margin),
+        Point2::new(max_x + margin, max_y + margin),
+    );
+
+    let mut cdt = Cdt::new(bounds);
+    let mut cdt_indices: Vec<usize> = Vec::with_capacity(pts2d.len());
+    for &p in &pts2d {
+        let idx = cdt.insert_point(p).map_err(crate::OperationsError::Math)?;
+        cdt_indices.push(idx);
+    }
+
+    // Insert outer boundary constraints.
+    let mut all_constraints: Vec<(usize, usize)> = Vec::new();
+    for i in 0..outer_count {
+        let j = (i + 1) % outer_count;
+        let ci = cdt_indices[i];
+        let cj = cdt_indices[j];
+        if ci != cj {
+            cdt.insert_constraint(ci, cj)
+                .map_err(crate::OperationsError::Math)?;
+            all_constraints.push((ci, cj));
+        }
+    }
+
+    // Insert inner wire constraints (holes).
+    for &(start, end) in &inner_wire_ranges {
+        let count = end - start;
+        for i in 0..count {
+            let j = (i + 1) % count;
+            let ci = cdt_indices[start + i];
+            let cj = cdt_indices[start + j];
+            if ci != cj {
+                cdt.insert_constraint(ci, cj)
+                    .map_err(crate::OperationsError::Math)?;
+                all_constraints.push((ci, cj));
+            }
+        }
+    }
+
+    // Remove exterior using only outer boundary constraints.
+    let outer_constraints: Vec<(usize, usize)> = (0..outer_count)
+        .filter_map(|i| {
+            let j = (i + 1) % outer_count;
+            let ci = cdt_indices[i];
+            let cj = cdt_indices[j];
+            (ci != cj).then_some((ci, cj))
+        })
+        .collect();
+    cdt.remove_exterior(&outer_constraints);
+
+    // Build constraint set for flood-fill stopping.
+    let constraint_set: HashSet<(usize, usize)> = all_constraints
+        .iter()
+        .flat_map(|&(a, b)| {
+            let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+            [(lo, hi), (hi, lo)]
+        })
+        .collect();
+
+    // Remove hole interiors by flooding from each hole centroid.
+    for &(start, end) in &inner_wire_ranges {
+        let count = end - start;
+        if count < 3 {
+            continue;
+        }
+        let mut cx = 0.0;
+        let mut cy = 0.0;
+        #[allow(clippy::cast_precision_loss)]
+        for idx in start..end {
+            cx += pts2d[idx].x();
+            cy += pts2d[idx].y();
+        }
+        cx /= count as f64;
+        cy /= count as f64;
+        let removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
+        debug_assert!(
+            removed,
+            "hole centroid fell outside CDT triangulation — concave inner wire?"
+        );
+    }
+
+    let cdt_triangles = cdt.triangles();
+
+    // Map CDT vertex index → global mesh index.
+    let mut cdt_to_global: HashMap<usize, u32> = HashMap::new();
+    for (local_idx, &cdt_idx) in cdt_indices.iter().enumerate() {
+        if let Some(gid) = all_global_ids[local_idx] {
+            cdt_to_global.insert(cdt_idx, gid);
+        }
+    }
+
+    // For any Steiner points inserted by CDT, allocate new global vertices.
+    for &(v0, v1, v2) in &cdt_triangles {
+        for &vi in &[v0, v1, v2] {
+            if let std::collections::hash_map::Entry::Vacant(e) = cdt_to_global.entry(vi) {
+                let p2d = cdt.vertices()[vi];
+                let p3d = unproject_point(p2d, normal, &all_positions[0]);
+                #[allow(clippy::cast_possible_truncation)]
+                let gid = merged.positions.len() as u32;
+                merged.positions.push(p3d);
+                merged.normals.push(normal);
+                e.insert(gid);
+            }
+        }
+    }
+
+    // Check winding of first triangle.
+    let needs_flip = if let Some(&(v0, v1, v2)) = cdt_triangles.first() {
+        let g0 = cdt_to_global[&v0] as usize;
+        let g1 = cdt_to_global[&v1] as usize;
+        let g2 = cdt_to_global[&v2] as usize;
+        let a = merged.positions[g1] - merged.positions[g0];
+        let b = merged.positions[g2] - merged.positions[g0];
+        a.cross(b).dot(normal) < 0.0
+    } else {
+        false
+    };
+
+    for &(v0, v1, v2) in &cdt_triangles {
+        let g0 = cdt_to_global[&v0];
+        let g1 = cdt_to_global[&v1];
+        let g2 = cdt_to_global[&v2];
+        if needs_flip {
+            merged.indices.push(g0);
+            merged.indices.push(g2);
+            merged.indices.push(g1);
+        } else {
+            merged.indices.push(g0);
+            merged.indices.push(g1);
+            merged.indices.push(g2);
+        }
+    }
+
+    Ok(())
 }
 
 /// Ear-clipping triangulation for a simple polygon in 3D.
@@ -1488,6 +2074,12 @@ fn tessellate_face_with_shared_edges(
     point_to_global: &mut HashMap<(u64, u64, u64), u32>,
 ) -> Result<(), crate::OperationsError> {
     let face_data = topo.face(face_id)?;
+    let is_reversed = face_data.is_reversed();
+
+    // Track index/position counts before tessellation so we can flip new
+    // triangles and normals if the face is reversed.
+    let idx_start = merged.indices.len();
+    let pos_start = merged.positions.len();
 
     if let FaceSurface::Plane { normal, .. } = face_data.surface() {
         // For planar faces: build boundary polygon from shared edge vertices.
@@ -1587,35 +2179,45 @@ fn tessellate_face_with_shared_edges(
             return Ok(());
         }
 
-        // Gather positions for ear-clip triangulation (need local coords).
+        // Gather positions for triangulation (need local coords).
         let local_positions: Vec<Point3> = boundary_global_ids
             .iter()
             .map(|&gid| merged.positions[gid as usize])
             .collect();
 
-        let mut local_indices = ear_clip_triangulate(&local_positions, normal);
+        if face_data.inner_wires().is_empty() {
+            // Simple ear-clip for faces without holes.
+            let mut local_indices = ear_clip_triangulate(&local_positions, normal);
 
-        // Ensure triangle winding matches the face normal.
-        // ear_clip_triangulate always produces CCW in 2D projection, but
-        // if the face normal has a negative dominant component the winding
-        // needs to be flipped to produce outward-facing triangles.
-        if local_indices.len() >= 3 {
-            let i0 = local_indices[0] as usize;
-            let i1 = local_indices[1] as usize;
-            let i2 = local_indices[2] as usize;
-            let a = local_positions[i1] - local_positions[i0];
-            let b = local_positions[i2] - local_positions[i0];
-            let tri_normal = a.cross(b);
-            if tri_normal.dot(normal) < 0.0 {
-                for t in 0..local_indices.len() / 3 {
-                    local_indices.swap(t * 3 + 1, t * 3 + 2);
+            // Ensure triangle winding matches the face normal.
+            if local_indices.len() >= 3 {
+                let i0 = local_indices[0] as usize;
+                let i1 = local_indices[1] as usize;
+                let i2 = local_indices[2] as usize;
+                let a = local_positions[i1] - local_positions[i0];
+                let b = local_positions[i2] - local_positions[i0];
+                let tri_normal = a.cross(b);
+                if tri_normal.dot(normal) < 0.0 {
+                    for t in 0..local_indices.len() / 3 {
+                        local_indices.swap(t * 3 + 1, t * 3 + 2);
+                    }
                 }
             }
-        }
 
-        // Map local triangle indices back to global vertex indices.
-        for &li in &local_indices {
-            merged.indices.push(boundary_global_ids[li as usize]);
+            for &li in &local_indices {
+                merged.indices.push(boundary_global_ids[li as usize]);
+            }
+        } else {
+            // CDT path for planar faces with inner wires (holes).
+            tessellate_planar_shared_with_holes(
+                topo,
+                face_data,
+                &boundary_global_ids,
+                &local_positions,
+                normal,
+                merged,
+                point_to_global,
+            )?;
         }
     } else if matches!(face_data.surface(), FaceSurface::Nurbs(_)) {
         // For NURBS faces: use CDT-based boundary-constrained tessellation.
@@ -1656,6 +2258,21 @@ fn tessellate_face_with_shared_edges(
             merged,
             point_to_global,
         )?;
+    }
+
+    // If the face is reversed, flip triangle winding AND negate per-vertex normals
+    // for all geometry added by this face. This ensures correct outward orientation
+    // for both volume computation and rendering.
+    if is_reversed {
+        let idx_end = merged.indices.len();
+        let tri_count = (idx_end - idx_start) / 3;
+        for t in 0..tri_count {
+            let base = idx_start + t * 3;
+            merged.indices.swap(base + 1, base + 2);
+        }
+        for n in &mut merged.normals[pos_start..] {
+            *n = -*n;
+        }
     }
 
     Ok(())

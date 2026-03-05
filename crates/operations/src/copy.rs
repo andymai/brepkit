@@ -40,6 +40,7 @@ struct FaceSnap {
     outer_wire_index: usize,
     inner_wire_indices: Vec<usize>,
     surface: FaceSurface,
+    reversed: bool,
 }
 
 struct ShellSnap {
@@ -146,6 +147,7 @@ pub fn copy_solid(
                 outer_wire_index,
                 inner_wire_indices,
                 surface,
+                reversed: face.is_reversed(),
             });
         }
 
@@ -192,9 +194,12 @@ pub fn copy_solid(
                 .iter()
                 .map(|idx| wire_map[idx])
                 .collect();
-            let new_fid = topo
-                .faces
-                .alloc(Face::new(new_outer, new_inner, fsnap.surface.clone()));
+            let new_face = if fsnap.reversed {
+                Face::new_reversed(new_outer, new_inner, fsnap.surface.clone())
+            } else {
+                Face::new(new_outer, new_inner, fsnap.surface.clone())
+            };
+            let new_fid = topo.faces.alloc(new_face);
             new_face_ids.push(new_fid);
         }
         let new_shell = Shell::new(new_face_ids).map_err(crate::OperationsError::Topology)?;
@@ -342,6 +347,7 @@ pub fn copy_and_transform_solid(
                 outer_wire_index,
                 inner_wire_indices,
                 surface,
+                reversed: face.is_reversed(),
             });
         }
 
@@ -543,9 +549,12 @@ pub fn copy_and_transform_solid(
                 }
             };
 
-            let new_fid = topo
-                .faces
-                .alloc(Face::new(new_outer, new_inner, new_surface));
+            let new_face = if fsnap.reversed {
+                Face::new_reversed(new_outer, new_inner, new_surface)
+            } else {
+                Face::new(new_outer, new_inner, new_surface)
+            };
+            let new_fid = topo.faces.alloc(new_face);
             new_face_ids.push(new_fid);
         }
         let new_shell = Shell::new(new_face_ids).map_err(crate::OperationsError::Topology)?;
