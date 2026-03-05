@@ -204,8 +204,18 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     }
 
     // ── Cylinder: 1 cylindrical face + planar caps ────────────────────
+    //
+    // A pure cylinder has exactly 1 cylindrical face and 2 planar caps.
+    // If there are more than 2 planes the solid is compound (e.g. a box
+    // with a drilled hole has 1 cylindrical hole-wall + 6 box faces).
+    // In the compound case the cylindrical face is a concave inner surface
+    // and the formula πr²h would compute the cylinder volume, not the solid.
     if let Some((origin, axis, r)) = cyl {
-        if cone_params.is_none() && torus_params.is_none() && sphere_r.is_none() {
+        if cone_params.is_none()
+            && torus_params.is_none()
+            && sphere_r.is_none()
+            && planes.len() == 2
+        {
             let origin_vec = Vec3::new(origin.x(), origin.y(), origin.z());
             let mut ts = cap_t_values(origin_vec, axis, &planes);
             if ts.len() >= 2 {
