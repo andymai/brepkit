@@ -10,7 +10,7 @@ brepkit is the computational backend that powers brepjs. It handles NURBS geomet
 
 ## Architecture
 
-brepkit is organized as a layered Cargo workspace where each layer depends only on layers below it:
+brepkit is organized as a layered Cargo workspace. Each layer depends on layers below it; the L2 IO crate also depends on L2 operations for tessellation during export:
 
 ```mermaid
 graph TD
@@ -21,7 +21,7 @@ graph TD
     MATH["<b>L0: brepkit-math</b><br/>Vectors, matrices, NURBS, predicates"]
 
     WASM --> OPS
-    WASM --> IO
+    WASM -.-> IO
     WASM --> TOPO
     WASM --> MATH
     IO --> OPS
