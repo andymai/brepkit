@@ -3,6 +3,11 @@ name: Release & Publish
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_version:
+        description: "Manually publish this version (e.g. 0.4.1). Skips release-please."
+        required: true
 
 permissions:
   contents: read
@@ -56,7 +61,7 @@ jobs:
   publish:
     name: Build WASM & Publish
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true'
+    if: ${{ always() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -83,7 +88,7 @@ jobs:
 
       - name: Set package name
         working-directory: crates/wasm/pkg
-        run: npm pkg set name="@andymai/brepkit-wasm"
+        run: npm pkg set name="brepkit-wasm"
 
       - name: Verify version
         working-directory: crates/wasm/pkg
@@ -94,9 +99,9 @@ jobs:
             echo "::error::Version mismatch: package.json=$PKG_VERSION tag=$TAG_VERSION"
             exit 1
           fi
-          echo "Publishing @andymai/brepkit-wasm@$PKG_VERSION"
+          echo "Publishing brepkit-wasm@$PKG_VERSION"
         env:
-          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name || format('v{0}', github.event.inputs.publish_version) }}
 
       - name: Publish to npm
         working-directory: crates/wasm/pkg
