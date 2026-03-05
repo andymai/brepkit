@@ -240,6 +240,66 @@ impl Cdt {
         // flood-fill is sufficient.
     }
 
+    /// Remove all non-removed triangles reachable from the triangle containing
+    /// `seed`, stopping at constraint edges.
+    ///
+    /// This is the standard CDT hole-removal approach: given a point known to
+    /// be inside a hole, find its containing triangle and flood-fill remove.
+    ///
+    /// Returns `true` if the seed triangle was found and removal occurred,
+    /// `false` if no triangle contains the seed point (e.g. concave hole
+    /// centroid falling outside the polygon).
+    pub fn flood_remove_from_point(
+        &mut self,
+        seed: Point2,
+        constraints: &HashSet<(usize, usize)>,
+    ) -> bool {
+        // Locate the non-removed triangle containing the seed point.
+        let seed_tri = self
+            .triangles
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| !t.removed)
+            .find(|(_, t)| {
+                let p0 = self.vertices[t.v[0]];
+                let p1 = self.vertices[t.v[1]];
+                let p2 = self.vertices[t.v[2]];
+                let d0 = orient2d(p0, p1, seed);
+                let d1 = orient2d(p1, p2, seed);
+                let d2 = orient2d(p2, p0, seed);
+                (d0 >= 0.0 && d1 >= 0.0 && d2 >= 0.0) || (d0 <= 0.0 && d1 <= 0.0 && d2 <= 0.0)
+            })
+            .map(|(i, _)| i);
+
+        let Some(start) = seed_tri else {
+            return false;
+        };
+
+        let mut stack = vec![start];
+        while let Some(ti) = stack.pop() {
+            if self.triangles[ti].removed {
+                continue;
+            }
+            self.triangles[ti].removed = true;
+
+            for local in 0..3 {
+                let va = self.triangles[ti].v[(local + 1) % 3];
+                let vb = self.triangles[ti].v[(local + 2) % 3];
+                let edge_key = sorted_pair(va, vb);
+                if constraints.contains(&edge_key) {
+                    continue;
+                }
+                if let Some(adj) = self.triangles[ti].adj[local] {
+                    if !self.triangles[adj].removed {
+                        stack.push(adj);
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
     /// Partition remaining (non-removed) interior triangles into connected
     /// regions separated by the given separator edges.
     ///
@@ -1015,104 +1075,6 @@ impl Cdt {
 
         // They must be on strictly opposite sides.
         d1 * d2 < 0.0
-    }
-
-    /// Remove triangles inside holes (inner loops).
-    ///
-    /// After the main exterior flood-fill, some interior pockets formed by
-    /// inner loops may remain. We detect these by checking triangle
-    /// centroids against the winding number of inner boundaries.
-    #[allow(dead_code)]
-    fn remove_hole_interiors(&mut self, all_constraints: &HashSet<(usize, usize)>) {
-        // Collect non-removed triangles adjacent to the removed region
-        // across non-constraint edges. These are candidates for hole interiors.
-        let mut seed_tris: Vec<usize> = Vec::new();
-
-        let len = self.triangles.len();
-        for i in 0..len {
-            if !self.triangles[i].removed {
-                continue;
-            }
-            for local in 0..3 {
-                let va = self.triangles[i].v[(local + 1) % 3];
-                let vb = self.triangles[i].v[(local + 2) % 3];
-                let edge = sorted_pair(va, vb);
-
-                if !all_constraints.contains(&edge) {
-                    continue; // Already crossed by flood-fill.
-                }
-
-                // There's a constraint edge separating removed from
-                // non-removed. The non-removed side across a hole boundary
-                // might need to be removed too.
-                if let Some(adj) = self.triangles[i].adj[local] {
-                    if !self.triangles[adj].removed {
-                        // Check if this non-removed triangle is adjacent to
-                        // another removed region via a non-constraint edge.
-                        // This would mean it's inside a hole.
-                        seed_tris.push(adj);
-                    }
-                }
-            }
-        }
-
-        // For each seed, check if it's in a hole region by seeing if
-        // a flood-fill from it reaches the outer boundary constraints.
-        // If not, it's enclosed by hole boundaries and should be removed.
-        for seed in seed_tris {
-            if self.triangles[seed].removed {
-                continue;
-            }
-            // Flood-fill from seed, stopping at constraints.
-            // If we reach any triangle with a super-triangle vertex or
-            // any triangle on the outer boundary, this region is not a hole.
-            let mut region = Vec::new();
-            let mut stack = vec![seed];
-            let mut is_hole = true;
-
-            while let Some(ti) = stack.pop() {
-                if self.triangles[ti].removed {
-                    continue;
-                }
-                // Check if already visited.
-                if region.contains(&ti) {
-                    continue;
-                }
-                region.push(ti);
-
-                let sc = self.super_count;
-                if self.triangles[ti].v[0] < sc
-                    || self.triangles[ti].v[1] < sc
-                    || self.triangles[ti].v[2] < sc
-                {
-                    // Reached super-triangle region — not a hole.
-                    is_hole = false;
-                    break;
-                }
-
-                for local in 0..3 {
-                    let va = self.triangles[ti].v[(local + 1) % 3];
-                    let vb = self.triangles[ti].v[(local + 2) % 3];
-                    let edge = sorted_pair(va, vb);
-
-                    if all_constraints.contains(&edge) {
-                        continue;
-                    }
-
-                    if let Some(adj) = self.triangles[ti].adj[local] {
-                        if !self.triangles[adj].removed && !region.contains(&adj) {
-                            stack.push(adj);
-                        }
-                    }
-                }
-            }
-
-            if is_hole {
-                for &ti in &region {
-                    self.triangles[ti].removed = true;
-                }
-            }
-        }
     }
 }
 

@@ -47,6 +47,13 @@ pub struct Face {
     inner_wires: Vec<WireId>,
     /// The geometric surface underlying this face.
     surface: FaceSurface,
+    /// Whether the face orientation is reversed relative to the surface normal.
+    ///
+    /// When `true`, the face's topological orientation (outward normal for
+    /// volume computation) is opposite to the geometric surface normal. This
+    /// is used by boolean operations when a curved face must contribute with
+    /// flipped winding without altering the underlying surface definition.
+    reversed: bool,
 }
 
 impl Face {
@@ -57,6 +64,26 @@ impl Face {
             outer_wire,
             inner_wires,
             surface,
+            reversed: false,
+        }
+    }
+
+    /// Creates a new face with reversed orientation relative to the surface normal.
+    ///
+    /// Used by boolean operations when a curved face must contribute with
+    /// flipped winding (e.g., a cylinder face from the tool solid that becomes
+    /// part of the result with opposite orientation).
+    #[must_use]
+    pub const fn new_reversed(
+        outer_wire: WireId,
+        inner_wires: Vec<WireId>,
+        surface: FaceSurface,
+    ) -> Self {
+        Self {
+            outer_wire,
+            inner_wires,
+            surface,
+            reversed: true,
         }
     }
 
@@ -81,5 +108,18 @@ impl Face {
     /// Sets the surface geometry of this face.
     pub fn set_surface(&mut self, surface: FaceSurface) {
         self.surface = surface;
+    }
+
+    /// Returns whether this face's orientation is reversed relative to its
+    /// surface normal.
+    #[must_use]
+    pub const fn is_reversed(&self) -> bool {
+        self.reversed
+    }
+
+    /// Sets whether this face's orientation is reversed relative to its
+    /// surface normal.
+    pub fn set_reversed(&mut self, reversed: bool) {
+        self.reversed = reversed;
     }
 }
