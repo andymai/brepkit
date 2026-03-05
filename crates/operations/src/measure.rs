@@ -131,11 +131,202 @@ pub fn solid_surface_area(
 
 // ── Volume ────────────────────────────────────────────────────────
 
+/// Try to compute the volume of a solid analytically by detecting known
+/// primitive shapes (sphere, cylinder, cone/frustum, torus).
+///
+/// Returns `None` if the solid is not a recognized pure primitive, in which
+/// case the caller should fall back to tessellation.
+///
+/// Detection rules (single pass over shell faces):
+/// - Any `Nurbs` face → `None` (fall back)
+/// - All faces are `Sphere` → sphere formula `(4/3)πr³`
+/// - Exactly 1 `Cylinder` + ≥1 `Plane` caps, 0 other analytic → `πr²h`
+/// - Exactly 1 `Cone` + ≤2 `Plane` caps, 0 other analytic → cone/frustum formula
+///   (cap radii are read from the `Circle3D` edges of the cap faces)
+/// - Exactly 1 `Torus` + 0 planes, 0 other analytic → `2π²Rr²`
+fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
+    use std::f64::consts::PI;
+
+    let solid_data = topo.solid(solid).ok()?;
+    let shell = topo.shell(solid_data.outer_shell()).ok()?;
+
+    // Classify all faces by surface type.
+    let mut sphere_r: Option<f64> = None;
+    let mut cyl: Option<(Point3, Vec3, f64)> = None; // (origin, axis, radius)
+    let mut cone_params: Option<(Point3, Vec3)> = None; // (apex, axis)
+    let mut torus_params: Option<(f64, f64)> = None; // (major_r, minor_r)
+    let mut planes: Vec<(Vec3, f64)> = Vec::new();
+    let mut plane_face_ids: Vec<FaceId> = Vec::new();
+
+    for &fid in shell.faces() {
+        let face = topo.face(fid).ok()?;
+        match face.surface() {
+            FaceSurface::Nurbs(_) => return None,
+            FaceSurface::Plane { normal, d } => {
+                planes.push((*normal, *d));
+                plane_face_ids.push(fid);
+            }
+            FaceSurface::Sphere(s) => {
+                let r = s.radius();
+                match sphere_r {
+                    None => sphere_r = Some(r),
+                    // Multiple sphere faces must all share the same radius.
+                    Some(existing) if (r - existing).abs() > existing * 1e-6 => return None,
+                    Some(_) => {}
+                }
+            }
+            FaceSurface::Cylinder(c) => {
+                if cyl.is_some() {
+                    return None;
+                }
+                cyl = Some((c.origin(), c.axis(), c.radius()));
+            }
+            FaceSurface::Cone(c) => {
+                if cone_params.is_some() {
+                    return None;
+                }
+                cone_params = Some((c.apex(), c.axis()));
+            }
+            FaceSurface::Torus(t) => {
+                if torus_params.is_some() {
+                    return None;
+                }
+                torus_params = Some((t.major_radius(), t.minor_radius()));
+            }
+        }
+    }
+
+    // ── Sphere: all faces are sphere faces (e.g. two hemispheres) ─────
+    if let Some(r) = sphere_r {
+        if cyl.is_none() && cone_params.is_none() && torus_params.is_none() && planes.is_empty() {
+            return Some(4.0 / 3.0 * PI * r * r * r);
+        }
+    }
+
+    // ── Cylinder: 1 cylindrical face + planar caps ────────────────────
+    //
+    // A pure cylinder has exactly 1 cylindrical face and 2 planar caps.
+    // If there are more than 2 planes the solid is compound (e.g. a box
+    // with a drilled hole has 1 cylindrical hole-wall + 6 box faces).
+    // In the compound case the cylindrical face is a concave inner surface
+    // and the formula πr²h would compute the cylinder volume, not the solid.
+    if let Some((origin, axis, r)) = cyl {
+        if cone_params.is_none()
+            && torus_params.is_none()
+            && sphere_r.is_none()
+            && planes.len() == 2
+        {
+            let origin_vec = Vec3::new(origin.x(), origin.y(), origin.z());
+            let mut ts = cap_t_values(origin_vec, axis, &planes);
+            if ts.len() >= 2 {
+                ts.sort_by(f64::total_cmp);
+                if let (Some(&t_min), Some(&t_max)) = (ts.first(), ts.last()) {
+                    return Some(PI * r * r * (t_max - t_min));
+                }
+            }
+        }
+    }
+
+    // ── Cone / frustum: 1 conical face + planar caps ──────────────────
+    //
+    // Cap radii are read directly from the Circle3D edges of the cap faces,
+    // bypassing the ConicalSurface parameterization entirely. Heights are
+    // derived from the circle centers projected onto the cone axis.
+    if let Some((apex, axis)) = cone_params {
+        if cyl.is_none() && torus_params.is_none() && sphere_r.is_none() {
+            let apex_vec = Vec3::new(apex.x(), apex.y(), apex.z());
+
+            // Collect (circle_center, radius) from each plane cap face.
+            let mut cap_circles: Vec<(Point3, f64)> = Vec::new();
+            for &fid in &plane_face_ids {
+                if let Some(cap) = find_cap_circle(topo, fid) {
+                    cap_circles.push(cap);
+                }
+            }
+
+            // If any cap face did not yield a circle, the cone is degenerate or
+            // unsupported — fall back to tessellation rather than silently wrong answer.
+            if cap_circles.len() != plane_face_ids.len() {
+                return None;
+            }
+
+            match cap_circles.as_slice() {
+                [(c, r)] => {
+                    // Pointed cone: h = distance from apex to cap center along axis.
+                    let c_vec = Vec3::new(c.x(), c.y(), c.z());
+                    let h = (c_vec - apex_vec).dot(axis).abs();
+                    return Some(PI / 3.0 * r * r * h);
+                }
+                [(c1, r1), (c2, r2)] => {
+                    // Frustum: h = distance between cap centers projected onto axis.
+                    let c1_vec = Vec3::new(c1.x(), c1.y(), c1.z());
+                    let c2_vec = Vec3::new(c2.x(), c2.y(), c2.z());
+                    let h = (c2_vec - c1_vec).dot(axis).abs();
+                    return Some(PI * h / 3.0 * (r1 * r1 + r1 * r2 + r2 * r2));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // ── Torus: 1 toroidal face, no planar caps ────────────────────────
+    if let Some((r_major, r_minor)) = torus_params {
+        if cyl.is_none() && cone_params.is_none() && sphere_r.is_none() && planes.is_empty() {
+            return Some(2.0 * PI * PI * r_major * r_minor * r_minor);
+        }
+    }
+
+    None
+}
+
+/// Minimum |n · axis| for a plane to be considered a perpendicular cap face
+/// (i.e. the plane normal is within ~8° of the axis direction).
+const AXIS_PARALLEL_MIN_DOT: f64 = 0.99;
+
+/// Compute signed distances along `axis` from `ref_pt` to cap planes that are
+/// roughly perpendicular to the axis (`|n · axis| > AXIS_PARALLEL_MIN_DOT`).
+///
+/// For a plane `n · P = d`, the intersection with the line `ref_pt + t * axis`
+/// satisfies `t = (d − n · ref_pt) / (n · axis)`.
+fn cap_t_values(ref_pt: Vec3, axis: Vec3, planes: &[(Vec3, f64)]) -> Vec<f64> {
+    let mut ts = Vec::new();
+    for &(n, d) in planes {
+        let nd = n.dot(axis);
+        if nd.abs() > AXIS_PARALLEL_MIN_DOT {
+            ts.push((d - n.dot(ref_pt)) / nd);
+        }
+    }
+    ts
+}
+
+/// Search a face's outer wire for a `Circle3D` edge and return its `(center, radius)`.
+///
+/// Used by the cone volume formula to read cap radii directly from the geometry
+/// rather than inferring them from the `ConicalSurface` parameterization.
+fn find_cap_circle(topo: &Topology, face_id: FaceId) -> Option<(Point3, f64)> {
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    for oe in wire.edges() {
+        // Use let-else so a missing edge skips to the next iteration
+        // rather than returning None for the whole face.
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        if let brepkit_topology::edge::EdgeCurve::Circle(c) = edge.curve() {
+            return Some((c.center(), c.radius()));
+        }
+    }
+    None
+}
+
 /// Compute the volume of a solid using the signed tetrahedra method
 /// (divergence theorem on a surface tessellation).
 ///
 /// For each triangle `(v0, v1, v2)`, the signed volume of the
 /// tetrahedron it forms with the origin is `v0 · (v1 × v2) / 6`.
+///
+/// For pure-primitive solids (sphere, cylinder, cone, torus), uses exact
+/// analytic formulas instead of tessellation.
 ///
 /// # Errors
 ///
@@ -145,6 +336,11 @@ pub fn solid_volume(
     solid: SolidId,
     deflection: f64,
 ) -> Result<f64, crate::OperationsError> {
+    // Fast path: exact analytic formula for known primitives.
+    if let Some(v) = try_analytic_solid_volume(topo, solid) {
+        return Ok(v);
+    }
+
     let mut total = 0.0;
 
     let solid_data = topo.solid(solid)?;
@@ -645,6 +841,94 @@ mod tests {
         assert!(
             tol.approx_eq(len, 16.0),
             "3×5 rectangle perimeter should be ~16.0, got {len}"
+        );
+    }
+
+    // ── Analytic volume tests ──────────────────────────────────────
+
+    #[test]
+    fn sphere_volume_analytic_exact() {
+        use crate::primitives::make_sphere;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        // Low segment count — analytic path must not depend on tessellation quality.
+        let solid = make_sphere(&mut topo, 3.0, 4).unwrap();
+
+        let vol = solid_volume(&topo, solid, 0.5).unwrap();
+        let expected = 4.0 / 3.0 * PI * 27.0; // (4/3)π × 3³ ≈ 113.1
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 1e-10,
+            "sphere volume should be exact via analytic path: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
+        );
+    }
+
+    #[test]
+    fn cylinder_volume_analytic_exact() {
+        use crate::primitives::make_cylinder;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+
+        let vol = solid_volume(&topo, solid, 0.5).unwrap();
+        let expected = PI * 25.0 * 20.0; // π × 5² × 20 ≈ 1570.8
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 1e-10,
+            "cylinder volume should be exact via analytic path: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
+        );
+    }
+
+    #[test]
+    fn cone_pointed_volume_analytic_exact() {
+        use crate::primitives::make_cone;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_cone(&mut topo, 5.0, 0.0, 15.0).unwrap();
+
+        let vol = solid_volume(&topo, solid, 0.5).unwrap();
+        let expected = PI / 3.0 * 25.0 * 15.0; // π/3 × 5² × 15 ≈ 392.7
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 1e-10,
+            "pointed cone volume should be exact: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
+        );
+    }
+
+    #[test]
+    fn cone_frustum_volume_analytic_exact() {
+        use crate::primitives::make_cone;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_cone(&mut topo, 2.0, 1.0, 3.0).unwrap();
+
+        let vol = solid_volume(&topo, solid, 0.5).unwrap();
+        let expected = PI / 3.0 * 3.0 * (4.0 + 2.0 + 1.0); // πh/3 × (r1²+r1r2+r2²) ≈ 21.99
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 1e-10,
+            "frustum volume should be exact: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
+        );
+    }
+
+    #[test]
+    fn torus_volume_analytic_exact() {
+        use crate::primitives::make_torus;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_torus(&mut topo, 10.0, 3.0, 32).unwrap();
+
+        let vol = solid_volume(&topo, solid, 0.5).unwrap();
+        let expected = 2.0 * PI * PI * 10.0 * 9.0; // 2π²Rr² ≈ 1776.5
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 1e-10,
+            "torus volume should be exact: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
         );
     }
 }
