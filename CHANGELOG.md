@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/andymai/brepkit/compare/v0.4.1...v0.4.2) (2026-03-05)
+
+
+### Bug Fixes
+
+* **measure:** analytic volume for sphere, cylinder, cone, torus ([#62](https://github.com/andymai/brepkit/issues/62)) ([368ec48](https://github.com/andymai/brepkit/commit/368ec4873c09285e6973d0070482781275533127))
+
 ## [0.4.1](https://github.com/andymai/brepkit/compare/v0.4.0...v0.4.1) (2026-03-04)
 
 
