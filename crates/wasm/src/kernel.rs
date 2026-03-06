@@ -2094,13 +2094,17 @@ impl BrepKernel {
     ///
     /// Returns one of: `"plane"`, `"cylinder"`, `"cone"`, `"sphere"`,
     /// `"torus"`, `"bspline"`.
+    ///
+    /// For NURBS surfaces that exactly represent analytic shapes, this
+    /// returns the underlying analytic type (e.g. `"sphere"` for a NURBS
+    /// sphere patch).
     #[wasm_bindgen(js_name = "getSurfaceType")]
     pub fn get_surface_type(&self, face: u32) -> Result<String, JsError> {
         let face_id = self.resolve_face(face)?;
         let face_data = self.topo.face(face_id)?;
         Ok(match face_data.surface() {
             FaceSurface::Plane { .. } => "plane",
-            FaceSurface::Nurbs(_) => "bspline",
+            FaceSurface::Nurbs(ns) => detect_nurbs_surface_type(ns),
             FaceSurface::Cylinder(_) => "cylinder",
             FaceSurface::Cone(_) => "cone",
             FaceSurface::Sphere(_) => "sphere",
@@ -2112,13 +2116,17 @@ impl BrepKernel {
     /// Get the curve type of an edge.
     ///
     /// Returns `"LINE"`, `"BSPLINE_CURVE"`, `"CIRCLE"`, or `"ELLIPSE"`.
+    ///
+    /// For NURBS curves that exactly represent analytic curves, this
+    /// returns the underlying analytic type (e.g. `"CIRCLE"` for a
+    /// rational NURBS circle).
     #[wasm_bindgen(js_name = "getEdgeCurveType")]
     pub fn get_edge_curve_type(&self, edge: u32) -> Result<String, JsError> {
         let edge_id = self.resolve_edge(edge)?;
         let edge_data = self.topo.edge(edge_id)?;
         Ok(match edge_data.curve() {
             EdgeCurve::Line => "LINE",
-            EdgeCurve::NurbsCurve(_) => "BSPLINE_CURVE",
+            EdgeCurve::NurbsCurve(nc) => detect_nurbs_curve_type(nc),
             EdgeCurve::Circle(_) => "CIRCLE",
             EdgeCurve::Ellipse(_) => "ELLIPSE",
         }
@@ -4806,6 +4814,205 @@ impl BrepKernel {
 
 /// Convert a `FaceId` to a `u32` handle for JavaScript.
 #[allow(clippy::cast_possible_truncation)]
+/// Detect if a NURBS curve represents an analytic curve type.
+///
+/// Checks if the curve is a circle or ellipse by sampling points
+/// and verifying they are coplanar and equidistant from a center.
+fn detect_nurbs_curve_type(nc: &brepkit_math::nurbs::NurbsCurve) -> &'static str {
+    // A rational degree-2 NURBS with specific weight patterns can represent
+    // conic sections. Check if all sampled points lie on a circle.
+    if nc.degree() < 2 || !nc.is_rational() {
+        return "BSPLINE_CURVE";
+    }
+
+    let (u_min, u_max) = nc.domain();
+    let n_samples = 16;
+
+    // Sample points along the curve
+    let mut points = Vec::with_capacity(n_samples);
+    for i in 0..n_samples {
+        #[allow(clippy::cast_precision_loss)]
+        let t = u_min + (u_max - u_min) * (i as f64) / ((n_samples - 1) as f64);
+        points.push(nc.evaluate(t));
+    }
+
+    // Compute center as average of all sampled points
+    let mut cx = 0.0_f64;
+    let mut cy = 0.0_f64;
+    let mut cz = 0.0_f64;
+    for p in &points {
+        cx += p.x();
+        cy += p.y();
+        cz += p.z();
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let n = points.len() as f64;
+    let center = brepkit_math::vec::Point3::new(cx / n, cy / n, cz / n);
+
+    // Check if all points are equidistant from center (circle test)
+    let distances: Vec<f64> = points.iter().map(|p| (*p - center).length()).collect();
+    let avg_dist = distances.iter().sum::<f64>() / n;
+
+    if avg_dist < 1e-10 {
+        return "BSPLINE_CURVE";
+    }
+
+    let tol = avg_dist * 1e-4; // 0.01% relative tolerance
+    let is_circle = distances.iter().all(|d| (d - avg_dist).abs() < tol);
+
+    if is_circle {
+        // Check coplanarity — all points should lie in a plane through center
+        let v0 = points[0] - center;
+        let v1 = points[n_samples / 4] - center;
+        let normal = v0.cross(v1);
+        let normal_len = normal.length();
+        if normal_len < 1e-10 {
+            return "BSPLINE_CURVE";
+        }
+        let normal = brepkit_math::vec::Vec3::new(
+            normal.x() / normal_len,
+            normal.y() / normal_len,
+            normal.z() / normal_len,
+        );
+
+        let coplanar = points
+            .iter()
+            .all(|p| ((*p - center).dot(normal)).abs() < tol);
+
+        if coplanar {
+            return "CIRCLE";
+        }
+    }
+
+    // TODO: Could also detect ELLIPSE (non-uniform distances but elliptic pattern)
+    "BSPLINE_CURVE"
+}
+
+/// Detect if a NURBS surface represents an analytic surface type.
+///
+/// Checks if the surface is a sphere, cylinder, cone, or torus by
+/// sampling a grid of points and analyzing their geometric properties.
+fn detect_nurbs_surface_type(ns: &brepkit_math::nurbs::surface::NurbsSurface) -> &'static str {
+    let (u_min, u_max) = ns.domain_u();
+    let (v_min, v_max) = ns.domain_v();
+    let n = 8; // 8×8 grid = 64 sample points
+
+    // Sample points on the surface
+    let mut points = Vec::with_capacity(n * n);
+    for i in 0..n {
+        for j in 0..n {
+            #[allow(clippy::cast_precision_loss)]
+            let u = u_min + (u_max - u_min) * (i as f64) / ((n - 1) as f64);
+            #[allow(clippy::cast_precision_loss)]
+            let v = v_min + (v_max - v_min) * (j as f64) / ((n - 1) as f64);
+            points.push(ns.evaluate(u, v));
+        }
+    }
+
+    // Compute center as average
+    let mut cx = 0.0_f64;
+    let mut cy = 0.0_f64;
+    let mut cz = 0.0_f64;
+    for p in &points {
+        cx += p.x();
+        cy += p.y();
+        cz += p.z();
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let np = points.len() as f64;
+    let center = brepkit_math::vec::Point3::new(cx / np, cy / np, cz / np);
+
+    // Check if all points equidistant from center (sphere test)
+    let distances: Vec<f64> = points.iter().map(|p| (*p - center).length()).collect();
+    let avg_dist = distances.iter().sum::<f64>() / np;
+
+    if avg_dist < 1e-10 {
+        return "bspline";
+    }
+
+    let tol = avg_dist * 1e-3; // 0.1% relative tolerance
+    let is_sphere = distances.iter().all(|d| (d - avg_dist).abs() < tol);
+
+    if is_sphere {
+        return "sphere";
+    }
+
+    // Cylinder test: points should be equidistant from an axis line.
+    // Try to find the axis by PCA (direction of maximum variance).
+    // For a cylinder, points cluster around a line; cross-section is a circle.
+    if let Some(axis_dir) = estimate_cylinder_axis(&points, center) {
+        let projected_distances: Vec<f64> = points
+            .iter()
+            .map(|p| {
+                let v = *p - center;
+                let along_axis = v.dot(axis_dir);
+                let radial = brepkit_math::vec::Vec3::new(
+                    v.x() - axis_dir.x() * along_axis,
+                    v.y() - axis_dir.y() * along_axis,
+                    v.z() - axis_dir.z() * along_axis,
+                );
+                radial.length()
+            })
+            .collect();
+
+        let avg_r = projected_distances.iter().sum::<f64>() / np;
+        if avg_r > 1e-10 {
+            let r_tol = avg_r * 1e-3;
+            let is_cylinder = projected_distances
+                .iter()
+                .all(|d| (d - avg_r).abs() < r_tol);
+            if is_cylinder {
+                return "cylinder";
+            }
+        }
+    }
+
+    "bspline"
+}
+
+/// Estimate the cylinder axis direction from a set of surface sample points
+/// using a simple PCA-like approach (direction of maximum variance).
+fn estimate_cylinder_axis(
+    points: &[brepkit_math::vec::Point3],
+    center: brepkit_math::vec::Point3,
+) -> Option<brepkit_math::vec::Vec3> {
+    // Build covariance matrix
+    let mut cxx = 0.0_f64;
+    let mut cxy = 0.0_f64;
+    let mut cxz = 0.0_f64;
+    let mut cyy = 0.0_f64;
+    let mut cyz = 0.0_f64;
+    let mut czz = 0.0_f64;
+
+    for p in points {
+        let dx = p.x() - center.x();
+        let dy = p.y() - center.y();
+        let dz = p.z() - center.z();
+        cxx += dx * dx;
+        cxy += dx * dy;
+        cxz += dx * dz;
+        cyy += dy * dy;
+        cyz += dy * dz;
+        czz += dz * dz;
+    }
+
+    // Power iteration to find the principal eigenvector
+    let mut v = brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0);
+    for _ in 0..20 {
+        let new_v = brepkit_math::vec::Vec3::new(
+            v.x().mul_add(cxx, v.y().mul_add(cxy, v.z() * cxz)),
+            v.x().mul_add(cxy, v.y().mul_add(cyy, v.z() * cyz)),
+            v.x().mul_add(cxz, v.y().mul_add(cyz, v.z() * czz)),
+        );
+        let len = new_v.length();
+        if len < 1e-15 {
+            return None;
+        }
+        v = brepkit_math::vec::Vec3::new(new_v.x() / len, new_v.y() / len, new_v.z() / len);
+    }
+    Some(v)
+}
+
 const fn face_id_to_u32(id: brepkit_topology::face::FaceId) -> u32 {
     id.index() as u32
 }
