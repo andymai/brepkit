@@ -1268,12 +1268,13 @@ pub fn boolean_with_evolution(
     // Build evolution map via heuristic matching.
     let mut evo = EvolutionMap::new();
     let mut matched_inputs: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut unmatched_outputs: Vec<(usize, Vec3, Point3)> = Vec::new();
 
-    // Normal dot threshold: cos(30deg) — faces with normals diverging more
-    // than ~30 degrees are not considered matches.
-    let normal_threshold = 0.866;
-    // Maximum centroid distance squared for a match (generous, scaled to unit).
-    let centroid_dist_sq_max = 10.0;
+    // Normal dot threshold: cos(45deg) — relaxed to handle faces split by
+    // booleans where normals may shift slightly.
+    let normal_threshold = 0.707;
+    // Maximum centroid distance squared for a match (generous).
+    let centroid_dist_sq_max = 100.0;
 
     for &(out_idx, out_normal, out_centroid) in &output_faces {
         let mut best_score = f64::NEG_INFINITY;
@@ -1295,7 +1296,6 @@ pub fn boolean_with_evolution(
             }
 
             // Score: higher normal alignment + closer centroid = better.
-            // Normalize distance contribution to [0, 1] range.
             let score = dot - dist_sq / centroid_dist_sq_max;
             if score > best_score {
                 best_score = score;
@@ -1305,6 +1305,32 @@ pub fn boolean_with_evolution(
 
         if let Some(in_idx) = best_input {
             evo.add_modified(in_idx, out_idx);
+            matched_inputs.insert(in_idx);
+        } else {
+            unmatched_outputs.push((out_idx, out_normal, out_centroid));
+        }
+    }
+
+    // Unmatched output faces are "generated" — attribute them to the nearest
+    // input face (the face most likely responsible for generating them, e.g.
+    // intersection curves create new faces near the boundary).
+    for &(out_idx, _out_normal, out_centroid) in &unmatched_outputs {
+        let mut best_dist_sq = f64::MAX;
+        let mut best_input: Option<usize> = None;
+
+        for &(in_idx, _, in_centroid) in &input_faces {
+            let dx = out_centroid.x() - in_centroid.x();
+            let dy = out_centroid.y() - in_centroid.y();
+            let dz = out_centroid.z() - in_centroid.z();
+            let dist_sq = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
+            if dist_sq < best_dist_sq {
+                best_dist_sq = dist_sq;
+                best_input = Some(in_idx);
+            }
+        }
+
+        if let Some(in_idx) = best_input {
+            evo.add_generated(in_idx, out_idx);
             matched_inputs.insert(in_idx);
         }
     }
@@ -1333,8 +1359,8 @@ fn collect_face_signatures(
         let normal = if let FaceSurface::Plane { normal, .. } = face.surface() {
             *normal
         } else {
-            // For non-planar faces, approximate normal from first triangle.
-            let verts = face_vertices(topo, fid)?;
+            // For non-planar faces, approximate normal from sampled polygon.
+            let verts = face_polygon(topo, fid)?;
             if verts.len() >= 3 {
                 let e1 = verts[1] - verts[0];
                 let e2 = verts[2] - verts[0];
@@ -1344,7 +1370,7 @@ fn collect_face_signatures(
             }
         };
 
-        let verts = face_vertices(topo, fid)?;
+        let verts = face_polygon(topo, fid)?;
         let centroid = polygon_centroid(&verts);
         result.push((fid.index(), normal, centroid));
     }
