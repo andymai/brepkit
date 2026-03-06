@@ -206,6 +206,12 @@ fn intersect_planar_face_with_plane(
         .map(|v| dot_normal_point(cut_normal, *v) - cut_d)
         .collect();
 
+    // If all vertices lie on the cutting plane the face is coplanar —
+    // the cross-section boundary comes from adjacent faces, not this one.
+    if dists.iter().all(|d| d.abs() < tol.linear) {
+        return None;
+    }
+
     // Collect intersection points where edges cross the plane.
     let mut crossings = Vec::new();
 

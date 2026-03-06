@@ -12,6 +12,7 @@ use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::VertexId;
+use brepkit_topology::wire::WireId;
 
 /// Apply an affine transform to a solid, modifying vertex positions and
 /// face surface geometry in place.
@@ -48,89 +49,7 @@ pub fn transform_solid(
     }
 
     // Mutate phase 2: transform edge curves (NURBS, Circle, Ellipse).
-    // Line edges need no update — their geometry is defined by vertices.
-    let origin = matrix.mul_point(brepkit_math::vec::Point3::new(0.0, 0.0, 0.0));
-    let transform_dir = |d: brepkit_math::vec::Vec3| -> brepkit_math::vec::Vec3 {
-        matrix.mul_point(brepkit_math::vec::Point3::new(d.x(), d.y(), d.z())) - origin
-    };
-    for eid in edge_ids {
-        let edge = topo.edge(eid)?;
-        let new_curve = match edge.curve() {
-            EdgeCurve::Line => None,
-            EdgeCurve::NurbsCurve(c) => {
-                let new_control_points: Vec<_> = c
-                    .control_points()
-                    .iter()
-                    .map(|pt| matrix.mul_point(*pt))
-                    .collect();
-                Some(EdgeCurve::NurbsCurve(NurbsCurve::new(
-                    c.degree(),
-                    c.knots().to_vec(),
-                    new_control_points,
-                    c.weights().to_vec(),
-                )?))
-            }
-            EdgeCurve::Circle(c) => {
-                let new_center = matrix.mul_point(c.center());
-                let new_u = transform_dir(c.u_axis());
-                let new_v = transform_dir(c.v_axis());
-                let su = new_u.length();
-                let sv = new_v.length();
-                let new_normal = new_u.cross(new_v).normalize()?;
-                if (su - sv).abs() < 1e-12 * su.max(sv).max(1.0) {
-                    Some(EdgeCurve::Circle(
-                        brepkit_math::curves::Circle3D::with_axes(
-                            new_center,
-                            new_normal,
-                            c.radius() * su,
-                            new_u.normalize()?,
-                            new_v.normalize()?,
-                        )?,
-                    ))
-                } else {
-                    let (semi_major, semi_minor, u_dir, v_dir) = if su >= sv {
-                        (
-                            c.radius() * su,
-                            c.radius() * sv,
-                            new_u.normalize()?,
-                            new_v.normalize()?,
-                        )
-                    } else {
-                        (
-                            c.radius() * sv,
-                            c.radius() * su,
-                            new_v.normalize()?,
-                            new_u.normalize()?,
-                        )
-                    };
-                    Some(EdgeCurve::Ellipse(
-                        brepkit_math::curves::Ellipse3D::with_axes(
-                            new_center, new_normal, semi_major, semi_minor, u_dir, v_dir,
-                        )?,
-                    ))
-                }
-            }
-            EdgeCurve::Ellipse(e) => {
-                let new_center = matrix.mul_point(e.center());
-                let new_u = transform_dir(e.u_axis());
-                let new_v = transform_dir(e.v_axis());
-                let new_normal = new_u.cross(new_v).normalize()?;
-                Some(EdgeCurve::Ellipse(
-                    brepkit_math::curves::Ellipse3D::with_axes(
-                        new_center,
-                        new_normal,
-                        e.semi_major() * new_u.length(),
-                        e.semi_minor() * new_v.length(),
-                        new_u.normalize()?,
-                        new_v.normalize()?,
-                    )?,
-                ))
-            }
-        };
-        if let Some(curve) = new_curve {
-            topo.edge_mut(eid)?.set_curve(curve);
-        }
-    }
+    transform_edges(topo, &edge_ids, matrix)?;
 
     // Mutate phase 3: transform face surface geometry.
     // For plane normals, use the inverse transpose: n' = (M⁻¹)ᵀ · n
@@ -247,6 +166,151 @@ fn transform_direction(matrix: &Mat4, dir: Vec3) -> Result<Vec3, crate::Operatio
         tip.z() - origin.z(),
     );
     Ok(raw.normalize()?)
+}
+
+/// Transform a set of edge curves in place.
+///
+/// Line edges need no update — their geometry is defined by vertices.
+#[allow(clippy::too_many_lines)]
+fn transform_edges(
+    topo: &mut Topology,
+    edge_ids: &HashSet<EdgeId>,
+    matrix: &Mat4,
+) -> Result<(), crate::OperationsError> {
+    let origin = matrix.mul_point(brepkit_math::vec::Point3::new(0.0, 0.0, 0.0));
+    let transform_dir = |d: Vec3| -> Vec3 {
+        matrix.mul_point(brepkit_math::vec::Point3::new(d.x(), d.y(), d.z())) - origin
+    };
+    for &eid in edge_ids {
+        let edge = topo.edge(eid)?;
+        let new_curve = match edge.curve() {
+            EdgeCurve::Line => None,
+            EdgeCurve::NurbsCurve(c) => {
+                let new_control_points: Vec<_> = c
+                    .control_points()
+                    .iter()
+                    .map(|pt| matrix.mul_point(*pt))
+                    .collect();
+                Some(EdgeCurve::NurbsCurve(NurbsCurve::new(
+                    c.degree(),
+                    c.knots().to_vec(),
+                    new_control_points,
+                    c.weights().to_vec(),
+                )?))
+            }
+            EdgeCurve::Circle(c) => {
+                let new_center = matrix.mul_point(c.center());
+                let new_u = transform_dir(c.u_axis());
+                let new_v = transform_dir(c.v_axis());
+                let su = new_u.length();
+                let sv = new_v.length();
+                let new_normal = new_u.cross(new_v).normalize()?;
+                if (su - sv).abs() < 1e-12 * su.max(sv).max(1.0) {
+                    Some(EdgeCurve::Circle(
+                        brepkit_math::curves::Circle3D::with_axes(
+                            new_center,
+                            new_normal,
+                            c.radius() * su,
+                            new_u.normalize()?,
+                            new_v.normalize()?,
+                        )?,
+                    ))
+                } else {
+                    let (semi_major, semi_minor, u_dir, v_dir) = if su >= sv {
+                        (
+                            c.radius() * su,
+                            c.radius() * sv,
+                            new_u.normalize()?,
+                            new_v.normalize()?,
+                        )
+                    } else {
+                        (
+                            c.radius() * sv,
+                            c.radius() * su,
+                            new_v.normalize()?,
+                            new_u.normalize()?,
+                        )
+                    };
+                    Some(EdgeCurve::Ellipse(
+                        brepkit_math::curves::Ellipse3D::with_axes(
+                            new_center, new_normal, semi_major, semi_minor, u_dir, v_dir,
+                        )?,
+                    ))
+                }
+            }
+            EdgeCurve::Ellipse(e) => {
+                let new_center = matrix.mul_point(e.center());
+                let new_u = transform_dir(e.u_axis());
+                let new_v = transform_dir(e.v_axis());
+                let new_normal = new_u.cross(new_v).normalize()?;
+                Some(EdgeCurve::Ellipse(
+                    brepkit_math::curves::Ellipse3D::with_axes(
+                        new_center,
+                        new_normal,
+                        e.semi_major() * new_u.length(),
+                        e.semi_minor() * new_v.length(),
+                        new_u.normalize()?,
+                        new_v.normalize()?,
+                    )?,
+                ))
+            }
+        };
+        if let Some(curve) = new_curve {
+            topo.edge_mut(eid)?.set_curve(curve);
+        }
+    }
+    Ok(())
+}
+
+/// Apply an affine transform to a wire, modifying vertex positions and
+/// edge curve geometry in place.
+///
+/// # Errors
+///
+/// Returns an error if the matrix is degenerate or a referenced entity is missing.
+pub fn transform_wire(
+    topo: &mut Topology,
+    wire_id: WireId,
+    matrix: &Mat4,
+) -> Result<(), crate::OperationsError> {
+    let tol = Tolerance::new();
+    if tol.approx_eq(matrix.determinant(), 0.0) {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "transform matrix is degenerate (zero determinant)".into(),
+        });
+    }
+
+    let (vertex_ids, edge_ids) = collect_wire_entities(topo, wire_id)?;
+
+    // Transform vertices.
+    for vid in vertex_ids {
+        let vertex = topo.vertex_mut(vid)?;
+        let new_point = matrix.mul_point(vertex.point());
+        vertex.set_point(new_point);
+    }
+
+    // Transform edge curves.
+    transform_edges(topo, &edge_ids, matrix)?;
+
+    Ok(())
+}
+
+/// Traverses wire → edges → vertices and returns deduplicated sets.
+fn collect_wire_entities(
+    topo: &Topology,
+    wire_id: WireId,
+) -> Result<(HashSet<VertexId>, HashSet<EdgeId>), crate::OperationsError> {
+    let mut vertex_ids = HashSet::new();
+    let mut edge_ids = HashSet::new();
+    let wire = topo.wire(wire_id)?;
+    for oe in wire.edges() {
+        let eid = oe.edge();
+        edge_ids.insert(eid);
+        let edge = topo.edge(eid)?;
+        vertex_ids.insert(edge.start());
+        vertex_ids.insert(edge.end());
+    }
+    Ok((vertex_ids, edge_ids))
 }
 
 /// Traverses solid → shells → faces → wires → edges → vertices and

@@ -567,6 +567,86 @@ pub fn copy_and_transform_solid(
     Ok(topo.solids.alloc(Solid::new(new_outer, new_inner)))
 }
 
+/// Create a deep copy of a wire and all its sub-entities.
+///
+/// Returns a new `WireId` for the copy. The original wire is not modified.
+/// All vertices and edges are duplicated.
+///
+/// # Errors
+///
+/// Returns an error if any topology lookup fails.
+pub fn copy_wire(topo: &mut Topology, wire_id: WireId) -> Result<WireId, crate::OperationsError> {
+    // ── Read phase ─────────────────────────────────────────────────
+    let wire = topo.wire(wire_id)?;
+    let closed = wire.is_closed();
+
+    let mut vertex_snaps: Vec<VertexSnap> = Vec::new();
+    let mut edge_snaps: Vec<EdgeSnap> = Vec::new();
+    let mut edge_refs: Vec<(usize, bool)> = Vec::new();
+
+    let mut seen_vertices = std::collections::HashSet::new();
+    let mut seen_edges = std::collections::HashSet::new();
+
+    for oe in wire.edges() {
+        let edge_idx = oe.edge().index();
+        edge_refs.push((edge_idx, oe.is_forward()));
+
+        if !seen_edges.insert(edge_idx) {
+            continue;
+        }
+        let edge = topo.edge(oe.edge())?;
+        let start_idx = edge.start().index();
+        let end_idx = edge.end().index();
+
+        for &vid_idx in &[start_idx, end_idx] {
+            if seen_vertices.insert(vid_idx) {
+                let vid = if vid_idx == start_idx {
+                    edge.start()
+                } else {
+                    edge.end()
+                };
+                let v = topo.vertex(vid)?;
+                vertex_snaps.push(VertexSnap {
+                    old_index: vid_idx,
+                    point: v.point(),
+                    tol: v.tolerance(),
+                });
+            }
+        }
+
+        edge_snaps.push(EdgeSnap {
+            old_index: edge_idx,
+            start_index: start_idx,
+            end_index: end_idx,
+            curve: edge.curve().clone(),
+        });
+    }
+
+    // ── Write phase ────────────────────────────────────────────────
+    let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
+    for vsnap in &vertex_snaps {
+        let new_vid = topo.vertices.alloc(Vertex::new(vsnap.point, vsnap.tol));
+        vertex_map.insert(vsnap.old_index, new_vid);
+    }
+
+    let mut edge_map: HashMap<usize, brepkit_topology::edge::EdgeId> = HashMap::new();
+    for esnap in &edge_snaps {
+        let new_start = vertex_map[&esnap.start_index];
+        let new_end = vertex_map[&esnap.end_index];
+        let copied_edge = topo
+            .edges
+            .alloc(Edge::new(new_start, new_end, esnap.curve.clone()));
+        edge_map.insert(esnap.old_index, copied_edge);
+    }
+
+    let new_edges: Vec<OrientedEdge> = edge_refs
+        .iter()
+        .map(|&(edge_idx, fwd)| OrientedEdge::new(edge_map[&edge_idx], fwd))
+        .collect();
+    let new_wire = Wire::new(new_edges, closed).map_err(crate::OperationsError::Topology)?;
+    Ok(topo.wires.alloc(new_wire))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
