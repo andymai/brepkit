@@ -29,7 +29,7 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::VertexId;
 
-use crate::boolean::{FaceSpec, assemble_solid};
+use crate::boolean::FaceSpec;
 use crate::dot_normal_point;
 
 /// Fillet one or more edges of a solid with a constant radius.
@@ -46,7 +46,7 @@ use crate::dot_normal_point;
 /// - `radius` is non-positive
 /// - `edges` is empty
 /// - Any edge is not shared by exactly two faces
-/// - The solid contains NURBS faces
+/// - A target edge is adjacent to a non-planar face
 #[allow(clippy::too_many_lines)]
 pub fn fillet(
     topo: &mut Topology,
@@ -77,14 +77,6 @@ pub fn fillet(
 
     for &face_id in &shell_face_ids {
         let face = topo.face(face_id)?;
-        let (normal, d) = match face.surface() {
-            FaceSurface::Plane { normal, d } => (*normal, *d),
-            _ => {
-                return Err(crate::OperationsError::InvalidInput {
-                    reason: "fillet on non-planar faces is not supported".into(),
-                });
-            }
-        };
 
         let wire = topo.wire(face.outer_wire())?;
         let mut vertex_ids = Vec::with_capacity(wire.edges().len());
@@ -107,6 +99,14 @@ pub fn fillet(
                 .or_default()
                 .push(face_id);
         }
+
+        // Only build polygon data for planar faces. Non-planar faces
+        // will be passed through unchanged if they don't contain target edges.
+        let normal = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            _ => continue,
+        };
+        let d = dot_normal_point(normal, positions[0]);
 
         face_polygons.insert(
             face_id.index(),
@@ -144,10 +144,19 @@ pub fn fillet(
     // Strategy: identical to chamfer but with more offset segments to
     // approximate the circular fillet.
     let mut fillet_data: HashMap<usize, FilletEdgeData> = HashMap::new();
-    let mut result_faces: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
+    let mut result_specs: Vec<FaceSpec> = Vec::new();
 
     for &face_id in &shell_face_ids {
-        let poly = &face_polygons[&face_id.index()];
+        // Non-planar faces pass through unchanged.
+        let Some(poly) = face_polygons.get(&face_id.index()) else {
+            let face = topo.face(face_id)?;
+            let verts = crate::boolean::face_vertices(topo, face_id)?;
+            result_specs.push(FaceSpec::Surface {
+                vertices: verts,
+                surface: face.surface().clone(),
+            });
+            continue;
+        };
         let n = poly.positions.len();
         let mut new_verts: Vec<Point3> = Vec::with_capacity(n + target_set.len());
 
@@ -217,7 +226,11 @@ pub fn fillet(
         }
 
         let new_d = dot_normal_point(poly.normal, new_verts[0]);
-        result_faces.push((new_verts, poly.normal, new_d));
+        result_specs.push(FaceSpec::Planar {
+            vertices: new_verts,
+            normal: poly.normal,
+            d: new_d,
+        });
     }
 
     // Build fillet faces (planar quads approximating the fillet arc).
@@ -263,10 +276,14 @@ pub fn fillet(
         };
 
         let d = dot_normal_point(normal, quad[0]);
-        result_faces.push((quad, normal, d));
+        result_specs.push(FaceSpec::Planar {
+            vertices: quad,
+            normal,
+            d,
+        });
     }
 
-    assemble_solid(topo, &result_faces, tol)
+    crate::boolean::assemble_solid_mixed(topo, &result_specs, tol)
 }
 
 /// Fillet one or more edges of a solid using the rolling-ball algorithm.
@@ -287,7 +304,7 @@ pub fn fillet(
 /// - `radius` is non-positive
 /// - `edges` is empty
 /// - Any edge is not shared by exactly two faces
-/// - The solid contains non-planar faces
+/// - A target edge is adjacent to a non-planar face
 #[allow(clippy::too_many_lines)]
 pub fn fillet_rolling_ball(
     topo: &mut Topology,
@@ -318,14 +335,6 @@ pub fn fillet_rolling_ball(
 
     for &face_id in &shell_face_ids {
         let face = topo.face(face_id)?;
-        let (normal, d) = match face.surface() {
-            FaceSurface::Plane { normal, d } => (*normal, *d),
-            _ => {
-                return Err(crate::OperationsError::InvalidInput {
-                    reason: "rolling-ball fillet on non-planar faces is not yet supported".into(),
-                });
-            }
-        };
 
         let wire = topo.wire(face.outer_wire())?;
         let mut vertex_ids = Vec::with_capacity(wire.edges().len());
@@ -348,6 +357,13 @@ pub fn fillet_rolling_ball(
                 .or_default()
                 .push(face_id);
         }
+
+        // Only build polygon data for planar faces. Non-planar faces
+        // will be passed through unchanged if they don't contain target edges.
+        let (normal, d) = match face.surface() {
+            FaceSurface::Plane { normal, d } => (*normal, *d),
+            _ => continue,
+        };
 
         face_polygons.insert(
             face_id.index(),
@@ -393,10 +409,19 @@ pub fn fillet_rolling_ball(
     }
 
     // Phase 3: Build modified (trimmed) planar faces.
-    let mut planar_faces: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
+    let mut all_specs: Vec<FaceSpec> = Vec::new();
 
     for &face_id in &shell_face_ids {
-        let poly = &face_polygons[&face_id.index()];
+        // Non-planar faces pass through unchanged.
+        let Some(poly) = face_polygons.get(&face_id.index()) else {
+            let face = topo.face(face_id)?;
+            let verts = crate::boolean::face_vertices(topo, face_id)?;
+            all_specs.push(FaceSpec::Surface {
+                vertices: verts,
+                surface: face.surface().clone(),
+            });
+            continue;
+        };
         let n = poly.positions.len();
         let mut new_verts: Vec<Point3> = Vec::with_capacity(n + target_set.len());
 
@@ -434,20 +459,14 @@ pub fn fillet_rolling_ball(
         }
 
         let new_d = dot_normal_point(poly.normal, new_verts[0]);
-        planar_faces.push((new_verts, poly.normal, new_d));
+        all_specs.push(FaceSpec::Planar {
+            vertices: new_verts,
+            normal: poly.normal,
+            d: new_d,
+        });
     }
 
-    // Phase 4: Build face specs for mixed-surface assembly.
-    let mut all_specs: Vec<FaceSpec> = planar_faces
-        .iter()
-        .map(|(verts, normal, d)| FaceSpec::Planar {
-            vertices: verts.clone(),
-            normal: *normal,
-            d: *d,
-        })
-        .collect();
-
-    // Phase 5: Build NURBS fillet faces for each target edge.
+    // Phase 4: Build NURBS fillet faces for each target edge.
     // Also collect contact points per vertex for vertex blend patches.
     // vertex_contacts maps vertex_index → list of (face_index, contact_point) pairs.
     let mut vertex_contacts: HashMap<usize, Vec<(usize, Point3)>> = HashMap::new();
@@ -872,10 +891,6 @@ pub fn fillet_variable(
 
     for &face_id in &shell_face_ids {
         let face = topo.face(face_id)?;
-        let normal = match face.surface() {
-            FaceSurface::Plane { normal, .. } => *normal,
-            _ => continue,
-        };
 
         let wire = topo.wire(face.outer_wire())?;
         let mut vertex_ids = Vec::new();
@@ -897,6 +912,12 @@ pub fn fillet_variable(
                 .or_default()
                 .push(face_id);
         }
+
+        // Only build polygon data for planar faces.
+        let normal = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            _ => continue,
+        };
 
         face_polygons.insert(
             face_id.index(),

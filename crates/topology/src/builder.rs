@@ -131,41 +131,24 @@ pub fn make_face_from_wire(
 ) -> Result<FaceId, crate::TopologyError> {
     let wire = topo.wire(wire_id)?;
     let edges = wire.edges();
-    if edges.len() < 3 {
+    if edges.is_empty() {
         return Err(crate::TopologyError::Empty {
-            entity: "wire (need at least 3 edges for a face)",
+            entity: "wire (no edges)",
         });
     }
 
-    // Get the first three vertex positions to compute the normal.
-    let mut positions = Vec::with_capacity(3);
-    for oe in edges.iter().take(3) {
-        let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
-        positions.push(topo.vertex(vid)?.point());
-    }
+    // Compute the plane normal from sample points along the wire.
+    // For wires with fewer than 3 edges (e.g. a single circle), we cannot
+    // rely on 3 distinct vertex positions. Instead, sample points along the
+    // edge curves to obtain non-collinear positions.
+    let sample_points = sample_wire_points(topo, edges)?;
 
-    let a = positions[1] - positions[0];
-    let b = positions[2] - positions[0];
-    let normal = a.cross(b);
-    let len = normal.length();
-
-    if len < 1e-15 {
-        return Err(crate::TopologyError::NonManifold {
-            reason: "face normal is degenerate (collinear points)".into(),
-        });
-    }
-
-    let normal = Vec3::new(normal.x() / len, normal.y() / len, normal.z() / len);
+    let normal = compute_plane_normal(&sample_points)?;
     let d = normal.x().mul_add(
-        positions[0].x(),
+        sample_points[0].x(),
         normal
             .y()
-            .mul_add(positions[0].y(), normal.z() * positions[0].z()),
+            .mul_add(sample_points[0].y(), normal.z() * sample_points[0].z()),
     );
 
     let face_id = topo
@@ -173,6 +156,92 @@ pub fn make_face_from_wire(
         .alloc(Face::new(wire_id, vec![], FaceSurface::Plane { normal, d }));
 
     Ok(face_id)
+}
+
+/// Sample at least 3 non-coincident points from a wire's edges.
+///
+/// For each edge, collects the start vertex and (for non-line curves) a
+/// midpoint sample. This ensures that even a single closed circle edge
+/// yields 3 well-spaced points for normal computation.
+fn sample_wire_points(
+    topo: &Topology,
+    edges: &[OrientedEdge],
+) -> Result<Vec<Point3>, crate::TopologyError> {
+    let mut points = Vec::with_capacity(edges.len() * 2);
+
+    for oe in edges {
+        let edge = topo.edge(oe.edge())?;
+        let start_vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        let start_pt = topo.vertex(start_vid)?.point();
+        points.push(start_pt);
+
+        // For curved edges, sample the midpoint to get a non-collinear point.
+        match edge.curve() {
+            EdgeCurve::Line => {}
+            EdgeCurve::Circle(c) => {
+                points.push(c.evaluate(PI));
+                // For closed circles (start == end), add a third sample.
+                if edge.start() == edge.end() {
+                    points.push(c.evaluate(PI / 2.0));
+                }
+            }
+            EdgeCurve::Ellipse(e) => {
+                points.push(e.evaluate(PI));
+                if edge.start() == edge.end() {
+                    points.push(e.evaluate(PI / 2.0));
+                }
+            }
+            EdgeCurve::NurbsCurve(nc) => {
+                let knots = nc.knots();
+                let mid_u = f64::midpoint(knots[0], knots[knots.len() - 1]);
+                points.push(nc.evaluate(mid_u));
+                if edge.start() == edge.end() {
+                    let quarter_u = f64::midpoint(knots[0], mid_u);
+                    points.push(nc.evaluate(quarter_u));
+                }
+            }
+        }
+    }
+
+    Ok(points)
+}
+
+/// Compute a unit plane normal from a set of sample points using Newell's
+/// method. Works for any number of points >= 3.
+fn compute_plane_normal(points: &[Point3]) -> Result<Vec3, crate::TopologyError> {
+    if points.len() < 3 {
+        return Err(crate::TopologyError::NonManifold {
+            reason: "need at least 3 sample points for face normal".into(),
+        });
+    }
+
+    // Newell's method: accumulate cross-product contributions from all
+    // consecutive point pairs. More robust than using just 3 points when
+    // the polygon has near-collinear segments.
+    let mut nx = 0.0_f64;
+    let mut ny = 0.0_f64;
+    let mut nz = 0.0_f64;
+    let n = points.len();
+    for i in 0..n {
+        let curr = points[i];
+        let next = points[(i + 1) % n];
+        nx += (curr.y() - next.y()) * (curr.z() + next.z());
+        ny += (curr.z() - next.z()) * (curr.x() + next.x());
+        nz += (curr.x() - next.x()) * (curr.y() + next.y());
+    }
+
+    let len = (nx * nx + ny * ny + nz * nz).sqrt();
+    if len < 1e-15 {
+        return Err(crate::TopologyError::NonManifold {
+            reason: "face normal is degenerate (collinear points)".into(),
+        });
+    }
+
+    Ok(Vec3::new(nx / len, ny / len, nz / len))
 }
 
 /// Create a rectangular face on the XY plane centered at the origin.
