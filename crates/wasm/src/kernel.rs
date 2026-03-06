@@ -1733,19 +1733,18 @@ impl BrepKernel {
             #[allow(clippy::cast_possible_truncation)]
             let idx_offset = (all_positions.len() / 3) as u32;
 
-            if let Ok(mesh_uv) = tessellate::tessellate_with_uvs(&self.topo, face_id, deflection) {
-                for p in &mesh_uv.mesh.positions {
-                    all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
-                }
-                for n in &mesh_uv.mesh.normals {
-                    all_normals.extend_from_slice(&[n.x(), n.y(), n.z()]);
-                }
-                for uv in &mesh_uv.uvs {
-                    all_uvs.extend_from_slice(uv);
-                }
-                for &idx in &mesh_uv.mesh.indices {
-                    all_indices.push(idx + idx_offset);
-                }
+            let mesh_uv = tessellate::tessellate_with_uvs(&self.topo, face_id, deflection)?;
+            for p in &mesh_uv.mesh.positions {
+                all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
+            }
+            for n in &mesh_uv.mesh.normals {
+                all_normals.extend_from_slice(&[n.x(), n.y(), n.z()]);
+            }
+            for uv in &mesh_uv.uvs {
+                all_uvs.extend_from_slice(uv);
+            }
+            for &idx in &mesh_uv.mesh.indices {
+                all_indices.push(idx + idx_offset);
             }
         }
 

@@ -55,10 +55,9 @@ pub fn face_area(
         FaceSurface::Plane { .. } => planar_face_area(topo, face_id),
         FaceSurface::Cylinder(cyl) => {
             // Cylinder lateral area: integrate r * du * dv over the face domain.
-            // Approximate the parameter range from the face's boundary.
+            // Use face_polygon to sample curved edges (circle caps give 32 points).
             let r = cyl.radius();
-            let wire = topo.wire(face.outer_wire())?;
-            let positions = collect_wire_positions(topo, wire)?;
+            let positions = crate::boolean::face_polygon(topo, face_id)?;
             if positions.len() >= 2 {
                 // Project boundary to get v-range (axial extent)
                 let axis = cyl.axis();
@@ -110,8 +109,7 @@ pub fn face_area(
             // Spherical zone area = 2πr² * (sin(v_max) - sin(v_min))
             // where v is the latitude parameter (-π/2 to π/2).
             let r = sph.radius();
-            let wire = topo.wire(face.outer_wire())?;
-            let positions = collect_wire_positions(topo, wire)?;
+            let positions = crate::boolean::face_polygon(topo, face_id)?;
             if positions.len() >= 3 {
                 let v_vals: Vec<f64> = positions.iter().map(|p| sph.project_point(*p).1).collect();
                 let avg_v: f64 = v_vals.iter().sum::<f64>() / v_vals.len() as f64;
