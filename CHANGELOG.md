@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/andymai/brepkit/compare/v0.4.3...v0.5.0) (2026-03-05)
+
+
+### Features
+
+* **operations:** support closed-path sweep ([#68](https://github.com/andymai/brepkit/issues/68)) ([b965c60](https://github.com/andymai/brepkit/commit/b965c60f72135df4ff0ce6e76b270e83f52a8549))
+
 ## [0.4.3](https://github.com/andymai/brepkit/compare/v0.4.2...v0.4.3) (2026-03-05)
 
 
