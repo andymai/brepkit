@@ -405,7 +405,11 @@ pub(crate) fn face_vertices(
 /// Unlike [`face_vertices`] which only returns edge start/end points,
 /// this samples circle/ellipse edges into 32 points so faces with a
 /// single closed-curve edge (e.g. cylinder caps) get a proper polygon.
-pub(crate) fn face_polygon(
+///
+/// # Errors
+///
+/// Returns an error if the face or its wire cannot be resolved.
+pub fn face_polygon(
     topo: &Topology,
     face_id: FaceId,
 ) -> Result<Vec<Point3>, crate::OperationsError> {

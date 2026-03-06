@@ -398,6 +398,56 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid_id))
     }
 
+    /// Loft profiles with options for start/end points and ruled mode.
+    ///
+    /// `options` is a JSON string with optional fields:
+    /// - `startPoint: [x, y, z]` — apex point before first profile
+    /// - `endPoint: [x, y, z]` — apex point after last profile
+    /// - `ruled: bool` — true for ruled (linear) surfaces (default), false for smooth
+    #[wasm_bindgen(js_name = "loftWithOptions")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn loft_with_options(&mut self, faces: Vec<u32>, options: &str) -> Result<u32, JsError> {
+        let opts: serde_json::Value =
+            serde_json::from_str(options).unwrap_or(serde_json::Value::Null);
+
+        let mut face_ids: Vec<brepkit_topology::face::FaceId> = faces
+            .iter()
+            .map(|&h| self.resolve_face(h))
+            .collect::<Result<_, _>>()?;
+
+        // If startPoint is given, create a tiny degenerate triangle face at that point
+        // and prepend it to the profiles.
+        if let Some(sp) = opts.get("startPoint").and_then(|v| v.as_array()) {
+            if sp.len() >= 3 {
+                let x = sp[0].as_f64().unwrap_or(0.0);
+                let y = sp[1].as_f64().unwrap_or(0.0);
+                let z = sp[2].as_f64().unwrap_or(0.0);
+                let apex_face = create_apex_face(&mut self.topo, Point3::new(x, y, z), &face_ids)?;
+                face_ids.insert(0, apex_face);
+            }
+        }
+
+        // If endPoint is given, create a tiny degenerate triangle face and append.
+        if let Some(ep) = opts.get("endPoint").and_then(|v| v.as_array()) {
+            if ep.len() >= 3 {
+                let x = ep[0].as_f64().unwrap_or(0.0);
+                let y = ep[1].as_f64().unwrap_or(0.0);
+                let z = ep[2].as_f64().unwrap_or(0.0);
+                let apex_face = create_apex_face(&mut self.topo, Point3::new(x, y, z), &face_ids)?;
+                face_ids.push(apex_face);
+            }
+        }
+
+        let ruled = opts.get("ruled").and_then(|v| v.as_bool()).unwrap_or(true);
+
+        let solid_id = if ruled {
+            brepkit_operations::loft::loft(&mut self.topo, &face_ids)?
+        } else {
+            brepkit_operations::loft::loft_smooth(&mut self.topo, &face_ids)?
+        };
+        Ok(solid_id_to_u32(solid_id))
+    }
+
     // ── Shell ─────────────────────────────────────────────────────
 
     /// Hollow a solid with uniform wall thickness.
@@ -5710,6 +5760,42 @@ fn chamfer_polygon_2d(
 ///
 /// Checks if the curve is a circle or ellipse by sampling points
 /// and verifying they are coplanar and equidistant from a center.
+/// Create a tiny degenerate polygon face at a point, matching the vertex
+/// count of the first existing profile. Used for loft start/end points.
+fn create_apex_face(
+    topo: &mut Topology,
+    point: Point3,
+    existing_profiles: &[brepkit_topology::face::FaceId],
+) -> Result<brepkit_topology::face::FaceId, JsError> {
+    // Determine target vertex count from the first profile.
+    let n = if let Some(&fid) = existing_profiles.first() {
+        let verts = brepkit_operations::boolean::face_polygon(topo, fid)
+            .map_err(|e: brepkit_operations::OperationsError| JsError::new(&e.to_string()))?;
+        verts.len().max(3)
+    } else {
+        3
+    };
+
+    // Create a tiny polygon at the apex point.
+    let epsilon = 1e-6;
+    let mut pts = Vec::with_capacity(n);
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..n {
+        let angle = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
+        pts.push(Point3::new(
+            point.x() + epsilon * angle.cos(),
+            point.y() + epsilon * angle.sin(),
+            point.z(),
+        ));
+    }
+
+    let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    let face_id = brepkit_topology::builder::make_face_from_wire(topo, wire_id)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(face_id)
+}
+
 fn detect_nurbs_curve_type(nc: &brepkit_math::nurbs::NurbsCurve) -> &'static str {
     // A rational degree-2 NURBS with specific weight patterns can represent
     // conic sections. Check if all sampled points lie on a circle.
