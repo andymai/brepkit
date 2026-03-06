@@ -117,6 +117,22 @@ graph TD
 
 ## Getting Started
 
+### npm (JavaScript / TypeScript)
+
+```bash
+npm install brepkit-wasm
+```
+
+```js
+import init, { BrepKernel } from "brepkit-wasm";
+
+await init();
+const kernel = new BrepKernel();
+const box = kernel.makeBox(10, 20, 30);
+```
+
+### Building from source
+
 ```bash
 # Build all crates
 cargo build --workspace
