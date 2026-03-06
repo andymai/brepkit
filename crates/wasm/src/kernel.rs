@@ -3539,6 +3539,22 @@ impl BrepKernel {
         Ok(solid_id_to_u32(result))
     }
 
+    /// Thicken a face into a solid by offsetting it by the given distance.
+    ///
+    /// Creates a solid from a face by extruding it along its normal by
+    /// `thickness`. Positive values offset outward, negative inward.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid or thickness is zero.
+    #[wasm_bindgen(js_name = "thicken")]
+    pub fn thicken_face(&mut self, face: u32, thickness: f64) -> Result<u32, JsError> {
+        validate_finite(thickness, "thickness")?;
+        let face_id = self.resolve_face(face)?;
+        let result = brepkit_operations::thicken::thicken(&mut self.topo, face_id, thickness)?;
+        Ok(solid_id_to_u32(result))
+    }
+
     /// Build an edge's NURBS curve data for JS consumption.
     ///
     /// Returns `null` for line edges, or a JSON string with
@@ -5691,6 +5707,49 @@ impl BrepKernel {
                 let solid = brepkit_operations::sew::sew_faces(&mut self.topo, &face_ids, tol)
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
+            "thicken" => {
+                let f = get_u32(args, "face")?;
+                let thickness = get_f64(args, "thickness")?;
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let result =
+                    brepkit_operations::thicken::thicken(&mut self.topo, face_id, thickness)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
+            "pipe" => {
+                let f = get_u32(args, "face")?;
+                let e = get_u32(args, "pathEdge")?;
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let edge_id = self.resolve_edge(e).map_err(|e| e.to_string())?;
+                let edge_data = self.topo.edge(edge_id).map_err(|e| e.to_string())?;
+                let curve = match edge_data.curve() {
+                    EdgeCurve::NurbsCurve(c) => c.clone(),
+                    EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                        return Err("pipe path must be a NURBS edge".into());
+                    }
+                };
+                let solid = brepkit_operations::pipe::pipe(&mut self.topo, face_id, &curve, None)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
+            "linearPattern" => {
+                let s = get_u32(args, "solid")?;
+                let dx = get_f64(args, "dx").unwrap_or(1.0);
+                let dy = get_f64(args, "dy").unwrap_or(0.0);
+                let dz = get_f64(args, "dz").unwrap_or(0.0);
+                let spacing = get_f64(args, "spacing")?;
+                let count = get_u32(args, "count")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let compound = brepkit_operations::pattern::linear_pattern(
+                    &mut self.topo,
+                    solid_id,
+                    Vec3::new(dx, dy, dz),
+                    spacing,
+                    count as usize,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(compound_id_to_u32(compound)))
             }
             "draft" => {
                 let s = get_u32(args, "solid")?;
