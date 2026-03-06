@@ -3,10 +3,10 @@
 ## Binding Patterns
 
 Flag public `#[wasm_bindgen]` methods that:
-- Missing `#[wasm_bindgen(js_name = "camelCase")]` attribute
-- Not validating inputs with helpers from `error.rs` (`validate_positive`, `validate_finite`)
-- Not mapping errors to `JsValue::from_str(&e.to_string())`
-- Returning entity IDs as anything other than `f64`
+- Are missing a `#[wasm_bindgen(js_name = "camelCase")]` attribute
+- Do not validate inputs with helpers from `error.rs` (`validate_positive`, `validate_finite`)
+- Do not map errors to `JsValue::from_str(&e.to_string())`
+- Return entity IDs as anything other than `f64`
 
 See `CLAUDE.md` "Recipe 4: Add a new WASM binding".
 

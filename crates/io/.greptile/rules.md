@@ -8,4 +8,4 @@ manually checked since their `_ =>` arms won't cause compiler errors:
 - `step/writer.rs`
 - `iges/writer.rs`
 
-Also check the corresponding readers handle the new variant on import.
+Also check that `step/reader.rs` and `iges/reader.rs` handle the new variant on import.
