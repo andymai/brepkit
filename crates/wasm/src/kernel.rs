@@ -1223,6 +1223,13 @@ impl BrepKernel {
             .into());
         }
 
+        if let Some(pos) = matrix.iter().position(|v| !v.is_finite()) {
+            return Err(WasmError::InvalidInput {
+                reason: format!("matrix element at index {pos} is not finite"),
+            }
+            .into());
+        }
+
         let wire_id = self.resolve_wire(wire)?;
         let rows = std::array::from_fn(|i| std::array::from_fn(|j| matrix[i * 4 + j]));
         let mat = Mat4(rows);
@@ -4755,6 +4762,42 @@ impl BrepKernel {
                     brepkit_operations::defeature::defeature(&mut self.topo, solid_id, &face_ids)
                         .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
+            "copyWire" => {
+                let w = get_u32(args, "wire")?;
+                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
+                let copy = brepkit_operations::copy::copy_wire(&mut self.topo, wire_id)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(wire_id_to_u32(copy)))
+            }
+            "transformWire" => {
+                let w = get_u32(args, "wire")?;
+                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
+                let matrix = args["matrix"]
+                    .as_array()
+                    .ok_or("missing or invalid 'matrix'")?;
+                if matrix.len() != 16 {
+                    return Err(format!(
+                        "matrix must have 16 elements, got {}",
+                        matrix.len()
+                    ));
+                }
+                let elems: Vec<f64> = matrix
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        v.as_f64()
+                            .ok_or_else(|| format!("matrix[{i}] is not a number"))
+                    })
+                    .collect::<Result<_, _>>()?;
+                if let Some(pos) = elems.iter().position(|v| !v.is_finite()) {
+                    return Err(format!("matrix element at index {pos} is not finite"));
+                }
+                let rows = std::array::from_fn(|i| std::array::from_fn(|j| elems[i * 4 + j]));
+                let mat = Mat4(rows);
+                brepkit_operations::transform::transform_wire(&mut self.topo, wire_id, &mat)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(null))
             }
             _ => Err(format!("unknown operation: {op}")),
         }
