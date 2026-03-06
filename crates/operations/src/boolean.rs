@@ -344,7 +344,10 @@ fn collect_face_data(
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
         if let FaceSurface::Plane { normal, d } = face.surface() {
-            let verts = face_vertices(topo, fid)?;
+            // Use face_polygon to properly sample curved edges (e.g. circle
+            // caps on cylinders). face_vertices only returns vertex positions,
+            // which gives 1 point for a single closed circle edge.
+            let verts = face_polygon(topo, fid)?;
             result.push((fid, verts, *normal, *d));
         } else {
             // Tessellate non-planar face into triangles and treat each as planar.
