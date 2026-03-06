@@ -908,6 +908,27 @@ impl BrepKernel {
         Ok(bytes)
     }
 
+    /// Export a solid to STL ASCII format.
+    ///
+    /// Returns the ASCII STL as UTF-8 bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or export fails.
+    #[cfg(feature = "io")]
+    #[wasm_bindgen(js_name = "exportStlAscii")]
+    pub fn export_stl_ascii(&self, solid: u32, deflection: f64) -> Result<Vec<u8>, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let bytes = brepkit_io::stl::writer::write_stl(
+            &self.topo,
+            &[solid_id],
+            deflection,
+            brepkit_io::stl::writer::StlFormat::Ascii,
+        )?;
+        Ok(bytes)
+    }
+
     /// Export a solid to OBJ format (UTF-8 string as bytes).
     ///
     /// # Errors
@@ -1167,6 +1188,53 @@ impl BrepKernel {
         let solid_id = self.resolve_solid(solid)?;
         let copy = brepkit_operations::copy::copy_solid(&mut self.topo, solid_id)?;
         Ok(solid_id_to_u32(copy))
+    }
+
+    /// Deep copy a wire, returning a new independent wire handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the wire handle is invalid.
+    #[wasm_bindgen(js_name = "copyWire")]
+    pub fn copy_wire_wasm(&mut self, wire: u32) -> Result<u32, JsError> {
+        let wire_id = self.resolve_wire(wire)?;
+        let copy = brepkit_operations::copy::copy_wire(&mut self.topo, wire_id)?;
+        Ok(wire_id_to_u32(copy))
+    }
+
+    /// Apply a 4×4 affine transform to a wire (in place).
+    ///
+    /// The `matrix` must contain exactly 16 values in row-major order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the wire handle is invalid, the matrix doesn't
+    /// have 16 elements, or the matrix is singular.
+    #[wasm_bindgen(js_name = "transformWire")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn transform_wire_wasm(&mut self, wire: u32, matrix: Vec<f64>) -> Result<(), JsError> {
+        if matrix.len() != 16 {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "transform matrix must have 16 elements, got {}",
+                    matrix.len()
+                ),
+            }
+            .into());
+        }
+
+        if let Some(pos) = matrix.iter().position(|v| !v.is_finite()) {
+            return Err(WasmError::InvalidInput {
+                reason: format!("matrix element at index {pos} is not finite"),
+            }
+            .into());
+        }
+
+        let wire_id = self.resolve_wire(wire)?;
+        let rows = std::array::from_fn(|i| std::array::from_fn(|j| matrix[i * 4 + j]));
+        let mat = Mat4(rows);
+        brepkit_operations::transform::transform_wire(&mut self.topo, wire_id, &mat)?;
+        Ok(())
     }
 
     /// Copy a solid and apply a 4×4 row-major affine transform in one pass.
@@ -2043,16 +2111,16 @@ impl BrepKernel {
 
     /// Get the curve type of an edge.
     ///
-    /// Returns `"line"` or `"bspline"`.
+    /// Returns `"LINE"`, `"BSPLINE_CURVE"`, `"CIRCLE"`, or `"ELLIPSE"`.
     #[wasm_bindgen(js_name = "getEdgeCurveType")]
     pub fn get_edge_curve_type(&self, edge: u32) -> Result<String, JsError> {
         let edge_id = self.resolve_edge(edge)?;
         let edge_data = self.topo.edge(edge_id)?;
         Ok(match edge_data.curve() {
-            EdgeCurve::Line => "line",
-            EdgeCurve::NurbsCurve(_) => "bspline",
-            EdgeCurve::Circle(_) => "circle",
-            EdgeCurve::Ellipse(_) => "ellipse",
+            EdgeCurve::Line => "LINE",
+            EdgeCurve::NurbsCurve(_) => "BSPLINE_CURVE",
+            EdgeCurve::Circle(_) => "CIRCLE",
+            EdgeCurve::Ellipse(_) => "ELLIPSE",
         }
         .into())
     }
@@ -4694,6 +4762,42 @@ impl BrepKernel {
                     brepkit_operations::defeature::defeature(&mut self.topo, solid_id, &face_ids)
                         .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
+            "copyWire" => {
+                let w = get_u32(args, "wire")?;
+                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
+                let copy = brepkit_operations::copy::copy_wire(&mut self.topo, wire_id)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(wire_id_to_u32(copy)))
+            }
+            "transformWire" => {
+                let w = get_u32(args, "wire")?;
+                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
+                let matrix = args["matrix"]
+                    .as_array()
+                    .ok_or("missing or invalid 'matrix'")?;
+                if matrix.len() != 16 {
+                    return Err(format!(
+                        "matrix must have 16 elements, got {}",
+                        matrix.len()
+                    ));
+                }
+                let elems: Vec<f64> = matrix
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        v.as_f64()
+                            .ok_or_else(|| format!("matrix[{i}] is not a number"))
+                    })
+                    .collect::<Result<_, _>>()?;
+                if let Some(pos) = elems.iter().position(|v| !v.is_finite()) {
+                    return Err(format!("matrix element at index {pos} is not finite"));
+                }
+                let rows = std::array::from_fn(|i| std::array::from_fn(|j| elems[i * 4 + j]));
+                let mat = Mat4(rows);
+                brepkit_operations::transform::transform_wire(&mut self.topo, wire_id, &mat)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(null))
             }
             _ => Err(format!("unknown operation: {op}")),
         }
