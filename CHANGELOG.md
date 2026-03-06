@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/andymai/brepkit/compare/v0.5.0...v0.5.1) (2026-03-06)
+
+
+### Bug Fixes
+
+* **wasm:** align edge curve types, fix section, add wire ops ([#71](https://github.com/andymai/brepkit/issues/71)) ([3186285](https://github.com/andymai/brepkit/commit/3186285c8ec880387350894d35f248554e545371))
+
 ## [0.5.0](https://github.com/andymai/brepkit/compare/v0.4.3...v0.5.0) (2026-03-05)
 
 
