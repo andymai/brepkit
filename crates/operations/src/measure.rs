@@ -84,10 +84,25 @@ pub fn face_area(
             }
         }
         FaceSurface::Sphere(sph) => {
-            // Hemisphere area = 2πr². For our 2-hemisphere sphere,
-            // each face is exactly one hemisphere.
+            // Spherical zone area = 2πr² * (sin(v_max) - sin(v_min))
+            // where v is the latitude parameter (-π/2 to π/2).
             let r = sph.radius();
-            Ok(2.0 * std::f64::consts::PI * r * r)
+            let wire = topo.wire(face.outer_wire())?;
+            let positions = collect_wire_positions(topo, wire)?;
+            if positions.len() >= 3 {
+                let v_vals: Vec<f64> = positions.iter().map(|p| sph.project_point(*p).1).collect();
+                let avg_v: f64 = v_vals.iter().sum::<f64>() / v_vals.len() as f64;
+                let signed_area = newell_signed_z_area(&positions);
+                let (v_min, v_max) = if signed_area > 0.0 {
+                    (avg_v, std::f64::consts::FRAC_PI_2)
+                } else {
+                    (-std::f64::consts::FRAC_PI_2, avg_v)
+                };
+                Ok(2.0 * std::f64::consts::PI * r * r * (v_max.sin() - v_min.sin()))
+            } else {
+                // Full sphere fallback
+                Ok(4.0 * std::f64::consts::PI * r * r)
+            }
         }
         _ => {
             let mesh = tessellate::tessellate(topo, face_id, deflection)?;
@@ -136,6 +151,18 @@ fn newell_area(positions: &[Point3]) -> f64 {
     }
 
     0.5 * sz.mul_add(sz, sx.mul_add(sx, sy * sy)).sqrt()
+}
+
+/// Signed area of a polygon projected onto the XY plane.
+/// Positive = CCW from +Z, negative = CW.
+fn newell_signed_z_area(pts: &[Point3]) -> f64 {
+    let n = pts.len();
+    let mut area = 0.0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        area += pts[i].x() * pts[j].y() - pts[j].x() * pts[i].y();
+    }
+    area * 0.5
 }
 
 /// Sum of triangle areas from a tessellated mesh.
