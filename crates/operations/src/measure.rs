@@ -51,27 +51,114 @@ pub fn face_area(
 ) -> Result<f64, crate::OperationsError> {
     let face = topo.face(face_id)?;
 
-    if matches!(face.surface(), FaceSurface::Plane { .. }) {
-        planar_face_area(topo, face_id)
-    } else {
-        let mesh = tessellate::tessellate(topo, face_id, deflection)?;
-        Ok(triangle_mesh_area(&mesh))
+    match face.surface() {
+        FaceSurface::Plane { .. } => planar_face_area(topo, face_id),
+        FaceSurface::Cylinder(cyl) => {
+            // Cylinder lateral area: integrate r * du * dv over the face domain.
+            // Use face_polygon to sample curved edges (circle caps give 32 points).
+            let r = cyl.radius();
+            let positions = crate::boolean::face_polygon(topo, face_id)?;
+            if positions.len() >= 2 {
+                // Project boundary to get v-range (axial extent)
+                let axis = cyl.axis();
+                let origin = cyl.origin();
+                let v_vals: Vec<f64> = positions
+                    .iter()
+                    .map(|p| {
+                        axis.dot(Vec3::new(
+                            p.x() - origin.x(),
+                            p.y() - origin.y(),
+                            p.z() - origin.z(),
+                        ))
+                    })
+                    .collect();
+                let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
+                let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let height = (v_max - v_min).abs();
+                // Compute angular sweep from boundary points projected onto the
+                // circular cross-section. For full cylinders this gives 2π; for
+                // partial cylinders it gives the actual angular extent.
+                let u_vals: Vec<f64> = positions
+                    .iter()
+                    .map(|p| {
+                        let rel =
+                            Vec3::new(p.x() - origin.x(), p.y() - origin.y(), p.z() - origin.z());
+                        let along = axis.dot(rel);
+                        let radial = rel - axis * along;
+                        radial.y().atan2(radial.x())
+                    })
+                    .collect();
+                let u_min = u_vals.iter().copied().fold(f64::INFINITY, f64::min);
+                let u_max = u_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let angular_span = u_max - u_min;
+                // If the angular span covers most of a full circle (> 350°),
+                // treat it as a full revolution — boundary sampling may not
+                // reach exactly ±π.
+                let sweep = if angular_span > 350.0_f64.to_radians() {
+                    std::f64::consts::TAU
+                } else {
+                    angular_span
+                };
+                Ok(sweep * r * height)
+            } else {
+                let mesh = tessellate::tessellate(topo, face_id, deflection)?;
+                Ok(triangle_mesh_area(&mesh))
+            }
+        }
+        FaceSurface::Sphere(sph) => {
+            // Spherical zone area = 2πr² * (sin(v_max) - sin(v_min))
+            // where v is the latitude parameter (-π/2 to π/2).
+            let r = sph.radius();
+            let positions = crate::boolean::face_polygon(topo, face_id)?;
+            if positions.len() >= 3 {
+                let v_vals: Vec<f64> = positions.iter().map(|p| sph.project_point(*p).1).collect();
+                let avg_v: f64 = v_vals.iter().sum::<f64>() / v_vals.len() as f64;
+                let signed_area = newell_signed_z_area(&positions);
+                let (v_min, v_max) = if signed_area > 0.0 {
+                    (avg_v, std::f64::consts::FRAC_PI_2)
+                } else {
+                    (-std::f64::consts::FRAC_PI_2, avg_v)
+                };
+                Ok(2.0 * std::f64::consts::PI * r * r * (v_max.sin() - v_min.sin()))
+            } else {
+                // Full sphere fallback
+                Ok(4.0 * std::f64::consts::PI * r * r)
+            }
+        }
+        _ => {
+            let mesh = tessellate::tessellate(topo, face_id, deflection)?;
+            Ok(triangle_mesh_area(&mesh))
+        }
     }
 }
 
 /// Newell's method: compute the area of a planar polygon from its
-/// boundary vertices.
+/// boundary vertices, subtracting inner wire (hole) areas.
 fn planar_face_area(topo: &Topology, face_id: FaceId) -> Result<f64, crate::OperationsError> {
     let face = topo.face(face_id)?;
-    let wire = topo.wire(face.outer_wire())?;
-    let positions = collect_wire_positions(topo, wire)?;
+    let outer_wire = topo.wire(face.outer_wire())?;
+    let outer_positions = collect_wire_positions(topo, outer_wire)?;
 
-    let n = positions.len();
-    if n < 3 {
-        return Ok(0.0);
+    let outer_area = newell_area(&outer_positions);
+
+    // Subtract hole areas.
+    let mut hole_area = 0.0;
+    for &inner_wid in face.inner_wires() {
+        let inner_wire = topo.wire(inner_wid)?;
+        let inner_positions = collect_wire_positions(topo, inner_wire)?;
+        hole_area += newell_area(&inner_positions);
     }
 
-    // Newell's method: sum cross products of consecutive edge pairs.
+    Ok((outer_area - hole_area).abs())
+}
+
+/// Compute the area of a polygon using Newell's method.
+fn newell_area(positions: &[Point3]) -> f64 {
+    let n = positions.len();
+    if n < 3 {
+        return 0.0;
+    }
+
     let mut sx = 0.0;
     let mut sy = 0.0;
     let mut sz = 0.0;
@@ -84,8 +171,19 @@ fn planar_face_area(topo: &Topology, face_id: FaceId) -> Result<f64, crate::Oper
         sz = vi.y().mul_add(-vj.x(), vi.x().mul_add(vj.y(), sz));
     }
 
-    let area = 0.5 * sz.mul_add(sz, sx.mul_add(sx, sy * sy)).sqrt();
-    Ok(area)
+    0.5 * sz.mul_add(sz, sx.mul_add(sx, sy * sy)).sqrt()
+}
+
+/// Signed area of a polygon projected onto the XY plane.
+/// Positive = CCW from +Z, negative = CW.
+fn newell_signed_z_area(pts: &[Point3]) -> f64 {
+    let n = pts.len();
+    let mut area = 0.0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        area += pts[i].x() * pts[j].y() - pts[j].x() * pts[i].y();
+    }
+    area * 0.5
 }
 
 /// Sum of triangle areas from a tessellated mesh.

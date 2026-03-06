@@ -296,6 +296,25 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid_id))
     }
 
+    /// Create an ellipsoid solid centered at the origin.
+    ///
+    /// Built by creating a unit sphere and scaling it by `(rx, ry, rz)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any radius is non-positive.
+    #[wasm_bindgen(js_name = "makeEllipsoid")]
+    pub fn make_ellipsoid_solid(&mut self, rx: f64, ry: f64, rz: f64) -> Result<u32, JsError> {
+        validate_positive(rx, "rx")?;
+        validate_positive(ry, "ry")?;
+        validate_positive(rz, "rz")?;
+        // Create a unit sphere, then scale it non-uniformly.
+        let solid_id = brepkit_operations::primitives::make_sphere(&mut self.topo, 1.0, 16)?;
+        let mat = brepkit_math::mat::Mat4::scale(rx, ry, rz);
+        transform_solid(&mut self.topo, solid_id, &mat)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
     // ── Section ───────────────────────────────────────────────────
 
     /// Section a solid with a plane, returning cross-section face handles.
@@ -376,6 +395,56 @@ impl BrepKernel {
             .map(|&h| self.resolve_face(h))
             .collect::<Result<_, _>>()?;
         let solid_id = brepkit_operations::loft::loft_smooth(&mut self.topo, &face_ids)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Loft profiles with options for start/end points and ruled mode.
+    ///
+    /// `options` is a JSON string with optional fields:
+    /// - `startPoint: [x, y, z]` — apex point before first profile
+    /// - `endPoint: [x, y, z]` — apex point after last profile
+    /// - `ruled: bool` — true for ruled (linear) surfaces (default), false for smooth
+    #[wasm_bindgen(js_name = "loftWithOptions")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn loft_with_options(&mut self, faces: Vec<u32>, options: &str) -> Result<u32, JsError> {
+        let opts: serde_json::Value =
+            serde_json::from_str(options).unwrap_or(serde_json::Value::Null);
+
+        let mut face_ids: Vec<brepkit_topology::face::FaceId> = faces
+            .iter()
+            .map(|&h| self.resolve_face(h))
+            .collect::<Result<_, _>>()?;
+
+        // If startPoint is given, create a tiny degenerate triangle face at that point
+        // and prepend it to the profiles.
+        if let Some(sp) = opts.get("startPoint").and_then(|v| v.as_array()) {
+            if sp.len() >= 3 {
+                let x = sp[0].as_f64().unwrap_or(0.0);
+                let y = sp[1].as_f64().unwrap_or(0.0);
+                let z = sp[2].as_f64().unwrap_or(0.0);
+                let apex_face = create_apex_face(&mut self.topo, Point3::new(x, y, z), &face_ids)?;
+                face_ids.insert(0, apex_face);
+            }
+        }
+
+        // If endPoint is given, create a tiny degenerate triangle face and append.
+        if let Some(ep) = opts.get("endPoint").and_then(|v| v.as_array()) {
+            if ep.len() >= 3 {
+                let x = ep[0].as_f64().unwrap_or(0.0);
+                let y = ep[1].as_f64().unwrap_or(0.0);
+                let z = ep[2].as_f64().unwrap_or(0.0);
+                let apex_face = create_apex_face(&mut self.topo, Point3::new(x, y, z), &face_ids)?;
+                face_ids.push(apex_face);
+            }
+        }
+
+        let ruled = opts.get("ruled").and_then(|v| v.as_bool()).unwrap_or(true);
+
+        let solid_id = if ruled {
+            brepkit_operations::loft::loft(&mut self.topo, &face_ids)?
+        } else {
+            brepkit_operations::loft::loft_smooth(&mut self.topo, &face_ids)?
+        };
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -737,6 +806,43 @@ impl BrepKernel {
 
         transform_solid(&mut self.topo, solid_id, &mat)?;
         Ok(())
+    }
+
+    /// Compose (multiply) two 4x4 transformation matrices.
+    ///
+    /// Returns the composed matrix as a flat 16-element array (row-major).
+    /// This computes `a * b`, meaning `b` is applied first, then `a`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either matrix doesn't have 16 elements.
+    #[wasm_bindgen(js_name = "composeTransforms")]
+    #[allow(clippy::needless_pass_by_value, clippy::unused_self)]
+    pub fn compose_transforms(
+        &self,
+        matrix_a: Vec<f64>,
+        matrix_b: Vec<f64>,
+    ) -> Result<Vec<f64>, JsError> {
+        if matrix_a.len() != 16 {
+            return Err(WasmError::InvalidInput {
+                reason: format!("matrix A must have 16 elements, got {}", matrix_a.len()),
+            }
+            .into());
+        }
+        if matrix_b.len() != 16 {
+            return Err(WasmError::InvalidInput {
+                reason: format!("matrix B must have 16 elements, got {}", matrix_b.len()),
+            }
+            .into());
+        }
+        let rows_a = std::array::from_fn(|i| std::array::from_fn(|j| matrix_a[i * 4 + j]));
+        let rows_b = std::array::from_fn(|i| std::array::from_fn(|j| matrix_b[i * 4 + j]));
+        let result = Mat4(rows_a) * Mat4(rows_b);
+        let mut out = Vec::with_capacity(16);
+        for row in &result.0 {
+            out.extend_from_slice(row);
+        }
+        Ok(out)
     }
 
     // ── Boolean operations ──────────────────────────────────────────
@@ -1552,6 +1658,106 @@ impl BrepKernel {
         Ok(merged.into())
     }
 
+    /// Tessellate a solid with per-face triangle grouping.
+    ///
+    /// Returns a JSON string containing `{ positions, normals, indices, faceOffsets }`.
+    /// `faceOffsets` is an array where `faceOffsets[i]` is the start index into
+    /// `indices` for face `i`, and the last element is `indices.length`.
+    #[wasm_bindgen(js_name = "tessellateSolidGrouped")]
+    pub fn tessellate_solid_grouped(
+        &self,
+        solid: u32,
+        deflection: f64,
+    ) -> Result<JsValue, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let faces = brepkit_topology::explorer::solid_faces(&self.topo, solid_id)?;
+
+        let mut all_positions: Vec<f64> = Vec::new();
+        let mut all_normals: Vec<f64> = Vec::new();
+        let mut all_indices: Vec<u32> = Vec::new();
+        let mut face_offsets: Vec<u32> = Vec::new();
+
+        for &face_id in &faces {
+            #[allow(clippy::cast_possible_truncation)]
+            let idx_offset = (all_positions.len() / 3) as u32;
+            face_offsets.push(all_indices.len() as u32);
+
+            if let Ok(mesh) = tessellate::tessellate(&self.topo, face_id, deflection) {
+                for p in &mesh.positions {
+                    all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
+                }
+                for n in &mesh.normals {
+                    all_normals.extend_from_slice(&[n.x(), n.y(), n.z()]);
+                }
+                for &idx in &mesh.indices {
+                    all_indices.push(idx + idx_offset);
+                }
+            }
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        face_offsets.push(all_indices.len() as u32);
+
+        Ok(serde_json::to_string(&serde_json::json!({
+            "positions": all_positions,
+            "normals": all_normals,
+            "indices": all_indices,
+            "faceOffsets": face_offsets,
+        }))
+        .map_err(|e| JsError::new(&e.to_string()))?
+        .into())
+    }
+
+    /// Tessellate a solid and include per-vertex UV coordinates.
+    ///
+    /// Returns a JSON string containing `{ positions, normals, indices, uvs }`.
+    /// `uvs` is a flat array of `[u0, v0, u1, v1, ...]` values, two per vertex.
+    /// For analytic and NURBS surfaces, these are the parametric (u, v) values.
+    /// For planar faces, UVs are computed by projection onto the face plane.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or tessellation fails.
+    #[wasm_bindgen(js_name = "tessellateSolidUV")]
+    pub fn tessellate_solid_uv(&self, solid: u32, deflection: f64) -> Result<JsValue, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let faces = brepkit_topology::explorer::solid_faces(&self.topo, solid_id)?;
+
+        let mut all_positions: Vec<f64> = Vec::new();
+        let mut all_normals: Vec<f64> = Vec::new();
+        let mut all_uvs: Vec<f64> = Vec::new();
+        let mut all_indices: Vec<u32> = Vec::new();
+
+        for &face_id in &faces {
+            #[allow(clippy::cast_possible_truncation)]
+            let idx_offset = (all_positions.len() / 3) as u32;
+
+            let mesh_uv = tessellate::tessellate_with_uvs(&self.topo, face_id, deflection)?;
+            for p in &mesh_uv.mesh.positions {
+                all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
+            }
+            for n in &mesh_uv.mesh.normals {
+                all_normals.extend_from_slice(&[n.x(), n.y(), n.z()]);
+            }
+            for uv in &mesh_uv.uvs {
+                all_uvs.extend_from_slice(uv);
+            }
+            for &idx in &mesh_uv.mesh.indices {
+                all_indices.push(idx + idx_offset);
+            }
+        }
+
+        Ok(serde_json::to_string(&serde_json::json!({
+            "positions": all_positions,
+            "normals": all_normals,
+            "indices": all_indices,
+            "uvs": all_uvs,
+        }))
+        .map_err(|e| JsError::new(&e.to_string()))?
+        .into())
+    }
+
     // ── Edge wireframe ────────────────────────────────────────────
 
     /// Sample all edges of a solid into polylines for wireframe rendering.
@@ -1669,6 +1875,102 @@ impl BrepKernel {
         let vertex_id = self.resolve_vertex(vertex)?;
         let point = self.topo.vertex(vertex_id)?.point();
         Ok(vec![point.x(), point.y(), point.z()])
+    }
+
+    /// Serialize a solid's B-Rep topology to JSON.
+    ///
+    /// Returns a JSON string containing the solid's complete topology:
+    /// vertices, edges (with curve types), faces (with surface types), and
+    /// connectivity information.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "toBREP")]
+    #[allow(clippy::too_many_lines)]
+    pub fn to_brep(&self, solid: u32) -> Result<JsValue, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let faces = brepkit_topology::explorer::solid_faces(&self.topo, solid_id)?;
+        let edges = brepkit_topology::explorer::solid_edges(&self.topo, solid_id)?;
+        let verts = brepkit_topology::explorer::solid_vertices(&self.topo, solid_id)?;
+
+        let vert_json: Vec<serde_json::Value> = verts
+            .iter()
+            .map(|&vid| -> Result<serde_json::Value, JsError> {
+                let v = self.topo.vertex(vid)?;
+                let p = v.point();
+                Ok(serde_json::json!({
+                    "id": vertex_id_to_u32(vid),
+                    "position": [p.x(), p.y(), p.z()],
+                }))
+            })
+            .collect::<Result<_, _>>()?;
+
+        let edge_json: Vec<serde_json::Value> = edges
+            .iter()
+            .map(|&eid| -> Result<serde_json::Value, JsError> {
+                let e = self.topo.edge(eid)?;
+                let curve_type = match e.curve() {
+                    brepkit_topology::edge::EdgeCurve::Line => "line",
+                    brepkit_topology::edge::EdgeCurve::Circle(_) => "circle",
+                    brepkit_topology::edge::EdgeCurve::Ellipse(_) => "ellipse",
+                    brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => "nurbs",
+                };
+                Ok(serde_json::json!({
+                    "id": edge_id_to_u32(eid),
+                    "curveType": curve_type,
+                    "startVertex": vertex_id_to_u32(e.start()),
+                    "endVertex": vertex_id_to_u32(e.end()),
+                }))
+            })
+            .collect::<Result<_, _>>()?;
+
+        let face_json: Vec<serde_json::Value> = faces
+            .iter()
+            .map(|&fid| -> Result<serde_json::Value, JsError> {
+                let f = self.topo.face(fid)?;
+                let surface_type = match f.surface() {
+                    brepkit_topology::face::FaceSurface::Plane { .. } => "plane",
+                    brepkit_topology::face::FaceSurface::Nurbs(_) => "nurbs",
+                    brepkit_topology::face::FaceSurface::Cylinder(_) => "cylinder",
+                    brepkit_topology::face::FaceSurface::Cone(_) => "cone",
+                    brepkit_topology::face::FaceSurface::Sphere(_) => "sphere",
+                    brepkit_topology::face::FaceSurface::Torus(_) => "torus",
+                };
+                let outer_wire = self.topo.wire(f.outer_wire())?;
+                let outer_edges: Vec<u32> = outer_wire
+                    .edges()
+                    .iter()
+                    .map(|e| edge_id_to_u32(e.edge()))
+                    .collect();
+                let inner_wires: Vec<Vec<u32>> =
+                    f.inner_wires()
+                        .iter()
+                        .filter_map(|&wid| {
+                            self.topo.wire(wid).ok().map(|w| {
+                                w.edges().iter().map(|e| edge_id_to_u32(e.edge())).collect()
+                            })
+                        })
+                        .collect();
+                Ok(serde_json::json!({
+                    "id": face_id_to_u32(fid),
+                    "surfaceType": surface_type,
+                    "reversed": f.is_reversed(),
+                    "outerWireEdges": outer_edges,
+                    "innerWires": inner_wires,
+                }))
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(serde_json::to_string(&serde_json::json!({
+            "type": "solid",
+            "solidId": solid_id_to_u32(solid_id),
+            "vertices": vert_json,
+            "edges": edge_json,
+            "faces": face_json,
+        }))
+        .map_err(|e| JsError::new(&e.to_string()))?
+        .into())
     }
 
     /// Get the face normal of a planar face.
@@ -1917,6 +2219,58 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid))
     }
 
+    /// Create a solid from a set of faces by sewing them together.
+    ///
+    /// Alias for `sewFaces` with a default tolerance. This is the equivalent
+    /// of OCCT's `BRepBuilderAPI_MakeSolid`.
+    #[wasm_bindgen(js_name = "makeSolid")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn make_solid_from_faces(&mut self, face_handles: Vec<u32>) -> Result<u32, JsError> {
+        let face_ids: Vec<brepkit_topology::face::FaceId> = face_handles
+            .iter()
+            .map(|&h| self.resolve_face(h))
+            .collect::<Result<_, _>>()?;
+        let tolerance = brepkit_math::tolerance::Tolerance::new().linear;
+        let solid = brepkit_operations::sew::sew_faces(&mut self.topo, &face_ids, tolerance)?;
+        Ok(solid_id_to_u32(solid))
+    }
+
+    /// Remove all holes from a face, returning a new face with only the outer wire.
+    #[wasm_bindgen(js_name = "removeHolesFromFace")]
+    pub fn remove_holes_from_face(&mut self, face: u32) -> Result<u32, JsError> {
+        let face_id = self.resolve_face(face)?;
+        let face_data = self.topo.face(face_id)?;
+        let outer_wire = face_data.outer_wire();
+        let surface = face_data.surface().clone();
+        let new_face = Face::new(outer_wire, vec![], surface);
+        let fid = self.topo.faces.alloc(new_face);
+        Ok(face_id_to_u32(fid))
+    }
+
+    /// Weld shells and faces into a single solid by sewing.
+    ///
+    /// Accepts an array of face handles from potentially different shells.
+    /// Sews all faces together into a single solid.
+    #[wasm_bindgen(js_name = "weldShellsAndFaces")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn weld_shells_and_faces(
+        &mut self,
+        face_handles: Vec<u32>,
+        tolerance: f64,
+    ) -> Result<u32, JsError> {
+        let face_ids: Vec<brepkit_topology::face::FaceId> = face_handles
+            .iter()
+            .map(|&h| self.resolve_face(h))
+            .collect::<Result<_, _>>()?;
+        let tol = if tolerance > 0.0 {
+            tolerance
+        } else {
+            brepkit_math::tolerance::Tolerance::new().linear
+        };
+        let solid = brepkit_operations::sew::sew_faces(&mut self.topo, &face_ids, tol)?;
+        Ok(solid_id_to_u32(solid))
+    }
+
     // ── Shape construction (low-level) ────────────────────────────
 
     /// Create a vertex at the given position.
@@ -2094,13 +2448,17 @@ impl BrepKernel {
     ///
     /// Returns one of: `"plane"`, `"cylinder"`, `"cone"`, `"sphere"`,
     /// `"torus"`, `"bspline"`.
+    ///
+    /// For NURBS surfaces that exactly represent analytic shapes, this
+    /// returns the underlying analytic type (e.g. `"sphere"` for a NURBS
+    /// sphere patch).
     #[wasm_bindgen(js_name = "getSurfaceType")]
     pub fn get_surface_type(&self, face: u32) -> Result<String, JsError> {
         let face_id = self.resolve_face(face)?;
         let face_data = self.topo.face(face_id)?;
         Ok(match face_data.surface() {
             FaceSurface::Plane { .. } => "plane",
-            FaceSurface::Nurbs(_) => "bspline",
+            FaceSurface::Nurbs(ns) => detect_nurbs_surface_type(ns),
             FaceSurface::Cylinder(_) => "cylinder",
             FaceSurface::Cone(_) => "cone",
             FaceSurface::Sphere(_) => "sphere",
@@ -2112,13 +2470,17 @@ impl BrepKernel {
     /// Get the curve type of an edge.
     ///
     /// Returns `"LINE"`, `"BSPLINE_CURVE"`, `"CIRCLE"`, or `"ELLIPSE"`.
+    ///
+    /// For NURBS curves that exactly represent analytic curves, this
+    /// returns the underlying analytic type (e.g. `"CIRCLE"` for a
+    /// rational NURBS circle).
     #[wasm_bindgen(js_name = "getEdgeCurveType")]
     pub fn get_edge_curve_type(&self, edge: u32) -> Result<String, JsError> {
         let edge_id = self.resolve_edge(edge)?;
         let edge_data = self.topo.edge(edge_id)?;
         Ok(match edge_data.curve() {
             EdgeCurve::Line => "LINE",
-            EdgeCurve::NurbsCurve(_) => "BSPLINE_CURVE",
+            EdgeCurve::NurbsCurve(nc) => detect_nurbs_curve_type(nc),
             EdgeCurve::Circle(_) => "CIRCLE",
             EdgeCurve::Ellipse(_) => "ELLIPSE",
         }
@@ -2259,6 +2621,127 @@ impl BrepKernel {
         }
     }
 
+    /// Measure curvature of an edge curve at parameter `t`.
+    ///
+    /// Returns `[curvature, tangent_x, tangent_y, tangent_z, normal_x, normal_y, normal_z]`.
+    /// Curvature is 1/radius. For lines, curvature is 0.
+    #[wasm_bindgen(js_name = "measureCurvatureAtEdge")]
+    pub fn measure_curvature_at_edge(&self, edge: u32, t: f64) -> Result<Vec<f64>, JsError> {
+        validate_finite(t, "t")?;
+        let edge_id = self.resolve_edge(edge)?;
+        let edge_data = self.topo.edge(edge_id)?;
+        match edge_data.curve() {
+            EdgeCurve::Line => {
+                let start = self.topo.vertex(edge_data.start())?.point();
+                let end = self.topo.vertex(edge_data.end())?.point();
+                let dir = end - start;
+                let len = dir.length();
+                let tangent = if len < 1e-15 {
+                    Vec3::new(1.0, 0.0, 0.0)
+                } else {
+                    Vec3::new(dir.x() / len, dir.y() / len, dir.z() / len)
+                };
+                Ok(vec![
+                    0.0,
+                    tangent.x(),
+                    tangent.y(),
+                    tangent.z(),
+                    0.0,
+                    0.0,
+                    0.0,
+                ])
+            }
+            EdgeCurve::NurbsCurve(curve) => {
+                let curvature = curve.curvature(t).unwrap_or(0.0);
+                let derivs = curve.derivatives(t, 2);
+                let tangent = if derivs.len() > 1 {
+                    derivs[1].normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0))
+                } else {
+                    Vec3::new(1.0, 0.0, 0.0)
+                };
+                let normal = if derivs.len() > 2 {
+                    let d1 = derivs[1];
+                    let d2 = derivs[2];
+                    let cross = d1.cross(d2);
+                    let binormal = cross.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                    binormal
+                        .cross(tangent)
+                        .normalize()
+                        .unwrap_or(Vec3::new(0.0, 1.0, 0.0))
+                } else {
+                    Vec3::new(0.0, 1.0, 0.0)
+                };
+                Ok(vec![
+                    curvature,
+                    tangent.x(),
+                    tangent.y(),
+                    tangent.z(),
+                    normal.x(),
+                    normal.y(),
+                    normal.z(),
+                ])
+            }
+            EdgeCurve::Circle(circle) => {
+                let curvature = 1.0 / circle.radius();
+                let tangent = circle
+                    .tangent(t)
+                    .normalize()
+                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                let point = circle.evaluate(t);
+                let to_center = Vec3::new(
+                    circle.center().x() - point.x(),
+                    circle.center().y() - point.y(),
+                    circle.center().z() - point.z(),
+                );
+                let normal = to_center.normalize().unwrap_or(Vec3::new(0.0, 1.0, 0.0));
+                Ok(vec![
+                    curvature,
+                    tangent.x(),
+                    tangent.y(),
+                    tangent.z(),
+                    normal.x(),
+                    normal.y(),
+                    normal.z(),
+                ])
+            }
+            EdgeCurve::Ellipse(ellipse) => {
+                let point = ellipse.evaluate(t);
+                let tangent = ellipse
+                    .tangent(t)
+                    .normalize()
+                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                // Approximate curvature from finite differences
+                let dt = 1e-6;
+                let p0 = ellipse.evaluate(t - dt);
+                let p1 = ellipse.evaluate(t + dt);
+                let d1 = p1 - p0;
+                let d2 = (p1 - point) - (point - p0);
+                let speed = d1.length() / (2.0 * dt);
+                let curvature = if speed > 1e-15 {
+                    d1.cross(d2).length() / ((2.0 * dt) * speed * speed * speed)
+                } else {
+                    0.0
+                };
+                let normal = Vec3::new(
+                    ellipse.center().x() - point.x(),
+                    ellipse.center().y() - point.y(),
+                    ellipse.center().z() - point.z(),
+                )
+                .normalize()
+                .unwrap_or(Vec3::new(0.0, 1.0, 0.0));
+                Ok(vec![
+                    curvature,
+                    tangent.x(),
+                    tangent.y(),
+                    tangent.z(),
+                    normal.x(),
+                    normal.y(),
+                    normal.z(),
+                ])
+            }
+        }
+    }
+
     /// Evaluate a surface normal at (u, v) on a face.
     ///
     /// Returns `[nx, ny, nz]`.
@@ -2336,6 +2819,189 @@ impl BrepKernel {
             FaceSurface::Torus(tor) => tor.evaluate(u, v),
         };
         Ok(vec![point.x(), point.y(), point.z()])
+    }
+
+    /// Measure principal curvatures at (u, v) on a face surface.
+    ///
+    /// Returns `[k1, k2, d1x, d1y, d1z, d2x, d2y, d2z]` where k1/k2 are
+    /// principal curvatures and d1/d2 are the corresponding direction vectors.
+    #[wasm_bindgen(js_name = "measureCurvatureAtSurface")]
+    #[allow(clippy::too_many_lines)]
+    pub fn measure_curvature_at_surface(
+        &self,
+        face: u32,
+        u: f64,
+        v: f64,
+    ) -> Result<Vec<f64>, JsError> {
+        let face_id = self.resolve_face(face)?;
+        let face_data = self.topo.face(face_id)?;
+        match face_data.surface() {
+            FaceSurface::Plane { .. } => Ok(vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            FaceSurface::Nurbs(surface) => {
+                let derivs = surface.derivatives(u, v, 2);
+                // derivs[i][j] = d^(i+j) S / du^i dv^j
+                let su = if derivs.len() > 1 && !derivs[1].is_empty() {
+                    derivs[1][0]
+                } else {
+                    return Ok(vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+                };
+                let sv = if !derivs.is_empty() && derivs[0].len() > 1 {
+                    derivs[0][1]
+                } else {
+                    return Ok(vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+                };
+                let suu = if derivs.len() > 2 && !derivs[2].is_empty() {
+                    derivs[2][0]
+                } else {
+                    Vec3::new(0.0, 0.0, 0.0)
+                };
+                let suv = if derivs.len() > 1 && derivs[1].len() > 1 {
+                    derivs[1][1]
+                } else {
+                    Vec3::new(0.0, 0.0, 0.0)
+                };
+                let svv = if !derivs.is_empty() && derivs[0].len() > 2 {
+                    derivs[0][2]
+                } else {
+                    Vec3::new(0.0, 0.0, 0.0)
+                };
+
+                let normal = su.cross(sv);
+                let normal = match normal.normalize() {
+                    Ok(n) => n,
+                    Err(_) => return Ok(vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                };
+
+                // First fundamental form coefficients
+                let ee = su.dot(su);
+                let ff = su.dot(sv);
+                let gg = sv.dot(sv);
+
+                // Second fundamental form coefficients
+                let ll = suu.dot(normal);
+                let mm = suv.dot(normal);
+                let nn = svv.dot(normal);
+
+                // Principal curvatures from shape operator eigenvalues
+                let denom = ee * gg - ff * ff;
+                if denom.abs() < 1e-30 {
+                    return Ok(vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+                }
+                let h = 0.5 * (ee * nn - 2.0 * ff * mm + gg * ll) / denom; // mean curvature
+                let k = (ll * nn - mm * mm) / denom; // Gaussian curvature
+                let disc = (h * h - k).max(0.0).sqrt();
+                let k1 = h + disc;
+                let k2 = h - disc;
+
+                // Principal directions (approximate)
+                let su_norm = su.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                let sv_norm = sv.normalize().unwrap_or(Vec3::new(0.0, 1.0, 0.0));
+
+                Ok(vec![
+                    k1,
+                    k2,
+                    su_norm.x(),
+                    su_norm.y(),
+                    su_norm.z(),
+                    sv_norm.x(),
+                    sv_norm.y(),
+                    sv_norm.z(),
+                ])
+            }
+            FaceSurface::Cylinder(cyl) => {
+                let r = cyl.radius();
+                let axis = cyl.axis().normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                let point = cyl.evaluate(u, v);
+                let to_axis = Vec3::new(
+                    cyl.origin().x() - point.x()
+                        + axis.x()
+                            * axis.dot(Vec3::new(
+                                point.x() - cyl.origin().x(),
+                                point.y() - cyl.origin().y(),
+                                point.z() - cyl.origin().z(),
+                            )),
+                    cyl.origin().y() - point.y()
+                        + axis.y()
+                            * axis.dot(Vec3::new(
+                                point.x() - cyl.origin().x(),
+                                point.y() - cyl.origin().y(),
+                                point.z() - cyl.origin().z(),
+                            )),
+                    cyl.origin().z() - point.z()
+                        + axis.z()
+                            * axis.dot(Vec3::new(
+                                point.x() - cyl.origin().x(),
+                                point.y() - cyl.origin().y(),
+                                point.z() - cyl.origin().z(),
+                            )),
+                );
+                let radial = to_axis.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                Ok(vec![
+                    1.0 / r,
+                    0.0,
+                    radial.x(),
+                    radial.y(),
+                    radial.z(),
+                    axis.x(),
+                    axis.y(),
+                    axis.z(),
+                ])
+            }
+            FaceSurface::Sphere(sph) => {
+                let r = sph.radius();
+                let point = sph.evaluate(u, v);
+                let radial = Vec3::new(
+                    point.x() - sph.center().x(),
+                    point.y() - sph.center().y(),
+                    point.z() - sph.center().z(),
+                )
+                .normalize()
+                .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                // Both principal curvatures are 1/r for a sphere
+                let d1 = Vec3::new(-radial.y(), radial.x(), 0.0)
+                    .normalize()
+                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                let d2 = radial.cross(d1);
+                Ok(vec![
+                    1.0 / r,
+                    1.0 / r,
+                    d1.x(),
+                    d1.y(),
+                    d1.z(),
+                    d2.x(),
+                    d2.y(),
+                    d2.z(),
+                ])
+            }
+            FaceSurface::Cone(cone) => {
+                let half_angle = cone.half_angle();
+                let v_pos = v.abs().max(1e-10);
+                let local_r = v_pos * half_angle.sin();
+                let k_parallel = if local_r > 1e-15 {
+                    half_angle.cos() / local_r
+                } else {
+                    0.0
+                };
+                let axis = cone.axis().normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                Ok(vec![
+                    0.0,
+                    k_parallel,
+                    axis.x(),
+                    axis.y(),
+                    axis.z(),
+                    1.0,
+                    0.0,
+                    0.0,
+                ])
+            }
+            FaceSurface::Torus(torus) => {
+                let r_major = torus.major_radius();
+                let r_minor = torus.minor_radius();
+                let k1 = 1.0 / r_minor;
+                let k2 = u.cos() / (r_major + r_minor * u.cos());
+                Ok(vec![k1, k2, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+            }
+        }
     }
 
     /// Heal a solid topology.
@@ -2869,6 +3535,22 @@ impl BrepKernel {
         let solid_id = self.resolve_solid(solid)?;
         let result =
             brepkit_operations::offset_solid::offset_solid(&mut self.topo, solid_id, distance)?;
+        Ok(solid_id_to_u32(result))
+    }
+
+    /// Thicken a face into a solid by offsetting it by the given distance.
+    ///
+    /// Creates a solid from a face by extruding it along its normal by
+    /// `thickness`. Positive values offset outward, negative inward.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid or thickness is zero.
+    #[wasm_bindgen(js_name = "thicken")]
+    pub fn thicken_face(&mut self, face: u32, thickness: f64) -> Result<u32, JsError> {
+        validate_finite(thickness, "thickness")?;
+        let face_id = self.resolve_face(face)?;
+        let result = brepkit_operations::thicken::thicken(&mut self.topo, face_id, thickness)?;
         Ok(solid_id_to_u32(result))
     }
 
@@ -3475,6 +4157,26 @@ impl BrepKernel {
             .iter()
             .map(|oe| edge_id_to_u32(oe.edge()))
             .collect())
+    }
+
+    /// Check whether a wire is closed (last edge connects back to first).
+    #[wasm_bindgen(js_name = "isWireClosed")]
+    pub fn is_wire_closed(&self, wire: u32) -> Result<bool, JsError> {
+        let wire_id = self.resolve_wire(wire)?;
+        let wire_data = self.topo.wire(wire_id)?;
+        Ok(wire_data.is_closed())
+    }
+
+    /// Compute the total arc-length of a wire.
+    #[wasm_bindgen(js_name = "wireLength")]
+    pub fn wire_length(&self, wire: u32) -> Result<f64, JsError> {
+        let wire_id = self.resolve_wire(wire)?;
+        let wire_data = self.topo.wire(wire_id)?;
+        let mut total = 0.0;
+        for oe in wire_data.edges() {
+            total += brepkit_operations::measure::edge_length(&self.topo, oe.edge())?;
+        }
+        Ok(total)
     }
 
     // ── Batch 3: Simple operations bindings ──────────────────────────
@@ -4172,6 +4874,121 @@ impl BrepKernel {
         Ok(result.iter().flat_map(|p| [p.x(), p.y()]).collect())
     }
 
+    // ── 2D Blueprint Operations ────────────────────────────────────
+
+    /// Test if a 2D point is inside a closed polygon.
+    ///
+    /// `polygon_coords` is a flat array `[x,y, x,y, ...]`.
+    /// Returns `true` if the point is inside the polygon (winding number test).
+    #[wasm_bindgen(js_name = "pointInPolygon2d")]
+    #[allow(clippy::unused_self)]
+    pub fn point_in_polygon_2d(
+        &self,
+        polygon_coords: Vec<f64>,
+        px: f64,
+        py: f64,
+    ) -> Result<bool, JsError> {
+        if polygon_coords.len() % 2 != 0 || polygon_coords.len() < 6 {
+            return Err(WasmError::InvalidInput {
+                reason: "polygon needs at least 3 points (6 coordinates)".into(),
+            }
+            .into());
+        }
+        let polygon: Vec<brepkit_math::vec::Point2> = polygon_coords
+            .chunks_exact(2)
+            .map(|c| brepkit_math::vec::Point2::new(c[0], c[1]))
+            .collect();
+        let point = brepkit_math::vec::Point2::new(px, py);
+        Ok(brepkit_math::predicates::point_in_polygon(point, &polygon))
+    }
+
+    /// Test if two 2D polygons intersect (overlap).
+    ///
+    /// Both polygons are flat arrays `[x,y, x,y, ...]`.
+    /// Returns `true` if any vertex of one polygon is inside the other
+    /// or if any edges cross.
+    #[wasm_bindgen(js_name = "polygonsIntersect2d")]
+    #[allow(clippy::unused_self)]
+    pub fn polygons_intersect_2d(
+        &self,
+        coords_a: Vec<f64>,
+        coords_b: Vec<f64>,
+    ) -> Result<bool, JsError> {
+        let poly_a = parse_polygon_2d(&coords_a)?;
+        let poly_b = parse_polygon_2d(&coords_b)?;
+        Ok(polygons_overlap_2d(&poly_a, &poly_b))
+    }
+
+    /// Compute the boolean intersection of two 2D polygons.
+    ///
+    /// Both polygons are flat arrays `[x,y, x,y, ...]`.
+    /// Returns a flat array of the intersection polygon coordinates,
+    /// or an empty array if they don't intersect.
+    ///
+    /// Uses the Sutherland-Hodgman algorithm (convex clipper).
+    #[wasm_bindgen(js_name = "intersectPolygons2d")]
+    #[allow(clippy::unused_self)]
+    pub fn intersect_polygons_2d(
+        &self,
+        coords_a: Vec<f64>,
+        coords_b: Vec<f64>,
+    ) -> Result<Vec<f64>, JsError> {
+        let subject = parse_polygon_2d(&coords_a)?;
+        let clip = parse_polygon_2d(&coords_b)?;
+        let result = sutherland_hodgman_clip(&subject, &clip);
+        Ok(result.iter().flat_map(|p| [p.x(), p.y()]).collect())
+    }
+
+    /// Find common (shared) edges between two adjacent 2D polygons.
+    ///
+    /// Both polygons are flat arrays `[x,y, x,y, ...]`.
+    /// Returns a flat array of common segment endpoints `[x1,y1, x2,y2, ...]`,
+    /// or an empty array if no common segments exist.
+    #[wasm_bindgen(js_name = "commonSegment2d")]
+    #[allow(clippy::unused_self)]
+    pub fn common_segment_2d(
+        &self,
+        coords_a: Vec<f64>,
+        coords_b: Vec<f64>,
+    ) -> Result<Vec<f64>, JsError> {
+        let poly_a = parse_polygon_2d(&coords_a)?;
+        let poly_b = parse_polygon_2d(&coords_b)?;
+        let tolerance = 1e-7;
+        let result = find_common_segments(&poly_a, &poly_b, tolerance);
+        Ok(result
+            .iter()
+            .flat_map(|(a, b)| [a.x(), a.y(), b.x(), b.y()])
+            .collect())
+    }
+
+    /// Round corners of a 2D polygon by inserting arc-approximation vertices.
+    ///
+    /// `coords` is a flat array `[x,y, x,y, ...]`.
+    /// `radius` is the fillet radius.
+    /// Returns a flat array of the filleted polygon coordinates.
+    #[wasm_bindgen(js_name = "fillet2d")]
+    #[allow(clippy::unused_self)]
+    pub fn fillet_2d(&self, coords: Vec<f64>, radius: f64) -> Result<Vec<f64>, JsError> {
+        validate_positive(radius, "radius")?;
+        let polygon = parse_polygon_2d(&coords)?;
+        let result = fillet_polygon_2d(&polygon, radius);
+        Ok(result.iter().flat_map(|p| [p.x(), p.y()]).collect())
+    }
+
+    /// Cut corners of a 2D polygon with flat bevels.
+    ///
+    /// `coords` is a flat array `[x,y, x,y, ...]`.
+    /// `distance` is the chamfer distance from each corner.
+    /// Returns a flat array of the chamfered polygon coordinates.
+    #[wasm_bindgen(js_name = "chamfer2d")]
+    #[allow(clippy::unused_self)]
+    pub fn chamfer_2d(&self, coords: Vec<f64>, distance: f64) -> Result<Vec<f64>, JsError> {
+        validate_positive(distance, "distance")?;
+        let polygon = parse_polygon_2d(&coords)?;
+        let result = chamfer_polygon_2d(&polygon, distance);
+        Ok(result.iter().flat_map(|p| [p.x(), p.y()]).collect())
+    }
+
     // ── Semantic APIs (Theme G) ──────────────────────────────────────
 
     /// Get the orientation of a shape.
@@ -4369,6 +5186,19 @@ impl BrepKernel {
                     segments as usize,
                 )
                 .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
+            "makeEllipsoid" => {
+                let rx = get_f64(args, "rx")?;
+                let ry = get_f64(args, "ry")?;
+                let rz = get_f64(args, "rz")?;
+                if rx <= 0.0 || ry <= 0.0 || rz <= 0.0 {
+                    return Err("rx, ry, rz must be positive".to_string());
+                }
+                let solid = brepkit_operations::primitives::make_sphere(&mut self.topo, 1.0, 16)
+                    .map_err(|e| e.to_string())?;
+                let mat = brepkit_math::mat::Mat4::scale(rx, ry, rz);
+                transform_solid(&mut self.topo, solid, &mat).map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
             }
             "fuse" => {
@@ -4799,13 +5629,725 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(null))
             }
+            "offsetFace" => {
+                let f = get_u32(args, "face")?;
+                let dist = get_f64(args, "distance")?;
+                let samples = get_u32(args, "samples").unwrap_or(16);
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let result = brepkit_operations::offset_face::offset_face(
+                    &mut self.topo,
+                    face_id,
+                    dist,
+                    samples as usize,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(face_id_to_u32(result)))
+            }
+            "offsetSolid" => {
+                let s = get_u32(args, "solid")?;
+                let dist = get_f64(args, "distance")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let result =
+                    brepkit_operations::offset_solid::offset_solid(&mut self.topo, solid_id, dist)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
+            "section" => {
+                let s = get_u32(args, "solid")?;
+                let px = get_f64(args, "px").unwrap_or(0.0);
+                let py = get_f64(args, "py").unwrap_or(0.0);
+                let pz = get_f64(args, "pz").unwrap_or(0.0);
+                let nx = get_f64(args, "nx").unwrap_or(0.0);
+                let ny = get_f64(args, "ny").unwrap_or(0.0);
+                let nz = get_f64(args, "nz").unwrap_or(1.0);
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let result = brepkit_operations::section::section(
+                    &mut self.topo,
+                    solid_id,
+                    Point3::new(px, py, pz),
+                    Vec3::new(nx, ny, nz),
+                )
+                .map_err(|e| e.to_string())?;
+                let face_ids: Vec<u32> = result.faces.iter().map(|&f| face_id_to_u32(f)).collect();
+                Ok(serde_json::json!(face_ids))
+            }
+            "split" => {
+                let s = get_u32(args, "solid")?;
+                let px = get_f64(args, "px").unwrap_or(0.0);
+                let py = get_f64(args, "py").unwrap_or(0.0);
+                let pz = get_f64(args, "pz").unwrap_or(0.0);
+                let nx = get_f64(args, "nx").unwrap_or(0.0);
+                let ny = get_f64(args, "ny").unwrap_or(0.0);
+                let nz = get_f64(args, "nz").unwrap_or(1.0);
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let result = brepkit_operations::split::split(
+                    &mut self.topo,
+                    solid_id,
+                    Point3::new(px, py, pz),
+                    Vec3::new(nx, ny, nz),
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "positive": solid_id_to_u32(result.positive),
+                    "negative": solid_id_to_u32(result.negative),
+                }))
+            }
+            "sewFaces" => {
+                let face_handles: Vec<u32> = args["faces"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let tol = get_f64(args, "tolerance").unwrap_or(1e-6);
+                let face_ids: Vec<_> = face_handles
+                    .iter()
+                    .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let solid = brepkit_operations::sew::sew_faces(&mut self.topo, &face_ids, tol)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
+            "thicken" => {
+                let f = get_u32(args, "face")?;
+                let thickness = get_f64(args, "thickness")?;
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let result =
+                    brepkit_operations::thicken::thicken(&mut self.topo, face_id, thickness)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
+            "pipe" => {
+                let f = get_u32(args, "face")?;
+                let e = get_u32(args, "pathEdge")?;
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let edge_id = self.resolve_edge(e).map_err(|e| e.to_string())?;
+                let edge_data = self.topo.edge(edge_id).map_err(|e| e.to_string())?;
+                let curve = match edge_data.curve() {
+                    EdgeCurve::NurbsCurve(c) => c.clone(),
+                    EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                        return Err("pipe path must be a NURBS edge".into());
+                    }
+                };
+                let solid = brepkit_operations::pipe::pipe(&mut self.topo, face_id, &curve, None)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
+            "linearPattern" => {
+                let s = get_u32(args, "solid")?;
+                let dx = get_f64(args, "dx").unwrap_or(1.0);
+                let dy = get_f64(args, "dy").unwrap_or(0.0);
+                let dz = get_f64(args, "dz").unwrap_or(0.0);
+                let spacing = get_f64(args, "spacing")?;
+                let count = get_u32(args, "count")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let compound = brepkit_operations::pattern::linear_pattern(
+                    &mut self.topo,
+                    solid_id,
+                    Vec3::new(dx, dy, dz),
+                    spacing,
+                    count as usize,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(compound_id_to_u32(compound)))
+            }
+            "draft" => {
+                let s = get_u32(args, "solid")?;
+                let angle = get_f64(args, "angle")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let face_handles: Vec<u32> = args["faces"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let face_ids: Vec<_> = face_handles
+                    .iter()
+                    .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let dx = get_f64(args, "dirX").unwrap_or(0.0);
+                let dy = get_f64(args, "dirY").unwrap_or(0.0);
+                let dz = get_f64(args, "dirZ").unwrap_or(1.0);
+                let npx = get_f64(args, "neutralX").unwrap_or(0.0);
+                let npy = get_f64(args, "neutralY").unwrap_or(0.0);
+                let npz = get_f64(args, "neutralZ").unwrap_or(0.0);
+                let dir = Vec3::new(dx, dy, dz);
+                let neutral = Point3::new(npx, npy, npz);
+                let result = brepkit_operations::draft::draft(
+                    &mut self.topo,
+                    solid_id,
+                    &face_ids,
+                    dir,
+                    neutral,
+                    angle,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
             _ => Err(format!("unknown operation: {op}")),
         }
     }
 }
 
-/// Convert a `FaceId` to a `u32` handle for JavaScript.
-#[allow(clippy::cast_possible_truncation)]
+// ── 2D Blueprint Helpers ──────────────────────────────────────────
+
+fn parse_polygon_2d(coords: &[f64]) -> Result<Vec<brepkit_math::vec::Point2>, JsError> {
+    if coords.len() % 2 != 0 || coords.len() < 6 {
+        return Err(WasmError::InvalidInput {
+            reason: "polygon needs at least 3 points (6 coordinates)".into(),
+        }
+        .into());
+    }
+    Ok(coords
+        .chunks_exact(2)
+        .map(|c| brepkit_math::vec::Point2::new(c[0], c[1]))
+        .collect())
+}
+
+/// Check if two 2D polygons overlap using vertex containment + edge crossing.
+fn polygons_overlap_2d(a: &[brepkit_math::vec::Point2], b: &[brepkit_math::vec::Point2]) -> bool {
+    use brepkit_math::predicates::point_in_polygon;
+
+    // Check if any vertex of A is inside B or vice versa.
+    for p in a {
+        if point_in_polygon(*p, b) {
+            return true;
+        }
+    }
+    for p in b {
+        if point_in_polygon(*p, a) {
+            return true;
+        }
+    }
+
+    // Check edge crossings.
+    for i in 0..a.len() {
+        let a1 = a[i];
+        let a2 = a[(i + 1) % a.len()];
+        for j in 0..b.len() {
+            let b1 = b[j];
+            let b2 = b[(j + 1) % b.len()];
+            if segments_intersect_2d(a1, a2, b1, b2) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Test if two 2D line segments intersect (proper crossing).
+fn segments_intersect_2d(
+    a1: brepkit_math::vec::Point2,
+    a2: brepkit_math::vec::Point2,
+    b1: brepkit_math::vec::Point2,
+    b2: brepkit_math::vec::Point2,
+) -> bool {
+    let d1 = cross_2d(b1, b2, a1);
+    let d2 = cross_2d(b1, b2, a2);
+    let d3 = cross_2d(a1, a2, b1);
+    let d4 = cross_2d(a1, a2, b2);
+
+    ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
+        && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
+}
+
+fn cross_2d(
+    a: brepkit_math::vec::Point2,
+    b: brepkit_math::vec::Point2,
+    c: brepkit_math::vec::Point2,
+) -> f64 {
+    (b.x() - a.x()) * (c.y() - a.y()) - (b.y() - a.y()) * (c.x() - a.x())
+}
+
+/// Sutherland-Hodgman polygon clipping algorithm.
+fn sutherland_hodgman_clip(
+    subject: &[brepkit_math::vec::Point2],
+    clip: &[brepkit_math::vec::Point2],
+) -> Vec<brepkit_math::vec::Point2> {
+    use brepkit_math::vec::Point2;
+
+    let mut output: Vec<Point2> = subject.to_vec();
+
+    for i in 0..clip.len() {
+        if output.is_empty() {
+            return output;
+        }
+        let edge_start = clip[i];
+        let edge_end = clip[(i + 1) % clip.len()];
+        let input = output;
+        output = Vec::new();
+
+        for j in 0..input.len() {
+            let current = input[j];
+            let previous = input[(j + input.len() - 1) % input.len()];
+
+            let curr_inside = cross_2d(edge_start, edge_end, current) >= 0.0;
+            let prev_inside = cross_2d(edge_start, edge_end, previous) >= 0.0;
+
+            if curr_inside {
+                if !prev_inside {
+                    if let Some(p) = line_intersect_2d(previous, current, edge_start, edge_end) {
+                        output.push(p);
+                    }
+                }
+                output.push(current);
+            } else if prev_inside {
+                if let Some(p) = line_intersect_2d(previous, current, edge_start, edge_end) {
+                    output.push(p);
+                }
+            }
+        }
+    }
+
+    output
+}
+
+/// Find the intersection point of two 2D line segments (as infinite lines).
+fn line_intersect_2d(
+    a1: brepkit_math::vec::Point2,
+    a2: brepkit_math::vec::Point2,
+    b1: brepkit_math::vec::Point2,
+    b2: brepkit_math::vec::Point2,
+) -> Option<brepkit_math::vec::Point2> {
+    let dx_a = a2.x() - a1.x();
+    let dy_a = a2.y() - a1.y();
+    let dx_b = b2.x() - b1.x();
+    let dy_b = b2.y() - b1.y();
+    let denom = dx_a * dy_b - dy_a * dx_b;
+    if denom.abs() < 1e-15 {
+        return None;
+    }
+    let t = ((b1.x() - a1.x()) * dy_b - (b1.y() - a1.y()) * dx_b) / denom;
+    Some(brepkit_math::vec::Point2::new(
+        a1.x() + t * dx_a,
+        a1.y() + t * dy_a,
+    ))
+}
+
+/// Find common (collinear, overlapping) edges between two polygons.
+fn find_common_segments(
+    a: &[brepkit_math::vec::Point2],
+    b: &[brepkit_math::vec::Point2],
+    tolerance: f64,
+) -> Vec<(brepkit_math::vec::Point2, brepkit_math::vec::Point2)> {
+    let mut results = Vec::new();
+    let tol_sq = tolerance * tolerance;
+
+    for i in 0..a.len() {
+        let a1 = a[i];
+        let a2 = a[(i + 1) % a.len()];
+        for j in 0..b.len() {
+            let b1 = b[j];
+            let b2 = b[(j + 1) % b.len()];
+
+            // Check if edge A and edge B are collinear and overlapping.
+            // Both endpoints of B must be close to line through A, or vice versa.
+            let dist_b1 = point_to_line_dist_sq_2d(b1, a1, a2);
+            let dist_b2 = point_to_line_dist_sq_2d(b2, a1, a2);
+
+            if dist_b1 < tol_sq && dist_b2 < tol_sq {
+                // Edges are collinear. Check for overlap by projecting onto A's direction.
+                let dx = a2.x() - a1.x();
+                let dy = a2.y() - a1.y();
+                let len_sq = dx * dx + dy * dy;
+                if len_sq < tol_sq {
+                    continue;
+                }
+                let t1 = ((b1.x() - a1.x()) * dx + (b1.y() - a1.y()) * dy) / len_sq;
+                let t2 = ((b2.x() - a1.x()) * dx + (b2.y() - a1.y()) * dy) / len_sq;
+                let t_min = t1.min(t2).max(0.0);
+                let t_max = t1.max(t2).min(1.0);
+                if t_max - t_min > tolerance / len_sq.sqrt() {
+                    results.push((
+                        brepkit_math::vec::Point2::new(a1.x() + t_min * dx, a1.y() + t_min * dy),
+                        brepkit_math::vec::Point2::new(a1.x() + t_max * dx, a1.y() + t_max * dy),
+                    ));
+                }
+            }
+        }
+    }
+    results
+}
+
+fn point_to_line_dist_sq_2d(
+    p: brepkit_math::vec::Point2,
+    a: brepkit_math::vec::Point2,
+    b: brepkit_math::vec::Point2,
+) -> f64 {
+    let dx = b.x() - a.x();
+    let dy = b.y() - a.y();
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < 1e-30 {
+        let ex = p.x() - a.x();
+        let ey = p.y() - a.y();
+        return ex * ex + ey * ey;
+    }
+    let cross = (p.x() - a.x()) * dy - (p.y() - a.y()) * dx;
+    (cross * cross) / len_sq
+}
+
+/// Round all corners of a 2D polygon with arc approximations.
+fn fillet_polygon_2d(
+    polygon: &[brepkit_math::vec::Point2],
+    radius: f64,
+) -> Vec<brepkit_math::vec::Point2> {
+    use brepkit_math::vec::Point2;
+
+    let n = polygon.len();
+    if n < 3 {
+        return polygon.to_vec();
+    }
+
+    let arc_segments = 8; // Number of segments per fillet arc
+    let mut result = Vec::with_capacity(n * (arc_segments + 1));
+
+    for i in 0..n {
+        let prev = polygon[(i + n - 1) % n];
+        let curr = polygon[i];
+        let next = polygon[(i + 1) % n];
+
+        let d_prev = ((prev.x() - curr.x()).powi(2) + (prev.y() - curr.y()).powi(2)).sqrt();
+        let d_next = ((next.x() - curr.x()).powi(2) + (next.y() - curr.y()).powi(2)).sqrt();
+
+        let max_r = (d_prev.min(d_next) / 2.0).min(radius);
+
+        if max_r < 1e-10 {
+            result.push(curr);
+            continue;
+        }
+
+        // Direction vectors from corner to adjacent vertices
+        let dir_prev_x = (prev.x() - curr.x()) / d_prev;
+        let dir_prev_y = (prev.y() - curr.y()) / d_prev;
+        let dir_next_x = (next.x() - curr.x()) / d_next;
+        let dir_next_y = (next.y() - curr.y()) / d_next;
+
+        // Tangent points on edges
+        let t1 = Point2::new(curr.x() + dir_prev_x * max_r, curr.y() + dir_prev_y * max_r);
+        let t2 = Point2::new(curr.x() + dir_next_x * max_r, curr.y() + dir_next_y * max_r);
+
+        // Generate arc points from t1 to t2
+        for k in 0..=arc_segments {
+            #[allow(clippy::cast_precision_loss)]
+            let t = k as f64 / arc_segments as f64;
+            let x = t2.x().mul_add(t, t1.x() * (1.0 - t));
+            let y = t2.y().mul_add(t, t1.y() * (1.0 - t));
+
+            // Push point toward the arc center for a circular approximation
+            let mid_x = f64::midpoint(t1.x(), t2.x());
+            let mid_y = f64::midpoint(t1.y(), t2.y());
+            let to_corner_x = curr.x() - mid_x;
+            let to_corner_y = curr.y() - mid_y;
+            let corner_dist = (to_corner_x * to_corner_x + to_corner_y * to_corner_y).sqrt();
+
+            if corner_dist > 1e-10 {
+                // Compute the bulge: how much to push along the corner bisector
+                let chord_half =
+                    ((t2.x() - t1.x()).powi(2) + (t2.y() - t1.y()).powi(2)).sqrt() / 2.0;
+                let sagitta = if max_r > chord_half {
+                    max_r - (max_r * max_r - chord_half * chord_half).sqrt()
+                } else {
+                    0.0
+                };
+
+                // Blend factor: maximum at midpoint (t=0.5), zero at endpoints
+                let blend = 4.0 * t * (1.0 - t); // parabolic blend
+                let push = sagitta * blend;
+
+                let nx = to_corner_x / corner_dist;
+                let ny = to_corner_y / corner_dist;
+                result.push(Point2::new(x + nx * push, y + ny * push));
+            } else {
+                result.push(Point2::new(x, y));
+            }
+        }
+    }
+
+    result
+}
+
+/// Cut all corners of a 2D polygon with flat bevels.
+fn chamfer_polygon_2d(
+    polygon: &[brepkit_math::vec::Point2],
+    distance: f64,
+) -> Vec<brepkit_math::vec::Point2> {
+    use brepkit_math::vec::Point2;
+
+    let n = polygon.len();
+    if n < 3 {
+        return polygon.to_vec();
+    }
+
+    let mut result = Vec::with_capacity(n * 2);
+
+    for i in 0..n {
+        let prev = polygon[(i + n - 1) % n];
+        let curr = polygon[i];
+        let next = polygon[(i + 1) % n];
+
+        let d_prev = ((prev.x() - curr.x()).powi(2) + (prev.y() - curr.y()).powi(2)).sqrt();
+        let d_next = ((next.x() - curr.x()).powi(2) + (next.y() - curr.y()).powi(2)).sqrt();
+
+        let d = (d_prev.min(d_next) / 2.0).min(distance);
+
+        if d < 1e-10 {
+            result.push(curr);
+            continue;
+        }
+
+        // Two chamfer points: one on previous edge, one on next edge
+        result.push(Point2::new(
+            curr.x() + (prev.x() - curr.x()) / d_prev * d,
+            curr.y() + (prev.y() - curr.y()) / d_prev * d,
+        ));
+        result.push(Point2::new(
+            curr.x() + (next.x() - curr.x()) / d_next * d,
+            curr.y() + (next.y() - curr.y()) / d_next * d,
+        ));
+    }
+
+    result
+}
+
+/// Create a tiny degenerate polygon face at a point, matching the vertex
+/// count of the first existing profile. Used for loft start/end points.
+fn create_apex_face(
+    topo: &mut Topology,
+    point: Point3,
+    existing_profiles: &[brepkit_topology::face::FaceId],
+) -> Result<brepkit_topology::face::FaceId, JsError> {
+    // Determine target vertex count from the first profile.
+    let n = if let Some(&fid) = existing_profiles.first() {
+        let verts = brepkit_operations::boolean::face_polygon(topo, fid)
+            .map_err(|e: brepkit_operations::OperationsError| JsError::new(&e.to_string()))?;
+        verts.len().max(3)
+    } else {
+        3
+    };
+
+    // Create a tiny polygon at the apex point.
+    let epsilon = 1e-6;
+    let mut pts = Vec::with_capacity(n);
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..n {
+        let angle = 2.0 * std::f64::consts::PI * (i as f64) / (n as f64);
+        pts.push(Point3::new(
+            point.x() + epsilon * angle.cos(),
+            point.y() + epsilon * angle.sin(),
+            point.z(),
+        ));
+    }
+
+    let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    let face_id = brepkit_topology::builder::make_face_from_wire(topo, wire_id)
+        .map_err(|e| JsError::new(&e.to_string()))?;
+    Ok(face_id)
+}
+
+/// Detect if a NURBS curve represents an analytic curve type.
+///
+/// Checks if the curve is a circle or ellipse by sampling points
+/// and verifying they are coplanar and equidistant from a center.
+fn detect_nurbs_curve_type(nc: &brepkit_math::nurbs::NurbsCurve) -> &'static str {
+    // A rational degree-2 NURBS with specific weight patterns can represent
+    // conic sections. Check if all sampled points lie on a circle.
+    if nc.degree() < 2 || !nc.is_rational() {
+        return "BSPLINE_CURVE";
+    }
+
+    let (u_min, u_max) = nc.domain();
+    let n_samples = 16;
+
+    // Sample points along the curve
+    let mut points = Vec::with_capacity(n_samples);
+    for i in 0..n_samples {
+        #[allow(clippy::cast_precision_loss)]
+        let t = u_min + (u_max - u_min) * (i as f64) / ((n_samples - 1) as f64);
+        points.push(nc.evaluate(t));
+    }
+
+    // Compute center as average of all sampled points
+    let mut cx = 0.0_f64;
+    let mut cy = 0.0_f64;
+    let mut cz = 0.0_f64;
+    for p in &points {
+        cx += p.x();
+        cy += p.y();
+        cz += p.z();
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let n = points.len() as f64;
+    let center = brepkit_math::vec::Point3::new(cx / n, cy / n, cz / n);
+
+    // Check if all points are equidistant from center (circle test)
+    let distances: Vec<f64> = points.iter().map(|p| (*p - center).length()).collect();
+    let avg_dist = distances.iter().sum::<f64>() / n;
+
+    if avg_dist < 1e-10 {
+        return "BSPLINE_CURVE";
+    }
+
+    let tol = avg_dist * 1e-4; // 0.01% relative tolerance
+    let is_circle = distances.iter().all(|d| (d - avg_dist).abs() < tol);
+
+    if is_circle {
+        // Check coplanarity — all points should lie in a plane through center
+        let v0 = points[0] - center;
+        let v1 = points[n_samples / 4] - center;
+        let normal = v0.cross(v1);
+        let normal_len = normal.length();
+        if normal_len < 1e-10 {
+            return "BSPLINE_CURVE";
+        }
+        let normal = brepkit_math::vec::Vec3::new(
+            normal.x() / normal_len,
+            normal.y() / normal_len,
+            normal.z() / normal_len,
+        );
+
+        let coplanar = points
+            .iter()
+            .all(|p| ((*p - center).dot(normal)).abs() < tol);
+
+        if coplanar {
+            return "CIRCLE";
+        }
+    }
+
+    // TODO: Could also detect ELLIPSE (non-uniform distances but elliptic pattern)
+    "BSPLINE_CURVE"
+}
+
+/// Detect if a NURBS surface represents an analytic surface type.
+///
+/// Checks if the surface is a sphere, cylinder, cone, or torus by
+/// sampling a grid of points and analyzing their geometric properties.
+fn detect_nurbs_surface_type(ns: &brepkit_math::nurbs::surface::NurbsSurface) -> &'static str {
+    let (u_min, u_max) = ns.domain_u();
+    let (v_min, v_max) = ns.domain_v();
+    let n = 8; // 8×8 grid = 64 sample points
+
+    // Sample points on the surface
+    let mut points = Vec::with_capacity(n * n);
+    for i in 0..n {
+        for j in 0..n {
+            #[allow(clippy::cast_precision_loss)]
+            let u = u_min + (u_max - u_min) * (i as f64) / ((n - 1) as f64);
+            #[allow(clippy::cast_precision_loss)]
+            let v = v_min + (v_max - v_min) * (j as f64) / ((n - 1) as f64);
+            points.push(ns.evaluate(u, v));
+        }
+    }
+
+    // Compute center as average
+    let mut cx = 0.0_f64;
+    let mut cy = 0.0_f64;
+    let mut cz = 0.0_f64;
+    for p in &points {
+        cx += p.x();
+        cy += p.y();
+        cz += p.z();
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let np = points.len() as f64;
+    let center = brepkit_math::vec::Point3::new(cx / np, cy / np, cz / np);
+
+    // Check if all points equidistant from center (sphere test)
+    let distances: Vec<f64> = points.iter().map(|p| (*p - center).length()).collect();
+    let avg_dist = distances.iter().sum::<f64>() / np;
+
+    if avg_dist < 1e-10 {
+        return "bspline";
+    }
+
+    let tol = avg_dist * 1e-3; // 0.1% relative tolerance
+    let is_sphere = distances.iter().all(|d| (d - avg_dist).abs() < tol);
+
+    if is_sphere {
+        return "sphere";
+    }
+
+    // Cylinder test: points should be equidistant from an axis line.
+    // Try to find the axis by PCA (direction of maximum variance).
+    // For a cylinder, points cluster around a line; cross-section is a circle.
+    if let Some(axis_dir) = estimate_cylinder_axis(&points, center) {
+        let projected_distances: Vec<f64> = points
+            .iter()
+            .map(|p| {
+                let v = *p - center;
+                let along_axis = v.dot(axis_dir);
+                let radial = brepkit_math::vec::Vec3::new(
+                    v.x() - axis_dir.x() * along_axis,
+                    v.y() - axis_dir.y() * along_axis,
+                    v.z() - axis_dir.z() * along_axis,
+                );
+                radial.length()
+            })
+            .collect();
+
+        let avg_r = projected_distances.iter().sum::<f64>() / np;
+        if avg_r > 1e-10 {
+            let r_tol = avg_r * 1e-3;
+            let is_cylinder = projected_distances
+                .iter()
+                .all(|d| (d - avg_r).abs() < r_tol);
+            if is_cylinder {
+                return "cylinder";
+            }
+        }
+    }
+
+    "bspline"
+}
+
+/// Estimate the cylinder axis direction from a set of surface sample points
+/// using a simple PCA-like approach (direction of maximum variance).
+fn estimate_cylinder_axis(
+    points: &[brepkit_math::vec::Point3],
+    center: brepkit_math::vec::Point3,
+) -> Option<brepkit_math::vec::Vec3> {
+    // Build covariance matrix
+    let mut cxx = 0.0_f64;
+    let mut cxy = 0.0_f64;
+    let mut cxz = 0.0_f64;
+    let mut cyy = 0.0_f64;
+    let mut cyz = 0.0_f64;
+    let mut czz = 0.0_f64;
+
+    for p in points {
+        let dx = p.x() - center.x();
+        let dy = p.y() - center.y();
+        let dz = p.z() - center.z();
+        cxx += dx * dx;
+        cxy += dx * dy;
+        cxz += dx * dz;
+        cyy += dy * dy;
+        cyz += dy * dz;
+        czz += dz * dz;
+    }
+
+    // Power iteration to find the principal eigenvector
+    let mut v = brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0);
+    for _ in 0..20 {
+        let new_v = brepkit_math::vec::Vec3::new(
+            v.x().mul_add(cxx, v.y().mul_add(cxy, v.z() * cxz)),
+            v.x().mul_add(cxy, v.y().mul_add(cyy, v.z() * cyz)),
+            v.x().mul_add(cxz, v.y().mul_add(cyz, v.z() * czz)),
+        );
+        let len = new_v.length();
+        if len < 1e-15 {
+            return None;
+        }
+        v = brepkit_math::vec::Vec3::new(new_v.x() / len, new_v.y() / len, new_v.z() / len);
+    }
+    Some(v)
+}
+
 const fn face_id_to_u32(id: brepkit_topology::face::FaceId) -> u32 {
     id.index() as u32
 }

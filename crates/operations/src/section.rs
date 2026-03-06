@@ -15,7 +15,7 @@ use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
-use crate::boolean::face_vertices;
+use crate::boolean::face_polygon;
 use crate::dot_normal_point;
 
 /// A cross-section result: one or more planar faces on the cutting plane.
@@ -73,7 +73,7 @@ pub fn section(
                 let face_normal = *face_normal;
                 let face_d = *face_d;
 
-                let verts = face_vertices(topo, fid)?;
+                let verts = face_polygon(topo, fid)?;
                 if let Some(seg) =
                     intersect_planar_face_with_plane(&verts, face_normal, face_d, normal, d, tol)
                 {

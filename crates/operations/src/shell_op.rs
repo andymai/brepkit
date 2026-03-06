@@ -13,7 +13,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
-use crate::boolean::{FaceSpec, assemble_solid_mixed, face_vertices};
+use crate::boolean::{FaceSpec, assemble_solid_mixed};
 use crate::dot_normal_point;
 
 /// Create a hollow shell from a solid by offsetting faces inward.
@@ -61,10 +61,10 @@ pub fn shell(
         }
     }
 
-    // Collect face vertex data for planar faces (needed for rim quads).
+    // Collect face vertex data (samples curved edges for proper polygons).
     let mut face_verts: Vec<(FaceId, Vec<Point3>)> = Vec::new();
     for &fid in &all_face_ids {
-        let verts = face_vertices(topo, fid)?;
+        let verts = crate::boolean::face_polygon(topo, fid)?;
         face_verts.push((fid, verts));
     }
 

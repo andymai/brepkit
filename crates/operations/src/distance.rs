@@ -28,7 +28,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
-use crate::boolean::face_vertices;
+use crate::boolean::face_polygon;
 
 /// Result of a distance computation.
 #[derive(Debug, Clone)]
@@ -211,7 +211,7 @@ fn point_to_face_distance(
     let face = topo.face(face_id)?;
     match face.surface() {
         FaceSurface::Plane { normal, d } => {
-            let verts = face_vertices(topo, face_id)?;
+            let verts = face_polygon(topo, face_id)?;
             Ok(point_to_polygon_distance(point, &verts, *normal, *d, tol))
         }
         FaceSurface::Nurbs(surface) => {

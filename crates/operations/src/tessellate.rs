@@ -37,6 +37,15 @@ pub struct TriangleMesh {
     pub indices: Vec<u32>,
 }
 
+/// A triangle mesh with per-vertex UV coordinates.
+#[derive(Debug, Clone, Default)]
+pub struct TriangleMeshUV {
+    /// The base mesh (positions, normals, indices).
+    pub mesh: TriangleMesh,
+    /// Per-vertex UV coordinates (same length as `mesh.positions`).
+    pub uvs: Vec<[f64; 2]>,
+}
+
 /// Tessellate a face into a triangle mesh.
 ///
 /// For planar faces, this performs fan triangulation from the first vertex,
@@ -53,121 +62,7 @@ pub fn tessellate(
     face: FaceId,
     deflection: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
-    let face_data = topo.face(face)?;
-    let is_reversed = face_data.is_reversed();
-
-    let mut mesh = match face_data.surface() {
-        FaceSurface::Plane { normal, .. } => tessellate_planar(topo, face_data, *normal),
-        FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection)),
-        FaceSurface::Cylinder(cyl) => {
-            let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
-            let u_range = (0.0, std::f64::consts::TAU);
-            // Angular resolution from chord deviation on the circular cross-section.
-            let nu = segments_for_chord_deviation(cyl.radius(), u_range.1 - u_range.0, deflection);
-            // Axial resolution: uniform spacing at roughly the same density.
-            let v_extent = (v_range.1 - v_range.0).abs();
-            let nv = 4_usize.max(
-                (v_extent / (cyl.radius() * std::f64::consts::TAU / nu as f64)).ceil() as usize,
-            );
-            let cyl = cyl.clone();
-            Ok(tessellate_analytic(
-                |u, v| cyl.evaluate(u, v),
-                |u, v| cyl.normal(u, v),
-                u_range,
-                v_range,
-                nu,
-                nv,
-                AnalyticKind::General,
-            ))
-        }
-        FaceSurface::Cone(cone) => {
-            let v_range = compute_axial_range(topo, face_data, cone.apex(), cone.axis());
-            let u_range = (0.0, std::f64::consts::TAU);
-            // Use the max radius (at the far end) for angular resolution.
-            let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
-            let nu = segments_for_chord_deviation(
-                max_radius.max(0.01),
-                u_range.1 - u_range.0,
-                deflection,
-            );
-            let v_extent = (v_range.1 - v_range.0).abs();
-            let nv = 4_usize.max(
-                (v_extent / (max_radius.max(0.01) * std::f64::consts::TAU / nu as f64)).ceil()
-                    as usize,
-            );
-            let cone = cone.clone();
-            Ok(tessellate_analytic(
-                |u, v| cone.evaluate(u, v),
-                |u, v| cone.normal(u, v),
-                u_range,
-                v_range,
-                nu,
-                nv,
-                AnalyticKind::ConeApex,
-            ))
-        }
-        FaceSurface::Sphere(sphere) => {
-            let u_range = (0.0, std::f64::consts::TAU);
-            let v_range = compute_sphere_v_range(topo, face_data, sphere);
-            let nu =
-                segments_for_chord_deviation(sphere.radius(), u_range.1 - u_range.0, deflection);
-            // Latitude resolution: same chord deviation criterion.
-            let nv =
-                segments_for_chord_deviation(sphere.radius(), v_range.1 - v_range.0, deflection);
-            // Determine pole handling from the v-range.
-            let kind = sphere_analytic_kind(v_range);
-            let sphere = sphere.clone();
-            Ok(tessellate_analytic(
-                |u, v| sphere.evaluate(u, v),
-                |u, v| sphere.normal(u, v),
-                u_range,
-                v_range,
-                nu,
-                nv,
-                kind,
-            ))
-        }
-        FaceSurface::Torus(torus) => {
-            let u_range = (0.0, std::f64::consts::TAU);
-            let v_range = (0.0, std::f64::consts::TAU);
-            // Major circle resolution: use (R + r) as the effective radius.
-            let nu = segments_for_chord_deviation(
-                torus.major_radius() + torus.minor_radius(),
-                u_range.1 - u_range.0,
-                deflection,
-            );
-            // Minor circle (tube cross-section) resolution.
-            let nv = segments_for_chord_deviation(
-                torus.minor_radius(),
-                v_range.1 - v_range.0,
-                deflection,
-            );
-            let torus = torus.clone();
-            Ok(tessellate_analytic(
-                |u, v| torus.evaluate(u, v),
-                |u, v| torus.normal(u, v),
-                u_range,
-                v_range,
-                nu,
-                nv,
-                AnalyticKind::General,
-            ))
-        }
-    }?;
-
-    // If the face is reversed, flip triangle winding and normals so that
-    // volume computation (divergence theorem) gets the correct sign.
-    if is_reversed {
-        for n in &mut mesh.normals {
-            *n = -*n;
-        }
-        let tri_count = mesh.indices.len() / 3;
-        for t in 0..tri_count {
-            mesh.indices.swap(t * 3 + 1, t * 3 + 2);
-        }
-    }
-
-    Ok(mesh)
+    tessellate_with_uvs(topo, face, deflection).map(|uv| uv.mesh)
 }
 
 /// Kind of special handling needed for analytic surface tessellation.
@@ -229,9 +124,10 @@ fn tessellate_analytic(
     nu: usize,
     nv: usize,
     kind: AnalyticKind,
-) -> TriangleMesh {
+) -> TriangleMeshUV {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
+    let mut uvs = Vec::new();
     let mut indices = Vec::new();
 
     let nu = nu.max(4);
@@ -246,6 +142,7 @@ fn tessellate_analytic(
             let idx = positions.len() as u32;
             positions.push(surface_eval(u, v));
             normals.push(normal_fn(u, v));
+            uvs.push([u, v]);
             grid[iv * (nu + 1) + iu] = idx;
         }
     }
@@ -292,10 +189,13 @@ fn tessellate_analytic(
         }
     }
 
-    TriangleMesh {
-        positions,
-        normals,
-        indices,
+    TriangleMeshUV {
+        mesh: TriangleMesh {
+            positions,
+            normals,
+            indices,
+        },
+        uvs,
     }
 }
 
@@ -1663,7 +1563,7 @@ fn force_subdivide(
 fn tessellate_nurbs(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     deflection: f64,
-) -> TriangleMesh {
+) -> TriangleMeshUV {
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
 
@@ -1711,6 +1611,7 @@ fn tessellate_nurbs(
     let mut eval_cache: HashMap<(u64, u64), (Point3, Vec3)> = HashMap::new();
     let mut positions = Vec::new();
     let mut normals = Vec::new();
+    let mut uvs: Vec<[f64; 2]> = Vec::new();
     let mut indices = Vec::new();
     // Map from (u_bits, v_bits) to vertex index.
     let mut vertex_map: HashMap<(u64, u64), u32> = HashMap::new();
@@ -1720,6 +1621,7 @@ fn tessellate_nurbs(
                                 eval_cache: &mut HashMap<(u64, u64), (Point3, Vec3)>,
                                 positions: &mut Vec<Point3>,
                                 normals: &mut Vec<Vec3>,
+                                uvs: &mut Vec<[f64; 2]>,
                                 vertex_map: &mut HashMap<(u64, u64), u32>|
      -> u32 {
         let key = (u.to_bits(), v.to_bits());
@@ -1735,6 +1637,7 @@ fn tessellate_nurbs(
         let idx = positions.len() as u32;
         positions.push(pos);
         normals.push(nrm);
+        uvs.push([u, v]);
         vertex_map.insert(key, idx);
         idx
     };
@@ -1744,43 +1647,40 @@ fn tessellate_nurbs(
             continue; // not a leaf
         }
 
-        let u_min = cell.u_min;
-        let u_max = cell.u_max;
-        let v_min = cell.v_min;
-        let v_max = cell.v_max;
-
-        // Get vertex indices for the 4 corners.
-        // Corner order: (u_min,v_min), (u_max,v_min), (u_max,v_max), (u_min,v_max)
         let i00 = get_or_insert_vertex(
-            u_min,
-            v_min,
+            cell.u_min,
+            cell.v_min,
             &mut eval_cache,
             &mut positions,
             &mut normals,
+            &mut uvs,
             &mut vertex_map,
         );
         let i10 = get_or_insert_vertex(
-            u_max,
-            v_min,
+            cell.u_max,
+            cell.v_min,
             &mut eval_cache,
             &mut positions,
             &mut normals,
+            &mut uvs,
             &mut vertex_map,
         );
         let i11 = get_or_insert_vertex(
-            u_max,
-            v_max,
+            cell.u_max,
+            cell.v_max,
             &mut eval_cache,
             &mut positions,
             &mut normals,
+            &mut uvs,
             &mut vertex_map,
         );
         let i01 = get_or_insert_vertex(
-            u_min,
-            v_max,
+            cell.u_min,
+            cell.v_max,
             &mut eval_cache,
             &mut positions,
             &mut normals,
+            &mut uvs,
             &mut vertex_map,
         );
 
@@ -1796,11 +1696,175 @@ fn tessellate_nurbs(
         indices.push(i01);
     }
 
-    TriangleMesh {
-        positions,
-        normals,
-        indices,
+    TriangleMeshUV {
+        mesh: TriangleMesh {
+            positions,
+            normals,
+            indices,
+        },
+        uvs,
     }
+}
+
+/// Tessellate a face and return mesh with per-vertex UV coordinates.
+///
+/// UV coordinates are the parametric (u, v) values of the surface at each
+/// vertex. For planar faces, UVs are computed by projecting onto the face
+/// plane axes.
+///
+/// # Errors
+///
+/// Returns an error if the face geometry cannot be tessellated.
+pub fn tessellate_with_uvs(
+    topo: &Topology,
+    face: FaceId,
+    deflection: f64,
+) -> Result<TriangleMeshUV, crate::OperationsError> {
+    let face_data = topo.face(face)?;
+    let is_reversed = face_data.is_reversed();
+
+    let mut result = match face_data.surface() {
+        FaceSurface::Plane { normal, .. } => {
+            let mesh = tessellate_planar(topo, face_data, *normal)?;
+            // For planar faces, project onto plane axes to get UVs.
+            let (u_axis, v_axis) = plane_axes(*normal);
+            let origin = if mesh.positions.is_empty() {
+                Point3::new(0.0, 0.0, 0.0)
+            } else {
+                mesh.positions[0]
+            };
+            let uvs = mesh
+                .positions
+                .iter()
+                .map(|p| {
+                    let d: Vec3 = *p - origin;
+                    [d.dot(u_axis), d.dot(v_axis)]
+                })
+                .collect();
+            Ok::<_, crate::OperationsError>(TriangleMeshUV { mesh, uvs })
+        }
+        FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection)),
+        FaceSurface::Cylinder(cyl) => {
+            let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
+            let u_range = (0.0, std::f64::consts::TAU);
+            let nu = segments_for_chord_deviation(cyl.radius(), u_range.1 - u_range.0, deflection);
+            let v_extent = (v_range.1 - v_range.0).abs();
+            let nv = 4_usize.max(
+                (v_extent / (cyl.radius() * std::f64::consts::TAU / nu as f64)).ceil() as usize,
+            );
+            let cyl = cyl.clone();
+            Ok(tessellate_analytic(
+                |u, v| cyl.evaluate(u, v),
+                |u, v| cyl.normal(u, v),
+                u_range,
+                v_range,
+                nu,
+                nv,
+                AnalyticKind::General,
+            ))
+        }
+        FaceSurface::Cone(cone) => {
+            let v_range = compute_axial_range(topo, face_data, cone.apex(), cone.axis());
+            let u_range = (0.0, std::f64::consts::TAU);
+            let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
+            let nu = segments_for_chord_deviation(
+                max_radius.max(0.01),
+                u_range.1 - u_range.0,
+                deflection,
+            );
+            let v_extent = (v_range.1 - v_range.0).abs();
+            let nv = 4_usize.max(
+                (v_extent / (max_radius.max(0.01) * std::f64::consts::TAU / nu as f64)).ceil()
+                    as usize,
+            );
+            let cone = cone.clone();
+            Ok(tessellate_analytic(
+                |u, v| cone.evaluate(u, v),
+                |u, v| cone.normal(u, v),
+                u_range,
+                v_range,
+                nu,
+                nv,
+                AnalyticKind::ConeApex,
+            ))
+        }
+        FaceSurface::Sphere(sphere) => {
+            let u_range = (0.0, std::f64::consts::TAU);
+            let v_range = compute_sphere_v_range(topo, face_data, sphere);
+            let nu =
+                segments_for_chord_deviation(sphere.radius(), u_range.1 - u_range.0, deflection);
+            let nv =
+                segments_for_chord_deviation(sphere.radius(), v_range.1 - v_range.0, deflection);
+            let kind = sphere_analytic_kind(v_range);
+            let sphere = sphere.clone();
+            Ok(tessellate_analytic(
+                |u, v| sphere.evaluate(u, v),
+                |u, v| sphere.normal(u, v),
+                u_range,
+                v_range,
+                nu,
+                nv,
+                kind,
+            ))
+        }
+        FaceSurface::Torus(torus) => {
+            let u_range = (0.0, std::f64::consts::TAU);
+            let v_range = (0.0, std::f64::consts::TAU);
+            let nu = segments_for_chord_deviation(
+                torus.major_radius() + torus.minor_radius(),
+                u_range.1 - u_range.0,
+                deflection,
+            );
+            let nv = segments_for_chord_deviation(
+                torus.minor_radius(),
+                v_range.1 - v_range.0,
+                deflection,
+            );
+            let torus = torus.clone();
+            Ok(tessellate_analytic(
+                |u, v| torus.evaluate(u, v),
+                |u, v| torus.normal(u, v),
+                u_range,
+                v_range,
+                nu,
+                nv,
+                AnalyticKind::General,
+            ))
+        }
+    }?;
+
+    if is_reversed {
+        for n in &mut result.mesh.normals {
+            *n = -*n;
+        }
+        let tri_count = result.mesh.indices.len() / 3;
+        for t in 0..tri_count {
+            result.mesh.indices.swap(t * 3 + 1, t * 3 + 2);
+        }
+    }
+
+    Ok(result)
+}
+
+/// Compute orthogonal axes for a plane given its normal.
+///
+/// Falls back to identity axes if the normal is degenerate (should not
+/// happen for valid face data).
+fn plane_axes(normal: Vec3) -> (Vec3, Vec3) {
+    let up = if normal.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u_axis = normal
+        .cross(up)
+        .normalize()
+        .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+    let v_axis = normal
+        .cross(u_axis)
+        .normalize()
+        .unwrap_or(Vec3::new(0.0, 1.0, 0.0));
+    (u_axis, v_axis)
 }
 
 // ── Watertight solid tessellation ──────────────────────────────────────
@@ -2976,7 +3040,7 @@ mod tests {
         )
         .unwrap();
 
-        let mesh = tessellate_nurbs(&surface, 0.1);
+        let mesh = tessellate_nurbs(&surface, 0.1).mesh;
 
         // Flat surface: all normals are identical, deviation = 0.
         // 4×4 cells × 2 triangles × 3 indices = 96.
@@ -3033,8 +3097,8 @@ mod tests {
         .unwrap();
 
         let deflection = 0.05;
-        let flat_mesh = tessellate_nurbs(&flat, deflection);
-        let curved_mesh = tessellate_nurbs(&curved, deflection);
+        let flat_mesh = tessellate_nurbs(&flat, deflection).mesh;
+        let curved_mesh = tessellate_nurbs(&curved, deflection).mesh;
 
         let flat_tris = flat_mesh.indices.len() / 3;
         let curved_tris = curved_mesh.indices.len() / 3;
@@ -3235,8 +3299,8 @@ mod tests {
         .unwrap();
 
         // Fine deflection should produce many triangles.
-        let fine_mesh = tessellate_nurbs(&dome, 0.01);
-        let coarse_mesh = tessellate_nurbs(&dome, 0.5);
+        let fine_mesh = tessellate_nurbs(&dome, 0.01).mesh;
+        let coarse_mesh = tessellate_nurbs(&dome, 0.5).mesh;
 
         assert!(
             fine_mesh.indices.len() / 3 > coarse_mesh.indices.len() / 3,
@@ -3276,7 +3340,7 @@ mod tests {
         .unwrap();
 
         let deflection = 0.05;
-        let mesh = tessellate_nurbs(&surface, deflection);
+        let mesh = tessellate_nurbs(&surface, deflection).mesh;
 
         // All triangles should have their midpoints close to the surface.
         // The maximum sag should be bounded (not exactly by deflection due
