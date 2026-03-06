@@ -1,0 +1,18 @@
+{
+  "files": [
+    {
+      "path": "CLAUDE.md",
+      "description": "Project architecture, layer rules, module map, common pitfalls, ripple-effect checklists, and coding conventions"
+    },
+    {
+      "path": "scripts/check-boundaries.sh",
+      "description": "Layer dependency enforcement script — validates crate Cargo.toml deps",
+      "scope": ["**/Cargo.toml"]
+    },
+    {
+      "path": "Cargo.toml",
+      "description": "Workspace root config with shared lints and crate members",
+      "scope": ["**/Cargo.toml"]
+    }
+  ]
+}
