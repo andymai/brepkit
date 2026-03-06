@@ -808,6 +808,43 @@ impl BrepKernel {
         Ok(())
     }
 
+    /// Compose (multiply) two 4x4 transformation matrices.
+    ///
+    /// Returns the composed matrix as a flat 16-element array (row-major).
+    /// This computes `a * b`, meaning `b` is applied first, then `a`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either matrix doesn't have 16 elements.
+    #[wasm_bindgen(js_name = "composeTransforms")]
+    #[allow(clippy::needless_pass_by_value, clippy::unused_self)]
+    pub fn compose_transforms(
+        &self,
+        matrix_a: Vec<f64>,
+        matrix_b: Vec<f64>,
+    ) -> Result<Vec<f64>, JsError> {
+        if matrix_a.len() != 16 {
+            return Err(WasmError::InvalidInput {
+                reason: format!("matrix A must have 16 elements, got {}", matrix_a.len()),
+            }
+            .into());
+        }
+        if matrix_b.len() != 16 {
+            return Err(WasmError::InvalidInput {
+                reason: format!("matrix B must have 16 elements, got {}", matrix_b.len()),
+            }
+            .into());
+        }
+        let rows_a = std::array::from_fn(|i| std::array::from_fn(|j| matrix_a[i * 4 + j]));
+        let rows_b = std::array::from_fn(|i| std::array::from_fn(|j| matrix_b[i * 4 + j]));
+        let result = Mat4(rows_a) * Mat4(rows_b);
+        let mut out = Vec::with_capacity(16);
+        for row in &result.0 {
+            out.extend_from_slice(row);
+        }
+        Ok(out)
+    }
+
     // ── Boolean operations ──────────────────────────────────────────
 
     /// Fuse (union) two solids into one.
@@ -1671,6 +1708,57 @@ impl BrepKernel {
         .into())
     }
 
+    /// Tessellate a solid and include per-vertex UV coordinates.
+    ///
+    /// Returns a JSON string containing `{ positions, normals, indices, uvs }`.
+    /// `uvs` is a flat array of `[u0, v0, u1, v1, ...]` values, two per vertex.
+    /// For analytic and NURBS surfaces, these are the parametric (u, v) values.
+    /// For planar faces, UVs are computed by projection onto the face plane.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or tessellation fails.
+    #[wasm_bindgen(js_name = "tessellateSolidUV")]
+    pub fn tessellate_solid_uv(&self, solid: u32, deflection: f64) -> Result<JsValue, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let faces = brepkit_topology::explorer::solid_faces(&self.topo, solid_id)?;
+
+        let mut all_positions: Vec<f64> = Vec::new();
+        let mut all_normals: Vec<f64> = Vec::new();
+        let mut all_uvs: Vec<f64> = Vec::new();
+        let mut all_indices: Vec<u32> = Vec::new();
+
+        for &face_id in &faces {
+            #[allow(clippy::cast_possible_truncation)]
+            let idx_offset = (all_positions.len() / 3) as u32;
+
+            if let Ok(mesh_uv) = tessellate::tessellate_with_uvs(&self.topo, face_id, deflection) {
+                for p in &mesh_uv.mesh.positions {
+                    all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
+                }
+                for n in &mesh_uv.mesh.normals {
+                    all_normals.extend_from_slice(&[n.x(), n.y(), n.z()]);
+                }
+                for uv in &mesh_uv.uvs {
+                    all_uvs.extend_from_slice(uv);
+                }
+                for &idx in &mesh_uv.mesh.indices {
+                    all_indices.push(idx + idx_offset);
+                }
+            }
+        }
+
+        Ok(serde_json::to_string(&serde_json::json!({
+            "positions": all_positions,
+            "normals": all_normals,
+            "indices": all_indices,
+            "uvs": all_uvs,
+        }))
+        .map_err(|e| JsError::new(&e.to_string()))?
+        .into())
+    }
+
     // ── Edge wireframe ────────────────────────────────────────────
 
     /// Sample all edges of a solid into polylines for wireframe rendering.
@@ -1788,6 +1876,102 @@ impl BrepKernel {
         let vertex_id = self.resolve_vertex(vertex)?;
         let point = self.topo.vertex(vertex_id)?.point();
         Ok(vec![point.x(), point.y(), point.z()])
+    }
+
+    /// Serialize a solid's B-Rep topology to JSON.
+    ///
+    /// Returns a JSON string containing the solid's complete topology:
+    /// vertices, edges (with curve types), faces (with surface types), and
+    /// connectivity information.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "toBREP")]
+    #[allow(clippy::too_many_lines)]
+    pub fn to_brep(&self, solid: u32) -> Result<JsValue, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let faces = brepkit_topology::explorer::solid_faces(&self.topo, solid_id)?;
+        let edges = brepkit_topology::explorer::solid_edges(&self.topo, solid_id)?;
+        let verts = brepkit_topology::explorer::solid_vertices(&self.topo, solid_id)?;
+
+        let vert_json: Vec<serde_json::Value> = verts
+            .iter()
+            .map(|&vid| -> Result<serde_json::Value, JsError> {
+                let v = self.topo.vertex(vid)?;
+                let p = v.point();
+                Ok(serde_json::json!({
+                    "id": vertex_id_to_u32(vid),
+                    "position": [p.x(), p.y(), p.z()],
+                }))
+            })
+            .collect::<Result<_, _>>()?;
+
+        let edge_json: Vec<serde_json::Value> = edges
+            .iter()
+            .map(|&eid| -> Result<serde_json::Value, JsError> {
+                let e = self.topo.edge(eid)?;
+                let curve_type = match e.curve() {
+                    brepkit_topology::edge::EdgeCurve::Line => "line",
+                    brepkit_topology::edge::EdgeCurve::Circle(_) => "circle",
+                    brepkit_topology::edge::EdgeCurve::Ellipse(_) => "ellipse",
+                    brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => "nurbs",
+                };
+                Ok(serde_json::json!({
+                    "id": edge_id_to_u32(eid),
+                    "curveType": curve_type,
+                    "startVertex": vertex_id_to_u32(e.start()),
+                    "endVertex": vertex_id_to_u32(e.end()),
+                }))
+            })
+            .collect::<Result<_, _>>()?;
+
+        let face_json: Vec<serde_json::Value> = faces
+            .iter()
+            .map(|&fid| -> Result<serde_json::Value, JsError> {
+                let f = self.topo.face(fid)?;
+                let surface_type = match f.surface() {
+                    brepkit_topology::face::FaceSurface::Plane { .. } => "plane",
+                    brepkit_topology::face::FaceSurface::Nurbs(_) => "nurbs",
+                    brepkit_topology::face::FaceSurface::Cylinder(_) => "cylinder",
+                    brepkit_topology::face::FaceSurface::Cone(_) => "cone",
+                    brepkit_topology::face::FaceSurface::Sphere(_) => "sphere",
+                    brepkit_topology::face::FaceSurface::Torus(_) => "torus",
+                };
+                let outer_wire = self.topo.wire(f.outer_wire())?;
+                let outer_edges: Vec<u32> = outer_wire
+                    .edges()
+                    .iter()
+                    .map(|e| edge_id_to_u32(e.edge()))
+                    .collect();
+                let inner_wires: Vec<Vec<u32>> =
+                    f.inner_wires()
+                        .iter()
+                        .filter_map(|&wid| {
+                            self.topo.wire(wid).ok().map(|w| {
+                                w.edges().iter().map(|e| edge_id_to_u32(e.edge())).collect()
+                            })
+                        })
+                        .collect();
+                Ok(serde_json::json!({
+                    "id": face_id_to_u32(fid),
+                    "surfaceType": surface_type,
+                    "reversed": f.is_reversed(),
+                    "outerWireEdges": outer_edges,
+                    "innerWires": inner_wires,
+                }))
+            })
+            .collect::<Result<_, _>>()?;
+
+        Ok(serde_json::to_string(&serde_json::json!({
+            "type": "solid",
+            "solidId": solid_id_to_u32(solid_id),
+            "vertices": vert_json,
+            "edges": edge_json,
+            "faces": face_json,
+        }))
+        .map_err(|e| JsError::new(&e.to_string()))?
+        .into())
     }
 
     /// Get the face normal of a planar face.
@@ -5426,6 +5610,122 @@ impl BrepKernel {
                 brepkit_operations::transform::transform_wire(&mut self.topo, wire_id, &mat)
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(null))
+            }
+            "offsetFace" => {
+                let f = get_u32(args, "face")?;
+                let dist = get_f64(args, "distance")?;
+                let samples = get_u32(args, "samples").unwrap_or(16);
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let result = brepkit_operations::offset_face::offset_face(
+                    &mut self.topo,
+                    face_id,
+                    dist,
+                    samples as usize,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(face_id_to_u32(result)))
+            }
+            "offsetSolid" => {
+                let s = get_u32(args, "solid")?;
+                let dist = get_f64(args, "distance")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let result =
+                    brepkit_operations::offset_solid::offset_solid(&mut self.topo, solid_id, dist)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
+            "section" => {
+                let s = get_u32(args, "solid")?;
+                let px = get_f64(args, "px").unwrap_or(0.0);
+                let py = get_f64(args, "py").unwrap_or(0.0);
+                let pz = get_f64(args, "pz").unwrap_or(0.0);
+                let nx = get_f64(args, "nx").unwrap_or(0.0);
+                let ny = get_f64(args, "ny").unwrap_or(0.0);
+                let nz = get_f64(args, "nz").unwrap_or(1.0);
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let result = brepkit_operations::section::section(
+                    &mut self.topo,
+                    solid_id,
+                    Point3::new(px, py, pz),
+                    Vec3::new(nx, ny, nz),
+                )
+                .map_err(|e| e.to_string())?;
+                let face_ids: Vec<u32> = result.faces.iter().map(|&f| face_id_to_u32(f)).collect();
+                Ok(serde_json::json!(face_ids))
+            }
+            "split" => {
+                let s = get_u32(args, "solid")?;
+                let px = get_f64(args, "px").unwrap_or(0.0);
+                let py = get_f64(args, "py").unwrap_or(0.0);
+                let pz = get_f64(args, "pz").unwrap_or(0.0);
+                let nx = get_f64(args, "nx").unwrap_or(0.0);
+                let ny = get_f64(args, "ny").unwrap_or(0.0);
+                let nz = get_f64(args, "nz").unwrap_or(1.0);
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let result = brepkit_operations::split::split(
+                    &mut self.topo,
+                    solid_id,
+                    Point3::new(px, py, pz),
+                    Vec3::new(nx, ny, nz),
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "positive": solid_id_to_u32(result.positive),
+                    "negative": solid_id_to_u32(result.negative),
+                }))
+            }
+            "sewFaces" => {
+                let face_handles: Vec<u32> = args["faces"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let tol = get_f64(args, "tolerance").unwrap_or(1e-6);
+                let face_ids: Vec<_> = face_handles
+                    .iter()
+                    .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let solid = brepkit_operations::sew::sew_faces(&mut self.topo, &face_ids, tol)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
+            "draft" => {
+                let s = get_u32(args, "solid")?;
+                let angle = get_f64(args, "angle")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let face_handles: Vec<u32> = args["faces"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let face_ids: Vec<_> = face_handles
+                    .iter()
+                    .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let dx = get_f64(args, "dirX").unwrap_or(0.0);
+                let dy = get_f64(args, "dirY").unwrap_or(0.0);
+                let dz = get_f64(args, "dirZ").unwrap_or(1.0);
+                let npx = get_f64(args, "neutralX").unwrap_or(0.0);
+                let npy = get_f64(args, "neutralY").unwrap_or(0.0);
+                let npz = get_f64(args, "neutralZ").unwrap_or(0.0);
+                let dir = Vec3::new(dx, dy, dz);
+                let neutral = Point3::new(npx, npy, npz);
+                let result = brepkit_operations::draft::draft(
+                    &mut self.topo,
+                    solid_id,
+                    &face_ids,
+                    dir,
+                    neutral,
+                    angle,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             _ => Err(format!("unknown operation: {op}")),
         }
