@@ -106,6 +106,9 @@ pub fn fillet(
             FaceSurface::Plane { normal, .. } => *normal,
             _ => continue,
         };
+        if positions.is_empty() {
+            continue;
+        }
         let d = dot_normal_point(normal, positions[0]);
 
         face_polygons.insert(

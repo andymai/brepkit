@@ -5193,6 +5193,9 @@ impl BrepKernel {
                 let rx = get_f64(args, "rx")?;
                 let ry = get_f64(args, "ry")?;
                 let rz = get_f64(args, "rz")?;
+                if rx <= 0.0 || ry <= 0.0 || rz <= 0.0 {
+                    return Err("rx, ry, rz must be positive".to_string());
+                }
                 let solid = brepkit_operations::primitives::make_sphere(&mut self.topo, 1.0, 16)
                     .map_err(|e| e.to_string())?;
                 let mat = brepkit_math::mat::Mat4::scale(rx, ry, rz);
@@ -6111,10 +6114,6 @@ fn chamfer_polygon_2d(
     result
 }
 
-/// Detect if a NURBS curve represents an analytic curve type.
-///
-/// Checks if the curve is a circle or ellipse by sampling points
-/// and verifying they are coplanar and equidistant from a center.
 /// Create a tiny degenerate polygon face at a point, matching the vertex
 /// count of the first existing profile. Used for loft start/end points.
 fn create_apex_face(
@@ -6151,6 +6150,10 @@ fn create_apex_face(
     Ok(face_id)
 }
 
+/// Detect if a NURBS curve represents an analytic curve type.
+///
+/// Checks if the curve is a circle or ellipse by sampling points
+/// and verifying they are coplanar and equidistant from a center.
 fn detect_nurbs_curve_type(nc: &brepkit_math::nurbs::NurbsCurve) -> &'static str {
     // A rational degree-2 NURBS with specific weight patterns can represent
     // conic sections. Check if all sampled points lie on a circle.

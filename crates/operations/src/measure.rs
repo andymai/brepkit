@@ -76,8 +76,31 @@ pub fn face_area(
                 let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
                 let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
                 let height = (v_max - v_min).abs();
-                // Full cylinder lateral area = 2πr * height
-                Ok(2.0 * std::f64::consts::PI * r * height)
+                // Compute angular sweep from boundary points projected onto the
+                // circular cross-section. For full cylinders this gives 2π; for
+                // partial cylinders it gives the actual angular extent.
+                let u_vals: Vec<f64> = positions
+                    .iter()
+                    .map(|p| {
+                        let rel =
+                            Vec3::new(p.x() - origin.x(), p.y() - origin.y(), p.z() - origin.z());
+                        let along = axis.dot(rel);
+                        let radial = rel - axis * along;
+                        radial.y().atan2(radial.x())
+                    })
+                    .collect();
+                let u_min = u_vals.iter().copied().fold(f64::INFINITY, f64::min);
+                let u_max = u_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let angular_span = u_max - u_min;
+                // If the angular span covers most of a full circle (> 350°),
+                // treat it as a full revolution — boundary sampling may not
+                // reach exactly ±π.
+                let sweep = if angular_span > 350.0_f64.to_radians() {
+                    std::f64::consts::TAU
+                } else {
+                    angular_span
+                };
+                Ok(sweep * r * height)
             } else {
                 let mesh = tessellate::tessellate(topo, face_id, deflection)?;
                 Ok(triangle_mesh_area(&mesh))
