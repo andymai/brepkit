@@ -97,18 +97,32 @@ pub fn face_area(
 }
 
 /// Newell's method: compute the area of a planar polygon from its
-/// boundary vertices.
+/// boundary vertices, subtracting inner wire (hole) areas.
 fn planar_face_area(topo: &Topology, face_id: FaceId) -> Result<f64, crate::OperationsError> {
     let face = topo.face(face_id)?;
-    let wire = topo.wire(face.outer_wire())?;
-    let positions = collect_wire_positions(topo, wire)?;
+    let outer_wire = topo.wire(face.outer_wire())?;
+    let outer_positions = collect_wire_positions(topo, outer_wire)?;
 
-    let n = positions.len();
-    if n < 3 {
-        return Ok(0.0);
+    let outer_area = newell_area(&outer_positions);
+
+    // Subtract hole areas.
+    let mut hole_area = 0.0;
+    for &inner_wid in face.inner_wires() {
+        let inner_wire = topo.wire(inner_wid)?;
+        let inner_positions = collect_wire_positions(topo, inner_wire)?;
+        hole_area += newell_area(&inner_positions);
     }
 
-    // Newell's method: sum cross products of consecutive edge pairs.
+    Ok((outer_area - hole_area).abs())
+}
+
+/// Compute the area of a polygon using Newell's method.
+fn newell_area(positions: &[Point3]) -> f64 {
+    let n = positions.len();
+    if n < 3 {
+        return 0.0;
+    }
+
     let mut sx = 0.0;
     let mut sy = 0.0;
     let mut sz = 0.0;
@@ -121,8 +135,7 @@ fn planar_face_area(topo: &Topology, face_id: FaceId) -> Result<f64, crate::Oper
         sz = vi.y().mul_add(-vj.x(), vi.x().mul_add(vj.y(), sz));
     }
 
-    let area = 0.5 * sz.mul_add(sz, sx.mul_add(sx, sy * sy)).sqrt();
-    Ok(area)
+    0.5 * sz.mul_add(sz, sx.mul_add(sx, sy * sy)).sqrt()
 }
 
 /// Sum of triangle areas from a tessellated mesh.
