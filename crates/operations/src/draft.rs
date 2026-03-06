@@ -11,7 +11,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
-use crate::boolean::{FaceSpec, assemble_solid_mixed, face_vertices};
+use crate::boolean::{FaceSpec, assemble_solid_mixed, face_polygon};
 use crate::dot_normal_point;
 
 /// Apply a draft angle to selected faces of a solid.
@@ -60,7 +60,7 @@ pub fn draft(
 
     for &fid in &all_face_ids {
         let face = topo.face(fid)?;
-        let verts = face_vertices(topo, fid)?;
+        let verts = face_polygon(topo, fid)?;
 
         if !draft_set.contains(&fid.index()) {
             // Non-draft face: keep as-is (supports any surface type).

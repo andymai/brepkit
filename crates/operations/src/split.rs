@@ -61,7 +61,7 @@ pub fn split(
     for &fid in &face_ids {
         let face = topo.face(fid)?;
         let surface = face.surface().clone();
-        let verts = crate::boolean::face_vertices(topo, fid)?;
+        let verts = crate::boolean::face_polygon(topo, fid)?;
         let dists: Vec<f64> = verts
             .iter()
             .map(|v| dot_normal_point(normal, *v) - d)

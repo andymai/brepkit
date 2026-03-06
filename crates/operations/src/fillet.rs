@@ -150,7 +150,7 @@ pub fn fillet(
         // Non-planar faces pass through unchanged.
         let Some(poly) = face_polygons.get(&face_id.index()) else {
             let face = topo.face(face_id)?;
-            let verts = crate::boolean::face_vertices(topo, face_id)?;
+            let verts = crate::boolean::face_polygon(topo, face_id)?;
             result_specs.push(FaceSpec::Surface {
                 vertices: verts,
                 surface: face.surface().clone(),
@@ -415,7 +415,7 @@ pub fn fillet_rolling_ball(
         // Non-planar faces pass through unchanged.
         let Some(poly) = face_polygons.get(&face_id.index()) else {
             let face = topo.face(face_id)?;
-            let verts = crate::boolean::face_vertices(topo, face_id)?;
+            let verts = crate::boolean::face_polygon(topo, face_id)?;
             all_specs.push(FaceSpec::Surface {
                 vertices: verts,
                 surface: face.surface().clone(),
@@ -947,7 +947,7 @@ pub fn fillet_variable(
     for &face_id in &shell_face_ids {
         let Some(poly) = face_polygons.get(&face_id.index()) else {
             let face = topo.face(face_id)?;
-            let verts = crate::boolean::face_vertices(topo, face_id)?;
+            let verts = crate::boolean::face_polygon(topo, face_id)?;
             all_specs.push(FaceSpec::Surface {
                 vertices: verts,
                 surface: face.surface().clone(),

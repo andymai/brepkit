@@ -138,7 +138,7 @@ pub fn chamfer(
         // Non-planar faces pass through unchanged.
         let Some(poly) = face_polygons.get(&face_id.index()) else {
             let face = topo.face(face_id)?;
-            let verts = crate::boolean::face_vertices(topo, face_id)?;
+            let verts = crate::boolean::face_polygon(topo, face_id)?;
             result_specs.push(FaceSpec::Surface {
                 vertices: verts,
                 surface: face.surface().clone(),

@@ -11,7 +11,7 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 use crate::OperationsError;
-use crate::boolean::face_vertices;
+use crate::boolean::face_polygon;
 use crate::dot_normal_point;
 
 /// Remove selected faces from a solid and heal the resulting gaps.
@@ -77,7 +77,7 @@ pub fn defeature(
             }
         };
 
-        let verts = face_vertices(topo, fid)?;
+        let verts = face_polygon(topo, fid)?;
         let d = dot_normal_point(normal, verts[0]);
         result_faces.push((verts, normal, d));
     }

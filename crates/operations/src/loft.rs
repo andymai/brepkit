@@ -15,7 +15,7 @@ use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
-use crate::boolean::face_vertices;
+use crate::boolean::face_polygon;
 use crate::dot_normal_point;
 
 /// Loft two or more planar profiles into a solid.
@@ -53,7 +53,7 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
                 });
             }
         }
-        let verts = face_vertices(topo, fid)?;
+        let verts = face_polygon(topo, fid)?;
         profile_verts.push(verts);
     }
 
@@ -272,7 +272,7 @@ pub fn loft_smooth(
                 });
             }
         }
-        let verts = face_vertices(topo, fid)?;
+        let verts = face_polygon(topo, fid)?;
         profile_verts.push(verts);
     }
 

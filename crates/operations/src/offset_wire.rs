@@ -12,7 +12,7 @@ use brepkit_topology::face::FaceSurface;
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
-use crate::boolean::face_vertices;
+use crate::boolean::face_polygon;
 
 /// Offset a planar wire by a given distance.
 ///
@@ -56,7 +56,7 @@ pub fn offset_wire(
     };
 
     // Get ordered vertices of the face's outer wire.
-    let verts = face_vertices(topo, face_id)?;
+    let verts = face_polygon(topo, face_id)?;
     let n = verts.len();
     if n < 3 {
         return Err(crate::OperationsError::InvalidInput {

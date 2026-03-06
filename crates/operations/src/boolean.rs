@@ -378,6 +378,7 @@ fn collect_face_data(
 }
 
 /// Get the ordered vertices of a face by traversing its outer wire.
+#[allow(dead_code)]
 pub(crate) fn face_vertices(
     topo: &Topology,
     face_id: FaceId,
