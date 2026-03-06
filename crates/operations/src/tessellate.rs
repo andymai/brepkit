@@ -62,121 +62,7 @@ pub fn tessellate(
     face: FaceId,
     deflection: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
-    let face_data = topo.face(face)?;
-    let is_reversed = face_data.is_reversed();
-
-    let mut mesh = match face_data.surface() {
-        FaceSurface::Plane { normal, .. } => tessellate_planar(topo, face_data, *normal),
-        FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection)),
-        FaceSurface::Cylinder(cyl) => {
-            let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
-            let u_range = (0.0, std::f64::consts::TAU);
-            // Angular resolution from chord deviation on the circular cross-section.
-            let nu = segments_for_chord_deviation(cyl.radius(), u_range.1 - u_range.0, deflection);
-            // Axial resolution: uniform spacing at roughly the same density.
-            let v_extent = (v_range.1 - v_range.0).abs();
-            let nv = 4_usize.max(
-                (v_extent / (cyl.radius() * std::f64::consts::TAU / nu as f64)).ceil() as usize,
-            );
-            let cyl = cyl.clone();
-            Ok(tessellate_analytic(
-                |u, v| cyl.evaluate(u, v),
-                |u, v| cyl.normal(u, v),
-                u_range,
-                v_range,
-                nu,
-                nv,
-                AnalyticKind::General,
-            ))
-        }
-        FaceSurface::Cone(cone) => {
-            let v_range = compute_axial_range(topo, face_data, cone.apex(), cone.axis());
-            let u_range = (0.0, std::f64::consts::TAU);
-            // Use the max radius (at the far end) for angular resolution.
-            let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
-            let nu = segments_for_chord_deviation(
-                max_radius.max(0.01),
-                u_range.1 - u_range.0,
-                deflection,
-            );
-            let v_extent = (v_range.1 - v_range.0).abs();
-            let nv = 4_usize.max(
-                (v_extent / (max_radius.max(0.01) * std::f64::consts::TAU / nu as f64)).ceil()
-                    as usize,
-            );
-            let cone = cone.clone();
-            Ok(tessellate_analytic(
-                |u, v| cone.evaluate(u, v),
-                |u, v| cone.normal(u, v),
-                u_range,
-                v_range,
-                nu,
-                nv,
-                AnalyticKind::ConeApex,
-            ))
-        }
-        FaceSurface::Sphere(sphere) => {
-            let u_range = (0.0, std::f64::consts::TAU);
-            let v_range = compute_sphere_v_range(topo, face_data, sphere);
-            let nu =
-                segments_for_chord_deviation(sphere.radius(), u_range.1 - u_range.0, deflection);
-            // Latitude resolution: same chord deviation criterion.
-            let nv =
-                segments_for_chord_deviation(sphere.radius(), v_range.1 - v_range.0, deflection);
-            // Determine pole handling from the v-range.
-            let kind = sphere_analytic_kind(v_range);
-            let sphere = sphere.clone();
-            Ok(tessellate_analytic(
-                |u, v| sphere.evaluate(u, v),
-                |u, v| sphere.normal(u, v),
-                u_range,
-                v_range,
-                nu,
-                nv,
-                kind,
-            ))
-        }
-        FaceSurface::Torus(torus) => {
-            let u_range = (0.0, std::f64::consts::TAU);
-            let v_range = (0.0, std::f64::consts::TAU);
-            // Major circle resolution: use (R + r) as the effective radius.
-            let nu = segments_for_chord_deviation(
-                torus.major_radius() + torus.minor_radius(),
-                u_range.1 - u_range.0,
-                deflection,
-            );
-            // Minor circle (tube cross-section) resolution.
-            let nv = segments_for_chord_deviation(
-                torus.minor_radius(),
-                v_range.1 - v_range.0,
-                deflection,
-            );
-            let torus = torus.clone();
-            Ok(tessellate_analytic(
-                |u, v| torus.evaluate(u, v),
-                |u, v| torus.normal(u, v),
-                u_range,
-                v_range,
-                nu,
-                nv,
-                AnalyticKind::General,
-            ))
-        }
-    }?;
-
-    // If the face is reversed, flip triangle winding and normals so that
-    // volume computation (divergence theorem) gets the correct sign.
-    if is_reversed {
-        for n in &mut mesh.normals {
-            *n = -*n;
-        }
-        let tri_count = mesh.indices.len() / 3;
-        for t in 0..tri_count {
-            mesh.indices.swap(t * 3 + 1, t * 3 + 2);
-        }
-    }
-
-    Ok(mesh)
+    tessellate_with_uvs(topo, face, deflection).map(|uv| uv.mesh)
 }
 
 /// Kind of special handling needed for analytic surface tessellation.
@@ -238,9 +124,10 @@ fn tessellate_analytic(
     nu: usize,
     nv: usize,
     kind: AnalyticKind,
-) -> TriangleMesh {
+) -> TriangleMeshUV {
     let mut positions = Vec::new();
     let mut normals = Vec::new();
+    let mut uvs = Vec::new();
     let mut indices = Vec::new();
 
     let nu = nu.max(4);
@@ -255,6 +142,7 @@ fn tessellate_analytic(
             let idx = positions.len() as u32;
             positions.push(surface_eval(u, v));
             normals.push(normal_fn(u, v));
+            uvs.push([u, v]);
             grid[iv * (nu + 1) + iu] = idx;
         }
     }
@@ -290,87 +178,6 @@ fn tessellate_analytic(
                 indices.push(i01);
             } else {
                 // Standard two-triangle quad.
-                indices.push(i00);
-                indices.push(i10);
-                indices.push(i11);
-
-                indices.push(i00);
-                indices.push(i11);
-                indices.push(i01);
-            }
-        }
-    }
-
-    TriangleMesh {
-        positions,
-        normals,
-        indices,
-    }
-}
-
-/// Tessellate an analytic surface and also return per-vertex UV coordinates.
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::too_many_lines
-)]
-fn tessellate_analytic_with_uvs(
-    surface_fn: impl Fn(f64, f64) -> Point3,
-    normal_fn: impl Fn(f64, f64) -> Vec3,
-    u_range: (f64, f64),
-    v_range: (f64, f64),
-    nu: usize,
-    nv: usize,
-    kind: AnalyticKind,
-) -> TriangleMeshUV {
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut uvs = Vec::new();
-    let mut indices = Vec::new();
-
-    let nu = nu.max(4);
-    let nv = nv.max(4);
-
-    let mut grid = vec![0u32; (nu + 1) * (nv + 1)];
-    for iv in 0..=nv {
-        let v = v_range.0 + (v_range.1 - v_range.0) * (iv as f64) / (nv as f64);
-        for iu in 0..=nu {
-            let u = u_range.0 + (u_range.1 - u_range.0) * (iu as f64) / (nu as f64);
-            let idx = positions.len() as u32;
-            positions.push(surface_fn(u, v));
-            normals.push(normal_fn(u, v));
-            uvs.push([u, v]);
-            grid[iv * (nu + 1) + iu] = idx;
-        }
-    }
-
-    let gi = |iu: usize, iv: usize| -> u32 {
-        let iu_w = if iu >= nu { 0 } else { iu };
-        grid[iv * (nu + 1) + iu_w]
-    };
-
-    let v_min_degenerate = matches!(kind, AnalyticKind::SpherePole | AnalyticKind::ConeApex);
-    let v_max_degenerate = matches!(kind, AnalyticKind::SpherePole | AnalyticKind::VMaxPole);
-
-    for iv in 0..nv {
-        let is_bottom = iv == 0;
-        let is_top = iv == nv - 1;
-
-        for iu in 0..nu {
-            let i00 = gi(iu, iv);
-            let i10 = gi(iu + 1, iv);
-            let i01 = gi(iu, iv + 1);
-            let i11 = gi(iu + 1, iv + 1);
-
-            if is_bottom && v_min_degenerate {
-                indices.push(i00);
-                indices.push(i11);
-                indices.push(i01);
-            } else if is_top && v_max_degenerate {
-                indices.push(i00);
-                indices.push(i10);
-                indices.push(i01);
-            } else {
                 indices.push(i00);
                 indices.push(i10);
                 indices.push(i11);
@@ -1756,7 +1563,7 @@ fn force_subdivide(
 fn tessellate_nurbs(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     deflection: f64,
-) -> TriangleMesh {
+) -> TriangleMeshUV {
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
 
@@ -1804,6 +1611,7 @@ fn tessellate_nurbs(
     let mut eval_cache: HashMap<(u64, u64), (Point3, Vec3)> = HashMap::new();
     let mut positions = Vec::new();
     let mut normals = Vec::new();
+    let mut uvs: Vec<[f64; 2]> = Vec::new();
     let mut indices = Vec::new();
     // Map from (u_bits, v_bits) to vertex index.
     let mut vertex_map: HashMap<(u64, u64), u32> = HashMap::new();
@@ -1813,146 +1621,8 @@ fn tessellate_nurbs(
                                 eval_cache: &mut HashMap<(u64, u64), (Point3, Vec3)>,
                                 positions: &mut Vec<Point3>,
                                 normals: &mut Vec<Vec3>,
+                                uvs: &mut Vec<[f64; 2]>,
                                 vertex_map: &mut HashMap<(u64, u64), u32>|
-     -> u32 {
-        let key = (u.to_bits(), v.to_bits());
-        if let Some(&idx) = vertex_map.get(&key) {
-            return idx;
-        }
-        let &mut (pos, nrm) = eval_cache.entry(key).or_insert_with(|| {
-            let p = surface.evaluate(u, v);
-            let n = safe_normal(surface, u, v);
-            (p, n)
-        });
-        #[allow(clippy::cast_possible_truncation)]
-        let idx = positions.len() as u32;
-        positions.push(pos);
-        normals.push(nrm);
-        vertex_map.insert(key, idx);
-        idx
-    };
-
-    for cell in &cells {
-        if cell.children.is_some() {
-            continue; // not a leaf
-        }
-
-        let u_min = cell.u_min;
-        let u_max = cell.u_max;
-        let v_min = cell.v_min;
-        let v_max = cell.v_max;
-
-        // Get vertex indices for the 4 corners.
-        // Corner order: (u_min,v_min), (u_max,v_min), (u_max,v_max), (u_min,v_max)
-        let i00 = get_or_insert_vertex(
-            u_min,
-            v_min,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut vertex_map,
-        );
-        let i10 = get_or_insert_vertex(
-            u_max,
-            v_min,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut vertex_map,
-        );
-        let i11 = get_or_insert_vertex(
-            u_max,
-            v_max,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut vertex_map,
-        );
-        let i01 = get_or_insert_vertex(
-            u_min,
-            v_max,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut vertex_map,
-        );
-
-        // Emit 2 triangles per quad cell.
-        // Triangle 1: (u_min,v_min) → (u_max,v_min) → (u_max,v_max)
-        indices.push(i00);
-        indices.push(i10);
-        indices.push(i11);
-
-        // Triangle 2: (u_min,v_min) → (u_max,v_max) → (u_min,v_max)
-        indices.push(i00);
-        indices.push(i11);
-        indices.push(i01);
-    }
-
-    TriangleMesh {
-        positions,
-        normals,
-        indices,
-    }
-}
-
-/// Tessellate a NURBS surface and also return per-vertex UV coordinates.
-fn tessellate_nurbs_with_uvs(
-    surface: &brepkit_math::nurbs::surface::NurbsSurface,
-    deflection: f64,
-) -> TriangleMeshUV {
-    let (u_lo, u_hi) = surface.domain_u();
-    let (v_lo, v_hi) = surface.domain_v();
-
-    let mut cells = Vec::with_capacity(256);
-
-    #[allow(clippy::cast_precision_loss)]
-    let du = (u_hi - u_lo) / INITIAL_CELLS as f64;
-    #[allow(clippy::cast_precision_loss)]
-    let dv = (v_hi - v_lo) / INITIAL_CELLS as f64;
-
-    for i in 0..INITIAL_CELLS {
-        for j in 0..INITIAL_CELLS {
-            #[allow(clippy::cast_precision_loss)]
-            let u_min = u_lo + (i as f64) * du;
-            #[allow(clippy::cast_precision_loss)]
-            let u_max = u_lo + ((i + 1) as f64) * du;
-            #[allow(clippy::cast_precision_loss)]
-            let v_min = v_lo + (j as f64) * dv;
-            #[allow(clippy::cast_precision_loss)]
-            let v_max = v_lo + ((j + 1) as f64) * dv;
-
-            cells.push(AdaptiveCell {
-                u_min,
-                u_max,
-                v_min,
-                v_max,
-                depth: 0,
-                children: None,
-            });
-        }
-    }
-
-    let n_roots = INITIAL_CELLS * INITIAL_CELLS;
-    for i in 0..n_roots {
-        build_quadtree(surface, &mut cells, i, deflection);
-    }
-    conforming_pass(surface, &mut cells);
-
-    let mut eval_cache: HashMap<(u64, u64), (Point3, Vec3)> = HashMap::new();
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut uvs: Vec<[f64; 2]> = Vec::new();
-    let mut indices = Vec::new();
-    let mut vertex_map: HashMap<(u64, u64), u32> = HashMap::new();
-
-    let get_or_insert = |u: f64,
-                         v: f64,
-                         eval_cache: &mut HashMap<(u64, u64), (Point3, Vec3)>,
-                         positions: &mut Vec<Point3>,
-                         normals: &mut Vec<Vec3>,
-                         uvs: &mut Vec<[f64; 2]>,
-                         vertex_map: &mut HashMap<(u64, u64), u32>|
      -> u32 {
         let key = (u.to_bits(), v.to_bits());
         if let Some(&idx) = vertex_map.get(&key) {
@@ -1974,10 +1644,10 @@ fn tessellate_nurbs_with_uvs(
 
     for cell in &cells {
         if cell.children.is_some() {
-            continue;
+            continue; // not a leaf
         }
 
-        let i00 = get_or_insert(
+        let i00 = get_or_insert_vertex(
             cell.u_min,
             cell.v_min,
             &mut eval_cache,
@@ -1986,7 +1656,7 @@ fn tessellate_nurbs_with_uvs(
             &mut uvs,
             &mut vertex_map,
         );
-        let i10 = get_or_insert(
+        let i10 = get_or_insert_vertex(
             cell.u_max,
             cell.v_min,
             &mut eval_cache,
@@ -1995,7 +1665,7 @@ fn tessellate_nurbs_with_uvs(
             &mut uvs,
             &mut vertex_map,
         );
-        let i11 = get_or_insert(
+        let i11 = get_or_insert_vertex(
             cell.u_max,
             cell.v_max,
             &mut eval_cache,
@@ -2004,7 +1674,7 @@ fn tessellate_nurbs_with_uvs(
             &mut uvs,
             &mut vertex_map,
         );
-        let i01 = get_or_insert(
+        let i01 = get_or_insert_vertex(
             cell.u_min,
             cell.v_max,
             &mut eval_cache,
@@ -2014,10 +1684,13 @@ fn tessellate_nurbs_with_uvs(
             &mut vertex_map,
         );
 
+        // Emit 2 triangles per quad cell.
+        // Triangle 1: (u_min,v_min) → (u_max,v_min) → (u_max,v_max)
         indices.push(i00);
         indices.push(i10);
         indices.push(i11);
 
+        // Triangle 2: (u_min,v_min) → (u_max,v_max) → (u_min,v_max)
         indices.push(i00);
         indices.push(i11);
         indices.push(i01);
@@ -2070,7 +1743,7 @@ pub fn tessellate_with_uvs(
                 .collect();
             Ok::<_, crate::OperationsError>(TriangleMeshUV { mesh, uvs })
         }
-        FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs_with_uvs(surface, deflection)),
+        FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection)),
         FaceSurface::Cylinder(cyl) => {
             let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
             let u_range = (0.0, std::f64::consts::TAU);
@@ -2080,7 +1753,7 @@ pub fn tessellate_with_uvs(
                 (v_extent / (cyl.radius() * std::f64::consts::TAU / nu as f64)).ceil() as usize,
             );
             let cyl = cyl.clone();
-            Ok(tessellate_analytic_with_uvs(
+            Ok(tessellate_analytic(
                 |u, v| cyl.evaluate(u, v),
                 |u, v| cyl.normal(u, v),
                 u_range,
@@ -2105,7 +1778,7 @@ pub fn tessellate_with_uvs(
                     as usize,
             );
             let cone = cone.clone();
-            Ok(tessellate_analytic_with_uvs(
+            Ok(tessellate_analytic(
                 |u, v| cone.evaluate(u, v),
                 |u, v| cone.normal(u, v),
                 u_range,
@@ -2124,7 +1797,7 @@ pub fn tessellate_with_uvs(
                 segments_for_chord_deviation(sphere.radius(), v_range.1 - v_range.0, deflection);
             let kind = sphere_analytic_kind(v_range);
             let sphere = sphere.clone();
-            Ok(tessellate_analytic_with_uvs(
+            Ok(tessellate_analytic(
                 |u, v| sphere.evaluate(u, v),
                 |u, v| sphere.normal(u, v),
                 u_range,
@@ -2148,7 +1821,7 @@ pub fn tessellate_with_uvs(
                 deflection,
             );
             let torus = torus.clone();
-            Ok(tessellate_analytic_with_uvs(
+            Ok(tessellate_analytic(
                 |u, v| torus.evaluate(u, v),
                 |u, v| torus.normal(u, v),
                 u_range,
@@ -3367,7 +3040,7 @@ mod tests {
         )
         .unwrap();
 
-        let mesh = tessellate_nurbs(&surface, 0.1);
+        let mesh = tessellate_nurbs(&surface, 0.1).mesh;
 
         // Flat surface: all normals are identical, deviation = 0.
         // 4×4 cells × 2 triangles × 3 indices = 96.
@@ -3424,8 +3097,8 @@ mod tests {
         .unwrap();
 
         let deflection = 0.05;
-        let flat_mesh = tessellate_nurbs(&flat, deflection);
-        let curved_mesh = tessellate_nurbs(&curved, deflection);
+        let flat_mesh = tessellate_nurbs(&flat, deflection).mesh;
+        let curved_mesh = tessellate_nurbs(&curved, deflection).mesh;
 
         let flat_tris = flat_mesh.indices.len() / 3;
         let curved_tris = curved_mesh.indices.len() / 3;
@@ -3626,8 +3299,8 @@ mod tests {
         .unwrap();
 
         // Fine deflection should produce many triangles.
-        let fine_mesh = tessellate_nurbs(&dome, 0.01);
-        let coarse_mesh = tessellate_nurbs(&dome, 0.5);
+        let fine_mesh = tessellate_nurbs(&dome, 0.01).mesh;
+        let coarse_mesh = tessellate_nurbs(&dome, 0.5).mesh;
 
         assert!(
             fine_mesh.indices.len() / 3 > coarse_mesh.indices.len() / 3,
@@ -3667,7 +3340,7 @@ mod tests {
         .unwrap();
 
         let deflection = 0.05;
-        let mesh = tessellate_nurbs(&surface, deflection);
+        let mesh = tessellate_nurbs(&surface, deflection).mesh;
 
         // All triangles should have their midpoints close to the surface.
         // The maximum sag should be bounded (not exactly by deflection due

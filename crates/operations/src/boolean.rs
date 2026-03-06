@@ -344,9 +344,6 @@ fn collect_face_data(
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
         if let FaceSurface::Plane { normal, d } = face.surface() {
-            // Use face_polygon to properly sample curved edges (e.g. circle
-            // caps on cylinders). face_vertices only returns vertex positions,
-            // which gives 1 point for a single closed circle edge.
             let verts = face_polygon(topo, fid)?;
             result.push((fid, verts, *normal, *d));
         } else {
@@ -377,33 +374,9 @@ fn collect_face_data(
     Ok(result)
 }
 
-/// Get the ordered vertices of a face by traversing its outer wire.
-#[allow(dead_code)]
-pub(crate) fn face_vertices(
-    topo: &Topology,
-    face_id: FaceId,
-) -> Result<Vec<Point3>, crate::OperationsError> {
-    let face = topo.face(face_id)?;
-    let wire = topo.wire(face.outer_wire())?;
-    let mut verts = Vec::with_capacity(wire.edges().len());
-
-    for oe in wire.edges() {
-        let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
-        verts.push(topo.vertex(vid)?.point());
-    }
-
-    Ok(verts)
-}
-
 /// Get a polygon approximation of a face by sampling curved edges.
 ///
-/// Unlike [`face_vertices`] which only returns edge start/end points,
-/// this samples circle/ellipse edges into 32 points so faces with a
+/// Samples circle/ellipse edges into 32 points so faces with a
 /// single closed-curve edge (e.g. cylinder caps) get a proper polygon.
 ///
 /// # Errors
