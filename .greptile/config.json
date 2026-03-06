@@ -1,0 +1,34 @@
+{
+  "strictness": 1,
+  "commentTypes": ["syntax", "logic", "style", "info"],
+  "patternRepositories": ["andymai/brepjs"],
+  "rules": [
+    {
+      "id": "layer-boundaries",
+      "severity": "high",
+      "rule": "Reject any `use brepkit_*` import or Cargo.toml dependency that violates the layer hierarchy: math(L0) has no workspace deps, topology(L1) depends only on math, operations(L2) on math+topology, io(L2) on math+topology+operations, wasm(L3) on all."
+    },
+    {
+      "id": "no-new-unwrap",
+      "severity": "high",
+      "rule": "New code must not introduce unwrap(), expect(), or panic!() outside #[cfg(test)] modules. Existing #[allow(clippy::unwrap_used)] annotations are accepted but should not be expanded."
+    },
+    {
+      "id": "snapshot-then-allocate",
+      "severity": "high",
+      "scope": ["crates/topology/**", "crates/operations/**", "crates/io/**", "crates/wasm/**"],
+      "rule": "When copying topology entities, all data must be read into local variables before allocating new entities. Simultaneous immutable+mutable borrows of the Topology arena will not compile. See CLAUDE.md 'Common Pitfalls'."
+    },
+    {
+      "id": "wildcard-match-arms",
+      "severity": "medium",
+      "scope": ["crates/io/**", "crates/operations/**"],
+      "rule": "Flag new _ => catch-all match arms on EdgeCurve or FaceSurface enums. Existing wildcards in io/src/step/writer.rs, io/src/iges/writer.rs, and operations/src/offset_face.rs must be manually verified when new variants are added."
+    },
+    {
+      "id": "tolerance-comparison",
+      "severity": "high",
+      "rule": "Compare floats via tolerance.approx_eq(), never ==. Use the Tolerance struct (linear: 1e-7, angular: 1e-12)."
+    }
+  ]
+}
