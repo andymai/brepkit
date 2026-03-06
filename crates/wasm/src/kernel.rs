@@ -2388,6 +2388,127 @@ impl BrepKernel {
         }
     }
 
+    /// Measure curvature of an edge curve at parameter `t`.
+    ///
+    /// Returns `[curvature, tangent_x, tangent_y, tangent_z, normal_x, normal_y, normal_z]`.
+    /// Curvature is 1/radius. For lines, curvature is 0.
+    #[wasm_bindgen(js_name = "measureCurvatureAtEdge")]
+    pub fn measure_curvature_at_edge(&self, edge: u32, t: f64) -> Result<Vec<f64>, JsError> {
+        validate_finite(t, "t")?;
+        let edge_id = self.resolve_edge(edge)?;
+        let edge_data = self.topo.edge(edge_id)?;
+        match edge_data.curve() {
+            EdgeCurve::Line => {
+                let start = self.topo.vertex(edge_data.start())?.point();
+                let end = self.topo.vertex(edge_data.end())?.point();
+                let dir = end - start;
+                let len = dir.length();
+                let tangent = if len < 1e-15 {
+                    Vec3::new(1.0, 0.0, 0.0)
+                } else {
+                    Vec3::new(dir.x() / len, dir.y() / len, dir.z() / len)
+                };
+                Ok(vec![
+                    0.0,
+                    tangent.x(),
+                    tangent.y(),
+                    tangent.z(),
+                    0.0,
+                    0.0,
+                    0.0,
+                ])
+            }
+            EdgeCurve::NurbsCurve(curve) => {
+                let curvature = curve.curvature(t).unwrap_or(0.0);
+                let derivs = curve.derivatives(t, 2);
+                let tangent = if derivs.len() > 1 {
+                    derivs[1].normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0))
+                } else {
+                    Vec3::new(1.0, 0.0, 0.0)
+                };
+                let normal = if derivs.len() > 2 {
+                    let d1 = derivs[1];
+                    let d2 = derivs[2];
+                    let cross = d1.cross(d2);
+                    let binormal = cross.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                    binormal
+                        .cross(tangent)
+                        .normalize()
+                        .unwrap_or(Vec3::new(0.0, 1.0, 0.0))
+                } else {
+                    Vec3::new(0.0, 1.0, 0.0)
+                };
+                Ok(vec![
+                    curvature,
+                    tangent.x(),
+                    tangent.y(),
+                    tangent.z(),
+                    normal.x(),
+                    normal.y(),
+                    normal.z(),
+                ])
+            }
+            EdgeCurve::Circle(circle) => {
+                let curvature = 1.0 / circle.radius();
+                let tangent = circle
+                    .tangent(t)
+                    .normalize()
+                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                let point = circle.evaluate(t);
+                let to_center = Vec3::new(
+                    circle.center().x() - point.x(),
+                    circle.center().y() - point.y(),
+                    circle.center().z() - point.z(),
+                );
+                let normal = to_center.normalize().unwrap_or(Vec3::new(0.0, 1.0, 0.0));
+                Ok(vec![
+                    curvature,
+                    tangent.x(),
+                    tangent.y(),
+                    tangent.z(),
+                    normal.x(),
+                    normal.y(),
+                    normal.z(),
+                ])
+            }
+            EdgeCurve::Ellipse(ellipse) => {
+                let point = ellipse.evaluate(t);
+                let tangent = ellipse
+                    .tangent(t)
+                    .normalize()
+                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                // Approximate curvature from finite differences
+                let dt = 1e-6;
+                let p0 = ellipse.evaluate(t - dt);
+                let p1 = ellipse.evaluate(t + dt);
+                let d1 = p1 - p0;
+                let d2 = (p1 - point) - (point - p0);
+                let speed = d1.length() / (2.0 * dt);
+                let curvature = if speed > 1e-15 {
+                    d1.cross(d2).length() / ((2.0 * dt) * speed * speed * speed)
+                } else {
+                    0.0
+                };
+                let normal = Vec3::new(
+                    ellipse.center().x() - point.x(),
+                    ellipse.center().y() - point.y(),
+                    ellipse.center().z() - point.z(),
+                )
+                .normalize()
+                .unwrap_or(Vec3::new(0.0, 1.0, 0.0));
+                Ok(vec![
+                    curvature,
+                    tangent.x(),
+                    tangent.y(),
+                    tangent.z(),
+                    normal.x(),
+                    normal.y(),
+                    normal.z(),
+                ])
+            }
+        }
+    }
+
     /// Evaluate a surface normal at (u, v) on a face.
     ///
     /// Returns `[nx, ny, nz]`.
@@ -2465,6 +2586,189 @@ impl BrepKernel {
             FaceSurface::Torus(tor) => tor.evaluate(u, v),
         };
         Ok(vec![point.x(), point.y(), point.z()])
+    }
+
+    /// Measure principal curvatures at (u, v) on a face surface.
+    ///
+    /// Returns `[k1, k2, d1x, d1y, d1z, d2x, d2y, d2z]` where k1/k2 are
+    /// principal curvatures and d1/d2 are the corresponding direction vectors.
+    #[wasm_bindgen(js_name = "measureCurvatureAtSurface")]
+    #[allow(clippy::too_many_lines)]
+    pub fn measure_curvature_at_surface(
+        &self,
+        face: u32,
+        u: f64,
+        v: f64,
+    ) -> Result<Vec<f64>, JsError> {
+        let face_id = self.resolve_face(face)?;
+        let face_data = self.topo.face(face_id)?;
+        match face_data.surface() {
+            FaceSurface::Plane { .. } => Ok(vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+            FaceSurface::Nurbs(surface) => {
+                let derivs = surface.derivatives(u, v, 2);
+                // derivs[i][j] = d^(i+j) S / du^i dv^j
+                let su = if derivs.len() > 1 && !derivs[1].is_empty() {
+                    derivs[1][0]
+                } else {
+                    return Ok(vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+                };
+                let sv = if !derivs.is_empty() && derivs[0].len() > 1 {
+                    derivs[0][1]
+                } else {
+                    return Ok(vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+                };
+                let suu = if derivs.len() > 2 && !derivs[2].is_empty() {
+                    derivs[2][0]
+                } else {
+                    Vec3::new(0.0, 0.0, 0.0)
+                };
+                let suv = if derivs.len() > 1 && derivs[1].len() > 1 {
+                    derivs[1][1]
+                } else {
+                    Vec3::new(0.0, 0.0, 0.0)
+                };
+                let svv = if !derivs.is_empty() && derivs[0].len() > 2 {
+                    derivs[0][2]
+                } else {
+                    Vec3::new(0.0, 0.0, 0.0)
+                };
+
+                let normal = su.cross(sv);
+                let normal = match normal.normalize() {
+                    Ok(n) => n,
+                    Err(_) => return Ok(vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]),
+                };
+
+                // First fundamental form coefficients
+                let ee = su.dot(su);
+                let ff = su.dot(sv);
+                let gg = sv.dot(sv);
+
+                // Second fundamental form coefficients
+                let ll = suu.dot(normal);
+                let mm = suv.dot(normal);
+                let nn = svv.dot(normal);
+
+                // Principal curvatures from shape operator eigenvalues
+                let denom = ee * gg - ff * ff;
+                if denom.abs() < 1e-30 {
+                    return Ok(vec![0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
+                }
+                let h = 0.5 * (ee * nn - 2.0 * ff * mm + gg * ll) / denom; // mean curvature
+                let k = (ll * nn - mm * mm) / denom; // Gaussian curvature
+                let disc = (h * h - k).max(0.0).sqrt();
+                let k1 = h + disc;
+                let k2 = h - disc;
+
+                // Principal directions (approximate)
+                let su_norm = su.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                let sv_norm = sv.normalize().unwrap_or(Vec3::new(0.0, 1.0, 0.0));
+
+                Ok(vec![
+                    k1,
+                    k2,
+                    su_norm.x(),
+                    su_norm.y(),
+                    su_norm.z(),
+                    sv_norm.x(),
+                    sv_norm.y(),
+                    sv_norm.z(),
+                ])
+            }
+            FaceSurface::Cylinder(cyl) => {
+                let r = cyl.radius();
+                let axis = cyl.axis().normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                let point = cyl.evaluate(u, v);
+                let to_axis = Vec3::new(
+                    cyl.origin().x() - point.x()
+                        + axis.x()
+                            * axis.dot(Vec3::new(
+                                point.x() - cyl.origin().x(),
+                                point.y() - cyl.origin().y(),
+                                point.z() - cyl.origin().z(),
+                            )),
+                    cyl.origin().y() - point.y()
+                        + axis.y()
+                            * axis.dot(Vec3::new(
+                                point.x() - cyl.origin().x(),
+                                point.y() - cyl.origin().y(),
+                                point.z() - cyl.origin().z(),
+                            )),
+                    cyl.origin().z() - point.z()
+                        + axis.z()
+                            * axis.dot(Vec3::new(
+                                point.x() - cyl.origin().x(),
+                                point.y() - cyl.origin().y(),
+                                point.z() - cyl.origin().z(),
+                            )),
+                );
+                let radial = to_axis.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                Ok(vec![
+                    1.0 / r,
+                    0.0,
+                    radial.x(),
+                    radial.y(),
+                    radial.z(),
+                    axis.x(),
+                    axis.y(),
+                    axis.z(),
+                ])
+            }
+            FaceSurface::Sphere(sph) => {
+                let r = sph.radius();
+                let point = sph.evaluate(u, v);
+                let radial = Vec3::new(
+                    point.x() - sph.center().x(),
+                    point.y() - sph.center().y(),
+                    point.z() - sph.center().z(),
+                )
+                .normalize()
+                .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                // Both principal curvatures are 1/r for a sphere
+                let d1 = Vec3::new(-radial.y(), radial.x(), 0.0)
+                    .normalize()
+                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                let d2 = radial.cross(d1);
+                Ok(vec![
+                    1.0 / r,
+                    1.0 / r,
+                    d1.x(),
+                    d1.y(),
+                    d1.z(),
+                    d2.x(),
+                    d2.y(),
+                    d2.z(),
+                ])
+            }
+            FaceSurface::Cone(cone) => {
+                let half_angle = cone.half_angle();
+                let v_pos = v.abs().max(1e-10);
+                let local_r = v_pos * half_angle.sin();
+                let k_parallel = if local_r > 1e-15 {
+                    half_angle.cos() / local_r
+                } else {
+                    0.0
+                };
+                let axis = cone.axis().normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                Ok(vec![
+                    0.0,
+                    k_parallel,
+                    axis.x(),
+                    axis.y(),
+                    axis.z(),
+                    1.0,
+                    0.0,
+                    0.0,
+                ])
+            }
+            FaceSurface::Torus(torus) => {
+                let r_major = torus.major_radius();
+                let r_minor = torus.minor_radius();
+                let k1 = 1.0 / r_minor;
+                let k2 = u.cos() / (r_major + r_minor * u.cos());
+                Ok(vec![k1, k2, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+            }
+        }
     }
 
     /// Heal a solid topology.

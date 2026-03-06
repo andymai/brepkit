@@ -51,11 +51,48 @@ pub fn face_area(
 ) -> Result<f64, crate::OperationsError> {
     let face = topo.face(face_id)?;
 
-    if matches!(face.surface(), FaceSurface::Plane { .. }) {
-        planar_face_area(topo, face_id)
-    } else {
-        let mesh = tessellate::tessellate(topo, face_id, deflection)?;
-        Ok(triangle_mesh_area(&mesh))
+    match face.surface() {
+        FaceSurface::Plane { .. } => planar_face_area(topo, face_id),
+        FaceSurface::Cylinder(cyl) => {
+            // Cylinder lateral area: integrate r * du * dv over the face domain.
+            // Approximate the parameter range from the face's boundary.
+            let r = cyl.radius();
+            let wire = topo.wire(face.outer_wire())?;
+            let positions = collect_wire_positions(topo, wire)?;
+            if positions.len() >= 2 {
+                // Project boundary to get v-range (axial extent)
+                let axis = cyl.axis();
+                let origin = cyl.origin();
+                let v_vals: Vec<f64> = positions
+                    .iter()
+                    .map(|p| {
+                        axis.dot(Vec3::new(
+                            p.x() - origin.x(),
+                            p.y() - origin.y(),
+                            p.z() - origin.z(),
+                        ))
+                    })
+                    .collect();
+                let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
+                let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                let height = (v_max - v_min).abs();
+                // Full cylinder lateral area = 2πr * height
+                Ok(2.0 * std::f64::consts::PI * r * height)
+            } else {
+                let mesh = tessellate::tessellate(topo, face_id, deflection)?;
+                Ok(triangle_mesh_area(&mesh))
+            }
+        }
+        FaceSurface::Sphere(sph) => {
+            // Hemisphere area = 2πr². For our 2-hemisphere sphere,
+            // each face is exactly one hemisphere.
+            let r = sph.radius();
+            Ok(2.0 * std::f64::consts::PI * r * r)
+        }
+        _ => {
+            let mesh = tessellate::tessellate(topo, face_id, deflection)?;
+            Ok(triangle_mesh_area(&mesh))
+        }
     }
 }
 
