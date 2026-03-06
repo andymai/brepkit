@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/andymai/brepkit/compare/v0.5.1...v0.5.2) (2026-03-06)
+
+
+### Bug Fixes
+
+* address 110 brepjs-wasm test failures across 12 categories ([#74](https://github.com/andymai/brepkit/issues/74)) ([df31ae4](https://github.com/andymai/brepkit/commit/df31ae4f6c1ef4e3346a24804836bc463345ce9d))
+
 ## [0.5.1](https://github.com/andymai/brepkit/compare/v0.5.0...v0.5.1) (2026-03-06)
 
 
