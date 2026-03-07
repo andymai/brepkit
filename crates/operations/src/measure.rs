@@ -620,17 +620,118 @@ fn collect_wire_positions(
     topo: &Topology,
     wire: &brepkit_topology::wire::Wire,
 ) -> Result<Vec<Point3>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+
     let mut positions = Vec::new();
+    let n_samples = 32_usize;
+    let tol = 1e-10;
+
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
-        positions.push(topo.vertex(vid)?.point());
+        match edge.curve() {
+            EdgeCurve::Line => {
+                let vid = if oe.is_forward() {
+                    edge.start()
+                } else {
+                    edge.end()
+                };
+                let pt = topo.vertex(vid)?.point();
+                if positions
+                    .last()
+                    .is_none_or(|p: &Point3| (*p - pt).length() > tol)
+                {
+                    positions.push(pt);
+                }
+            }
+            EdgeCurve::Circle(c) => {
+                let (t0, t1) = if edge.is_closed() {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    let sp = topo.vertex(edge.start())?.point();
+                    let ep = topo.vertex(edge.end())?.point();
+                    let ts = c.project(sp);
+                    let mut te = c.project(ep);
+                    if te <= ts {
+                        te += std::f64::consts::TAU;
+                    }
+                    (ts, te)
+                };
+                sample_edge_curve(
+                    &|t| c.evaluate(t),
+                    t0,
+                    t1,
+                    n_samples,
+                    oe.is_forward(),
+                    tol,
+                    &mut positions,
+                );
+            }
+            EdgeCurve::Ellipse(e) => {
+                let (t0, t1) = if edge.is_closed() {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    let sp = topo.vertex(edge.start())?.point();
+                    let ep = topo.vertex(edge.end())?.point();
+                    let ts = e.project(sp);
+                    let mut te = e.project(ep);
+                    if te <= ts {
+                        te += std::f64::consts::TAU;
+                    }
+                    (ts, te)
+                };
+                sample_edge_curve(
+                    &|t| e.evaluate(t),
+                    t0,
+                    t1,
+                    n_samples,
+                    oe.is_forward(),
+                    tol,
+                    &mut positions,
+                );
+            }
+            EdgeCurve::NurbsCurve(nc) => {
+                let (u0, u1) = nc.domain();
+                sample_edge_curve(
+                    &|t| nc.evaluate(t),
+                    u0,
+                    u1,
+                    n_samples,
+                    oe.is_forward(),
+                    tol,
+                    &mut positions,
+                );
+            }
+        }
     }
     Ok(positions)
+}
+
+/// Sample points along a parametric curve for area/distance calculations.
+#[allow(clippy::cast_precision_loss)]
+fn sample_edge_curve(
+    evaluate: &dyn Fn(f64) -> Point3,
+    t0: f64,
+    t1: f64,
+    n_samples: usize,
+    forward: bool,
+    tol: f64,
+    positions: &mut Vec<Point3>,
+) {
+    let indices: Box<dyn Iterator<Item = usize>> = if forward {
+        Box::new(0..n_samples)
+    } else {
+        Box::new((0..n_samples).rev())
+    };
+    for i in indices {
+        let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
+        let pt = evaluate(t);
+        if positions
+            .last()
+            .is_none_or(|p: &Point3| (*p - pt).length() > tol)
+        {
+            positions.push(pt);
+        }
+    }
 }
 
 // ── Edge and wire length ──────────────────────────────────────────

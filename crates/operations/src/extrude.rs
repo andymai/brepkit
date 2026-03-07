@@ -26,6 +26,97 @@ struct InnerWireData {
     vertical_edge_ids: Vec<EdgeId>,
 }
 
+/// Split closed single-edge wires (e.g. a full circle represented as one
+/// NURBS edge with start==end) into multiple edges so that downstream
+/// extrusion logic can create proper side faces.
+///
+/// If no splitting is needed, returns the original edges unchanged.
+fn maybe_split_closed_wire(
+    topo: &mut Topology,
+    oriented: &[OrientedEdge],
+    tol: f64,
+) -> Result<Vec<OrientedEdge>, crate::OperationsError> {
+    // Only need splitting when the wire has edges whose start==end vertex.
+    // Collect all edges that need splitting, and pass through the rest.
+    let mut result = Vec::with_capacity(oriented.len() * 4);
+    for oe in oriented {
+        let edge = topo.edge(oe.edge())?;
+        if edge.start() == edge.end() {
+            // Closed edge — split the curve at evenly-spaced parameters.
+            // Use 32 segments for a good approximation of curved geometry
+            // in the side faces (which are planar quads).
+            let split_edges = split_closed_edge(topo, oe.edge(), 32, tol)?;
+            for se in split_edges {
+                result.push(OrientedEdge::new(se, oe.is_forward()));
+            }
+        } else {
+            result.push(*oe);
+        }
+    }
+    Ok(result)
+}
+
+/// Split a closed edge (start==end) into `n` sub-edges by evaluating the
+/// curve at evenly-spaced parameter values and creating new vertices/edges.
+fn split_closed_edge(
+    topo: &mut Topology,
+    edge_id: EdgeId,
+    n: usize,
+    tol: f64,
+) -> Result<Vec<EdgeId>, crate::OperationsError> {
+    let edge = topo.edge(edge_id)?;
+    let start_vid = edge.start();
+    let curve = edge.curve().clone();
+
+    // Get the parameter domain of the curve.
+    let (u0, u1) = match &curve {
+        EdgeCurve::NurbsCurve(nc) => nc.domain(),
+        EdgeCurve::Circle(_) => (0.0, std::f64::consts::TAU),
+        EdgeCurve::Ellipse(_) => (0.0, std::f64::consts::TAU),
+        EdgeCurve::Line => {
+            // Lines can't be closed with start==end in a meaningful way.
+            return Ok(vec![edge_id]);
+        }
+    };
+
+    let evaluate = |u: f64| -> Point3 {
+        match &curve {
+            EdgeCurve::NurbsCurve(nc) => nc.evaluate(u),
+            EdgeCurve::Circle(c) => c.evaluate(u),
+            EdgeCurve::Ellipse(e) => e.evaluate(u),
+            EdgeCurve::Line => unreachable!(),
+        }
+    };
+
+    let mut new_vids = Vec::with_capacity(n);
+    new_vids.push(start_vid);
+    for i in 1..n {
+        #[allow(clippy::cast_precision_loss)]
+        let u = u0 + (u1 - u0) * (i as f64) / (n as f64);
+        let pt = evaluate(u);
+        let vid = topo.vertices.alloc(Vertex::new(pt, tol));
+        new_vids.push(vid);
+    }
+
+    // Create sub-edges, each as a Line between adjacent split vertices.
+    // (The extrusion side faces only need vertex positions; the curve
+    // representation for the side quad doesn't need to be exact.)
+    let mut edge_ids = Vec::with_capacity(n);
+    for i in 0..n {
+        let v_start = new_vids[i];
+        let v_end = new_vids[(i + 1) % n];
+        // For the first segment start vertex, reuse the original.
+        // For the last segment end vertex, wrap to the original start.
+        let v_end_actual = if i == n - 1 { start_vid } else { v_end };
+        let eid = topo
+            .edges
+            .alloc(Edge::new(v_start, v_end_actual, EdgeCurve::Line));
+        edge_ids.push(eid);
+    }
+
+    Ok(edge_ids)
+}
+
 /// Extract vertices, create offset (top) vertices and edges for a wire.
 ///
 /// Returns: `(input_verts, input_positions, input_oriented, input_edge_ids,
@@ -49,7 +140,11 @@ fn extrude_wire_vertices(
 > {
     let tol = Tolerance::new();
     let wire = topo.wire(wire_id)?;
-    let oriented: Vec<_> = wire.edges().to_vec();
+    let original_oriented: Vec<_> = wire.edges().to_vec();
+
+    // Check for closed single-edge wires (e.g. a full circle) and split them
+    // into multiple edges so that the extrusion can create proper side faces.
+    let oriented = maybe_split_closed_wire(topo, &original_oriented, tol.linear)?;
 
     let mut verts: Vec<VertexId> = Vec::with_capacity(oriented.len());
     for oe in &oriented {
@@ -179,7 +274,9 @@ pub fn extrude(
 
     let mut all_faces = Vec::with_capacity(n + 2 + inner_wire_ids.len() * 4);
 
-    // --- Bottom face: reversed copy of input face ---
+    // --- Bottom face: reversed copy of input wire ---
+    // Use the (possibly-split) edges so the bottom cap shares vertices
+    // with the side faces, keeping the shell manifold.
     let reversed_bottom_edges: Vec<OrientedEdge> = input_oriented
         .iter()
         .rev()
@@ -339,6 +436,8 @@ pub fn extrude(
     }
 
     // --- Top face ---
+    // Always use the split top_edge_ids so that the top cap shares vertices
+    // and edges with the side faces, ensuring a closed (manifold) shell.
     let top_wire = Wire::new(
         top_edge_ids
             .iter()
@@ -387,6 +486,110 @@ pub fn extrude(
     let solid = topo.solids.alloc(Solid::new(shell_id, vec![]));
 
     Ok(solid)
+}
+
+/// Create a translated copy of a wire by duplicating all edges, translating
+/// their vertices and curve geometry by `offset`.
+#[allow(dead_code)]
+fn make_translated_wire(
+    topo: &mut Topology,
+    oriented_edges: &[OrientedEdge],
+    offset: Vec3,
+) -> Result<WireId, crate::OperationsError> {
+    use std::collections::HashMap;
+
+    let tol = Tolerance::new();
+    let mut vertex_map: HashMap<VertexId, VertexId> = HashMap::new();
+
+    // Map vertices: for each unique vertex, create a translated copy.
+    let mut get_or_create_vertex =
+        |topo: &mut Topology, vid: VertexId| -> Result<VertexId, crate::OperationsError> {
+            if let Some(&mapped) = vertex_map.get(&vid) {
+                return Ok(mapped);
+            }
+            let pt = topo.vertex(vid)?.point();
+            let new_vid = topo.vertices.alloc(Vertex::new(pt + offset, tol.linear));
+            vertex_map.insert(vid, new_vid);
+            Ok(new_vid)
+        };
+
+    let mut new_edges = Vec::with_capacity(oriented_edges.len());
+    for oe in oriented_edges {
+        let edge = topo.edge(oe.edge())?;
+        let v_start = edge.start();
+        let v_end = edge.end();
+        let curve = edge.curve().clone();
+
+        let new_start = get_or_create_vertex(topo, v_start)?;
+        let new_end = if v_start == v_end {
+            new_start
+        } else {
+            get_or_create_vertex(topo, v_end)?
+        };
+
+        let new_curve = translate_edge_curve(&curve, offset)?;
+        let new_eid = topo.edges.alloc(Edge::new(new_start, new_end, new_curve));
+        new_edges.push(OrientedEdge::new(new_eid, oe.is_forward()));
+    }
+
+    let wire = Wire::new(new_edges, true).map_err(crate::OperationsError::Topology)?;
+    Ok(topo.wires.alloc(wire))
+}
+
+/// Translate an `EdgeCurve` by an offset vector.
+///
+/// # Errors
+///
+/// Returns an error if constructing the translated curve fails (should
+/// never happen when translating a valid curve).
+#[allow(dead_code)]
+fn translate_edge_curve(
+    curve: &EdgeCurve,
+    offset: Vec3,
+) -> Result<EdgeCurve, crate::OperationsError> {
+    Ok(match curve {
+        EdgeCurve::Line => EdgeCurve::Line,
+        EdgeCurve::Circle(c) => {
+            let new_center = c.center() + offset;
+            EdgeCurve::Circle(
+                brepkit_math::curves::Circle3D::with_axes(
+                    new_center,
+                    c.normal(),
+                    c.radius(),
+                    c.u_axis(),
+                    c.v_axis(),
+                )
+                .map_err(crate::OperationsError::Math)?,
+            )
+        }
+        EdgeCurve::Ellipse(e) => {
+            let new_center = e.center() + offset;
+            EdgeCurve::Ellipse(
+                brepkit_math::curves::Ellipse3D::with_axes(
+                    new_center,
+                    e.normal(),
+                    e.semi_major(),
+                    e.semi_minor(),
+                    e.u_axis(),
+                    e.v_axis(),
+                )
+                .map_err(crate::OperationsError::Math)?,
+            )
+        }
+        EdgeCurve::NurbsCurve(nc) => {
+            let translated_cps: Vec<Point3> =
+                nc.control_points().iter().map(|&p| p + offset).collect();
+            EdgeCurve::NurbsCurve(
+                brepkit_math::nurbs::curve::NurbsCurve::new(
+                    nc.degree(),
+                    nc.knots().to_vec(),
+                    translated_cps,
+                    nc.weights().to_vec(),
+                )
+                .map_err(crate::OperationsError::Math)?,
+            )
+        }
+    })
 }
 
 #[cfg(test)]

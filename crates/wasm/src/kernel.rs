@@ -2340,14 +2340,16 @@ impl BrepKernel {
             .collect();
         let curve = NurbsCurve::new(degree as usize, knots, cp, weights)?;
 
-        let v_start = self
-            .topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(start_x, start_y, start_z), TOL));
-        let v_end = self
-            .topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(end_x, end_y, end_z), TOL));
+        let start_pt = Point3::new(start_x, start_y, start_z);
+        let end_pt = Point3::new(end_x, end_y, end_z);
+        let v_start = self.topo.vertices.alloc(Vertex::new(start_pt, TOL));
+        // When start ≈ end (closed curve), reuse the same vertex so
+        // downstream code correctly identifies the edge as closed.
+        let v_end = if (start_pt - end_pt).length() < TOL * 100.0 {
+            v_start
+        } else {
+            self.topo.vertices.alloc(Vertex::new(end_pt, TOL))
+        };
         let eid = self
             .topo
             .edges
