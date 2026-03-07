@@ -34,6 +34,11 @@ pub enum BooleanOp {
 }
 
 /// Default tessellation deflection for non-planar faces in boolean operations.
+///
+/// A larger value produces fewer triangles (faster but coarser approximation).
+/// Since the boolean result decomposes curved faces into individual planar
+/// triangles, keeping this coarse avoids face-count explosion in sequential
+/// boolean operations.
 const DEFAULT_BOOLEAN_DEFLECTION: f64 = 0.1;
 
 /// Options for boolean operations.
@@ -175,6 +180,23 @@ pub fn boolean_with_options(
                 log::info!(
                     "boolean {op:?}: analytic path failed ({e}), falling back to tessellated"
                 );
+            }
+        }
+    }
+
+    // ── Mesh boolean fast path for high-face-count solids ─────────────
+    // When either solid has many faces (e.g. from a prior tessellated boolean),
+    // the chord-based splitting approach is too slow. Use the mesh boolean
+    // which operates on triangle meshes directly.
+    {
+        let count_a = face_count(topo, a)?;
+        let count_b = face_count(topo, b)?;
+        if count_a > 100 || count_b > 100 {
+            log::debug!(
+                "boolean {op:?}: high face count ({count_a}, {count_b}), using mesh boolean"
+            );
+            if let Ok(result) = mesh_boolean_path(topo, op, a, b, opts.deflection) {
+                return Ok(result);
             }
         }
     }
@@ -1465,6 +1487,63 @@ fn surface_aware_aabb(surface: &FaceSurface, vertices: &[Point3], tol: Tolerance
         }
     };
     bb.expanded(tol.linear)
+}
+
+/// Get the number of faces in a solid's outer shell.
+fn face_count(topo: &Topology, solid: SolidId) -> Result<usize, crate::OperationsError> {
+    let s = topo.solid(solid)?;
+    let shell = topo.shell(s.outer_shell())?;
+    Ok(shell.faces().len())
+}
+
+/// Perform a boolean operation using the mesh boolean path.
+///
+/// Tessellates both solids into triangle meshes, runs the mesh boolean,
+/// and assembles the result back into topology.
+fn mesh_boolean_path(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+    deflection: f64,
+) -> Result<SolidId, crate::OperationsError> {
+    let mesh_a = crate::tessellate::tessellate_solid(topo, a, deflection)?;
+    let mesh_b = crate::tessellate::tessellate_solid(topo, b, deflection)?;
+
+    let mb_result = crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, deflection)?;
+
+    // Convert mesh result to topology: each triangle becomes a planar face.
+    let tol = Tolerance::new();
+    let mut face_data: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
+    for tri in mb_result.mesh.indices.chunks_exact(3) {
+        let i0 = tri[0] as usize;
+        let i1 = tri[1] as usize;
+        let i2 = tri[2] as usize;
+
+        let v0 = mb_result.mesh.positions[i0];
+        let v1 = mb_result.mesh.positions[i1];
+        let v2 = mb_result.mesh.positions[i2];
+
+        let edge1 = v1 - v0;
+        let edge2 = v2 - v0;
+        let normal = edge1
+            .cross(edge2)
+            .normalize()
+            .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+        let d = crate::dot_normal_point(normal, v0);
+
+        face_data.push((vec![v0, v1, v2], normal, d));
+    }
+
+    if face_data.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "mesh boolean produced empty result".into(),
+        });
+    }
+
+    let result = assemble_solid(topo, &face_data, tol)?;
+    validate_boolean_result(topo, result)?;
+    Ok(result)
 }
 
 /// Check if a solid is composed entirely of planar faces.
@@ -3160,6 +3239,49 @@ mod tests {
         assert!(
             (vol - expected).abs() < expected * 0.1,
             "cut volume {vol} should be near {expected}"
+        );
+    }
+
+    #[test]
+    fn sequential_cylinder_cuts() {
+        let mut topo = Topology::new();
+        let plate = crate::primitives::make_box(&mut topo, 50.0, 30.0, 10.0).unwrap();
+
+        // First drill: small cylinder at (10, 10)
+        let cyl1 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+        let mat1 = brepkit_math::mat::Mat4::translation(10.0, 10.0, -5.0);
+        crate::transform::transform_solid(&mut topo, cyl1, &mat1).unwrap();
+        let r1 = boolean(&mut topo, BooleanOp::Cut, plate, cyl1).unwrap();
+
+        let s = topo.solid(r1).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        eprintln!("First cut: {} faces", sh.faces().len());
+
+        // Second drill: small cylinder at (40, 10) — non-overlapping
+        let cyl2 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+        let mat2 = brepkit_math::mat::Mat4::translation(40.0, 10.0, -5.0);
+        crate::transform::transform_solid(&mut topo, cyl2, &mat2).unwrap();
+        let r2 = boolean(&mut topo, BooleanOp::Cut, r1, cyl2).unwrap();
+
+        let s2 = topo.solid(r2).unwrap();
+        let sh2 = topo.shell(s2.outer_shell()).unwrap();
+        eprintln!("Second cut: {} faces", sh2.faces().len());
+
+        let vol = crate::measure::solid_volume(&topo, r2, 0.1).unwrap();
+        eprintln!("Volume after 2 drills: {vol}");
+
+        // Third drill at (25, 20)
+        let cyl3 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let mat3 = brepkit_math::mat::Mat4::translation(25.0, 20.0, -5.0);
+        crate::transform::transform_solid(&mut topo, cyl3, &mat3).unwrap();
+        let r3 = boolean(&mut topo, BooleanOp::Cut, r2, cyl3).unwrap();
+
+        let vol3 = crate::measure::solid_volume(&topo, r3, 0.1).unwrap();
+        eprintln!("Volume after 3 drills: {vol3}");
+
+        assert!(
+            vol3 < 50.0 * 30.0 * 10.0,
+            "drilled plate should have less volume: {vol3}"
         );
     }
 }

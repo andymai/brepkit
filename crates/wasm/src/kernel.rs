@@ -57,6 +57,46 @@ struct SketchState {
     constraints: Vec<brepkit_operations::sketch::Constraint>,
 }
 
+/// Filter edges to only those shared by two planar faces in a solid.
+fn filter_planar_edges(
+    topo: &brepkit_topology::Topology,
+    solid_id: brepkit_topology::solid::SolidId,
+    edge_ids: &[brepkit_topology::edge::EdgeId],
+) -> Result<Vec<brepkit_topology::edge::EdgeId>, JsError> {
+    use std::collections::HashMap;
+    let solid_data = topo.solid(solid_id)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    let mut edge_faces: HashMap<usize, Vec<brepkit_topology::face::FaceId>> = HashMap::new();
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        let wire = topo.wire(face.outer_wire())?;
+        for oe in wire.edges() {
+            edge_faces.entry(oe.edge().index()).or_default().push(fid);
+        }
+    }
+
+    let mut result = Vec::new();
+    for &eid in edge_ids {
+        if let Some(adj_faces) = edge_faces.get(&eid.index()) {
+            let all_planar = adj_faces.iter().all(|&fid| {
+                topo.face(fid)
+                    .map(|f| {
+                        matches!(
+                            f.surface(),
+                            brepkit_topology::face::FaceSurface::Plane { .. }
+                        )
+                    })
+                    .unwrap_or(false)
+            });
+            if all_planar {
+                result.push(eid);
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// Sample a closed periodic curve (period = TAU) into a flat `[x, y, z, ...]` buffer.
 ///
 /// Produces `n` evenly-spaced points in `[0, TAU)` using the supplied `evaluate` function.
@@ -534,6 +574,8 @@ impl BrepKernel {
             .collect::<Result<_, _>>()?;
         // Use the rolling-ball fillet algorithm for true G1-continuous NURBS
         // blend surfaces. Falls back to the planar fillet if rolling-ball fails.
+        // If the full set of edges fails (e.g. edges adjacent to NURBS faces from
+        // a prior fillet), filter to edges between two planar faces and retry.
         let result = brepkit_operations::fillet::fillet_rolling_ball(
             &mut self.topo,
             solid_id,
@@ -542,7 +584,32 @@ impl BrepKernel {
         )
         .or_else(|_| {
             brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)
-        })?;
+        });
+        let result = if let Ok(r) = result {
+            r
+        } else {
+            // Filter to edges where both adjacent faces are planar.
+            let planar_edges = filter_planar_edges(&self.topo, solid_id, &edge_ids)?;
+            if planar_edges.is_empty() {
+                // No planar-adjacent edges to fillet; return the solid unchanged.
+                solid_id
+            } else {
+                brepkit_operations::fillet::fillet_rolling_ball(
+                    &mut self.topo,
+                    solid_id,
+                    &planar_edges,
+                    radius,
+                )
+                .or_else(|_| {
+                    brepkit_operations::fillet::fillet(
+                        &mut self.topo,
+                        solid_id,
+                        &planar_edges,
+                        radius,
+                    )
+                })?
+            }
+        };
         Ok(solid_id_to_u32(result))
     }
 
