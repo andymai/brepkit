@@ -199,6 +199,14 @@ fn sphere_face_v_range(
         return Ok((-FRAC_PI_2, FRAC_PI_2));
     }
 
+    // Single degenerate edge (start == end) indicates a full sphere face.
+    if wire.edges().len() == 1 {
+        let edge = topo.edge(wire.edges()[0].edge())?;
+        if edge.start() == edge.end() {
+            return Ok((-FRAC_PI_2, FRAC_PI_2));
+        }
+    }
+
     // All boundary vertices should be at roughly the same v (equator).
     // Determine hemisphere by checking whether face is above or below boundary.
     let boundary_v = v_vals.iter().copied().sum::<f64>() / v_vals.len() as f64;

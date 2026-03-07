@@ -134,6 +134,18 @@ pub fn chamfer(
     let mut chamfer_data: HashMap<usize, ChamferEdgeData> = HashMap::new();
     let mut result_specs: Vec<FaceSpec> = Vec::new();
 
+    // Track corner vertices where all adjacent edges are chamfered.
+    // Maps vertex_id → (original_position, Vec<(face_id, intersection_point)>).
+    let mut corner_data: HashMap<usize, (Point3, Vec<(FaceId, Point3)>)> = HashMap::new();
+
+    // Count how many faces reference each vertex (to detect full-corner chamfer).
+    let mut vertex_face_count: HashMap<usize, usize> = HashMap::new();
+    for poly in face_polygons.values() {
+        for vid in &poly.vertex_ids {
+            *vertex_face_count.entry(vid.index()).or_default() += 1;
+        }
+    }
+
     for &face_id in &shell_face_ids {
         // Non-planar faces pass through unchanged.
         let Some(poly) = face_polygons.get(&face_id.index()) else {
@@ -195,32 +207,58 @@ pub fn chamfer(
                     );
                 }
                 (true, true) => {
-                    // Both adjacent edges are chamfered. Emit two points:
-                    // 1st: from the "after" edge chamfer, offset toward V[prev]
-                    let dir_prev = (prev_pos - pos).normalize()?;
-                    let c_after = pos + dir_prev * distance;
-                    new_verts.push(c_after);
+                    // Both adjacent edges are chamfered. Compute a single
+                    // intersection point where the two trim planes meet on
+                    // this face, rather than two separate offset points.
+                    let d1 = (next_pos - pos).normalize()?;
+                    let d2_dir = (pos - prev_pos).normalize()?;
 
+                    // Inward perpendiculars within the face plane.
+                    // For CCW winding (matching outward normal), inward = n × d.
+                    let p1 = poly.normal.cross(d1);
+                    let p2 = poly.normal.cross(d2_dir);
+
+                    let cos_angle = p1.dot(p2);
+                    let denom = 1.0 + cos_angle;
+
+                    let intersection = if denom.abs() < 1e-12 {
+                        // Nearly antiparallel — fall back to midpoint.
+                        let mid = Point3::new(
+                            (prev_pos.x() + next_pos.x()) * 0.5,
+                            (prev_pos.y() + next_pos.y()) * 0.5,
+                            (prev_pos.z() + next_pos.z()) * 0.5,
+                        );
+                        let dir = (mid - pos).normalize()?;
+                        pos + dir * distance
+                    } else {
+                        let scale = distance / denom;
+                        pos + (p1 + p2) * scale
+                    };
+
+                    new_verts.push(intersection);
+
+                    // Record this point for both adjacent chamfered edges.
                     record_chamfer_point(
                         &mut chamfer_data,
                         poly.wire_edge_ids[i].index(),
                         poly.vertex_ids[i],
                         face_id,
-                        c_after,
+                        intersection,
                     );
-
-                    // 2nd: from the "before" edge chamfer, offset toward V[next]
-                    let dir_next = (next_pos - pos).normalize()?;
-                    let c_before = pos + dir_next * distance;
-                    new_verts.push(c_before);
-
                     record_chamfer_point(
                         &mut chamfer_data,
                         poly.wire_edge_ids[prev_i].index(),
                         poly.vertex_ids[i],
                         face_id,
-                        c_before,
+                        intersection,
                     );
+
+                    // Track for corner triangle generation.
+                    corner_data
+                        .entry(poly.vertex_ids[i].index())
+                        .or_insert_with(|| (pos, Vec::new()))
+                        .1
+                        .push((face_id, intersection));
                 }
             }
         }
@@ -289,6 +327,100 @@ pub fn chamfer(
             vertices: quad,
             normal,
             d,
+        });
+    }
+
+    // -- Phase 4.5: Corner faces --
+    // At each original vertex where ALL adjacent edges are chamfered,
+    // the trim-plane intersections from each face create a polygonal gap
+    // (triangle for box vertices, k-gon for degree-k vertices).
+    // Compute an approximate solid center for outward normal orientation.
+    let solid_center = {
+        let mut cx = 0.0;
+        let mut cy = 0.0;
+        let mut cz = 0.0;
+        let mut count = 0.0;
+        for poly in face_polygons.values() {
+            for p in &poly.positions {
+                cx += p.x();
+                cy += p.y();
+                cz += p.z();
+                count += 1.0;
+            }
+        }
+        Point3::new(cx / count, cy / count, cz / count)
+    };
+
+    for (vid, (orig_pos, entries)) in corner_data {
+        // Only create a corner face if ALL faces at this vertex contributed
+        // (i.e. all edges at this vertex are chamfered).
+        let expected = vertex_face_count.get(&vid).copied().unwrap_or(0);
+        if entries.len() != expected || entries.len() < 3 {
+            continue;
+        }
+
+        // Order the corner vertices for consistent winding.
+        // Use the original vertex position to compute outward direction.
+        let outward = (orig_pos - solid_center)
+            .normalize()
+            .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+
+        // For a triangle (3 entries), compute the normal and ensure it
+        // points outward (away from solid center).
+        let pts: Vec<Point3> = entries.iter().map(|(_, p)| *p).collect();
+        let e1 = pts[1] - pts[0];
+        let e2 = pts[2] - pts[0];
+        let tri_normal = e1.cross(e2);
+
+        let mut corner_verts: Vec<Point3> = if tri_normal.dot(outward) >= 0.0 {
+            pts
+        } else {
+            let mut rev = pts;
+            rev.reverse();
+            rev
+        };
+
+        // For k > 3 corner faces, sort by angle around the outward axis.
+        if corner_verts.len() > 3 {
+            let center = Point3::new(
+                corner_verts.iter().map(|p| p.x()).sum::<f64>() / corner_verts.len() as f64,
+                corner_verts.iter().map(|p| p.y()).sum::<f64>() / corner_verts.len() as f64,
+                corner_verts.iter().map(|p| p.z()).sum::<f64>() / corner_verts.len() as f64,
+            );
+            // Pick a reference direction in the corner face plane.
+            let ref_dir = (corner_verts[0] - center)
+                .normalize()
+                .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+            let binormal = outward.cross(ref_dir);
+            corner_verts.sort_by(|a, b| {
+                let da = *a - center;
+                let db = *b - center;
+                let angle_a = da.dot(binormal).atan2(da.dot(ref_dir));
+                let angle_b = db.dot(binormal).atan2(db.dot(ref_dir));
+                angle_a
+                    .partial_cmp(&angle_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            // Re-check winding after sort.
+            let se1 = corner_verts[1] - corner_verts[0];
+            let se2 = corner_verts[2] - corner_verts[0];
+            if se1.cross(se2).dot(outward) < 0.0 {
+                corner_verts.reverse();
+            }
+        }
+
+        let cn = {
+            let ce1 = corner_verts[1] - corner_verts[0];
+            let ce2 = corner_verts[2] - corner_verts[0];
+            ce1.cross(ce2)
+                .normalize()
+                .unwrap_or(Vec3::new(0.0, 0.0, 1.0))
+        };
+        let cd = dot_normal_point(cn, corner_verts[0]);
+        result_specs.push(FaceSpec::Planar {
+            vertices: corner_verts,
+            normal: cn,
+            d: cd,
         });
     }
 
@@ -502,5 +634,31 @@ mod tests {
 
         validate_shell_manifold(result_shell, &topo.faces, &topo.wires)
             .expect("result should be manifold");
+    }
+
+    #[test]
+    fn chamfer_all_edges_volume() {
+        let mut topo = Topology::new();
+        let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let edges = solid_edge_ids(&topo, cube);
+
+        // Chamfer all 12 edges.
+        assert_eq!(edges.len(), 12, "box should have 12 edges");
+        let result = chamfer(&mut topo, cube, &edges, 1.0).unwrap();
+
+        let s = topo.solid(result).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        // 6 trimmed faces + 12 chamfer strips + 8 corner triangles = 26 faces.
+        assert_eq!(sh.faces().len(), 26, "chamfered box should have 26 faces");
+
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        // Chamfered 10³ box with d=1: exact volume ≈ 952
+        // (1000 - 12 edges × ~4 each = ~48 removed).
+        assert!(
+            vol < 1000.0,
+            "chamfered box vol should be < 1000, got {vol}"
+        );
+        assert!(vol > 800.0, "chamfered box vol should be > 800, got {vol}");
     }
 }

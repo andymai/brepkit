@@ -549,15 +549,30 @@ pub fn solid_volume(
         return Ok(v);
     }
 
+    // For all-planar solids, use polygon fan-triangulation with winding correction.
+    if let Ok(v) = volume_from_planar_polygons(topo, solid, deflection) {
+        return Ok(v);
+    }
+
+    // Compute bounding box volume as an upper bound sanity check.
+    let bbox_vol = solid_bounding_box(topo, solid)
+        .map(|bb| {
+            let dx = bb.max.x() - bb.min.x();
+            let dy = bb.max.y() - bb.min.y();
+            let dz = bb.max.z() - bb.min.z();
+            dx * dy * dz
+        })
+        .unwrap_or(f64::MAX);
+
     // Try watertight tessellation first — this gives correct volume
     // via signed tetrahedra since the mesh is closed.
     let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
     if !mesh.indices.is_empty() {
         let vol = signed_volume_from_mesh(&mesh);
-        // If watertight mesh volume is non-trivial, use it.
-        // Near-zero result indicates inconsistent winding (e.g. shelled solids
-        // where inner face normals cancel outer face contributions).
-        if vol > 1e-12 {
+        // Accept the result if it's non-trivial AND doesn't exceed the
+        // bounding box volume (which indicates a non-watertight mesh with
+        // inconsistent winding, e.g. chamfered solids with boundary edges).
+        if vol > 1e-12 && vol <= bbox_vol * 1.01 {
             return Ok(vol);
         }
     }
@@ -629,7 +644,18 @@ fn volume_from_per_face_tessellation(
             continue;
         }
 
-        let sign = face_winding_sign_centroid(&mesh, centroid);
+        // Use the face's stored normal for planar faces (more reliable
+        // than centroid-based heuristic for chamfer bevels and other
+        // angled faces).
+        let sign = if let Ok(face) = topo.face(fid) {
+            if let FaceSurface::Plane { normal, .. } = face.surface() {
+                face_winding_sign_from_normal(&mesh, *normal)
+            } else {
+                face_winding_sign_centroid(&mesh, centroid)
+            }
+        } else {
+            face_winding_sign_centroid(&mesh, centroid)
+        };
 
         for t in 0..tri_count {
             let v0 = pos[idx[t * 3] as usize];
@@ -645,6 +671,78 @@ fn volume_from_per_face_tessellation(
     }
 
     Ok((total / 6.0).abs())
+}
+
+/// Compute volume for all-planar solids using face polygon triangulation
+/// with winding correction based on the stored face normal.
+///
+/// For each planar face, fan-triangulates the polygon and sums the signed
+/// tetrahedra volumes, correcting winding so that the face normal points
+/// outward. This works even for non-manifold topology since it only needs
+/// each face's vertices and normal.
+fn volume_from_planar_polygons(
+    topo: &Topology,
+    solid: SolidId,
+    _deflection: f64,
+) -> Result<f64, crate::OperationsError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    // Use the divergence theorem: V = (1/3) Σ d_i × A_i
+    // where d_i = n_i · p (signed distance from origin to face plane)
+    // and A_i is the polygon area.
+    let mut total = 0.0_f64;
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        let face_normal = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            _ => {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "planar polygon volume requires all-planar faces".into(),
+                });
+            }
+        };
+
+        // Get face polygon vertices from wire edges.
+        let wire = topo.wire(face.outer_wire())?;
+        let mut verts = Vec::with_capacity(wire.edges().len());
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            verts.push(topo.vertex(vid)?.point());
+        }
+
+        if verts.len() < 3 {
+            continue;
+        }
+
+        // Signed distance from origin to the face plane.
+        let d = crate::dot_normal_point(face_normal, verts[0]);
+
+        // Polygon area via Newell method: A = |Σ (vi × vi+1)| / 2
+        let n = verts.len();
+        let mut cx = 0.0_f64;
+        let mut cy = 0.0_f64;
+        let mut cz = 0.0_f64;
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let vi = &verts[i];
+            let vj = &verts[j];
+            cx += vi.y() * vj.z() - vi.z() * vj.y();
+            cy += vi.z() * vj.x() - vi.x() * vj.z();
+            cz += vi.x() * vj.y() - vi.y() * vj.x();
+        }
+        let area_vec = Vec3::new(cx, cy, cz);
+        let area = area_vec.length() / 2.0;
+
+        total += d * area;
+    }
+
+    Ok((total / 3.0).abs())
 }
 
 /// Compute the volume of a solid directly from its face vertex
@@ -914,6 +1012,36 @@ fn face_winding_sign_centroid(mesh: &tessellate::TriangleMesh, solid_centroid: P
         let outward = mid - solid_centroid;
         // If tri_normal points same way as outward, winding is correct
         agree += if tri_normal.dot(outward) >= 0.0 {
+            1
+        } else {
+            -1
+        };
+    }
+
+    if agree >= 0 { 1.0 } else { -1.0 }
+}
+
+/// Determine winding sign by comparing the mesh triangle normals against
+/// the face's known surface normal. More reliable than centroid-based
+/// heuristic for angled faces (e.g. chamfer bevels).
+fn face_winding_sign_from_normal(mesh: &tessellate::TriangleMesh, face_normal: Vec3) -> f64 {
+    let idx = &mesh.indices;
+    let pos = &mesh.positions;
+    let tri_count = idx.len() / 3;
+    if tri_count == 0 {
+        return 1.0;
+    }
+
+    let mut agree: i32 = 0;
+    for t in 0..tri_count {
+        let i0 = idx[t * 3] as usize;
+        let i1 = idx[t * 3 + 1] as usize;
+        let i2 = idx[t * 3 + 2] as usize;
+        let tri_normal = (pos[i1] - pos[i0]).cross(pos[i2] - pos[i0]);
+        if tri_normal.length() < 1e-20 {
+            continue;
+        }
+        agree += if tri_normal.dot(face_normal) >= 0.0 {
             1
         } else {
             -1
