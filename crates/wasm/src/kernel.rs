@@ -1150,6 +1150,56 @@ impl BrepKernel {
         Ok(handles)
     }
 
+    /// Import a triangle mesh from flat vertex/index arrays.
+    ///
+    /// `positions` is a flat `[x0,y0,z0, x1,y1,z1, ...]` array.
+    /// `indices` is a flat `[i0,i1,i2, i3,i4,i5, ...]` array of triangle
+    /// vertex indices. Returns a solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the arrays are malformed or mesh import fails.
+    #[cfg(feature = "io")]
+    #[wasm_bindgen(js_name = "importIndexedMesh")]
+    pub fn import_indexed_mesh(
+        &mut self,
+        positions: &[f64],
+        indices: &[u32],
+    ) -> Result<u32, JsError> {
+        use brepkit_math::vec::Point3;
+
+        if positions.len() % 3 != 0 {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "positions length {} is not a multiple of 3",
+                    positions.len()
+                ),
+            }
+            .into());
+        }
+        if indices.len() % 3 != 0 {
+            return Err(WasmError::InvalidInput {
+                reason: format!("indices length {} is not a multiple of 3", indices.len()),
+            }
+            .into());
+        }
+
+        let verts: Vec<Point3> = positions
+            .chunks_exact(3)
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect();
+        let normals = Vec::new();
+
+        let mesh = brepkit_operations::tessellate::TriangleMesh {
+            positions: verts,
+            normals,
+            indices: indices.to_vec(),
+        };
+
+        let solid_id = brepkit_io::stl::import::import_mesh(&mut self.topo, &mesh, TOL)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
     /// Export a solid to STEP AP203 format.
     ///
     /// Returns the STEP file as a UTF-8 encoded byte vector.

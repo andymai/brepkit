@@ -542,39 +542,113 @@ pub fn solid_volume(
         return Ok(v);
     }
 
+    // Fast path: for solids made entirely of planar triangular faces
+    // (e.g. mesh imports), compute volume directly from face geometry.
+    // This avoids re-tessellation which has known WASM winding issues.
+    if let Ok(v) = solid_volume_from_faces(topo, solid, deflection) {
+        return Ok(v);
+    }
+
+    // General path: tessellate into a watertight mesh with shared
+    // vertices and consistent winding, then apply divergence theorem.
+    let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
+    let idx = &mesh.indices;
+    let pos = &mesh.positions;
+    let tri_count = idx.len() / 3;
+
     let mut total = 0.0;
+    for t in 0..tri_count {
+        let v0 = pos[idx[t * 3] as usize];
+        let v1 = pos[idx[t * 3 + 1] as usize];
+        let v2 = pos[idx[t * 3 + 2] as usize];
+
+        let a = Vec3::new(v0.x(), v0.y(), v0.z());
+        let b = Vec3::new(v1.x(), v1.y(), v1.z());
+        let c = Vec3::new(v2.x(), v2.y(), v2.z());
+
+        total += a.dot(b.cross(c));
+    }
+
+    // If the mesh has consistent winding, the sign of total tells us
+    // whether the winding is outward (+) or inward (-). Either way,
+    // the absolute value gives the correct volume.
+    Ok((total / 6.0).abs())
+}
+
+/// Compute the volume of a solid directly from its face vertex
+/// positions, bypassing tessellation. Only valid for solids composed
+/// entirely of planar triangular faces (e.g. mesh imports).
+///
+/// Returns an error if the solid contains non-planar or
+/// non-triangular faces.
+///
+/// # Errors
+///
+/// Returns [`OperationsError`] if topology lookups fail or if the
+/// solid contains non-planar/non-triangular faces.
+pub fn solid_volume_from_faces(
+    topo: &Topology,
+    solid: SolidId,
+    _deflection: f64,
+) -> Result<f64, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
 
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
+    let mut total = 0.0;
+    let mut all_planar_triangles = true;
+
     for &fid in shell.faces() {
-        let mesh = tessellate::tessellate(topo, fid, deflection)?;
-        let idx = &mesh.indices;
-        let pos = &mesh.positions;
-        let tri_count = idx.len() / 3;
-        if tri_count == 0 {
-            continue;
+        let face = topo.face(fid)?;
+
+        // Only use the fast path for planar faces with exactly 3 line edges.
+        if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+            all_planar_triangles = false;
+            break;
         }
 
-        // Determine winding sign: compare the tessellated triangle normal
-        // with the stored mesh normal (which reflects the face's intended
-        // outward direction). If they disagree, flip the contribution.
-        let sign = face_winding_sign(&mesh);
-
-        for t in 0..tri_count {
-            let v0 = pos[idx[t * 3] as usize];
-            let v1 = pos[idx[t * 3 + 1] as usize];
-            let v2 = pos[idx[t * 3 + 2] as usize];
-
-            let a = Vec3::new(v0.x(), v0.y(), v0.z());
-            let b = Vec3::new(v1.x(), v1.y(), v1.z());
-            let c = Vec3::new(v2.x(), v2.y(), v2.z());
-
-            total += sign * a.dot(b.cross(c));
+        let wire = topo.wire(face.outer_wire())?;
+        let edges = wire.edges();
+        if edges.len() != 3 {
+            all_planar_triangles = false;
+            break;
         }
+
+        // Check all edges are lines.
+        let mut pts = Vec::with_capacity(3);
+        for oe in edges {
+            let edge = topo.edge(oe.edge())?;
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                all_planar_triangles = false;
+                break;
+            }
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            pts.push(topo.vertex(vid)?.point());
+        }
+        if !all_planar_triangles {
+            break;
+        }
+
+        let a = Vec3::new(pts[0].x(), pts[0].y(), pts[0].z());
+        let b = Vec3::new(pts[1].x(), pts[1].y(), pts[1].z());
+        let c = Vec3::new(pts[2].x(), pts[2].y(), pts[2].z());
+
+        total += a.dot(b.cross(c));
     }
 
-    Ok((total / 6.0).abs())
+    if all_planar_triangles {
+        Ok((total / 6.0).abs())
+    } else {
+        Err(crate::OperationsError::InvalidInput {
+            reason: "solid contains non-planar or non-triangular faces".to_string(),
+        })
+    }
 }
 
 // ── Center of mass ────────────────────────────────────────────────
@@ -594,6 +668,12 @@ pub fn solid_center_of_mass(
     solid: SolidId,
     deflection: f64,
 ) -> Result<Point3, crate::OperationsError> {
+    // Fast path: for all-planar-triangle solids, compute directly
+    // from face geometry (avoids re-tessellation winding issues).
+    if let Ok(com) = center_of_mass_from_faces(topo, solid) {
+        return Ok(com);
+    }
+
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
@@ -628,6 +708,75 @@ pub fn solid_center_of_mass(
             cy += signed_vol * (v0.y() + v1.y() + v2.y());
             cz += signed_vol * (v0.z() + v1.z() + v2.z());
         }
+    }
+
+    if total_vol.abs() < 1e-15 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "solid has zero volume, center of mass is undefined".into(),
+        });
+    }
+
+    let denom = 4.0 * total_vol;
+    Ok(Point3::new(cx / denom, cy / denom, cz / denom))
+}
+
+/// Compute center of mass directly from face vertex positions for
+/// solids composed entirely of planar triangular faces.
+fn center_of_mass_from_faces(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<Point3, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
+
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    let mut total_vol = 0.0;
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    let mut cz = 0.0;
+
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "non-planar face".to_string(),
+            });
+        }
+        let wire = topo.wire(face.outer_wire())?;
+        let edges = wire.edges();
+        if edges.len() != 3 {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "non-triangular face".to_string(),
+            });
+        }
+
+        let mut pts = Vec::with_capacity(3);
+        for oe in edges {
+            let edge = topo.edge(oe.edge())?;
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "non-line edge".to_string(),
+                });
+            }
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            pts.push(topo.vertex(vid)?.point());
+        }
+
+        let a = Vec3::new(pts[0].x(), pts[0].y(), pts[0].z());
+        let b = Vec3::new(pts[1].x(), pts[1].y(), pts[1].z());
+        let c = Vec3::new(pts[2].x(), pts[2].y(), pts[2].z());
+
+        let signed_vol = a.dot(b.cross(c));
+        total_vol += signed_vol;
+        cx += signed_vol * (pts[0].x() + pts[1].x() + pts[2].x());
+        cy += signed_vol * (pts[0].y() + pts[1].y() + pts[2].y());
+        cz += signed_vol * (pts[0].z() + pts[1].z() + pts[2].z());
     }
 
     if total_vol.abs() < 1e-15 {
