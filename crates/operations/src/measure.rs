@@ -549,9 +549,21 @@ pub fn solid_volume(
         return Ok(v);
     }
 
-    // General path: tessellate into a watertight mesh with shared
-    // vertices and consistent winding, then apply divergence theorem.
+    // General path: try watertight tessellation first, fall back to
+    // per-face tessellation if tessellate_solid produces no triangles
+    // (e.g. for NURBS faces where CDT/snap stitching fails).
     let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
+    if !mesh.indices.is_empty() {
+        return Ok(signed_volume_from_mesh(&mesh));
+    }
+
+    // Fallback: per-face tessellation with winding correction.
+    volume_from_per_face_tessellation(topo, solid, deflection)
+}
+
+/// Compute absolute signed volume from a triangle mesh using
+/// the divergence theorem (signed tetrahedra method).
+fn signed_volume_from_mesh(mesh: &tessellate::TriangleMesh) -> f64 {
     let idx = &mesh.indices;
     let pos = &mesh.positions;
     let tri_count = idx.len() / 3;
@@ -569,9 +581,44 @@ pub fn solid_volume(
         total += a.dot(b.cross(c));
     }
 
-    // If the mesh has consistent winding, the sign of total tells us
-    // whether the winding is outward (+) or inward (-). Either way,
-    // the absolute value gives the correct volume.
+    (total / 6.0).abs()
+}
+
+/// Compute volume by tessellating each face independently, then
+/// applying winding correction based on face normals.
+fn volume_from_per_face_tessellation(
+    topo: &Topology,
+    solid: SolidId,
+    deflection: f64,
+) -> Result<f64, crate::OperationsError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    let mut total = 0.0;
+    for &fid in shell.faces() {
+        let mesh = tessellate::tessellate(topo, fid, deflection)?;
+        if mesh.indices.is_empty() {
+            continue;
+        }
+
+        let sign = face_winding_sign(&mesh);
+        let idx = &mesh.indices;
+        let pos = &mesh.positions;
+        let tri_count = idx.len() / 3;
+
+        for t in 0..tri_count {
+            let v0 = pos[idx[t * 3] as usize];
+            let v1 = pos[idx[t * 3 + 1] as usize];
+            let v2 = pos[idx[t * 3 + 2] as usize];
+
+            let a = Vec3::new(v0.x(), v0.y(), v0.z());
+            let b = Vec3::new(v1.x(), v1.y(), v1.z());
+            let c = Vec3::new(v2.x(), v2.y(), v2.z());
+
+            total += sign * a.dot(b.cross(c));
+        }
+    }
+
     Ok((total / 6.0).abs())
 }
 
@@ -1380,6 +1427,20 @@ mod tests {
         assert!(
             rel_err < 1e-10,
             "torus volume should be exact: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
+        );
+    }
+
+    #[test]
+    fn ellipsoid_volume() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
+        let mat = brepkit_math::mat::Mat4::scale(5.0, 3.0, 2.0);
+        crate::transform::transform_solid(&mut topo, solid, &mat).unwrap();
+        let vol = solid_volume(&topo, solid, 0.1).unwrap();
+        let expected = 4.0 / 3.0 * std::f64::consts::PI * 5.0 * 3.0 * 2.0;
+        assert!(
+            (vol - expected).abs() < expected * 0.15,
+            "expected ~{expected}, got {vol}"
         );
     }
 }
