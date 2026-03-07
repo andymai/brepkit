@@ -134,11 +134,20 @@ pub fn transform_solid(
                 topo.face_mut(fid)?.set_surface(FaceSurface::Cone(new_cone));
             }
             FaceSurface::Sphere(sph) => {
-                let new_center = matrix.mul_point(sph.center());
-                let new_sph =
-                    brepkit_math::surfaces::SphericalSurface::new(new_center, sph.radius())?;
-                topo.face_mut(fid)?
-                    .set_surface(FaceSurface::Sphere(new_sph));
+                if is_uniform_scale(matrix) {
+                    let new_center = matrix.mul_point(sph.center());
+                    let new_sph =
+                        brepkit_math::surfaces::SphericalSurface::new(new_center, sph.radius())?;
+                    topo.face_mut(fid)?
+                        .set_surface(FaceSurface::Sphere(new_sph));
+                } else {
+                    // Non-uniform scale: sample the face's v-range of the
+                    // sphere and refit as NURBS.
+                    let (v_min, v_max) = sphere_face_v_range(topo, fid, sph)?;
+                    let sph_clone = sph.clone();
+                    let nurbs = sphere_to_transformed_nurbs(&sph_clone, matrix, v_min, v_max)?;
+                    topo.face_mut(fid)?.set_surface(FaceSurface::Nurbs(nurbs));
+                }
             }
             FaceSurface::Torus(tor) => {
                 let new_center = matrix.mul_point(tor.center());
@@ -153,6 +162,152 @@ pub fn transform_solid(
     }
 
     Ok(())
+}
+
+/// Determine the v-range (latitude) of a sphere face from its boundary.
+///
+/// Projects boundary vertices onto the sphere to find their latitudes,
+/// then uses the sign of the average vertex Z offset from center to
+/// determine which hemisphere the face covers.
+fn sphere_face_v_range(
+    topo: &Topology,
+    face_id: FaceId,
+    sph: &brepkit_math::surfaces::SphericalSurface,
+) -> Result<(f64, f64), crate::OperationsError> {
+    use std::f64::consts::FRAC_PI_2;
+
+    let face = topo.face(face_id)?;
+    let wire = topo.wire(face.outer_wire())?;
+    let mut v_vals = Vec::new();
+
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let pt = topo.vertex(edge.start())?.point();
+        let (_u, v) = sph.project_point(pt);
+        v_vals.push(v);
+    }
+
+    if v_vals.is_empty() {
+        // Full sphere with no boundary → full range
+        return Ok((-FRAC_PI_2, FRAC_PI_2));
+    }
+
+    // All boundary vertices should be at roughly the same v (equator).
+    // Determine hemisphere by checking whether face is above or below boundary.
+    let boundary_v = v_vals.iter().copied().sum::<f64>() / v_vals.len() as f64;
+
+    // Check which side: sample a face interior point. A simpler heuristic:
+    // if any inner wire exists, check it. Otherwise, examine the face's
+    // Newell normal direction relative to the sphere center.
+    //
+    // For brepkit's make_sphere: south hemisphere has normals pointing
+    // away from center with v ∈ [-π/2, boundary_v], north hemisphere
+    // v ∈ [boundary_v, π/2].
+    //
+    // Use a heuristic: compute the average Z of boundary relative to center
+    // and compare with the face's position hints.
+    let center = sph.center();
+    let avg_boundary_z: f64 = {
+        let mut sum = 0.0;
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let pt = topo.vertex(edge.start())?.point();
+            sum += pt.z() - center.z();
+        }
+        sum / wire.edges().len() as f64
+    };
+
+    // If the boundary is near the equator (avg_z ≈ 0), we need another way.
+    // Try to detect hemisphere by checking if the face has a pole vertex
+    // (a degenerate edge with a pole at v = ±π/2).
+    // Simpler approach: this is called before the transform, and make_sphere
+    // creates two faces. Just check if boundary_v ≈ 0 and pick hemispheres.
+    if boundary_v.abs() < 0.1 {
+        // Near equator: use face ordering. Check if this face has vertices
+        // near the north pole (z > center.z) or south pole (z < center.z).
+        // If avg_boundary_z is near 0, look for a degenerate pole vertex.
+        let mut has_pole_north = false;
+        let mut has_pole_south = false;
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            if edge.start() == edge.end() {
+                let pt = topo.vertex(edge.start())?.point();
+                let dz = pt.z() - center.z();
+                if dz > 0.0 {
+                    has_pole_north = true;
+                } else {
+                    has_pole_south = true;
+                }
+            }
+        }
+        if has_pole_north {
+            return Ok((boundary_v, FRAC_PI_2));
+        }
+        if has_pole_south {
+            return Ok((-FRAC_PI_2, boundary_v));
+        }
+        // Default: use the winding direction. If first edge goes "forward" in
+        // parameter space, it's the north hemisphere.
+        // Fallback: just check avg Z of all edge midpoints would require
+        // curve evaluation. Use a simpler heuristic based on face ordering.
+        // The first face in make_sphere is south, second is north.
+        // This is fragile, but works for this specific case.
+        if avg_boundary_z >= 0.0 {
+            return Ok((boundary_v, FRAC_PI_2));
+        }
+        return Ok((-FRAC_PI_2, boundary_v));
+    }
+
+    if boundary_v > 0.0 {
+        Ok((boundary_v, FRAC_PI_2))
+    } else {
+        Ok((-FRAC_PI_2, boundary_v))
+    }
+}
+
+/// Check whether a transform matrix has uniform scaling (all axis scale
+/// factors are approximately equal). Non-uniform scaling distorts spheres
+/// into ellipsoids, so analytic representations must be converted to NURBS.
+fn is_uniform_scale(matrix: &Mat4) -> bool {
+    let m = &matrix.0;
+    // Column vector magnitudes of the upper-left 3×3
+    let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
+    let sy = (m[0][1] * m[0][1] + m[1][1] * m[1][1] + m[2][1] * m[2][1]).sqrt();
+    let sz = (m[0][2] * m[0][2] + m[1][2] * m[1][2] + m[2][2] * m[2][2]).sqrt();
+    let avg = (sx + sy + sz) / 3.0;
+    let rel = 0.01; // 1% tolerance
+    (sx - avg).abs() < avg * rel && (sy - avg).abs() < avg * rel && (sz - avg).abs() < avg * rel
+}
+
+/// Sample a spherical surface over a given v-range, transform the points
+/// with a matrix, and refit as a NURBS surface. This preserves the correct
+/// geometry when a non-uniform scale is applied (sphere → ellipsoid).
+#[allow(clippy::cast_precision_loss)]
+fn sphere_to_transformed_nurbs(
+    sph: &brepkit_math::surfaces::SphericalSurface,
+    matrix: &Mat4,
+    v_min: f64,
+    v_max: f64,
+) -> Result<NurbsSurface, crate::OperationsError> {
+    use std::f64::consts::TAU;
+
+    let n_u = 33; // Longitude samples (0 to 2π)
+    let n_v = 17; // Latitude samples
+
+    let mut rows: Vec<Vec<brepkit_math::vec::Point3>> = Vec::with_capacity(n_v);
+    for iv in 0..n_v {
+        let v = v_min + (v_max - v_min) * (iv as f64) / ((n_v - 1) as f64);
+        let mut row = Vec::with_capacity(n_u);
+        for iu in 0..n_u {
+            let u = TAU * (iu as f64) / ((n_u - 1) as f64);
+            let pt = sph.evaluate(u, v);
+            row.push(matrix.mul_point(pt));
+        }
+        rows.push(row);
+    }
+
+    let nurbs = brepkit_math::nurbs::surface_fitting::interpolate_surface(&rows, 3, 3)?;
+    Ok(nurbs)
 }
 
 /// Transforms a direction vector by applying the matrix and subtracting the
