@@ -7,7 +7,7 @@
 //! the given [`Topology`]. The solids are built with correct manifold
 //! topology and outward-pointing face normals.
 
-use std::f64::consts::{FRAC_PI_2, PI};
+use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -509,25 +509,65 @@ pub fn make_sphere(
         });
     }
 
-    let surface = brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), radius)
-        .map_err(crate::OperationsError::Math)?;
+    let surface_n =
+        brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), radius)
+            .map_err(crate::OperationsError::Math)?;
+    let surface_s =
+        brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), radius)
+            .map_err(crate::OperationsError::Math)?;
 
-    // Single face with a degenerate boundary wire (sphere is doubly periodic),
-    // matching OCCT's convention of one spherical face per sphere.
-    let v0 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(radius, 0.0, 0.0), tol.linear));
-    let e0 = topo.edges.alloc(Edge::new(v0, v0, EdgeCurve::Line));
+    // Equatorial polygon: `segments` vertices evenly spaced on the circle
+    // at z = 0, forming the shared boundary between north and south hemispheres.
+    let eq_verts: Vec<_> = (0..segments)
+        .map(|i| {
+            let theta = TAU * i as f64 / segments as f64;
+            let pt = Point3::new(radius * theta.cos(), radius * theta.sin(), 0.0);
+            topo.vertices.alloc(Vertex::new(pt, tol.linear))
+        })
+        .collect();
 
-    let wire = Wire::new(vec![OrientedEdge::new(e0, true)], true)
-        .map_err(crate::OperationsError::Topology)?;
-    let wid = topo.wires.alloc(wire);
+    // Line edges connecting consecutive equatorial vertices (closed polygon).
+    let eq_edges: Vec<_> = (0..segments)
+        .map(|i| {
+            let j = (i + 1) % segments;
+            topo.edges
+                .alloc(Edge::new(eq_verts[i], eq_verts[j], EdgeCurve::Line))
+        })
+        .collect();
 
-    let face_id = topo
+    // North hemisphere: equatorial wire traversed forward (CCW from +Z).
+    // Outward normal points upward (+Z hemisphere).
+    let north_wire = Wire::new(
+        eq_edges
+            .iter()
+            .map(|&eid| OrientedEdge::new(eid, true))
+            .collect(),
+        true,
+    )
+    .map_err(crate::OperationsError::Topology)?;
+    let north_wid = topo.wires.alloc(north_wire);
+    let north_face = topo
         .faces
-        .alloc(Face::new(wid, vec![], FaceSurface::Sphere(surface)));
+        .alloc(Face::new(north_wid, vec![], FaceSurface::Sphere(surface_n)));
 
-    let shell = Shell::new(vec![face_id]).map_err(crate::OperationsError::Topology)?;
+    // South hemisphere: equatorial wire traversed backward (CW from +Z).
+    // Outward normal points downward (-Z hemisphere).
+    let south_wire = Wire::new(
+        eq_edges
+            .iter()
+            .rev()
+            .map(|&eid| OrientedEdge::new(eid, false))
+            .collect(),
+        true,
+    )
+    .map_err(crate::OperationsError::Topology)?;
+    let south_wid = topo.wires.alloc(south_wire);
+    let south_face = topo
+        .faces
+        .alloc(Face::new(south_wid, vec![], FaceSurface::Sphere(surface_s)));
+
+    let shell =
+        Shell::new(vec![north_face, south_face]).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.shells.alloc(shell);
     Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
 }
@@ -931,12 +971,12 @@ mod tests {
     }
 
     #[test]
-    fn make_sphere_single_face() {
+    fn make_sphere_two_hemispheres() {
         let mut topo = Topology::new();
         let solid = make_sphere(&mut topo, 1.0, 8).unwrap();
         let s = topo.solid(solid).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
-        assert_eq!(sh.faces().len(), 1, "sphere should have 1 spherical face");
+        assert_eq!(sh.faces().len(), 2, "sphere should have 2 hemisphere faces");
     }
 
     #[test]

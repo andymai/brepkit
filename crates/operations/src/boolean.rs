@@ -152,8 +152,16 @@ pub fn boolean_with_options(
     );
 
     // ── Try analytic fast path ──────────────────────────────────────────
-    let both_analytic = is_all_analytic(topo, a)? && is_all_analytic(topo, b)?;
-    if both_analytic {
+    // Only use the analytic path when both solids are composed entirely of
+    // analytic surfaces AND at least one is all-planar. The analytic boolean's
+    // fragment classification doesn't correctly handle non-planar face splitting
+    // (e.g., sphere or cylinder vs. sphere/cylinder).
+    // Use the analytic fast path only when both solids are all-planar.
+    // The analytic boolean's fragment classification doesn't correctly
+    // handle non-planar faces (sphere/cylinder), producing wrong results
+    // when cutting with curved tools.
+    let both_planar = is_all_planar(topo, a)? && is_all_planar(topo, b)?;
+    if both_planar {
         match analytic_boolean(topo, op, a, b, tol, opts.deflection) {
             Ok(solid) => {
                 validate_boolean_result(topo, solid)?;
@@ -169,8 +177,6 @@ pub fn boolean_with_options(
                 );
             }
         }
-    } else {
-        log::info!("boolean {op:?}: using tessellated path (non-analytic faces)");
     }
 
     // ── Phase 0: Guard + Precompute ──────────────────────────────────────
@@ -1461,7 +1467,21 @@ fn surface_aware_aabb(surface: &FaceSurface, vertices: &[Point3], tol: Tolerance
     bb.expanded(tol.linear)
 }
 
+/// Check if a solid is composed entirely of planar faces.
+fn is_all_planar(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
+    let s = topo.solid(solid)?;
+    let shell = topo.shell(s.outer_shell())?;
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// Check if a solid is composed entirely of analytic surfaces (no NURBS).
+#[cfg(test)]
 fn is_all_analytic(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
     let s = topo.solid(solid)?;
     let shell = topo.shell(s.outer_shell())?;
@@ -3105,6 +3125,41 @@ mod tests {
             result.is_ok(),
             "cut(box, sphere) should succeed: {:?}",
             result.err()
+        );
+        let r = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, r, 0.1).unwrap();
+        assert!(
+            vol < 1000.0,
+            "cut(box, sphere) volume {vol} should be less than box volume 1000"
+        );
+    }
+
+    #[test]
+    fn cut_box_by_translated_cylinder() {
+        let mut topo = Topology::new();
+        let bx = crate::primitives::make_box(&mut topo, 50.0, 30.0, 10.0).unwrap();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+
+        // Translate cylinder to center of box, extending through it.
+        let mat = brepkit_math::mat::Mat4::translation(25.0, 15.0, -5.0);
+        crate::transform::transform_solid(&mut topo, cyl, &mat).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Cut, bx, cyl);
+        assert!(
+            result.is_ok(),
+            "cut(box, cyl) should succeed: {:?}",
+            result.err()
+        );
+        let rr = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, rr, 0.1).unwrap();
+        let expected = 50.0 * 30.0 * 10.0 - std::f64::consts::PI * 25.0 * 10.0;
+        assert!(
+            vol < 15000.0,
+            "cut volume {vol} should be less than box volume 15000"
+        );
+        assert!(
+            (vol - expected).abs() < expected * 0.1,
+            "cut volume {vol} should be near {expected}"
         );
     }
 }
