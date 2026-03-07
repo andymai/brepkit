@@ -94,7 +94,7 @@ pub fn face_area(
                 // If the angular span covers most of a full circle (> 350°),
                 // treat it as a full revolution — boundary sampling may not
                 // reach exactly ±π.
-                let sweep = if angular_span > 350.0_f64.to_radians() {
+                let sweep = if angular_span > 330.0_f64.to_radians() {
                     std::f64::consts::TAU
                 } else {
                     angular_span
@@ -297,7 +297,42 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     // ── Sphere: all faces are sphere faces (e.g. two hemispheres) ─────
     if let Some(r) = sphere_r {
         if cyl.is_none() && cone_params.is_none() && torus_params.is_none() && planes.is_empty() {
-            return Some(4.0 / 3.0 * PI * r * r * r);
+            // Verify actual vertex distances match the stored radius.
+            // A non-uniform scale transforms vertices but leaves the sphere
+            // surface radius unchanged, making the analytic formula wrong.
+            let sphere_faces: Vec<_> = shell.faces().to_vec();
+            let center = if let Ok(f) = topo.face(sphere_faces[0]) {
+                if let FaceSurface::Sphere(s) = f.surface() {
+                    s.center()
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            };
+            let mut max_dist = 0.0_f64;
+            let mut min_dist = f64::INFINITY;
+            for &fid in &sphere_faces {
+                if let Ok(face) = topo.face(fid) {
+                    if let Ok(wire) = topo.wire(face.outer_wire()) {
+                        for oe in wire.edges() {
+                            if let Ok(e) = topo.edge(oe.edge()) {
+                                if let Ok(v) = topo.vertex(e.start()) {
+                                    let d = (v.point() - center).length();
+                                    max_dist = max_dist.max(d);
+                                    min_dist = min_dist.min(d);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // If all vertices are equidistant (within 1%), use analytic formula
+            if (max_dist - min_dist).abs() < r * 0.01 {
+                return Some(4.0 / 3.0 * PI * r * r * r);
+            }
+            // Non-uniform scale detected — fall through to tessellation
+            return None;
         }
     }
 
@@ -623,7 +658,7 @@ fn collect_wire_positions(
     use brepkit_topology::edge::EdgeCurve;
 
     let mut positions = Vec::new();
-    let n_samples = 32_usize;
+    let n_samples = 256_usize;
     let tol = 1e-10;
 
     for oe in wire.edges() {

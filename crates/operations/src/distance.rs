@@ -201,6 +201,130 @@ pub fn solid_to_solid_distance(
     })
 }
 
+/// Compute the minimum distance from a point to a face.
+///
+/// # Errors
+///
+/// Returns an error if the face lookup fails.
+pub fn point_to_face(
+    topo: &Topology,
+    point: Point3,
+    face_id: FaceId,
+) -> Result<DistanceResult, crate::OperationsError> {
+    let tol = Tolerance::new();
+    if let Some((dist, closest)) = point_to_face_distance(topo, point, face_id, tol)? {
+        Ok(DistanceResult {
+            distance: dist,
+            point_a: point,
+            point_b: closest,
+        })
+    } else {
+        // Fallback: distance to closest wire vertex
+        let face = topo.face(face_id)?;
+        let wire = topo.wire(face.outer_wire())?;
+        let mut best = f64::INFINITY;
+        let mut best_pt = point;
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let vp = topo.vertex(edge.start())?.point();
+            let d = (point - vp).length();
+            if d < best {
+                best = d;
+                best_pt = vp;
+            }
+        }
+        Ok(DistanceResult {
+            distance: best,
+            point_a: point,
+            point_b: best_pt,
+        })
+    }
+}
+
+/// Compute the minimum distance from a point to an edge.
+///
+/// For line edges, uses exact point-to-segment distance.
+/// For curved edges, samples the curve and returns the closest sample.
+///
+/// # Errors
+///
+/// Returns an error if the edge lookup fails.
+#[allow(clippy::cast_precision_loss)]
+pub fn point_to_edge(
+    topo: &Topology,
+    point: Point3,
+    edge_id: brepkit_topology::edge::EdgeId,
+) -> Result<DistanceResult, crate::OperationsError> {
+    let edge = topo.edge(edge_id)?;
+    let start = topo.vertex(edge.start())?.point();
+    let end = topo.vertex(edge.end())?.point();
+
+    if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+        let closest = closest_point_on_segment(point, start, end);
+        let dist = (point - closest).length();
+        Ok(DistanceResult {
+            distance: dist,
+            point_a: point,
+            point_b: closest,
+        })
+    } else {
+        // Sample the curve and find closest point
+        let (t0, t1) = match edge.curve() {
+            brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) => nc.domain(),
+            brepkit_topology::edge::EdgeCurve::Circle(_) => {
+                if edge.is_closed() {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    (0.0, std::f64::consts::PI)
+                }
+            }
+            brepkit_topology::edge::EdgeCurve::Ellipse(_) => {
+                if edge.is_closed() {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    (0.0, std::f64::consts::PI)
+                }
+            }
+            brepkit_topology::edge::EdgeCurve::Line => unreachable!(),
+        };
+        let n_samples = 64;
+        let mut best_dist = f64::INFINITY;
+        let mut best_pt = start;
+        for i in 0..=n_samples {
+            let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
+            let pt = match edge.curve() {
+                brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) => nc.evaluate(t),
+                brepkit_topology::edge::EdgeCurve::Circle(c) => c.evaluate(t),
+                brepkit_topology::edge::EdgeCurve::Ellipse(e) => e.evaluate(t),
+                brepkit_topology::edge::EdgeCurve::Line => unreachable!(),
+            };
+            let d = (point - pt).length();
+            if d < best_dist {
+                best_dist = d;
+                best_pt = pt;
+            }
+        }
+        Ok(DistanceResult {
+            distance: best_dist,
+            point_a: point,
+            point_b: best_pt,
+        })
+    }
+}
+
+/// Closest point on a line segment to a point.
+fn closest_point_on_segment(point: Point3, a: Point3, b: Point3) -> Point3 {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    if len_sq < 1e-30 {
+        return a;
+    }
+    let ap = Vec3::new(point.x() - a.x(), point.y() - a.y(), point.z() - a.z());
+    let t = ap.dot(ab) / len_sq;
+    let t = t.clamp(0.0, 1.0);
+    Point3::new(a.x() + t * ab.x(), a.y() + t * ab.y(), a.z() + t * ab.z())
+}
+
 /// Compute the distance from a point to a single face, dispatching by type.
 fn point_to_face_distance(
     topo: &Topology,

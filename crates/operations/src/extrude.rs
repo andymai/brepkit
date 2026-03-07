@@ -31,7 +31,11 @@ struct InnerWireData {
 /// extrusion logic can create proper side faces.
 ///
 /// If no splitting is needed, returns the original edges unchanged.
-fn maybe_split_closed_wire(
+///
+/// # Errors
+///
+/// Returns an error if edge lookup fails.
+pub fn maybe_split_closed_wire(
     topo: &mut Topology,
     oriented: &[OrientedEdge],
     tol: f64,
@@ -45,7 +49,7 @@ fn maybe_split_closed_wire(
             // Closed edge — split the curve at evenly-spaced parameters.
             // Use 32 segments for a good approximation of curved geometry
             // in the side faces (which are planar quads).
-            let split_edges = split_closed_edge(topo, oe.edge(), 32, tol)?;
+            let split_edges = split_closed_edge(topo, oe.edge(), 256, tol)?;
             for se in split_edges {
                 result.push(OrientedEdge::new(se, oe.is_forward()));
             }
@@ -58,7 +62,11 @@ fn maybe_split_closed_wire(
 
 /// Split a closed edge (start==end) into `n` sub-edges by evaluating the
 /// curve at evenly-spaced parameter values and creating new vertices/edges.
-fn split_closed_edge(
+///
+/// # Errors
+///
+/// Returns an error if edge lookup fails.
+pub fn split_closed_edge(
     topo: &mut Topology,
     edge_id: EdgeId,
     n: usize,

@@ -224,7 +224,11 @@ pub fn revolve(
                         wire_id: brepkit_topology::wire::WireId|
      -> Result<WireRevolveData, crate::OperationsError> {
         let wire = topo.wire(wire_id)?;
-        let input_oriented: Vec<_> = wire.edges().to_vec();
+        let original_oriented: Vec<_> = wire.edges().to_vec();
+
+        // Split closed edges (e.g. full circles) into line segments.
+        let input_oriented =
+            crate::extrude::maybe_split_closed_wire(topo, &original_oriented, tol.linear)?;
         let n = input_oriented.len();
 
         let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);

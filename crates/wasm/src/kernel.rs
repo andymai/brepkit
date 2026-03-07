@@ -2195,6 +2195,64 @@ impl BrepKernel {
         Ok(result.distance)
     }
 
+    /// Compute minimum distance from a point to a face.
+    ///
+    /// Returns `[distance, closest_x, closest_y, closest_z]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid.
+    #[wasm_bindgen(js_name = "pointToFaceDistance")]
+    pub fn point_to_face_distance_wasm(
+        &self,
+        px: f64,
+        py: f64,
+        pz: f64,
+        face: u32,
+    ) -> Result<Vec<f64>, JsError> {
+        let face_id = self.resolve_face(face)?;
+        let result = brepkit_operations::distance::point_to_face(
+            &self.topo,
+            Point3::new(px, py, pz),
+            face_id,
+        )?;
+        Ok(vec![
+            result.distance,
+            result.point_b.x(),
+            result.point_b.y(),
+            result.point_b.z(),
+        ])
+    }
+
+    /// Compute minimum distance from a point to an edge.
+    ///
+    /// Returns `[distance, closest_x, closest_y, closest_z]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the edge handle is invalid.
+    #[wasm_bindgen(js_name = "pointToEdgeDistance")]
+    pub fn point_to_edge_distance_wasm(
+        &self,
+        px: f64,
+        py: f64,
+        pz: f64,
+        edge: u32,
+    ) -> Result<Vec<f64>, JsError> {
+        let edge_id = self.resolve_edge(edge)?;
+        let result = brepkit_operations::distance::point_to_edge(
+            &self.topo,
+            Point3::new(px, py, pz),
+            edge_id,
+        )?;
+        Ok(vec![
+            result.distance,
+            result.point_b.x(),
+            result.point_b.y(),
+            result.point_b.z(),
+        ])
+    }
+
     // ── Sewing ────────────────────────────────────────────────────
 
     /// Sew loose faces into a connected solid.
@@ -6165,11 +6223,22 @@ fn detect_nurbs_curve_type(nc: &brepkit_math::nurbs::NurbsCurve) -> &'static str
     let (u_min, u_max) = nc.domain();
     let n_samples = 16;
 
-    // Sample points along the curve
+    // Check if the curve is closed (start ≈ end) to avoid sampling the
+    // duplicate endpoint, which would bias the center calculation.
+    let start_pt = nc.evaluate(u_min);
+    let end_pt = nc.evaluate(u_max);
+    let is_closed = (start_pt - end_pt).length() < 1e-6;
+
+    // Sample points along the curve. For closed curves, exclude the
+    // last point (t=u_max) since it duplicates the first.
     let mut points = Vec::with_capacity(n_samples);
     for i in 0..n_samples {
         #[allow(clippy::cast_precision_loss)]
-        let t = u_min + (u_max - u_min) * (i as f64) / ((n_samples - 1) as f64);
+        let t = if is_closed {
+            u_min + (u_max - u_min) * (i as f64) / (n_samples as f64)
+        } else {
+            u_min + (u_max - u_min) * (i as f64) / ((n_samples - 1) as f64)
+        };
         points.push(nc.evaluate(t));
     }
 

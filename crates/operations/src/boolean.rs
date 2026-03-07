@@ -393,14 +393,17 @@ pub fn face_polygon(
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
         let curve = edge.curve();
-        // Only sample full-circle/ellipse edges (start == end vertex).
+        // Sample closed parametric edges (start == end vertex).
         // Partial arcs fall through to the vertex-based path.
         let start_vid = edge.start();
         let end_vid = edge.end();
-        let is_closed_edge =
-            start_vid == end_vid && matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
+        let is_closed_edge = start_vid == end_vid
+            && matches!(
+                curve,
+                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
+            );
         if is_closed_edge {
-            let mut sampled = sample_edge_curve(curve, 32);
+            let mut sampled = sample_edge_curve(curve, 128);
             if !oe.is_forward() {
                 sampled.reverse();
             }
@@ -2550,10 +2553,16 @@ fn sample_edge_curve(curve: &EdgeCurve, n: usize) -> Vec<Point3> {
             .collect(),
         EdgeCurve::NurbsCurve(nc) => {
             let (u0, u1) = nc.domain();
+            // For closed curves (start ≈ end), use n as divisor to avoid
+            // duplicating the first point at t=u_max.
+            let start_pt = nc.evaluate(u0);
+            let end_pt = nc.evaluate(u1);
+            let is_closed = (start_pt - end_pt).length() < 1e-6;
+            let divisor = if is_closed { n } else { n - 1 };
             (0..n)
                 .map(|i| {
                     #[allow(clippy::cast_precision_loss)]
-                    let t = u0 + (u1 - u0) * (i as f64) / ((n - 1) as f64);
+                    let t = u0 + (u1 - u0) * (i as f64) / (divisor as f64);
                     nc.evaluate(t)
                 })
                 .collect()
