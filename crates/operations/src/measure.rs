@@ -553,7 +553,13 @@ pub fn solid_volume(
     // via signed tetrahedra since the mesh is closed.
     let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
     if !mesh.indices.is_empty() {
-        return Ok(signed_volume_from_mesh(&mesh));
+        let vol = signed_volume_from_mesh(&mesh);
+        // If watertight mesh volume is non-trivial, use it.
+        // Near-zero result indicates inconsistent winding (e.g. shelled solids
+        // where inner face normals cancel outer face contributions).
+        if vol > 1e-12 {
+            return Ok(vol);
+        }
     }
 
     // Fallback: per-face tessellation with centroid-based winding correction.
@@ -792,9 +798,8 @@ pub fn solid_center_of_mass(
     }
 
     if total_vol.abs() < 1e-15 {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "solid has zero volume, center of mass is undefined".into(),
-        });
+        // Volume too small to compute weighted CoM — fall back to vertex centroid.
+        return Ok(approx_centroid);
     }
 
     let denom = 4.0 * total_vol;

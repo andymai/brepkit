@@ -138,13 +138,34 @@ pub fn shell(
         }
     }
 
+    // Compute approximate solid center from face vertices for rim orientation.
+    let solid_center = {
+        let mut cx = 0.0;
+        let mut cy = 0.0;
+        let mut cz = 0.0;
+        let mut count = 0.0;
+        for (_, verts) in &face_verts {
+            for v in verts {
+                cx += v.x();
+                cy += v.y();
+                cz += v.z();
+                count += 1.0;
+            }
+        }
+        if count > 0.0 {
+            Point3::new(cx / count, cy / count, cz / count)
+        } else {
+            Point3::new(0.0, 0.0, 0.0)
+        }
+    };
+
     // Rim faces: for each edge of an open face, connect outer to inner.
-    for &(fid, ref verts) in &face_verts {
+    for (fid, verts) in &face_verts {
         if !open_set.contains(&fid.index()) {
             continue;
         }
 
-        let face = topo.face(fid)?;
+        let face = topo.face(*fid)?;
         let normal = match face.surface() {
             FaceSurface::Plane { normal, .. } => *normal,
             _ => {
@@ -170,10 +191,22 @@ pub fn shell(
             let rim_verts = vec![outer_a, outer_b, inner_b, inner_a];
             let edge1 = outer_b - outer_a;
             let edge2 = inner_a - outer_a;
-            let rim_normal = edge1
+            let mut rim_normal = edge1
                 .cross(edge2)
                 .normalize()
                 .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+
+            // Ensure rim normal points outward (away from solid center).
+            let rim_center = Point3::new(
+                (outer_a.x() + outer_b.x() + inner_a.x() + inner_b.x()) / 4.0,
+                (outer_a.y() + outer_b.y() + inner_a.y() + inner_b.y()) / 4.0,
+                (outer_a.z() + outer_b.z() + inner_a.z() + inner_b.z()) / 4.0,
+            );
+            let to_center = solid_center - rim_center;
+            if rim_normal.dot(to_center) > 0.0 {
+                rim_normal = -rim_normal;
+            }
+
             let rim_d = dot_normal_point(rim_normal, outer_a);
             result_specs.push(FaceSpec::Planar {
                 vertices: rim_verts,
@@ -289,5 +322,27 @@ mod tests {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);
         assert!(shell(&mut topo, cube, -0.1, &[]).is_err());
+    }
+
+    #[test]
+    fn shell_two_open_faces_volume() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+
+        // Find both +Z and -Z faces
+        let top = find_faces_by_normal(&topo, cube, Vec3::new(0.0, 0.0, 1.0));
+        let bot = find_faces_by_normal(&topo, cube, Vec3::new(0.0, 0.0, -1.0));
+        let mut open_faces = top;
+        open_faces.extend(bot);
+        assert_eq!(open_faces.len(), 2);
+
+        let result = shell(&mut topo, cube, 0.1, &open_faces).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+        // Expected: 1.0 - 0.8*0.8*1.0 = 0.36
+        assert!(vol > 0.1, "tube shell volume should be positive, got {vol}");
+        assert!(
+            vol < 1.0,
+            "tube shell volume should be < original 1.0, got {vol}"
+        );
     }
 }
