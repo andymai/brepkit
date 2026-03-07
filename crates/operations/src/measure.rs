@@ -13,11 +13,11 @@ use crate::tessellate;
 
 // ── Bounding box ──────────────────────────────────────────────────
 
-/// Compute the axis-aligned bounding box of a solid from its vertices.
+/// Compute the axis-aligned bounding box of a solid.
 ///
-/// This is exact for planar solids and a tight approximation for NURBS
-/// solids (NURBS control point hulls may extend slightly beyond
-/// the actual surface but vertices lie on the surface boundary).
+/// For planar solids, uses vertex positions (exact). For solids with
+/// analytic surfaces (sphere, cylinder, cone, torus), expands the AABB
+/// to include surface extremes. For NURBS, uses control-point hulls.
 ///
 /// # Errors
 ///
@@ -27,11 +27,79 @@ pub fn solid_bounding_box(
     solid: SolidId,
 ) -> Result<Aabb3, crate::OperationsError> {
     let points = collect_solid_vertex_points(topo, solid)?;
-    Aabb3::try_from_points(points.iter().copied()).ok_or_else(|| {
+    let mut aabb = Aabb3::try_from_points(points.iter().copied()).ok_or_else(|| {
         crate::OperationsError::InvalidInput {
             reason: "solid has no vertices".into(),
         }
-    })
+    })?;
+
+    // Expand AABB for analytic surfaces whose extremes lie beyond vertices.
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+    for &fid in shell.faces() {
+        if let Ok(face) = topo.face(fid) {
+            expand_aabb_for_surface(&mut aabb, face.surface());
+        }
+    }
+
+    Ok(aabb)
+}
+
+/// Expand an AABB to include a point.
+fn aabb_include(aabb: &mut Aabb3, p: Point3) {
+    *aabb = aabb.union(Aabb3 { min: p, max: p });
+}
+
+/// Expand an AABB to include surface-specific extremes that vertices miss.
+fn expand_aabb_for_surface(aabb: &mut Aabb3, surface: &FaceSurface) {
+    match surface {
+        FaceSurface::Sphere(s) => {
+            let c = s.center();
+            let r = s.radius();
+            aabb_include(aabb, Point3::new(c.x() - r, c.y() - r, c.z() - r));
+            aabb_include(aabb, Point3::new(c.x() + r, c.y() + r, c.z() + r));
+        }
+        FaceSurface::Cylinder(c) => {
+            let origin = c.origin();
+            let axis = c.axis();
+            let r = c.radius();
+            for corner in [aabb.min, aabb.max] {
+                let rel = Vec3::new(
+                    corner.x() - origin.x(),
+                    corner.y() - origin.y(),
+                    corner.z() - origin.z(),
+                );
+                let t = axis.dot(rel);
+                let coa = Point3::new(
+                    origin.x() + axis.x() * t,
+                    origin.y() + axis.y() * t,
+                    origin.z() + axis.z() * t,
+                );
+                aabb_include(aabb, Point3::new(coa.x() - r, coa.y() - r, coa.z() - r));
+                aabb_include(aabb, Point3::new(coa.x() + r, coa.y() + r, coa.z() + r));
+            }
+        }
+        FaceSurface::Torus(t) => {
+            let c = t.center();
+            let outer_r = t.major_radius() + t.minor_radius();
+            aabb_include(
+                aabb,
+                Point3::new(c.x() - outer_r, c.y() - outer_r, c.z() - t.minor_radius()),
+            );
+            aabb_include(
+                aabb,
+                Point3::new(c.x() + outer_r, c.y() + outer_r, c.z() + t.minor_radius()),
+            );
+        }
+        FaceSurface::Nurbs(nurbs) => {
+            for row in nurbs.control_points() {
+                for pt in row {
+                    aabb_include(aabb, *pt);
+                }
+            }
+        }
+        FaceSurface::Plane { .. } | FaceSurface::Cone(_) => {}
+    }
 }
 
 // ── Face area ─────────────────────────────────────────────────────

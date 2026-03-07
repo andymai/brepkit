@@ -2504,6 +2504,21 @@ impl BrepKernel {
         Ok(wire_id_to_u32(face_data.outer_wire()))
     }
 
+    /// Get all wires of a face (outer wire first, then inner/hole wires).
+    ///
+    /// # Errors
+    /// Returns an error if the face handle is invalid.
+    #[wasm_bindgen(js_name = "getFaceWires")]
+    pub fn get_face_wires(&self, face: u32) -> Result<Vec<u32>, JsError> {
+        let face_id = self.resolve_face(face)?;
+        let face_data = self.topo.face(face_id)?;
+        let mut wires = vec![wire_id_to_u32(face_data.outer_wire())];
+        for &iw in face_data.inner_wires() {
+            wires.push(wire_id_to_u32(iw));
+        }
+        Ok(wires)
+    }
+
     /// Get the surface type of a face.
     ///
     /// Returns one of: `"plane"`, `"cylinder"`, `"cone"`, `"sphere"`,

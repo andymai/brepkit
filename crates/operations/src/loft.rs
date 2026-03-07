@@ -18,6 +18,56 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 use crate::boolean::face_polygon;
 use crate::dot_normal_point;
 
+/// Resample a closed polygon to `target_count` evenly spaced points.
+///
+/// Distributes `target_count` points at equal arc-length intervals
+/// along the polygon boundary.
+#[allow(clippy::cast_precision_loss)]
+fn resample_closed_polygon(points: &[Point3], target_count: usize) -> Vec<Point3> {
+    let n = points.len();
+    if n == 0 || target_count == 0 {
+        return Vec::new();
+    }
+    // Compute cumulative arc lengths (closed: last segment wraps to first point)
+    let mut cum_len = Vec::with_capacity(n + 1);
+    cum_len.push(0.0);
+    for i in 0..n {
+        let next = (i + 1) % n;
+        let seg = (points[next] - points[i]).length();
+        cum_len.push(cum_len[i] + seg);
+    }
+    let total = *cum_len.last().unwrap_or(&0.0);
+    if total < 1e-15 {
+        return vec![points[0]; target_count];
+    }
+
+    let mut result = Vec::with_capacity(target_count);
+    for i in 0..target_count {
+        let target_len = total * (i as f64) / (target_count as f64);
+        // Binary search for the segment containing target_len
+        let seg = cum_len
+            .partition_point(|&l| l < target_len)
+            .saturating_sub(1)
+            .min(n - 1);
+        let seg_start = cum_len[seg];
+        let seg_end = cum_len[seg + 1];
+        let seg_len = seg_end - seg_start;
+        let t = if seg_len > 1e-15 {
+            (target_len - seg_start) / seg_len
+        } else {
+            0.0
+        };
+        let a = points[seg];
+        let b = points[(seg + 1) % n];
+        result.push(Point3::new(
+            a.x() + t * (b.x() - a.x()),
+            a.y() + t * (b.y() - a.y()),
+            a.z() + t * (b.z() - a.z()),
+        ));
+    }
+    result
+}
+
 /// Loft two or more planar profiles into a solid.
 ///
 /// Each profile is a planar face. All profiles must have the same
@@ -57,22 +107,17 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         profile_verts.push(verts);
     }
 
-    // Validate all profiles have the same vertex count.
-    let n = profile_verts[0].len();
+    // Resample all profiles to the maximum vertex count so that lofting
+    // between different-resolution profiles (e.g. rectangle ↔ circle) works.
+    let n = profile_verts.iter().map(Vec::len).max().unwrap_or(0);
     if n < 3 {
         return Err(crate::OperationsError::InvalidInput {
             reason: "loft profiles must have at least 3 vertices".into(),
         });
     }
-    for (i, verts) in profile_verts.iter().enumerate() {
+    for verts in &mut profile_verts {
         if verts.len() != n {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: format!(
-                    "profile {} has {} vertices, but profile 0 has {n}",
-                    i,
-                    verts.len()
-                ),
-            });
+            *verts = resample_closed_polygon(verts, n);
         }
     }
 
@@ -276,22 +321,16 @@ pub fn loft_smooth(
         profile_verts.push(verts);
     }
 
-    // Validate all profiles have the same vertex count.
-    let n = profile_verts[0].len();
+    // Resample all profiles to the maximum vertex count.
+    let n = profile_verts.iter().map(Vec::len).max().unwrap_or(0);
     if n < 3 {
         return Err(crate::OperationsError::InvalidInput {
             reason: "loft profiles must have at least 3 vertices".into(),
         });
     }
-    for (i, verts) in profile_verts.iter().enumerate() {
+    for verts in &mut profile_verts {
         if verts.len() != n {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: format!(
-                    "profile {} has {} vertices, but profile 0 has {n}",
-                    i,
-                    verts.len()
-                ),
-            });
+            *verts = resample_closed_polygon(verts, n);
         }
     }
 
@@ -634,9 +673,11 @@ mod tests {
             },
         ));
 
+        // Profiles with different vertex counts should succeed via resampling.
+        let result = loft(&mut topo, &[square, tri]);
         assert!(
-            loft(&mut topo, &[square, tri]).is_err(),
-            "mismatched vertex counts should fail"
+            result.is_ok(),
+            "loft with different vertex counts should succeed via resampling"
         );
     }
 

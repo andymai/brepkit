@@ -115,10 +115,10 @@ pub fn transform_solid(
             FaceSurface::Cylinder(cyl) => {
                 let new_origin = matrix.mul_point(cyl.origin());
                 let new_axis = transform_direction(matrix, cyl.axis())?;
+                // Scale radius: measure how the matrix scales a direction perpendicular to axis
+                let new_radius = scaled_radius(matrix, cyl.axis(), cyl.radius());
                 let new_cyl = brepkit_math::surfaces::CylindricalSurface::new(
-                    new_origin,
-                    new_axis,
-                    cyl.radius(),
+                    new_origin, new_axis, new_radius,
                 )?;
                 topo.face_mut(fid)?
                     .set_surface(FaceSurface::Cylinder(new_cyl));
@@ -136,8 +136,13 @@ pub fn transform_solid(
             FaceSurface::Sphere(sph) => {
                 if is_uniform_scale(matrix) {
                     let new_center = matrix.mul_point(sph.center());
-                    let new_sph =
-                        brepkit_math::surfaces::SphericalSurface::new(new_center, sph.radius())?;
+                    // Extract uniform scale factor from column magnitudes
+                    let m = &matrix.0;
+                    let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
+                    let new_sph = brepkit_math::surfaces::SphericalSurface::new(
+                        new_center,
+                        sph.radius() * sx,
+                    )?;
                     topo.face_mut(fid)?
                         .set_surface(FaceSurface::Sphere(new_sph));
                 } else {
@@ -151,10 +156,12 @@ pub fn transform_solid(
             }
             FaceSurface::Torus(tor) => {
                 let new_center = matrix.mul_point(tor.center());
+                let m = &matrix.0;
+                let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
                 let new_tor = brepkit_math::surfaces::ToroidalSurface::new(
                     new_center,
-                    tor.major_radius(),
-                    tor.minor_radius(),
+                    tor.major_radius() * sx,
+                    tor.minor_radius() * sx,
                 )?;
                 topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
             }
@@ -268,6 +275,30 @@ fn sphere_face_v_range(
 /// Check whether a transform matrix has uniform scaling (all axis scale
 /// factors are approximately equal). Non-uniform scaling distorts spheres
 /// into ellipsoids, so analytic representations must be converted to NURBS.
+/// Compute the scaled radius of a circle perpendicular to `axis` after transform.
+fn scaled_radius(matrix: &Mat4, axis: Vec3, radius: f64) -> f64 {
+    // Pick a direction perpendicular to the axis
+    let perp = if axis.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+            .cross(axis)
+            .normalize()
+            .unwrap_or(Vec3::new(1.0, 0.0, 0.0))
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+            .cross(axis)
+            .normalize()
+            .unwrap_or(Vec3::new(0.0, 1.0, 0.0))
+    };
+    // Transform the perpendicular direction and measure its length
+    let origin = brepkit_math::vec::Point3::new(0.0, 0.0, 0.0);
+    let end =
+        brepkit_math::vec::Point3::new(perp.x() * radius, perp.y() * radius, perp.z() * radius);
+    let t_origin = matrix.mul_point(origin);
+    let t_end = matrix.mul_point(end);
+    let diff = t_end - t_origin;
+    diff.length()
+}
+
 fn is_uniform_scale(matrix: &Mat4) -> bool {
     let m = &matrix.0;
     // Column vector magnitudes of the upper-left 3×3
