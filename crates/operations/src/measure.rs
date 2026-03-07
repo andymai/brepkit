@@ -549,32 +549,23 @@ pub fn solid_volume(
         return Ok(v);
     }
 
-    // For all-planar solids, use polygon fan-triangulation with winding correction.
-    if let Ok(v) = volume_from_planar_polygons(topo, solid, deflection) {
-        return Ok(v);
-    }
-
-    // Compute bounding box volume as an upper bound sanity check.
-    let bbox_vol = solid_bounding_box(topo, solid)
-        .map(|bb| {
-            let dx = bb.max.x() - bb.min.x();
-            let dy = bb.max.y() - bb.min.y();
-            let dz = bb.max.z() - bb.min.z();
-            dx * dy * dz
-        })
-        .unwrap_or(f64::MAX);
-
     // Try watertight tessellation first — this gives correct volume
     // via signed tetrahedra since the mesh is closed.
     let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
     if !mesh.indices.is_empty() {
         let vol = signed_volume_from_mesh(&mesh);
-        // Accept the result if it's non-trivial AND doesn't exceed the
-        // bounding box volume (which indicates a non-watertight mesh with
-        // inconsistent winding, e.g. chamfered solids with boundary edges).
-        if vol > 1e-12 && vol <= bbox_vol * 1.01 {
+        // If watertight mesh volume is non-trivial, use it.
+        // Near-zero result indicates inconsistent winding (e.g. shelled solids
+        // where inner face normals cancel outer face contributions).
+        if vol > 1e-12 {
             return Ok(vol);
         }
+    }
+
+    // For all-planar solids (e.g. chamfered boxes with non-manifold topology
+    // where tessellate_solid gives wrong winding), use polygon-based volume.
+    if let Ok(v) = volume_from_planar_polygons(topo, solid, deflection) {
+        return Ok(v);
     }
 
     // Fallback: per-face tessellation with centroid-based winding correction.
