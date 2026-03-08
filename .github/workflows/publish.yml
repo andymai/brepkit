@@ -83,7 +83,7 @@ jobs:
         run: cargo install wasm-pack --locked
 
       - name: Build WASM package
-        run: wasm-pack build crates/wasm --target bundler --release
+        run: wasm-pack build crates/wasm --target nodejs --release
 
       - name: Set package name
         working-directory: crates/wasm/pkg
