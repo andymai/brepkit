@@ -25,4 +25,8 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+    ignore:
+      # The @version tag specifies the Rust version to install, not the
+      # action version. Dependabot incorrectly treats it as a version bump.
+      - dependency-name: dtolnay/rust-toolchain
     open-pull-requests-limit: 5
