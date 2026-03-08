@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/andymai/brepkit/compare/v0.7.1...v0.7.2) (2026-03-08)
+
+
+### Bug Fixes
+
+* compute cylinder band normal from surface point, not centroid ([#92](https://github.com/andymai/brepkit/issues/92)) ([24f52ee](https://github.com/andymai/brepkit/commit/24f52ee6703582fda742c00825d7f4ec621b48a1))
+
 ## [0.7.1](https://github.com/andymai/brepkit/compare/v0.7.0...v0.7.1) (2026-03-08)
 
 
