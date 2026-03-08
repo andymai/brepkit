@@ -326,12 +326,17 @@ fn validate_at(pkg: &Path) -> Result<()> {
         }
     }
 
-    // 4. package.json checks
+    // 4. package.json checks — collect errors rather than short-circuiting
+    //    so all issues are reported together.
     let pkg_json_path = pkg.join("package.json");
     if pkg_json_path.exists() {
-        let pkg_json: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&pkg_json_path)?)?;
-        validate_package_json(&pkg_json, &mut errors);
+        match fs::read_to_string(&pkg_json_path)
+            .context("reading package.json")
+            .and_then(|s| serde_json::from_str(&s).context("parsing package.json"))
+        {
+            Ok(pkg_json) => validate_package_json(&pkg_json, &mut errors),
+            Err(e) => errors.push(format!("package.json unreadable/invalid: {e}")),
+        }
     }
 
     if errors.is_empty() {
@@ -347,17 +352,19 @@ fn validate_at(pkg: &Path) -> Result<()> {
     }
 }
 
-/// Count method declarations in a wasm-bindgen .d.ts file.
-/// Matches lines like `  methodName(...): ReturnType;` — any indented line
-/// starting with a lowercase identifier followed by `(`.
+/// Count class method declarations in a wasm-bindgen .d.ts file.
+/// Matches indented lines like `  methodName(...): ReturnType;` but excludes
+/// top-level `export function ...` lines which are module-level bindings, not
+/// class methods.
 fn count_dts_methods(dts: &str) -> usize {
     dts.lines()
         .filter(|l| {
             let trimmed = l.trim();
-            trimmed
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_ascii_lowercase())
+            !trimmed.starts_with("export ")
+                && trimmed
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_lowercase())
                 && trimmed.contains('(')
         })
         .count()
