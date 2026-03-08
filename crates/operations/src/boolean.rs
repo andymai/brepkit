@@ -4,7 +4,7 @@
 //! into planar triangles before clipping, enabling approximate boolean
 //! operations on any solid geometry.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
@@ -22,6 +22,12 @@ use brepkit_topology::wire::WireId;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::dot_normal_point;
+
+/// Number of samples used when discretizing closed curves (circles, ellipses)
+/// in the analytic boolean path. All code paths must use this constant so that
+/// band fragments, cap face polygons, and holed-face inner wires share the
+/// same vertices and edges at their boundaries.
+const CLOSED_CURVE_SAMPLES: usize = 64;
 
 /// The type of boolean operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -439,7 +445,9 @@ pub fn face_polygon(
                 EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
             );
         if is_closed_edge {
-            let mut sampled = sample_edge_curve(curve, 128);
+            // Must use CLOSED_CURVE_SAMPLES (not a larger value) — vertex count
+            // must match create_band_fragments and inner-wire dedup for sharing.
+            let mut sampled = sample_edge_curve(curve, CLOSED_CURVE_SAMPLES);
             if !oe.is_forward() {
                 sampled.reverse();
             }
@@ -1791,6 +1799,11 @@ fn analytic_boolean(
     // Track which faces have non-planar intersection partners (analytic-analytic).
     let mut has_analytic_analytic = false;
 
+    // Track face indices that participate in analytic-analytic intersections
+    // (e.g. cylinder-cylinder). These faces need tessellation, not chord splitting.
+    let mut analytic_analytic_faces_a: HashSet<usize> = HashSet::new();
+    let mut analytic_analytic_faces_b: HashSet<usize> = HashSet::new();
+
     // Track contained intersection curves (circle/ellipse fully inside a planar face).
     #[allow(clippy::items_after_statements)]
     struct ContainedCurve {
@@ -1969,6 +1982,11 @@ fn analytic_boolean(
                 };
 
                 if let (Some(surf_a_an), Some(surf_b_an)) = (surf_a_opt, surf_b_opt) {
+                    // Mark both faces for tessellation unconditionally — even
+                    // if intersection fails, chord splitting can't handle curved
+                    // surfaces. Over-tessellation is safe; under-tessellation is not.
+                    analytic_analytic_faces_a.insert(ia);
+                    analytic_analytic_faces_b.insert(ib);
                     if let Ok(curves) = intersect_analytic_analytic(surf_a_an, surf_b_an, 32) {
                         for ic in &curves {
                             let pts: Vec<Point3> = ic.points.iter().map(|ip| ip.point).collect();
@@ -2047,10 +2065,12 @@ fn analytic_boolean(
 
     // Process solid A faces.
     for (ia, snap) in snaps_a.iter().enumerate() {
-        // Sphere faces: always tessellate into triangle fragments.
+        // Sphere faces and faces involved in analytic-analytic intersections
+        // (e.g. cylinder-cylinder): tessellate into triangle fragments.
         // Chord splitting on the equatorial polygon doesn't produce
-        // meaningful sphere surface fragments.
-        if matches!(snap.surface, FaceSurface::Sphere(_)) {
+        // meaningful surface fragments for curved-curved intersections.
+        if matches!(snap.surface, FaceSurface::Sphere(_)) || analytic_analytic_faces_a.contains(&ia)
+        {
             tessellate_face_into_fragments(topo, snap.id, Source::A, deflection, &mut fragments)?;
             continue;
         }
@@ -2092,7 +2112,7 @@ fn analytic_boolean(
                 // The analytic face itself becomes a fragment.
                 // Its boundary is the intersection curve (circle/ellipse).
                 if let Some(ref ec) = edge_curve_for_face {
-                    let curve_verts = sample_edge_curve(ec, 32);
+                    let curve_verts = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES);
                     if curve_verts.len() >= 3 {
                         let avg_normal = snap.normal;
                         let d_val = snap.d;
@@ -2132,7 +2152,7 @@ fn analytic_boolean(
 
             // Create disc fragment for each contained curve, pre-classified as Inside.
             for ec in inner_curves {
-                let curve_verts = sample_edge_curve(ec, 32);
+                let curve_verts = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES);
                 if curve_verts.len() >= 3 {
                     let disc_idx = fragments.len();
                     fragments.push(AnalyticFragment {
@@ -2192,8 +2212,9 @@ fn analytic_boolean(
 
     // Process solid B faces (same logic).
     for (ib, snap) in snaps_b.iter().enumerate() {
-        // Sphere faces: always tessellate into triangle fragments.
-        if matches!(snap.surface, FaceSurface::Sphere(_)) {
+        // Sphere faces and analytic-analytic faces: tessellate into triangles.
+        if matches!(snap.surface, FaceSurface::Sphere(_)) || analytic_analytic_faces_b.contains(&ib)
+        {
             tessellate_face_into_fragments(topo, snap.id, Source::B, deflection, &mut fragments)?;
             continue;
         }
@@ -2230,7 +2251,7 @@ fn analytic_boolean(
 
             if !matches!(snap.surface, FaceSurface::Plane { .. }) {
                 if let Some(ref ec) = edge_curve_for_face {
-                    let curve_verts = sample_edge_curve(ec, 32);
+                    let curve_verts = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES);
                     if curve_verts.len() >= 3 {
                         fragments.push(AnalyticFragment {
                             vertices: curve_verts,
@@ -2266,7 +2287,7 @@ fn analytic_boolean(
             }
 
             for ec in inner_curves {
-                let curve_verts = sample_edge_curve(ec, 32);
+                let curve_verts = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES);
                 if curve_verts.len() >= 3 {
                     let disc_idx = fragments.len();
                     fragments.push(AnalyticFragment {
@@ -2459,7 +2480,7 @@ fn analytic_boolean(
         if let Some(inner_curves) = holed_face_inner_curves.get(&idx) {
             for ec in inner_curves {
                 // Sample the curve and REVERSE for CW winding (hole convention).
-                let mut hole_pts = sample_edge_curve(ec, 32);
+                let mut hole_pts = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES);
                 if flip {
                     // If the face is flipped, don't reverse the hole
                     // (the outer wire is already reversed).
@@ -2485,12 +2506,24 @@ fn analytic_boolean(
                 let mut hole_edges = Vec::with_capacity(hm);
                 for i in 0..hm {
                     let j = (i + 1) % hm;
-                    let eid = topo.edges.alloc(Edge::new(
-                        hole_vert_ids[i],
-                        hole_vert_ids[j],
-                        EdgeCurve::Line,
-                    ));
-                    hole_edges.push(OrientedEdge::new(eid, true));
+                    let vi_idx = hole_vert_ids[i].index();
+                    let vj_idx = hole_vert_ids[j].index();
+                    let is_forward = vi_idx <= vj_idx;
+                    let key = if is_forward {
+                        (vi_idx, vj_idx)
+                    } else {
+                        (vj_idx, vi_idx)
+                    };
+
+                    let eid = *edge_map.entry(key).or_insert_with(|| {
+                        let (start, end) = if is_forward {
+                            (hole_vert_ids[i], hole_vert_ids[j])
+                        } else {
+                            (hole_vert_ids[j], hole_vert_ids[i])
+                        };
+                        topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                    });
+                    hole_edges.push(OrientedEdge::new(eid, is_forward));
                 }
                 let hw = Wire::new(hole_edges, true).map_err(crate::OperationsError::Topology)?;
                 inner_wire_ids.push(topo.wires.alloc(hw));
@@ -2749,7 +2782,7 @@ fn create_band_fragments(
         return;
     };
 
-    let n_samples: usize = 32;
+    let n_samples: usize = CLOSED_CURVE_SAMPLES;
 
     // Pair each contained curve with its v-parameter on the cylinder axis.
     let mut cut_levels: Vec<(f64, &EdgeCurve)> = Vec::new();
@@ -2821,13 +2854,50 @@ fn create_band_fragments(
         }
     }
 
+    // Extract face polygon vertices at each barrel endpoint level.
+    // These come from the same Circle3D::evaluate calls that generated the
+    // cap face polygons, ensuring exact floating-point match for vertex dedup.
+    let v_tol = 1e-6;
+    let mut verts_at_vmin: Vec<Point3> = Vec::new();
+    let mut verts_at_vmax: Vec<Point3> = Vec::new();
+    for &p in face_verts {
+        let v = cyl.axis().dot(p - cyl.origin());
+        if (v - v_min).abs() < v_tol {
+            verts_at_vmin.push(p);
+        } else if (v - v_max).abs() < v_tol {
+            verts_at_vmax.push(p);
+        }
+    }
+    // Deduplicate points at each level (seam vertex duplicates circle[0]).
+    // Use quantized-position keying to handle any duplicate, not just adjacent.
+    let dedup_by_pos = |pts: &mut Vec<Point3>| {
+        let scale = 1e7_f64;
+        let mut seen = HashSet::new();
+        pts.retain(|p| {
+            #[allow(clippy::cast_possible_truncation)]
+            let key = (
+                (p.x() * scale).round() as i64,
+                (p.y() * scale).round() as i64,
+                (p.z() * scale).round() as i64,
+            );
+            seen.insert(key)
+        });
+    };
+    dedup_by_pos(&mut verts_at_vmin);
+    dedup_by_pos(&mut verts_at_vmax);
+
     // Sample a circle at a given v-level. For cut levels with an EdgeCurve,
     // use sample_edge_curve so the points match the holed-face inner wire.
-    // For barrel endpoints, use cylinder parametric evaluation.
+    // For barrel endpoints, use the actual face polygon vertices so they
+    // share vertices/edges with adjacent cap faces (exact float match).
     #[allow(clippy::cast_precision_loss)]
     let sample_level = |v: f64, curve: Option<&EdgeCurve>| -> Vec<Point3> {
         if let Some(ec) = curve {
             sample_edge_curve(ec, n_samples)
+        } else if (v - v_min).abs() < v_tol && verts_at_vmin.len() >= 3 {
+            verts_at_vmin.clone()
+        } else if (v - v_max).abs() < v_tol && verts_at_vmax.len() >= 3 {
+            verts_at_vmax.clone()
         } else {
             (0..n_samples)
                 .map(|i| {
@@ -2871,13 +2941,14 @@ fn create_band_fragments(
         };
         let band_d = crate::dot_normal_point(band_normal, centroid);
 
+        let n_verts = verts.len();
         fragments.push(AnalyticFragment {
             vertices: verts,
             surface: surface.clone(),
             normal: band_normal,
             d: band_d,
             source,
-            edge_curves: vec![None; 2 * n_samples],
+            edge_curves: vec![None; n_verts],
             source_reversed,
         });
     }
@@ -3595,5 +3666,104 @@ mod tests {
             vol3 < 50.0 * 30.0 * 10.0,
             "drilled plate should have less volume: {vol3}"
         );
+    }
+
+    #[test]
+    fn intersect_two_cylinders() {
+        let mut topo = Topology::new();
+        let cyl1 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let cyl2 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+
+        // Offset second cylinder so it partially overlaps the first.
+        let mat = brepkit_math::mat::Mat4::translation(2.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, cyl2, &mat).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Intersect, cyl1, cyl2);
+        assert!(
+            result.is_ok(),
+            "intersect(cyl, cyl) should succeed: {:?}",
+            result.err()
+        );
+        let r = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, r, 0.1).unwrap();
+        assert!(vol > 0.0, "intersection volume should be positive: {vol}");
+        // Intersection must be smaller than either cylinder.
+        let vol_cyl2 = std::f64::consts::PI * 3.0_f64.powi(2) * 20.0;
+        assert!(
+            vol < vol_cyl2,
+            "intersection volume {vol} should be less than smaller cylinder {vol_cyl2}"
+        );
+    }
+
+    #[test]
+    fn fuse_two_cylinders() {
+        let mut topo = Topology::new();
+        let cyl1 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let cyl2 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+
+        let mat = brepkit_math::mat::Mat4::translation(2.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, cyl2, &mat).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Fuse, cyl1, cyl2);
+        assert!(
+            result.is_ok(),
+            "fuse(cyl, cyl) should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn cut_cylinder_by_cylinder() {
+        let mut topo = Topology::new();
+        let cyl1 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let cyl2 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+
+        let mat = brepkit_math::mat::Mat4::translation(2.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, cyl2, &mat).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Cut, cyl1, cyl2);
+        assert!(
+            result.is_ok(),
+            "cut(cyl, cyl) should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    /// Staircase-like benchmark: fuse box steps with cylinder posts.
+    /// Mimics the brepjs staircase benchmark (OCCT: 4s target).
+    #[test]
+    fn staircase_fuse_with_cylinders() {
+        use std::time::Instant;
+
+        let mut topo = Topology::new();
+        let start = Instant::now();
+
+        // Build 10 steps, each is a box with a cylinder post.
+        let mut shapes: Vec<SolidId> = Vec::new();
+        for i in 0..10 {
+            let step = crate::primitives::make_box(&mut topo, 20.0, 30.0, 2.0).unwrap();
+            let mat_step = brepkit_math::mat::Mat4::translation(0.0, 0.0, f64::from(i) * 10.0);
+            crate::transform::transform_solid(&mut topo, step, &mat_step).unwrap();
+            shapes.push(step);
+
+            let post = crate::primitives::make_cylinder(&mut topo, 1.5, 10.0).unwrap();
+            let mat_post =
+                brepkit_math::mat::Mat4::translation(10.0, 15.0, f64::from(i) * 10.0 + 2.0);
+            crate::transform::transform_solid(&mut topo, post, &mat_post).unwrap();
+            shapes.push(post);
+        }
+
+        // Fuse all shapes together sequentially.
+        let mut result = shapes[0];
+        for &shape in &shapes[1..] {
+            result = boolean(&mut topo, BooleanOp::Fuse, result, shape).unwrap();
+        }
+
+        let elapsed = start.elapsed();
+        eprintln!("Staircase fuse: {elapsed:?} ({} shapes)", shapes.len());
+
+        let vol = crate::measure::solid_volume(&topo, result, 0.5).unwrap();
+        eprintln!("Volume: {vol:.1}");
+        assert!(vol > 0.0, "staircase volume should be positive");
     }
 }
