@@ -746,8 +746,25 @@ mod tests {
         let copy = copy_wire(&mut topo, orig).unwrap();
 
         assert_ne!(orig.index(), copy.index());
+    }
 
-        // Both wires should have the same number of edges.
+    #[test]
+    fn copy_wire_preserves_edge_count() {
+        use brepkit_math::vec::Point3;
+        use brepkit_topology::builder::make_polygon_wire;
+
+        let mut topo = Topology::new();
+        let orig = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+        )
+        .unwrap();
+        let copy = copy_wire(&mut topo, orig).unwrap();
+
         let orig_edges = topo.wire(orig).unwrap().edges().len();
         let copy_edges = topo.wire(copy).unwrap().edges().len();
         assert_eq!(orig_edges, copy_edges);

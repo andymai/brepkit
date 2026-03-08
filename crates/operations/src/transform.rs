@@ -1066,15 +1066,15 @@ mod tests {
 
         transform_wire(&mut topo, wire, &Mat4::translation(5.0, 0.0, 0.0)).unwrap();
 
-        // All vertices should have x shifted by 5.
+        // All vertices should have x shifted by 5 (original x values were 0, 1, 1).
+        let tol = Tolerance::new();
         let w = topo.wire(wire).unwrap();
         for oe in w.edges() {
             let edge = topo.edge(oe.edge()).unwrap();
-            let start_pos = topo.vertex(edge.start()).unwrap().point();
+            let x = topo.vertex(edge.start()).unwrap().point().x();
             assert!(
-                start_pos.x() >= 4.9,
-                "vertex x should be shifted: got {}",
-                start_pos.x()
+                tol.approx_eq(x, 5.0) || tol.approx_eq(x, 6.0),
+                "vertex x should be 5.0 or 6.0 after translation, got {x}"
             );
         }
     }
