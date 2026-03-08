@@ -53,7 +53,8 @@ jobs:
       - uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate coverage
         run: |
-          cargo llvm-cov --workspace --lcov --output-path lcov.info
+          cargo llvm-cov --workspace --no-report
+          cargo llvm-cov report --lcov --output-path lcov.info
           COVERAGE=$(cargo llvm-cov report --json | jq -r '.data[0].totals.lines.percent // empty')
           if [ -z "$COVERAGE" ]; then
             echo "::error::Failed to extract coverage percentage from report"
@@ -79,7 +80,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
-      - run: cargo check --workspace
+      - run: cargo check --workspace --all-features
 
   wasm:
     name: WASM Build & Validate
@@ -87,8 +88,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - name: Install wasm-pack
-        run: cargo install wasm-pack --locked
+      - uses: taiki-e/install-action@wasm-pack
       - name: Build and validate WASM
         run: cargo xtask wasm-build --skip-opt
 

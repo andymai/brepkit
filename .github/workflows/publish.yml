@@ -72,8 +72,7 @@ jobs:
       # rust-toolchain.toml provides the pinned Rust version + wasm32 target
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install wasm-pack
-        run: cargo install wasm-pack --locked
+      - uses: taiki-e/install-action@wasm-pack
 
       - name: Build WASM (bundler target for browsers)
         run: wasm-pack build crates/wasm --target bundler --release --out-dir pkg
