@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/andymai/brepkit/compare/v0.7.2...v0.7.3) (2026-03-08)
+
+
+### Bug Fixes
+
+* address outstanding PR review comments ([#94](https://github.com/andymai/brepkit/issues/94)) ([483d990](https://github.com/andymai/brepkit/commit/483d990537c5be9ec0c0138976538c5731f1ba47))
+
 ## [0.7.2](https://github.com/andymai/brepkit/compare/v0.7.1...v0.7.2) (2026-03-08)
 
 
