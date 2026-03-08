@@ -76,7 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       # Override rust-toolchain.toml to test the declared minimum version
-      - uses: dtolnay/rust-toolchain@1.100.0
+      - uses: dtolnay/rust-toolchain@1.85.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
