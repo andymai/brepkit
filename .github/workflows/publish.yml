@@ -91,9 +91,8 @@ jobs:
       - name: Merge dual targets into single package
         working-directory: crates/wasm
         run: |
-          # Copy nodejs artifacts alongside bundler ones
+          # nodejs target produces a single brepkit_wasm.js (no _bg.js split)
           cp pkg-node/brepkit_wasm.js pkg/brepkit_wasm_node.js
-          cp pkg-node/brepkit_wasm_bg.js pkg/brepkit_wasm_bg_node.js
 
       - name: Set package name and exports
         working-directory: crates/wasm/pkg
@@ -112,6 +111,9 @@ jobs:
             };
             pkg.main = "brepkit_wasm_node.js";
             pkg.module = "brepkit_wasm.js";
+            if (!pkg.files.includes("brepkit_wasm_node.js")) {
+              pkg.files.push("brepkit_wasm_node.js");
+            }
             require("fs").writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
           '
 
