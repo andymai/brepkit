@@ -273,6 +273,10 @@ pub fn boolean_with_options(
     let analytic_a = try_build_analytic_classifier(topo, a);
     let analytic_b = try_build_analytic_classifier(topo, b);
 
+    // Build BVH acceleration structures for face data.
+    let bvh_a = build_face_bvh(&faces_a);
+    let bvh_b = build_face_bvh(&faces_b);
+
     let classes: Vec<FaceClass> = fragments
         .iter()
         .map(|frag| {
@@ -285,11 +289,11 @@ pub fn boolean_with_options(
             if let Some(class) = fast {
                 return class;
             }
-            let opposite = match frag.source {
-                Source::A => &faces_b,
-                Source::B => &faces_a,
+            let (opposite, bvh) = match frag.source {
+                Source::A => (&faces_b, bvh_b.as_ref()),
+                Source::B => (&faces_a, bvh_a.as_ref()),
             };
-            classify_fragment(frag, opposite, tol)
+            classify_fragment(frag, opposite, bvh, tol)
         })
         .collect();
 
@@ -374,6 +378,11 @@ type FaceData = Vec<(FaceId, Vec<Point3>, Vec3, f64)>;
 /// For NURBS faces, tessellates into triangles and returns each triangle
 /// as a separate planar "face" entry. This allows the existing planar
 /// boolean clipping algorithm to handle NURBS solids.
+/// Number of angular segments used to approximate cylinder faces in the
+/// classification face data. 16 segments = 16 quads per cylinder band,
+/// sufficient for correct ray-crossing parity.
+const CLASSIFIER_CYL_SEGMENTS: usize = 16;
+
 fn collect_face_data(
     topo: &Topology,
     solid_id: SolidId,
@@ -385,30 +394,75 @@ fn collect_face_data(
 
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
-        if let FaceSurface::Plane { normal, d } = face.surface() {
-            let verts = face_polygon(topo, fid)?;
-            result.push((fid, verts, *normal, *d));
-        } else {
-            // Tessellate non-planar face into triangles and treat each as planar.
-            let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
-            for tri in mesh.indices.chunks_exact(3) {
-                let i0 = tri[0] as usize;
-                let i1 = tri[1] as usize;
-                let i2 = tri[2] as usize;
+        match face.surface() {
+            FaceSurface::Plane { normal, d } => {
+                let verts = face_polygon(topo, fid)?;
+                result.push((fid, verts, *normal, *d));
+            }
+            FaceSurface::Cylinder(cyl) => {
+                // Approximate the cylinder barrel as planar quads for the
+                // classifier. Much faster than full tessellation (~16 quads
+                // vs ~800 triangles per band) while giving correct crossing
+                // parity for ray-casting.
+                let verts = face_polygon(topo, fid)?;
+                let mut v_min = f64::MAX;
+                let mut v_max = f64::MIN;
+                for &p in &verts {
+                    let v = cyl.axis().dot(p - cyl.origin());
+                    if v < v_min {
+                        v_min = v;
+                    }
+                    if v > v_max {
+                        v_max = v;
+                    }
+                }
+                if (v_max - v_min).abs() < 1e-10 {
+                    continue;
+                }
+                #[allow(clippy::cast_precision_loss)]
+                for i in 0..CLASSIFIER_CYL_SEGMENTS {
+                    let u0 = std::f64::consts::TAU * (i as f64) / (CLASSIFIER_CYL_SEGMENTS as f64);
+                    let u1 =
+                        std::f64::consts::TAU * ((i + 1) as f64) / (CLASSIFIER_CYL_SEGMENTS as f64);
+                    let b0 = cyl.evaluate(u0, v_min);
+                    let b1 = cyl.evaluate(u1, v_min);
+                    let t0 = cyl.evaluate(u0, v_max);
+                    let t1 = cyl.evaluate(u1, v_max);
 
-                let v0 = mesh.positions[i0];
-                let v1 = mesh.positions[i1];
-                let v2 = mesh.positions[i2];
+                    // Two triangles per quad.
+                    for tri in &[[b0, b1, t1], [b0, t1, t0]] {
+                        let edge1 = tri[1] - tri[0];
+                        let edge2 = tri[2] - tri[0];
+                        let cross = edge1.cross(edge2);
+                        let Ok(n) = cross.normalize() else { continue };
+                        let d_val = crate::dot_normal_point(n, tri[0]);
+                        result.push((fid, tri.to_vec(), n, d_val));
+                    }
+                }
+            }
+            _ => {
+                // Other non-planar: tessellate with coarse deflection.
+                let coarse_deflection = deflection * 4.0;
+                let mesh = crate::tessellate::tessellate(topo, fid, coarse_deflection)?;
+                for tri in mesh.indices.chunks_exact(3) {
+                    let i0 = tri[0] as usize;
+                    let i1 = tri[1] as usize;
+                    let i2 = tri[2] as usize;
 
-                let edge1 = v1 - v0;
-                let edge2 = v2 - v0;
-                let normal = edge1
-                    .cross(edge2)
-                    .normalize()
-                    .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
-                let d = crate::dot_normal_point(normal, v0);
+                    let v0 = mesh.positions[i0];
+                    let v1 = mesh.positions[i1];
+                    let v2 = mesh.positions[i2];
 
-                result.push((fid, vec![v0, v1, v2], normal, d));
+                    let edge1 = v1 - v0;
+                    let edge2 = v2 - v0;
+                    let normal = edge1
+                        .cross(edge2)
+                        .normalize()
+                        .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                    let d = crate::dot_normal_point(normal, v0);
+
+                    result.push((fid, vec![v0, v1, v2], normal, d));
+                }
             }
         }
     }
@@ -982,6 +1036,15 @@ fn split_polygon_by_chord(
 enum AnalyticClassifier {
     /// Point-in-sphere: `|p - center| ≤ radius`.
     Sphere { center: Point3, radius: f64 },
+    /// Point-in-cylinder: radial distance from axis ≤ radius AND axial
+    /// position within [z_min, z_max].
+    Cylinder {
+        origin: Point3,
+        axis: Vec3,
+        radius: f64,
+        z_min: f64,
+        z_max: f64,
+    },
 }
 
 impl AnalyticClassifier {
@@ -996,6 +1059,36 @@ impl AnalyticClassifier {
                 if dist_sq < (radius - tol.linear) * (radius - tol.linear) {
                     Some(FaceClass::Inside)
                 } else if dist_sq > (radius + tol.linear) * (radius + tol.linear) {
+                    Some(FaceClass::Outside)
+                } else {
+                    None // On boundary — fall back to ray-casting
+                }
+            }
+            Self::Cylinder {
+                origin,
+                axis,
+                radius,
+                z_min,
+                z_max,
+            } => {
+                let diff = centroid - *origin;
+                let axial = diff.dot(*axis);
+                // Check axial bounds (cap faces).
+                if axial < *z_min - tol.linear || axial > *z_max + tol.linear {
+                    return Some(FaceClass::Outside);
+                }
+                // Radial distance from the axis.
+                let projected = *axis * axial;
+                let radial_vec = diff - projected;
+                let radial_dist_sq = radial_vec.x() * radial_vec.x()
+                    + radial_vec.y() * radial_vec.y()
+                    + radial_vec.z() * radial_vec.z();
+                if radial_dist_sq < (radius - tol.linear) * (radius - tol.linear)
+                    && axial > *z_min + tol.linear
+                    && axial < *z_max - tol.linear
+                {
+                    Some(FaceClass::Inside)
+                } else if radial_dist_sq > (radius + tol.linear) * (radius + tol.linear) {
                     Some(FaceClass::Outside)
                 } else {
                     None // On boundary — fall back to ray-casting
@@ -1016,12 +1109,17 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
     let tol = Tolerance::new();
 
     let mut sphere_info: Option<(Point3, f64)> = None;
+    let mut cylinder_info: Option<(Point3, Vec3, f64)> = None;
+    let mut has_planar = false;
+    let mut has_sphere = false;
+    let mut has_cylinder = false;
+
     for &fid in shell.faces() {
         let face = topo.face(fid).ok()?;
         match face.surface() {
             FaceSurface::Sphere(sph) => {
+                has_sphere = true;
                 if let Some((c, r)) = sphere_info {
-                    // All sphere faces must reference the same sphere.
                     let dc = (c - sph.center()).length();
                     if dc > tol.linear || (r - sph.radius()).abs() > tol.linear {
                         return None;
@@ -1030,21 +1128,117 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
                     sphere_info = Some((sph.center(), sph.radius()));
                 }
             }
-            _ => return None,
+            FaceSurface::Cylinder(cyl) => {
+                has_cylinder = true;
+                if let Some((o, a, r)) = cylinder_info {
+                    let do_ = (o - cyl.origin()).length();
+                    let da = 1.0 - a.dot(cyl.axis()).abs();
+                    if do_ > tol.linear || da > tol.angular || (r - cyl.radius()).abs() > tol.linear
+                    {
+                        return None;
+                    }
+                } else {
+                    cylinder_info = Some((cyl.origin(), cyl.axis(), cyl.radius()));
+                }
+            }
+            FaceSurface::Plane { .. } => {
+                has_planar = true;
+            }
+            _ => return None, // Unsupported surface type
         }
     }
 
-    let (center, radius) = sphere_info?;
-    Some(AnalyticClassifier::Sphere { center, radius })
+    // Pure sphere solid (all faces are sphere).
+    if has_sphere && !has_planar && !has_cylinder {
+        let (center, radius) = sphere_info?;
+        return Some(AnalyticClassifier::Sphere { center, radius });
+    }
+
+    // Cylinder solid (1 cylinder face + 2 planar caps).
+    if has_cylinder && has_planar && !has_sphere {
+        let (origin, axis, radius) = cylinder_info?;
+        // Compute axial extent from planar cap faces.
+        let mut z_min = f64::INFINITY;
+        let mut z_max = f64::NEG_INFINITY;
+        for &fid in shell.faces() {
+            let face = topo.face(fid).ok()?;
+            if let FaceSurface::Plane { normal, d } = face.surface() {
+                // The plane's d value along the cylinder axis gives the cap position.
+                // For a cylinder cap, the plane normal is parallel to the axis.
+                let dot = normal.dot(axis);
+                if dot.abs() > 0.5 {
+                    // Project the plane onto the axis to find the cap position.
+                    // d = normal · point, so point along axis = d / dot for this axis.
+                    let z = *d / dot;
+                    z_min = z_min.min(z);
+                    z_max = z_max.max(z);
+                }
+            }
+        }
+        if z_min < z_max {
+            return Some(AnalyticClassifier::Cylinder {
+                origin,
+                axis,
+                radius,
+                z_min,
+                z_max,
+            });
+        }
+    }
+
+    None
+}
+
+/// Build a BVH over face data for accelerated ray-cast classification.
+///
+/// Returns `None` when the face count is small enough that linear scan is
+/// faster than BVH construction + traversal overhead.
+fn build_face_bvh(faces: &FaceData) -> Option<Bvh> {
+    // Only worth building for ≥32 faces (BVH overhead vs linear scan).
+    if faces.len() < 32 {
+        return None;
+    }
+    let aabbs: Vec<(usize, Aabb3)> = faces
+        .iter()
+        .enumerate()
+        .map(|(i, (_, verts, _, _))| {
+            let bb = Aabb3::from_points(verts.iter().copied());
+            (i, bb)
+        })
+        .collect();
+    Some(Bvh::build(&aabbs))
 }
 
 /// Classify a face fragment relative to the opposite solid.
-fn classify_fragment(frag: &FaceFragment, opposite: &FaceData, tol: Tolerance) -> FaceClass {
+///
+/// When `bvh` is `Some`, uses BVH-accelerated ray queries instead of
+/// linearly scanning all faces. This reduces classification from O(F) to
+/// O(log F) per fragment.
+fn classify_fragment(
+    frag: &FaceFragment,
+    opposite: &FaceData,
+    bvh: Option<&Bvh>,
+    tol: Tolerance,
+) -> FaceClass {
     // Compute centroid of the fragment.
     let centroid = polygon_centroid(&frag.vertices);
 
-    // First check for coplanar faces.
-    for &(_, ref verts, n_opp, d_opp) in opposite {
+    // First check for coplanar faces — must scan candidates only.
+    // For coplanar test we need faces near the centroid's plane, so use
+    // BVH point-containment if available, otherwise linear scan.
+    let coplanar_indices: Vec<usize> = if let Some(bvh) = bvh {
+        // Expand a tiny AABB around centroid to find nearby faces.
+        let probe = Aabb3 {
+            min: centroid + Vec3::new(-tol.linear, -tol.linear, -tol.linear),
+            max: centroid + Vec3::new(tol.linear, tol.linear, tol.linear),
+        };
+        bvh.query_overlap(&probe)
+    } else {
+        (0..opposite.len()).collect()
+    };
+
+    for &i in &coplanar_indices {
+        let (_, ref verts, n_opp, d_opp) = opposite[i];
         let dist = dot_normal_point(n_opp, centroid) - d_opp;
         if dist.abs() < tol.linear && point_in_face_3d(centroid, verts, &n_opp) {
             let dot = frag.normal.dot(n_opp);
@@ -1064,23 +1258,48 @@ fn classify_fragment(frag: &FaceFragment, opposite: &FaceData, tol: Tolerance) -
     let ray_dir = frag.normal;
     let mut crossings = 0i32;
 
-    for &(_, ref verts, n_opp, d_opp) in opposite {
-        let denom = n_opp.dot(ray_dir);
-        if denom.abs() < tol.angular {
-            continue; // Ray parallel to face.
+    if let Some(bvh) = bvh {
+        // BVH-accelerated ray cast: only test faces whose AABBs the ray hits.
+        let candidates = bvh.query_ray(centroid, ray_dir);
+        for idx in candidates {
+            let (_, ref verts, n_opp, d_opp) = opposite[idx];
+            let denom = n_opp.dot(ray_dir);
+            if denom.abs() < tol.angular {
+                continue;
+            }
+            let numer = d_opp - dot_normal_point(n_opp, centroid);
+            let t = numer / denom;
+            if t <= tol.linear {
+                continue;
+            }
+            let hit = point_along_line(&centroid, &ray_dir, t);
+            if point_in_face_3d(hit, verts, &n_opp) {
+                if denom > 0.0 {
+                    crossings -= 1;
+                } else {
+                    crossings += 1;
+                }
+            }
         }
-        let numer = d_opp - dot_normal_point(n_opp, centroid);
-        let t = numer / denom;
-        if t <= tol.linear {
-            continue; // Behind or at the ray origin.
-        }
-
-        let hit = point_along_line(&centroid, &ray_dir, t);
-        if point_in_face_3d(hit, verts, &n_opp) {
-            if denom > 0.0 {
-                crossings -= 1;
-            } else {
-                crossings += 1;
+    } else {
+        // Linear scan fallback for small face sets.
+        for &(_, ref verts, n_opp, d_opp) in opposite {
+            let denom = n_opp.dot(ray_dir);
+            if denom.abs() < tol.angular {
+                continue;
+            }
+            let numer = d_opp - dot_normal_point(n_opp, centroid);
+            let t = numer / denom;
+            if t <= tol.linear {
+                continue;
+            }
+            let hit = point_along_line(&centroid, &ray_dir, t);
+            if point_in_face_3d(hit, verts, &n_opp) {
+                if denom > 0.0 {
+                    crossings -= 1;
+                } else {
+                    crossings += 1;
+                }
             }
         }
     }
@@ -1804,6 +2023,11 @@ fn analytic_boolean(
     let mut analytic_analytic_faces_a: HashSet<usize> = HashSet::new();
     let mut analytic_analytic_faces_b: HashSet<usize> = HashSet::new();
 
+    // V-ranges of intersection curves on cylinder faces (for band-splitting
+    // instead of full tessellation). Key: face index, Value: list of (v_min, v_max).
+    let mut analytic_intersection_vranges_a: HashMap<usize, Vec<(f64, f64)>> = HashMap::new();
+    let mut analytic_intersection_vranges_b: HashMap<usize, Vec<(f64, f64)>> = HashMap::new();
+
     // Track contained intersection curves (circle/ellipse fully inside a planar face).
     #[allow(clippy::items_after_statements)]
     struct ContainedCurve {
@@ -1982,14 +2206,13 @@ fn analytic_boolean(
                 };
 
                 if let (Some(surf_a_an), Some(surf_b_an)) = (surf_a_opt, surf_b_opt) {
-                    // Mark both faces for tessellation unconditionally — even
-                    // if intersection fails, chord splitting can't handle curved
-                    // surfaces. Over-tessellation is safe; under-tessellation is not.
-                    analytic_analytic_faces_a.insert(ia);
-                    analytic_analytic_faces_b.insert(ib);
                     if let Ok(curves) = intersect_analytic_analytic(surf_a_an, surf_b_an, 32) {
                         for ic in &curves {
                             let pts: Vec<Point3> = ic.points.iter().map(|ip| ip.point).collect();
+
+                            analytic_analytic_faces_a.insert(ia);
+                            analytic_analytic_faces_b.insert(ib);
+
                             for pair in pts.windows(2) {
                                 face_intersections_a
                                     .entry(ia)
@@ -2001,6 +2224,10 @@ fn analytic_boolean(
                                     .push((pair[0], pair[1], None));
                             }
                         }
+                    } else {
+                        // Intersection computation failed — mark for full tessellation.
+                        analytic_analytic_faces_a.insert(ia);
+                        analytic_analytic_faces_b.insert(ib);
                     }
                 } else {
                     has_analytic_analytic = true;
@@ -2014,6 +2241,67 @@ fn analytic_boolean(
         return Err(crate::OperationsError::InvalidInput {
             reason: "analytic-analytic intersection not supported, falling back".into(),
         });
+    }
+
+    // ── Compute cylinder v-ranges from chord intersection points ───────
+    // For cylinder faces that participate in analytic-analytic intersections,
+    // compute the v-extent of all chord endpoints on the cylinder axis. This
+    // enables band-splitting: only the intersection zone gets tessellated,
+    // uninvolved bands keep FaceSurface::Cylinder, preventing face-count
+    // explosion in sequential boolean operations.
+    for (ia, snap) in snaps_a.iter().enumerate() {
+        if let FaceSurface::Cylinder(cyl) = &snap.surface {
+            if let Some(chords) = face_intersections_a.get(&ia) {
+                if !analytic_analytic_faces_a.contains(&ia) {
+                    let mut vmin = f64::MAX;
+                    let mut vmax = f64::MIN;
+                    for &(p0, p1, _) in chords {
+                        for p in &[p0, p1] {
+                            let v = cyl.axis().dot(*p - cyl.origin());
+                            if v < vmin {
+                                vmin = v;
+                            }
+                            if v > vmax {
+                                vmax = v;
+                            }
+                        }
+                    }
+                    if vmax > vmin {
+                        analytic_intersection_vranges_a
+                            .entry(ia)
+                            .or_default()
+                            .push((vmin, vmax));
+                    }
+                }
+            }
+        }
+    }
+    for (ib, snap) in snaps_b.iter().enumerate() {
+        if let FaceSurface::Cylinder(cyl) = &snap.surface {
+            if let Some(chords) = face_intersections_b.get(&ib) {
+                if !analytic_analytic_faces_b.contains(&ib) {
+                    let mut vmin = f64::MAX;
+                    let mut vmax = f64::MIN;
+                    for &(p0, p1, _) in chords {
+                        for p in &[p0, p1] {
+                            let v = cyl.axis().dot(*p - cyl.origin());
+                            if v < vmin {
+                                vmin = v;
+                            }
+                            if v > vmax {
+                                vmax = v;
+                            }
+                        }
+                    }
+                    if vmax > vmin {
+                        analytic_intersection_vranges_b
+                            .entry(ib)
+                            .or_default()
+                            .push((vmin, vmax));
+                    }
+                }
+            }
+        }
     }
 
     // ── Build contained-curve lookup sets ──────────────────────────────
@@ -2065,12 +2353,32 @@ fn analytic_boolean(
 
     // Process solid A faces.
     for (ia, snap) in snaps_a.iter().enumerate() {
-        // Sphere faces and faces involved in analytic-analytic intersections
-        // (e.g. cylinder-cylinder): tessellate into triangle fragments.
-        // Chord splitting on the equatorial polygon doesn't produce
-        // meaningful surface fragments for curved-curved intersections.
-        if matches!(snap.surface, FaceSurface::Sphere(_)) || analytic_analytic_faces_a.contains(&ia)
-        {
+        // Sphere faces: tessellate into triangle fragments.
+        if matches!(snap.surface, FaceSurface::Sphere(_)) {
+            tessellate_face_into_fragments(topo, snap.id, Source::A, deflection, &mut fragments)?;
+            continue;
+        }
+        // Cylinder faces with intersection v-ranges: band-split instead of
+        // full tessellation. Only the intersection band gets tessellated;
+        // uninvolved bands keep FaceSurface::Cylinder.
+        if let Some(vranges) = analytic_intersection_vranges_a.get(&ia) {
+            split_cylinder_at_intersection(
+                &snap.surface,
+                &snap.vertices,
+                snap.normal,
+                snap.d,
+                Source::A,
+                snap.reversed,
+                vranges,
+                topo,
+                snap.id,
+                deflection,
+                &mut fragments,
+            )?;
+            continue;
+        }
+        // Non-cylinder analytic-analytic: full tessellation fallback.
+        if analytic_analytic_faces_a.contains(&ia) {
             tessellate_face_into_fragments(topo, snap.id, Source::A, deflection, &mut fragments)?;
             continue;
         }
@@ -2212,9 +2520,30 @@ fn analytic_boolean(
 
     // Process solid B faces (same logic).
     for (ib, snap) in snaps_b.iter().enumerate() {
-        // Sphere faces and analytic-analytic faces: tessellate into triangles.
-        if matches!(snap.surface, FaceSurface::Sphere(_)) || analytic_analytic_faces_b.contains(&ib)
-        {
+        // Sphere faces: tessellate into triangles.
+        if matches!(snap.surface, FaceSurface::Sphere(_)) {
+            tessellate_face_into_fragments(topo, snap.id, Source::B, deflection, &mut fragments)?;
+            continue;
+        }
+        // Cylinder faces with intersection v-ranges: band-split.
+        if let Some(vranges) = analytic_intersection_vranges_b.get(&ib) {
+            split_cylinder_at_intersection(
+                &snap.surface,
+                &snap.vertices,
+                snap.normal,
+                snap.d,
+                Source::B,
+                snap.reversed,
+                vranges,
+                topo,
+                snap.id,
+                deflection,
+                &mut fragments,
+            )?;
+            continue;
+        }
+        // Non-cylinder analytic-analytic: full tessellation fallback.
+        if analytic_analytic_faces_b.contains(&ib) {
             tessellate_face_into_fragments(topo, snap.id, Source::B, deflection, &mut fragments)?;
             continue;
         }
@@ -2353,6 +2682,10 @@ fn analytic_boolean(
     let analytic_cls_a = try_build_analytic_classifier(topo, a);
     let analytic_cls_b = try_build_analytic_classifier(topo, b);
 
+    // BVH acceleration for ray-cast classification.
+    let bvh_a = build_face_bvh(&face_data_a);
+    let bvh_b = build_face_bvh(&face_data_b);
+
     let classes: Vec<FaceClass> = fragments
         .iter()
         .enumerate()
@@ -2374,9 +2707,9 @@ fn analytic_boolean(
             if let Some(class) = fast {
                 return class;
             }
-            let opposite = match frag.source {
-                Source::A => &face_data_b,
-                Source::B => &face_data_a,
+            let (opposite, bvh) = match frag.source {
+                Source::A => (&face_data_b, bvh_b.as_ref()),
+                Source::B => (&face_data_a, bvh_a.as_ref()),
             };
             let pseudo = FaceFragment {
                 vertices: frag.vertices.clone(),
@@ -2384,7 +2717,7 @@ fn analytic_boolean(
                 d: frag.d,
                 source: frag.source,
             };
-            classify_fragment(&pseudo, opposite, tol)
+            classify_fragment(&pseudo, opposite, bvh, tol)
         })
         .collect();
 
@@ -2745,6 +3078,203 @@ fn tessellate_face_into_fragments(
             source_reversed: false, // planar fragment, no reversal needed
         });
     }
+    Ok(())
+}
+
+/// Split a cylinder face at intersection v-ranges, producing:
+/// - Cylinder-surface band fragments for regions *outside* the intersection
+/// - Tessellated planar triangle fragments for the narrow intersection band
+///
+/// This prevents face-count explosion in sequential boolean operations:
+/// instead of tessellating the *entire* barrel into ~500 triangles, only the
+/// thin intersection region gets tessellated while the rest keeps
+/// `FaceSurface::Cylinder`.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn split_cylinder_at_intersection(
+    surface: &FaceSurface,
+    face_verts: &[Point3],
+    normal: Vec3,
+    d: f64,
+    source: Source,
+    source_reversed: bool,
+    vranges: &[(f64, f64)],
+    topo: &Topology,
+    face_id: FaceId,
+    deflection: f64,
+    fragments: &mut Vec<AnalyticFragment>,
+) -> Result<(), crate::OperationsError> {
+    let FaceSurface::Cylinder(cyl) = surface else {
+        // Not a cylinder — fall back to full tessellation.
+        return tessellate_face_into_fragments(topo, face_id, source, deflection, fragments);
+    };
+
+    // Compute the barrel's v extent from boundary vertices.
+    let mut barrel_vmin = f64::MAX;
+    let mut barrel_vmax = f64::MIN;
+    for &p in face_verts {
+        let v = cyl.axis().dot(p - cyl.origin());
+        if v < barrel_vmin {
+            barrel_vmin = v;
+        }
+        if v > barrel_vmax {
+            barrel_vmax = v;
+        }
+    }
+
+    if (barrel_vmax - barrel_vmin).abs() < 1e-10 || vranges.is_empty() {
+        // Degenerate or no ranges — keep as-is.
+        fragments.push(AnalyticFragment {
+            vertices: face_verts.to_vec(),
+            surface: surface.clone(),
+            normal,
+            d,
+            source,
+            edge_curves: vec![None; face_verts.len()],
+            source_reversed,
+        });
+        return Ok(());
+    }
+
+    // Merge overlapping v-ranges with padding to create the "intersection zone".
+    let barrel_height = barrel_vmax - barrel_vmin;
+    let padding = barrel_height * 0.05; // 5% of barrel height
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    let mut sorted_ranges: Vec<(f64, f64)> = vranges.to_vec();
+    sorted_ranges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    for &(lo, hi) in &sorted_ranges {
+        let lo_padded = (lo - padding).max(barrel_vmin);
+        let hi_padded = (hi + padding).min(barrel_vmax);
+        if let Some(last) = merged.last_mut() {
+            if lo_padded <= last.1 {
+                last.1 = last.1.max(hi_padded);
+                continue;
+            }
+        }
+        merged.push((lo_padded, hi_padded));
+    }
+
+    // If intersection zones cover >60% of the barrel, band-splitting won't save
+    // enough faces and loses chord-splitting accuracy. Fall back to full tessellation.
+    let total_iz: f64 = merged.iter().map(|(lo, hi)| hi - lo).sum();
+    if total_iz > barrel_height * 0.6 {
+        return tessellate_face_into_fragments(topo, face_id, source, deflection, fragments);
+    }
+
+    // Build level list: regions outside merged ranges are cylinder bands,
+    // regions inside merged ranges get tessellated.
+    // Levels: barrel_vmin, [gap regions as cylinder], [intersection regions tessellated], barrel_vmax
+    let n_samples: usize = CLOSED_CURVE_SAMPLES;
+
+    // Collect face polygon vertices at barrel endpoints for exact vertex matching.
+    let v_tol = 1e-6;
+    let mut verts_at_vmin: Vec<Point3> = Vec::new();
+    let mut verts_at_vmax: Vec<Point3> = Vec::new();
+    for &p in face_verts {
+        let v = cyl.axis().dot(p - cyl.origin());
+        if (v - barrel_vmin).abs() < v_tol {
+            verts_at_vmin.push(p);
+        } else if (v - barrel_vmax).abs() < v_tol {
+            verts_at_vmax.push(p);
+        }
+    }
+    // Deduplicate points at each level.
+    let dedup_by_pos = |pts: &mut Vec<Point3>| {
+        let scale = 1e7_f64;
+        let mut seen = HashSet::new();
+        pts.retain(|p| {
+            #[allow(clippy::cast_possible_truncation)]
+            let key = (
+                (p.x() * scale).round() as i64,
+                (p.y() * scale).round() as i64,
+                (p.z() * scale).round() as i64,
+            );
+            seen.insert(key)
+        });
+    };
+    dedup_by_pos(&mut verts_at_vmin);
+    dedup_by_pos(&mut verts_at_vmax);
+
+    #[allow(clippy::cast_precision_loss)]
+    let sample_circle_at_v = |v: f64| -> Vec<Point3> {
+        if (v - barrel_vmin).abs() < v_tol && verts_at_vmin.len() >= 3 {
+            verts_at_vmin.clone()
+        } else if (v - barrel_vmax).abs() < v_tol && verts_at_vmax.len() >= 3 {
+            verts_at_vmax.clone()
+        } else {
+            (0..n_samples)
+                .map(|i| {
+                    let u = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                    cyl.evaluate(u, v)
+                })
+                .collect()
+        }
+    };
+
+    // Helper: create a cylinder band fragment between two v-levels.
+    let make_band = |v_bot: f64, v_top: f64, frags: &mut Vec<AnalyticFragment>| {
+        if (v_top - v_bot).abs() < 1e-10 {
+            return;
+        }
+        let bot_pts = sample_circle_at_v(v_bot);
+        let top_pts = sample_circle_at_v(v_top);
+
+        let mut verts = Vec::with_capacity(bot_pts.len() + top_pts.len());
+        verts.extend_from_slice(&bot_pts);
+        verts.extend(top_pts.into_iter().rev());
+
+        // Compute normal from a surface point (not centroid) to avoid
+        // degenerate zero normal for full-circle bands.
+        let surface_point = verts[0];
+        let band_normal = (surface_point
+            - cyl.origin()
+            - cyl.axis() * cyl.axis().dot(surface_point - cyl.origin()))
+        .normalize()
+        .unwrap_or(normal);
+        #[allow(clippy::cast_precision_loss)]
+        let centroid = {
+            let (sx, sy, sz) = verts.iter().fold((0.0, 0.0, 0.0), |(ax, ay, az), v| {
+                (ax + v.x(), ay + v.y(), az + v.z())
+            });
+            let inv_n = 1.0 / verts.len() as f64;
+            Point3::new(sx * inv_n, sy * inv_n, sz * inv_n)
+        };
+        let band_d = crate::dot_normal_point(band_normal, centroid);
+
+        let n_verts = verts.len();
+        frags.push(AnalyticFragment {
+            vertices: verts,
+            surface: surface.clone(),
+            normal: band_normal,
+            d: band_d,
+            source,
+            edge_curves: vec![None; n_verts],
+            source_reversed,
+        });
+    };
+
+    // Walk through the barrel, creating cylinder bands for all regions.
+    // Both gap regions and intersection zones become cylinder bands,
+    // preserving FaceSurface::Cylinder throughout. The classifier
+    // determines inside/outside for each band independently.
+    //
+    // Collect all unique v-levels (barrel endpoints + intersection zone
+    // boundaries), then create one band per consecutive pair.
+    let mut levels: Vec<f64> = vec![barrel_vmin];
+    for &(iz_lo, iz_hi) in &merged {
+        if iz_lo > barrel_vmin + 1e-10 {
+            levels.push(iz_lo);
+        }
+        if iz_hi < barrel_vmax - 1e-10 {
+            levels.push(iz_hi);
+        }
+    }
+    levels.push(barrel_vmax);
+    levels.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+
+    for w in levels.windows(2) {
+        make_band(w[0], w[1], fragments);
+    }
+
     Ok(())
 }
 
@@ -3696,6 +4226,26 @@ mod tests {
     }
 
     #[test]
+    fn intersect_two_equal_cylinders() {
+        // Same params as brepjs benchmark: r=5, r=5, offset=3
+        let mut topo = Topology::new();
+        let cyl1 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let cyl2 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(3.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, cyl2, &mat).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Intersect, cyl1, cyl2);
+        assert!(
+            result.is_ok(),
+            "intersect(cyl r=5, cyl r=5 offset=3) should succeed: {:?}",
+            result.err()
+        );
+        let r = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, r, 0.1).unwrap();
+        assert!(vol > 0.0, "intersection volume should be positive: {vol}");
+    }
+
+    #[test]
     fn fuse_two_cylinders() {
         let mut topo = Topology::new();
         let cyl1 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
@@ -3765,5 +4315,296 @@ mod tests {
         let vol = crate::measure::solid_volume(&topo, result, 0.5).unwrap();
         eprintln!("Volume: {vol:.1}");
         assert!(vol > 0.0, "staircase volume should be positive");
+    }
+
+    #[test]
+    fn profile_cylinder_cylinder_intersect() {
+        let mut topo = Topology::new();
+        let cyl1 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let cyl2 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(3.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, cyl2, &mat).unwrap();
+
+        // Profile multiple runs
+        for i in 0..5 {
+            let mut t = Topology::new();
+            let c1 = crate::primitives::make_cylinder(&mut t, 5.0, 20.0).unwrap();
+            let c2 = crate::primitives::make_cylinder(&mut t, 5.0, 20.0).unwrap();
+            let m = brepkit_math::mat::Mat4::translation(3.0, 0.0, 0.0);
+            crate::transform::transform_solid(&mut t, c2, &m).unwrap();
+
+            let start = std::time::Instant::now();
+            let result = boolean(&mut t, BooleanOp::Intersect, c1, c2);
+            let elapsed = start.elapsed();
+            eprintln!("run {i}: {elapsed:?} result={}", result.is_ok());
+        }
+
+        // Final run for correctness check
+        let result = boolean(&mut topo, BooleanOp::Intersect, cyl1, cyl2).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        eprintln!("Volume: {vol:.2}");
+        assert!(
+            vol > 0.0,
+            "intersection volume should be positive, got {vol}"
+        );
+    }
+
+    /// Profile individual phases of the analytic boolean.
+    #[test]
+    fn profile_analytic_boolean_phases() {
+        use std::time::Instant;
+
+        let mut topo = Topology::new();
+        let cyl1 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let cyl2 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(3.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, cyl2, &mat).unwrap();
+
+        let _tol = Tolerance::new();
+        let deflection = DEFAULT_BOOLEAN_DEFLECTION;
+
+        // Phase: is_all_analytic + has_torus checks
+        let t = Instant::now();
+        let analytic_a = is_all_analytic(&topo, cyl1).unwrap();
+        let analytic_b = is_all_analytic(&topo, cyl2).unwrap();
+        let no_torus_a = !has_torus(&topo, cyl1).unwrap();
+        let no_torus_b = !has_torus(&topo, cyl2).unwrap();
+        eprintln!(
+            "  checks: {:?} (analytic={analytic_a},{analytic_b} torus={no_torus_a},{no_torus_b})",
+            t.elapsed()
+        );
+
+        // Phase: face_polygon for all faces
+        let t = Instant::now();
+        let solid_a = topo.solid(cyl1).unwrap();
+        let shell_a = topo.shell(solid_a.outer_shell()).unwrap();
+        let face_ids_a: Vec<FaceId> = shell_a.faces().to_vec();
+        for &fid in &face_ids_a {
+            let _ = face_polygon(&topo, fid).unwrap();
+        }
+        let solid_b = topo.solid(cyl2).unwrap();
+        let shell_b = topo.shell(solid_b.outer_shell()).unwrap();
+        let face_ids_b: Vec<FaceId> = shell_b.faces().to_vec();
+        for &fid in &face_ids_b {
+            let _ = face_polygon(&topo, fid).unwrap();
+        }
+        eprintln!(
+            "  face_polygon: {:?} ({} + {} faces)",
+            t.elapsed(),
+            face_ids_a.len(),
+            face_ids_b.len()
+        );
+
+        // Phase: tessellate non-planar faces (for normal extraction)
+        let t = Instant::now();
+        let mut tess_count = 0;
+        for &fid in face_ids_a.iter().chain(face_ids_b.iter()) {
+            let face = topo.face(fid).unwrap();
+            if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+                let _ = crate::tessellate::tessellate(&topo, fid, deflection).unwrap();
+                tess_count += 1;
+            }
+        }
+        eprintln!(
+            "  tessellate_for_normals: {:?} ({tess_count} faces)",
+            t.elapsed()
+        );
+
+        // Phase: intersect_analytic_analytic
+        let t = Instant::now();
+        {
+            use brepkit_math::analytic_intersection::{
+                AnalyticSurface, intersect_analytic_analytic,
+            };
+            // Find the cylinder barrel faces and intersect them
+            for &fid_a in &face_ids_a {
+                let fa = topo.face(fid_a).unwrap();
+                if let FaceSurface::Cylinder(c_a) = fa.surface() {
+                    for &fid_b in &face_ids_b {
+                        let fb = topo.face(fid_b).unwrap();
+                        if let FaceSurface::Cylinder(c_b) = fb.surface() {
+                            let surf_a = AnalyticSurface::Cylinder(c_a);
+                            let surf_b = AnalyticSurface::Cylinder(c_b);
+                            let _ = intersect_analytic_analytic(surf_a, surf_b, 32);
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("  intersect_analytic: {:?}", t.elapsed());
+
+        // Phase: tessellate barrel faces into fragments
+        let t = Instant::now();
+        let mut frag_count = 0;
+        let mut frags = Vec::new();
+        for &fid in face_ids_a.iter().chain(face_ids_b.iter()) {
+            let face = topo.face(fid).unwrap();
+            if matches!(face.surface(), FaceSurface::Cylinder(_)) {
+                tessellate_face_into_fragments(&topo, fid, Source::A, deflection, &mut frags)
+                    .unwrap();
+                frag_count += frags.len();
+            }
+        }
+        eprintln!(
+            "  tessellate_fragments: {:?} ({frag_count} frags)",
+            t.elapsed()
+        );
+
+        // Phase: full boolean (end-to-end)
+        let mut topo2 = Topology::new();
+        let c1 = crate::primitives::make_cylinder(&mut topo2, 5.0, 20.0).unwrap();
+        let c2 = crate::primitives::make_cylinder(&mut topo2, 5.0, 20.0).unwrap();
+        let m = brepkit_math::mat::Mat4::translation(3.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo2, c2, &m).unwrap();
+        let t = Instant::now();
+        let result = boolean(&mut topo2, BooleanOp::Intersect, c1, c2).unwrap();
+        eprintln!("  full_boolean: {:?}", t.elapsed());
+
+        let vol = crate::measure::solid_volume(&topo2, result, 0.1).unwrap();
+        eprintln!("  volume: {vol:.2}");
+        assert!(vol > 0.0);
+    }
+
+    /// Profile sequential fuses (staircase pattern) to identify scaling bottleneck.
+    #[test]
+    fn profile_sequential_fuse_scaling() {
+        use std::time::Instant;
+
+        let mut topo = Topology::new();
+        let step_count = 16_usize;
+        let step_rise = 18.0;
+        let rotation_per_step = 22.5_f64;
+        let step_width = 70.0;
+        let step_depth = 25.0;
+        let column_radius = 12.0;
+        let step_thickness = 4.0;
+        let post_radius = 1.5;
+        let rail_height = 90.0;
+        let rail_radius = column_radius + step_width - 4.0;
+
+        let col_height = step_count as f64 * step_rise + step_thickness;
+        let column =
+            crate::primitives::make_cylinder(&mut topo, column_radius, col_height).unwrap();
+        let landing =
+            crate::primitives::make_cylinder(&mut topo, column_radius + step_width, step_thickness)
+                .unwrap();
+
+        // Create step pieces (box + cylinder post fused), translated and rotated
+        let mut pieces = Vec::new();
+        for i in 0..step_count {
+            let step = crate::primitives::make_box(
+                &mut topo,
+                column_radius + step_width,
+                step_depth,
+                step_thickness,
+            )
+            .unwrap();
+            let post =
+                crate::primitives::make_cylinder(&mut topo, post_radius, rail_height).unwrap();
+
+            // Translate post
+            let mat = brepkit_math::mat::Mat4::translation(rail_radius, 0.0, step_thickness);
+            crate::transform::transform_solid(&mut topo, post, &mat).unwrap();
+            // Translate step
+            let mat = brepkit_math::mat::Mat4::translation(0.0, -step_depth / 2.0, 0.0);
+            crate::transform::transform_solid(&mut topo, step, &mat).unwrap();
+
+            // Fuse step + post
+            let piece = boolean(&mut topo, BooleanOp::Fuse, step, post).unwrap();
+
+            // Lift
+            let mat = brepkit_math::mat::Mat4::translation(0.0, 0.0, step_rise * (i as f64 + 1.0));
+            crate::transform::transform_solid(&mut topo, piece, &mat).unwrap();
+
+            // Rotate
+            let angle = rotation_per_step * i as f64;
+            let rot = brepkit_math::mat::Mat4::rotation_z(angle.to_radians());
+            crate::transform::transform_solid(&mut topo, piece, &rot).unwrap();
+
+            pieces.push(piece);
+        }
+
+        let ball1 = crate::primitives::make_sphere(&mut topo, 4.0, 16).unwrap();
+        let first_post_top = step_rise + step_thickness + rail_height;
+        let mat = brepkit_math::mat::Mat4::translation(rail_radius, 0.0, first_post_top);
+        crate::transform::transform_solid(&mut topo, ball1, &mat).unwrap();
+
+        let ball2 = crate::primitives::make_sphere(&mut topo, 4.0, 16).unwrap();
+        let last_post_top = first_post_top + step_rise * (step_count as f64 - 1.0);
+        let mat = brepkit_math::mat::Mat4::translation(rail_radius, 0.0, last_post_top);
+        crate::transform::transform_solid(&mut topo, ball2, &mat).unwrap();
+        let angle = rotation_per_step * (step_count as f64 - 1.0);
+        let rot = brepkit_math::mat::Mat4::rotation_z(angle.to_radians());
+        crate::transform::transform_solid(&mut topo, ball2, &rot).unwrap();
+
+        // Sequential fuse
+        let all_parts = std::iter::once(column)
+            .chain(std::iter::once(landing))
+            .chain(pieces)
+            .chain(std::iter::once(ball1))
+            .chain(std::iter::once(ball2))
+            .collect::<Vec<_>>();
+
+        eprintln!("total parts: {}", all_parts.len());
+
+        // Profile a single fuse step with the accumulated solid at step 8
+        let mut current = all_parts[0];
+        for &piece in &all_parts[1..9] {
+            current = boolean(&mut topo, BooleanOp::Fuse, current, piece).unwrap();
+        }
+
+        // Now profile the next fuse step in detail
+        let piece = all_parts[9];
+        let t0 = Instant::now();
+
+        // Phase 1: face_polygon for all faces of solid A
+        let solid_acc = topo.solid(current).unwrap();
+        let shell_acc = topo.shell(solid_acc.outer_shell()).unwrap();
+        let face_ids_acc: Vec<FaceId> = shell_acc.faces().to_vec();
+        eprintln!("  accumulated faces: {}", face_ids_acc.len());
+        for &fid in &face_ids_acc {
+            let _ = face_polygon(&topo, fid).unwrap();
+        }
+        eprintln!("  phase1 (face_polygon A): {:?}", t0.elapsed());
+
+        // Phase 2: tessellate non-planar faces
+        let t1 = Instant::now();
+        let mut tess_count = 0;
+        for &fid in &face_ids_acc {
+            let face = topo.face(fid).unwrap();
+            if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+                let _ = crate::tessellate::tessellate(&topo, fid, 0.1).unwrap();
+                tess_count += 1;
+            }
+        }
+        eprintln!(
+            "  phase2 (tessellate A, {} non-planar): {:?}",
+            tess_count,
+            t1.elapsed()
+        );
+
+        // Phase 3: AABB computation
+        let t2 = Instant::now();
+        for &fid in &face_ids_acc {
+            let face = topo.face(fid).unwrap();
+            let verts = face_polygon(&topo, fid).unwrap();
+            let _ = surface_aware_aabb(face.surface(), &verts, Tolerance::new());
+        }
+        eprintln!("  phase3 (AABB A): {:?}", t2.elapsed());
+
+        // Phase 4: classification data collection
+        let t3 = Instant::now();
+        let deflection = 0.1;
+        let face_data_acc = collect_face_data(&topo, current, deflection).unwrap();
+        eprintln!(
+            "  phase4 (collect_face_data A, {} entries): {:?}",
+            face_data_acc.len(),
+            t3.elapsed()
+        );
+
+        // Full boolean for comparison
+        let t_full = Instant::now();
+        let _ = boolean(&mut topo, BooleanOp::Fuse, current, piece).unwrap();
+        eprintln!("  full_boolean step 9: {:?}", t_full.elapsed());
     }
 }

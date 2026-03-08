@@ -210,6 +210,25 @@ impl Aabb3 {
         )
     }
 
+    /// Test whether a ray (origin + positive-t direction) intersects this box.
+    ///
+    /// Uses the slab method. Returns `true` if the ray hits the box at any
+    /// `t >= 0`.
+    #[must_use]
+    pub fn ray_intersects(self, origin: Point3, inv_dir: Vec3) -> bool {
+        let t1x = (self.min.x() - origin.x()) * inv_dir.x();
+        let t2x = (self.max.x() - origin.x()) * inv_dir.x();
+        let t1y = (self.min.y() - origin.y()) * inv_dir.y();
+        let t2y = (self.max.y() - origin.y()) * inv_dir.y();
+        let t1z = (self.min.z() - origin.z()) * inv_dir.z();
+        let t2z = (self.max.z() - origin.z()) * inv_dir.z();
+
+        let tmin = t1x.min(t2x).max(t1y.min(t2y)).max(t1z.min(t2z));
+        let tmax = t1x.max(t2x).min(t1y.max(t2y)).min(t1z.max(t2z));
+
+        tmax >= tmin.max(0.0)
+    }
+
     /// Squared distance from a point to the closest point on the box.
     #[must_use]
     pub fn distance_squared_to_point(self, p: Point3) -> f64 {
