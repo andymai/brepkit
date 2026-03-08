@@ -12,7 +12,9 @@
     missing_docs
 )]
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use std::hint::black_box;
+
+use criterion::{Criterion, criterion_group, criterion_main};
 
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Vec3;

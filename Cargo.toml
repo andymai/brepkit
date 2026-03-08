@@ -32,7 +32,7 @@ wasm-bindgen = "=0.2.114"  # Pinned: must match wasm-bindgen-cli in CI
 proptest = "1"
 
 # Benchmarking
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 # IO formats
 zip = { version = "2", default-features = false, features = ["deflate"] }
