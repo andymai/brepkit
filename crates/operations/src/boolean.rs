@@ -1005,6 +1005,7 @@ impl AnalyticClassifier {
 fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<AnalyticClassifier> {
     let s = topo.solid(solid).ok()?;
     let shell = topo.shell(s.outer_shell()).ok()?;
+    let tol = Tolerance::new();
 
     let mut sphere_info: Option<(Point3, f64)> = None;
     for &fid in shell.faces() {
@@ -1014,7 +1015,7 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
                 if let Some((c, r)) = sphere_info {
                     // All sphere faces must reference the same sphere.
                     let dc = (c - sph.center()).length();
-                    if dc > 1e-7 || (r - sph.radius()).abs() > 1e-7 {
+                    if dc > tol.linear || (r - sph.radius()).abs() > tol.linear {
                         return None;
                     }
                 } else {

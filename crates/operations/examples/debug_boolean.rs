@@ -44,9 +44,11 @@ fn main() {
                     d
                 )
             }
+            brepkit_topology::face::FaceSurface::Nurbs(_) => "Nurbs".to_string(),
             brepkit_topology::face::FaceSurface::Cylinder(_) => "Cylinder".to_string(),
+            brepkit_topology::face::FaceSurface::Cone(_) => "Cone".to_string(),
             brepkit_topology::face::FaceSurface::Sphere(_) => "Sphere".to_string(),
-            _ => format!("{:?}", std::mem::discriminant(surface)),
+            brepkit_topology::face::FaceSurface::Torus(_) => "Torus".to_string(),
         };
 
         eprintln!(
