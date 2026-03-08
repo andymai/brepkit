@@ -445,6 +445,8 @@ pub fn face_polygon(
                 EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
             );
         if is_closed_edge {
+            // Must use CLOSED_CURVE_SAMPLES (not a larger value) — vertex count
+            // must match create_band_fragments and inner-wire dedup for sharing.
             let mut sampled = sample_edge_curve(curve, CLOSED_CURVE_SAMPLES);
             if !oe.is_forward() {
                 sampled.reverse();
@@ -1980,8 +1982,9 @@ fn analytic_boolean(
                 };
 
                 if let (Some(surf_a_an), Some(surf_b_an)) = (surf_a_opt, surf_b_opt) {
-                    // Mark both faces for tessellation — chord splitting
-                    // can't handle 3D intersection curves on curved surfaces.
+                    // Mark both faces for tessellation unconditionally — even
+                    // if intersection fails, chord splitting can't handle curved
+                    // surfaces. Over-tessellation is safe; under-tessellation is not.
                     analytic_analytic_faces_a.insert(ia);
                     analytic_analytic_faces_b.insert(ib);
                     if let Ok(curves) = intersect_analytic_analytic(surf_a_an, surf_b_an, 32) {
