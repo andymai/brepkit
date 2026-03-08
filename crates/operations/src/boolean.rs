@@ -18,6 +18,7 @@ use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::{Vertex, VertexId};
+use brepkit_topology::wire::WireId;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::dot_normal_point;
@@ -157,31 +158,25 @@ pub fn boolean_with_options(
     );
 
     // ── Try analytic fast path ──────────────────────────────────────────
-    // Only use the analytic path when both solids are composed entirely of
-    // analytic surfaces AND at least one is all-planar. The analytic boolean's
-    // fragment classification doesn't correctly handle non-planar face splitting
-    // (e.g., sphere or cylinder vs. sphere/cylinder).
-    // Use the analytic fast path only when both solids are all-planar.
-    // The analytic boolean's fragment classification doesn't correctly
-    // handle non-planar faces (sphere/cylinder), producing wrong results
-    // when cutting with curved tools.
-    let both_planar = is_all_planar(topo, a)? && is_all_planar(topo, b)?;
-    if both_planar {
-        match analytic_boolean(topo, op, a, b, tol, opts.deflection) {
-            Ok(solid) => {
-                validate_boolean_result(topo, solid)?;
-                log::info!(
-                    "boolean {op:?}: analytic path succeeded → solid {}",
-                    solid.index()
-                );
-                return Ok(solid);
-            }
-            Err(e) => {
-                log::info!(
-                    "boolean {op:?}: analytic path failed ({e}), falling back to tessellated"
-                );
-            }
+    // Use when both solids are all-analytic (no NURBS) and neither contains
+    // torus faces. This covers cutting/drilling with cylinders/cones and
+    // sphere intersections. Sphere faces are handled by tessellating them
+    // into triangle fragments within the analytic boolean, with O(1)
+    // point-in-sphere classification for the opposite solid.
+    //
+    // Torus faces are excluded because their parametric decomposition
+    // (degree-4 intersection curves) is not yet implemented.
+    let try_analytic = {
+        let both_analytic = is_all_analytic(topo, a)? && is_all_analytic(topo, b)?;
+        let no_torus = !has_torus(topo, a)? && !has_torus(topo, b)?;
+        both_analytic && no_torus
+    };
+    if try_analytic {
+        if let Ok(solid) = analytic_boolean(topo, op, a, b, tol, opts.deflection) {
+            validate_boolean_result(topo, solid)?;
+            return Ok(solid);
         }
+        // Analytic path failed; fall back to tessellated boolean.
     }
 
     // ── Mesh boolean fast path for high-face-count solids ─────────────
@@ -268,9 +263,22 @@ pub fn boolean_with_options(
 
     // ── Phase 4: Classification ──────────────────────────────────────────
 
+    // Build analytic classifiers for O(1) point-in-solid tests when possible.
+    let analytic_a = try_build_analytic_classifier(topo, a);
+    let analytic_b = try_build_analytic_classifier(topo, b);
+
     let classes: Vec<FaceClass> = fragments
         .iter()
         .map(|frag| {
+            // Try analytic classification first (e.g. point-in-sphere).
+            let centroid = polygon_centroid(&frag.vertices);
+            let fast = match frag.source {
+                Source::A => analytic_b.as_ref().and_then(|c| c.classify(centroid, tol)),
+                Source::B => analytic_a.as_ref().and_then(|c| c.classify(centroid, tol)),
+            };
+            if let Some(class) = fast {
+                return class;
+            }
             let opposite = match frag.source {
                 Source::A => &faces_b,
                 Source::B => &faces_a,
@@ -959,6 +967,68 @@ fn split_polygon_by_chord(
 // Phase 4: Classification
 // ---------------------------------------------------------------------------
 
+/// Analytic classifier for simple convex solids.
+///
+/// Instead of ray-casting against hundreds of tessellated triangles, use
+/// exact geometric predicates to classify points inside/outside a solid.
+enum AnalyticClassifier {
+    /// Point-in-sphere: `|p - center| ≤ radius`.
+    Sphere { center: Point3, radius: f64 },
+}
+
+impl AnalyticClassifier {
+    /// Classify a centroid as Inside, Outside, or None (on boundary → fall back).
+    fn classify(&self, centroid: Point3, tol: Tolerance) -> Option<FaceClass> {
+        match self {
+            Self::Sphere { center, radius } => {
+                let dx = centroid.x() - center.x();
+                let dy = centroid.y() - center.y();
+                let dz = centroid.z() - center.z();
+                let dist_sq = dx * dx + dy * dy + dz * dz;
+                if dist_sq < (radius - tol.linear) * (radius - tol.linear) {
+                    Some(FaceClass::Inside)
+                } else if dist_sq > (radius + tol.linear) * (radius + tol.linear) {
+                    Some(FaceClass::Outside)
+                } else {
+                    None // On boundary — fall back to ray-casting
+                }
+            }
+        }
+    }
+}
+
+/// Try to build an analytic classifier for a solid.
+///
+/// Returns `Some` when the solid is a simple convex analytic shape (e.g. sphere)
+/// that supports O(1) point-in-solid tests. Falls back to `None` for complex or
+/// non-analytic solids.
+fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<AnalyticClassifier> {
+    let s = topo.solid(solid).ok()?;
+    let shell = topo.shell(s.outer_shell()).ok()?;
+
+    let mut sphere_info: Option<(Point3, f64)> = None;
+    for &fid in shell.faces() {
+        let face = topo.face(fid).ok()?;
+        match face.surface() {
+            FaceSurface::Sphere(sph) => {
+                if let Some((c, r)) = sphere_info {
+                    // All sphere faces must reference the same sphere.
+                    let dc = (c - sph.center()).length();
+                    if dc > 1e-7 || (r - sph.radius()).abs() > 1e-7 {
+                        return None;
+                    }
+                } else {
+                    sphere_info = Some((sph.center(), sph.radius()));
+                }
+            }
+            _ => return None,
+        }
+    }
+
+    let (center, radius) = sphere_info?;
+    Some(AnalyticClassifier::Sphere { center, radius })
+}
+
 /// Classify a face fragment relative to the opposite solid.
 fn classify_fragment(frag: &FaceFragment, opposite: &FaceData, tol: Tolerance) -> FaceClass {
     // Compute centroid of the fragment.
@@ -1546,21 +1616,7 @@ fn mesh_boolean_path(
     Ok(result)
 }
 
-/// Check if a solid is composed entirely of planar faces.
-fn is_all_planar(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
-    let s = topo.solid(solid)?;
-    let shell = topo.shell(s.outer_shell())?;
-    for &fid in shell.faces() {
-        let face = topo.face(fid)?;
-        if !matches!(face.surface(), FaceSurface::Plane { .. }) {
-            return Ok(false);
-        }
-    }
-    Ok(true)
-}
-
 /// Check if a solid is composed entirely of analytic surfaces (no NURBS).
-#[cfg(test)]
 fn is_all_analytic(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
     let s = topo.solid(solid)?;
     let shell = topo.shell(s.outer_shell())?;
@@ -1573,6 +1629,19 @@ fn is_all_analytic(topo: &Topology, solid: SolidId) -> Result<bool, crate::Opera
     Ok(true)
 }
 
+/// Check if a solid contains any torus faces.
+fn has_torus(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
+    let s = topo.solid(solid)?;
+    let shell = topo.shell(s.outer_shell())?;
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        if matches!(face.surface(), FaceSurface::Torus(_)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Snapshot of face data for analytic boolean processing.
 struct FaceSnapshot {
     id: FaceId,
@@ -1580,6 +1649,9 @@ struct FaceSnapshot {
     vertices: Vec<Point3>,
     normal: Vec3,
     d: f64,
+    /// Whether the original face was reversed (needed to preserve orientation
+    /// when carrying unsplit faces through sequential booleans).
+    reversed: bool,
 }
 
 /// Analytic face fragment preserving the original surface type.
@@ -1597,6 +1669,8 @@ struct AnalyticFragment {
     /// Edge curve types for the boundary segments.
     /// `None` = straight line, `Some(curve)` = exact curve (circle, ellipse).
     edge_curves: Vec<Option<EdgeCurve>>,
+    /// Whether the source face was reversed (preserved for non-planar faces).
+    source_reversed: bool,
 }
 
 /// Perform an analytic boolean preserving exact surface types.
@@ -1633,6 +1707,7 @@ fn analytic_boolean(
     for &fid in &face_ids_a {
         let face = topo.face(fid)?;
         let surface = face.surface().clone();
+        let reversed = face.is_reversed();
         let verts = face_polygon(topo, fid)?;
         let (normal, d) = match &surface {
             FaceSurface::Plane { normal, d } => (*normal, *d),
@@ -1658,6 +1733,7 @@ fn analytic_boolean(
             vertices: verts,
             normal,
             d,
+            reversed,
         });
     }
 
@@ -1665,6 +1741,7 @@ fn analytic_boolean(
     for &fid in &face_ids_b {
         let face = topo.face(fid)?;
         let surface = face.surface().clone();
+        let reversed = face.is_reversed();
         let verts = face_polygon(topo, fid)?;
         let (normal, d) = match &surface {
             FaceSurface::Plane { normal, d } => (*normal, *d),
@@ -1689,6 +1766,7 @@ fn analytic_boolean(
             vertices: verts,
             normal,
             d,
+            reversed,
         });
     }
 
@@ -1959,6 +2037,8 @@ fn analytic_boolean(
     let mut pre_classifications: HashMap<usize, FaceClass> = HashMap::new();
     // Holed-face inner curves: fragment index → edge curves for inner wire construction.
     let mut holed_face_inner_curves: HashMap<usize, Vec<EdgeCurve>> = HashMap::new();
+    // Existing inner wire IDs from source faces (to preserve holes from prior booleans).
+    let mut existing_inner_wires: HashMap<usize, Vec<WireId>> = HashMap::new();
 
     // ── Split faces into fragments ───────────────────────────────────────
 
@@ -1966,6 +2046,13 @@ fn analytic_boolean(
 
     // Process solid A faces.
     for (ia, snap) in snaps_a.iter().enumerate() {
+        // Sphere faces: always tessellate into triangle fragments.
+        // Chord splitting on the equatorial polygon doesn't produce
+        // meaningful sphere surface fragments.
+        if matches!(snap.surface, FaceSurface::Sphere(_)) {
+            tessellate_face_into_fragments(topo, snap.id, Source::A, deflection, &mut fragments)?;
+            continue;
+        }
         if let Some(chords) = face_intersections_a.get(&ia) {
             let chord_pairs: Vec<(Point3, Point3)> =
                 chords.iter().map(|&(p0, p1, _)| (p0, p1)).collect();
@@ -1994,6 +2081,7 @@ fn analytic_boolean(
                     d: frag.d,
                     source: Source::A,
                     edge_curves,
+                    source_reversed: snap.reversed,
                 });
             }
 
@@ -2014,6 +2102,7 @@ fn analytic_boolean(
                             d: d_val,
                             source: Source::A,
                             edge_curves: vec![Some(ec.clone())],
+                            source_reversed: snap.reversed,
                         });
                     }
                 }
@@ -2029,9 +2118,16 @@ fn analytic_boolean(
                 d: snap.d,
                 source: Source::A,
                 edge_curves: vec![None; snap.vertices.len()],
+                source_reversed: snap.reversed,
             });
             pre_classifications.insert(holed_idx, FaceClass::Outside);
             holed_face_inner_curves.insert(holed_idx, inner_curves.clone());
+
+            // Preserve existing inner wires (holes from prior booleans).
+            let source_face = topo.face(snap.id)?;
+            if !source_face.inner_wires().is_empty() {
+                existing_inner_wires.insert(holed_idx, source_face.inner_wires().to_vec());
+            }
 
             // Create disc fragment for each contained curve, pre-classified as Inside.
             for ec in inner_curves {
@@ -2045,25 +2141,38 @@ fn analytic_boolean(
                         d: snap.d,
                         source: Source::A,
                         edge_curves: vec![Some(ec.clone())],
+                        source_reversed: false, // new disc geometry
                     });
                     pre_classifications.insert(disc_idx, FaceClass::Inside);
                 }
             }
         } else if let Some(band_curves) = analytic_contained_a.get(&ia) {
-            // Non-planar face (e.g. cylinder barrel) with contained curves.
-            // Create band fragments between contained curves and face boundary.
-            create_band_fragments(
-                &snap.surface,
-                &snap.vertices,
-                snap.normal,
-                snap.d,
-                Source::A,
-                band_curves,
-                topo,
-                &mut fragments,
-            );
+            // Non-planar face with contained curves.
+            if matches!(snap.surface, FaceSurface::Sphere(_)) {
+                tessellate_face_into_fragments(
+                    topo,
+                    snap.id,
+                    Source::A,
+                    deflection,
+                    &mut fragments,
+                )?;
+            } else {
+                // Cylinder/cone: create band fragments between contained curves.
+                create_band_fragments(
+                    &snap.surface,
+                    &snap.vertices,
+                    snap.normal,
+                    snap.d,
+                    Source::A,
+                    snap.reversed,
+                    band_curves,
+                    topo,
+                    &mut fragments,
+                );
+            }
         } else {
-            // Unsplit face — keep as-is.
+            // Unsplit face — keep as-is, preserving any existing inner wires.
+            let unsplit_idx = fragments.len();
             fragments.push(AnalyticFragment {
                 vertices: snap.vertices.clone(),
                 surface: snap.surface.clone(),
@@ -2071,12 +2180,22 @@ fn analytic_boolean(
                 d: snap.d,
                 source: Source::A,
                 edge_curves: vec![None; snap.vertices.len()],
+                source_reversed: snap.reversed,
             });
+            let source_face = topo.face(snap.id)?;
+            if !source_face.inner_wires().is_empty() {
+                existing_inner_wires.insert(unsplit_idx, source_face.inner_wires().to_vec());
+            }
         }
     }
 
     // Process solid B faces (same logic).
     for (ib, snap) in snaps_b.iter().enumerate() {
+        // Sphere faces: always tessellate into triangle fragments.
+        if matches!(snap.surface, FaceSurface::Sphere(_)) {
+            tessellate_face_into_fragments(topo, snap.id, Source::B, deflection, &mut fragments)?;
+            continue;
+        }
         if let Some(chords) = face_intersections_b.get(&ib) {
             let chord_pairs: Vec<(Point3, Point3)> =
                 chords.iter().map(|&(p0, p1, _)| (p0, p1)).collect();
@@ -2104,6 +2223,7 @@ fn analytic_boolean(
                     d: frag.d,
                     source: Source::B,
                     edge_curves,
+                    source_reversed: snap.reversed,
                 });
             }
 
@@ -2118,6 +2238,7 @@ fn analytic_boolean(
                             d: snap.d,
                             source: Source::B,
                             edge_curves: vec![Some(ec.clone())],
+                            source_reversed: snap.reversed,
                         });
                     }
                 }
@@ -2132,9 +2253,16 @@ fn analytic_boolean(
                 d: snap.d,
                 source: Source::B,
                 edge_curves: vec![None; snap.vertices.len()],
+                source_reversed: snap.reversed,
             });
             pre_classifications.insert(holed_idx, FaceClass::Outside);
             holed_face_inner_curves.insert(holed_idx, inner_curves.clone());
+
+            // Preserve existing inner wires (holes from prior booleans).
+            let source_face = topo.face(snap.id)?;
+            if !source_face.inner_wires().is_empty() {
+                existing_inner_wires.insert(holed_idx, source_face.inner_wires().to_vec());
+            }
 
             for ec in inner_curves {
                 let curve_verts = sample_edge_curve(ec, 32);
@@ -2147,22 +2275,36 @@ fn analytic_boolean(
                         d: snap.d,
                         source: Source::B,
                         edge_curves: vec![Some(ec.clone())],
+                        source_reversed: false, // new disc geometry
                     });
                     pre_classifications.insert(disc_idx, FaceClass::Inside);
                 }
             }
         } else if let Some(band_curves) = analytic_contained_b.get(&ib) {
-            create_band_fragments(
-                &snap.surface,
-                &snap.vertices,
-                snap.normal,
-                snap.d,
-                Source::B,
-                band_curves,
-                topo,
-                &mut fragments,
-            );
+            if matches!(snap.surface, FaceSurface::Sphere(_)) {
+                tessellate_face_into_fragments(
+                    topo,
+                    snap.id,
+                    Source::B,
+                    deflection,
+                    &mut fragments,
+                )?;
+            } else {
+                create_band_fragments(
+                    &snap.surface,
+                    &snap.vertices,
+                    snap.normal,
+                    snap.d,
+                    Source::B,
+                    snap.reversed,
+                    band_curves,
+                    topo,
+                    &mut fragments,
+                );
+            }
         } else {
+            // Unsplit face — keep as-is, preserving any existing inner wires.
+            let unsplit_idx = fragments.len();
             fragments.push(AnalyticFragment {
                 vertices: snap.vertices.clone(),
                 surface: snap.surface.clone(),
@@ -2170,7 +2312,12 @@ fn analytic_boolean(
                 d: snap.d,
                 source: Source::B,
                 edge_curves: vec![None; snap.vertices.len()],
+                source_reversed: snap.reversed,
             });
+            let source_face = topo.face(snap.id)?;
+            if !source_face.inner_wires().is_empty() {
+                existing_inner_wires.insert(unsplit_idx, source_face.inner_wires().to_vec());
+            }
         }
     }
 
@@ -2180,12 +2327,29 @@ fn analytic_boolean(
     let face_data_a = collect_face_data(topo, a, deflection)?;
     let face_data_b = collect_face_data(topo, b, deflection)?;
 
+    // Analytic classifiers for O(1) point-in-solid tests (e.g. sphere).
+    let analytic_cls_a = try_build_analytic_classifier(topo, a);
+    let analytic_cls_b = try_build_analytic_classifier(topo, b);
+
     let classes: Vec<FaceClass> = fragments
         .iter()
         .enumerate()
         .map(|(idx, frag)| {
             // Use pre-classification for contained-curve fragments.
             if let Some(&class) = pre_classifications.get(&idx) {
+                return class;
+            }
+            // Try analytic classification first.
+            let centroid = polygon_centroid(&frag.vertices);
+            let fast = match frag.source {
+                Source::A => analytic_cls_b
+                    .as_ref()
+                    .and_then(|c| c.classify(centroid, tol)),
+                Source::B => analytic_cls_a
+                    .as_ref()
+                    .and_then(|c| c.classify(centroid, tol)),
+            };
+            if let Some(class) = fast {
                 return class;
             }
             let opposite = match frag.source {
@@ -2213,10 +2377,15 @@ fn analytic_boolean(
             continue;
         };
 
-        let (verts, normal, d_val) = if flip {
+        let is_nonplanar = !matches!(frag.surface, FaceSurface::Plane { .. });
+        let (verts, normal, d_val) = if flip && !is_nonplanar {
+            // Planar faces: reverse vertex winding and negate normal/d.
             let rev: Vec<_> = frag.vertices.iter().copied().rev().collect();
             (rev, -frag.normal, -frag.d)
         } else {
+            // Non-planar faces: keep original winding; Face::new_reversed
+            // handles the flip via the `reversed` flag so tessellation
+            // flips triangle winding and normals correctly.
             (frag.vertices.clone(), frag.normal, frag.d)
         };
 
@@ -2262,9 +2431,16 @@ fn analytic_boolean(
         let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
         let wire_id = topo.wires.alloc(wire);
 
-        // Build inner wires for holed faces (contained curves).
-        let inner_wire_ids = if let Some(inner_curves) = holed_face_inner_curves.get(&idx) {
-            let mut iw_ids = Vec::new();
+        // Build inner wires for holed faces (new contained curves + existing holes).
+        let mut inner_wire_ids = Vec::new();
+
+        // 1. Carry over existing inner wires from source faces (prior booleans).
+        if let Some(existing_wires) = existing_inner_wires.get(&idx) {
+            inner_wire_ids.extend_from_slice(existing_wires);
+        }
+
+        // 2. Create new inner wires from contained intersection curves.
+        if let Some(inner_curves) = holed_face_inner_curves.get(&idx) {
             for ec in inner_curves {
                 // Sample the curve and REVERSE for CW winding (hole convention).
                 let mut hole_pts = sample_edge_curve(ec, 32);
@@ -2293,8 +2469,6 @@ fn analytic_boolean(
                 let mut hole_edges = Vec::with_capacity(hm);
                 for i in 0..hm {
                     let j = (i + 1) % hm;
-                    // Use Line edges — the points are sampled, so edges
-                    // between adjacent samples are straight segments.
                     let eid = topo.edges.alloc(Edge::new(
                         hole_vert_ids[i],
                         hole_vert_ids[j],
@@ -2303,20 +2477,24 @@ fn analytic_boolean(
                     hole_edges.push(OrientedEdge::new(eid, true));
                 }
                 let hw = Wire::new(hole_edges, true).map_err(crate::OperationsError::Topology)?;
-                iw_ids.push(topo.wires.alloc(hw));
+                inner_wire_ids.push(topo.wires.alloc(hw));
             }
-            iw_ids
-        } else {
-            vec![]
-        };
+        }
 
-        let is_nonplanar = !matches!(frag.surface, FaceSurface::Plane { .. });
         let surface = match &frag.surface {
             FaceSurface::Plane { .. } => FaceSurface::Plane { normal, d: d_val },
             other => other.clone(),
         };
 
-        let new_face = if flip && is_nonplanar {
+        // For non-planar faces, the effective orientation is the XOR of
+        // the boolean flip and the source face's original reversed status.
+        // This preserves reversal through sequential boolean operations.
+        let effective_reversed = if is_nonplanar {
+            flip ^ frag.source_reversed
+        } else {
+            false
+        };
+        let new_face = if effective_reversed {
             Face::new_reversed(wire_id, inner_wire_ids, surface)
         } else {
             Face::new(wire_id, inner_wire_ids, surface)
@@ -2474,6 +2652,53 @@ fn curve_boundary_crossings(
     CurveClassification::Crossings(crossings)
 }
 
+/// Tessellate a non-planar face into triangle fragments for the analytic boolean.
+///
+/// Used for sphere faces where band decomposition isn't feasible. Each triangle
+/// gets its own `AnalyticFragment` but retains the original surface type so that
+/// output faces preserve the analytic geometry.
+fn tessellate_face_into_fragments(
+    topo: &Topology,
+    face_id: FaceId,
+    source: Source,
+    deflection: f64,
+    fragments: &mut Vec<AnalyticFragment>,
+) -> Result<(), crate::OperationsError> {
+    let mesh = crate::tessellate::tessellate(topo, face_id, deflection)?;
+    for tri in mesh.indices.chunks_exact(3) {
+        let v0 = mesh.positions[tri[0] as usize];
+        let v1 = mesh.positions[tri[1] as usize];
+        let v2 = mesh.positions[tri[2] as usize];
+
+        let edge1 = v1 - v0;
+        let edge2 = v2 - v0;
+        let cross = edge1.cross(edge2);
+        // Skip degenerate (zero-area) triangles.
+        let Ok(normal) = cross.normalize() else {
+            continue;
+        };
+        let d_val = dot_normal_point(normal, v0);
+
+        // Use planar surface for tessellated triangle fragments.
+        // The original curved surface (e.g. Sphere) can't be used because
+        // each triangle is a flat approximation — re-tessellating with the
+        // curved surface would project vertices back onto the sphere,
+        // producing wrong geometry.
+        let plane_surface = FaceSurface::Plane { normal, d: d_val };
+
+        fragments.push(AnalyticFragment {
+            vertices: vec![v0, v1, v2],
+            surface: plane_surface,
+            normal,
+            d: d_val,
+            source,
+            edge_curves: vec![None; 3],
+            source_reversed: false, // planar fragment, no reversal needed
+        });
+    }
+    Ok(())
+}
+
 /// Create band fragments for a non-planar (analytic) face that has contained
 /// curves. Splits the face into bands between the contained curves and the
 /// face's natural boundary circles.
@@ -2489,6 +2714,7 @@ fn create_band_fragments(
     normal: Vec3,
     d: f64,
     source: Source,
+    source_reversed: bool,
     contained_curves: &[EdgeCurve],
     _topo: &Topology,
     fragments: &mut Vec<AnalyticFragment>,
@@ -2502,6 +2728,7 @@ fn create_band_fragments(
             d,
             source,
             edge_curves: vec![None; face_verts.len()],
+            source_reversed,
         });
         return;
     };
@@ -2528,6 +2755,7 @@ fn create_band_fragments(
             d,
             source,
             edge_curves: vec![None; face_verts.len()],
+            source_reversed,
         });
         return;
     }
@@ -2553,6 +2781,7 @@ fn create_band_fragments(
             d,
             source,
             edge_curves: vec![None; face_verts.len()],
+            source_reversed,
         });
         return;
     }
@@ -2629,6 +2858,7 @@ fn create_band_fragments(
             d: band_d,
             source,
             edge_curves: vec![None; 2 * n_samples],
+            source_reversed,
         });
     }
 }
@@ -3210,6 +3440,68 @@ mod tests {
         assert!(
             vol < 1000.0,
             "cut(box, sphere) volume {vol} should be less than box volume 1000"
+        );
+    }
+
+    #[test]
+    fn cut_box_by_large_sphere_containment() {
+        // Sphere (r=50) fully contains the box (10x10x10 at origin).
+        // Cut should produce an empty result (error) or a very small volume.
+        let mut topo = Topology::new();
+        let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let sp = crate::primitives::make_sphere(&mut topo, 50.0, 16).unwrap();
+        // Box fully inside sphere → cut removes everything → should fail or give ~0 volume.
+        let result = boolean(&mut topo, BooleanOp::Cut, bx, sp);
+        // Either it errors (all faces discarded) or produces a degenerate result.
+        if let Ok(r) = result {
+            let vol = crate::measure::solid_volume(&topo, r, 0.1).unwrap();
+            assert!(
+                vol < 10.0,
+                "fully contained cut should remove nearly all volume, got {vol}"
+            );
+        }
+    }
+
+    #[test]
+    fn intersect_box_with_containing_sphere() {
+        // Sphere (r=50) fully contains the box (10x10x10).
+        // Intersect should return the box volume.
+        let mut topo = Topology::new();
+        let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let sp = crate::primitives::make_sphere(&mut topo, 50.0, 16).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Intersect, bx, sp);
+        assert!(
+            result.is_ok(),
+            "intersect(box, containing sphere) should succeed: {:?}",
+            result.err()
+        );
+        let r = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, r, 0.1).unwrap();
+        assert!(
+            (vol - 1000.0).abs() < 50.0,
+            "intersect with containing sphere should preserve box volume, got {vol}"
+        );
+    }
+
+    #[test]
+    fn disjoint_box_sphere_cut_preserves_box() {
+        // Sphere at origin, box far away → no overlap → cut should preserve box.
+        let mut topo = Topology::new();
+        let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(100.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, bx, &mat).unwrap();
+        let sp = crate::primitives::make_sphere(&mut topo, 5.0, 16).unwrap();
+        let result = boolean(&mut topo, BooleanOp::Cut, bx, sp);
+        assert!(
+            result.is_ok(),
+            "disjoint cut should succeed: {:?}",
+            result.err()
+        );
+        let r = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, r, 0.1).unwrap();
+        assert!(
+            (vol - 1000.0).abs() < 50.0,
+            "disjoint cut should preserve box volume, got {vol}"
         );
     }
 

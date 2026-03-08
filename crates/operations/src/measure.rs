@@ -549,6 +549,24 @@ pub fn solid_volume(
         return Ok(v);
     }
 
+    // For solids with faces that have inner wires (holes from boolean ops),
+    // the watertight tessellation may produce cracks at hole boundaries
+    // because hole edges and adjacent curved face edges aren't shared.
+    // Also, the centroid-based winding correction in the per-face fallback
+    // fails for holes where normals correctly point inward.
+    // Use direct signed-volume summation: tessellate() already handles
+    // face reversal (flips winding + normals), so raw signed tets are correct.
+    let has_holed_faces = {
+        let s = topo.solid(solid)?;
+        let sh = topo.shell(s.outer_shell())?;
+        sh.faces()
+            .iter()
+            .any(|&fid| topo.face(fid).is_ok_and(|f| !f.inner_wires().is_empty()))
+    };
+    if has_holed_faces {
+        return volume_from_direct_face_tessellation(topo, solid, deflection);
+    }
+
     // Try watertight tessellation first — this gives correct volume
     // via signed tetrahedra since the mesh is closed.
     let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
@@ -658,6 +676,42 @@ fn volume_from_per_face_tessellation(
             let c = Vec3::new(v2.x(), v2.y(), v2.z());
 
             total += sign * a.dot(b.cross(c));
+        }
+    }
+
+    Ok((total / 6.0).abs())
+}
+
+/// Compute volume by tessellating each face and summing signed tetrahedra
+/// WITHOUT winding correction. Relies on `tessellate()` already handling
+/// face reversal (via `is_reversed` flag) to produce correctly oriented
+/// triangles. This is more reliable than centroid-based winding correction
+/// for solids with concavities or cylindrical holes.
+fn volume_from_direct_face_tessellation(
+    topo: &Topology,
+    solid: SolidId,
+    deflection: f64,
+) -> Result<f64, crate::OperationsError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    let mut total: f64 = 0.0;
+    for &fid in shell.faces() {
+        let mesh = tessellate::tessellate(topo, fid, deflection)?;
+        let idx = &mesh.indices;
+        let pos = &mesh.positions;
+        let tri_count = idx.len() / 3;
+
+        for t in 0..tri_count {
+            let v0 = pos[idx[t * 3] as usize];
+            let v1 = pos[idx[t * 3 + 1] as usize];
+            let v2 = pos[idx[t * 3 + 2] as usize];
+
+            let a = Vec3::new(v0.x(), v0.y(), v0.z());
+            let b = Vec3::new(v1.x(), v1.y(), v1.z());
+            let c = Vec3::new(v2.x(), v2.y(), v2.z());
+
+            total += a.dot(b.cross(c));
         }
     }
 
