@@ -35,7 +35,7 @@ proptest = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 
 # IO formats
-zip = { version = "2", default-features = false, features = ["deflate"] }
+zip = { version = "8", default-features = false, features = ["deflate"] }
 quick-xml = "0.39"
 
 # Workspace crates
