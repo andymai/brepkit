@@ -2371,6 +2371,7 @@ fn analytic_boolean(
 
     let resolution = 1e7;
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
+    let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
     let mut face_ids_out = Vec::new();
 
     for (idx, (frag, &class)) in fragments.iter().zip(classes.iter()).enumerate() {
@@ -2410,23 +2411,37 @@ fn analytic_boolean(
             })
             .collect();
 
-        // Build edges — use exact curve types where available.
+        // Build edges — deduplicate by ordered vertex-index pair so adjacent
+        // faces share edge IDs (required for fillet/chamfer adjacency queries).
         let mut oriented_edges = Vec::with_capacity(n);
         for i in 0..n {
             let j = (i + 1) % n;
-
-            let edge_curve = if frag.edge_curves.len() == 1 {
-                frag.edge_curves[0].clone().unwrap_or(EdgeCurve::Line)
-            } else if i < frag.edge_curves.len() {
-                frag.edge_curves[i].clone().unwrap_or(EdgeCurve::Line)
+            let vi_idx = vert_ids[i].index();
+            let vj_idx = vert_ids[j].index();
+            let (key_min, key_max) = if vi_idx <= vj_idx {
+                (vi_idx, vj_idx)
             } else {
-                EdgeCurve::Line
+                (vj_idx, vi_idx)
             };
+            let is_forward = vi_idx <= vj_idx;
 
-            let vi = vert_ids[i];
-            let vj = vert_ids[j];
-            let eid = topo.edges.alloc(Edge::new(vi, vj, edge_curve));
-            oriented_edges.push(OrientedEdge::new(eid, true));
+            let edge_id = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
+                let edge_curve = if frag.edge_curves.len() == 1 {
+                    frag.edge_curves[0].clone().unwrap_or(EdgeCurve::Line)
+                } else if i < frag.edge_curves.len() {
+                    frag.edge_curves[i].clone().unwrap_or(EdgeCurve::Line)
+                } else {
+                    EdgeCurve::Line
+                };
+                let (start, end) = if vi_idx <= vj_idx {
+                    (vert_ids[i], vert_ids[j])
+                } else {
+                    (vert_ids[j], vert_ids[i])
+                };
+                topo.edges.alloc(Edge::new(start, end, edge_curve))
+            });
+
+            oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
         }
 
         let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
