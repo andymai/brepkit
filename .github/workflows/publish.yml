@@ -48,15 +48,10 @@ jobs:
       - name: Enable auto-merge
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_JSON: ${{ needs.release-please.outputs.pr }}
+          PR_NUMBER: ${{ fromJSON(needs.release-please.outputs.pr).number }}
         run: |
-          if [ -n "$PR_JSON" ] && [ "$PR_JSON" != "null" ]; then
-            pr_number=$(echo "$PR_JSON" | jq -r '.number')
-            if [ -n "$pr_number" ] && [ "$pr_number" != "null" ]; then
-              echo "Enabling auto-merge for PR #$pr_number"
-              gh pr merge "$pr_number" --auto --squash --repo "$GITHUB_REPOSITORY"
-            fi
-          fi
+          echo "Enabling auto-merge for PR #$PR_NUMBER"
+          gh pr merge "$PR_NUMBER" --auto --squash --repo "$GITHUB_REPOSITORY"
 
   publish:
     name: Build WASM & Publish
@@ -72,15 +67,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          registry-url: 'https://registry.npmjs.org'
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
+      # rust-toolchain.toml provides the pinned Rust version + wasm32 target
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install wasm-pack
-        run: cargo install wasm-pack --locked
+      - uses: taiki-e/install-action@wasm-pack
 
       - name: Build WASM (bundler target for browsers)
         run: wasm-pack build crates/wasm --target bundler --release --out-dir pkg
@@ -91,30 +83,26 @@ jobs:
       - name: Merge dual targets into single package
         working-directory: crates/wasm
         run: |
-          # nodejs target produces a single brepkit_wasm.js (no _bg.js split)
-          cp pkg-node/brepkit_wasm.js pkg/brepkit_wasm_node.js
+          # Rename to .cjs so Node treats it as CommonJS even with "type": "module"
+          cp pkg-node/brepkit_wasm.js pkg/brepkit_wasm_node.cjs
 
       - name: Set package name and exports
         working-directory: crates/wasm/pkg
         run: |
           npm pkg set name="brepkit-wasm"
-          # Configure conditional exports: bundler/browser get ESM, node gets CJS
           node -e '
             const pkg = require("./package.json");
+            pkg.main = "brepkit_wasm_node.cjs";
+            pkg.module = "brepkit_wasm.js";
             pkg.exports = {
               ".": {
-                "node": "./brepkit_wasm_node.js",
+                "node": "./brepkit_wasm_node.cjs",
                 "import": "./brepkit_wasm.js",
                 "default": "./brepkit_wasm.js"
               },
               "./brepkit_wasm_bg.wasm": "./brepkit_wasm_bg.wasm"
             };
-            pkg.main = "brepkit_wasm_node.js";
-            pkg.module = "brepkit_wasm.js";
-            pkg.files = pkg.files || [];
-            if (!pkg.files.includes("brepkit_wasm_node.js")) {
-              pkg.files.push("brepkit_wasm_node.js");
-            }
+            pkg.files = [...(pkg.files || []), "brepkit_wasm_node.cjs"];
             require("fs").writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
           '
 
@@ -134,3 +122,5 @@ jobs:
       - name: Publish to npm
         working-directory: crates/wasm/pkg
         run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
