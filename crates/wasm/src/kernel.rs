@@ -57,6 +57,46 @@ struct SketchState {
     constraints: Vec<brepkit_operations::sketch::Constraint>,
 }
 
+/// Filter edges to only those shared by two planar faces in a solid.
+fn filter_planar_edges(
+    topo: &brepkit_topology::Topology,
+    solid_id: brepkit_topology::solid::SolidId,
+    edge_ids: &[brepkit_topology::edge::EdgeId],
+) -> Result<Vec<brepkit_topology::edge::EdgeId>, JsError> {
+    use std::collections::HashMap;
+    let solid_data = topo.solid(solid_id)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    let mut edge_faces: HashMap<usize, Vec<brepkit_topology::face::FaceId>> = HashMap::new();
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        let wire = topo.wire(face.outer_wire())?;
+        for oe in wire.edges() {
+            edge_faces.entry(oe.edge().index()).or_default().push(fid);
+        }
+    }
+
+    let mut result = Vec::new();
+    for &eid in edge_ids {
+        if let Some(adj_faces) = edge_faces.get(&eid.index()) {
+            let all_planar = adj_faces.iter().all(|&fid| {
+                topo.face(fid)
+                    .map(|f| {
+                        matches!(
+                            f.surface(),
+                            brepkit_topology::face::FaceSurface::Plane { .. }
+                        )
+                    })
+                    .unwrap_or(false)
+            });
+            if all_planar {
+                result.push(eid);
+            }
+        }
+    }
+    Ok(result)
+}
+
 /// Sample a closed periodic curve (period = TAU) into a flat `[x, y, z, ...]` buffer.
 ///
 /// Produces `n` evenly-spaced points in `[0, TAU)` using the supplied `evaluate` function.
@@ -534,6 +574,8 @@ impl BrepKernel {
             .collect::<Result<_, _>>()?;
         // Use the rolling-ball fillet algorithm for true G1-continuous NURBS
         // blend surfaces. Falls back to the planar fillet if rolling-ball fails.
+        // If the full set of edges fails (e.g. edges adjacent to NURBS faces from
+        // a prior fillet), filter to edges between two planar faces and retry.
         let result = brepkit_operations::fillet::fillet_rolling_ball(
             &mut self.topo,
             solid_id,
@@ -542,7 +584,32 @@ impl BrepKernel {
         )
         .or_else(|_| {
             brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)
-        })?;
+        });
+        let result = if let Ok(r) = result {
+            r
+        } else {
+            // Filter to edges where both adjacent faces are planar.
+            let planar_edges = filter_planar_edges(&self.topo, solid_id, &edge_ids)?;
+            if planar_edges.is_empty() {
+                // No planar-adjacent edges to fillet; return the solid unchanged.
+                solid_id
+            } else {
+                brepkit_operations::fillet::fillet_rolling_ball(
+                    &mut self.topo,
+                    solid_id,
+                    &planar_edges,
+                    radius,
+                )
+                .or_else(|_| {
+                    brepkit_operations::fillet::fillet(
+                        &mut self.topo,
+                        solid_id,
+                        &planar_edges,
+                        radius,
+                    )
+                })?
+            }
+        };
         Ok(solid_id_to_u32(result))
     }
 
@@ -1148,6 +1215,56 @@ impl BrepKernel {
             handles.push(solid_id_to_u32(solid_id));
         }
         Ok(handles)
+    }
+
+    /// Import a triangle mesh from flat vertex/index arrays.
+    ///
+    /// `positions` is a flat `[x0,y0,z0, x1,y1,z1, ...]` array.
+    /// `indices` is a flat `[i0,i1,i2, i3,i4,i5, ...]` array of triangle
+    /// vertex indices. Returns a solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the arrays are malformed or mesh import fails.
+    #[cfg(feature = "io")]
+    #[wasm_bindgen(js_name = "importIndexedMesh")]
+    pub fn import_indexed_mesh(
+        &mut self,
+        positions: &[f64],
+        indices: &[u32],
+    ) -> Result<u32, JsError> {
+        use brepkit_math::vec::Point3;
+
+        if positions.len() % 3 != 0 {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "positions length {} is not a multiple of 3",
+                    positions.len()
+                ),
+            }
+            .into());
+        }
+        if indices.len() % 3 != 0 {
+            return Err(WasmError::InvalidInput {
+                reason: format!("indices length {} is not a multiple of 3", indices.len()),
+            }
+            .into());
+        }
+
+        let verts: Vec<Point3> = positions
+            .chunks_exact(3)
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect();
+        let normals = Vec::new();
+
+        let mesh = brepkit_operations::tessellate::TriangleMesh {
+            positions: verts,
+            normals,
+            indices: indices.to_vec(),
+        };
+
+        let solid_id = brepkit_io::stl::import::import_mesh(&mut self.topo, &mesh, TOL)?;
+        Ok(solid_id_to_u32(solid_id))
     }
 
     /// Export a solid to STEP AP203 format.
@@ -2195,6 +2312,64 @@ impl BrepKernel {
         Ok(result.distance)
     }
 
+    /// Compute minimum distance from a point to a face.
+    ///
+    /// Returns `[distance, closest_x, closest_y, closest_z]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid.
+    #[wasm_bindgen(js_name = "pointToFaceDistance")]
+    pub fn point_to_face_distance_wasm(
+        &self,
+        px: f64,
+        py: f64,
+        pz: f64,
+        face: u32,
+    ) -> Result<Vec<f64>, JsError> {
+        let face_id = self.resolve_face(face)?;
+        let result = brepkit_operations::distance::point_to_face(
+            &self.topo,
+            Point3::new(px, py, pz),
+            face_id,
+        )?;
+        Ok(vec![
+            result.distance,
+            result.point_b.x(),
+            result.point_b.y(),
+            result.point_b.z(),
+        ])
+    }
+
+    /// Compute minimum distance from a point to an edge.
+    ///
+    /// Returns `[distance, closest_x, closest_y, closest_z]`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the edge handle is invalid.
+    #[wasm_bindgen(js_name = "pointToEdgeDistance")]
+    pub fn point_to_edge_distance_wasm(
+        &self,
+        px: f64,
+        py: f64,
+        pz: f64,
+        edge: u32,
+    ) -> Result<Vec<f64>, JsError> {
+        let edge_id = self.resolve_edge(edge)?;
+        let result = brepkit_operations::distance::point_to_edge(
+            &self.topo,
+            Point3::new(px, py, pz),
+            edge_id,
+        )?;
+        Ok(vec![
+            result.distance,
+            result.point_b.x(),
+            result.point_b.y(),
+            result.point_b.z(),
+        ])
+    }
+
     // ── Sewing ────────────────────────────────────────────────────
 
     /// Sew loose faces into a connected solid.
@@ -2340,14 +2515,16 @@ impl BrepKernel {
             .collect();
         let curve = NurbsCurve::new(degree as usize, knots, cp, weights)?;
 
-        let v_start = self
-            .topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(start_x, start_y, start_z), TOL));
-        let v_end = self
-            .topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(end_x, end_y, end_z), TOL));
+        let start_pt = Point3::new(start_x, start_y, start_z);
+        let end_pt = Point3::new(end_x, end_y, end_z);
+        let v_start = self.topo.vertices.alloc(Vertex::new(start_pt, TOL));
+        // When start ≈ end (closed curve), reuse the same vertex so
+        // downstream code correctly identifies the edge as closed.
+        let v_end = if (start_pt - end_pt).length() < TOL * 100.0 {
+            v_start
+        } else {
+            self.topo.vertices.alloc(Vertex::new(end_pt, TOL))
+        };
         let eid = self
             .topo
             .edges
@@ -2442,6 +2619,21 @@ impl BrepKernel {
         let face_id = self.resolve_face(face)?;
         let face_data = self.topo.face(face_id)?;
         Ok(wire_id_to_u32(face_data.outer_wire()))
+    }
+
+    /// Get all wires of a face (outer wire first, then inner/hole wires).
+    ///
+    /// # Errors
+    /// Returns an error if the face handle is invalid.
+    #[wasm_bindgen(js_name = "getFaceWires")]
+    pub fn get_face_wires(&self, face: u32) -> Result<Vec<u32>, JsError> {
+        let face_id = self.resolve_face(face)?;
+        let face_data = self.topo.face(face_id)?;
+        let mut wires = vec![wire_id_to_u32(face_data.outer_wire())];
+        for &iw in face_data.inner_wires() {
+            wires.push(wire_id_to_u32(iw));
+        }
+        Ok(wires)
     }
 
     /// Get the surface type of a face.
@@ -6163,11 +6355,22 @@ fn detect_nurbs_curve_type(nc: &brepkit_math::nurbs::NurbsCurve) -> &'static str
     let (u_min, u_max) = nc.domain();
     let n_samples = 16;
 
-    // Sample points along the curve
+    // Check if the curve is closed (start ≈ end) to avoid sampling the
+    // duplicate endpoint, which would bias the center calculation.
+    let start_pt = nc.evaluate(u_min);
+    let end_pt = nc.evaluate(u_max);
+    let is_closed = (start_pt - end_pt).length() < 1e-6;
+
+    // Sample points along the curve. For closed curves, exclude the
+    // last point (t=u_max) since it duplicates the first.
     let mut points = Vec::with_capacity(n_samples);
     for i in 0..n_samples {
         #[allow(clippy::cast_precision_loss)]
-        let t = u_min + (u_max - u_min) * (i as f64) / ((n_samples - 1) as f64);
+        let t = if is_closed {
+            u_min + (u_max - u_min) * (i as f64) / (n_samples as f64)
+        } else {
+            u_min + (u_max - u_min) * (i as f64) / ((n_samples - 1) as f64)
+        };
         points.push(nc.evaluate(t));
     }
 

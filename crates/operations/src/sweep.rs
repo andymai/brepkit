@@ -409,14 +409,19 @@ pub fn sweep(
 
     // Collect profile vertices and positions.
     let input_wire = topo.wire(input_wire_id)?;
-    let input_oriented: Vec<_> = input_wire.edges().to_vec();
-    let n = input_oriented.len();
+    let original_oriented: Vec<_> = input_wire.edges().to_vec();
 
-    if n == 0 {
+    if original_oriented.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "sweep profile has no edges".into(),
         });
     }
+
+    // Split closed edges (e.g. full circles) into multiple line segments
+    // so that the sweep can create proper side faces.
+    let input_oriented =
+        crate::extrude::maybe_split_closed_wire(topo, &original_oriented, tol.linear)?;
+    let n = input_oriented.len();
 
     let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
     for oe in &input_oriented {
@@ -727,14 +732,17 @@ pub fn sweep_smooth(
 
     // Collect profile vertices.
     let input_wire = topo.wire(input_wire_id)?;
-    let input_oriented: Vec<_> = input_wire.edges().to_vec();
-    let n = input_oriented.len();
+    let original_oriented: Vec<_> = input_wire.edges().to_vec();
 
-    if n == 0 {
+    if original_oriented.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "sweep profile has no edges".into(),
         });
     }
+
+    let input_oriented =
+        crate::extrude::maybe_split_closed_wire(topo, &original_oriented, tol.linear)?;
+    let n = input_oriented.len();
 
     let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
     for oe in &input_oriented {
@@ -1029,14 +1037,17 @@ pub fn sweep_with_options(
     }
 
     let input_wire = topo.wire(input_wire_id)?;
-    let input_oriented: Vec<_> = input_wire.edges().to_vec();
-    let n = input_oriented.len();
+    let original_oriented: Vec<_> = input_wire.edges().to_vec();
 
-    if n == 0 {
+    if original_oriented.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "sweep profile has no edges".into(),
         });
     }
+
+    let input_oriented =
+        crate::extrude::maybe_split_closed_wire(topo, &original_oriented, tol.linear)?;
+    let n = input_oriented.len();
 
     let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
     for oe in &input_oriented {

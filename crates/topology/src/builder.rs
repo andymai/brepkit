@@ -183,25 +183,38 @@ fn sample_wire_points(
         match edge.curve() {
             EdgeCurve::Line => {}
             EdgeCurve::Circle(c) => {
-                points.push(c.evaluate(PI));
-                // For closed circles (start == end), add a third sample.
                 if edge.start() == edge.end() {
-                    points.push(c.evaluate(PI / 2.0));
+                    // Full circle: sample at 1/3 and 2/3 of parameter range
+                    // in monotonic order so Newell's method gives correct
+                    // normal sign.
+                    let tau = std::f64::consts::TAU;
+                    points.push(c.evaluate(tau / 3.0));
+                    points.push(c.evaluate(2.0 * tau / 3.0));
+                } else {
+                    points.push(c.evaluate(PI));
                 }
             }
             EdgeCurve::Ellipse(e) => {
-                points.push(e.evaluate(PI));
                 if edge.start() == edge.end() {
-                    points.push(e.evaluate(PI / 2.0));
+                    let tau = std::f64::consts::TAU;
+                    points.push(e.evaluate(tau / 3.0));
+                    points.push(e.evaluate(2.0 * tau / 3.0));
+                } else {
+                    points.push(e.evaluate(PI));
                 }
             }
             EdgeCurve::NurbsCurve(nc) => {
                 let knots = nc.knots();
                 let mid_u = f64::midpoint(knots[0], knots[knots.len() - 1]);
-                points.push(nc.evaluate(mid_u));
                 if edge.start() == edge.end() {
-                    let quarter_u = f64::midpoint(knots[0], mid_u);
-                    points.push(nc.evaluate(quarter_u));
+                    // Sample at 1/3 and 2/3 in monotonic order so Newell's
+                    // method gives correct normal sign.
+                    let third_u = knots[0] + (knots[knots.len() - 1] - knots[0]) / 3.0;
+                    let two_third_u = knots[0] + 2.0 * (knots[knots.len() - 1] - knots[0]) / 3.0;
+                    points.push(nc.evaluate(third_u));
+                    points.push(nc.evaluate(two_third_u));
+                } else {
+                    points.push(nc.evaluate(mid_u));
                 }
             }
         }

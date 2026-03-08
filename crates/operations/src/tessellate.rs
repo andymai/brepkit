@@ -336,7 +336,25 @@ fn tessellate_planar(
 
     if face_data.inner_wires().is_empty() {
         let normals_out = vec![normal; n];
-        let indices = ear_clip_triangulate(&positions, normal);
+        let mut indices = ear_clip_triangulate(&positions, normal);
+
+        // Ensure triangle winding matches the face normal.
+        // ear_clip_triangulate forces CCW in 2D projection, which may
+        // disagree with the face normal for faces whose normal opposes
+        // the projection direction.
+        if indices.len() >= 3 {
+            let i0 = indices[0] as usize;
+            let i1 = indices[1] as usize;
+            let i2 = indices[2] as usize;
+            let a = positions[i1] - positions[i0];
+            let b = positions[i2] - positions[i0];
+            let tri_normal = a.cross(b);
+            if tri_normal.dot(normal) < 0.0 {
+                for t in 0..indices.len() / 3 {
+                    indices.swap(t * 3 + 1, t * 3 + 2);
+                }
+            }
+        }
 
         Ok(TriangleMesh {
             positions,
@@ -3438,5 +3456,43 @@ mod tests {
             boundary < mesh.indices.len() / 3,
             "filleted box should have few boundary edges, got {boundary}"
         );
+    }
+}
+
+#[cfg(test)]
+mod winding_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_topology::Topology;
+
+    #[test]
+    fn per_face_tessellation_matches_face_normal() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+
+        for &fid in shell.faces() {
+            let mesh = tessellate(&topo, fid, 0.1).unwrap();
+            let face = topo.face(fid).unwrap();
+            if let FaceSurface::Plane { normal, .. } = face.surface() {
+                // Check first triangle winding
+                if mesh.indices.len() >= 3 {
+                    let i0 = mesh.indices[0] as usize;
+                    let i1 = mesh.indices[1] as usize;
+                    let i2 = mesh.indices[2] as usize;
+                    let a = mesh.positions[i1] - mesh.positions[i0];
+                    let b = mesh.positions[i2] - mesh.positions[i0];
+                    let tri_normal = a.cross(b);
+                    let dot = tri_normal.dot(*normal);
+                    assert!(
+                        dot > 0.0,
+                        "Face normal {:?} disagrees with tri normal {:?} (dot={dot})",
+                        normal,
+                        tri_normal,
+                    );
+                }
+            }
+        }
     }
 }

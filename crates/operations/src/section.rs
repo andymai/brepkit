@@ -153,6 +153,14 @@ pub fn section(
         }
     }
 
+    // If no crossing segments were found, the cutting plane may be exactly
+    // coplanar with one or more faces. In that case, extract the boundary
+    // edges of those coplanar faces as the cross-section.
+    if segments.is_empty() {
+        let coplanar_segs = extract_coplanar_boundary(topo, &face_ids, normal, d, tol)?;
+        segments = coplanar_segs;
+    }
+
     if segments.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "cutting plane does not intersect the solid".into(),
@@ -160,7 +168,17 @@ pub fn section(
     }
 
     // Assemble segments into closed wires.
-    let wires = assemble_wires(topo, &segments, normal, d, tol)?;
+    let mut wires = assemble_wires(topo, &segments, normal, d, tol)?;
+
+    // Fallback: if crossing-based segments didn't form closed wires,
+    // try using coplanar face boundaries instead (handles the case where
+    // the cutting plane exactly coincides with a face of the solid).
+    if wires.is_empty() {
+        let coplanar_segs = extract_coplanar_boundary(topo, &face_ids, normal, d, tol)?;
+        if !coplanar_segs.is_empty() {
+            wires = assemble_wires(topo, &coplanar_segs, normal, d, tol)?;
+        }
+    }
 
     if wires.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
@@ -180,6 +198,89 @@ pub fn section(
     Ok(Section {
         faces: result_faces,
     })
+}
+
+type EdgeKey = ((i64, i64, i64), (i64, i64, i64));
+
+/// Extract boundary edges of faces coplanar with the cutting plane.
+///
+/// For each coplanar face, its edges are boundary edges if they are not shared
+/// with another coplanar face. These boundary edges form the cross-section
+/// outline where the solid meets the cutting plane.
+fn extract_coplanar_boundary(
+    topo: &Topology,
+    face_ids: &[FaceId],
+    cut_normal: Vec3,
+    cut_d: f64,
+    tol: Tolerance,
+) -> Result<Vec<(Point3, Point3)>, crate::OperationsError> {
+    use std::collections::HashMap;
+
+    // Use a relaxed tolerance for coplanar detection to handle
+    // floating-point precision differences across platforms (e.g. WASM).
+    let coplanar_tol = tol.linear * 100.0;
+
+    // Identify coplanar face indices.
+    let mut coplanar_faces = Vec::new();
+    for &fid in face_ids {
+        let verts = face_polygon(topo, fid)?;
+        if verts.len() >= 3
+            && verts
+                .iter()
+                .all(|v| (dot_normal_point(cut_normal, *v) - cut_d).abs() < coplanar_tol)
+        {
+            coplanar_faces.push(fid);
+        }
+    }
+
+    if coplanar_faces.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Collect all edges of coplanar faces. Each edge is represented by a pair
+    // of quantized endpoint coordinates (to handle floating-point matching).
+    // An edge shared by two coplanar faces appears twice and is internal.
+    // An edge appearing once is a boundary edge.
+    let quantize = |p: Point3| -> (i64, i64, i64) {
+        let scale = 1.0 / (tol.linear * 10.0);
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+
+    let edge_key = |a: Point3, b: Point3| -> EdgeKey {
+        let qa = quantize(a);
+        let qb = quantize(b);
+        if qa <= qb { (qa, qb) } else { (qb, qa) }
+    };
+
+    // Count edge occurrences and store the actual points.
+    let mut edge_counts: HashMap<EdgeKey, (Point3, Point3, usize)> = HashMap::new();
+
+    for &fid in &coplanar_faces {
+        let verts = face_polygon(topo, fid)?;
+        let n = verts.len();
+        for i in 0..n {
+            let a = verts[i];
+            let b = verts[(i + 1) % n];
+            let key = edge_key(a, b);
+            edge_counts
+                .entry(key)
+                .and_modify(|e| e.2 += 1)
+                .or_insert((a, b, 1));
+        }
+    }
+
+    // Boundary edges appear exactly once.
+    let boundary: Vec<(Point3, Point3)> = edge_counts
+        .into_values()
+        .filter(|(_, _, count)| *count == 1)
+        .map(|(a, b, _)| (a, b))
+        .collect();
+
+    Ok(boundary)
 }
 
 /// Intersect a planar face polygon with a cutting plane.
@@ -208,7 +309,9 @@ fn intersect_planar_face_with_plane(
 
     // If all vertices lie on the cutting plane the face is coplanar —
     // the cross-section boundary comes from adjacent faces, not this one.
-    if dists.iter().all(|d| d.abs() < tol.linear) {
+    // Use a relaxed tolerance (100× linear) for cross-platform consistency.
+    let coplanar_tol = tol.linear * 100.0;
+    if dists.iter().all(|d| d.abs() < coplanar_tol) {
         return None;
     }
 
@@ -277,34 +380,56 @@ fn assemble_wires(
     let mut remaining: Vec<(Point3, Point3)> = segments.to_vec();
     let mut wires = Vec::new();
 
+    // Compute a chaining tolerance that accommodates tessellated geometry.
+    // Use 50% of the average segment length — this is generous enough to
+    // bridge gaps between adjacent triangle crossings while still
+    // rejecting clearly unrelated segments.
+    let avg_len = if segments.is_empty() {
+        tol.linear * 1000.0
+    } else {
+        let total: f64 = segments.iter().map(|(a, b)| (*a - *b).length()).sum();
+        total / segments.len() as f64
+    };
+    let chain_tol = avg_len.max(tol.linear * 1000.0);
+
     while !remaining.is_empty() {
         // Start a new chain with the first remaining segment.
         let first = remaining.remove(0);
         let mut chain: Vec<Point3> = vec![first.0, first.1];
 
-        // Iteratively find segments that connect to the chain end.
+        // Iteratively find the closest segment that connects to the chain end.
         let mut changed = true;
         while changed {
             changed = false;
             let chain_end = chain[chain.len() - 1];
+            let threshold_sq = chain_tol * chain_tol;
+
+            // Find the closest matching segment endpoint.
+            let mut best_idx = None;
+            let mut best_dist = threshold_sq;
+            let mut best_forward = true;
 
             for i in 0..remaining.len() {
                 let (a, b) = remaining[i];
                 let dist_a = (a - chain_end).length_squared();
                 let dist_b = (b - chain_end).length_squared();
-                let threshold_sq = (tol.linear * 1000.0) * (tol.linear * 1000.0);
 
-                if dist_a < threshold_sq {
-                    chain.push(b);
-                    remaining.remove(i);
-                    changed = true;
-                    break;
-                } else if dist_b < threshold_sq {
-                    chain.push(a);
-                    remaining.remove(i);
-                    changed = true;
-                    break;
+                if dist_a < best_dist {
+                    best_dist = dist_a;
+                    best_idx = Some(i);
+                    best_forward = true;
                 }
+                if dist_b < best_dist {
+                    best_dist = dist_b;
+                    best_idx = Some(i);
+                    best_forward = false;
+                }
+            }
+
+            if let Some(idx) = best_idx {
+                let (a, b) = remaining.remove(idx);
+                chain.push(if best_forward { b } else { a });
+                changed = true;
             }
         }
 
@@ -315,8 +440,7 @@ fn assemble_wires(
 
         let start = chain[0];
         let end = chain[chain.len() - 1];
-        let close_tol = tol.linear * 1000.0;
-        let closed = (start - end).length_squared() < close_tol * close_tol;
+        let closed = (start - end).length_squared() < chain_tol * chain_tol;
 
         if !closed {
             // Not a closed wire — skip (partial section).
@@ -438,6 +562,37 @@ mod tests {
             tol.approx_eq(area, 1.0),
             "cross-section area should be ~1.0, got {area}"
         );
+    }
+
+    #[test]
+    fn section_after_boolean_cut() {
+        // Reproduce: box(20,20,20).cut(sphere(12, at origin)).section('XY')
+        let mut topo = Topology::new();
+        let b = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+        let s = crate::primitives::make_sphere(&mut topo, 12.0, 16).unwrap();
+
+        let cut_result = crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, b, s);
+        assert!(
+            cut_result.is_ok(),
+            "boolean cut should succeed: {:?}",
+            cut_result.err()
+        );
+        let solid = cut_result.unwrap();
+
+        // Section at XY plane (z=0).
+        let result = section(
+            &mut topo,
+            solid,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        assert!(
+            result.is_ok(),
+            "section should succeed after boolean: {:?}",
+            result.err()
+        );
+        let sec = result.unwrap();
+        assert!(!sec.faces.is_empty(), "should produce at least one face");
     }
 
     #[test]

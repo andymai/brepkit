@@ -10,6 +10,7 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 use crate::OperationsError;
+use crate::boolean::FaceSpec;
 use crate::dot_normal_point;
 
 /// Offset all faces of a solid by a uniform distance.
@@ -50,6 +51,17 @@ pub fn offset_solid(
     let shell = topo.shell(solid_data.outer_shell())?;
     let face_ids: Vec<FaceId> = shell.faces().to_vec();
 
+    // Check if all faces are planar.
+    let all_planar = face_ids.iter().all(|&fid| {
+        topo.face(fid)
+            .map(|f| matches!(f.surface(), FaceSurface::Plane { .. }))
+            .unwrap_or(false)
+    });
+
+    if !all_planar {
+        return offset_solid_general(topo, solid, &face_ids, distance, tol);
+    }
+
     // Collect face normals and plane equations.
     let mut face_normals: std::collections::HashMap<usize, (Vec3, f64)> =
         std::collections::HashMap::new();
@@ -60,11 +72,7 @@ pub fn offset_solid(
         let face = topo.face(fid)?;
         let (normal, d) = match face.surface() {
             FaceSurface::Plane { normal, d } => (*normal, *d),
-            _ => {
-                return Err(OperationsError::InvalidInput {
-                    reason: "solid offset currently only supports planar faces".into(),
-                });
-            }
+            _ => unreachable!("checked all_planar above"),
         };
 
         face_normals.insert(fid.index(), (normal, d));
@@ -184,6 +192,73 @@ pub fn offset_solid(
     }
 
     Ok(offset_result)
+}
+
+/// Offset a solid that contains non-planar faces using per-face offset.
+///
+/// Uses `offset_face` to offset each face individually, then reassembles
+/// the result into a solid using `assemble_solid_mixed`.
+fn offset_solid_general(
+    topo: &mut Topology,
+    _solid: SolidId,
+    face_ids: &[FaceId],
+    distance: f64,
+    tol: Tolerance,
+) -> Result<SolidId, OperationsError> {
+    let mut result_specs: Vec<FaceSpec> = Vec::new();
+
+    for &fid in face_ids {
+        let offset_fid = crate::offset_face::offset_face(topo, fid, distance, 8)?;
+        let offset_face = topo.face(offset_fid)?;
+
+        let verts: Vec<Point3> = {
+            let wire = topo.wire(offset_face.outer_wire())?;
+            let mut pts = Vec::new();
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let vid = if oe.is_forward() {
+                    edge.start()
+                } else {
+                    edge.end()
+                };
+                pts.push(topo.vertex(vid)?.point());
+            }
+            pts
+        };
+
+        match offset_face.surface() {
+            FaceSurface::Plane { normal, d } => {
+                result_specs.push(FaceSpec::Planar {
+                    vertices: verts,
+                    normal: *normal,
+                    d: *d,
+                });
+            }
+            other => {
+                result_specs.push(FaceSpec::Surface {
+                    vertices: verts,
+                    surface: other.clone(),
+                });
+            }
+        }
+    }
+
+    if result_specs.is_empty() {
+        return Err(OperationsError::InvalidInput {
+            reason: "offset produced no faces".into(),
+        });
+    }
+
+    let result = crate::boolean::assemble_solid_mixed(topo, &result_specs, tol)?;
+
+    let vol = crate::measure::solid_volume(topo, result, 0.1)?;
+    if vol < tol.linear {
+        return Err(OperationsError::InvalidInput {
+            reason: format!("offset distance {distance} causes solid to collapse (volume = {vol})"),
+        });
+    }
+
+    Ok(result)
 }
 
 /// Solve a 3-plane intersection: find the point where three planes meet.
@@ -339,6 +414,22 @@ mod tests {
         assert!(
             (vol - 5.832).abs() < 0.5,
             "small inward offset volume should be ~5.832, got {vol}"
+        );
+    }
+
+    #[test]
+    fn offset_sphere_outward() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_sphere(&mut topo, 5.0, 32).unwrap();
+
+        let result = offset_solid(&mut topo, solid, 1.0).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+
+        // Offset sphere r=5 by 1 → r=6, volume = 4/3 π r³ ≈ 904.78
+        let expected = 4.0 / 3.0 * std::f64::consts::PI * 216.0;
+        assert!(
+            (vol - expected).abs() / expected < 0.15,
+            "offset sphere volume should be ~{expected}, got {vol}"
         );
     }
 

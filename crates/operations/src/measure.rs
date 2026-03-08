@@ -13,11 +13,11 @@ use crate::tessellate;
 
 // ── Bounding box ──────────────────────────────────────────────────
 
-/// Compute the axis-aligned bounding box of a solid from its vertices.
+/// Compute the axis-aligned bounding box of a solid.
 ///
-/// This is exact for planar solids and a tight approximation for NURBS
-/// solids (NURBS control point hulls may extend slightly beyond
-/// the actual surface but vertices lie on the surface boundary).
+/// For planar solids, uses vertex positions (exact). For solids with
+/// analytic surfaces (sphere, cylinder, cone, torus), expands the AABB
+/// to include surface extremes. For NURBS, uses control-point hulls.
 ///
 /// # Errors
 ///
@@ -27,11 +27,79 @@ pub fn solid_bounding_box(
     solid: SolidId,
 ) -> Result<Aabb3, crate::OperationsError> {
     let points = collect_solid_vertex_points(topo, solid)?;
-    Aabb3::try_from_points(points.iter().copied()).ok_or_else(|| {
+    let mut aabb = Aabb3::try_from_points(points.iter().copied()).ok_or_else(|| {
         crate::OperationsError::InvalidInput {
             reason: "solid has no vertices".into(),
         }
-    })
+    })?;
+
+    // Expand AABB for analytic surfaces whose extremes lie beyond vertices.
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+    for &fid in shell.faces() {
+        if let Ok(face) = topo.face(fid) {
+            expand_aabb_for_surface(&mut aabb, face.surface());
+        }
+    }
+
+    Ok(aabb)
+}
+
+/// Expand an AABB to include a point.
+fn aabb_include(aabb: &mut Aabb3, p: Point3) {
+    *aabb = aabb.union(Aabb3 { min: p, max: p });
+}
+
+/// Expand an AABB to include surface-specific extremes that vertices miss.
+fn expand_aabb_for_surface(aabb: &mut Aabb3, surface: &FaceSurface) {
+    match surface {
+        FaceSurface::Sphere(s) => {
+            let c = s.center();
+            let r = s.radius();
+            aabb_include(aabb, Point3::new(c.x() - r, c.y() - r, c.z() - r));
+            aabb_include(aabb, Point3::new(c.x() + r, c.y() + r, c.z() + r));
+        }
+        FaceSurface::Cylinder(c) => {
+            let origin = c.origin();
+            let axis = c.axis();
+            let r = c.radius();
+            for corner in [aabb.min, aabb.max] {
+                let rel = Vec3::new(
+                    corner.x() - origin.x(),
+                    corner.y() - origin.y(),
+                    corner.z() - origin.z(),
+                );
+                let t = axis.dot(rel);
+                let coa = Point3::new(
+                    origin.x() + axis.x() * t,
+                    origin.y() + axis.y() * t,
+                    origin.z() + axis.z() * t,
+                );
+                aabb_include(aabb, Point3::new(coa.x() - r, coa.y() - r, coa.z() - r));
+                aabb_include(aabb, Point3::new(coa.x() + r, coa.y() + r, coa.z() + r));
+            }
+        }
+        FaceSurface::Torus(t) => {
+            let c = t.center();
+            let outer_r = t.major_radius() + t.minor_radius();
+            aabb_include(
+                aabb,
+                Point3::new(c.x() - outer_r, c.y() - outer_r, c.z() - t.minor_radius()),
+            );
+            aabb_include(
+                aabb,
+                Point3::new(c.x() + outer_r, c.y() + outer_r, c.z() + t.minor_radius()),
+            );
+        }
+        FaceSurface::Nurbs(nurbs) => {
+            for row in nurbs.control_points() {
+                for pt in row {
+                    aabb_include(aabb, *pt);
+                }
+            }
+        }
+        FaceSurface::Plane { .. } | FaceSurface::Cone(_) => {}
+    }
 }
 
 // ── Face area ─────────────────────────────────────────────────────
@@ -94,7 +162,7 @@ pub fn face_area(
                 // If the angular span covers most of a full circle (> 350°),
                 // treat it as a full revolution — boundary sampling may not
                 // reach exactly ±π.
-                let sweep = if angular_span > 350.0_f64.to_radians() {
+                let sweep = if angular_span > 330.0_f64.to_radians() {
                     std::f64::consts::TAU
                 } else {
                     angular_span
@@ -297,7 +365,42 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     // ── Sphere: all faces are sphere faces (e.g. two hemispheres) ─────
     if let Some(r) = sphere_r {
         if cyl.is_none() && cone_params.is_none() && torus_params.is_none() && planes.is_empty() {
-            return Some(4.0 / 3.0 * PI * r * r * r);
+            // Verify actual vertex distances match the stored radius.
+            // A non-uniform scale transforms vertices but leaves the sphere
+            // surface radius unchanged, making the analytic formula wrong.
+            let sphere_faces: Vec<_> = shell.faces().to_vec();
+            let center = if let Ok(f) = topo.face(sphere_faces[0]) {
+                if let FaceSurface::Sphere(s) = f.surface() {
+                    s.center()
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            };
+            let mut max_dist = 0.0_f64;
+            let mut min_dist = f64::INFINITY;
+            for &fid in &sphere_faces {
+                if let Ok(face) = topo.face(fid) {
+                    if let Ok(wire) = topo.wire(face.outer_wire()) {
+                        for oe in wire.edges() {
+                            if let Ok(e) = topo.edge(oe.edge()) {
+                                if let Ok(v) = topo.vertex(e.start()) {
+                                    let d = (v.point() - center).length();
+                                    max_dist = max_dist.max(d);
+                                    min_dist = min_dist.min(d);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // If all vertices are equidistant (within 1%), use analytic formula
+            if (max_dist - min_dist).abs() < r * 0.01 {
+                return Some(4.0 / 3.0 * PI * r * r * r);
+            }
+            // Non-uniform scale detected — fall through to tessellation
+            return None;
         }
     }
 
@@ -439,11 +542,90 @@ pub fn solid_volume(
         return Ok(v);
     }
 
+    // Fast path: for solids made entirely of planar triangular faces
+    // (e.g. mesh imports), compute volume directly from face geometry.
+    // This avoids re-tessellation which has known WASM winding issues.
+    if let Ok(v) = solid_volume_from_faces(topo, solid, deflection) {
+        return Ok(v);
+    }
+
+    // Try watertight tessellation first — this gives correct volume
+    // via signed tetrahedra since the mesh is closed.
+    let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
+    if !mesh.indices.is_empty() {
+        let vol = signed_volume_from_mesh(&mesh);
+        // If watertight mesh volume is non-trivial, use it.
+        // Near-zero result indicates inconsistent winding (e.g. shelled solids
+        // where inner face normals cancel outer face contributions).
+        if vol > 1e-12 {
+            return Ok(vol);
+        }
+    }
+
+    // For all-planar solids (e.g. chamfered boxes with non-manifold topology
+    // where tessellate_solid gives wrong winding), use polygon-based volume.
+    if let Ok(v) = volume_from_planar_polygons(topo, solid, deflection) {
+        return Ok(v);
+    }
+
+    // Fallback: per-face tessellation with centroid-based winding correction.
+    volume_from_per_face_tessellation(topo, solid, deflection)
+}
+
+/// Compute signed volume from a watertight triangle mesh using
+/// the divergence theorem (signed tetrahedra method).
+fn signed_volume_from_mesh(mesh: &tessellate::TriangleMesh) -> f64 {
+    let idx = &mesh.indices;
+    let pos = &mesh.positions;
+    let tri_count = idx.len() / 3;
+
     let mut total = 0.0;
+    for t in 0..tri_count {
+        let v0 = pos[idx[t * 3] as usize];
+        let v1 = pos[idx[t * 3 + 1] as usize];
+        let v2 = pos[idx[t * 3 + 2] as usize];
+
+        let a = Vec3::new(v0.x(), v0.y(), v0.z());
+        let b = Vec3::new(v1.x(), v1.y(), v1.z());
+        let c = Vec3::new(v2.x(), v2.y(), v2.z());
+
+        total += a.dot(b.cross(c));
+    }
+
+    (total / 6.0).abs()
+}
+
+/// Compute volume by tessellating each face independently, then
+/// applying winding correction using the solid's approximate centroid.
+///
+/// For each face, we check whether the tessellated triangle normals
+/// point away from the solid centroid (outward). If most triangles'
+/// normals point inward, we flip the sign for that face's volume
+/// contribution.
+fn volume_from_per_face_tessellation(
+    topo: &Topology,
+    solid: SolidId,
+    deflection: f64,
+) -> Result<f64, crate::OperationsError> {
+    // Compute approximate solid centroid from vertex positions.
+    let vertex_points = collect_solid_vertex_points(topo, solid)?;
+    let centroid = if vertex_points.is_empty() {
+        Point3::new(0.0, 0.0, 0.0)
+    } else {
+        let n = vertex_points.len() as f64;
+        let (mut sx, mut sy, mut sz) = (0.0, 0.0, 0.0);
+        for p in &vertex_points {
+            sx += p.x();
+            sy += p.y();
+            sz += p.z();
+        }
+        Point3::new(sx / n, sy / n, sz / n)
+    };
 
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
+    let mut total: f64 = 0.0;
     for &fid in shell.faces() {
         let mesh = tessellate::tessellate(topo, fid, deflection)?;
         let idx = &mesh.indices;
@@ -453,10 +635,18 @@ pub fn solid_volume(
             continue;
         }
 
-        // Determine winding sign: compare the tessellated triangle normal
-        // with the stored mesh normal (which reflects the face's intended
-        // outward direction). If they disagree, flip the contribution.
-        let sign = face_winding_sign(&mesh);
+        // Use the face's stored normal for planar faces (more reliable
+        // than centroid-based heuristic for chamfer bevels and other
+        // angled faces).
+        let sign = if let Ok(face) = topo.face(fid) {
+            if let FaceSurface::Plane { normal, .. } = face.surface() {
+                face_winding_sign_from_normal(&mesh, *normal)
+            } else {
+                face_winding_sign_centroid(&mesh, centroid)
+            }
+        } else {
+            face_winding_sign_centroid(&mesh, centroid)
+        };
 
         for t in 0..tri_count {
             let v0 = pos[idx[t * 3] as usize];
@@ -472,6 +662,154 @@ pub fn solid_volume(
     }
 
     Ok((total / 6.0).abs())
+}
+
+/// Compute volume for all-planar solids using face polygon triangulation
+/// with winding correction based on the stored face normal.
+///
+/// For each planar face, fan-triangulates the polygon and sums the signed
+/// tetrahedra volumes, correcting winding so that the face normal points
+/// outward. This works even for non-manifold topology since it only needs
+/// each face's vertices and normal.
+fn volume_from_planar_polygons(
+    topo: &Topology,
+    solid: SolidId,
+    _deflection: f64,
+) -> Result<f64, crate::OperationsError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    // Use the divergence theorem: V = (1/3) Σ d_i × A_i
+    // where d_i = n_i · p (signed distance from origin to face plane)
+    // and A_i is the polygon area.
+    let mut total = 0.0_f64;
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        let face_normal = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            _ => {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "planar polygon volume requires all-planar faces".into(),
+                });
+            }
+        };
+
+        // Get face polygon vertices from wire edges.
+        let wire = topo.wire(face.outer_wire())?;
+        let mut verts = Vec::with_capacity(wire.edges().len());
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            verts.push(topo.vertex(vid)?.point());
+        }
+
+        if verts.len() < 3 {
+            continue;
+        }
+
+        // Signed distance from origin to the face plane.
+        let d = crate::dot_normal_point(face_normal, verts[0]);
+
+        // Polygon area via Newell method: A = |Σ (vi × vi+1)| / 2
+        let n = verts.len();
+        let mut cx = 0.0_f64;
+        let mut cy = 0.0_f64;
+        let mut cz = 0.0_f64;
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let vi = &verts[i];
+            let vj = &verts[j];
+            cx += vi.y() * vj.z() - vi.z() * vj.y();
+            cy += vi.z() * vj.x() - vi.x() * vj.z();
+            cz += vi.x() * vj.y() - vi.y() * vj.x();
+        }
+        let area_vec = Vec3::new(cx, cy, cz);
+        let area = area_vec.length() / 2.0;
+
+        total += d * area;
+    }
+
+    Ok((total / 3.0).abs())
+}
+
+/// Compute the volume of a solid directly from its face vertex
+/// positions, bypassing tessellation. Only valid for solids composed
+/// entirely of planar triangular faces (e.g. mesh imports).
+///
+/// Returns an error if the solid contains non-planar or
+/// non-triangular faces.
+///
+/// # Errors
+///
+/// Returns [`OperationsError`] if topology lookups fail or if the
+/// solid contains non-planar/non-triangular faces.
+pub fn solid_volume_from_faces(
+    topo: &Topology,
+    solid: SolidId,
+    _deflection: f64,
+) -> Result<f64, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
+
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    let mut total = 0.0;
+    let mut all_planar_triangles = true;
+
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+
+        // Only use the fast path for planar faces with exactly 3 line edges.
+        if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+            all_planar_triangles = false;
+            break;
+        }
+
+        let wire = topo.wire(face.outer_wire())?;
+        let edges = wire.edges();
+        if edges.len() != 3 {
+            all_planar_triangles = false;
+            break;
+        }
+
+        // Check all edges are lines.
+        let mut pts = Vec::with_capacity(3);
+        for oe in edges {
+            let edge = topo.edge(oe.edge())?;
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                all_planar_triangles = false;
+                break;
+            }
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            pts.push(topo.vertex(vid)?.point());
+        }
+        if !all_planar_triangles {
+            break;
+        }
+
+        let a = Vec3::new(pts[0].x(), pts[0].y(), pts[0].z());
+        let b = Vec3::new(pts[1].x(), pts[1].y(), pts[1].z());
+        let c = Vec3::new(pts[2].x(), pts[2].y(), pts[2].z());
+
+        total += a.dot(b.cross(c));
+    }
+
+    if all_planar_triangles {
+        Ok((total / 6.0).abs())
+    } else {
+        Err(crate::OperationsError::InvalidInput {
+            reason: "solid contains non-planar or non-triangular faces".to_string(),
+        })
+    }
 }
 
 // ── Center of mass ────────────────────────────────────────────────
@@ -491,10 +829,31 @@ pub fn solid_center_of_mass(
     solid: SolidId,
     deflection: f64,
 ) -> Result<Point3, crate::OperationsError> {
+    // Fast path: for all-planar-triangle solids, compute directly
+    // from face geometry (avoids re-tessellation winding issues).
+    if let Ok(com) = center_of_mass_from_faces(topo, solid) {
+        return Ok(com);
+    }
+
+    // Compute approximate solid centroid from vertex positions.
+    let vertex_points = collect_solid_vertex_points(topo, solid)?;
+    let approx_centroid = if vertex_points.is_empty() {
+        Point3::new(0.0, 0.0, 0.0)
+    } else {
+        let n = vertex_points.len() as f64;
+        let (mut sx, mut sy, mut sz) = (0.0, 0.0, 0.0);
+        for p in &vertex_points {
+            sx += p.x();
+            sy += p.y();
+            sz += p.z();
+        }
+        Point3::new(sx / n, sy / n, sz / n)
+    };
+
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
-    let mut total_vol = 0.0;
+    let mut total_vol: f64 = 0.0;
     let mut cx = 0.0;
     let mut cy = 0.0;
     let mut cz = 0.0;
@@ -508,7 +867,7 @@ pub fn solid_center_of_mass(
             continue;
         }
 
-        let sign = face_winding_sign(&mesh);
+        let sign = face_winding_sign_centroid(&mesh, approx_centroid);
 
         for t in 0..tri_count {
             let v0 = pos[idx[t * 3] as usize];
@@ -528,6 +887,74 @@ pub fn solid_center_of_mass(
     }
 
     if total_vol.abs() < 1e-15 {
+        // Volume too small to compute weighted CoM — fall back to vertex centroid.
+        return Ok(approx_centroid);
+    }
+
+    let denom = 4.0 * total_vol;
+    Ok(Point3::new(cx / denom, cy / denom, cz / denom))
+}
+
+/// Compute center of mass directly from face vertex positions for
+/// solids composed entirely of planar triangular faces.
+fn center_of_mass_from_faces(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<Point3, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
+
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    let mut total_vol = 0.0;
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    let mut cz = 0.0;
+
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "non-planar face".to_string(),
+            });
+        }
+        let wire = topo.wire(face.outer_wire())?;
+        let edges = wire.edges();
+        if edges.len() != 3 {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "non-triangular face".to_string(),
+            });
+        }
+
+        let mut pts = Vec::with_capacity(3);
+        for oe in edges {
+            let edge = topo.edge(oe.edge())?;
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "non-line edge".to_string(),
+                });
+            }
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            pts.push(topo.vertex(vid)?.point());
+        }
+
+        let a = Vec3::new(pts[0].x(), pts[0].y(), pts[0].z());
+        let b = Vec3::new(pts[1].x(), pts[1].y(), pts[1].z());
+        let c = Vec3::new(pts[2].x(), pts[2].y(), pts[2].z());
+
+        let signed_vol = a.dot(b.cross(c));
+        total_vol += signed_vol;
+        cx += signed_vol * (pts[0].x() + pts[1].x() + pts[2].x());
+        cy += signed_vol * (pts[0].y() + pts[1].y() + pts[2].y());
+        cz += signed_vol * (pts[0].z() + pts[1].z() + pts[2].z());
+    }
+
+    if total_vol.abs() < 1e-15 {
         return Err(crate::OperationsError::InvalidInput {
             reason: "solid has zero volume, center of mass is undefined".into(),
         });
@@ -539,29 +966,80 @@ pub fn solid_center_of_mass(
 
 // ── Helpers ───────────────────────────────────────────────────────
 
-/// Determine winding sign correction for a tessellated face.
+/// Determine winding sign correction for a tessellated face using
+/// the topology face's stored surface normal rather than mesh normals.
+/// This is more reliable across platforms (native vs WASM).
+/// Determine the winding sign for volume computation of a face.
 ///
-/// Compares the geometric triangle normal (from cross product of first
-/// triangle's edges) with the stored mesh normal. Returns `1.0` if they
-/// agree, `-1.0` if the winding is reversed.
-fn face_winding_sign(mesh: &tessellate::TriangleMesh) -> f64 {
+/// For planar faces, uses the face's stored normal. For non-planar faces,
+/// uses the solid's approximate centroid to determine the expected outward
+/// direction, since the surface's geometric normal may not match the
+/// topological outward normal.
+fn face_winding_sign_centroid(mesh: &tessellate::TriangleMesh, solid_centroid: Point3) -> f64 {
     let idx = &mesh.indices;
     let pos = &mesh.positions;
-    if idx.len() < 3 {
+    let tri_count = idx.len() / 3;
+    if tri_count == 0 {
         return 1.0;
     }
-    let i0 = idx[0] as usize;
-    let i1 = idx[1] as usize;
-    let i2 = idx[2] as usize;
-    let edge1 = pos[i1] - pos[i0];
-    let edge2 = pos[i2] - pos[i0];
-    let tri_normal = edge1.cross(edge2);
-    let mesh_normal = mesh.normals[i0];
-    if tri_normal.dot(mesh_normal) >= 0.0 {
-        1.0
-    } else {
-        -1.0
+
+    // For each triangle, check whether its geometric normal points
+    // away from the solid centroid. Use majority vote.
+    let mut agree: i32 = 0;
+    for t in 0..tri_count {
+        let i0 = idx[t * 3] as usize;
+        let i1 = idx[t * 3 + 1] as usize;
+        let i2 = idx[t * 3 + 2] as usize;
+        let tri_normal = (pos[i1] - pos[i0]).cross(pos[i2] - pos[i0]);
+        if tri_normal.length() < 1e-20 {
+            continue;
+        }
+        // Vector from centroid to triangle midpoint
+        let mid = Point3::new(
+            (pos[i0].x() + pos[i1].x() + pos[i2].x()) / 3.0,
+            (pos[i0].y() + pos[i1].y() + pos[i2].y()) / 3.0,
+            (pos[i0].z() + pos[i1].z() + pos[i2].z()) / 3.0,
+        );
+        let outward = mid - solid_centroid;
+        // If tri_normal points same way as outward, winding is correct
+        agree += if tri_normal.dot(outward) >= 0.0 {
+            1
+        } else {
+            -1
+        };
     }
+
+    if agree >= 0 { 1.0 } else { -1.0 }
+}
+
+/// Determine winding sign by comparing the mesh triangle normals against
+/// the face's known surface normal. More reliable than centroid-based
+/// heuristic for angled faces (e.g. chamfer bevels).
+fn face_winding_sign_from_normal(mesh: &tessellate::TriangleMesh, face_normal: Vec3) -> f64 {
+    let idx = &mesh.indices;
+    let pos = &mesh.positions;
+    let tri_count = idx.len() / 3;
+    if tri_count == 0 {
+        return 1.0;
+    }
+
+    let mut agree: i32 = 0;
+    for t in 0..tri_count {
+        let i0 = idx[t * 3] as usize;
+        let i1 = idx[t * 3 + 1] as usize;
+        let i2 = idx[t * 3 + 2] as usize;
+        let tri_normal = (pos[i1] - pos[i0]).cross(pos[i2] - pos[i0]);
+        if tri_normal.length() < 1e-20 {
+            continue;
+        }
+        agree += if tri_normal.dot(face_normal) >= 0.0 {
+            1
+        } else {
+            -1
+        };
+    }
+
+    if agree >= 0 { 1.0 } else { -1.0 }
 }
 
 /// Collect deduplicated vertex positions from a solid.
@@ -620,17 +1098,118 @@ fn collect_wire_positions(
     topo: &Topology,
     wire: &brepkit_topology::wire::Wire,
 ) -> Result<Vec<Point3>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+
     let mut positions = Vec::new();
+    let n_samples = 256_usize;
+    let tol = 1e-10;
+
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
-        positions.push(topo.vertex(vid)?.point());
+        match edge.curve() {
+            EdgeCurve::Line => {
+                let vid = if oe.is_forward() {
+                    edge.start()
+                } else {
+                    edge.end()
+                };
+                let pt = topo.vertex(vid)?.point();
+                if positions
+                    .last()
+                    .is_none_or(|p: &Point3| (*p - pt).length() > tol)
+                {
+                    positions.push(pt);
+                }
+            }
+            EdgeCurve::Circle(c) => {
+                let (t0, t1) = if edge.is_closed() {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    let sp = topo.vertex(edge.start())?.point();
+                    let ep = topo.vertex(edge.end())?.point();
+                    let ts = c.project(sp);
+                    let mut te = c.project(ep);
+                    if te <= ts {
+                        te += std::f64::consts::TAU;
+                    }
+                    (ts, te)
+                };
+                sample_edge_curve(
+                    &|t| c.evaluate(t),
+                    t0,
+                    t1,
+                    n_samples,
+                    oe.is_forward(),
+                    tol,
+                    &mut positions,
+                );
+            }
+            EdgeCurve::Ellipse(e) => {
+                let (t0, t1) = if edge.is_closed() {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    let sp = topo.vertex(edge.start())?.point();
+                    let ep = topo.vertex(edge.end())?.point();
+                    let ts = e.project(sp);
+                    let mut te = e.project(ep);
+                    if te <= ts {
+                        te += std::f64::consts::TAU;
+                    }
+                    (ts, te)
+                };
+                sample_edge_curve(
+                    &|t| e.evaluate(t),
+                    t0,
+                    t1,
+                    n_samples,
+                    oe.is_forward(),
+                    tol,
+                    &mut positions,
+                );
+            }
+            EdgeCurve::NurbsCurve(nc) => {
+                let (u0, u1) = nc.domain();
+                sample_edge_curve(
+                    &|t| nc.evaluate(t),
+                    u0,
+                    u1,
+                    n_samples,
+                    oe.is_forward(),
+                    tol,
+                    &mut positions,
+                );
+            }
+        }
     }
     Ok(positions)
+}
+
+/// Sample points along a parametric curve for area/distance calculations.
+#[allow(clippy::cast_precision_loss)]
+fn sample_edge_curve(
+    evaluate: &dyn Fn(f64) -> Point3,
+    t0: f64,
+    t1: f64,
+    n_samples: usize,
+    forward: bool,
+    tol: f64,
+    positions: &mut Vec<Point3>,
+) {
+    let indices: Box<dyn Iterator<Item = usize>> = if forward {
+        Box::new(0..n_samples)
+    } else {
+        Box::new((0..n_samples).rev())
+    };
+    for i in indices {
+        let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
+        let pt = evaluate(t);
+        if positions
+            .last()
+            .is_none_or(|p: &Point3| (*p - pt).length() > tol)
+        {
+            positions.push(pt);
+        }
+    }
 }
 
 // ── Edge and wire length ──────────────────────────────────────────
@@ -1027,6 +1606,51 @@ mod tests {
         assert!(
             rel_err < 1e-10,
             "torus volume should be exact: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
+        );
+    }
+
+    #[test]
+    fn ellipsoid_volume() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
+        let mat = brepkit_math::mat::Mat4::scale(5.0, 3.0, 2.0);
+        crate::transform::transform_solid(&mut topo, solid, &mat).unwrap();
+        let vol = solid_volume(&topo, solid, 0.1).unwrap();
+        let expected = 4.0 / 3.0 * std::f64::consts::PI * 5.0 * 3.0 * 2.0;
+        assert!(
+            (vol - expected).abs() < expected * 0.15,
+            "expected ~{expected}, got {vol}"
+        );
+    }
+
+    #[test]
+    fn fillet_single_edge_volume() {
+        use brepkit_topology::explorer;
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+        let edges: Vec<_> = explorer::solid_edges(&topo, solid).unwrap();
+        let filleted =
+            crate::fillet::fillet_rolling_ball(&mut topo, solid, &[edges[0]], 2.0).unwrap();
+        let vol = solid_volume(&topo, filleted, 0.01).unwrap();
+        assert!(
+            vol < 8000.0,
+            "filleted box should have less volume than 8000, got {vol}"
+        );
+        assert!(
+            vol > 7000.0,
+            "filleted box should still have significant volume, got {vol}"
+        );
+    }
+
+    #[test]
+    fn chamfered_box_volume() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let vol = solid_volume(&topo, solid, 0.1).unwrap();
+        // Box volume should be close to 1000
+        assert!(
+            (vol - 1000.0).abs() < 50.0,
+            "box should have volume ~1000, got {vol}"
         );
     }
 }

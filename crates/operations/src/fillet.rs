@@ -413,6 +413,7 @@ pub fn fillet_rolling_ball(
 
     // Phase 3: Build modified (trimmed) planar faces.
     let mut all_specs: Vec<FaceSpec> = Vec::new();
+    let mut fillet_face_indices: Vec<usize> = Vec::new();
 
     for &face_id in &shell_face_ids {
         // Non-planar faces pass through unchanged.
@@ -590,12 +591,23 @@ pub fn fillet_rolling_ball(
         )
         .map_err(crate::OperationsError::Math)?;
 
-        // Add the fillet face as a Surface FaceSpec.
-        // Boundary vertices: contact1_start → contact2_start → contact2_end → contact1_end
         all_specs.push(FaceSpec::Surface {
             vertices: vec![contact1_start, contact2_start, contact2_end, contact1_end],
             surface: FaceSurface::Nurbs(fillet_surface),
         });
+
+        // Track which faces need normal reversal (surface normal points
+        // inward, same direction as bisector toward solid interior).
+        let srf_mid_normal = match &all_specs[all_specs.len() - 1] {
+            FaceSpec::Surface {
+                surface: FaceSurface::Nurbs(srf),
+                ..
+            } => srf.normal(0.5, 0.5).unwrap_or(bisector),
+            _ => bisector,
+        };
+        if srf_mid_normal.dot(bisector) > 0.0 {
+            fillet_face_indices.push(all_specs.len() - 1);
+        }
 
         // Record contact points at each vertex for vertex blend detection.
         // Each edge contributes two contact points per endpoint (one on each face).
@@ -738,7 +750,25 @@ pub fn fillet_rolling_ball(
     }
 
     // Phase 6: Assemble the solid using mixed-surface assembly.
-    crate::boolean::assemble_solid_mixed(topo, &all_specs, tol)
+    let solid_id = crate::boolean::assemble_solid_mixed(topo, &all_specs, tol)?;
+
+    // Phase 7: Mark fillet faces whose NURBS surface normal points inward
+    // as reversed. This ensures tessellation produces outward-facing
+    // triangles for correct volume computation and rendering.
+    if !fillet_face_indices.is_empty() {
+        let solid_data = topo.solid(solid_id)?;
+        let shell = topo.shell(solid_data.outer_shell())?;
+        let face_ids: Vec<_> = shell.faces().to_vec();
+        for &fi in &fillet_face_indices {
+            if fi < face_ids.len() {
+                let fid = face_ids[fi];
+                let face = topo.face_mut(fid)?;
+                face.set_reversed(true);
+            }
+        }
+    }
+
+    Ok(solid_id)
 }
 
 // ── Internal data structures ───────────────────────────────────────
