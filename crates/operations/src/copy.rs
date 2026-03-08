@@ -727,4 +727,113 @@ mod tests {
             bbox_copy.min.x()
         );
     }
+
+    #[test]
+    fn copy_wire_creates_new_wire() {
+        use brepkit_math::vec::Point3;
+        use brepkit_topology::builder::make_polygon_wire;
+
+        let mut topo = Topology::new();
+        let orig = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+        )
+        .unwrap();
+        let copy = copy_wire(&mut topo, orig).unwrap();
+
+        assert_ne!(orig.index(), copy.index());
+    }
+
+    #[test]
+    fn copy_wire_preserves_edge_count() {
+        use brepkit_math::vec::Point3;
+        use brepkit_topology::builder::make_polygon_wire;
+
+        let mut topo = Topology::new();
+        let orig = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+        )
+        .unwrap();
+        let copy = copy_wire(&mut topo, orig).unwrap();
+
+        let orig_edges = topo.wire(orig).unwrap().edges().len();
+        let copy_edges = topo.wire(copy).unwrap().edges().len();
+        assert_eq!(orig_edges, copy_edges);
+    }
+
+    #[test]
+    fn copy_wire_is_independent() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::vec::Point3;
+        use brepkit_topology::builder::make_polygon_wire;
+
+        let mut topo = Topology::new();
+        let orig = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+        )
+        .unwrap();
+        let copy = copy_wire(&mut topo, orig).unwrap();
+
+        // Transform the copy; original should be unchanged.
+        crate::transform::transform_wire(&mut topo, copy, &Mat4::translation(10.0, 0.0, 0.0))
+            .unwrap();
+
+        // Check that original vertex positions are unchanged.
+        let tol = Tolerance::new();
+        let orig_wire = topo.wire(orig).unwrap();
+        let first_edge = orig_wire.edges().first().unwrap();
+        let start = topo.edge(first_edge.edge()).unwrap().start();
+        let pos = topo.vertex(start).unwrap().point();
+        assert!(
+            tol.approx_eq(pos.x(), 0.0),
+            "original wire should be unchanged, x = {}",
+            pos.x()
+        );
+    }
+
+    #[test]
+    fn copy_wire_with_circle_edge() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+
+        // Create a closed circular wire (single circle edge, start == end).
+        let v = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let edge = topo.edges.alloc(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let wire = Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap();
+        let wid = topo.wires.alloc(wire);
+
+        let copy_wid = copy_wire(&mut topo, wid).unwrap();
+        assert_ne!(wid.index(), copy_wid.index());
+
+        // Verify the copied wire has a circle edge.
+        let copy_wire = topo.wire(copy_wid).unwrap();
+        let copy_edge = topo.edge(copy_wire.edges()[0].edge()).unwrap();
+        assert!(
+            matches!(copy_edge.curve(), EdgeCurve::Circle(_)),
+            "copied edge should be a Circle"
+        );
+    }
 }

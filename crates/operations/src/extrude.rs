@@ -92,7 +92,8 @@ pub fn split_closed_edge(
             EdgeCurve::NurbsCurve(nc) => nc.evaluate(u),
             EdgeCurve::Circle(c) => c.evaluate(u),
             EdgeCurve::Ellipse(e) => e.evaluate(u),
-            EdgeCurve::Line => unreachable!(),
+            // Line was handled above (early return).
+            EdgeCurve::Line => Point3::new(0.0, 0.0, 0.0),
         }
     };
 

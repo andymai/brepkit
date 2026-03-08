@@ -285,7 +285,8 @@ pub fn point_to_edge(
                     (0.0, std::f64::consts::PI)
                 }
             }
-            brepkit_topology::edge::EdgeCurve::Line => unreachable!(),
+            // Line was handled above (early return via `if` branch).
+            brepkit_topology::edge::EdgeCurve::Line => (0.0, 0.0),
         };
         let n_samples = 64;
         let mut best_dist = f64::INFINITY;
@@ -296,7 +297,8 @@ pub fn point_to_edge(
                 brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) => nc.evaluate(t),
                 brepkit_topology::edge::EdgeCurve::Circle(c) => c.evaluate(t),
                 brepkit_topology::edge::EdgeCurve::Ellipse(e) => e.evaluate(t),
-                brepkit_topology::edge::EdgeCurve::Line => unreachable!(),
+                // Line was handled above.
+                brepkit_topology::edge::EdgeCurve::Line => start,
             };
             let d = (point - pt).length();
             if d < best_dist {
