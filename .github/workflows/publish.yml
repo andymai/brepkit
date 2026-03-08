@@ -111,6 +111,7 @@ jobs:
             };
             pkg.main = "brepkit_wasm_node.js";
             pkg.module = "brepkit_wasm.js";
+            pkg.files = pkg.files || [];
             if (!pkg.files.includes("brepkit_wasm_node.js")) {
               pkg.files.push("brepkit_wasm_node.js");
             }
