@@ -2938,13 +2938,14 @@ fn create_band_fragments(
         };
         let band_d = crate::dot_normal_point(band_normal, centroid);
 
+        let n_verts = verts.len();
         fragments.push(AnalyticFragment {
             vertices: verts,
             surface: surface.clone(),
             normal: band_normal,
             d: band_d,
             source,
-            edge_curves: vec![None; 2 * n_samples],
+            edge_curves: vec![None; n_verts],
             source_reversed,
         });
     }

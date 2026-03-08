@@ -90,6 +90,18 @@ pub fn chamfer(
                 .push(face_id);
         }
 
+        // Include inner wire edges in adjacency map so hole-boundary
+        // edges are correctly counted as shared by 2 faces.
+        for &inner_wire_id in face.inner_wires() {
+            let inner_wire = topo.wire(inner_wire_id)?;
+            for oe in inner_wire.edges() {
+                edge_to_faces
+                    .entry(oe.edge().index())
+                    .or_default()
+                    .push(face_id);
+            }
+        }
+
         // Only build polygon data for planar faces. Non-planar faces
         // will be passed through unchanged if they don't contain target edges.
         let normal = match face.surface() {
@@ -108,25 +120,26 @@ pub fn chamfer(
         );
     }
 
-    // -- Phase 2: Validate target edges --
-    let target_set: HashSet<usize> = edges.iter().map(|e| e.index()).collect();
+    // -- Phase 2: Filter to manifold edges, validate --
+    // Like fillet, silently skip non-manifold edges (shared by != 2 faces)
+    // which commonly occur in boolean operation output.
+    let filtered_edges: Vec<EdgeId> = edges
+        .iter()
+        .copied()
+        .filter(|edge_id| {
+            edge_to_faces
+                .get(&edge_id.index())
+                .is_some_and(|faces| faces.len() == 2)
+        })
+        .collect();
 
-    for &edge_id in edges {
-        let faces = edge_to_faces.get(&edge_id.index()).ok_or_else(|| {
-            crate::OperationsError::InvalidInput {
-                reason: format!("edge {} is not part of the solid", edge_id.index()),
-            }
-        })?;
-        if faces.len() != 2 {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: format!(
-                    "edge {} is shared by {} faces, expected exactly 2",
-                    edge_id.index(),
-                    faces.len()
-                ),
-            });
-        }
+    if filtered_edges.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "no manifold edges to chamfer (all edges are boundary or missing)".into(),
+        });
     }
+
+    let target_set: HashSet<usize> = filtered_edges.iter().map(|e| e.index()).collect();
 
     // -- Phase 3: Build modified polygons + collect chamfer face data --
 
@@ -274,7 +287,7 @@ pub fn chamfer(
     }
 
     // -- Phase 4: Build chamfer faces --
-    for &edge_id in edges {
+    for &edge_id in &filtered_edges {
         let data = chamfer_data.get(&edge_id.index()).ok_or_else(|| {
             crate::OperationsError::InvalidInput {
                 reason: format!(
