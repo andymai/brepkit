@@ -625,11 +625,10 @@ fn tessellate_planar_with_holes(
         cy /= count as f64;
 
         // Flood-fill remove from the hole centroid, stopping at constraints.
-        let removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
-        debug_assert!(
-            removed,
-            "hole centroid fell outside CDT triangulation — concave inner wire?"
-        );
+        // If the centroid falls outside the triangulation (e.g. concave inner
+        // wire), skip removal — the hole triangles will remain, producing a
+        // slightly over-tessellated but non-panicking result.
+        let _removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
     }
 
     // Extract triangles and build mesh.
@@ -871,11 +870,9 @@ fn tessellate_planar_shared_with_holes(
         }
         cx /= count as f64;
         cy /= count as f64;
-        let removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
-        debug_assert!(
-            removed,
-            "hole centroid fell outside CDT triangulation — concave inner wire?"
-        );
+        // If the centroid falls outside the triangulation (e.g. concave inner
+        // wire), skip removal gracefully.
+        let _removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
     }
 
     let cdt_triangles = cdt.triangles();

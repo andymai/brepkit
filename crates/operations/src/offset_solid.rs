@@ -72,7 +72,11 @@ pub fn offset_solid(
         let face = topo.face(fid)?;
         let (normal, d) = match face.surface() {
             FaceSurface::Plane { normal, d } => (*normal, *d),
-            _ => unreachable!("checked all_planar above"),
+            _ => {
+                return Err(OperationsError::InvalidInput {
+                    reason: "expected planar face after all_planar check".into(),
+                });
+            }
         };
 
         face_normals.insert(fid.index(), (normal, d));

@@ -1047,4 +1047,55 @@ mod tests {
         }
         assert!(found, "should still have NURBS faces after transform");
     }
+
+    #[test]
+    fn translate_wire() {
+        use brepkit_math::vec::Point3;
+        use brepkit_topology::builder::make_polygon_wire;
+
+        let mut topo = Topology::new();
+        let wire = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+        )
+        .unwrap();
+
+        transform_wire(&mut topo, wire, &Mat4::translation(5.0, 0.0, 0.0)).unwrap();
+
+        // All vertices should have x shifted by 5.
+        let w = topo.wire(wire).unwrap();
+        for oe in w.edges() {
+            let edge = topo.edge(oe.edge()).unwrap();
+            let start_pos = topo.vertex(edge.start()).unwrap().point();
+            assert!(
+                start_pos.x() >= 4.9,
+                "vertex x should be shifted: got {}",
+                start_pos.x()
+            );
+        }
+    }
+
+    #[test]
+    fn degenerate_matrix_errors_for_wire() {
+        use brepkit_math::vec::Point3;
+        use brepkit_topology::builder::make_polygon_wire;
+
+        let mut topo = Topology::new();
+        let wire = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+        )
+        .unwrap();
+
+        let result = transform_wire(&mut topo, wire, &Mat4::scale(0.0, 1.0, 1.0));
+        assert!(result.is_err());
+    }
 }
