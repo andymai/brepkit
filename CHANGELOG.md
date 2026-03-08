@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/andymai/brepkit/compare/v0.5.2...v0.5.3) (2026-03-08)
+
+
+### Bug Fixes
+
+* brepjs compatibility fixes across geometry and operations ([#76](https://github.com/andymai/brepkit/issues/76)) ([f17f392](https://github.com/andymai/brepkit/commit/f17f3929b7182ad2a4d689c6b815d9e6225aecf2))
+
 ## [0.5.2](https://github.com/andymai/brepkit/compare/v0.5.1...v0.5.2) (2026-03-06)
 
 
