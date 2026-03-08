@@ -82,12 +82,38 @@ jobs:
       - name: Install wasm-pack
         run: cargo install wasm-pack --locked
 
-      - name: Build WASM package
-        run: wasm-pack build crates/wasm --target bundler --release
+      - name: Build WASM (bundler target for browsers)
+        run: wasm-pack build crates/wasm --target bundler --release --out-dir pkg
 
-      - name: Set package name
+      - name: Build WASM (nodejs target for Node.js/vitest)
+        run: wasm-pack build crates/wasm --target nodejs --release --out-dir pkg-node
+
+      - name: Merge dual targets into single package
+        working-directory: crates/wasm
+        run: |
+          # Copy nodejs artifacts alongside bundler ones
+          cp pkg-node/brepkit_wasm.js pkg/brepkit_wasm_node.js
+          cp pkg-node/brepkit_wasm_bg.js pkg/brepkit_wasm_bg_node.js
+
+      - name: Set package name and exports
         working-directory: crates/wasm/pkg
-        run: npm pkg set name="brepkit-wasm"
+        run: |
+          npm pkg set name="brepkit-wasm"
+          # Configure conditional exports: bundler/browser get ESM, node gets CJS
+          node -e '
+            const pkg = require("./package.json");
+            pkg.exports = {
+              ".": {
+                "node": "./brepkit_wasm_node.js",
+                "import": "./brepkit_wasm.js",
+                "default": "./brepkit_wasm.js"
+              },
+              "./brepkit_wasm_bg.wasm": "./brepkit_wasm_bg.wasm"
+            };
+            pkg.main = "brepkit_wasm_node.js";
+            pkg.module = "brepkit_wasm.js";
+            require("fs").writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
 
       - name: Verify version
         working-directory: crates/wasm/pkg
