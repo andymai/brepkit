@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/andymai/brepkit/compare/v0.5.3...v0.6.0) (2026-03-08)
+
+
+### Features
+
+* xtask WASM build pipeline with validation and smoke test ([#81](https://github.com/andymai/brepkit/issues/81)) ([9595615](https://github.com/andymai/brepkit/commit/95956155fd14f3200c9b230a9fa2ef7bbe970ba6))
+
 ## [0.5.3](https://github.com/andymai/brepkit/compare/v0.5.2...v0.5.3) (2026-03-08)
 
 
