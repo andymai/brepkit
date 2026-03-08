@@ -783,7 +783,6 @@ fn cross_shape_fuse() {
 // ===========================================================================
 
 #[test]
-#[ignore = "cylinder-cylinder booleans produce degenerate results (known P2.1 limitation)"]
 fn fuse_two_cylinders() {
     let mut topo = Topology::new();
     let a = make_cylinder(&mut topo, 1.0, 3.0).unwrap();
@@ -795,7 +794,6 @@ fn fuse_two_cylinders() {
 }
 
 #[test]
-#[ignore = "cylinder-cylinder booleans produce degenerate results (known P2.1 limitation)"]
 fn cut_cylinder_from_cylinder() {
     let mut topo = Topology::new();
     let a = make_cylinder(&mut topo, 2.0, 3.0).unwrap();

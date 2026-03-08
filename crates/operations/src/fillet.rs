@@ -100,6 +100,19 @@ pub fn fillet(
                 .push(face_id);
         }
 
+        // Inner wire edges also contribute to adjacency: an edge shared
+        // between a face's inner wire (hole boundary) and another face's
+        // outer wire should be counted for both faces.
+        for &inner_wid in face.inner_wires() {
+            let inner_wire = topo.wire(inner_wid)?;
+            for oe in inner_wire.edges() {
+                edge_to_faces
+                    .entry(oe.edge().index())
+                    .or_default()
+                    .push(face_id);
+            }
+        }
+
         // Only build polygon data for planar faces. Non-planar faces
         // will be passed through unchanged if they don't contain target edges.
         let normal = match face.surface() {
@@ -123,25 +136,26 @@ pub fn fillet(
         );
     }
 
-    // Validate target edges.
-    let target_set: HashSet<usize> = edges.iter().map(|e| e.index()).collect();
+    // Filter target edges: only keep manifold edges (shared by exactly 2 faces).
+    // Non-manifold edges (boundary/seam) are silently skipped rather than causing
+    // an error, so callers can pass "all edges" without pre-filtering.
+    let filtered_edges: Vec<EdgeId> = edges
+        .iter()
+        .copied()
+        .filter(|edge_id| {
+            edge_to_faces
+                .get(&edge_id.index())
+                .is_some_and(|faces| faces.len() == 2)
+        })
+        .collect();
 
-    for &edge_id in edges {
-        let faces = edge_to_faces.get(&edge_id.index()).ok_or_else(|| {
-            crate::OperationsError::InvalidInput {
-                reason: format!("edge {} is not part of the solid", edge_id.index()),
-            }
-        })?;
-        if faces.len() != 2 {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: format!(
-                    "edge {} is shared by {} faces, expected exactly 2",
-                    edge_id.index(),
-                    faces.len()
-                ),
-            });
-        }
+    if filtered_edges.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "no manifold edges to fillet (all edges are boundary or missing)".into(),
+        });
     }
+
+    let target_set: HashSet<usize> = filtered_edges.iter().map(|e| e.index()).collect();
 
     // Build modified face polygons and fillet faces.
     // Strategy: identical to chamfer but with more offset segments to
@@ -237,7 +251,7 @@ pub fn fillet(
     }
 
     // Build fillet faces (planar quads approximating the fillet arc).
-    for &edge_id in edges {
+    for &edge_id in &filtered_edges {
         let data = fillet_data.get(&edge_id.index()).ok_or_else(|| {
             crate::OperationsError::InvalidInput {
                 reason: format!("failed to compute fillet data for edge {}", edge_id.index()),
@@ -361,6 +375,17 @@ pub fn fillet_rolling_ball(
                 .push(face_id);
         }
 
+        // Inner wire edges also contribute to adjacency.
+        for &inner_wid in face.inner_wires() {
+            let inner_wire = topo.wire(inner_wid)?;
+            for oe in inner_wire.edges() {
+                edge_to_faces
+                    .entry(oe.edge().index())
+                    .or_default()
+                    .push(face_id);
+            }
+        }
+
         // Only build polygon data for planar faces. Non-planar faces
         // will be passed through unchanged if they don't contain target edges.
         let (normal, d) = match face.surface() {
@@ -380,26 +405,27 @@ pub fn fillet_rolling_ball(
         );
     }
 
-    // Phase 2: Validate target edges and build vertex-to-edge adjacency.
-    let target_set: HashSet<usize> = edges.iter().map(|e| e.index()).collect();
+    // Phase 2: Filter to manifold edges and build vertex-to-edge adjacency.
+    let filtered_edges: Vec<EdgeId> = edges
+        .iter()
+        .copied()
+        .filter(|edge_id| {
+            edge_to_faces
+                .get(&edge_id.index())
+                .is_some_and(|faces| faces.len() == 2)
+        })
+        .collect();
+
+    if filtered_edges.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "no manifold edges to fillet (all edges are boundary or missing)".into(),
+        });
+    }
+
+    let target_set: HashSet<usize> = filtered_edges.iter().map(|e| e.index()).collect();
     let mut vertex_fillet_edges: HashMap<usize, Vec<EdgeId>> = HashMap::new();
 
-    for &edge_id in edges {
-        let faces = edge_to_faces.get(&edge_id.index()).ok_or_else(|| {
-            crate::OperationsError::InvalidInput {
-                reason: format!("edge {} is not part of the solid", edge_id.index()),
-            }
-        })?;
-        if faces.len() != 2 {
-            return Err(crate::OperationsError::InvalidInput {
-                reason: format!(
-                    "edge {} is shared by {} faces, expected exactly 2",
-                    edge_id.index(),
-                    faces.len()
-                ),
-            });
-        }
-
+    for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
         vertex_fillet_edges
             .entry(edge.start().index())
@@ -475,7 +501,7 @@ pub fn fillet_rolling_ball(
     // vertex_contacts maps vertex_index → list of (face_index, contact_point) pairs.
     let mut vertex_contacts: HashMap<usize, Vec<(usize, Point3)>> = HashMap::new();
 
-    for &edge_id in edges {
+    for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
         let p_start = topo.vertex(edge.start())?.point();
         let p_end = topo.vertex(edge.end())?.point();
@@ -1550,6 +1576,83 @@ mod tests {
             sh.faces().len() >= 10,
             "expected at least 10 faces (6 + 3 + 1 blend), got {}",
             sh.faces().len()
+        );
+    }
+
+    /// Fillet on a boolean result: fuse(box, cylinder) → fillet should work
+    /// on edges shared between two planar faces.
+    #[test]
+    fn fillet_on_boolean_result() {
+        let mut topo = Topology::new();
+        let base = crate::primitives::make_box(&mut topo, 80.0, 60.0, 10.0).unwrap();
+        let boss = crate::primitives::make_cylinder(&mut topo, 15.0, 30.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(40.0, 30.0, 10.0);
+        crate::transform::transform_solid(&mut topo, boss, &mat).unwrap();
+
+        let fused = crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, base, boss)
+            .unwrap();
+
+        let solid = topo.solid(fused).unwrap();
+        let shell = topo.shell(solid.outer_shell()).unwrap();
+
+        // Build edge-to-face map from all wires (outer + inner).
+        let mut edge_to_face_ids: HashMap<usize, Vec<FaceId>> = HashMap::new();
+        for &fid in shell.faces() {
+            let face = topo.face(fid).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            for oe in wire.edges() {
+                edge_to_face_ids
+                    .entry(oe.edge().index())
+                    .or_default()
+                    .push(fid);
+            }
+            for &iwid in face.inner_wires() {
+                let iw = topo.wire(iwid).unwrap();
+                for oe in iw.edges() {
+                    edge_to_face_ids
+                        .entry(oe.edge().index())
+                        .or_default()
+                        .push(fid);
+                }
+            }
+        }
+
+        // Allow a small number of seam edges from cylindrical band discretization.
+        let bad_count = edge_to_face_ids.values().filter(|f| f.len() != 2).count();
+        assert!(
+            bad_count <= 4,
+            "too many non-manifold edges: {bad_count} (expected <= 4 seam edges)",
+        );
+
+        // Fillet only manifold edges where BOTH adjacent faces are planar.
+        let is_planar = |fid: FaceId| -> bool {
+            matches!(topo.face(fid).unwrap().surface(), FaceSurface::Plane { .. })
+        };
+        let mut planar_edges = Vec::new();
+        for (&eidx, face_ids) in &edge_to_face_ids {
+            if face_ids.len() == 2 && is_planar(face_ids[0]) && is_planar(face_ids[1]) {
+                let face = topo.face(face_ids[0]).unwrap();
+                let wire = topo.wire(face.outer_wire()).unwrap();
+                for oe in wire.edges() {
+                    if oe.edge().index() == eidx {
+                        planar_edges.push(oe.edge());
+                        break;
+                    }
+                }
+            }
+        }
+        planar_edges.sort_unstable_by_key(|e| e.index());
+        planar_edges.dedup_by_key(|e| e.index());
+
+        assert!(
+            !planar_edges.is_empty(),
+            "should have planar-planar edges to fillet"
+        );
+        let result = super::fillet(&mut topo, fused, &planar_edges, 1.0);
+        assert!(
+            result.is_ok(),
+            "fillet on planar edges of boolean result should succeed: {:?}",
+            result.err()
         );
     }
 }
