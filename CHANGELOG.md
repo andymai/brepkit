@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/andymai/brepkit/compare/v0.7.0...v0.7.1) (2026-03-08)
+
+
+### Bug Fixes
+
+* deduplicate edges in analytic boolean for proper adjacency ([9a09ff7](https://github.com/andymai/brepkit/commit/9a09ff70bf7f94fe63c4bbb1846197c6f389b2f9))
+
 ## [0.7.0](https://github.com/andymai/brepkit/compare/v0.6.0...v0.7.0) (2026-03-08)
 
 
