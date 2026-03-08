@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.4](https://github.com/andymai/brepkit/compare/v0.7.3...v0.7.4) (2026-03-08)
+
+
+### Bug Fixes
+
+* fillet tolerates non-manifold edges from boolean results ([#96](https://github.com/andymai/brepkit/issues/96)) ([b64caa8](https://github.com/andymai/brepkit/commit/b64caa81b93e023a3121f59a10682c6fef73ca78))
+
 ## [0.7.3](https://github.com/andymai/brepkit/compare/v0.7.2...v0.7.3) (2026-03-08)
 
 
