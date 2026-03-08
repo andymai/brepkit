@@ -54,7 +54,7 @@ jobs:
       - name: Generate coverage
         run: |
           cargo llvm-cov --workspace --lcov --output-path lcov.info
-          COVERAGE=$(cargo llvm-cov report --workspace --json | jq -r '.data[0].totals.lines.percent // empty')
+          COVERAGE=$(cargo llvm-cov report --json | jq -r '.data[0].totals.lines.percent // empty')
           if [ -z "$COVERAGE" ]; then
             echo "::error::Failed to extract coverage percentage from report"
             exit 1
@@ -111,6 +111,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Cargo.lock is gitignored (library crate), generate it for audit
+      - run: cargo generate-lockfile
       - uses: rustsec/audit-check@v2
         with:
           token: ${{ github.token }}
