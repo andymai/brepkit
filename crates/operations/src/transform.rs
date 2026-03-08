@@ -1098,4 +1098,49 @@ mod tests {
         let result = transform_wire(&mut topo, wire, &Mat4::scale(0.0, 1.0, 1.0));
         assert!(result.is_err());
     }
+
+    #[test]
+    fn translate_wire_with_circle_edge() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let v = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let edge = topo.edges.alloc(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let wire = Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap();
+        let wid = topo.wires.alloc(wire);
+
+        transform_wire(&mut topo, wid, &Mat4::translation(5.0, 0.0, 0.0)).unwrap();
+
+        // Vertex should be shifted.
+        let tol = Tolerance::new();
+        let pos = topo.vertex(v).unwrap().point();
+        assert!(
+            tol.approx_eq(pos.x(), 6.0),
+            "vertex should be at x=6 after +5 translation, got {}",
+            pos.x()
+        );
+
+        // Circle center should also be shifted.
+        let w = topo.wire(wid).unwrap();
+        let e = topo.edge(w.edges()[0].edge()).unwrap();
+        assert!(
+            matches!(e.curve(), EdgeCurve::Circle(_)),
+            "expected Circle edge after transform"
+        );
+        if let EdgeCurve::Circle(c) = e.curve() {
+            assert!(
+                tol.approx_eq(c.center().x(), 5.0),
+                "circle center should be at x=5, got {}",
+                c.center().x()
+            );
+        }
+    }
 }

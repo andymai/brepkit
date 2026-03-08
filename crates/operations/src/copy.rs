@@ -804,4 +804,36 @@ mod tests {
             pos.x()
         );
     }
+
+    #[test]
+    fn copy_wire_with_circle_edge() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+
+        // Create a closed circular wire (single circle edge, start == end).
+        let v = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let edge = topo.edges.alloc(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let wire = Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap();
+        let wid = topo.wires.alloc(wire);
+
+        let copy_wid = copy_wire(&mut topo, wid).unwrap();
+        assert_ne!(wid.index(), copy_wid.index());
+
+        // Verify the copied wire has a circle edge.
+        let copy_wire = topo.wire(copy_wid).unwrap();
+        let copy_edge = topo.edge(copy_wire.edges()[0].edge()).unwrap();
+        assert!(
+            matches!(copy_edge.curve(), EdgeCurve::Circle(_)),
+            "copied edge should be a Circle"
+        );
+    }
 }
