@@ -2852,19 +2852,23 @@ fn create_band_fragments(
         verts.extend(top_pts.into_iter().rev());
 
         // Compute representative normal and d for the band.
-        // Use the centroid's position and the average outward normal.
-        let centroid = verts.iter().fold(Point3::new(0.0, 0.0, 0.0), |acc, &p| {
-            acc + (p - Point3::new(0.0, 0.0, 0.0))
-        });
-        let centroid = Point3::new(
-            centroid.x() / verts.len() as f64,
-            centroid.y() / verts.len() as f64,
-            centroid.z() / verts.len() as f64,
-        );
-        let band_normal =
-            (centroid - cyl.origin() - cyl.axis() * cyl.axis().dot(centroid - cyl.origin()))
-                .normalize()
-                .unwrap_or(normal);
+        // Use a surface point (first vertex) for the outward normal, not
+        // the polygon centroid — the centroid of a full-circle band falls
+        // on the cylinder axis, making the radial direction degenerate.
+        let surface_point = verts[0];
+        let band_normal = (surface_point
+            - cyl.origin()
+            - cyl.axis() * cyl.axis().dot(surface_point - cyl.origin()))
+        .normalize()
+        .unwrap_or(normal);
+        #[allow(clippy::cast_precision_loss)]
+        let centroid = {
+            let (sx, sy, sz) = verts.iter().fold((0.0, 0.0, 0.0), |(ax, ay, az), v| {
+                (ax + v.x(), ay + v.y(), az + v.z())
+            });
+            let inv_n = 1.0 / verts.len() as f64;
+            Point3::new(sx * inv_n, sy * inv_n, sz * inv_n)
+        };
         let band_d = crate::dot_normal_point(band_normal, centroid);
 
         fragments.push(AnalyticFragment {

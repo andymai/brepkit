@@ -1707,4 +1707,51 @@ mod tests {
             "box should have volume ~1000, got {vol}"
         );
     }
+
+    /// Boolean cut must reduce volume: cut(box, cylinder) < box volume.
+    ///
+    /// Regression test for the cylinder band classification bug: the analytic
+    /// boolean was computing the band normal from the polygon centroid, which
+    /// falls on the cylinder axis for full-circle bands, yielding a degenerate
+    /// zero-length direction. Ray-casting with this direction classified the
+    /// bore fragment as Outside instead of Inside, causing the cylinder bore
+    /// face to be dropped from the result.
+    #[test]
+    fn cut_box_cylinder_volume_decreases() {
+        use crate::boolean::{BooleanOp, boolean};
+        use crate::primitives::{make_box, make_cylinder};
+        use crate::transform::transform_solid;
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+        let bx = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let cyl = make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+        // Center cylinder in box so it fully passes through.
+        transform_solid(&mut topo, cyl, &Mat4::translation(5.0, 5.0, 0.0)).unwrap();
+        let cut = boolean(&mut topo, BooleanOp::Cut, bx, cyl).unwrap();
+
+        let box_vol = solid_volume(&topo, bx, 0.01).unwrap();
+        let cut_vol = solid_volume(&topo, cut, 0.01).unwrap();
+        // Expected: box volume minus full cylinder bore through box height.
+        let expected = 1000.0 - std::f64::consts::PI * 9.0 * 10.0;
+
+        // The result should have 7 faces: 6 planar (2 with holes) + 1 cylinder bore.
+        let s = topo.solid(cut).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        assert_eq!(
+            sh.faces().len(),
+            7,
+            "expected 7 faces (6 plane + 1 cylinder bore)"
+        );
+
+        assert!(
+            cut_vol < box_vol,
+            "cut volume ({cut_vol:.2}) must be less than box volume ({box_vol:.2})"
+        );
+        let rel_err = (cut_vol - expected).abs() / expected;
+        assert!(
+            rel_err < 0.02,
+            "cut volume ({cut_vol:.2}) should be close to expected ({expected:.2}), rel_err={rel_err:.4}"
+        );
+    }
 }
