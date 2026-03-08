@@ -1,0 +1,18 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Standalone crate — intentionally NOT a workspace member.
+# Run via: cargo xtask <command>
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

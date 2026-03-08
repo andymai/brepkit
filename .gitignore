@@ -7,6 +7,10 @@ Cargo.lock
 /pkg/
 *.wasm
 
+# xtask (standalone crate, has its own target dir)
+/xtask/target/
+/xtask/Cargo.lock
+
 # Node
 node_modules/
 bindings/ts/dist/
