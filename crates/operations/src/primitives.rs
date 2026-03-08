@@ -171,7 +171,8 @@ pub fn make_cylinder(
         });
     }
 
-    let hz = height / 2.0;
+    // Match OCCT convention: cylinder base at z=0, top at z=height.
+    // (brepjs drill and placement code assumes this convention.)
 
     // Analytic cylindrical surface
     let cyl_surface = brepkit_math::surfaces::CylindricalSurface::new(
@@ -184,19 +185,19 @@ pub fn make_cylinder(
     // --- Lateral face: single face with degenerate seam wire ---
     let v_bot = topo
         .vertices
-        .alloc(Vertex::new(Point3::new(radius, 0.0, -hz), tol.linear));
+        .alloc(Vertex::new(Point3::new(radius, 0.0, 0.0), tol.linear));
     let v_top = topo
         .vertices
-        .alloc(Vertex::new(Point3::new(radius, 0.0, hz), tol.linear));
+        .alloc(Vertex::new(Point3::new(radius, 0.0, height), tol.linear));
 
     let bot_circle = brepkit_math::curves::Circle3D::new(
-        Point3::new(0.0, 0.0, -hz),
+        Point3::new(0.0, 0.0, 0.0),
         Vec3::new(0.0, 0.0, 1.0),
         radius,
     )
     .map_err(crate::OperationsError::Math)?;
     let top_circle = brepkit_math::curves::Circle3D::new(
-        Point3::new(0.0, 0.0, hz),
+        Point3::new(0.0, 0.0, height),
         Vec3::new(0.0, 0.0, 1.0),
         radius,
     )
@@ -227,7 +228,7 @@ pub fn make_cylinder(
         FaceSurface::Cylinder(cyl_surface),
     ));
 
-    // --- Bottom cap (z = -hz, normal pointing down) ---
+    // --- Bottom cap (z = 0, normal pointing down) ---
     // Reuse the same circle edge as the lateral face for watertight topology.
     // Reversed orientation: CW from +z corresponds to outward normal -z.
     let bot_cap_wire = Wire::new(vec![OrientedEdge::new(e_bot_circle, false)], true)
@@ -238,11 +239,11 @@ pub fn make_cylinder(
         vec![],
         FaceSurface::Plane {
             normal: Vec3::new(0.0, 0.0, -1.0),
-            d: hz,
+            d: 0.0,
         },
     ));
 
-    // --- Top cap (z = +hz, normal pointing up) ---
+    // --- Top cap (z = height, normal pointing up) ---
     // Reuse the same circle edge; forward orientation gives outward normal +z.
     let top_cap_wire = Wire::new(vec![OrientedEdge::new(e_top_circle, true)], true)
         .map_err(crate::OperationsError::Topology)?;
@@ -252,7 +253,7 @@ pub fn make_cylinder(
         vec![],
         FaceSurface::Plane {
             normal: Vec3::new(0.0, 0.0, 1.0),
-            d: hz,
+            d: height,
         },
     ));
 
@@ -264,11 +265,12 @@ pub fn make_cylinder(
 
 // ── Cone ───────────────────────────────────────────────────────────
 
-/// Create a cone solid centered at the origin, with its axis along +Z.
+/// Create a cone solid with its base at the origin, axis along +Z.
 ///
-/// The cone has `bottom_radius` at `z = -height/2` and `top_radius` at
-/// `z = height/2`. Setting `top_radius = 0` creates a pointed cone;
+/// The cone has `bottom_radius` at `z = 0` and `top_radius` at
+/// `z = height`. Setting `top_radius = 0` creates a pointed cone;
 /// setting it to a positive value creates a truncated cone (frustum).
+/// Matches OCCT convention where the base is at the origin.
 ///
 /// # Errors
 ///
@@ -301,13 +303,12 @@ pub fn make_cone(
         });
     }
 
-    let hz = height / 2.0;
-
     // Determine which end is larger and compute virtual apex + half-angle
+    // Base at z=0, top at z=height (OCCT convention).
     let (r_big, r_small, big_z, small_z, axis_sign) = if bottom_radius >= top_radius {
-        (bottom_radius, top_radius, -hz, hz, -1.0_f64)
+        (bottom_radius, top_radius, 0.0, height, -1.0_f64)
     } else {
-        (top_radius, bottom_radius, hz, -hz, 1.0_f64)
+        (top_radius, bottom_radius, height, 0.0, 1.0_f64)
     };
 
     let half_angle = if r_small <= tol.linear {
@@ -322,7 +323,7 @@ pub fn make_cone(
     // half_angle must be in (0, π/2) for ConicalSurface
     if half_angle <= tol.angular || half_angle >= FRAC_PI_2 {
         // Degenerate case — fall back to revolve approach
-        let face_id = make_trapezoid_xz_face(topo, bottom_radius, top_radius, hz)?;
+        let face_id = make_trapezoid_xz_face(topo, bottom_radius, top_radius, 0.0, height)?;
         return crate::revolve::revolve(
             topo,
             face_id,
@@ -381,37 +382,40 @@ pub fn make_cone(
         )));
 
         // Base cap: reuse the same circle edge for watertight topology.
-        let cap_forward = big_z >= 0.0; // +z cap needs forward, -z needs reversed
+        // axis_sign < 0 means bottom is bigger (cap at z=0, outward normal -z, reversed edge).
+        // axis_sign > 0 means top is bigger (cap at z=height, outward normal +z, forward edge).
+        let cap_forward = axis_sign > 0.0;
         let cap_wire = Wire::new(vec![OrientedEdge::new(e_circle, cap_forward)], true)
             .map_err(crate::OperationsError::Topology)?;
         let cap_wid = topo.wires.alloc(cap_wire);
-        let cap_normal = Vec3::new(0.0, 0.0, if big_z < 0.0 { -1.0 } else { 1.0 });
+        let cap_normal = Vec3::new(0.0, 0.0, axis_sign);
         faces.push(topo.faces.alloc(Face::new(
             cap_wid,
             vec![],
             FaceSurface::Plane {
                 normal: cap_normal,
-                d: hz,
+                d: big_z,
             },
         )));
     } else {
         // Frustum: two circles
         let v_bot = topo.vertices.alloc(Vertex::new(
-            Point3::new(bottom_radius, 0.0, -hz),
+            Point3::new(bottom_radius, 0.0, 0.0),
             tol.linear,
         ));
-        let v_top = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(top_radius, 0.0, hz), tol.linear));
+        let v_top = topo.vertices.alloc(Vertex::new(
+            Point3::new(top_radius, 0.0, height),
+            tol.linear,
+        ));
 
         let bot_circle = brepkit_math::curves::Circle3D::new(
-            Point3::new(0.0, 0.0, -hz),
+            Point3::new(0.0, 0.0, 0.0),
             Vec3::new(0.0, 0.0, 1.0),
             bottom_radius,
         )
         .map_err(crate::OperationsError::Math)?;
         let top_circle = brepkit_math::curves::Circle3D::new(
-            Point3::new(0.0, 0.0, hz),
+            Point3::new(0.0, 0.0, height),
             Vec3::new(0.0, 0.0, 1.0),
             top_radius,
         )
@@ -441,7 +445,7 @@ pub fn make_cone(
             FaceSurface::Cone(cone_surface),
         )));
 
-        // Bottom cap: reuse the same circle edge for watertight topology.
+        // Bottom cap (z=0): reuse the same circle edge for watertight topology.
         let bot_cap_wire = Wire::new(vec![OrientedEdge::new(e_bot, false)], true)
             .map_err(crate::OperationsError::Topology)?;
         let bot_wid = topo.wires.alloc(bot_cap_wire);
@@ -450,11 +454,11 @@ pub fn make_cone(
             vec![],
             FaceSurface::Plane {
                 normal: Vec3::new(0.0, 0.0, -1.0),
-                d: hz,
+                d: 0.0,
             },
         )));
 
-        // Top cap: reuse the same circle edge for watertight topology.
+        // Top cap (z=height): reuse the same circle edge for watertight topology.
         let top_cap_wire = Wire::new(vec![OrientedEdge::new(e_top, true)], true)
             .map_err(crate::OperationsError::Topology)?;
         let top_wid = topo.wires.alloc(top_cap_wire);
@@ -463,7 +467,7 @@ pub fn make_cone(
             vec![],
             FaceSurface::Plane {
                 normal: Vec3::new(0.0, 0.0, 1.0),
-                d: hz,
+                d: height,
             },
         )));
     }
@@ -654,23 +658,24 @@ fn make_trapezoid_xz_face(
     topo: &mut Topology,
     bottom_radius: f64,
     top_radius: f64,
-    hz: f64,
+    z_bottom: f64,
+    z_top: f64,
 ) -> Result<brepkit_topology::face::FaceId, crate::OperationsError> {
     let tol = Tolerance::new();
 
     let v0 = topo
         .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 0.0, -hz), tol.linear));
+        .alloc(Vertex::new(Point3::new(0.0, 0.0, z_bottom), tol.linear));
     let v1 = topo.vertices.alloc(Vertex::new(
-        Point3::new(bottom_radius, 0.0, -hz),
+        Point3::new(bottom_radius, 0.0, z_bottom),
         tol.linear,
     ));
     let v2 = topo
         .vertices
-        .alloc(Vertex::new(Point3::new(top_radius, 0.0, hz), tol.linear));
+        .alloc(Vertex::new(Point3::new(top_radius, 0.0, z_top), tol.linear));
     let v3 = topo
         .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 0.0, hz), tol.linear));
+        .alloc(Vertex::new(Point3::new(0.0, 0.0, z_top), tol.linear));
 
     let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
     let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
