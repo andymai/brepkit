@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/andymai/brepkit/compare/v0.6.0...v0.7.0) (2026-03-08)
+
+
+### Features
+
+* analytic sphere boolean with O(1) classification ([#89](https://github.com/andymai/brepkit/issues/89)) ([327d0f2](https://github.com/andymai/brepkit/commit/327d0f25227e6464ff086be236d1e253feb71d8a))
+
 ## [0.6.0](https://github.com/andymai/brepkit/compare/v0.5.3...v0.6.0) (2026-03-08)
 
 
