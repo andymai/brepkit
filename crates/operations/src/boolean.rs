@@ -467,6 +467,13 @@ pub fn boolean_with_options(
         return handle_disjoint(topo, op, &faces_a, &faces_b);
     }
 
+    // ── Containment shortcut ─────────────────────────────────────────
+    // If one solid is entirely inside the other, skip expensive intersection
+    // computation and go directly to the appropriate result.
+    if let Some(result) = try_containment_shortcut(topo, op, a, b, &faces_a, &faces_b, tol)? {
+        return Ok(result);
+    }
+
     // ── Phase 1a: Analytic fast path ───────────────────────────────────
 
     let (analytic_segs, analytic_pairs) = compute_analytic_segments(topo, a, b, tol)?;
@@ -811,6 +818,77 @@ fn solid_aabb(faces: &FaceData, tol: Tolerance) -> Result<Aabb3, crate::Operatio
     .ok_or_else(|| crate::OperationsError::InvalidInput {
         reason: "solid has no vertices".into(),
     })
+}
+
+/// Check if one solid is entirely contained in the other and short-circuit
+/// the boolean operation without expensive face intersection computation.
+///
+/// Uses analytic classifiers (box, sphere, cylinder) for O(1) per-vertex
+/// containment tests. Returns `None` if classifiers can't be built or
+/// containment isn't detected.
+#[allow(clippy::too_many_arguments)]
+fn try_containment_shortcut(
+    topo: &mut Topology,
+    op: BooleanOp,
+    _a: SolidId,
+    _b: SolidId,
+    faces_a: &FaceData,
+    faces_b: &FaceData,
+    tol: Tolerance,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let classifier_a = try_build_analytic_classifier(topo, _a);
+    let classifier_b = try_build_analytic_classifier(topo, _b);
+
+    let extract = |data: &FaceData| -> Vec<(Vec<Point3>, Vec3, f64)> {
+        data.iter()
+            .map(|(_, verts, normal, d)| (verts.clone(), *normal, *d))
+            .collect()
+    };
+
+    // Check: is A entirely inside B?
+    if let Some(ref cb) = classifier_b {
+        let all_a_inside_b = faces_a.iter().all(|(_, verts, _, _)| {
+            verts
+                .iter()
+                .all(|v| matches!(cb.classify(*v, tol), Some(FaceClass::Inside)))
+        });
+        if all_a_inside_b {
+            log::debug!("boolean {op:?}: A fully inside B, shortcut");
+            return match op {
+                // A - B: A is inside B → nothing remains
+                BooleanOp::Cut => Err(crate::OperationsError::InvalidInput {
+                    reason: "cut: first solid is fully inside second".into(),
+                }),
+                // A ∩ B: result is A (since A ⊂ B)
+                BooleanOp::Intersect => Ok(Some(assemble_solid(topo, &extract(faces_a), tol)?)),
+                // A ∪ B: result is B (since A ⊂ B)
+                BooleanOp::Fuse => Ok(Some(assemble_solid(topo, &extract(faces_b), tol)?)),
+            };
+        }
+    }
+
+    // Check: is B entirely inside A?
+    if let Some(ref ca) = classifier_a {
+        let all_b_inside_a = faces_b.iter().all(|(_, verts, _, _)| {
+            verts
+                .iter()
+                .all(|v| matches!(ca.classify(*v, tol), Some(FaceClass::Inside)))
+        });
+        if all_b_inside_a {
+            log::debug!("boolean {op:?}: B fully inside A, shortcut");
+            return match op {
+                // A - B: B is inside A → result is A with B-shaped hole
+                // Can't shortcut — need actual face splitting.
+                BooleanOp::Cut => Ok(None),
+                // A ∩ B: result is B (since B ⊂ A)
+                BooleanOp::Intersect => Ok(Some(assemble_solid(topo, &extract(faces_b), tol)?)),
+                // A ∪ B: result is A (since B ⊂ A)
+                BooleanOp::Fuse => Ok(Some(assemble_solid(topo, &extract(faces_a), tol)?)),
+            };
+        }
+    }
+
+    Ok(None)
 }
 
 /// Handle the case where two solids' AABBs don't overlap.

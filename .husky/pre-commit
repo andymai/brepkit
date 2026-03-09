@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-# Tiered pre-commit: fmt+clippy (parallel) → test
+# Pre-commit: fast checks only (fmt + clippy in parallel)
+# Full test suite runs in pre-push and CI.
 echo "🔍 Running pre-commit checks..."
 
-# Tier 1: Format and lint in parallel
 cargo fmt --all -- --check &
 FMT_PID=$!
 
@@ -25,11 +25,5 @@ if [ $CLIPPY_EXIT -ne 0 ]; then
   echo "❌ clippy failed. Fix warnings before committing."
   exit 1
 fi
-
-# Tier 2: Tests
-cargo test --workspace --quiet || {
-  echo "❌ Tests failed. Fix tests before committing."
-  exit 1
-}
 
 echo "✅ Pre-commit checks passed."
