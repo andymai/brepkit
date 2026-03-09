@@ -550,7 +550,7 @@ fn tessellate_planar_with_holes(
         Point2::new(max_x + margin, max_y + margin),
     );
 
-    let mut cdt = Cdt::new(bounds);
+    let mut cdt = Cdt::with_capacity(bounds, pts2d.len());
 
     // Insert all points.
     let mut cdt_indices: Vec<usize> = Vec::with_capacity(pts2d.len());
@@ -771,12 +771,15 @@ fn tessellate_planar_shared_with_holes(
         for oe in iw.edges() {
             let edge_idx = oe.edge().index();
             if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
-                let ordered: Vec<u32> = if oe.is_forward() {
-                    global_ids.clone()
-                } else {
-                    global_ids.iter().rev().copied().collect()
-                };
-                for (j, &gid) in ordered.iter().enumerate() {
+                // Iterate without cloning: use index-based forward/reverse.
+                let is_fwd = oe.is_forward();
+                let len = global_ids.len();
+                for j in 0..len {
+                    let gid = if is_fwd {
+                        global_ids[j]
+                    } else {
+                        global_ids[len - 1 - j]
+                    };
                     if j == 0 && !inner_global_ids.is_empty() {
                         let last_gid = *inner_global_ids.last().unwrap_or(&u32::MAX);
                         if last_gid == gid {
@@ -864,7 +867,7 @@ fn tessellate_planar_shared_with_holes(
         Point2::new(max_x + margin, max_y + margin),
     );
 
-    let mut cdt = Cdt::new(bounds);
+    let mut cdt = Cdt::with_capacity(bounds, pts2d.len());
     let mut cdt_indices: Vec<usize> = Vec::with_capacity(pts2d.len());
     for &p in &pts2d {
         let idx = cdt.insert_point(p).map_err(crate::OperationsError::Math)?;
@@ -992,6 +995,136 @@ fn tessellate_planar_shared_with_holes(
     }
 
     Ok(())
+}
+
+/// Pure CDT computation: takes 2D points and wire ranges, returns triangles
+/// as indices into the input points array. Also returns any Steiner point
+/// 2D coordinates with their CDT vertex indices.
+///
+/// This is extracted as a standalone function to enable parallel execution
+/// across faces.
+#[allow(clippy::too_many_lines)]
+fn run_planar_cdt(
+    pts2d: &[brepkit_math::vec::Point2],
+    outer_count: usize,
+    inner_wire_ranges: &[(usize, usize)],
+) -> Result<Vec<(usize, usize, usize)>, crate::OperationsError> {
+    use brepkit_math::cdt::Cdt;
+    use brepkit_math::vec::Point2;
+    use std::collections::HashSet;
+
+    // Compute bounding box for CDT.
+    let mut min_x = f64::MAX;
+    let mut min_y = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut max_y = f64::MIN;
+    for &p in pts2d {
+        min_x = min_x.min(p.x());
+        min_y = min_y.min(p.y());
+        max_x = max_x.max(p.x());
+        max_y = max_y.max(p.y());
+    }
+    let margin = ((max_x - min_x).max(max_y - min_y)) * 0.1 + 1e-6;
+    let bounds = (
+        Point2::new(min_x - margin, min_y - margin),
+        Point2::new(max_x + margin, max_y + margin),
+    );
+
+    let mut cdt = Cdt::with_capacity(bounds, pts2d.len());
+    let mut cdt_indices: Vec<usize> = Vec::with_capacity(pts2d.len());
+    for &p in pts2d {
+        let idx = cdt.insert_point(p).map_err(crate::OperationsError::Math)?;
+        cdt_indices.push(idx);
+    }
+
+    // Insert outer boundary constraints.
+    let mut all_constraints: Vec<(usize, usize)> = Vec::new();
+    for i in 0..outer_count {
+        let j = (i + 1) % outer_count;
+        let ci = cdt_indices[i];
+        let cj = cdt_indices[j];
+        if ci != cj {
+            cdt.insert_constraint(ci, cj)
+                .map_err(crate::OperationsError::Math)?;
+            all_constraints.push((ci, cj));
+        }
+    }
+
+    // Insert inner wire constraints (holes).
+    for &(start, end) in inner_wire_ranges {
+        let count = end - start;
+        for i in 0..count {
+            let j = (i + 1) % count;
+            let ci = cdt_indices[start + i];
+            let cj = cdt_indices[start + j];
+            if ci != cj {
+                cdt.insert_constraint(ci, cj)
+                    .map_err(crate::OperationsError::Math)?;
+                all_constraints.push((ci, cj));
+            }
+        }
+    }
+
+    // Remove exterior using only outer boundary constraints.
+    let outer_constraints: Vec<(usize, usize)> = (0..outer_count)
+        .filter_map(|i| {
+            let j = (i + 1) % outer_count;
+            let ci = cdt_indices[i];
+            let cj = cdt_indices[j];
+            (ci != cj).then_some((ci, cj))
+        })
+        .collect();
+    cdt.remove_exterior(&outer_constraints);
+
+    // Build constraint set for flood-fill stopping.
+    let constraint_set: HashSet<(usize, usize)> = all_constraints
+        .iter()
+        .flat_map(|&(a, b)| {
+            let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+            [(lo, hi), (hi, lo)]
+        })
+        .collect();
+
+    // Remove hole interiors by flooding from each hole centroid.
+    for &(start, end) in inner_wire_ranges {
+        let count = end - start;
+        if count < 3 {
+            continue;
+        }
+        let mut cx = 0.0;
+        let mut cy = 0.0;
+        #[allow(clippy::cast_precision_loss)]
+        for idx in start..end {
+            cx += pts2d[idx].x();
+            cy += pts2d[idx].y();
+        }
+        cx /= count as f64;
+        cy /= count as f64;
+        let _removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
+    }
+
+    let cdt_triangles = cdt.triangles();
+
+    // Build reverse mapping: CDT vertex index → input point index.
+    let mut cdt_to_input: HashMap<usize, usize> = HashMap::new();
+    for (input_idx, &cdt_idx) in cdt_indices.iter().enumerate() {
+        cdt_to_input.entry(cdt_idx).or_insert(input_idx);
+    }
+
+    // Map CDT triangles to input indices. Steiner points (from super-triangle
+    // remnants) are extremely rare; skip those triangles.
+    let mut result = Vec::with_capacity(cdt_triangles.len());
+    for &(v0, v1, v2) in &cdt_triangles {
+        if let (Some(&i0), Some(&i1), Some(&i2)) = (
+            cdt_to_input.get(&v0),
+            cdt_to_input.get(&v1),
+            cdt_to_input.get(&v2),
+        ) {
+            result.push((i0, i1, i2));
+        }
+    }
+
+    Ok(result)
 }
 
 /// Ear-clipping triangulation for a simple polygon in 3D.
@@ -2177,10 +2310,239 @@ pub fn tessellate_solid(
     }
 
     // Phase 4: Tessellate each face using its boundary edge vertices.
-    for &face_id in &all_faces {
+    //
+    // For large planar faces with holes, extract CDT inputs first and run
+    // CDTs in parallel (the CDT is the dominant cost for these faces).
+    // Small faces and non-planar faces are processed sequentially.
+    #[allow(clippy::items_after_statements)]
+    struct CdtJob {
+        pts2d: Vec<brepkit_math::vec::Point2>,
+        outer_count: usize,
+        inner_wire_ranges: Vec<(usize, usize)>,
+        all_global_ids: Vec<Option<u32>>,
+        all_positions: Vec<Point3>,
+        normal: Vec3,
+        is_reversed: bool,
+    }
+    #[allow(clippy::items_after_statements)]
+    type CdtResult = Result<Vec<(usize, usize, usize)>, crate::OperationsError>;
+
+    // Phase 4a: Collect CDT jobs for large planar faces with holes.
+    let mut cdt_jobs: Vec<CdtJob> = Vec::new();
+    let mut other_face_indices: Vec<usize> = Vec::new();
+
+    for (fi, &face_id) in all_faces.iter().enumerate() {
+        let face_data = topo.face(face_id)?;
+        let has_inner = !face_data.inner_wires().is_empty();
+        if let FaceSurface::Plane { normal, .. } = face_data.surface() {
+            if has_inner {
+                // Collect boundary data for this face's CDT job.
+                let normal = *normal;
+                let is_reversed = face_data.is_reversed();
+                let wire = topo.wire(face_data.outer_wire())?;
+
+                let ax = normal.x().abs();
+                let ay = normal.y().abs();
+                let az = normal.z().abs();
+                let project = |p: Point3| -> brepkit_math::vec::Point2 {
+                    if az >= ax && az >= ay {
+                        brepkit_math::vec::Point2::new(p.x(), p.y())
+                    } else if ay >= ax {
+                        brepkit_math::vec::Point2::new(p.x(), p.z())
+                    } else {
+                        brepkit_math::vec::Point2::new(p.y(), p.z())
+                    }
+                };
+
+                let tol = 1e-10;
+                let mut all_positions: Vec<Point3> = Vec::new();
+                let mut all_global_ids: Vec<Option<u32>> = Vec::new();
+
+                // Collect outer boundary.
+                for oe in wire.edges() {
+                    let edge_idx = oe.edge().index();
+                    if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
+                        let is_fwd = oe.is_forward();
+                        let len = global_ids.len();
+                        for j in 0..len {
+                            let gid = if is_fwd {
+                                global_ids[j]
+                            } else {
+                                global_ids[len - 1 - j]
+                            };
+                            if j == 0 && !all_global_ids.is_empty() {
+                                let last_gid =
+                                    all_global_ids.last().and_then(|g| *g).unwrap_or(u32::MAX);
+                                if last_gid == gid {
+                                    continue;
+                                }
+                                if (last_gid as usize) < merged.positions.len()
+                                    && (gid as usize) < merged.positions.len()
+                                    && (merged.positions[last_gid as usize]
+                                        - merged.positions[gid as usize])
+                                        .length()
+                                        < tol
+                                {
+                                    continue;
+                                }
+                            }
+                            all_positions.push(merged.positions[gid as usize]);
+                            all_global_ids.push(Some(gid));
+                        }
+                    }
+                }
+                // Remove closing duplicate.
+                if all_global_ids.len() > 2 {
+                    if let (Some(&Some(first)), Some(&Some(last))) =
+                        (all_global_ids.first(), all_global_ids.last())
+                    {
+                        if first == last
+                            || ((first as usize) < merged.positions.len()
+                                && (last as usize) < merged.positions.len()
+                                && (merged.positions[first as usize]
+                                    - merged.positions[last as usize])
+                                    .length()
+                                    < tol)
+                        {
+                            all_positions.pop();
+                            all_global_ids.pop();
+                        }
+                    }
+                }
+                let outer_count = all_positions.len();
+
+                // Collect inner wires.
+                let mut inner_wire_ranges: Vec<(usize, usize)> = Vec::new();
+                for &iw_id in face_data.inner_wires() {
+                    let iw = topo.wire(iw_id)?;
+                    let start = all_positions.len();
+                    let mut inner_global_ids: Vec<u32> = Vec::new();
+                    for oe in iw.edges() {
+                        let edge_idx = oe.edge().index();
+                        if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
+                            let is_fwd = oe.is_forward();
+                            let len = global_ids.len();
+                            for j in 0..len {
+                                let gid = if is_fwd {
+                                    global_ids[j]
+                                } else {
+                                    global_ids[len - 1 - j]
+                                };
+                                if j == 0 && !inner_global_ids.is_empty() {
+                                    let last_gid = *inner_global_ids.last().unwrap_or(&u32::MAX);
+                                    if last_gid == gid {
+                                        continue;
+                                    }
+                                    if (last_gid as usize) < merged.positions.len()
+                                        && (gid as usize) < merged.positions.len()
+                                        && (merged.positions[last_gid as usize]
+                                            - merged.positions[gid as usize])
+                                            .length()
+                                            < tol
+                                    {
+                                        continue;
+                                    }
+                                }
+                                inner_global_ids.push(gid);
+                                all_positions.push(merged.positions[gid as usize]);
+                                all_global_ids.push(Some(gid));
+                            }
+                        }
+                    }
+                    // Remove closing duplicate.
+                    if inner_global_ids.len() > 2 {
+                        if let (Some(&first), Some(&last)) =
+                            (inner_global_ids.first(), inner_global_ids.last())
+                        {
+                            if first == last
+                                || ((first as usize) < merged.positions.len()
+                                    && (last as usize) < merged.positions.len()
+                                    && (merged.positions[first as usize]
+                                        - merged.positions[last as usize])
+                                        .length()
+                                        < tol)
+                            {
+                                inner_global_ids.pop();
+                                all_positions.pop();
+                                all_global_ids.pop();
+                            }
+                        }
+                    }
+                    let end = all_positions.len();
+                    inner_wire_ranges.push((start, end));
+                }
+
+                let pts2d: Vec<brepkit_math::vec::Point2> =
+                    all_positions.iter().map(|&p| project(p)).collect();
+
+                cdt_jobs.push(CdtJob {
+                    pts2d,
+                    outer_count,
+                    inner_wire_ranges,
+                    all_global_ids,
+                    all_positions,
+                    normal,
+                    is_reversed,
+                });
+                continue;
+            }
+        }
+        other_face_indices.push(fi);
+    }
+
+    // Phase 4b: Run CDTs in parallel for large planar faces.
+    let cdt_results: Vec<CdtResult> = if cdt_jobs.len() >= 2 {
+        use rayon::prelude::*;
+        cdt_jobs
+            .par_iter()
+            .map(|job| run_planar_cdt(&job.pts2d, job.outer_count, &job.inner_wire_ranges))
+            .collect()
+    } else {
+        cdt_jobs
+            .iter()
+            .map(|job| run_planar_cdt(&job.pts2d, job.outer_count, &job.inner_wire_ranges))
+            .collect()
+    };
+
+    // Phase 4c: Merge CDT results into the shared mesh (sequential).
+    for (job, result) in cdt_jobs.iter().zip(cdt_results) {
+        let tris = result?;
+
+        // Check winding of first triangle.
+        let needs_flip = if let Some(&(i0, i1, i2)) = tris.first() {
+            let p0 = job.all_positions[i0];
+            let p1 = job.all_positions[i1];
+            let p2 = job.all_positions[i2];
+            let a = p1 - p0;
+            let b = p2 - p0;
+            let winding_matches = a.cross(b).dot(job.normal) > 0.0;
+            // XOR: flip if winding doesn't match, or if face is reversed (but not both).
+            winding_matches == job.is_reversed
+        } else {
+            false
+        };
+
+        for &(i0, i1, i2) in &tris {
+            let g0 = job.all_global_ids[i0].unwrap_or(0);
+            let g1 = job.all_global_ids[i1].unwrap_or(0);
+            let g2 = job.all_global_ids[i2].unwrap_or(0);
+            if needs_flip {
+                merged.indices.push(g0);
+                merged.indices.push(g2);
+                merged.indices.push(g1);
+            } else {
+                merged.indices.push(g0);
+                merged.indices.push(g1);
+                merged.indices.push(g2);
+            }
+        }
+    }
+
+    // Phase 4d: Process remaining faces sequentially.
+    for &fi in &other_face_indices {
         tessellate_face_with_shared_edges(
             topo,
-            face_id,
+            all_faces[fi],
             deflection,
             &edge_global_indices,
             &mut merged,
@@ -2252,24 +2614,20 @@ fn tessellate_face_with_shared_edges(
         for oe in wire.edges() {
             let edge_idx = oe.edge().index();
             if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
-                // Use pre-computed edge vertices. Reverse if edge orientation
-                // in this wire is backwards.
-                let ordered: Vec<u32> = if oe.is_forward() {
-                    global_ids.clone()
-                } else {
-                    global_ids.iter().rev().copied().collect()
-                };
-
-                // Skip the first point if it duplicates the last boundary point
-                // (edges share endpoints: edge[i].end == edge[i+1].start).
-                for (j, &gid) in ordered.iter().enumerate() {
+                // Iterate without allocating: use index-based forward/reverse.
+                let is_fwd = oe.is_forward();
+                let len = global_ids.len();
+                for j in 0..len {
+                    let gid = if is_fwd {
+                        global_ids[j]
+                    } else {
+                        global_ids[len - 1 - j]
+                    };
                     if j == 0 && !boundary_global_ids.is_empty() {
                         let last_gid = *boundary_global_ids.last().unwrap_or(&u32::MAX);
                         if last_gid == gid {
                             continue;
                         }
-                        // Check position proximity for points from different edges
-                        // that share the same vertex.
                         if (last_gid as usize) < merged.positions.len()
                             && (gid as usize) < merged.positions.len()
                         {
@@ -2563,7 +2921,7 @@ fn tessellate_nonplanar_cdt(
         Point2::new(u_min - margin, v_min - margin),
         Point2::new(u_max + margin, v_max + margin),
     );
-    let mut cdt = Cdt::new(bounds);
+    let mut cdt = Cdt::with_capacity(bounds, n_boundary);
 
     // Step 3: Insert boundary points into CDT.
     // cdt_idx → Option<global mesh index> (None for super-triangle vertices).
@@ -2795,17 +3153,34 @@ fn tessellate_nonplanar_snap(
         }
     }
 
+    // Build spatial hash for O(1) snap lookups instead of O(n*m) brute force.
     let snap_tol = 1e-6;
+    let inv_cell = 1.0 / snap_tol;
+    let mut snap_grid: HashMap<(i64, i64, i64), u32> = HashMap::with_capacity(snap_targets.len());
+    for &(target_pos, gid) in &snap_targets {
+        let cx = (target_pos.x() * inv_cell).round() as i64;
+        let cy = (target_pos.y() * inv_cell).round() as i64;
+        let cz = (target_pos.z() * inv_cell).round() as i64;
+        snap_grid.insert((cx, cy, cz), gid);
+    }
 
     for (i, &pos) in face_mesh.positions.iter().enumerate() {
+        let cx = (pos.x() * inv_cell).round() as i64;
+        let cy = (pos.y() * inv_cell).round() as i64;
+        let cz = (pos.z() * inv_cell).round() as i64;
         let mut best_gid = None;
-        let mut best_dist = snap_tol;
-
-        for &(target_pos, gid) in &snap_targets {
-            let dist = (pos - target_pos).length();
-            if dist < best_dist {
-                best_dist = dist;
-                best_gid = Some(gid);
+        // Check 3x3x3 neighborhood for snap matches.
+        'snap: for dx in -1_i64..=1 {
+            for dy in -1_i64..=1 {
+                for dz in -1_i64..=1 {
+                    if let Some(&gid) = snap_grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                        let target_pos = merged.positions[gid as usize];
+                        if (pos - target_pos).length() < snap_tol {
+                            best_gid = Some(gid);
+                            break 'snap;
+                        }
+                    }
+                }
             }
         }
 
