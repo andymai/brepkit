@@ -559,7 +559,7 @@ impl BrepKernel {
     ///
     /// Returns an error if radius is non-positive or edges are invalid.
     #[wasm_bindgen(js_name = "fillet")]
-    #[allow(clippy::needless_pass_by_value)]
+    #[allow(clippy::needless_pass_by_value, deprecated)]
     pub fn fillet_solid(
         &mut self,
         solid: u32,
@@ -5605,9 +5605,17 @@ impl BrepKernel {
                     .iter()
                     .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
                     .collect::<Result<Vec<_>, _>>()?;
-                let result =
+                #[allow(deprecated)]
+                let result = brepkit_operations::fillet::fillet_rolling_ball(
+                    &mut self.topo,
+                    solid_id,
+                    &edge_ids,
+                    radius,
+                )
+                .or_else(|_| {
                     brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)
-                        .map_err(|e| e.to_string())?;
+                })
+                .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             "shell" => {

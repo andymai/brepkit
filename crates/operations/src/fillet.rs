@@ -32,13 +32,13 @@ use brepkit_topology::vertex::VertexId;
 use crate::boolean::FaceSpec;
 use crate::dot_normal_point;
 
-/// Fillet one or more edges of a solid with a constant radius.
+/// Fillet one or more edges of a solid with a constant radius (flat chamfer).
+///
+/// **Deprecated**: This creates flat bevel faces, not rounded fillets.
+/// Use [`fillet_rolling_ball`] for true G1-continuous NURBS blend surfaces.
 ///
 /// Each target edge is replaced by a flat bevel face (chamfer-like
-/// approximation of a fillet arc). For true cylindrical fillet
-/// surfaces, a NURBS implementation would be needed, but this
-/// piecewise-planar approach produces correct topology and is
-/// suitable for downstream tessellation at any resolution.
+/// approximation of a fillet arc).
 ///
 /// # Errors
 ///
@@ -47,6 +47,10 @@ use crate::dot_normal_point;
 /// - `edges` is empty
 /// - Any edge is not shared by exactly two faces
 /// - A target edge is adjacent to a non-planar face
+#[deprecated(
+    since = "0.8.0",
+    note = "Use fillet_rolling_ball for true rounded fillets"
+)]
 #[allow(clippy::too_many_lines)]
 pub fn fillet(
     topo: &mut Topology,
@@ -1157,7 +1161,7 @@ pub fn fillet_variable(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, deprecated)]
 
     use std::collections::HashSet;
 
