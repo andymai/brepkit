@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.10](https://github.com/andymai/brepkit/compare/v0.7.9...v0.7.10) (2026-03-09)
+
+
+### Bug Fixes
+
+* deep robustness — polygon clipping, Newton singularity, fat line signs, CSI ([#113](https://github.com/andymai/brepkit/issues/113)) ([2337aab](https://github.com/andymai/brepkit/commit/2337aab2e2c87e782dae02dc58f1c5632d6d8b6e))
+
 ## [0.7.9](https://github.com/andymai/brepkit/compare/v0.7.8...v0.7.9) (2026-03-09)
 
 
