@@ -5535,7 +5535,7 @@ impl BrepKernel {
             }
             "revolve" => {
                 let f = get_u32(args, "face")?;
-                let angle = get_f64(args, "angle")?;
+                let angle_degrees = get_f64(args, "angle")?;
                 let ox = get_f64(args, "originX").unwrap_or(0.0);
                 let oy = get_f64(args, "originY").unwrap_or(0.0);
                 let oz = get_f64(args, "originZ").unwrap_or(0.0);
@@ -5543,12 +5543,13 @@ impl BrepKernel {
                 let ay = get_f64(args, "axisY").unwrap_or(0.0);
                 let az = get_f64(args, "axisZ").unwrap_or(1.0);
                 let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                // Convert degrees to radians to match the direct WASM binding.
                 let solid = revolve(
                     &mut self.topo,
                     face_id,
                     Point3::new(ox, oy, oz),
                     Vec3::new(ax, ay, az),
-                    angle,
+                    angle_degrees.to_radians(),
                 )
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
