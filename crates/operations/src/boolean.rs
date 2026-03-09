@@ -2951,11 +2951,16 @@ fn analytic_boolean(
         }
     }
 
-    // Unwrap: all fragments are now classified.
+    // All fragments should now be classified.
     let classes: Vec<FaceClass> = classes
         .into_iter()
-        .map(|c| c.unwrap_or(FaceClass::Outside))
-        .collect();
+        .enumerate()
+        .map(|(_i, c)| -> Result<FaceClass, crate::OperationsError> {
+            c.ok_or_else(|| crate::OperationsError::InvalidInput {
+                reason: format!("boolean: fragment {_i} was not classified"),
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     // ── Selection + Assembly ─────────────────────────────────────────────
 

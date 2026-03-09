@@ -38,7 +38,10 @@ fn main() {
         let surface_name = match face.surface() {
             brepkit_topology::face::FaceSurface::Plane { .. } => "Plane",
             brepkit_topology::face::FaceSurface::Cylinder { .. } => "Cylinder",
-            _ => "Other",
+            brepkit_topology::face::FaceSurface::Cone { .. } => "Cone",
+            brepkit_topology::face::FaceSurface::Sphere { .. } => "Sphere",
+            brepkit_topology::face::FaceSurface::Torus { .. } => "Torus",
+            brepkit_topology::face::FaceSurface::Nurbs(_) => "Nurbs",
         };
         eprintln!(
             "  {} face: {} edges, {} inner wires",

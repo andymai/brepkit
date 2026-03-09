@@ -2382,9 +2382,18 @@ pub fn tessellate_solid(
                         tol,
                     );
                     // Track flat IDs for closing-duplicate removal.
+                    // Each vertex should have a global ID from the edge pool; use
+                    // a unique sentinel if the snap lookup missed (shouldn't happen
+                    // in practice, but avoids silently aliasing to vertex 0).
                     let mut inner_flat_ids: Vec<u32> = Vec::with_capacity(inner_gids.len());
+                    let mut next_sentinel = u32::MAX;
                     for (pos, gid_opt) in inner_pos.into_iter().zip(inner_gids) {
-                        let gid = gid_opt.unwrap_or(0);
+                        let gid = gid_opt.unwrap_or_else(|| {
+                            debug_assert!(false, "inner wire vertex had no global ID");
+                            let s = next_sentinel;
+                            next_sentinel = next_sentinel.wrapping_sub(1);
+                            s
+                        });
                         inner_flat_ids.push(gid);
                         all_positions.push(pos);
                         all_global_ids.push(Some(gid));
