@@ -270,6 +270,8 @@ fn refine_plane_surface_point(
 ) -> Option<IntersectionPoint> {
     let mut u = u_guess;
     let mut v = v_guess;
+    let (u_min, u_max) = surface.domain_u();
+    let (v_min, v_max) = surface.domain_v();
 
     for _ in 0..20 {
         let pt = surface.evaluate(u, v);
@@ -302,9 +304,6 @@ fn refine_plane_surface_point(
         u -= grad_u * step_size;
         v -= grad_v * step_size;
 
-        // Clamp to actual surface domain.
-        let (u_min, u_max) = surface.domain_u();
-        let (v_min, v_max) = surface.domain_v();
         u = u.clamp(u_min, u_max);
         v = v.clamp(v_min, v_max);
     }
@@ -335,6 +334,8 @@ fn refine_line_surface_point(
 ) -> Option<IntersectionPoint> {
     let mut u = u_guess;
     let mut v = v_guess;
+    let (u_min, u_max) = surface.domain_u();
+    let (v_min, v_max) = surface.domain_v();
 
     for _ in 0..20 {
         let pt = surface.evaluate(u, v);
@@ -382,8 +383,6 @@ fn refine_line_surface_point(
 
         u -= du;
         v -= dv;
-        let (u_min, u_max) = surface.domain_u();
-        let (v_min, v_max) = surface.domain_v();
         u = u.clamp(u_min, u_max);
         v = v.clamp(v_min, v_max);
     }
@@ -1174,6 +1173,10 @@ fn refine_ssi_point(
     let mut v1 = v1_guess;
     let mut u2 = u2_guess;
     let mut v2 = v2_guess;
+    let (u1_min, u1_max) = s1.domain_u();
+    let (v1_min, v1_max) = s1.domain_v();
+    let (u2_min, u2_max) = s2.domain_u();
+    let (v2_min, v2_max) = s2.domain_v();
 
     for _ in 0..50 {
         let p1 = s1.evaluate(u1, v1);
@@ -1192,8 +1195,6 @@ fn refine_ssi_point(
         let (du2, dv2) = surface_newton_step(s2, u2, v2, p1);
         u2 += du2;
         v2 += dv2;
-        let (u2_min, u2_max) = s2.domain_u();
-        let (v2_min, v2_max) = s2.domain_v();
         u2 = u2.clamp(u2_min, u2_max);
         v2 = v2.clamp(v2_min, v2_max);
 
@@ -1202,8 +1203,6 @@ fn refine_ssi_point(
         let (du1, dv1) = surface_newton_step(s1, u1, v1, p2_new);
         u1 += du1;
         v1 += dv1;
-        let (u1_min, u1_max) = s1.domain_u();
-        let (v1_min, v1_max) = s1.domain_v();
         u1 = u1.clamp(u1_min, u1_max);
         v1 = v1.clamp(v1_min, v1_max);
     }
@@ -1523,8 +1522,7 @@ fn perturbation_tangent(
     best_dir
 }
 
-/// Clamp parameter value to avoid edge singularities.
-/// Clamp a parameter value to slightly inside the surface domain.
+/// Clamp a parameter value to slightly inside the given domain.
 /// The margin is 0.1% of the domain span to avoid evaluation at exact boundaries.
 fn clamp_to_domain(v: f64, min: f64, max: f64) -> f64 {
     let margin = 0.001 * (max - min);
@@ -1547,22 +1545,11 @@ fn clamp_state(state: &[f64; 4], s1: &NurbsSurface, s2: &NurbsSurface) -> [f64; 
 
 /// Check if a parameter state is at the domain boundary of either surface.
 fn at_boundary(state: &[f64; 4], s1: &NurbsSurface, s2: &NurbsSurface) -> bool {
-    let (u1_min, u1_max) = s1.domain_u();
-    let (v1_min, v1_max) = s1.domain_v();
-    let (u2_min, u2_max) = s2.domain_u();
-    let (v2_min, v2_max) = s2.domain_v();
-    let margins = [
-        0.001 * (u1_max - u1_min),
-        0.001 * (v1_max - v1_min),
-        0.001 * (u2_max - u2_min),
-        0.001 * (v2_max - v2_min),
-    ];
-    let mins = [u1_min, v1_min, u2_min, v2_min];
-    let maxs = [u1_max, v1_max, u2_max, v2_max];
+    let clamped = clamp_state(state, s1, s2);
     state
         .iter()
-        .enumerate()
-        .any(|(i, &v)| v <= mins[i] + margins[i] || v >= maxs[i] - margins[i])
+        .zip(clamped.iter())
+        .any(|(&s, &c)| (s - c).abs() > f64::EPSILON)
 }
 
 /// March in one direction along the intersection curve using RKF45

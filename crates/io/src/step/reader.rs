@@ -311,18 +311,12 @@ impl<'a> StepBuilder<'a> {
                 let is_rational = attrs.contains("RATIONAL");
                 self.build_bspline_surface(surface_ref, &attrs, is_rational)
             }
-            // Composite entity (starts with '('), e.g. RATIONAL_B_SPLINE_SURFACE composite.
             _ if entity_type.is_empty() || attrs.contains("B_SPLINE_SURFACE_WITH_KNOTS") => {
                 let is_rational = attrs.contains("RATIONAL");
-                let bspline_attrs = if let Some(pos) = attrs.find("B_SPLINE_SURFACE_WITH_KNOTS") {
-                    &attrs[pos + "B_SPLINE_SURFACE_WITH_KNOTS".len()..]
-                } else if let Some(pos) = attrs.find("B_SPLINE_SURFACE") {
-                    &attrs[pos + "B_SPLINE_SURFACE".len()..]
-                } else {
-                    return Err(IoError::UnsupportedEntity {
+                let bspline_attrs = find_composite_bspline_attrs(&attrs, "B_SPLINE_SURFACE")
+                    .ok_or_else(|| IoError::UnsupportedEntity {
                         entity: format!("composite surface #{surface_ref}"),
-                    });
-                };
+                    })?;
                 self.build_bspline_surface(surface_ref, bspline_attrs, is_rational)
             }
             _ => Err(IoError::UnsupportedEntity {
@@ -438,21 +432,13 @@ impl<'a> StepBuilder<'a> {
                 Ok(EdgeCurve::Ellipse(ellipse))
             }
             "B_SPLINE_CURVE_WITH_KNOTS" => self.build_bspline_curve(curve_ref, &attrs, false),
-            // Composite entity: starts with '(' (e.g. RATIONAL_B_SPLINE_CURVE composite)
             _ if entity_type.is_empty() || attrs.contains("B_SPLINE_CURVE_WITH_KNOTS") => {
                 let is_rational = attrs.contains("RATIONAL");
-                // Extract the B_SPLINE_CURVE_WITH_KNOTS portion from the composite attrs.
-                if let Some(bspline_start) = attrs.find("B_SPLINE_CURVE_WITH_KNOTS") {
-                    let bspline_attrs = &attrs[bspline_start + "B_SPLINE_CURVE_WITH_KNOTS".len()..];
-                    self.build_bspline_curve(curve_ref, bspline_attrs, is_rational)
-                } else if let Some(bspline_start) = attrs.find("B_SPLINE_CURVE") {
-                    let bspline_attrs = &attrs[bspline_start + "B_SPLINE_CURVE".len()..];
-                    self.build_bspline_curve(curve_ref, bspline_attrs, is_rational)
-                } else {
-                    Err(IoError::UnsupportedEntity {
+                let bspline_attrs = find_composite_bspline_attrs(&attrs, "B_SPLINE_CURVE")
+                    .ok_or_else(|| IoError::UnsupportedEntity {
                         entity: format!("composite curve #{curve_ref}"),
-                    })
-                }
+                    })?;
+                self.build_bspline_curve(curve_ref, bspline_attrs, is_rational)
             }
             _ => Err(IoError::UnsupportedEntity {
                 entity: format!("{entity_type} (curve #{curve_ref})"),
@@ -676,6 +662,21 @@ fn parse_floats(attrs: &str) -> Vec<f64> {
     result
 }
 
+/// Find the B-spline attribute substring within a composite STEP entity.
+///
+/// Searches for `"{base_name}_WITH_KNOTS"` first, then falls back to `base_name`.
+/// Returns the portion of `attrs` after the matched marker.
+fn find_composite_bspline_attrs<'a>(attrs: &'a str, base_name: &str) -> Option<&'a str> {
+    let with_knots = format!("{base_name}_WITH_KNOTS");
+    if let Some(pos) = attrs.find(&with_knots) {
+        return Some(&attrs[pos + with_knots.len()..]);
+    }
+    if let Some(pos) = attrs.find(base_name) {
+        return Some(&attrs[pos + base_name.len()..]);
+    }
+    None
+}
+
 /// Parse integers from a parenthesized list like `(4, 4)`.
 fn parse_ints_in_parens(s: &str) -> Vec<u32> {
     let mut result = Vec::new();
@@ -721,7 +722,8 @@ fn extract_rational_weights(attrs: &str, expected_count: usize) -> Vec<f64> {
 }
 
 /// Parse a (possibly nested) list of weights from RATIONAL_B_SPLINE attrs.
-/// Handles both flat `(w1, w2, w3)` and nested `((w1, w2), (w3, w4))` forms.
+/// Handles both flat `(w1, w2, w3)` and nested `((w1, w2), (w3, w4))` forms,
+/// as well as no-paren format `w1, w2, w3)`.
 fn parse_weight_list(s: &str) -> Vec<f64> {
     let mut weights = Vec::new();
     let mut depth = 0i32;
@@ -753,7 +755,7 @@ fn parse_weight_list(s: &str) -> Vec<f64> {
             }
             _ => {}
         }
-        if depth >= 1 && ch != '(' {
+        if depth >= 0 && ch != '(' && ch != ')' {
             current.push(ch);
         }
     }
@@ -1397,5 +1399,55 @@ mod tests {
         let vals = [0.0, 0.5, 1.0];
         let flat = expand_knots(&mults, &vals);
         assert_eq!(flat, vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn parse_weight_list_nested() {
+        // Nested format: ((w1, w2, w3))
+        let weights = parse_weight_list("(1.0, 0.707, 1.0))");
+        assert_eq!(weights.len(), 3);
+        assert!((weights[0] - 1.0).abs() < 1e-10);
+        assert!((weights[1] - 0.707).abs() < 1e-10);
+        assert!((weights[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn parse_weight_list_flat() {
+        // Flat format: (w1, w2, w3) — no inner parens
+        let weights = parse_weight_list("1.0, 0.707, 1.0)");
+        assert_eq!(weights.len(), 3);
+        assert!((weights[0] - 1.0).abs() < 1e-10);
+        assert!((weights[1] - 0.707).abs() < 1e-10);
+        assert!((weights[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn parse_weight_list_scientific() {
+        // Scientific notation
+        let weights = parse_weight_list("(1.000000E+00, 7.071068E-01))");
+        assert_eq!(weights.len(), 2);
+        assert!((weights[0] - 1.0).abs() < 1e-5);
+        assert!((weights[1] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn parse_weight_list_2d_nested() {
+        // 2D nested format: ((w1, w2), (w3, w4))
+        let weights = parse_weight_list("(1.0, 0.5), (0.5, 1.0))");
+        assert_eq!(weights.len(), 4);
+        assert!((weights[0] - 1.0).abs() < 1e-10);
+        assert!((weights[1] - 0.5).abs() < 1e-10);
+        assert!((weights[2] - 0.5).abs() < 1e-10);
+        assert!((weights[3] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn extract_rational_weights_from_composite() {
+        let attrs = "BOUNDED_CURVE() B_SPLINE_CURVE(2, (#1, #2, #3)) \
+                     B_SPLINE_CURVE_WITH_KNOTS((3,3), (0.0, 1.0)) \
+                     RATIONAL_B_SPLINE_CURVE((1.0, 0.707, 1.0))";
+        let weights = extract_rational_weights(attrs, 3);
+        assert_eq!(weights.len(), 3);
+        assert!((weights[1] - 0.707).abs() < 1e-10);
     }
 }
