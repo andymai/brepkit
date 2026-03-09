@@ -462,6 +462,66 @@ impl ToroidalSurface {
         })
     }
 
+    /// Create a torus with explicit axis and reference direction.
+    ///
+    /// `ref_dir` defines the x-axis of the local frame (projected
+    /// perpendicular to `z_axis`). This preserves the parametric
+    /// orientation from STEP `AXIS2_PLACEMENT_3D`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MathError::ParameterOutOfRange`] if either radius is
+    /// non-positive, or [`MathError::ZeroVector`] if `z_axis` is zero.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fallback perpendicular vector cannot be normalized
+    /// (should not occur for any valid unit `z_axis`).
+    pub fn with_axis_and_ref_dir(
+        center: Point3,
+        major_radius: f64,
+        minor_radius: f64,
+        z_axis: Vec3,
+        ref_dir: Vec3,
+    ) -> Result<Self, MathError> {
+        if major_radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: major_radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        if minor_radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: minor_radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        let z = z_axis.normalize()?;
+        // Project ref_dir onto the plane perpendicular to z.
+        let ref_proj = ref_dir - z * ref_dir.dot(z);
+        let x = ref_proj.normalize().unwrap_or_else(|_| {
+            // ref_dir parallel to z — fall back to arbitrary perpendicular.
+            let candidate = if z.x().abs() < 0.9 {
+                Vec3::new(1.0, 0.0, 0.0)
+            } else {
+                Vec3::new(0.0, 1.0, 0.0)
+            };
+            #[allow(clippy::unwrap_used)]
+            z.cross(candidate).normalize().unwrap()
+        });
+        let y = z.cross(x);
+        Ok(Self {
+            center,
+            major_radius,
+            minor_radius,
+            x_axis: x,
+            y_axis: y,
+            z_axis: z,
+        })
+    }
+
     /// Evaluates the surface at parameters `(u, v)`.
     #[must_use]
     pub fn evaluate(&self, u: f64, v: f64) -> Point3 {

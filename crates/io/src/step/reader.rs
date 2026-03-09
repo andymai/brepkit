@@ -298,9 +298,9 @@ impl<'a> StepBuilder<'a> {
                 let minor_r = floats.get(1).copied().ok_or_else(|| IoError::ParseError {
                     reason: format!("TOROIDAL_SURFACE #{surface_ref} missing minor_radius"),
                 })?;
-                let (center, axis, _ref_dir) = self.build_axis2_placement(axis_ref)?;
-                let torus = brepkit_math::surfaces::ToroidalSurface::with_axis(
-                    center, major_r, minor_r, axis,
+                let (center, axis, ref_dir) = self.build_axis2_placement(axis_ref)?;
+                let torus = brepkit_math::surfaces::ToroidalSurface::with_axis_and_ref_dir(
+                    center, major_r, minor_r, axis, ref_dir,
                 )
                 .map_err(|e| IoError::ParseError {
                     reason: format!("TOROIDAL_SURFACE #{surface_ref}: {e}"),
@@ -671,7 +671,10 @@ fn find_composite_bspline_attrs<'a>(attrs: &'a str, base_name: &str) -> Option<&
     if let Some(pos) = attrs.find(&with_knots) {
         return Some(&attrs[pos + with_knots.len()..]);
     }
-    if let Some(pos) = attrs.find(base_name) {
+    // Anchor on base_name followed by '(' to avoid matching inside
+    // "RATIONAL_B_SPLINE_CURVE" when searching for "B_SPLINE_CURVE".
+    let anchored = format!("{base_name}(");
+    if let Some(pos) = attrs.find(&anchored) {
         return Some(&attrs[pos + base_name.len()..]);
     }
     None
