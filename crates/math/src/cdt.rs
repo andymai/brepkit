@@ -1551,7 +1551,8 @@ fn segment_intersection_point(a0: Point2, a1: Point2, b0: Point2, b1: Point2) ->
     let dx_ab = b0.x() - a0.x();
     let dy_ab = b0.y() - a0.y();
     let t = (dx_ab * dy_b - dy_ab * dx_b) / denom;
-    if t > 0.0 && t < 1.0 {
+    let u = (dx_ab * dy_a - dy_ab * dx_a) / denom;
+    if t > 0.0 && t < 1.0 && u > 0.0 && u < 1.0 {
         Some(Point2::new(
             dx_a.mul_add(t, a0.x()),
             dy_a.mul_add(t, a0.y()),
