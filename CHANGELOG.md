@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.6](https://github.com/andymai/brepkit/compare/v0.7.5...v0.7.6) (2026-03-09)
+
+
+### Performance Improvements
+
+* algorithmic optimizations for booleans, CDT, and tessellation ([#102](https://github.com/andymai/brepkit/issues/102)) ([a7383e8](https://github.com/andymai/brepkit/commit/a7383e82b3553c989e0c4c1fef118b10d36a031c))
+
 ## [0.7.5](https://github.com/andymai/brepkit/compare/v0.7.4...v0.7.5) (2026-03-09)
 
 
