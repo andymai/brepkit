@@ -60,6 +60,66 @@ fn dedup_points_by_position(pts: &mut Vec<Point3>) {
     });
 }
 
+/// Compute a representative normal and d-value for a face from its surface type.
+///
+/// For planar faces, returns the plane normal/d directly. For analytic surfaces
+/// (cylinder, sphere, cone, torus), computes the normal from the surface
+/// definition and a sample vertex — avoiding expensive tessellation.
+fn analytic_face_normal_d(surface: &FaceSurface, verts: &[Point3]) -> (Vec3, f64) {
+    match surface {
+        FaceSurface::Plane { normal, d } => (*normal, *d),
+        FaceSurface::Cylinder(cyl) => {
+            // Cylinder axis direction as representative normal.
+            let n = cyl.axis();
+            let d = if verts.is_empty() {
+                0.0
+            } else {
+                crate::dot_normal_point(n, verts[0])
+            };
+            (n, d)
+        }
+        FaceSurface::Sphere(sph) => {
+            // Outward radial from center through first vertex.
+            if let Some(&v) = verts.first() {
+                let dir = v - sph.center();
+                let n = dir.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                (n, crate::dot_normal_point(n, v))
+            } else {
+                (Vec3::new(0.0, 0.0, 1.0), 0.0)
+            }
+        }
+        FaceSurface::Cone(cone) => {
+            let n = cone.axis();
+            let d = if verts.is_empty() {
+                0.0
+            } else {
+                crate::dot_normal_point(n, verts[0])
+            };
+            (n, d)
+        }
+        FaceSurface::Torus(tor) => {
+            let n = tor.z_axis();
+            let d = if verts.is_empty() {
+                0.0
+            } else {
+                crate::dot_normal_point(n, verts[0])
+            };
+            (n, d)
+        }
+        FaceSurface::Nurbs(_) => {
+            // For NURBS, use polygon normal from vertices.
+            if verts.len() >= 3 {
+                let e1 = verts[1] - verts[0];
+                let e2 = verts[2] - verts[0];
+                let n = e1.cross(e2).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                (n, crate::dot_normal_point(n, verts[0]))
+            } else {
+                (Vec3::new(0.0, 0.0, 1.0), 0.0)
+            }
+        }
+    }
+}
+
 /// Compute the axial extent (v-range) of points projected onto a cylinder axis.
 ///
 /// Returns `None` if the extent is degenerate (< 1e-10).
@@ -2158,24 +2218,7 @@ fn analytic_boolean(
         let surface = face.surface().clone();
         let reversed = face.is_reversed();
         let verts = face_polygon(topo, fid)?;
-        let (normal, d) = match &surface {
-            FaceSurface::Plane { normal, d } => (*normal, *d),
-            _ => {
-                // For non-planar faces, compute a representative normal from tessellation.
-                let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
-                let avg_normal = if mesh.normals.is_empty() {
-                    Vec3::new(0.0, 0.0, 1.0)
-                } else {
-                    mesh.normals[0]
-                };
-                let d_val = if mesh.positions.is_empty() {
-                    0.0
-                } else {
-                    dot_normal_point(avg_normal, mesh.positions[0])
-                };
-                (avg_normal, d_val)
-            }
-        };
+        let (normal, d) = analytic_face_normal_d(&surface, &verts);
         snaps_a.push(FaceSnapshot {
             id: fid,
             surface,
@@ -2192,23 +2235,7 @@ fn analytic_boolean(
         let surface = face.surface().clone();
         let reversed = face.is_reversed();
         let verts = face_polygon(topo, fid)?;
-        let (normal, d) = match &surface {
-            FaceSurface::Plane { normal, d } => (*normal, *d),
-            _ => {
-                let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
-                let avg_normal = if mesh.normals.is_empty() {
-                    Vec3::new(0.0, 0.0, 1.0)
-                } else {
-                    mesh.normals[0]
-                };
-                let d_val = if mesh.positions.is_empty() {
-                    0.0
-                } else {
-                    dot_normal_point(avg_normal, mesh.positions[0])
-                };
-                (avg_normal, d_val)
-            }
-        };
+        let (normal, d) = analytic_face_normal_d(&surface, &verts);
         snaps_b.push(FaceSnapshot {
             id: fid,
             surface,
