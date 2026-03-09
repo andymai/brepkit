@@ -3220,10 +3220,27 @@ fn curve_boundary_crossings(
         return CurveClassification::Crossings(raw_points);
     }
 
+    // Pre-project face polygon to 2D once, then test all sample points
+    // against the projected polygon. This avoids re-projecting the polygon
+    // for every sample point (64 allocations → 1 allocation).
+    let ax = face_normal.x().abs();
+    let ay = face_normal.y().abs();
+    let az = face_normal.z().abs();
+    let project_3d_to_2d = |p: Point3| -> Point2 {
+        if az >= ax && az >= ay {
+            Point2::new(p.x(), p.y())
+        } else if ay >= ax {
+            Point2::new(p.x(), p.z())
+        } else {
+            Point2::new(p.y(), p.z())
+        }
+    };
+    let polygon_2d: Vec<Point2> = face_verts.iter().map(|p| project_3d_to_2d(*p)).collect();
+
     // Classify each sample as inside or outside the face polygon.
     let inside: Vec<bool> = raw_points
         .iter()
-        .map(|pt| point_in_face_3d(*pt, face_verts, &face_normal))
+        .map(|pt| point_in_polygon(project_3d_to_2d(*pt), &polygon_2d))
         .collect();
 
     let all_inside = inside.iter().all(|&v| v);
