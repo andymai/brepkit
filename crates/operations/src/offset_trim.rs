@@ -4,11 +4,18 @@
 //! on itself, creating self-intersections. This module detects such regions
 //! and trims the offset surface to produce valid geometry.
 //!
-//! The approach is sampling-based: we evaluate the offset surface on a grid,
-//! check each sample against the original surface to identify invalid regions,
-//! then refit a clean surface through only the valid samples.
+//! ## Approach
+//!
+//! 1. **SSI-based** (primary): Use `detect_self_intersection` from the math
+//!    crate to find actual self-intersection curves on the offset surface.
+//!    The SSI curves' parameter-space data defines the boundary between
+//!    valid and folded-back regions.
+//! 2. **Sampling-based** (fallback): If SSI detection finds no curves (e.g.,
+//!    on degenerate surfaces or very tight folds), fall back to grid sampling
+//!    with distance checks against the original surface.
 
 use brepkit_math::nurbs::projection::project_point_to_surface;
+use brepkit_math::nurbs::self_intersection::detect_self_intersection;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::nurbs::surface_fitting::interpolate_surface;
 use brepkit_math::vec::Point3;
@@ -17,6 +24,9 @@ use crate::OperationsError;
 
 /// Grid resolution for the initial self-intersection detection pass.
 const DETECTION_GRID: usize = 20;
+
+/// Grid resolution for SSI-based detection.
+const SSI_GRID: usize = 25;
 
 /// Grid resolution for the dense refit sampling pass.
 const REFIT_GRID: usize = 30;
@@ -28,13 +38,12 @@ const MAX_INVALID_FRACTION: f64 = 0.5;
 /// Factor applied to tolerance for the distance check. Samples whose
 /// distance to the original surface deviates from `|offset_distance|`
 /// by more than `tolerance * DISTANCE_TOLERANCE_FACTOR` are flagged.
-/// This needs to be generous because the sampling-based offset introduces
-/// interpolation error proportional to curvature.
 const DISTANCE_TOLERANCE_FACTOR: f64 = 10.0;
 
-/// Relative tolerance for the distance check. The allowed deviation
-/// is `max(tolerance * DISTANCE_TOLERANCE_FACTOR, |offset_distance| * RELATIVE_DISTANCE_TOL)`.
-const RELATIVE_DISTANCE_TOL: f64 = 0.15;
+/// Relative tolerance for the fallback distance check. Tightened from
+/// 0.15 to 0.02 — the SSI-based primary path handles the cases that
+/// formerly needed the loose 15% tolerance.
+const RELATIVE_DISTANCE_TOL: f64 = 0.02;
 
 /// Detect and remove self-intersections in an offset NURBS surface.
 ///
@@ -43,23 +52,170 @@ const RELATIVE_DISTANCE_TOL: f64 = 0.15;
 /// cleaned offset surface.
 ///
 /// # Algorithm
-/// 1. Sample the offset surface on a grid and check for self-intersections
-///    by looking for sign changes in the distance to the original surface
-/// 2. If self-intersections are detected, find the self-intersection curves
-///    using surface-surface intersection (offset vs itself in different patches)
-/// 3. Trim the offset surface along the self-intersection curves, keeping
-///    only patches that are at the correct offset distance
+///
+/// 1. Try SSI-based detection: find actual self-intersection curves on the
+///    offset surface. The SSI curves' parameter-space data classifies which
+///    side of each curve is at the correct offset distance (valid) vs.
+///    folded back (invalid).
+/// 2. If SSI detection finds curves, trim using the SSI parameter boundary.
+/// 3. If SSI detection finds nothing, fall back to grid sampling with
+///    distance/normal checks (tighter tolerance than before).
 ///
 /// # Errors
 /// Returns an error if surface analysis fails.
+#[allow(clippy::too_many_lines)]
 pub fn trim_offset_self_intersections(
     original: &NurbsSurface,
     offset: &NurbsSurface,
     offset_distance: f64,
     tolerance: f64,
 ) -> Result<NurbsSurface, OperationsError> {
+    // ── Primary path: SSI-based detection ──────────────────────────────
+    if let Ok(ssi_curves) = detect_self_intersection(offset, SSI_GRID, tolerance) {
+        if !ssi_curves.is_empty() {
+            return trim_via_ssi(original, offset, offset_distance, tolerance, &ssi_curves);
+        }
+    }
+
+    // ── Fallback path: sampling-based detection ────────────────────────
+    trim_via_sampling(original, offset, offset_distance, tolerance)
+}
+
+/// Trim the offset surface using SSI curves found by `detect_self_intersection`.
+///
+/// The SSI curves divide the parameter domain into regions. We classify each
+/// region by checking a sample point's distance to the original surface:
+/// the side at the correct offset distance is valid, the folded-back side
+/// is trimmed away.
+#[allow(clippy::cast_precision_loss)]
+fn trim_via_ssi(
+    original: &NurbsSurface,
+    offset: &NurbsSurface,
+    offset_distance: f64,
+    tolerance: f64,
+    ssi_curves: &[brepkit_math::nurbs::self_intersection::SelfIntersectionCurve],
+) -> Result<NurbsSurface, OperationsError> {
+    let expected_dist = offset_distance.abs();
+    let dist_tol = distance_tolerance(tolerance, expected_dist);
+
+    // Build a validity mask using the SSI curve parameter-space data.
+    // For each SSI curve, the params_a and params_b give two sheets of the
+    // surface that map to the same 3D point. One sheet is at the correct
+    // offset distance (valid), the other is folded back (invalid).
+    //
+    // Strategy: sample the offset surface on a grid. For each sample, check
+    // if it's on the invalid side of any SSI curve by:
+    //   1. Finding the closest SSI curve point in parameter space
+    //   2. Checking which sheet (a or b) it's closer to
+    //   3. Checking distance to the original surface for that sheet
+    let (u_min, u_max) = offset.domain_u();
+    let (v_min, v_max) = offset.domain_v();
+    let n = REFIT_GRID;
+
+    // Pre-compute which sheets are valid vs. invalid for each SSI curve.
+    // We check the midpoint of each sheet against the original surface.
+    let mut invalid_params: Vec<(f64, f64)> = Vec::new();
+
+    for ssi in ssi_curves {
+        if ssi.params_a.is_empty() {
+            continue;
+        }
+        // Check midpoint of each sheet.
+        let mid_idx = ssi.params_a.len() / 2;
+        let (ua, va) = ssi.params_a[mid_idx];
+        let (ub, vb) = ssi.params_b[mid_idx];
+
+        let pt_a = offset.evaluate(ua, va);
+        let pt_b = offset.evaluate(ub, vb);
+
+        let dist_a = project_point_to_surface(original, pt_a, tolerance)
+            .map_or(expected_dist, |proj| proj.distance);
+        let dist_b = project_point_to_surface(original, pt_b, tolerance)
+            .map_or(expected_dist, |proj| proj.distance);
+
+        // The sheet further from the expected offset is invalid.
+        let a_err = (dist_a - expected_dist).abs();
+        let b_err = (dist_b - expected_dist).abs();
+
+        if a_err > b_err {
+            invalid_params.extend_from_slice(&ssi.params_a);
+        } else {
+            invalid_params.extend_from_slice(&ssi.params_b);
+        }
+    }
+
+    // Build validity mask: a sample is invalid if it's near any invalid
+    // parameter point (within a grid cell's worth of parameter distance).
+    let u_cell = (u_max - u_min) / (n as f64);
+    let v_cell = (v_max - v_min) / (n as f64);
+    let proximity = (u_cell * u_cell + v_cell * v_cell).sqrt() * 1.5;
+
+    let mut mask = Vec::with_capacity(n);
+    for i in 0..n {
+        let u = lerp(u_min, u_max, i as f64 / (n - 1) as f64);
+        let mut row = Vec::with_capacity(n);
+        for j in 0..n {
+            let v = lerp(v_min, v_max, j as f64 / (n - 1) as f64);
+
+            // Check if this sample is near any invalid parameter point.
+            let near_invalid = invalid_params
+                .iter()
+                .any(|&(iu, iv)| ((u - iu).powi(2) + (v - iv).powi(2)).sqrt() < proximity);
+
+            let valid = if near_invalid {
+                // Double-check with actual distance measurement.
+                let pt = offset.evaluate(u, v);
+                project_point_to_surface(original, pt, tolerance).map_or(true, |proj| {
+                    let dist_ok = (proj.distance - expected_dist).abs() <= dist_tol;
+                    let normal_ok =
+                        check_normal_consistency(original, offset, proj.u, proj.v, u, v);
+                    dist_ok && normal_ok
+                })
+            } else {
+                true
+            };
+
+            row.push(valid);
+        }
+        mask.push(row);
+    }
+
+    // Count invalid samples.
+    let total = n * n;
+    let invalid_count = mask
+        .iter()
+        .flat_map(|row| row.iter())
+        .filter(|&&v| !v)
+        .count();
+
+    if invalid_count == 0 {
+        return Ok(offset.clone());
+    }
+
+    let invalid_fraction = invalid_count as f64 / total as f64;
+    if invalid_fraction > MAX_INVALID_FRACTION {
+        return Err(OperationsError::InvalidInput {
+            reason: format!(
+                "offset self-intersection covers {:.0}% of the surface (limit: {:.0}%)",
+                invalid_fraction * 100.0,
+                MAX_INVALID_FRACTION * 100.0
+            ),
+        });
+    }
+
+    refit_valid_region(offset, &mask)
+}
+
+/// Fallback: sampling-based self-intersection detection and trimming.
+fn trim_via_sampling(
+    original: &NurbsSurface,
+    offset: &NurbsSurface,
+    offset_distance: f64,
+    tolerance: f64,
+) -> Result<NurbsSurface, OperationsError> {
     // Step 1: Detection — sample the offset surface and check distances.
-    let validity_mask = detect_self_intersections(original, offset, offset_distance, tolerance);
+    let validity_mask =
+        detect_self_intersections_sampling(original, offset, offset_distance, tolerance);
 
     // Count invalid samples.
     let total = validity_mask.len() * validity_mask[0].len();
@@ -131,7 +287,7 @@ fn lerp(a: f64, b: f64, t: f64) -> f64 {
 /// A sample is valid if its distance to the original surface is within
 /// the computed tolerance of `|offset_distance|`.
 #[allow(clippy::cast_precision_loss)]
-fn detect_self_intersections(
+fn detect_self_intersections_sampling(
     original: &NurbsSurface,
     offset: &NurbsSurface,
     offset_distance: f64,
