@@ -336,10 +336,10 @@ fn tessellate_planar(
 
     if face_data.inner_wires().is_empty() {
         let normals_out = vec![normal; n];
-        let mut indices = ear_clip_triangulate(&positions, normal);
+        let mut indices = cdt_triangulate_simple(&positions, normal);
 
         // Ensure triangle winding matches the face normal.
-        // ear_clip_triangulate forces CCW in 2D projection, which may
+        // cdt_triangulate_simple forces CCW in 2D projection, which may
         // disagree with the face normal for faces whose normal opposes
         // the projection direction.
         if indices.len() >= 3 {
@@ -623,22 +623,15 @@ fn tessellate_planar_with_holes(
         if count < 3 {
             continue;
         }
-        // Compute centroid of hole polygon in 2D.
-        let mut cx = 0.0;
-        let mut cy = 0.0;
-        #[allow(clippy::cast_precision_loss)]
-        for idx in start..end {
-            cx += pts2d[idx].x();
-            cy += pts2d[idx].y();
-        }
-        cx /= count as f64;
-        cy /= count as f64;
 
-        // Flood-fill remove from the hole centroid, stopping at constraints.
-        // If the centroid falls outside the triangulation (e.g. concave inner
-        // wire), skip removal — the hole triangles will remain, producing a
-        // slightly over-tessellated but non-panicking result.
-        let _removed = cdt.flood_remove_from_point(Point2::new(cx, cy), &constraint_set);
+        // Find a seed point guaranteed inside the hole polygon.
+        // The centroid fails for concave polygons, so we try multiple
+        // strategies: vertex inward-bisector stepping, then centroid fallback.
+        let hole_poly: Vec<Point2> = (start..end).map(|i| pts2d[i]).collect();
+        let seed = find_interior_seed(&hole_poly);
+
+        // Flood-fill remove from the seed, stopping at constraints.
+        let _removed = cdt.flood_remove_from_point(seed, &constraint_set);
     }
 
     // Extract triangles and build mesh.
@@ -705,6 +698,84 @@ fn tessellate_planar_with_holes(
         normals: normals_out,
         indices: indices_out,
     })
+}
+
+/// Find a point guaranteed to be inside a simple polygon in 2D.
+///
+/// Tries multiple strategies:
+/// 1. For each vertex, step inward along the angle bisector of adjacent edges.
+///    Verify with winding number.
+/// 2. Fall back to centroid if nothing else works (best-effort).
+fn find_interior_seed(polygon: &[brepkit_math::vec::Point2]) -> brepkit_math::vec::Point2 {
+    use brepkit_math::predicates::point_in_polygon;
+    use brepkit_math::vec::Point2;
+
+    let n = polygon.len();
+    if n < 3 {
+        // Degenerate — return first point.
+        return polygon[0];
+    }
+
+    // Strategy 1: vertex bisector stepping.
+    // For each vertex, compute the inward bisector of the two adjacent edges
+    // and step ε inward. A convex vertex's bisector always points inward.
+    for i in 0..n {
+        let prev = polygon[(i + n - 1) % n];
+        let curr = polygon[i];
+        let next = polygon[(i + 1) % n];
+
+        // Edge vectors pointing away from curr.
+        let e_prev = Point2::new(prev.x() - curr.x(), prev.y() - curr.y());
+        let e_next = Point2::new(next.x() - curr.x(), next.y() - curr.y());
+
+        let len_prev = (e_prev.x() * e_prev.x() + e_prev.y() * e_prev.y()).sqrt();
+        let len_next = (e_next.x() * e_next.x() + e_next.y() * e_next.y()).sqrt();
+        if len_prev < 1e-30 || len_next < 1e-30 {
+            continue;
+        }
+
+        // Normalize and compute bisector.
+        let u_prev = Point2::new(e_prev.x() / len_prev, e_prev.y() / len_prev);
+        let u_next = Point2::new(e_next.x() / len_next, e_next.y() / len_next);
+        let bisector = Point2::new(u_prev.x() + u_next.x(), u_prev.y() + u_next.y());
+        let bis_len = (bisector.x() * bisector.x() + bisector.y() * bisector.y()).sqrt();
+        if bis_len < 1e-30 {
+            continue;
+        }
+
+        // Step a small distance along the bisector.
+        let step = 1e-4 * len_prev.min(len_next);
+        let candidate = Point2::new(
+            curr.x() + step * bisector.x() / bis_len,
+            curr.y() + step * bisector.y() / bis_len,
+        );
+
+        if point_in_polygon(candidate, polygon) {
+            return candidate;
+        }
+
+        // Try the opposite direction (for reflex vertices, the bisector
+        // points outward, so flip it).
+        let candidate_flip = Point2::new(
+            curr.x() - step * bisector.x() / bis_len,
+            curr.y() - step * bisector.y() / bis_len,
+        );
+
+        if point_in_polygon(candidate_flip, polygon) {
+            return candidate_flip;
+        }
+    }
+
+    // Strategy 2: centroid fallback (best-effort).
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    for p in polygon {
+        cx += p.x();
+        cy += p.y();
+    }
+    cx /= n as f64;
+    cy /= n as f64;
+    Point2::new(cx, cy)
 }
 
 /// Reconstruct a 3D point from a 2D projection, using the face plane.
@@ -1132,11 +1203,15 @@ fn run_planar_cdt(
     Ok(result)
 }
 
-/// Ear-clipping triangulation for a simple polygon in 3D.
+/// Triangulate a simple polygon (no holes) in 3D using CDT.
 ///
 /// Projects the polygon to 2D (dropping the coordinate corresponding to
-/// the dominant normal component), then applies the ear-clipping algorithm.
-fn ear_clip_triangulate(positions: &[Point3], normal: Vec3) -> Vec<u32> {
+/// the dominant normal component), inserts boundary constraints, and returns
+/// triangle indices. Falls back to fan triangulation for degenerate cases.
+fn cdt_triangulate_simple(positions: &[Point3], normal: Vec3) -> Vec<u32> {
+    use brepkit_math::cdt::Cdt;
+    use brepkit_math::vec::Point2;
+
     let n = positions.len();
     if n < 3 {
         return vec![];
@@ -1145,146 +1220,84 @@ fn ear_clip_triangulate(positions: &[Point3], normal: Vec3) -> Vec<u32> {
         return vec![0, 1, 2];
     }
 
-    // Project to 2D by dropping the dominant normal axis.
-    let ax = normal.x().abs();
-    let ay = normal.y().abs();
-    let az = normal.z().abs();
+    let pts2d: Vec<Point2> = positions
+        .iter()
+        .map(|&p| project_by_normal(p, normal))
+        .collect();
 
-    let project = |p: Point3| -> (f64, f64) {
-        if az >= ax && az >= ay {
-            (p.x(), p.y())
-        } else if ay >= ax {
-            (p.x(), p.z())
-        } else {
-            (p.y(), p.z())
-        }
-    };
+    // Compute bounding box with margin for the super-triangle.
+    let bounds = compute_cdt_bounds(&pts2d);
+    let mut cdt = Cdt::with_capacity(bounds, n);
 
-    let pts2d: Vec<(f64, f64)> = positions.iter().map(|&p| project(p)).collect();
-
-    // Ensure CCW winding in 2D.
-    let signed_area = polygon_signed_area_2d(&pts2d);
-    let ccw = signed_area > 0.0;
-
-    // Active vertex list (indices into the original positions array).
-    let mut active: Vec<usize> = if ccw {
-        (0..n).collect()
-    } else {
-        (0..n).rev().collect()
-    };
-
-    let mut indices = Vec::with_capacity((n - 2) * 3);
-    let mut safety = n * n; // prevent infinite loop on degenerate input
-
-    while active.len() > 3 && safety > 0 {
-        safety -= 1;
-        let len = active.len();
-        let mut found_ear = false;
-
-        for i in 0..len {
-            let prev = active[(i + len - 1) % len];
-            let curr = active[i];
-            let next = active[(i + 1) % len];
-
-            // Check if this vertex forms a convex (left-turn) ear.
-            let (ax2, ay2) = pts2d[prev];
-            let (bx, by) = pts2d[curr];
-            let (cx, cy) = pts2d[next];
-
-            let cross = (bx - ax2).mul_add(cy - ay2, -(by - ay2) * (cx - ax2));
-            if cross <= 0.0 {
-                continue; // reflex vertex, not an ear
-            }
-
-            // Check that no other active vertex lies inside this triangle.
-            let mut contains_point = false;
-            for j in 0..len {
-                if j == (i + len - 1) % len || j == i || j == (i + 1) % len {
-                    continue;
-                }
-                let (px, py) = pts2d[active[j]];
-                if point_in_triangle_2d(px, py, ax2, ay2, bx, by, cx, cy) {
-                    contains_point = true;
-                    break;
-                }
-            }
-
-            if !contains_point {
-                // This is an ear — emit the triangle.
-                #[allow(clippy::cast_possible_truncation)]
-                {
-                    indices.push(prev as u32);
-                    indices.push(curr as u32);
-                    indices.push(next as u32);
-                }
-                active.remove(i);
-                found_ear = true;
-                break;
-            }
-        }
-
-        if !found_ear {
-            // Fallback: no ear found (degenerate polygon).
-            // Use fan triangulation as best-effort.
-            break;
+    // Insert polygon vertices.
+    let mut cdt_indices = Vec::with_capacity(n);
+    for &p in &pts2d {
+        match cdt.insert_point(p) {
+            Ok(idx) => cdt_indices.push(idx),
+            Err(_) => return fan_triangulate(n),
         }
     }
 
-    // Handle remaining triangle.
-    if active.len() == 3 {
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            indices.push(active[0] as u32);
-            indices.push(active[1] as u32);
-            indices.push(active[2] as u32);
+    // Insert boundary constraints.
+    let mut constraints = Vec::with_capacity(n);
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let ci = cdt_indices[i];
+        let cj = cdt_indices[j];
+        if ci != cj {
+            if cdt.insert_constraint(ci, cj).is_err() {
+                // CDT constraint insertion failed — fall back to fan.
+                return fan_triangulate(n);
+            }
+            constraints.push((ci, cj));
         }
-    } else if active.len() > 3 {
-        // Fallback fan triangulation for degenerate cases.
-        for i in 1..active.len() - 1 {
+    }
+
+    cdt.remove_exterior(&constraints);
+
+    let cdt_triangles = cdt.triangles();
+
+    // Build reverse mapping: CDT vertex index → original polygon index.
+    let mut cdt_to_input: HashMap<usize, usize> = HashMap::new();
+    for (input_idx, &cdt_idx) in cdt_indices.iter().enumerate() {
+        cdt_to_input.entry(cdt_idx).or_insert(input_idx);
+    }
+
+    let mut indices = Vec::with_capacity(cdt_triangles.len() * 3);
+    for &(v0, v1, v2) in &cdt_triangles {
+        if let (Some(&i0), Some(&i1), Some(&i2)) = (
+            cdt_to_input.get(&v0),
+            cdt_to_input.get(&v1),
+            cdt_to_input.get(&v2),
+        ) {
             #[allow(clippy::cast_possible_truncation)]
             {
-                indices.push(active[0] as u32);
-                indices.push(active[i] as u32);
-                indices.push(active[i + 1] as u32);
+                indices.push(i0 as u32);
+                indices.push(i1 as u32);
+                indices.push(i2 as u32);
             }
         }
+    }
+
+    if indices.is_empty() {
+        return fan_triangulate(n);
     }
 
     indices
 }
 
-/// Signed area of a 2D polygon (positive = CCW).
-fn polygon_signed_area_2d(pts: &[(f64, f64)]) -> f64 {
-    let n = pts.len();
-    let mut area = 0.0;
-    for i in 0..n {
-        let j = (i + 1) % n;
-        area += pts[i].0 * pts[j].1;
-        area -= pts[j].0 * pts[i].1;
+/// Fan triangulation as a last-resort fallback.
+fn fan_triangulate(n: usize) -> Vec<u32> {
+    let mut indices = Vec::with_capacity((n - 2) * 3);
+    for i in 1..n - 1 {
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            indices.push(0_u32);
+            indices.push(i as u32);
+            indices.push((i + 1) as u32);
+        }
     }
-    area / 2.0
-}
-
-/// Test if point (px,py) is inside triangle (ax,ay)-(bx,by)-(cx,cy).
-#[allow(clippy::too_many_arguments)]
-fn point_in_triangle_2d(
-    px: f64,
-    py: f64,
-    ax: f64,
-    ay: f64,
-    bx: f64,
-    by: f64,
-    cx: f64,
-    cy: f64,
-) -> bool {
-    let d1 = (px - bx).mul_add(ay - by, -(ax - bx) * (py - by));
-    let d2 = (px - cx).mul_add(by - cy, -(bx - cx) * (py - cy));
-    let d3 = (px - ax).mul_add(cy - ay, -(cx - ax) * (py - ay));
-
-    let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
-    let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
-
-    !(has_neg && has_pos)
+    indices
 }
 
 /// A cell in the adaptive quadtree for NURBS tessellation.
@@ -1342,6 +1355,95 @@ fn compute_axial_range(
         (v_min, v_max)
     } else {
         (-1.0, 1.0) // fallback
+    }
+}
+
+/// Compute the angular (u) range for an analytic face from its wire boundary.
+///
+/// Projects boundary edge vertices onto the surface and collects their
+/// u-parameters. If the face doesn't span the full revolution, returns
+/// the tighter `[u_min, u_max]` range. Returns `(0, 2π)` for full-circle
+/// faces or when fewer than 3 boundary vertices exist.
+fn compute_angular_range<F>(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    project: F,
+) -> (f64, f64)
+where
+    F: Fn(Point3) -> (f64, f64),
+{
+    use std::f64::consts::TAU;
+
+    let mut angles: Vec<f64> = Vec::new();
+
+    if let Ok(wire) = topo.wire(face_data.outer_wire()) {
+        for oe in wire.edges() {
+            if let Ok(edge) = topo.edge(oe.edge()) {
+                for &vid in &[edge.start(), edge.end()] {
+                    if let Ok(vertex) = topo.vertex(vid) {
+                        let (u, _v) = project(vertex.point());
+                        angles.push(u);
+                    }
+                }
+            }
+        }
+    }
+
+    if angles.len() < 3 {
+        return (0.0, TAU);
+    }
+
+    // Sort angles and find the largest gap between consecutive angles.
+    // The largest gap is where the face *doesn't* have coverage, so the
+    // face's angular extent is TAU - largest_gap, starting after the gap.
+    angles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    angles.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+
+    if angles.len() < 2 {
+        return (0.0, TAU);
+    }
+
+    let mut max_gap = 0.0_f64;
+    let mut gap_end_idx = 0_usize;
+    for i in 0..angles.len() {
+        let j = (i + 1) % angles.len();
+        let gap = if j > i {
+            angles[j] - angles[i]
+        } else {
+            angles[j] + TAU - angles[i]
+        };
+        if gap > max_gap {
+            max_gap = gap;
+            gap_end_idx = j;
+        }
+    }
+
+    // If the largest gap is smaller than what we'd expect from even spacing
+    // of the boundary vertices, the face likely covers the full revolution.
+    // Use 2.5x the expected spacing as threshold, with a minimum of 120° to
+    // handle full-circle faces with very few vertices (4-8 is common after
+    // boolean operations).
+    let n_angles = angles.len() as f64;
+    let even_gap = TAU / n_angles;
+    let gap_threshold = (2.5 * even_gap).max(TAU / 3.0);
+    if max_gap < gap_threshold {
+        return (0.0, TAU);
+    }
+
+    // The face starts at angles[gap_end_idx] and ends at the angle before the gap.
+    let u_start = angles[gap_end_idx];
+    let gap_start_idx = if gap_end_idx == 0 {
+        angles.len() - 1
+    } else {
+        gap_end_idx - 1
+    };
+    let u_end = angles[gap_start_idx];
+
+    // Normalize so that u_start < u_end, wrapping if needed.
+    if u_end > u_start {
+        (u_start, u_end)
+    } else {
+        (u_start, u_end + TAU)
     }
 }
 
@@ -1965,7 +2067,7 @@ pub fn tessellate_with_uvs(
         FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection)),
         FaceSurface::Cylinder(cyl) => {
             let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
-            let u_range = (0.0, std::f64::consts::TAU);
+            let u_range = compute_angular_range(topo, face_data, |p| cyl.project_point(p));
             let nu = segments_for_chord_deviation(cyl.radius(), u_range.1 - u_range.0, deflection);
             let v_extent = (v_range.1 - v_range.0).abs();
             let nv = 4_usize.max(
@@ -1984,7 +2086,7 @@ pub fn tessellate_with_uvs(
         }
         FaceSurface::Cone(cone) => {
             let v_range = compute_axial_range(topo, face_data, cone.apex(), cone.axis());
-            let u_range = (0.0, std::f64::consts::TAU);
+            let u_range = compute_angular_range(topo, face_data, |p| cone.project_point(p));
             let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
             let nu = segments_for_chord_deviation(
                 max_radius.max(0.01),
@@ -2008,7 +2110,7 @@ pub fn tessellate_with_uvs(
             ))
         }
         FaceSurface::Sphere(sphere) => {
-            let u_range = (0.0, std::f64::consts::TAU);
+            let u_range = compute_angular_range(topo, face_data, |p| sphere.project_point(p));
             let v_range = compute_sphere_v_range(topo, face_data, sphere);
             let nu =
                 segments_for_chord_deviation(sphere.radius(), u_range.1 - u_range.0, deflection);
@@ -2027,7 +2129,7 @@ pub fn tessellate_with_uvs(
             ))
         }
         FaceSurface::Torus(torus) => {
-            let u_range = (0.0, std::f64::consts::TAU);
+            let u_range = compute_angular_range(topo, face_data, |p| torus.project_point(p));
             let v_range = (0.0, std::f64::consts::TAU);
             let nu = segments_for_chord_deviation(
                 torus.major_radius() + torus.minor_radius(),
@@ -2626,7 +2728,7 @@ fn tessellate_face_with_shared_edges(
 
         if face_data.inner_wires().is_empty() {
             // Simple ear-clip for faces without holes.
-            let mut local_indices = ear_clip_triangulate(&local_positions, normal);
+            let mut local_indices = cdt_triangulate_simple(&local_positions, normal);
 
             // Ensure triangle winding matches the face normal.
             if local_indices.len() >= 3 {
@@ -2726,7 +2828,7 @@ fn tessellate_face_with_shared_edges(
 #[allow(clippy::too_many_lines)]
 fn tessellate_nonplanar_cdt(
     topo: &Topology,
-    _face_id: FaceId,
+    face_id: FaceId,
     face_data: &brepkit_topology::face::Face,
     deflection: f64,
     edge_global_indices: &HashMap<usize, Vec<u32>>,
@@ -2737,12 +2839,15 @@ fn tessellate_nonplanar_cdt(
     use brepkit_math::vec::Point2;
 
     // Step 1: Collect boundary points in wire-traversal order with global IDs.
+    // Also track which edge each point came from (for PCurve lookup).
+    use brepkit_topology::edge::EdgeId;
     let wire = topo.wire(face_data.outer_wire())?;
     let tol_dup = 1e-10;
 
-    let mut boundary_3d: Vec<(Point3, u32)> = Vec::new();
+    let mut boundary_3d: Vec<(Point3, u32, EdgeId)> = Vec::new();
     for oe in wire.edges() {
-        let edge_idx = oe.edge().index();
+        let edge_id_local = oe.edge();
+        let edge_idx = edge_id_local.index();
         if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
             let ordered: Vec<u32> = if oe.is_forward() {
                 global_ids.clone()
@@ -2751,7 +2856,7 @@ fn tessellate_nonplanar_cdt(
             };
             for (j, &gid) in ordered.iter().enumerate() {
                 if j == 0 && !boundary_3d.is_empty() {
-                    let (_, last_gid) = boundary_3d[boundary_3d.len() - 1];
+                    let (_, last_gid, _) = boundary_3d[boundary_3d.len() - 1];
                     if last_gid == gid
                         || (merged.positions[last_gid as usize] - merged.positions[gid as usize])
                             .length()
@@ -2760,7 +2865,7 @@ fn tessellate_nonplanar_cdt(
                         continue;
                     }
                 }
-                boundary_3d.push((merged.positions[gid as usize], gid));
+                boundary_3d.push((merged.positions[gid as usize], gid, edge_id_local));
             }
         } else {
             // Edge not in shared pool — insert directly.
@@ -2773,7 +2878,7 @@ fn tessellate_nonplanar_cdt(
             };
             for (j, &pt) in ordered.iter().enumerate() {
                 if j == 0 && !boundary_3d.is_empty() {
-                    let (last_pos, _) = boundary_3d[boundary_3d.len() - 1];
+                    let (last_pos, _, _) = boundary_3d[boundary_3d.len() - 1];
                     if (last_pos - pt).length() < tol_dup {
                         continue;
                     }
@@ -2785,14 +2890,14 @@ fn tessellate_nonplanar_cdt(
                     merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
                     idx
                 });
-                boundary_3d.push((pt, gid));
+                boundary_3d.push((pt, gid, edge_id_local));
             }
         }
     }
 
     // Remove closing duplicate.
     if boundary_3d.len() > 2 {
-        if let (Some(&(_, first_gid)), Some(&(_, last_gid))) =
+        if let (Some(&(_, first_gid, _)), Some(&(_, last_gid, _))) =
             (boundary_3d.first(), boundary_3d.last())
         {
             if first_gid == last_gid
@@ -2813,9 +2918,24 @@ fn tessellate_nonplanar_cdt(
     }
 
     // Step 2: Project boundary 3D points to (u,v) parameter space.
+    // For NURBS surfaces, check the PCurve registry first — evaluating a
+    // PCurve directly is O(1) vs O(n) Newton projection.
     let boundary_uv: Vec<(f64, f64)> = boundary_3d
         .iter()
-        .map(|(pt, _)| project_to_surface_uv(face_data.surface(), *pt))
+        .map(|(pt, _, edge_id_local)| {
+            // Try PCurve lookup first.
+            if let Some(pcurve) = topo.pcurves.get(*edge_id_local, face_id) {
+                // We have the edge's PCurve — find the closest t and evaluate.
+                // For boundary points sampled along the edge, approximate t
+                // by projecting onto the PCurve's parameter range.
+                let uv = project_via_pcurve(pcurve, *pt, face_data.surface());
+                if let Some(uv) = uv {
+                    return Ok(uv);
+                }
+            }
+            // Fall back to surface projection.
+            project_to_surface_uv(face_data.surface(), *pt)
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     // Compute (u,v) bounding box.
@@ -2960,6 +3080,63 @@ fn project_to_surface_uv(
         FaceSurface::Plane { .. } => Err(crate::OperationsError::InvalidInput {
             reason: "planar faces should not use CDT tessellation".to_string(),
         }),
+    }
+}
+
+/// Try to find (u,v) coordinates for a 3D point using a PCurve.
+///
+/// Samples the PCurve at multiple t values, finds the closest one to `pt`
+/// on the surface, and returns the (u,v) from the PCurve evaluation.
+/// Returns `None` if the closest sample is too far from `pt`.
+fn project_via_pcurve(
+    pcurve: &brepkit_topology::pcurve::PCurve,
+    pt: Point3,
+    surface: &FaceSurface,
+) -> Option<(f64, f64)> {
+    let t_start = pcurve.t_start();
+    let t_end = pcurve.t_end();
+    let n_samples = 16;
+
+    let mut best_t = t_start;
+    let mut best_dist = f64::MAX;
+
+    for i in 0..=n_samples {
+        let t = t_start + (t_end - t_start) * (i as f64) / (n_samples as f64);
+        let uv = pcurve.evaluate(t);
+        let p_surf = evaluate_surface_at(surface, uv.x(), uv.y());
+        let d = (p_surf - pt).length();
+        if d < best_dist {
+            best_dist = d;
+            best_t = t;
+        }
+    }
+
+    // Refine with bisection around best_t.
+    let dt = (t_end - t_start) / (n_samples as f64);
+    let mut lo = (best_t - dt).max(t_start);
+    let mut hi = (best_t + dt).min(t_end);
+    for _ in 0..10 {
+        let mid = 0.5 * (lo + hi);
+        let uv_lo = pcurve.evaluate(lo);
+        let uv_hi = pcurve.evaluate(hi);
+        let d_lo = (evaluate_surface_at(surface, uv_lo.x(), uv_lo.y()) - pt).length();
+        let d_hi = (evaluate_surface_at(surface, uv_hi.x(), uv_hi.y()) - pt).length();
+        if d_lo < d_hi {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+
+    let t_final = 0.5 * (lo + hi);
+    let uv = pcurve.evaluate(t_final);
+    let p_final = evaluate_surface_at(surface, uv.x(), uv.y());
+
+    // Accept if the projected point is close enough to the target.
+    if (p_final - pt).length() < 1e-4 {
+        Some((uv.x(), uv.y()))
+    } else {
+        None
     }
 }
 

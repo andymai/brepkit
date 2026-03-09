@@ -15,7 +15,10 @@ pub mod self_intersection;
 pub mod surface;
 pub mod surface_fitting;
 
-pub use bezier_clip::{CurveCurveHit, curve_curve_intersect};
+pub use bezier_clip::{
+    CurveCurveHit, CurveCurveOverlap, CurveCurveResult, curve_curve_intersect,
+    curve_curve_intersect_full,
+};
 pub use curve::NurbsCurve;
 pub use decompose::{
     BezierPatch, curve_degree_elevate, curve_to_bezier_segments, surface_to_bezier_patches,

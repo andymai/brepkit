@@ -1153,13 +1153,13 @@ fn find_ssi_seeds_grid(
     seeds
 }
 
-/// Refine an SSI point using alternating projection.
-///
-/// Instead of solving the coupled 4D system, alternately:
-/// 1. Project the midpoint onto surface 1 (find closest (u1,v1))
-/// 2. Project the midpoint onto surface 2 (find closest (u2,v2))
-/// 3. Repeat until the two projections converge.
 #[allow(clippy::similar_names)]
+/// Refine an SSI point using coupled 4D Newton iteration.
+///
+/// Solves `S₁(u₁,v₁) - S₂(u₂,v₂) = 0` directly as a 3×4 system via
+/// normal equations `JᵀJ·δ = Jᵀr`, giving **quadratic convergence**.
+/// This replaces the previous alternating-projection approach which had
+/// only linear convergence and could fail near tangent intersections.
 fn refine_ssi_point(
     s1: &NurbsSurface,
     s2: &NurbsSurface,
@@ -1169,56 +1169,128 @@ fn refine_ssi_point(
     v2_guess: f64,
     tolerance: f64,
 ) -> Option<IntersectionPoint> {
-    let mut u1 = u1_guess;
-    let mut v1 = v1_guess;
-    let mut u2 = u2_guess;
-    let mut v2 = v2_guess;
-    let (u1_min, u1_max) = s1.domain_u();
-    let (v1_min, v1_max) = s1.domain_v();
-    let (u2_min, u2_max) = s2.domain_u();
-    let (v2_min, v2_max) = s2.domain_v();
+    let mut state = [u1_guess, v1_guess, u2_guess, v2_guess];
 
-    for _ in 0..50 {
-        let p1 = s1.evaluate(u1, v1);
-        let p2 = s2.evaluate(u2, v2);
-        let residual = p1 - p2;
+    for _ in 0..30 {
+        let cstate = constrain_state(&state, s1, s2);
+        let p1 = s1.evaluate(cstate[0], cstate[1]);
+        let p2 = s2.evaluate(cstate[2], cstate[3]);
+        let r = p1 - p2;
 
-        if residual.length() < tolerance {
+        if r.length() < tolerance {
             return Some(IntersectionPoint {
                 point: p1,
-                param1: (u1, v1),
-                param2: (u2, v2),
+                param1: (cstate[0], cstate[1]),
+                param2: (cstate[2], cstate[3]),
             });
         }
 
-        // Step 1: Move (u2, v2) on surface 2 toward p1.
-        let (du2, dv2) = surface_newton_step(s2, u2, v2, p1);
-        u2 += du2;
-        v2 += dv2;
-        u2 = u2.clamp(u2_min, u2_max);
-        v2 = v2.clamp(v2_min, v2_max);
+        // Build 3×4 Jacobian: J = [∂S₁/∂u₁, ∂S₁/∂v₁, -∂S₂/∂u₂, -∂S₂/∂v₂]
+        let d1 = s1.derivatives(cstate[0], cstate[1], 1);
+        let d2 = s2.derivatives(cstate[2], cstate[3], 1);
+        let j = [d1[1][0], d1[0][1], -d2[1][0], -d2[0][1]]; // 4 column vectors (Vec3)
 
-        // Step 2: Move (u1, v1) on surface 1 toward the updated p2.
-        let p2_new = s2.evaluate(u2, v2);
-        let (du1, dv1) = surface_newton_step(s1, u1, v1, p2_new);
-        u1 += du1;
-        v1 += dv1;
-        u1 = u1.clamp(u1_min, u1_max);
-        v1 = v1.clamp(v1_min, v1_max);
+        // Normal equations: JᵀJ (4×4) · δ = -Jᵀr (4×1)
+        // Use only the well-conditioned 4×4 system.
+        let r_vec = Vec3::new(r.x(), r.y(), r.z());
+        let jtr: [f64; 4] = std::array::from_fn(|i| -j[i].dot(r_vec));
+        let jtj: [[f64; 4]; 4] = std::array::from_fn(|i| std::array::from_fn(|k| j[i].dot(j[k])));
+
+        // Solve 4×4 system via Gaussian elimination with partial pivoting.
+        if let Some(delta) = solve_4x4(jtj, jtr) {
+            state[0] += delta[0];
+            state[1] += delta[1];
+            state[2] += delta[2];
+            state[3] += delta[3];
+        } else {
+            // Singular — fall back to alternating projection step.
+            let (du2, dv2) = surface_newton_step(s2, cstate[2], cstate[3], p1);
+            state[2] += du2;
+            state[3] += dv2;
+            let p2_new = s2.evaluate(
+                constrain_param(
+                    state[2],
+                    s2.domain_u().0,
+                    s2.domain_u().1,
+                    s2.is_periodic_u(),
+                ),
+                constrain_param(
+                    state[3],
+                    s2.domain_v().0,
+                    s2.domain_v().1,
+                    s2.is_periodic_v(),
+                ),
+            );
+            let (du1, dv1) = surface_newton_step(s1, cstate[0], cstate[1], p2_new);
+            state[0] += du1;
+            state[1] += dv1;
+        }
     }
 
-    // Final check.
-    let p1 = s1.evaluate(u1, v1);
-    let p2 = s2.evaluate(u2, v2);
+    // Final check with relaxed tolerance.
+    let cstate = constrain_state(&state, s1, s2);
+    let p1 = s1.evaluate(cstate[0], cstate[1]);
+    let p2 = s2.evaluate(cstate[2], cstate[3]);
     if (p1 - p2).length() < tolerance * 100.0 {
         Some(IntersectionPoint {
             point: p1,
-            param1: (u1, v1),
-            param2: (u2, v2),
+            param1: (cstate[0], cstate[1]),
+            param2: (cstate[2], cstate[3]),
         })
     } else {
         None
     }
+}
+
+/// Solve a 4×4 linear system via Gaussian elimination with partial pivoting.
+///
+/// Returns `None` if the matrix is singular.
+fn solve_4x4(a: [[f64; 4]; 4], b: [f64; 4]) -> Option<[f64; 4]> {
+    let mut m = [[0.0_f64; 5]; 4];
+    for i in 0..4 {
+        for j in 0..4 {
+            m[i][j] = a[i][j];
+        }
+        m[i][4] = b[i];
+    }
+
+    // Forward elimination with partial pivoting.
+    for col in 0..4 {
+        // Find pivot.
+        let mut max_val = m[col][col].abs();
+        let mut max_row = col;
+        for row in (col + 1)..4 {
+            if m[row][col].abs() > max_val {
+                max_val = m[row][col].abs();
+                max_row = row;
+            }
+        }
+        if max_val < 1e-14 {
+            return None;
+        }
+        if max_row != col {
+            m.swap(col, max_row);
+        }
+        let pivot = m[col][col];
+        for row in (col + 1)..4 {
+            let factor = m[row][col] / pivot;
+            for j in col..5 {
+                m[row][j] -= factor * m[col][j];
+            }
+        }
+    }
+
+    // Back substitution.
+    let mut x = [0.0; 4];
+    for i in (0..4).rev() {
+        let mut sum = m[i][4];
+        for j in (i + 1)..4 {
+            sum -= m[i][j] * x[j];
+        }
+        x[i] = sum / m[i][i];
+    }
+
+    Some(x)
 }
 
 /// Compute a Newton step to move (u, v) on the surface closer to a target
@@ -1255,6 +1327,19 @@ fn surface_newton_step(surface: &NurbsSurface, u: f64, v: f64, target: Point3) -
 /// Uses the tangent direction (cross product of surface normals) to step
 /// forward, then corrects back to the intersection with Newton.
 ///
+/// Minimum distance from point `p` to the line segment `a`–`b`.
+fn point_to_segment_dist(p: Point3, a: Point3, b: Point3) -> f64 {
+    let ab = b - a;
+    let ap = p - a;
+    let len_sq = ab.dot(ab);
+    if len_sq < 1e-30 {
+        return ap.length();
+    }
+    let t = (ap.dot(ab) / len_sq).clamp(0.0, 1.0);
+    let proj = Point3::new(a.x() + t * ab.x(), a.y() + t * ab.y(), a.z() + t * ab.z());
+    (p - proj).length()
+}
+
 /// The `step_size` is the *initial* step size. The marcher adapts it based
 /// on both RKF45 integration error and geometric curvature (angular
 /// deviation between successive tangent vectors). This ensures fine
@@ -1522,34 +1607,62 @@ fn perturbation_tangent(
     best_dir
 }
 
-/// Clamp a parameter value to slightly inside the given domain.
-/// The margin is 0.1% of the domain span to avoid evaluation at exact boundaries.
-fn clamp_to_domain(v: f64, min: f64, max: f64) -> f64 {
-    let margin = 0.001 * (max - min);
-    v.clamp(min + margin, max - margin)
+/// Constrain a parameter value to the domain, wrapping if periodic or
+/// clamping if not.
+///
+/// For periodic parameters, values that exceed the domain are wrapped
+/// modulo the period (e.g., `u = 6.5` on a `[0, 2π]` cylinder wraps
+/// to `u ≈ 0.217`). For non-periodic parameters, values are clamped
+/// with a 0.1% margin to avoid evaluation at exact boundaries.
+fn constrain_param(v: f64, min: f64, max: f64, periodic: bool) -> f64 {
+    if periodic {
+        let span = max - min;
+        if span <= 0.0 {
+            return min;
+        }
+        let wrapped = min + (v - min).rem_euclid(span);
+        // Tiny margin to stay within evaluable domain.
+        let margin = 1e-10 * span;
+        wrapped.clamp(min + margin, max - margin)
+    } else {
+        let margin = 0.001 * (max - min);
+        v.clamp(min + margin, max - margin)
+    }
 }
 
-/// Clamp all four parameters to their respective surface domains.
-fn clamp_state(state: &[f64; 4], s1: &NurbsSurface, s2: &NurbsSurface) -> [f64; 4] {
+/// Constrain all four parameters to their respective surface domains,
+/// wrapping periodic parameters instead of clamping.
+fn constrain_state(state: &[f64; 4], s1: &NurbsSurface, s2: &NurbsSurface) -> [f64; 4] {
     let (u1_min, u1_max) = s1.domain_u();
     let (v1_min, v1_max) = s1.domain_v();
     let (u2_min, u2_max) = s2.domain_u();
     let (v2_min, v2_max) = s2.domain_v();
     [
-        clamp_to_domain(state[0], u1_min, u1_max),
-        clamp_to_domain(state[1], v1_min, v1_max),
-        clamp_to_domain(state[2], u2_min, u2_max),
-        clamp_to_domain(state[3], v2_min, v2_max),
+        constrain_param(state[0], u1_min, u1_max, s1.is_periodic_u()),
+        constrain_param(state[1], v1_min, v1_max, s1.is_periodic_v()),
+        constrain_param(state[2], u2_min, u2_max, s2.is_periodic_u()),
+        constrain_param(state[3], v2_min, v2_max, s2.is_periodic_v()),
     ]
 }
 
 /// Check if a parameter state is at the domain boundary of either surface.
+///
+/// For periodic parameters, wrapping means we never hit a boundary — the
+/// surface seamlessly continues. Only non-periodic parameters can be "at
+/// boundary" (e.g., the v-direction of a cylinder, or any NURBS surface).
 fn at_boundary(state: &[f64; 4], s1: &NurbsSurface, s2: &NurbsSurface) -> bool {
-    let clamped = clamp_state(state, s1, s2);
+    let periodic = [
+        s1.is_periodic_u(),
+        s1.is_periodic_v(),
+        s2.is_periodic_u(),
+        s2.is_periodic_v(),
+    ];
+    let constrained = constrain_state(state, s1, s2);
     state
         .iter()
-        .zip(clamped.iter())
-        .any(|(&s, &c)| (s - c).abs() > f64::EPSILON)
+        .zip(constrained.iter())
+        .zip(periodic.iter())
+        .any(|((&s, &c), &is_per)| !is_per && (s - c).abs() > f64::EPSILON)
 }
 
 /// March in one direction along the intersection curve using RKF45
@@ -1579,8 +1692,6 @@ fn march_direction(
     let mut h = step_size;
     let h_min = tolerance;
     let max_h = step_size * 4.0;
-    let seed_state = [seed.param1.0, seed.param1.1, seed.param2.0, seed.param2.1];
-
     // Angular thresholds in radians for curvature adaptation.
     let max_angle = 10.0_f64.to_radians(); // halve step if tangent turns > 10°
     let min_angle = 2.0_f64.to_radians(); // double step if tangent turns < 2°
@@ -1650,7 +1761,7 @@ fn march_direction(
         let _ = accepted_h;
 
         // Accept the 4th-order solution (more conservative).
-        let next = clamp_state(&y4, s1, s2);
+        let next = constrain_state(&y4, s1, s2);
 
         // Newton-refine to stay on the intersection curve.
         if let Some(refined) =
@@ -1705,16 +1816,23 @@ fn march_direction(
                 break;
             }
 
-            // Closed-loop detection: after accumulating enough points,
-            // check if we've returned close to the seed.
+            // Closed-loop detection: check if the current 3D point is close
+            // to the first traced segment (not just the seed). Using 3D
+            // distance instead of 4D parameter distance avoids issues when
+            // surfaces have very different parameterization scales.
             if points.len() >= 5 {
-                let dist_to_seed = ((ref_state[0] - seed_state[0]).powi(2)
-                    + (ref_state[1] - seed_state[1]).powi(2)
-                    + (ref_state[2] - seed_state[2]).powi(2)
-                    + (ref_state[3] - seed_state[3]).powi(2))
-                .sqrt();
+                let d_3d = (refined.point - seed.point).length();
+                // Also check against the second point to detect crossing
+                // the start segment, not just proximity to the seed.
+                let near_seed = d_3d < tolerance * 100.0;
+                let near_first_seg = if points.len() >= 2 {
+                    point_to_segment_dist(refined.point, points[0].point, points[1].point)
+                        < tolerance * 100.0
+                } else {
+                    false
+                };
 
-                if dist_to_seed < 3.0 * step_size {
+                if near_seed || near_first_seg {
                     // Close the loop by adding the seed point.
                     points.push(*seed);
                     break;
@@ -1743,7 +1861,7 @@ fn rkf45_step(
 ) -> Option<([f64; 4], [f64; 4])> {
     // Helper: evaluate f at a state, scaling by h.
     let f = |state: &[f64; 4]| -> Option<[f64; 4]> {
-        let clamped = clamp_state(state, s1, s2);
+        let clamped = constrain_state(state, s1, s2);
         let t = ssi_tangent_params(s1, s2, clamped[0], clamped[1], clamped[2], clamped[3], sign)?;
         Some([t[0] * h, t[1] * h, t[2] * h, t[3] * h])
     };

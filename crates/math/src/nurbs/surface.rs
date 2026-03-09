@@ -132,6 +132,47 @@ impl NurbsSurface {
         (v_min, v_max)
     }
 
+    /// Whether the surface is periodic (closed) in u.
+    ///
+    /// A NURBS surface is considered periodic in u if the first and last
+    /// control point rows coincide within a tight tolerance. This is true
+    /// for surfaces converted from analytic periodic types (cylinder, cone,
+    /// sphere, torus).
+    #[must_use]
+    pub fn is_periodic_u(&self) -> bool {
+        let n = self.control_points.len();
+        if n < 2 {
+            return false;
+        }
+        let first = &self.control_points[0];
+        let last = &self.control_points[n - 1];
+        if first.len() != last.len() {
+            return false;
+        }
+        first.iter().zip(last.iter()).all(|(a, b)| {
+            let d = *a - *b;
+            d.x() * d.x() + d.y() * d.y() + d.z() * d.z() < 1e-12
+        })
+    }
+
+    /// Whether the surface is periodic (closed) in v.
+    ///
+    /// A NURBS surface is considered periodic in v if the first and last
+    /// control point columns coincide within a tight tolerance.
+    #[must_use]
+    pub fn is_periodic_v(&self) -> bool {
+        if self.control_points.is_empty() {
+            return false;
+        }
+        self.control_points.iter().all(|row| {
+            if row.len() < 2 {
+                return false;
+            }
+            let d = row[0] - row[row.len() - 1];
+            d.x() * d.x() + d.y() * d.y() + d.z() * d.z() < 1e-12
+        })
+    }
+
     /// Knot vector in the u direction.
     #[must_use]
     pub fn knots_u(&self) -> &[f64] {
