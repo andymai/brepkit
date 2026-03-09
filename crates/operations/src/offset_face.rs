@@ -102,7 +102,16 @@ fn offset_planar_face(
     Ok(face_id)
 }
 
-/// Offset a NURBS face by sampling and refitting.
+/// Offset a NURBS face by sampling and refitting with adaptive refinement.
+///
+/// Uses a two-pass approach:
+/// 1. Coarse grid sampling with curvature estimation at each point
+/// 2. Adaptive refinement: regions where `curvature × |distance|` is large
+///    (indicating potential cusps in the offset surface) get denser sampling
+///
+/// This prevents the previous uniform-grid approach from missing cusps
+/// at high-curvature regions of the input surface.
+#[allow(clippy::too_many_lines)]
 fn offset_nurbs_face(
     topo: &mut Topology,
     face_id: FaceId,
@@ -111,19 +120,100 @@ fn offset_nurbs_face(
     samples: usize,
 ) -> Result<FaceId, OperationsError> {
     let n = samples.max(4); // Minimum 4×4 grid.
+
+    // Pass 1: Evaluate curvature at a coarse grid to identify high-curvature regions.
+    let coarse = n.max(4);
     #[allow(clippy::cast_precision_loss)]
-    let divisor = (n - 1) as f64;
+    let coarse_div = (coarse - 1) as f64;
+    let mut max_curvature = 0.0_f64;
+    let mut curvatures: Vec<Vec<f64>> = Vec::with_capacity(coarse);
+
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..coarse {
+        let u = i as f64 / coarse_div;
+        let mut row = Vec::with_capacity(coarse);
+        for j in 0..coarse {
+            let v = j as f64 / coarse_div;
+            let kappa = estimate_curvature(nurbs, u, v);
+            max_curvature = max_curvature.max(kappa);
+            row.push(kappa);
+        }
+        curvatures.push(row);
+    }
+
+    // Pass 2: Build adaptive parameter grid. For each coarse cell, decide
+    // the local subdivision level based on curvature × |distance|.
+    // High curvature × distance → more samples (up to 4× coarse density).
+    let threshold = max_curvature * distance.abs() * 0.25;
+    let mut u_params: Vec<f64> = Vec::new();
+    let mut v_params: Vec<f64> = Vec::new();
+
+    // Collect u-parameters: for each coarse interval, subdivide if needed.
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..coarse {
+        let u0 = i as f64 / coarse_div;
+        u_params.push(u0);
+
+        if i + 1 < coarse {
+            // Check if any cell in this u-row has high curvature.
+            let row_max = curvatures[i].iter().copied().fold(0.0_f64, f64::max);
+            let cell_metric = row_max * distance.abs();
+            if threshold > 1e-12 && cell_metric > threshold {
+                // Add midpoints for this interval.
+                let u1 = (i + 1) as f64 / coarse_div;
+                let mid = 0.5 * (u0 + u1);
+                u_params.push(mid);
+                // If very high curvature, add quarter-points too.
+                if cell_metric > threshold * 3.0 {
+                    u_params.push(0.25_f64.mul_add(u1 - u0, u0));
+                    u_params.push(0.75_f64.mul_add(u1 - u0, u0));
+                }
+            }
+        }
+    }
+    // Ensure endpoint.
+    if u_params.last().is_none_or(|&u| (u - 1.0).abs() > 1e-15) {
+        u_params.push(1.0);
+    }
+
+    // Collect v-parameters similarly.
+    #[allow(clippy::cast_precision_loss)]
+    for j in 0..coarse {
+        let v0 = j as f64 / coarse_div;
+        v_params.push(v0);
+
+        if j + 1 < coarse {
+            let col_max = curvatures.iter().map(|row| row[j]).fold(0.0_f64, f64::max);
+            let cell_metric = col_max * distance.abs();
+            if threshold > 1e-12 && cell_metric > threshold {
+                let v1 = (j + 1) as f64 / coarse_div;
+                let mid = 0.5 * (v0 + v1);
+                v_params.push(mid);
+                if cell_metric > threshold * 3.0 {
+                    v_params.push(0.25_f64.mul_add(v1 - v0, v0));
+                    v_params.push(0.75_f64.mul_add(v1 - v0, v0));
+                }
+            }
+        }
+    }
+    if v_params.last().is_none_or(|&v| (v - 1.0).abs() > 1e-15) {
+        v_params.push(1.0);
+    }
+
+    // Sort and deduplicate parameter lists.
+    u_params.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    u_params.dedup_by(|a, b| (*a - *b).abs() < 1e-15);
+    v_params.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    v_params.dedup_by(|a, b| (*a - *b).abs() < 1e-15);
 
     // Sample the surface and offset each point along the normal.
-    let mut offset_grid: Vec<Vec<Point3>> = Vec::with_capacity(n);
+    let nu = u_params.len();
+    let nv = v_params.len();
+    let mut offset_grid: Vec<Vec<Point3>> = Vec::with_capacity(nu);
 
-    #[allow(clippy::cast_precision_loss)]
-    for i in 0..n {
-        let u = i as f64 / divisor;
-        let mut row = Vec::with_capacity(n);
-        for j in 0..n {
-            let v = j as f64 / divisor;
-
+    for &u in &u_params {
+        let mut row = Vec::with_capacity(nv);
+        for &v in &v_params {
             let pt = nurbs.evaluate(u, v);
             let normal = nurbs
                 .normal(u, v)
@@ -409,6 +499,55 @@ fn offset_torus_face(
         FaceSurface::Torus(new_torus),
     ));
     Ok(face_id)
+}
+
+/// Estimate surface curvature at parameter (u, v) using second derivatives.
+///
+/// Returns the maximum absolute principal curvature. Uses the second
+/// fundamental form eigenvalues: `κ = (L·N - M²) / (E·G - F²)` for
+/// Gaussian curvature, and `(E·N - 2·F·M + G·L) / (2·(E·G - F²))` for
+/// mean curvature. The max principal curvature is `|H| + sqrt(H² - K)`.
+fn estimate_curvature(nurbs: &brepkit_math::nurbs::NurbsSurface, u: f64, v: f64) -> f64 {
+    let d = nurbs.derivatives(u, v, 2);
+    if d.len() < 3 || d[0].len() < 3 {
+        return 0.0;
+    }
+
+    let su = d[1][0]; // ∂S/∂u
+    let sv = d[0][1]; // ∂S/∂v
+    let suu = d[2][0]; // ∂²S/∂u²
+    let suv = d[1][1]; // ∂²S/∂u∂v
+    let svv = d[0][2]; // ∂²S/∂v²
+
+    let n_raw = su.cross(sv);
+    let n_len = n_raw.length();
+    if n_len < 1e-20 {
+        return 0.0;
+    }
+    let n = n_raw * (1.0 / n_len);
+
+    // First fundamental form coefficients.
+    let e_coeff = su.dot(su);
+    let f_coeff = su.dot(sv);
+    let g_coeff = sv.dot(sv);
+
+    // Second fundamental form coefficients.
+    let l_coeff = suu.dot(n);
+    let m_coeff = suv.dot(n);
+    let n_coeff = svv.dot(n);
+
+    let denom = e_coeff * g_coeff - f_coeff * f_coeff;
+    if denom.abs() < 1e-30 {
+        return 0.0;
+    }
+
+    // Mean curvature H and Gaussian curvature K.
+    let h = (e_coeff * n_coeff - 2.0 * f_coeff * m_coeff + g_coeff * l_coeff) / (2.0 * denom);
+    let k = (l_coeff * n_coeff - m_coeff * m_coeff) / denom;
+
+    // Max principal curvature: |H| + sqrt(max(H² - K, 0))
+    let disc = (h * h - k).max(0.0).sqrt();
+    (h.abs() + disc).abs()
 }
 
 /// Offset all vertices in a wire using a position-dependent function.

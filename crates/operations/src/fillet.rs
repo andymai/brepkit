@@ -643,10 +643,47 @@ pub fn fillet_rolling_ball(
         });
     }
 
+    // Phase 3b: G1 chain detection.
+    // Detect chains of consecutive fillet edges that share a vertex.
+    // When two fillet strips meet at a vertex on the same pair of faces,
+    // they should share contact points for G1 tangent continuity.
+    // Build a map: vertex_index → Vec<(edge_idx, face1_idx, face2_idx)>
+    let mut vertex_fillet_adjacency: HashMap<usize, Vec<(usize, usize, usize)>> = HashMap::new();
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        if let Some(faces) = edge_to_faces.get(&edge_id.index()) {
+            if faces.len() >= 2 {
+                let f1 = faces[0].index();
+                let f2 = faces[1].index();
+                let (fa, fb) = if f1 < f2 { (f1, f2) } else { (f2, f1) };
+                vertex_fillet_adjacency
+                    .entry(edge.start().index())
+                    .or_default()
+                    .push((edge_id.index(), fa, fb));
+                vertex_fillet_adjacency
+                    .entry(edge.end().index())
+                    .or_default()
+                    .push((edge_id.index(), fa, fb));
+            }
+        }
+    }
+    // Identify G1 chain junctions: vertices where exactly 2 fillet edges share
+    // the same face pair. At these junctions, the fillet strips should merge
+    // smoothly. We store the shared vertex info for use during Phase 4.
+    let mut g1_chain_vertices: HashSet<usize> = HashSet::new();
+    for (vi, adj) in &vertex_fillet_adjacency {
+        if adj.len() == 2 && adj[0].1 == adj[1].1 && adj[0].2 == adj[1].2 {
+            g1_chain_vertices.insert(*vi);
+        }
+    }
+
     // Phase 4: Build NURBS fillet faces for each target edge.
     // Also collect contact points per vertex for vertex blend patches.
     // vertex_contacts maps vertex_index → list of (face_index, contact_point) pairs.
     let mut vertex_contacts: HashMap<usize, Vec<(usize, Point3)>> = HashMap::new();
+    // For G1 chain junctions, store the contact points computed by the first
+    // edge so the second edge can reuse them exactly.
+    let mut g1_contact_cache: HashMap<usize, (Point3, Point3)> = HashMap::new();
 
     for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
@@ -738,6 +775,29 @@ pub fn fillet_rolling_ball(
             let contact2 = p + ld2 * radius;
 
             grid.push([contact1, mid_cp, contact2]);
+        }
+
+        // G1 chain continuity: at chain junction vertices, snap contact points
+        // to match the adjacent fillet strip's endpoints for G1 continuity.
+        let start_vi = edge.start().index();
+        let end_vi = edge.end().index();
+        if g1_chain_vertices.contains(&start_vi) {
+            if let Some(&(c1, c2)) = g1_contact_cache.get(&start_vi) {
+                // Snap this strip's start to match the previous strip's end.
+                grid[0] = [c1, grid[0][1], c2];
+            } else {
+                // First strip at this junction — cache for the next strip.
+                g1_contact_cache.insert(start_vi, (grid[0][0], grid[0][2]));
+            }
+        }
+        if g1_chain_vertices.contains(&end_vi) {
+            if let Some(&(c1, c2)) = g1_contact_cache.get(&end_vi) {
+                let last = n_v - 1;
+                grid[last] = [c1, grid[last][1], c2];
+            } else {
+                let last = n_v - 1;
+                g1_contact_cache.insert(end_vi, (grid[last][0], grid[last][2]));
+            }
         }
 
         // Build the fillet surface from the cross-section grid.

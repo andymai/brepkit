@@ -2413,14 +2413,20 @@ fn mesh_boolean_path(
     b: SolidId,
     deflection: f64,
 ) -> Result<SolidId, crate::OperationsError> {
+    // Snapshot original face surfaces before tessellation. These are used
+    // after the mesh boolean to re-classify result triangles onto their
+    // original analytic surfaces (instead of losing all surface info).
+    let original_surfaces = snapshot_face_surfaces(topo, a, b)?;
+
     let mesh_a = crate::tessellate::tessellate_solid(topo, a, deflection)?;
     let mesh_b = crate::tessellate::tessellate_solid(topo, b, deflection)?;
 
     let mb_result = crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, deflection)?;
 
-    // Convert mesh result to topology: each triangle becomes a planar face.
+    // Convert mesh result to topology, attempting to re-classify each
+    // triangle onto an original analytic surface when possible.
     let tol = Tolerance::new();
-    let mut face_data: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
+    let mut face_specs: Vec<FaceSpec> = Vec::new();
     for tri in mb_result.mesh.indices.chunks_exact(3) {
         let i0 = tri[0] as usize;
         let i1 = tri[1] as usize;
@@ -2438,18 +2444,132 @@ fn mesh_boolean_path(
             .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
         let d = crate::dot_normal_point(normal, v0);
 
-        face_data.push((vec![v0, v1, v2], normal, d));
+        // Try to match this triangle to an original face surface.
+        let centroid = Point3::new(
+            (v0.x() + v1.x() + v2.x()) / 3.0,
+            (v0.y() + v1.y() + v2.y()) / 3.0,
+            (v0.z() + v1.z() + v2.z()) / 3.0,
+        );
+        if let Some(surface) = classify_triangle_surface(&original_surfaces, centroid, normal, tol)
+        {
+            face_specs.push(FaceSpec::Surface {
+                vertices: vec![v0, v1, v2],
+                surface,
+            });
+        } else {
+            face_specs.push(FaceSpec::Planar {
+                vertices: vec![v0, v1, v2],
+                normal,
+                d,
+            });
+        }
     }
 
-    if face_data.is_empty() {
+    if face_specs.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "mesh boolean produced empty result".into(),
         });
     }
 
-    let result = assemble_solid(topo, &face_data, tol)?;
+    let result = assemble_solid_mixed(topo, &face_specs, tol)?;
     validate_boolean_result(topo, result)?;
     Ok(result)
+}
+
+/// Snapshot face surfaces from both input solids before tessellation.
+fn snapshot_face_surfaces(
+    topo: &Topology,
+    a: SolidId,
+    b: SolidId,
+) -> Result<Vec<FaceSurface>, crate::OperationsError> {
+    let mut surfaces = Vec::new();
+    for &solid_id in &[a, b] {
+        let solid = topo.solid(solid_id)?;
+        let shell = topo.shell(solid.outer_shell())?;
+        for &fid in shell.faces() {
+            let face = topo.face(fid)?;
+            surfaces.push(face.surface().clone());
+        }
+    }
+    Ok(surfaces)
+}
+
+/// Try to classify a result triangle onto an original analytic surface.
+///
+/// Returns `Some(FaceSurface)` if the triangle's centroid and normal are
+/// consistent with an original face surface (the point lies on the surface
+/// and the normal matches). Otherwise returns `None` (keep as planar).
+fn classify_triangle_surface(
+    original_surfaces: &[FaceSurface],
+    centroid: Point3,
+    normal: Vec3,
+    tol: Tolerance,
+) -> Option<FaceSurface> {
+    for surface in original_surfaces {
+        match surface {
+            FaceSurface::Plane { .. } => {
+                // Already handled as FaceSpec::Planar, skip.
+            }
+            FaceSurface::Cylinder(cyl) => {
+                // Check if centroid is on the cylinder surface.
+                let dp = centroid - cyl.origin();
+                let dp_vec = Vec3::new(dp.x(), dp.y(), dp.z());
+                let along = dp_vec.dot(cyl.axis());
+                let radial = dp_vec - cyl.axis() * along;
+                let r = radial.length();
+                if (r - cyl.radius()).abs() < tol.linear * 100.0 {
+                    // Check normal consistency: cylinder normal is radial.
+                    if let Ok(rad_dir) = radial.normalize() {
+                        if rad_dir.dot(normal).abs() > 0.8 {
+                            return Some(surface.clone());
+                        }
+                    }
+                }
+            }
+            FaceSurface::Sphere(sph) => {
+                let dp = centroid - sph.center();
+                let r = dp.length();
+                if (r - sph.radius()).abs() < tol.linear * 100.0 {
+                    if let Ok(dir) = dp.normalize() {
+                        if dir.dot(normal).abs() > 0.8 {
+                            return Some(surface.clone());
+                        }
+                    }
+                }
+            }
+            FaceSurface::Cone(cone) => {
+                // Check if centroid is on the cone surface.
+                let dp = centroid - cone.apex();
+                let dp_vec = Vec3::new(dp.x(), dp.y(), dp.z());
+                let along = dp_vec.dot(cone.axis());
+                let radial = dp_vec - cone.axis() * along;
+                let r = radial.length();
+                let expected_r = along.abs() * cone.half_angle().tan();
+                if (r - expected_r).abs() < tol.linear * 100.0 && along > 0.0 {
+                    return Some(surface.clone());
+                }
+            }
+            FaceSurface::Torus(tor) => {
+                let dp = centroid - tor.center();
+                let dp_vec = Vec3::new(dp.x(), dp.y(), dp.z());
+                let along = dp_vec.dot(tor.z_axis());
+                let in_plane = dp_vec - tor.z_axis() * along;
+                if let Ok(ring_dir) = in_plane.normalize() {
+                    let tube_center = tor.center() + ring_dir * tor.major_radius();
+                    let tube_dist = (centroid - tube_center).length();
+                    if (tube_dist - tor.minor_radius()).abs() < tol.linear * 100.0 {
+                        return Some(surface.clone());
+                    }
+                }
+            }
+            FaceSurface::Nurbs(_) => {
+                // NURBS surface matching would require Newton projection,
+                // which is too expensive for per-triangle classification.
+                // Skip — these triangles stay as planar.
+            }
+        }
+    }
+    None
 }
 
 /// Check if a solid is composed entirely of analytic surfaces (no NURBS).

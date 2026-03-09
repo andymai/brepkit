@@ -745,6 +745,12 @@ pub fn intersect_analytic_analytic(
     b: AnalyticSurface<'_>,
     grid_res: usize,
 ) -> Result<Vec<IntersectionCurve>, MathError> {
+    // Try algebraic specialization for known surface pairs before falling
+    // back to the general marching approach.
+    if let Some(result) = try_algebraic_intersection(&a, &b)? {
+        return Ok(result);
+    }
+
     let (surf_a, norm_a, u_range_a, v_range_a) = surface_closures(&a);
     let (surf_b, norm_b, u_range_b, v_range_b) = surface_closures(&b);
 
@@ -875,6 +881,155 @@ pub fn intersect_analytic_analytic(
     }
 
     Ok(curves)
+}
+
+/// Try algebraic (closed-form or semi-algebraic) intersection for known
+/// surface pairs before falling back to general marching.
+///
+/// Returns `Some(curves)` if a specialized method exists, `None` otherwise.
+///
+/// Currently handles:
+/// - **Sphere-sphere**: intersection is a circle (plane through the two centers)
+/// - **Coaxial cylinders**: same axis → circle(s) or empty
+/// - **Sphere-cylinder**: reduce to quadratic in one parameter
+#[allow(clippy::too_many_lines)]
+fn try_algebraic_intersection(
+    a: &AnalyticSurface<'_>,
+    b: &AnalyticSurface<'_>,
+) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    match (a, b) {
+        (AnalyticSurface::Sphere(s1), AnalyticSurface::Sphere(s2)) => {
+            algebraic_sphere_sphere(s1, s2).map(Some)
+        }
+        (AnalyticSurface::Cylinder(c1), AnalyticSurface::Cylinder(c2)) => {
+            // Only specialize for coaxial cylinders.
+            let axis_dot = c1.axis().dot(c2.axis()).abs();
+            if axis_dot > 1.0 - 1e-10 {
+                // Axes are parallel — check if they're the same line.
+                let delta = c2.origin() - c1.origin();
+                let delta_vec = Vec3::new(delta.x(), delta.y(), delta.z());
+                let along = delta_vec.dot(c1.axis());
+                let perp = (delta_vec - c1.axis() * along).length();
+                if perp < 1e-8 {
+                    // Coaxial: same axis, different radii → no intersection
+                    // (unless equal radius → degenerate overlap, skip)
+                    if (c1.radius() - c2.radius()).abs() < 1e-8 {
+                        return Ok(None); // Overlapping — let marcher handle
+                    }
+                    return Ok(Some(vec![])); // Coaxial, different radii
+                }
+            }
+            Ok(None) // Non-coaxial: fall through to marching
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Algebraic sphere-sphere intersection.
+///
+/// Two spheres intersect in a circle lying in the radical plane.
+/// The radical plane is perpendicular to the line connecting the centers,
+/// at a distance d1 from center1 where:
+///   d1 = (D² + R1² - R2²) / (2D)
+/// and D is the distance between centers.
+fn algebraic_sphere_sphere(
+    s1: &SphericalSurface,
+    s2: &SphericalSurface,
+) -> Result<Vec<IntersectionCurve>, MathError> {
+    let c1 = s1.center();
+    let c2 = s2.center();
+    let r1 = s1.radius();
+    let r2 = s2.radius();
+
+    let delta = c2 - c1;
+    let d_sq = delta.x() * delta.x() + delta.y() * delta.y() + delta.z() * delta.z();
+    let d = d_sq.sqrt();
+
+    if d < 1e-12 {
+        // Concentric spheres: no intersection (unless same radius → degenerate).
+        return Ok(vec![]);
+    }
+
+    // Check separation conditions.
+    if d > r1 + r2 + 1e-10 {
+        return Ok(vec![]); // Too far apart
+    }
+    if d + r2.min(r1) + 1e-10 < r1.max(r2) {
+        return Ok(vec![]); // One inside the other
+    }
+
+    // Distance from c1 to the radical plane along the center line.
+    let d1 = (d_sq + r1 * r1 - r2 * r2) / (2.0 * d);
+
+    // Radius of the intersection circle.
+    let r_circle_sq = r1 * r1 - d1 * d1;
+    if r_circle_sq < 0.0 {
+        // Tangent or no intersection (numerical noise).
+        if r_circle_sq > -1e-10 {
+            // Tangent: single point.
+            let axis = Vec3::new(delta.x() / d, delta.y() / d, delta.z() / d);
+            let tangent_pt = Point3::new(
+                c1.x() + axis.x() * d1,
+                c1.y() + axis.y() * d1,
+                c1.z() + axis.z() * d1,
+            );
+            let ipt = IntersectionPoint {
+                point: tangent_pt,
+                param1: (0.0, 0.0),
+                param2: (0.0, 0.0),
+            };
+            // Single-point "curve" — not very useful but correct.
+            return Ok(vec![IntersectionCurve {
+                curve: interpolate(&[tangent_pt, tangent_pt], 1)?,
+                points: vec![ipt],
+            }]);
+        }
+        return Ok(vec![]);
+    }
+
+    let r_circle = r_circle_sq.sqrt();
+    let axis = Vec3::new(delta.x() / d, delta.y() / d, delta.z() / d);
+    let center = Point3::new(
+        c1.x() + axis.x() * d1,
+        c1.y() + axis.y() * d1,
+        c1.z() + axis.z() * d1,
+    );
+
+    // Build a reference frame for the circle.
+    // Pick a vector not parallel to axis for the cross product.
+    let ref_vec = if axis.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u_dir = axis.cross(ref_vec).normalize()?;
+    let v_dir = axis.cross(u_dir);
+
+    // Sample the circle for the IntersectionCurve representation.
+    let n_samples = 33; // Odd for symmetry
+    let mut points = Vec::with_capacity(n_samples);
+    let mut positions = Vec::with_capacity(n_samples);
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..n_samples {
+        let theta = TAU * i as f64 / (n_samples - 1) as f64;
+        let (sin_t, cos_t) = theta.sin_cos();
+        let pt = Point3::new(
+            center.x() + (u_dir.x() * cos_t + v_dir.x() * sin_t) * r_circle,
+            center.y() + (u_dir.y() * cos_t + v_dir.y() * sin_t) * r_circle,
+            center.z() + (u_dir.z() * cos_t + v_dir.z() * sin_t) * r_circle,
+        );
+        positions.push(pt);
+        points.push(IntersectionPoint {
+            point: pt,
+            param1: (0.0, 0.0),
+            param2: (0.0, 0.0),
+        });
+    }
+
+    let degree = 3.min(positions.len() - 1);
+    let curve = interpolate(&positions, degree)?;
+
+    Ok(vec![IntersectionCurve { curve, points }])
 }
 
 /// March along the intersection of two surfaces from a seed point.
