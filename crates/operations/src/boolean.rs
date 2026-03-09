@@ -23,6 +23,145 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::dot_normal_point;
 
+// ---------------------------------------------------------------------------
+// Shared helpers (used across multiple phases)
+// ---------------------------------------------------------------------------
+
+/// Convert a `FaceSurface` reference to an `AnalyticSurface` reference.
+///
+/// Returns `None` for planar and NURBS surfaces.
+fn face_surface_to_analytic(
+    surface: &FaceSurface,
+) -> Option<brepkit_math::analytic_intersection::AnalyticSurface<'_>> {
+    use brepkit_math::analytic_intersection::AnalyticSurface;
+    match surface {
+        FaceSurface::Cylinder(c) => Some(AnalyticSurface::Cylinder(c)),
+        FaceSurface::Cone(c) => Some(AnalyticSurface::Cone(c)),
+        FaceSurface::Sphere(s) => Some(AnalyticSurface::Sphere(s)),
+        FaceSurface::Torus(t) => Some(AnalyticSurface::Torus(t)),
+        _ => None,
+    }
+}
+
+/// Deduplicate 3D points by quantized position (spatial hashing at 1e-7 scale).
+fn dedup_points_by_position(pts: &mut Vec<Point3>) {
+    let scale = 1e7_f64;
+    let mut seen = HashSet::new();
+    pts.retain(|p| {
+        #[allow(clippy::cast_possible_truncation)]
+        let key = (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        );
+        seen.insert(key)
+    });
+}
+
+/// Compute the axial extent (v-range) of points projected onto a cylinder axis.
+///
+/// Returns `None` if the extent is degenerate (< 1e-10).
+fn cylinder_v_extent(
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+    points: &[Point3],
+) -> Option<(f64, f64)> {
+    let mut v_min = f64::MAX;
+    let mut v_max = f64::MIN;
+    for &p in points {
+        let v = cyl.axis().dot(p - cyl.origin());
+        v_min = v_min.min(v);
+        v_max = v_max.max(v);
+    }
+    if (v_max - v_min).abs() < 1e-10 {
+        None
+    } else {
+        Some((v_min, v_max))
+    }
+}
+
+/// Merge overlapping v-ranges with padding, clamped to `[extent_min, extent_max]`.
+///
+/// Returns `None` if the merged zones cover more than 60% of the total extent
+/// (band-splitting would not be worthwhile).
+fn merge_vranges_with_padding(
+    vranges: &[(f64, f64)],
+    extent_min: f64,
+    extent_max: f64,
+    padding_fraction: f64,
+) -> Option<Vec<(f64, f64)>> {
+    let extent_height = extent_max - extent_min;
+    let padding = extent_height * padding_fraction;
+    let mut sorted: Vec<(f64, f64)> = vranges.to_vec();
+    sorted.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for &(lo, hi) in &sorted {
+        let lo_padded = (lo - padding).max(extent_min);
+        let hi_padded = (hi + padding).min(extent_max);
+        if let Some(last) = merged.last_mut() {
+            if lo_padded <= last.1 {
+                last.1 = last.1.max(hi_padded);
+                continue;
+            }
+        }
+        merged.push((lo_padded, hi_padded));
+    }
+
+    let total_iz: f64 = merged.iter().map(|(lo, hi)| hi - lo).sum();
+    if total_iz > extent_height * 0.6 {
+        None
+    } else {
+        Some(merged)
+    }
+}
+
+/// Build an ordered list of v-levels from extent bounds and merged intersection zones.
+///
+/// Deduplicates levels that are within 1e-10 of each other.
+fn build_v_levels(extent_min: f64, extent_max: f64, merged: &[(f64, f64)]) -> Vec<f64> {
+    let mut levels: Vec<f64> = vec![extent_min];
+    for &(iz_lo, iz_hi) in merged {
+        if iz_lo > extent_min + 1e-10 {
+            levels.push(iz_lo);
+        }
+        if iz_hi < extent_max - 1e-10 {
+            levels.push(iz_hi);
+        }
+    }
+    levels.push(extent_max);
+    levels.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+    levels
+}
+
+/// Test a single face against a ray for crossing parity.
+///
+/// Returns +1 for a front-to-back crossing, -1 for back-to-front, or 0 for
+/// no intersection (parallel, behind origin, or outside polygon).
+fn ray_face_crossing(
+    centroid: Point3,
+    ray_dir: Vec3,
+    verts: &[Point3],
+    n_opp: Vec3,
+    d_opp: f64,
+    tol: Tolerance,
+) -> i32 {
+    let denom = n_opp.dot(ray_dir);
+    if denom.abs() < tol.angular {
+        return 0;
+    }
+    let numer = d_opp - dot_normal_point(n_opp, centroid);
+    let t = numer / denom;
+    if t <= tol.linear {
+        return 0;
+    }
+    let hit = point_along_line(&centroid, &ray_dir, t);
+    if point_in_face_3d(hit, verts, &n_opp) {
+        if denom > 0.0 { -1 } else { 1 }
+    } else {
+        0
+    }
+}
+
 /// Number of samples used when discretizing closed curves (circles, ellipses)
 /// in the analytic boolean path. All code paths must use this constant so that
 /// band fragments, cap face polygons, and holed-face inner wires share the
@@ -405,20 +544,9 @@ fn collect_face_data(
                 // vs ~800 triangles per band) while giving correct crossing
                 // parity for ray-casting.
                 let verts = face_polygon(topo, fid)?;
-                let mut v_min = f64::MAX;
-                let mut v_max = f64::MIN;
-                for &p in &verts {
-                    let v = cyl.axis().dot(p - cyl.origin());
-                    if v < v_min {
-                        v_min = v;
-                    }
-                    if v > v_max {
-                        v_max = v;
-                    }
-                }
-                if (v_max - v_min).abs() < 1e-10 {
+                let Some((v_min, v_max)) = cylinder_v_extent(cyl, &verts) else {
                     continue;
-                }
+                };
                 #[allow(clippy::cast_precision_loss)]
                 for i in 0..CLASSIFIER_CYL_SEGMENTS {
                     let u0 = std::f64::consts::TAU * (i as f64) / (CLASSIFIER_CYL_SEGMENTS as f64);
@@ -441,8 +569,36 @@ fn collect_face_data(
                 }
             }
             FaceSurface::Sphere(_) => {
-                // Skip: sphere classification uses AnalyticClassifier::Sphere
-                // (O(1) point-in-sphere test) which doesn't need face data.
+                // Tessellate sphere faces for ray-cast classification fallback.
+                // When AnalyticClassifier::Sphere is available it short-circuits
+                // before reaching this data, so the cost is only paid for mixed
+                // solids (sphere + other face types).
+                let coarse_deflection = deflection * 4.0;
+                let mesh = crate::tessellate::tessellate(topo, fid, coarse_deflection)?;
+                for tri in mesh.indices.chunks_exact(3) {
+                    let i0 = tri[0] as usize;
+                    let i1 = tri[1] as usize;
+                    let i2 = tri[2] as usize;
+
+                    let v0 = mesh.positions[i0];
+                    let v1 = mesh.positions[i1];
+                    let v2 = mesh.positions[i2];
+
+                    let e1 = v1 - v0;
+                    let e2 = v2 - v0;
+                    let n = Vec3::new(
+                        e1.y() * e2.z() - e1.z() * e2.y(),
+                        e1.z() * e2.x() - e1.x() * e2.z(),
+                        e1.x() * e2.y() - e1.y() * e2.x(),
+                    );
+                    let len = (n.x() * n.x() + n.y() * n.y() + n.z() * n.z()).sqrt();
+                    if len < 1e-15 {
+                        continue;
+                    }
+                    let n = n * (1.0 / len);
+                    let d = n.x() * v0.x() + n.y() * v0.y() + n.z() * v0.z();
+                    result.push((fid, vec![v0, v1, v2], n, d));
+                }
             }
             _ => {
                 // Other non-planar: tessellate with coarse deflection.
@@ -656,7 +812,7 @@ fn try_plane_analytic_pair(
     analytic_surf: &FaceSurface,
     tol: Tolerance,
 ) -> Option<Vec<IntersectionSegment>> {
-    use brepkit_math::analytic_intersection::{AnalyticSurface, sample_plane_analytic};
+    use brepkit_math::analytic_intersection::sample_plane_analytic;
 
     // Extract plane normal + d.
     let (normal, d) = match plane_surf {
@@ -664,14 +820,7 @@ fn try_plane_analytic_pair(
         _ => return None,
     };
 
-    // Extract analytic surface reference.
-    let analytic = match analytic_surf {
-        FaceSurface::Cylinder(c) => AnalyticSurface::Cylinder(c),
-        FaceSurface::Cone(c) => AnalyticSurface::Cone(c),
-        FaceSurface::Sphere(s) => AnalyticSurface::Sphere(s),
-        FaceSurface::Torus(t) => AnalyticSurface::Torus(t),
-        _ => return None,
-    };
+    let analytic = face_surface_to_analytic(analytic_surf)?;
 
     // Get sample points without NURBS curve fitting.
     let chains = sample_plane_analytic(analytic, normal, d).ok()?;
@@ -1173,7 +1322,10 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
                 if dot.abs() > 0.5 {
                     // Project the plane onto the axis to find the cap position.
                     // d = normal · point, so point along axis = d / dot for this axis.
-                    let z = *d / dot;
+                    // d/dot gives position from global origin; subtract
+                    // the cylinder origin's projection to get axis-relative z.
+                    let origin_vec = Vec3::new(origin.x(), origin.y(), origin.z());
+                    let z = *d / dot - axis.dot(origin_vec);
                     z_min = z_min.min(z);
                     z_max = z_max.max(z);
                 }
@@ -1264,47 +1416,14 @@ fn classify_fragment(
 
     if let Some(bvh) = bvh {
         // BVH-accelerated ray cast: only test faces whose AABBs the ray hits.
-        let candidates = bvh.query_ray(centroid, ray_dir);
-        for idx in candidates {
+        for idx in bvh.query_ray(centroid, ray_dir) {
             let (_, ref verts, n_opp, d_opp) = opposite[idx];
-            let denom = n_opp.dot(ray_dir);
-            if denom.abs() < tol.angular {
-                continue;
-            }
-            let numer = d_opp - dot_normal_point(n_opp, centroid);
-            let t = numer / denom;
-            if t <= tol.linear {
-                continue;
-            }
-            let hit = point_along_line(&centroid, &ray_dir, t);
-            if point_in_face_3d(hit, verts, &n_opp) {
-                if denom > 0.0 {
-                    crossings -= 1;
-                } else {
-                    crossings += 1;
-                }
-            }
+            crossings += ray_face_crossing(centroid, ray_dir, verts, n_opp, d_opp, tol);
         }
     } else {
         // Linear scan fallback for small face sets.
         for &(_, ref verts, n_opp, d_opp) in opposite {
-            let denom = n_opp.dot(ray_dir);
-            if denom.abs() < tol.angular {
-                continue;
-            }
-            let numer = d_opp - dot_normal_point(n_opp, centroid);
-            let t = numer / denom;
-            if t <= tol.linear {
-                continue;
-            }
-            let hit = point_along_line(&centroid, &ray_dir, t);
-            if point_in_face_3d(hit, verts, &n_opp) {
-                if denom > 0.0 {
-                    crossings -= 1;
-                } else {
-                    crossings += 1;
-                }
-            }
+            crossings += ray_face_crossing(centroid, ray_dir, verts, n_opp, d_opp, tol);
         }
     }
 
@@ -1923,7 +2042,7 @@ fn analytic_boolean(
     deflection: f64,
 ) -> Result<SolidId, crate::OperationsError> {
     use brepkit_math::analytic_intersection::{
-        AnalyticSurface, ExactIntersectionCurve, exact_plane_analytic, intersect_analytic_analytic,
+        ExactIntersectionCurve, exact_plane_analytic, intersect_analytic_analytic,
     };
 
     // Collect face info for both solids.
@@ -2074,15 +2193,9 @@ fn analytic_boolean(
                 }
             } else if is_plane_a && !is_plane_b {
                 // Plane cuts analytic surface.
-                let analytic_surf = match &snap_b.surface {
-                    FaceSurface::Cylinder(c) => AnalyticSurface::Cylinder(c),
-                    FaceSurface::Cone(c) => AnalyticSurface::Cone(c),
-                    FaceSurface::Sphere(s) => AnalyticSurface::Sphere(s),
-                    FaceSurface::Torus(t) => AnalyticSurface::Torus(t),
-                    _ => {
-                        has_analytic_analytic = true;
-                        continue;
-                    }
+                let Some(analytic_surf) = face_surface_to_analytic(&snap_b.surface) else {
+                    has_analytic_analytic = true;
+                    continue;
                 };
 
                 let epa_result = exact_plane_analytic(analytic_surf, snap_a.normal, snap_a.d);
@@ -2135,15 +2248,9 @@ fn analytic_boolean(
                 }
             } else if !is_plane_a && is_plane_b {
                 // Analytic surface cut by plane (symmetric case).
-                let analytic_surf = match &snap_a.surface {
-                    FaceSurface::Cylinder(c) => AnalyticSurface::Cylinder(c),
-                    FaceSurface::Cone(c) => AnalyticSurface::Cone(c),
-                    FaceSurface::Sphere(s) => AnalyticSurface::Sphere(s),
-                    FaceSurface::Torus(t) => AnalyticSurface::Torus(t),
-                    _ => {
-                        has_analytic_analytic = true;
-                        continue;
-                    }
+                let Some(analytic_surf) = face_surface_to_analytic(&snap_a.surface) else {
+                    has_analytic_analytic = true;
+                    continue;
                 };
 
                 if let Ok(curves) = exact_plane_analytic(analytic_surf, snap_b.normal, snap_b.d) {
@@ -2194,20 +2301,8 @@ fn analytic_boolean(
                 }
             } else {
                 // Analytic-analytic: compute intersection via marching.
-                let surf_a_opt = match &snap_a.surface {
-                    FaceSurface::Cylinder(c) => Some(AnalyticSurface::Cylinder(c)),
-                    FaceSurface::Cone(c) => Some(AnalyticSurface::Cone(c)),
-                    FaceSurface::Sphere(s) => Some(AnalyticSurface::Sphere(s)),
-                    FaceSurface::Torus(t) => Some(AnalyticSurface::Torus(t)),
-                    _ => None,
-                };
-                let surf_b_opt = match &snap_b.surface {
-                    FaceSurface::Cylinder(c) => Some(AnalyticSurface::Cylinder(c)),
-                    FaceSurface::Cone(c) => Some(AnalyticSurface::Cone(c)),
-                    FaceSurface::Sphere(s) => Some(AnalyticSurface::Sphere(s)),
-                    FaceSurface::Torus(t) => Some(AnalyticSurface::Torus(t)),
-                    _ => None,
-                };
+                let surf_a_opt = face_surface_to_analytic(&snap_a.surface);
+                let surf_b_opt = face_surface_to_analytic(&snap_b.surface);
 
                 if let (Some(surf_a_an), Some(surf_b_an)) = (surf_a_opt, surf_b_opt) {
                     if let Ok(curves) = intersect_analytic_analytic(surf_a_an, surf_b_an, 32) {
@@ -3093,19 +3188,20 @@ fn split_cylinder_at_intersection(
     };
 
     // Compute the barrel's v extent from boundary vertices.
-    let mut barrel_vmin = f64::MAX;
-    let mut barrel_vmax = f64::MIN;
-    for &p in face_verts {
-        let v = cyl.axis().dot(p - cyl.origin());
-        if v < barrel_vmin {
-            barrel_vmin = v;
-        }
-        if v > barrel_vmax {
-            barrel_vmax = v;
-        }
-    }
+    let Some((barrel_vmin, barrel_vmax)) = cylinder_v_extent(cyl, face_verts) else {
+        fragments.push(AnalyticFragment {
+            vertices: face_verts.to_vec(),
+            surface: surface.clone(),
+            normal,
+            d,
+            source,
+            edge_curves: vec![None; face_verts.len()],
+            source_reversed,
+        });
+        return Ok(());
+    };
 
-    if (barrel_vmax - barrel_vmin).abs() < 1e-10 || vranges.is_empty() {
+    if vranges.is_empty() {
         // Degenerate or no ranges — keep as-is.
         fragments.push(AnalyticFragment {
             vertices: face_verts.to_vec(),
@@ -3119,30 +3215,11 @@ fn split_cylinder_at_intersection(
         return Ok(());
     }
 
-    // Merge overlapping v-ranges with padding to create the "intersection zone".
-    let barrel_height = barrel_vmax - barrel_vmin;
-    let padding = barrel_height * 0.05; // 5% of barrel height
-    let mut merged: Vec<(f64, f64)> = Vec::new();
-    let mut sorted_ranges: Vec<(f64, f64)> = vranges.to_vec();
-    sorted_ranges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    for &(lo, hi) in &sorted_ranges {
-        let lo_padded = (lo - padding).max(barrel_vmin);
-        let hi_padded = (hi + padding).min(barrel_vmax);
-        if let Some(last) = merged.last_mut() {
-            if lo_padded <= last.1 {
-                last.1 = last.1.max(hi_padded);
-                continue;
-            }
-        }
-        merged.push((lo_padded, hi_padded));
-    }
-
-    // If intersection zones cover >60% of the barrel, band-splitting won't save
-    // enough faces and loses chord-splitting accuracy. Fall back to full tessellation.
-    let total_iz: f64 = merged.iter().map(|(lo, hi)| hi - lo).sum();
-    if total_iz > barrel_height * 0.6 {
+    // Merge overlapping v-ranges with padding. Fall back to full tessellation
+    // if intersection zones cover >60% of the barrel height.
+    let Some(merged) = merge_vranges_with_padding(vranges, barrel_vmin, barrel_vmax, 0.05) else {
         return tessellate_face_into_fragments(topo, face_id, source, deflection, fragments);
-    }
+    };
 
     // Build level list: regions outside merged ranges are cylinder bands,
     // regions inside merged ranges get tessellated.
@@ -3161,22 +3238,8 @@ fn split_cylinder_at_intersection(
             verts_at_vmax.push(p);
         }
     }
-    // Deduplicate points at each level.
-    let dedup_by_pos = |pts: &mut Vec<Point3>| {
-        let scale = 1e7_f64;
-        let mut seen = HashSet::new();
-        pts.retain(|p| {
-            #[allow(clippy::cast_possible_truncation)]
-            let key = (
-                (p.x() * scale).round() as i64,
-                (p.y() * scale).round() as i64,
-                (p.z() * scale).round() as i64,
-            );
-            seen.insert(key)
-        });
-    };
-    dedup_by_pos(&mut verts_at_vmin);
-    dedup_by_pos(&mut verts_at_vmax);
+    dedup_points_by_position(&mut verts_at_vmin);
+    dedup_points_by_position(&mut verts_at_vmax);
 
     #[allow(clippy::cast_precision_loss)]
     let sample_circle_at_v = |v: f64| -> Vec<Point3> {
@@ -3214,14 +3277,7 @@ fn split_cylinder_at_intersection(
             - cyl.axis() * cyl.axis().dot(surface_point - cyl.origin()))
         .normalize()
         .unwrap_or(normal);
-        #[allow(clippy::cast_precision_loss)]
-        let centroid = {
-            let (sx, sy, sz) = verts.iter().fold((0.0, 0.0, 0.0), |(ax, ay, az), v| {
-                (ax + v.x(), ay + v.y(), az + v.z())
-            });
-            let inv_n = 1.0 / verts.len() as f64;
-            Point3::new(sx * inv_n, sy * inv_n, sz * inv_n)
-        };
+        let centroid = polygon_centroid(&verts);
         let band_d = crate::dot_normal_point(band_normal, centroid);
 
         let n_verts = verts.len();
@@ -3241,19 +3297,7 @@ fn split_cylinder_at_intersection(
     // preserving FaceSurface::Cylinder throughout. The classifier
     // determines inside/outside for each band independently.
     //
-    // Collect all unique v-levels (barrel endpoints + intersection zone
-    // boundaries), then create one band per consecutive pair.
-    let mut levels: Vec<f64> = vec![barrel_vmin];
-    for &(iz_lo, iz_hi) in &merged {
-        if iz_lo > barrel_vmin + 1e-10 {
-            levels.push(iz_lo);
-        }
-        if iz_hi < barrel_vmax - 1e-10 {
-            levels.push(iz_hi);
-        }
-    }
-    levels.push(barrel_vmax);
-    levels.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+    let levels = build_v_levels(barrel_vmin, barrel_vmax, &merged);
 
     for w in levels.windows(2) {
         make_band(w[0], w[1], fragments);
@@ -3306,29 +3350,11 @@ fn split_sphere_at_intersection(
         return Ok(());
     }
 
-    // Merge overlapping v-ranges with padding.
-    let face_height = face_vmax - face_vmin;
-    let padding = face_height * 0.05;
-    let mut merged: Vec<(f64, f64)> = Vec::new();
-    let mut sorted_ranges: Vec<(f64, f64)> = vranges.to_vec();
-    sorted_ranges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    for &(lo, hi) in &sorted_ranges {
-        let lo_padded = (lo - padding).max(face_vmin);
-        let hi_padded = (hi + padding).min(face_vmax);
-        if let Some(last) = merged.last_mut() {
-            if lo_padded <= last.1 {
-                last.1 = last.1.max(hi_padded);
-                continue;
-            }
-        }
-        merged.push((lo_padded, hi_padded));
-    }
-
-    // If intersection zones cover >60% of the face, fall back to tessellation.
-    let total_iz: f64 = merged.iter().map(|(lo, hi)| hi - lo).sum();
-    if total_iz > face_height * 0.6 {
+    // Merge overlapping v-ranges with padding. Fall back to full tessellation
+    // if intersection zones cover >60% of the face height.
+    let Some(merged) = merge_vranges_with_padding(vranges, face_vmin, face_vmax, 0.05) else {
         return tessellate_face_into_fragments(topo, face_id, source, deflection, fragments);
-    }
+    };
 
     let n_samples: usize = CLOSED_CURVE_SAMPLES;
     let pole_eps = 1e-6;
@@ -3371,14 +3397,7 @@ fn split_sphere_at_intersection(
         // Compute outward normal from a surface point.
         let sample_pt = verts[0];
         let cap_normal = (sample_pt - sph.center()).normalize().unwrap_or(normal);
-        #[allow(clippy::cast_precision_loss)]
-        let centroid = {
-            let (sx, sy, sz) = verts.iter().fold((0.0, 0.0, 0.0), |(ax, ay, az), v| {
-                (ax + v.x(), ay + v.y(), az + v.z())
-            });
-            let inv_n = 1.0 / verts.len() as f64;
-            Point3::new(sx * inv_n, sy * inv_n, sz * inv_n)
-        };
+        let centroid = polygon_centroid(&verts);
         let cap_d = crate::dot_normal_point(cap_normal, centroid);
 
         let n_verts = verts.len();
@@ -3393,18 +3412,7 @@ fn split_sphere_at_intersection(
         });
     };
 
-    // Build v-levels and create caps between consecutive pairs.
-    let mut levels: Vec<f64> = vec![face_vmin];
-    for &(iz_lo, iz_hi) in &merged {
-        if iz_lo > face_vmin + 1e-10 {
-            levels.push(iz_lo);
-        }
-        if iz_hi < face_vmax - 1e-10 {
-            levels.push(iz_hi);
-        }
-    }
-    levels.push(face_vmax);
-    levels.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+    let levels = build_v_levels(face_vmin, face_vmax, &merged);
 
     for w in levels.windows(2) {
         make_cap(w[0], w[1], fragments);
@@ -3449,12 +3457,8 @@ fn collect_analytic_vranges(
         for &(p0, p1, _) in chords {
             for p in &[p0, p1] {
                 let v = v_of_point(*p);
-                if v < vmin {
-                    vmin = v;
-                }
-                if v > vmax {
-                    vmax = v;
-                }
+                vmin = vmin.min(v);
+                vmax = vmax.max(v);
             }
         }
         if vmax > vmin {
@@ -3525,19 +3529,7 @@ fn create_band_fragments(
     }
 
     // Compute the barrel's v extent from its boundary vertices.
-    let mut v_min = f64::MAX;
-    let mut v_max = f64::MIN;
-    for &p in face_verts {
-        let v = cyl.axis().dot(p - cyl.origin());
-        if v < v_min {
-            v_min = v;
-        }
-        if v > v_max {
-            v_max = v;
-        }
-    }
-
-    if (v_max - v_min).abs() < 1e-10 {
+    let Some((v_min, v_max)) = cylinder_v_extent(cyl, face_verts) else {
         fragments.push(AnalyticFragment {
             vertices: face_verts.to_vec(),
             surface: surface.clone(),
@@ -3548,7 +3540,7 @@ fn create_band_fragments(
             source_reversed,
         });
         return;
-    }
+    };
 
     // Sort cut levels by v-parameter.
     cut_levels.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -3584,22 +3576,8 @@ fn create_band_fragments(
         }
     }
     // Deduplicate points at each level (seam vertex duplicates circle[0]).
-    // Use quantized-position keying to handle any duplicate, not just adjacent.
-    let dedup_by_pos = |pts: &mut Vec<Point3>| {
-        let scale = 1e7_f64;
-        let mut seen = HashSet::new();
-        pts.retain(|p| {
-            #[allow(clippy::cast_possible_truncation)]
-            let key = (
-                (p.x() * scale).round() as i64,
-                (p.y() * scale).round() as i64,
-                (p.z() * scale).round() as i64,
-            );
-            seen.insert(key)
-        });
-    };
-    dedup_by_pos(&mut verts_at_vmin);
-    dedup_by_pos(&mut verts_at_vmax);
+    dedup_points_by_position(&mut verts_at_vmin);
+    dedup_points_by_position(&mut verts_at_vmax);
 
     // Sample a circle at a given v-level. For cut levels with an EdgeCurve,
     // use sample_edge_curve so the points match the holed-face inner wire.
@@ -3646,14 +3624,7 @@ fn create_band_fragments(
             - cyl.axis() * cyl.axis().dot(surface_point - cyl.origin()))
         .normalize()
         .unwrap_or(normal);
-        #[allow(clippy::cast_precision_loss)]
-        let centroid = {
-            let (sx, sy, sz) = verts.iter().fold((0.0, 0.0, 0.0), |(ax, ay, az), v| {
-                (ax + v.x(), ay + v.y(), az + v.z())
-            });
-            let inv_n = 1.0 / verts.len() as f64;
-            Point3::new(sx * inv_n, sy * inv_n, sz * inv_n)
-        };
+        let centroid = polygon_centroid(&verts);
         let band_d = crate::dot_normal_point(band_normal, centroid);
 
         let n_verts = verts.len();
