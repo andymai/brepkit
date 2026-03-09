@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use rayon::prelude::*;
+
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
 use brepkit_math::plane::plane_plane_intersection;
@@ -56,6 +58,66 @@ fn dedup_points_by_position(pts: &mut Vec<Point3>) {
         );
         seen.insert(key)
     });
+}
+
+/// Compute a representative normal and d-value for a face from its surface type.
+///
+/// For planar faces, returns the plane normal/d directly. For analytic surfaces
+/// (cylinder, sphere, cone, torus), computes the normal from the surface
+/// definition and a sample vertex — avoiding expensive tessellation.
+fn analytic_face_normal_d(surface: &FaceSurface, verts: &[Point3]) -> (Vec3, f64) {
+    match surface {
+        FaceSurface::Plane { normal, d } => (*normal, *d),
+        FaceSurface::Cylinder(cyl) => {
+            // Cylinder axis direction as representative normal.
+            let n = cyl.axis();
+            let d = if verts.is_empty() {
+                0.0
+            } else {
+                crate::dot_normal_point(n, verts[0])
+            };
+            (n, d)
+        }
+        FaceSurface::Sphere(sph) => {
+            // Outward radial from center through first vertex.
+            if let Some(&v) = verts.first() {
+                let dir = v - sph.center();
+                let n = dir.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                (n, crate::dot_normal_point(n, v))
+            } else {
+                (Vec3::new(0.0, 0.0, 1.0), 0.0)
+            }
+        }
+        FaceSurface::Cone(cone) => {
+            let n = cone.axis();
+            let d = if verts.is_empty() {
+                0.0
+            } else {
+                crate::dot_normal_point(n, verts[0])
+            };
+            (n, d)
+        }
+        FaceSurface::Torus(tor) => {
+            let n = tor.z_axis();
+            let d = if verts.is_empty() {
+                0.0
+            } else {
+                crate::dot_normal_point(n, verts[0])
+            };
+            (n, d)
+        }
+        FaceSurface::Nurbs(_) => {
+            // For NURBS, use polygon normal from vertices.
+            if verts.len() >= 3 {
+                let e1 = verts[1] - verts[0];
+                let e2 = verts[2] - verts[0];
+                let n = e1.cross(e2).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                (n, crate::dot_normal_point(n, verts[0]))
+            } else {
+                (Vec3::new(0.0, 0.0, 1.0), 0.0)
+            }
+        }
+    }
 }
 
 /// Compute the axial extent (v-range) of points projected onto a cylinder axis.
@@ -167,6 +229,11 @@ fn ray_face_crossing(
 /// band fragments, cap face polygons, and holed-face inner wires share the
 /// same vertices and edges at their boundaries.
 const CLOSED_CURVE_SAMPLES: usize = 64;
+
+/// Minimum fragment count for parallel classification via rayon.
+/// Below this threshold, sequential iteration is faster due to rayon's
+/// thread-pool synchronization overhead (~5-20µs).
+const PARALLEL_THRESHOLD: usize = 64;
 
 /// The type of boolean operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -416,25 +483,28 @@ pub fn boolean_with_options(
     let bvh_a = build_face_bvh(&faces_a);
     let bvh_b = build_face_bvh(&faces_b);
 
-    let classes: Vec<FaceClass> = fragments
-        .iter()
-        .map(|frag| {
-            // Try analytic classification first (e.g. point-in-sphere).
-            let centroid = polygon_centroid(&frag.vertices);
-            let fast = match frag.source {
-                Source::A => analytic_b.as_ref().and_then(|c| c.classify(centroid, tol)),
-                Source::B => analytic_a.as_ref().and_then(|c| c.classify(centroid, tol)),
-            };
-            if let Some(class) = fast {
-                return class;
-            }
-            let (opposite, bvh) = match frag.source {
-                Source::A => (&faces_b, bvh_b.as_ref()),
-                Source::B => (&faces_a, bvh_a.as_ref()),
-            };
-            classify_fragment(frag, opposite, bvh, tol)
-        })
-        .collect();
+    // Classification: parallelize when fragment count justifies rayon overhead.
+    let classify_fn = |frag: &FaceFragment| -> FaceClass {
+        let centroid = polygon_centroid(&frag.vertices);
+        let fast = match frag.source {
+            Source::A => analytic_b.as_ref().and_then(|c| c.classify(centroid, tol)),
+            Source::B => analytic_a.as_ref().and_then(|c| c.classify(centroid, tol)),
+        };
+        if let Some(class) = fast {
+            return class;
+        }
+        let (opposite, bvh) = match frag.source {
+            Source::A => (&faces_b, bvh_b.as_ref()),
+            Source::B => (&faces_a, bvh_a.as_ref()),
+        };
+        classify_fragment(frag, opposite, bvh, tol)
+    };
+
+    let classes: Vec<FaceClass> = if fragments.len() >= PARALLEL_THRESHOLD {
+        fragments.par_iter().map(classify_fn).collect()
+    } else {
+        fragments.iter().map(classify_fn).collect()
+    };
 
     // ── Phase 5: Selection ───────────────────────────────────────────────
 
@@ -1198,6 +1268,9 @@ enum AnalyticClassifier {
         z_min: f64,
         z_max: f64,
     },
+    /// Point-in-box: axis-aligned bounding box test.
+    /// O(1) with just 6 comparisons — the fastest classifier.
+    Box { min: Point3, max: Point3 },
 }
 
 impl AnalyticClassifier {
@@ -1242,6 +1315,29 @@ impl AnalyticClassifier {
                 {
                     Some(FaceClass::Inside)
                 } else if radial_dist_sq > (radius + tol.linear) * (radius + tol.linear) {
+                    Some(FaceClass::Outside)
+                } else {
+                    None // On boundary — fall back to ray-casting
+                }
+            }
+            Self::Box { min, max } => {
+                // 6 comparisons — the fastest possible classifier.
+                let tl = tol.linear;
+                if centroid.x() > min.x() + tl
+                    && centroid.x() < max.x() - tl
+                    && centroid.y() > min.y() + tl
+                    && centroid.y() < max.y() - tl
+                    && centroid.z() > min.z() + tl
+                    && centroid.z() < max.z() - tl
+                {
+                    Some(FaceClass::Inside)
+                } else if centroid.x() < min.x() - tl
+                    || centroid.x() > max.x() + tl
+                    || centroid.y() < min.y() - tl
+                    || centroid.y() > max.y() + tl
+                    || centroid.z() < min.z() - tl
+                    || centroid.z() > max.z() + tl
+                {
                     Some(FaceClass::Outside)
                 } else {
                     None // On boundary — fall back to ray-casting
@@ -1298,6 +1394,68 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
                 has_planar = true;
             }
             _ => return None, // Unsupported surface type
+        }
+    }
+
+    // Pure planar solid (all faces are planes) — likely a box.
+    // Detect axis-aligned boxes by checking that all faces are axis-aligned planes
+    // that form 3 opposite-normal pairs.
+    if has_planar && !has_sphere && !has_cylinder {
+        let faces = shell.faces();
+        if faces.len() == 6 {
+            // Collect all plane normals and d values.
+            let mut planes: Vec<(Vec3, f64)> = Vec::with_capacity(6);
+            let mut is_box = true;
+            for &fid in faces {
+                if let Ok(face) = topo.face(fid) {
+                    if let FaceSurface::Plane { normal, d } = face.surface() {
+                        // Check axis-alignment: exactly one component should be ±1.
+                        let ax = normal.x().abs();
+                        let ay = normal.y().abs();
+                        let az = normal.z().abs();
+                        if (ax > 1.0 - tol.angular && ay < tol.angular && az < tol.angular)
+                            || (ay > 1.0 - tol.angular && ax < tol.angular && az < tol.angular)
+                            || (az > 1.0 - tol.angular && ax < tol.angular && ay < tol.angular)
+                        {
+                            planes.push((*normal, *d));
+                        } else {
+                            is_box = false;
+                            break;
+                        }
+                    } else {
+                        is_box = false;
+                        break;
+                    }
+                } else {
+                    is_box = false;
+                    break;
+                }
+            }
+            if is_box && planes.len() == 6 {
+                // Extract min/max from the 3 axis pairs.
+                let mut x_vals = Vec::new();
+                let mut y_vals = Vec::new();
+                let mut z_vals = Vec::new();
+                for &(normal, d) in &planes {
+                    if normal.x().abs() > 0.5 {
+                        // d = normal · point, so the plane is at x = d/normal.x()
+                        x_vals.push(d / normal.x());
+                    } else if normal.y().abs() > 0.5 {
+                        y_vals.push(d / normal.y());
+                    } else {
+                        z_vals.push(d / normal.z());
+                    }
+                }
+                if x_vals.len() == 2 && y_vals.len() == 2 && z_vals.len() == 2 {
+                    x_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    y_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    z_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    return Some(AnalyticClassifier::Box {
+                        min: Point3::new(x_vals[0], y_vals[0], z_vals[0]),
+                        max: Point3::new(x_vals[1], y_vals[1], z_vals[1]),
+                    });
+                }
+            }
         }
     }
 
@@ -1376,9 +1534,21 @@ fn classify_fragment(
     bvh: Option<&Bvh>,
     tol: Tolerance,
 ) -> FaceClass {
-    // Compute centroid of the fragment.
     let centroid = polygon_centroid(&frag.vertices);
+    classify_point(centroid, frag.normal, opposite, bvh, tol)
+}
 
+/// Classify a point (centroid with a ray direction) relative to an opposite solid.
+///
+/// This is the core classification logic, separated from `FaceFragment` to avoid
+/// unnecessary cloning when the centroid/normal are already known.
+fn classify_point(
+    centroid: Point3,
+    normal: Vec3,
+    opposite: &FaceData,
+    bvh: Option<&Bvh>,
+    tol: Tolerance,
+) -> FaceClass {
     // First check for coplanar faces — must scan candidates only.
     // For coplanar test we need faces near the centroid's plane, so use
     // BVH point-containment if available, otherwise linear scan.
@@ -1397,7 +1567,7 @@ fn classify_fragment(
         let (_, ref verts, n_opp, d_opp) = opposite[i];
         let dist = dot_normal_point(n_opp, centroid) - d_opp;
         if dist.abs() < tol.linear && point_in_face_3d(centroid, verts, &n_opp) {
-            let dot = frag.normal.dot(n_opp);
+            let dot = normal.dot(n_opp);
             return if dot > tol.angular {
                 FaceClass::CoplanarSame
             } else if dot < -tol.angular {
@@ -1411,7 +1581,7 @@ fn classify_fragment(
     }
 
     // Ray-cast from centroid along fragment normal.
-    let ray_dir = frag.normal;
+    let ray_dir = normal;
     let mut crossings = 0i32;
 
     if let Some(bvh) = bvh {
@@ -1789,21 +1959,17 @@ fn collect_face_signatures(
 
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
+        let verts = face_polygon(topo, fid)?;
         let normal = if let FaceSurface::Plane { normal, .. } = face.surface() {
             *normal
+        } else if verts.len() >= 3 {
+            let e1 = verts[1] - verts[0];
+            let e2 = verts[2] - verts[0];
+            e1.cross(e2).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0))
         } else {
-            // For non-planar faces, approximate normal from sampled polygon.
-            let verts = face_polygon(topo, fid)?;
-            if verts.len() >= 3 {
-                let e1 = verts[1] - verts[0];
-                let e2 = verts[2] - verts[0];
-                e1.cross(e2).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0))
-            } else {
-                Vec3::new(0.0, 0.0, 1.0)
-            }
+            Vec3::new(0.0, 0.0, 1.0)
         };
 
-        let verts = face_polygon(topo, fid)?;
         let centroid = polygon_centroid(&verts);
         result.push((fid.index(), normal, centroid));
     }
@@ -2060,24 +2226,7 @@ fn analytic_boolean(
         let surface = face.surface().clone();
         let reversed = face.is_reversed();
         let verts = face_polygon(topo, fid)?;
-        let (normal, d) = match &surface {
-            FaceSurface::Plane { normal, d } => (*normal, *d),
-            _ => {
-                // For non-planar faces, compute a representative normal from tessellation.
-                let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
-                let avg_normal = if mesh.normals.is_empty() {
-                    Vec3::new(0.0, 0.0, 1.0)
-                } else {
-                    mesh.normals[0]
-                };
-                let d_val = if mesh.positions.is_empty() {
-                    0.0
-                } else {
-                    dot_normal_point(avg_normal, mesh.positions[0])
-                };
-                (avg_normal, d_val)
-            }
-        };
+        let (normal, d) = analytic_face_normal_d(&surface, &verts);
         snaps_a.push(FaceSnapshot {
             id: fid,
             surface,
@@ -2094,23 +2243,7 @@ fn analytic_boolean(
         let surface = face.surface().clone();
         let reversed = face.is_reversed();
         let verts = face_polygon(topo, fid)?;
-        let (normal, d) = match &surface {
-            FaceSurface::Plane { normal, d } => (*normal, *d),
-            _ => {
-                let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
-                let avg_normal = if mesh.normals.is_empty() {
-                    Vec3::new(0.0, 0.0, 1.0)
-                } else {
-                    mesh.normals[0]
-                };
-                let d_val = if mesh.positions.is_empty() {
-                    0.0
-                } else {
-                    dot_normal_point(avg_normal, mesh.positions[0])
-                };
-                (avg_normal, d_val)
-            }
-        };
+        let (normal, d) = analytic_face_normal_d(&surface, &verts);
         snaps_b.push(FaceSnapshot {
             id: fid,
             surface,
@@ -2161,12 +2294,30 @@ fn analytic_boolean(
     }
     let mut contained_curves: Vec<ContainedCurve> = Vec::new();
 
+    // Build BVH over solid B's face AABBs for O(n log m) broad-phase instead of O(n*m).
+    // Only worthwhile when B has enough faces to amortize BVH build cost.
+    let analytic_bvh_b = if snaps_b.len() >= 16 {
+        let b_bvh_entries: Vec<(usize, Aabb3)> = aabbs_b
+            .iter()
+            .enumerate()
+            .map(|(i, aabb)| (i, *aabb))
+            .collect();
+        Some(Bvh::build(&b_bvh_entries))
+    } else {
+        None
+    };
+
     for (ia, snap_a) in snaps_a.iter().enumerate() {
-        for (ib, snap_b) in snaps_b.iter().enumerate() {
-            // Skip non-overlapping AABBs.
-            if !aabbs_a[ia].intersects(aabbs_b[ib]) {
-                continue;
-            }
+        // Use BVH for broad-phase when available, otherwise brute-force with AABB check.
+        let candidates: Vec<usize> = if let Some(ref bvh) = analytic_bvh_b {
+            bvh.query_overlap(&aabbs_a[ia])
+        } else {
+            (0..snaps_b.len())
+                .filter(|&ib| aabbs_a[ia].intersects(aabbs_b[ib]))
+                .collect()
+        };
+        for &ib in &candidates {
+            let snap_b = &snaps_b[ib];
 
             let is_plane_a = matches!(snap_a.surface, FaceSurface::Plane { .. });
             let is_plane_b = matches!(snap_b.surface, FaceSurface::Plane { .. });
@@ -2753,52 +2904,63 @@ fn analytic_boolean(
 
     // ── Classification ───────────────────────────────────────────────────
 
-    // Build FaceData for classification (tessellated faces of opposite solid).
-    let face_data_a = collect_face_data(topo, a, deflection)?;
-    let face_data_b = collect_face_data(topo, b, deflection)?;
-
-    // Analytic classifiers for O(1) point-in-solid tests (e.g. sphere).
+    // Try analytic classifiers first (O(1) point-in-solid tests).
+    // Only build expensive tessellated face data if needed.
     let analytic_cls_a = try_build_analytic_classifier(topo, a);
     let analytic_cls_b = try_build_analytic_classifier(topo, b);
 
-    // BVH acceleration for ray-cast classification.
-    let bvh_a = build_face_bvh(&face_data_a);
-    let bvh_b = build_face_bvh(&face_data_b);
-
-    let classes: Vec<FaceClass> = fragments
+    // Phase 1: classify everything we can with analytic classifiers.
+    let mut classes: Vec<Option<FaceClass>> = fragments
         .iter()
         .enumerate()
         .map(|(idx, frag)| {
-            // Use pre-classification for contained-curve fragments.
             if let Some(&class) = pre_classifications.get(&idx) {
-                return class;
+                return Some(class);
             }
-            // Try analytic classification first.
             let centroid = polygon_centroid(&frag.vertices);
-            let fast = match frag.source {
+            match frag.source {
                 Source::A => analytic_cls_b
                     .as_ref()
                     .and_then(|c| c.classify(centroid, tol)),
                 Source::B => analytic_cls_a
                     .as_ref()
                     .and_then(|c| c.classify(centroid, tol)),
-            };
-            if let Some(class) = fast {
-                return class;
             }
+        })
+        .collect();
+
+    // Phase 2: if any fragments are unclassified, build face data and ray-cast.
+    let needs_raycast = classes.iter().any(Option::is_none);
+    if needs_raycast {
+        let face_data_a = collect_face_data(topo, a, deflection)?;
+        let face_data_b = collect_face_data(topo, b, deflection)?;
+        let bvh_a = build_face_bvh(&face_data_a);
+        let bvh_b = build_face_bvh(&face_data_b);
+
+        for (idx, class) in classes.iter_mut().enumerate() {
+            if class.is_some() {
+                continue;
+            }
+            let frag = &fragments[idx];
             let (opposite, bvh) = match frag.source {
                 Source::A => (&face_data_b, bvh_b.as_ref()),
                 Source::B => (&face_data_a, bvh_a.as_ref()),
             };
-            let pseudo = FaceFragment {
-                vertices: frag.vertices.clone(),
-                normal: frag.normal,
-                d: frag.d,
-                source: frag.source,
-            };
-            classify_fragment(&pseudo, opposite, bvh, tol)
+            let centroid = polygon_centroid(&frag.vertices);
+            *class = Some(classify_point(centroid, frag.normal, opposite, bvh, tol));
+        }
+    }
+
+    // All fragments should now be classified.
+    let classes: Vec<FaceClass> = classes
+        .into_iter()
+        .enumerate()
+        .map(|(_i, c)| -> Result<FaceClass, crate::OperationsError> {
+            c.ok_or_else(|| crate::OperationsError::InvalidInput {
+                reason: format!("boolean: fragment {_i} was not classified"),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     // ── Selection + Assembly ─────────────────────────────────────────────
 
@@ -3059,10 +3221,27 @@ fn curve_boundary_crossings(
         return CurveClassification::Crossings(raw_points);
     }
 
+    // Pre-project face polygon to 2D once, then test all sample points
+    // against the projected polygon. This avoids re-projecting the polygon
+    // for every sample point (64 allocations → 1 allocation).
+    let ax = face_normal.x().abs();
+    let ay = face_normal.y().abs();
+    let az = face_normal.z().abs();
+    let project_3d_to_2d = |p: Point3| -> Point2 {
+        if az >= ax && az >= ay {
+            Point2::new(p.x(), p.y())
+        } else if ay >= ax {
+            Point2::new(p.x(), p.z())
+        } else {
+            Point2::new(p.y(), p.z())
+        }
+    };
+    let polygon_2d: Vec<Point2> = face_verts.iter().map(|p| project_3d_to_2d(*p)).collect();
+
     // Classify each sample as inside or outside the face polygon.
     let inside: Vec<bool> = raw_points
         .iter()
-        .map(|pt| point_in_face_3d(*pt, face_verts, &face_normal))
+        .map(|pt| point_in_polygon(project_3d_to_2d(*pt), &polygon_2d))
         .collect();
 
     let all_inside = inside.iter().all(|&v| v);

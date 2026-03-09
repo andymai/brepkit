@@ -34,6 +34,51 @@ use crate::MathError;
 use crate::predicates::{in_circle, orient2d};
 use crate::vec::Point2;
 
+/// Fast floating-point in-circle test with error bound.
+///
+/// Computes the in-circle determinant using standard f64 arithmetic.
+/// If the magnitude exceeds the error bound, returns the result directly.
+/// Otherwise, falls back to the exact `in_circle` predicate.
+///
+/// The error bound is derived from Shewchuk's analysis: the maximum
+/// rounding error of the 4×4 determinant is bounded by
+/// `εB * |det|` where εB depends on the matrix entries.
+#[inline]
+fn fast_in_circle(a: Point2, b: Point2, c: Point2, d: Point2) -> f64 {
+    let adx = a.x() - d.x();
+    let ady = a.y() - d.y();
+    let bdx = b.x() - d.x();
+    let bdy = b.y() - d.y();
+    let cdx = c.x() - d.x();
+    let cdy = c.y() - d.y();
+
+    let abdet = adx * bdy - bdx * ady;
+    let bcdet = bdx * cdy - cdx * bdy;
+    let cadet = cdx * ady - adx * cdy;
+    let alift = adx * adx + ady * ady;
+    let blift = bdx * bdx + bdy * bdy;
+    let clift = cdx * cdx + cdy * cdy;
+
+    let det = alift * bcdet + blift * cadet + clift * abdet;
+
+    // Error bound (conservative): if |det| >> sum of absolute products,
+    // the sign is reliable. Use Shewchuk's iccerrboundA ≈ 10ε where
+    // ε ≈ 2^-53. For our tolerance, 1e-10 * permanent works well.
+    let permanent = alift * ((bdx * cdy).abs() + (cdx * bdy).abs())
+        + blift * ((cdx * ady).abs() + (adx * cdy).abs())
+        + clift * ((adx * bdy).abs() + (bdx * ady).abs());
+
+    // Error bound coefficient: 10 * 2^-53 ≈ 1.11e-15
+    let errbound = 1.11e-15 * permanent;
+
+    if det > errbound || det < -errbound {
+        det
+    } else {
+        // Near zero — use exact predicate
+        in_circle(a, b, c, d)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Data structures
 // ---------------------------------------------------------------------------
@@ -57,6 +102,14 @@ pub struct Cdt {
     constraints: HashSet<(usize, usize)>,
     /// Number of super-triangle vertices at the start of the vertex list.
     super_count: usize,
+    /// Spatial hash for O(1) amortized duplicate point detection.
+    dup_grid: std::collections::HashMap<(i64, i64), Vec<usize>>,
+    /// Last successfully located triangle — used as starting point for the
+    /// walking search to exploit spatial coherence in insertion order.
+    last_located: usize,
+    /// Vertex → one incident triangle index for O(1) edge lookups.
+    /// Updated on triangle creation/removal.
+    vertex_tri: Vec<usize>,
 }
 
 /// Tolerance for duplicate point detection.
@@ -74,6 +127,16 @@ impl Cdt {
     /// with margin.
     #[must_use]
     pub fn new(bounds: (Point2, Point2)) -> Self {
+        Self::with_capacity(bounds, 0)
+    }
+
+    /// Create a new CDT with pre-allocated capacity for `n` points.
+    ///
+    /// Pre-allocates vertex and triangle storage to avoid reallocations
+    /// during bulk insertion. Each point insertion creates ~2 triangles,
+    /// so `2*n + 1` triangle slots are allocated.
+    #[must_use]
+    pub fn with_capacity(bounds: (Point2, Point2), n: usize) -> Self {
         let (min, max) = bounds;
         let dx = max.x() - min.x();
         let dy = max.y() - min.y();
@@ -86,18 +149,29 @@ impl Cdt {
         let s1 = Point2::new(cx + margin * 2.0, cy - margin);
         let s2 = Point2::new(cx, cy + margin * 2.0);
 
-        let vertices = vec![s0, s1, s2];
-        let triangles = vec![CdtTriangle {
+        let mut vertices = Vec::with_capacity(n + 3);
+        vertices.push(s0);
+        vertices.push(s1);
+        vertices.push(s2);
+
+        let mut triangles = Vec::with_capacity(2 * n + 1);
+        triangles.push(CdtTriangle {
             v: [0, 1, 2],
             adj: [None, None, None],
             removed: false,
-        }];
+        });
+
+        let mut vertex_tri = Vec::with_capacity(n + 3);
+        vertex_tri.extend([0, 0, 0]); // all 3 super-verts → tri 0
 
         Self {
             vertices,
             triangles,
             constraints: HashSet::new(),
             super_count: 3,
+            dup_grid: std::collections::HashMap::new(),
+            last_located: 0,
+            vertex_tri,
         }
     }
 
@@ -112,19 +186,31 @@ impl Cdt {
     /// Returns [`MathError::ConvergenceFailure`] if the point cannot be
     /// located in any triangle (should not happen for valid inputs).
     pub fn insert_point(&mut self, p: Point2) -> Result<usize, MathError> {
-        // Check for duplicate.
-        for (i, &v) in self.vertices.iter().enumerate() {
-            let d = p - v;
-            if d.length_squared() < DUP_TOL * DUP_TOL {
-                return Ok(i);
+        // Check for duplicate using spatial hash grid (O(1) amortized).
+        let cell = dup_grid_cell(p);
+        // Check the cell and its 8 neighbors to handle points near cell boundaries.
+        for dx in -1..=1_i64 {
+            for dy in -1..=1_i64 {
+                let neighbor = (cell.0 + dx, cell.1 + dy);
+                if let Some(indices) = self.dup_grid.get(&neighbor) {
+                    for &i in indices {
+                        let d = p - self.vertices[i];
+                        if d.length_squared() < DUP_TOL * DUP_TOL {
+                            return Ok(i);
+                        }
+                    }
+                }
             }
         }
 
         let vi = self.vertices.len();
         self.vertices.push(p);
+        self.vertex_tri.push(0); // will be updated by split_triangle/split_edge
+        self.dup_grid.entry(cell).or_default().push(vi);
 
         // Find the triangle containing the point.
         let (tri_idx, location) = self.locate_point(p)?;
+        self.last_located = tri_idx;
 
         match location {
             PointLocation::Inside => {
@@ -136,6 +222,58 @@ impl Cdt {
         }
 
         Ok(vi)
+    }
+
+    /// Bulk-insert points sorted by Hilbert curve for O(1) amortized locate.
+    ///
+    /// Returns a `Vec` where `result[original_index]` is the CDT vertex index.
+    /// Points near the Hilbert curve walk path are inserted together, so each
+    /// `locate_point` call starts close to the target triangle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MathError::ConvergenceFailure`] if any point cannot be located.
+    pub fn insert_points_hilbert(&mut self, points: &[Point2]) -> Result<Vec<usize>, MathError> {
+        if points.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Compute bounding box of input points.
+        let mut min_x = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for p in points {
+            min_x = min_x.min(p.x());
+            max_x = max_x.max(p.x());
+            min_y = min_y.min(p.y());
+            max_y = max_y.max(p.y());
+        }
+
+        let range = (max_x - min_x).max(max_y - min_y).max(1e-10);
+        let n = 1u32 << 16; // 65536 grid resolution
+        let scale = f64::from(n - 1) / range;
+
+        // Sort by Hilbert index for spatial locality.
+        let mut order: Vec<(u64, usize)> = points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let gx = ((p.x() - min_x) * scale) as u32;
+                let gy = ((p.y() - min_y) * scale) as u32;
+                (hilbert_xy_to_d(n, gx.min(n - 1), gy.min(n - 1)), i)
+            })
+            .collect();
+        order.sort_unstable_by_key(|&(h, _)| h);
+
+        // Insert in Hilbert order, storing results in original order.
+        let mut result = vec![0usize; points.len()];
+        for &(_, orig_idx) in &order {
+            let cdt_idx = self.insert_point(points[orig_idx])?;
+            result[orig_idx] = cdt_idx;
+        }
+
+        Ok(result)
     }
 
     /// Insert a constraint edge between two existing vertices.
@@ -254,22 +392,25 @@ impl Cdt {
         seed: Point2,
         constraints: &HashSet<(usize, usize)>,
     ) -> bool {
-        // Locate the non-removed triangle containing the seed point.
-        let seed_tri = self
-            .triangles
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| !t.removed)
-            .find(|(_, t)| {
-                let p0 = self.vertices[t.v[0]];
-                let p1 = self.vertices[t.v[1]];
-                let p2 = self.vertices[t.v[2]];
-                let d0 = orient2d(p0, p1, seed);
-                let d1 = orient2d(p1, p2, seed);
-                let d2 = orient2d(p2, p0, seed);
-                (d0 >= 0.0 && d1 >= 0.0 && d2 >= 0.0) || (d0 <= 0.0 && d1 <= 0.0 && d2 <= 0.0)
-            })
-            .map(|(i, _)| i);
+        // Use the walking point-location search (O(sqrt(n))) instead of
+        // linear scan (O(n)) to find the seed triangle.
+        let seed_tri = self.locate_point(seed).ok().map(|(i, _)| i).or_else(|| {
+            // Fallback: linear scan for removed/degenerate cases.
+            self.triangles
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| !t.removed)
+                .find(|(_, t)| {
+                    let p0 = self.vertices[t.v[0]];
+                    let p1 = self.vertices[t.v[1]];
+                    let p2 = self.vertices[t.v[2]];
+                    let d0 = orient2d(p0, p1, seed);
+                    let d1 = orient2d(p1, p2, seed);
+                    let d2 = orient2d(p2, p0, seed);
+                    (d0 >= 0.0 && d1 >= 0.0 && d2 >= 0.0) || (d0 <= 0.0 && d1 <= 0.0 && d2 <= 0.0)
+                })
+                .map(|(i, _)| i)
+        });
 
         let Some(start) = seed_tri else {
             return false;
@@ -432,15 +573,21 @@ enum PointLocation {
 }
 
 impl Cdt {
-    /// Locate the triangle containing point `p` by walking from the last
-    /// triangle.
+    /// Locate the triangle containing point `p` by walking from a hint
+    /// triangle (exploits spatial coherence for sequential insertions).
     fn locate_point(&self, p: Point2) -> Result<(usize, PointLocation), MathError> {
-        // Start from the last non-removed triangle.
-        let mut current = self
-            .triangles
-            .iter()
-            .rposition(|t| !t.removed)
-            .ok_or(MathError::ConvergenceFailure { iterations: 0 })?;
+        // Start from the last successfully located triangle for spatial coherence.
+        // Fall back to the last non-removed triangle if the hint is stale.
+        let mut current = if self.last_located < self.triangles.len()
+            && !self.triangles[self.last_located].removed
+        {
+            self.last_located
+        } else {
+            self.triangles
+                .iter()
+                .rposition(|t| !t.removed)
+                .ok_or(MathError::ConvergenceFailure { iterations: 0 })?
+        };
 
         let max_steps = self.triangles.len() * 2 + 10;
         for _ in 0..max_steps {
@@ -598,10 +745,22 @@ impl Cdt {
         // But we must still ensure it points to t0 in case it was modified.
         // Since t0 == tri_idx, no replace needed for adj2.
 
-        // Legalize edges.
-        self.legalize(t0, 2, vi); // edge opposite vi in t0 = edge (a,b) = adj0
-        self.legalize(t1, 2, vi); // edge opposite vi in t1 = edge (b,c) = adj1
-        self.legalize(t2, 2, vi); // edge opposite vi in t2 = edge (c,a) = adj2
+        // Update vertex→triangle index.
+        if vi < self.vertex_tri.len() {
+            self.vertex_tri[vi] = t0;
+        }
+        if a < self.vertex_tri.len() {
+            self.vertex_tri[a] = t0;
+        }
+        if b < self.vertex_tri.len() {
+            self.vertex_tri[b] = t1;
+        }
+        if c < self.vertex_tri.len() {
+            self.vertex_tri[c] = t2;
+        }
+
+        // Legalize all 3 outer edges in one batch call.
+        self.legalize_batch(&[(t0, 2), (t1, 2), (t2, 2)], vi);
     }
 
     /// Split a triangle along the edge at local index `edge_local`, inserting
@@ -707,10 +866,24 @@ impl Cdt {
             }
 
             // Legalize external edges.
-            self.legalize(t0, 2, vi); // across (opp, e0)
-            self.legalize(t1, 1, vi); // across (e1, opp)
-            self.legalize(t2, 2, vi); // across (opp2, e1)
-            self.legalize(t3, 1, vi); // across (e0, opp2)
+            // Update vertex→triangle index for all affected vertices.
+            if vi < self.vertex_tri.len() {
+                self.vertex_tri[vi] = t0;
+            }
+            if opp < self.vertex_tri.len() {
+                self.vertex_tri[opp] = t0;
+            }
+            if e0 < self.vertex_tri.len() {
+                self.vertex_tri[e0] = t0;
+            }
+            if e1 < self.vertex_tri.len() {
+                self.vertex_tri[e1] = t1;
+            }
+            if opp2 < self.vertex_tri.len() {
+                self.vertex_tri[opp2] = t2;
+            }
+
+            self.legalize_batch(&[(t0, 2), (t1, 1), (t2, 2), (t3, 1)], vi);
         } else {
             // No neighbor across the split edge — just split into 2.
             self.triangles[t0] = CdtTriangle {
@@ -725,6 +898,20 @@ impl Cdt {
                 removed: false,
             });
 
+            // Update vertex→triangle index.
+            if vi < self.vertex_tri.len() {
+                self.vertex_tri[vi] = t0;
+            }
+            if opp < self.vertex_tri.len() {
+                self.vertex_tri[opp] = t0;
+            }
+            if e0 < self.vertex_tri.len() {
+                self.vertex_tri[e0] = t0;
+            }
+            if e1 < self.vertex_tri.len() {
+                self.vertex_tri[e1] = t1;
+            }
+
             if let Some(a) = adj_opp_e0 {
                 self.replace_adj(a, tri_idx, t0);
             }
@@ -732,8 +919,7 @@ impl Cdt {
                 self.replace_adj(a, tri_idx, t1);
             }
 
-            self.legalize(t0, 2, vi);
-            self.legalize(t1, 1, vi);
+            self.legalize_batch(&[(t0, 2), (t1, 1)], vi);
         }
     }
 
@@ -750,11 +936,17 @@ impl Cdt {
         None
     }
 
+    /// Legalize multiple edges after point insertion.
+    fn legalize_batch(&mut self, initial: &[(usize, usize)], inserted_vertex: usize) {
+        for &(ti, el) in initial {
+            self.legalize(ti, el, inserted_vertex);
+        }
+    }
+
     /// Legalize the edge at local index `edge_local` of triangle `tri_idx`.
     ///
-    /// The edge opposite vertex `v[edge_local]` is checked against the
-    /// Delaunay criterion. If violated and not constrained, the edge is
-    /// flipped.
+    /// Recursively flips non-Delaunay edges until the local Delaunay property
+    /// is restored around the inserted vertex.
     fn legalize(&mut self, tri_idx: usize, edge_local: usize, inserted_vertex: usize) {
         let Some(adj) = self.triangles[tri_idx].adj[edge_local] else {
             return;
@@ -764,49 +956,38 @@ impl Cdt {
             return;
         }
 
-        let tri = &self.triangles[tri_idx];
-        let e0 = tri.v[(edge_local + 1) % 3];
-        let e1 = tri.v[(edge_local + 2) % 3];
+        let e0 = self.triangles[tri_idx].v[(edge_local + 1) % 3];
+        let e1 = self.triangles[tri_idx].v[(edge_local + 2) % 3];
 
         // Don't flip constrained edges.
         if self.constraints.contains(&sorted_pair(e0, e1)) {
             return;
         }
 
-        // Find the opposite vertex in the adjacent triangle.
         let opp_local = self.find_opposite_local(adj, e0, e1);
         let opp_vert = self.triangles[adj].v[opp_local];
 
-        // In-circle test: if opp_vert is inside the circumcircle of
-        // (v[0], v[1], v[2]) of tri_idx, flip.
         let a = self.vertices[self.triangles[tri_idx].v[0]];
         let b = self.vertices[self.triangles[tri_idx].v[1]];
         let c = self.vertices[self.triangles[tri_idx].v[2]];
         let d = self.vertices[opp_vert];
 
-        // in_circle returns positive if d is inside circumcircle of (a,b,c)
-        // when a,b,c are CCW.
-        if in_circle(a, b, c, d) > 0.0 {
+        if fast_in_circle(a, b, c, d) > 0.0 {
             self.flip_edge(tri_idx, edge_local, adj, opp_local);
 
-            // After flipping, recursively legalize the two affected edges.
-            // Find which edges to re-check (the ones that were outer edges
-            // of the original quad).
-            // After flip, tri_idx and adj have been modified.
-            // We need to legalize the edges that now face the inserted vertex.
+            // After flipping, legalize the two outer edges that now face
+            // the inserted vertex.
             self.legalize_toward(tri_idx, inserted_vertex);
             self.legalize_toward(adj, inserted_vertex);
         }
     }
 
-    /// Legalize the edge of `tri_idx` that faces away from `vi`
-    /// (the edge not containing `vi`).
+    /// Legalize the edge of `tri_idx` that faces away from `vi`.
     fn legalize_toward(&mut self, tri_idx: usize, vi: usize) {
         if self.triangles[tri_idx].removed {
             return;
         }
         let tri = &self.triangles[tri_idx];
-        // Find the local index of vi in this triangle.
         let local = if tri.v[0] == vi {
             0
         } else if tri.v[1] == vi {
@@ -814,9 +995,8 @@ impl Cdt {
         } else if tri.v[2] == vi {
             2
         } else {
-            return; // vi is not in this triangle
+            return;
         };
-        // The edge opposite vi is at adj[local].
         self.legalize(tri_idx, local, vi);
     }
 
@@ -870,6 +1050,20 @@ impl Cdt {
         }
         if let Some(a) = a_adj_prev {
             self.replace_adj(a, tri_a, tri_b);
+        }
+
+        // Update vertex→triangle hints for affected vertices.
+        if a_opp < self.vertex_tri.len() {
+            self.vertex_tri[a_opp] = tri_a;
+        }
+        if b_opp < self.vertex_tri.len() {
+            self.vertex_tri[b_opp] = tri_b;
+        }
+        if a_e0 < self.vertex_tri.len() {
+            self.vertex_tri[a_e0] = tri_b;
+        }
+        if a_e1 < self.vertex_tri.len() {
+            self.vertex_tri[a_e1] = tri_a;
         }
     }
 
@@ -975,7 +1169,13 @@ impl Cdt {
     }
 
     /// Check if an edge between v0 and v1 exists in the triangulation.
+    /// Uses the vertex→triangle hint to walk the fan around v0 in O(degree).
     fn edge_exists(&self, v0: usize, v1: usize) -> bool {
+        // Try fast fan walk first using vertex_tri hint.
+        if let Some(result) = self.edge_exists_fan(v0, v1) {
+            return result;
+        }
+        // Fallback: linear scan (only if hint is stale).
         for tri in &self.triangles {
             if tri.removed {
                 continue;
@@ -991,8 +1191,85 @@ impl Cdt {
         false
     }
 
+    /// Walk the triangle fan around vertex v0 checking for edge (v0, v1).
+    /// Returns Some(bool) if successful, None if the hint is stale.
+    fn edge_exists_fan(&self, v0: usize, v1: usize) -> Option<bool> {
+        if v0 >= self.vertex_tri.len() {
+            return None;
+        }
+        let start = self.vertex_tri[v0];
+        if start >= self.triangles.len() || self.triangles[start].removed {
+            return None;
+        }
+        // Verify the hint triangle actually contains v0.
+        let tri = &self.triangles[start];
+        let v0_local = tri.v.iter().position(|&v| v == v0)?;
+
+        // Walk around v0 in one direction, then the other.
+        // Check each triangle for the edge (v0, v1).
+        let check_tri = |tri: &CdtTriangle, v0_local: usize| -> bool {
+            let a = tri.v[(v0_local + 1) % 3];
+            let b = tri.v[(v0_local + 2) % 3];
+            a == v1 || b == v1
+        };
+
+        if check_tri(tri, v0_local) {
+            return Some(true);
+        }
+
+        // Walk clockwise (follow adj to the "left" of v0).
+        let mut current = start;
+        let mut cur_v0_local = v0_local;
+        let max_steps = self.triangles.len();
+        for _ in 0..max_steps {
+            // In triangle (v0, a, b) with v0 at position v0_local:
+            //   adj[v0_local] is across edge (a, b) — doesn't touch v0
+            //   adj[(v0_local+1)%3] is across edge (b, v0) — touches v0
+            //   adj[(v0_local+2)%3] is across edge (v0, a) — touches v0
+            let next = self.triangles[current].adj[(cur_v0_local + 1) % 3];
+            match next {
+                Some(ni) if ni != start && !self.triangles[ni].removed => {
+                    current = ni;
+                    let t = &self.triangles[ni];
+                    cur_v0_local = t.v.iter().position(|&v| v == v0)?;
+                    if check_tri(t, cur_v0_local) {
+                        return Some(true);
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        // Walk counter-clockwise.
+        current = start;
+        cur_v0_local = v0_local;
+        for _ in 0..max_steps {
+            let next = self.triangles[current].adj[(cur_v0_local + 2) % 3];
+            match next {
+                Some(ni) if ni != start && !self.triangles[ni].removed => {
+                    current = ni;
+                    let t = &self.triangles[ni];
+                    cur_v0_local = t.v.iter().position(|&v| v == v0)?;
+                    if check_tri(t, cur_v0_local) {
+                        return Some(true);
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        Some(false)
+    }
+
     /// Find a non-constrained edge that intersects segment (v0, v1).
+    /// Walks from v0 toward v1 using triangle adjacency (O(k) where k =
+    /// number of crossed edges) instead of scanning all triangles.
     fn find_intersecting_edge(&self, v0: usize, v1: usize) -> Option<(usize, usize)> {
+        // Try walking from v0 first (O(degree) amortized).
+        if let Some(result) = self.walk_for_intersecting_edge(v0, v1, None) {
+            return Some(result);
+        }
+        // Fallback: linear scan (only when walk fails).
         let p0 = self.vertices[v0];
         let p1 = self.vertices[v1];
 
@@ -1004,7 +1281,6 @@ impl Cdt {
                 let ea = tri.v[(local + 1) % 3];
                 let eb = tri.v[(local + 2) % 3];
 
-                // Skip edges that share a vertex with the constraint.
                 if ea == v0 || ea == v1 || eb == v0 || eb == v1 {
                     continue;
                 }
@@ -1020,7 +1296,73 @@ impl Cdt {
         None
     }
 
-    /// Find an intersecting edge that is different from (skip_e0, skip_e1).
+    /// Walk the triangle fan around `v0` toward `v1`, returning the first
+    /// intersecting edge. If `skip` is provided, edges matching that pair
+    /// are ignored.
+    fn walk_for_intersecting_edge(
+        &self,
+        v0: usize,
+        v1: usize,
+        skip: Option<(usize, usize)>,
+    ) -> Option<(usize, usize)> {
+        if v0 >= self.vertex_tri.len() {
+            return None;
+        }
+        let start = self.vertex_tri[v0];
+        if start >= self.triangles.len() || self.triangles[start].removed {
+            return None;
+        }
+        if !self.triangles[start].v.contains(&v0) {
+            return None;
+        }
+
+        let p0 = self.vertices[v0];
+        let p1 = self.vertices[v1];
+
+        let mut current = start;
+        let max_steps = self.triangles.len();
+        for _ in 0..max_steps {
+            let t = &self.triangles[current];
+            if t.removed {
+                break;
+            }
+            let v0_local = match t.v.iter().position(|&v| v == v0) {
+                Some(l) => l,
+                None => break,
+            };
+            let ea = t.v[(v0_local + 1) % 3];
+            let eb = t.v[(v0_local + 2) % 3];
+            let should_skip = skip.is_some_and(|s| sorted_pair(ea, eb) == s);
+            if ea != v1 && eb != v1 && !should_skip {
+                let pa = self.vertices[ea];
+                let pb = self.vertices[eb];
+                if segments_properly_intersect(p0, p1, pa, pb) {
+                    return Some((current, v0_local));
+                }
+            }
+            // Walk in the direction that the target point lies.
+            let va = self.vertices[ea];
+            let side = orient2d(p0, p1, va);
+            let next_adj = if side >= 0.0 {
+                t.adj[(v0_local + 2) % 3]
+            } else {
+                t.adj[(v0_local + 1) % 3]
+            };
+            match next_adj {
+                Some(ni) if ni != start && !self.triangles[ni].removed => {
+                    current = ni;
+                }
+                _ => break,
+            }
+        }
+
+        None
+    }
+
+    /// Find an intersecting edge different from (skip_e0, skip_e1).
+    ///
+    /// Tries multiple strategies: walk from v1 (reverse), walk from v0 with
+    /// skip, then falls back to linear scan.
     fn find_other_intersecting_edge(
         &self,
         v0: usize,
@@ -1028,9 +1370,26 @@ impl Cdt {
         skip_e0: usize,
         skip_e1: usize,
     ) -> Option<(usize, usize)> {
+        let skip = sorted_pair(skip_e0, skip_e1);
+
+        // Strategy 1: Walk from v1 toward v0 (reverse direction).
+        if let Some(result) = self.walk_for_intersecting_edge(v1, v0, None) {
+            let tri = &self.triangles[result.0];
+            let ea = tri.v[(result.1 + 1) % 3];
+            let eb = tri.v[(result.1 + 2) % 3];
+            if sorted_pair(ea, eb) != skip {
+                return Some(result);
+            }
+        }
+
+        // Strategy 2: Walk from v0 with skip.
+        if let Some(result) = self.walk_for_intersecting_edge(v0, v1, Some(skip)) {
+            return Some(result);
+        }
+
+        // Strategy 3: Linear scan fallback (rare).
         let p0 = self.vertices[v0];
         let p1 = self.vertices[v1];
-
         for (ti, tri) in self.triangles.iter().enumerate() {
             if tri.removed {
                 continue;
@@ -1038,19 +1397,14 @@ impl Cdt {
             for local in 0..3 {
                 let ea = tri.v[(local + 1) % 3];
                 let eb = tri.v[(local + 2) % 3];
-
                 if ea == v0 || ea == v1 || eb == v0 || eb == v1 {
                     continue;
                 }
-
-                // Skip the edge we already tried.
-                if sorted_pair(ea, eb) == sorted_pair(skip_e0, skip_e1) {
+                if sorted_pair(ea, eb) == skip {
                     continue;
                 }
-
                 let pa = self.vertices[ea];
                 let pb = self.vertices[eb];
-
                 if segments_properly_intersect(p0, p1, pa, pb) {
                     return Some((ti, local));
                 }
@@ -1164,6 +1518,40 @@ fn segments_properly_intersect(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -
         return true;
     }
     false
+}
+
+/// Map a 2D point to a grid cell for duplicate detection.
+/// Cell size is much larger than `DUP_TOL` so neighbors cover the tolerance radius.
+#[allow(clippy::cast_possible_truncation)]
+fn dup_grid_cell(p: Point2) -> (i64, i64) {
+    // Cell size ~1e-9: 1000× DUP_TOL to keep neighbor checks cheap while
+    // ensuring points within DUP_TOL always land in the same or adjacent cells.
+    const CELL_INV: f64 = 1e9;
+    (
+        (p.x() * CELL_INV).floor() as i64,
+        (p.y() * CELL_INV).floor() as i64,
+    )
+}
+
+/// Map (x, y) in [0, n) × [0, n) to a Hilbert curve index (n must be power of 2).
+fn hilbert_xy_to_d(n: u32, mut x: u32, mut y: u32) -> u64 {
+    let mut d: u64 = 0;
+    let mut s = n / 2;
+    while s > 0 {
+        let rx = u32::from(x & s > 0);
+        let ry = u32::from(y & s > 0);
+        d += u64::from(s) * u64::from(s) * u64::from((3 * rx) ^ ry);
+        // Rotate quadrant.
+        if ry == 0 {
+            if rx == 1 {
+                x = 2u32.wrapping_mul(s).wrapping_sub(1).wrapping_sub(x);
+                y = 2u32.wrapping_mul(s).wrapping_sub(1).wrapping_sub(y);
+            }
+            std::mem::swap(&mut x, &mut y);
+        }
+        s /= 2;
+    }
+    d
 }
 
 // ---------------------------------------------------------------------------
