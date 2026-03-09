@@ -266,7 +266,23 @@ pub fn fillet(
         let v_start = edge.start();
         let v_end = edge.end();
 
-        let face_list = &edge_to_faces[&edge_id.index()];
+        let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: format!(
+                    "fillet: edge {} not found in edge-to-face map",
+                    edge_id.index()
+                ),
+            });
+        };
+        if face_list.len() < 2 {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: format!(
+                    "fillet: edge {} has {} adjacent faces, expected 2",
+                    edge_id.index(),
+                    face_list.len()
+                ),
+            });
+        }
         let f1 = face_list[0];
         let f2 = face_list[1];
 
@@ -510,7 +526,12 @@ pub fn fillet_rolling_ball(
         let p_start = topo.vertex(edge.start())?.point();
         let p_end = topo.vertex(edge.end())?.point();
 
-        let face_list = &edge_to_faces[&edge_id.index()];
+        let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
+            continue; // Edge not in map, skip
+        };
+        if face_list.len() < 2 {
+            continue; // Non-manifold edge, skip
+        }
         let f1 = face_list[0];
         let f2 = face_list[1];
         let n1 = face_polygons[&f1.index()].normal;
@@ -1064,12 +1085,12 @@ pub fn fillet_variable(
         let p_start = topo.vertex(edge.start())?.point();
         let p_end = topo.vertex(edge.end())?.point();
 
-        let face_list = edge_to_faces.get(&edge_id.index());
-        if face_list.is_none() || face_list.is_some_and(|f| f.len() < 2) {
+        let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
+            continue;
+        };
+        if face_list.len() < 2 {
             continue;
         }
-        let empty_faces = vec![];
-        let face_list = face_list.unwrap_or(&empty_faces);
         let f1 = face_list[0];
         let f2 = face_list[1];
 

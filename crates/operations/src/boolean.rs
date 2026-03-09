@@ -2180,6 +2180,37 @@ struct FaceSnapshot {
     reversed: bool,
 }
 
+/// Build `edge_curves` for a face polygon by examining the source face's wire edges.
+///
+/// When the outer wire contains a single closed Circle or Ellipse edge, the
+/// polygon vertices all came from sampling that edge. Returns
+/// `vec![Some(curve)]` (length 1) to signal a single-closed-curve boundary.
+/// Otherwise returns `vec![None; n]` for n polygon vertices.
+fn edge_curves_from_face(
+    topo: &Topology,
+    face_id: FaceId,
+    n_verts: usize,
+) -> Vec<Option<EdgeCurve>> {
+    let Ok(face) = topo.face(face_id) else {
+        return vec![None; n_verts];
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return vec![None; n_verts];
+    };
+    let edges = wire.edges();
+    // Single closed edge that's a Circle or Ellipse → single-curve boundary.
+    if edges.len() == 1 {
+        if let Ok(edge) = topo.edge(edges[0].edge()) {
+            if edge.start() == edge.end()
+                && matches!(edge.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+            {
+                return vec![Some(edge.curve().clone())];
+            }
+        }
+    }
+    vec![None; n_verts]
+}
+
 /// Analytic face fragment preserving the original surface type.
 struct AnalyticFragment {
     /// Polygon boundary in 3D (for classification and planar assembly fallback).
@@ -2674,7 +2705,7 @@ fn analytic_boolean(
                 normal: snap.normal,
                 d: snap.d,
                 source: Source::A,
-                edge_curves: vec![None; snap.vertices.len()],
+                edge_curves: edge_curves_from_face(topo, snap.id, snap.vertices.len()),
                 source_reversed: snap.reversed,
             });
             pre_classifications.insert(holed_idx, FaceClass::Outside);
@@ -2736,7 +2767,7 @@ fn analytic_boolean(
                 normal: snap.normal,
                 d: snap.d,
                 source: Source::A,
-                edge_curves: vec![None; snap.vertices.len()],
+                edge_curves: edge_curves_from_face(topo, snap.id, snap.vertices.len()),
                 source_reversed: snap.reversed,
             });
             let source_face = topo.face(snap.id)?;
@@ -2842,7 +2873,7 @@ fn analytic_boolean(
                 normal: snap.normal,
                 d: snap.d,
                 source: Source::B,
-                edge_curves: vec![None; snap.vertices.len()],
+                edge_curves: edge_curves_from_face(topo, snap.id, snap.vertices.len()),
                 source_reversed: snap.reversed,
             });
             pre_classifications.insert(holed_idx, FaceClass::Outside);
@@ -2901,7 +2932,7 @@ fn analytic_boolean(
                 normal: snap.normal,
                 d: snap.d,
                 source: Source::B,
-                edge_curves: vec![None; snap.vertices.len()],
+                edge_curves: edge_curves_from_face(topo, snap.id, snap.vertices.len()),
                 source_reversed: snap.reversed,
             });
             let source_face = topo.face(snap.id)?;
@@ -3017,39 +3048,80 @@ fn analytic_boolean(
 
         // Build edges — deduplicate by ordered vertex-index pair so adjacent
         // faces share edge IDs (required for fillet/chamfer adjacency queries).
-        let mut oriented_edges = Vec::with_capacity(n);
-        for i in 0..n {
-            let j = (i + 1) % n;
-            let vi_idx = vert_ids[i].index();
-            let vj_idx = vert_ids[j].index();
-            let (key_min, key_max) = if vi_idx <= vj_idx {
-                (vi_idx, vj_idx)
-            } else {
-                (vj_idx, vi_idx)
-            };
-            let is_forward = vi_idx <= vj_idx;
+        //
+        // Special handling for closed-curve boundaries and cylinder barrels:
+        // instead of creating N line edges per circle/ellipse boundary, create
+        // proper closed Circle/Ellipse edges to match canonical B-Rep topology.
+        let is_single_closed_curve = frag.edge_curves.len() == 1
+            && matches!(
+                frag.edge_curves[0],
+                Some(EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+            );
 
-            let edge_id = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
-                let edge_curve = if frag.edge_curves.len() == 1 {
-                    frag.edge_curves[0].clone().unwrap_or(EdgeCurve::Line)
-                } else if i < frag.edge_curves.len() {
-                    frag.edge_curves[i].clone().unwrap_or(EdgeCurve::Line)
+        let wire_id = if let FaceSurface::Cylinder(cyl) = &frag.surface {
+            build_cylinder_barrel_wire(
+                topo,
+                cyl,
+                &verts,
+                &mut vertex_map,
+                &mut edge_map,
+                resolution,
+                tol,
+            )?
+        } else if is_single_closed_curve {
+            // Disc fragment: boundary is a single closed curve (circle/ellipse).
+            // Create one closed edge instead of N line edges.
+            let ec = frag.edge_curves[0].clone().unwrap_or(EdgeCurve::Line);
+            let seam_pt = verts[0];
+            let key = (
+                quantize(seam_pt.x(), resolution),
+                quantize(seam_pt.y(), resolution),
+                quantize(seam_pt.z(), resolution),
+            );
+            let vid = *vertex_map
+                .entry(key)
+                .or_insert_with(|| topo.vertices.alloc(Vertex::new(seam_pt, tol.linear)));
+            let edge_key = (vid.index(), vid.index());
+            let eid = *edge_map
+                .entry(edge_key)
+                .or_insert_with(|| topo.edges.alloc(Edge::new(vid, vid, ec)));
+            let wire = Wire::new(vec![OrientedEdge::new(eid, true)], true)
+                .map_err(crate::OperationsError::Topology)?;
+            topo.wires.alloc(wire)
+        } else {
+            let mut oriented_edges = Vec::with_capacity(n);
+            for i in 0..n {
+                let j = (i + 1) % n;
+                let vi_idx = vert_ids[i].index();
+                let vj_idx = vert_ids[j].index();
+                let (key_min, key_max) = if vi_idx <= vj_idx {
+                    (vi_idx, vj_idx)
                 } else {
-                    EdgeCurve::Line
+                    (vj_idx, vi_idx)
                 };
-                let (start, end) = if vi_idx <= vj_idx {
-                    (vert_ids[i], vert_ids[j])
-                } else {
-                    (vert_ids[j], vert_ids[i])
-                };
-                topo.edges.alloc(Edge::new(start, end, edge_curve))
-            });
+                let is_forward = vi_idx <= vj_idx;
 
-            oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
-        }
+                let edge_id = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
+                    let edge_curve = if frag.edge_curves.len() == 1 {
+                        frag.edge_curves[0].clone().unwrap_or(EdgeCurve::Line)
+                    } else if i < frag.edge_curves.len() {
+                        frag.edge_curves[i].clone().unwrap_or(EdgeCurve::Line)
+                    } else {
+                        EdgeCurve::Line
+                    };
+                    let (start, end) = if vi_idx <= vj_idx {
+                        (vert_ids[i], vert_ids[j])
+                    } else {
+                        (vert_ids[j], vert_ids[i])
+                    };
+                    topo.edges.alloc(Edge::new(start, end, edge_curve))
+                });
 
-        let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
-        let wire_id = topo.wires.alloc(wire);
+                oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
+            }
+            let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
+            topo.wires.alloc(wire)
+        };
 
         // Build inner wires for holed faces (new contained curves + existing holes).
         let mut inner_wire_ids = Vec::new();
@@ -3060,56 +3132,86 @@ fn analytic_boolean(
         }
 
         // 2. Create new inner wires from contained intersection curves.
+        //    For Circle/Ellipse curves, create a single closed edge instead
+        //    of N line segments — this produces proper B-Rep topology.
         if let Some(inner_curves) = holed_face_inner_curves.get(&idx) {
             for ec in inner_curves {
-                // Sample the curve and REVERSE for CW winding (hole convention).
-                let mut hole_pts = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES);
-                if flip {
-                    // If the face is flipped, don't reverse the hole
-                    // (the outer wire is already reversed).
+                let hw_id = if matches!(ec, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
+                    // Use the seam point (t=0) as the single vertex for the
+                    // closed edge. This matches the barrel boundary vertex
+                    // so the edge is shared between the hole wire and the
+                    // adjacent cylinder barrel face.
+                    let seam_pt = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES)[0];
+                    let key = (
+                        quantize(seam_pt.x(), resolution),
+                        quantize(seam_pt.y(), resolution),
+                        quantize(seam_pt.z(), resolution),
+                    );
+                    let vid = *vertex_map
+                        .entry(key)
+                        .or_insert_with(|| topo.vertices.alloc(Vertex::new(seam_pt, tol.linear)));
+                    let edge_key = (vid.index(), vid.index());
+                    let eid = *edge_map
+                        .entry(edge_key)
+                        .or_insert_with(|| topo.edges.alloc(Edge::new(vid, vid, ec.clone())));
+                    // Hole wires wind CW (reversed circle). When the face is
+                    // flipped, the outer wire is already reversed so the hole
+                    // keeps its natural (forward) direction.
+                    let hw = Wire::new(vec![OrientedEdge::new(eid, flip)], true)
+                        .map_err(crate::OperationsError::Topology)?;
+                    topo.wires.alloc(hw)
                 } else {
-                    hole_pts.reverse();
-                }
-
-                let hole_vert_ids: Vec<VertexId> = hole_pts
-                    .iter()
-                    .map(|p| {
-                        let key = (
-                            quantize(p.x(), resolution),
-                            quantize(p.y(), resolution),
-                            quantize(p.z(), resolution),
-                        );
-                        *vertex_map
-                            .entry(key)
-                            .or_insert_with(|| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
-                    })
-                    .collect();
-
-                let hm = hole_vert_ids.len();
-                let mut hole_edges = Vec::with_capacity(hm);
-                for i in 0..hm {
-                    let j = (i + 1) % hm;
-                    let vi_idx = hole_vert_ids[i].index();
-                    let vj_idx = hole_vert_ids[j].index();
-                    let is_forward = vi_idx <= vj_idx;
-                    let key = if is_forward {
-                        (vi_idx, vj_idx)
+                    // Non-circle/ellipse: fall back to sampled polygon edges.
+                    let mut hole_pts = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES);
+                    if flip {
+                        // If the face is flipped, don't reverse the hole
+                        // (the outer wire is already reversed).
                     } else {
-                        (vj_idx, vi_idx)
-                    };
+                        hole_pts.reverse();
+                    }
 
-                    let eid = *edge_map.entry(key).or_insert_with(|| {
-                        let (start, end) = if is_forward {
-                            (hole_vert_ids[i], hole_vert_ids[j])
+                    let hole_vert_ids: Vec<VertexId> = hole_pts
+                        .iter()
+                        .map(|p| {
+                            let key = (
+                                quantize(p.x(), resolution),
+                                quantize(p.y(), resolution),
+                                quantize(p.z(), resolution),
+                            );
+                            *vertex_map
+                                .entry(key)
+                                .or_insert_with(|| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+                        })
+                        .collect();
+
+                    let hm = hole_vert_ids.len();
+                    let mut hole_edges = Vec::with_capacity(hm);
+                    for i in 0..hm {
+                        let j = (i + 1) % hm;
+                        let vi_idx = hole_vert_ids[i].index();
+                        let vj_idx = hole_vert_ids[j].index();
+                        let is_forward = vi_idx <= vj_idx;
+                        let key = if is_forward {
+                            (vi_idx, vj_idx)
                         } else {
-                            (hole_vert_ids[j], hole_vert_ids[i])
+                            (vj_idx, vi_idx)
                         };
-                        topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
-                    });
-                    hole_edges.push(OrientedEdge::new(eid, is_forward));
-                }
-                let hw = Wire::new(hole_edges, true).map_err(crate::OperationsError::Topology)?;
-                inner_wire_ids.push(topo.wires.alloc(hw));
+
+                        let eid = *edge_map.entry(key).or_insert_with(|| {
+                            let (start, end) = if is_forward {
+                                (hole_vert_ids[i], hole_vert_ids[j])
+                            } else {
+                                (hole_vert_ids[j], hole_vert_ids[i])
+                            };
+                            topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                        });
+                        hole_edges.push(OrientedEdge::new(eid, is_forward));
+                    }
+                    let hw =
+                        Wire::new(hole_edges, true).map_err(crate::OperationsError::Topology)?;
+                    topo.wires.alloc(hw)
+                };
+                inner_wire_ids.push(hw_id);
             }
         }
 
@@ -3826,6 +3928,106 @@ fn create_band_fragments(
             source_reversed,
         });
     }
+}
+
+/// Build a proper cylinder barrel wire with Circle edges + seam line.
+///
+/// Cylinder barrel fragments are represented as polygons with layout:
+///   `bot[0..n] ++ top_reversed[0..n]`  (2n vertices total)
+/// where n = `CLOSED_CURVE_SAMPLES`. This function consolidates those 2n
+/// line edges into 2 Circle edges + 1 seam Line (3 unique edges, 4 oriented),
+/// matching the canonical B-Rep topology for a cylinder lateral face.
+#[allow(clippy::too_many_arguments)]
+fn build_cylinder_barrel_wire(
+    topo: &mut Topology,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+    verts: &[Point3],
+    vertex_map: &mut HashMap<(i64, i64, i64), VertexId>,
+    edge_map: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
+    resolution: f64,
+    tol: Tolerance,
+) -> Result<WireId, crate::OperationsError> {
+    let n_half = verts.len() / 2;
+
+    // The polygon layout is: bot[0..n_half] + top_reversed[0..n_half].
+    // bot[0] is at u=0 on the bottom circle; verts[2n-1] = top[0] is at u=0 on the top circle.
+    let bot_seam_pos = verts[0];
+    let top_seam_pos = verts[verts.len() - 1];
+
+    // Compute v-levels from vertex positions on the cylinder axis.
+    let v_bot = cyl.axis().dot(bot_seam_pos - cyl.origin());
+    let v_top = cyl.axis().dot(top_seam_pos - cyl.origin());
+
+    // Create Circle3D at each level.
+    let bot_center = cyl.origin() + cyl.axis() * v_bot;
+    let top_center = cyl.origin() + cyl.axis() * v_top;
+    let bot_circle = brepkit_math::curves::Circle3D::new(bot_center, cyl.axis(), cyl.radius())
+        .map_err(crate::OperationsError::Math)?;
+    let top_circle = brepkit_math::curves::Circle3D::new(top_center, cyl.axis(), cyl.radius())
+        .map_err(crate::OperationsError::Math)?;
+
+    // Create/lookup vertices at the seam points.
+    let bot_vid = *vertex_map
+        .entry((
+            quantize(bot_seam_pos.x(), resolution),
+            quantize(bot_seam_pos.y(), resolution),
+            quantize(bot_seam_pos.z(), resolution),
+        ))
+        .or_insert_with(|| topo.vertices.alloc(Vertex::new(bot_seam_pos, tol.linear)));
+    let top_vid = *vertex_map
+        .entry((
+            quantize(top_seam_pos.x(), resolution),
+            quantize(top_seam_pos.y(), resolution),
+            quantize(top_seam_pos.z(), resolution),
+        ))
+        .or_insert_with(|| topo.vertices.alloc(Vertex::new(top_seam_pos, tol.linear)));
+
+    // Create/lookup closed Circle edges — dedup key is (v, v) for closed edges.
+    let bot_edge = *edge_map
+        .entry((bot_vid.index(), bot_vid.index()))
+        .or_insert_with(|| {
+            topo.edges
+                .alloc(Edge::new(bot_vid, bot_vid, EdgeCurve::Circle(bot_circle)))
+        });
+    let top_edge = *edge_map
+        .entry((top_vid.index(), top_vid.index()))
+        .or_insert_with(|| {
+            topo.edges
+                .alloc(Edge::new(top_vid, top_vid, EdgeCurve::Circle(top_circle)))
+        });
+
+    // Create/lookup seam line edge.
+    let (seam_key_min, seam_key_max) = if bot_vid.index() <= top_vid.index() {
+        (bot_vid.index(), top_vid.index())
+    } else {
+        (top_vid.index(), bot_vid.index())
+    };
+    let seam_fwd = bot_vid.index() <= top_vid.index();
+    let seam_edge = *edge_map
+        .entry((seam_key_min, seam_key_max))
+        .or_insert_with(|| {
+            let (start, end) = if seam_fwd {
+                (bot_vid, top_vid)
+            } else {
+                (top_vid, bot_vid)
+            };
+            topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+        });
+
+    // Wire: bot_circle(fwd) → seam(fwd) → top_circle(rev) → seam(rev)
+    // This matches the canonical cylinder lateral wire from make_cylinder.
+    let _ = n_half; // suppress unused variable warning
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(bot_edge, true),
+            OrientedEdge::new(seam_edge, seam_fwd),
+            OrientedEdge::new(top_edge, false),
+            OrientedEdge::new(seam_edge, !seam_fwd),
+        ],
+        true,
+    )
+    .map_err(crate::OperationsError::Topology)?;
+    Ok(topo.wires.alloc(wire))
 }
 
 /// Sample an `EdgeCurve` into N points.
@@ -4950,5 +5152,44 @@ mod tests {
         let t_full = Instant::now();
         let _ = boolean(&mut topo, BooleanOp::Fuse, current, piece).unwrap();
         eprintln!("  full_boolean step 9: {:?}", t_full.elapsed());
+    }
+
+    /// Verify that `cut(box, cylinder)` produces a reasonable edge count
+    /// with proper Circle edges (not tessellated into N line segments).
+    #[test]
+    fn box_cut_cylinder_edge_count() {
+        let mut topo = Topology::new();
+
+        let b = crate::primitives::make_box(&mut topo, 40.0, 20.0, 5.0).unwrap();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+
+        let mat = brepkit_math::mat::Mat4::translation(20.0, 10.0, 0.0);
+        let hole = crate::copy::copy_solid(&mut topo, cyl).unwrap();
+        crate::transform::transform_solid(&mut topo, hole, &mat).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Cut, b, hole).unwrap();
+
+        let edges = brepkit_topology::explorer::solid_edges(&topo, result).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+
+        // 7 faces: 6 planar (4 sides + top/bottom with holes) + 1 cylinder barrel
+        assert_eq!(faces.len(), 7, "expected 7 faces for box-cylinder cut");
+
+        // ~16 edges: 12 box edges + 2 circle edges + 1 seam + maybe 1 extra
+        assert!(
+            edges.len() <= 20,
+            "expected ~16 edges for box-cylinder cut, got {} (was 142 before fix)",
+            edges.len()
+        );
+
+        // Verify Circle edges exist (not tessellated to line segments)
+        let circle_count = edges
+            .iter()
+            .filter(|&&eid| matches!(topo.edge(eid).unwrap().curve(), EdgeCurve::Circle(_)))
+            .count();
+        assert!(
+            circle_count >= 2,
+            "expected at least 2 Circle edges, got {circle_count}"
+        );
     }
 }

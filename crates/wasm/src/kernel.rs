@@ -576,41 +576,61 @@ impl BrepKernel {
         // blend surfaces. Falls back to the planar fillet if rolling-ball fails.
         // If the full set of edges fails (e.g. edges adjacent to NURBS faces from
         // a prior fillet), filter to edges between two planar faces and retry.
-        let result = brepkit_operations::fillet::fillet_rolling_ball(
-            &mut self.topo,
-            solid_id,
-            &edge_ids,
-            radius,
-        )
-        .or_else(|_| {
-            brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)
-        });
-        let result = if let Ok(r) = result {
-            r
-        } else {
-            // Filter to edges where both adjacent faces are planar.
-            let planar_edges = filter_planar_edges(&self.topo, solid_id, &edge_ids)?;
-            if planar_edges.is_empty() {
-                // No planar-adjacent edges to fillet; return the solid unchanged.
-                solid_id
-            } else {
-                brepkit_operations::fillet::fillet_rolling_ball(
+        //
+        // Wrap in catch_unwind to prevent panics from corrupting kernel state.
+        // Without this, a panic during fillet leaves the RefCell borrow unreleased,
+        // making all subsequent kernel operations fail with "recursive use".
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
+                let result = brepkit_operations::fillet::fillet_rolling_ball(
                     &mut self.topo,
                     solid_id,
-                    &planar_edges,
+                    &edge_ids,
                     radius,
                 )
                 .or_else(|_| {
-                    brepkit_operations::fillet::fillet(
-                        &mut self.topo,
-                        solid_id,
-                        &planar_edges,
-                        radius,
-                    )
-                })?
+                    brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)
+                });
+                let solid = if let Ok(r) = result {
+                    r
+                } else {
+                    // Filter to edges where both adjacent faces are planar.
+                    let planar_edges = filter_planar_edges(&self.topo, solid_id, &edge_ids)?;
+                    if planar_edges.is_empty() {
+                        // No planar-adjacent edges to fillet; return the solid unchanged.
+                        solid_id
+                    } else {
+                        brepkit_operations::fillet::fillet_rolling_ball(
+                            &mut self.topo,
+                            solid_id,
+                            &planar_edges,
+                            radius,
+                        )
+                        .or_else(|_| {
+                            brepkit_operations::fillet::fillet(
+                                &mut self.topo,
+                                solid_id,
+                                &planar_edges,
+                                radius,
+                            )
+                        })?
+                    }
+                };
+                Ok(solid_id_to_u32(solid))
+            }));
+        match result {
+            Ok(inner) => inner,
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    format!("Fillet operation panicked: {s}")
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    format!("Fillet operation panicked: {s}")
+                } else {
+                    "Fillet operation panicked (unknown cause)".to_string()
+                };
+                Err(JsError::new(&msg))
             }
-        };
-        Ok(solid_id_to_u32(result))
+        }
     }
 
     // ── Operations ─────────────────────────────────────────────────
