@@ -309,7 +309,7 @@ impl StepWriteContext {
                 self.write_entity(
                     cid,
                     "CIRCLE",
-                    &format!("'', #{placement}, {}", fmt_f64(circle.radius())),
+                    &format!("'', #{placement}, {})", fmt_f64(circle.radius())),
                 );
                 cid
             }
@@ -324,7 +324,7 @@ impl StepWriteContext {
                     eid,
                     "ELLIPSE",
                     &format!(
-                        "'', #{placement}, {}, {}",
+                        "'', #{placement}, {}, {})",
                         fmt_f64(ellipse.semi_major()),
                         fmt_f64(ellipse.semi_minor())
                     ),
@@ -854,5 +854,49 @@ mod tests {
             step_str.contains("CONICAL_SURFACE"),
             "STEP export should contain CONICAL_SURFACE entity"
         );
+    }
+
+    #[test]
+    fn step_circle_entities_well_formed() {
+        let mut topo = Topology::new();
+        let solid = brepkit_operations::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+
+        let step_str = write_step(&topo, &[solid]).unwrap();
+
+        // Every CIRCLE entity line should end with ");".
+        for line in step_str.lines() {
+            if line.contains("= CIRCLE(") {
+                assert!(
+                    line.trim_end().ends_with(");"),
+                    "CIRCLE entity should end with ');' but got: {line}"
+                );
+            }
+        }
+    }
+
+    /// Verify that every entity line in the STEP DATA section is properly
+    /// closed with ");".
+    #[test]
+    fn step_all_entities_properly_closed() {
+        let mut topo = Topology::new();
+        let solid = brepkit_operations::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+
+        let step_str = write_step(&topo, &[solid]).unwrap();
+
+        let in_data = step_str
+            .lines()
+            .skip_while(|l| !l.starts_with("DATA;"))
+            .skip(1)
+            .take_while(|l| !l.starts_with("ENDSEC;"));
+
+        for line in in_data {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                assert!(
+                    trimmed.ends_with(");"),
+                    "Entity line should end with ');' but got: {trimmed}"
+                );
+            }
+        }
     }
 }
