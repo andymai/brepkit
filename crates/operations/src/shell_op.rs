@@ -168,9 +168,32 @@ pub fn shell(
         let face = topo.face(*fid)?;
         let normal = match face.surface() {
             FaceSurface::Plane { normal, .. } => *normal,
-            _ => {
-                // For non-planar open faces, estimate normal at center.
-                Vec3::new(0.0, 0.0, 1.0) // Fallback; rim quads are approximate.
+            FaceSurface::Cylinder(cyl) => cyl.axis(),
+            FaceSurface::Cone(cone) => cone.axis(),
+            FaceSurface::Sphere(sph) => {
+                // Use direction from sphere center to face centroid as normal proxy.
+                let centroid = verts.iter().fold(Vec3::new(0.0, 0.0, 0.0), |acc, v| {
+                    acc + Vec3::new(v.x(), v.y(), v.z())
+                });
+                #[allow(clippy::cast_precision_loss)]
+                let inv = 1.0 / verts.len() as f64;
+                let centroid_pt =
+                    Point3::new(centroid.x() * inv, centroid.y() * inv, centroid.z() * inv);
+                (centroid_pt - sph.center())
+                    .normalize()
+                    .unwrap_or(Vec3::new(0.0, 0.0, 1.0))
+            }
+            FaceSurface::Torus(tor) => tor.z_axis(),
+            FaceSurface::Nurbs(nurbs) => {
+                // Evaluate surface normal at domain center.
+                let (u0, u1) = nurbs.domain_u();
+                let (v0, v1) = nurbs.domain_v();
+                let mid_u = (u0 + u1) * 0.5;
+                let mid_v = (v0 + v1) * 0.5;
+                nurbs
+                    .normal(mid_u, mid_v)
+                    .and_then(Vec3::normalize)
+                    .unwrap_or(Vec3::new(0.0, 0.0, 1.0))
             }
         };
 
