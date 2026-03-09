@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/andymai/brepkit/compare/v0.7.13...v0.8.0) (2026-03-09)
+
+
+### Features
+
+* add relative tolerance for scale-aware comparisons ([#122](https://github.com/andymai/brepkit/issues/122)) ([6c748cc](https://github.com/andymai/brepkit/commit/6c748cc48cab5a3542793c24c97afb7a59b31e38))
+
 ## [0.7.13](https://github.com/andymai/brepkit/compare/v0.7.12...v0.7.13) (2026-03-09)
 
 
