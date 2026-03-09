@@ -64,9 +64,9 @@ fn fast_in_circle(a: Point2, b: Point2, c: Point2, d: Point2) -> f64 {
     // Error bound (conservative): if |det| >> sum of absolute products,
     // the sign is reliable. Use Shewchuk's iccerrboundA ≈ 10ε where
     // ε ≈ 2^-53. For our tolerance, 1e-10 * permanent works well.
-    let permanent = alift * (bdx * cdy).abs().max((cdx * bdy).abs())
-        + blift * (cdx * ady).abs().max((adx * cdy).abs())
-        + clift * (adx * bdy).abs().max((bdx * ady).abs());
+    let permanent = alift * ((bdx * cdy).abs() + (cdx * bdy).abs())
+        + blift * ((cdx * ady).abs() + (adx * cdy).abs())
+        + clift * ((adx * bdy).abs() + (bdx * ady).abs());
 
     // Error bound coefficient: 10 * 2^-53 ≈ 1.11e-15
     let errbound = 1.11e-15 * permanent;
@@ -1222,9 +1222,6 @@ impl Cdt {
         let mut cur_v0_local = v0_local;
         let max_steps = self.triangles.len();
         for _ in 0..max_steps {
-            // The edge "to the left" of v0 in this triangle is
-            // adj[(v0_local + 2) % 3] (opposite to v[(v0_local + 2) % 3]).
-            // Wait, we need to think about this more carefully.
             // In triangle (v0, a, b) with v0 at position v0_local:
             //   adj[v0_local] is across edge (a, b) — doesn't touch v0
             //   adj[(v0_local+1)%3] is across edge (b, v0) — touches v0
@@ -1268,8 +1265,8 @@ impl Cdt {
     /// Walks from v0 toward v1 using triangle adjacency (O(k) where k =
     /// number of crossed edges) instead of scanning all triangles.
     fn find_intersecting_edge(&self, v0: usize, v1: usize) -> Option<(usize, usize)> {
-        // Try walking from v0 first.
-        if let Some(result) = self.find_intersecting_walk(v0, v1) {
+        // Try walking from v0 first (O(degree) amortized).
+        if let Some(result) = self.walk_for_intersecting_edge(v0, v1, None) {
             return Some(result);
         }
         // Fallback: linear scan (only when walk fails).
@@ -1299,8 +1296,15 @@ impl Cdt {
         None
     }
 
-    /// Walk from v0 toward v1 to find the first intersecting edge.
-    fn find_intersecting_walk(&self, v0: usize, v1: usize) -> Option<(usize, usize)> {
+    /// Walk the triangle fan around `v0` toward `v1`, returning the first
+    /// intersecting edge. If `skip` is provided, edges matching that pair
+    /// are ignored.
+    fn walk_for_intersecting_edge(
+        &self,
+        v0: usize,
+        v1: usize,
+        skip: Option<(usize, usize)>,
+    ) -> Option<(usize, usize)> {
         if v0 >= self.vertex_tri.len() {
             return None;
         }
@@ -1308,16 +1312,13 @@ impl Cdt {
         if start >= self.triangles.len() || self.triangles[start].removed {
             return None;
         }
-        let tri = &self.triangles[start];
-        if !tri.v.contains(&v0) {
+        if !self.triangles[start].v.contains(&v0) {
             return None;
         }
 
         let p0 = self.vertices[v0];
         let p1 = self.vertices[v1];
 
-        // Walk the fan around v0 to find the triangle whose opposite edge
-        // is intersected by the segment (v0, v1).
         let mut current = start;
         let max_steps = self.triangles.len();
         for _ in 0..max_steps {
@@ -1329,134 +1330,17 @@ impl Cdt {
                 Some(l) => l,
                 None => break,
             };
-            // Check the edge opposite v0 (between the other two vertices).
             let ea = t.v[(v0_local + 1) % 3];
             let eb = t.v[(v0_local + 2) % 3];
-            if ea != v1 && eb != v1 {
+            let should_skip = skip.is_some_and(|s| sorted_pair(ea, eb) == s);
+            if ea != v1 && eb != v1 && !should_skip {
                 let pa = self.vertices[ea];
                 let pb = self.vertices[eb];
                 if segments_properly_intersect(p0, p1, pa, pb) {
                     return Some((current, v0_local));
                 }
             }
-            // Move to the next triangle in the fan around v0.
             // Walk in the direction that the target point lies.
-            let va = self.vertices[ea];
-            let side = orient2d(p0, p1, va);
-            let next_adj = if side >= 0.0 {
-                t.adj[(v0_local + 2) % 3] // walk toward ea
-            } else {
-                t.adj[(v0_local + 1) % 3] // walk toward eb
-            };
-            match next_adj {
-                Some(ni) if ni != start && !self.triangles[ni].removed => {
-                    current = ni;
-                }
-                _ => break,
-            }
-        }
-
-        None // Walk failed, caller will fall back to linear scan
-    }
-
-    /// Find an intersecting edge different from (skip_e0, skip_e1).
-    ///
-    /// Walks from v1's triangle fan toward v0 (the reverse direction),
-    /// finding a different crossing edge in O(degree) instead of O(n).
-    /// Falls back to walking from v0 with skip if the v1 walk fails.
-    fn find_other_intersecting_edge(
-        &self,
-        v0: usize,
-        v1: usize,
-        skip_e0: usize,
-        skip_e1: usize,
-    ) -> Option<(usize, usize)> {
-        // Strategy 1: Walk from v1 toward v0 (reverse direction).
-        // This typically finds a different edge than walking from v0.
-        if let Some(result) = self.find_intersecting_walk(v1, v0) {
-            let tri = &self.triangles[result.0];
-            let ea = tri.v[(result.1 + 1) % 3];
-            let eb = tri.v[(result.1 + 2) % 3];
-            if sorted_pair(ea, eb) != sorted_pair(skip_e0, skip_e1) {
-                return Some(result);
-            }
-        }
-
-        // Strategy 2: Walk from v0 but look for a non-skipped edge.
-        if let Some(result) = self.find_intersecting_walk_skip(v0, v1, skip_e0, skip_e1) {
-            return Some(result);
-        }
-
-        // Strategy 3: Linear scan fallback (rare — only when walks fail).
-        let p0 = self.vertices[v0];
-        let p1 = self.vertices[v1];
-        for (ti, tri) in self.triangles.iter().enumerate() {
-            if tri.removed {
-                continue;
-            }
-            for local in 0..3 {
-                let ea = tri.v[(local + 1) % 3];
-                let eb = tri.v[(local + 2) % 3];
-                if ea == v0 || ea == v1 || eb == v0 || eb == v1 {
-                    continue;
-                }
-                if sorted_pair(ea, eb) == sorted_pair(skip_e0, skip_e1) {
-                    continue;
-                }
-                let pa = self.vertices[ea];
-                let pb = self.vertices[eb];
-                if segments_properly_intersect(p0, p1, pa, pb) {
-                    return Some((ti, local));
-                }
-            }
-        }
-        None
-    }
-
-    /// Walk from v0 toward v1, skipping a specific edge, to find another
-    /// intersecting edge in O(degree).
-    fn find_intersecting_walk_skip(
-        &self,
-        v0: usize,
-        v1: usize,
-        skip_e0: usize,
-        skip_e1: usize,
-    ) -> Option<(usize, usize)> {
-        if v0 >= self.vertex_tri.len() {
-            return None;
-        }
-        let start = self.vertex_tri[v0];
-        if start >= self.triangles.len() || self.triangles[start].removed {
-            return None;
-        }
-        let tri = &self.triangles[start];
-        if !tri.v.contains(&v0) {
-            return None;
-        }
-
-        let p0 = self.vertices[v0];
-        let p1 = self.vertices[v1];
-
-        let mut current = start;
-        let max_steps = self.triangles.len();
-        for _ in 0..max_steps {
-            let t = &self.triangles[current];
-            if t.removed {
-                break;
-            }
-            let v0_local = match t.v.iter().position(|&v| v == v0) {
-                Some(l) => l,
-                None => break,
-            };
-            let ea = t.v[(v0_local + 1) % 3];
-            let eb = t.v[(v0_local + 2) % 3];
-            if ea != v1 && eb != v1 && sorted_pair(ea, eb) != sorted_pair(skip_e0, skip_e1) {
-                let pa = self.vertices[ea];
-                let pb = self.vertices[eb];
-                if segments_properly_intersect(p0, p1, pa, pb) {
-                    return Some((current, v0_local));
-                }
-            }
             let va = self.vertices[ea];
             let side = orient2d(p0, p1, va);
             let next_adj = if side >= 0.0 {
@@ -1469,6 +1353,61 @@ impl Cdt {
                     current = ni;
                 }
                 _ => break,
+            }
+        }
+
+        None
+    }
+
+    /// Find an intersecting edge different from (skip_e0, skip_e1).
+    ///
+    /// Tries multiple strategies: walk from v1 (reverse), walk from v0 with
+    /// skip, then falls back to linear scan.
+    fn find_other_intersecting_edge(
+        &self,
+        v0: usize,
+        v1: usize,
+        skip_e0: usize,
+        skip_e1: usize,
+    ) -> Option<(usize, usize)> {
+        let skip = sorted_pair(skip_e0, skip_e1);
+
+        // Strategy 1: Walk from v1 toward v0 (reverse direction).
+        if let Some(result) = self.walk_for_intersecting_edge(v1, v0, None) {
+            let tri = &self.triangles[result.0];
+            let ea = tri.v[(result.1 + 1) % 3];
+            let eb = tri.v[(result.1 + 2) % 3];
+            if sorted_pair(ea, eb) != skip {
+                return Some(result);
+            }
+        }
+
+        // Strategy 2: Walk from v0 with skip.
+        if let Some(result) = self.walk_for_intersecting_edge(v0, v1, Some(skip)) {
+            return Some(result);
+        }
+
+        // Strategy 3: Linear scan fallback (rare).
+        let p0 = self.vertices[v0];
+        let p1 = self.vertices[v1];
+        for (ti, tri) in self.triangles.iter().enumerate() {
+            if tri.removed {
+                continue;
+            }
+            for local in 0..3 {
+                let ea = tri.v[(local + 1) % 3];
+                let eb = tri.v[(local + 2) % 3];
+                if ea == v0 || ea == v1 || eb == v0 || eb == v1 {
+                    continue;
+                }
+                if sorted_pair(ea, eb) == skip {
+                    continue;
+                }
+                let pa = self.vertices[ea];
+                let pb = self.vertices[eb];
+                if segments_properly_intersect(p0, p1, pa, pb) {
+                    return Some((ti, local));
+                }
             }
         }
         None

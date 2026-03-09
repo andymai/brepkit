@@ -490,6 +490,43 @@ fn sample_wire_positions(
     Ok(positions)
 }
 
+/// Project a 3D point to 2D by dropping the dominant normal axis.
+fn project_by_normal(p: Point3, normal: Vec3) -> brepkit_math::vec::Point2 {
+    let ax = normal.x().abs();
+    let ay = normal.y().abs();
+    let az = normal.z().abs();
+    if az >= ax && az >= ay {
+        brepkit_math::vec::Point2::new(p.x(), p.y())
+    } else if ay >= ax {
+        brepkit_math::vec::Point2::new(p.x(), p.z())
+    } else {
+        brepkit_math::vec::Point2::new(p.y(), p.z())
+    }
+}
+
+/// Compute an axis-aligned bounding box with margin for a set of 2D points.
+fn compute_cdt_bounds(
+    pts2d: &[brepkit_math::vec::Point2],
+) -> (brepkit_math::vec::Point2, brepkit_math::vec::Point2) {
+    use brepkit_math::vec::Point2;
+
+    let mut min_x = f64::MAX;
+    let mut min_y = f64::MAX;
+    let mut max_x = f64::MIN;
+    let mut max_y = f64::MIN;
+    for &p in pts2d {
+        min_x = min_x.min(p.x());
+        min_y = min_y.min(p.y());
+        max_x = max_x.max(p.x());
+        max_y = max_y.max(p.y());
+    }
+    let margin = ((max_x - min_x).max(max_y - min_y)) * 0.1 + 1e-6;
+    (
+        Point2::new(min_x - margin, min_y - margin),
+        Point2::new(max_x + margin, max_y + margin),
+    )
+}
+
 /// Tessellate a planar face with inner wires (holes) using CDT.
 #[allow(clippy::too_many_lines)]
 fn tessellate_planar_with_holes(
@@ -501,20 +538,6 @@ fn tessellate_planar_with_holes(
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
     use std::collections::HashSet;
-
-    // Project to 2D by dropping the dominant normal axis.
-    let ax = normal.x().abs();
-    let ay = normal.y().abs();
-    let az = normal.z().abs();
-    let project = |p: Point3| -> Point2 {
-        if az >= ax && az >= ay {
-            Point2::new(p.x(), p.y())
-        } else if ay >= ax {
-            Point2::new(p.x(), p.z())
-        } else {
-            Point2::new(p.y(), p.z())
-        }
-    };
 
     // Collect all positions: outer + inner wires.
     let mut all_positions: Vec<Point3> = outer_positions.to_vec();
@@ -531,24 +554,11 @@ fn tessellate_planar_with_holes(
         inner_wire_ranges.push((start, end));
     }
 
-    let pts2d: Vec<Point2> = all_positions.iter().map(|&p| project(p)).collect();
-
-    // Compute bounding box for CDT.
-    let mut min_x = f64::MAX;
-    let mut min_y = f64::MAX;
-    let mut max_x = f64::MIN;
-    let mut max_y = f64::MIN;
-    for &p in &pts2d {
-        min_x = min_x.min(p.x());
-        min_y = min_y.min(p.y());
-        max_x = max_x.max(p.x());
-        max_y = max_y.max(p.y());
-    }
-    let margin = ((max_x - min_x).max(max_y - min_y)) * 0.1 + 1e-6;
-    let bounds = (
-        Point2::new(min_x - margin, min_y - margin),
-        Point2::new(max_x + margin, max_y + margin),
-    );
+    let pts2d: Vec<Point2> = all_positions
+        .iter()
+        .map(|&p| project_by_normal(p, normal))
+        .collect();
+    let bounds = compute_cdt_bounds(&pts2d);
 
     let mut cdt = Cdt::with_capacity(bounds, pts2d.len());
 
@@ -720,6 +730,91 @@ fn unproject_point(p2d: brepkit_math::vec::Point2, normal: Vec3, reference: &Poi
     }
 }
 
+/// Collect global vertex IDs from a wire, deduplicating consecutive vertices.
+///
+/// Iterates each oriented edge of `wire`, looking up its pre-computed global
+/// vertex IDs from `edge_global_indices`. Adjacent duplicate vertices (by ID
+/// or position within `tol`) are skipped. Returns positions and optional global
+/// IDs in wire-traversal order.
+fn collect_wire_global_vertices(
+    wire: &brepkit_topology::wire::Wire,
+    edge_global_indices: &HashMap<usize, Vec<u32>>,
+    positions: &[Point3],
+    tol: f64,
+) -> (Vec<Point3>, Vec<Option<u32>>) {
+    let mut out_positions: Vec<Point3> = Vec::new();
+    let mut out_global_ids: Vec<Option<u32>> = Vec::new();
+
+    for oe in wire.edges() {
+        let edge_idx = oe.edge().index();
+        if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
+            let is_fwd = oe.is_forward();
+            let len = global_ids.len();
+            for j in 0..len {
+                let gid = if is_fwd {
+                    global_ids[j]
+                } else {
+                    global_ids[len - 1 - j]
+                };
+                if j == 0 && !out_global_ids.is_empty() {
+                    let last_gid = out_global_ids.last().and_then(|g| *g).unwrap_or(u32::MAX);
+                    if last_gid == gid {
+                        continue;
+                    }
+                    if (last_gid as usize) < positions.len()
+                        && (gid as usize) < positions.len()
+                        && (positions[last_gid as usize] - positions[gid as usize]).length() < tol
+                    {
+                        continue;
+                    }
+                }
+                out_positions.push(positions[gid as usize]);
+                out_global_ids.push(Some(gid));
+            }
+        }
+    }
+
+    (out_positions, out_global_ids)
+}
+
+/// Remove the last element from parallel position/ID vectors if it duplicates
+/// the first (closed wire loop-back).
+fn remove_closing_duplicate_global(
+    positions: &mut Vec<Point3>,
+    global_ids: &mut Vec<Option<u32>>,
+    all_positions: &[Point3],
+    tol: f64,
+) {
+    if global_ids.len() > 2 {
+        if let (Some(&Some(first)), Some(&Some(last))) = (global_ids.first(), global_ids.last()) {
+            if first == last
+                || ((first as usize) < all_positions.len()
+                    && (last as usize) < all_positions.len()
+                    && (all_positions[first as usize] - all_positions[last as usize]).length()
+                        < tol)
+            {
+                positions.pop();
+                global_ids.pop();
+            }
+        }
+    }
+}
+
+/// Remove the last element from a global ID list if it duplicates the first.
+fn remove_closing_duplicate_ids(ids: &mut Vec<u32>, positions: &[Point3], tol: f64) {
+    if ids.len() > 2 {
+        if let (Some(&first), Some(&last)) = (ids.first(), ids.last()) {
+            if first == last
+                || ((first as usize) < positions.len()
+                    && (last as usize) < positions.len()
+                    && (positions[first as usize] - positions[last as usize]).length() < tol)
+            {
+                ids.pop();
+            }
+        }
+    }
+}
+
 /// CDT tessellation for a planar face with inner wires, writing into a shared mesh.
 ///
 /// `boundary_global_ids` and `outer_positions` describe the outer wire (already
@@ -740,19 +835,6 @@ fn tessellate_planar_shared_with_holes(
     use brepkit_math::vec::Point2;
     use std::collections::HashSet;
 
-    let ax = normal.x().abs();
-    let ay = normal.y().abs();
-    let az = normal.z().abs();
-    let project = |p: Point3| -> Point2 {
-        if az >= ax && az >= ay {
-            Point2::new(p.x(), p.y())
-        } else if ay >= ax {
-            Point2::new(p.x(), p.z())
-        } else {
-            Point2::new(p.y(), p.z())
-        }
-    };
-
     // Collect all 3D positions and their global mesh IDs.
     let mut all_positions: Vec<Point3> = outer_positions.to_vec();
     let mut all_global_ids: Vec<Option<u32>> =
@@ -764,108 +846,46 @@ fn tessellate_planar_shared_with_holes(
     for &iw_id in face_data.inner_wires() {
         let iw = topo.wire(iw_id)?;
         let start = all_positions.len();
-        // Reuse pre-computed shared edge vertices for inner wires when available.
-        // This avoids redundant circle sampling and ensures vertex sharing with
-        // adjacent faces that reference the same edges.
-        let mut inner_global_ids: Vec<u32> = Vec::new();
-        for oe in iw.edges() {
-            let edge_idx = oe.edge().index();
-            if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
-                // Iterate without cloning: use index-based forward/reverse.
-                let is_fwd = oe.is_forward();
-                let len = global_ids.len();
-                for j in 0..len {
-                    let gid = if is_fwd {
-                        global_ids[j]
-                    } else {
-                        global_ids[len - 1 - j]
-                    };
-                    if j == 0 && !inner_global_ids.is_empty() {
-                        let last_gid = *inner_global_ids.last().unwrap_or(&u32::MAX);
-                        if last_gid == gid {
-                            continue;
-                        }
-                        if (last_gid as usize) < merged.positions.len()
-                            && (gid as usize) < merged.positions.len()
-                        {
-                            let last_pos = merged.positions[last_gid as usize];
-                            let this_pos = merged.positions[gid as usize];
-                            if (last_pos - this_pos).length() < tol {
-                                continue;
-                            }
-                        }
-                    }
-                    inner_global_ids.push(gid);
-                    all_positions.push(merged.positions[gid as usize]);
-                    all_global_ids.push(Some(gid));
-                }
+        let (inner_pos, inner_gids) =
+            collect_wire_global_vertices(iw, edge_global_indices, &merged.positions, tol);
+        let mut inner_flat_ids: Vec<u32> = Vec::with_capacity(inner_gids.len());
+        for (pos, gid_opt) in inner_pos.into_iter().zip(inner_gids) {
+            if let Some(gid) = gid_opt {
+                inner_flat_ids.push(gid);
+                all_positions.push(pos);
+                all_global_ids.push(Some(gid));
             } else {
-                // Fallback: sample edge directly (shouldn't happen for valid solids).
-                let edge_data = topo.edge(oe.edge())?;
-                let points = sample_edge(topo, edge_data, 0.1)?;
-                let ordered: Vec<Point3> = if oe.is_forward() {
-                    points
-                } else {
-                    points.into_iter().rev().collect()
-                };
-                for &pt in &ordered {
-                    let key = (pt.x().to_bits(), pt.y().to_bits(), pt.z().to_bits());
-                    let gid = point_to_global.entry(key).or_insert_with(|| {
-                        #[allow(clippy::cast_possible_truncation)]
-                        let idx = merged.positions.len() as u32;
-                        merged.positions.push(pt);
-                        merged.normals.push(normal);
-                        idx
-                    });
-                    inner_global_ids.push(*gid);
-                    all_positions.push(pt);
-                    all_global_ids.push(Some(*gid));
-                }
+                // Fallback: allocate a global vertex for an unshared point.
+                let key = (pos.x().to_bits(), pos.y().to_bits(), pos.z().to_bits());
+                let gid = *point_to_global.entry(key).or_insert_with(|| {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let idx = merged.positions.len() as u32;
+                    merged.positions.push(pos);
+                    merged.normals.push(normal);
+                    idx
+                });
+                inner_flat_ids.push(gid);
+                all_positions.push(pos);
+                all_global_ids.push(Some(gid));
             }
         }
         // Remove closing duplicate if the wire loops back.
-        if inner_global_ids.len() > 2 {
-            if let (Some(&first), Some(&last)) = (inner_global_ids.first(), inner_global_ids.last())
-            {
-                if first == last {
-                    inner_global_ids.pop();
-                    all_positions.pop();
-                    all_global_ids.pop();
-                } else if (first as usize) < merged.positions.len()
-                    && (last as usize) < merged.positions.len()
-                {
-                    let fp = merged.positions[first as usize];
-                    let lp = merged.positions[last as usize];
-                    if (fp - lp).length() < tol {
-                        inner_global_ids.pop();
-                        all_positions.pop();
-                        all_global_ids.pop();
-                    }
-                }
-            }
+        if inner_flat_ids.len() > 2 {
+            remove_closing_duplicate_ids(&mut inner_flat_ids, &merged.positions, tol);
+            // Trim all_positions and all_global_ids to match.
+            let expected_end = start + inner_flat_ids.len();
+            all_positions.truncate(expected_end);
+            all_global_ids.truncate(expected_end);
         }
         let end = all_positions.len();
         inner_wire_ranges.push((start, end));
     }
 
-    let pts2d: Vec<Point2> = all_positions.iter().map(|&p| project(p)).collect();
-
-    // Compute bounding box for CDT.
-    let mut min_x = f64::MAX;
-    let mut min_y = f64::MAX;
-    let mut max_x = f64::MIN;
-    let mut max_y = f64::MIN;
-    for &p in &pts2d {
-        min_x = min_x.min(p.x());
-        min_y = min_y.min(p.y());
-        max_x = max_x.max(p.x());
-        max_y = max_y.max(p.y());
-    }
-    let margin = ((max_x - min_x).max(max_y - min_y)) * 0.1 + 1e-6;
-    let bounds = (
-        Point2::new(min_x - margin, min_y - margin),
-        Point2::new(max_x + margin, max_y + margin),
-    );
+    let pts2d: Vec<Point2> = all_positions
+        .iter()
+        .map(|&p| project_by_normal(p, normal))
+        .collect();
+    let bounds = compute_cdt_bounds(&pts2d);
 
     let mut cdt = Cdt::with_capacity(bounds, pts2d.len());
     let mut cdt_indices: Vec<usize> = Vec::with_capacity(pts2d.len());
@@ -1013,22 +1033,7 @@ fn run_planar_cdt(
     use brepkit_math::vec::Point2;
     use std::collections::HashSet;
 
-    // Compute bounding box for CDT.
-    let mut min_x = f64::MAX;
-    let mut min_y = f64::MAX;
-    let mut max_x = f64::MIN;
-    let mut max_y = f64::MIN;
-    for &p in pts2d {
-        min_x = min_x.min(p.x());
-        min_y = min_y.min(p.y());
-        max_x = max_x.max(p.x());
-        max_y = max_y.max(p.y());
-    }
-    let margin = ((max_x - min_x).max(max_y - min_y)) * 0.1 + 1e-6;
-    let bounds = (
-        Point2::new(min_x - margin, min_y - margin),
-        Point2::new(max_x + margin, max_y + margin),
-    );
+    let bounds = compute_cdt_bounds(pts2d);
 
     let mut cdt = Cdt::with_capacity(bounds, pts2d.len());
     let mut cdt_indices: Vec<usize> = Vec::with_capacity(pts2d.len());
@@ -2251,15 +2256,23 @@ pub fn tessellate_solid(
     let edge_indices: Vec<usize> = edge_face_map.keys().copied().collect();
     let edge_points: HashMap<usize, Vec<Point3>> = if edge_indices.len() >= 32 {
         use rayon::prelude::*;
-        edge_indices
+        let results: Vec<Result<(usize, Vec<Point3>), crate::OperationsError>> = edge_indices
             .par_iter()
             .filter_map(|&edge_idx| {
                 let edge_id = topo.edges.id_from_index(edge_idx)?;
-                let edge_data = topo.edge(edge_id).ok()?;
-                let points = sample_edge(topo, edge_data, deflection).ok()?;
-                Some((edge_idx, points))
+                let edge_data = match topo.edge(edge_id) {
+                    Ok(d) => d,
+                    Err(e) => return Some(Err(crate::OperationsError::Topology(e))),
+                };
+                Some(sample_edge(topo, edge_data, deflection).map(|pts| (edge_idx, pts)))
             })
-            .collect()
+            .collect();
+        let mut map = HashMap::new();
+        for r in results {
+            let (idx, pts) = r?;
+            map.insert(idx, pts);
+        }
+        map
     } else {
         let mut map = HashMap::new();
         for &edge_idx in &edge_indices {
@@ -2340,140 +2353,56 @@ pub fn tessellate_solid(
                 let normal = *normal;
                 let is_reversed = face_data.is_reversed();
                 let wire = topo.wire(face_data.outer_wire())?;
-
-                let ax = normal.x().abs();
-                let ay = normal.y().abs();
-                let az = normal.z().abs();
-                let project = |p: Point3| -> brepkit_math::vec::Point2 {
-                    if az >= ax && az >= ay {
-                        brepkit_math::vec::Point2::new(p.x(), p.y())
-                    } else if ay >= ax {
-                        brepkit_math::vec::Point2::new(p.x(), p.z())
-                    } else {
-                        brepkit_math::vec::Point2::new(p.y(), p.z())
-                    }
-                };
-
                 let tol = 1e-10;
-                let mut all_positions: Vec<Point3> = Vec::new();
-                let mut all_global_ids: Vec<Option<u32>> = Vec::new();
 
-                // Collect outer boundary.
-                for oe in wire.edges() {
-                    let edge_idx = oe.edge().index();
-                    if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
-                        let is_fwd = oe.is_forward();
-                        let len = global_ids.len();
-                        for j in 0..len {
-                            let gid = if is_fwd {
-                                global_ids[j]
-                            } else {
-                                global_ids[len - 1 - j]
-                            };
-                            if j == 0 && !all_global_ids.is_empty() {
-                                let last_gid =
-                                    all_global_ids.last().and_then(|g| *g).unwrap_or(u32::MAX);
-                                if last_gid == gid {
-                                    continue;
-                                }
-                                if (last_gid as usize) < merged.positions.len()
-                                    && (gid as usize) < merged.positions.len()
-                                    && (merged.positions[last_gid as usize]
-                                        - merged.positions[gid as usize])
-                                        .length()
-                                        < tol
-                                {
-                                    continue;
-                                }
-                            }
-                            all_positions.push(merged.positions[gid as usize]);
-                            all_global_ids.push(Some(gid));
-                        }
-                    }
-                }
-                // Remove closing duplicate.
-                if all_global_ids.len() > 2 {
-                    if let (Some(&Some(first)), Some(&Some(last))) =
-                        (all_global_ids.first(), all_global_ids.last())
-                    {
-                        if first == last
-                            || ((first as usize) < merged.positions.len()
-                                && (last as usize) < merged.positions.len()
-                                && (merged.positions[first as usize]
-                                    - merged.positions[last as usize])
-                                    .length()
-                                    < tol)
-                        {
-                            all_positions.pop();
-                            all_global_ids.pop();
-                        }
-                    }
-                }
+                // Collect outer boundary vertices from shared edge pool.
+                let (mut all_positions, mut all_global_ids) = collect_wire_global_vertices(
+                    wire,
+                    &edge_global_indices,
+                    &merged.positions,
+                    tol,
+                );
+                remove_closing_duplicate_global(
+                    &mut all_positions,
+                    &mut all_global_ids,
+                    &merged.positions,
+                    tol,
+                );
                 let outer_count = all_positions.len();
 
-                // Collect inner wires.
+                // Collect inner wire vertices.
                 let mut inner_wire_ranges: Vec<(usize, usize)> = Vec::new();
                 for &iw_id in face_data.inner_wires() {
                     let iw = topo.wire(iw_id)?;
                     let start = all_positions.len();
-                    let mut inner_global_ids: Vec<u32> = Vec::new();
-                    for oe in iw.edges() {
-                        let edge_idx = oe.edge().index();
-                        if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
-                            let is_fwd = oe.is_forward();
-                            let len = global_ids.len();
-                            for j in 0..len {
-                                let gid = if is_fwd {
-                                    global_ids[j]
-                                } else {
-                                    global_ids[len - 1 - j]
-                                };
-                                if j == 0 && !inner_global_ids.is_empty() {
-                                    let last_gid = *inner_global_ids.last().unwrap_or(&u32::MAX);
-                                    if last_gid == gid {
-                                        continue;
-                                    }
-                                    if (last_gid as usize) < merged.positions.len()
-                                        && (gid as usize) < merged.positions.len()
-                                        && (merged.positions[last_gid as usize]
-                                            - merged.positions[gid as usize])
-                                            .length()
-                                            < tol
-                                    {
-                                        continue;
-                                    }
-                                }
-                                inner_global_ids.push(gid);
-                                all_positions.push(merged.positions[gid as usize]);
-                                all_global_ids.push(Some(gid));
-                            }
-                        }
+                    let (inner_pos, inner_gids) = collect_wire_global_vertices(
+                        iw,
+                        &edge_global_indices,
+                        &merged.positions,
+                        tol,
+                    );
+                    // Track flat IDs for closing-duplicate removal.
+                    let mut inner_flat_ids: Vec<u32> = Vec::with_capacity(inner_gids.len());
+                    for (pos, gid_opt) in inner_pos.into_iter().zip(inner_gids) {
+                        let gid = gid_opt.unwrap_or(0);
+                        inner_flat_ids.push(gid);
+                        all_positions.push(pos);
+                        all_global_ids.push(Some(gid));
                     }
-                    // Remove closing duplicate.
-                    if inner_global_ids.len() > 2 {
-                        if let (Some(&first), Some(&last)) =
-                            (inner_global_ids.first(), inner_global_ids.last())
-                        {
-                            if first == last
-                                || ((first as usize) < merged.positions.len()
-                                    && (last as usize) < merged.positions.len()
-                                    && (merged.positions[first as usize]
-                                        - merged.positions[last as usize])
-                                        .length()
-                                        < tol)
-                            {
-                                inner_global_ids.pop();
-                                all_positions.pop();
-                                all_global_ids.pop();
-                            }
-                        }
+                    if inner_flat_ids.len() > 2 {
+                        remove_closing_duplicate_ids(&mut inner_flat_ids, &merged.positions, tol);
+                        let expected_end = start + inner_flat_ids.len();
+                        all_positions.truncate(expected_end);
+                        all_global_ids.truncate(expected_end);
                     }
                     let end = all_positions.len();
                     inner_wire_ranges.push((start, end));
                 }
 
-                let pts2d: Vec<brepkit_math::vec::Point2> =
-                    all_positions.iter().map(|&p| project(p)).collect();
+                let pts2d: Vec<brepkit_math::vec::Point2> = all_positions
+                    .iter()
+                    .map(|&p| project_by_normal(p, normal))
+                    .collect();
 
                 cdt_jobs.push(CdtJob {
                     pts2d,
@@ -2673,24 +2602,7 @@ fn tessellate_face_with_shared_edges(
             }
         }
 
-        // Remove closing duplicate if the wire loops back.
-        if boundary_global_ids.len() > 2 {
-            if let (Some(&first), Some(&last)) =
-                (boundary_global_ids.first(), boundary_global_ids.last())
-            {
-                if first == last {
-                    boundary_global_ids.pop();
-                } else if (first as usize) < merged.positions.len()
-                    && (last as usize) < merged.positions.len()
-                {
-                    let fp = merged.positions[first as usize];
-                    let lp = merged.positions[last as usize];
-                    if (fp - lp).length() < tol {
-                        boundary_global_ids.pop();
-                    }
-                }
-            }
-        }
+        remove_closing_duplicate_ids(&mut boundary_global_ids, &merged.positions, tol);
 
         let n = boundary_global_ids.len();
         if n < 3 {
@@ -2830,13 +2742,12 @@ fn tessellate_nonplanar_cdt(
             };
             for (j, &gid) in ordered.iter().enumerate() {
                 if j == 0 && !boundary_3d.is_empty() {
-                    let (last_pos, last_gid) = boundary_3d[boundary_3d.len() - 1];
+                    let (_, last_gid) = boundary_3d[boundary_3d.len() - 1];
                     if last_gid == gid
                         || (merged.positions[last_gid as usize] - merged.positions[gid as usize])
                             .length()
                             < tol_dup
                     {
-                        let _ = last_pos; // suppress unused warning
                         continue;
                     }
                 }
@@ -3156,12 +3067,13 @@ fn tessellate_nonplanar_snap(
     // Build spatial hash for O(1) snap lookups instead of O(n*m) brute force.
     let snap_tol = 1e-6;
     let inv_cell = 1.0 / snap_tol;
-    let mut snap_grid: HashMap<(i64, i64, i64), u32> = HashMap::with_capacity(snap_targets.len());
+    let mut snap_grid: HashMap<(i64, i64, i64), Vec<u32>> =
+        HashMap::with_capacity(snap_targets.len());
     for &(target_pos, gid) in &snap_targets {
         let cx = (target_pos.x() * inv_cell).round() as i64;
         let cy = (target_pos.y() * inv_cell).round() as i64;
         let cz = (target_pos.z() * inv_cell).round() as i64;
-        snap_grid.insert((cx, cy, cz), gid);
+        snap_grid.entry((cx, cy, cz)).or_default().push(gid);
     }
 
     for (i, &pos) in face_mesh.positions.iter().enumerate() {
@@ -3169,15 +3081,19 @@ fn tessellate_nonplanar_snap(
         let cy = (pos.y() * inv_cell).round() as i64;
         let cz = (pos.z() * inv_cell).round() as i64;
         let mut best_gid = None;
+        let mut best_dist = snap_tol;
         // Check 3x3x3 neighborhood for snap matches.
-        'snap: for dx in -1_i64..=1 {
+        for dx in -1_i64..=1 {
             for dy in -1_i64..=1 {
                 for dz in -1_i64..=1 {
-                    if let Some(&gid) = snap_grid.get(&(cx + dx, cy + dy, cz + dz)) {
-                        let target_pos = merged.positions[gid as usize];
-                        if (pos - target_pos).length() < snap_tol {
-                            best_gid = Some(gid);
-                            break 'snap;
+                    if let Some(gids) = snap_grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                        for &gid in gids {
+                            let target_pos = merged.positions[gid as usize];
+                            let dist = (pos - target_pos).length();
+                            if dist < best_dist {
+                                best_dist = dist;
+                                best_gid = Some(gid);
+                            }
                         }
                     }
                 }
