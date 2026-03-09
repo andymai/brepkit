@@ -379,7 +379,11 @@ fn intersect_hull_with_line(hull: &[(f64, f64)], d: f64, find_min: bool) -> Opti
 
 /// Recursion depth at which we start checking for overlap instead of
 /// continuing to subdivide fruitlessly.
-const OVERLAP_CHECK_DEPTH: usize = 30;
+const OVERLAP_CHECK_DEPTH: usize = 8;
+
+/// Fat line thickness below which we consider the curve degenerate
+/// (collinear control points). Triggers immediate overlap detection.
+const DEGENERATE_FAT_LINE: f64 = 1e-12;
 
 /// Number of samples for approximate Hausdorff distance check.
 const HAUSDORFF_SAMPLES: usize = 5;
@@ -447,6 +451,26 @@ fn bezier_clip_recurse(
 
     let cps_a = seg_a.control_points();
     let cps_b = seg_b.control_points();
+
+    // Early overlap detection: if both fat lines are degenerate (near-zero
+    // thickness), the curves are collinear. Check for overlap immediately
+    // instead of subdividing 2^30 times.
+    if depth <= 2 {
+        if let Some((_, _, d_min_a, d_max_a, _)) = fat_line(cps_a) {
+            if (d_max_a - d_min_a) < DEGENERATE_FAT_LINE {
+                if let Some((_, _, d_min_b, d_max_b, _)) = fat_line(cps_b) {
+                    if (d_max_b - d_min_b) < DEGENERATE_FAT_LINE {
+                        // Both curves are essentially straight lines — check overlap.
+                        if check_overlap(
+                            seg_a, seg_b, u_a_lo, u_a_hi, u_b_lo, u_b_hi, tolerance, overlaps,
+                        ) {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Try clipping B against A's fat line.
     if let Some((new_b_lo, new_b_hi)) = clip_to_fat_line(cps_a, cps_b, u_b_lo, u_b_hi) {
