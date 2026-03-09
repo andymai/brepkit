@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.13](https://github.com/andymai/brepkit/compare/v0.7.12...v0.7.13) (2026-03-09)
+
+
+### Bug Fixes
+
+* SSI branch detection and offset self-intersection trimming ([#120](https://github.com/andymai/brepkit/issues/120)) ([e287fd0](https://github.com/andymai/brepkit/commit/e287fd08eafad9da23ebf4b8e1bf47f2a0458e88))
+
 ## [0.7.12](https://github.com/andymai/brepkit/compare/v0.7.11...v0.7.12) (2026-03-09)
 
 
