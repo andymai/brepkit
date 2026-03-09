@@ -1141,9 +1141,27 @@ impl Cdt {
                 let e0 = self.triangles[ti].v[(local + 1) % 3];
                 let e1 = self.triangles[ti].v[(local + 2) % 3];
 
-                // Don't flip constrained edges.
+                // If the intersecting edge is constrained, split both edges
+                // at their intersection point rather than giving up.
                 if self.constraints.contains(&sorted_pair(e0, e1)) {
-                    // Can't flip — the constraint conflicts. Skip.
+                    let p0 = self.vertices[v0];
+                    let p1 = self.vertices[v1];
+                    let q0 = self.vertices[e0];
+                    let q1 = self.vertices[e1];
+                    if let Some(mid_pt) = segment_intersection_point(p0, p1, q0, q1) {
+                        let mid = self.insert_point(mid_pt)?;
+                        // Replace old constraint (e0,e1) with two sub-constraints.
+                        self.constraints.remove(&sorted_pair(e0, e1));
+                        self.constraints.insert(sorted_pair(e0, mid));
+                        self.constraints.insert(sorted_pair(mid, e1));
+                        // Recover the two halves of the original edge.
+                        self.recover_edge(v0, mid)?;
+                        self.constraints.insert(sorted_pair(v0, mid));
+                        self.recover_edge(mid, v1)?;
+                        self.constraints.insert(sorted_pair(mid, v1));
+                        return Ok(());
+                    }
+                    // Intersection computation failed — give up gracefully.
                     return Ok(());
                 }
 
@@ -1518,6 +1536,29 @@ fn walk_region_boundary(
 /// Return a sorted pair `(min, max)`.
 fn sorted_pair(a: usize, b: usize) -> (usize, usize) {
     if a <= b { (a, b) } else { (b, a) }
+}
+
+/// Compute the intersection point of two line segments, if they cross.
+fn segment_intersection_point(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<Point2> {
+    let dx_a = a1.x() - a0.x();
+    let dy_a = a1.y() - a0.y();
+    let dx_b = b1.x() - b0.x();
+    let dy_b = b1.y() - b0.y();
+    let denom = dx_a * dy_b - dy_a * dx_b;
+    if denom.abs() < 1e-15 {
+        return None;
+    }
+    let dx_ab = b0.x() - a0.x();
+    let dy_ab = b0.y() - a0.y();
+    let t = (dx_ab * dy_b - dy_ab * dx_b) / denom;
+    if t > 0.0 && t < 1.0 {
+        Some(Point2::new(
+            dx_a.mul_add(t, a0.x()),
+            dy_a.mul_add(t, a0.y()),
+        ))
+    } else {
+        None
+    }
 }
 
 /// Test if two line segments properly intersect (crossing, not just touching).
