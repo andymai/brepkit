@@ -96,31 +96,18 @@ pub fn split(
             positive_specs.push(make_spec(verts.clone(), &surface));
             negative_specs.push(make_spec(verts, &surface));
         } else {
-            // Mixed: clip the face polygon. Clipped fragments are planar
-            // approximations (proper curved-face splitting requires exact
-            // surface-plane intersection curves — future work).
-            let face_normal = match &surface {
-                brepkit_topology::face::FaceSurface::Plane { normal: fn_, .. } => *fn_,
-                _ => normal, // Fallback for non-planar straddling faces
-            };
-
+            // Mixed: clip the face polygon. Vertex positions are interpolated
+            // along polygon edges (linear approximation of the actual
+            // surface-plane intersection curve). For curved faces, we
+            // preserve the original surface type so that downstream
+            // operations (tessellation, booleans) handle curvature correctly.
             let (pos_verts, neg_verts, crossings) = clip_polygon(&verts, &dists, tol);
 
             if pos_verts.len() >= 3 {
-                let pos_d = dot_normal_point(face_normal, pos_verts[0]);
-                positive_specs.push(FaceSpec::Planar {
-                    vertices: pos_verts,
-                    normal: face_normal,
-                    d: pos_d,
-                });
+                positive_specs.push(make_spec(pos_verts, &surface));
             }
             if neg_verts.len() >= 3 {
-                let neg_d = dot_normal_point(face_normal, neg_verts[0]);
-                negative_specs.push(FaceSpec::Planar {
-                    vertices: neg_verts,
-                    normal: face_normal,
-                    d: neg_d,
-                });
+                negative_specs.push(make_spec(neg_verts, &surface));
             }
 
             cap_points.extend(crossings);
