@@ -390,6 +390,51 @@ impl ToroidalSurface {
         })
     }
 
+    /// Creates a toroidal surface with a specified axis direction.
+    ///
+    /// The axis is the central symmetry axis of the torus. The local
+    /// coordinate frame is derived from it.
+    ///
+    /// # Errors
+    /// Returns an error if either radius is not positive or axis is zero.
+    pub fn with_axis(
+        center: Point3,
+        major_radius: f64,
+        minor_radius: f64,
+        z_axis: Vec3,
+    ) -> Result<Self, MathError> {
+        if major_radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: major_radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        if minor_radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: minor_radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        let z = z_axis.normalize()?;
+        let candidate = if z.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let x = z.cross(candidate).normalize()?;
+        let y = z.cross(x);
+        Ok(Self {
+            center,
+            major_radius,
+            minor_radius,
+            x_axis: x,
+            y_axis: y,
+            z_axis: z,
+        })
+    }
+
     /// Evaluates the surface at parameters `(u, v)`.
     #[must_use]
     pub fn evaluate(&self, u: f64, v: f64) -> Point3 {
