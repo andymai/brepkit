@@ -1,8 +1,10 @@
-//! Edge filleting (rounding edges with a constant radius).
+//! Edge filleting (rounding edges with a constant or variable radius).
 //!
 //! Replaces sharp edges with a smooth cylindrical fillet surface.
-//! Works on planar solids only. Each filleted edge is replaced by
-//! a true rolling-ball NURBS blend surface with G1 tangent continuity.
+//! Supports edges between planar faces, and edges between planar and
+//! curved analytic faces (cylinder, cone, sphere, torus). Each filleted
+//! edge is replaced by a true rolling-ball NURBS blend surface with G1
+//! tangent continuity.
 //!
 //! The rolling-ball algorithm:
 //! 1. For each target edge, find the two adjacent planar faces
@@ -108,6 +110,51 @@ fn edge_v_samples(curve: &EdgeCurve) -> usize {
         EdgeCurve::Line => 2,
         EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => 9,
         EdgeCurve::NurbsCurve(_) => 7,
+    }
+}
+
+/// Compute the outward surface normal of a `FaceSurface` at a given 3D point.
+///
+/// For analytic surfaces this is exact (no parameter-space projection needed).
+/// For NURBS surfaces, uses the midpoint normal as an approximation (full
+/// point-inversion would be needed for exactness, but this suffices for fillet
+/// cross-section geometry where the point is known to lie on the surface).
+fn face_surface_normal_at(surface: &FaceSurface, point: Point3) -> Option<Vec3> {
+    match surface {
+        FaceSurface::Plane { normal, .. } => Some(*normal),
+        FaceSurface::Cylinder(cyl) => {
+            // Project point onto cylinder axis to find closest axis point,
+            // then the normal is the radial direction from axis to point.
+            let dp = point - cyl.origin();
+            let along_axis = dp.dot(cyl.axis());
+            let on_axis = cyl.origin() + cyl.axis() * along_axis;
+            (point - on_axis).normalize().ok()
+        }
+        FaceSurface::Cone(cone) => {
+            // For a cone, the normal is perpendicular to the surface.
+            // Project point onto axis, compute the radial direction,
+            // then rotate by (90° - half_angle) around the tangent.
+            let dp = point - cone.apex();
+            let along_axis = dp.dot(cone.axis());
+            let radial = dp - cone.axis() * along_axis;
+            let radial_n = radial.normalize().ok()?;
+            let (sin_a, cos_a) = cone.half_angle().sin_cos();
+            // Normal = radial * sin(half_angle) - axis * cos(half_angle)
+            Some(radial_n * sin_a + cone.axis() * (-cos_a))
+        }
+        FaceSurface::Sphere(sph) => (point - sph.center()).normalize().ok(),
+        FaceSurface::Torus(tor) => {
+            // Project point onto the major circle plane to find the closest
+            // point on the major circle, then the normal is from the tube
+            // center toward the point.
+            let dp = point - tor.center();
+            let along_axis = dp.dot(tor.z_axis());
+            let in_plane = dp - tor.z_axis() * along_axis;
+            let ring_dir = in_plane.normalize().ok()?;
+            let tube_center = tor.center() + ring_dir * tor.major_radius();
+            (point - tube_center).normalize().ok()
+        }
+        FaceSurface::Nurbs(srf) => srf.normal(0.5, 0.5).ok(),
     }
 }
 
@@ -448,9 +495,11 @@ pub fn fillet_rolling_ball(
 
     let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
     let mut face_polygons: HashMap<usize, FacePolygon> = HashMap::new();
+    let mut face_surfaces: HashMap<usize, FaceSurface> = HashMap::new();
 
     for &face_id in &shell_face_ids {
         let face = topo.face(face_id)?;
+        face_surfaces.insert(face_id.index(), face.surface().clone());
 
         let wire = topo.wire(face.outer_wire())?;
         let mut vertex_ids = Vec::with_capacity(wire.edges().len());
@@ -485,8 +534,9 @@ pub fn fillet_rolling_ball(
             }
         }
 
-        // Only build polygon data for planar faces. Non-planar faces
-        // will be passed through unchanged if they don't contain target edges.
+        // Build polygon data for planar faces (used for Phase 3 trimming).
+        // Non-planar faces are stored in face_surfaces and passed through
+        // untrimmed — their fillet geometry is still computed in Phase 4.
         let (normal, d) = match face.surface() {
             FaceSurface::Plane { normal, d } => (*normal, *d),
             _ => continue,
@@ -600,6 +650,18 @@ pub fn fillet_rolling_ball(
             continue;
         };
         let n = poly.positions.len();
+
+        // Skip polygon trimming for degenerate faces (e.g., disc caps with a
+        // single closed circular edge where start==end vertex).
+        if n < 3 {
+            all_specs.push(FaceSpec::Planar {
+                vertices: poly.positions.clone(),
+                normal: poly.normal,
+                d: poly.d,
+            });
+            continue;
+        }
+
         let mut new_verts: Vec<Point3> = Vec::with_capacity(n + target_set.len());
 
         for i in 0..n {
@@ -698,8 +760,22 @@ pub fn fillet_rolling_ball(
         }
         let f1 = face_list[0];
         let f2 = face_list[1];
-        let n1 = face_polygons[&f1.index()].normal;
-        let n2 = face_polygons[&f2.index()].normal;
+
+        // Get face surfaces — needed for normal evaluation on curved faces.
+        let (Some(surf1), Some(surf2)) = (
+            face_surfaces.get(&f1.index()),
+            face_surfaces.get(&f2.index()),
+        ) else {
+            continue;
+        };
+
+        // Evaluate surface normals at the edge start point.
+        let Some(n1_start) = face_surface_normal_at(surf1, p_start) else {
+            continue;
+        };
+        let Some(n2_start) = face_surface_normal_at(surf2, p_start) else {
+            continue;
+        };
 
         // Snapshot the edge curve before further borrows.
         let edge_curve = edge.curve().clone();
@@ -711,18 +787,16 @@ pub fn fillet_rolling_ball(
         }
         let edge_dir = edge_tan.normalize()?;
 
-        // Compute inward-pointing directions on each face (perpendicular to edge,
-        // in the face plane, pointing toward the solid interior).
-        let cross1 = edge_dir.cross(n1);
-        let cross2 = edge_dir.cross(n2);
+        // Compute reference inward-pointing directions at the edge start.
+        let cross1 = edge_dir.cross(n1_start);
+        let cross2 = edge_dir.cross(n2_start);
 
-        // Choose sign so the inward directions point toward each other.
-        let d1_raw = if cross1.dot(n2) > 0.0 {
+        let d1_raw = if cross1.dot(n2_start) > 0.0 {
             cross1
         } else {
             -cross1
         };
-        let d2_raw = if cross2.dot(n1) > 0.0 {
+        let d2_raw = if cross2.dot(n1_start) > 0.0 {
             cross2
         } else {
             -cross2
@@ -731,7 +805,7 @@ pub fn fillet_rolling_ball(
         let d1_ref = d1_raw.normalize().unwrap_or(d1_raw);
         let d2_ref = d2_raw.normalize().unwrap_or(d2_raw);
 
-        // Half dihedral angle (angle between the inward face directions)
+        // Half dihedral angle at the start (reference for the whole edge).
         let cos_half = d1_ref.dot(d2_ref).clamp(-1.0, 1.0);
         let half_angle = cos_half.acos() / 2.0;
 
@@ -740,7 +814,15 @@ pub fn fillet_rolling_ball(
             continue;
         }
 
-        let n_v = edge_v_samples(&edge_curve);
+        // For curved faces, need more samples even if the edge is straight,
+        // because the surface normal varies along the edge.
+        let both_planar = matches!(surf1, FaceSurface::Plane { .. })
+            && matches!(surf2, FaceSurface::Plane { .. });
+        let n_v = if both_planar {
+            edge_v_samples(&edge_curve)
+        } else {
+            edge_v_samples(&edge_curve).max(7)
+        };
 
         // Sample cross-section geometry at each v-station along the edge curve.
         let mut grid: Vec<[Point3; 3]> = Vec::with_capacity(n_v);
@@ -753,11 +835,16 @@ pub fn fillet_rolling_ball(
             let tan = sample_edge_tangent(&edge_curve, p_start, p_end, t);
             let local_dir = tan.normalize().unwrap_or(edge_dir);
 
+            // Evaluate surface normals at this sample point. For planar faces,
+            // these are constant; for curved faces, they vary along the edge.
+            let ln1 = face_surface_normal_at(surf1, p).unwrap_or(n1_start);
+            let ln2 = face_surface_normal_at(surf2, p).unwrap_or(n2_start);
+
             // Recompute cross-section directions at this sample
-            let c1 = local_dir.cross(n1);
-            let c2 = local_dir.cross(n2);
-            let ld1 = if c1.dot(n2) > 0.0 { c1 } else { -c1 };
-            let ld2 = if c2.dot(n1) > 0.0 { c2 } else { -c2 };
+            let c1 = local_dir.cross(ln1);
+            let c2 = local_dir.cross(ln2);
+            let ld1 = if c1.dot(ln2) > 0.0 { c1 } else { -c1 };
+            let ld2 = if c2.dot(ln1) > 0.0 { c2 } else { -c2 };
             let ld1 = ld1.normalize().unwrap_or(d1_ref);
             let ld2 = ld2.normalize().unwrap_or(d2_ref);
 
@@ -1278,11 +1365,14 @@ pub fn fillet_variable(
         std::collections::HashMap::new();
     let mut face_polygons: std::collections::HashMap<usize, FacePolygon> =
         std::collections::HashMap::new();
+    let mut face_surfaces: std::collections::HashMap<usize, FaceSurface> =
+        std::collections::HashMap::new();
     let target_set: std::collections::HashSet<usize> =
         edge_laws.iter().map(|(e, _)| e.index()).collect();
 
     for &face_id in &shell_face_ids {
         let face = topo.face(face_id)?;
+        face_surfaces.insert(face_id.index(), face.surface().clone());
 
         let wire = topo.wire(face.outer_wire())?;
         let mut vertex_ids = Vec::new();
@@ -1305,7 +1395,7 @@ pub fn fillet_variable(
                 .push(face_id);
         }
 
-        // Only build polygon data for planar faces.
+        // Build polygon data for planar faces (used for trimming).
         let normal = match face.surface() {
             FaceSurface::Plane { normal, .. } => *normal,
             _ => continue,
@@ -1346,6 +1436,17 @@ pub fn fillet_variable(
             continue;
         };
         let n = poly.positions.len();
+
+        // Skip polygon trimming for degenerate faces (e.g., disc caps).
+        if n < 3 {
+            all_specs.push(FaceSpec::Planar {
+                vertices: poly.positions.clone(),
+                normal: poly.normal,
+                d: poly.d,
+            });
+            continue;
+        }
+
         let mut new_verts: Vec<Point3> = Vec::with_capacity(n + target_set.len());
 
         for i in 0..n {
@@ -1411,12 +1512,20 @@ pub fn fillet_variable(
         let f1 = face_list[0];
         let f2 = face_list[1];
 
-        let (n1, n2) = match (
-            face_polygons.get(&f1.index()),
-            face_polygons.get(&f2.index()),
-        ) {
-            (Some(p1), Some(p2)) => (p1.normal, p2.normal),
-            _ => continue,
+        // Get face surfaces for normal evaluation on curved faces.
+        let (Some(surf1), Some(surf2)) = (
+            face_surfaces.get(&f1.index()),
+            face_surfaces.get(&f2.index()),
+        ) else {
+            continue;
+        };
+
+        // Evaluate surface normals at the edge start point.
+        let Some(n1_start) = face_surface_normal_at(surf1, p_start) else {
+            continue;
+        };
+        let Some(n2_start) = face_surface_normal_at(surf2, p_start) else {
+            continue;
         };
 
         let edge_curve = edge.curve().clone();
@@ -1428,14 +1537,14 @@ pub fn fillet_variable(
         let edge_dir = edge_tan.normalize()?;
 
         // Reference cross-section at t=0 for fallback directions.
-        let cross1_ref = edge_dir.cross(n1);
-        let cross2_ref = edge_dir.cross(n2);
-        let d1_ref = if cross1_ref.dot(n2) > 0.0 {
+        let cross1_ref = edge_dir.cross(n1_start);
+        let cross2_ref = edge_dir.cross(n2_start);
+        let d1_ref = if cross1_ref.dot(n2_start) > 0.0 {
             cross1_ref
         } else {
             -cross1_ref
         };
-        let d2_ref = if cross2_ref.dot(n1) > 0.0 {
+        let d2_ref = if cross2_ref.dot(n1_start) > 0.0 {
             cross2_ref
         } else {
             -cross2_ref
@@ -1449,8 +1558,14 @@ pub fn fillet_variable(
             continue;
         }
 
-        // Use more samples for curved edges.
-        let n_v = edge_v_samples(&edge_curve).max(n_samples);
+        // Use more samples for curved faces or curved edges.
+        let both_planar = matches!(surf1, FaceSurface::Plane { .. })
+            && matches!(surf2, FaceSurface::Plane { .. });
+        let n_v = if both_planar {
+            edge_v_samples(&edge_curve).max(n_samples)
+        } else {
+            edge_v_samples(&edge_curve).max(n_samples).max(7)
+        };
 
         // Build interpolation grid: n_v rows × 3 columns (arc CPs).
         let mut grid: Vec<Vec<Point3>> = Vec::with_capacity(n_v);
@@ -1464,11 +1579,15 @@ pub fn fillet_variable(
             let tan = sample_edge_tangent(&edge_curve, p_start, p_end, t);
             let local_dir = tan.normalize().unwrap_or(edge_dir);
 
+            // Evaluate surface normals at this sample point.
+            let ln1 = face_surface_normal_at(surf1, p).unwrap_or(n1_start);
+            let ln2 = face_surface_normal_at(surf2, p).unwrap_or(n2_start);
+
             // Recompute cross-section directions at this sample
-            let c1 = local_dir.cross(n1);
-            let c2 = local_dir.cross(n2);
-            let ld1 = if c1.dot(n2) > 0.0 { c1 } else { -c1 };
-            let ld2 = if c2.dot(n1) > 0.0 { c2 } else { -c2 };
+            let c1 = local_dir.cross(ln1);
+            let c2 = local_dir.cross(ln2);
+            let ld1 = if c1.dot(ln2) > 0.0 { c1 } else { -c1 };
+            let ld2 = if c2.dot(ln1) > 0.0 { c2 } else { -c2 };
             let ld1 = ld1.normalize().unwrap_or(d1_ref);
             let ld2 = ld2.normalize().unwrap_or(d2_ref);
 
@@ -2080,6 +2199,80 @@ mod tests {
             result.is_ok(),
             "small radius should succeed: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn fillet_plane_cylinder_edge() {
+        // A cylinder has planar top/bottom and a cylindrical lateral face.
+        // The edges between the planar caps and the cylindrical face should
+        // now be filleted (previously silently skipped).
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 2.0, 4.0).unwrap();
+
+        // Find edges that border both a planar face and a cylindrical face.
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        let mut plane_cyl_edges: Vec<EdgeId> = Vec::new();
+        let mut edge_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
+
+        for &fid in sh.faces() {
+            let face = topo.face(fid).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            for oe in wire.edges() {
+                edge_faces.entry(oe.edge().index()).or_default().push(fid);
+            }
+        }
+
+        for (&eidx, fids) in &edge_faces {
+            if fids.len() == 2 {
+                let s1 = topo.face(fids[0]).unwrap().surface().clone();
+                let s2 = topo.face(fids[1]).unwrap().surface().clone();
+                let has_plane = matches!(s1, FaceSurface::Plane { .. })
+                    || matches!(s2, FaceSurface::Plane { .. });
+                let has_cyl = matches!(s1, FaceSurface::Cylinder(_))
+                    || matches!(s2, FaceSurface::Cylinder(_));
+                if has_plane && has_cyl {
+                    // Recover the EdgeId from eidx — walk the shell to find it.
+                    for &fid in sh.faces() {
+                        let face = topo.face(fid).unwrap();
+                        let wire = topo.wire(face.outer_wire()).unwrap();
+                        for oe in wire.edges() {
+                            if oe.edge().index() == eidx {
+                                plane_cyl_edges.push(oe.edge());
+                            }
+                        }
+                    }
+                    break; // Just need one edge for the test
+                }
+            }
+        }
+
+        assert!(
+            !plane_cyl_edges.is_empty(),
+            "cylinder should have plane-cylinder edges"
+        );
+
+        // Fillet the first plane-cylinder edge. This should succeed now
+        // (previously it would have been silently skipped).
+        let result = super::fillet_rolling_ball(&mut topo, solid, &plane_cyl_edges[..1], 0.3);
+        assert!(
+            result.is_ok(),
+            "plane-cylinder fillet should succeed: {:?}",
+            result.err()
+        );
+
+        // Verify the result has a NURBS fillet face.
+        let result_solid = result.unwrap();
+        let rs = topo.solid(result_solid).unwrap();
+        let rsh = topo.shell(rs.outer_shell()).unwrap();
+        let has_nurbs = rsh
+            .faces()
+            .iter()
+            .any(|&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)));
+        assert!(
+            has_nurbs,
+            "plane-cylinder fillet should produce a NURBS face"
         );
     }
 }

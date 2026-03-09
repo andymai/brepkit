@@ -374,4 +374,48 @@ mod tests {
             prop_assert!((d1 + d2).abs() < 1e-10, "d1={}, d2={}", d1, d2);
         }
     }
+
+    #[test]
+    fn orient2d_sos_never_zero() {
+        // Collinear points: orient2d returns 0, orient2d_sos must not.
+        let a = Point2::new(0.0, 0.0);
+        let b = Point2::new(1.0, 1.0);
+        let c = Point2::new(2.0, 2.0);
+        assert_eq!(orient2d(a, b, c), 0.0);
+        assert_ne!(orient2d_sos(a, b, c, 0, 1, 2), 0.0);
+    }
+
+    #[test]
+    fn orient2d_sos_consistent() {
+        // Same call twice gives same sign.
+        let a = Point2::new(0.0, 0.0);
+        let b = Point2::new(1.0, 1.0);
+        let c = Point2::new(2.0, 2.0);
+        let s1 = orient2d_sos(a, b, c, 0, 1, 2);
+        let s2 = orient2d_sos(a, b, c, 0, 1, 2);
+        assert_eq!(s1.signum(), s2.signum());
+    }
+
+    #[test]
+    fn orient3d_sos_never_zero() {
+        // Coplanar points: orient3d returns 0, orient3d_sos must not.
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let c = Point3::new(0.0, 1.0, 0.0);
+        let d = Point3::new(0.5, 0.5, 0.0);
+        assert_eq!(orient3d(a, b, c, d), 0.0);
+        assert_ne!(orient3d_sos(a, b, c, d, 0, 1, 2, 3), 0.0);
+    }
+
+    #[test]
+    fn orient3d_sos_passes_through_nonzero() {
+        // Non-degenerate case: orient3d_sos returns the same sign as orient3d.
+        let a = Point3::new(0.0, 0.0, 0.0);
+        let b = Point3::new(1.0, 0.0, 0.0);
+        let c = Point3::new(0.0, 1.0, 0.0);
+        let d = Point3::new(0.0, 0.0, 1.0);
+        let exact = orient3d(a, b, c, d);
+        let sos = orient3d_sos(a, b, c, d, 0, 1, 2, 3);
+        assert_eq!(exact.signum(), sos.signum());
+    }
 }

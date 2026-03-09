@@ -1,10 +1,10 @@
 //! Exact NURBS boolean operations via surface-surface intersection.
 //!
-//! # WARNING
+//! # Status
 //!
-//! **This module has broken pcurve registration (lines ~272-306 associate
-//! pcurves with the wrong edge). Do not wire into the boolean dispatcher
-//! until fixed.** Use [`boolean`](crate::boolean) instead.
+//! PCurve registration has been fixed (SSI curves now create proper edges
+//! instead of associating with the wrong boundary edge). The module falls
+//! back to the tessellated boolean when face splitting or assembly fails.
 //!
 //! Unlike the tessellate-then-clip approach in [`boolean`](crate::boolean),
 //! this module computes exact intersection curves between NURBS faces and
@@ -278,6 +278,12 @@ fn compute_all_ssi(
 }
 
 /// Build pcurves from SSI results and register them on the topology.
+///
+/// For each SSI curve, creates a new edge in the topology representing the
+/// intersection curve, then registers pcurves on that edge for both faces.
+/// Previously this incorrectly associated pcurves with the first boundary
+/// edge of each face.
+#[allow(clippy::unnecessary_wraps)]
 fn register_pcurves(
     topo: &mut Topology,
     pairs: &[FacePair],
@@ -308,26 +314,16 @@ fn register_pcurves(
                 Err(_) => EdgeCurve::Line,
             };
 
-            let _edge_id = topo.edges.alloc(Edge::new(start_vid, end_vid, edge_curve));
+            let edge_id = topo.edges.alloc(Edge::new(start_vid, end_vid, edge_curve));
 
             // Build and register pcurve on face_a.
             if let Some(pcurve_a) = build_pcurve_from_params(&ssi_curve.points, true) {
-                // Find edges on face_a that this SSI curve intersects
-                // For now, store the pcurve as a new edge association
-                let face_a = pair.face_a;
-                let wire = topo.wire(topo.face(face_a)?.outer_wire())?;
-                if let Some(first_edge) = wire.edges().first() {
-                    topo.pcurves.set(first_edge.edge(), face_a, pcurve_a);
-                }
+                topo.pcurves.set(edge_id, pair.face_a, pcurve_a);
             }
 
-            // Build pcurve on face_b: 2D curve from param2 values
+            // Build and register pcurve on face_b.
             if let Some(pcurve_b) = build_pcurve_from_params(&ssi_curve.points, false) {
-                let face_b = pair.face_b;
-                let wire = topo.wire(topo.face(face_b)?.outer_wire())?;
-                if let Some(first_edge) = wire.edges().first() {
-                    topo.pcurves.set(first_edge.edge(), face_b, pcurve_b);
-                }
+                topo.pcurves.set(edge_id, pair.face_b, pcurve_b);
             }
         }
     }
