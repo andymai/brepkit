@@ -85,6 +85,15 @@ impl CylindricalSurface {
         self.radius
     }
 
+    /// Returns a copy of this cylinder with its origin translated by `offset`.
+    #[must_use]
+    pub fn translated(&self, offset: Vec3) -> Self {
+        Self {
+            origin: self.origin + offset,
+            ..self.clone()
+        }
+    }
+
     /// Project a 3D point onto the cylinder surface, returning (u, v) parameters.
     ///
     /// `u` is the angular parameter [0, 2π), `v` is the axial parameter.
@@ -184,6 +193,15 @@ impl ConicalSurface {
     #[must_use]
     pub const fn half_angle(&self) -> f64 {
         self.half_angle
+    }
+
+    /// Returns a copy of this cone with its apex translated by `offset`.
+    #[must_use]
+    pub fn translated(&self, offset: Vec3) -> Self {
+        Self {
+            apex: self.apex + offset,
+            ..self.clone()
+        }
     }
 
     /// Returns the radius at a given distance `v` along the axis from the apex.
@@ -320,6 +338,15 @@ impl SphericalSurface {
     #[must_use]
     pub const fn radius(&self) -> f64 {
         self.radius
+    }
+
+    /// Returns a copy of this sphere with its center translated by `offset`.
+    #[must_use]
+    pub fn translated(&self, offset: Vec3) -> Self {
+        Self {
+            center: self.center + offset,
+            ..self.clone()
+        }
     }
 
     /// Project a 3D point onto the sphere, returning (u, v) parameters.
@@ -460,6 +487,15 @@ impl ToroidalSurface {
     #[must_use]
     pub const fn center(&self) -> Point3 {
         self.center
+    }
+
+    /// Returns a copy of this torus with its center translated by `offset`.
+    #[must_use]
+    pub fn translated(&self, offset: Vec3) -> Self {
+        Self {
+            center: self.center + offset,
+            ..self.clone()
+        }
     }
 
     /// Returns the major radius (distance from center to tube center).

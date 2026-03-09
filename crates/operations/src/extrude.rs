@@ -482,7 +482,10 @@ pub fn extrude(
             .map_err(crate::OperationsError::Math)?;
             FaceSurface::Nurbs(translated_surface)
         }
-        other => other.clone(),
+        FaceSurface::Cylinder(cyl) => FaceSurface::Cylinder(cyl.translated(offset)),
+        FaceSurface::Cone(cone) => FaceSurface::Cone(cone.translated(offset)),
+        FaceSurface::Sphere(sph) => FaceSurface::Sphere(sph.translated(offset)),
+        FaceSurface::Torus(tor) => FaceSurface::Torus(tor.translated(offset)),
     };
     let top_face = topo
         .faces
