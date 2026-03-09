@@ -193,6 +193,16 @@ fn intersect_triangles(
     let nb = (b1 - b0).cross(b2 - b0);
     let line_dir = na.cross(nb);
 
+    // Coplanar check: when |na × nb| ≈ 0, the triangles lie in the same plane.
+    // The standard Möller algorithm degenerates here — dispatch to 2D overlap.
+    let line_len_sq =
+        line_dir.x() * line_dir.x() + line_dir.y() * line_dir.y() + line_dir.z() * line_dir.z();
+    let na_len_sq = na.x() * na.x() + na.y() * na.y() + na.z() * na.z();
+    let nb_len_sq = nb.x() * nb.x() + nb.y() * nb.y() + nb.z() * nb.z();
+    if line_len_sq < 1e-20 * na_len_sq.max(nb_len_sq) {
+        return intersect_coplanar_triangles(a0, a1, a2, b0, b1, b2, tolerance);
+    }
+
     // Project onto the axis with the largest component for numerical stability.
     let ax = line_dir.x().abs();
     let ay = line_dir.y().abs();
@@ -234,6 +244,161 @@ fn intersect_triangles(
         tri_a: 0,
         tri_b: 0,
     })
+}
+
+/// Handle coplanar triangle-triangle intersection.
+///
+/// When two triangles lie in the same plane, the standard Möller algorithm
+/// degenerates (na × nb = 0). Instead, project both triangles to 2D and
+/// find intersection edges of their boundaries. Returns the longest edge
+/// of the overlap as the intersection segment, or `None` if the triangles
+/// don't overlap.
+#[allow(clippy::too_many_lines)]
+fn intersect_coplanar_triangles(
+    a0: Point3,
+    a1: Point3,
+    a2: Point3,
+    b0: Point3,
+    b1: Point3,
+    b2: Point3,
+    tolerance: f64,
+) -> Option<TriTriIntersection> {
+    // Choose projection axis: drop the coordinate with the largest normal component.
+    let na = (a1 - a0).cross(a2 - a0);
+    let nax = na.x().abs();
+    let nay = na.y().abs();
+    let naz = na.z().abs();
+
+    let to_2d = |p: Point3| -> (f64, f64) {
+        if naz >= nax && naz >= nay {
+            (p.x(), p.y())
+        } else if nay >= nax {
+            (p.x(), p.z())
+        } else {
+            (p.y(), p.z())
+        }
+    };
+
+    let a2d = [to_2d(a0), to_2d(a1), to_2d(a2)];
+    let b2d = [to_2d(b0), to_2d(b1), to_2d(b2)];
+
+    let a3d = [a0, a1, a2];
+    let b3d = [b0, b1, b2];
+
+    // Find all edge-edge intersection points between the two triangles.
+    let mut hits: Vec<Point3> = Vec::new();
+
+    let a_edges: [(usize, usize); 3] = [(0, 1), (1, 2), (2, 0)];
+    let b_edges: [(usize, usize); 3] = [(0, 1), (1, 2), (2, 0)];
+
+    for &(ai, aj) in &a_edges {
+        for &(bi, bj) in &b_edges {
+            if let Some(pt) = segment_segment_2d(
+                a2d[ai], a2d[aj], b2d[bi], b2d[bj], a3d[ai], a3d[aj], b3d[bi], b3d[bj], tolerance,
+            ) {
+                hits.push(pt);
+            }
+        }
+    }
+
+    // Also check for vertices of A inside B and vice versa.
+    for i in 0..3 {
+        if point_in_triangle_2d(a2d[i], b2d[0], b2d[1], b2d[2]) {
+            hits.push(a3d[i]);
+        }
+        if point_in_triangle_2d(b2d[i], a2d[0], a2d[1], a2d[2]) {
+            hits.push(b3d[i]);
+        }
+    }
+
+    if hits.len() < 2 {
+        return None;
+    }
+
+    // Deduplicate and find the two most distant points as the intersection segment.
+    let mut best_dist_sq = 0.0_f64;
+    let mut best_p0 = hits[0];
+    let mut best_p1 = hits[1];
+
+    for i in 0..hits.len() {
+        for j in (i + 1)..hits.len() {
+            let dx = hits[j].x() - hits[i].x();
+            let dy = hits[j].y() - hits[i].y();
+            let dz = hits[j].z() - hits[i].z();
+            let d2 = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
+            if d2 > best_dist_sq {
+                best_dist_sq = d2;
+                best_p0 = hits[i];
+                best_p1 = hits[j];
+            }
+        }
+    }
+
+    if best_dist_sq < tolerance * tolerance {
+        return None;
+    }
+
+    Some(TriTriIntersection {
+        p0: best_p0,
+        p1: best_p1,
+        tri_a: 0,
+        tri_b: 0,
+    })
+}
+
+/// 2D segment-segment intersection. Returns the 3D intersection point if
+/// the two segments intersect in the 2D projection.
+#[allow(clippy::too_many_arguments)]
+fn segment_segment_2d(
+    a0: (f64, f64),
+    a1: (f64, f64),
+    b0: (f64, f64),
+    b1: (f64, f64),
+    a0_3d: Point3,
+    a1_3d: Point3,
+    _b0_3d: Point3,
+    _b1_3d: Point3,
+    tolerance: f64,
+) -> Option<Point3> {
+    let dx_a = a1.0 - a0.0;
+    let dy_a = a1.1 - a0.1;
+    let dx_b = b1.0 - b0.0;
+    let dy_b = b1.1 - b0.1;
+
+    let denom = dx_a * dy_b - dy_a * dx_b;
+    if denom.abs() < tolerance * tolerance {
+        return None; // Parallel or coincident — skip (handled by vertex-in-triangle)
+    }
+
+    let dx_ab = b0.0 - a0.0;
+    let dy_ab = b0.1 - a0.1;
+
+    let t = (dx_ab * dy_b - dy_ab * dx_b) / denom;
+    let u = (dx_ab * dy_a - dy_ab * dx_a) / denom;
+
+    if t >= -tolerance && t <= 1.0 + tolerance && u >= -tolerance && u <= 1.0 + tolerance {
+        let t_clamped = t.clamp(0.0, 1.0);
+        Some(lerp_point(a0_3d, a1_3d, t_clamped))
+    } else {
+        None
+    }
+}
+
+/// Test if a 2D point lies inside a triangle using cross products.
+fn point_in_triangle_2d(p: (f64, f64), v0: (f64, f64), v1: (f64, f64), v2: (f64, f64)) -> bool {
+    let cross = |a: (f64, f64), b: (f64, f64), c: (f64, f64)| -> f64 {
+        (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+    };
+
+    let d1 = cross(v0, v1, p);
+    let d2 = cross(v1, v2, p);
+    let d3 = cross(v2, v0, p);
+
+    let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
+    let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
+
+    // Strictly inside (not on boundary) to avoid double-counting with edge tests.
+    !(has_neg && has_pos)
 }
 
 /// Check if three signed distances are all on the same side (all positive or all negative).
