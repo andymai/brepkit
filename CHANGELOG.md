@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/andymai/brepkit/compare/v0.8.0...v0.8.1) (2026-03-09)
+
+
+### Performance Improvements
+
+* fix algorithmic bottlenecks — test suite 370s → 9s ([#125](https://github.com/andymai/brepkit/issues/125)) ([27ae79f](https://github.com/andymai/brepkit/commit/27ae79f2eb9ac5bec2d36f36bdce85ecd04bc774))
+
 ## [0.8.0](https://github.com/andymai/brepkit/compare/v0.7.13...v0.8.0) (2026-03-09)
 
 
