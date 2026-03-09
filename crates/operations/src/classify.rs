@@ -224,14 +224,11 @@ fn compute_winding_number(
         }
     }
 
-    // Use absolute value: face orientation (inward vs outward normals) affects
-    // the sign, but the magnitude tells us whether the point is enclosed.
+    // Use abs(): the vertex-swap above ensures consistent winding per
+    // triangle, but across faces the orientation may vary (common after
+    // boolean operations). abs() makes classification robust to mixed
+    // orientations while still detecting inside vs outside.
     let winding = (total_omega / (4.0 * PI)).abs();
-    #[cfg(test)]
-    eprintln!(
-        "DEBUG winding={winding}, total_omega={total_omega}, faces={}",
-        shell.faces().len()
-    );
     Ok((winding, false))
 }
 
