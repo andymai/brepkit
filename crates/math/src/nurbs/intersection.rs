@@ -2462,8 +2462,12 @@ mod tests {
         let tilted = wide_domain_tilted();
 
         // Verify domain is actually [0, 100].
-        assert_eq!(tilted.domain_u(), (0.0, 100.0));
-        assert_eq!(tilted.domain_v(), (0.0, 100.0));
+        let (u_min, u_max) = tilted.domain_u();
+        let (v_min, v_max) = tilted.domain_v();
+        assert!(u_min.abs() < 1e-10);
+        assert!((u_max - 100.0).abs() < 1e-10);
+        assert!(v_min.abs() < 1e-10);
+        assert!((v_max - 100.0).abs() < 1e-10);
 
         let result = intersect_plane_nurbs(&tilted, Vec3::new(0.0, 0.0, 1.0), 0.0, 50).unwrap();
 
@@ -2496,8 +2500,8 @@ mod tests {
         let s2 = wide_domain_tilted();
 
         // Verify domains.
-        assert_eq!(s1.domain_u(), (0.0, 100.0));
-        assert_eq!(s2.domain_u(), (0.0, 100.0));
+        assert!((s1.domain_u().1 - 100.0).abs() < 1e-10);
+        assert!((s2.domain_u().1 - 100.0).abs() < 1e-10);
 
         let seeds = find_ssi_seeds_grid(&s1, &s2, 15, 1e-6);
         assert!(

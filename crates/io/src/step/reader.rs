@@ -712,9 +712,8 @@ fn extract_rational_weights(attrs: &str, expected_count: usize) -> Vec<f64> {
             if weights.len() >= expected_count {
                 return weights[..expected_count].to_vec();
             }
-            if !weights.is_empty() {
-                return weights;
-            }
+            // Partial parse (fewer than expected): fall back to uniform
+            // weights rather than propagating a dimension-mismatch error.
         }
     }
 
@@ -746,6 +745,16 @@ fn parse_weight_list(s: &str) -> Vec<f64> {
                 }
             }
             ',' if depth <= 1 => {
+                let trimmed = current.trim();
+                if let Ok(v) = trimmed.parse::<f64>() {
+                    weights.push(v);
+                }
+                current.clear();
+                continue;
+            }
+            ',' => {
+                // Comma inside a nested sub-list (depth > 1) — flush token
+                // without accumulating the comma character.
                 let trimmed = current.trim();
                 if let Ok(v) = trimmed.parse::<f64>() {
                     weights.push(v);
@@ -1432,8 +1441,8 @@ mod tests {
 
     #[test]
     fn parse_weight_list_2d_nested() {
-        // 2D nested format: ((w1, w2), (w3, w4))
-        let weights = parse_weight_list("(1.0, 0.5), (0.5, 1.0))");
+        // 2D nested format: ((w1, w2), (w3, w4)) — real STEP has double nesting
+        let weights = parse_weight_list("((1.0, 0.5), (0.5, 1.0)))");
         assert_eq!(weights.len(), 4);
         assert!((weights[0] - 1.0).abs() < 1e-10);
         assert!((weights[1] - 0.5).abs() < 1e-10);
