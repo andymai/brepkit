@@ -80,15 +80,34 @@ fn expand_aabb_for_surface(aabb: &mut Aabb3, surface: &FaceSurface) {
             }
         }
         FaceSurface::Torus(t) => {
+            // Use the torus's actual axis to compute correct AABB extents.
             let c = t.center();
             let outer_r = t.major_radius() + t.minor_radius();
+            let axis = t.z_axis();
+            // Axial extent: minor_radius along the torus axis.
+            let axial_offset = Vec3::new(
+                axis.x() * t.minor_radius(),
+                axis.y() * t.minor_radius(),
+                axis.z() * t.minor_radius(),
+            );
+            // Radial extent: outer_r in the equatorial plane (perpendicular to axis).
+            // Worst case for each AABB axis is outer_r * sqrt(1 - axis_component^2),
+            // but conservatively use outer_r for all axes.
             aabb_include(
                 aabb,
-                Point3::new(c.x() - outer_r, c.y() - outer_r, c.z() - t.minor_radius()),
+                Point3::new(
+                    c.x() - outer_r + axial_offset.x().min(0.0),
+                    c.y() - outer_r + axial_offset.y().min(0.0),
+                    c.z() - outer_r + axial_offset.z().min(0.0),
+                ),
             );
             aabb_include(
                 aabb,
-                Point3::new(c.x() + outer_r, c.y() + outer_r, c.z() + t.minor_radius()),
+                Point3::new(
+                    c.x() + outer_r + axial_offset.x().max(0.0),
+                    c.y() + outer_r + axial_offset.y().max(0.0),
+                    c.z() + outer_r + axial_offset.z().max(0.0),
+                ),
             );
         }
         FaceSurface::Nurbs(nurbs) => {

@@ -271,18 +271,35 @@ pub fn point_to_edge(
         // Sample the curve and find closest point
         let (t0, t1) = match edge.curve() {
             brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) => nc.domain(),
-            brepkit_topology::edge::EdgeCurve::Circle(_) => {
+            brepkit_topology::edge::EdgeCurve::Circle(c) => {
                 if edge.is_closed() {
                     (0.0, std::f64::consts::TAU)
                 } else {
-                    (0.0, std::f64::consts::PI)
+                    // Project start/end vertices to get actual arc parameter range.
+                    let mut t0 = c.project(start);
+                    let mut t1 = c.project(end);
+                    if t0 < 0.0 {
+                        t0 += std::f64::consts::TAU;
+                    }
+                    if t1 <= t0 {
+                        t1 += std::f64::consts::TAU;
+                    }
+                    (t0, t1)
                 }
             }
-            brepkit_topology::edge::EdgeCurve::Ellipse(_) => {
+            brepkit_topology::edge::EdgeCurve::Ellipse(e) => {
                 if edge.is_closed() {
                     (0.0, std::f64::consts::TAU)
                 } else {
-                    (0.0, std::f64::consts::PI)
+                    let mut t0 = e.project(start);
+                    let mut t1 = e.project(end);
+                    if t0 < 0.0 {
+                        t0 += std::f64::consts::TAU;
+                    }
+                    if t1 <= t0 {
+                        t1 += std::f64::consts::TAU;
+                    }
+                    (t0, t1)
                 }
             }
             // Line was handled above (early return via `if` branch).
@@ -492,14 +509,8 @@ fn point_to_torus(point: Point3, torus: &brepkit_math::surfaces::ToroidalSurface
         point.z() - torus.center().z(),
     );
 
-    // The torus axis is z_axis. Project pv onto the plane perpendicular to z_axis.
-    // Torus uses x_axis/y_axis/z_axis from its struct but they're private.
-    // We reconstruct: the torus is centered at center, with z_axis = (0,0,1) by default.
-    // Using evaluate to get the major circle direction:
-    // At (u, 0), the point is at major_radius from center in the equatorial plane.
-    // We can use the z-component relative to center as the axial distance.
-    // For a standard torus (z_axis = (0,0,1)):
-    let z_axis = Vec3::new(0.0, 0.0, 1.0); // ToroidalSurface default
+    // Use the torus's actual axis (not hardcoded Z) for correct orientation.
+    let z_axis = torus.z_axis();
     let h = pv.dot(z_axis);
 
     // Radial projection in the equatorial plane.
