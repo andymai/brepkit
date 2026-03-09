@@ -512,6 +512,67 @@ fn bench_gridfinity_3x3_baseplate(c: &mut Criterion) {
 }
 
 // ===========================================================================
+// Stress tests — scalability benchmarks for complex models
+// ===========================================================================
+
+/// Tessellate a solid after 64 boolean cuts (cylinder holes in a plate).
+/// Exercises parallel tessellation on a high-face-count solid.
+fn bench_tessellate_64_hole_plate(c: &mut Criterion) {
+    // Build a plate with 64 holes (8×8 grid of cylinder cuts).
+    let mut topo = Topology::new();
+    let mut result = primitives::make_box(&mut topo, 100.0, 100.0, 10.0).unwrap();
+    for row in 0..8 {
+        for col in 0..8 {
+            let cyl = primitives::make_cylinder(&mut topo, 2.0, 20.0).unwrap();
+            let x = 6.0 + col as f64 * 12.0;
+            let y = 6.0 + row as f64 * 12.0;
+            let mat = Mat4::translation(x, y, -5.0);
+            transform_solid(&mut topo, cyl, &mat).unwrap();
+            result = boolean(&mut topo, BooleanOp::Cut, result, cyl).unwrap();
+        }
+    }
+    c.bench_function("tessellate 64-hole plate", |b| {
+        b.iter(|| {
+            black_box(tessellate::tessellate_solid(&topo, result, 0.1).unwrap());
+        });
+    });
+}
+
+/// 64-cylinder boolean cuts — stress test for sequential analytic booleans.
+fn bench_boolean_64_holes(c: &mut Criterion) {
+    c.bench_function("boolean 64 cuts (8x8 grid)", |b| {
+        b.iter(|| {
+            let mut topo = Topology::new();
+            let mut result = primitives::make_box(&mut topo, 100.0, 100.0, 10.0).unwrap();
+            for row in 0..8 {
+                for col in 0..8 {
+                    let cyl = primitives::make_cylinder(&mut topo, 2.0, 20.0).unwrap();
+                    let x = 6.0 + col as f64 * 12.0;
+                    let y = 6.0 + row as f64 * 12.0;
+                    let mat = Mat4::translation(x, y, -5.0);
+                    transform_solid(&mut topo, cyl, &mat).unwrap();
+                    result = boolean(&mut topo, BooleanOp::Cut, result, cyl).unwrap();
+                }
+            }
+            black_box(result);
+        });
+    });
+}
+
+/// Tessellate a complex boolean result (box ∩ sphere) at fine tolerance.
+fn bench_tessellate_boolean_result(c: &mut Criterion) {
+    let mut topo = Topology::new();
+    let bx = primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let sp = primitives::make_sphere(&mut topo, 7.0, 16).unwrap();
+    let result = boolean(&mut topo, BooleanOp::Intersect, bx, sp).unwrap();
+    c.bench_function("tessellate box∩sphere (tol=0.01)", |b| {
+        b.iter(|| {
+            black_box(tessellate::tessellate_solid(&topo, result, 0.01).unwrap());
+        });
+    });
+}
+
+// ===========================================================================
 // Criterion groups — organized to mirror JS benchmark sections
 // ===========================================================================
 
@@ -568,6 +629,13 @@ criterion_group!(
     bench_intersect_box_sphere_single,
 );
 
+criterion_group!(
+    stress_bench,
+    bench_tessellate_64_hole_plate,
+    bench_boolean_64_holes,
+    bench_tessellate_boolean_result,
+);
+
 criterion_main!(
     primitives_bench,
     booleans_bench,
@@ -579,4 +647,5 @@ criterion_main!(
     endtoend_bench,
     gridfinity_bench,
     optimization_bench,
+    stress_bench,
 );

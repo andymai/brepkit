@@ -725,13 +725,14 @@ fn unproject_point(p2d: brepkit_math::vec::Point2, normal: Vec3, reference: &Poi
 /// `boundary_global_ids` and `outer_positions` describe the outer wire (already
 /// collected by the caller). Inner wires are sampled here and added as CDT
 /// constraint loops.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn tessellate_planar_shared_with_holes(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
     boundary_global_ids: &[u32],
     outer_positions: &[Point3],
     normal: Vec3,
+    edge_global_indices: &HashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
     point_to_global: &mut HashMap<(u64, u64, u64), u32>,
 ) -> Result<(), crate::OperationsError> {
@@ -762,20 +763,83 @@ fn tessellate_planar_shared_with_holes(
     let tol = 1e-10;
     for &iw_id in face_data.inner_wires() {
         let iw = topo.wire(iw_id)?;
-        let inner_pts = sample_wire_positions(topo, iw, tol)?;
         let start = all_positions.len();
-        for &pt in &inner_pts {
-            all_positions.push(pt);
-            // Allocate or reuse global mesh vertices for inner wire points.
-            let key = (pt.x().to_bits(), pt.y().to_bits(), pt.z().to_bits());
-            let gid = point_to_global.entry(key).or_insert_with(|| {
-                #[allow(clippy::cast_possible_truncation)]
-                let idx = merged.positions.len() as u32;
-                merged.positions.push(pt);
-                merged.normals.push(normal);
-                idx
-            });
-            all_global_ids.push(Some(*gid));
+        // Reuse pre-computed shared edge vertices for inner wires when available.
+        // This avoids redundant circle sampling and ensures vertex sharing with
+        // adjacent faces that reference the same edges.
+        let mut inner_global_ids: Vec<u32> = Vec::new();
+        for oe in iw.edges() {
+            let edge_idx = oe.edge().index();
+            if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
+                let ordered: Vec<u32> = if oe.is_forward() {
+                    global_ids.clone()
+                } else {
+                    global_ids.iter().rev().copied().collect()
+                };
+                for (j, &gid) in ordered.iter().enumerate() {
+                    if j == 0 && !inner_global_ids.is_empty() {
+                        let last_gid = *inner_global_ids.last().unwrap_or(&u32::MAX);
+                        if last_gid == gid {
+                            continue;
+                        }
+                        if (last_gid as usize) < merged.positions.len()
+                            && (gid as usize) < merged.positions.len()
+                        {
+                            let last_pos = merged.positions[last_gid as usize];
+                            let this_pos = merged.positions[gid as usize];
+                            if (last_pos - this_pos).length() < tol {
+                                continue;
+                            }
+                        }
+                    }
+                    inner_global_ids.push(gid);
+                    all_positions.push(merged.positions[gid as usize]);
+                    all_global_ids.push(Some(gid));
+                }
+            } else {
+                // Fallback: sample edge directly (shouldn't happen for valid solids).
+                let edge_data = topo.edge(oe.edge())?;
+                let points = sample_edge(topo, edge_data, 0.1)?;
+                let ordered: Vec<Point3> = if oe.is_forward() {
+                    points
+                } else {
+                    points.into_iter().rev().collect()
+                };
+                for &pt in &ordered {
+                    let key = (pt.x().to_bits(), pt.y().to_bits(), pt.z().to_bits());
+                    let gid = point_to_global.entry(key).or_insert_with(|| {
+                        #[allow(clippy::cast_possible_truncation)]
+                        let idx = merged.positions.len() as u32;
+                        merged.positions.push(pt);
+                        merged.normals.push(normal);
+                        idx
+                    });
+                    inner_global_ids.push(*gid);
+                    all_positions.push(pt);
+                    all_global_ids.push(Some(*gid));
+                }
+            }
+        }
+        // Remove closing duplicate if the wire loops back.
+        if inner_global_ids.len() > 2 {
+            if let (Some(&first), Some(&last)) = (inner_global_ids.first(), inner_global_ids.last())
+            {
+                if first == last {
+                    inner_global_ids.pop();
+                    all_positions.pop();
+                    all_global_ids.pop();
+                } else if (first as usize) < merged.positions.len()
+                    && (last as usize) < merged.positions.len()
+                {
+                    let fp = merged.positions[first as usize];
+                    let lp = merged.positions[last as usize];
+                    if (fp - lp).length() < tol {
+                        inner_global_ids.pop();
+                        all_positions.pop();
+                        all_global_ids.pop();
+                    }
+                }
+            }
         }
         let end = all_positions.len();
         inner_wire_ranges.push((start, end));
@@ -2049,17 +2113,32 @@ pub fn tessellate_solid(
 
     // Phase 2: Tessellate each unique edge once.
     // Key: edge index → Vec<Point3> (oriented start→end).
-    let mut edge_points: HashMap<usize, Vec<Point3>> = HashMap::new();
-
-    for &edge_idx in edge_face_map.keys() {
-        // Reconstruct EdgeId from arena index.
-        if let Some(edge_id) = topo.edges.id_from_index(edge_idx) {
-            if let Ok(edge_data) = topo.edge(edge_id) {
-                let points = sample_edge(topo, edge_data, deflection)?;
-                edge_points.insert(edge_idx, points);
+    // Parallelized with rayon when there are enough edges to amortize
+    // thread-pool synchronization overhead.
+    let edge_indices: Vec<usize> = edge_face_map.keys().copied().collect();
+    let edge_points: HashMap<usize, Vec<Point3>> = if edge_indices.len() >= 32 {
+        use rayon::prelude::*;
+        edge_indices
+            .par_iter()
+            .filter_map(|&edge_idx| {
+                let edge_id = topo.edges.id_from_index(edge_idx)?;
+                let edge_data = topo.edge(edge_id).ok()?;
+                let points = sample_edge(topo, edge_data, deflection).ok()?;
+                Some((edge_idx, points))
+            })
+            .collect()
+    } else {
+        let mut map = HashMap::new();
+        for &edge_idx in &edge_indices {
+            if let Some(edge_id) = topo.edges.id_from_index(edge_idx) {
+                if let Ok(edge_data) = topo.edge(edge_id) {
+                    let points = sample_edge(topo, edge_data, deflection)?;
+                    map.insert(edge_idx, points);
+                }
             }
         }
-    }
+        map
+    };
 
     // Phase 3: Build merged mesh with shared edge vertices.
     //
@@ -2296,6 +2375,7 @@ fn tessellate_face_with_shared_edges(
                 &boundary_global_ids,
                 &local_positions,
                 normal,
+                edge_global_indices,
                 merged,
                 point_to_global,
             )?;

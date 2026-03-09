@@ -1959,21 +1959,17 @@ fn collect_face_signatures(
 
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
+        let verts = face_polygon(topo, fid)?;
         let normal = if let FaceSurface::Plane { normal, .. } = face.surface() {
             *normal
+        } else if verts.len() >= 3 {
+            let e1 = verts[1] - verts[0];
+            let e2 = verts[2] - verts[0];
+            e1.cross(e2).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0))
         } else {
-            // For non-planar faces, approximate normal from sampled polygon.
-            let verts = face_polygon(topo, fid)?;
-            if verts.len() >= 3 {
-                let e1 = verts[1] - verts[0];
-                let e2 = verts[2] - verts[0];
-                e1.cross(e2).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0))
-            } else {
-                Vec3::new(0.0, 0.0, 1.0)
-            }
+            Vec3::new(0.0, 0.0, 1.0)
         };
 
-        let verts = face_polygon(topo, fid)?;
         let centroid = polygon_centroid(&verts);
         result.push((fid.index(), normal, centroid));
     }

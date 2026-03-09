@@ -57,6 +57,14 @@ pub struct Cdt {
     constraints: HashSet<(usize, usize)>,
     /// Number of super-triangle vertices at the start of the vertex list.
     super_count: usize,
+    /// Spatial hash for O(1) amortized duplicate point detection.
+    dup_grid: std::collections::HashMap<(i64, i64), Vec<usize>>,
+    /// Last successfully located triangle — used as starting point for the
+    /// walking search to exploit spatial coherence in insertion order.
+    last_located: usize,
+    /// Vertex → one incident triangle index for O(1) edge lookups.
+    /// Updated on triangle creation/removal.
+    vertex_tri: Vec<usize>,
 }
 
 /// Tolerance for duplicate point detection.
@@ -94,10 +102,13 @@ impl Cdt {
         }];
 
         Self {
-            vertices,
+            vertices: vertices.clone(),
             triangles,
             constraints: HashSet::new(),
             super_count: 3,
+            dup_grid: std::collections::HashMap::new(),
+            last_located: 0,
+            vertex_tri: vec![0; vertices.len()], // all 3 super-verts → tri 0
         }
     }
 
@@ -112,19 +123,31 @@ impl Cdt {
     /// Returns [`MathError::ConvergenceFailure`] if the point cannot be
     /// located in any triangle (should not happen for valid inputs).
     pub fn insert_point(&mut self, p: Point2) -> Result<usize, MathError> {
-        // Check for duplicate.
-        for (i, &v) in self.vertices.iter().enumerate() {
-            let d = p - v;
-            if d.length_squared() < DUP_TOL * DUP_TOL {
-                return Ok(i);
+        // Check for duplicate using spatial hash grid (O(1) amortized).
+        let cell = dup_grid_cell(p);
+        // Check the cell and its 8 neighbors to handle points near cell boundaries.
+        for dx in -1..=1_i64 {
+            for dy in -1..=1_i64 {
+                let neighbor = (cell.0 + dx, cell.1 + dy);
+                if let Some(indices) = self.dup_grid.get(&neighbor) {
+                    for &i in indices {
+                        let d = p - self.vertices[i];
+                        if d.length_squared() < DUP_TOL * DUP_TOL {
+                            return Ok(i);
+                        }
+                    }
+                }
             }
         }
 
         let vi = self.vertices.len();
         self.vertices.push(p);
+        self.vertex_tri.push(0); // will be updated by split_triangle/split_edge
+        self.dup_grid.entry(cell).or_default().push(vi);
 
         // Find the triangle containing the point.
         let (tri_idx, location) = self.locate_point(p)?;
+        self.last_located = tri_idx;
 
         match location {
             PointLocation::Inside => {
@@ -254,22 +277,25 @@ impl Cdt {
         seed: Point2,
         constraints: &HashSet<(usize, usize)>,
     ) -> bool {
-        // Locate the non-removed triangle containing the seed point.
-        let seed_tri = self
-            .triangles
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| !t.removed)
-            .find(|(_, t)| {
-                let p0 = self.vertices[t.v[0]];
-                let p1 = self.vertices[t.v[1]];
-                let p2 = self.vertices[t.v[2]];
-                let d0 = orient2d(p0, p1, seed);
-                let d1 = orient2d(p1, p2, seed);
-                let d2 = orient2d(p2, p0, seed);
-                (d0 >= 0.0 && d1 >= 0.0 && d2 >= 0.0) || (d0 <= 0.0 && d1 <= 0.0 && d2 <= 0.0)
-            })
-            .map(|(i, _)| i);
+        // Use the walking point-location search (O(sqrt(n))) instead of
+        // linear scan (O(n)) to find the seed triangle.
+        let seed_tri = self.locate_point(seed).ok().map(|(i, _)| i).or_else(|| {
+            // Fallback: linear scan for removed/degenerate cases.
+            self.triangles
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| !t.removed)
+                .find(|(_, t)| {
+                    let p0 = self.vertices[t.v[0]];
+                    let p1 = self.vertices[t.v[1]];
+                    let p2 = self.vertices[t.v[2]];
+                    let d0 = orient2d(p0, p1, seed);
+                    let d1 = orient2d(p1, p2, seed);
+                    let d2 = orient2d(p2, p0, seed);
+                    (d0 >= 0.0 && d1 >= 0.0 && d2 >= 0.0) || (d0 <= 0.0 && d1 <= 0.0 && d2 <= 0.0)
+                })
+                .map(|(i, _)| i)
+        });
 
         let Some(start) = seed_tri else {
             return false;
@@ -432,15 +458,21 @@ enum PointLocation {
 }
 
 impl Cdt {
-    /// Locate the triangle containing point `p` by walking from the last
-    /// triangle.
+    /// Locate the triangle containing point `p` by walking from a hint
+    /// triangle (exploits spatial coherence for sequential insertions).
     fn locate_point(&self, p: Point2) -> Result<(usize, PointLocation), MathError> {
-        // Start from the last non-removed triangle.
-        let mut current = self
-            .triangles
-            .iter()
-            .rposition(|t| !t.removed)
-            .ok_or(MathError::ConvergenceFailure { iterations: 0 })?;
+        // Start from the last successfully located triangle for spatial coherence.
+        // Fall back to the last non-removed triangle if the hint is stale.
+        let mut current = if self.last_located < self.triangles.len()
+            && !self.triangles[self.last_located].removed
+        {
+            self.last_located
+        } else {
+            self.triangles
+                .iter()
+                .rposition(|t| !t.removed)
+                .ok_or(MathError::ConvergenceFailure { iterations: 0 })?
+        };
 
         let max_steps = self.triangles.len() * 2 + 10;
         for _ in 0..max_steps {
@@ -598,6 +630,20 @@ impl Cdt {
         // But we must still ensure it points to t0 in case it was modified.
         // Since t0 == tri_idx, no replace needed for adj2.
 
+        // Update vertex→triangle index.
+        if vi < self.vertex_tri.len() {
+            self.vertex_tri[vi] = t0;
+        }
+        if a < self.vertex_tri.len() {
+            self.vertex_tri[a] = t0;
+        }
+        if b < self.vertex_tri.len() {
+            self.vertex_tri[b] = t1;
+        }
+        if c < self.vertex_tri.len() {
+            self.vertex_tri[c] = t2;
+        }
+
         // Legalize edges.
         self.legalize(t0, 2, vi); // edge opposite vi in t0 = edge (a,b) = adj0
         self.legalize(t1, 2, vi); // edge opposite vi in t1 = edge (b,c) = adj1
@@ -707,6 +753,23 @@ impl Cdt {
             }
 
             // Legalize external edges.
+            // Update vertex→triangle index for all affected vertices.
+            if vi < self.vertex_tri.len() {
+                self.vertex_tri[vi] = t0;
+            }
+            if opp < self.vertex_tri.len() {
+                self.vertex_tri[opp] = t0;
+            }
+            if e0 < self.vertex_tri.len() {
+                self.vertex_tri[e0] = t0;
+            }
+            if e1 < self.vertex_tri.len() {
+                self.vertex_tri[e1] = t1;
+            }
+            if opp2 < self.vertex_tri.len() {
+                self.vertex_tri[opp2] = t2;
+            }
+
             self.legalize(t0, 2, vi); // across (opp, e0)
             self.legalize(t1, 1, vi); // across (e1, opp)
             self.legalize(t2, 2, vi); // across (opp2, e1)
@@ -724,6 +787,20 @@ impl Cdt {
                 adj: [None, adj_e1_opp, Some(t0)],
                 removed: false,
             });
+
+            // Update vertex→triangle index.
+            if vi < self.vertex_tri.len() {
+                self.vertex_tri[vi] = t0;
+            }
+            if opp < self.vertex_tri.len() {
+                self.vertex_tri[opp] = t0;
+            }
+            if e0 < self.vertex_tri.len() {
+                self.vertex_tri[e0] = t0;
+            }
+            if e1 < self.vertex_tri.len() {
+                self.vertex_tri[e1] = t1;
+            }
 
             if let Some(a) = adj_opp_e0 {
                 self.replace_adj(a, tri_idx, t0);
@@ -871,6 +948,20 @@ impl Cdt {
         if let Some(a) = a_adj_prev {
             self.replace_adj(a, tri_a, tri_b);
         }
+
+        // Update vertex→triangle hints for affected vertices.
+        if a_opp < self.vertex_tri.len() {
+            self.vertex_tri[a_opp] = tri_a;
+        }
+        if b_opp < self.vertex_tri.len() {
+            self.vertex_tri[b_opp] = tri_b;
+        }
+        if a_e0 < self.vertex_tri.len() {
+            self.vertex_tri[a_e0] = tri_b;
+        }
+        if a_e1 < self.vertex_tri.len() {
+            self.vertex_tri[a_e1] = tri_a;
+        }
     }
 
     /// Replace an adjacency reference in a triangle.
@@ -975,7 +1066,13 @@ impl Cdt {
     }
 
     /// Check if an edge between v0 and v1 exists in the triangulation.
+    /// Uses the vertex→triangle hint to walk the fan around v0 in O(degree).
     fn edge_exists(&self, v0: usize, v1: usize) -> bool {
+        // Try fast fan walk first using vertex_tri hint.
+        if let Some(result) = self.edge_exists_fan(v0, v1) {
+            return result;
+        }
+        // Fallback: linear scan (only if hint is stale).
         for tri in &self.triangles {
             if tri.removed {
                 continue;
@@ -991,8 +1088,88 @@ impl Cdt {
         false
     }
 
+    /// Walk the triangle fan around vertex v0 checking for edge (v0, v1).
+    /// Returns Some(bool) if successful, None if the hint is stale.
+    fn edge_exists_fan(&self, v0: usize, v1: usize) -> Option<bool> {
+        if v0 >= self.vertex_tri.len() {
+            return None;
+        }
+        let start = self.vertex_tri[v0];
+        if start >= self.triangles.len() || self.triangles[start].removed {
+            return None;
+        }
+        // Verify the hint triangle actually contains v0.
+        let tri = &self.triangles[start];
+        let v0_local = tri.v.iter().position(|&v| v == v0)?;
+
+        // Walk around v0 in one direction, then the other.
+        // Check each triangle for the edge (v0, v1).
+        let check_tri = |tri: &CdtTriangle, v0_local: usize| -> bool {
+            let a = tri.v[(v0_local + 1) % 3];
+            let b = tri.v[(v0_local + 2) % 3];
+            a == v1 || b == v1
+        };
+
+        if check_tri(tri, v0_local) {
+            return Some(true);
+        }
+
+        // Walk clockwise (follow adj to the "left" of v0).
+        let mut current = start;
+        let mut cur_v0_local = v0_local;
+        let max_steps = self.triangles.len();
+        for _ in 0..max_steps {
+            // The edge "to the left" of v0 in this triangle is
+            // adj[(v0_local + 2) % 3] (opposite to v[(v0_local + 2) % 3]).
+            // Wait, we need to think about this more carefully.
+            // In triangle (v0, a, b) with v0 at position v0_local:
+            //   adj[v0_local] is across edge (a, b) — doesn't touch v0
+            //   adj[(v0_local+1)%3] is across edge (b, v0) — touches v0
+            //   adj[(v0_local+2)%3] is across edge (v0, a) — touches v0
+            let next = self.triangles[current].adj[(cur_v0_local + 1) % 3];
+            match next {
+                Some(ni) if ni != start && !self.triangles[ni].removed => {
+                    current = ni;
+                    let t = &self.triangles[ni];
+                    cur_v0_local = t.v.iter().position(|&v| v == v0)?;
+                    if check_tri(t, cur_v0_local) {
+                        return Some(true);
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        // Walk counter-clockwise.
+        current = start;
+        cur_v0_local = v0_local;
+        for _ in 0..max_steps {
+            let next = self.triangles[current].adj[(cur_v0_local + 2) % 3];
+            match next {
+                Some(ni) if ni != start && !self.triangles[ni].removed => {
+                    current = ni;
+                    let t = &self.triangles[ni];
+                    cur_v0_local = t.v.iter().position(|&v| v == v0)?;
+                    if check_tri(t, cur_v0_local) {
+                        return Some(true);
+                    }
+                }
+                _ => break,
+            }
+        }
+
+        Some(false)
+    }
+
     /// Find a non-constrained edge that intersects segment (v0, v1).
+    /// Walks from v0 toward v1 using triangle adjacency (O(k) where k =
+    /// number of crossed edges) instead of scanning all triangles.
     fn find_intersecting_edge(&self, v0: usize, v1: usize) -> Option<(usize, usize)> {
+        // Try walking from v0 first.
+        if let Some(result) = self.find_intersecting_walk(v0, v1) {
+            return Some(result);
+        }
+        // Fallback: linear scan (only when walk fails).
         let p0 = self.vertices[v0];
         let p1 = self.vertices[v1];
 
@@ -1004,7 +1181,6 @@ impl Cdt {
                 let ea = tri.v[(local + 1) % 3];
                 let eb = tri.v[(local + 2) % 3];
 
-                // Skip edges that share a vertex with the constraint.
                 if ea == v0 || ea == v1 || eb == v0 || eb == v1 {
                     continue;
                 }
@@ -1018,6 +1194,66 @@ impl Cdt {
             }
         }
         None
+    }
+
+    /// Walk from v0 toward v1 to find the first intersecting edge.
+    fn find_intersecting_walk(&self, v0: usize, v1: usize) -> Option<(usize, usize)> {
+        if v0 >= self.vertex_tri.len() {
+            return None;
+        }
+        let start = self.vertex_tri[v0];
+        if start >= self.triangles.len() || self.triangles[start].removed {
+            return None;
+        }
+        let tri = &self.triangles[start];
+        if !tri.v.contains(&v0) {
+            return None;
+        }
+
+        let p0 = self.vertices[v0];
+        let p1 = self.vertices[v1];
+
+        // Walk the fan around v0 to find the triangle whose opposite edge
+        // is intersected by the segment (v0, v1).
+        let mut current = start;
+        let max_steps = self.triangles.len();
+        for _ in 0..max_steps {
+            let t = &self.triangles[current];
+            if t.removed {
+                break;
+            }
+            let v0_local = match t.v.iter().position(|&v| v == v0) {
+                Some(l) => l,
+                None => break,
+            };
+            // Check the edge opposite v0 (between the other two vertices).
+            let ea = t.v[(v0_local + 1) % 3];
+            let eb = t.v[(v0_local + 2) % 3];
+            if ea != v1 && eb != v1 {
+                let pa = self.vertices[ea];
+                let pb = self.vertices[eb];
+                if segments_properly_intersect(p0, p1, pa, pb) {
+                    return Some((current, v0_local));
+                }
+            }
+            // Move to the next triangle in the fan around v0.
+            // Walk in the direction that the target point lies.
+            let va = self.vertices[ea];
+            let side = orient2d(p0, p1, va);
+            let next_adj = if side >= 0.0 {
+                t.adj[(v0_local + 2) % 3] // walk toward ea
+            } else {
+                t.adj[(v0_local + 1) % 3] // walk toward eb
+            };
+            match next_adj {
+                Some(ni) if ni != start && !self.triangles[ni].removed => {
+                    current = ni;
+                }
+                _ => break,
+            }
+        }
+
+        None // Walk failed, caller will fall back to linear scan
     }
 
     /// Find an intersecting edge that is different from (skip_e0, skip_e1).
@@ -1164,6 +1400,19 @@ fn segments_properly_intersect(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -
         return true;
     }
     false
+}
+
+/// Map a 2D point to a grid cell for duplicate detection.
+/// Cell size is much larger than `DUP_TOL` so neighbors cover the tolerance radius.
+#[allow(clippy::cast_possible_truncation)]
+fn dup_grid_cell(p: Point2) -> (i64, i64) {
+    // Cell size ~1e-9: 1000× DUP_TOL to keep neighbor checks cheap while
+    // ensuring points within DUP_TOL always land in the same or adjacent cells.
+    const CELL_INV: f64 = 1e9;
+    (
+        (p.x() * CELL_INV).floor() as i64,
+        (p.y() * CELL_INV).floor() as i64,
+    )
 }
 
 // ---------------------------------------------------------------------------
