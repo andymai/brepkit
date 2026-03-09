@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.7](https://github.com/andymai/brepkit/compare/v0.7.6...v0.7.7) (2026-03-09)
+
+
+### Bug Fixes
+
+* Tier 1 critical fixes — SSI domains, STEP I/O, extrude surfaces ([#104](https://github.com/andymai/brepkit/issues/104)) ([14069fd](https://github.com/andymai/brepkit/commit/14069fdd69cff3d272c8fb68abc24dd0ffe6f911))
+
 ## [0.7.6](https://github.com/andymai/brepkit/compare/v0.7.5...v0.7.6) (2026-03-09)
 
 
