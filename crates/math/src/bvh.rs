@@ -95,6 +95,11 @@ impl Bvh {
 
     /// Find the primitive whose AABB is closest to `point`.
     ///
+    /// **Note**: This returns the primitive with the closest *AABB*, which is
+    /// a lower bound on the actual distance. For exact closest-primitive
+    /// queries, use [`query_closest_with_distance`] with a callback that
+    /// computes the true distance to each primitive.
+    ///
     /// Returns `None` if the BVH is empty.
     #[must_use]
     pub fn query_closest(&self, point: Point3) -> Option<usize> {
@@ -126,6 +131,57 @@ impl Bvh {
             } else {
                 best_id = Some(node.primitive);
                 best_dist = node_dist;
+            }
+        }
+
+        best_id
+    }
+
+    /// Find the closest primitive to `point` using an exact distance callback.
+    ///
+    /// Unlike [`query_closest`], this uses the provided `distance_sq` callback
+    /// to compute the actual squared distance from `point` to each candidate
+    /// primitive, ensuring the true closest primitive is returned. The BVH
+    /// AABB distances are used only for pruning, so distant subtrees are
+    /// skipped efficiently.
+    ///
+    /// Returns `None` if the BVH is empty.
+    #[must_use]
+    pub fn query_closest_with_distance(
+        &self,
+        point: Point3,
+        distance_sq: &dyn Fn(usize) -> f64,
+    ) -> Option<usize> {
+        if self.nodes.is_empty() {
+            return None;
+        }
+
+        let mut best_id = None;
+        let mut best_dist = f64::INFINITY;
+        let mut stack = vec![0usize];
+
+        while let Some(idx) = stack.pop() {
+            let node = &self.nodes[idx];
+            let node_dist = node.aabb.distance_squared_to_point(point);
+            if node_dist >= best_dist {
+                continue;
+            }
+            if node.primitive == usize::MAX {
+                let dl = self.nodes[node.left].aabb.distance_squared_to_point(point);
+                let dr = self.nodes[node.right].aabb.distance_squared_to_point(point);
+                if dl < dr {
+                    stack.push(node.right);
+                    stack.push(node.left);
+                } else {
+                    stack.push(node.left);
+                    stack.push(node.right);
+                }
+            } else {
+                let actual_dist = distance_sq(node.primitive);
+                if actual_dist < best_dist {
+                    best_dist = actual_dist;
+                    best_id = Some(node.primitive);
+                }
             }
         }
 

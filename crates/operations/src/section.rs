@@ -15,8 +15,24 @@ use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
+use brepkit_math::nurbs::intersection::IntersectionPoint;
+
 use crate::boolean::face_polygon;
 use crate::dot_normal_point;
+
+/// Chain intersection curve points into consecutive segment pairs.
+///
+/// Instead of connecting only the first and last point (chord approximation),
+/// this chains all intermediate points as individual segments, faithfully
+/// tracing the actual intersection curve.
+fn chain_curve_points(points: &[IntersectionPoint], segments: &mut Vec<(Point3, Point3)>) {
+    if points.len() < 2 {
+        return;
+    }
+    for pair in points.windows(2) {
+        segments.push((pair[0].point, pair[1].point));
+    }
+}
 
 /// A cross-section result: one or more planar faces on the cutting plane.
 #[derive(Debug)]
@@ -85,69 +101,35 @@ pub fn section(
                 let intersection_curves =
                     brepkit_math::nurbs::intersection::intersect_plane_nurbs(nurbs, normal, d, 50)?;
                 for curve in &intersection_curves {
-                    if curve.points.len() >= 2 {
-                        let first = curve.points.first().map(|p| p.point);
-                        let last = curve.points.last().map(|p| p.point);
-                        if let (Some(a), Some(b)) = (first, last) {
-                            segments.push((a, b));
-                        }
-                    }
+                    chain_curve_points(&curve.points, &mut segments);
                 }
             }
             FaceSurface::Cylinder(cyl) => {
                 let curves =
                     brepkit_math::analytic_intersection::intersect_plane_cylinder(cyl, normal, d)?;
                 for curve in &curves {
-                    if curve.points.len() >= 2 {
-                        if let (Some(a), Some(b)) = (
-                            curve.points.first().map(|p| p.point),
-                            curve.points.last().map(|p| p.point),
-                        ) {
-                            segments.push((a, b));
-                        }
-                    }
+                    chain_curve_points(&curve.points, &mut segments);
                 }
             }
             FaceSurface::Cone(cone) => {
                 let curves =
                     brepkit_math::analytic_intersection::intersect_plane_cone(cone, normal, d)?;
                 for curve in &curves {
-                    if curve.points.len() >= 2 {
-                        if let (Some(a), Some(b)) = (
-                            curve.points.first().map(|p| p.point),
-                            curve.points.last().map(|p| p.point),
-                        ) {
-                            segments.push((a, b));
-                        }
-                    }
+                    chain_curve_points(&curve.points, &mut segments);
                 }
             }
             FaceSurface::Sphere(sphere) => {
                 let curves =
                     brepkit_math::analytic_intersection::intersect_plane_sphere(sphere, normal, d)?;
                 for curve in &curves {
-                    if curve.points.len() >= 2 {
-                        if let (Some(a), Some(b)) = (
-                            curve.points.first().map(|p| p.point),
-                            curve.points.last().map(|p| p.point),
-                        ) {
-                            segments.push((a, b));
-                        }
-                    }
+                    chain_curve_points(&curve.points, &mut segments);
                 }
             }
             FaceSurface::Torus(torus) => {
                 let curves =
                     brepkit_math::analytic_intersection::intersect_plane_torus(torus, normal, d)?;
                 for curve in &curves {
-                    if curve.points.len() >= 2 {
-                        if let (Some(a), Some(b)) = (
-                            curve.points.first().map(|p| p.point),
-                            curve.points.last().map(|p| p.point),
-                        ) {
-                            segments.push((a, b));
-                        }
-                    }
+                    chain_curve_points(&curve.points, &mut segments);
                 }
             }
         }

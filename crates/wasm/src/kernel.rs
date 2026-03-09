@@ -97,6 +97,29 @@ fn filter_planar_edges(
     Ok(result)
 }
 
+/// Attempt fillet with rolling-ball, falling back to flat bevel on failure.
+#[allow(deprecated)]
+fn try_fillet(
+    topo: &mut brepkit_topology::Topology,
+    solid_id: brepkit_topology::solid::SolidId,
+    edge_ids: &[brepkit_topology::edge::EdgeId],
+    radius: f64,
+) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
+    brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
+        .or_else(|_| brepkit_operations::fillet::fillet(topo, solid_id, edge_ids, radius))
+}
+
+/// Extract a human-readable message from a `catch_unwind` panic payload.
+fn panic_message(payload: &Box<dyn std::any::Any + Send>, operation: &str) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        format!("{operation} operation panicked: {s}")
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        format!("{operation} operation panicked: {s}")
+    } else {
+        format!("{operation} operation panicked (unknown cause)")
+    }
+}
+
 /// Sample a closed periodic curve (period = TAU) into a flat `[x, y, z, ...]` buffer.
 ///
 /// Produces `n` evenly-spaced points in `[0, TAU)` using the supplied `evaluate` function.
@@ -576,41 +599,32 @@ impl BrepKernel {
         // blend surfaces. Falls back to the planar fillet if rolling-ball fails.
         // If the full set of edges fails (e.g. edges adjacent to NURBS faces from
         // a prior fillet), filter to edges between two planar faces and retry.
-        let result = brepkit_operations::fillet::fillet_rolling_ball(
-            &mut self.topo,
-            solid_id,
-            &edge_ids,
-            radius,
-        )
-        .or_else(|_| {
-            brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)
-        });
-        let result = if let Ok(r) = result {
-            r
-        } else {
-            // Filter to edges where both adjacent faces are planar.
-            let planar_edges = filter_planar_edges(&self.topo, solid_id, &edge_ids)?;
-            if planar_edges.is_empty() {
-                // No planar-adjacent edges to fillet; return the solid unchanged.
-                solid_id
-            } else {
-                brepkit_operations::fillet::fillet_rolling_ball(
-                    &mut self.topo,
-                    solid_id,
-                    &planar_edges,
-                    radius,
-                )
-                .or_else(|_| {
-                    brepkit_operations::fillet::fillet(
-                        &mut self.topo,
-                        solid_id,
-                        &planar_edges,
-                        radius,
-                    )
-                })?
+        //
+        // Wrap in catch_unwind to prevent panics from propagating across the
+        // WASM FFI boundary, which would abort the entire WASM instance.
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
+                let solid = if let Ok(s) = try_fillet(&mut self.topo, solid_id, &edge_ids, radius) {
+                    s
+                } else {
+                    // Filter to edges where both adjacent faces are planar.
+                    let planar_edges = filter_planar_edges(&self.topo, solid_id, &edge_ids)?;
+                    if planar_edges.is_empty() {
+                        solid_id
+                    } else {
+                        try_fillet(&mut self.topo, solid_id, &planar_edges, radius)
+                            .map_err(|e| JsError::new(&e.to_string()))?
+                    }
+                };
+                Ok(solid_id_to_u32(solid))
+            }));
+        match result {
+            Ok(inner) => inner,
+            Err(panic_info) => {
+                let msg = panic_message(&panic_info, "Fillet");
+                Err(JsError::new(&msg))
             }
-        };
-        Ok(solid_id_to_u32(result))
+        }
     }
 
     // ── Operations ─────────────────────────────────────────────────
@@ -5535,7 +5549,7 @@ impl BrepKernel {
             }
             "revolve" => {
                 let f = get_u32(args, "face")?;
-                let angle = get_f64(args, "angle")?;
+                let angle_degrees = get_f64(args, "angle")?;
                 let ox = get_f64(args, "originX").unwrap_or(0.0);
                 let oy = get_f64(args, "originY").unwrap_or(0.0);
                 let oz = get_f64(args, "originZ").unwrap_or(0.0);
@@ -5543,12 +5557,13 @@ impl BrepKernel {
                 let ay = get_f64(args, "axisY").unwrap_or(0.0);
                 let az = get_f64(args, "axisZ").unwrap_or(1.0);
                 let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                // Convert degrees to radians to match the direct WASM binding.
                 let solid = revolve(
                     &mut self.topo,
                     face_id,
                     Point3::new(ox, oy, oz),
                     Vec3::new(ax, ay, az),
-                    angle,
+                    angle_degrees.to_radians(),
                 )
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
@@ -5605,9 +5620,15 @@ impl BrepKernel {
                     .iter()
                     .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
                     .collect::<Result<Vec<_>, _>>()?;
-                let result =
-                    brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)
-                        .map_err(|e| e.to_string())?;
+                let fillet_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    try_fillet(&mut self.topo, solid_id, &edge_ids, radius)
+                }));
+                let result = match fillet_result {
+                    Ok(inner) => inner.map_err(|e| e.to_string())?,
+                    Err(panic_info) => {
+                        return Err(panic_message(&panic_info, "Fillet"));
+                    }
+                };
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             "shell" => {

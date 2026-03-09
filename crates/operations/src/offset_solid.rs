@@ -63,10 +63,10 @@ pub fn offset_solid(
     }
 
     // Collect face normals and plane equations.
-    let mut face_normals: std::collections::HashMap<usize, (Vec3, f64)> =
-        std::collections::HashMap::new();
-    let mut vertex_faces: std::collections::HashMap<usize, Vec<usize>> =
-        std::collections::HashMap::new();
+    let mut face_normals: std::collections::BTreeMap<usize, (Vec3, f64)> =
+        std::collections::BTreeMap::new();
+    let mut vertex_faces: std::collections::BTreeMap<usize, Vec<usize>> =
+        std::collections::BTreeMap::new();
 
     for &fid in &face_ids {
         let face = topo.face(fid)?;
@@ -105,8 +105,8 @@ pub fn offset_solid(
     // Compute offset vertex positions.
     // For vertices at the intersection of 3+ faces, solve the 3-plane
     // intersection to find the correct offset position.
-    let mut vertex_offset_pos: std::collections::HashMap<usize, Point3> =
-        std::collections::HashMap::new();
+    let mut vertex_offset_pos: std::collections::BTreeMap<usize, Point3> =
+        std::collections::BTreeMap::new();
 
     for (&vid_idx, adj_faces) in &vertex_faces {
         let vid = topo.vertices.id_from_index(vid_idx);

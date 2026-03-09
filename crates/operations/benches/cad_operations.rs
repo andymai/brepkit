@@ -21,6 +21,7 @@ use brepkit_math::vec::Vec3;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::chamfer::chamfer;
 use brepkit_operations::copy::copy_solid;
+#[allow(deprecated)]
 use brepkit_operations::fillet::fillet;
 use brepkit_operations::measure;
 use brepkit_operations::pattern;
@@ -283,6 +284,7 @@ fn bench_box_fillet_all(c: &mut Criterion) {
             let mut topo = Topology::new();
             let solid = primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
             let edges = collect_edges(&topo, solid);
+            #[allow(deprecated)]
             black_box(fillet(&mut topo, solid, &edges, 1.0).unwrap());
         });
     });

@@ -302,17 +302,50 @@ impl NurbsSurface {
     /// Compute the unit normal vector at parameters `(u, v)`.
     ///
     /// The normal is the cross product of the u- and v-partial derivatives,
-    /// normalized.
+    /// normalized. At degenerate points (poles, collapsed edges) where
+    /// `du × dv ≈ 0`, falls back to perturbing the parameter slightly
+    /// in each direction and retrying — an L'Hôpital-style approach.
     ///
     /// # Errors
     ///
     /// Returns [`MathError::ZeroVector`] if the surface is degenerate at
-    /// this point (both partials are parallel or zero).
+    /// this point and all fallback perturbations also fail.
     pub fn normal(&self, u: f64, v: f64) -> Result<Vec3, MathError> {
         let d = self.derivatives(u, v, 1);
         let du = d[1][0];
         let dv = d[0][1];
-        du.cross(dv).normalize()
+        let cross = du.cross(dv);
+
+        if cross.length_squared() > 1e-30 {
+            return cross.normalize();
+        }
+
+        // Degenerate point — try perturbing the parameter slightly.
+        let (u0, u1) = self.domain_u();
+        let (v0, v1) = self.domain_v();
+        let eps_u = (u1 - u0) * 1e-6;
+        let eps_v = (v1 - v0) * 1e-6;
+
+        let perturbations = [
+            (u + eps_u, v),
+            (u - eps_u, v),
+            (u, v + eps_v),
+            (u, v - eps_v),
+        ];
+
+        for (pu, pv) in perturbations {
+            let pu = pu.clamp(u0, u1);
+            let pv = pv.clamp(v0, v1);
+            let pd = self.derivatives(pu, pv, 1);
+            let pdu = pd[1][0];
+            let pdv = pd[0][1];
+            let pcross = pdu.cross(pdv);
+            if pcross.length_squared() > 1e-30 {
+                return pcross.normalize();
+            }
+        }
+
+        Err(MathError::ZeroVector)
     }
 
     /// Compute an axis-aligned bounding box from control point extrema.

@@ -357,27 +357,43 @@ pub fn fix_face_orientations(
 
     for &fid in &face_ids {
         let face = topo.face(fid)?;
+        let wire = topo.wire(face.outer_wire())?;
+        let first_oe = match wire.edges().first() {
+            Some(oe) => oe,
+            None => continue,
+        };
+        let edge = topo.edge(first_oe.edge())?;
+        let face_point = topo.vertex(edge.start())?.point();
+        let to_face = face_point - center_pt;
 
-        if let FaceSurface::Plane { normal, d } = face.surface() {
-            // Get a point on the face
-            let wire = topo.wire(face.outer_wire())?;
-            if let Some(first_oe) = wire.edges().first() {
-                let edge = topo.edge(first_oe.edge())?;
-                let face_point = topo.vertex(edge.start())?.point();
-
-                // Vector from center to face point
-                let to_face = face_point - center_pt;
-
-                // If normal points toward center (wrong direction), flip it
+        match face.surface() {
+            FaceSurface::Plane { normal, d } => {
                 if normal.dot(to_face) < 0.0 {
                     faces_to_flip.push((fid, *normal, *d));
                     fixed_count += 1;
                 }
             }
+            FaceSurface::Cylinder(cyl) => {
+                // For cylinders, the outward radial direction should point away from center.
+                let to_pt = Vec3::new(
+                    face_point.x() - cyl.origin().x(),
+                    face_point.y() - cyl.origin().y(),
+                    face_point.z() - cyl.origin().z(),
+                );
+                let h = to_pt.dot(cyl.axis());
+                let radial = to_pt - cyl.axis() * h;
+                if radial.dot(to_face) < 0.0 {
+                    // Cylinder orientation is wrong — but we can only flip planar faces.
+                    // For analytic surfaces, orientation is inherent; skip.
+                }
+            }
+            // Non-planar faces: orientation is determined by surface parameterization,
+            // not a flippable normal. Skip for now.
+            _ => {}
         }
     }
 
-    // Apply flips
+    // Apply flips (only planar faces can be flipped).
     for (fid, normal, d) in faces_to_flip {
         let face = topo.face_mut(fid)?;
         face.set_surface(FaceSurface::Plane {
@@ -638,7 +654,11 @@ pub fn remove_duplicate_faces(
         let face = topo.face(fid)?;
         let normal = match face.surface() {
             FaceSurface::Plane { normal, .. } => *normal,
-            _ => continue, // Skip non-planar faces for now
+            FaceSurface::Cylinder(cyl) => cyl.axis(),
+            FaceSurface::Cone(cone) => cone.axis(),
+            FaceSurface::Sphere(_) => Vec3::new(0.0, 0.0, 1.0), // placeholder for comparison
+            FaceSurface::Torus(tor) => tor.z_axis(),
+            FaceSurface::Nurbs(_) => continue, // NURBS dedup needs parameter-space comparison
         };
 
         let wire = topo.wire(face.outer_wire())?;
