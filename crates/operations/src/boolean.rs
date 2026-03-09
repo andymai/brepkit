@@ -2869,61 +2869,63 @@ fn analytic_boolean(
 
     // ── Classification ───────────────────────────────────────────────────
 
-    // Build FaceData for classification (tessellated faces of opposite solid).
-    let face_data_a = collect_face_data(topo, a, deflection)?;
-    let face_data_b = collect_face_data(topo, b, deflection)?;
-
-    // Analytic classifiers for O(1) point-in-solid tests (e.g. sphere).
+    // Try analytic classifiers first (O(1) point-in-solid tests).
+    // Only build expensive tessellated face data if needed.
     let analytic_cls_a = try_build_analytic_classifier(topo, a);
     let analytic_cls_b = try_build_analytic_classifier(topo, b);
 
-    // BVH acceleration for ray-cast classification.
-    let bvh_a = build_face_bvh(&face_data_a);
-    let bvh_b = build_face_bvh(&face_data_b);
+    // Phase 1: classify everything we can with analytic classifiers.
+    let mut classes: Vec<Option<FaceClass>> = fragments
+        .iter()
+        .enumerate()
+        .map(|(idx, frag)| {
+            if let Some(&class) = pre_classifications.get(&idx) {
+                return Some(class);
+            }
+            let centroid = polygon_centroid(&frag.vertices);
+            match frag.source {
+                Source::A => analytic_cls_b
+                    .as_ref()
+                    .and_then(|c| c.classify(centroid, tol)),
+                Source::B => analytic_cls_a
+                    .as_ref()
+                    .and_then(|c| c.classify(centroid, tol)),
+            }
+        })
+        .collect();
 
-    // Classification with adaptive parallelism.
-    let analytic_classify_fn = |idx: usize, frag: &AnalyticFragment| -> FaceClass {
-        if let Some(&class) = pre_classifications.get(&idx) {
-            return class;
-        }
-        let centroid = polygon_centroid(&frag.vertices);
-        let fast = match frag.source {
-            Source::A => analytic_cls_b
-                .as_ref()
-                .and_then(|c| c.classify(centroid, tol)),
-            Source::B => analytic_cls_a
-                .as_ref()
-                .and_then(|c| c.classify(centroid, tol)),
-        };
-        if let Some(class) = fast {
-            return class;
-        }
-        let (opposite, bvh) = match frag.source {
-            Source::A => (&face_data_b, bvh_b.as_ref()),
-            Source::B => (&face_data_a, bvh_a.as_ref()),
-        };
-        let pseudo = FaceFragment {
-            vertices: frag.vertices.clone(),
-            normal: frag.normal,
-            d: frag.d,
-            source: frag.source,
-        };
-        classify_fragment(&pseudo, opposite, bvh, tol)
-    };
+    // Phase 2: if any fragments are unclassified, build face data and ray-cast.
+    let needs_raycast = classes.iter().any(Option::is_none);
+    if needs_raycast {
+        let face_data_a = collect_face_data(topo, a, deflection)?;
+        let face_data_b = collect_face_data(topo, b, deflection)?;
+        let bvh_a = build_face_bvh(&face_data_a);
+        let bvh_b = build_face_bvh(&face_data_b);
 
-    let classes: Vec<FaceClass> = if fragments.len() >= PARALLEL_THRESHOLD {
-        fragments
-            .par_iter()
-            .enumerate()
-            .map(|(idx, frag)| analytic_classify_fn(idx, frag))
-            .collect()
-    } else {
-        fragments
-            .iter()
-            .enumerate()
-            .map(|(idx, frag)| analytic_classify_fn(idx, frag))
-            .collect()
-    };
+        for (idx, class) in classes.iter_mut().enumerate() {
+            if class.is_some() {
+                continue;
+            }
+            let frag = &fragments[idx];
+            let (opposite, bvh) = match frag.source {
+                Source::A => (&face_data_b, bvh_b.as_ref()),
+                Source::B => (&face_data_a, bvh_a.as_ref()),
+            };
+            let pseudo = FaceFragment {
+                vertices: frag.vertices.clone(),
+                normal: frag.normal,
+                d: frag.d,
+                source: frag.source,
+            };
+            *class = Some(classify_fragment(&pseudo, opposite, bvh, tol));
+        }
+    }
+
+    // Unwrap: all fragments are now classified.
+    let classes: Vec<FaceClass> = classes
+        .into_iter()
+        .map(|c| c.unwrap_or(FaceClass::Outside))
+        .collect();
 
     // ── Selection + Assembly ─────────────────────────────────────────────
 
