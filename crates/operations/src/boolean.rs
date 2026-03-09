@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use rayon::prelude::*;
+
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
 use brepkit_math::plane::plane_plane_intersection;
@@ -167,6 +169,11 @@ fn ray_face_crossing(
 /// band fragments, cap face polygons, and holed-face inner wires share the
 /// same vertices and edges at their boundaries.
 const CLOSED_CURVE_SAMPLES: usize = 64;
+
+/// Minimum fragment count for parallel classification via rayon.
+/// Below this threshold, sequential iteration is faster due to rayon's
+/// thread-pool synchronization overhead (~5-20µs).
+const PARALLEL_THRESHOLD: usize = 64;
 
 /// The type of boolean operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -416,25 +423,28 @@ pub fn boolean_with_options(
     let bvh_a = build_face_bvh(&faces_a);
     let bvh_b = build_face_bvh(&faces_b);
 
-    let classes: Vec<FaceClass> = fragments
-        .iter()
-        .map(|frag| {
-            // Try analytic classification first (e.g. point-in-sphere).
-            let centroid = polygon_centroid(&frag.vertices);
-            let fast = match frag.source {
-                Source::A => analytic_b.as_ref().and_then(|c| c.classify(centroid, tol)),
-                Source::B => analytic_a.as_ref().and_then(|c| c.classify(centroid, tol)),
-            };
-            if let Some(class) = fast {
-                return class;
-            }
-            let (opposite, bvh) = match frag.source {
-                Source::A => (&faces_b, bvh_b.as_ref()),
-                Source::B => (&faces_a, bvh_a.as_ref()),
-            };
-            classify_fragment(frag, opposite, bvh, tol)
-        })
-        .collect();
+    // Classification: parallelize when fragment count justifies rayon overhead.
+    let classify_fn = |frag: &FaceFragment| -> FaceClass {
+        let centroid = polygon_centroid(&frag.vertices);
+        let fast = match frag.source {
+            Source::A => analytic_b.as_ref().and_then(|c| c.classify(centroid, tol)),
+            Source::B => analytic_a.as_ref().and_then(|c| c.classify(centroid, tol)),
+        };
+        if let Some(class) = fast {
+            return class;
+        }
+        let (opposite, bvh) = match frag.source {
+            Source::A => (&faces_b, bvh_b.as_ref()),
+            Source::B => (&faces_a, bvh_a.as_ref()),
+        };
+        classify_fragment(frag, opposite, bvh, tol)
+    };
+
+    let classes: Vec<FaceClass> = if fragments.len() >= PARALLEL_THRESHOLD {
+        fragments.par_iter().map(classify_fn).collect()
+    } else {
+        fragments.iter().map(classify_fn).collect()
+    };
 
     // ── Phase 5: Selection ───────────────────────────────────────────────
 
@@ -1198,6 +1208,9 @@ enum AnalyticClassifier {
         z_min: f64,
         z_max: f64,
     },
+    /// Point-in-box: axis-aligned bounding box test.
+    /// O(1) with just 6 comparisons — the fastest classifier.
+    Box { min: Point3, max: Point3 },
 }
 
 impl AnalyticClassifier {
@@ -1242,6 +1255,29 @@ impl AnalyticClassifier {
                 {
                     Some(FaceClass::Inside)
                 } else if radial_dist_sq > (radius + tol.linear) * (radius + tol.linear) {
+                    Some(FaceClass::Outside)
+                } else {
+                    None // On boundary — fall back to ray-casting
+                }
+            }
+            Self::Box { min, max } => {
+                // 6 comparisons — the fastest possible classifier.
+                let tl = tol.linear;
+                if centroid.x() > min.x() + tl
+                    && centroid.x() < max.x() - tl
+                    && centroid.y() > min.y() + tl
+                    && centroid.y() < max.y() - tl
+                    && centroid.z() > min.z() + tl
+                    && centroid.z() < max.z() - tl
+                {
+                    Some(FaceClass::Inside)
+                } else if centroid.x() < min.x() - tl
+                    || centroid.x() > max.x() + tl
+                    || centroid.y() < min.y() - tl
+                    || centroid.y() > max.y() + tl
+                    || centroid.z() < min.z() - tl
+                    || centroid.z() > max.z() + tl
+                {
                     Some(FaceClass::Outside)
                 } else {
                     None // On boundary — fall back to ray-casting
@@ -1298,6 +1334,68 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
                 has_planar = true;
             }
             _ => return None, // Unsupported surface type
+        }
+    }
+
+    // Pure planar solid (all faces are planes) — likely a box.
+    // Detect axis-aligned boxes by checking that all faces are axis-aligned planes
+    // that form 3 opposite-normal pairs.
+    if has_planar && !has_sphere && !has_cylinder {
+        let faces = shell.faces();
+        if faces.len() == 6 {
+            // Collect all plane normals and d values.
+            let mut planes: Vec<(Vec3, f64)> = Vec::with_capacity(6);
+            let mut is_box = true;
+            for &fid in faces {
+                if let Ok(face) = topo.face(fid) {
+                    if let FaceSurface::Plane { normal, d } = face.surface() {
+                        // Check axis-alignment: exactly one component should be ±1.
+                        let ax = normal.x().abs();
+                        let ay = normal.y().abs();
+                        let az = normal.z().abs();
+                        if (ax > 1.0 - tol.angular && ay < tol.angular && az < tol.angular)
+                            || (ay > 1.0 - tol.angular && ax < tol.angular && az < tol.angular)
+                            || (az > 1.0 - tol.angular && ax < tol.angular && ay < tol.angular)
+                        {
+                            planes.push((*normal, *d));
+                        } else {
+                            is_box = false;
+                            break;
+                        }
+                    } else {
+                        is_box = false;
+                        break;
+                    }
+                } else {
+                    is_box = false;
+                    break;
+                }
+            }
+            if is_box && planes.len() == 6 {
+                // Extract min/max from the 3 axis pairs.
+                let mut x_vals = Vec::new();
+                let mut y_vals = Vec::new();
+                let mut z_vals = Vec::new();
+                for &(normal, d) in &planes {
+                    if normal.x().abs() > 0.5 {
+                        // d = normal · point, so the plane is at x = d/normal.x()
+                        x_vals.push(d / normal.x());
+                    } else if normal.y().abs() > 0.5 {
+                        y_vals.push(d / normal.y());
+                    } else {
+                        z_vals.push(d / normal.z());
+                    }
+                }
+                if x_vals.len() == 2 && y_vals.len() == 2 && z_vals.len() == 2 {
+                    x_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    y_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    z_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    return Some(AnalyticClassifier::Box {
+                        min: Point3::new(x_vals[0], y_vals[0], z_vals[0]),
+                        max: Point3::new(x_vals[1], y_vals[1], z_vals[1]),
+                    });
+                }
+            }
         }
     }
 
@@ -2161,12 +2259,30 @@ fn analytic_boolean(
     }
     let mut contained_curves: Vec<ContainedCurve> = Vec::new();
 
+    // Build BVH over solid B's face AABBs for O(n log m) broad-phase instead of O(n*m).
+    // Only worthwhile when B has enough faces to amortize BVH build cost.
+    let analytic_bvh_b = if snaps_b.len() >= 16 {
+        let b_bvh_entries: Vec<(usize, Aabb3)> = aabbs_b
+            .iter()
+            .enumerate()
+            .map(|(i, aabb)| (i, *aabb))
+            .collect();
+        Some(Bvh::build(&b_bvh_entries))
+    } else {
+        None
+    };
+
     for (ia, snap_a) in snaps_a.iter().enumerate() {
-        for (ib, snap_b) in snaps_b.iter().enumerate() {
-            // Skip non-overlapping AABBs.
-            if !aabbs_a[ia].intersects(aabbs_b[ib]) {
-                continue;
-            }
+        // Use BVH for broad-phase when available, otherwise brute-force with AABB check.
+        let candidates: Vec<usize> = if let Some(ref bvh) = analytic_bvh_b {
+            bvh.query_overlap(&aabbs_a[ia])
+        } else {
+            (0..snaps_b.len())
+                .filter(|&ib| aabbs_a[ia].intersects(aabbs_b[ib]))
+                .collect()
+        };
+        for &ib in &candidates {
+            let snap_b = &snaps_b[ib];
 
             let is_plane_a = matches!(snap_a.surface, FaceSurface::Plane { .. });
             let is_plane_b = matches!(snap_b.surface, FaceSurface::Plane { .. });
@@ -2765,40 +2881,49 @@ fn analytic_boolean(
     let bvh_a = build_face_bvh(&face_data_a);
     let bvh_b = build_face_bvh(&face_data_b);
 
-    let classes: Vec<FaceClass> = fragments
-        .iter()
-        .enumerate()
-        .map(|(idx, frag)| {
-            // Use pre-classification for contained-curve fragments.
-            if let Some(&class) = pre_classifications.get(&idx) {
-                return class;
-            }
-            // Try analytic classification first.
-            let centroid = polygon_centroid(&frag.vertices);
-            let fast = match frag.source {
-                Source::A => analytic_cls_b
-                    .as_ref()
-                    .and_then(|c| c.classify(centroid, tol)),
-                Source::B => analytic_cls_a
-                    .as_ref()
-                    .and_then(|c| c.classify(centroid, tol)),
-            };
-            if let Some(class) = fast {
-                return class;
-            }
-            let (opposite, bvh) = match frag.source {
-                Source::A => (&face_data_b, bvh_b.as_ref()),
-                Source::B => (&face_data_a, bvh_a.as_ref()),
-            };
-            let pseudo = FaceFragment {
-                vertices: frag.vertices.clone(),
-                normal: frag.normal,
-                d: frag.d,
-                source: frag.source,
-            };
-            classify_fragment(&pseudo, opposite, bvh, tol)
-        })
-        .collect();
+    // Classification with adaptive parallelism.
+    let analytic_classify_fn = |idx: usize, frag: &AnalyticFragment| -> FaceClass {
+        if let Some(&class) = pre_classifications.get(&idx) {
+            return class;
+        }
+        let centroid = polygon_centroid(&frag.vertices);
+        let fast = match frag.source {
+            Source::A => analytic_cls_b
+                .as_ref()
+                .and_then(|c| c.classify(centroid, tol)),
+            Source::B => analytic_cls_a
+                .as_ref()
+                .and_then(|c| c.classify(centroid, tol)),
+        };
+        if let Some(class) = fast {
+            return class;
+        }
+        let (opposite, bvh) = match frag.source {
+            Source::A => (&face_data_b, bvh_b.as_ref()),
+            Source::B => (&face_data_a, bvh_a.as_ref()),
+        };
+        let pseudo = FaceFragment {
+            vertices: frag.vertices.clone(),
+            normal: frag.normal,
+            d: frag.d,
+            source: frag.source,
+        };
+        classify_fragment(&pseudo, opposite, bvh, tol)
+    };
+
+    let classes: Vec<FaceClass> = if fragments.len() >= PARALLEL_THRESHOLD {
+        fragments
+            .par_iter()
+            .enumerate()
+            .map(|(idx, frag)| analytic_classify_fn(idx, frag))
+            .collect()
+    } else {
+        fragments
+            .iter()
+            .enumerate()
+            .map(|(idx, frag)| analytic_classify_fn(idx, frag))
+            .collect()
+    };
 
     // ── Selection + Assembly ─────────────────────────────────────────────
 
