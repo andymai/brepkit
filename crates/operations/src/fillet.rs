@@ -1015,14 +1015,13 @@ pub fn fillet_variable(
         );
     }
 
-    // Build trimmed planar faces (using average radius for trimming).
-    let avg_radius: f64 = edge_laws
+    // Build a map from edge index to radius law for per-vertex radius lookup.
+    // Each vertex adjacent to a filleted edge uses that edge's actual radius
+    // at the vertex (start=0.0, end=1.0) instead of a global average.
+    let edge_law_map: HashMap<usize, &FilletRadiusLaw> = edge_laws
         .iter()
-        .map(|(_, law)| law.evaluate(0.5))
-        .sum::<f64>()
-        / edge_laws.len() as f64;
-    // Placeholder: edges_only will be used for per-edge trimming.
-    let _ = edge_laws.len();
+        .map(|(eid, law)| (eid.index(), law))
+        .collect();
 
     // Use the constant-radius trimming from the basic fillet for the planar faces.
     // The NURBS canal surface replaces the fillet face.
@@ -1050,21 +1049,31 @@ pub fn fillet_variable(
             let prev_pos = poly.positions[prev_i];
             let next_pos = poly.positions[next_i];
 
+            // Look up per-edge radius at this vertex:
+            // - "before" edge (prev_i): vertex i is at its end → evaluate(1.0)
+            // - "after" edge (i): vertex i is at its start → evaluate(0.0)
+            let radius_before = edge_law_map
+                .get(&poly.wire_edge_ids[prev_i].index())
+                .map_or(0.0, |law| law.evaluate(1.0));
+            let radius_after = edge_law_map
+                .get(&poly.wire_edge_ids[i].index())
+                .map_or(0.0, |law| law.evaluate(0.0));
+
             match (before_filleted, after_filleted) {
                 (false, false) => new_verts.push(pos),
                 (true, false) => {
                     let dir = (next_pos - pos).normalize()?;
-                    new_verts.push(pos + dir * avg_radius);
+                    new_verts.push(pos + dir * radius_before);
                 }
                 (false, true) => {
                     let dir = (prev_pos - pos).normalize()?;
-                    new_verts.push(pos + dir * avg_radius);
+                    new_verts.push(pos + dir * radius_after);
                 }
                 (true, true) => {
                     let dir_prev = (prev_pos - pos).normalize()?;
-                    new_verts.push(pos + dir_prev * avg_radius);
+                    new_verts.push(pos + dir_prev * radius_before);
                     let dir_next = (next_pos - pos).normalize()?;
-                    new_verts.push(pos + dir_next * avg_radius);
+                    new_verts.push(pos + dir_next * radius_after);
                 }
             }
         }
