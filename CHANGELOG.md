@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.5](https://github.com/andymai/brepkit/compare/v0.7.4...v0.7.5) (2026-03-09)
+
+
+### Performance Improvements
+
+* preserve analytic surfaces through sequential booleans ([#98](https://github.com/andymai/brepkit/issues/98)) ([7923932](https://github.com/andymai/brepkit/commit/7923932149a29acd58536cdd82000d35dd0c8d08))
+
 ## [0.7.4](https://github.com/andymai/brepkit/compare/v0.7.3...v0.7.4) (2026-03-08)
 
 
