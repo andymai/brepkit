@@ -97,6 +97,29 @@ fn filter_planar_edges(
     Ok(result)
 }
 
+/// Attempt fillet with rolling-ball, falling back to flat bevel on failure.
+#[allow(deprecated)]
+fn try_fillet(
+    topo: &mut brepkit_topology::Topology,
+    solid_id: brepkit_topology::solid::SolidId,
+    edge_ids: &[brepkit_topology::edge::EdgeId],
+    radius: f64,
+) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
+    brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
+        .or_else(|_| brepkit_operations::fillet::fillet(topo, solid_id, edge_ids, radius))
+}
+
+/// Extract a human-readable message from a `catch_unwind` panic payload.
+fn panic_message(payload: &Box<dyn std::any::Any + Send>, operation: &str) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        format!("{operation} operation panicked: {s}")
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        format!("{operation} operation panicked: {s}")
+    } else {
+        format!("{operation} operation panicked (unknown cause)")
+    }
+}
+
 /// Sample a closed periodic curve (period = TAU) into a flat `[x, y, z, ...]` buffer.
 ///
 /// Produces `n` evenly-spaced points in `[0, TAU)` using the supplied `evaluate` function.
@@ -559,7 +582,7 @@ impl BrepKernel {
     ///
     /// Returns an error if radius is non-positive or edges are invalid.
     #[wasm_bindgen(js_name = "fillet")]
-    #[allow(clippy::needless_pass_by_value, deprecated)]
+    #[allow(clippy::needless_pass_by_value)]
     pub fn fillet_solid(
         &mut self,
         solid: u32,
@@ -582,38 +605,16 @@ impl BrepKernel {
         // making all subsequent kernel operations fail with "recursive use".
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
-                let result = brepkit_operations::fillet::fillet_rolling_ball(
-                    &mut self.topo,
-                    solid_id,
-                    &edge_ids,
-                    radius,
-                )
-                .or_else(|_| {
-                    brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)
-                });
-                let solid = if let Ok(r) = result {
-                    r
+                let solid = if let Ok(s) = try_fillet(&mut self.topo, solid_id, &edge_ids, radius) {
+                    s
                 } else {
                     // Filter to edges where both adjacent faces are planar.
                     let planar_edges = filter_planar_edges(&self.topo, solid_id, &edge_ids)?;
                     if planar_edges.is_empty() {
-                        // No planar-adjacent edges to fillet; return the solid unchanged.
                         solid_id
                     } else {
-                        brepkit_operations::fillet::fillet_rolling_ball(
-                            &mut self.topo,
-                            solid_id,
-                            &planar_edges,
-                            radius,
-                        )
-                        .or_else(|_| {
-                            brepkit_operations::fillet::fillet(
-                                &mut self.topo,
-                                solid_id,
-                                &planar_edges,
-                                radius,
-                            )
-                        })?
+                        try_fillet(&mut self.topo, solid_id, &planar_edges, radius)
+                            .map_err(|e| JsError::new(&e.to_string()))?
                     }
                 };
                 Ok(solid_id_to_u32(solid))
@@ -621,13 +622,7 @@ impl BrepKernel {
         match result {
             Ok(inner) => inner,
             Err(panic_info) => {
-                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    format!("Fillet operation panicked: {s}")
-                } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                    format!("Fillet operation panicked: {s}")
-                } else {
-                    "Fillet operation panicked (unknown cause)".to_string()
-                };
+                let msg = panic_message(&panic_info, "Fillet");
                 Err(JsError::new(&msg))
             }
         }
@@ -5626,17 +5621,8 @@ impl BrepKernel {
                     .iter()
                     .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
                     .collect::<Result<Vec<_>, _>>()?;
-                #[allow(deprecated)]
-                let result = brepkit_operations::fillet::fillet_rolling_ball(
-                    &mut self.topo,
-                    solid_id,
-                    &edge_ids,
-                    radius,
-                )
-                .or_else(|_| {
-                    brepkit_operations::fillet::fillet(&mut self.topo, solid_id, &edge_ids, radius)
-                })
-                .map_err(|e| e.to_string())?;
+                let result = try_fillet(&mut self.topo, solid_id, &edge_ids, radius)
+                    .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             "shell" => {

@@ -1662,6 +1662,15 @@ fn quantize(v: f64, resolution: f64) -> i64 {
     (v * resolution).round() as i64
 }
 
+/// Quantize a 3D point to a spatial hash key for vertex deduplication.
+fn quantize_point(p: Point3, resolution: f64) -> (i64, i64, i64) {
+    (
+        quantize(p.x(), resolution),
+        quantize(p.y(), resolution),
+        quantize(p.z(), resolution),
+    )
+}
+
 /// Assemble a solid from a set of planar face polygons with normals.
 ///
 /// Uses spatial hashing for vertex dedup and edge sharing.
@@ -1751,11 +1760,7 @@ pub(crate) fn assemble_solid_mixed(
         let vert_ids: Vec<VertexId> = verts
             .iter()
             .map(|p| {
-                let key = (
-                    quantize(p.x(), resolution),
-                    quantize(p.y(), resolution),
-                    quantize(p.z(), resolution),
-                );
+                let key = quantize_point(*p, resolution);
                 *vertex_map
                     .entry(key)
                     .or_insert_with(|| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
@@ -2198,15 +2203,13 @@ fn edge_curves_from_face(
         return vec![None; n_verts];
     };
     let edges = wire.edges();
-    // Single closed edge that's a Circle or Ellipse → single-curve boundary.
-    if edges.len() == 1 {
-        if let Ok(edge) = topo.edge(edges[0].edge()) {
-            if edge.start() == edge.end()
-                && matches!(edge.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
-            {
-                return vec![Some(edge.curve().clone())];
-            }
-        }
+    // Single closed Circle or Ellipse edge → single-curve boundary.
+    if edges.len() == 1
+        && let Ok(edge) = topo.edge(edges[0].edge())
+        && edge.start() == edge.end()
+        && matches!(edge.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+    {
+        return vec![Some(edge.curve().clone())];
     }
     vec![None; n_verts]
 }
@@ -3035,11 +3038,7 @@ fn analytic_boolean(
         let vert_ids: Vec<VertexId> = verts
             .iter()
             .map(|p| {
-                let key = (
-                    quantize(p.x(), resolution),
-                    quantize(p.y(), resolution),
-                    quantize(p.z(), resolution),
-                );
+                let key = quantize_point(*p, resolution);
                 *vertex_map
                     .entry(key)
                     .or_insert_with(|| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
@@ -3071,19 +3070,16 @@ fn analytic_boolean(
         } else if is_single_closed_curve {
             // Disc fragment: boundary is a single closed curve (circle/ellipse).
             // Create one closed edge instead of N line edges.
-            let ec = frag.edge_curves[0].clone().unwrap_or(EdgeCurve::Line);
+            // Safety: is_single_closed_curve guarantees frag.edge_curves[0] is Some.
+            let Some(ec) = frag.edge_curves[0].clone() else {
+                unreachable!("is_single_closed_curve guarantees Some")
+            };
             let seam_pt = verts[0];
-            let key = (
-                quantize(seam_pt.x(), resolution),
-                quantize(seam_pt.y(), resolution),
-                quantize(seam_pt.z(), resolution),
-            );
             let vid = *vertex_map
-                .entry(key)
+                .entry(quantize_point(seam_pt, resolution))
                 .or_insert_with(|| topo.vertices.alloc(Vertex::new(seam_pt, tol.linear)));
-            let edge_key = (vid.index(), vid.index());
             let eid = *edge_map
-                .entry(edge_key)
+                .entry((vid.index(), vid.index()))
                 .or_insert_with(|| topo.edges.alloc(Edge::new(vid, vid, ec)));
             let wire = Wire::new(vec![OrientedEdge::new(eid, true)], true)
                 .map_err(crate::OperationsError::Topology)?;
@@ -3142,17 +3138,11 @@ fn analytic_boolean(
                     // so the edge is shared between the hole wire and the
                     // adjacent cylinder barrel face.
                     let seam_pt = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES)[0];
-                    let key = (
-                        quantize(seam_pt.x(), resolution),
-                        quantize(seam_pt.y(), resolution),
-                        quantize(seam_pt.z(), resolution),
-                    );
                     let vid = *vertex_map
-                        .entry(key)
+                        .entry(quantize_point(seam_pt, resolution))
                         .or_insert_with(|| topo.vertices.alloc(Vertex::new(seam_pt, tol.linear)));
-                    let edge_key = (vid.index(), vid.index());
                     let eid = *edge_map
-                        .entry(edge_key)
+                        .entry((vid.index(), vid.index()))
                         .or_insert_with(|| topo.edges.alloc(Edge::new(vid, vid, ec.clone())));
                     // Hole wires wind CW (reversed circle). When the face is
                     // flipped, the outer wire is already reversed so the hole
@@ -3163,10 +3153,10 @@ fn analytic_boolean(
                 } else {
                     // Non-circle/ellipse: fall back to sampled polygon edges.
                     let mut hole_pts = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES);
-                    if flip {
-                        // If the face is flipped, don't reverse the hole
-                        // (the outer wire is already reversed).
-                    } else {
+                    if !flip {
+                        // Reverse for CW winding (hole convention). When the
+                        // face is flipped, the outer wire is already reversed
+                        // so the hole keeps its natural direction.
                         hole_pts.reverse();
                     }
 
@@ -3947,9 +3937,7 @@ fn build_cylinder_barrel_wire(
     resolution: f64,
     tol: Tolerance,
 ) -> Result<WireId, crate::OperationsError> {
-    let n_half = verts.len() / 2;
-
-    // The polygon layout is: bot[0..n_half] + top_reversed[0..n_half].
+    // The polygon layout is: bot[0..n/2] + top_reversed[0..n/2].
     // bot[0] is at u=0 on the bottom circle; verts[2n-1] = top[0] is at u=0 on the top circle.
     let bot_seam_pos = verts[0];
     let top_seam_pos = verts[verts.len() - 1];
@@ -3968,18 +3956,10 @@ fn build_cylinder_barrel_wire(
 
     // Create/lookup vertices at the seam points.
     let bot_vid = *vertex_map
-        .entry((
-            quantize(bot_seam_pos.x(), resolution),
-            quantize(bot_seam_pos.y(), resolution),
-            quantize(bot_seam_pos.z(), resolution),
-        ))
+        .entry(quantize_point(bot_seam_pos, resolution))
         .or_insert_with(|| topo.vertices.alloc(Vertex::new(bot_seam_pos, tol.linear)));
     let top_vid = *vertex_map
-        .entry((
-            quantize(top_seam_pos.x(), resolution),
-            quantize(top_seam_pos.y(), resolution),
-            quantize(top_seam_pos.z(), resolution),
-        ))
+        .entry(quantize_point(top_seam_pos, resolution))
         .or_insert_with(|| topo.vertices.alloc(Vertex::new(top_seam_pos, tol.linear)));
 
     // Create/lookup closed Circle edges — dedup key is (v, v) for closed edges.
@@ -3996,27 +3976,24 @@ fn build_cylinder_barrel_wire(
                 .alloc(Edge::new(top_vid, top_vid, EdgeCurve::Circle(top_circle)))
         });
 
-    // Create/lookup seam line edge.
-    let (seam_key_min, seam_key_max) = if bot_vid.index() <= top_vid.index() {
+    // Create/lookup seam line edge. Forward means bot→top in canonical order.
+    let seam_fwd = bot_vid.index() <= top_vid.index();
+    let seam_key = if seam_fwd {
         (bot_vid.index(), top_vid.index())
     } else {
         (top_vid.index(), bot_vid.index())
     };
-    let seam_fwd = bot_vid.index() <= top_vid.index();
-    let seam_edge = *edge_map
-        .entry((seam_key_min, seam_key_max))
-        .or_insert_with(|| {
-            let (start, end) = if seam_fwd {
-                (bot_vid, top_vid)
-            } else {
-                (top_vid, bot_vid)
-            };
-            topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
-        });
+    let seam_edge = *edge_map.entry(seam_key).or_insert_with(|| {
+        let (start, end) = if seam_fwd {
+            (bot_vid, top_vid)
+        } else {
+            (top_vid, bot_vid)
+        };
+        topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+    });
 
     // Wire: bot_circle(fwd) → seam(fwd) → top_circle(rev) → seam(rev)
     // This matches the canonical cylinder lateral wire from make_cylinder.
-    let _ = n_half; // suppress unused variable warning
     let wire = Wire::new(
         vec![
             OrientedEdge::new(bot_edge, true),
