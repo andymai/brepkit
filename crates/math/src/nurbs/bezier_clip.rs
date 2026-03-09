@@ -30,6 +30,29 @@ pub struct CurveCurveHit {
     pub point: Point3,
 }
 
+/// A coincident/overlapping interval between two curves.
+#[derive(Debug, Clone, Copy)]
+pub struct CurveCurveOverlap {
+    /// Start parameter on the first curve.
+    pub u1_start: f64,
+    /// End parameter on the first curve.
+    pub u1_end: f64,
+    /// Start parameter on the second curve.
+    pub u2_start: f64,
+    /// End parameter on the second curve.
+    pub u2_end: f64,
+}
+
+/// Complete result of a curve-curve intersection, including both point
+/// intersections and overlapping (coincident) intervals.
+#[derive(Debug, Clone)]
+pub struct CurveCurveResult {
+    /// Isolated intersection points.
+    pub hits: Vec<CurveCurveHit>,
+    /// Coincident curve intervals (shared sub-arcs).
+    pub overlaps: Vec<CurveCurveOverlap>,
+}
+
 /// Find all intersections between two NURBS curves using Bezier clipping.
 ///
 /// Returns intersection parameters and points, accurate to `tolerance`.
@@ -42,10 +65,29 @@ pub fn curve_curve_intersect(
     curve2: &NurbsCurve,
     tolerance: f64,
 ) -> Result<Vec<CurveCurveHit>, MathError> {
+    let result = curve_curve_intersect_full(curve1, curve2, tolerance)?;
+    Ok(result.hits)
+}
+
+/// Find all intersections between two NURBS curves, including overlapping
+/// (coincident) intervals.
+///
+/// Use this instead of [`curve_curve_intersect`] when you need to detect
+/// shared sub-arcs between curves.
+///
+/// # Errors
+///
+/// Returns an error if curve decomposition fails.
+pub fn curve_curve_intersect_full(
+    curve1: &NurbsCurve,
+    curve2: &NurbsCurve,
+    tolerance: f64,
+) -> Result<CurveCurveResult, MathError> {
     let segments1 = curve_to_bezier_segments(curve1)?;
     let segments2 = curve_to_bezier_segments(curve2)?;
 
     let mut hits = Vec::new();
+    let mut overlaps = Vec::new();
 
     for seg1 in &segments1 {
         let aabb1 = seg1.aabb();
@@ -59,13 +101,31 @@ pub fn curve_curve_intersect(
             let (u2_lo, u2_hi) = seg2.domain();
 
             bezier_clip_recurse(
-                seg1, seg2, u1_lo, u1_hi, u2_lo, u2_hi, tolerance, 0, &mut hits,
+                seg1,
+                seg2,
+                u1_lo,
+                u1_hi,
+                u2_lo,
+                u2_hi,
+                tolerance,
+                0,
+                &mut hits,
+                &mut overlaps,
             );
         }
     }
 
     merge_duplicate_hits(&mut hits, tolerance);
-    Ok(hits)
+    merge_overlaps(&mut overlaps, tolerance);
+    // Remove point hits that fall within an overlap interval.
+    if !overlaps.is_empty() {
+        hits.retain(|h| {
+            !overlaps
+                .iter()
+                .any(|o| h.u1 >= o.u1_start - tolerance && h.u1 <= o.u1_end + tolerance)
+        });
+    }
+    Ok(CurveCurveResult { hits, overlaps })
 }
 
 /// Signed distances of control points to the fat line defined by the first
@@ -282,6 +342,13 @@ fn intersect_hull_with_line(hull: &[(f64, f64)], d: f64, find_min: bool) -> Opti
     result
 }
 
+/// Recursion depth at which we start checking for overlap instead of
+/// continuing to subdivide fruitlessly.
+const OVERLAP_CHECK_DEPTH: usize = 30;
+
+/// Number of samples for approximate Hausdorff distance check.
+const HAUSDORFF_SAMPLES: usize = 5;
+
 /// Recursive Bezier clipping core.
 #[allow(clippy::too_many_arguments)]
 fn bezier_clip_recurse(
@@ -294,6 +361,7 @@ fn bezier_clip_recurse(
     tolerance: f64,
     depth: usize,
     hits: &mut Vec<CurveCurveHit>,
+    overlaps: &mut Vec<CurveCurveOverlap>,
 ) {
     // Base case: both intervals are small enough.
     let span_a = u_a_hi - u_a_lo;
@@ -317,7 +385,13 @@ fn bezier_clip_recurse(
     }
 
     if depth >= MAX_DEPTH {
-        // Max depth: report current best guess.
+        // Before giving up, check for coincident overlap.
+        if check_overlap(
+            seg_a, seg_b, u_a_lo, u_a_hi, u_b_lo, u_b_hi, tolerance, overlaps,
+        ) {
+            return;
+        }
+        // Not coincident — report current best guess as a point hit.
         let u1_mid = 0.5 * (u_a_lo + u_a_hi);
         let u2_mid = 0.5 * (u_b_lo + u_b_hi);
         let pt = seg_a.evaluate(u1_mid);
@@ -360,6 +434,7 @@ fn bezier_clip_recurse(
                 tolerance,
                 depth + 1,
                 hits,
+                overlaps,
             );
             return;
         }
@@ -384,17 +459,102 @@ fn bezier_clip_recurse(
                     tolerance,
                     depth + 1,
                     hits,
+                    overlaps,
                 );
                 return;
             }
         }
 
-        // Neither clip was effective: subdivide the longer interval.
+        // Neither clip was effective. At high depth, check for overlap before
+        // subdividing further — coincident curves will never clip effectively.
+        if depth >= OVERLAP_CHECK_DEPTH
+            && check_overlap(
+                seg_a, seg_b, u_a_lo, u_a_hi, new_b_lo, new_b_hi, tolerance, overlaps,
+            )
+        {
+            return;
+        }
+
+        // Subdivide the longer interval.
         subdivide_and_recurse(
-            seg_a, seg_b, u_a_lo, u_a_hi, new_b_lo, new_b_hi, tolerance, depth, hits,
+            seg_a, seg_b, u_a_lo, u_a_hi, new_b_lo, new_b_hi, tolerance, depth, hits, overlaps,
         );
     }
     // If clip_to_fat_line returned None, no intersection in this pair.
+}
+
+/// Check if two curve segments are coincident over the given parameter
+/// intervals. Samples points on curve A and checks their distance to
+/// curve B. If the maximum distance (approximate Hausdorff distance)
+/// is below tolerance, emits an overlap and returns `true`.
+#[allow(clippy::too_many_arguments)]
+fn check_overlap(
+    seg_a: &NurbsCurve,
+    seg_b: &NurbsCurve,
+    u_a_lo: f64,
+    u_a_hi: f64,
+    u_b_lo: f64,
+    u_b_hi: f64,
+    tolerance: f64,
+    overlaps: &mut Vec<CurveCurveOverlap>,
+) -> bool {
+    let span_a = u_a_hi - u_a_lo;
+    let span_b = u_b_hi - u_b_lo;
+
+    // Don't classify tiny intervals as overlaps — those are point
+    // intersections where both curves happen to be close near a crossing.
+    // Overlap requires the curves to be coincident over a meaningful arc
+    // length, so the 3D extent must exceed a multiple of tolerance.
+    let pa_lo = seg_a.evaluate(u_a_lo);
+    let pa_hi = seg_a.evaluate(u_a_hi);
+    let arc_a = (pa_hi - pa_lo).length();
+    if arc_a < tolerance * 50.0 && span_a < tolerance * 100.0 && span_b < tolerance * 100.0 {
+        return false;
+    }
+
+    // Sample points on A and find closest points on B (symmetric Hausdorff).
+    let mut max_dist = 0.0_f64;
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..=HAUSDORFF_SAMPLES {
+        let t_a = u_a_lo + (u_a_hi - u_a_lo) * (i as f64) / (HAUSDORFF_SAMPLES as f64);
+        let pa = seg_a.evaluate(t_a);
+
+        let mut best_dist = f64::MAX;
+        #[allow(clippy::cast_precision_loss)]
+        for j in 0..=HAUSDORFF_SAMPLES {
+            let t_b = u_b_lo + (u_b_hi - u_b_lo) * (j as f64) / (HAUSDORFF_SAMPLES as f64);
+            let pb = seg_b.evaluate(t_b);
+            best_dist = best_dist.min((pa - pb).length());
+        }
+        max_dist = max_dist.max(best_dist);
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..=HAUSDORFF_SAMPLES {
+        let t_b = u_b_lo + (u_b_hi - u_b_lo) * (i as f64) / (HAUSDORFF_SAMPLES as f64);
+        let pb = seg_b.evaluate(t_b);
+
+        let mut best_dist = f64::MAX;
+        #[allow(clippy::cast_precision_loss)]
+        for j in 0..=HAUSDORFF_SAMPLES {
+            let t_a = u_a_lo + (u_a_hi - u_a_lo) * (j as f64) / (HAUSDORFF_SAMPLES as f64);
+            let pa = seg_a.evaluate(t_a);
+            best_dist = best_dist.min((pb - pa).length());
+        }
+        max_dist = max_dist.max(best_dist);
+    }
+
+    if max_dist < tolerance * 10.0 {
+        overlaps.push(CurveCurveOverlap {
+            u1_start: u_a_lo,
+            u1_end: u_a_hi,
+            u2_start: u_b_lo,
+            u2_end: u_b_hi,
+        });
+        true
+    } else {
+        false
+    }
 }
 
 /// Subdivide the longer curve at the midpoint and recurse on both halves.
@@ -409,6 +569,7 @@ fn subdivide_and_recurse(
     tolerance: f64,
     depth: usize,
     hits: &mut Vec<CurveCurveHit>,
+    overlaps: &mut Vec<CurveCurveOverlap>,
 ) {
     let span_a = u_a_hi - u_a_lo;
     let span_b = u_b_hi - u_b_lo;
@@ -425,6 +586,7 @@ fn subdivide_and_recurse(
             tolerance,
             depth + 1,
             hits,
+            overlaps,
         );
         bezier_clip_recurse(
             seg_a,
@@ -436,6 +598,7 @@ fn subdivide_and_recurse(
             tolerance,
             depth + 1,
             hits,
+            overlaps,
         );
     } else {
         let mid = 0.5 * (u_b_lo + u_b_hi);
@@ -449,6 +612,7 @@ fn subdivide_and_recurse(
             tolerance,
             depth + 1,
             hits,
+            overlaps,
         );
         bezier_clip_recurse(
             seg_a,
@@ -460,6 +624,7 @@ fn subdivide_and_recurse(
             tolerance,
             depth + 1,
             hits,
+            overlaps,
         );
     }
 }
@@ -560,6 +725,37 @@ fn merge_duplicate_hits(hits: &mut Vec<CurveCurveHit>, tolerance: f64) {
     }
 
     *hits = merged;
+}
+
+/// Merge adjacent or overlapping overlap intervals.
+fn merge_overlaps(overlaps: &mut Vec<CurveCurveOverlap>, tolerance: f64) {
+    if overlaps.len() <= 1 {
+        return;
+    }
+    overlaps.sort_by(|a, b| {
+        a.u1_start
+            .partial_cmp(&b.u1_start)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut merged = Vec::with_capacity(overlaps.len());
+    merged.push(overlaps[0]);
+
+    for ov in overlaps.iter().skip(1) {
+        // SAFETY: merged is never empty here — we pushed the first element above.
+        #[allow(clippy::expect_used)]
+        let last = merged.last_mut().expect("non-empty");
+        if ov.u1_start <= last.u1_end + tolerance {
+            // Extend the existing interval.
+            last.u1_end = last.u1_end.max(ov.u1_end);
+            last.u2_start = last.u2_start.min(ov.u2_start);
+            last.u2_end = last.u2_end.max(ov.u2_end);
+        } else {
+            merged.push(*ov);
+        }
+    }
+
+    *overlaps = merged;
 }
 
 #[cfg(test)]
@@ -685,5 +881,40 @@ mod tests {
             let near = hits.iter().any(|h| (h.point - target).length() < 1e-4);
             prop_assert!(near, "no hit near target {:?}, hits: {:?}", target, hits);
         }
+    }
+
+    #[test]
+    fn overlapping_lines_detected() {
+        // Two collinear lines that share the interval [0.5, 1.5] on x.
+        // Line 1: (0,0,0) → (2,0,0)
+        // Line 2: (1,0,0) → (3,0,0)
+        let c1 = make_line(Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+        let c2 = make_line(Point3::new(1.0, 0.0, 0.0), Point3::new(3.0, 0.0, 0.0));
+
+        let result = curve_curve_intersect_full(&c1, &c2, 1e-8).expect("no error");
+        assert!(
+            !result.overlaps.is_empty(),
+            "expected overlap, got {} hits and {} overlaps",
+            result.hits.len(),
+            result.overlaps.len()
+        );
+
+        // The overlap on c1 should span roughly [0.5, 1.0] (u-space).
+        let ov = &result.overlaps[0];
+        assert!(ov.u1_start < 0.55, "u1_start too high: {}", ov.u1_start);
+        assert!(ov.u1_end > 0.95, "u1_end too low: {}", ov.u1_end);
+    }
+
+    #[test]
+    fn identical_curves_full_overlap() {
+        let c1 = make_line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0));
+        let c2 = make_line(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0));
+
+        let result = curve_curve_intersect_full(&c1, &c2, 1e-8).expect("no error");
+        assert!(
+            !result.overlaps.is_empty(),
+            "identical curves should produce overlap, got {} hits",
+            result.hits.len()
+        );
     }
 }
