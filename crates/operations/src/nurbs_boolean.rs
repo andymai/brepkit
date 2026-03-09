@@ -1,5 +1,11 @@
 //! Exact NURBS boolean operations via surface-surface intersection.
 //!
+//! # WARNING
+//!
+//! **This module has broken pcurve registration (lines ~272-306 associate
+//! pcurves with the wrong edge). Do not wire into the boolean dispatcher
+//! until fixed.** Use [`boolean`](crate::boolean) instead.
+//!
 //! Unlike the tessellate-then-clip approach in [`boolean`](crate::boolean),
 //! this module computes exact intersection curves between NURBS faces and
 //! splits faces along those curves. This produces precise B-Rep topology
