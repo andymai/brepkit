@@ -76,14 +76,19 @@ pub fn intersect_plane_nurbs(
     // Phase 1: Sample the signed distance field on a grid.
     let mut distances = vec![vec![0.0_f64; n]; n];
 
+    let (u_min, u_max) = surface.domain_u();
+    let (v_min, v_max) = surface.domain_v();
+
     #[allow(clippy::cast_precision_loss)]
-    let step = 1.0 / (n - 1) as f64;
+    let u_step = (u_max - u_min) / (n - 1) as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let v_step = (v_max - v_min) / (n - 1) as f64;
 
     #[allow(clippy::cast_precision_loss)]
     for (i, row) in distances.iter_mut().enumerate() {
-        let u = i as f64 * step;
+        let u = u_min + i as f64 * u_step;
         for (j, dist) in row.iter_mut().enumerate() {
-            let v = j as f64 * step;
+            let v = v_min + j as f64 * v_step;
             let pt = surface.evaluate(u, v);
             let pt_vec = Vec3::new(pt.x(), pt.y(), pt.z());
             *dist = plane_normal.dot(pt_vec) - plane_d;
@@ -102,10 +107,10 @@ pub fn intersect_plane_nurbs(
             let d11 = distances[i + 1][j + 1];
 
             // Check edges for sign changes.
-            let u0 = i as f64 * step;
-            let u1 = (i + 1) as f64 * step;
-            let v0 = j as f64 * step;
-            let v1 = (j + 1) as f64 * step;
+            let u0 = u_min + i as f64 * u_step;
+            let u1 = u_min + (i + 1) as f64 * u_step;
+            let v0 = v_min + j as f64 * v_step;
+            let v1 = v_min + (j + 1) as f64 * v_step;
 
             // Bottom edge (i,j) → (i+1,j)
             if d00 * d10 < 0.0 {
@@ -188,8 +193,13 @@ pub fn intersect_line_nurbs(
 ) -> Result<Vec<IntersectionPoint>, MathError> {
     let n = samples.max(10);
 
+    let (u_min, u_max) = surface.domain_u();
+    let (v_min, v_max) = surface.domain_v();
+
     #[allow(clippy::cast_precision_loss)]
-    let step = 1.0 / (n - 1) as f64;
+    let u_step = (u_max - u_min) / (n - 1) as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let v_step = (v_max - v_min) / (n - 1) as f64;
 
     // Sample surface points and compute distance to ray.
     let mut candidates: Vec<(f64, f64, f64)> = Vec::new(); // (u, v, t_along_ray)
@@ -199,11 +209,18 @@ pub fn intersect_line_nurbs(
         return Err(MathError::ZeroVector);
     }
 
+    // Compute an adaptive distance threshold based on the surface's 3D extent.
+    // Use the diagonal of the surface bounding box divided by the grid resolution.
+    let corner_00 = surface.evaluate(u_min, v_min);
+    let corner_11 = surface.evaluate(u_max, v_max);
+    #[allow(clippy::cast_precision_loss)]
+    let candidate_threshold = ((corner_11 - corner_00).length() / n as f64).max(0.1);
+
     #[allow(clippy::cast_precision_loss)]
     for i in 0..n {
-        let u = i as f64 * step;
+        let u = u_min + i as f64 * u_step;
         for j in 0..n {
-            let v = j as f64 * step;
+            let v = v_min + j as f64 * v_step;
             let pt = surface.evaluate(u, v);
             let diff = pt - ray_origin;
             let diff_vec = Vec3::new(diff.x(), diff.y(), diff.z());
@@ -217,7 +234,7 @@ pub fn intersect_line_nurbs(
             );
 
             let dist = (pt - closest_on_ray).length();
-            if dist < 0.1 {
+            if dist < candidate_threshold {
                 // Rough candidate.
                 candidates.push((u, v, t));
             }
@@ -253,6 +270,8 @@ fn refine_plane_surface_point(
 ) -> Option<IntersectionPoint> {
     let mut u = u_guess;
     let mut v = v_guess;
+    let (u_min, u_max) = surface.domain_u();
+    let (v_min, v_max) = surface.domain_v();
 
     for _ in 0..20 {
         let pt = surface.evaluate(u, v);
@@ -285,9 +304,8 @@ fn refine_plane_surface_point(
         u -= grad_u * step_size;
         v -= grad_v * step_size;
 
-        // Clamp to [0, 1].
-        u = u.clamp(0.0, 1.0);
-        v = v.clamp(0.0, 1.0);
+        u = u.clamp(u_min, u_max);
+        v = v.clamp(v_min, v_max);
     }
 
     // Final check.
@@ -316,6 +334,8 @@ fn refine_line_surface_point(
 ) -> Option<IntersectionPoint> {
     let mut u = u_guess;
     let mut v = v_guess;
+    let (u_min, u_max) = surface.domain_u();
+    let (v_min, v_max) = surface.domain_v();
 
     for _ in 0..20 {
         let pt = surface.evaluate(u, v);
@@ -363,8 +383,8 @@ fn refine_line_surface_point(
 
         u -= du;
         v -= dv;
-        u = u.clamp(0.0, 1.0);
-        v = v.clamp(0.0, 1.0);
+        u = u.clamp(u_min, u_max);
+        v = v.clamp(v_min, v_max);
     }
 
     // Final check.
@@ -1071,7 +1091,20 @@ fn find_ssi_seeds_grid(
     n: usize,
     tolerance: f64,
 ) -> Vec<IntersectionPoint> {
-    let step = 1.0 / (n - 1) as f64;
+    let (u1_min, u1_max) = s1.domain_u();
+    let (v1_min, v1_max) = s1.domain_v();
+    let (u2_min, u2_max) = s2.domain_u();
+    let (v2_min, v2_max) = s2.domain_v();
+
+    #[allow(clippy::cast_precision_loss)]
+    let u1_step = (u1_max - u1_min) / (n - 1) as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let v1_step = (v1_max - v1_min) / (n - 1) as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let u2_step = (u2_max - u2_min) / (n - 1) as f64;
+    #[allow(clippy::cast_precision_loss)]
+    let v2_step = (v2_max - v2_min) / (n - 1) as f64;
+
     let mut seeds = Vec::new();
 
     // Sample both surfaces.
@@ -1079,17 +1112,27 @@ fn find_ssi_seeds_grid(
     let mut pts2: Vec<(f64, f64, Point3)> = Vec::with_capacity(n * n);
 
     for i in 0..n {
-        let u = i as f64 * step;
+        let u1 = u1_min + i as f64 * u1_step;
         for j in 0..n {
-            let v = j as f64 * step;
-            pts1.push((u, v, s1.evaluate(u, v)));
-            pts2.push((u, v, s2.evaluate(u, v)));
+            let v1 = v1_min + j as f64 * v1_step;
+            pts1.push((u1, v1, s1.evaluate(u1, v1)));
+        }
+    }
+
+    for i in 0..n {
+        let u2 = u2_min + i as f64 * u2_step;
+        for j in 0..n {
+            let v2 = v2_min + j as f64 * v2_step;
+            pts2.push((u2, v2, s2.evaluate(u2, v2)));
         }
     }
 
     // For each pair of sample points, if close enough, try Newton.
-    // Use a generous threshold based on the diagonal of a grid cell.
-    let threshold = step * 3.0;
+    // Use a generous threshold based on the diagonal of a grid cell (in 3D space).
+    let diag1 = (s1.evaluate(u1_min, v1_min) - s1.evaluate(u1_max, v1_max)).length();
+    let diag2 = (s2.evaluate(u2_min, v2_min) - s2.evaluate(u2_max, v2_max)).length();
+    #[allow(clippy::cast_precision_loss)]
+    let threshold = ((diag1.max(diag2) / n as f64) * 3.0).max(0.1);
 
     for &(u1, v1, p1) in &pts1 {
         for &(u2, v2, p2) in &pts2 {
@@ -1130,6 +1173,10 @@ fn refine_ssi_point(
     let mut v1 = v1_guess;
     let mut u2 = u2_guess;
     let mut v2 = v2_guess;
+    let (u1_min, u1_max) = s1.domain_u();
+    let (v1_min, v1_max) = s1.domain_v();
+    let (u2_min, u2_max) = s2.domain_u();
+    let (v2_min, v2_max) = s2.domain_v();
 
     for _ in 0..50 {
         let p1 = s1.evaluate(u1, v1);
@@ -1148,16 +1195,16 @@ fn refine_ssi_point(
         let (du2, dv2) = surface_newton_step(s2, u2, v2, p1);
         u2 += du2;
         v2 += dv2;
-        u2 = u2.clamp(0.0, 1.0);
-        v2 = v2.clamp(0.0, 1.0);
+        u2 = u2.clamp(u2_min, u2_max);
+        v2 = v2.clamp(v2_min, v2_max);
 
         // Step 2: Move (u1, v1) on surface 1 toward the updated p2.
         let p2_new = s2.evaluate(u2, v2);
         let (du1, dv1) = surface_newton_step(s1, u1, v1, p2_new);
         u1 += du1;
         v1 += dv1;
-        u1 = u1.clamp(0.0, 1.0);
-        v1 = v1.clamp(0.0, 1.0);
+        u1 = u1.clamp(u1_min, u1_max);
+        v1 = v1.clamp(v1_min, v1_max);
     }
 
     // Final check.
@@ -1475,14 +1522,34 @@ fn perturbation_tangent(
     best_dir
 }
 
-/// Clamp parameter value to avoid edge singularities.
-fn clamp_param(v: f64) -> f64 {
-    v.clamp(0.001, 0.999)
+/// Clamp a parameter value to slightly inside the given domain.
+/// The margin is 0.1% of the domain span to avoid evaluation at exact boundaries.
+fn clamp_to_domain(v: f64, min: f64, max: f64) -> f64 {
+    let margin = 0.001 * (max - min);
+    v.clamp(min + margin, max - margin)
 }
 
-/// Check if a parameter state is at the domain boundary.
-fn at_boundary(state: &[f64; 4]) -> bool {
-    state.iter().any(|&v| v <= 0.001 || v >= 0.999)
+/// Clamp all four parameters to their respective surface domains.
+fn clamp_state(state: &[f64; 4], s1: &NurbsSurface, s2: &NurbsSurface) -> [f64; 4] {
+    let (u1_min, u1_max) = s1.domain_u();
+    let (v1_min, v1_max) = s1.domain_v();
+    let (u2_min, u2_max) = s2.domain_u();
+    let (v2_min, v2_max) = s2.domain_v();
+    [
+        clamp_to_domain(state[0], u1_min, u1_max),
+        clamp_to_domain(state[1], v1_min, v1_max),
+        clamp_to_domain(state[2], u2_min, u2_max),
+        clamp_to_domain(state[3], v2_min, v2_max),
+    ]
+}
+
+/// Check if a parameter state is at the domain boundary of either surface.
+fn at_boundary(state: &[f64; 4], s1: &NurbsSurface, s2: &NurbsSurface) -> bool {
+    let clamped = clamp_state(state, s1, s2);
+    state
+        .iter()
+        .zip(clamped.iter())
+        .any(|(&s, &c)| (s - c).abs() > f64::EPSILON)
 }
 
 /// March in one direction along the intersection curve using RKF45
@@ -1583,12 +1650,7 @@ fn march_direction(
         let _ = accepted_h;
 
         // Accept the 4th-order solution (more conservative).
-        let next = [
-            clamp_param(y4[0]),
-            clamp_param(y4[1]),
-            clamp_param(y4[2]),
-            clamp_param(y4[3]),
-        ];
+        let next = clamp_state(&y4, s1, s2);
 
         // Newton-refine to stay on the intersection curve.
         if let Some(refined) =
@@ -1638,7 +1700,7 @@ fn march_direction(
                 refined.param2.0,
                 refined.param2.1,
             ];
-            if at_boundary(&ref_state) {
+            if at_boundary(&ref_state, s1, s2) {
                 points.push(refined);
                 break;
             }
@@ -1681,15 +1743,8 @@ fn rkf45_step(
 ) -> Option<([f64; 4], [f64; 4])> {
     // Helper: evaluate f at a state, scaling by h.
     let f = |state: &[f64; 4]| -> Option<[f64; 4]> {
-        let t = ssi_tangent_params(
-            s1,
-            s2,
-            clamp_param(state[0]),
-            clamp_param(state[1]),
-            clamp_param(state[2]),
-            clamp_param(state[3]),
-            sign,
-        )?;
+        let clamped = clamp_state(state, s1, s2);
+        let t = ssi_tangent_params(s1, s2, clamped[0], clamped[1], clamped[2], clamped[3], sign)?;
         Some([t[0] * h, t[1] * h, t[2] * h, t[3] * h])
     };
 
@@ -2363,6 +2418,236 @@ mod tests {
         }
         // None is also acceptable for this degenerate case — it means
         // the perturbation fallback will be used.
+    }
+
+    // ── Non-normalized domain tests ────────────────────────────
+
+    /// Create a bilinear surface over domain [0, 100] × [0, 100].
+    fn wide_domain_surface(z: f64) -> NurbsSurface {
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 100.0, 100.0],
+            vec![0.0, 0.0, 100.0, 100.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, z), Point3::new(0.0, 10.0, z)],
+                vec![Point3::new(10.0, 0.0, z), Point3::new(10.0, 10.0, z)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap()
+    }
+
+    /// Create a tilted surface over domain [0, 100] × [0, 100] that
+    /// crosses z=0 at x=5.
+    fn wide_domain_tilted() -> NurbsSurface {
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 100.0, 100.0],
+            vec![0.0, 0.0, 100.0, 100.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, -5.0), Point3::new(0.0, 10.0, -5.0)],
+                vec![Point3::new(10.0, 0.0, 5.0), Point3::new(10.0, 10.0, 5.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn plane_nurbs_wide_domain() {
+        // Surface with knot domain [0, 100] — should still find the
+        // intersection with the z=0 plane.
+        let tilted = wide_domain_tilted();
+
+        // Verify domain is actually [0, 100].
+        let (u_min, u_max) = tilted.domain_u();
+        let (v_min, v_max) = tilted.domain_v();
+        assert!(u_min.abs() < 1e-10);
+        assert!((u_max - 100.0).abs() < 1e-10);
+        assert!(v_min.abs() < 1e-10);
+        assert!((v_max - 100.0).abs() < 1e-10);
+
+        let result = intersect_plane_nurbs(&tilted, Vec3::new(0.0, 0.0, 1.0), 0.0, 50).unwrap();
+
+        assert!(
+            !result.is_empty(),
+            "should find intersection on [0,100] domain surface"
+        );
+
+        for curve in &result {
+            for pt in &curve.points {
+                assert!(
+                    pt.point.z().abs() < 0.2,
+                    "intersection point should be near z=0, got z={}",
+                    pt.point.z()
+                );
+                // x should be near 5.0 (the midpoint where z crosses 0)
+                assert!(
+                    (pt.point.x() - 5.0).abs() < 1.0,
+                    "x should be near 5.0, got {}",
+                    pt.point.x()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ssi_wide_domain_surfaces() {
+        // Two surfaces with [0, 100] domains that intersect.
+        let s1 = wide_domain_surface(0.0);
+        let s2 = wide_domain_tilted();
+
+        // Verify domains.
+        assert!((s1.domain_u().1 - 100.0).abs() < 1e-10);
+        assert!((s2.domain_u().1 - 100.0).abs() < 1e-10);
+
+        let seeds = find_ssi_seeds_grid(&s1, &s2, 15, 1e-6);
+        assert!(
+            !seeds.is_empty(),
+            "should find seeds between wide-domain surfaces"
+        );
+
+        let result = intersect_nurbs_nurbs(&s1, &s2, 15, 0.0).unwrap();
+        assert!(
+            !result.is_empty(),
+            "should find SSI on [0,100] domain surfaces"
+        );
+
+        for curve in &result {
+            for pt in &curve.points {
+                assert!(
+                    pt.point.z().abs() < 0.5,
+                    "SSI point should be near z=0, got z={}",
+                    pt.point.z()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn line_nurbs_wide_domain() {
+        // Ray intersection with a surface having [0, 100] domain.
+        let surface = wide_domain_surface(0.0);
+
+        let result = intersect_line_nurbs(
+            &surface,
+            Point3::new(5.0, 5.0, 1.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            20,
+        )
+        .unwrap();
+
+        assert!(!result.is_empty(), "ray should hit wide-domain surface");
+
+        let pt = &result[0];
+        assert!(
+            (pt.point.x() - 5.0).abs() < 0.5,
+            "x should be ~5.0, got {}",
+            pt.point.x()
+        );
+        assert!(
+            pt.point.z().abs() < 0.1,
+            "z should be ~0.0, got {}",
+            pt.point.z()
+        );
+    }
+
+    /// Create a half-cylinder-like surface with v-domain [0, 2π].
+    fn cylinder_nurbs_surface() -> NurbsSurface {
+        use std::f64::consts::PI;
+        let tau = 2.0 * PI;
+        // Approximate a cylinder of radius 1, height 2, with a degree-2
+        // NURBS surface in v (angular) and degree-1 in u (height).
+        // Use 9 control points in v for a full circle (rational).
+        let r = 1.0;
+        let w = std::f64::consts::FRAC_1_SQRT_2; // cos(45°)
+
+        // v knots for a full circle: [0,0,0, π/2,π/2, π,π, 3π/2,3π/2, 2π,2π,2π]
+        let knots_v = vec![
+            0.0,
+            0.0,
+            0.0,
+            PI / 2.0,
+            PI / 2.0,
+            PI,
+            PI,
+            3.0 * PI / 2.0,
+            3.0 * PI / 2.0,
+            tau,
+            tau,
+            tau,
+        ];
+
+        // 9 control points around the circle at z=0 and z=2.
+        let circle_cps = [
+            (r, 0.0, 1.0),
+            (r, r, w),
+            (0.0, r, 1.0),
+            (-r, r, w),
+            (-r, 0.0, 1.0),
+            (-r, -r, w),
+            (0.0, -r, 1.0),
+            (r, -r, w),
+            (r, 0.0, 1.0),
+        ];
+
+        let cps_bottom: Vec<Point3> = circle_cps
+            .iter()
+            .map(|&(x, y, _)| Point3::new(x, y, 0.0))
+            .collect();
+        let cps_top: Vec<Point3> = circle_cps
+            .iter()
+            .map(|&(x, y, _)| Point3::new(x, y, 2.0))
+            .collect();
+
+        let weights_row: Vec<f64> = circle_cps.iter().map(|&(_, _, w_)| w_).collect();
+
+        NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 2.0, 2.0], // u: height [0, 2]
+            knots_v,
+            vec![cps_bottom, cps_top],
+            vec![weights_row.clone(), weights_row],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn plane_nurbs_cylinder_domain() {
+        use std::f64::consts::PI;
+        let cylinder = cylinder_nurbs_surface();
+
+        // Verify domain is [0,2] × [0, 2π].
+        let (u_min, u_max) = cylinder.domain_u();
+        let (v_min, v_max) = cylinder.domain_v();
+        assert!((u_min - 0.0).abs() < 1e-10);
+        assert!((u_max - 2.0).abs() < 1e-10);
+        assert!((v_min - 0.0).abs() < 1e-10);
+        assert!((v_max - 2.0 * PI).abs() < 1e-10);
+
+        // Intersect with a plane at z=1 (horizontal slice through cylinder).
+        let result = intersect_plane_nurbs(&cylinder, Vec3::new(0.0, 0.0, 1.0), 1.0, 50).unwrap();
+
+        assert!(
+            !result.is_empty(),
+            "should find intersection of cylinder with z=1 plane"
+        );
+
+        // All intersection points should be near z=1 and at radius ~1.
+        for curve in &result {
+            for pt in &curve.points {
+                assert!(
+                    (pt.point.z() - 1.0).abs() < 0.2,
+                    "z should be ~1.0, got {}",
+                    pt.point.z()
+                );
+                let r = (pt.point.x().powi(2) + pt.point.y().powi(2)).sqrt();
+                assert!((r - 1.0).abs() < 0.2, "radius should be ~1.0, got {r}");
+            }
+        }
     }
 
     /// Verify that the tangential touch test still works with the new

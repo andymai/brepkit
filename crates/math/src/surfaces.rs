@@ -85,6 +85,15 @@ impl CylindricalSurface {
         self.radius
     }
 
+    /// Returns a copy of this cylinder with its origin translated by `offset`.
+    #[must_use]
+    pub fn translated(&self, offset: Vec3) -> Self {
+        Self {
+            origin: self.origin + offset,
+            ..self.clone()
+        }
+    }
+
     /// Project a 3D point onto the cylinder surface, returning (u, v) parameters.
     ///
     /// `u` is the angular parameter [0, 2π), `v` is the axial parameter.
@@ -184,6 +193,15 @@ impl ConicalSurface {
     #[must_use]
     pub const fn half_angle(&self) -> f64 {
         self.half_angle
+    }
+
+    /// Returns a copy of this cone with its apex translated by `offset`.
+    #[must_use]
+    pub fn translated(&self, offset: Vec3) -> Self {
+        Self {
+            apex: self.apex + offset,
+            ..self.clone()
+        }
     }
 
     /// Returns the radius at a given distance `v` along the axis from the apex.
@@ -322,6 +340,15 @@ impl SphericalSurface {
         self.radius
     }
 
+    /// Returns a copy of this sphere with its center translated by `offset`.
+    #[must_use]
+    pub fn translated(&self, offset: Vec3) -> Self {
+        Self {
+            center: self.center + offset,
+            ..self.clone()
+        }
+    }
+
     /// Project a 3D point onto the sphere, returning (u, v) parameters.
     ///
     /// `u` is the longitudinal angle [0, 2π), `v` is the latitude [-π/2, π/2].
@@ -390,6 +417,111 @@ impl ToroidalSurface {
         })
     }
 
+    /// Creates a toroidal surface with a specified axis direction.
+    ///
+    /// The axis is the central symmetry axis of the torus. The local
+    /// coordinate frame is derived from it.
+    ///
+    /// # Errors
+    /// Returns an error if either radius is not positive or axis is zero.
+    pub fn with_axis(
+        center: Point3,
+        major_radius: f64,
+        minor_radius: f64,
+        z_axis: Vec3,
+    ) -> Result<Self, MathError> {
+        if major_radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: major_radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        if minor_radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: minor_radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        let z = z_axis.normalize()?;
+        let candidate = if z.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let x = z.cross(candidate).normalize()?;
+        let y = z.cross(x);
+        Ok(Self {
+            center,
+            major_radius,
+            minor_radius,
+            x_axis: x,
+            y_axis: y,
+            z_axis: z,
+        })
+    }
+
+    /// Create a torus with explicit axis and reference direction.
+    ///
+    /// `ref_dir` defines the x-axis of the local frame (projected
+    /// perpendicular to `z_axis`). This preserves the parametric
+    /// orientation from STEP `AXIS2_PLACEMENT_3D`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MathError::ParameterOutOfRange`] if either radius is
+    /// non-positive, or [`MathError::ZeroVector`] if `z_axis` is zero.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fallback perpendicular vector cannot be normalized
+    /// (should not occur for any valid unit `z_axis`).
+    pub fn with_axis_and_ref_dir(
+        center: Point3,
+        major_radius: f64,
+        minor_radius: f64,
+        z_axis: Vec3,
+        ref_dir: Vec3,
+    ) -> Result<Self, MathError> {
+        if major_radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: major_radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        if minor_radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: minor_radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        let z = z_axis.normalize()?;
+        // Project ref_dir onto the plane perpendicular to z.
+        let ref_proj = ref_dir - z * ref_dir.dot(z);
+        let x = ref_proj.normalize().unwrap_or_else(|_| {
+            // ref_dir parallel to z — fall back to arbitrary perpendicular.
+            let candidate = if z.x().abs() < 0.9 {
+                Vec3::new(1.0, 0.0, 0.0)
+            } else {
+                Vec3::new(0.0, 1.0, 0.0)
+            };
+            #[allow(clippy::unwrap_used)]
+            z.cross(candidate).normalize().unwrap()
+        });
+        let y = z.cross(x);
+        Ok(Self {
+            center,
+            major_radius,
+            minor_radius,
+            x_axis: x,
+            y_axis: y,
+            z_axis: z,
+        })
+    }
+
     /// Evaluates the surface at parameters `(u, v)`.
     #[must_use]
     pub fn evaluate(&self, u: f64, v: f64) -> Point3 {
@@ -415,6 +547,15 @@ impl ToroidalSurface {
     #[must_use]
     pub const fn center(&self) -> Point3 {
         self.center
+    }
+
+    /// Returns a copy of this torus with its center translated by `offset`.
+    #[must_use]
+    pub fn translated(&self, offset: Vec3) -> Self {
+        Self {
+            center: self.center + offset,
+            ..self.clone()
+        }
     }
 
     /// Returns the major radius (distance from center to tube center).
