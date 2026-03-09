@@ -65,6 +65,34 @@ impl Bvh {
         results
     }
 
+    /// Query all primitives whose AABB is intersected by a ray.
+    ///
+    /// `origin` is the ray start, `dir` is the ray direction (need not be
+    /// normalised). Only positive-`t` hits are returned.
+    #[must_use]
+    pub fn query_ray(&self, origin: Point3, dir: crate::vec::Vec3) -> Vec<usize> {
+        let mut results = Vec::new();
+        if self.nodes.is_empty() {
+            return results;
+        }
+        // Pre-compute inverse direction for slab tests.
+        let inv_dir = crate::vec::Vec3::new(1.0 / dir.x(), 1.0 / dir.y(), 1.0 / dir.z());
+        let mut stack = vec![0usize];
+        while let Some(idx) = stack.pop() {
+            let node = &self.nodes[idx];
+            if !node.aabb.ray_intersects(origin, inv_dir) {
+                continue;
+            }
+            if node.primitive == usize::MAX {
+                stack.push(node.left);
+                stack.push(node.right);
+            } else {
+                results.push(node.primitive);
+            }
+        }
+        results
+    }
+
     /// Find the primitive whose AABB is closest to `point`.
     ///
     /// Returns `None` if the BVH is empty.

@@ -1149,7 +1149,8 @@ fn compute_axial_range(
 /// range `[-π/2, π/2]`. For hemisphere faces with a proper equatorial wire,
 /// computes the boundary latitude from the wire vertices, then uses the
 /// wire winding direction to determine which hemisphere the face covers.
-fn compute_sphere_v_range(
+#[must_use]
+pub fn compute_sphere_v_range(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
     sphere: &brepkit_math::surfaces::SphericalSurface,
@@ -1195,7 +1196,8 @@ fn compute_sphere_v_range(
 
 /// Signed area of a polygon projected onto the XY plane.
 /// Positive = CCW winding from +Z, negative = CW.
-fn projected_signed_area(pts: &[Point3]) -> f64 {
+#[must_use]
+pub fn projected_signed_area(pts: &[Point3]) -> f64 {
     let n = pts.len();
     let mut area = 0.0;
     for i in 0..n {

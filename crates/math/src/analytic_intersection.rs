@@ -748,13 +748,7 @@ pub fn intersect_analytic_analytic(
     let (surf_a, norm_a, u_range_a, v_range_a) = surface_closures(&a);
     let (surf_b, norm_b, u_range_b, v_range_b) = surface_closures(&b);
 
-    // Sample surface A on a grid. For each grid point, project it
-    // analytically onto surface B to find the closest point, then check
-    // if the distance is below threshold (indicating near-intersection).
-    let mut seeds: Vec<(Point3, (f64, f64), (f64, f64))> = Vec::new();
-    // Coarse threshold scales with the surface size — the distance from
-    // a grid point on A to its projection on B can be large even near
-    // the intersection (e.g., sphere R=2 and cylinder R=1 → gap ≈ 1).
+    // Compute characteristic surface dimensions for adaptive parameters.
     let diag_a = {
         let p00 = surf_a(u_range_a.0, v_range_a.0);
         let p11 = surf_a(u_range_a.1, v_range_a.1);
@@ -765,10 +759,16 @@ pub fn intersect_analytic_analytic(
         let p11 = surf_b(u_range_b.1, v_range_b.1);
         (p00 - p11).length()
     };
+    let char_size = diag_a.min(diag_b).max(0.1);
+
+    // Sample surface A on a grid. For each grid point, project it
+    // analytically onto surface B to find the closest point, then check
+    // if the distance is below threshold (indicating near-intersection).
+    let mut seeds: Vec<(Point3, (f64, f64), (f64, f64))> = Vec::new();
+    // Coarse threshold scales with the surface size — the distance from
+    // a grid point on A to its projection on B can be large even near
+    // the intersection (e.g., sphere R=2 and cylinder R=1 → gap ≈ 1).
     let seed_threshold = diag_a.max(diag_b).max(1.0) * 0.5;
-    // fine_threshold reserved for future Newton refinement of seeds.
-    #[allow(unused_variables)]
-    let fine_threshold = 1e-6;
 
     #[allow(clippy::cast_precision_loss)]
     for ia in 0..grid_res {
@@ -805,9 +805,10 @@ pub fn intersect_analytic_analytic(
     }
 
     // Aggressively deduplicate seeds — we only need 1-2 per intersection
-    // branch. Use a large dedup radius (10× step size) to avoid redundant
-    // marches from nearby seeds.
-    let dedup_radius = 0.2; // 10× the march step size (0.02)
+    // branch. Scale dedup radius to ~2% of characteristic surface size
+    // (at least 10× the march step size) to avoid redundant marches.
+    let march_step = (char_size * 0.02).clamp(0.005, 0.5);
+    let dedup_radius = march_step * 10.0;
     let mut unique_seeds = Vec::new();
     for seed in &seeds {
         let dominated = unique_seeds
@@ -840,6 +841,7 @@ pub fn intersect_analytic_analytic(
             v_range_a,
             u_range_b,
             v_range_b,
+            march_step,
         );
 
         if march_result.len() >= 2 {
@@ -893,8 +895,8 @@ fn march_analytic_intersection(
     v_range_a: (f64, f64),
     u_range_b: (f64, f64),
     v_range_b: (f64, f64),
+    initial_step: f64,
 ) -> Vec<Point3> {
-    let initial_step: f64 = 0.02;
     let max_steps = 500;
     let h_min = 1e-6;
     let h_max = initial_step * 4.0;
@@ -902,9 +904,12 @@ fn march_analytic_intersection(
     let max_angle = 10.0_f64.to_radians();
     let min_angle = 2.0_f64.to_radians();
 
-    let mut result = vec![seed];
+    // March forward from seed, collecting points.
+    let mut forward = Vec::new();
+    // March backward from seed, collecting points (reversed at end).
+    let mut backward = Vec::new();
 
-    for direction in &[1.0_f64, -1.0] {
+    for (direction, points) in [(1.0_f64, &mut forward), (-1.0_f64, &mut backward)] {
         let mut current = seed;
         let mut h = initial_step;
         let mut prev_tangent: Option<Vec3> = None;
@@ -965,21 +970,23 @@ fn march_analytic_intersection(
                 break;
             }
 
-            // Check for loop closure (use adaptive step for threshold).
-            if result.len() > 3 && (mid - result[0]).length() < h * 2.0 {
-                result.push(result[0]);
+            // Check for loop closure — if we've collected enough points and
+            // the current point is close to the seed, the curve is closed.
+            if points.len() > 3 && (mid - seed).length() < h * 2.0 {
+                points.push(seed);
                 break;
             }
 
-            if *direction > 0.0 {
-                result.push(mid);
-            } else {
-                result.insert(0, mid);
-            }
+            points.push(mid);
             current = mid;
         }
     }
 
+    // Assemble result: backward (reversed) + seed + forward
+    backward.reverse();
+    let mut result = backward;
+    result.push(seed);
+    result.append(&mut forward);
     result
 }
 
