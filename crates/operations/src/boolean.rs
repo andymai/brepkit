@@ -426,6 +426,7 @@ pub fn boolean_with_options(
     };
     if try_analytic {
         if let Ok(solid) = analytic_boolean(topo, op, a, b, tol, opts.deflection) {
+            let _ = crate::heal::remove_degenerate_edges(topo, solid, tol.linear)?;
             validate_boolean_result(topo, solid)?;
             return Ok(solid);
         }
@@ -573,6 +574,12 @@ pub fn boolean_with_options(
     // ── Phase 6: Assembly ────────────────────────────────────────────────
 
     let result = assemble_solid(topo, &selected, tol)?;
+
+    // ── Phase 6b: Post-boolean healing ─────────────────────────────────
+    // Light healing: remove degenerate (zero-length) edges and fix face
+    // orientations. We intentionally skip vertex merging and face removal
+    // since they can corrupt valid boolean output with small features.
+    let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
 
     // ── Phase 7: Degenerate result check ──────────────────────────────
     validate_boolean_result(topo, result)?;
@@ -1016,42 +1023,43 @@ fn compute_intersection_segments(
                 d: d_b,
             };
 
-            if let Some(seg) = intersect_face_pair(&side_a, &side_b, tol) {
-                segments.push(seg);
-            }
+            segments.extend(intersect_face_pair(&side_a, &side_b, tol));
         }
     }
 
     segments
 }
 
-/// Intersect two planar face polygons. Returns an intersection segment if any.
+/// Intersect two planar face polygons. Returns intersection segments for all
+/// overlapping intervals (handles concave polygons correctly).
 fn intersect_face_pair(
     a: &FacePairSide<'_>,
     b: &FacePairSide<'_>,
     tol: Tolerance,
-) -> Option<IntersectionSegment> {
+) -> Vec<IntersectionSegment> {
     // Plane-plane intersection line.
-    let (line_pt, line_dir) = plane_plane_intersection(a.normal, a.d, b.normal, b.d, tol.linear)?;
+    let Some((line_pt, line_dir)) =
+        plane_plane_intersection(a.normal, a.d, b.normal, b.d, tol.linear)
+    else {
+        return Vec::new();
+    };
 
-    // Cyrus-Beck clip against both polygons.
-    let (t_min_a, t_max_a) = cyrus_beck_clip(&line_pt, &line_dir, a.verts, &a.normal, tol)?;
-    let (t_min_b, t_max_b) = cyrus_beck_clip(&line_pt, &line_dir, b.verts, &b.normal, tol)?;
+    // Clip against both polygons (multi-interval for concave support).
+    let intervals_a = polygon_clip_intervals(&line_pt, &line_dir, a.verts, &a.normal, tol);
+    let intervals_b = polygon_clip_intervals(&line_pt, &line_dir, b.verts, &b.normal, tol);
 
-    // Intersection of the two parameter intervals.
-    let t_min = t_min_a.max(t_min_b);
-    let t_max = t_max_a.min(t_max_b);
+    // Intersect the two interval lists.
+    let overlaps = intersect_interval_lists(&intervals_a, &intervals_b, tol.linear);
 
-    if t_max - t_min < tol.linear {
-        return None;
-    }
-
-    Some(IntersectionSegment {
-        face_a: a.fid,
-        face_b: b.fid,
-        p0: point_along_line(&line_pt, &line_dir, t_min),
-        p1: point_along_line(&line_pt, &line_dir, t_max),
-    })
+    overlaps
+        .into_iter()
+        .map(|(t_min, t_max)| IntersectionSegment {
+            face_a: a.fid,
+            face_b: b.fid,
+            p0: point_along_line(&line_pt, &line_dir, t_min),
+            p1: point_along_line(&line_pt, &line_dir, t_max),
+        })
+        .collect()
 }
 
 /// Helper: `point + dir * t` as a `Point3`.
@@ -1063,11 +1071,200 @@ fn point_along_line(pt: &Point3, dir: &Vec3, t: f64) -> Point3 {
     )
 }
 
-/// Cyrus-Beck clipping of a line against a convex polygon.
+/// Clip a line against a polygon, returning all inside intervals.
+///
+/// The line is `P(t) = line_pt + t * line_dir`. The polygon lies on a plane
+/// with normal `face_normal`. Returns a sorted list of `(t_enter, t_exit)`
+/// intervals where the line is inside the polygon.
+///
+/// Unlike Cyrus-Beck (which only handles convex polygons), this computes
+/// actual finite edge crossings and uses midpoint winding-number tests to
+/// support concave polygons.
+fn polygon_clip_intervals(
+    line_pt: &Point3,
+    line_dir: &Vec3,
+    polygon: &[Point3],
+    face_normal: &Vec3,
+    tol: Tolerance,
+) -> Vec<(f64, f64)> {
+    let n = polygon.len();
+    if n < 3 {
+        return Vec::new();
+    }
+
+    // Project everything to 2D by dropping the dominant normal axis.
+    let (ax1, ax2) = dominant_projection_axes(face_normal);
+
+    let proj = |p: Point3| -> (f64, f64) {
+        (
+            p.x() * ax1.x() + p.y() * ax1.y() + p.z() * ax1.z(),
+            p.x() * ax2.x() + p.y() * ax2.y() + p.z() * ax2.z(),
+        )
+    };
+
+    let (lx, ly) = proj(*line_pt);
+    let dx = line_dir.x() * ax1.x() + line_dir.y() * ax1.y() + line_dir.z() * ax1.z();
+    let dy = line_dir.x() * ax2.x() + line_dir.y() * ax2.y() + line_dir.z() * ax2.z();
+
+    // Collect crossing parameters where the line crosses *finite* polygon edges.
+    let mut crossings: Vec<f64> = Vec::new();
+
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (ex, ey) = proj(polygon[i]);
+        let (fx, fy) = proj(polygon[j]);
+
+        // Edge direction in 2D
+        let edx = fx - ex;
+        let edy = fy - ey;
+
+        // Solve: line_pt_2d + t * dir_2d = edge_pt + s * edge_dir
+        // → t * dx - s * edx = ex - lx
+        // → t * dy - s * edy = ey - ly
+        let det = dx * (-edy) - dy * (-edx);
+        if det.abs() < 1e-15 {
+            continue; // Parallel
+        }
+
+        let rhs_x = ex - lx;
+        let rhs_y = ey - ly;
+        let t = (rhs_x * (-edy) - rhs_y * (-edx)) / det;
+        let s = (dx * rhs_y - dy * rhs_x) / det;
+
+        // The crossing must be within the finite edge: s ∈ [0, 1].
+        if s >= -tol.linear && s <= 1.0 + tol.linear {
+            crossings.push(t);
+        }
+    }
+
+    if crossings.is_empty() {
+        if point_in_polygon_3d(line_pt, polygon, face_normal) {
+            return vec![(f64::NEG_INFINITY, f64::INFINITY)];
+        }
+        return Vec::new();
+    }
+
+    crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    crossings.dedup_by(|a, b| (*a - *b).abs() < tol.linear);
+
+    // Build intervals by testing midpoints between consecutive crossings.
+    let mut intervals = Vec::new();
+
+    // Test before first crossing
+    let t_before = crossings[0] - 1.0;
+    let p_before = point_along_line(line_pt, line_dir, t_before);
+    if point_in_polygon_3d(&p_before, polygon, face_normal) {
+        intervals.push((f64::NEG_INFINITY, crossings[0]));
+    }
+
+    for w in crossings.windows(2) {
+        let t_mid = (w[0] + w[1]) * 0.5;
+        let p_mid = point_along_line(line_pt, line_dir, t_mid);
+        if point_in_polygon_3d(&p_mid, polygon, face_normal) {
+            intervals.push((w[0], w[1]));
+        }
+    }
+
+    // Test after last crossing
+    let t_after = crossings[crossings.len() - 1] + 1.0;
+    let p_after = point_along_line(line_pt, line_dir, t_after);
+    if point_in_polygon_3d(&p_after, polygon, face_normal) {
+        intervals.push((crossings[crossings.len() - 1], f64::INFINITY));
+    }
+
+    intervals
+}
+
+/// Test if a 3D point lies inside a 3D polygon (both on the same plane).
+///
+/// Projects to 2D using the face normal, then uses winding number.
+fn point_in_polygon_3d(pt: &Point3, polygon: &[Point3], normal: &Vec3) -> bool {
+    // Choose projection axes: drop the component aligned with the dominant normal axis.
+    let (ax1, ax2) = dominant_projection_axes(normal);
+
+    let px = pt.x() * ax1.x() + pt.y() * ax1.y() + pt.z() * ax1.z();
+    let py = pt.x() * ax2.x() + pt.y() * ax2.y() + pt.z() * ax2.z();
+
+    let mut winding = 0i32;
+    let n = polygon.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let yi = polygon[i].x() * ax2.x() + polygon[i].y() * ax2.y() + polygon[i].z() * ax2.z();
+        let yj = polygon[j].x() * ax2.x() + polygon[j].y() * ax2.y() + polygon[j].z() * ax2.z();
+
+        if yi <= py {
+            if yj > py {
+                let xi =
+                    polygon[i].x() * ax1.x() + polygon[i].y() * ax1.y() + polygon[i].z() * ax1.z();
+                let xj =
+                    polygon[j].x() * ax1.x() + polygon[j].y() * ax1.y() + polygon[j].z() * ax1.z();
+                if cross_2d(xi - px, yi - py, xj - px, yj - py) > 0.0 {
+                    winding += 1;
+                }
+            }
+        } else if yj <= py {
+            let xi = polygon[i].x() * ax1.x() + polygon[i].y() * ax1.y() + polygon[i].z() * ax1.z();
+            let xj = polygon[j].x() * ax1.x() + polygon[j].y() * ax1.y() + polygon[j].z() * ax1.z();
+            if cross_2d(xi - px, yi - py, xj - px, yj - py) < 0.0 {
+                winding -= 1;
+            }
+        }
+    }
+    winding != 0
+}
+
+/// Pick two axes for projecting a 3D polygon to 2D by dropping the dominant
+/// normal component.
+fn dominant_projection_axes(normal: &Vec3) -> (Vec3, Vec3) {
+    let ax = normal.x().abs();
+    let ay = normal.y().abs();
+    let az = normal.z().abs();
+    if az >= ax && az >= ay {
+        // Drop Z
+        (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0))
+    } else if ay >= ax {
+        // Drop Y
+        (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0))
+    } else {
+        // Drop X
+        (Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0))
+    }
+}
+
+/// 2D cross product (determinant).
+fn cross_2d(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    ax * by - ay * bx
+}
+
+/// Intersect two sorted lists of intervals, returning all overlapping sub-intervals.
+fn intersect_interval_lists(a: &[(f64, f64)], b: &[(f64, f64)], tol: f64) -> Vec<(f64, f64)> {
+    let mut result = Vec::new();
+    let mut ai = 0;
+    let mut bi = 0;
+    while ai < a.len() && bi < b.len() {
+        let lo = a[ai].0.max(b[bi].0);
+        let hi = a[ai].1.min(b[bi].1);
+        if hi - lo > tol {
+            result.push((lo, hi));
+        }
+        // Advance the interval that ends first.
+        if a[ai].1 < b[bi].1 {
+            ai += 1;
+        } else {
+            bi += 1;
+        }
+    }
+    result
+}
+
+/// Cyrus-Beck clipping of a line against a convex polygon (single interval).
 ///
 /// The line is `P(t) = line_pt + t * line_dir`. The polygon lies on a plane
 /// with normal `face_normal`. Returns `(t_min, t_max)` of the segment inside
 /// the polygon, or `None` if the line doesn't cross the polygon.
+///
+/// Only correct for convex polygons. For concave polygons, use
+/// [`polygon_clip_intervals`] which returns multiple intervals.
 fn cyrus_beck_clip(
     line_pt: &Point3,
     line_dir: &Vec3,
@@ -1086,30 +1283,23 @@ fn cyrus_beck_clip(
     for i in 0..n {
         let j = (i + 1) % n;
         let edge_vec = polygon[j] - polygon[i];
-        // Inward-pointing normal of this edge (within the face plane).
         let edge_normal = face_normal.cross(edge_vec);
 
-        // Vector from polygon vertex to line point.
         let w = *line_pt - polygon[i];
-
         let denom = edge_normal.dot(*line_dir);
         let numer = -edge_normal.dot(w);
 
         if denom.abs() < tol.angular {
-            // Line parallel to this edge.
-            // edge_normal · w > 0 means on the interior side.
             if edge_normal.dot(w) < 0.0 {
-                return None; // Outside this edge.
+                return None;
             }
             continue;
         }
 
         let t = numer / denom;
         if denom > 0.0 {
-            // Entering half-space (inward normal convention).
             t_enter = t_enter.max(t);
         } else {
-            // Exiting half-space (inward normal convention).
             t_exit = t_exit.min(t);
         }
 
@@ -4202,6 +4392,8 @@ fn sample_edge_curve(curve: &EdgeCurve, n: usize) -> Vec<Point3> {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use brepkit_math::tolerance::Tolerance;
+    use brepkit_math::vec::{Point3, Vec3};
     use brepkit_topology::Topology;
     use brepkit_topology::test_utils::make_unit_cube_manifold_at;
     use brepkit_topology::validation::validate_shell_manifold;
@@ -4217,6 +4409,82 @@ mod tests {
             "result should be manifold"
         );
         sh.faces().len()
+    }
+
+    // ── Polygon clipper tests ─────────────────────────────────────────
+
+    #[test]
+    fn polygon_clip_convex_square() {
+        let tol = Tolerance::new();
+        let polygon = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(2.0, 2.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+        ];
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        // Line through center, along Y
+        let line_pt = Point3::new(1.0, 0.0, 0.0);
+        let line_dir = Vec3::new(0.0, 1.0, 0.0);
+        let intervals = super::polygon_clip_intervals(&line_pt, &line_dir, &polygon, &normal, tol);
+        assert_eq!(intervals.len(), 1, "expected 1 interval, got {intervals:?}");
+        assert!(
+            (intervals[0].0 - 0.0).abs() < 0.01,
+            "t_min={}",
+            intervals[0].0
+        );
+        assert!(
+            (intervals[0].1 - 2.0).abs() < 0.01,
+            "t_max={}",
+            intervals[0].1
+        );
+    }
+
+    #[test]
+    fn polygon_clip_l_shape() {
+        let tol = Tolerance::new();
+        // L-shaped (concave) polygon
+        let polygon = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(2.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(1.0, 2.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+        ];
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        // Line at x=0.5, along Y — should give one interval [0, 2]
+        let intervals = super::polygon_clip_intervals(
+            &Point3::new(0.5, 0.0, 0.0),
+            &Vec3::new(0.0, 1.0, 0.0),
+            &polygon,
+            &normal,
+            tol,
+        );
+        assert_eq!(
+            intervals.len(),
+            1,
+            "x=0.5 should have 1 interval: {intervals:?}"
+        );
+
+        // Line at x=1.5, along Y — should give one interval [0, 1] (narrow arm)
+        let intervals2 = super::polygon_clip_intervals(
+            &Point3::new(1.5, 0.0, 0.0),
+            &Vec3::new(0.0, 1.0, 0.0),
+            &polygon,
+            &normal,
+            tol,
+        );
+        assert_eq!(
+            intervals2.len(),
+            1,
+            "x=1.5 should have 1 interval: {intervals2:?}"
+        );
+        assert!(
+            intervals2[0].1 < 1.5,
+            "should only reach y=1, got {}",
+            intervals2[0].1
+        );
     }
 
     // ── Disjoint tests ──────────────────────────────────────────────────

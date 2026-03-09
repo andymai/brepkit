@@ -131,10 +131,12 @@ pub fn curve_curve_intersect_full(
 /// Signed distances of control points to the fat line defined by the first
 /// and last control points of the curve.
 ///
-/// Returns `(line_dir, d_values, d_min, d_max)` where `line_dir` is the
-/// normalized baseline direction, `d_values` are the signed distances for
-/// each control point, and `d_min`/`d_max` bound the fat line.
-fn fat_line(cps: &[Point3]) -> Option<(Vec3, Vec<f64>, f64, f64)> {
+/// Returns `(line_dir, d_values, d_min, d_max, ref_normal)` where `line_dir`
+/// is the normalized baseline direction, `d_values` are the signed distances
+/// for each control point, `d_min`/`d_max` bound the fat line, and
+/// `ref_normal` is the reference normal used for consistent sign convention.
+#[allow(clippy::type_complexity)]
+fn fat_line(cps: &[Point3]) -> Option<(Vec3, Vec<f64>, f64, f64, Option<Vec3>)> {
     let n = cps.len();
     if n < 2 {
         return None;
@@ -154,20 +156,32 @@ fn fat_line(cps: &[Point3]) -> Option<(Vec3, Vec<f64>, f64, f64)> {
 
     // Compute signed distance for each control point.
     // Use the cross product magnitude as the signed perpendicular distance.
-    // For 3D curves we pick the component of the cross product that gives
-    // a consistent signed scalar. We use the full cross-product length with
-    // the sign from the dominant component.
+    //
+    // For consistent sign convention in 3D: establish a reference normal from
+    // the first non-degenerate cross product, then project all subsequent
+    // cross products onto it. This prevents sign flips for nearly-coplanar
+    // curves where the dominant component can change due to floating-point noise.
+    let ref_normal = cps
+        .iter()
+        .map(|&pi| (pi - p0).cross(dir))
+        .find(|c| c.length() > 1e-20);
+
     let dists: Vec<f64> = cps
         .iter()
         .map(|&pi| {
             let v = pi - p0;
             let cross = v.cross(dir);
             let len = cross.length();
-            // Sign convention: use the z-component of the cross product if the
-            // curves are planar (XY). For general 3D, sign doesn't matter for
-            // clipping as long as it's consistent. Pick the sign from the
-            // largest-magnitude component of the cross product.
-            let sign = dominant_sign(cross);
+            let sign = match ref_normal {
+                Some(ref_n) => {
+                    if cross.dot(ref_n) >= 0.0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                }
+                None => dominant_sign(cross),
+            };
             len * sign
         })
         .collect();
@@ -179,7 +193,7 @@ fn fat_line(cps: &[Point3]) -> Option<(Vec3, Vec<f64>, f64, f64)> {
         .fold(f64::NEG_INFINITY, f64::max)
         .max(0.0);
 
-    Some((dir, dists, d_min, d_max))
+    Some((dir, dists, d_min, d_max, ref_normal))
 }
 
 /// Return +1.0 or -1.0 based on the dominant component of the cross product.
@@ -207,7 +221,7 @@ fn clip_to_fat_line(
     t_b_lo: f64,
     t_b_hi: f64,
 ) -> Option<(f64, f64)> {
-    let (dir, _dists_a, d_min, d_max) = fat_line(cps_a)?;
+    let (dir, _dists_a, d_min, d_max, ref_normal_a) = fat_line(cps_a)?;
 
     let p0_a = cps_a[0];
     let n_b = cps_b.len();
@@ -216,6 +230,18 @@ fn clip_to_fat_line(
     }
 
     // Compute signed distances of B's control points to A's fat line.
+    // CRITICAL: use the SAME reference normal that fat_line used for A's own
+    // control points. If we compute a different reference normal from B's
+    // points, the sign convention can flip, making d_min/d_max bounds
+    // inconsistent with B's distance values.
+    //
+    // When A's ref_normal is None (e.g. A is a straight line where all
+    // points lie on the baseline), we fall back to dominant_sign per-point.
+    // Do NOT try to establish a different reference from B's points — that
+    // can produce a sign polarity opposite to what the convex hull clip
+    // expects relative to d_min/d_max = 0.
+    let ref_normal_b = ref_normal_a;
+
     #[allow(clippy::cast_precision_loss)]
     let dist_pts: Vec<(f64, f64)> = cps_b
         .iter()
@@ -224,7 +250,16 @@ fn clip_to_fat_line(
             let v = pi - p0_a;
             let cross = v.cross(dir);
             let len = cross.length();
-            let sign = dominant_sign(cross);
+            let sign = match ref_normal_b {
+                Some(ref_n) => {
+                    if cross.dot(ref_n) >= 0.0 {
+                        1.0
+                    } else {
+                        -1.0
+                    }
+                }
+                None => dominant_sign(cross),
+            };
             let t = t_b_lo + (t_b_hi - t_b_lo) * (i as f64) / ((n_b - 1) as f64);
             (t, len * sign)
         })
