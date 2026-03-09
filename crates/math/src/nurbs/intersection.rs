@@ -1132,7 +1132,7 @@ fn find_ssi_seeds_grid(
     let diag1 = (s1.evaluate(u1_min, v1_min) - s1.evaluate(u1_max, v1_max)).length();
     let diag2 = (s2.evaluate(u2_min, v2_min) - s2.evaluate(u2_max, v2_max)).length();
     #[allow(clippy::cast_precision_loss)]
-    let threshold = (diag1.max(diag2) / n as f64) * 3.0;
+    let threshold = ((diag1.max(diag2) / n as f64) * 3.0).max(0.1);
 
     for &(u1, v1, p1) in &pts1 {
         for &(u2, v2, p2) in &pts2 {

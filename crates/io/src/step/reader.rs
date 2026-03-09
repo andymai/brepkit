@@ -776,7 +776,8 @@ fn parse_weight_list(s: &str) -> Vec<f64> {
 /// Returns uniform weights if parsing fails.
 fn extract_rational_weight_grid(attrs: &str, n_rows: usize, n_cols: usize) -> Vec<Vec<f64>> {
     let flat = extract_rational_weights(attrs, n_rows * n_cols);
-    if flat.len() == n_rows * n_cols && flat.iter().any(|&w| (w - 1.0).abs() > 1e-12) {
+    let tol = brepkit_math::tolerance::Tolerance::new();
+    if flat.len() == n_rows * n_cols && flat.iter().any(|&w| !tol.approx_eq(w, 1.0)) {
         // Reshape flat weights into a 2D grid.
         flat.chunks(n_cols).map(<[f64]>::to_vec).collect()
     } else {
