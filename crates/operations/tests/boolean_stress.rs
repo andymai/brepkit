@@ -578,7 +578,10 @@ fn options_fine_deflection() {
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
     let b = box_at(&mut topo, 1.0, 0.0, 0.0, 2.0, 2.0, 2.0);
 
-    let opts = BooleanOptions { deflection: 0.01 };
+    let opts = BooleanOptions {
+        deflection: 0.01,
+        ..Default::default()
+    };
     let result = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, opts).unwrap();
     check_manifold(&topo, result);
 }
@@ -589,7 +592,10 @@ fn options_coarse_deflection() {
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
     let b = box_at(&mut topo, 1.0, 0.0, 0.0, 2.0, 2.0, 2.0);
 
-    let opts = BooleanOptions { deflection: 1.0 };
+    let opts = BooleanOptions {
+        deflection: 1.0,
+        ..Default::default()
+    };
     let result = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, opts).unwrap();
     check_manifold(&topo, result);
 }

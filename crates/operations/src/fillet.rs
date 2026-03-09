@@ -21,16 +21,95 @@
 use std::collections::{HashMap, HashSet};
 
 use brepkit_math::nurbs::surface::NurbsSurface;
+use brepkit_math::nurbs::surface_fitting::interpolate_surface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeId;
+use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::VertexId;
 
 use crate::boolean::FaceSpec;
 use crate::dot_normal_point;
+
+/// Sample a point along an edge curve at normalised parameter `t` ∈ [0, 1].
+///
+/// For `Line` edges this is simple lerp between start/end.
+/// For Circle/Ellipse/NurbsCurve the actual curve geometry is evaluated.
+fn sample_edge_point(curve: &EdgeCurve, p_start: Point3, p_end: Point3, t: f64) -> Point3 {
+    match curve {
+        EdgeCurve::Line => Point3::new(
+            p_start.x().mul_add(1.0 - t, p_end.x() * t),
+            p_start.y().mul_add(1.0 - t, p_end.y() * t),
+            p_start.z().mul_add(1.0 - t, p_end.z() * t),
+        ),
+        EdgeCurve::Circle(circle) => {
+            let ts = circle.project(p_start);
+            let mut te = circle.project(p_end);
+            if te <= ts {
+                te += std::f64::consts::TAU;
+            }
+            circle.evaluate(ts + (te - ts) * t)
+        }
+        EdgeCurve::Ellipse(ellipse) => {
+            let ts = ellipse.project(p_start);
+            let mut te = ellipse.project(p_end);
+            if te <= ts {
+                te += std::f64::consts::TAU;
+            }
+            ellipse.evaluate(ts + (te - ts) * t)
+        }
+        EdgeCurve::NurbsCurve(nurbs) => {
+            let (u0, u1) = nurbs.domain();
+            nurbs.evaluate(u0 + (u1 - u0) * t)
+        }
+    }
+}
+
+/// Compute the tangent direction along an edge curve at normalised parameter `t`.
+///
+/// Returns an unnormalised tangent vector. For `Line` edges this is the constant
+/// `p_end - p_start` direction.
+fn sample_edge_tangent(curve: &EdgeCurve, p_start: Point3, p_end: Point3, t: f64) -> Vec3 {
+    match curve {
+        EdgeCurve::Line => p_end - p_start,
+        EdgeCurve::Circle(circle) => {
+            let ts = circle.project(p_start);
+            let mut te = circle.project(p_end);
+            if te <= ts {
+                te += std::f64::consts::TAU;
+            }
+            circle.tangent(ts + (te - ts) * t)
+        }
+        EdgeCurve::Ellipse(ellipse) => {
+            let ts = ellipse.project(p_start);
+            let mut te = ellipse.project(p_end);
+            if te <= ts {
+                te += std::f64::consts::TAU;
+            }
+            ellipse.tangent(ts + (te - ts) * t)
+        }
+        EdgeCurve::NurbsCurve(nurbs) => {
+            let (u0, u1) = nurbs.domain();
+            let u = u0 + (u1 - u0) * t;
+            let d = nurbs.derivatives(u, 1);
+            d[1]
+        }
+    }
+}
+
+/// Determine the number of v-direction samples needed for an edge curve.
+///
+/// Line edges need only 2 samples (start + end) for an exact linear surface.
+/// Curved edges need more samples to capture the curvature.
+fn edge_v_samples(curve: &EdgeCurve) -> usize {
+    match curve {
+        EdgeCurve::Line => 2,
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => 9,
+        EdgeCurve::NurbsCurve(_) => 7,
+    }
+}
 
 /// Fillet one or more edges of a solid with a constant radius (flat chamfer).
 ///
@@ -457,6 +536,54 @@ pub fn fillet_rolling_ball(
             .push(edge_id);
     }
 
+    // Phase 2b: Validate that the fillet radius fits within adjacent face geometry.
+    // For each target edge on each adjacent face, the shortest non-target edge
+    // from the shared vertices bounds how far the contact point can extend.
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        let p_start = topo.vertex(edge.start())?.point();
+        let p_end = topo.vertex(edge.end())?.point();
+
+        let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
+            continue;
+        };
+        for &fid in face_list {
+            let poly = match face_polygons.get(&fid.index()) {
+                Some(p) => p,
+                None => continue,
+            };
+            // For each vertex of the target edge, find the shortest adjacent
+            // non-target edge on this face. The radius must not exceed that length.
+            for &edge_pt in &[p_start, p_end] {
+                let mut min_adj = f64::MAX;
+                for (i, pos) in poly.positions.iter().enumerate() {
+                    let next_i = (i + 1) % poly.positions.len();
+                    let next_pos = poly.positions[next_i];
+                    // Skip the target edge itself
+                    if target_set.contains(&poly.wire_edge_ids[i].index()) {
+                        continue;
+                    }
+                    // Only check edges sharing the vertex
+                    if (*pos - edge_pt).length() < tol.linear
+                        || (next_pos - edge_pt).length() < tol.linear
+                    {
+                        let edge_len = (next_pos - *pos).length();
+                        if edge_len < min_adj {
+                            min_adj = edge_len;
+                        }
+                    }
+                }
+                if radius > min_adj && min_adj < f64::MAX {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: format!(
+                            "fillet radius {radius:.6} exceeds adjacent edge length {min_adj:.6}"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
     // Phase 3: Build modified (trimmed) planar faces.
     let mut all_specs: Vec<FaceSpec> = Vec::new();
     let mut fillet_face_indices: Vec<usize> = Vec::new();
@@ -537,131 +664,135 @@ pub fn fillet_rolling_ball(
         let n1 = face_polygons[&f1.index()].normal;
         let n2 = face_polygons[&f2.index()].normal;
 
-        // Edge direction
-        let edge_vec = p_end - p_start;
-        let edge_len = edge_vec.length();
-        if edge_len < tol.linear {
+        // Snapshot the edge curve before further borrows.
+        let edge_curve = edge.curve().clone();
+
+        // Edge direction at the start (used for cross-section geometry).
+        let edge_tan = sample_edge_tangent(&edge_curve, p_start, p_end, 0.0);
+        if edge_tan.length() < tol.linear {
             continue;
         }
-        let edge_dir = edge_vec.normalize()?;
+        let edge_dir = edge_tan.normalize()?;
 
         // Compute inward-pointing directions on each face (perpendicular to edge,
         // in the face plane, pointing toward the solid interior).
-        // For face with outward normal n and edge direction t:
-        // The inward direction is -(t × n) or +(t × n) depending on orientation.
         let cross1 = edge_dir.cross(n1);
         let cross2 = edge_dir.cross(n2);
 
-        // Choose sign so the inward directions point toward each other
-        // (their dot product should be positive for a convex edge).
-        let d1 = if cross1.dot(n2) > 0.0 {
+        // Choose sign so the inward directions point toward each other.
+        let d1_raw = if cross1.dot(n2) > 0.0 {
             cross1
         } else {
-            Vec3::new(-cross1.x(), -cross1.y(), -cross1.z())
+            -cross1
         };
-        let d2 = if cross2.dot(n1) > 0.0 {
+        let d2_raw = if cross2.dot(n1) > 0.0 {
             cross2
         } else {
-            Vec3::new(-cross2.x(), -cross2.y(), -cross2.z())
+            -cross2
         };
 
-        // Normalize (they should already be unit length since edge_dir and n are unit)
-        let d1 = d1.normalize().unwrap_or(d1);
-        let d2 = d2.normalize().unwrap_or(d2);
+        let d1_ref = d1_raw.normalize().unwrap_or(d1_raw);
+        let d2_ref = d2_raw.normalize().unwrap_or(d2_raw);
 
         // Half dihedral angle (angle between the inward face directions)
-        let cos_half = d1.dot(d2).clamp(-1.0, 1.0);
+        let cos_half = d1_ref.dot(d2_ref).clamp(-1.0, 1.0);
         let half_angle = cos_half.acos() / 2.0;
 
         if half_angle.abs() < tol.angular || (std::f64::consts::PI - half_angle).abs() < tol.angular
         {
-            // Degenerate angle — faces are parallel or antiparallel, can't fillet
             continue;
         }
 
-        // Bisector direction (toward fillet center)
-        let bisector = (d1 + d2).normalize()?;
+        let n_v = edge_v_samples(&edge_curve);
 
-        // Fillet center distance is R/sin(half_angle), but we only need
-        // contact points and the middle control point for the NURBS arc.
+        // Sample cross-section geometry at each v-station along the edge curve.
+        let mut grid: Vec<[Point3; 3]> = Vec::with_capacity(n_v);
+        let mut bisector_ref = Vec3::new(0.0, 0.0, 0.0);
 
-        // Compute contact points and fillet center at each edge endpoint.
-        // Contact point on face i = edge_point + d_i * radius
-        let contact1_start = p_start + d1 * radius;
-        let contact1_end = p_end + d1 * radius;
-        let contact2_start = p_start + d2 * radius;
-        let contact2_end = p_end + d2 * radius;
+        #[allow(clippy::cast_precision_loss)]
+        for s in 0..n_v {
+            let t = s as f64 / (n_v - 1).max(1) as f64;
+            let p = sample_edge_point(&edge_curve, p_start, p_end, t);
+            let tan = sample_edge_tangent(&edge_curve, p_start, p_end, t);
+            let local_dir = tan.normalize().unwrap_or(edge_dir);
 
-        // Build the NURBS fillet surface as a degree (2,1) rational surface.
-        // u-direction: circular arc (degree 2, 3 control points)
-        // v-direction: along edge (degree 1, 2 control points)
-        //
-        // The arc goes from contact1 to contact2 through a middle control point.
-        // For a rational quadratic circular arc:
-        //   P0 = contact point on face 1 (weight 1)
-        //   P1 = intersection of tangent lines at P0 and P2 (weight cos(α/2))
-        //   P2 = contact point on face 2 (weight 1)
-        //
-        // The tangent at P0 points from P0 toward the center (in the plane
-        // perpendicular to the edge), and similarly for P2.
-        // The middle control point is where these tangent lines meet.
-        //
-        // For a symmetric fillet, the middle CP is on the bisector at distance
-        // R / cos(α/2) from the edge.
+            // Recompute cross-section directions at this sample
+            let c1 = local_dir.cross(n1);
+            let c2 = local_dir.cross(n2);
+            let ld1 = if c1.dot(n2) > 0.0 { c1 } else { -c1 };
+            let ld2 = if c2.dot(n1) > 0.0 { c2 } else { -c2 };
+            let ld1 = ld1.normalize().unwrap_or(d1_ref);
+            let ld2 = ld2.normalize().unwrap_or(d2_ref);
 
-        // Arc half-angle: the angle from contact1 to contact2 through the center
-        let arc_half = half_angle; // For the fillet arc
-        let w_mid = arc_half.cos(); // Weight for middle control point
+            let local_cos = ld1.dot(ld2).clamp(-1.0, 1.0);
+            let local_half = local_cos.acos() / 2.0;
+            let bisector = (ld1 + ld2).normalize().unwrap_or(d1_ref);
 
-        // Middle control point: on the bisector at distance R/cos(α/2)
-        let mid_dist = radius / arc_half.cos();
-        let mid_start = p_start + bisector * mid_dist;
-        let mid_end = p_end + bisector * mid_dist;
+            if s == 0 {
+                bisector_ref = bisector;
+            }
 
-        // Build the NURBS surface.
-        // Convention: control_points[u_index][v_index].
-        // u = arc direction (3 CPs, degree 2), v = edge direction (2 CPs, degree 1).
-        let fillet_surface = NurbsSurface::new(
-            2,                                  // degree_u (circular arc)
-            1,                                  // degree_v (linear along edge)
-            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], // knots_u: 3 CPs + degree 2 + 1 = 6
-            vec![0.0, 0.0, 1.0, 1.0],           // knots_v: 2 CPs + degree 1 + 1 = 4
-            vec![
-                // u=0: contact on face 1 (start → end of edge)
-                vec![contact1_start, contact1_end],
-                // u=0.5: middle arc CP (start → end of edge)
-                vec![mid_start, mid_end],
-                // u=1: contact on face 2 (start → end of edge)
-                vec![contact2_start, contact2_end],
-            ],
-            vec![
-                vec![1.0, 1.0],     // u=0 weights
-                vec![w_mid, w_mid], // u=0.5 weights (cos(α/2))
-                vec![1.0, 1.0],     // u=1 weights
-            ],
-        )
-        .map_err(crate::OperationsError::Math)?;
+            let contact1 = p + ld1 * radius;
+            let mid_dist = radius / local_half.cos().max(0.01);
+            let mid_cp = p + bisector * mid_dist;
+            let contact2 = p + ld2 * radius;
+
+            grid.push([contact1, mid_cp, contact2]);
+        }
+
+        // Build the fillet surface from the cross-section grid.
+        let contact1_start = grid[0][0];
+        let contact2_start = grid[0][2];
+        let contact1_end = grid[n_v - 1][0];
+        let contact2_end = grid[n_v - 1][2];
+
+        let fillet_surface = if n_v == 2 {
+            // Line edge: exact rational quadratic arc × linear.
+            let arc_half = half_angle;
+            let w_mid = arc_half.cos();
+            NurbsSurface::new(
+                2,
+                1,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![
+                    vec![contact1_start, contact1_end],
+                    vec![grid[0][1], grid[1][1]],
+                    vec![contact2_start, contact2_end],
+                ],
+                vec![vec![1.0, 1.0], vec![w_mid, w_mid], vec![1.0, 1.0]],
+            )
+            .map_err(crate::OperationsError::Math)?
+        } else {
+            // Curved edge: interpolate through sampled cross-sections.
+            let n_arc = 3;
+            let transposed: Vec<Vec<Point3>> = (0..n_arc)
+                .map(|col| (0..n_v).map(|row| grid[row][col]).collect())
+                .collect();
+            let degree_u = 2.min(n_arc - 1);
+            let degree_v = (n_v - 1).min(3);
+            interpolate_surface(&transposed, degree_u, degree_v)
+                .map_err(crate::OperationsError::Math)?
+        };
 
         all_specs.push(FaceSpec::Surface {
             vertices: vec![contact1_start, contact2_start, contact2_end, contact1_end],
             surface: FaceSurface::Nurbs(fillet_surface),
         });
 
-        // Track which faces need normal reversal (surface normal points
-        // inward, same direction as bisector toward solid interior).
+        // Track which faces need normal reversal.
         let srf_mid_normal = match &all_specs[all_specs.len() - 1] {
             FaceSpec::Surface {
                 surface: FaceSurface::Nurbs(srf),
                 ..
-            } => srf.normal(0.5, 0.5).unwrap_or(bisector),
-            _ => bisector,
+            } => srf.normal(0.5, 0.5).unwrap_or(bisector_ref),
+            _ => bisector_ref,
         };
-        if srf_mid_normal.dot(bisector) > 0.0 {
+        if srf_mid_normal.dot(bisector_ref) > 0.0 {
             fillet_face_indices.push(all_specs.len() - 1);
         }
 
         // Record contact points at each vertex for vertex blend detection.
-        // Each edge contributes two contact points per endpoint (one on each face).
         let start_vi = edge.start().index();
         let end_vi = edge.end().index();
         vertex_contacts
@@ -792,6 +923,124 @@ pub fn fillet_rolling_ball(
 
         let ordered_points: Vec<Point3> = indexed_points.into_iter().map(|(_, p)| p).collect();
 
+        // Build a spherical cap NURBS patch instead of a flat triangle.
+        // The fillet sphere center is at distance R/sin(half_angle) from the
+        // original vertex along the bisector of the face normals. For a 3-point
+        // corner, we approximate with a rational Coons-like patch.
+        if ordered_points.len() == 3 {
+            if let Some(v_pos) = original_vertex {
+                // Sphere center: the original vertex offset by R along each
+                // adjacent fillet's bisector converges to the same point.
+                // Use the centroid + outward normal * R as an approximation.
+                let sphere_center = Point3::new(
+                    centroid.x() + blend_normal.x() * radius,
+                    centroid.y() + blend_normal.y() * radius,
+                    centroid.z() + blend_normal.z() * radius,
+                );
+
+                // Midpoints of each arc edge on the sphere.
+                // For a great-circle arc from A to B on sphere center C radius R:
+                //   mid = C + R * normalize((A-C) + (B-C))
+                let sphere_mid = |a: Point3, b: Point3| -> Option<Point3> {
+                    let va = a - sphere_center;
+                    let vb = b - sphere_center;
+                    let sum = va + vb;
+                    let len = sum.length();
+                    if len < 1e-15 {
+                        return None;
+                    }
+                    let r_actual = va.length();
+                    let dir = Vec3::new(sum.x() / len, sum.y() / len, sum.z() / len);
+                    Some(Point3::new(
+                        sphere_center.x() + dir.x() * r_actual,
+                        sphere_center.y() + dir.y() * r_actual,
+                        sphere_center.z() + dir.z() * r_actual,
+                    ))
+                };
+
+                let p0 = ordered_points[0];
+                let p1 = ordered_points[1];
+                let p2 = ordered_points[2];
+
+                // Try to build the spherical cap patch.
+                if let (Some(m01), Some(m12), Some(m20)) =
+                    (sphere_mid(p0, p1), sphere_mid(p1, p2), sphere_mid(p2, p0))
+                {
+                    // Apex: point on sphere closest to outward normal.
+                    let apex = {
+                        let avg = Vec3::new(
+                            (p0 - sphere_center).x()
+                                + (p1 - sphere_center).x()
+                                + (p2 - sphere_center).x(),
+                            (p0 - sphere_center).y()
+                                + (p1 - sphere_center).y()
+                                + (p2 - sphere_center).y(),
+                            (p0 - sphere_center).z()
+                                + (p1 - sphere_center).z()
+                                + (p2 - sphere_center).z(),
+                        );
+                        let len = avg.length().max(1e-15);
+                        let r_actual = (p0 - sphere_center).length();
+                        Point3::new(
+                            sphere_center.x() + avg.x() / len * r_actual,
+                            sphere_center.y() + avg.y() / len * r_actual,
+                            sphere_center.z() + avg.z() / len * r_actual,
+                        )
+                    };
+
+                    // Build a degree (2,2) patch: 3×3 control points.
+                    // Row 0: p0, m01, p1  (bottom edge arc)
+                    // Row 1: m20, apex, m12 (middle arc through apex)
+                    // Row 2: p2, p2, p2  (degenerate top = single point)
+                    //
+                    // Weights: corners 1.0, edge midpoints need rational weight
+                    // for circular arc approximation.
+                    let w_edge = {
+                        let v0 = (p0 - sphere_center).normalize().unwrap_or(blend_normal);
+                        let v1 = (p1 - sphere_center).normalize().unwrap_or(blend_normal);
+                        let dot = v0.dot(v1).clamp(-1.0, 1.0);
+                        let half = (dot.acos() / 2.0).cos();
+                        half.max(0.5)
+                    };
+
+                    let cap_surface = NurbsSurface::new(
+                        2,
+                        2,
+                        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                        vec![vec![p0, m20, p2], vec![m01, apex, m12], vec![p1, m12, p2]],
+                        vec![
+                            vec![1.0, w_edge, 1.0],
+                            vec![w_edge, w_edge * w_edge, w_edge],
+                            vec![1.0, w_edge, 1.0],
+                        ],
+                    )
+                    .map_err(crate::OperationsError::Math)?;
+
+                    all_specs.push(FaceSpec::Surface {
+                        vertices: ordered_points,
+                        surface: FaceSurface::Nurbs(cap_surface),
+                    });
+
+                    // Check if we need to flip this face too.
+                    let cap_norm = match &all_specs[all_specs.len() - 1] {
+                        FaceSpec::Surface {
+                            surface: FaceSurface::Nurbs(srf),
+                            ..
+                        } => srf.normal(0.5, 0.5).unwrap_or(blend_normal),
+                        _ => blend_normal,
+                    };
+                    // The cap normal should point away from the original vertex.
+                    let to_vertex = v_pos - centroid;
+                    if to_vertex.dot(cap_norm) > 0.0 {
+                        fillet_face_indices.push(all_specs.len() - 1);
+                    }
+                    continue;
+                }
+            }
+        }
+
+        // Fallback: flat planar blend for non-triangular or degenerate cases.
         let blend_d = dot_normal_point(blend_normal, ordered_points[0]);
         all_specs.push(FaceSpec::Planar {
             vertices: ordered_points,
@@ -940,8 +1189,6 @@ pub fn fillet_variable(
     solid: SolidId,
     edge_laws: &[(EdgeId, FilletRadiusLaw)],
 ) -> Result<SolidId, crate::OperationsError> {
-    use brepkit_math::nurbs::surface_fitting::interpolate_surface;
-
     let tol = Tolerance::new();
 
     if edge_laws.is_empty() {
@@ -1111,74 +1358,112 @@ pub fn fillet_variable(
             _ => continue,
         };
 
-        let edge_vec = p_end - p_start;
-        let edge_len = edge_vec.length();
-        if edge_len < tol.linear {
+        let edge_curve = edge.curve().clone();
+
+        let edge_tan = sample_edge_tangent(&edge_curve, p_start, p_end, 0.0);
+        if edge_tan.length() < tol.linear {
             continue;
         }
-        let edge_dir = edge_vec.normalize()?;
+        let edge_dir = edge_tan.normalize()?;
 
-        // Compute cross-section geometry at each sample point.
-        let cross1 = edge_dir.cross(n1);
-        let cross2 = edge_dir.cross(n2);
-        let d1 = if cross1.dot(n2) > 0.0 {
-            cross1
+        // Reference cross-section at t=0 for fallback directions.
+        let cross1_ref = edge_dir.cross(n1);
+        let cross2_ref = edge_dir.cross(n2);
+        let d1_ref = if cross1_ref.dot(n2) > 0.0 {
+            cross1_ref
         } else {
-            -cross1
+            -cross1_ref
         };
-        let d2 = if cross2.dot(n1) > 0.0 {
-            cross2
+        let d2_ref = if cross2_ref.dot(n1) > 0.0 {
+            cross2_ref
         } else {
-            -cross2
+            -cross2_ref
         };
-        let d1 = d1.normalize().unwrap_or(d1);
-        let d2 = d2.normalize().unwrap_or(d2);
-        let bisector = (d1 + d2).normalize()?;
-        let cos_half = d1.dot(d2).clamp(-1.0, 1.0);
-        let half_angle = cos_half.acos() / 2.0;
+        let d1_ref = d1_ref.normalize().unwrap_or(d1_ref);
+        let d2_ref = d2_ref.normalize().unwrap_or(d2_ref);
+        let cos_half_ref = d1_ref.dot(d2_ref).clamp(-1.0, 1.0);
+        let half_angle = cos_half_ref.acos() / 2.0;
 
         if half_angle.abs() < tol.angular {
             continue;
         }
 
-        // Build interpolation grid: n_samples rows × 3 columns (arc CPs).
-        let mut grid: Vec<Vec<Point3>> = Vec::with_capacity(n_samples);
-        let arc_half = half_angle;
+        // Use more samples for curved edges.
+        let n_v = edge_v_samples(&edge_curve).max(n_samples);
+
+        // Build interpolation grid: n_v rows × 3 columns (arc CPs).
+        let mut grid: Vec<Vec<Point3>> = Vec::with_capacity(n_v);
 
         #[allow(clippy::cast_precision_loss)]
-        for s in 0..n_samples {
-            let t = s as f64 / (n_samples - 1).max(1) as f64;
+        for s in 0..n_v {
+            let t = s as f64 / (n_v - 1).max(1) as f64;
             let r = law.evaluate(t);
-            let p = Point3::new(
-                p_start.x().mul_add(1.0 - t, p_end.x() * t),
-                p_start.y().mul_add(1.0 - t, p_end.y() * t),
-                p_start.z().mul_add(1.0 - t, p_end.z() * t),
-            );
+            let p = sample_edge_point(&edge_curve, p_start, p_end, t);
+            let tan = sample_edge_tangent(&edge_curve, p_start, p_end, t);
+            let local_dir = tan.normalize().unwrap_or(edge_dir);
 
-            let contact1 = p + d1 * r;
-            let contact2 = p + d2 * r;
-            let mid_dist = r / arc_half.cos();
+            // Recompute cross-section directions at this sample
+            let c1 = local_dir.cross(n1);
+            let c2 = local_dir.cross(n2);
+            let ld1 = if c1.dot(n2) > 0.0 { c1 } else { -c1 };
+            let ld2 = if c2.dot(n1) > 0.0 { c2 } else { -c2 };
+            let ld1 = ld1.normalize().unwrap_or(d1_ref);
+            let ld2 = ld2.normalize().unwrap_or(d2_ref);
+
+            let local_cos = ld1.dot(ld2).clamp(-1.0, 1.0);
+            let local_half = local_cos.acos() / 2.0;
+            let bisector = (ld1 + ld2).normalize().unwrap_or(d1_ref);
+
+            let contact1 = p + ld1 * r;
+            let contact2 = p + ld2 * r;
+            let mid_dist = r / local_half.cos().max(0.01);
             let mid_cp = p + bisector * mid_dist;
 
             grid.push(vec![contact1, mid_cp, contact2]);
         }
 
-        // Transpose grid for interpolate_surface convention:
-        // rows = arc CPs (3), columns = samples along edge (n_samples).
-        let n_arc = 3;
-        let transposed: Vec<Vec<Point3>> = (0..n_arc)
-            .map(|col| (0..n_samples).map(|row| grid[row][col]).collect())
-            .collect();
-        let degree_u = 2.min(n_arc - 1);
-        let degree_v = (n_samples - 1).min(3);
-        let surface = interpolate_surface(&transposed, degree_u, degree_v)
+        // Build a rational NURBS surface with exact circular arc cross-sections.
+        // u-direction: degree 2, 3 CPs with weights [1, cos(α/2), 1]
+        // v-direction: interpolated through sampled stations along the edge
+        let w_mid = half_angle.cos();
+        let degree_v = (n_v - 1).min(3);
+
+        // Interpolate each of the 3 u-rows independently in v.
+        let row_contact1: Vec<Point3> = (0..n_v).map(|i| grid[i][0]).collect();
+        let row_mid: Vec<Point3> = (0..n_v).map(|i| grid[i][1]).collect();
+        let row_contact2: Vec<Point3> = (0..n_v).map(|i| grid[i][2]).collect();
+
+        let crv0 = brepkit_math::nurbs::fitting::interpolate(&row_contact1, degree_v)
             .map_err(crate::OperationsError::Math)?;
+        let crv1 = brepkit_math::nurbs::fitting::interpolate(&row_mid, degree_v)
+            .map_err(crate::OperationsError::Math)?;
+        let crv2 = brepkit_math::nurbs::fitting::interpolate(&row_contact2, degree_v)
+            .map_err(crate::OperationsError::Math)?;
+
+        // All three curves share the same knot vector and degree since they
+        // interpolate the same number of points with the same degree.
+        let knots_v = crv0.knots().to_vec();
+        let n_cp_v = crv0.control_points().len();
+
+        let surface = NurbsSurface::new(
+            2,                                  // degree_u (circular arc)
+            crv0.degree(),                      // degree_v
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], // knots_u
+            knots_v,
+            vec![
+                crv0.control_points().to_vec(),
+                crv1.control_points().to_vec(),
+                crv2.control_points().to_vec(),
+            ],
+            vec![vec![1.0; n_cp_v], vec![w_mid; n_cp_v], vec![1.0; n_cp_v]],
+        )
+        .map_err(crate::OperationsError::Math)?;
 
         // Boundary vertices for the canal surface.
         let c1s = grid[0][0];
         let c2s = grid[0][2];
-        let c1e = grid[n_samples - 1][0];
-        let c2e = grid[n_samples - 1][2];
+        let c1e = grid[n_v - 1][0];
+        let c2e = grid[n_v - 1][2];
 
         all_specs.push(FaceSpec::Surface {
             vertices: vec![c1s, c2s, c2e, c1e],
@@ -1686,6 +1971,35 @@ mod tests {
         assert!(
             result.is_ok(),
             "fillet on planar edges of boolean result should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn fillet_radius_too_large_rejected() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+        // Unit cube has edge length 2.0 — a radius of 3.0 exceeds adjacent edges.
+        let result = super::fillet_rolling_ball(&mut topo, solid, &edges[..1], 3.0);
+        assert!(result.is_err(), "should reject radius exceeding face size");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("exceeds"),
+            "error should mention exceeds: {msg}"
+        );
+    }
+
+    #[test]
+    fn fillet_radius_just_fits() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+        // Edge length is 4.0 — a radius of 1.0 should fit comfortably.
+        let result = super::fillet_rolling_ball(&mut topo, solid, &edges[..1], 1.0);
+        assert!(
+            result.is_ok(),
+            "small radius should succeed: {:?}",
             result.err()
         );
     }
