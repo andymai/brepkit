@@ -1534,9 +1534,21 @@ fn classify_fragment(
     bvh: Option<&Bvh>,
     tol: Tolerance,
 ) -> FaceClass {
-    // Compute centroid of the fragment.
     let centroid = polygon_centroid(&frag.vertices);
+    classify_point(centroid, frag.normal, opposite, bvh, tol)
+}
 
+/// Classify a point (centroid with a ray direction) relative to an opposite solid.
+///
+/// This is the core classification logic, separated from `FaceFragment` to avoid
+/// unnecessary cloning when the centroid/normal are already known.
+fn classify_point(
+    centroid: Point3,
+    normal: Vec3,
+    opposite: &FaceData,
+    bvh: Option<&Bvh>,
+    tol: Tolerance,
+) -> FaceClass {
     // First check for coplanar faces — must scan candidates only.
     // For coplanar test we need faces near the centroid's plane, so use
     // BVH point-containment if available, otherwise linear scan.
@@ -1555,7 +1567,7 @@ fn classify_fragment(
         let (_, ref verts, n_opp, d_opp) = opposite[i];
         let dist = dot_normal_point(n_opp, centroid) - d_opp;
         if dist.abs() < tol.linear && point_in_face_3d(centroid, verts, &n_opp) {
-            let dot = frag.normal.dot(n_opp);
+            let dot = normal.dot(n_opp);
             return if dot > tol.angular {
                 FaceClass::CoplanarSame
             } else if dot < -tol.angular {
@@ -1569,7 +1581,7 @@ fn classify_fragment(
     }
 
     // Ray-cast from centroid along fragment normal.
-    let ray_dir = frag.normal;
+    let ray_dir = normal;
     let mut crossings = 0i32;
 
     if let Some(bvh) = bvh {
@@ -2938,13 +2950,8 @@ fn analytic_boolean(
                 Source::A => (&face_data_b, bvh_b.as_ref()),
                 Source::B => (&face_data_a, bvh_a.as_ref()),
             };
-            let pseudo = FaceFragment {
-                vertices: frag.vertices.clone(),
-                normal: frag.normal,
-                d: frag.d,
-                source: frag.source,
-            };
-            *class = Some(classify_fragment(&pseudo, opposite, bvh, tol));
+            let centroid = polygon_centroid(&frag.vertices);
+            *class = Some(classify_point(centroid, frag.normal, opposite, bvh, tol));
         }
     }
 
