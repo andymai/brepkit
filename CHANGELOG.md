@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.8](https://github.com/andymai/brepkit/compare/v0.7.7...v0.7.8) (2026-03-09)
+
+
+### Bug Fixes
+
+* consolidate boolean edges and prevent fillet panic corruption ([#106](https://github.com/andymai/brepkit/issues/106)) ([7c5588a](https://github.com/andymai/brepkit/commit/7c5588a2660d938ca4a347c3114f6d146faa3f0b))
+
 ## [0.7.7](https://github.com/andymai/brepkit/compare/v0.7.6...v0.7.7) (2026-03-09)
 
 
