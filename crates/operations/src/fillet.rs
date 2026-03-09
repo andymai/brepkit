@@ -643,10 +643,47 @@ pub fn fillet_rolling_ball(
         });
     }
 
+    // Phase 3b: G1 chain detection.
+    // Detect chains of consecutive fillet edges that share a vertex.
+    // When two fillet strips meet at a vertex on the same pair of faces,
+    // they should share contact points for G1 tangent continuity.
+    // Build a map: vertex_index → Vec<(edge_idx, face1_idx, face2_idx)>
+    let mut vertex_fillet_adjacency: HashMap<usize, Vec<(usize, usize, usize)>> = HashMap::new();
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        if let Some(faces) = edge_to_faces.get(&edge_id.index()) {
+            if faces.len() >= 2 {
+                let f1 = faces[0].index();
+                let f2 = faces[1].index();
+                let (fa, fb) = if f1 < f2 { (f1, f2) } else { (f2, f1) };
+                vertex_fillet_adjacency
+                    .entry(edge.start().index())
+                    .or_default()
+                    .push((edge_id.index(), fa, fb));
+                vertex_fillet_adjacency
+                    .entry(edge.end().index())
+                    .or_default()
+                    .push((edge_id.index(), fa, fb));
+            }
+        }
+    }
+    // Identify G1 chain junctions: vertices where exactly 2 fillet edges share
+    // the same face pair. At these junctions, the fillet strips should merge
+    // smoothly. We store the shared vertex info for use during Phase 4.
+    let mut g1_chain_vertices: HashSet<usize> = HashSet::new();
+    for (vi, adj) in &vertex_fillet_adjacency {
+        if adj.len() == 2 && adj[0].1 == adj[1].1 && adj[0].2 == adj[1].2 {
+            g1_chain_vertices.insert(*vi);
+        }
+    }
+
     // Phase 4: Build NURBS fillet faces for each target edge.
     // Also collect contact points per vertex for vertex blend patches.
     // vertex_contacts maps vertex_index → list of (face_index, contact_point) pairs.
     let mut vertex_contacts: HashMap<usize, Vec<(usize, Point3)>> = HashMap::new();
+    // For G1 chain junctions, store the contact points computed by the first
+    // edge so the second edge can reuse them exactly.
+    let mut g1_contact_cache: HashMap<usize, (Point3, Point3)> = HashMap::new();
 
     for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
@@ -738,6 +775,29 @@ pub fn fillet_rolling_ball(
             let contact2 = p + ld2 * radius;
 
             grid.push([contact1, mid_cp, contact2]);
+        }
+
+        // G1 chain continuity: at chain junction vertices, snap contact points
+        // to match the adjacent fillet strip's endpoints for G1 continuity.
+        let start_vi = edge.start().index();
+        let end_vi = edge.end().index();
+        if g1_chain_vertices.contains(&start_vi) {
+            if let Some(&(c1, c2)) = g1_contact_cache.get(&start_vi) {
+                // Snap this strip's start to match the previous strip's end.
+                grid[0] = [c1, grid[0][1], c2];
+            } else {
+                // First strip at this junction — cache for the next strip.
+                g1_contact_cache.insert(start_vi, (grid[0][0], grid[0][2]));
+            }
+        }
+        if g1_chain_vertices.contains(&end_vi) {
+            if let Some(&(c1, c2)) = g1_contact_cache.get(&end_vi) {
+                let last = n_v - 1;
+                grid[last] = [c1, grid[last][1], c2];
+            } else {
+                let last = n_v - 1;
+                g1_contact_cache.insert(end_vi, (grid[last][0], grid[last][2]));
+            }
         }
 
         // Build the fillet surface from the cross-section grid.
@@ -1008,10 +1068,11 @@ pub fn fillet_rolling_ball(
                         2,
                         vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
                         vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-                        vec![vec![p0, m20, p2], vec![m01, apex, m12], vec![p1, m12, p2]],
+                        // v=1 boundary degenerates to single point p2
+                        vec![vec![p0, m20, p2], vec![m01, apex, p2], vec![p1, m12, p2]],
                         vec![
                             vec![1.0, w_edge, 1.0],
-                            vec![w_edge, w_edge * w_edge, w_edge],
+                            vec![w_edge, w_edge * w_edge, 1.0],
                             vec![1.0, w_edge, 1.0],
                         ],
                     )
@@ -1393,6 +1454,7 @@ pub fn fillet_variable(
 
         // Build interpolation grid: n_v rows × 3 columns (arc CPs).
         let mut grid: Vec<Vec<Point3>> = Vec::with_capacity(n_v);
+        let mut sample_weights: Vec<f64> = Vec::with_capacity(n_v);
 
         #[allow(clippy::cast_precision_loss)]
         for s in 0..n_v {
@@ -1419,13 +1481,13 @@ pub fn fillet_variable(
             let mid_dist = r / local_half.cos().max(0.01);
             let mid_cp = p + bisector * mid_dist;
 
+            sample_weights.push(local_half.cos().max(0.01));
             grid.push(vec![contact1, mid_cp, contact2]);
         }
 
         // Build a rational NURBS surface with exact circular arc cross-sections.
         // u-direction: degree 2, 3 CPs with weights [1, cos(α/2), 1]
         // v-direction: interpolated through sampled stations along the edge
-        let w_mid = half_angle.cos();
         let degree_v = (n_v - 1).min(3);
 
         // Interpolate each of the 3 u-rows independently in v.
@@ -1445,6 +1507,23 @@ pub fn fillet_variable(
         let knots_v = crv0.knots().to_vec();
         let n_cp_v = crv0.control_points().len();
 
+        // Per-station arc weights: interpolate sample_weights to match n_cp_v.
+        #[allow(clippy::cast_precision_loss)]
+        let mid_weights: Vec<f64> = if n_cp_v == sample_weights.len() {
+            sample_weights.clone()
+        } else {
+            (0..n_cp_v)
+                .map(|i| {
+                    let t = i as f64 / (n_cp_v - 1).max(1) as f64;
+                    let idx_f = t * (sample_weights.len() - 1).max(1) as f64;
+                    let lo = (idx_f.floor() as usize).min(sample_weights.len() - 1);
+                    let hi = (lo + 1).min(sample_weights.len() - 1);
+                    let frac = idx_f - lo as f64;
+                    sample_weights[lo] * (1.0 - frac) + sample_weights[hi] * frac
+                })
+                .collect()
+        };
+
         let surface = NurbsSurface::new(
             2,                                  // degree_u (circular arc)
             crv0.degree(),                      // degree_v
@@ -1455,7 +1534,7 @@ pub fn fillet_variable(
                 crv1.control_points().to_vec(),
                 crv2.control_points().to_vec(),
             ],
-            vec![vec![1.0; n_cp_v], vec![w_mid; n_cp_v], vec![1.0; n_cp_v]],
+            vec![vec![1.0; n_cp_v], mid_weights, vec![1.0; n_cp_v]],
         )
         .map_err(crate::OperationsError::Math)?;
 

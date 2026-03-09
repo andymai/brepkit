@@ -284,9 +284,9 @@ impl Default for BooleanOptions {
 /// pipeline. Computed once from `BooleanOptions` at the start of a boolean
 /// operation to avoid repeated derivation and hardcoded epsilon values.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 struct BooleanContext {
-    /// Base tolerance.
+    /// Base tolerance (used when wiring ctx through the full pipeline).
+    #[allow(dead_code)]
     tol: Tolerance,
     /// Vertex merge distance: vertices closer than this are considered identical.
     vertex_merge: f64,
@@ -401,13 +401,16 @@ pub fn boolean_with_options(
     opts: BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = opts.tolerance;
-    let _ctx = BooleanContext::from_options(&opts);
+    let ctx = BooleanContext::from_options(&opts);
 
     log::debug!(
-        "boolean {op:?}: solids ({}, {}), deflection={}",
+        "boolean {op:?}: solids ({}, {}), deflection={}, vertex_merge={}, classify_tol={}, degenerate_area={}",
         a.index(),
         b.index(),
-        opts.deflection
+        opts.deflection,
+        ctx.vertex_merge,
+        ctx.classify_tol,
+        ctx.degenerate_area,
     );
 
     // ── Try analytic fast path ──────────────────────────────────────────
@@ -1053,6 +1056,7 @@ fn intersect_face_pair(
 
     overlaps
         .into_iter()
+        .filter(|(lo, hi)| lo.is_finite() && hi.is_finite())
         .map(|(t_min, t_max)| IntersectionSegment {
             face_a: a.fid,
             face_b: b.fid,
@@ -2130,8 +2134,8 @@ fn validate_boolean_result(topo: &Topology, solid: SolidId) -> Result<(), crate:
     // minor topological imperfections (e.g., boundary edges on analytic faces)
     // that don't prevent downstream use. Hard-failing here would reject ~25%
     // of currently working booleans. The long-term fix is post-boolean healing.
-    if let Ok(report) = crate::validate::validate_solid(topo, solid) {
-        if !report.is_valid() {
+    match crate::validate::validate_solid(topo, solid) {
+        Ok(report) if !report.is_valid() => {
             let errors: Vec<_> = report
                 .issues
                 .iter()
@@ -2144,6 +2148,10 @@ fn validate_boolean_result(topo: &Topology, solid: SolidId) -> Result<(), crate:
                 errors.join("; ")
             );
         }
+        Err(e) => {
+            log::warn!("validate_solid failed (skipping validation): {e}");
+        }
+        Ok(_) => {}
     }
 
     Ok(())
@@ -2413,14 +2421,20 @@ fn mesh_boolean_path(
     b: SolidId,
     deflection: f64,
 ) -> Result<SolidId, crate::OperationsError> {
+    // Snapshot original face surfaces before tessellation. These are used
+    // after the mesh boolean to re-classify result triangles onto their
+    // original analytic surfaces (instead of losing all surface info).
+    let original_surfaces = snapshot_face_surfaces(topo, a, b)?;
+
     let mesh_a = crate::tessellate::tessellate_solid(topo, a, deflection)?;
     let mesh_b = crate::tessellate::tessellate_solid(topo, b, deflection)?;
 
     let mb_result = crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, deflection)?;
 
-    // Convert mesh result to topology: each triangle becomes a planar face.
+    // Convert mesh result to topology, attempting to re-classify each
+    // triangle onto an original analytic surface when possible.
     let tol = Tolerance::new();
-    let mut face_data: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
+    let mut face_specs: Vec<FaceSpec> = Vec::new();
     for tri in mb_result.mesh.indices.chunks_exact(3) {
         let i0 = tri[0] as usize;
         let i1 = tri[1] as usize;
@@ -2438,18 +2452,132 @@ fn mesh_boolean_path(
             .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
         let d = crate::dot_normal_point(normal, v0);
 
-        face_data.push((vec![v0, v1, v2], normal, d));
+        // Try to match this triangle to an original face surface.
+        let centroid = Point3::new(
+            (v0.x() + v1.x() + v2.x()) / 3.0,
+            (v0.y() + v1.y() + v2.y()) / 3.0,
+            (v0.z() + v1.z() + v2.z()) / 3.0,
+        );
+        if let Some(surface) = classify_triangle_surface(&original_surfaces, centroid, normal, tol)
+        {
+            face_specs.push(FaceSpec::Surface {
+                vertices: vec![v0, v1, v2],
+                surface,
+            });
+        } else {
+            face_specs.push(FaceSpec::Planar {
+                vertices: vec![v0, v1, v2],
+                normal,
+                d,
+            });
+        }
     }
 
-    if face_data.is_empty() {
+    if face_specs.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "mesh boolean produced empty result".into(),
         });
     }
 
-    let result = assemble_solid(topo, &face_data, tol)?;
+    let result = assemble_solid_mixed(topo, &face_specs, tol)?;
     validate_boolean_result(topo, result)?;
     Ok(result)
+}
+
+/// Snapshot face surfaces from both input solids before tessellation.
+fn snapshot_face_surfaces(
+    topo: &Topology,
+    a: SolidId,
+    b: SolidId,
+) -> Result<Vec<FaceSurface>, crate::OperationsError> {
+    let mut surfaces = Vec::new();
+    for &solid_id in &[a, b] {
+        let solid = topo.solid(solid_id)?;
+        let shell = topo.shell(solid.outer_shell())?;
+        for &fid in shell.faces() {
+            let face = topo.face(fid)?;
+            surfaces.push(face.surface().clone());
+        }
+    }
+    Ok(surfaces)
+}
+
+/// Try to classify a result triangle onto an original analytic surface.
+///
+/// Returns `Some(FaceSurface)` if the triangle's centroid and normal are
+/// consistent with an original face surface (the point lies on the surface
+/// and the normal matches). Otherwise returns `None` (keep as planar).
+fn classify_triangle_surface(
+    original_surfaces: &[FaceSurface],
+    centroid: Point3,
+    normal: Vec3,
+    tol: Tolerance,
+) -> Option<FaceSurface> {
+    for surface in original_surfaces {
+        match surface {
+            FaceSurface::Plane { .. } => {
+                // Already handled as FaceSpec::Planar, skip.
+            }
+            FaceSurface::Cylinder(cyl) => {
+                // Check if centroid is on the cylinder surface.
+                let dp = centroid - cyl.origin();
+                let dp_vec = Vec3::new(dp.x(), dp.y(), dp.z());
+                let along = dp_vec.dot(cyl.axis());
+                let radial = dp_vec - cyl.axis() * along;
+                let r = radial.length();
+                if (r - cyl.radius()).abs() < tol.linear * 100.0 {
+                    // Check normal consistency: cylinder normal is radial.
+                    if let Ok(rad_dir) = radial.normalize() {
+                        if rad_dir.dot(normal).abs() > 0.8 {
+                            return Some(surface.clone());
+                        }
+                    }
+                }
+            }
+            FaceSurface::Sphere(sph) => {
+                let dp = centroid - sph.center();
+                let r = dp.length();
+                if (r - sph.radius()).abs() < tol.linear * 100.0 {
+                    if let Ok(dir) = dp.normalize() {
+                        if dir.dot(normal).abs() > 0.8 {
+                            return Some(surface.clone());
+                        }
+                    }
+                }
+            }
+            FaceSurface::Cone(cone) => {
+                // Check if centroid is on the cone surface.
+                let dp = centroid - cone.apex();
+                let dp_vec = Vec3::new(dp.x(), dp.y(), dp.z());
+                let along = dp_vec.dot(cone.axis());
+                let radial = dp_vec - cone.axis() * along;
+                let r = radial.length();
+                let expected_r = along.abs() * cone.half_angle().tan();
+                if (r - expected_r).abs() < tol.linear * 100.0 && along > 0.0 {
+                    return Some(surface.clone());
+                }
+            }
+            FaceSurface::Torus(tor) => {
+                let dp = centroid - tor.center();
+                let dp_vec = Vec3::new(dp.x(), dp.y(), dp.z());
+                let along = dp_vec.dot(tor.z_axis());
+                let in_plane = dp_vec - tor.z_axis() * along;
+                if let Ok(ring_dir) = in_plane.normalize() {
+                    let tube_center = tor.center() + ring_dir * tor.major_radius();
+                    let tube_dist = (centroid - tube_center).length();
+                    if (tube_dist - tor.minor_radius()).abs() < tol.linear * 100.0 {
+                        return Some(surface.clone());
+                    }
+                }
+            }
+            FaceSurface::Nurbs(_) => {
+                // NURBS surface matching would require Newton projection,
+                // which is too expensive for per-triangle classification.
+                // Skip — these triangles stay as planar.
+            }
+        }
+    }
+    None
 }
 
 /// Check if a solid is composed entirely of analytic surfaces (no NURBS).
@@ -2940,6 +3068,7 @@ fn analytic_boolean(
                 topo,
                 snap.id,
                 deflection,
+                tol,
                 &mut fragments,
             )?;
             continue;
@@ -3063,6 +3192,7 @@ fn analytic_boolean(
                     snap.reversed,
                     band_curves,
                     topo,
+                    tol,
                     &mut fragments,
                 );
             }
@@ -3116,6 +3246,7 @@ fn analytic_boolean(
                 topo,
                 snap.id,
                 deflection,
+                tol,
                 &mut fragments,
             )?;
             continue;
@@ -3228,6 +3359,7 @@ fn analytic_boolean(
                     snap.reversed,
                     band_curves,
                     topo,
+                    tol,
                     &mut fragments,
                 );
             }
@@ -3804,6 +3936,7 @@ fn split_cylinder_at_intersection(
     topo: &Topology,
     face_id: FaceId,
     deflection: f64,
+    tol: Tolerance,
     fragments: &mut Vec<AnalyticFragment>,
 ) -> Result<(), crate::OperationsError> {
     let FaceSurface::Cylinder(cyl) = surface else {
@@ -3862,8 +3995,8 @@ fn split_cylinder_at_intersection(
             verts_at_vmax.push(p);
         }
     }
-    dedup_points_by_position(&mut verts_at_vmin, Tolerance::new());
-    dedup_points_by_position(&mut verts_at_vmax, Tolerance::new());
+    dedup_points_by_position(&mut verts_at_vmin, tol);
+    dedup_points_by_position(&mut verts_at_vmax, tol);
 
     #[allow(clippy::cast_precision_loss)]
     let sample_circle_at_v = |v: f64| -> Vec<Point3> {
@@ -4109,6 +4242,7 @@ fn create_band_fragments(
     source_reversed: bool,
     contained_curves: &[EdgeCurve],
     _topo: &Topology,
+    tol: Tolerance,
     fragments: &mut Vec<AnalyticFragment>,
 ) {
     let FaceSurface::Cylinder(cyl) = surface else {
@@ -4200,8 +4334,8 @@ fn create_band_fragments(
         }
     }
     // Deduplicate points at each level (seam vertex duplicates circle[0]).
-    dedup_points_by_position(&mut verts_at_vmin, Tolerance::new());
-    dedup_points_by_position(&mut verts_at_vmax, Tolerance::new());
+    dedup_points_by_position(&mut verts_at_vmin, tol);
+    dedup_points_by_position(&mut verts_at_vmax, tol);
 
     // Sample a circle at a given v-level. For cut levels with an EdgeCurve,
     // use sample_edge_curve so the points match the holed-face inner wire.

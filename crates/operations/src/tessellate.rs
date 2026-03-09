@@ -711,6 +711,9 @@ fn find_interior_seed(polygon: &[brepkit_math::vec::Point2]) -> brepkit_math::ve
     use brepkit_math::vec::Point2;
 
     let n = polygon.len();
+    if n == 0 {
+        return Point2::new(0.0, 0.0);
+    }
     if n < 3 {
         // Degenerate — return first point.
         return polygon[0];
@@ -1397,7 +1400,7 @@ where
     // The largest gap is where the face *doesn't* have coverage, so the
     // face's angular extent is TAU - largest_gap, starting after the gap.
     angles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    angles.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+    angles.dedup_by(|a, b| (*a - *b).abs() < brepkit_math::tolerance::Tolerance::default().linear);
 
     if angles.len() < 2 {
         return (0.0, TAU);
@@ -3133,7 +3136,7 @@ fn project_via_pcurve(
     let p_final = evaluate_surface_at(surface, uv.x(), uv.y());
 
     // Accept if the projected point is close enough to the target.
-    if (p_final - pt).length() < 1e-4 {
+    if (p_final - pt).length() < brepkit_math::tolerance::Tolerance::default().linear {
         Some((uv.x(), uv.y()))
     } else {
         None

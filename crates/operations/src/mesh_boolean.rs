@@ -199,7 +199,8 @@ fn intersect_triangles(
         line_dir.x() * line_dir.x() + line_dir.y() * line_dir.y() + line_dir.z() * line_dir.z();
     let na_len_sq = na.x() * na.x() + na.y() * na.y() + na.z() * na.z();
     let nb_len_sq = nb.x() * nb.x() + nb.y() * nb.y() + nb.z() * nb.z();
-    if line_len_sq < 1e-20 * na_len_sq.max(nb_len_sq) {
+    // sin²(angle) threshold: tolerance² for angular comparison
+    if line_len_sq < (tolerance * tolerance) * na_len_sq.max(nb_len_sq) {
         return intersect_coplanar_triangles(a0, a1, a2, b0, b1, b2, tolerance);
     }
 
@@ -397,7 +398,8 @@ fn point_in_triangle_2d(p: (f64, f64), v0: (f64, f64), v1: (f64, f64), v2: (f64,
     let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
     let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
 
-    // Strictly inside (not on boundary) to avoid double-counting with edge tests.
+    // Inside the triangle or on its boundary. Handles boundary cases where
+    // one or more cross products are zero (e.g., point on edge or vertex).
     !(has_neg && has_pos)
 }
 

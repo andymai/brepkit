@@ -166,6 +166,81 @@ pub fn insphere(a: Point3, b: Point3, c: Point3, d: Point3, e: Point3) -> f64 {
     )
 }
 
+// ---------------------------------------------------------------------------
+// Symbolic perturbation (SoS — Simulation of Simplicity)
+// ---------------------------------------------------------------------------
+
+/// Compute `orient2d(a, b, c)` with symbolic perturbation to resolve degeneracy.
+///
+/// When the exact `orient2d` returns 0 (collinear points), applies an
+/// index-based perturbation: the point with the highest index is perturbed
+/// infinitesimally upward, breaking ties consistently.
+///
+/// Returns a non-zero `f64` whose sign indicates the resolved orientation.
+/// The magnitude is arbitrary when the exact result was zero.
+// SoS predicates require exact-zero detection by design
+#[allow(clippy::float_cmp)]
+#[must_use]
+pub fn orient2d_sos(a: Point2, b: Point2, c: Point2, ia: usize, ib: usize, ic: usize) -> f64 {
+    let det = orient2d(a, b, c);
+    if det != 0.0 {
+        return det;
+    }
+
+    // SoS perturbation: the point with the largest index is perturbed.
+    // The sign depends on its position in the argument list (even/odd parity).
+    let max_idx = ia.max(ib).max(ic);
+    if max_idx == ic {
+        1.0 // c is perturbed → positive (CCW)
+    } else if max_idx == ib {
+        -1.0 // b is perturbed → negative (CW)
+    } else {
+        1.0 // a is perturbed → positive
+    }
+}
+
+/// Compute `orient3d(a, b, c, d)` with symbolic perturbation to resolve degeneracy.
+///
+/// When the exact `orient3d` returns 0 (coplanar points), applies an
+/// index-based perturbation: the point with the highest index is perturbed
+/// infinitesimally along the z-axis, breaking ties consistently.
+///
+/// Returns a non-zero `f64` whose sign indicates the resolved orientation.
+/// The magnitude is arbitrary when the exact result was zero.
+// SoS predicates require exact-zero detection by design
+#[allow(clippy::float_cmp)]
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn orient3d_sos(
+    a: Point3,
+    b: Point3,
+    c: Point3,
+    d: Point3,
+    ia: usize,
+    ib: usize,
+    ic: usize,
+    id: usize,
+) -> f64 {
+    let det = orient3d(a, b, c, d);
+    if det != 0.0 {
+        return det;
+    }
+
+    // SoS perturbation: the point with the largest index receives an
+    // infinitesimal perturbation. The sign depends on which argument
+    // position it occupies (even permutation → positive, odd → negative).
+    let max_idx = ia.max(ib).max(ic).max(id);
+    if max_idx == id {
+        1.0 // d perturbed: positive (below plane)
+    } else if max_idx == ic {
+        -1.0 // c perturbed: negative (above plane)
+    } else if max_idx == ib {
+        1.0 // b perturbed: positive
+    } else {
+        -1.0 // a perturbed: negative
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)]
 mod tests {
