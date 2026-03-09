@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.12](https://github.com/andymai/brepkit/compare/v0.7.11...v0.7.12) (2026-03-09)
+
+
+### Bug Fixes
+
+* architecture improvements — curved fillets, NURBS boolean, SoS predicates ([#114](https://github.com/andymai/brepkit/issues/114)) ([5fdcd58](https://github.com/andymai/brepkit/commit/5fdcd58be0f1809fcb2d54430fc3aae7bb073927))
+
 ## [0.7.11](https://github.com/andymai/brepkit/compare/v0.7.10...v0.7.11) (2026-03-09)
 
 
