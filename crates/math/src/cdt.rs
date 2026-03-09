@@ -113,7 +113,11 @@ pub struct Cdt {
 }
 
 /// Tolerance for duplicate point detection.
-const DUP_TOL: f64 = 1e-12;
+/// Duplicate point detection tolerance.
+///
+/// Aligned with the snap tolerance (1e-8) to avoid near-coincident points
+/// that pass the duplicate check but create degenerate triangles.
+const DUP_TOL: f64 = 1e-8;
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -945,45 +949,55 @@ impl Cdt {
 
     /// Legalize the edge at local index `edge_local` of triangle `tri_idx`.
     ///
-    /// Recursively flips non-Delaunay edges until the local Delaunay property
-    /// is restored around the inserted vertex.
+    /// Iteratively flips non-Delaunay edges until the local Delaunay property
+    /// is restored around the inserted vertex. Uses an explicit stack to
+    /// avoid stack overflow on large meshes.
     fn legalize(&mut self, tri_idx: usize, edge_local: usize, inserted_vertex: usize) {
-        let Some(adj) = self.triangles[tri_idx].adj[edge_local] else {
-            return;
-        };
+        let mut stack = vec![(tri_idx, edge_local, inserted_vertex)];
 
-        if self.triangles[adj].removed {
-            return;
-        }
+        while let Some((ti, el, vi)) = stack.pop() {
+            let Some(adj) = self.triangles[ti].adj[el] else {
+                continue;
+            };
 
-        let e0 = self.triangles[tri_idx].v[(edge_local + 1) % 3];
-        let e1 = self.triangles[tri_idx].v[(edge_local + 2) % 3];
+            if self.triangles[adj].removed {
+                continue;
+            }
 
-        // Don't flip constrained edges.
-        if self.constraints.contains(&sorted_pair(e0, e1)) {
-            return;
-        }
+            let e0 = self.triangles[ti].v[(el + 1) % 3];
+            let e1 = self.triangles[ti].v[(el + 2) % 3];
 
-        let opp_local = self.find_opposite_local(adj, e0, e1);
-        let opp_vert = self.triangles[adj].v[opp_local];
+            // Don't flip constrained edges.
+            if self.constraints.contains(&sorted_pair(e0, e1)) {
+                continue;
+            }
 
-        let a = self.vertices[self.triangles[tri_idx].v[0]];
-        let b = self.vertices[self.triangles[tri_idx].v[1]];
-        let c = self.vertices[self.triangles[tri_idx].v[2]];
-        let d = self.vertices[opp_vert];
+            let opp_local = self.find_opposite_local(adj, e0, e1);
+            let opp_vert = self.triangles[adj].v[opp_local];
 
-        if fast_in_circle(a, b, c, d) > 0.0 {
-            self.flip_edge(tri_idx, edge_local, adj, opp_local);
+            let a = self.vertices[self.triangles[ti].v[0]];
+            let b = self.vertices[self.triangles[ti].v[1]];
+            let c = self.vertices[self.triangles[ti].v[2]];
+            let d = self.vertices[opp_vert];
 
-            // After flipping, legalize the two outer edges that now face
-            // the inserted vertex.
-            self.legalize_toward(tri_idx, inserted_vertex);
-            self.legalize_toward(adj, inserted_vertex);
+            if fast_in_circle(a, b, c, d) > 0.0 {
+                self.flip_edge(ti, el, adj, opp_local);
+
+                // After flipping, legalize the two outer edges that now face
+                // the inserted vertex. Push to stack instead of recursing.
+                self.push_legalize_toward(&mut stack, ti, vi);
+                self.push_legalize_toward(&mut stack, adj, vi);
+            }
         }
     }
 
-    /// Legalize the edge of `tri_idx` that faces away from `vi`.
-    fn legalize_toward(&mut self, tri_idx: usize, vi: usize) {
+    /// Push a legalize task for the edge of `tri_idx` that faces away from `vi`.
+    fn push_legalize_toward(
+        &self,
+        stack: &mut Vec<(usize, usize, usize)>,
+        tri_idx: usize,
+        vi: usize,
+    ) {
         if self.triangles[tri_idx].removed {
             return;
         }
@@ -997,7 +1011,7 @@ impl Cdt {
         } else {
             return;
         };
-        self.legalize(tri_idx, local, vi);
+        stack.push((tri_idx, local, vi));
     }
 
     /// Flip the shared edge between two triangles.
@@ -1524,9 +1538,9 @@ fn segments_properly_intersect(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -
 /// Cell size is much larger than `DUP_TOL` so neighbors cover the tolerance radius.
 #[allow(clippy::cast_possible_truncation)]
 fn dup_grid_cell(p: Point2) -> (i64, i64) {
-    // Cell size ~1e-9: 1000× DUP_TOL to keep neighbor checks cheap while
+    // Cell size ~1e-5: 1000× DUP_TOL to keep neighbor checks cheap while
     // ensuring points within DUP_TOL always land in the same or adjacent cells.
-    const CELL_INV: f64 = 1e9;
+    const CELL_INV: f64 = 1e5;
     (
         (p.x() * CELL_INV).floor() as i64,
         (p.y() * CELL_INV).floor() as i64,
