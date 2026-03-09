@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.9](https://github.com/andymai/brepkit/compare/v0.7.8...v0.7.9) (2026-03-09)
+
+
+### Bug Fixes
+
+* boolean robustness — multi-ray classification, coplanar handling, exact predicates ([#108](https://github.com/andymai/brepkit/issues/108)) ([82d45c8](https://github.com/andymai/brepkit/commit/82d45c81773cd0a0b232713a83c4fc111a595f31))
+* fillet robustness — edge curves, rational arcs, validation, spherical blends ([#112](https://github.com/andymai/brepkit/issues/112)) ([d69391e](https://github.com/andymai/brepkit/commit/d69391efa5804c0a1fbfec7c8f344b9fc790facb))
+* NURBS intersection foundation — periodic surfaces, 4D Newton, overlap detection ([#109](https://github.com/andymai/brepkit/issues/109)) ([82c3b95](https://github.com/andymai/brepkit/commit/82c3b95d3e57a7193875334dd895989e1d07ccad))
+* tessellation correctness — concave holes, analytic u_range, CDT, PCurves ([#110](https://github.com/andymai/brepkit/issues/110)) ([5ecd91e](https://github.com/andymai/brepkit/commit/5ecd91e2a22a33635abf40d1a64dc2c912866806))
+
 ## [0.7.8](https://github.com/andymai/brepkit/compare/v0.7.7...v0.7.8) (2026-03-09)
 
 
