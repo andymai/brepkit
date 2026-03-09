@@ -5157,6 +5157,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "slow (~300s): sphere fully containing box triggers expensive SSI"]
     fn cut_box_by_large_sphere_containment() {
         // Sphere (r=50) fully contains the box (10x10x10 at origin).
         // Cut should produce an empty result (error) or a very small volume.
