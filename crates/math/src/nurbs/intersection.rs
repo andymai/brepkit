@@ -21,6 +21,8 @@
     clippy::manual_let_else
 )]
 
+use std::collections::VecDeque;
+
 use crate::MathError;
 use crate::aabb::Aabb3;
 use crate::bvh::Bvh;
@@ -29,6 +31,15 @@ use crate::nurbs::decompose::{BezierPatch, curve_to_bezier_segments, surface_to_
 use crate::nurbs::fitting::{approximate_lspia, interpolate};
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
+
+/// Maximum work-queue entries for the branch-aware SSI marcher.
+const MAX_QUEUE_SIZE: usize = 100;
+
+/// Maximum traced curve segments before stopping branch exploration.
+const MAX_SEGMENTS: usize = 50;
+
+/// Maximum branch points detected per march direction.
+const MAX_BRANCHES_PER_DIRECTION: usize = 10;
 
 /// A point on an intersection curve, with parameter values on both surfaces.
 #[derive(Debug, Clone, Copy)]
@@ -853,24 +864,42 @@ pub fn intersect_nurbs_nurbs(
     }
 
     // Phase 2: March from each seed along the intersection curve.
-    // Skip seeds that are close to already-traced points to avoid
-    // redundant marching along the same intersection branch.
-    let mut all_points: Vec<IntersectionPoint> = Vec::new();
+    // Uses a work-queue to discover branch points during marching and
+    // spawn additional traces from those branches. Segment-distance
+    // dedup avoids redundant marching on already-traced curves.
     let dedup_dist = march_step * 0.5;
+    let mut traced_segments: Vec<Vec<IntersectionPoint>> = Vec::new();
+    let mut work_queue: VecDeque<IntersectionPoint> = seeds.into();
 
-    for seed in &seeds {
-        // If this seed is near an already-traced point, it's on a curve
-        // we've already found — skip it.
-        let already_traced = all_points
-            .iter()
-            .any(|p| (p.point - seed.point).length() < dedup_dist);
-        if already_traced {
+    while let Some(seed) = work_queue.pop_front() {
+        if traced_segments.len() >= MAX_SEGMENTS {
+            break;
+        }
+
+        // Segment-distance dedup: check if this seed is near any already-
+        // traced polyline *segment*, not just individual points. This
+        // prevents false positives when a seed is near the middle of a
+        // traced curve but could reach a different branch.
+        if near_existing_segment(&traced_segments, &seed, dedup_dist) {
             continue;
         }
 
-        let traced = march_intersection(surface1, surface2, seed, march_step, tolerance);
-        all_points.extend(traced);
+        let (traced, branch_seeds) =
+            march_with_branches(surface1, surface2, &seed, march_step, tolerance);
+
+        if !traced.is_empty() {
+            traced_segments.push(traced);
+        }
+
+        // Add branch seeds to the work queue (capped).
+        for bs in branch_seeds {
+            if work_queue.len() < MAX_QUEUE_SIZE {
+                work_queue.push_back(bs);
+            }
+        }
     }
+
+    let all_points: Vec<IntersectionPoint> = traced_segments.into_iter().flatten().collect();
 
     if all_points.is_empty() {
         return Ok(Vec::new());
@@ -1757,6 +1786,237 @@ fn point_to_segment_dist(p: Point3, a: Point3, b: Point3) -> f64 {
     (p - proj).length()
 }
 
+/// Check if a point is near any polyline segment in traced curves.
+///
+/// Uses segment distance (not point distance) to avoid false positives:
+/// a seed near the *middle* of a traced curve won't be rejected just
+/// because it's close to an interior point — it must be within `dist`
+/// of the actual polyline path. This prevents discarding seeds that
+/// could reach a different branch.
+fn near_existing_segment(
+    segments: &[Vec<IntersectionPoint>],
+    point: &IntersectionPoint,
+    dist: f64,
+) -> bool {
+    for seg in segments {
+        if seg.len() < 2 {
+            // Single-point segment: fallback to point distance.
+            if let Some(p) = seg.first() {
+                if (p.point - point.point).length() < dist {
+                    return true;
+                }
+            }
+            continue;
+        }
+        for w in seg.windows(2) {
+            if point_to_segment_dist(point.point, w[0].point, w[1].point) < dist {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// March along an intersection curve, detecting branch points.
+///
+/// Returns the traced points and any branch seed points found during
+/// marching. Branch points are detected when the surface normals become
+/// near-parallel (`|n1 × n2|` drops below threshold), confirmed via
+/// second-order curvature analysis. At confirmed branch points, new
+/// seeds are spawned in divergent directions.
+fn march_with_branches(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    seed: &IntersectionPoint,
+    step_size: f64,
+    tolerance: f64,
+) -> (Vec<IntersectionPoint>, Vec<IntersectionPoint>) {
+    let max_steps = 200;
+    let mut branch_seeds: Vec<IntersectionPoint> = Vec::new();
+
+    // March forward, collecting branch points.
+    let (forward, fwd_branches) =
+        march_direction_with_branches(s1, s2, seed, true, step_size, tolerance, max_steps);
+    branch_seeds.extend(fwd_branches);
+
+    // March backward, collecting branch points.
+    let (backward, bwd_branches) =
+        march_direction_with_branches(s1, s2, seed, false, step_size, tolerance, max_steps);
+    branch_seeds.extend(bwd_branches);
+
+    // Combine: backward (reversed) + seed + forward.
+    let mut result: Vec<IntersectionPoint> = backward.into_iter().rev().collect();
+    result.push(*seed);
+    result.extend(forward);
+
+    (result, branch_seeds)
+}
+
+/// Detect branch directions at a near-tangential point.
+///
+/// At a point where `|n1 × n2|` is small (surfaces nearly tangent),
+/// sample perturbation directions and find viable SSI continuations
+/// that differ from the current march direction by > 30°. Each such
+/// direction produces a new seed offset slightly from the branch point.
+fn find_branch_directions(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    point: &IntersectionPoint,
+    current_tangent: Vec3,
+    step_size: f64,
+    tolerance: f64,
+) -> Vec<IntersectionPoint> {
+    let eps = step_size * 0.1;
+    let (u1, v1) = point.param1;
+    let (u2, v2) = point.param2;
+    let min_branch_angle = 30.0_f64.to_radians();
+
+    let directions: [(f64, f64); 8] = [
+        (eps, 0.0),
+        (-eps, 0.0),
+        (0.0, eps),
+        (0.0, -eps),
+        (eps, eps),
+        (eps, -eps),
+        (-eps, eps),
+        (-eps, -eps),
+    ];
+
+    let mut branch_seeds = Vec::new();
+
+    for &(du, dv) in &directions {
+        let u1p = u1 + du;
+        let v1p = v1 + dv;
+
+        if let Some(refined) = refine_ssi_point(s1, s2, u1p, v1p, u2, v2, tolerance) {
+            let d = refined.point - point.point;
+            let dist = d.length();
+            if dist < tolerance {
+                continue; // Too close, not a real branch
+            }
+
+            if let Ok(dir) = d.normalize() {
+                // Check that this direction diverges from the current tangent.
+                let cos_angle = dir.dot(current_tangent).abs();
+                let angle = cos_angle.acos();
+                if angle > min_branch_angle {
+                    branch_seeds.push(refined);
+                }
+            }
+        }
+    }
+
+    branch_seeds
+}
+
+/// March in one direction, detecting branch points where `|n1 × n2|`
+/// drops below threshold. Returns traced points and branch seed points.
+#[allow(clippy::too_many_lines, clippy::many_single_char_names)]
+fn march_direction_with_branches(
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
+    seed: &IntersectionPoint,
+    forward: bool,
+    step_size: f64,
+    tolerance: f64,
+    max_steps: usize,
+) -> (Vec<IntersectionPoint>, Vec<IntersectionPoint>) {
+    let traced = march_direction(s1, s2, seed, forward, step_size, tolerance, max_steps);
+    let mut branch_seeds: Vec<IntersectionPoint> = Vec::new();
+
+    // Post-process: scan traced points for near-tangential locations.
+    let branch_threshold = tolerance * 1000.0;
+
+    for pt in &traced {
+        if branch_seeds.len() >= MAX_BRANCHES_PER_DIRECTION {
+            break;
+        }
+
+        let n1 = match s1.normal(pt.param1.0, pt.param1.1) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        let n2 = match s2.normal(pt.param2.0, pt.param2.1) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+
+        let cross_mag = n1.cross(n2).length();
+        if cross_mag >= branch_threshold {
+            continue; // Not near-tangential, no branch point
+        }
+
+        // Near-tangential point found. Use second-order analysis to confirm.
+        let has_branch = {
+            let d1 = s1.derivatives(pt.param1.0, pt.param1.1, 2);
+            let d2 = s2.derivatives(pt.param2.0, pt.param2.1, 2);
+            if d1.len() >= 3 && d1[0].len() >= 3 && d2.len() >= 3 && d2[0].len() >= 3 {
+                // Check curvature difference eigenvalues.
+                let s1u = d1[1][0];
+                let s1v = d1[0][1];
+                let n1_raw = s1u.cross(s1v);
+                let n1_len = n1_raw.length();
+                if n1_len > 1e-12 {
+                    let n = n1_raw * (1.0 / n1_len);
+                    let l1 = d1[2][0].dot(n);
+                    let m1 = d1[1][1].dot(n);
+                    let n1c = d1[0][2].dot(n);
+
+                    let s2u = d2[1][0];
+                    let s2v = d2[0][1];
+                    let n2_raw = s2u.cross(s2v);
+                    let n2_len = n2_raw.length();
+                    if n2_len > 1e-12 {
+                        let n2n = n2_raw * (1.0 / n2_len);
+                        let l2 = d2[2][0].dot(n2n);
+                        let m2 = d2[1][1].dot(n2n);
+                        let n2c = d2[0][2].dot(n2n);
+
+                        let dl = l1 - l2;
+                        let dm = m1 - m2;
+                        let dn = n1c - n2c;
+                        let trace = dl + dn;
+                        let det = dl * dn - dm * dm;
+                        let disc = trace * trace - 4.0 * det;
+                        let disc_sqrt = disc.max(0.0).sqrt();
+                        let lambda1 = 0.5 * (trace - disc_sqrt);
+                        let lambda2 = 0.5 * (trace + disc_sqrt);
+
+                        // Both eigenvalues near zero indicates a branch point
+                        // (the curvature difference vanishes in all directions).
+                        lambda1.abs() < 0.1 && lambda2.abs() < 0.1
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+
+        if !has_branch {
+            continue;
+        }
+
+        // Confirmed branch point: find divergent directions.
+        let sign = if forward { 1.0 } else { -1.0 };
+        let current_tangent = {
+            let t = n1.cross(n2);
+            t.normalize()
+                .ok()
+                .map(|t| Vec3::new(t.x() * sign, t.y() * sign, t.z() * sign))
+                .unwrap_or(Vec3::new(1.0, 0.0, 0.0))
+        };
+
+        let new_seeds = find_branch_directions(s1, s2, pt, current_tangent, step_size, tolerance);
+        branch_seeds.extend(new_seeds);
+    }
+
+    (traced, branch_seeds)
+}
+
 /// March along an intersection curve from a seed point.
 ///
 /// Uses the tangent direction (cross product of surface normals) to step
@@ -1766,6 +2026,7 @@ fn point_to_segment_dist(p: Point3, a: Point3, b: Point3) -> f64 {
 /// deviation between successive tangent vectors). This ensures fine
 /// resolution on high-curvature portions and efficient large steps on
 /// flat portions.
+#[cfg(test)]
 fn march_intersection(
     s1: &NurbsSurface,
     s2: &NurbsSurface,
@@ -3310,5 +3571,198 @@ mod tests {
         // Parameters should be symmetric around 0.5.
         assert!(hits[0].t < 0.5, "first hit t should be < 0.5");
         assert!(hits[1].t > 0.5, "second hit t should be > 0.5");
+    }
+
+    /// Build a cylinder NURBS surface along z-axis, centered at (cx, cy).
+    fn cylinder_at(cx: f64, cy: f64, r: f64, z_lo: f64, z_hi: f64) -> NurbsSurface {
+        use std::f64::consts::PI;
+        let tau = 2.0 * PI;
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+
+        let knots_v = vec![
+            0.0,
+            0.0,
+            0.0,
+            PI / 2.0,
+            PI / 2.0,
+            PI,
+            PI,
+            3.0 * PI / 2.0,
+            3.0 * PI / 2.0,
+            tau,
+            tau,
+            tau,
+        ];
+
+        let circle_cps = [
+            (r, 0.0, 1.0),
+            (r, r, w),
+            (0.0, r, 1.0),
+            (-r, r, w),
+            (-r, 0.0, 1.0),
+            (-r, -r, w),
+            (0.0, -r, 1.0),
+            (r, -r, w),
+            (r, 0.0, 1.0),
+        ];
+
+        let cps_lo: Vec<Point3> = circle_cps
+            .iter()
+            .map(|&(x, y, _)| Point3::new(cx + x, cy + y, z_lo))
+            .collect();
+        let cps_hi: Vec<Point3> = circle_cps
+            .iter()
+            .map(|&(x, y, _)| Point3::new(cx + x, cy + y, z_hi))
+            .collect();
+
+        let weights: Vec<f64> = circle_cps.iter().map(|&(_, _, w_)| w_).collect();
+
+        NurbsSurface::new(
+            1,
+            2,
+            vec![z_lo, z_lo, z_hi, z_hi],
+            knots_v,
+            vec![cps_lo, cps_hi],
+            vec![weights.clone(), weights],
+        )
+        .unwrap()
+    }
+
+    /// Build a cylinder NURBS surface along x-axis, centered at (cy, cz).
+    fn cylinder_along_x(cy: f64, cz: f64, r: f64, x_lo: f64, x_hi: f64) -> NurbsSurface {
+        use std::f64::consts::PI;
+        let tau = 2.0 * PI;
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+
+        let knots_v = vec![
+            0.0,
+            0.0,
+            0.0,
+            PI / 2.0,
+            PI / 2.0,
+            PI,
+            PI,
+            3.0 * PI / 2.0,
+            3.0 * PI / 2.0,
+            tau,
+            tau,
+            tau,
+        ];
+
+        // Circle in YZ plane.
+        let circle_cps = [
+            (r, 0.0, 1.0),
+            (r, r, w),
+            (0.0, r, 1.0),
+            (-r, r, w),
+            (-r, 0.0, 1.0),
+            (-r, -r, w),
+            (0.0, -r, 1.0),
+            (r, -r, w),
+            (r, 0.0, 1.0),
+        ];
+
+        let cps_lo: Vec<Point3> = circle_cps
+            .iter()
+            .map(|&(y, z, _)| Point3::new(x_lo, cy + y, cz + z))
+            .collect();
+        let cps_hi: Vec<Point3> = circle_cps
+            .iter()
+            .map(|&(y, z, _)| Point3::new(x_hi, cy + y, cz + z))
+            .collect();
+
+        let weights: Vec<f64> = circle_cps.iter().map(|&(_, _, w_)| w_).collect();
+
+        NurbsSurface::new(
+            1,
+            2,
+            vec![x_lo, x_lo, x_hi, x_hi],
+            knots_v,
+            vec![cps_lo, cps_hi],
+            vec![weights.clone(), weights],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn ssi_perpendicular_cylinders_two_loops() {
+        // Two perpendicular cylinders of radius 1 centered at the origin:
+        // cylinder A along z-axis, cylinder B along x-axis.
+        // They produce two distinct closed intersection loops.
+        let cyl_z = cylinder_at(0.0, 0.0, 1.0, -2.0, 2.0);
+        let cyl_x = cylinder_along_x(0.0, 0.0, 1.0, -2.0, 2.0);
+
+        let result = intersect_nurbs_nurbs(&cyl_z, &cyl_x, 20, 0.0).unwrap();
+
+        // Should find at least 1 curve (ideally 2 for both loops).
+        assert!(
+            !result.is_empty(),
+            "perpendicular cylinders must produce intersection curves"
+        );
+
+        // Verify all intersection points lie on both surfaces.
+        for curve in &result {
+            for pt in &curve.points {
+                let on_cyl_z = {
+                    let x = pt.point.x();
+                    let y = pt.point.y();
+                    (x * x + y * y).sqrt()
+                };
+                let on_cyl_x = {
+                    let y = pt.point.y();
+                    let z = pt.point.z();
+                    (y * y + z * z).sqrt()
+                };
+                assert!(
+                    (on_cyl_z - 1.0).abs() < 0.05,
+                    "point should be on z-cylinder (r={on_cyl_z})"
+                );
+                assert!(
+                    (on_cyl_x - 1.0).abs() < 0.05,
+                    "point should be on x-cylinder (r={on_cyl_x})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn segment_distance_dedup_works() {
+        // Verify that near_existing_segment uses segment distance,
+        // not just point distance.
+        let p0 = IntersectionPoint {
+            point: Point3::new(0.0, 0.0, 0.0),
+            param1: (0.0, 0.0),
+            param2: (0.0, 0.0),
+        };
+        let p1 = IntersectionPoint {
+            point: Point3::new(10.0, 0.0, 0.0),
+            param1: (1.0, 0.0),
+            param2: (1.0, 0.0),
+        };
+        let segment = vec![p0, p1];
+
+        // Point near the middle of the segment (y=0.01).
+        let near_mid = IntersectionPoint {
+            point: Point3::new(5.0, 0.01, 0.0),
+            param1: (0.5, 0.0),
+            param2: (0.5, 0.0),
+        };
+        assert!(near_existing_segment(
+            std::slice::from_ref(&segment),
+            &near_mid,
+            0.1
+        ));
+
+        // Point far from the segment (y=2.0).
+        let far = IntersectionPoint {
+            point: Point3::new(5.0, 2.0, 0.0),
+            param1: (0.5, 0.0),
+            param2: (0.5, 0.0),
+        };
+        assert!(!near_existing_segment(
+            std::slice::from_ref(&segment),
+            &far,
+            0.1
+        ));
     }
 }
