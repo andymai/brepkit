@@ -284,9 +284,9 @@ impl Default for BooleanOptions {
 /// pipeline. Computed once from `BooleanOptions` at the start of a boolean
 /// operation to avoid repeated derivation and hardcoded epsilon values.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 struct BooleanContext {
-    /// Base tolerance.
+    /// Base tolerance (used when wiring ctx through the full pipeline).
+    #[allow(dead_code)]
     tol: Tolerance,
     /// Vertex merge distance: vertices closer than this are considered identical.
     vertex_merge: f64,
@@ -401,13 +401,16 @@ pub fn boolean_with_options(
     opts: BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = opts.tolerance;
-    let _ctx = BooleanContext::from_options(&opts);
+    let ctx = BooleanContext::from_options(&opts);
 
     log::debug!(
-        "boolean {op:?}: solids ({}, {}), deflection={}",
+        "boolean {op:?}: solids ({}, {}), deflection={}, vertex_merge={}, classify_tol={}, degenerate_area={}",
         a.index(),
         b.index(),
-        opts.deflection
+        opts.deflection,
+        ctx.vertex_merge,
+        ctx.classify_tol,
+        ctx.degenerate_area,
     );
 
     // ── Try analytic fast path ──────────────────────────────────────────
@@ -1053,6 +1056,7 @@ fn intersect_face_pair(
 
     overlaps
         .into_iter()
+        .filter(|(lo, hi)| lo.is_finite() && hi.is_finite())
         .map(|(t_min, t_max)| IntersectionSegment {
             face_a: a.fid,
             face_b: b.fid,
@@ -2130,8 +2134,8 @@ fn validate_boolean_result(topo: &Topology, solid: SolidId) -> Result<(), crate:
     // minor topological imperfections (e.g., boundary edges on analytic faces)
     // that don't prevent downstream use. Hard-failing here would reject ~25%
     // of currently working booleans. The long-term fix is post-boolean healing.
-    if let Ok(report) = crate::validate::validate_solid(topo, solid) {
-        if !report.is_valid() {
+    match crate::validate::validate_solid(topo, solid) {
+        Ok(report) if !report.is_valid() => {
             let errors: Vec<_> = report
                 .issues
                 .iter()
@@ -2144,6 +2148,10 @@ fn validate_boolean_result(topo: &Topology, solid: SolidId) -> Result<(), crate:
                 errors.join("; ")
             );
         }
+        Err(e) => {
+            log::warn!("validate_solid failed (skipping validation): {e}");
+        }
+        Ok(_) => {}
     }
 
     Ok(())
@@ -3060,6 +3068,7 @@ fn analytic_boolean(
                 topo,
                 snap.id,
                 deflection,
+                tol,
                 &mut fragments,
             )?;
             continue;
@@ -3183,6 +3192,7 @@ fn analytic_boolean(
                     snap.reversed,
                     band_curves,
                     topo,
+                    tol,
                     &mut fragments,
                 );
             }
@@ -3236,6 +3246,7 @@ fn analytic_boolean(
                 topo,
                 snap.id,
                 deflection,
+                tol,
                 &mut fragments,
             )?;
             continue;
@@ -3348,6 +3359,7 @@ fn analytic_boolean(
                     snap.reversed,
                     band_curves,
                     topo,
+                    tol,
                     &mut fragments,
                 );
             }
@@ -3924,6 +3936,7 @@ fn split_cylinder_at_intersection(
     topo: &Topology,
     face_id: FaceId,
     deflection: f64,
+    tol: Tolerance,
     fragments: &mut Vec<AnalyticFragment>,
 ) -> Result<(), crate::OperationsError> {
     let FaceSurface::Cylinder(cyl) = surface else {
@@ -3982,8 +3995,8 @@ fn split_cylinder_at_intersection(
             verts_at_vmax.push(p);
         }
     }
-    dedup_points_by_position(&mut verts_at_vmin, Tolerance::new());
-    dedup_points_by_position(&mut verts_at_vmax, Tolerance::new());
+    dedup_points_by_position(&mut verts_at_vmin, tol);
+    dedup_points_by_position(&mut verts_at_vmax, tol);
 
     #[allow(clippy::cast_precision_loss)]
     let sample_circle_at_v = |v: f64| -> Vec<Point3> {
@@ -4229,6 +4242,7 @@ fn create_band_fragments(
     source_reversed: bool,
     contained_curves: &[EdgeCurve],
     _topo: &Topology,
+    tol: Tolerance,
     fragments: &mut Vec<AnalyticFragment>,
 ) {
     let FaceSurface::Cylinder(cyl) = surface else {
@@ -4320,8 +4334,8 @@ fn create_band_fragments(
         }
     }
     // Deduplicate points at each level (seam vertex duplicates circle[0]).
-    dedup_points_by_position(&mut verts_at_vmin, Tolerance::new());
-    dedup_points_by_position(&mut verts_at_vmax, Tolerance::new());
+    dedup_points_by_position(&mut verts_at_vmin, tol);
+    dedup_points_by_position(&mut verts_at_vmax, tol);
 
     // Sample a circle at a given v-level. For cut levels with an EdgeCurve,
     // use sample_edge_curve so the points match the holed-face inner wire.

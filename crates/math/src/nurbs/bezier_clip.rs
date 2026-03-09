@@ -777,16 +777,15 @@ fn merge_overlaps(overlaps: &mut Vec<CurveCurveOverlap>, tolerance: f64) {
     merged.push(overlaps[0]);
 
     for ov in overlaps.iter().skip(1) {
-        // SAFETY: merged is never empty here — we pushed the first element above.
-        #[allow(clippy::expect_used)]
-        let last = merged.last_mut().expect("non-empty");
-        if ov.u1_start <= last.u1_end + tolerance {
-            // Extend the existing interval.
-            last.u1_end = last.u1_end.max(ov.u1_end);
-            last.u2_start = last.u2_start.min(ov.u2_start);
-            last.u2_end = last.u2_end.max(ov.u2_end);
-        } else {
-            merged.push(*ov);
+        if let Some(last) = merged.last_mut() {
+            if ov.u1_start <= last.u1_end + tolerance {
+                // Extend the existing interval.
+                last.u1_end = last.u1_end.max(ov.u1_end);
+                last.u2_start = last.u2_start.min(ov.u2_start);
+                last.u2_end = last.u2_end.max(ov.u2_end);
+            } else {
+                merged.push(*ov);
+            }
         }
     }
 

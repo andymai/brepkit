@@ -149,9 +149,10 @@ impl NurbsSurface {
         if first.len() != last.len() {
             return false;
         }
+        // (1e-7)^2 matching Tolerance::default().linear
         first.iter().zip(last.iter()).all(|(a, b)| {
             let d = *a - *b;
-            d.x() * d.x() + d.y() * d.y() + d.z() * d.z() < 1e-12
+            d.x() * d.x() + d.y() * d.y() + d.z() * d.z() < 1e-14
         })
     }
 
@@ -164,12 +165,13 @@ impl NurbsSurface {
         if self.control_points.is_empty() {
             return false;
         }
+        // (1e-7)^2 matching Tolerance::default().linear
         self.control_points.iter().all(|row| {
             if row.len() < 2 {
                 return false;
             }
             let d = row[0] - row[row.len() - 1];
-            d.x() * d.x() + d.y() * d.y() + d.z() * d.z() < 1e-12
+            d.x() * d.x() + d.y() * d.y() + d.z() * d.z() < 1e-14
         })
     }
 

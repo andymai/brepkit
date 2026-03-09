@@ -1744,11 +1744,6 @@ fn surface_newton_step(surface: &NurbsSurface, u: f64, v: f64, target: Point3) -
     (du, dv)
 }
 
-/// March along an intersection curve from a seed point.
-///
-/// Uses the tangent direction (cross product of surface normals) to step
-/// forward, then corrects back to the intersection with Newton.
-///
 /// Minimum distance from point `p` to the line segment `a`–`b`.
 fn point_to_segment_dist(p: Point3, a: Point3, b: Point3) -> f64 {
     let ab = b - a;
@@ -1762,6 +1757,10 @@ fn point_to_segment_dist(p: Point3, a: Point3, b: Point3) -> f64 {
     (p - proj).length()
 }
 
+/// March along an intersection curve from a seed point.
+///
+/// Uses the tangent direction (cross product of surface normals) to step
+/// forward, then corrects back to the intersection with Newton.
 /// The `step_size` is the *initial* step size. The marcher adapts it based
 /// on both RKF45 integration error and geometric curvature (angular
 /// deviation between successive tangent vectors). This ensures fine

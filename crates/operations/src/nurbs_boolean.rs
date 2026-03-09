@@ -30,10 +30,12 @@ use brepkit_math::nurbs::intersection::{IntersectionCurve, IntersectionPoint};
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point2, Point3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::pcurve::PCurve;
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
+use brepkit_topology::vertex::Vertex;
 
 use crate::OperationsError;
 use crate::boolean::BooleanOp;
@@ -287,7 +289,28 @@ fn register_pcurves(
                 continue;
             }
 
-            // Build pcurve on face_a: 2D curve from param1 values
+            // Create vertices at the SSI curve endpoints.
+            let p_start = ssi_curve.points.first().map(|p| p.point);
+            let p_end = ssi_curve.points.last().map(|p| p.point);
+            let (Some(start_pt), Some(end_pt)) = (p_start, p_end) else {
+                continue;
+            };
+
+            let lin_tol = brepkit_math::tolerance::Tolerance::default().linear;
+            let start_vid = topo.vertices.alloc(Vertex::new(start_pt, lin_tol));
+            let end_vid = topo.vertices.alloc(Vertex::new(end_pt, lin_tol));
+
+            // Fit the 3D SSI points to a NURBS curve for the edge geometry.
+            let ssi_points: Vec<Point3> = ssi_curve.points.iter().map(|p| p.point).collect();
+            let degree = (ssi_points.len() - 1).min(3);
+            let edge_curve = match brepkit_math::nurbs::fitting::interpolate(&ssi_points, degree) {
+                Ok(crv) => EdgeCurve::NurbsCurve(crv),
+                Err(_) => EdgeCurve::Line,
+            };
+
+            let _edge_id = topo.edges.alloc(Edge::new(start_vid, end_vid, edge_curve));
+
+            // Build and register pcurve on face_a.
             if let Some(pcurve_a) = build_pcurve_from_params(&ssi_curve.points, true) {
                 // Find edges on face_a that this SSI curve intersects
                 // For now, store the pcurve as a new edge association
