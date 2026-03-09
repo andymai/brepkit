@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.11](https://github.com/andymai/brepkit/compare/v0.7.10...v0.7.11) (2026-03-09)
+
+
+### Bug Fixes
+
+* Sprint 8 — SSI perf, adaptive offsets, G1 fillets, algebraic SSI ([#115](https://github.com/andymai/brepkit/issues/115)) ([20b9943](https://github.com/andymai/brepkit/commit/20b99435f5735426291dbc8145af5ececd1e40f5))
+
 ## [0.7.10](https://github.com/andymai/brepkit/compare/v0.7.9...v0.7.10) (2026-03-09)
 
 
