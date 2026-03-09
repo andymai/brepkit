@@ -1812,8 +1812,9 @@ const MIN_SOLID_FACES: usize = 3;
 /// Validate that a boolean result is not degenerate.
 ///
 /// Checks for:
-/// - Too few faces (< 4, which can't form a closed solid)
-/// - Open shell (boundary edges)
+/// - Too few faces (< `MIN_SOLID_FACES`)
+/// - No edges or vertices (empty topology)
+/// - Degenerate faces (face with 0 edges)
 fn validate_boolean_result(topo: &Topology, solid: SolidId) -> Result<(), crate::OperationsError> {
     let s = topo.solid(solid)?;
     let shell = topo.shell(s.outer_shell())?;
@@ -1824,6 +1825,14 @@ fn validate_boolean_result(topo: &Topology, solid: SolidId) -> Result<(), crate:
             reason: format!(
                 "boolean result has only {face_count} faces (minimum {MIN_SOLID_FACES} required for a closed solid)"
             ),
+        });
+    }
+
+    // Check that we have at least some edges and vertices.
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, solid)?;
+    if e == 0 || v == 0 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!("boolean result has degenerate topology (F={f}, E={e}, V={v})"),
         });
     }
 
