@@ -51,6 +51,29 @@ impl Tolerance {
     pub fn approx_eq(self, a: f64, b: f64) -> bool {
         (a - b).abs() <= self.linear
     }
+
+    /// Convert the linear tolerance to parameter space given the magnitude
+    /// of a surface derivative (or curve tangent).
+    ///
+    /// The parametric tolerance is `linear / derivative_magnitude`, so a
+    /// surface with `||∂S/∂u|| = 1000` and linear tolerance 1e-7 gives
+    /// parametric tolerance 1e-10.
+    ///
+    /// Clamps to `[1e-15, 0.1]` to prevent degeneracy.
+    #[must_use]
+    pub fn parametric(self, derivative_mag: f64) -> f64 {
+        if derivative_mag < 1e-30 {
+            return self.linear;
+        }
+        (self.linear / derivative_mag).clamp(1e-15, 0.1)
+    }
+
+    /// A squared linear tolerance, useful for distance² comparisons
+    /// that avoid the `sqrt` call.
+    #[must_use]
+    pub fn linear_sq(self) -> f64 {
+        self.linear * self.linear
+    }
 }
 
 impl Default for Tolerance {

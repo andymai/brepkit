@@ -45,9 +45,11 @@ fn face_surface_to_analytic(
     }
 }
 
-/// Deduplicate 3D points by quantized position (spatial hashing at 1e-7 scale).
-fn dedup_points_by_position(pts: &mut Vec<Point3>) {
-    let scale = 1e7_f64;
+/// Deduplicate 3D points by quantized position (spatial hashing).
+///
+/// Resolution is derived from the tolerance: `1.0 / tol.linear`.
+fn dedup_points_by_position(pts: &mut Vec<Point3>, tol: Tolerance) {
+    let scale = 1.0 / tol.linear;
     let mut seen = HashSet::new();
     pts.retain(|p| {
         #[allow(clippy::cast_possible_truncation)]
@@ -262,12 +264,50 @@ pub struct BooleanOptions {
     /// Lower values produce more triangles (more accurate but slower).
     /// Default: 0.1.
     pub deflection: f64,
+    /// Tolerance for geometric comparisons.
+    ///
+    /// Controls vertex merging, point classification, and predicate
+    /// thresholds throughout the boolean pipeline. Default: `Tolerance::new()`.
+    pub tolerance: Tolerance,
 }
 
 impl Default for BooleanOptions {
     fn default() -> Self {
         Self {
             deflection: DEFAULT_BOOLEAN_DEFLECTION,
+            tolerance: Tolerance::new(),
+        }
+    }
+}
+
+/// Internal context carrying tolerance-derived thresholds through the boolean
+/// pipeline. Computed once from `BooleanOptions` at the start of a boolean
+/// operation to avoid repeated derivation and hardcoded epsilon values.
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+struct BooleanContext {
+    /// Base tolerance.
+    tol: Tolerance,
+    /// Vertex merge distance: vertices closer than this are considered identical.
+    vertex_merge: f64,
+    /// Point classification tolerance: distance threshold for on-surface tests.
+    classify_tol: f64,
+    /// Degenerate polygon threshold: skip polygons with area below this.
+    degenerate_area: f64,
+}
+
+impl BooleanContext {
+    fn from_options(opts: &BooleanOptions) -> Self {
+        let tol = opts.tolerance;
+        Self {
+            tol,
+            // 1000x linear tolerance for vertex merging — aggressive enough to
+            // catch coincident vertices while preserving distinct features.
+            vertex_merge: tol.linear * 1000.0,
+            // Classification tolerance for point-in-solid tests.
+            classify_tol: tol.linear * 100.0,
+            // Degenerate area threshold (area < this → skip polygon).
+            degenerate_area: tol.linear * tol.linear,
         }
     }
 }
@@ -360,7 +400,8 @@ pub fn boolean_with_options(
     b: SolidId,
     opts: BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
-    let tol = Tolerance::new();
+    let tol = opts.tolerance;
+    let _ctx = BooleanContext::from_options(&opts);
 
     log::debug!(
         "boolean {op:?}: solids ({}, {}), deflection={}",
@@ -1780,7 +1821,7 @@ pub(crate) fn assemble_solid_mixed(
     face_specs: &[FaceSpec],
     tol: Tolerance,
 ) -> Result<SolidId, crate::OperationsError> {
-    let resolution = 1e7;
+    let resolution = 1.0 / tol.linear;
 
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
@@ -3081,7 +3122,7 @@ fn analytic_boolean(
 
     // ── Selection + Assembly ─────────────────────────────────────────────
 
-    let resolution = 1e7;
+    let resolution = 1.0 / tol.linear;
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
     let mut face_ids_out = Vec::new();
@@ -3631,8 +3672,8 @@ fn split_cylinder_at_intersection(
             verts_at_vmax.push(p);
         }
     }
-    dedup_points_by_position(&mut verts_at_vmin);
-    dedup_points_by_position(&mut verts_at_vmax);
+    dedup_points_by_position(&mut verts_at_vmin, Tolerance::new());
+    dedup_points_by_position(&mut verts_at_vmax, Tolerance::new());
 
     #[allow(clippy::cast_precision_loss)]
     let sample_circle_at_v = |v: f64| -> Vec<Point3> {
@@ -3969,8 +4010,8 @@ fn create_band_fragments(
         }
     }
     // Deduplicate points at each level (seam vertex duplicates circle[0]).
-    dedup_points_by_position(&mut verts_at_vmin);
-    dedup_points_by_position(&mut verts_at_vmax);
+    dedup_points_by_position(&mut verts_at_vmin, Tolerance::new());
+    dedup_points_by_position(&mut verts_at_vmax, Tolerance::new());
 
     // Sample a circle at a given v-level. For cut levels with an EdgeCurve,
     // use sample_edge_curve so the points match the holed-face inner wire.
