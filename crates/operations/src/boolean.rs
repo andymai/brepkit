@@ -11,7 +11,7 @@ use rayon::prelude::*;
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
 use brepkit_math::plane::plane_plane_intersection;
-use brepkit_math::predicates::{orient3d, point_in_polygon};
+use brepkit_math::predicates::{orient3d_sos, point_in_polygon};
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
@@ -1442,9 +1442,24 @@ fn split_polygon_by_chord(
         c0.z() + normal.z(),
     );
 
+    // Use SoS perturbation so coplanar vertices get a deterministic side
+    // assignment (never duplicated into both halves).
+    #[allow(clippy::cast_precision_loss)]
     let signs: Vec<f64> = polygon
         .iter()
-        .map(|v| orient3d(c0, c1, c_top, *v))
+        .enumerate()
+        .map(|(i, v)| {
+            orient3d_sos(
+                c0,
+                c1,
+                c_top,
+                *v,
+                usize::MAX - 2,
+                usize::MAX - 1,
+                usize::MAX,
+                i,
+            )
+        })
         .collect();
 
     let mut left = Vec::new();
@@ -1455,13 +1470,11 @@ fn split_polygon_by_chord(
         let si = signs[i];
         let sj = signs[j];
 
-        // Classify current vertex using exact orient3d sign.
-        // orient3d returns an exact value — compare to 0.0, not a tolerance
-        // (it's a volume, not a length, so tol.linear is dimensionally wrong).
-        if si >= 0.0 {
+        // Classify using SoS sign — guaranteed non-zero, so each vertex
+        // goes to exactly one side (no duplicates).
+        if si > 0.0 {
             left.push(polygon[i]);
-        }
-        if si <= 0.0 {
+        } else {
             right.push(polygon[i]);
         }
 

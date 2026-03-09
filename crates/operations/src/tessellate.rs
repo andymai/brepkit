@@ -2593,28 +2593,52 @@ pub fn tessellate_solid(
         )?;
     }
 
-    // Phase 5: Compute proper vertex normals via face-area-weighted averaging.
-    // Reset normals to zero, then accumulate face normals weighted by triangle area.
-    for n in &mut merged.normals {
-        *n = Vec3::new(0.0, 0.0, 0.0);
-    }
+    // Phase 5: Surface-aware vertex normals.
+    //
+    // Interior (non-shared) vertices already have surface-evaluated normals
+    // from the face tessellation phase. Shared edge vertices start with
+    // placeholder normals (0,0,0) from Phase 3. For these, compute
+    // area-weighted averages from adjacent triangles.
+    //
+    // We do NOT split vertices at creases — that would break watertightness
+    // (index-based half-edge pairing). Crease splitting is a rendering-layer
+    // concern; the tessellator preserves topological integrity.
+
+    let n_verts = merged.positions.len();
     let tri_count = merged.indices.len() / 3;
+
+    // Accumulate area-weighted triangle normals into every vertex that
+    // still has a zero placeholder normal.
+    let mut accum: Vec<Vec3> = vec![Vec3::new(0.0, 0.0, 0.0); n_verts];
+    let mut needs_normal = vec![false; n_verts];
+    for i in 0..n_verts {
+        let n = &merged.normals[i];
+        if n.x().abs() < 1e-30 && n.y().abs() < 1e-30 && n.z().abs() < 1e-30 {
+            needs_normal[i] = true;
+        }
+    }
+
     for t in 0..tri_count {
         let i0 = merged.indices[t * 3] as usize;
         let i1 = merged.indices[t * 3 + 1] as usize;
         let i2 = merged.indices[t * 3 + 2] as usize;
         let a = merged.positions[i1] - merged.positions[i0];
         let b = merged.positions[i2] - merged.positions[i0];
-        let face_normal = a.cross(b); // length = 2× triangle area (area weighting)
-        merged.normals[i0] = merged.normals[i0] + face_normal;
-        merged.normals[i1] = merged.normals[i1] + face_normal;
-        merged.normals[i2] = merged.normals[i2] + face_normal;
+        let face_normal = a.cross(b); // area-weighted (unnormalized)
+        if needs_normal[i0] {
+            accum[i0] = accum[i0] + face_normal;
+        }
+        if needs_normal[i1] {
+            accum[i1] = accum[i1] + face_normal;
+        }
+        if needs_normal[i2] {
+            accum[i2] = accum[i2] + face_normal;
+        }
     }
-    for n in &mut merged.normals {
-        if let Ok(normalized) = n.normalize() {
-            *n = normalized;
-        } else {
-            *n = Vec3::new(0.0, 0.0, 1.0);
+
+    for i in 0..n_verts {
+        if needs_normal[i] {
+            merged.normals[i] = accum[i].normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
         }
     }
 
@@ -2790,11 +2814,21 @@ fn tessellate_face_with_shared_edges(
             )?;
         }
     } else {
-        // For analytic faces (Cylinder, Cone, Sphere, Torus): snap-based
-        // stitching works well because analytic evaluation is precise.
-        // CDT fails for these due to periodic parameter spaces (e.g., sphere
-        // equatorial boundary collapses to a line at v=0 in (u,v) space).
-        tessellate_nonplanar_snap(
+        // For analytic faces (Cylinder, Cone, Sphere, Torus): use CDT-based
+        // tessellation with exact boundary constraints when the boundary forms
+        // a non-degenerate polygon in (u,v) parameter space. Falls back to
+        // snap-based stitching for faces where the boundary is degenerate
+        // (e.g., sphere hemispheres where the equatorial boundary collapses
+        // to a line at v=0 in parameter space).
+        //
+        // Save mesh state before CDT attempt so we can roll back if it fails
+        // (CDT may partially insert positions/normals before hitting an error).
+        let pos_save = merged.positions.len();
+        let nrm_save = merged.normals.len();
+        let idx_save = merged.indices.len();
+        let ptg_save = point_to_global.clone();
+
+        let cdt_ok = tessellate_nonplanar_cdt(
             topo,
             face_id,
             face_data,
@@ -2802,7 +2836,27 @@ fn tessellate_face_with_shared_edges(
             edge_global_indices,
             merged,
             point_to_global,
-        )?;
+        );
+        let cdt_produced_tris = cdt_ok.is_ok() && merged.indices.len() > idx_save;
+        if !cdt_produced_tris {
+            // CDT failed or produced zero triangles (e.g., sphere hemisphere
+            // where the boundary degenerates to a line in (u,v) space).
+            // Roll back and fall back to snap-based stitching.
+            merged.positions.truncate(pos_save);
+            merged.normals.truncate(nrm_save);
+            merged.indices.truncate(idx_save);
+            *point_to_global = ptg_save;
+
+            tessellate_nonplanar_snap(
+                topo,
+                face_id,
+                face_data,
+                deflection,
+                edge_global_indices,
+                merged,
+                point_to_global,
+            )?;
+        }
     }
 
     // If the face is reversed, flip triangle winding AND negate per-vertex normals
