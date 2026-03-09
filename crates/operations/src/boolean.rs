@@ -2253,108 +2253,18 @@ fn analytic_boolean(
     // enables band/cap-splitting: only the intersection zone gets tessellated,
     // uninvolved regions keep their analytic surface type, preventing face-count
     // explosion in sequential boolean operations.
-    for (ia, snap) in snaps_a.iter().enumerate() {
-        if let Some(chords) = face_intersections_a.get(&ia) {
-            if !analytic_analytic_faces_a.contains(&ia) {
-                match &snap.surface {
-                    FaceSurface::Cylinder(cyl) => {
-                        let mut vmin = f64::MAX;
-                        let mut vmax = f64::MIN;
-                        for &(p0, p1, _) in chords {
-                            for p in &[p0, p1] {
-                                let v = cyl.axis().dot(*p - cyl.origin());
-                                if v < vmin {
-                                    vmin = v;
-                                }
-                                if v > vmax {
-                                    vmax = v;
-                                }
-                            }
-                        }
-                        if vmax > vmin {
-                            analytic_intersection_vranges_a
-                                .entry(ia)
-                                .or_default()
-                                .push((vmin, vmax));
-                        }
-                    }
-                    FaceSurface::Sphere(sph) => {
-                        let mut vmin = f64::MAX;
-                        let mut vmax = f64::MIN;
-                        for &(p0, p1, _) in chords {
-                            for p in &[p0, p1] {
-                                let (_, v) = sph.project_point(*p);
-                                if v < vmin {
-                                    vmin = v;
-                                }
-                                if v > vmax {
-                                    vmax = v;
-                                }
-                            }
-                        }
-                        if vmax > vmin {
-                            analytic_intersection_vranges_a
-                                .entry(ia)
-                                .or_default()
-                                .push((vmin, vmax));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-    for (ib, snap) in snaps_b.iter().enumerate() {
-        if let Some(chords) = face_intersections_b.get(&ib) {
-            if !analytic_analytic_faces_b.contains(&ib) {
-                match &snap.surface {
-                    FaceSurface::Cylinder(cyl) => {
-                        let mut vmin = f64::MAX;
-                        let mut vmax = f64::MIN;
-                        for &(p0, p1, _) in chords {
-                            for p in &[p0, p1] {
-                                let v = cyl.axis().dot(*p - cyl.origin());
-                                if v < vmin {
-                                    vmin = v;
-                                }
-                                if v > vmax {
-                                    vmax = v;
-                                }
-                            }
-                        }
-                        if vmax > vmin {
-                            analytic_intersection_vranges_b
-                                .entry(ib)
-                                .or_default()
-                                .push((vmin, vmax));
-                        }
-                    }
-                    FaceSurface::Sphere(sph) => {
-                        let mut vmin = f64::MAX;
-                        let mut vmax = f64::MIN;
-                        for &(p0, p1, _) in chords {
-                            for p in &[p0, p1] {
-                                let (_, v) = sph.project_point(*p);
-                                if v < vmin {
-                                    vmin = v;
-                                }
-                                if v > vmax {
-                                    vmax = v;
-                                }
-                            }
-                        }
-                        if vmax > vmin {
-                            analytic_intersection_vranges_b
-                                .entry(ib)
-                                .or_default()
-                                .push((vmin, vmax));
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
+    collect_analytic_vranges(
+        &snaps_a,
+        &face_intersections_a,
+        &analytic_analytic_faces_a,
+        &mut analytic_intersection_vranges_a,
+    );
+    collect_analytic_vranges(
+        &snaps_b,
+        &face_intersections_b,
+        &analytic_analytic_faces_b,
+        &mut analytic_intersection_vranges_b,
+    );
 
     // ── Build contained-curve lookup sets ──────────────────────────────
 
@@ -3501,6 +3411,56 @@ fn split_sphere_at_intersection(
     }
 
     Ok(())
+}
+
+/// Compute v-parameter ranges where intersection chords cross analytic faces.
+///
+/// For each face that has intersection chords (and isn't in the analytic-analytic
+/// set), projects chord endpoints onto the surface's v-parameter and records
+/// the (vmin, vmax) interval.
+#[allow(clippy::type_complexity)]
+fn collect_analytic_vranges(
+    snaps: &[FaceSnapshot],
+    face_intersections: &HashMap<usize, Vec<(Point3, Point3, Option<EdgeCurve>)>>,
+    analytic_analytic_faces: &HashSet<usize>,
+    vranges_out: &mut HashMap<usize, Vec<(f64, f64)>>,
+) {
+    for (idx, snap) in snaps.iter().enumerate() {
+        let Some(chords) = face_intersections.get(&idx) else {
+            continue;
+        };
+        if analytic_analytic_faces.contains(&idx) {
+            continue;
+        }
+        let v_of_point: Box<dyn Fn(Point3) -> f64> = match &snap.surface {
+            FaceSurface::Cylinder(cyl) => {
+                let axis = cyl.axis();
+                let origin = cyl.origin();
+                Box::new(move |p| axis.dot(p - origin))
+            }
+            FaceSurface::Sphere(sph) => {
+                let sph = sph.clone();
+                Box::new(move |p| sph.project_point(p).1)
+            }
+            _ => continue,
+        };
+        let mut vmin = f64::MAX;
+        let mut vmax = f64::MIN;
+        for &(p0, p1, _) in chords {
+            for p in &[p0, p1] {
+                let v = v_of_point(*p);
+                if v < vmin {
+                    vmin = v;
+                }
+                if v > vmax {
+                    vmax = v;
+                }
+            }
+        }
+        if vmax > vmin {
+            vranges_out.entry(idx).or_default().push((vmin, vmax));
+        }
+    }
 }
 
 /// Create band fragments for a non-planar (analytic) face that has contained
