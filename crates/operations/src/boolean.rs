@@ -3057,17 +3057,10 @@ fn analytic_boolean(
                 Some(EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
             );
 
-        let wire_id = if let FaceSurface::Cylinder(cyl) = &frag.surface {
-            build_cylinder_barrel_wire(
-                topo,
-                cyl,
-                &verts,
-                &mut vertex_map,
-                &mut edge_map,
-                resolution,
-                tol,
-            )?
-        } else if is_single_closed_curve {
+        // Check single-closed-curve FIRST — disc fragments (cylinder caps) carry
+        // FaceSurface::Cylinder but have a single-circle polygon, not the
+        // bot[0..n/2]+top_reversed[0..n/2] layout that build_cylinder_barrel_wire expects.
+        let wire_id = if is_single_closed_curve {
             // Disc fragment: boundary is a single closed curve (circle/ellipse).
             // Create one closed edge instead of N line edges.
             // Safety: is_single_closed_curve guarantees frag.edge_curves[0] is Some.
@@ -3084,6 +3077,52 @@ fn analytic_boolean(
             let wire = Wire::new(vec![OrientedEdge::new(eid, true)], true)
                 .map_err(crate::OperationsError::Topology)?;
             topo.wires.alloc(wire)
+        } else if let FaceSurface::Cylinder(cyl) = &frag.surface {
+            // Cylinder barrel: polygon must have even vertex count and distinct
+            // v-levels at verts[0] (bot seam) and verts[last] (top seam).
+            // Chord-split fragments don't satisfy this — fall through to generic path.
+            let has_band_layout = verts.len() >= 4 && verts.len() % 2 == 0 && {
+                let v0 = cyl.axis().dot(verts[0] - cyl.origin());
+                let v1 = cyl.axis().dot(verts[verts.len() - 1] - cyl.origin());
+                (v0 - v1).abs() > tol.linear
+            };
+            if has_band_layout {
+                build_cylinder_barrel_wire(
+                    topo,
+                    cyl,
+                    &verts,
+                    &mut vertex_map,
+                    &mut edge_map,
+                    resolution,
+                    tol,
+                )?
+            } else {
+                // Chord-split or degenerate cylinder fragment — use generic polygon edges.
+                let mut oriented_edges = Vec::with_capacity(n);
+                for i in 0..n {
+                    let j = (i + 1) % n;
+                    let vi_idx = vert_ids[i].index();
+                    let vj_idx = vert_ids[j].index();
+                    let (key_min, key_max) = if vi_idx <= vj_idx {
+                        (vi_idx, vj_idx)
+                    } else {
+                        (vj_idx, vi_idx)
+                    };
+                    let fwd = vi_idx <= vj_idx;
+                    let eid = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
+                        let (start, end) = if fwd {
+                            (vert_ids[i], vert_ids[j])
+                        } else {
+                            (vert_ids[j], vert_ids[i])
+                        };
+                        topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                    });
+                    oriented_edges.push(OrientedEdge::new(eid, fwd));
+                }
+                let wire =
+                    Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
+                topo.wires.alloc(wire)
+            }
         } else {
             let mut oriented_edges = Vec::with_capacity(n);
             for i in 0..n {

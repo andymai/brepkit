@@ -600,9 +600,8 @@ impl BrepKernel {
         // If the full set of edges fails (e.g. edges adjacent to NURBS faces from
         // a prior fillet), filter to edges between two planar faces and retry.
         //
-        // Wrap in catch_unwind to prevent panics from corrupting kernel state.
-        // Without this, a panic during fillet leaves the RefCell borrow unreleased,
-        // making all subsequent kernel operations fail with "recursive use".
+        // Wrap in catch_unwind to prevent panics from propagating across the
+        // WASM FFI boundary, which would abort the entire WASM instance.
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
                 let solid = if let Ok(s) = try_fillet(&mut self.topo, solid_id, &edge_ids, radius) {
@@ -5621,8 +5620,15 @@ impl BrepKernel {
                     .iter()
                     .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
                     .collect::<Result<Vec<_>, _>>()?;
-                let result = try_fillet(&mut self.topo, solid_id, &edge_ids, radius)
-                    .map_err(|e| e.to_string())?;
+                let fillet_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    try_fillet(&mut self.topo, solid_id, &edge_ids, radius)
+                }));
+                let result = match fillet_result {
+                    Ok(inner) => inner.map_err(|e| e.to_string())?,
+                    Err(panic_info) => {
+                        return Err(panic_message(&panic_info, "Fillet"));
+                    }
+                };
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             "shell" => {
