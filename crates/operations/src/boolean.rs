@@ -696,13 +696,17 @@ fn collect_face_data(
                     }
                 }
             }
-            FaceSurface::Sphere(_) => {
-                // Tessellate sphere faces for ray-cast classification fallback.
-                // When AnalyticClassifier::Sphere is available it short-circuits
-                // before reaching this data, so the cost is only paid for mixed
-                // solids (sphere + other face types).
+            FaceSurface::Sphere(sph) => {
+                // Use the sphere's center-to-centroid direction for normals
+                // rather than cross products from tessellated triangles, since
+                // the tessellation winding order may not match face orientation.
+                // Respect the face's `reversed` flag to flip the normal when the
+                // face's topological orientation opposes the geometric surface.
                 let coarse_deflection = deflection * 4.0;
                 let mesh = crate::tessellate::tessellate(topo, fid, coarse_deflection)?;
+                let center = sph.center();
+                let face_data = topo.face(fid)?;
+                let sign = if face_data.is_reversed() { -1.0 } else { 1.0 };
                 for tri in mesh.indices.chunks_exact(3) {
                     let i0 = tri[0] as usize;
                     let i1 = tri[1] as usize;
@@ -712,18 +716,17 @@ fn collect_face_data(
                     let v1 = mesh.positions[i1];
                     let v2 = mesh.positions[i2];
 
-                    let e1 = v1 - v0;
-                    let e2 = v2 - v0;
-                    let n = Vec3::new(
-                        e1.y() * e2.z() - e1.z() * e2.y(),
-                        e1.z() * e2.x() - e1.x() * e2.z(),
-                        e1.x() * e2.y() - e1.y() * e2.x(),
-                    );
-                    let len = (n.x() * n.x() + n.y() * n.y() + n.z() * n.z()).sqrt();
+                    // Radial direction from sphere center → outward normal,
+                    // then flip if face is reversed.
+                    let cx = (v0.x() + v1.x() + v2.x()) / 3.0;
+                    let cy = (v0.y() + v1.y() + v2.y()) / 3.0;
+                    let cz = (v0.z() + v1.z() + v2.z()) / 3.0;
+                    let dir = Vec3::new(cx - center.x(), cy - center.y(), cz - center.z());
+                    let len = (dir.x() * dir.x() + dir.y() * dir.y() + dir.z() * dir.z()).sqrt();
                     if len < 1e-15 {
                         continue;
                     }
-                    let n = n * (1.0 / len);
+                    let n = dir * (sign / len);
                     let d = n.x() * v0.x() + n.y() * v0.y() + n.z() * v0.z();
                     result.push((fid, vec![v0, v1, v2], n, d));
                 }
@@ -5232,6 +5235,42 @@ mod tests {
             vol < 1000.0,
             "cut(box, sphere) volume {vol} should be less than box volume 1000"
         );
+    }
+
+    #[test]
+    fn cut_box_by_translated_sphere() {
+        // Matches brepjs test: box(10,10,10), sphere(r=3) translated to (5,5,5).
+        let mut topo = Topology::new();
+        let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let sp = crate::primitives::make_sphere(&mut topo, 3.0, 32).unwrap();
+        // Translate sphere to center of box
+        let mat = brepkit_math::mat::Mat4::translation(5.0, 5.0, 5.0);
+        crate::transform::transform_solid(&mut topo, sp, &mat).unwrap();
+
+        // Sanity: sphere is entirely inside box
+        let sph_vol = crate::measure::solid_volume(&topo, sp, 0.05).unwrap();
+        eprintln!("sphere volume: {sph_vol:.1} (expected ~113.1)");
+
+        let result = boolean(&mut topo, BooleanOp::Cut, bx, sp);
+        assert!(
+            result.is_ok(),
+            "cut(box, translated sphere) should succeed: {:?}",
+            result.err()
+        );
+        let r = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, r, 0.05).unwrap();
+        let expected = 1000.0 - sph_vol;
+        eprintln!("cut volume: {vol:.1} (expected ~{expected:.1})");
+
+        // Count result faces
+        let faces = brepkit_topology::explorer::solid_faces(&topo, r).unwrap();
+        eprintln!("result has {} faces", faces.len());
+
+        assert!(
+            vol < 1000.0,
+            "cut volume {vol} should be less than box volume 1000"
+        );
+        assert!(vol > 0.0, "cut volume should be positive");
     }
 
     #[test]

@@ -145,18 +145,48 @@ pub fn validate_solid(
     }
 
     // 4. Degenerate faces.
+    //
+    // Only faces on a planar surface bounded entirely by straight edges
+    // require ≥3 unique vertices. Faces with curved edges (Circle,
+    // Ellipse, NURBS) or non-planar surfaces (Cylinder, Sphere, Torus,
+    // etc.) can validly have fewer vertices because the surface/edge
+    // geometry defines the boundary shape.
     let faces = explorer::solid_faces(topo, solid)?;
     for fid in &faces {
-        let face_verts = explorer::face_vertices(topo, *fid)?;
-        if face_verts.len() < 3 {
-            issues.push(ValidationIssue {
-                severity: Severity::Error,
-                description: format!(
-                    "face {} has only {} vertices (need at least 3)",
-                    fid.index(),
-                    face_verts.len()
-                ),
-            });
+        let face_data = topo.face(*fid)?;
+        let is_planar = matches!(
+            face_data.surface(),
+            brepkit_topology::face::FaceSurface::Plane { .. }
+        );
+        let all_straight = {
+            let mut straight = true;
+            'outer: for wire_id in std::iter::once(face_data.outer_wire())
+                .chain(face_data.inner_wires().iter().copied())
+            {
+                let wire = topo.wire(wire_id)?;
+                for oe in wire.edges() {
+                    let edge = topo.edge(oe.edge())?;
+                    if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                        straight = false;
+                        break 'outer;
+                    }
+                }
+            }
+            straight
+        };
+
+        if is_planar && all_straight {
+            let face_verts = explorer::face_vertices(topo, *fid)?;
+            if face_verts.len() < 3 {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!(
+                        "face {} has only {} vertices (need at least 3)",
+                        fid.index(),
+                        face_verts.len()
+                    ),
+                });
+            }
         }
     }
 
@@ -199,10 +229,44 @@ pub fn validate_solid(
         }
     }
 
-    // 7. Degenerate face area: faces with near-zero area are likely slivers.
+    // 7. Degenerate face area: faces with near-zero polygon area are likely slivers.
+    //
+    // Only meaningful for faces bounded entirely by straight edges.
+    // The polygon area formula uses vertex positions, which is
+    // meaningless when edges are curved (e.g. a cylinder cap has
+    // 1 vertex → zero polygon area despite being a valid disc).
     let area_tol_sq = tol.linear * tol.linear;
     for fid in &faces {
         let face = topo.face(*fid)?;
+
+        // Skip non-planar faces and faces with curved edges — the polygon
+        // area formula is only meaningful for planar faces with straight edges.
+        if !matches!(
+            face.surface(),
+            brepkit_topology::face::FaceSurface::Plane { .. }
+        ) {
+            continue;
+        }
+        let has_curved = {
+            let mut curved = false;
+            'area_outer: for wire_id in
+                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                let wire = topo.wire(wire_id)?;
+                for oe in wire.edges() {
+                    let edge = topo.edge(oe.edge())?;
+                    if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                        curved = true;
+                        break 'area_outer;
+                    }
+                }
+            }
+            curved
+        };
+        if has_curved {
+            continue;
+        }
+
         let wire = topo.wire(face.outer_wire())?;
 
         // Collect wire vertex positions.
@@ -393,10 +457,50 @@ mod tests {
         let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
 
         let report = validate_solid(&topo, solid).unwrap();
-        // Cylinder may or may not pass all checks depending on tessellation
-        // but should at least produce a report without panicking
-        let _ = report.is_valid();
-        let _ = report.error_count();
+        assert!(
+            report.is_valid(),
+            "cylinder should be valid: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    fn sphere_solid_validates() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_sphere(&mut topo, 2.0, 32).unwrap();
+
+        let report = validate_solid(&topo, solid).unwrap();
+        assert!(
+            report.is_valid(),
+            "sphere should be valid: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    fn cone_solid_validates() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cone(&mut topo, 2.0, 0.0, 3.0).unwrap();
+
+        let report = validate_solid(&topo, solid).unwrap();
+        assert!(
+            report.is_valid(),
+            "cone should be valid: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    fn torus_solid_validates() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_torus(&mut topo, 5.0, 1.0, 32).unwrap();
+
+        let report = validate_solid(&topo, solid).unwrap();
+        assert!(
+            report.is_valid(),
+            "torus should be valid: {:?}",
+            report.issues
+        );
     }
 
     #[test]
