@@ -46,12 +46,24 @@ pub fn fuse_all(
         });
     }
 
-    let mut result = solids[0];
-    for &sid in &solids[1..] {
-        result = boolean(topo, BooleanOp::Fuse, result, sid)?;
+    // Pairwise balanced reduction: union adjacent pairs at each level.
+    // This keeps operand sizes small — O(log N × F) max faces instead of
+    // O(N × F) from left-fold, dramatically improving boolean performance.
+    let mut current = solids;
+    while current.len() > 1 {
+        let mut next = Vec::with_capacity(current.len().div_ceil(2));
+        let mut i = 0;
+        while i + 1 < current.len() {
+            next.push(boolean(topo, BooleanOp::Fuse, current[i], current[i + 1])?);
+            i += 2;
+        }
+        if i < current.len() {
+            next.push(current[i]);
+        }
+        current = next;
     }
 
-    Ok(result)
+    Ok(current[0])
 }
 
 /// Count the total number of solids in a compound.

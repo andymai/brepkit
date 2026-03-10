@@ -295,8 +295,21 @@ fn tessellate_planar(
                 );
             }
             EdgeCurve::NurbsCurve(nurbs) => {
-                let n_samples = 16;
                 let (u0, u1) = nurbs.domain();
+                let n_spans = nurbs
+                    .control_points()
+                    .len()
+                    .saturating_sub(nurbs.degree())
+                    .max(1);
+                let coarse_n = (n_spans * 4).clamp(8, 128);
+                let max_dev = measure_max_chord_deviation(nurbs, u0, u1, coarse_n);
+                #[allow(clippy::cast_sign_loss)]
+                let n_samples = if max_dev <= deflection {
+                    coarse_n
+                } else {
+                    ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize
+                }
+                .clamp(8, 4096);
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(
                     &|t| nurbs.evaluate(t),
@@ -334,9 +347,9 @@ fn tessellate_planar(
 
     let n = positions.len();
     if n < 3 {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: format!("face has only {n} vertices, need at least 3"),
-        });
+        // Degenerate face (e.g. sliver from boolean) — return empty mesh
+        // rather than failing the entire solid tessellation.
+        return Ok(TriangleMesh::default());
     }
 
     if face_data.inner_wires().is_empty() {
@@ -460,8 +473,21 @@ fn sample_wire_positions(
                 );
             }
             EdgeCurve::NurbsCurve(nurbs) => {
-                let n_samples = 16;
                 let (u0, u1) = nurbs.domain();
+                let n_spans = nurbs
+                    .control_points()
+                    .len()
+                    .saturating_sub(nurbs.degree())
+                    .max(1);
+                let coarse_n = (n_spans * 4).clamp(8, 128);
+                let max_dev = measure_max_chord_deviation(nurbs, u0, u1, coarse_n);
+                #[allow(clippy::cast_sign_loss)]
+                let n_samples = if max_dev <= deflection {
+                    coarse_n
+                } else {
+                    ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize
+                }
+                .clamp(8, 4096);
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve_into(
                     &|t| nurbs.evaluate(t),
@@ -2273,19 +2299,80 @@ fn edge_sample_count(
                 (std::f64::consts::TAU / angle_step).ceil() as usize + 1
             }
         }
-        EdgeCurve::Ellipse(_) => {
-            // Conservative: use higher count for ellipses due to varying curvature.
-            let n = (std::f64::consts::TAU / deflection.sqrt()).ceil() as usize;
-            n.max(16)
+        EdgeCurve::Ellipse(ellipse) => {
+            // Use chord-deviation formula with max curvature radius (a²/b).
+            // An ellipse's curvature is highest at the ends of the semi-major axis
+            // where the radius of curvature equals a²/b.
+            let a = ellipse.semi_major();
+            let b = ellipse.semi_minor();
+            let max_curv_radius = a * a / b;
+            let arc_range = if edge.is_closed() {
+                std::f64::consts::TAU
+            } else if let (Ok(sp), Ok(ep)) = (
+                topo.vertex(edge.start())
+                    .map(brepkit_topology::vertex::Vertex::point),
+                topo.vertex(edge.end())
+                    .map(brepkit_topology::vertex::Vertex::point),
+            ) {
+                let ts = ellipse.project(sp);
+                let mut te = ellipse.project(ep);
+                if te <= ts {
+                    te += std::f64::consts::TAU;
+                }
+                te - ts
+            } else {
+                std::f64::consts::TAU
+            };
+            segments_for_chord_deviation(max_curv_radius, arc_range, deflection).min(4096)
         }
         EdgeCurve::NurbsCurve(nurbs) => {
-            let n_cp = nurbs.control_points().len();
-            // Sample proportional to control points and inversely to deflection.
-            let base = n_cp * 4;
-            let adaptive = (1.0 / deflection.sqrt()).ceil() as usize;
-            base.max(adaptive).max(8)
+            // Adaptive: coarse-pass deviation measurement, then refine if needed.
+            let (u0, u1) = nurbs.domain();
+            let n_spans = nurbs
+                .control_points()
+                .len()
+                .saturating_sub(nurbs.degree())
+                .max(1);
+            let coarse_n = (n_spans * 4).clamp(8, 128);
+            let max_dev = measure_max_chord_deviation(nurbs, u0, u1, coarse_n);
+            if max_dev <= deflection {
+                coarse_n
+            } else {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let refined = ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize;
+                refined.clamp(8, 4096)
+            }
         }
     }
+}
+
+/// Measure the maximum midpoint chord deviation across `n` segments of a NURBS curve.
+///
+/// For each segment `[u_i, u_{i+1}]`, evaluates the curve at the midpoint and
+/// measures its distance from the chord midpoint. Returns the maximum deviation.
+fn measure_max_chord_deviation(
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+    u0: f64,
+    u1: f64,
+    n: usize,
+) -> f64 {
+    let mut max_dev: f64 = 0.0;
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..n {
+        let t0 = u0 + (u1 - u0) * (i as f64) / (n as f64);
+        let t1 = u0 + (u1 - u0) * ((i + 1) as f64) / (n as f64);
+        let p0 = nurbs.evaluate(t0);
+        let p1 = nurbs.evaluate(t1);
+        let mid_chord = Point3::new(
+            (p0.x() + p1.x()) * 0.5,
+            (p0.y() + p1.y()) * 0.5,
+            (p0.z() + p1.z()) * 0.5,
+        );
+        let mid_curve = nurbs.evaluate((t0 + t1) * 0.5);
+        let dev = (mid_curve - mid_chord).length();
+        max_dev = max_dev.max(dev);
+    }
+    max_dev
 }
 
 /// Get the parameter range for a circle edge.
@@ -2637,15 +2724,19 @@ pub fn tessellate_solid(
     }
 
     // Phase 4d: Process remaining faces sequentially.
+    // Skip faces that fail tessellation (e.g. degenerate slivers from booleans)
+    // rather than aborting the entire solid — matches tessellate_solid_grouped.
     for &fi in &other_face_indices {
-        tessellate_face_with_shared_edges(
+        if let Err(e) = tessellate_face_with_shared_edges(
             topo,
             all_faces[fi],
             deflection,
             &edge_global_indices,
             &mut merged,
             &mut point_to_global,
-        )?;
+        ) {
+            log::warn!("skipping face during tessellation: {e}");
+        }
     }
 
     // Phase 5: Surface-aware vertex normals.
