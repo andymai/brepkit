@@ -95,13 +95,13 @@ fn segments_for_chord_deviation(radius: f64, arc_range: f64, deflection: f64) ->
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let n = (arc_range / theta).ceil() as usize;
-    // Also apply a fallback formula for very coarse deflection (where the
-    // geometric formula gives too few segments for downstream accuracy):
-    // n_fallback = ceil(range / sqrt(deflection)), matching the legacy behavior
-    // for small surfaces where deflection >> radius.
+    // Minimum segment count for doubly-curved surfaces (e.g. spheres) where
+    // the geometric formula under-samples because it only considers single-
+    // direction curvature. Scales with sqrt(radius/deflection) so larger
+    // radii correctly produce more segments.
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let n_fallback = (arc_range / deflection.sqrt()).ceil() as usize;
-    n.max(n_fallback).max(4)
+    let n_min = (arc_range * (radius / deflection).sqrt()).ceil() as usize;
+    n.max(n_min).max(4)
 }
 
 /// Tessellate an analytic surface on a `(nu × nv)` grid.
@@ -207,6 +207,7 @@ fn tessellate_planar(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
     normal: Vec3,
+    deflection: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
 
@@ -244,7 +245,6 @@ fn tessellate_planar(
         let edge = topo.edge(oe.edge())?;
         match edge.curve() {
             EdgeCurve::Circle(circle) => {
-                let n_samples = 32;
                 let (t_start, t_end) = if edge.is_closed() {
                     (0.0, std::f64::consts::TAU)
                 } else {
@@ -257,6 +257,9 @@ fn tessellate_planar(
                     }
                     (ts, te)
                 };
+                let arc_range = t_end - t_start;
+                let n_samples =
+                    segments_for_chord_deviation(circle.radius(), arc_range, deflection);
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(
                     &|t| circle.evaluate(t),
@@ -267,7 +270,6 @@ fn tessellate_planar(
                 );
             }
             EdgeCurve::Ellipse(ellipse) => {
-                let n_samples = 32;
                 let (t_start, t_end) = if edge.is_closed() {
                     (0.0, std::f64::consts::TAU)
                 } else {
@@ -280,6 +282,9 @@ fn tessellate_planar(
                     }
                     (ts, te)
                 };
+                let arc_range = t_end - t_start;
+                let n_samples =
+                    segments_for_chord_deviation(ellipse.semi_major(), arc_range, deflection);
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(
                     &|t| ellipse.evaluate(t),
@@ -363,7 +368,7 @@ fn tessellate_planar(
         })
     } else {
         // CDT path for faces with holes.
-        tessellate_planar_with_holes(topo, face_data, &positions, normal)
+        tessellate_planar_with_holes(topo, face_data, &positions, normal, deflection)
     }
 }
 
@@ -372,6 +377,7 @@ fn sample_wire_positions(
     topo: &Topology,
     wire: &brepkit_topology::wire::Wire,
     tol: f64,
+    deflection: f64,
 ) -> Result<Vec<Point3>, crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
 
@@ -404,7 +410,6 @@ fn sample_wire_positions(
         let edge = topo.edge(oe.edge())?;
         match edge.curve() {
             EdgeCurve::Circle(circle) => {
-                let n_samples = 32;
                 let (t_start, t_end) = if edge.is_closed() {
                     (0.0, std::f64::consts::TAU)
                 } else {
@@ -417,6 +422,9 @@ fn sample_wire_positions(
                     }
                     (ts, te)
                 };
+                let arc_range = t_end - t_start;
+                let n_samples =
+                    segments_for_chord_deviation(circle.radius(), arc_range, deflection);
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve_into(
                     &|t| circle.evaluate(t),
@@ -427,7 +435,6 @@ fn sample_wire_positions(
                 );
             }
             EdgeCurve::Ellipse(ellipse) => {
-                let n_samples = 32;
                 let (t_start, t_end) = if edge.is_closed() {
                     (0.0, std::f64::consts::TAU)
                 } else {
@@ -440,6 +447,9 @@ fn sample_wire_positions(
                     }
                     (ts, te)
                 };
+                let arc_range = t_end - t_start;
+                let n_samples =
+                    segments_for_chord_deviation(ellipse.semi_major(), arc_range, deflection);
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve_into(
                     &|t| ellipse.evaluate(t),
@@ -534,6 +544,7 @@ fn tessellate_planar_with_holes(
     face_data: &brepkit_topology::face::Face,
     outer_positions: &[Point3],
     normal: Vec3,
+    deflection: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
@@ -547,7 +558,7 @@ fn tessellate_planar_with_holes(
     let tol = 1e-10;
     for &iw_id in face_data.inner_wires() {
         let iw = topo.wire(iw_id)?;
-        let inner_pts = sample_wire_positions(topo, iw, tol)?;
+        let inner_pts = sample_wire_positions(topo, iw, tol, deflection)?;
         let start = all_positions.len();
         all_positions.extend_from_slice(&inner_pts);
         let end = all_positions.len();
@@ -2049,7 +2060,7 @@ pub fn tessellate_with_uvs(
 
     let mut result = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => {
-            let mesh = tessellate_planar(topo, face_data, *normal)?;
+            let mesh = tessellate_planar(topo, face_data, *normal, deflection)?;
             // For planar faces, project onto plane axes to get UVs.
             let (u_axis, v_axis) = plane_axes(*normal);
             let origin = if mesh.positions.is_empty() {
@@ -4307,7 +4318,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: smaller cylinder produces more triangles than larger one — deflection scaling ignores radius"]
     fn test_circle_deflection_scaling() {
         let mut topo = Topology::new();
         let small = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();

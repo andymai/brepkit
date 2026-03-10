@@ -583,10 +583,15 @@ pub fn intersect_plane_torus(
     let du = TAU / (n_grid as f64);
     let dv = TAU / (n_grid as f64);
 
+    // Offset grid by half a cell to avoid landing exactly on zero crossings
+    // (e.g. sin(0) = 0.0 exactly in IEEE 754, which defeats sign-change detection).
+    let u_off = du * 0.5;
+    let v_off = dv * 0.5;
+
     for iu in 0..n_grid {
         for iv in 0..n_grid {
-            let u0 = (iu as f64) * du;
-            let v0 = (iv as f64) * dv;
+            let u0 = (iu as f64).mul_add(du, u_off);
+            let v0 = (iv as f64).mul_add(dv, v_off);
             let u1 = u0 + du;
             let v1 = v0 + dv;
 
