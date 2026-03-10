@@ -4,6 +4,7 @@ yanked = "warn"
 
 [licenses]
 allow = [
+  "AGPL-3.0-only",
   "Apache-2.0",
   "MIT",
   "BSD-2-Clause",

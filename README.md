@@ -152,4 +152,4 @@ cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release --no-defau
 
 ## License
 
-Apache-2.0
+AGPL-3.0-only — see [LICENSE](LICENSE) for details.
