@@ -27,7 +27,7 @@ jobs:
           path-to-signatures: "signatures/cla.json"
           path-to-document: "https://github.com/andymai/brepkit/blob/main/.github/CLA.md"
           branch: "cla-signatures"
-          allowlist: "dependabot[bot],renovate[bot]"
+          allowlist: "dependabot[bot],renovate[bot],brepkit[bot]"
           custom-notsigned-prcomment: >
             Thank you for your contribution! Before we can merge this PR,
             you need to sign the Contributor License Agreement.
