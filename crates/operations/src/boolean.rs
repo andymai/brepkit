@@ -2908,6 +2908,7 @@ fn refine_boundary_edges(
                 let edge = topo.edge(oe.edge())?;
                 let start_vid = edge.start();
                 let end_vid = edge.end();
+                let original_curve = edge.curve().clone();
 
                 // Build vertex chain in traversal order
                 let chain: Vec<VertexId> = if oe.is_forward() {
@@ -2922,7 +2923,9 @@ fn refine_boundary_edges(
                     c
                 };
 
-                // Create sub-edges (reusing from edge_map when possible)
+                // Create sub-edges (reusing from edge_map when possible).
+                // Preserve the original edge's curve type so curved edges
+                // (Circle, Ellipse) are not silently replaced with lines.
                 for k in 0..chain.len() - 1 {
                     let va = chain[k];
                     let vb = chain[k + 1];
@@ -2936,7 +2939,7 @@ fn refine_boundary_edges(
                     let fwd = va_idx <= vb_idx;
                     let sub_eid = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
                         let (s, e) = if fwd { (va, vb) } else { (vb, va) };
-                        topo.edges.alloc(Edge::new(s, e, EdgeCurve::Line))
+                        topo.edges.alloc(Edge::new(s, e, original_curve.clone()))
                     });
                     new_oriented_edges.push(OrientedEdge::new(sub_eid, fwd));
                 }
