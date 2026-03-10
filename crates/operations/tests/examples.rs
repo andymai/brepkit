@@ -388,3 +388,45 @@ fn example_custom_profile_extrusion() {
         "mesh should have multiple triangles"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Example 8: Checkpoint and Restore
+// ═══════════════════════════════════════════════════════════════════
+
+/// Snapshot topology before a boolean, then restore after a failed attempt.
+#[test]
+fn example_checkpoint_restore() {
+    let mut topo = Topology::new();
+
+    // Create a box
+    let box_id = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let box_vol = brepkit_operations::measure::solid_volume(&topo, box_id, 0.1).unwrap();
+    assert!((box_vol - 1000.0).abs() < 1.0);
+
+    // Take a checkpoint (clone the topology)
+    let snapshot = topo.clone();
+    let snapshot_vertex_count = snapshot.vertices.len();
+
+    // Perform a boolean that adds many entities
+    let cyl_id = brepkit_operations::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
+    let transform = Mat4::translation(5.0, 5.0, -5.0);
+    brepkit_operations::transform::transform_solid(&mut topo, cyl_id, &transform).unwrap();
+    let _result = brepkit_operations::boolean::boolean(
+        &mut topo,
+        brepkit_operations::boolean::BooleanOp::Cut,
+        box_id,
+        cyl_id,
+    )
+    .unwrap();
+
+    // Arena has grown significantly
+    assert!(topo.vertices.len() > snapshot_vertex_count + 10);
+
+    // Restore from snapshot — arena shrinks back
+    topo = snapshot;
+    assert_eq!(topo.vertices.len(), snapshot_vertex_count);
+
+    // Original box is still valid and unchanged
+    let restored_vol = brepkit_operations::measure::solid_volume(&topo, box_id, 0.1).unwrap();
+    assert!((restored_vol - 1000.0).abs() < 1.0);
+}

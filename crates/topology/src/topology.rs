@@ -20,7 +20,7 @@ use crate::wire::{Wire, WireId};
 /// Fields are `pub` because every operation needs direct arena access for
 /// allocation and lookup; wrapping in getters would be pure boilerplate
 /// with no invariant to protect.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Topology {
     /// All vertices in the model.
     pub vertices: Arena<Vertex>,
@@ -139,6 +139,46 @@ mod tests {
             .vertices
             .alloc(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
 
+        let v = topo.vertex(vid).unwrap();
+        assert!((v.point().x() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn clone_preserves_entities() {
+        let mut topo = Topology::new();
+        let vid = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
+
+        let snapshot = topo.clone();
+
+        // Add more entities after the snapshot
+        topo.vertices
+            .alloc(Vertex::new(Point3::new(4.0, 5.0, 6.0), 1e-7));
+        assert_eq!(topo.vertices.len(), 2);
+
+        // Snapshot still has exactly 1 vertex
+        assert_eq!(snapshot.vertices.len(), 1);
+        let v = snapshot.vertex(vid).unwrap();
+        assert!((v.point().x() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn restore_from_clone() {
+        let mut topo = Topology::new();
+        let vid = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
+
+        let snapshot = topo.clone();
+
+        // Mutate after snapshot
+        topo.vertices
+            .alloc(Vertex::new(Point3::new(9.0, 9.0, 9.0), 1e-7));
+
+        // Restore from snapshot
+        topo = snapshot;
+        assert_eq!(topo.vertices.len(), 1);
         let v = topo.vertex(vid).unwrap();
         assert!((v.point().x() - 1.0).abs() < f64::EPSILON);
     }
