@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.10](https://github.com/andymai/brepkit/compare/v0.8.9...v0.8.10) (2026-03-10)
+
+
+### Bug Fixes
+
+* harden operation tests with volume/area assertions and fix extrude inner-wall normals ([#150](https://github.com/andymai/brepkit/issues/150)) ([c6b54b5](https://github.com/andymai/brepkit/commit/c6b54b553c257c595d651d175a407f316934b078))
+
 ## [0.8.9](https://github.com/andymai/brepkit/compare/v0.8.8...v0.8.9) (2026-03-10)
 
 
