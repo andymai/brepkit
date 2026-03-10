@@ -7018,8 +7018,17 @@ fn parse_sketch_constraint(
         "angle" => {
             let p1 = json_usize(val, "p1")?;
             let p2 = json_usize(val, "p2")?;
-            let p3 = json_usize(val, "p3")?;
-            let p4 = json_usize(val, "p4")?;
+            // Backward compat: old API was (p1, p2, value) for single-line angle.
+            // New API is (p1, p2, p3, p4, value) for angle between two lines.
+            // When p3/p4 are absent, default to p1/p2 (zero angle between same line).
+            let p3 = val
+                .get("p3")
+                .and_then(|v| v.as_u64())
+                .map_or(p1, |v| v as usize);
+            let p4 = val
+                .get("p4")
+                .and_then(|v| v.as_u64())
+                .map_or(p2, |v| v as usize);
             let v = json_f64(val, "value")?;
             Ok(Constraint::Angle(p1, p2, p3, p4, v))
         }
