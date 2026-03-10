@@ -26,7 +26,7 @@ jobs:
         with:
           path-to-signatures: "signatures/cla.json"
           path-to-document: "https://github.com/andymai/brepkit/blob/main/.github/CLA.md"
-          branch: "main"
+          branch: "cla-signatures"
           allowlist: "dependabot[bot],renovate[bot]"
           custom-notsigned-prcomment: >
             Thank you for your contribution! Before we can merge this PR,
