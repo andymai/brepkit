@@ -346,7 +346,6 @@ fn test_boolean_sphere_cylinder() {
 }
 
 #[test]
-#[ignore = "bug: cone-box fuse produces incorrect volume (32 vs expected 48)"]
 fn test_boolean_cone_box() {
     // Cone r_bottom=2, r_top=0, height=3. Box 4x4x3.
     let mut topo = Topology::new();
