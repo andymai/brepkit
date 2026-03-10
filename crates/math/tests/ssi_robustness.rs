@@ -203,7 +203,6 @@ fn plane_cone_intersection() {
 /// Two perpendicular cylinders (same radius, same origin) produce a
 /// figure-8 intersection.
 #[test]
-#[ignore = "bug: marching method produces points far from both cylinder surfaces"]
 fn cylinder_cylinder_perpendicular() {
     let cyl_z =
         CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
