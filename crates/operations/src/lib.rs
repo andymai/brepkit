@@ -48,6 +48,9 @@ pub mod transform;
 pub mod untrim;
 pub mod validate;
 
+#[cfg(test)]
+pub(crate) mod test_helpers;
+
 /// Compute `n · p` treating a `Point3` as a direction vector.
 ///
 /// Equivalent to the dot product `n.x*p.x + n.y*p.y + n.z*p.z`, used

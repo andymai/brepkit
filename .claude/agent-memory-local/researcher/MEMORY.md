@@ -30,3 +30,13 @@
 - Self-intersection NURBS: Li, Jia, Chen 2025 ACM TOG - algebraic signature approach
 - Topology-guaranteed SSI: Yang, Jia, Yan SIGGRAPH Asia 2023 (dl.acm.org/doi/10.1145/3618349)
 - Fast winding numbers (meshes): Barill et al. SIGGRAPH 2018 - BVH with multipole expansion
+
+## CAD Kernel Testing Research (2026-03-09) - see `/home/andy/dev/active/brepkit-robustness/test-research.md`
+- OCCT BRepCheck_Analyzer has 37 validation status codes; brepkit implements ~4
+- OCCT has 20+ test groups with dedicated suites per operation type
+- Parasolid PK_BODY_check has 5 geometry check levels + 30+ topology fault states
+- CGAL uses Thingi10K (10,000 models) for mesh algorithm stress testing
+- brepkit: 1,029 tests, 8 proptest, 22 benchmarks, 0 golden files, 0 STEP round-trip tests
+- Weakest coverage: sew(4), split(4), mesh_boolean(5), shell_op(6), section(7)
+- Key gaps: no post-boolean validation depth, no STEP round-trip, no tessellation quality, no scale tests
+- Priority: (1) validation pipeline, (2) STEP round-trip, (3) tess quality, (4) boolean edge cases

@@ -85,6 +85,13 @@ fn face_all_edges_straight(
 /// 3. **Boundary edges**: no edge shared by only 1 face (open shell)
 /// 4. **Degenerate faces**: each face has at least 3 vertices
 /// 5. **Face normal consistency**: normals should be non-zero
+/// 6. **Wire closure**: every wire forms a closed loop
+/// 7. **Degenerate face area**: near-zero polygon area warning for planar faces
+/// 8. **Zero-length edges**: edges with coincident start/end vertices
+/// 9. **Empty wires**: wires with no edges
+/// 10. **Shell connectivity**: all faces reachable from any face
+/// 11. **Redundant faces**: same face ID appearing twice in shell
+/// 12. **Edge vertex consistency**: edge vertices belong to the solid
 ///
 /// # Errors
 ///
@@ -280,6 +287,136 @@ pub fn validate_solid(
                     ),
                 });
             }
+        }
+    }
+
+    // 8. Zero-length edges: edges with coincident start/end vertices
+    // (but not intentionally closed edges like circles).
+    let all_edges = explorer::solid_edges(topo, solid)?;
+    for eid in &all_edges {
+        let edge = topo.edge(*eid)?;
+        if !edge.is_closed() {
+            let p_start = topo.vertex(edge.start())?.point();
+            let p_end = topo.vertex(edge.end())?.point();
+            let dx = p_start.x() - p_end.x();
+            let dy = p_start.y() - p_end.y();
+            let dz = p_start.z() - p_end.z();
+            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+            if dist < tol.linear {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!(
+                        "edge {} has near-zero length ({dist:.2e} < {:.2e})",
+                        eid.index(),
+                        tol.linear
+                    ),
+                });
+            }
+        }
+    }
+
+    // 9. Empty wires.
+    for fid in &faces {
+        let face = topo.face(*fid)?;
+        let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+
+        for wire_id in wire_ids {
+            let wire = topo.wire(wire_id)?;
+            if wire.edges().is_empty() {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!(
+                        "wire {} on face {} has no edges",
+                        wire_id.index(),
+                        fid.index()
+                    ),
+                });
+            }
+        }
+    }
+
+    // 10. Shell connectivity: all faces should be reachable from any face.
+    // For genus-0 solids (sphere-like), all faces must be in one connected
+    // component. Higher-genus solids (e.g. hollow revolves creating a torus)
+    // can legitimately have multiple face-connected components (inner/outer
+    // shells sharing no edges), so we skip this check for genus > 0.
+    if !faces.is_empty() && genus_times_2 == 0 {
+        let face_set: std::collections::HashSet<usize> = faces.iter().map(|f| f.index()).collect();
+        let mut visited = std::collections::HashSet::new();
+        let mut queue = std::collections::VecDeque::new();
+
+        visited.insert(faces[0].index());
+        queue.push_back(faces[0]);
+
+        while let Some(current) = queue.pop_front() {
+            // Find all faces that share an edge with current
+            for adj_faces in edge_map.values() {
+                if adj_faces.iter().any(|f| f.index() == current.index()) {
+                    for neighbor in adj_faces {
+                        if face_set.contains(&neighbor.index()) && visited.insert(neighbor.index())
+                        {
+                            queue.push_back(*neighbor);
+                        }
+                    }
+                }
+            }
+        }
+
+        let unreachable = face_set.len() - visited.len();
+        if unreachable > 0 {
+            issues.push(ValidationIssue {
+                severity: Severity::Error,
+                description: format!(
+                    "shell is disconnected: {unreachable} face(s) not reachable from first face"
+                ),
+            });
+        }
+    }
+
+    // 11. Redundant faces in shell.
+    {
+        let mut face_counts = std::collections::HashMap::new();
+        for fid in &faces {
+            *face_counts.entry(fid.index()).or_insert(0usize) += 1;
+        }
+        for (&idx, &count) in &face_counts {
+            if count > 1 {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!("face {idx} appears {count} times in shell (redundant)"),
+                });
+            }
+        }
+    }
+
+    // 12. Edge vertex consistency: edge vertices must belong to the solid.
+    let vertex_set: std::collections::HashSet<usize> = {
+        let verts = explorer::solid_vertices(topo, solid)?;
+        verts.iter().map(|v| v.index()).collect()
+    };
+    for eid in &all_edges {
+        let edge = topo.edge(*eid)?;
+        if !vertex_set.contains(&edge.start().index()) {
+            issues.push(ValidationIssue {
+                severity: Severity::Error,
+                description: format!(
+                    "edge {} start vertex {} not found in solid",
+                    eid.index(),
+                    edge.start().index()
+                ),
+            });
+        }
+        if !vertex_set.contains(&edge.end().index()) {
+            issues.push(ValidationIssue {
+                severity: Severity::Error,
+                description: format!(
+                    "edge {} end vertex {} not found in solid",
+                    eid.index(),
+                    edge.end().index()
+                ),
+            });
         }
     }
 
@@ -661,6 +798,58 @@ mod tests {
     }
 
     #[test]
+    fn validate_detects_non_manifold_edge() {
+        // 3 faces sharing one edge is non-manifold
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        // Duplicate one face to create a non-manifold edge
+        let shell_id = topo.solid(solid).unwrap().outer_shell();
+        let shell = topo.shell(shell_id).unwrap();
+        let mut faces: Vec<_> = shell.faces().to_vec();
+        let extra_face = faces[0]; // duplicate first face
+        faces.push(extra_face);
+
+        let new_shell = brepkit_topology::shell::Shell::new(faces).unwrap();
+        *topo.shell_mut(shell_id).unwrap() = new_shell;
+
+        let report = validate_solid(&topo, solid).unwrap();
+        assert!(!report.is_valid(), "non-manifold edge should be invalid");
+        let has_nm = report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("non-manifold") || i.description.contains("shared by"));
+        assert!(has_nm, "should mention non-manifold: {:?}", report.issues);
+    }
+
+    #[test]
+    fn validate_detects_zero_length_normal() {
+        // A face with a zero-length normal should produce a warning.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        // Corrupt a face normal to zero-length.
+        let shell_id = topo.solid(solid).unwrap().outer_shell();
+        let face_id = topo.shell(shell_id).unwrap().faces()[0];
+        let face = topo.face_mut(face_id).unwrap();
+        *face = brepkit_topology::face::Face::new(
+            face.outer_wire(),
+            face.inner_wires().to_vec(),
+            brepkit_topology::face::FaceSurface::Plane {
+                normal: brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0),
+                d: 0.0,
+            },
+        );
+
+        let report = validate_solid(&topo, solid).unwrap();
+        assert!(
+            report.warning_count() > 0,
+            "zero-length normal should produce a warning: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
     fn no_area_warnings_on_valid_box() {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
@@ -674,6 +863,255 @@ mod tests {
         assert!(
             area_warnings.is_empty(),
             "valid box should have no area warnings: {area_warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_detects_open_wire() {
+        // Construct a solid with a wire that doesn't close
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        // Get a wire and break its closure by removing the closed flag
+        let shell_id = topo.solid(solid).unwrap().outer_shell();
+        let face_id = topo.shell(shell_id).unwrap().faces()[0];
+        let wire_id = topo.face(face_id).unwrap().outer_wire();
+        let wire = topo.wire(wire_id).unwrap();
+        let edges = wire.edges().to_vec();
+
+        // Create an open wire (not closed) with same edges
+        if edges.len() > 1 {
+            use brepkit_topology::wire::Wire;
+            let open_wire = Wire::new(edges[..edges.len() - 1].to_vec(), false);
+            if let Ok(w) = open_wire {
+                *topo.wire_mut(wire_id).unwrap() = w;
+
+                let report = validate_solid(&topo, solid).unwrap();
+                assert!(
+                    !report.is_valid(),
+                    "open wire should be invalid: {:?}",
+                    report.issues
+                );
+            }
+        }
+    }
+
+    // ── repair_solid ─────────────────────────────────
+
+    // ── Zero-length edge detection ─────────────────────
+
+    #[test]
+    fn validate_detects_zero_length_edge() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        // Find an edge and make its vertices coincident
+        let edges = explorer::solid_edges(&topo, solid).unwrap();
+        let edge = topo.edge(edges[0]).unwrap();
+        let end_vid = edge.end();
+        let start_pos = topo.vertex(edge.start()).unwrap().point();
+
+        // Move end vertex to same position as start
+        topo.vertex_mut(end_vid).unwrap().set_point(start_pos);
+
+        let report = validate_solid(&topo, solid).unwrap();
+        let has_zero_length = report.issues.iter().any(|i| {
+            i.description.contains("zero length") || i.description.contains("near-zero length")
+        });
+        assert!(
+            has_zero_length,
+            "should detect zero-length edge: {:?}",
+            report.issues
+        );
+    }
+
+    // ── Disconnected shell detection ───────────────────
+
+    #[test]
+    fn validate_connected_shell_passes() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let report = validate_solid(&topo, solid).unwrap();
+        let has_disconnect = report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("disconnected"));
+        assert!(
+            !has_disconnect,
+            "valid box should not be disconnected: {:?}",
+            report.issues
+        );
+    }
+
+    // ── Redundant face detection ───────────────────────
+
+    #[test]
+    fn validate_detects_redundant_face() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        // Duplicate a face in the shell
+        let shell_id = topo.solid(solid).unwrap().outer_shell();
+        let shell = topo.shell(shell_id).unwrap();
+        let mut faces: Vec<_> = shell.faces().to_vec();
+        let dup = faces[0];
+        faces.push(dup);
+
+        let new_shell = brepkit_topology::shell::Shell::new(faces).unwrap();
+        *topo.shell_mut(shell_id).unwrap() = new_shell;
+
+        let report = validate_solid(&topo, solid).unwrap();
+        let has_redundant = report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("redundant") || i.description.contains("appears"));
+        assert!(
+            has_redundant,
+            "should detect redundant face: {:?}",
+            report.issues
+        );
+    }
+
+    // ── Boolean result validation ──────────────────────
+
+    #[test]
+    #[ignore = "bug: boolean fuse leaves 32 boundary edges (shell not closed)"]
+    fn boolean_fuse_result_validates() {
+        let mut topo = Topology::new();
+        let a = brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+
+        let result =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, a, b).unwrap();
+
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(
+            report.is_valid(),
+            "boolean fuse should produce a valid solid: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    #[ignore = "bug: boolean cut leaves 32 boundary edges (shell not closed)"]
+    fn boolean_cut_result_validates() {
+        let mut topo = Topology::new();
+        let a = brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+
+        let result =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, a, b).unwrap();
+
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(
+            report.is_valid(),
+            "boolean cut should produce a valid solid: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    #[ignore = "bug: boolean intersect leaves 40 boundary edges (shell not closed)"]
+    fn boolean_intersect_result_validates() {
+        let mut topo = Topology::new();
+        let a = brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+
+        let result =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Intersect, a, b).unwrap();
+
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(
+            report.is_valid(),
+            "boolean intersect should produce a valid solid: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    #[ignore = "bug: fillet leaves 10 boundary edges (shell not closed)"]
+    fn fillet_result_validates() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+
+        // Find edges for fillet
+        let s = topo.solid(cube).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        let mut edges = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for &fid in sh.faces() {
+            let face = topo.face(fid).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            for oe in wire.edges() {
+                if seen.insert(oe.edge().index()) {
+                    edges.push(oe.edge());
+                }
+            }
+        }
+
+        let result = crate::fillet::fillet(&mut topo, cube, &[edges[0]], 0.1).unwrap();
+
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(
+            report.is_valid(),
+            "fillet should produce a valid solid: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    fn extrude_result_validates() {
+        let mut topo = Topology::new();
+        let face = brepkit_topology::test_utils::make_unit_square_face(&mut topo);
+        let solid = crate::extrude::extrude(
+            &mut topo,
+            face,
+            brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+        )
+        .unwrap();
+
+        let report = validate_solid(&topo, solid).unwrap();
+        assert!(
+            report.is_valid(),
+            "extrude result should validate: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    fn revolve_result_validates() {
+        use brepkit_math::vec::{Point3, Vec3};
+
+        let mut topo = Topology::new();
+        let face = brepkit_topology::test_utils::make_unit_square_face(&mut topo);
+
+        // Move face away from axis to avoid degenerate geometry
+        for vid in explorer::face_vertices(&topo, face).unwrap() {
+            let v = topo.vertex_mut(vid).unwrap();
+            v.set_point(Point3::new(
+                v.point().x() + 2.0,
+                v.point().y(),
+                v.point().z(),
+            ));
+        }
+
+        let solid = crate::revolve::revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            std::f64::consts::PI,
+        )
+        .unwrap();
+
+        let report = validate_solid(&topo, solid).unwrap();
+        assert!(
+            report.is_valid(),
+            "revolve result should validate: {:?}",
+            report.issues
         );
     }
 

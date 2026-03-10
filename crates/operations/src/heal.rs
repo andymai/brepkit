@@ -856,6 +856,39 @@ mod tests {
     }
 
     #[test]
+    fn heal_clean_geometry_zero_repairs() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let report = repair_solid(&mut topo, solid, 1e-7).unwrap();
+        assert_eq!(
+            report.total_repairs(),
+            0,
+            "clean box should need zero repairs, got {}",
+            report.total_repairs()
+        );
+        assert!(
+            report.is_valid_after(),
+            "clean box should be valid after repair"
+        );
+    }
+
+    #[test]
+    fn heal_preserves_volume() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 3.0, 4.0, 5.0).unwrap();
+
+        let vol_before = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        let _report = repair_solid(&mut topo, solid, 1e-7).unwrap();
+        let vol_after = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+
+        assert!(
+            (vol_before - vol_after).abs() < 0.01,
+            "heal should preserve volume: before={vol_before}, after={vol_after}"
+        );
+    }
+
+    #[test]
     fn heal_preserves_box_volume() {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();

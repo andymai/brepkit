@@ -1,0 +1,7 @@
+# box 10x10x10 minus cylinder r=3 h=10 at center
+vertices: 325
+triangles: 506
+volume: 720.946449
+bbox_min: (0.000000, 0.000000, -3.000000)
+bbox_max: (10.000000, 10.000000, 13.000000)
+com: (5.213357, 5.213357, 4.573287)
