@@ -39,12 +39,12 @@ fn assert_point_approx(a: Point3, b: Point3, tol: f64, label: &str) {
     assert!(
         (a.x() - b.x()).abs() < tol && (a.y() - b.y()).abs() < tol && (a.z() - b.z()).abs() < tol,
         "{label}: expected ({:.4}, {:.4}, {:.4}), got ({:.4}, {:.4}, {:.4}), tol={tol}",
-        a.x(),
-        a.y(),
-        a.z(),
         b.x(),
         b.y(),
         b.z(),
+        a.x(),
+        a.y(),
+        a.z(),
     );
 }
 
