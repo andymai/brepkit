@@ -21,7 +21,7 @@ comments on GitHub.
 
 ## 2. Copyright Assignment
 
-You hereby assign to the brepkit project maintainer (Andy Mai) all right,
+You hereby assign to the brepkit project maintainer (Andy Aragon) all right,
 title, and interest in and to the copyright of your contributions. This
 includes the right to license the contribution under any terms, including
 proprietary licenses.
