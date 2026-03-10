@@ -1,123 +1,163 @@
 # brepkit
 
-The B-Rep modeling engine behind [brepjs](https://github.com/andymai/brepjs), written in Rust and compiled to WebAssembly.
+Solid modeling kernel for Rust and WebAssembly.
+
+[![CI](https://github.com/andymai/brepkit/actions/workflows/ci.yml/badge.svg)](https://github.com/andymai/brepkit/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/brepkit-wasm)](https://www.npmjs.com/package/brepkit-wasm)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0--only-blue.svg)](LICENSE)
+[![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
+
+**[Architecture](#architecture)** · **[Performance](#performance)** · **[Examples](#common-patterns)** · **[Contributing](./CONTRIBUTING.md)**
+
+```rust
+use brepkit_operations::primitives::{make_box, make_cylinder};
+use brepkit_operations::boolean::{boolean, BooleanOp};
+use brepkit_operations::measure::solid_volume;
+use brepkit_io::step::writer::write_step;
+use brepkit_topology::Topology;
+
+let mut topo = Topology::new();
+
+// Create a block with a cylindrical hole
+let block = make_box(&mut topo, 30.0, 20.0, 10.0)?;
+let hole = make_cylinder(&mut topo, 5.0, 15.0)?;
+let drilled = boolean(&mut topo, BooleanOp::Cut, block, hole)?;
+
+// Measure and export
+let vol = solid_volume(&topo, drilled, 0.1)?;
+let step = write_step(&topo, &[drilled])?;
+```
 
 ## Overview
 
-Boundary Representation (B-Rep) modeling describes 3D solids by their boundary surfaces — faces, edges, and vertices — rather than as triangle meshes or voxel grids. This is the standard representation used by professional CAD systems because it preserves exact geometry and supports precise operations like filleting and boolean cuts.
+Solids are boundary representations (B-Rep): faces, edges, and vertices with exact NURBS geometry, not triangle meshes. Booleans, fillets, and STEP export operate on exact curves and surfaces.
 
-brepkit is the computational backend that powers brepjs. It handles NURBS geometry, boolean operations, filleting, tessellation, and multi-format data exchange in memory-safe Rust with first-class WASM support. brepjs provides the developer-facing TypeScript API; brepkit provides the engine underneath.
+- No `unsafe`, no `unwrap`, no `panic`. All operations return `Result`
+- Compiles to WebAssembly (browser/Node.js) and runs natively with rayon parallelism
+- 1,200+ tests (proptest, golden files, integration), 60% minimum coverage enforced in CI
 
 ## Architecture
 
-brepkit is organized as a layered Cargo workspace. Each layer depends on layers below it; the L2 IO crate also depends on L2 operations for tessellation during export:
+Layered Cargo workspace. Each layer depends only on layers below it. Boundaries are enforced by `scripts/check-boundaries.sh` and checked in CI.
 
-```mermaid
-graph TD
-    WASM["<b>L3: brepkit-wasm</b><br/>WASM/JS bindings"]
-    OPS["<b>L2: brepkit-operations</b><br/>Booleans, fillets, extrude, tessellate"]
-    IO["<b>L2: brepkit-io</b><br/>STEP, IGES, STL, 3MF, OBJ, PLY, glTF"]
-    TOPO["<b>L1: brepkit-topology</b><br/>B-Rep data structures (arena-based)"]
-    MATH["<b>L0: brepkit-math</b><br/>Vectors, matrices, NURBS, predicates"]
-
-    WASM --> OPS
-    WASM -.-> IO
-    WASM --> TOPO
-    WASM --> MATH
-    IO --> OPS
-    IO --> TOPO
-    IO --> MATH
-    OPS --> TOPO
-    OPS --> MATH
-    TOPO --> MATH
-```
-
-| Layer | Crate | Purpose |
-|-------|-------|---------|
-| L0 | `brepkit-math` | Vectors, matrices, NURBS curves/surfaces, geometric predicates |
-| L1 | `brepkit-topology` | B-Rep data structures — vertex, edge, wire, face, shell, solid |
-| L2 | `brepkit-operations` | Boolean ops, fillets, extrusion, tessellation, and more |
-| L2 | `brepkit-io` | Multi-format CAD data exchange (7 formats) |
-| L3 | `brepkit-wasm` | WebAssembly bindings via wasm-bindgen |
+| Layer | Crate | What it does |
+|-------|-------|-------------|
+| L0 | `brepkit-math` | Points, vectors, matrices, NURBS curves/surfaces, geometric predicates, CDT, convex hull |
+| L1 | `brepkit-topology` | Arena-allocated B-Rep: vertex, edge, wire, face, shell, solid. Half-edge adjacency graph |
+| L2 | `brepkit-operations` | Booleans, fillet, chamfer, extrude, revolve, sweep, loft, shell, measure (40 modules) |
+| L2 | `brepkit-io` | Import/export for 7 formats (2 B-Rep, 5 mesh). Uses operations for tessellation during mesh export |
+| L3 | `brepkit-wasm` | JavaScript API via wasm-bindgen |
 
 ## Features
 
-### Primitives
+**Primitives:** box, cylinder, cone, sphere, torus
 
-- Box, cylinder, cone, sphere, torus
+**Booleans:** union, cut, intersect with analytic surface preservation. Mesh-based (co-refinement) and NURBS-based variants
 
-### Boolean Operations
+**Shape modifications:** extrude, revolve, sweep, loft, pipe, helical sweep, chamfer, fillet (constant + variable radius), shell, draft, offset, thicken, mirror, pattern
 
-- Union, cut (subtract), intersection
-- Mesh-based boolean (co-refinement)
-- NURBS-based boolean
+**Sectioning:** cross-section curves, split by plane/surface
 
-### Shape Modifications
+**Measurement:** bounding box, area, volume, center of mass, distance, point classification (in/on/out)
 
-- Extrude, revolve, sweep, loft, pipe
-- Helical sweep
-- Chamfer, fillet
-- Shell (hollow solid), draft (taper faces)
-- Offset face, offset solid, offset wire
-- Thicken, mirror, pattern (linear/circular)
-- Transform (translate/rotate/scale), copy
+**Geometry:** NURBS evaluation, surface-surface intersection, curve fitting (LSPIA), point projection, self-intersection detection
 
-### Sectioning & Splitting
+**Tessellation:** parallel CDT for planar faces, snap tessellation for analytic surfaces
 
-- Section (cross-section curves)
-- Split (divide solid by plane/surface)
+**Repair:** healing, defeaturing, sewing, validation, face filling (Coons patch)
 
-### Analysis & Measurement
+**Sketching:** 2D constraint solver for sketch-driven modeling
 
-- Bounding box, area, volume, center of mass
-- Point-to-shape distance queries
-- Point classification (inside/on/outside solid)
-- Feature recognition
+**Assemblies:** hierarchical product structure with transforms, flattening, BOM
 
-### Geometry
-
-- NURBS curve and surface evaluation
-- Surface-surface intersection
-- Analytic surfaces (cylinder, cone, sphere, torus)
-- Curve fitting (LSPIA), point projection
-- Self-intersection detection
-
-### Tessellation
-
-- B-Rep to triangle mesh conversion
-- CDT (constrained Delaunay) for NURBS faces, snap tessellation for analytic faces
-
-### Repair & Utilities
-
-- Shape healing, defeaturing
-- Sewing (join faces into shells)
-- Topology validation
-- Face filling (Coons patch)
-- 2D sketch constraint solver
-- Assembly management
+**Evolution:** face provenance tracking through booleans and modeling operations
 
 ## Data Exchange
 
-**B-Rep formats** — import and export exact solid geometry (faces, edges, NURBS):
+| Format | Type | Import | Export |
+|--------|------|--------|--------|
+| STEP | B-Rep | ✓ | ✓ |
+| IGES | B-Rep | ✓ | ✓ |
+| STL | Mesh | ✓ | ✓ |
+| 3MF | Mesh | ✓ | ✓ |
+| OBJ | Mesh | ✓ | ✓ |
+| PLY | Mesh | ✓ | ✓ |
+| glTF | Mesh | ✓ | ✓ |
 
-| Format | Import | Export |
-|--------|--------|--------|
-| STEP   | ✓      | ✓      |
-| IGES   | ✓      | ✓      |
+B-Rep formats preserve exact geometry. Mesh formats export tessellated triangles.
 
-**Mesh formats** — import and export tessellated triangle meshes:
+## Performance
 
-| Format | Import | Export |
-|--------|--------|--------|
-| STL    | ✓      | ✓      |
-| 3MF    | ✓      | ✓      |
-| OBJ    | ✓      | ✓      |
-| PLY    | ✓      | ✓      |
-| glTF   | ✓      | ✓      |
+Compound boolean staircase (9 sequential union/cut operations):
+
+| Benchmark | brepkit (WASM) | OCCT (WASM) | brepkit (native) |
+|-----------|---------------|-------------|------------------|
+| 9-step boolean staircase | 281 ms | 3,800 ms | 40 ms |
+| Result face count | 72 | ~7,000 | 72 |
+
+The lower face count comes from analytic surface preservation: booleans keep cylinders and planes as exact surfaces instead of tessellating to triangles.
+
+- **Tessellation** (64-hole plate): 29 ms with parallel CDT
+
+> See `crates/operations/benches/` for reproduction. Native benchmarks use rayon; WASM is single-threaded.
+
+## Common Patterns
+
+### Measure a solid
+
+```rust
+use brepkit_operations::measure::{solid_volume, solid_bounding_box};
+
+let vol = solid_volume(&topo, result, 0.1)?;
+let bbox = solid_bounding_box(&topo, result)?;
+println!("Volume: {vol:.2} mm³, bounds: {bbox:?}");
+```
+
+### Export to STEP
+
+```rust
+use brepkit_io::step::writer::write_step;
+
+let step_string = write_step(&topo, &[result])?;
+std::fs::write("output.step", step_string)?;
+```
+
+### Import from STEP
+
+```rust
+use brepkit_io::step::reader::read_step;
+
+let step_data = std::fs::read_to_string("input.step")?;
+let solids = read_step(&step_data, &mut topo)?;
+```
+
+### Error handling
+
+All operations return `Result`. Errors are typed per crate:
+
+```rust
+use brepkit_operations::OperationsError;
+
+match boolean(&mut topo, BooleanOp::Fuse, a, b) {
+    Ok(fused) => { /* use the result */ }
+    Err(OperationsError::InvalidInput { reason }) => eprintln!("Bad input: {reason}"),
+    Err(e) => eprintln!("Operation failed: {e}"),
+}
+```
 
 ## Getting Started
 
-### npm (JavaScript / TypeScript)
+### As a Rust dependency
+
+```toml
+[dependencies]
+brepkit-math = { git = "https://github.com/andymai/brepkit" }
+brepkit-topology = { git = "https://github.com/andymai/brepkit" }
+brepkit-operations = { git = "https://github.com/andymai/brepkit" }
+brepkit-io = { git = "https://github.com/andymai/brepkit" }        # optional
+```
+
+### As a WASM package
 
 ```bash
 npm install brepkit-wasm
@@ -128,28 +168,33 @@ import init, { BrepKernel } from "brepkit-wasm";
 
 await init();
 const kernel = new BrepKernel();
-const box = kernel.makeBox(10, 20, 30);
+const solid = kernel.makeBox(10, 20, 30);
 ```
+
+For a higher-level TypeScript API, see [brepjs](https://github.com/andymai/brepjs).
 
 ### Building from source
 
 ```bash
-# Build all crates
 cargo build --workspace
-
-# Run tests
 cargo test --workspace
-
-# Lint
 cargo clippy --all-targets -- -D warnings
+cargo fmt --all
 
-# Build WASM bindings
-cargo build -p brepkit-wasm --target wasm32-unknown-unknown
+# WASM (full)
+cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release
 
-# Build WASM (release, without IO for smaller binary)
+# WASM (smaller, no IO)
 cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release --no-default-features
 ```
 
+## Projects Using brepkit
+
+- [brepjs](https://github.com/andymai/brepjs) - CAD modeling for JavaScript
+- [Gridfinity Layout Tool](https://github.com/andymai/gridfinity-layout-tool) - Web-based Gridfinity storage layout generator
+
+Using brepkit? [Open a PR](https://github.com/andymai/brepkit/pulls) to add your project.
+
 ## License
 
-AGPL-3.0-only — see [LICENSE](LICENSE) for details.
+[AGPL-3.0-only](./LICENSE)
