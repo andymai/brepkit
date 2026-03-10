@@ -4327,7 +4327,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: boolean cut result mesh has boundary edges — face tessellations not stitched at cut seams"]
     fn test_tessellate_boolean_result_watertight() {
         use std::collections::{HashMap, HashSet};
 
