@@ -326,7 +326,6 @@ fn plane_sphere_no_intersection() {
 /// Plane-torus intersection at z=0 (through the center) should produce
 /// two concentric circles: one at R+r and one at R-r.
 #[test]
-#[ignore = "bug: torus sampler only finds inner circle (R-r), misses outer circle (R+r)"]
 fn plane_torus_equatorial_two_circles() {
     let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0, 1.0).unwrap();
 
