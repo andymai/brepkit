@@ -746,10 +746,10 @@ fn collect_face_data(
 
                     let edge1 = v1 - v0;
                     let edge2 = v2 - v0;
-                    let normal = edge1
-                        .cross(edge2)
-                        .normalize()
-                        .unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                    let cross = edge1.cross(edge2);
+                    let Ok(normal) = cross.normalize() else {
+                        continue; // Skip degenerate triangles (e.g. at cone apex)
+                    };
                     let d = crate::dot_normal_point(normal, v0);
 
                     result.push((fid, vec![v0, v1, v2], normal, d));
@@ -1598,6 +1598,15 @@ enum AnalyticClassifier {
         z_min: f64,
         z_max: f64,
     },
+    /// Point-in-cone-frustum: radial distance from axis ≤ interpolated radius
+    /// AND axial position within [z_min, z_max].
+    Cone {
+        apex: Point3,
+        axis: Vec3,
+        half_angle: f64,
+        z_min: f64,
+        z_max: f64,
+    },
     /// Point-in-box: axis-aligned bounding box test.
     /// O(1) with just 6 comparisons — the fastest classifier.
     Box { min: Point3, max: Point3 },
@@ -1650,6 +1659,38 @@ impl AnalyticClassifier {
                     None // On boundary — fall back to ray-casting
                 }
             }
+            Self::Cone {
+                apex,
+                axis,
+                half_angle,
+                z_min,
+                z_max,
+            } => {
+                let diff = centroid - *apex;
+                let axial = diff.dot(*axis);
+                // Check axial bounds.
+                if axial < *z_min - tol.linear || axial > *z_max + tol.linear {
+                    return Some(FaceClass::Outside);
+                }
+                // Radial distance from axis.
+                let projected = *axis * axial;
+                let radial_vec = diff - projected;
+                let radial_dist_sq = radial_vec.x() * radial_vec.x()
+                    + radial_vec.y() * radial_vec.y()
+                    + radial_vec.z() * radial_vec.z();
+                // Expected radius at this axial position: r = |axial| * tan(half_angle).
+                let expected_r = axial.abs() * half_angle.tan();
+                if radial_dist_sq < (expected_r - tol.linear).max(0.0).powi(2)
+                    && axial > *z_min + tol.linear
+                    && axial < *z_max - tol.linear
+                {
+                    Some(FaceClass::Inside)
+                } else if radial_dist_sq > (expected_r + tol.linear) * (expected_r + tol.linear) {
+                    Some(FaceClass::Outside)
+                } else {
+                    None // On boundary — fall back to ray-casting
+                }
+            }
             Self::Box { min, max } => {
                 // 6 comparisons — the fastest possible classifier.
                 let tl = tol.linear;
@@ -1689,9 +1730,11 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
 
     let mut sphere_info: Option<(Point3, f64)> = None;
     let mut cylinder_info: Option<(Point3, Vec3, f64)> = None;
+    let mut cone_info: Option<(Point3, Vec3, f64)> = None;
     let mut has_planar = false;
     let mut has_sphere = false;
     let mut has_cylinder = false;
+    let mut has_cone = false;
 
     for &fid in shell.faces() {
         let face = topo.face(fid).ok()?;
@@ -1718,6 +1761,21 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
                     }
                 } else {
                     cylinder_info = Some((cyl.origin(), cyl.axis(), cyl.radius()));
+                }
+            }
+            FaceSurface::Cone(con) => {
+                has_cone = true;
+                if let Some((a, ax, ha)) = cone_info {
+                    let da = (a - con.apex()).length();
+                    let dax = 1.0 - ax.dot(con.axis()).abs();
+                    if da > tol.linear
+                        || dax > tol.angular
+                        || (ha - con.half_angle()).abs() > tol.angular
+                    {
+                        return None;
+                    }
+                } else {
+                    cone_info = Some((con.apex(), con.axis(), con.half_angle()));
                 }
             }
             FaceSurface::Plane { .. } => {
@@ -1830,6 +1888,44 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
         }
     }
 
+    // Cone solid (1 cone face + 1 or 2 planar caps).
+    if has_cone && has_planar && !has_sphere && !has_cylinder {
+        let (apex, axis, half_angle) = cone_info?;
+        // Compute axial extent from planar cap faces (distance from apex along axis).
+        let mut z_min = f64::INFINITY;
+        let mut z_max = f64::NEG_INFINITY;
+        let apex_vec = Vec3::new(apex.x(), apex.y(), apex.z());
+        for &fid in shell.faces() {
+            let face = topo.face(fid).ok()?;
+            if let FaceSurface::Plane { normal, d } = face.surface() {
+                let dot = normal.dot(axis);
+                if dot.abs() > 0.5 {
+                    let z = *d / dot - axis.dot(apex_vec);
+                    z_min = z_min.min(z);
+                    z_max = z_max.max(z);
+                }
+            }
+        }
+        // For pointed cones, the apex is a face boundary vertex (z=0 from apex).
+        // The solid extends from z_min to z_max where z is measured from apex
+        // along the axis direction. If only one cap, set the other bound to 0.
+        if z_min == f64::INFINITY {
+            z_min = 0.0;
+        }
+        if z_max == f64::NEG_INFINITY {
+            z_max = 0.0;
+        }
+        if (z_max - z_min).abs() > tol.linear {
+            return Some(AnalyticClassifier::Cone {
+                apex,
+                axis,
+                half_angle,
+                z_min,
+                z_max,
+            });
+        }
+    }
+
     None
 }
 
@@ -1895,6 +1991,22 @@ fn classify_point(
 
     for &i in &coplanar_indices {
         let (_, ref verts, n_opp, d_opp) = opposite[i];
+        // Skip if the centroid coincides with a vertex of the opposing face.
+        // This prevents false coplanar matches when the centroid is at a
+        // singular point (e.g. cone apex, sphere pole) that is a vertex of
+        // tessellated face data. At such vertices, the centroid lies on the
+        // triangle plane (distance = 0) but the face is NOT truly coplanar.
+        // Use a tight threshold (10× tolerance) to avoid interfering with
+        // legitimate near-touching geometry.
+        let near_vertex = verts.iter().any(|v| {
+            let dx = centroid.x() - v.x();
+            let dy = centroid.y() - v.y();
+            let dz = centroid.z() - v.z();
+            dx * dx + dy * dy + dz * dz < tol.linear * 10.0 * tol.linear * 10.0
+        });
+        if near_vertex {
+            continue;
+        }
         let dist = dot_normal_point(n_opp, centroid) - d_opp;
         if dist.abs() < tol.linear && point_in_face_3d(centroid, verts, &n_opp) {
             let dot = normal.dot(n_opp);
