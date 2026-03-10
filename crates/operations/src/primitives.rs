@@ -628,15 +628,28 @@ pub fn make_torus(
     )
     .map_err(crate::OperationsError::Math)?;
 
-    // Single face with a degenerate boundary wire (torus is doubly periodic).
+    // The torus surface is doubly periodic (two seam curves).
+    // Minimal CW complex: 1 vertex, 2 edges, 1 face → V-E+F = 0 (genus 1).
+    // The boundary wire follows the fundamental polygon: a → b → a⁻¹ → b⁻¹.
     let v0 = topo.vertices.alloc(Vertex::new(
         Point3::new(major_radius + minor_radius, 0.0, 0.0),
         tol.linear,
     ));
-    let e0 = topo.edges.alloc(Edge::new(v0, v0, EdgeCurve::Line));
+    // Seam edge a (longitudinal — around the tube)
+    let ea = topo.edges.alloc(Edge::new(v0, v0, EdgeCurve::Line));
+    // Seam edge b (meridional — around the ring)
+    let eb = topo.edges.alloc(Edge::new(v0, v0, EdgeCurve::Line));
 
-    let wire = Wire::new(vec![OrientedEdge::new(e0, true)], true)
-        .map_err(crate::OperationsError::Topology)?;
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(ea, true),
+            OrientedEdge::new(eb, true),
+            OrientedEdge::new(ea, false),
+            OrientedEdge::new(eb, false),
+        ],
+        true,
+    )
+    .map_err(crate::OperationsError::Topology)?;
     let wid = topo.wires.alloc(wire);
 
     let face_id = topo

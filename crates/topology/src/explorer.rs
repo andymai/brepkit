@@ -142,8 +142,19 @@ pub fn edge_to_face_map(
     let mut map: HashMap<usize, Vec<FaceId>> = HashMap::new();
 
     for face_id in solid_faces(topo, solid)? {
-        for eid in face_edges(topo, face_id)? {
-            map.entry(eid.index()).or_default().push(face_id);
+        // Iterate wire edges directly (without deduplication) so that seam
+        // edges — which appear twice in the same face's wire with opposite
+        // orientations — are counted twice.  This matches the BRep convention
+        // that each seam edge contributes two face-uses, keeping the
+        // edge-sharing count correct for manifold checks.
+        let face_data = topo.face(face_id)?;
+        for wire_id in
+            std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+        {
+            let wire = topo.wire(wire_id)?;
+            for oe in wire.edges() {
+                map.entry(oe.edge().index()).or_default().push(face_id);
+            }
         }
     }
 

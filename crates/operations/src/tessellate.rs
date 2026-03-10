@@ -3277,7 +3277,21 @@ fn tessellate_nonplanar_snap(
     merged: &mut TriangleMesh,
     point_to_global: &mut HashMap<(u64, u64, u64), u32>,
 ) -> Result<(), crate::OperationsError> {
-    let face_mesh = tessellate(topo, face_id, deflection)?;
+    let mut face_mesh = tessellate(topo, face_id, deflection)?;
+
+    // `tessellate()` already applies the `is_reversed` flip (reversing
+    // winding and negating normals). The caller `tessellate_face_with_shared_edges`
+    // will apply its own flip, so undo the one from `tessellate()` to avoid
+    // a double-flip that would cancel out.
+    if face_data.is_reversed() {
+        let tri_count = face_mesh.indices.len() / 3;
+        for t in 0..tri_count {
+            face_mesh.indices.swap(t * 3 + 1, t * 3 + 2);
+        }
+        for n in &mut face_mesh.normals {
+            *n = -*n;
+        }
+    }
 
     let mut local_to_global: Vec<u32> = Vec::with_capacity(face_mesh.positions.len());
 
@@ -4077,6 +4091,134 @@ mod winding_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use brepkit_topology::Topology;
+
+    /// Regression test for the double-flip bug: `tessellate_nonplanar_snap`
+    /// calls `tessellate()` which applies the `is_reversed` flip, and then
+    /// `tessellate_face_with_shared_edges` applies it again — two flips
+    /// cancel out, leaving reversed sphere faces with wrong winding.
+    ///
+    /// This test creates a solid with reversed sphere faces (as produced by
+    /// boolean cut) and verifies that `tessellate_solid` produces a mesh
+    /// where the signed volume matches expectations (negative contribution
+    /// from the reversed hemisphere).
+    #[test]
+    fn reversed_sphere_face_tessellation_correct_winding() {
+        use brepkit_topology::face::Face;
+        use brepkit_topology::shell::Shell;
+        use brepkit_topology::solid::Solid;
+
+        // Build a sphere, then create a copy with all faces reversed.
+        // The reversed copy should have opposite signed volume, proving that
+        // `tessellate_solid` correctly handles the `is_reversed` flag without
+        // double-flipping.
+        let mut topo = Topology::new();
+        let sphere = crate::primitives::make_sphere(&mut topo, 3.0, 32).unwrap();
+
+        // Translate sphere to avoid degenerate geometry at origin.
+        let mat = brepkit_math::mat::Mat4::translation(5.0, 5.0, 5.0);
+        crate::transform::transform_solid(&mut topo, sphere, &mat).unwrap();
+
+        // Tessellate the normal (non-reversed) sphere.
+        let mesh_normal = tessellate_solid(&topo, sphere, 0.05).unwrap();
+        let vol_normal = signed_volume_raw(&mesh_normal);
+
+        // Collect face data first (immutable borrow), then allocate (mutable borrow).
+        let solid_data = topo.solid(sphere).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+        let face_copies: Vec<_> = shell
+            .faces()
+            .iter()
+            .map(|&fid| {
+                let face = topo.face(fid).unwrap();
+                (
+                    face.outer_wire(),
+                    face.inner_wires().to_vec(),
+                    face.surface().clone(),
+                )
+            })
+            .collect();
+
+        let mut rev_face_ids = Vec::new();
+        for (outer_wire, inner_wires, surface) in face_copies {
+            let new_face = Face::new_reversed(outer_wire, inner_wires, surface);
+            rev_face_ids.push(topo.faces.alloc(new_face));
+        }
+        let rev_shell = Shell::new(rev_face_ids).unwrap();
+        let rev_shell_id = topo.shells.alloc(rev_shell);
+        let rev_solid = topo.solids.alloc(Solid::new(rev_shell_id, vec![]));
+
+        let mesh_reversed = tessellate_solid(&topo, rev_solid, 0.05).unwrap();
+        let vol_reversed = signed_volume_raw(&mesh_reversed);
+
+        // The reversed mesh should have the OPPOSITE sign.
+        // (Normal sphere has positive signed volume; reversed should be negative.)
+        assert!(
+            vol_normal > 0.0,
+            "normal sphere signed volume should be positive, got {vol_normal}"
+        );
+        assert!(
+            vol_reversed < 0.0,
+            "reversed sphere signed volume should be negative, got {vol_reversed} \
+             (this fails if tessellate_nonplanar_snap double-flips)"
+        );
+        assert!(
+            (vol_normal + vol_reversed).abs() < 1.0,
+            "normal + reversed should cancel to ~0, got {}",
+            vol_normal + vol_reversed
+        );
+    }
+
+    /// Regression test: boolean cut produces a solid with reversed non-planar
+    /// faces. The tessellated mesh must have positive signed volume (correct
+    /// outward-facing winding). This is the exact scenario where the double-flip
+    /// bug in `tessellate_nonplanar_snap` caused inverted meshes.
+    #[test]
+    fn boolean_cut_result_has_positive_signed_volume() {
+        let mut topo = Topology::new();
+        let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let sp = crate::primitives::make_sphere(&mut topo, 3.0, 32).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(5.0, 5.0, 5.0);
+        crate::transform::transform_solid(&mut topo, sp, &mat).unwrap();
+
+        let cut_result =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, bx, sp).unwrap();
+
+        let mesh = tessellate_solid(&topo, cut_result, 0.05).unwrap();
+        let vol = signed_volume_raw(&mesh);
+
+        // The cut result should have positive signed volume (outward winding).
+        // Before the double-flip fix, this would be negative or wrong magnitude.
+        assert!(
+            vol > 0.0,
+            "boolean cut result should have positive signed volume, got {vol}"
+        );
+
+        // Volume should be box (1000) minus full sphere (4/3·π·27 ≈ 113.1).
+        let expected_approx = 1000.0 - (4.0 / 3.0) * std::f64::consts::PI * 27.0;
+        let rel_err = (vol - expected_approx).abs() / expected_approx;
+        assert!(
+            rel_err < 0.15,
+            "volume {vol} too far from expected ~{expected_approx:.1} (rel error {rel_err:.3})"
+        );
+    }
+
+    /// Helper: compute raw signed volume WITHOUT abs(), to detect winding issues.
+    fn signed_volume_raw(mesh: &TriangleMesh) -> f64 {
+        let idx = &mesh.indices;
+        let pos = &mesh.positions;
+        let tri_count = idx.len() / 3;
+        let mut total = 0.0;
+        for t in 0..tri_count {
+            let v0 = pos[idx[t * 3] as usize];
+            let v1 = pos[idx[t * 3 + 1] as usize];
+            let v2 = pos[idx[t * 3 + 2] as usize];
+            let a = Vec3::new(v0.x(), v0.y(), v0.z());
+            let b = Vec3::new(v1.x(), v1.y(), v1.z());
+            let c = Vec3::new(v2.x(), v2.y(), v2.z());
+            total += a.dot(b.cross(c));
+        }
+        total / 6.0
+    }
 
     #[test]
     fn per_face_tessellation_matches_face_normal() {
