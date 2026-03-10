@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.4](https://github.com/andymai/brepkit/compare/v0.8.3...v0.8.4) (2026-03-10)
+
+
+### Bug Fixes
+
+* fillet/chamfer side-face corner trimming produces closed shells ([#132](https://github.com/andymai/brepkit/issues/132)) ([14f060d](https://github.com/andymai/brepkit/commit/14f060dd4a3e1fd42a0c04c54da4d8817fa5742b))
+
 ## [0.8.3](https://github.com/andymai/brepkit/compare/v0.8.2...v0.8.3) (2026-03-10)
 
 
