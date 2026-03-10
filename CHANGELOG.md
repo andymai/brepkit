@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.5](https://github.com/andymai/brepkit/compare/v0.8.4...v0.8.5) (2026-03-10)
+
+
+### Bug Fixes
+
+* cone nappe direction and cylinder-box test geometry ([#137](https://github.com/andymai/brepkit/issues/137)) ([7fbf774](https://github.com/andymai/brepkit/commit/7fbf774f03139dfc6fb9bb7834953f4b820234f6))
+
 ## [0.8.4](https://github.com/andymai/brepkit/compare/v0.8.3...v0.8.4) (2026-03-10)
 
 
