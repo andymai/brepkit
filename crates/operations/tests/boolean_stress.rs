@@ -842,16 +842,15 @@ fn volume_large_boxes() {
 // ===========================================================================
 
 #[test]
-#[ignore = "known deep boolean algorithm issue — tracked separately"]
 fn cut_cylinder_from_box_volume() {
-    // Box 4×4×4 at origin (z=0..4), cylinder r=1, h=6 centered at origin
-    // (z=-3..3), translated to (2,2,2) → z=-1..5, fully through box.
+    // Box 4×4×4 at origin (z=0..4), cylinder r=1, h=6 at z=0..6
+    // (make_cylinder places base at z=0), translated to (2,2,-1) → z=-1..5.
     // Overlap height = 4 (clamped to box z=0..4).
     // Expected: box_vol - π·r²·h = 64 - π·1²·4 ≈ 64 - 12.566 ≈ 51.434
     let mut topo = Topology::new();
     let base = box_at(&mut topo, 0.0, 0.0, 0.0, 4.0, 4.0, 4.0);
     let cyl = make_cylinder(&mut topo, 1.0, 6.0).unwrap();
-    transform_solid(&mut topo, cyl, &Mat4::translation(2.0, 2.0, 2.0)).unwrap();
+    transform_solid(&mut topo, cyl, &Mat4::translation(2.0, 2.0, -1.0)).unwrap();
 
     let result = boolean(&mut topo, BooleanOp::Cut, base, cyl).unwrap();
     check_manifold(&topo, result);
