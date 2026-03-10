@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/andymai/brepkit/compare/v0.8.1...v0.8.2) (2026-03-10)
+
+
+### Bug Fixes
+
+* tessellation double-flip, validation false positives, torus topology ([#127](https://github.com/andymai/brepkit/issues/127)) ([4be7cff](https://github.com/andymai/brepkit/commit/4be7cff3f930044d9a444ff2a39594cb5f926fc4))
+
 ## [0.8.1](https://github.com/andymai/brepkit/compare/v0.8.0...v0.8.1) (2026-03-09)
 
 
