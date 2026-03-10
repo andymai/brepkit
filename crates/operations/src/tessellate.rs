@@ -1331,6 +1331,39 @@ const MAX_DEPTH: u8 = 6;
 /// Initial grid resolution (cells per direction).
 const INITIAL_CELLS: usize = 4;
 
+/// Compute the v-parameter range for a surface by projecting boundary vertices.
+///
+/// `project_v` maps a 3D point to its v-parameter on the surface.
+/// Falls back to (-1.0, 1.0) if the face has no usable vertices.
+fn compute_v_param_range(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    project_v: impl Fn(Point3) -> f64,
+) -> (f64, f64) {
+    let mut v_min = f64::MAX;
+    let mut v_max = f64::MIN;
+
+    if let Ok(wire) = topo.wire(face_data.outer_wire()) {
+        for oe in wire.edges() {
+            if let Ok(edge) = topo.edge(oe.edge()) {
+                for &vid in &[edge.start(), edge.end()] {
+                    if let Ok(vertex) = topo.vertex(vid) {
+                        let v = project_v(vertex.point());
+                        v_min = v_min.min(v);
+                        v_max = v_max.max(v);
+                    }
+                }
+            }
+        }
+    }
+
+    if v_min < v_max {
+        (v_min, v_max)
+    } else {
+        (-1.0, 1.0) // fallback
+    }
+}
+
 /// Compute the v-range (axial extent) for an analytic surface from its face
 /// wire boundary vertices.
 ///
@@ -1413,7 +1446,9 @@ where
     angles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     angles.dedup_by(|a, b| (*a - *b).abs() < brepkit_math::tolerance::Tolerance::default().linear);
 
-    if angles.len() < 2 {
+    if angles.len() < 4 {
+        // With fewer than 4 unique angles we can't reliably distinguish
+        // partial arc from full circle. Default to full revolution.
         return (0.0, TAU);
     }
 
@@ -1432,14 +1467,20 @@ where
         }
     }
 
-    // If the largest gap is smaller than what we'd expect from even spacing
-    // of the boundary vertices, the face likely covers the full revolution.
-    // Use 2.5x the expected spacing as threshold, with a minimum of 120° to
-    // handle full-circle faces with very few vertices (4-8 is common after
-    // boolean operations).
+    // Decide if the face covers the full revolution. If the largest gap
+    // between consecutive boundary vertex angles is small enough, the
+    // vertices genuinely span the full circle.
+    //
+    // We use `min(2.5 * even_gap, 120°)` as threshold. The `min` (not `max`)
+    // is critical: with many densely-packed vertices on a partial arc (e.g.
+    // 64 chord-sampled points on a 270° arc after STEP round-trip), the
+    // even_gap ≈ 4.2° gives threshold ≈ 10.5°, but the actual gap is ~90°,
+    // correctly rejecting full-circle. With few vertices (4 equatorial verts
+    // on a hemisphere, gap ≈ 90°, threshold = 120°), it still correctly
+    // identifies full-circle.
     let n_angles = angles.len() as f64;
     let even_gap = TAU / n_angles;
-    let gap_threshold = (2.5 * even_gap).max(TAU / 3.0);
+    let gap_threshold = (2.5 * even_gap).min(TAU / 3.0);
     if max_gap < gap_threshold {
         return (0.0, TAU);
     }
@@ -2099,7 +2140,10 @@ pub fn tessellate_with_uvs(
             ))
         }
         FaceSurface::Cone(cone) => {
-            let v_range = compute_axial_range(topo, face_data, cone.apex(), cone.axis());
+            // Use project_point to get the true v-parameter range, not the
+            // axial projection. The cone's v is the distance from the apex
+            // along the surface generator, not the axis.
+            let v_range = compute_v_param_range(topo, face_data, |p| cone.project_point(p).1);
             let u_range = compute_angular_range(topo, face_data, |p| cone.project_point(p));
             let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
             let nu = segments_for_chord_deviation(

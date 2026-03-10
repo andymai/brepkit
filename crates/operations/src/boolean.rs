@@ -160,7 +160,14 @@ fn compute_v_range_hint(surface: &FaceSurface, verts: &[Point3]) -> Option<(f64,
                 None
             } else {
                 let pad = (v_max - v_min) * 0.1;
-                Some(((v_min - pad).max(0.001), v_max + pad))
+                // Clamp the lower bound away from the apex singularity (v=0),
+                // but allow negative v if the geometry requires it.
+                let lo = if v_min > 0.0 {
+                    (v_min - pad).max(0.001)
+                } else {
+                    v_min - pad
+                };
+                Some((lo, v_max + pad))
             }
         }
         _ => None, // Sphere and torus have fixed parametric ranges

@@ -166,6 +166,9 @@ impl<'a> StepBuilder<'a> {
     #[allow(clippy::too_many_lines)]
     fn build_face(&mut self, face_ref: u64) -> Result<brepkit_topology::face::FaceId, IoError> {
         let attrs = self.get_entity(face_ref)?.attrs.clone();
+        // Check for reversed face orientation (.F. flag at end of ADVANCED_FACE).
+        let orient_tail = attrs.trim_end_matches(')').trim();
+        let face_reversed = orient_tail.ends_with(".F.") || orient_tail.ends_with(".FALSE.");
         let all_refs = parse_refs(&attrs);
         let list_refs = parse_list_refs(&attrs);
 
@@ -214,10 +217,15 @@ impl<'a> StepBuilder<'a> {
             reason: format!("ADVANCED_FACE #{face_ref} has no bounds"),
         })?;
 
-        let face_id = self
-            .topo
-            .faces
-            .alloc(Face::new(outer, inner_wires, surface));
+        let face_id = if face_reversed {
+            self.topo
+                .faces
+                .alloc(Face::new_reversed(outer, inner_wires, surface))
+        } else {
+            self.topo
+                .faces
+                .alloc(Face::new(outer, inner_wires, surface))
+        };
         Ok(face_id)
     }
 
