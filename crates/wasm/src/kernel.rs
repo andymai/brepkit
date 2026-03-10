@@ -2294,6 +2294,27 @@ impl BrepKernel {
         Ok(report.error_count() as u32)
     }
 
+    /// Validate a solid with relaxed checks suitable for assembled geometry.
+    ///
+    /// Operations like boolean, fillet, and shell produce geometrically
+    /// correct shapes that may not have fully manifold topology (faces
+    /// from different operations may not share edges). This validation
+    /// skips Euler characteristic, boundary edge, non-manifold edge, and
+    /// shell connectivity checks.
+    ///
+    /// Returns 0 if the solid passes all structural checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "validateSolidRelaxed")]
+    pub fn validate_solid_relaxed_wasm(&self, solid: u32) -> Result<u32, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let report = brepkit_operations::validate::validate_solid_relaxed(&self.topo, solid_id)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(report.error_count() as u32)
+    }
+
     // ── Distance ──────────────────────────────────────────────────
 
     /// Compute minimum distance from a point to a solid.

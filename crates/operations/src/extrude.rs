@@ -217,6 +217,26 @@ fn extrude_wire_vertices(
     ))
 }
 
+/// Determine if a polygon (inner wire) is CW when viewed from the
+/// extrusion direction.
+///
+/// Uses the signed area projected onto the extrusion axis: negative = CW,
+/// positive = CCW. This generalizes to non-axis-aligned extrusions.
+fn inner_wire_is_cw(positions: &[Point3], offset: &Vec3) -> bool {
+    if positions.len() < 3 {
+        return true; // degenerate — default to CW
+    }
+    let axis = offset.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+    let p0 = positions[0];
+    let mut signed_area_2 = 0.0;
+    for i in 1..positions.len() - 1 {
+        let a = positions[i] - p0;
+        let b = positions[i + 1] - p0;
+        signed_area_2 += a.cross(b).dot(axis);
+    }
+    signed_area_2 < 0.0
+}
+
 /// Extrude a planar face along a direction to produce a solid.
 ///
 /// The extrusion creates a prism-like solid from the face. A reversed copy of
@@ -399,40 +419,63 @@ pub fn extrude(
         all_faces.push(side_face);
     }
 
-    // --- Inner wire side faces (reversed normals) ---
+    // --- Inner wire side faces ---
     for iwd in &inner_wire_data {
         let iw_n = iwd.positions.len();
+
+        // Detect inner wire winding direction relative to the face normal.
+        // CW (negative signed area) is the standard B-Rep hole convention;
+        // CCW (positive signed area) occurs when callers use math-convention
+        // circle generation.  We support both.
+        let is_cw = inner_wire_is_cw(&iwd.positions, &offset);
+
         for i in 0..iw_n {
             let next = (i + 1) % iw_n;
 
-            // Inner side face winding is reversed relative to outer: the
-            // inner wire runs CW (when viewed from outside), so the side
-            // quads' normals point inward. We reverse the quad winding to
-            // achieve outward-facing normals on the inner tube.
-            let side_wire = Wire::new(
-                vec![
+            let (side_edges, side_normal) = if is_cw {
+                // CW inner wire: traverse the quad in the reversed pattern
+                // (up, across, down, back) so that the face normal points
+                // into the hole (away from solid material).
+                let edges = vec![
                     OrientedEdge::new(iwd.vertical_edge_ids[i], true),
                     OrientedEdge::new(iwd.top_edge_ids[i], true),
                     OrientedEdge::new(iwd.vertical_edge_ids[next], false),
                     OrientedEdge::new(iwd.edge_ids[i], !iwd.oriented[i].is_forward()),
-                ],
-                true,
-            )
-            .map_err(crate::OperationsError::Topology)?;
+                ];
+                let p0 = iwd.positions[i];
+                let p1 = iwd.positions[next];
+                let edge_dir = p1 - p0;
+                let normal = edge_dir
+                    .cross(offset)
+                    .normalize()
+                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                (edges, normal)
+            } else {
+                // CCW inner wire: use the same winding pattern as outer
+                // side faces (bottom-edge forward, right up, top back,
+                // left down) which produces inward-pointing normals for
+                // CCW inner geometry.
+                let edges = vec![
+                    OrientedEdge::new(iwd.edge_ids[i], iwd.oriented[i].is_forward()),
+                    OrientedEdge::new(iwd.vertical_edge_ids[next], true),
+                    OrientedEdge::new(iwd.top_edge_ids[i], false),
+                    OrientedEdge::new(iwd.vertical_edge_ids[i], false),
+                ];
+                let p0 = iwd.positions[i];
+                let p1 = iwd.positions[next];
+                let edge_dir = p1 - p0;
+                let normal = offset
+                    .cross(edge_dir)
+                    .normalize()
+                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                (edges, normal)
+            };
 
+            let side_wire =
+                Wire::new(side_edges, true).map_err(crate::OperationsError::Topology)?;
             let side_wire_id = topo.wires.alloc(side_wire);
 
             let p0 = iwd.positions[i];
-            let p1 = iwd.positions[next];
-            let edge_dir = p1 - p0;
-            // Inner side faces: normals must point INTO the hole (away from
-            // solid material). The inner wire runs CW, so edge_dir is reversed
-            // relative to the outer wire — use edge_dir.cross(offset) instead
-            // of offset.cross(edge_dir) to get the correct outward direction.
-            let side_normal = edge_dir
-                .cross(offset)
-                .normalize()
-                .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
             let side_d = dot_normal_point(side_normal, p0);
 
             let side_face = topo.faces.alloc(Face::new(
@@ -1048,6 +1091,72 @@ mod tests {
         assert!(
             rel_err < 1e-8,
             "oblique extrusion volume should be {expected}, got {vol} (rel_err={rel_err:.2e})"
+        );
+    }
+
+    /// Reproduce brepjs compound extrude: 20×20 rectangle with a circular
+    /// polygon hole (CCW winding, 32 segments, radius 3), extruded by 10.
+    #[test]
+    fn extrude_face_with_ccw_circle_hole_volume() {
+        let mut topo = Topology::new();
+
+        // Outer wire: 20×20 rectangle (CCW).
+        let outer_pts = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(20.0, 0.0, 0.0),
+            Point3::new(20.0, 20.0, 0.0),
+            Point3::new(0.0, 20.0, 0.0),
+        ];
+        let outer_wire =
+            brepkit_topology::builder::make_polygon_wire(&mut topo, &outer_pts).unwrap();
+
+        // Inner wire: 32-segment polygon circle at center (10,10), radius 3.
+        // CCW winding (standard math convention: cos/sin going counter-clockwise).
+        let n_segments = 32;
+        let cx = 10.0;
+        let cy = 10.0;
+        let r = 3.0;
+        let inner_pts: Vec<Point3> = (0..n_segments)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let theta = 2.0 * std::f64::consts::PI * (i as f64) / (n_segments as f64);
+                Point3::new(cx + r * theta.cos(), cy + r * theta.sin(), 0.0)
+            })
+            .collect();
+        let inner_wire =
+            brepkit_topology::builder::make_polygon_wire(&mut topo, &inner_pts).unwrap();
+
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let face = Face::new(
+            outer_wire,
+            vec![inner_wire],
+            FaceSurface::Plane { normal, d: 0.0 },
+        );
+        let face_id = topo.faces.alloc(face);
+
+        let solid = extrude(&mut topo, face_id, Vec3::new(0.0, 0.0, 1.0), 10.0).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+
+        // Expected: 20*20*10 - polygon_area*10
+        // Polygon area of regular 32-gon inscribed in circle r=3:
+        // A = n * r^2 * sin(2*pi/n) / 2 = 32 * 9 * sin(pi/16) / 2 ≈ 27.86
+        // Expected volume ≈ 4000 - 278.6 = 3721.4
+        let polygon_area: f64 = (0..n_segments)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let theta1 = 2.0 * std::f64::consts::PI * (i as f64) / (n_segments as f64);
+                #[allow(clippy::cast_precision_loss)]
+                let theta2 = 2.0 * std::f64::consts::PI * ((i + 1) as f64) / (n_segments as f64);
+                0.5 * r * r * (theta2 - theta1).sin().abs()
+            })
+            .sum();
+        let expected = 20.0 * 20.0 * 10.0 - polygon_area * 10.0;
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 0.01,
+            "CCW circle hole extrusion volume should be ~{expected:.1}, got {vol:.1} \
+             (rel_err={rel_err:.2e})"
         );
     }
 }

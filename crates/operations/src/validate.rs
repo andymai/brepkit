@@ -423,6 +423,236 @@ pub fn validate_solid(
     Ok(ValidationReport { issues })
 }
 
+/// Validate a solid with relaxed checks suitable for assembled geometry.
+///
+/// Operations like boolean, fillet, and shell produce solids where faces
+/// may not share edges (each face has its own wire/edge topology). These
+/// shapes are geometrically correct (volumes, tessellation, I/O all work)
+/// but fail strict manifold checks.
+///
+/// Relaxed mode checks:
+/// - Wire closure (every wire forms a closed loop)
+/// - Degenerate faces (planar faces with < 3 vertices)
+/// - Empty wires
+/// - Zero-length edges
+/// - Redundant faces
+/// - Edge vertex consistency
+///
+/// Skipped in relaxed mode:
+/// - Euler-Poincaré characteristic (assembled shells may have multiple components)
+/// - Boundary edges (faces from different operations may not share edges)
+/// - Non-manifold edges (edge duplication is expected in assembled geometry)
+/// - Shell connectivity (multiple disconnected face groups are valid)
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub fn validate_solid_relaxed(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<ValidationReport, crate::OperationsError> {
+    let mut issues = Vec::new();
+    let tol = Tolerance::new();
+
+    let faces = explorer::solid_faces(topo, solid)?;
+
+    // Degenerate faces (planar + straight edges only).
+    for fid in &faces {
+        let face_data = topo.face(*fid)?;
+        let is_planar = matches!(
+            face_data.surface(),
+            brepkit_topology::face::FaceSurface::Plane { .. }
+        );
+
+        if is_planar && face_all_edges_straight(topo, face_data)? {
+            let face_verts = explorer::face_vertices(topo, *fid)?;
+            if face_verts.len() < 3 {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!(
+                        "face {} has only {} vertices (need at least 3)",
+                        fid.index(),
+                        face_verts.len()
+                    ),
+                });
+            }
+        }
+    }
+
+    // Face normal consistency (planar faces).
+    for fid in &faces {
+        let face = topo.face(*fid)?;
+        if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface() {
+            let len = normal.length();
+            if !tol.approx_eq(len, 1.0) {
+                issues.push(ValidationIssue {
+                    severity: Severity::Warning,
+                    description: format!(
+                        "face {} has non-unit normal (length = {len})",
+                        fid.index()
+                    ),
+                });
+            }
+        }
+    }
+
+    // Wire closure.
+    for fid in &faces {
+        let face = topo.face(*fid)?;
+        let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+
+        for wire_id in wire_ids {
+            let wire = topo.wire(wire_id)?;
+            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, &topo.edges) {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!(
+                        "wire {} on face {} is not closed",
+                        wire_id.index(),
+                        fid.index()
+                    ),
+                });
+            }
+        }
+    }
+
+    // Degenerate face area (planar + straight edges only).
+    let area_tol_sq = tol.linear * tol.linear;
+    for fid in &faces {
+        let face = topo.face(*fid)?;
+
+        if !matches!(
+            face.surface(),
+            brepkit_topology::face::FaceSurface::Plane { .. }
+        ) {
+            continue;
+        }
+        if !face_all_edges_straight(topo, face)? {
+            continue;
+        }
+
+        let wire = topo.wire(face.outer_wire())?;
+        let mut positions = Vec::new();
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            positions.push(topo.vertex(vid)?.point());
+        }
+
+        if positions.len() >= 3 {
+            let area = polygon_area_3d(&positions);
+            if area < area_tol_sq {
+                issues.push(ValidationIssue {
+                    severity: Severity::Warning,
+                    description: format!(
+                        "face {} has near-zero area ({area:.2e} < {area_tol_sq:.2e})",
+                        fid.index()
+                    ),
+                });
+            }
+        }
+    }
+
+    // Zero-length edges.
+    let all_edges = explorer::solid_edges(topo, solid)?;
+    for eid in &all_edges {
+        let edge = topo.edge(*eid)?;
+        if !edge.is_closed() {
+            let p_start = topo.vertex(edge.start())?.point();
+            let p_end = topo.vertex(edge.end())?.point();
+            let dx = p_start.x() - p_end.x();
+            let dy = p_start.y() - p_end.y();
+            let dz = p_start.z() - p_end.z();
+            let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+            if dist < tol.linear {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!(
+                        "edge {} has near-zero length ({dist:.2e} < {:.2e})",
+                        eid.index(),
+                        tol.linear
+                    ),
+                });
+            }
+        }
+    }
+
+    // Empty wires.
+    for fid in &faces {
+        let face = topo.face(*fid)?;
+        let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+
+        for wire_id in wire_ids {
+            let wire = topo.wire(wire_id)?;
+            if wire.edges().is_empty() {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!(
+                        "wire {} on face {} has no edges",
+                        wire_id.index(),
+                        fid.index()
+                    ),
+                });
+            }
+        }
+    }
+
+    // Redundant faces.
+    {
+        let mut face_counts = std::collections::HashMap::new();
+        for fid in &faces {
+            *face_counts.entry(fid.index()).or_insert(0usize) += 1;
+        }
+        for (&idx, &count) in &face_counts {
+            if count > 1 {
+                issues.push(ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!("face {idx} appears {count} times in shell (redundant)"),
+                });
+            }
+        }
+    }
+
+    // Edge vertex consistency.
+    let vertex_set: std::collections::HashSet<usize> = {
+        let verts = explorer::solid_vertices(topo, solid)?;
+        verts.iter().map(|v| v.index()).collect()
+    };
+    for eid in &all_edges {
+        let edge = topo.edge(*eid)?;
+        if !vertex_set.contains(&edge.start().index()) {
+            issues.push(ValidationIssue {
+                severity: Severity::Error,
+                description: format!(
+                    "edge {} start vertex {} not found in solid",
+                    eid.index(),
+                    edge.start().index()
+                ),
+            });
+        }
+        if !vertex_set.contains(&edge.end().index()) {
+            issues.push(ValidationIssue {
+                severity: Severity::Error,
+                description: format!(
+                    "edge {} end vertex {} not found in solid",
+                    eid.index(),
+                    edge.end().index()
+                ),
+            });
+        }
+    }
+
+    Ok(ValidationReport { issues })
+}
+
 /// Compute the area of a 3D polygon using the cross-product method.
 ///
 /// For a planar polygon with vertices `p0, p1, ..., pN`, the area is
@@ -1149,5 +1379,126 @@ mod tests {
         let report = crate::heal::repair_solid(&mut topo, solid, 1e-7).unwrap();
         // Should not crash; may or may not be valid depending on cylinder topology
         let _ = report.is_valid_after();
+    }
+
+    // ── Relaxed validation ────────────────────────────
+
+    #[test]
+    fn relaxed_valid_box() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let report = validate_solid_relaxed(&topo, solid).unwrap();
+        assert!(
+            report.is_valid(),
+            "box should pass relaxed validation: {:?}",
+            report.issues
+        );
+    }
+
+    #[test]
+    fn relaxed_fillet_passes() {
+        let mut topo = Topology::new();
+        let cube = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+
+        let s = topo.solid(cube).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        let mut edges = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for &fid in sh.faces() {
+            let face = topo.face(fid).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            for oe in wire.edges() {
+                if seen.insert(oe.edge().index()) {
+                    edges.push(oe.edge());
+                }
+            }
+        }
+
+        let result = crate::fillet::fillet_rolling_ball(&mut topo, cube, &[edges[0]], 2.0).unwrap();
+
+        // Strict validation fails for fillet results (boundary edges + disconnected)
+        let strict = validate_solid(&topo, result).unwrap();
+        assert!(!strict.is_valid(), "fillet should fail strict validation");
+
+        // Relaxed validation should pass
+        let relaxed = validate_solid_relaxed(&topo, result).unwrap();
+        assert!(
+            relaxed.is_valid(),
+            "fillet should pass relaxed validation: {:?}",
+            relaxed.issues
+        );
+    }
+
+    #[test]
+    fn relaxed_shell_passes() {
+        let mut topo = Topology::new();
+        let cube = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+
+        let s = topo.solid(cube).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        let open_face = sh.faces()[0];
+
+        let result = crate::shell_op::shell(&mut topo, cube, 1.0, &[open_face]).unwrap();
+
+        // Strict validation fails for shell results
+        let strict = validate_solid(&topo, result).unwrap();
+        assert!(!strict.is_valid(), "shell should fail strict validation");
+
+        // Relaxed validation should pass
+        let relaxed = validate_solid_relaxed(&topo, result).unwrap();
+        assert!(
+            relaxed.is_valid(),
+            "shell should pass relaxed validation: {:?}",
+            relaxed.issues
+        );
+    }
+
+    #[test]
+    fn relaxed_boolean_cut_passes() {
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+
+        let mat = brepkit_math::mat::Mat4::translation(5.0, 5.0, 5.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let result =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, a, b).unwrap();
+
+        let relaxed = validate_solid_relaxed(&topo, result).unwrap();
+        assert!(
+            relaxed.is_valid(),
+            "boolean cut should pass relaxed validation: {:?}",
+            relaxed.issues
+        );
+    }
+
+    #[test]
+    fn relaxed_detects_open_wire() {
+        // Open wire should still be caught by relaxed validation
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let shell_id = topo.solid(solid).unwrap().outer_shell();
+        let face_id = topo.shell(shell_id).unwrap().faces()[0];
+        let wire_id = topo.face(face_id).unwrap().outer_wire();
+        let wire = topo.wire(wire_id).unwrap();
+        let edges = wire.edges().to_vec();
+
+        if edges.len() > 1 {
+            use brepkit_topology::wire::Wire;
+            let open_wire = Wire::new(edges[..edges.len() - 1].to_vec(), false);
+            if let Ok(w) = open_wire {
+                *topo.wire_mut(wire_id).unwrap() = w;
+
+                let report = validate_solid_relaxed(&topo, solid).unwrap();
+                assert!(
+                    !report.is_valid(),
+                    "open wire should fail even relaxed validation: {:?}",
+                    report.issues
+                );
+            }
+        }
     }
 }
