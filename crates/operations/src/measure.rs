@@ -1384,13 +1384,78 @@ pub fn face_perimeter(topo: &Topology, face_id: FaceId) -> Result<f64, crate::Op
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::panic)]
 
     use brepkit_math::tolerance::Tolerance;
     use brepkit_topology::Topology;
     use brepkit_topology::test_utils::make_unit_cube;
 
     use super::*;
+
+    // ── Helper: assert relative error within tolerance ────────────
+    //
+    // For analytic primitives (box, cylinder, sphere, cone, torus) we
+    // expect 1e-8 relative error. For NURBS-involving operations
+    // (fillet, boolean, tessellation-based) we accept 1e-4.
+
+    fn assert_rel(actual: f64, expected: f64, rel_tol: f64, label: &str) {
+        let rel_err = if expected.abs() < 1e-15 {
+            actual.abs()
+        } else {
+            (actual - expected).abs() / expected.abs()
+        };
+        assert!(
+            rel_err < rel_tol,
+            "{label}: expected {expected:.8}, got {actual:.8}, \
+             rel_err={rel_err:.2e} (tolerance={rel_tol:.0e})"
+        );
+    }
+
+    /// Assert that `aabb` contains the box `[min_x..max_x, min_y..max_y, min_z..max_z]`
+    /// within a 1e-6 slack on each bound.
+    fn assert_aabb_contains(
+        aabb: &brepkit_math::aabb::Aabb3,
+        min_x: f64,
+        min_y: f64,
+        min_z: f64,
+        max_x: f64,
+        max_y: f64,
+        max_z: f64,
+    ) {
+        let slack = 1e-6;
+        assert!(
+            aabb.min.x() <= min_x + slack,
+            "min.x={} > {min_x}",
+            aabb.min.x()
+        );
+        assert!(
+            aabb.min.y() <= min_y + slack,
+            "min.y={} > {min_y}",
+            aabb.min.y()
+        );
+        assert!(
+            aabb.min.z() <= min_z + slack,
+            "min.z={} > {min_z}",
+            aabb.min.z()
+        );
+        assert!(
+            aabb.max.x() >= max_x - slack,
+            "max.x={} < {max_x}",
+            aabb.max.x()
+        );
+        assert!(
+            aabb.max.y() >= max_y - slack,
+            "max.y={} < {max_y}",
+            aabb.max.y()
+        );
+        assert!(
+            aabb.max.z() >= max_z - slack,
+            "max.z={} < {max_z}",
+            aabb.max.z()
+        );
+    }
+
+    // ── Bounding box ─────────────────────────────────────────────
 
     #[test]
     fn unit_cube_bounding_box() {
@@ -1408,74 +1473,187 @@ mod tests {
         assert!(tol.approx_eq(aabb.max.z(), 1.0));
     }
 
+    /// AABB for a sphere must include the full radius extent in all axes.
+    /// Sphere at origin with r=5: AABB should be [-5,-5,-5] to [5,5,5].
+    #[test]
+    fn sphere_bounding_box() {
+        use crate::primitives::make_sphere;
+
+        let mut topo = Topology::new();
+        let solid = make_sphere(&mut topo, 5.0, 8).unwrap();
+
+        let aabb = solid_bounding_box(&topo, solid).unwrap();
+        // Sphere AABB is expanded by expand_aabb_for_surface to include ±r.
+        assert_aabb_contains(&aabb, -5.0, -5.0, -5.0, 5.0, 5.0, 5.0);
+    }
+
+    /// AABB for a cylinder at origin, r=3, h=10 (z=0..10).
+    /// Must include the full circular extent: x,y ∈ [-3,3].
+    #[test]
+    fn cylinder_bounding_box() {
+        use crate::primitives::make_cylinder;
+
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+
+        let aabb = solid_bounding_box(&topo, solid).unwrap();
+        assert_aabb_contains(&aabb, -3.0, -3.0, 0.0, 3.0, 3.0, 10.0);
+    }
+
+    /// AABB for a torus at origin, R=10, r=3, axis along Z.
+    /// Radial extent: ±(R+r) = ±13 in x,y.
+    /// Axial extent: ±r = ±3 in z.
+    #[test]
+    fn torus_bounding_box() {
+        use crate::primitives::make_torus;
+
+        let mut topo = Topology::new();
+        let solid = make_torus(&mut topo, 10.0, 3.0, 16).unwrap();
+
+        let aabb = solid_bounding_box(&topo, solid).unwrap();
+        // Radial: ±(R+r) = ±13
+        assert!(aabb.min.x() <= -13.0 + 1e-6, "min.x={}", aabb.min.x());
+        assert!(aabb.min.y() <= -13.0 + 1e-6, "min.y={}", aabb.min.y());
+        assert!(aabb.max.x() >= 13.0 - 1e-6, "max.x={}", aabb.max.x());
+        assert!(aabb.max.y() >= 13.0 - 1e-6, "max.y={}", aabb.max.y());
+        // Axial: ±r = ±3
+        assert!(aabb.min.z() <= -3.0 + 1e-6, "min.z={}", aabb.min.z());
+        assert!(aabb.max.z() >= 3.0 - 1e-6, "max.z={}", aabb.max.z());
+    }
+
+    // ── Volume: analytic primitives (1e-8 tolerance) ─────────────
+
     #[test]
     fn unit_cube_volume() {
         let mut topo = Topology::new();
         let solid = make_unit_cube(&mut topo);
 
+        // Unit cube is all-planar — volume is computed via polygon method,
+        // which should be exact to floating-point precision.
         let vol = solid_volume(&topo, solid, 0.1).unwrap();
-        let tol = Tolerance::loose();
-        assert!(
-            tol.approx_eq(vol, 1.0),
-            "unit cube volume should be ~1.0, got {vol}"
-        );
+        assert_rel(vol, 1.0, 1e-8, "unit cube volume");
+    }
+
+    /// make_box(10,10,10) → volume = 1000.0 exactly.
+    /// Previously tested with 5% tolerance (|vol-1000| < 50) — absurdly loose
+    /// for a pure-planar box that uses no tessellation.
+    #[test]
+    fn box_volume_exact() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let vol = solid_volume(&topo, solid, 0.1).unwrap();
+        // All-planar solid → exact polygon-based volume.
+        assert_rel(vol, 1000.0, 1e-8, "10×10×10 box volume");
+    }
+
+    /// Non-cube rectangular box: volume = dx × dy × dz.
+    #[test]
+    fn rectangular_box_volume_exact() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.5, 7.3, 4.1).unwrap();
+        let vol = solid_volume(&topo, solid, 0.1).unwrap();
+        // 2.5 × 7.3 × 4.1 = 74.825
+        assert_rel(vol, 2.5 * 7.3 * 4.1, 1e-8, "2.5×7.3×4.1 box volume");
     }
 
     #[test]
-    fn unit_cube_surface_area() {
-        let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+    fn sphere_volume_analytic_exact() {
+        use crate::primitives::make_sphere;
+        use std::f64::consts::PI;
 
-        let area = solid_surface_area(&topo, solid, 0.1).unwrap();
-        let tol = Tolerance::loose();
-        assert!(
-            tol.approx_eq(area, 6.0),
-            "unit cube surface area should be ~6.0, got {area}"
-        );
+        let mut topo = Topology::new();
+        // Low segment count — analytic path must not depend on tessellation quality.
+        let solid = make_sphere(&mut topo, 3.0, 4).unwrap();
+
+        let vol = solid_volume(&topo, solid, 0.5).unwrap();
+        // V = (4/3)πr³ = (4/3)π(27) ≈ 113.097
+        let expected = 4.0 / 3.0 * PI * 27.0;
+        assert_rel(vol, expected, 1e-10, "sphere r=3 volume");
     }
 
     #[test]
-    fn unit_cube_center_of_mass() {
-        let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+    fn cylinder_volume_analytic_exact() {
+        use crate::primitives::make_cylinder;
+        use std::f64::consts::PI;
 
-        let com = solid_center_of_mass(&topo, solid, 0.1).unwrap();
-        let tol = Tolerance::loose();
-        assert!(
-            tol.approx_eq(com.x(), 0.5),
-            "center x should be ~0.5, got {}",
-            com.x()
-        );
-        assert!(
-            tol.approx_eq(com.y(), 0.5),
-            "center y should be ~0.5, got {}",
-            com.y()
-        );
-        assert!(
-            tol.approx_eq(com.z(), 0.5),
-            "center z should be ~0.5, got {}",
-            com.z()
-        );
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 5.0, 20.0).unwrap();
+
+        let vol = solid_volume(&topo, solid, 0.5).unwrap();
+        // V = πr²h = π(25)(20) ≈ 1570.796
+        let expected = PI * 25.0 * 20.0;
+        assert_rel(vol, expected, 1e-10, "cylinder r=5 h=20 volume");
     }
 
     #[test]
-    fn unit_cube_face_area() {
+    fn cone_pointed_volume_analytic_exact() {
+        use crate::primitives::make_cone;
+        use std::f64::consts::PI;
+
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_cone(&mut topo, 5.0, 0.0, 15.0).unwrap();
 
-        let tol = Tolerance::loose();
-        let solid_data = topo.solid(solid).unwrap();
-        let shell = topo.shell(solid_data.outer_shell()).unwrap();
-
-        for &fid in shell.faces() {
-            let area = face_area(&topo, fid, 0.1).unwrap();
-            assert!(
-                tol.approx_eq(area, 1.0),
-                "each unit cube face should have area ~1.0, got {area}"
-            );
-        }
+        let vol = solid_volume(&topo, solid, 0.5).unwrap();
+        // V = (π/3)r²h = (π/3)(25)(15) ≈ 392.699
+        let expected = PI / 3.0 * 25.0 * 15.0;
+        assert_rel(vol, expected, 1e-10, "pointed cone r=5 h=15 volume");
     }
 
+    #[test]
+    fn cone_frustum_volume_analytic_exact() {
+        use crate::primitives::make_cone;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_cone(&mut topo, 2.0, 1.0, 3.0).unwrap();
+
+        let vol = solid_volume(&topo, solid, 0.5).unwrap();
+        // V = (πh/3)(r₁² + r₁r₂ + r₂²) = (π·3/3)(4+2+1) ≈ 21.991
+        let expected = PI / 3.0 * 3.0 * (4.0 + 2.0 + 1.0);
+        assert_rel(vol, expected, 1e-10, "frustum r1=2 r2=1 h=3 volume");
+    }
+
+    #[test]
+    fn torus_volume_analytic_exact() {
+        use crate::primitives::make_torus;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_torus(&mut topo, 10.0, 3.0, 32).unwrap();
+
+        let vol = solid_volume(&topo, solid, 0.5).unwrap();
+        // V = 2π²Rr² = 2π²(10)(9) ≈ 1776.529
+        let expected = 2.0 * PI * PI * 10.0 * 9.0;
+        assert_rel(vol, expected, 1e-10, "torus R=10 r=3 volume");
+    }
+
+    // ── Volume: tessellation-based (1e-4 tolerance) ──────────────
+
+    /// Ellipsoid via non-uniform scale of a unit sphere.
+    /// V = (4/3)π·a·b·c where a,b,c are the semi-axes.
+    ///
+    /// Non-uniform scale defeats the analytic sphere detector (vertex
+    /// distances no longer match stored radius), so this goes through
+    /// tessellation. A fine deflection (0.01) is needed because the NURBS
+    /// ellipsoid has high curvature variation across its surface.
+    #[test]
+    fn ellipsoid_volume() {
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
+        let mat = brepkit_math::mat::Mat4::scale(5.0, 3.0, 2.0);
+        crate::transform::transform_solid(&mut topo, solid, &mat).unwrap();
+        // Use fine deflection (0.01) for NURBS ellipsoid — the adaptive
+        // tessellator needs small chord tolerance to refine the high-curvature
+        // regions near the minor axis (z semi-axis = 2).
+        let vol = solid_volume(&topo, solid, 0.01).unwrap();
+        // V = (4/3)π·5·3·2 = 40π ≈ 125.664
+        let expected = 4.0 / 3.0 * PI * 5.0 * 3.0 * 2.0;
+        assert_rel(vol, expected, 0.01, "ellipsoid 5×3×2 volume");
+    }
+
+    /// Extruded 2×3 rectangle by 4 → volume = 2×3×4 = 24.0 exactly.
     #[test]
     fn extruded_box_volume() {
         use brepkit_math::vec::{Point3, Vec3 as V};
@@ -1486,7 +1664,6 @@ mod tests {
 
         let mut topo = Topology::new();
 
-        // Create a 2×3 rectangle on the XY plane.
         let v0 = topo
             .vertices
             .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-10));
@@ -1525,25 +1702,172 @@ mod tests {
             },
         ));
 
-        // Extrude by 4 along Z.
         let solid =
             crate::extrude::extrude(&mut topo, face_id, V::new(0.0, 0.0, 1.0), 4.0).unwrap();
 
         let vol = solid_volume(&topo, solid, 0.1).unwrap();
-        let tol = Tolerance::loose();
-        assert!(
-            tol.approx_eq(vol, 24.0),
-            "2×3 rect extruded by 4 should have volume ~24.0, got {vol}"
-        );
+        // All-planar extrusion: 2 × 3 × 4 = 24.0 exactly.
+        assert_rel(vol, 24.0, 1e-8, "extruded 2×3×4 box volume");
     }
+
+    // ── Volume: operations that involve NURBS (1e-4 tolerance) ───
+
+    /// Fillet on one edge of a 20³ box.
+    ///
+    /// A rolling-ball fillet of radius r on one edge of length L removes
+    /// a prismatic quarter-cylinder notch:
+    ///   V_removed = (1 - π/4) × r² × L
+    ///
+    /// For r=2, L=20:
+    ///   V_removed = (1 - π/4) × 4 × 20 = (1 - 0.7854) × 80 ≈ 17.168
+    ///   V_expected = 8000 - 17.168 ≈ 7982.83
+    ///
+    /// Previously: bounds were 7000 < vol < 8000 (12.5% tolerance window).
+    /// Now: 1% tolerance around the derived value.
+    #[test]
+    fn fillet_single_edge_volume() {
+        use brepkit_topology::explorer;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+        let edges: Vec<_> = explorer::solid_edges(&topo, solid).unwrap();
+        let filleted =
+            crate::fillet::fillet_rolling_ball(&mut topo, solid, &[edges[0]], 2.0).unwrap();
+        let vol = solid_volume(&topo, filleted, 0.01).unwrap();
+        // V = 20³ - (1 - π/4) × r² × L = 8000 - (1-π/4)×4×20 ≈ 7982.83
+        let expected = 8000.0 - (1.0 - PI / 4.0) * 4.0 * 20.0;
+        assert_rel(vol, expected, 0.01, "fillet r=2 on 20³ box, one edge");
+    }
+
+    // ── Surface area ─────────────────────────────────────────────
+
+    #[test]
+    fn unit_cube_surface_area() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube(&mut topo);
+
+        let area = solid_surface_area(&topo, solid, 0.1).unwrap();
+        // 6 faces × 1.0 each = 6.0 exactly for all-planar solid.
+        assert_rel(area, 6.0, 1e-8, "unit cube surface area");
+    }
+
+    #[test]
+    fn unit_cube_face_area() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube(&mut topo);
+
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+
+        for &fid in shell.faces() {
+            let area = face_area(&topo, fid, 0.1).unwrap();
+            assert_rel(area, 1.0, 1e-8, "unit cube face area");
+        }
+    }
+
+    /// Box surface area = 2(ab + bc + ac).
+    /// 10×10×10 → SA = 6 × 100 = 600.
+    #[test]
+    fn box_surface_area_exact() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let area = solid_surface_area(&topo, solid, 0.1).unwrap();
+        assert_rel(area, 600.0, 1e-8, "10³ box surface area");
+    }
+
+    /// Cylinder total surface area = 2πr² + 2πrh (two caps + lateral).
+    /// r=3, h=10 → SA = 2π(9) + 2π(3)(10) = 18π + 60π = 78π ≈ 245.04.
+    #[test]
+    fn cylinder_surface_area() {
+        use crate::primitives::make_cylinder;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+        let area = solid_surface_area(&topo, solid, 0.01).unwrap();
+        // SA = 2πr² + 2πrh = 2π(9 + 30) = 78π ≈ 245.04
+        let expected = 2.0 * PI * (9.0 + 30.0);
+        assert_rel(area, expected, 1e-4, "cylinder r=3 h=10 surface area");
+    }
+
+    /// Sphere surface area = 4πr². r=5 → SA = 100π ≈ 314.16.
+    #[test]
+    fn sphere_surface_area() {
+        use crate::primitives::make_sphere;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_sphere(&mut topo, 5.0, 16).unwrap();
+        let area = solid_surface_area(&topo, solid, 0.01).unwrap();
+        // SA = 4πr² = 4π(25) = 100π ≈ 314.159
+        let expected = 4.0 * PI * 25.0;
+        assert_rel(area, expected, 1e-4, "sphere r=5 surface area");
+    }
+
+    // ── Center of mass ───────────────────────────────────────────
+
+    #[test]
+    fn unit_cube_center_of_mass() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube(&mut topo);
+
+        let com = solid_center_of_mass(&topo, solid, 0.1).unwrap();
+        // Symmetric solid centered at (0.5, 0.5, 0.5).
+        assert_rel(com.x(), 0.5, 1e-8, "cube CoM x");
+        assert_rel(com.y(), 0.5, 1e-8, "cube CoM y");
+        assert_rel(com.z(), 0.5, 1e-8, "cube CoM z");
+    }
+
+    /// Cylinder r=3, h=10, base at z=0. CoM is at (0, 0, h/2) = (0, 0, 5).
+    #[test]
+    fn cylinder_center_of_mass() {
+        use crate::primitives::make_cylinder;
+
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+        let com = solid_center_of_mass(&topo, solid, 0.01).unwrap();
+        // By symmetry: x=0, y=0. By uniform density: z = h/2 = 5.
+        assert_rel(com.x().abs(), 0.0, 1e-4, "cylinder CoM x");
+        assert_rel(com.y().abs(), 0.0, 1e-4, "cylinder CoM y");
+        assert_rel(com.z(), 5.0, 1e-4, "cylinder CoM z");
+    }
+
+    /// Pointed cone, r_bottom=4, h=12, base at z=0.
+    /// CoM_z = h/4 = 3.0 (standard formula for solid cone).
+    #[test]
+    fn cone_center_of_mass() {
+        use crate::primitives::make_cone;
+
+        let mut topo = Topology::new();
+        let solid = make_cone(&mut topo, 4.0, 0.0, 12.0).unwrap();
+        let com = solid_center_of_mass(&topo, solid, 0.01).unwrap();
+        // Cone CoM is at h/4 from the base.
+        assert_rel(com.x().abs(), 0.0, 1e-4, "cone CoM x");
+        assert_rel(com.y().abs(), 0.0, 1e-4, "cone CoM y");
+        assert_rel(com.z(), 3.0, 1e-4, "cone CoM z = h/4 = 3");
+    }
+
+    /// Non-symmetric box: 2×3×4, origin at (0,0,0).
+    /// CoM = (1, 1.5, 2) — midpoint of each dimension.
+    #[test]
+    fn rectangular_box_center_of_mass() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+        let com = solid_center_of_mass(&topo, solid, 0.1).unwrap();
+        assert_rel(com.x(), 1.0, 1e-8, "rect box CoM x");
+        assert_rel(com.y(), 1.5, 1e-8, "rect box CoM y");
+        assert_rel(com.z(), 2.0, 1e-8, "rect box CoM z");
+    }
+
+    // ── Edge & wire lengths ──────────────────────────────────────
 
     #[test]
     fn edge_length_unit_cube() {
         let mut topo = Topology::new();
         let solid = make_unit_cube(&mut topo);
 
-        // All edges of a unit cube have length 1.0.
-        let tol = Tolerance::loose();
+        let tol = Tolerance::new();
         let solid_data = topo.solid(solid).unwrap();
         let shell = topo.shell(solid_data.outer_shell()).unwrap();
 
@@ -1560,21 +1884,49 @@ mod tests {
         }
     }
 
+    /// Cylinder circumference edge: 2πr.
+    /// r=3 → 6π ≈ 18.8496.
+    #[test]
+    fn edge_length_circle() {
+        use crate::primitives::make_cylinder;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+
+        // Find a circular edge (cap boundary).
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+        let mut found_circle = false;
+        for &fid in shell.faces() {
+            let face = topo.face(fid).unwrap();
+            if matches!(face.surface(), FaceSurface::Plane { .. }) {
+                let wire = topo.wire(face.outer_wire()).unwrap();
+                for oe in wire.edges() {
+                    let edge = topo.edge(oe.edge()).unwrap();
+                    if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_)) {
+                        let len = edge_length(&topo, oe.edge()).unwrap();
+                        // Circumference = 2πr = 6π ≈ 18.8496
+                        assert_rel(len, 2.0 * PI * 3.0, 1e-8, "circle edge length");
+                        found_circle = true;
+                    }
+                }
+            }
+        }
+        assert!(found_circle, "should have found at least one circular edge");
+    }
+
     #[test]
     fn face_perimeter_unit_cube() {
         let mut topo = Topology::new();
         let solid = make_unit_cube(&mut topo);
 
-        let tol = Tolerance::loose();
         let solid_data = topo.solid(solid).unwrap();
         let shell = topo.shell(solid_data.outer_shell()).unwrap();
 
         for &fid in shell.faces() {
             let perim = face_perimeter(&topo, fid).unwrap();
-            assert!(
-                tol.approx_eq(perim, 4.0),
-                "unit cube face perimeter should be ~4.0, got {perim}"
-            );
+            assert_rel(perim, 4.0, 1e-8, "unit cube face perimeter");
         }
     }
 
@@ -1587,174 +1939,34 @@ mod tests {
 
         let face = topo.face(fid).unwrap();
         let len = wire_length(&topo, face.outer_wire()).unwrap();
-        let tol = Tolerance::loose();
-        assert!(
-            tol.approx_eq(len, 16.0),
-            "3×5 rectangle perimeter should be ~16.0, got {len}"
-        );
+        // Perimeter = 2(3+5) = 16.0 exactly.
+        assert_rel(len, 16.0, 1e-8, "3×5 rectangle perimeter");
     }
 
-    // ── Analytic volume tests ──────────────────────────────────────
-
-    #[test]
-    fn sphere_volume_analytic_exact() {
-        use crate::primitives::make_sphere;
-        use std::f64::consts::PI;
-
-        let mut topo = Topology::new();
-        // Low segment count — analytic path must not depend on tessellation quality.
-        let solid = make_sphere(&mut topo, 3.0, 4).unwrap();
-
-        let vol = solid_volume(&topo, solid, 0.5).unwrap();
-        let expected = 4.0 / 3.0 * PI * 27.0; // (4/3)π × 3³ ≈ 113.1
-        let rel_err = (vol - expected).abs() / expected;
-        assert!(
-            rel_err < 1e-10,
-            "sphere volume should be exact via analytic path: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
-        );
-    }
-
-    #[test]
-    fn cylinder_volume_analytic_exact() {
-        use crate::primitives::make_cylinder;
-        use std::f64::consts::PI;
-
-        let mut topo = Topology::new();
-        let solid = make_cylinder(&mut topo, 5.0, 20.0).unwrap();
-
-        let vol = solid_volume(&topo, solid, 0.5).unwrap();
-        let expected = PI * 25.0 * 20.0; // π × 5² × 20 ≈ 1570.8
-        let rel_err = (vol - expected).abs() / expected;
-        assert!(
-            rel_err < 1e-10,
-            "cylinder volume should be exact via analytic path: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
-        );
-    }
-
-    #[test]
-    fn cone_pointed_volume_analytic_exact() {
-        use crate::primitives::make_cone;
-        use std::f64::consts::PI;
-
-        let mut topo = Topology::new();
-        let solid = make_cone(&mut topo, 5.0, 0.0, 15.0).unwrap();
-
-        let vol = solid_volume(&topo, solid, 0.5).unwrap();
-        let expected = PI / 3.0 * 25.0 * 15.0; // π/3 × 5² × 15 ≈ 392.7
-        let rel_err = (vol - expected).abs() / expected;
-        assert!(
-            rel_err < 1e-10,
-            "pointed cone volume should be exact: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
-        );
-    }
-
-    #[test]
-    fn cone_frustum_volume_analytic_exact() {
-        use crate::primitives::make_cone;
-        use std::f64::consts::PI;
-
-        let mut topo = Topology::new();
-        let solid = make_cone(&mut topo, 2.0, 1.0, 3.0).unwrap();
-
-        let vol = solid_volume(&topo, solid, 0.5).unwrap();
-        let expected = PI / 3.0 * 3.0 * (4.0 + 2.0 + 1.0); // πh/3 × (r1²+r1r2+r2²) ≈ 21.99
-        let rel_err = (vol - expected).abs() / expected;
-        assert!(
-            rel_err < 1e-10,
-            "frustum volume should be exact: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
-        );
-    }
-
-    #[test]
-    fn torus_volume_analytic_exact() {
-        use crate::primitives::make_torus;
-        use std::f64::consts::PI;
-
-        let mut topo = Topology::new();
-        let solid = make_torus(&mut topo, 10.0, 3.0, 32).unwrap();
-
-        let vol = solid_volume(&topo, solid, 0.5).unwrap();
-        let expected = 2.0 * PI * PI * 10.0 * 9.0; // 2π²Rr² ≈ 1776.5
-        let rel_err = (vol - expected).abs() / expected;
-        assert!(
-            rel_err < 1e-10,
-            "torus volume should be exact: expected {expected:.6}, got {vol:.6}, rel_err={rel_err:.2e}"
-        );
-    }
-
-    #[test]
-    fn ellipsoid_volume() {
-        let mut topo = Topology::new();
-        let solid = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
-        let mat = brepkit_math::mat::Mat4::scale(5.0, 3.0, 2.0);
-        crate::transform::transform_solid(&mut topo, solid, &mat).unwrap();
-        let vol = solid_volume(&topo, solid, 0.1).unwrap();
-        let expected = 4.0 / 3.0 * std::f64::consts::PI * 5.0 * 3.0 * 2.0;
-        assert!(
-            (vol - expected).abs() < expected * 0.15,
-            "expected ~{expected}, got {vol}"
-        );
-    }
-
-    #[test]
-    fn fillet_single_edge_volume() {
-        use brepkit_topology::explorer;
-        let mut topo = Topology::new();
-        let solid = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
-        let edges: Vec<_> = explorer::solid_edges(&topo, solid).unwrap();
-        let filleted =
-            crate::fillet::fillet_rolling_ball(&mut topo, solid, &[edges[0]], 2.0).unwrap();
-        let vol = solid_volume(&topo, filleted, 0.01).unwrap();
-        assert!(
-            vol < 8000.0,
-            "filleted box should have less volume than 8000, got {vol}"
-        );
-        assert!(
-            vol > 7000.0,
-            "filleted box should still have significant volume, got {vol}"
-        );
-    }
-
-    #[test]
-    fn chamfered_box_volume() {
-        let mut topo = Topology::new();
-        let solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
-        let vol = solid_volume(&topo, solid, 0.1).unwrap();
-        // Box volume should be close to 1000
-        assert!(
-            (vol - 1000.0).abs() < 50.0,
-            "box should have volume ~1000, got {vol}"
-        );
-    }
+    // ── Boolean volume ───────────────────────────────────────────
 
     /// Boolean cut must reduce volume: cut(box, cylinder) < box volume.
     ///
-    /// Regression test for the cylinder band classification bug: the analytic
-    /// boolean was computing the band normal from the polygon centroid, which
-    /// falls on the cylinder axis for full-circle bands, yielding a degenerate
-    /// zero-length direction. Ray-casting with this direction classified the
-    /// bore fragment as Outside instead of Inside, causing the cylinder bore
-    /// face to be dropped from the result.
+    /// Regression test for the cylinder band classification bug.
     #[test]
     fn cut_box_cylinder_volume_decreases() {
         use crate::boolean::{BooleanOp, boolean};
         use crate::primitives::{make_box, make_cylinder};
         use crate::transform::transform_solid;
         use brepkit_math::mat::Mat4;
+        use std::f64::consts::PI;
 
         let mut topo = Topology::new();
         let bx = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let cyl = make_cylinder(&mut topo, 3.0, 20.0).unwrap();
-        // Center cylinder in box so it fully passes through.
         transform_solid(&mut topo, cyl, &Mat4::translation(5.0, 5.0, 0.0)).unwrap();
         let cut = boolean(&mut topo, BooleanOp::Cut, bx, cyl).unwrap();
 
         let box_vol = solid_volume(&topo, bx, 0.01).unwrap();
         let cut_vol = solid_volume(&topo, cut, 0.01).unwrap();
-        // Expected: box volume minus full cylinder bore through box height.
-        let expected = 1000.0 - std::f64::consts::PI * 9.0 * 10.0;
+        // V = 10³ - πr²h = 1000 - π(9)(10) = 1000 - 90π ≈ 717.35
+        let expected = 1000.0 - PI * 9.0 * 10.0;
 
-        // The result should have 7 faces: 6 planar (2 with holes) + 1 cylinder bore.
         let s = topo.solid(cut).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
         assert_eq!(
@@ -1767,10 +1979,173 @@ mod tests {
             cut_vol < box_vol,
             "cut volume ({cut_vol:.2}) must be less than box volume ({box_vol:.2})"
         );
-        let rel_err = (cut_vol - expected).abs() / expected;
-        assert!(
-            rel_err < 0.02,
-            "cut volume ({cut_vol:.2}) should be close to expected ({expected:.2}), rel_err={rel_err:.4}"
+        assert_rel(cut_vol, expected, 0.02, "cut(box, cylinder) volume");
+    }
+
+    // ── Edge case: degenerate and boundary inputs ────────────────
+
+    /// Volume and AABB of a very thin box (one dimension near-zero).
+    /// 10 × 10 × 0.001 → V = 0.1, SA = 2(100 + 0.01 + 0.01) = 200.04.
+    #[test]
+    fn thin_box_volume_and_area() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 0.001).unwrap();
+        let vol = solid_volume(&topo, solid, 0.001).unwrap();
+        let area = solid_surface_area(&topo, solid, 0.001).unwrap();
+        // V = 10 × 10 × 0.001 = 0.1
+        assert_rel(vol, 0.1, 1e-8, "thin box volume");
+        // SA = 2(10×10 + 10×0.001 + 10×0.001) = 2(100+0.01+0.01) = 200.04
+        assert_rel(area, 200.04, 1e-8, "thin box surface area");
+    }
+
+    /// Very large box to check numerical stability at scale.
+    /// 1000 × 1000 × 1000 → V = 1e9.
+    #[test]
+    fn large_box_volume() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1000.0, 1000.0, 1000.0).unwrap();
+        let vol = solid_volume(&topo, solid, 1.0).unwrap();
+        assert_rel(vol, 1e9, 1e-8, "1000³ box volume");
+    }
+
+    /// Very small box to check numerical stability at micro-scale.
+    /// 0.001 × 0.001 × 0.001 → V = 1e-9.
+    #[test]
+    fn tiny_box_volume() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 0.001, 0.001, 0.001).unwrap();
+        let vol = solid_volume(&topo, solid, 0.0001).unwrap();
+        assert_rel(vol, 1e-9, 1e-8, "0.001³ box volume");
+    }
+
+    /// Cylinder with very small radius: r=0.01, h=10.
+    /// V = π(0.0001)(10) = 0.001π ≈ 0.003142.
+    #[test]
+    fn thin_cylinder_volume() {
+        use crate::primitives::make_cylinder;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 0.01, 10.0).unwrap();
+        let vol = solid_volume(&topo, solid, 0.01).unwrap();
+        let expected = PI * 0.0001 * 10.0;
+        assert_rel(vol, expected, 1e-8, "thin cylinder r=0.01 h=10 volume");
+    }
+
+    /// Flat cylinder (disc-like): r=10, h=0.01.
+    /// V = π(100)(0.01) = π ≈ 3.1416.
+    #[test]
+    fn flat_cylinder_volume() {
+        use crate::primitives::make_cylinder;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 10.0, 0.01).unwrap();
+        let vol = solid_volume(&topo, solid, 0.01).unwrap();
+        let expected = PI * 100.0 * 0.01;
+        assert_rel(vol, expected, 1e-8, "flat cylinder r=10 h=0.01 volume");
+    }
+
+    /// Nearly-pointed frustum: r_bottom=5, r_top=0.001, h=10.
+    /// V = (πh/3)(r₁² + r₁r₂ + r₂²) = (10π/3)(25 + 0.005 + 0.000001) ≈ 261.80.
+    #[test]
+    fn near_pointed_frustum_volume() {
+        use crate::primitives::make_cone;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_cone(&mut topo, 5.0, 0.001, 10.0).unwrap();
+        let vol = solid_volume(&topo, solid, 0.5).unwrap();
+        let r1 = 5.0_f64;
+        let r2 = 0.001_f64;
+        let expected = PI * 10.0 / 3.0 * (r1 * r1 + r1 * r2 + r2 * r2);
+        assert_rel(vol, expected, 1e-8, "near-pointed frustum volume");
+    }
+
+    // ── Composition: measure after operations ────────────────────
+
+    /// Volume after transform: uniform scale by 2 triples each dimension.
+    /// Unit cube → 2×2×2 cube → V = 8.
+    #[test]
+    fn volume_after_uniform_scale() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::scale(2.0, 2.0, 2.0);
+        crate::transform::transform_solid(&mut topo, solid, &mat).unwrap();
+        let vol = solid_volume(&topo, solid, 0.1).unwrap();
+        assert_rel(vol, 8.0, 1e-8, "unit cube scaled ×2 volume");
+    }
+
+    /// CoM shifts correctly under translation.
+    /// Box (0,0,0)-(1,1,1) translated by (10,20,30) → CoM = (10.5, 20.5, 30.5).
+    #[test]
+    fn center_of_mass_after_translation() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(10.0, 20.0, 30.0);
+        crate::transform::transform_solid(&mut topo, solid, &mat).unwrap();
+        let com = solid_center_of_mass(&topo, solid, 0.1).unwrap();
+        assert_rel(com.x(), 10.5, 1e-8, "translated CoM x");
+        assert_rel(com.y(), 20.5, 1e-8, "translated CoM y");
+        assert_rel(com.z(), 30.5, 1e-8, "translated CoM z");
+    }
+
+    /// Volume is invariant under rotation.
+    #[test]
+    fn volume_invariant_under_rotation() {
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 3.0, 4.0, 5.0).unwrap();
+        let vol_before = solid_volume(&topo, solid, 0.1).unwrap();
+
+        // Rotate 45° around Z axis.
+        let mat = brepkit_math::mat::Mat4::rotation_z(PI / 4.0);
+        crate::transform::transform_solid(&mut topo, solid, &mat).unwrap();
+        let vol_after = solid_volume(&topo, solid, 0.1).unwrap();
+
+        // V = 3×4×5 = 60, should be unchanged.
+        assert_rel(vol_before, 60.0, 1e-8, "box volume before rotation");
+        assert_rel(vol_after, 60.0, 1e-8, "box volume after rotation");
+    }
+
+    // ── Error path validation ────────────────────────────────────
+
+    /// face_area with a non-planar face and zero deflection should still
+    /// return a reasonable result (tessellation at maximum detail).
+    #[test]
+    fn cylinder_face_area_analytic() {
+        use crate::primitives::make_cylinder;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 3.0, 10.0).unwrap();
+
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+
+        let mut lateral_area = 0.0;
+        let mut cap_area = 0.0;
+        for &fid in shell.faces() {
+            let face = topo.face(fid).unwrap();
+            let area = face_area(&topo, fid, 0.01).unwrap();
+            match face.surface() {
+                FaceSurface::Cylinder(_) => lateral_area += area,
+                FaceSurface::Plane { .. } => cap_area += area,
+                _ => panic!("unexpected surface type in cylinder"),
+            }
+        }
+
+        // Lateral area = 2πrh = 2π(3)(10) = 60π ≈ 188.496
+        assert_rel(
+            lateral_area,
+            2.0 * PI * 3.0 * 10.0,
+            1e-4,
+            "cylinder lateral area",
         );
+        // Two caps = 2πr² = 2π(9) = 18π ≈ 56.549
+        // Cap area uses Newell's method on 256-sample polygon of circle edge,
+        // so discretization error is O(1/n²) ≈ 2e-5 per cap.
+        assert_rel(cap_area, 2.0 * PI * 9.0, 2e-4, "cylinder cap area");
     }
 }
