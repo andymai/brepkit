@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/andymai/brepkit/compare/v0.10.0...v0.10.1) (2026-03-10)
+
+
+### Bug Fixes
+
+* compound extrude winding + relaxed validation for brepjs compat ([#160](https://github.com/andymai/brepkit/issues/160)) ([bfe8f91](https://github.com/andymai/brepkit/commit/bfe8f9170500d7bae84755ff88e30c73279551c4))
+
 ## [0.10.0](https://github.com/andymai/brepkit/compare/v0.9.0...v0.10.0) (2026-03-10)
 
 
