@@ -755,14 +755,36 @@ pub fn intersect_analytic_analytic(
     b: AnalyticSurface<'_>,
     grid_res: usize,
 ) -> Result<Vec<IntersectionCurve>, MathError> {
+    intersect_analytic_analytic_bounded(a, b, grid_res, None, None)
+}
+
+/// Intersect two analytic surfaces with optional v-range overrides.
+///
+/// When `v_range_hint_a` or `v_range_hint_b` is `Some((min, max))`, the
+/// marching algorithm searches that v-range instead of the hardcoded default.
+/// This is essential for cylinders and cones whose default v-range is small
+/// (-1..1 or 0.01..2) but whose actual face may extend much further.
+///
+/// # Errors
+///
+/// Returns `MathError` if algebraic intersection fails or marching diverges.
+pub fn intersect_analytic_analytic_bounded(
+    a: AnalyticSurface<'_>,
+    b: AnalyticSurface<'_>,
+    grid_res: usize,
+    v_range_hint_a: Option<(f64, f64)>,
+    v_range_hint_b: Option<(f64, f64)>,
+) -> Result<Vec<IntersectionCurve>, MathError> {
     // Try algebraic specialization for known surface pairs before falling
     // back to the general marching approach.
     if let Some(result) = try_algebraic_intersection(&a, &b)? {
         return Ok(result);
     }
 
-    let (surf_a, norm_a, u_range_a, v_range_a) = surface_closures(&a);
-    let (surf_b, norm_b, u_range_b, v_range_b) = surface_closures(&b);
+    let (surf_a, norm_a, u_range_a, default_v_a) = surface_closures(&a);
+    let (surf_b, norm_b, u_range_b, default_v_b) = surface_closures(&b);
+    let v_range_a = v_range_hint_a.unwrap_or(default_v_a);
+    let v_range_b = v_range_hint_b.unwrap_or(default_v_b);
 
     // Compute characteristic surface dimensions for adaptive parameters.
     let diag_a = {
@@ -780,6 +802,7 @@ pub fn intersect_analytic_analytic(
     // Sample surface A on a grid. For each grid point, project it
     // analytically onto surface B to find the closest point, then check
     // if the distance is below threshold (indicating near-intersection).
+    #[allow(clippy::type_complexity)]
     let mut seeds: Vec<(Point3, (f64, f64), (f64, f64))> = Vec::new();
     // Coarse threshold scales with the surface size — the distance from
     // a grid point on A to its projection on B can be large even near
@@ -931,8 +954,127 @@ fn try_algebraic_intersection(
             }
             Ok(None) // Non-coaxial: fall through to marching
         }
+        // Sphere-cylinder (both orderings).
+        (AnalyticSurface::Sphere(s), AnalyticSurface::Cylinder(c))
+        | (AnalyticSurface::Cylinder(c), AnalyticSurface::Sphere(s)) => {
+            algebraic_sphere_cylinder(s, c)
+        }
         _ => Ok(None),
     }
+}
+
+/// Algebraic sphere-cylinder intersection.
+///
+/// For a sphere of radius R centered at C and a cylinder of radius r with
+/// axis through O in direction A, the intersection is found by:
+///
+/// 1. Project the sphere center onto the cylinder axis.
+/// 2. Compute the perpendicular distance `d_perp` from center to axis.
+/// 3. If `d_perp + r > R` or `d_perp + R < r`: no intersection.
+/// 4. Otherwise, the intersection lies at axial positions where
+///    `sqrt(R² - z²) = r` for the coaxial case (d_perp = 0), giving
+///    two circles at `z = ±sqrt(R² - r²)`.
+/// 5. For the general case, solve a quartic for the axial position.
+///    Currently only handles the coaxial case analytically.
+fn algebraic_sphere_cylinder(
+    sphere: &SphericalSurface,
+    cyl: &CylindricalSurface,
+) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    let sc = sphere.center();
+    let r_sphere = sphere.radius();
+    let co = cyl.origin();
+    let axis = cyl.axis();
+    let r_cyl = cyl.radius();
+
+    // Project sphere center onto the cylinder axis.
+    let delta = sc - co;
+    let delta_vec = Vec3::new(delta.x(), delta.y(), delta.z());
+    let along = delta_vec.dot(axis);
+    let perp_vec = delta_vec - axis * along;
+    let d_perp = perp_vec.length();
+
+    // Separation check.
+    if d_perp > r_sphere + r_cyl + 1e-10 {
+        return Ok(Some(vec![])); // Too far apart
+    }
+
+    // Currently only handle the coaxial/near-coaxial case.
+    // Non-coaxial sphere-cylinder intersections produce quartic curves;
+    // fall back to the general marching approach for those.
+    if d_perp > 1e-8 {
+        return Ok(None); // Fall through to marching
+    }
+
+    // Coaxial case: sphere center is on the cylinder axis.
+    // The intersection is at z = ±sqrt(R² - r²) relative to sphere center.
+    if r_cyl > r_sphere + 1e-10 {
+        return Ok(Some(vec![])); // Cylinder larger than sphere
+    }
+
+    let z_sq = r_sphere * r_sphere - r_cyl * r_cyl;
+    if z_sq < 0.0 {
+        return Ok(Some(vec![])); // No real intersection
+    }
+
+    let z = z_sq.sqrt();
+
+    // The intersection circles are centered on the axis at height ±z
+    // from the sphere center, with radius = r_cyl.
+    let center_axis_pt = Point3::new(
+        co.x() + axis.x() * along,
+        co.y() + axis.y() * along,
+        co.z() + axis.z() * along,
+    );
+
+    let mut curves = Vec::new();
+
+    // Build reference frame perpendicular to axis.
+    let ref_vec = if axis.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u_dir = axis.cross(ref_vec).normalize()?;
+    let v_dir = axis.cross(u_dir);
+
+    for &z_offset in &[z, -z] {
+        let center = Point3::new(
+            center_axis_pt.x() + axis.x() * z_offset,
+            center_axis_pt.y() + axis.y() * z_offset,
+            center_axis_pt.z() + axis.z() * z_offset,
+        );
+
+        let n_samples = 33;
+        let mut points = Vec::with_capacity(n_samples);
+        let mut positions = Vec::with_capacity(n_samples);
+        #[allow(clippy::cast_precision_loss)]
+        for i in 0..n_samples {
+            let theta = TAU * i as f64 / (n_samples - 1) as f64;
+            let (sin_t, cos_t) = theta.sin_cos();
+            let pt = Point3::new(
+                center.x() + (u_dir.x() * cos_t + v_dir.x() * sin_t) * r_cyl,
+                center.y() + (u_dir.y() * cos_t + v_dir.y() * sin_t) * r_cyl,
+                center.z() + (u_dir.z() * cos_t + v_dir.z() * sin_t) * r_cyl,
+            );
+            positions.push(pt);
+            points.push(IntersectionPoint {
+                point: pt,
+                param1: (0.0, 0.0),
+                param2: (0.0, 0.0),
+            });
+        }
+
+        let degree = 3.min(positions.len() - 1);
+        let curve = interpolate(&positions, degree)?;
+        curves.push(IntersectionCurve { curve, points });
+    }
+
+    // If z is effectively 0, the two circles coincide (tangent case).
+    if z < 1e-10 {
+        curves.pop(); // Remove duplicate
+    }
+
+    Ok(Some(curves))
 }
 
 /// Algebraic sphere-sphere intersection.
