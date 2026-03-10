@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.9](https://github.com/andymai/brepkit/compare/v0.8.8...v0.8.9) (2026-03-10)
+
+
+### Bug Fixes
+
+* cone classifier uses vertex radii instead of wrong apex ([c010dc3](https://github.com/andymai/brepkit/commit/c010dc3b59a42e23c1ded90ae825a5bf981664dc))
+* cone parameterization, STEP face orientation, angular range ([#148](https://github.com/andymai/brepkit/issues/148)) ([1ddfed3](https://github.com/andymai/brepkit/commit/1ddfed331aad8ba5cd8e7ec9970df20275133c81))
+
 ## [0.8.8](https://github.com/andymai/brepkit/compare/v0.8.7...v0.8.8) (2026-03-10)
 
 
