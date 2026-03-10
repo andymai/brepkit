@@ -37,3 +37,8 @@ tarpaulin-report.html
 
 # mdBook
 /book/book/
+
+# Internal docs (prevent accidental commits)
+*-INTERNAL.md
+ISSUES-*.md
+ROADMAP.md
