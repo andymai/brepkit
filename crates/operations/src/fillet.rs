@@ -287,13 +287,12 @@ pub fn fillet(
 
     let target_set: HashSet<usize> = filtered_edges.iter().map(|e| e.index()).collect();
 
-    // Map: vertex index → filleted edges touching it.
-    // Used to detect "side face" vertices at fillet endpoints.
-    let mut vertex_fillet_edges_depr: HashSet<usize> = HashSet::new();
+    // Vertices at endpoints of filleted edges (used to detect side-face corners).
+    let mut vertex_fillet_endpoints: HashSet<usize> = HashSet::new();
     for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
-        vertex_fillet_edges_depr.insert(edge.start().index());
-        vertex_fillet_edges_depr.insert(edge.end().index());
+        vertex_fillet_endpoints.insert(edge.start().index());
+        vertex_fillet_endpoints.insert(edge.end().index());
     }
 
     // Build modified face polygons and fillet faces.
@@ -329,7 +328,7 @@ pub fn fillet(
 
             // Check if vertex sits at a fillet endpoint even though neither
             // adjacent edge of THIS face is the filleted edge (side face case).
-            let at_fillet_endpoint = vertex_fillet_edges_depr.contains(&poly.vertex_ids[i].index());
+            let at_fillet_endpoint = vertex_fillet_endpoints.contains(&poly.vertex_ids[i].index());
 
             match (before_filleted, after_filleted, at_fillet_endpoint) {
                 (false, false, false) => {
