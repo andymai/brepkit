@@ -1042,6 +1042,101 @@ fn algebraic_sphere_sphere(
     Ok(vec![IntersectionCurve { curve, points }])
 }
 
+/// Newton correction: project a point back onto the intersection curve
+/// of two analytic surfaces. Solves the 3×3 system:
+///   δ · na = -da  (eliminate distance to surface A)
+///   δ · nb = -db  (eliminate distance to surface B)
+///   δ · t  = 0    (minimal correction, perpendicular to tangent)
+#[allow(clippy::too_many_arguments)]
+fn correct_to_intersection(
+    a: &AnalyticSurface<'_>,
+    b: &AnalyticSurface<'_>,
+    surf_a: &dyn Fn(f64, f64) -> Point3,
+    norm_a: &dyn Fn(f64, f64) -> Vec3,
+    surf_b: &dyn Fn(f64, f64) -> Point3,
+    norm_b: &dyn Fn(f64, f64) -> Vec3,
+    point: Point3,
+    u_range_a: (f64, f64),
+    v_range_a: (f64, f64),
+    u_range_b: (f64, f64),
+    v_range_b: (f64, f64),
+    max_iters: usize,
+) -> Point3 {
+    let mut p = point;
+    for _ in 0..max_iters {
+        let (ua, va) = project_analytic(a, p, u_range_a, v_range_a);
+        let (ub, vb) = project_analytic(b, p, u_range_b, v_range_b);
+        let pa = surf_a(ua, va);
+        let pb = surf_b(ub, vb);
+        let na = norm_a(ua, va);
+        let nb = norm_b(ub, vb);
+        let pv = Vec3::new(p.x(), p.y(), p.z());
+
+        let da = (pv - Vec3::new(pa.x(), pa.y(), pa.z())).dot(na);
+        let db = (pv - Vec3::new(pb.x(), pb.y(), pb.z())).dot(nb);
+
+        if da.abs() < 1e-7 && db.abs() < 1e-7 {
+            break;
+        }
+
+        let t = na.cross(nb);
+        let t_len = t.length();
+        if t_len < 1e-10 {
+            // Surfaces are tangent — fall back to midpoint.
+            return Point3::new(
+                (pa.x() + pb.x()) * 0.5,
+                (pa.y() + pb.y()) * 0.5,
+                (pa.z() + pb.z()) * 0.5,
+            );
+        }
+        let t_hat = t * (1.0 / t_len);
+
+        // Solve [na; nb; t_hat] · δ = [-da, -db, 0] via Cramer's rule.
+        let det = na.x() * (nb.y() * t_hat.z() - nb.z() * t_hat.y())
+            - na.y() * (nb.x() * t_hat.z() - nb.z() * t_hat.x())
+            + na.z() * (nb.x() * t_hat.y() - nb.y() * t_hat.x());
+        if det.abs() < 1e-15 {
+            return Point3::new(
+                (pa.x() + pb.x()) * 0.5,
+                (pa.y() + pb.y()) * 0.5,
+                (pa.z() + pb.z()) * 0.5,
+            );
+        }
+        let inv = 1.0 / det;
+        // Cramer's rule: replace each column of A with rhs = (-da, -db, 0).
+        let dx = inv
+            * (-da * (nb.y() * t_hat.z() - nb.z() * t_hat.y())
+                + db * (na.y() * t_hat.z() - na.z() * t_hat.y()));
+        let dy = inv
+            * (da * (nb.x() * t_hat.z() - nb.z() * t_hat.x())
+                - db * (na.x() * t_hat.z() - na.z() * t_hat.x()));
+        let dz = inv
+            * (-da * (nb.x() * t_hat.y() - nb.y() * t_hat.x())
+                + db * (na.x() * t_hat.y() - na.y() * t_hat.x()));
+        let candidate = Point3::new(p.x() + dx, p.y() + dy, p.z() + dz);
+
+        // Divergence guard: if the correction moves farther from both
+        // surfaces, abandon Newton and return the best point so far.
+        let (uc, vc) = project_analytic(a, candidate, u_range_a, v_range_a);
+        let (ud, vd) = project_analytic(b, candidate, u_range_b, v_range_b);
+        let pc_a = surf_a(uc, vc);
+        let pc_b = surf_b(ud, vd);
+        let cv = Vec3::new(candidate.x(), candidate.y(), candidate.z());
+        let da_new = (cv - Vec3::new(pc_a.x(), pc_a.y(), pc_a.z()))
+            .dot(norm_a(uc, vc))
+            .abs();
+        let db_new = (cv - Vec3::new(pc_b.x(), pc_b.y(), pc_b.z()))
+            .dot(norm_b(ud, vd))
+            .abs();
+        if da_new > da.abs() && db_new > db.abs() {
+            return p;
+        }
+
+        p = candidate;
+    }
+    p
+}
+
 /// March along the intersection of two surfaces from a seed point.
 ///
 /// Uses the cross product of surface normals as the tangent direction
@@ -1121,7 +1216,6 @@ fn march_analytic_intersection(
                 (pa.y() + pb.y()) * 0.5,
                 (pa.z() + pb.z()) * 0.5,
             );
-
             let out_a = ua2 <= u_range_a.0
                 || ua2 >= u_range_a.1
                 || va2 <= v_range_a.0
@@ -1152,6 +1246,15 @@ fn march_analytic_intersection(
     let mut result = backward;
     result.push(seed);
     result.append(&mut forward);
+
+    // Refine all points onto the intersection curve via Newton correction.
+    for pt in &mut result {
+        *pt = correct_to_intersection(
+            a, b, surf_a, norm_a, surf_b, norm_b, *pt, u_range_a, v_range_a, u_range_b, v_range_b,
+            5,
+        );
+    }
+
     result
 }
 
