@@ -1476,6 +1476,8 @@ mod tests {
 
     #[test]
     fn relaxed_detects_open_wire() {
+        use brepkit_topology::wire::Wire;
+
         // Open wire should still be caught by relaxed validation
         let mut topo = Topology::new();
         let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
@@ -1486,19 +1488,15 @@ mod tests {
         let wire = topo.wire(wire_id).unwrap();
         let edges = wire.edges().to_vec();
 
-        if edges.len() > 1 {
-            use brepkit_topology::wire::Wire;
-            let open_wire = Wire::new(edges[..edges.len() - 1].to_vec(), false);
-            if let Ok(w) = open_wire {
-                *topo.wire_mut(wire_id).unwrap() = w;
+        assert!(edges.len() > 1, "box face should have > 1 edge");
+        let open_wire = Wire::new(edges[..edges.len() - 1].to_vec(), false).unwrap();
+        *topo.wire_mut(wire_id).unwrap() = open_wire;
 
-                let report = validate_solid_relaxed(&topo, solid).unwrap();
-                assert!(
-                    !report.is_valid(),
-                    "open wire should fail even relaxed validation: {:?}",
-                    report.issues
-                );
-            }
-        }
+        let report = validate_solid_relaxed(&topo, solid).unwrap();
+        assert!(
+            !report.is_valid(),
+            "open wire should fail even relaxed validation: {:?}",
+            report.issues
+        );
     }
 }

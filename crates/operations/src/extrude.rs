@@ -222,6 +222,8 @@ fn extrude_wire_vertices(
 ///
 /// Uses the signed area projected onto the extrusion axis: negative = CW,
 /// positive = CCW. This generalizes to non-axis-aligned extrusions.
+/// When the projected area is near-zero (polygon nearly perpendicular to
+/// the extrusion axis), defaults to CW (the standard B-Rep hole convention).
 fn inner_wire_is_cw(positions: &[Point3], offset: &Vec3) -> bool {
     if positions.len() < 3 {
         return true; // degenerate — default to CW
@@ -234,7 +236,10 @@ fn inner_wire_is_cw(positions: &[Point3], offset: &Vec3) -> bool {
         let b = positions[i + 1] - p0;
         signed_area_2 += a.cross(b).dot(axis);
     }
-    signed_area_2 < 0.0
+    // Use a tolerance threshold to avoid floating-point noise flipping
+    // the classification for polygons nearly perpendicular to the axis.
+    // Default to CW (standard B-Rep hole convention) when ambiguous.
+    signed_area_2 < -f64::EPSILON
 }
 
 /// Extrude a planar face along a direction to produce a solid.
