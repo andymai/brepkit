@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/andymai/brepkit/compare/v0.9.0...v0.10.0) (2026-03-10)
+
+
+### Features
+
+* add production GCS (Geometric Constraint Solver) ([#154](https://github.com/andymai/brepkit/issues/154)) ([9a48cb9](https://github.com/andymai/brepkit/commit/9a48cb943c460e8a6c65debc7cfc4dd9c483a8d4))
+
 ## [0.9.0](https://github.com/andymai/brepkit/compare/v0.8.10...v0.9.0) (2026-03-10)
 
 
