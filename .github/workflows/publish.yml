@@ -30,8 +30,14 @@ jobs:
         with:
           app-id: ${{ secrets.BREPKIT_BOT_APP_ID }}
           private-key: ${{ secrets.BREPKIT_BOT_PRIVATE_KEY }}
+
       - uses: googleapis/release-please-action@v4
         id: release
+        # release-please can fail with "duplicate tag" (release already exists)
+        # or "issue is locked" (can't comment on auto-merged PR). Both are
+        # non-fatal — the release was created successfully. Publishing happens
+        # independently via the release:created event trigger.
+        continue-on-error: true
         with:
           token: ${{ steps.app-token.outputs.token }}
           manifest-file: .release-please-manifest.json
