@@ -1644,13 +1644,16 @@ enum AnalyticClassifier {
         z_max: f64,
     },
     /// Point-in-cone-frustum: radial distance from axis ≤ interpolated radius
-    /// AND axial position within [z_min, z_max].
+    /// AND axial position within [z_min, z_max]. Uses linear interpolation
+    /// between r_min (at z_min) and r_max (at z_max) for the expected radius,
+    /// which is robust regardless of ConicalSurface apex/axis orientation.
     Cone {
-        apex: Point3,
+        origin: Point3,
         axis: Vec3,
-        half_angle: f64,
         z_min: f64,
         z_max: f64,
+        r_at_z_min: f64,
+        r_at_z_max: f64,
     },
     /// Point-in-box: axis-aligned bounding box test.
     /// O(1) with just 6 comparisons — the fastest classifier.
@@ -1705,13 +1708,14 @@ impl AnalyticClassifier {
                 }
             }
             Self::Cone {
-                apex,
+                origin,
                 axis,
-                half_angle,
                 z_min,
                 z_max,
+                r_at_z_min,
+                r_at_z_max,
             } => {
-                let diff = centroid - *apex;
+                let diff = centroid - *origin;
                 let axial = diff.dot(*axis);
                 // Check axial bounds.
                 if axial < *z_min - tol.linear || axial > *z_max + tol.linear {
@@ -1723,8 +1727,14 @@ impl AnalyticClassifier {
                 let radial_dist_sq = radial_vec.x() * radial_vec.x()
                     + radial_vec.y() * radial_vec.y()
                     + radial_vec.z() * radial_vec.z();
-                // Expected radius at this axial position: r = |axial| * tan(half_angle).
-                let expected_r = axial.abs() * half_angle.tan();
+                // Linearly interpolate expected radius between z_min and z_max.
+                let dz = z_max - z_min;
+                let t = if dz.abs() > 1e-12 {
+                    (axial - z_min) / dz
+                } else {
+                    0.5
+                };
+                let expected_r = r_at_z_min + t * (r_at_z_max - r_at_z_min);
                 if radial_dist_sq < (expected_r - tol.linear).max(0.0).powi(2)
                     && axial > *z_min + tol.linear
                     && axial < *z_max - tol.linear
@@ -1935,38 +1945,76 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
 
     // Cone solid (1 cone face + 1 or 2 planar caps).
     if has_cone && has_planar && !has_sphere && !has_cylinder {
-        let (apex, axis, half_angle) = cone_info?;
-        // Compute axial extent from planar cap faces (distance from apex along axis).
-        let mut z_min = f64::INFINITY;
-        let mut z_max = f64::NEG_INFINITY;
-        let apex_vec = Vec3::new(apex.x(), apex.y(), apex.z());
+        let (apex, axis, _half_angle) = cone_info?;
+        // Use the cone's axis as the reference axis, but measure z from a fixed
+        // origin (the apex position) rather than relying on the apex being the
+        // geometric virtual apex (which may be wrong for frustums).
+        let origin = apex;
+        let origin_vec = Vec3::new(origin.x(), origin.y(), origin.z());
+
+        // Compute axial extent and radii from planar cap faces.
+        // z values are measured from `origin` along `axis`.
+        let mut caps: Vec<(f64, f64)> = Vec::new(); // (z_position, radius)
         for &fid in shell.faces() {
             let face = topo.face(fid).ok()?;
             if let FaceSurface::Plane { normal, d } = face.surface() {
                 let dot = normal.dot(axis);
                 if dot.abs() > 0.5 {
-                    let z = *d / dot - axis.dot(apex_vec);
-                    z_min = z_min.min(z);
-                    z_max = z_max.max(z);
+                    let z = *d / dot - axis.dot(origin_vec);
+                    // Compute the cap radius from face vertices.
+                    let wire = topo.wire(face.outer_wire()).ok()?;
+                    let mut max_r_sq = 0.0_f64;
+                    for oe in wire.edges() {
+                        let edge = topo.edge(oe.edge()).ok()?;
+                        for vid in [edge.start(), edge.end()] {
+                            let v = topo.vertex(vid).ok()?;
+                            let diff = v.point() - origin;
+                            let axial_comp = axis * diff.dot(axis);
+                            let radial = diff - axial_comp;
+                            let r_sq = radial.x() * radial.x()
+                                + radial.y() * radial.y()
+                                + radial.z() * radial.z();
+                            max_r_sq = max_r_sq.max(r_sq);
+                        }
+                    }
+                    caps.push((z, max_r_sq.sqrt()));
                 }
             }
         }
-        // For pointed cones, the apex is a face boundary vertex (z=0 from apex).
-        // The solid extends from z_min to z_max where z is measured from apex
-        // along the axis direction. If only one cap, set the other bound to 0.
+
+        // Sort caps by z and extract z_min/z_max with their radii.
+        caps.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let (mut z_min, mut z_max) = (f64::INFINITY, f64::NEG_INFINITY);
+        let (mut r_at_z_min, mut r_at_z_max) = (0.0, 0.0);
+        for &(z, r) in &caps {
+            if z < z_min {
+                z_min = z;
+                r_at_z_min = r;
+            }
+            if z > z_max {
+                z_max = z;
+                r_at_z_max = r;
+            }
+        }
+
+        // For pointed cones with only one cap.
         if z_min == f64::INFINITY {
             z_min = 0.0;
+            r_at_z_min = 0.0;
         }
         if z_max == f64::NEG_INFINITY {
             z_max = 0.0;
+            r_at_z_max = 0.0;
         }
         if (z_max - z_min).abs() > tol.linear {
             return Some(AnalyticClassifier::Cone {
-                apex,
+                origin,
                 axis,
-                half_angle,
                 z_min,
                 z_max,
+                r_at_z_min,
+                r_at_z_max,
             });
         }
     }
