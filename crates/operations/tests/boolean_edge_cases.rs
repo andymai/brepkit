@@ -138,7 +138,6 @@ fn test_kissing_boxes_cut() {
 }
 
 #[test]
-#[ignore = "bug: tangent cylinder-box fuse produces incorrect volume"]
 fn test_kissing_cylinder_box() {
     // Cylinder radius 1, height 2. Box with left face tangent at x=1.
     let mut topo = Topology::new();
@@ -317,7 +316,6 @@ fn test_alternating_union_cut() {
 // ── Mixed surfaces ──────────────────────────────────────────────────
 
 #[test]
-#[ignore = "bug: sphere-cylinder cut produces degenerate result (1 face)"]
 fn test_boolean_sphere_cylinder() {
     // Sphere radius 2. Cylinder radius 0.5, height 6 through center.
     let mut topo = Topology::new();

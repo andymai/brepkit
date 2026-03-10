@@ -122,6 +122,51 @@ fn analytic_face_normal_d(surface: &FaceSurface, verts: &[Point3]) -> (Vec3, f64
     }
 }
 
+/// Compute the v-range hint for an analytic surface based on face vertices.
+///
+/// Returns `Some((v_min, v_max))` if the surface has a non-trivial v
+/// parameterization that depends on the face extent (cylinder, cone).
+/// Returns `None` for surfaces where the default v_range is correct
+/// (sphere, torus).
+fn compute_v_range_hint(surface: &FaceSurface, verts: &[Point3]) -> Option<(f64, f64)> {
+    match surface {
+        FaceSurface::Cylinder(cyl) => {
+            // v = axial distance from origin. Compute from face vertices
+            // with padding to ensure intersections near the boundary are found.
+            cylinder_v_extent(cyl, verts).map(|(lo, hi)| {
+                let pad = (hi - lo) * 0.1;
+                (lo - pad, hi + pad)
+            })
+        }
+        FaceSurface::Cone(cone) => {
+            // v = distance from apex along the axis-radial direction.
+            // Compute from face vertices.
+            let axis = cone.axis();
+            let apex = cone.apex();
+            let half = cone.half_angle();
+            let (sin_a, cos_a) = half.sin_cos();
+            let mut v_min = f64::MAX;
+            let mut v_max = f64::MIN;
+            for &p in verts {
+                let d = p - apex;
+                let axial = d.dot(axis);
+                let radial_sq = d.dot(d) - axial * axial;
+                // v = sqrt(axial^2 + radial_sq) with correct sign
+                let v = axial * sin_a + radial_sq.sqrt() * cos_a;
+                v_min = v_min.min(v);
+                v_max = v_max.max(v);
+            }
+            if (v_max - v_min).abs() < 1e-10 {
+                None
+            } else {
+                let pad = (v_max - v_min) * 0.1;
+                Some(((v_min - pad).max(0.001), v_max + pad))
+            }
+        }
+        _ => None, // Sphere and torus have fixed parametric ranges
+    }
+}
+
 /// Compute the axial extent (v-range) of points projected onto a cylinder axis.
 ///
 /// Returns `None` if the extent is degenerate (< 1e-10).
@@ -1961,7 +2006,66 @@ fn classify_fragment(
     tol: Tolerance,
 ) -> FaceClass {
     let centroid = polygon_centroid(&frag.vertices);
-    classify_point(centroid, frag.normal, opposite, bvh, tol)
+    let class = classify_point(centroid, frag.normal, opposite, bvh, tol);
+    guard_tangent_coplanar(class, &frag.vertices, frag.normal, opposite, bvh, tol)
+}
+
+/// Guard against false coplanar classifications at tangent touch points.
+///
+/// When a face touches a curved surface tangentially, the centroid may lie
+/// exactly on the opposing surface with aligned normals, causing a false
+/// Coplanar classification. This function verifies coplanar results by
+/// checking whether most fragment vertices are also on the opposing face
+/// planes. If fewer than half are, it's a tangent touch — re-classify via
+/// ray-casting from a vertex that's clearly off the opposing surface.
+fn guard_tangent_coplanar(
+    class: FaceClass,
+    vertices: &[Point3],
+    normal: Vec3,
+    opposite: &FaceData,
+    bvh: Option<&Bvh>,
+    tol: Tolerance,
+) -> FaceClass {
+    if !matches!(class, FaceClass::CoplanarSame | FaceClass::CoplanarOpposite) || vertices.len() < 3
+    {
+        return class;
+    }
+
+    // Check how many vertices are on the same plane as any opposing face.
+    // Use plane distance only (not polygon containment) to avoid false
+    // negatives from vertices on polygon edges.
+    let mut on_plane_count = 0usize;
+    for v in vertices {
+        let on_any_plane = opposite.iter().any(|(_, _verts, n_opp, d_opp)| {
+            let dist = dot_normal_point(*n_opp, *v) - d_opp;
+            dist.abs() < tol.linear * 10.0
+        });
+        if on_any_plane {
+            on_plane_count += 1;
+        }
+    }
+
+    // If most vertices are on an opposing face plane, this is likely a true
+    // coplanar situation — keep the original classification. Only override
+    // when very few vertices (at most 1) are on any opposing plane, which
+    // indicates a tangent touch at a point or line.
+    if on_plane_count <= 1 {
+        // Find a vertex that's NOT on any opposing face for reliable ray-cast.
+        for v in vertices {
+            let on_any = opposite.iter().any(|(_, _verts, n_opp, d_opp)| {
+                let dist = dot_normal_point(*n_opp, *v) - d_opp;
+                dist.abs() < tol.linear * 10.0
+            });
+            if !on_any {
+                return classify_point(*v, normal, opposite, bvh, tol);
+            }
+        }
+        // All vertices near some opposing plane — use centroid ray-cast.
+        let centroid = polygon_centroid(vertices);
+        return classify_point_raycast(centroid, normal, opposite, bvh, tol);
+    }
+
+    class
 }
 
 /// Classify a point (centroid with a ray direction) relative to an opposite solid.
@@ -2089,6 +2193,81 @@ fn classify_point(
     }
 
     // Majority vote: inside if 2+ of 3 rays say inside.
+    if inside_votes >= 2 {
+        FaceClass::Inside
+    } else {
+        FaceClass::Outside
+    }
+}
+
+/// Ray-cast only classification — skips the coplanar check.
+///
+/// Used when the coplanar check has been determined unreliable (e.g. tangent
+/// touch) and we need a direct Inside/Outside answer via ray-casting.
+fn classify_point_raycast(
+    point: Point3,
+    normal: Vec3,
+    opposite: &FaceData,
+    bvh: Option<&Bvh>,
+    tol: Tolerance,
+) -> FaceClass {
+    let ray_dirs = {
+        let perp = if normal.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let cross_vec = normal.cross(perp);
+        let axis_len = cross_vec.length();
+        if axis_len < 1e-12 {
+            [normal, normal, normal]
+        } else {
+            let inv = 1.0 / axis_len;
+            let axis = Vec3::new(
+                cross_vec.x() * inv,
+                cross_vec.y() * inv,
+                cross_vec.z() * inv,
+            );
+            let rodrigues = |cos_a: f64, sin_a: f64| -> Vec3 {
+                let dot = axis.dot(normal);
+                let cross = axis.cross(normal);
+                Vec3::new(
+                    normal.x().mul_add(
+                        cos_a,
+                        cross.x().mul_add(sin_a, axis.x() * dot * (1.0 - cos_a)),
+                    ),
+                    normal.y().mul_add(
+                        cos_a,
+                        cross.y().mul_add(sin_a, axis.y() * dot * (1.0 - cos_a)),
+                    ),
+                    normal.z().mul_add(
+                        cos_a,
+                        cross.z().mul_add(sin_a, axis.z() * dot * (1.0 - cos_a)),
+                    ),
+                )
+            };
+            [normal, rodrigues(0.574, 0.819), rodrigues(0.574, -0.819)]
+        }
+    };
+
+    let mut inside_votes = 0u8;
+    for ray_dir in &ray_dirs {
+        let mut crossings = 0i32;
+        if let Some(bvh) = bvh {
+            for idx in bvh.query_ray(point, *ray_dir) {
+                let (_, ref verts, n_opp, d_opp) = opposite[idx];
+                crossings += ray_face_crossing(point, *ray_dir, verts, n_opp, d_opp, tol);
+            }
+        } else {
+            for &(_, ref verts, n_opp, d_opp) in opposite {
+                crossings += ray_face_crossing(point, *ray_dir, verts, n_opp, d_opp, tol);
+            }
+        }
+        if crossings != 0 {
+            inside_votes += 1;
+        }
+    }
+
     if inside_votes >= 2 {
         FaceClass::Inside
     } else {
@@ -3311,7 +3490,7 @@ fn analytic_boolean(
     deflection: f64,
 ) -> Result<SolidId, crate::OperationsError> {
     use brepkit_math::analytic_intersection::{
-        ExactIntersectionCurve, exact_plane_analytic, intersect_analytic_analytic,
+        ExactIntersectionCurve, exact_plane_analytic, intersect_analytic_analytic_bounded,
     };
 
     // Collect face info for both solids.
@@ -3559,7 +3738,11 @@ fn analytic_boolean(
                 let surf_b_opt = face_surface_to_analytic(&snap_b.surface);
 
                 if let (Some(surf_a_an), Some(surf_b_an)) = (surf_a_opt, surf_b_opt) {
-                    if let Ok(curves) = intersect_analytic_analytic(surf_a_an, surf_b_an, 32) {
+                    let v_hint_a = compute_v_range_hint(&snap_a.surface, &snap_a.vertices);
+                    let v_hint_b = compute_v_range_hint(&snap_b.surface, &snap_b.vertices);
+                    if let Ok(curves) = intersect_analytic_analytic_bounded(
+                        surf_a_an, surf_b_an, 32, v_hint_a, v_hint_b,
+                    ) {
                         for ic in &curves {
                             let pts: Vec<Point3> = ic.points.iter().map(|ip| ip.point).collect();
 
@@ -4024,14 +4207,41 @@ fn analytic_boolean(
             if let Some(&class) = pre_classifications.get(&idx) {
                 return Some(class);
             }
+            let classifier = match frag.source {
+                Source::A => analytic_cls_b.as_ref(),
+                Source::B => analytic_cls_a.as_ref(),
+            };
+            let classifier = match classifier {
+                Some(c) => c,
+                None => return None,
+            };
             let centroid = polygon_centroid(&frag.vertices);
-            match frag.source {
-                Source::A => analytic_cls_b
-                    .as_ref()
-                    .and_then(|c| c.classify(centroid, tol)),
-                Source::B => analytic_cls_a
-                    .as_ref()
-                    .and_then(|c| c.classify(centroid, tol)),
+            if let Some(class) = classifier.classify(centroid, tol) {
+                return Some(class);
+            }
+            // Centroid is on the boundary of a curved solid (sphere/cylinder/
+            // cone). Phase 2 ray-casting from a point ON a curved surface is
+            // unreliable (ray may graze the surface), so resolve using vertex
+            // majority voting. For box classifiers, defer to Phase 2 — ray-
+            // casting from a point on a flat face is reliable.
+            if matches!(classifier, AnalyticClassifier::Box { .. }) {
+                return None;
+            }
+            let mut inside = 0u32;
+            let mut outside = 0u32;
+            for v in &frag.vertices {
+                match classifier.classify(*v, tol) {
+                    Some(FaceClass::Inside) => inside += 1,
+                    Some(FaceClass::Outside) => outside += 1,
+                    _ => {}
+                }
+            }
+            if outside > inside && outside > 0 {
+                Some(FaceClass::Outside)
+            } else if inside > outside && inside > 0 {
+                Some(FaceClass::Inside)
+            } else {
+                None // Truly ambiguous — defer to Phase 2
             }
         })
         .collect();
@@ -4054,7 +4264,17 @@ fn analytic_boolean(
                 Source::B => (&face_data_a, bvh_a.as_ref()),
             };
             let centroid = polygon_centroid(&frag.vertices);
-            *class = Some(classify_point(centroid, frag.normal, opposite, bvh, tol));
+            let raw = classify_point(centroid, frag.normal, opposite, bvh, tol);
+            // Apply tangent guard: verify coplanar classifications
+            // using fragment vertices to catch tangent-touch false positives.
+            *class = Some(guard_tangent_coplanar(
+                raw,
+                &frag.vertices,
+                frag.normal,
+                opposite,
+                bvh,
+                tol,
+            ));
         }
     }
 
