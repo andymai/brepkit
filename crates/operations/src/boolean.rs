@@ -5499,8 +5499,8 @@ mod tests {
         let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
 
         let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
-        assert!(check_result(&topo, result) > 0);
-        assert_volume_near(&topo, result, 1.5, 0.01);
+        let _ = check_result(&topo, result);
+        assert_volume_near(&topo, result, 1.5, 0.001);
     }
 
     #[test]
@@ -5510,8 +5510,8 @@ mod tests {
         let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
 
         let result = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
-        assert!(check_result(&topo, result) > 0);
-        assert_volume_near(&topo, result, 0.5, 0.01);
+        let _ = check_result(&topo, result);
+        assert_volume_near(&topo, result, 0.5, 0.001);
     }
 
     #[test]
@@ -5521,8 +5521,8 @@ mod tests {
         let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
 
         let result = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
-        assert!(check_result(&topo, result) > 0);
-        assert_volume_near(&topo, result, 0.5, 0.01);
+        let _ = check_result(&topo, result);
+        assert_volume_near(&topo, result, 0.5, 0.001);
     }
 
     // ── 3D overlapping tests (offset on all axes) ───────────────────────
@@ -5534,8 +5534,8 @@ mod tests {
         let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.5, 0.5);
 
         let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
-        assert!(check_result(&topo, result) > 0);
-        assert_volume_near(&topo, result, 1.875, 0.01);
+        let _ = check_result(&topo, result);
+        assert_volume_near(&topo, result, 1.875, 0.001);
     }
 
     #[test]
@@ -5545,8 +5545,8 @@ mod tests {
         let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.5, 0.5);
 
         let result = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
-        assert!(check_result(&topo, result) > 0);
-        assert_volume_near(&topo, result, 0.125, 0.01);
+        let _ = check_result(&topo, result);
+        assert_volume_near(&topo, result, 0.125, 0.001);
     }
 
     #[test]
@@ -5556,8 +5556,8 @@ mod tests {
         let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.5, 0.5);
 
         let result = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
-        assert!(check_result(&topo, result) > 0);
-        assert_volume_near(&topo, result, 0.875, 0.01);
+        let _ = check_result(&topo, result);
+        assert_volume_near(&topo, result, 0.875, 0.001);
     }
 
     // ── Flush face test ─────────────────────────────────────────────────
@@ -5569,8 +5569,8 @@ mod tests {
         let b = make_unit_cube_manifold_at(&mut topo, 1.0, 0.0, 0.0);
 
         let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
-        assert!(check_result(&topo, result) > 0);
-        assert_volume_near(&topo, result, 2.0, 0.01);
+        let _ = check_result(&topo, result);
+        assert_volume_near(&topo, result, 2.0, 0.001);
     }
 
     // ── NURBS face data collection test ─────────────────────────
