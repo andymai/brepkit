@@ -60,8 +60,12 @@ struct Checkpoint {
 }
 
 /// Internal state for an in-progress sketch.
+///
+/// Wraps a `GcsSystem` for the new entity-based API, with index-based
+/// lookup vectors for backward compatibility with the JS API.
 #[derive(Default, Clone)]
 struct SketchState {
+    /// Legacy point/constraint storage for backward-compat API.
     points: Vec<brepkit_operations::sketch::SketchPoint>,
     constraints: Vec<brepkit_operations::sketch::Constraint>,
 }
@@ -5022,6 +5026,76 @@ impl BrepKernel {
         .to_string())
     }
 
+    /// Compute degrees of freedom for a sketch.
+    ///
+    /// Returns a JSON string: `{"dof": n, "rank": n, "numParams": n, "numEquations": n}`.
+    #[wasm_bindgen(js_name = "sketchDof")]
+    pub fn sketch_dof(&mut self, sketch: u32) -> Result<String, JsError> {
+        let sk = self
+            .sketches
+            .get_mut(sketch as usize)
+            .ok_or(WasmError::InvalidHandle {
+                entity: "sketch",
+                index: sketch as usize,
+            })?;
+        // Build a temporary GcsSystem from the legacy data
+        let mut sys = brepkit_operations::sketch::GcsSystem::new();
+        let point_ids: Vec<brepkit_operations::sketch::PointId> = sk
+            .points
+            .iter()
+            .map(|p| {
+                sys.add_point(brepkit_operations::sketch::PointData {
+                    x: p.x,
+                    y: p.y,
+                    fixed: p.fixed,
+                })
+            })
+            .collect();
+
+        // We need lines for line-based constraints, create them implicitly
+        let mut line_cache: std::collections::HashMap<
+            (usize, usize),
+            brepkit_operations::sketch::LineId,
+        > = std::collections::HashMap::new();
+
+        for c in &sk.constraints {
+            match c {
+                brepkit_operations::sketch::Constraint::Horizontal(a, b)
+                | brepkit_operations::sketch::Constraint::Vertical(a, b) => {
+                    if let std::collections::hash_map::Entry::Vacant(e) = line_cache.entry((*a, *b))
+                    {
+                        if let Ok(lid) = sys.add_line(point_ids[*a], point_ids[*b]) {
+                            e.insert(lid);
+                        }
+                    }
+                }
+                brepkit_operations::sketch::Constraint::Perpendicular(a, b, c, d)
+                | brepkit_operations::sketch::Constraint::Parallel(a, b, c, d)
+                | brepkit_operations::sketch::Constraint::Angle(a, b, c, d, _) => {
+                    for (x, y) in [(*a, *b), (*c, *d)] {
+                        if let std::collections::hash_map::Entry::Vacant(e) =
+                            line_cache.entry((x, y))
+                        {
+                            if let Ok(lid) = sys.add_line(point_ids[x], point_ids[y]) {
+                                e.insert(lid);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let dof = sys.dof();
+        Ok(serde_json::json!({
+            "dof": dof.dof,
+            "rank": dof.rank,
+            "numParams": dof.num_params,
+            "numEquations": dof.num_equations,
+        })
+        .to_string())
+    }
+
     /// Create a new empty assembly. Returns an assembly index.
     #[wasm_bindgen(js_name = "assemblyNew")]
     pub fn assembly_new(&mut self, name: &str) -> u32 {
@@ -6898,8 +6972,10 @@ fn parse_sketch_constraint(
         "angle" => {
             let p1 = json_usize(val, "p1")?;
             let p2 = json_usize(val, "p2")?;
+            let p3 = json_usize(val, "p3")?;
+            let p4 = json_usize(val, "p4")?;
             let v = json_f64(val, "value")?;
-            Ok(Constraint::Angle(p1, p2, v))
+            Ok(Constraint::Angle(p1, p2, p3, p4, v))
         }
         "perpendicular" => {
             let p1 = json_usize(val, "p1")?;
