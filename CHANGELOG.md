@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.8](https://github.com/andymai/brepkit/compare/v0.8.7...v0.8.8) (2026-03-10)
+
+
+### Bug Fixes
+
+* sphere-cylinder intersection and tangent-touch classification ([#145](https://github.com/andymai/brepkit/issues/145)) ([b00f3b7](https://github.com/andymai/brepkit/commit/b00f3b761d08edbaee918669123096b23d7fb8e2))
+
 ## [0.8.7](https://github.com/andymai/brepkit/compare/v0.8.6...v0.8.7) (2026-03-10)
 
 
