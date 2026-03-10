@@ -1331,6 +1331,39 @@ const MAX_DEPTH: u8 = 6;
 /// Initial grid resolution (cells per direction).
 const INITIAL_CELLS: usize = 4;
 
+/// Compute the v-parameter range for a surface by projecting boundary vertices.
+///
+/// `project_v` maps a 3D point to its v-parameter on the surface.
+/// Falls back to (-1.0, 1.0) if the face has no usable vertices.
+fn compute_v_param_range(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    project_v: impl Fn(Point3) -> f64,
+) -> (f64, f64) {
+    let mut v_min = f64::MAX;
+    let mut v_max = f64::MIN;
+
+    if let Ok(wire) = topo.wire(face_data.outer_wire()) {
+        for oe in wire.edges() {
+            if let Ok(edge) = topo.edge(oe.edge()) {
+                for &vid in &[edge.start(), edge.end()] {
+                    if let Ok(vertex) = topo.vertex(vid) {
+                        let v = project_v(vertex.point());
+                        v_min = v_min.min(v);
+                        v_max = v_max.max(v);
+                    }
+                }
+            }
+        }
+    }
+
+    if v_min < v_max {
+        (v_min, v_max)
+    } else {
+        (-1.0, 1.0) // fallback
+    }
+}
+
 /// Compute the v-range (axial extent) for an analytic surface from its face
 /// wire boundary vertices.
 ///
@@ -2107,7 +2140,10 @@ pub fn tessellate_with_uvs(
             ))
         }
         FaceSurface::Cone(cone) => {
-            let v_range = compute_axial_range(topo, face_data, cone.apex(), cone.axis());
+            // Use project_point to get the true v-parameter range, not the
+            // axial projection. The cone's v is the distance from the apex
+            // along the surface generator, not the axis.
+            let v_range = compute_v_param_range(topo, face_data, |p| cone.project_point(p).1);
             let u_range = compute_angular_range(topo, face_data, |p| cone.project_point(p));
             let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
             let nu = segments_for_chord_deviation(

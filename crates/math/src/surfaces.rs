@@ -129,7 +129,10 @@ pub struct ConicalSurface {
 impl ConicalSurface {
     /// Creates a new conical surface.
     ///
-    /// `half_angle` is the angle between the axis and the cone's surface (radians).
+    /// `half_angle` is the angle from the radial plane to the cone's surface
+    /// generator (radians). Small angles produce wide/flat cones; angles near
+    /// π/2 produce narrow/spike cones. In the evaluate formula
+    /// `P(u,v) = apex + v*(cos(a)*radial + sin(a)*axis)`, `a` is this angle.
     ///
     /// # Errors
     /// Returns an error if half-angle is not in `(0, π/2)` or axis is zero.

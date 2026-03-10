@@ -368,7 +368,6 @@ fn test_boolean_cone_box() {
 }
 
 #[test]
-#[ignore = "bug: cone-cylinder cut returns intersection volume — classification inverts cone fragments"]
 fn test_boolean_cone_cylinder() {
     // Cone r_bottom=2, r_top=1, height=3. Cylinder radius 0.5, height 3.
     let mut topo = Topology::new();

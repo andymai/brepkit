@@ -311,13 +311,18 @@ pub fn make_cone(
         (top_radius, bottom_radius, height, 0.0, 1.0_f64)
     };
 
+    // The ConicalSurface formula is:
+    //   P(u,v) = apex + v*(cos(a)*radial(u) + sin(a)*axis)
+    // where `a` is the angle from the radial plane to the surface generator.
+    // For a cone with base radius R at axial distance H from the apex:
+    //   tan(a) = H / R  →  a = atan2(H, R)
     let half_angle = if r_small <= tol.linear {
         // Pointed cone: apex at the small end
-        r_big.atan2(height)
+        height.atan2(r_big)
     } else {
         // Frustum: virtual apex beyond the small end
         let axial_to_apex = r_small * height / (r_big - r_small);
-        r_big.atan2(axial_to_apex + height)
+        (axial_to_apex + height).atan2(r_big)
     };
 
     // half_angle must be in (0, π/2) for ConicalSurface
@@ -342,7 +347,9 @@ pub fn make_cone(
         Point3::new(0.0, 0.0, small_z - axis_sign * axial_to_apex)
     };
 
-    let axis_dir = Vec3::new(0.0, 0.0, -axis_sign);
+    // Axis points from apex toward the base (big end), so that the
+    // surface generator v>0 sweeps from apex outward to the base.
+    let axis_dir = Vec3::new(0.0, 0.0, axis_sign);
     let cone_surface = brepkit_math::surfaces::ConicalSurface::new(apex_pos, axis_dir, half_angle)
         .map_err(crate::OperationsError::Math)?;
 
