@@ -487,11 +487,15 @@ impl StepWriteContext {
         };
 
         let bound_refs: Vec<String> = bound_ids.iter().map(|id| format!("#{id}")).collect();
+        let face_orient = if face.is_reversed() { ".F." } else { ".T." };
         let advanced_face = self.next_id();
         self.write_entity(
             advanced_face,
             "ADVANCED_FACE",
-            &format!("'', ({}), #{surface_id}, .T.)", bound_refs.join(", ")),
+            &format!(
+                "'', ({}), #{surface_id}, {face_orient})",
+                bound_refs.join(", ")
+            ),
         );
 
         Ok(advanced_face)

@@ -337,7 +337,9 @@ pub fn make_cone(
         Point3::new(0.0, 0.0, small_z)
     } else {
         let axial_to_apex = r_small * height / (r_big - r_small);
-        Point3::new(0.0, 0.0, small_z + axis_sign * axial_to_apex)
+        // Apex is beyond the small end, away from the big end.
+        // axis_sign points big→small, so we negate it to go small→apex.
+        Point3::new(0.0, 0.0, small_z - axis_sign * axial_to_apex)
     };
 
     let axis_dir = Vec3::new(0.0, 0.0, -axis_sign);

@@ -681,7 +681,6 @@ fn step_roundtrip_cone() {
 }
 
 #[test]
-#[ignore = "bug: STEP round-trip loses ~32% volume on boolean results with curved faces"]
 fn step_roundtrip_boolean_result_volume() {
     let mut topo = Topology::new();
     let base = primitives::make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
