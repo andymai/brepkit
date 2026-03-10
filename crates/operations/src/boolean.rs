@@ -150,7 +150,7 @@ fn compute_v_range_hint(surface: &FaceSurface, verts: &[Point3]) -> Option<(f64,
             for &p in verts {
                 let d = p - apex;
                 let axial = d.dot(axis);
-                let radial_sq = d.dot(d) - axial * axial;
+                let radial_sq = (d.dot(d) - axial * axial).max(0.0);
                 // v = sqrt(axial^2 + radial_sq) with correct sign
                 let v = axial * sin_a + radial_sq.sqrt() * cos_a;
                 v_min = v_min.min(v);
@@ -2062,7 +2062,7 @@ fn guard_tangent_coplanar(
         }
         // All vertices near some opposing plane — use centroid ray-cast.
         let centroid = polygon_centroid(vertices);
-        return classify_point_raycast(centroid, normal, opposite, bvh, tol);
+        return multiray_classify(centroid, normal, opposite, bvh, tol);
     }
 
     class
@@ -2126,85 +2126,16 @@ fn classify_point(
         }
     }
 
-    // Multi-ray classification: cast 3 rays in different directions and take
-    // majority vote. A single ray can give wrong results when it grazes an
-    // edge or vertex — the crossing count becomes ambiguous. Using 3 rays
-    // makes the classification robust against such degeneracies.
-    //
-    // Generate two extra ray directions by rotating the normal ~55° using
-    // Rodrigues' formula around a perpendicular axis.
-    let ray_dirs = {
-        let perp = if normal.x().abs() < 0.9 {
-            Vec3::new(1.0, 0.0, 0.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        };
-        let cross_vec = normal.cross(perp);
-        let axis_len = cross_vec.length();
-        if axis_len < 1e-12 {
-            // Degenerate — fall back to single-ray
-            [normal, normal, normal]
-        } else {
-            let inv = 1.0 / axis_len;
-            let axis = Vec3::new(
-                cross_vec.x() * inv,
-                cross_vec.y() * inv,
-                cross_vec.z() * inv,
-            );
-            let rodrigues = |cos_a: f64, sin_a: f64| -> Vec3 {
-                let dot = axis.dot(normal);
-                let cross = axis.cross(normal);
-                Vec3::new(
-                    normal.x().mul_add(
-                        cos_a,
-                        cross.x().mul_add(sin_a, axis.x() * dot * (1.0 - cos_a)),
-                    ),
-                    normal.y().mul_add(
-                        cos_a,
-                        cross.y().mul_add(sin_a, axis.y() * dot * (1.0 - cos_a)),
-                    ),
-                    normal.z().mul_add(
-                        cos_a,
-                        cross.z().mul_add(sin_a, axis.z() * dot * (1.0 - cos_a)),
-                    ),
-                )
-            };
-            // cos(55°) ≈ 0.574, sin(55°) ≈ 0.819
-            [normal, rodrigues(0.574, 0.819), rodrigues(0.574, -0.819)]
-        }
-    };
-
-    let mut inside_votes = 0u8;
-    for ray_dir in &ray_dirs {
-        let mut crossings = 0i32;
-        if let Some(bvh) = bvh {
-            for idx in bvh.query_ray(centroid, *ray_dir) {
-                let (_, ref verts, n_opp, d_opp) = opposite[idx];
-                crossings += ray_face_crossing(centroid, *ray_dir, verts, n_opp, d_opp, tol);
-            }
-        } else {
-            for &(_, ref verts, n_opp, d_opp) in opposite {
-                crossings += ray_face_crossing(centroid, *ray_dir, verts, n_opp, d_opp, tol);
-            }
-        }
-        if crossings != 0 {
-            inside_votes += 1;
-        }
-    }
-
-    // Majority vote: inside if 2+ of 3 rays say inside.
-    if inside_votes >= 2 {
-        FaceClass::Inside
-    } else {
-        FaceClass::Outside
-    }
+    multiray_classify(centroid, normal, opposite, bvh, tol)
 }
 
-/// Ray-cast only classification — skips the coplanar check.
+/// Multi-ray inside/outside classification via majority vote.
 ///
-/// Used when the coplanar check has been determined unreliable (e.g. tangent
-/// touch) and we need a direct Inside/Outside answer via ray-casting.
-fn classify_point_raycast(
+/// Casts 3 rays (the given normal + two ~55° rotations) and counts boundary
+/// crossings. Returns Inside if 2+ of 3 rays report an odd crossing count.
+/// This is the shared implementation used by both `classify_point` and the
+/// tangent-coplanar guard's fallback.
+fn multiray_classify(
     point: Point3,
     normal: Vec3,
     opposite: &FaceData,
@@ -2246,6 +2177,7 @@ fn classify_point_raycast(
                     ),
                 )
             };
+            // cos(55°) ≈ 0.574, sin(55°) ≈ 0.819
             [normal, rodrigues(0.574, 0.819), rodrigues(0.574, -0.819)]
         }
     };

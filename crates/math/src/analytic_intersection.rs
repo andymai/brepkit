@@ -1001,7 +1001,7 @@ fn algebraic_sphere_cylinder(
     // Currently only handle the coaxial/near-coaxial case.
     // Non-coaxial sphere-cylinder intersections produce quartic curves;
     // fall back to the general marching approach for those.
-    if d_perp > 1e-8 {
+    if d_perp > 1e-7 {
         return Ok(None); // Fall through to marching
     }
 
