@@ -27,9 +27,13 @@ impl QrResult {
     /// Perform QR factorization with column pivoting on an m×n matrix.
     ///
     /// `data` is row-major, length `m * n`. It is modified in-place.
-    #[allow(clippy::too_many_lines)]
+    /// # Panics
+    ///
+    /// Panics if `data.len() < m * n`. This is a precondition invariant —
+    /// callers within the GCS module always provide correctly-sized buffers.
+    #[allow(clippy::too_many_lines, clippy::missing_panics_doc)]
     pub fn factorize(data: &mut [f64], m: usize, n: usize) -> Self {
-        assert!(
+        debug_assert!(
             data.len() >= m * n,
             "data length {} < m*n = {}",
             data.len(),

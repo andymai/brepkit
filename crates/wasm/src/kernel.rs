@@ -5031,6 +5031,7 @@ impl BrepKernel {
     /// Returns a JSON string: `{"dof": n, "rank": n, "numParams": n, "numEquations": n}`.
     #[wasm_bindgen(js_name = "sketchDof")]
     pub fn sketch_dof(&mut self, sketch: u32) -> Result<String, JsError> {
+        use brepkit_operations::sketch::GcsConstraint;
         let sk = self
             .sketches
             .get_mut(sketch as usize)
@@ -5058,32 +5059,77 @@ impl BrepKernel {
             brepkit_operations::sketch::LineId,
         > = std::collections::HashMap::new();
 
-        for c in &sk.constraints {
-            match c {
-                brepkit_operations::sketch::Constraint::Horizontal(a, b)
-                | brepkit_operations::sketch::Constraint::Vertical(a, b) => {
-                    if let std::collections::hash_map::Entry::Vacant(e) = line_cache.entry((*a, *b))
-                    {
-                        if let Ok(lid) = sys.add_line(point_ids[*a], point_ids[*b]) {
-                            e.insert(lid);
-                        }
-                    }
+        // Helper: get or create an implicit line for a point pair
+        let mut get_or_create_line = |sys: &mut brepkit_operations::sketch::GcsSystem,
+                                      ids: &[brepkit_operations::sketch::PointId],
+                                      a: usize,
+                                      b: usize|
+         -> Option<brepkit_operations::sketch::LineId> {
+            if let std::collections::hash_map::Entry::Vacant(e) = line_cache.entry((a, b)) {
+                if let Ok(lid) = sys.add_line(ids[a], ids[b]) {
+                    e.insert(lid);
                 }
-                brepkit_operations::sketch::Constraint::Perpendicular(a, b, c, d)
-                | brepkit_operations::sketch::Constraint::Parallel(a, b, c, d)
-                | brepkit_operations::sketch::Constraint::Angle(a, b, c, d, _) => {
-                    for (x, y) in [(*a, *b), (*c, *d)] {
-                        if let std::collections::hash_map::Entry::Vacant(e) =
-                            line_cache.entry((x, y))
-                        {
-                            if let Ok(lid) = sys.add_line(point_ids[x], point_ids[y]) {
-                                e.insert(lid);
-                            }
-                        }
-                    }
-                }
-                _ => {}
             }
+            line_cache.get(&(a, b)).copied()
+        };
+
+        // Convert constraints from legacy enum to GcsConstraint
+        for c in &sk.constraints {
+            let _ = match c {
+                brepkit_operations::sketch::Constraint::Coincident(a, b) => {
+                    sys.add_constraint(GcsConstraint::Coincident(point_ids[*a], point_ids[*b]))
+                }
+                brepkit_operations::sketch::Constraint::Distance(a, b, d) => {
+                    sys.add_constraint(GcsConstraint::Distance(point_ids[*a], point_ids[*b], *d))
+                }
+                brepkit_operations::sketch::Constraint::FixX(p, v) => {
+                    sys.add_constraint(GcsConstraint::FixX(point_ids[*p], *v))
+                }
+                brepkit_operations::sketch::Constraint::FixY(p, v) => {
+                    sys.add_constraint(GcsConstraint::FixY(point_ids[*p], *v))
+                }
+                brepkit_operations::sketch::Constraint::Horizontal(a, b) => {
+                    if let Some(l) = get_or_create_line(&mut sys, &point_ids, *a, *b) {
+                        sys.add_constraint(GcsConstraint::Horizontal(l))
+                    } else {
+                        continue;
+                    }
+                }
+                brepkit_operations::sketch::Constraint::Vertical(a, b) => {
+                    if let Some(l) = get_or_create_line(&mut sys, &point_ids, *a, *b) {
+                        sys.add_constraint(GcsConstraint::Vertical(l))
+                    } else {
+                        continue;
+                    }
+                }
+                brepkit_operations::sketch::Constraint::Angle(a, b, c, d, theta) => {
+                    let l1 = get_or_create_line(&mut sys, &point_ids, *a, *b);
+                    let l2 = get_or_create_line(&mut sys, &point_ids, *c, *d);
+                    if let (Some(l1), Some(l2)) = (l1, l2) {
+                        sys.add_constraint(GcsConstraint::Angle(l1, l2, *theta))
+                    } else {
+                        continue;
+                    }
+                }
+                brepkit_operations::sketch::Constraint::Perpendicular(a, b, c, d) => {
+                    let l1 = get_or_create_line(&mut sys, &point_ids, *a, *b);
+                    let l2 = get_or_create_line(&mut sys, &point_ids, *c, *d);
+                    if let (Some(l1), Some(l2)) = (l1, l2) {
+                        sys.add_constraint(GcsConstraint::Perpendicular(l1, l2))
+                    } else {
+                        continue;
+                    }
+                }
+                brepkit_operations::sketch::Constraint::Parallel(a, b, c, d) => {
+                    let l1 = get_or_create_line(&mut sys, &point_ids, *a, *b);
+                    let l2 = get_or_create_line(&mut sys, &point_ids, *c, *d);
+                    if let (Some(l1), Some(l2)) = (l1, l2) {
+                        sys.add_constraint(GcsConstraint::Parallel(l1, l2))
+                    } else {
+                        continue;
+                    }
+                }
+            };
         }
 
         let dof = sys.dof();
