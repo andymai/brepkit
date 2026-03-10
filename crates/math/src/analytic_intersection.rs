@@ -1070,7 +1070,7 @@ fn correct_to_intersection(
         let da = (pv - Vec3::new(pa.x(), pa.y(), pa.z())).dot(na);
         let db = (pv - Vec3::new(pb.x(), pb.y(), pb.z())).dot(nb);
 
-        if da.abs() < 1e-12 && db.abs() < 1e-12 {
+        if da.abs() < 1e-7 && db.abs() < 1e-7 {
             break;
         }
 
@@ -1108,7 +1108,26 @@ fn correct_to_intersection(
         let dz = inv
             * (-da * (nb.x() * t_hat.y() - nb.y() * t_hat.x())
                 + db * (na.x() * t_hat.y() - na.y() * t_hat.x()));
-        p = Point3::new(p.x() + dx, p.y() + dy, p.z() + dz);
+        let candidate = Point3::new(p.x() + dx, p.y() + dy, p.z() + dz);
+
+        // Divergence guard: if the correction moves farther from both
+        // surfaces, abandon Newton and return the best point so far.
+        let (uc, vc) = project_analytic(a, candidate, u_range_a, v_range_a);
+        let (ud, vd) = project_analytic(b, candidate, u_range_b, v_range_b);
+        let pc_a = surf_a(uc, vc);
+        let pc_b = surf_b(ud, vd);
+        let cv = Vec3::new(candidate.x(), candidate.y(), candidate.z());
+        let da_new = (cv - Vec3::new(pc_a.x(), pc_a.y(), pc_a.z()))
+            .dot(norm_a(uc, vc))
+            .abs();
+        let db_new = (cv - Vec3::new(pc_b.x(), pc_b.y(), pc_b.z()))
+            .dot(norm_b(ud, vd))
+            .abs();
+        if da_new > da.abs() && db_new > db.abs() {
+            return p;
+        }
+
+        p = candidate;
     }
     p
 }

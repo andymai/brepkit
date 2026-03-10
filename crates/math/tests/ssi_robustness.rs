@@ -222,8 +222,8 @@ fn cylinder_cylinder_perpendicular() {
     );
 
     // All intersection points must lie on both cylinders.
-    // The marching method has limited accuracy — use a generous tolerance.
-    let tol = 0.2;
+    // Newton post-correction achieves high accuracy.
+    let tol = 1e-4;
     for curve in &curves {
         for pt in &curve.points {
             assert_on_cylinder(
