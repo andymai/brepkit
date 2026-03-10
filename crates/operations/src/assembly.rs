@@ -42,7 +42,7 @@ pub struct Component {
 /// - Instance sharing (same solid, different transforms)
 /// - Bounding box computation for the entire assembly
 /// - Flattening to a list of positioned solids
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Assembly {
     /// All components, indexed by their ID.
     components: HashMap<ComponentId, Component>,

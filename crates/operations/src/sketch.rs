@@ -902,4 +902,66 @@ mod tests {
             sketch.points[p].x
         );
     }
+
+    #[test]
+    fn rectangle_30x20() {
+        // Build a 30x20 rectangle from 4 points with distance, horizontal,
+        // and vertical constraints. Pin one corner to the origin.
+        let mut sketch = Sketch::new();
+
+        // Four corners — start with rough initial guesses
+        let p0 = sketch.add_point(SketchPoint::new(0.0, 0.0)); // bottom-left
+        let p1 = sketch.add_point(SketchPoint::new(25.0, 1.0)); // bottom-right
+        let p2 = sketch.add_point(SketchPoint::new(26.0, 18.0)); // top-right
+        let p3 = sketch.add_point(SketchPoint::new(1.0, 17.0)); // top-left
+
+        // Pin p0 at origin
+        sketch.add_constraint(Constraint::FixX(p0, 0.0));
+        sketch.add_constraint(Constraint::FixY(p0, 0.0));
+
+        // Bottom edge: p0-p1 horizontal, length 30
+        sketch.add_constraint(Constraint::Horizontal(p0, p1));
+        sketch.add_constraint(Constraint::Distance(p0, p1, 30.0));
+
+        // Right edge: p1-p2 vertical, length 20
+        sketch.add_constraint(Constraint::Vertical(p1, p2));
+        sketch.add_constraint(Constraint::Distance(p1, p2, 20.0));
+
+        // Top edge: p2-p3 horizontal, length 30
+        sketch.add_constraint(Constraint::Horizontal(p2, p3));
+        sketch.add_constraint(Constraint::Distance(p2, p3, 30.0));
+
+        // Left edge: p3-p0 vertical, length 20
+        sketch.add_constraint(Constraint::Vertical(p3, p0));
+        sketch.add_constraint(Constraint::Distance(p3, p0, 20.0));
+
+        let result = sketch.solve(200, TOL).unwrap();
+        assert!(result.converged, "rectangle should converge");
+
+        // Verify corner positions
+        let eps = 1e-4;
+        assert!((sketch.points[p0].x).abs() < eps, "p0.x = 0");
+        assert!((sketch.points[p0].y).abs() < eps, "p0.y = 0");
+        assert!((sketch.points[p1].x - 30.0).abs() < eps, "p1.x = 30");
+        assert!((sketch.points[p1].y).abs() < eps, "p1.y = 0");
+        assert!((sketch.points[p2].x - 30.0).abs() < eps, "p2.x = 30");
+        assert!((sketch.points[p2].y - 20.0).abs() < eps, "p2.y = 20");
+        assert!((sketch.points[p3].x).abs() < eps, "p3.x = 0");
+        assert!((sketch.points[p3].y - 20.0).abs() < eps, "p3.y = 20");
+
+        // Verify edge lengths via Euclidean distance
+        let d01 = (sketch.points[p1].x - sketch.points[p0].x)
+            .hypot(sketch.points[p1].y - sketch.points[p0].y);
+        let d12 = (sketch.points[p2].x - sketch.points[p1].x)
+            .hypot(sketch.points[p2].y - sketch.points[p1].y);
+        let d23 = (sketch.points[p3].x - sketch.points[p2].x)
+            .hypot(sketch.points[p3].y - sketch.points[p2].y);
+        let d30 = (sketch.points[p0].x - sketch.points[p3].x)
+            .hypot(sketch.points[p0].y - sketch.points[p3].y);
+
+        assert!((d01 - 30.0).abs() < eps, "bottom edge = 30, got {d01}");
+        assert!((d12 - 20.0).abs() < eps, "right edge = 20, got {d12}");
+        assert!((d23 - 30.0).abs() < eps, "top edge = 30, got {d23}");
+        assert!((d30 - 20.0).abs() < eps, "left edge = 20, got {d30}");
+    }
 }

@@ -56,7 +56,7 @@ impl<T> Id<T> {
 ///
 /// Stores values of type `T` in a contiguous `Vec` and hands out
 /// [`Id<T>`] handles for O(1) lookup.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Arena<T> {
     items: Vec<T>,
 }
