@@ -167,7 +167,8 @@ impl<'a> StepBuilder<'a> {
     fn build_face(&mut self, face_ref: u64) -> Result<brepkit_topology::face::FaceId, IoError> {
         let attrs = self.get_entity(face_ref)?.attrs.clone();
         // Check for reversed face orientation (.F. flag at end of ADVANCED_FACE).
-        let face_reversed = attrs.trim_end_matches(')').trim().ends_with(".F.");
+        let orient_tail = attrs.trim_end_matches(')').trim();
+        let face_reversed = orient_tail.ends_with(".F.") || orient_tail.ends_with(".FALSE.");
         let all_refs = parse_refs(&attrs);
         let list_refs = parse_list_refs(&attrs);
 
