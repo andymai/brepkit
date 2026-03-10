@@ -15,7 +15,7 @@ use brepkit_math::predicates::{orient3d_sos, point_in_polygon};
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::{Edge, EdgeCurve};
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
@@ -2760,6 +2760,209 @@ struct AnalyticFragment {
     source_reversed: bool,
 }
 
+/// Refine boundary edges by splitting them at intermediate collinear vertices.
+///
+/// After analytic boolean assembly, unsplit faces may have long edges that
+/// span the same geometric line as multiple shorter edges from adjacent
+/// split faces. This function splits those long edges at the intermediate
+/// vertex positions, enabling proper edge sharing between adjacent faces.
+#[allow(clippy::too_many_lines)]
+fn refine_boundary_edges(
+    topo: &mut Topology,
+    face_ids: &mut [FaceId],
+    edge_map: &mut HashMap<(usize, usize), EdgeId>,
+    tol: Tolerance,
+) -> Result<(), crate::OperationsError> {
+    // Build edge-to-face usage map
+    let mut edge_face_count: HashMap<EdgeId, usize> = HashMap::new();
+    for &fid in face_ids.iter() {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                *edge_face_count.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+
+    // Find boundary edges (used by exactly 1 face)
+    let boundary_edges: HashSet<EdgeId> = edge_face_count
+        .iter()
+        .filter(|&(_, &count)| count == 1)
+        .map(|(&eid, _)| eid)
+        .collect();
+
+    if boundary_edges.is_empty() {
+        return Ok(());
+    }
+
+    // Collect all vertex positions
+    let mut all_vertex_positions: HashMap<VertexId, Point3> = HashMap::new();
+    for &fid in face_ids.iter() {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                if let Ok(v) = topo.vertex(edge.start()) {
+                    all_vertex_positions
+                        .entry(edge.start())
+                        .or_insert_with(|| v.point());
+                }
+                if let Ok(v) = topo.vertex(edge.end()) {
+                    all_vertex_positions
+                        .entry(edge.end())
+                        .or_insert_with(|| v.point());
+                }
+            }
+        }
+    }
+
+    // For each boundary edge, find intermediate collinear vertices
+    let mut edge_splits: HashMap<EdgeId, Vec<VertexId>> = HashMap::new();
+
+    for &eid in &boundary_edges {
+        let edge = topo.edge(eid)?;
+        let p0 = all_vertex_positions[&edge.start()];
+        let p1 = all_vertex_positions[&edge.end()];
+        let dx = p1.x() - p0.x();
+        let dy = p1.y() - p0.y();
+        let dz = p1.z() - p0.z();
+        let len_sq = dx * dx + dy * dy + dz * dz;
+        if len_sq < tol.linear * tol.linear {
+            continue;
+        }
+        let len = len_sq.sqrt();
+
+        let mut intermediates: Vec<(f64, VertexId)> = Vec::new();
+
+        for (&vid, &pos) in &all_vertex_positions {
+            if vid == edge.start() || vid == edge.end() {
+                continue;
+            }
+            // Project pos onto line p0 + t*(p1-p0)
+            let dpx = pos.x() - p0.x();
+            let dpy = pos.y() - p0.y();
+            let dpz = pos.z() - p0.z();
+            let t = (dpx * dx + dpy * dy + dpz * dz) / len_sq;
+
+            // Must be strictly between endpoints
+            if t <= tol.linear / len || t >= 1.0 - tol.linear / len {
+                continue;
+            }
+
+            // Check distance from point to line
+            let proj_x = p0.x() + t * dx;
+            let proj_y = p0.y() + t * dy;
+            let proj_z = p0.z() + t * dz;
+            let dist_sq = (pos.x() - proj_x).powi(2)
+                + (pos.y() - proj_y).powi(2)
+                + (pos.z() - proj_z).powi(2);
+
+            if dist_sq < tol.linear * tol.linear {
+                intermediates.push((t, vid));
+            }
+        }
+
+        if !intermediates.is_empty() {
+            intermediates
+                .sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            intermediates.dedup_by_key(|(_, vid)| *vid);
+            edge_splits.insert(eid, intermediates.into_iter().map(|(_, vid)| vid).collect());
+        }
+    }
+
+    if edge_splits.is_empty() {
+        return Ok(());
+    }
+
+    // Rebuild faces that have edges needing splits
+    for fi in 0..face_ids.len() {
+        let fid = face_ids[fi];
+        let face = topo.face(fid)?;
+        let outer_wire_id = face.outer_wire();
+        let outer_wire = topo.wire(outer_wire_id)?;
+
+        let mut needs_rebuild = false;
+        for oe in outer_wire.edges() {
+            if edge_splits.contains_key(&oe.edge()) {
+                needs_rebuild = true;
+                break;
+            }
+        }
+
+        if !needs_rebuild {
+            continue;
+        }
+
+        // Snapshot face data before mutable borrow
+        let surface = face.surface().clone();
+        let inner_wires = face.inner_wires().to_vec();
+        let is_reversed = face.is_reversed();
+        let old_edges: Vec<OrientedEdge> = outer_wire.edges().to_vec();
+
+        // Rebuild the outer wire with split edges
+        let mut new_oriented_edges = Vec::new();
+        for oe in &old_edges {
+            if let Some(intermediates) = edge_splits.get(&oe.edge()) {
+                let edge = topo.edge(oe.edge())?;
+                let start_vid = edge.start();
+                let end_vid = edge.end();
+                let original_curve = edge.curve().clone();
+
+                // Build vertex chain in traversal order
+                let chain: Vec<VertexId> = if oe.is_forward() {
+                    let mut c = vec![start_vid];
+                    c.extend(intermediates.iter().copied());
+                    c.push(end_vid);
+                    c
+                } else {
+                    let mut c = vec![end_vid];
+                    c.extend(intermediates.iter().rev().copied());
+                    c.push(start_vid);
+                    c
+                };
+
+                // Create sub-edges (reusing from edge_map when possible).
+                // Preserve the original edge's curve type so curved edges
+                // (Circle, Ellipse) are not silently replaced with lines.
+                for k in 0..chain.len() - 1 {
+                    let va = chain[k];
+                    let vb = chain[k + 1];
+                    let va_idx = va.index();
+                    let vb_idx = vb.index();
+                    let (key_min, key_max) = if va_idx <= vb_idx {
+                        (va_idx, vb_idx)
+                    } else {
+                        (vb_idx, va_idx)
+                    };
+                    let fwd = va_idx <= vb_idx;
+                    let sub_eid = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
+                        let (s, e) = if fwd { (va, vb) } else { (vb, va) };
+                        topo.edges.alloc(Edge::new(s, e, original_curve.clone()))
+                    });
+                    new_oriented_edges.push(OrientedEdge::new(sub_eid, fwd));
+                }
+            } else {
+                new_oriented_edges.push(*oe);
+            }
+        }
+
+        let new_wire =
+            Wire::new(new_oriented_edges, true).map_err(crate::OperationsError::Topology)?;
+        let new_wire_id = topo.wires.alloc(new_wire);
+
+        let new_face = if is_reversed {
+            Face::new_reversed(new_wire_id, inner_wires, surface)
+        } else {
+            Face::new(new_wire_id, inner_wires, surface)
+        };
+        face_ids[fi] = topo.faces.alloc(new_face);
+    }
+
+    Ok(())
+}
+
 /// Perform an analytic boolean preserving exact surface types.
 ///
 /// This is the fast path for solids with only analytic faces. It computes
@@ -3802,6 +4005,12 @@ fn analytic_boolean(
             reason: "analytic boolean produced no faces".into(),
         });
     }
+
+    // ── Post-assembly edge refinement ──────────────────────────────────
+    // Unsplit faces may have long boundary edges that span the same line
+    // as multiple shorter edges from adjacent split faces. Refine them
+    // so edge sharing works correctly.
+    refine_boundary_edges(topo, &mut face_ids_out, &mut edge_map, tol)?;
 
     let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.shells.alloc(shell);
@@ -5866,7 +6075,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: fuse produces 36 boundary edges on overlapping 10x10x10 boxes"]
     fn fuse_overlapping_boxes_validates() {
         let mut topo = Topology::new();
         let a = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();

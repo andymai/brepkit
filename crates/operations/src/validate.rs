@@ -976,7 +976,6 @@ mod tests {
     // ── Boolean result validation ──────────────────────
 
     #[test]
-    #[ignore = "bug: boolean fuse leaves 32 boundary edges (shell not closed)"]
     fn boolean_fuse_result_validates() {
         let mut topo = Topology::new();
         let a = brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -994,7 +993,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: boolean cut leaves 32 boundary edges (shell not closed)"]
     fn boolean_cut_result_validates() {
         let mut topo = Topology::new();
         let a = brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -1012,7 +1010,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: boolean intersect leaves 40 boundary edges (shell not closed)"]
     fn boolean_intersect_result_validates() {
         let mut topo = Topology::new();
         let a = brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
