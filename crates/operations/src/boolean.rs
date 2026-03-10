@@ -2179,6 +2179,10 @@ pub(crate) fn assemble_solid_mixed(
         });
     }
 
+    // Post-assembly edge refinement: split long boundary edges at
+    // intermediate collinear vertices so adjacent faces can share edges.
+    refine_boundary_edges(topo, &mut face_ids, &mut edge_map, tol)?;
+
     let shell = Shell::new(face_ids).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.shells.alloc(shell);
     Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
