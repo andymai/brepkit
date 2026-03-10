@@ -672,22 +672,16 @@ mod tests {
 
     /// Chamfer all 12 edges of a 10³ box with d=1.0.
     ///
-    /// Exact volume derivation:
-    ///   Original: 10³ = 1000
-    ///   Each edge chamfer removes a triangular prism: V = (d²/2) × L
-    ///     12 edges × (1²/2 × 10) = 12 × 5 = 60 removed from edges
-    ///     BUT: edges at corners overlap, so corner octants are triple-counted.
-    ///   Each corner chamfer removes an octahedral cap: V = d³/6
-    ///     8 corners × (1³/6) = 8/6 ≈ 1.333
-    ///   By inclusion-exclusion: V = 1000 - 60 + 2×(8/6) ≈ 1000 - 60 + 2.667 ≈ 942.667
+    /// Volume derivation for 10³ box chamfered at d=1:
+    ///   Each edge removes a right-triangular prism with legs d, length L-2d=8:
+    ///     12 × (d²/2) × (L-2d) = 12 × 0.5 × 8 = 48
+    ///   Each corner removes a tetrahedron with volume d³/6:
+    ///     8 × (1/6) ≈ 1.333
+    ///   Total removed ≈ 49.333, expected ≈ 950.7
     ///
-    /// Actually, the standard formula for a symmetrically chamfered box:
-    ///   V = L³ - 12 × (d²L/2) + 8 × (d³·2/6)
-    ///     = 1000 - 60 + 2.667 = 942.667
-    ///
-    /// Note: the corner geometry is triangular (flat chamfer face, not
-    /// spherical), so corner removal = tetrahedron with volume d³/6 each.
-    /// The edge prisms overlap at corners, so we add back 2× the corner vol.
+    /// Use 5% tolerance to account for implementation variations in corner
+    /// treatment (the actual value depends on whether edge prisms use full
+    /// edge length L=10 or trimmed L-2d=8).
     #[test]
     fn chamfer_all_edges_volume() {
         let mut topo = Topology::new();
@@ -704,19 +698,10 @@ mod tests {
         assert_eq!(sh.faces().len(), 26, "chamfered box should have 26 faces");
 
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
-        // Each edge removes a right-triangular prism: base = isosceles right
-        // triangle with legs d=1, area = d²/2 = 0.5, length = L-2d = 8.
-        // 12 edges × 0.5 × 8 = 48.
-        // Each corner removes a tetrahedron: V = d³/6 = 1/6.
-        // 8 corners × 1/6 = 4/3 ≈ 1.333.
-        // Total removed ≈ 48 + 1.333 = 49.333.
-        // Expected ≈ 1000 - 49.333 = 950.667.
-        //
-        // However, edge prism length may be full L=10 with overlapping
-        // corner deductions. The exact value depends on the chamfer
-        // algorithm's corner treatment. Use 5% tolerance to validate
-        // the range while exposing gross errors.
-        let expected = 950.0; // approximate; range [940, 960] is correct
+        // Expected ≈ 950.7 (see doc comment). 5% tolerance window
+        // covers the range [903, 998], catching gross errors while
+        // allowing for implementation variations in corner treatment.
+        let expected = 950.0;
         let rel_err = (vol - expected).abs() / expected;
         assert!(
             rel_err < 0.05,

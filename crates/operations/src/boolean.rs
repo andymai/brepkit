@@ -5998,12 +5998,15 @@ mod tests {
         let result = boolean(&mut topo, BooleanOp::Fuse, bx, sp).unwrap();
 
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
-        let vol_box = 1000.0;
+        let vol_box: f64 = 1000.0;
         let vol_sphere = 4.0 / 3.0 * std::f64::consts::PI * 343.0;
-        // Fused volume must be greater than the larger input.
+        // Fused volume must exceed the larger input (sphere ≈ 1437 > box = 1000).
+        // Allow 2% tessellation tolerance on the lower bound.
+        let vol_max = vol_box.max(vol_sphere);
         assert!(
-            vol > vol_box,
-            "fuse volume {vol:.1} should be > box volume {vol_box}"
+            vol > vol_max * 0.98,
+            "fuse volume {vol:.1} should be > ~larger input {:.1}",
+            vol_max * 0.98
         );
         // And less than the sum (since they overlap).
         assert!(
@@ -6274,12 +6277,14 @@ mod tests {
 
         let vol_cyl1 = PI * 25.0 * 20.0; // ≈ 1570.8
         let vol_cyl2 = PI * 9.0 * 20.0; // ≈ 565.5
-        // Fuse volume must exceed the larger cylinder (cyl2 adds material).
-        // Allow 1% tessellation tolerance on the lower bound.
+        // Fuse volume must exceed cyl1 + a meaningful fraction of cyl2's
+        // protrusion. With cyl2 at x=4 (r=3), about half of cyl2 protrudes
+        // past cyl1. Use cyl1 + 0.25*cyl2 as a conservative lower bound.
+        // Allow 2% tessellation tolerance.
+        let lower = (vol_cyl1 + 0.25 * vol_cyl2) * 0.98;
         assert!(
-            vol > vol_cyl1 * 0.99,
-            "fuse volume {vol:.1} should be > ~larger cylinder {:.1}",
-            vol_cyl1 * 0.99
+            vol > lower,
+            "fuse volume {vol:.1} should be > conservative lower bound {lower:.1}"
         );
         assert!(
             vol < vol_cyl1 + vol_cyl2,
