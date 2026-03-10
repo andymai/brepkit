@@ -36,6 +36,25 @@ use wasm_bindgen::prelude::*;
 use crate::error::{WasmError, validate_finite, validate_positive};
 use crate::shapes::JsMesh;
 
+/// Typed result for `tessellateSolidGrouped` — avoids `json!()` intermediate `Value`.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupedMeshResult {
+    positions: Vec<f64>,
+    normals: Vec<f64>,
+    indices: Vec<u32>,
+    face_offsets: Vec<u32>,
+}
+
+/// Typed result for `tessellateSolidUV` — avoids `json!()` intermediate `Value`.
+#[derive(serde::Serialize)]
+struct UvMeshResult {
+    positions: Vec<f64>,
+    normals: Vec<f64>,
+    indices: Vec<u32>,
+    uvs: Vec<f64>,
+}
+
 /// Default tolerance for vertices created by the kernel.
 const TOL: f64 = 1e-7;
 
@@ -1843,14 +1862,15 @@ impl BrepKernel {
         #[allow(clippy::cast_possible_truncation)]
         face_offsets.push(all_indices.len() as u32);
 
-        Ok(serde_json::to_string(&serde_json::json!({
-            "positions": all_positions,
-            "normals": all_normals,
-            "indices": all_indices,
-            "faceOffsets": face_offsets,
-        }))
-        .map_err(|e| JsError::new(&e.to_string()))?
-        .into())
+        let result = GroupedMeshResult {
+            positions: all_positions,
+            normals: all_normals,
+            indices: all_indices,
+            face_offsets,
+        };
+        Ok(serde_json::to_string(&result)
+            .map_err(|e| JsError::new(&e.to_string()))?
+            .into())
     }
 
     /// Tessellate a solid and include per-vertex UV coordinates.
@@ -1878,7 +1898,10 @@ impl BrepKernel {
             #[allow(clippy::cast_possible_truncation)]
             let idx_offset = (all_positions.len() / 3) as u32;
 
-            let mesh_uv = tessellate::tessellate_with_uvs(&self.topo, face_id, deflection)?;
+            let mesh_uv = match tessellate::tessellate_with_uvs(&self.topo, face_id, deflection) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
             for p in &mesh_uv.mesh.positions {
                 all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
             }
@@ -1893,14 +1916,15 @@ impl BrepKernel {
             }
         }
 
-        Ok(serde_json::to_string(&serde_json::json!({
-            "positions": all_positions,
-            "normals": all_normals,
-            "indices": all_indices,
-            "uvs": all_uvs,
-        }))
-        .map_err(|e| JsError::new(&e.to_string()))?
-        .into())
+        let result = UvMeshResult {
+            positions: all_positions,
+            normals: all_normals,
+            indices: all_indices,
+            uvs: all_uvs,
+        };
+        Ok(serde_json::to_string(&result)
+            .map_err(|e| JsError::new(&e.to_string()))?
+            .into())
     }
 
     // ── Edge wireframe ────────────────────────────────────────────
