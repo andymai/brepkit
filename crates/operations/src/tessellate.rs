@@ -4193,8 +4193,8 @@ mod winding_tests {
             "boolean cut result should have positive signed volume, got {vol}"
         );
 
-        // Volume should be box (1000) minus sphere cap (~56.5), roughly 880-950.
-        let expected_approx = 1000.0 - (4.0 / 3.0) * std::f64::consts::PI * 27.0 / 2.0;
+        // Volume should be box (1000) minus full sphere (4/3·π·27 ≈ 113.1).
+        let expected_approx = 1000.0 - (4.0 / 3.0) * std::f64::consts::PI * 27.0;
         let rel_err = (vol - expected_approx).abs() / expected_approx;
         assert!(
             rel_err < 0.15,

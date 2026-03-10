@@ -5,6 +5,7 @@
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
+use brepkit_topology::TopologyError;
 use brepkit_topology::explorer;
 use brepkit_topology::solid::SolidId;
 
@@ -62,6 +63,23 @@ impl ValidationReport {
 /// Validate a solid, returning a report of all issues found.
 ///
 /// Checks performed:
+/// Returns `true` if every edge in the face is a straight line.
+fn face_all_edges_straight(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+) -> Result<bool, TopologyError> {
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let wire = topo.wire(wire_id)?;
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// 1. **Euler-Poincaré**: V - E + F = 2(1 - g) for genus-g closed solid
 /// 2. **Manifold edges**: each edge shared by exactly 2 faces
 /// 3. **Boundary edges**: no edge shared by only 1 face (open shell)
@@ -158,24 +176,8 @@ pub fn validate_solid(
             face_data.surface(),
             brepkit_topology::face::FaceSurface::Plane { .. }
         );
-        let all_straight = {
-            let mut straight = true;
-            'outer: for wire_id in std::iter::once(face_data.outer_wire())
-                .chain(face_data.inner_wires().iter().copied())
-            {
-                let wire = topo.wire(wire_id)?;
-                for oe in wire.edges() {
-                    let edge = topo.edge(oe.edge())?;
-                    if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                        straight = false;
-                        break 'outer;
-                    }
-                }
-            }
-            straight
-        };
 
-        if is_planar && all_straight {
+        if is_planar && face_all_edges_straight(topo, face_data)? {
             let face_verts = explorer::face_vertices(topo, *fid)?;
             if face_verts.len() < 3 {
                 issues.push(ValidationIssue {
@@ -247,23 +249,7 @@ pub fn validate_solid(
         ) {
             continue;
         }
-        let has_curved = {
-            let mut curved = false;
-            'area_outer: for wire_id in
-                std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
-            {
-                let wire = topo.wire(wire_id)?;
-                for oe in wire.edges() {
-                    let edge = topo.edge(oe.edge())?;
-                    if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                        curved = true;
-                        break 'area_outer;
-                    }
-                }
-            }
-            curved
-        };
-        if has_curved {
+        if !face_all_edges_straight(topo, face)? {
             continue;
         }
 
