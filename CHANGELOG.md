@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.6](https://github.com/andymai/brepkit/compare/v0.8.5...v0.8.6) (2026-03-10)
+
+
+### Bug Fixes
+
+* add Cone classifier and fix false coplanar detection ([#140](https://github.com/andymai/brepkit/issues/140)) ([4755334](https://github.com/andymai/brepkit/commit/4755334c2c1d77295fc70a24ded545130e5e1de0))
+* split non-manifold edges after boolean assembly ([#139](https://github.com/andymai/brepkit/issues/139)) ([5e06ef2](https://github.com/andymai/brepkit/commit/5e06ef283f1b28f3cf4f6c65cc85d1dd0b1e7779))
+
 ## [0.8.5](https://github.com/andymai/brepkit/compare/v0.8.4...v0.8.5) (2026-03-10)
 
 
