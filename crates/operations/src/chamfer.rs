@@ -670,13 +670,30 @@ mod tests {
             .expect("result should be manifold");
     }
 
+    /// Chamfer all 12 edges of a 10³ box with d=1.0.
+    ///
+    /// Exact volume derivation:
+    ///   Original: 10³ = 1000
+    ///   Each edge chamfer removes a triangular prism: V = (d²/2) × L
+    ///     12 edges × (1²/2 × 10) = 12 × 5 = 60 removed from edges
+    ///     BUT: edges at corners overlap, so corner octants are triple-counted.
+    ///   Each corner chamfer removes an octahedral cap: V = d³/6
+    ///     8 corners × (1³/6) = 8/6 ≈ 1.333
+    ///   By inclusion-exclusion: V = 1000 - 60 + 2×(8/6) ≈ 1000 - 60 + 2.667 ≈ 942.667
+    ///
+    /// Actually, the standard formula for a symmetrically chamfered box:
+    ///   V = L³ - 12 × (d²L/2) + 8 × (d³·2/6)
+    ///     = 1000 - 60 + 2.667 = 942.667
+    ///
+    /// Note: the corner geometry is triangular (flat chamfer face, not
+    /// spherical), so corner removal = tetrahedron with volume d³/6 each.
+    /// The edge prisms overlap at corners, so we add back 2× the corner vol.
     #[test]
     fn chamfer_all_edges_volume() {
         let mut topo = Topology::new();
         let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let edges = solid_edge_ids(&topo, cube);
 
-        // Chamfer all 12 edges.
         assert_eq!(edges.len(), 12, "box should have 12 edges");
         let result = chamfer(&mut topo, cube, &edges, 1.0).unwrap();
 
@@ -687,12 +704,48 @@ mod tests {
         assert_eq!(sh.faces().len(), 26, "chamfered box should have 26 faces");
 
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
-        // Chamfered 10³ box with d=1: exact volume ≈ 952
-        // (1000 - 12 edges × ~4 each = ~48 removed).
+        // Each edge removes a right-triangular prism: base = isosceles right
+        // triangle with legs d=1, area = d²/2 = 0.5, length = L-2d = 8.
+        // 12 edges × 0.5 × 8 = 48.
+        // Each corner removes a tetrahedron: V = d³/6 = 1/6.
+        // 8 corners × 1/6 = 4/3 ≈ 1.333.
+        // Total removed ≈ 48 + 1.333 = 49.333.
+        // Expected ≈ 1000 - 49.333 = 950.667.
+        //
+        // However, edge prism length may be full L=10 with overlapping
+        // corner deductions. The exact value depends on the chamfer
+        // algorithm's corner treatment. Use 5% tolerance to validate
+        // the range while exposing gross errors.
+        let expected = 950.0; // approximate; range [940, 960] is correct
+        let rel_err = (vol - expected).abs() / expected;
         assert!(
-            vol < 1000.0,
-            "chamfered box vol should be < 1000, got {vol}"
+            rel_err < 0.05,
+            "chamfered 10³ box with d=1 should have volume ~{expected}, got {vol} \
+             (rel_err={rel_err:.2e}). Was previously 800-1000 tolerance."
         );
-        assert!(vol > 800.0, "chamfered box vol should be > 800, got {vol}");
+    }
+
+    /// Single-edge chamfer on a unit cube: d=0.2.
+    ///
+    /// Removes a right-triangular prism: legs = 0.2, length = 1.0.
+    /// V_removed = (0.2²/2) × 1.0 = 0.02.
+    /// V_expected = 1.0 - 0.02 = 0.98.
+    #[test]
+    fn chamfer_single_edge_volume() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let edges = solid_edge_ids(&topo, cube);
+
+        let result = chamfer(&mut topo, cube, &[edges[0]], 0.2).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+        // V = 1.0 - (0.2²/2 × 1.0) = 1.0 - 0.02 = 0.98
+        let expected = 0.98;
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 1e-4,
+            "single-edge chamfer d=0.2 on unit cube: expected {expected}, got {vol} \
+             (rel_err={rel_err:.2e})"
+        );
     }
 }

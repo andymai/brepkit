@@ -370,6 +370,9 @@ mod tests {
         );
     }
 
+    /// Outward offset of a 2³ box by 0.5.
+    /// Each face moves outward by 0.5, so each dimension grows by 2×0.5 = 1.0.
+    /// V = (2+1)³ = 27.0 exactly (all-planar, no tessellation).
     #[test]
     fn offset_box_correct_volume() {
         let mut topo = Topology::new();
@@ -378,13 +381,18 @@ mod tests {
         let offset = offset_solid(&mut topo, solid, 0.5).unwrap();
         let vol = crate::measure::solid_volume(&topo, offset, 0.1).unwrap();
 
-        // Expected: (2+1)^3 = 27 (each dimension grows by 2×0.5)
+        // All-planar offset → exact polygon volume.
+        let expected = 27.0;
+        let rel_err = (vol - expected).abs() / expected;
         assert!(
-            (vol - 27.0).abs() < 0.5,
-            "outward offset of unit cube by 0.5 should have volume ~27.0, got {vol}"
+            rel_err < 1e-8,
+            "outward offset of 2³ box by 0.5: expected {expected}, got {vol} \
+             (rel_err={rel_err:.2e}). Was 0.5 abs tolerance."
         );
     }
 
+    /// Inward offset of a 4³ box by 0.5.
+    /// V = (4-1)³ = 27.0 exactly.
     #[test]
     fn offset_inward_correct_volume() {
         let mut topo = Topology::new();
@@ -393,34 +401,39 @@ mod tests {
         let offset = offset_solid(&mut topo, solid, -0.5).unwrap();
         let vol = crate::measure::solid_volume(&topo, offset, 0.1).unwrap();
 
-        // Expected: (4-1)^3 = 27 (each dimension shrinks by 2×0.5)
+        let expected = 27.0;
+        let rel_err = (vol - expected).abs() / expected;
         assert!(
-            (vol - 27.0).abs() < 0.5,
-            "inward offset by 0.5 should have volume ~27.0, got {vol}"
+            rel_err < 1e-8,
+            "inward offset of 4³ box by 0.5: expected {expected}, got {vol} \
+             (rel_err={rel_err:.2e}). Was 0.5 abs tolerance."
         );
     }
 
+    /// Small inward offset: 2³ box offset by -0.1.
+    /// V = (2-0.2)³ = 1.8³ = 5.832 exactly.
     #[test]
-    fn offset_very_large_inward_still_valid() {
-        // Even with a large inward offset on a box, the 3-plane intersection
-        // produces a valid (inverted) box. This is geometrically correct —
-        // the offset box at -1.0 on a unit cube produces a box centered at
-        // (0.5,0.5,0.5) with dimensions (-1,-1,-1), which flips normals but
-        // has positive absolute volume. Full self-intersection detection
-        // requires face-face intersection checking (future work).
+    fn offset_small_inward_correct_volume() {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
-        // Small inward offset should always succeed.
         let offset = offset_solid(&mut topo, solid, -0.1).unwrap();
         let vol = crate::measure::solid_volume(&topo, offset, 0.1).unwrap();
-        // (2-0.2)^3 = 1.8^3 = 5.832
+
+        let expected = 5.832;
+        let rel_err = (vol - expected).abs() / expected;
         assert!(
-            (vol - 5.832).abs() < 0.5,
-            "small inward offset volume should be ~5.832, got {vol}"
+            rel_err < 1e-8,
+            "small inward offset volume: expected {expected}, got {vol} \
+             (rel_err={rel_err:.2e}). Was 0.5 abs tolerance."
         );
     }
 
+    /// Offset sphere r=5 by +1 → r=6. V = (4/3)π(6³) ≈ 904.78.
+    ///
+    /// Sphere offset goes through tessellation path (NURBS faces).
+    /// With 32 segments, expect ~5% error from tessellation approximation.
+    /// Previously used 15% tolerance — tightened to 5%.
     #[test]
     fn offset_sphere_outward() {
         let mut topo = Topology::new();
@@ -429,11 +442,31 @@ mod tests {
         let result = offset_solid(&mut topo, solid, 1.0).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
-        // Offset sphere r=5 by 1 → r=6, volume = 4/3 π r³ ≈ 904.78
+        // V = (4/3)πr³ = (4/3)π(216) ≈ 904.779
         let expected = 4.0 / 3.0 * std::f64::consts::PI * 216.0;
+        let rel_err = (vol - expected).abs() / expected;
         assert!(
-            (vol - expected).abs() / expected < 0.15,
-            "offset sphere volume should be ~{expected}, got {vol}"
+            rel_err < 0.05,
+            "offset sphere volume: expected {expected:.2}, got {vol:.2} \
+             (rel_err={rel_err:.2e}). Was 15% tolerance."
+        );
+    }
+
+    /// Offset a non-cube rectangular box outward.
+    /// 3×5×7 box offset by +1 → (3+2)×(5+2)×(7+2) = 5×7×9 = 315.
+    #[test]
+    fn offset_rectangular_box_volume() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, 3.0, 5.0, 7.0).unwrap();
+
+        let offset = offset_solid(&mut topo, solid, 1.0).unwrap();
+        let vol = crate::measure::solid_volume(&topo, offset, 0.1).unwrap();
+
+        let expected = 5.0 * 7.0 * 9.0; // 315.0
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 1e-8,
+            "offset 3×5×7 box by 1: expected {expected}, got {vol} (rel_err={rel_err:.2e})"
         );
     }
 

@@ -5951,28 +5951,65 @@ mod tests {
     }
 
     #[test]
+    /// Intersect a 10³ box with a sphere of r=7 centered at origin.
+    ///
+    /// The box occupies (0,0,0)-(10,10,10). The sphere at origin extends
+    /// from -7 to +7 in all axes. The intersection is the part of the
+    /// sphere inside the box — roughly one octant of the sphere.
+    ///
+    /// V(sphere) = (4/3)π(343) ≈ 1436.76
+    /// V(box) = 1000
+    /// Intersection ≤ min(V_box, V_sphere) = 1000.
+    /// The sphere extends 7 units into the box but only from origin.
+    /// Intersection volume must be > 0 and < both input volumes.
     fn intersect_box_sphere_succeeds() {
         let mut topo = Topology::new();
         let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let sp = crate::primitives::make_sphere(&mut topo, 7.0, 16).unwrap();
-        let result = boolean(&mut topo, BooleanOp::Intersect, bx, sp);
+        let result = boolean(&mut topo, BooleanOp::Intersect, bx, sp).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        // Intersection must be positive and less than both inputs.
+        let vol_box = 1000.0;
+        let vol_sphere = 4.0 / 3.0 * std::f64::consts::PI * 343.0;
         assert!(
-            result.is_ok(),
-            "intersect(box, sphere) should succeed: {:?}",
-            result.err()
+            vol > 0.0,
+            "intersection volume should be positive, got {vol}"
+        );
+        assert!(
+            vol < vol_box,
+            "intersection volume {vol:.1} should be < box volume {vol_box}"
+        );
+        assert!(
+            vol < vol_sphere,
+            "intersection volume {vol:.1} should be < sphere volume {vol_sphere:.1}"
         );
     }
 
     #[test]
+    /// Fuse a 10³ box with a sphere of r=7.
+    ///
+    /// By inclusion-exclusion: V(A∪B) = V(A) + V(B) - V(A∩B).
+    /// Fused volume must be > max(V_box, V_sphere) and ≤ V_box + V_sphere.
     fn fuse_box_sphere_succeeds() {
         let mut topo = Topology::new();
         let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let sp = crate::primitives::make_sphere(&mut topo, 7.0, 16).unwrap();
-        let result = boolean(&mut topo, BooleanOp::Fuse, bx, sp);
+        let result = boolean(&mut topo, BooleanOp::Fuse, bx, sp).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        let vol_box = 1000.0;
+        let vol_sphere = 4.0 / 3.0 * std::f64::consts::PI * 343.0;
+        // Fused volume must be greater than the larger input.
         assert!(
-            result.is_ok(),
-            "fuse(box, sphere) should succeed: {:?}",
-            result.err()
+            vol > vol_box,
+            "fuse volume {vol:.1} should be > box volume {vol_box}"
+        );
+        // And less than the sum (since they overlap).
+        assert!(
+            vol < vol_box + vol_sphere,
+            "fuse volume {vol:.1} should be < sum {:.1}",
+            vol_box + vol_sphere
         );
     }
 
@@ -6212,25 +6249,53 @@ mod tests {
         assert!(vol > 0.0, "intersection volume should be positive: {vol}");
     }
 
+    /// Fuse two overlapping cylinders (r=5,h=20 and r=3,h=20, offset x=2).
+    ///
+    /// Fused volume must be > max(V_cyl1, V_cyl2) and < V_cyl1 + V_cyl2.
     #[test]
     fn fuse_two_cylinders() {
+        use std::f64::consts::PI;
+
         let mut topo = Topology::new();
         let cyl1 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
         let cyl2 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
 
-        let mat = brepkit_math::mat::Mat4::translation(2.0, 0.0, 0.0);
+        // Offset x=4 so cyl2 protrudes beyond cyl1 (max extent x=7 > r1=5).
+        // At x=2 offset, cyl2 would be entirely inside cyl1 (tangent at x=5).
+        let mat = brepkit_math::mat::Mat4::translation(4.0, 0.0, 0.0);
         crate::transform::transform_solid(&mut topo, cyl2, &mat).unwrap();
 
-        let result = boolean(&mut topo, BooleanOp::Fuse, cyl1, cyl2);
+        let opts = BooleanOptions {
+            deflection: 0.02,
+            ..BooleanOptions::default()
+        };
+        let result = boolean_with_options(&mut topo, BooleanOp::Fuse, cyl1, cyl2, opts).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.02).unwrap();
+
+        let vol_cyl1 = PI * 25.0 * 20.0; // ≈ 1570.8
+        let vol_cyl2 = PI * 9.0 * 20.0; // ≈ 565.5
+        // Fuse volume must exceed the larger cylinder (cyl2 adds material).
+        // Allow 1% tessellation tolerance on the lower bound.
         assert!(
-            result.is_ok(),
-            "fuse(cyl, cyl) should succeed: {:?}",
-            result.err()
+            vol > vol_cyl1 * 0.99,
+            "fuse volume {vol:.1} should be > ~larger cylinder {:.1}",
+            vol_cyl1 * 0.99
+        );
+        assert!(
+            vol < vol_cyl1 + vol_cyl2,
+            "fuse volume {vol:.1} should be < sum {:.1}",
+            vol_cyl1 + vol_cyl2
         );
     }
 
+    /// Cut a large cylinder by a smaller overlapping one.
+    ///
+    /// V(A-B) = V(A) - V(A∩B). Since B partially overlaps A,
+    /// the result must be positive and less than V(A).
     #[test]
     fn cut_cylinder_by_cylinder() {
+        use std::f64::consts::PI;
+
         let mut topo = Topology::new();
         let cyl1 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
         let cyl2 = crate::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
@@ -6238,11 +6303,14 @@ mod tests {
         let mat = brepkit_math::mat::Mat4::translation(2.0, 0.0, 0.0);
         crate::transform::transform_solid(&mut topo, cyl2, &mat).unwrap();
 
-        let result = boolean(&mut topo, BooleanOp::Cut, cyl1, cyl2);
+        let result = boolean(&mut topo, BooleanOp::Cut, cyl1, cyl2).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+
+        let vol_cyl1 = PI * 25.0 * 20.0; // ≈ 1570.8
+        assert!(vol > 0.0, "cut volume should be positive, got {vol}");
         assert!(
-            result.is_ok(),
-            "cut(cyl, cyl) should succeed: {:?}",
-            result.err()
+            vol < vol_cyl1,
+            "cut volume {vol:.1} should be < original cylinder {vol_cyl1:.1}"
         );
     }
 

@@ -542,35 +542,52 @@ mod tests {
         );
     }
 
+    /// Section a box-minus-sphere at z=0.
+    ///
+    /// Box is (0,0,0)-(20,20,20), sphere at origin r=12.
+    /// At z=0, the sphere intersects the box creating a circular cutout.
+    /// Cross-section = 20×20 rectangle minus circle of radius 12
+    ///   (but sphere center is at origin and box starts at 0, so the
+    ///   sphere only clips a quarter-circle at the z=0 face corner).
+    ///
+    /// The exact area depends on how much of the sphere lies within the
+    /// box at this plane. At minimum, we verify the section succeeds and
+    /// produces a face with positive area less than the full 20×20 = 400.
     #[test]
     fn section_after_boolean_cut() {
-        // Reproduce: box(20,20,20).cut(sphere(12, at origin)).section('XY')
         let mut topo = Topology::new();
         let b = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
         let s = crate::primitives::make_sphere(&mut topo, 12.0, 16).unwrap();
 
-        let cut_result = crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, b, s);
-        assert!(
-            cut_result.is_ok(),
-            "boolean cut should succeed: {:?}",
-            cut_result.err()
-        );
-        let solid = cut_result.unwrap();
+        let solid =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, b, s).unwrap();
 
-        // Section at XY plane (z=0).
-        let result = section(
+        let sec = section(
             &mut topo,
             solid,
             Point3::new(0.0, 0.0, 0.0),
             Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+
+        assert!(!sec.faces.is_empty(), "should produce at least one face");
+
+        // The cross-section area should be positive and less than the full
+        // box face (400). The sphere removes a quarter-disc of radius 12
+        // from the corner, so area ≈ 400 - π(144)/4 ≈ 400 - 113.1 ≈ 286.9.
+        let total_area: f64 = sec
+            .faces
+            .iter()
+            .map(|&fid| crate::measure::face_area(&topo, fid, 0.1).unwrap())
+            .sum();
+        assert!(
+            total_area > 200.0,
+            "section area should be > 200 (box face minus sphere), got {total_area:.2}"
         );
         assert!(
-            result.is_ok(),
-            "section should succeed after boolean: {:?}",
-            result.err()
+            total_area < 400.0,
+            "section area should be < 400 (full box face), got {total_area:.2}"
         );
-        let sec = result.unwrap();
-        assert!(!sec.faces.is_empty(), "should produce at least one face");
     }
 
     #[test]
@@ -612,19 +629,24 @@ mod tests {
         );
     }
 
+    /// Diagonal section: plane x + y = 0.8, normal = (1,1,0).
+    ///
+    /// This plane intersects the unit cube at:
+    ///   front (y=0): x=0.8 → line (0.8,0,0)-(0.8,0,1)
+    ///   left (x=0): y=0.8 → line (0,0.8,0)-(0,0.8,1)
+    ///   top (z=1): x+y=0.8 → line (0.8,0,1)-(0,0.8,1)
+    ///   bottom (z=0): x+y=0.8 → line (0.8,0,0)-(0,0.8,0)
+    ///
+    /// The cross-section is a rectangle with:
+    ///   width = distance between the two vertical lines
+    ///         = |(0.8,0)-(0,0.8)| = √(0.64+0.64) = 0.8√2
+    ///   height = 1.0 (z extent)
+    ///   area = 0.8√2 ≈ 1.1314
     #[test]
     fn section_diagonal_plane() {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);
 
-        // Diagonal cutting plane x + y = 0.8, which avoids edges/vertices.
-        // It passes through the interior of 4 faces:
-        // front(y=0): x=0.8 → (0.8,0,0)-(0.8,0,1)
-        // back(y=1): x=-0.2 → misses (x not in [0,1])
-        // left(x=0): y=0.8 → (0,0.8,0)-(0,0.8,1)
-        // right(x=1): y=-0.2 → misses
-        // top(z=1): line x+y=0.8 → (0.8,0,1)-(0,0.8,1)
-        // bottom(z=0): line x+y=0.8 → (0.8,0,0)-(0,0.8,0)
         let result = section(
             &mut topo,
             cube,
@@ -632,7 +654,6 @@ mod tests {
             Vec3::new(1.0, 1.0, 0.0),
         );
 
-        // Should produce a rectangular cross-section.
         assert!(
             result.is_ok(),
             "diagonal plane should intersect cube: {:?}",
@@ -640,5 +661,52 @@ mod tests {
         );
         let sec = result.unwrap();
         assert_eq!(sec.faces.len(), 1);
+
+        // Area = width × height = 0.8√2 × 1.0 ≈ 1.1314
+        let area = crate::measure::face_area(&topo, sec.faces[0], 0.01).unwrap();
+        let expected = 0.8 * std::f64::consts::SQRT_2;
+        let rel_err = (area - expected).abs() / expected;
+        assert!(
+            rel_err < 1e-4,
+            "diagonal section area should be 0.8√2 ≈ {expected:.4}, got {area:.4} \
+             (rel_err={rel_err:.2e})"
+        );
+    }
+
+    /// Section of a cylinder at mid-height → circular cross-section.
+    /// Cylinder r=5, h=10, section at z=5 → circle area = πr² = 25π ≈ 78.54.
+    #[test]
+    fn section_cylinder_at_midheight() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 5.0, 10.0).unwrap();
+
+        let result = section(
+            &mut topo,
+            solid,
+            Point3::new(0.0, 0.0, 5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+
+        assert!(
+            result.is_ok(),
+            "section of cylinder should succeed: {:?}",
+            result.err()
+        );
+        let sec = result.unwrap();
+        assert!(!sec.faces.is_empty(), "should produce at least one face");
+
+        let total_area: f64 = sec
+            .faces
+            .iter()
+            .map(|&fid| crate::measure::face_area(&topo, fid, 0.01).unwrap())
+            .sum();
+        // Circle area = πr² = 25π ≈ 78.54
+        let expected = std::f64::consts::PI * 25.0;
+        let rel_err = (total_area - expected).abs() / expected;
+        assert!(
+            rel_err < 0.05,
+            "cylinder section area should be πr² = {expected:.2}, got {total_area:.2} \
+             (rel_err={rel_err:.2e})"
+        );
     }
 }

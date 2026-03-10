@@ -801,10 +801,123 @@ mod tests {
         )
         .unwrap();
 
+        // By Pappus' centroid theorem: V = 2π × centroid_distance × area.
+        // Outer: 2×1 rect at x=1..3, y=0..1. Centroid_x = 2.0, area = 2.0.
+        // Inner: 1×0.5 rect at x=1.5..2.5, y=0.25..0.75. Centroid_x = 2.0, area = 0.5.
+        // Net: V = 2π × (2.0×2.0 - 2.0×0.5) = 2π × 3.0 = 6π ≈ 18.85.
         let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        let expected = 6.0 * PI;
+        let rel_err = (vol - expected).abs() / expected;
         assert!(
-            vol > 0.0,
-            "revolved hollow solid should have positive volume"
+            rel_err < 0.05,
+            "revolved hollow annular volume should be ~{expected:.2}, got {vol:.2} (rel_err={rel_err:.2e})"
+        );
+    }
+
+    /// Revolve a unit square 360° around Y-axis → annular solid.
+    ///
+    /// By Pappus' centroid theorem:
+    ///   V = 2π × centroid_distance_from_axis × area
+    ///
+    /// Unit square at (0,0)-(1,1) on XY plane, revolved around Y-axis.
+    /// Centroid distance from Y-axis (x-axis distance) = 0.5.
+    /// Area = 1.0.
+    /// V = 2π × 0.5 × 1.0 = π ≈ 3.1416.
+    #[test]
+    fn revolve_square_full_volume() {
+        let mut topo = Topology::new();
+        let face = make_unit_square_face(&mut topo);
+
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0 * PI,
+        )
+        .unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+        // V = 2π × 0.5 × 1.0 = π ≈ 3.1416
+        let expected = PI;
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 0.05,
+            "full revolution of unit square should have volume π ≈ {expected:.4}, \
+             got {vol:.4} (rel_err={rel_err:.2e})"
+        );
+    }
+
+    /// Revolve a unit square 180° → half-annular solid.
+    /// V = π × centroid_distance × area = π × 0.5 × 1.0 = π/2 ≈ 1.5708.
+    #[test]
+    fn revolve_square_half_volume() {
+        let mut topo = Topology::new();
+        let face = make_unit_square_face(&mut topo);
+
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            PI,
+        )
+        .unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+        // Half revolution: V = (angle/2π) × 2π × centroid × area
+        //                    = π × 0.5 × 1.0 = π/2 ≈ 1.5708
+        let expected = PI / 2.0;
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 0.05,
+            "half revolution of unit square should have volume π/2 ≈ {expected:.4}, \
+             got {vol:.4} (rel_err={rel_err:.2e})"
+        );
+    }
+
+    /// Revolve a rectangle with offset from axis → larger annulus.
+    ///
+    /// Rectangle at x=2..4, y=0..3 (offset 2 units from Y-axis).
+    /// Centroid_x = 3.0, area = 6.0.
+    /// V = 2π × 3.0 × 6.0 = 36π ≈ 113.097.
+    #[test]
+    fn revolve_offset_rectangle_volume() {
+        let mut topo = Topology::new();
+        // Build manually: 2×3 rectangle at x=2..4, y=0..3.
+        let pts = vec![
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(4.0, 0.0, 0.0),
+            Point3::new(4.0, 3.0, 0.0),
+            Point3::new(2.0, 3.0, 0.0),
+        ];
+        let wire = brepkit_topology::builder::make_polygon_wire(&mut topo, &pts).unwrap();
+        let face = topo.faces.alloc(brepkit_topology::face::Face::new(
+            wire,
+            vec![],
+            brepkit_topology::face::FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0 * PI,
+        )
+        .unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+        // V = 2π × centroid_x × area = 2π × 3.0 × 6.0 = 36π ≈ 113.097
+        let expected = 36.0 * PI;
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 0.05,
+            "revolved offset rectangle volume should be 36π ≈ {expected:.2}, \
+             got {vol:.2} (rel_err={rel_err:.2e})"
         );
     }
 }
