@@ -186,7 +186,6 @@ fn test_boolean_thin_slab() {
 }
 
 #[test]
-#[ignore = "bug: near-tangent intersection produces non-manifold result"]
 fn test_boolean_near_tangent() {
     // Two boxes with tiny overlap: A (0,0,0)-(1,1,1), B (0.999,0,0)-(2,1,1).
     let mut topo = Topology::new();
@@ -400,7 +399,6 @@ fn test_boolean_cone_cylinder() {
 // ── Edge/vertex contact ─────────────────────────────────────────────
 
 #[test]
-#[ignore = "bug: shared-edge fuse produces non-manifold result (edge shared by 4 faces)"]
 fn test_boolean_shared_edge() {
     // Box A: (0,0,0)-(1,1,1). Box B: (1,1,0)-(2,2,1). Share edge (1,1,0)-(1,1,1).
     let mut topo = Topology::new();

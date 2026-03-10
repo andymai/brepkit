@@ -2183,6 +2183,10 @@ pub(crate) fn assemble_solid_mixed(
     // intermediate collinear vertices so adjacent faces can share edges.
     refine_boundary_edges(topo, &mut face_ids, &mut edge_map, tol)?;
 
+    // Split non-manifold edges (shared by > 2 faces) into separate copies,
+    // pairing faces by angular ordering around the edge.
+    split_nonmanifold_edges(topo, &mut face_ids)?;
+
     let shell = Shell::new(face_ids).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.shells.alloc(shell);
     Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
@@ -2956,6 +2960,216 @@ fn refine_boundary_edges(
             Wire::new(new_oriented_edges, true).map_err(crate::OperationsError::Topology)?;
         let new_wire_id = topo.wires.alloc(new_wire);
 
+        let new_face = if is_reversed {
+            Face::new_reversed(new_wire_id, inner_wires, surface)
+        } else {
+            Face::new(new_wire_id, inner_wires, surface)
+        };
+        face_ids[fi] = topo.faces.alloc(new_face);
+    }
+
+    Ok(())
+}
+
+/// Split non-manifold edges into multiple coincident copies.
+///
+/// After boolean assembly, some edges may be shared by more than 2 faces.
+/// This happens when two solids share an edge or a vertex exactly, creating
+/// an L-shaped junction. A manifold solid requires every edge to be shared
+/// by exactly 2 faces.
+///
+/// This function detects non-manifold edges and duplicates them, assigning
+/// each copy to a pair of faces based on angular ordering around the edge.
+/// Faces are sorted by the angle of their outward normal projected onto
+/// the plane perpendicular to the edge, then paired consecutively.
+#[allow(clippy::too_many_lines)]
+fn split_nonmanifold_edges(
+    topo: &mut Topology,
+    face_ids: &mut [FaceId],
+) -> Result<(), crate::OperationsError> {
+    // Build edge → [(face_index, is_forward)] map.
+    let mut edge_faces: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        let face = topo.face(fid)?;
+        let wire = topo.wire(face.outer_wire())?;
+        for oe in wire.edges() {
+            edge_faces
+                .entry(oe.edge().index())
+                .or_default()
+                .push((fi, oe.is_forward()));
+        }
+    }
+
+    // Find non-manifold edges (shared by > 2 faces).
+    let nonmanifold: Vec<(usize, Vec<(usize, bool)>)> = edge_faces
+        .into_iter()
+        .filter(|(_, faces)| faces.len() > 2)
+        .collect();
+
+    if nonmanifold.is_empty() {
+        return Ok(());
+    }
+
+    // For each non-manifold edge, sort faces by angle and create edge copies.
+    // Map: (face_index, old_edge_index) → new_edge_id
+    let mut edge_replacements: HashMap<(usize, usize), EdgeId> = HashMap::new();
+
+    for (edge_idx, face_refs) in &nonmanifold {
+        let edge_id = topo.edges.id_from_index(*edge_idx).ok_or_else(|| {
+            crate::OperationsError::InvalidInput {
+                reason: format!("edge index {edge_idx} not found"),
+            }
+        })?;
+        // Snapshot edge data before any mutable borrows (borrow checker).
+        let edge_start = topo.edge(edge_id)?.start();
+        let edge_end = topo.edge(edge_id)?.end();
+        let edge_curve = topo.edge(edge_id)?.curve().clone();
+        let start_pos = topo.vertex(edge_start)?.point();
+        let end_pos = topo.vertex(edge_end)?.point();
+
+        // Edge direction vector.
+        let edge_dir = Vec3::new(
+            end_pos.x() - start_pos.x(),
+            end_pos.y() - start_pos.y(),
+            end_pos.z() - start_pos.z(),
+        );
+        let edge_len = edge_dir.length();
+        if edge_len < 1e-15 {
+            continue;
+        }
+        let edge_axis = Vec3::new(
+            edge_dir.x() / edge_len,
+            edge_dir.y() / edge_len,
+            edge_dir.z() / edge_len,
+        );
+
+        // Build a local 2D frame perpendicular to the edge.
+        let perp = if edge_axis.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let u_axis = edge_axis.cross(perp);
+        let u_len = u_axis.length();
+        if u_len < 1e-15 {
+            continue;
+        }
+        let u_axis = Vec3::new(u_axis.x() / u_len, u_axis.y() / u_len, u_axis.z() / u_len);
+        let v_axis = edge_axis.cross(u_axis);
+
+        // Compute angle for each face's normal projected onto the perpendicular plane.
+        let mut face_angles: Vec<(usize, bool, f64)> = Vec::new();
+        for &(fi, is_fwd) in face_refs {
+            let face = topo.face(face_ids[fi])?;
+            let normal = if let FaceSurface::Plane { normal, .. } = face.surface() {
+                *normal
+            } else {
+                // For non-planar faces, approximate normal from wire polygon centroid.
+                let wire = topo.wire(face.outer_wire())?;
+                let mut sum = Vec3::new(0.0, 0.0, 0.0);
+                let mut count = 0usize;
+                for oe in wire.edges() {
+                    if let Ok(e) = topo.edge(oe.edge()) {
+                        if let Ok(v) = topo.vertex(e.start()) {
+                            let p = v.point();
+                            sum = Vec3::new(sum.x() + p.x(), sum.y() + p.y(), sum.z() + p.z());
+                            count += 1;
+                        }
+                    }
+                }
+                if count == 0 {
+                    continue;
+                }
+                #[allow(clippy::cast_precision_loss)]
+                let inv = 1.0 / count as f64;
+                let centroid_dir = Vec3::new(sum.x() * inv, sum.y() * inv, sum.z() * inv);
+                let mid = Point3::new(
+                    (start_pos.x() + end_pos.x()) * 0.5,
+                    (start_pos.y() + end_pos.y()) * 0.5,
+                    (start_pos.z() + end_pos.z()) * 0.5,
+                );
+                Vec3::new(
+                    centroid_dir.x() - mid.x(),
+                    centroid_dir.y() - mid.y(),
+                    centroid_dir.z() - mid.z(),
+                )
+            };
+
+            // If face is reversed, flip the effective normal for sorting.
+            let effective_normal = if face.is_reversed() {
+                Vec3::new(-normal.x(), -normal.y(), -normal.z())
+            } else {
+                normal
+            };
+
+            // Project normal onto perpendicular plane and compute angle.
+            let proj_u = effective_normal.dot(u_axis);
+            let proj_v = effective_normal.dot(v_axis);
+            let angle = proj_v.atan2(proj_u);
+            face_angles.push((fi, is_fwd, angle));
+        }
+
+        // Sort by angle.
+        face_angles.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
+
+        // Pair consecutive faces (in angular order) and assign edge copies.
+        // For N faces around an edge, we need N/2 edge instances.
+        // Each pair of consecutive faces shares one edge instance.
+        let n = face_angles.len();
+        for pair_idx in 0..(n / 2) {
+            let i = pair_idx * 2;
+            let j = i + 1;
+            if j >= n {
+                break;
+            }
+
+            // Create a new edge copy (or reuse the original for the first pair).
+            let new_edge_id = if pair_idx == 0 {
+                edge_id
+            } else {
+                topo.edges
+                    .alloc(Edge::new(edge_start, edge_end, edge_curve.clone()))
+            };
+
+            edge_replacements.insert((face_angles[i].0, *edge_idx), new_edge_id);
+            edge_replacements.insert((face_angles[j].0, *edge_idx), new_edge_id);
+        }
+
+        // Handle odd face (if N is odd, the last face keeps the original edge).
+        if n % 2 == 1 {
+            let last = &face_angles[n - 1];
+            edge_replacements.insert((last.0, *edge_idx), edge_id);
+        }
+    }
+
+    if edge_replacements.is_empty() {
+        return Ok(());
+    }
+
+    // Rebuild face wires with replaced edges.
+    let affected_faces: HashSet<usize> = edge_replacements.keys().map(|(fi, _)| *fi).collect();
+    for fi in affected_faces {
+        let fid = face_ids[fi];
+        let face = topo.face(fid)?;
+        let wire = topo.wire(face.outer_wire())?;
+        let surface = face.surface().clone();
+        let is_reversed = face.is_reversed();
+        let inner_wires: Vec<WireId> = face.inner_wires().to_vec();
+
+        let new_edges: Vec<OrientedEdge> = wire
+            .edges()
+            .iter()
+            .map(|oe| {
+                if let Some(&new_eid) = edge_replacements.get(&(fi, oe.edge().index())) {
+                    OrientedEdge::new(new_eid, oe.is_forward())
+                } else {
+                    *oe
+                }
+            })
+            .collect();
+
+        let new_wire = Wire::new(new_edges, true).map_err(crate::OperationsError::Topology)?;
+        let new_wire_id = topo.wires.alloc(new_wire);
         let new_face = if is_reversed {
             Face::new_reversed(new_wire_id, inner_wires, surface)
         } else {
@@ -4015,6 +4229,9 @@ fn analytic_boolean(
     // as multiple shorter edges from adjacent split faces. Refine them
     // so edge sharing works correctly.
     refine_boundary_edges(topo, &mut face_ids_out, &mut edge_map, tol)?;
+
+    // Split non-manifold edges (shared by > 2 faces) into separate copies.
+    split_nonmanifold_edges(topo, &mut face_ids_out)?;
 
     let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.shells.alloc(shell);
