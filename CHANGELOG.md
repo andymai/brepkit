@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/andymai/brepkit/compare/v0.8.2...v0.8.3) (2026-03-10)
+
+
+### Bug Fixes
+
+* resolve boolean open-shell bugs via boundary edge refinement ([#130](https://github.com/andymai/brepkit/issues/130)) ([f7caef9](https://github.com/andymai/brepkit/commit/f7caef9bd535c4434a87e23973ed1bc279d8e913))
+
 ## [0.8.2](https://github.com/andymai/brepkit/compare/v0.8.1...v0.8.2) (2026-03-10)
 
 
