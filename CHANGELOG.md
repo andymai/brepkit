@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.7](https://github.com/andymai/brepkit/compare/v0.8.6...v0.8.7) (2026-03-10)
+
+
+### Bug Fixes
+
+* add Newton correction to SSI marching method ([#143](https://github.com/andymai/brepkit/issues/143)) ([4cd18bf](https://github.com/andymai/brepkit/commit/4cd18bf71cf642a8aacb6a5c812c8555630bde56))
+
 ## [0.8.6](https://github.com/andymai/brepkit/compare/v0.8.5...v0.8.6) (2026-03-10)
 
 
