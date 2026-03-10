@@ -287,6 +287,14 @@ pub fn fillet(
 
     let target_set: HashSet<usize> = filtered_edges.iter().map(|e| e.index()).collect();
 
+    // Vertices at endpoints of filleted edges (used to detect side-face corners).
+    let mut vertex_fillet_endpoints: HashSet<usize> = HashSet::new();
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        vertex_fillet_endpoints.insert(edge.start().index());
+        vertex_fillet_endpoints.insert(edge.end().index());
+    }
+
     // Build modified face polygons and fillet faces.
     // Strategy: identical to chamfer but with more offset segments to
     // approximate the circular fillet.
@@ -318,11 +326,23 @@ pub fn fillet(
             let prev_pos = poly.positions[prev_i];
             let next_pos = poly.positions[next_i];
 
-            match (before_filleted, after_filleted) {
-                (false, false) => {
+            // Check if vertex sits at a fillet endpoint even though neither
+            // adjacent edge of THIS face is the filleted edge (side face case).
+            let at_fillet_endpoint = vertex_fillet_endpoints.contains(&poly.vertex_ids[i].index());
+
+            match (before_filleted, after_filleted, at_fillet_endpoint) {
+                (false, false, false) => {
                     new_verts.push(pos);
                 }
-                (true, false) => {
+                (false, false, true) => {
+                    // Side face corner: split into two contact points.
+                    let dir_prev = (prev_pos - pos).normalize()?;
+                    new_verts.push(pos + dir_prev * radius);
+
+                    let dir_next = (next_pos - pos).normalize()?;
+                    new_verts.push(pos + dir_next * radius);
+                }
+                (true, false, _) => {
                     let dir = (next_pos - pos).normalize()?;
                     let c = pos + dir * radius;
                     new_verts.push(c);
@@ -334,7 +354,7 @@ pub fn fillet(
                         c,
                     );
                 }
-                (false, true) => {
+                (false, true, _) => {
                     let dir = (prev_pos - pos).normalize()?;
                     let c = pos + dir * radius;
                     new_verts.push(c);
@@ -346,7 +366,7 @@ pub fn fillet(
                         c,
                     );
                 }
-                (true, true) => {
+                (true, true, _) => {
                     let dir_prev = (prev_pos - pos).normalize()?;
                     let c_after = pos + dir_prev * radius;
                     new_verts.push(c_after);
@@ -675,19 +695,35 @@ pub fn fillet_rolling_ball(
             let prev_pos = poly.positions[prev_i];
             let next_pos = poly.positions[next_i];
 
-            match (before_filleted, after_filleted) {
-                (false, false) => {
+            // Check if this vertex sits at the endpoint of a filleted edge
+            // (even if neither adjacent edge of THIS face is the filleted edge).
+            // This handles "side faces" that share a corner vertex with the
+            // filleted edge — they need the corner split into two contact points.
+            let at_fillet_endpoint = vertex_fillet_edges.contains_key(&poly.vertex_ids[i].index());
+
+            match (before_filleted, after_filleted, at_fillet_endpoint) {
+                (false, false, false) => {
                     new_verts.push(pos);
                 }
-                (true, false) => {
+                // Side face: vertex is at a fillet endpoint but neither adjacent
+                // edge of this face is the filleted edge. Split into two contact
+                // points along the face's own edges.
+                (false, false, true) => {
+                    let dir_prev = (prev_pos - pos).normalize()?;
+                    new_verts.push(pos + dir_prev * radius);
+
+                    let dir_next = (next_pos - pos).normalize()?;
+                    new_verts.push(pos + dir_next * radius);
+                }
+                (true, false, _) => {
                     let dir = (next_pos - pos).normalize()?;
                     new_verts.push(pos + dir * radius);
                 }
-                (false, true) => {
+                (false, true, _) => {
                     let dir = (prev_pos - pos).normalize()?;
                     new_verts.push(pos + dir * radius);
                 }
-                (true, true) => {
+                (true, true, _) => {
                     let dir_prev = (prev_pos - pos).normalize()?;
                     new_verts.push(pos + dir_prev * radius);
 
@@ -1726,7 +1762,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "bug: fillet produces Euler χ=0 on genus-0 solid (expected χ=2)"]
     fn fillet_single_edge_euler() {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);

@@ -1028,7 +1028,6 @@ mod tests {
 
     #[test]
     #[allow(deprecated)]
-    #[ignore = "bug: fillet leaves 10 boundary edges (shell not closed)"]
     fn fillet_result_validates() {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);

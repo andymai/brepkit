@@ -141,6 +141,14 @@ pub fn chamfer(
 
     let target_set: HashSet<usize> = filtered_edges.iter().map(|e| e.index()).collect();
 
+    // Vertices at endpoints of chamfered edges (used to detect side-face corners).
+    let mut vertex_chamfer_endpoints: HashSet<usize> = HashSet::new();
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        vertex_chamfer_endpoints.insert(edge.start().index());
+        vertex_chamfer_endpoints.insert(edge.end().index());
+    }
+
     // -- Phase 3: Build modified polygons + collect chamfer face data --
 
     // For each target edge, we collect the chamfer points from both faces.
@@ -186,12 +194,25 @@ pub fn chamfer(
             let prev_pos = poly.positions[prev_i];
             let next_pos = poly.positions[next_i];
 
-            match (before_chamfered, after_chamfered) {
-                (false, false) => {
+            let at_chamfer_endpoint =
+                vertex_chamfer_endpoints.contains(&poly.vertex_ids[i].index());
+
+            match (before_chamfered, after_chamfered, at_chamfer_endpoint) {
+                (false, false, false) => {
                     // No chamfer at this vertex — keep as-is.
                     new_verts.push(pos);
                 }
-                (true, false) => {
+                (false, false, true) => {
+                    // Side face corner: vertex is at a chamfered edge endpoint
+                    // but neither adjacent edge of THIS face is chamfered.
+                    // Split into two offset points along the face's own edges.
+                    let dir_prev = (prev_pos - pos).normalize()?;
+                    new_verts.push(pos + dir_prev * distance);
+
+                    let dir_next = (next_pos - pos).normalize()?;
+                    new_verts.push(pos + dir_next * distance);
+                }
+                (true, false, _) => {
                     // Only the edge before is chamfered. Offset toward V[next].
                     let dir = (next_pos - pos).normalize()?;
                     let c = pos + dir * distance;
@@ -205,7 +226,7 @@ pub fn chamfer(
                         c,
                     );
                 }
-                (false, true) => {
+                (false, true, _) => {
                     // Only the edge after is chamfered. Offset toward V[prev].
                     let dir = (prev_pos - pos).normalize()?;
                     let c = pos + dir * distance;
@@ -219,7 +240,7 @@ pub fn chamfer(
                         c,
                     );
                 }
-                (true, true) => {
+                (true, true, _) => {
                     // Both adjacent edges are chamfered. Compute a single
                     // intersection point where the two trim planes meet on
                     // this face, rather than two separate offset points.
