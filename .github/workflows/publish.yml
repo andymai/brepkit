@@ -3,6 +3,8 @@ name: Release & Publish
 on:
   push:
     branches: [main]
+  release:
+    types: [created]
   workflow_dispatch:
     inputs:
       publish_version:
@@ -16,6 +18,7 @@ jobs:
   release-please:
     name: Release Please
     runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' }}
     outputs:
       release_created: ${{ steps.release.outputs['release_created'] }}
       tag_name: ${{ steps.release.outputs['tag_name'] }}
@@ -53,10 +56,21 @@ jobs:
           echo "Enabling auto-merge for PR #$PR_NUMBER"
           gh pr merge "$PR_NUMBER" --auto --squash --repo "$GITHUB_REPOSITORY"
 
+  # Publish triggers on three events:
+  # 1. release:created — fired when release-please creates a GitHub release
+  #    (works even if release-please crashes afterward trying to comment on
+  #    the locked/merged PR, which was preventing release_created from being set)
+  # 2. release_created output — belt-and-suspenders if release-please succeeds fully
+  # 3. workflow_dispatch — manual publish for a specific version
   publish:
     name: Build WASM & Publish
-    needs: release-please
-    if: ${{ always() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch') }}
+    needs: [release-please]
+    if: >-
+      always() && (
+        github.event_name == 'release' ||
+        github.event_name == 'workflow_dispatch' ||
+        needs.release-please.outputs.release_created == 'true'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -117,7 +131,7 @@ jobs:
           fi
           echo "Publishing brepkit-wasm@$PKG_VERSION"
         env:
-          TAG_NAME: ${{ needs.release-please.outputs.tag_name || format('v{0}', github.event.inputs.publish_version) }}
+          TAG_NAME: ${{ github.event.release.tag_name || needs.release-please.outputs.tag_name || format('v{0}', github.event.inputs.publish_version) }}
 
       - name: Publish to npm
         working-directory: crates/wasm/pkg
