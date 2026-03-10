@@ -2323,7 +2323,7 @@ fn edge_sample_count(
             } else {
                 std::f64::consts::TAU
             };
-            segments_for_chord_deviation(max_curv_radius, arc_range, deflection)
+            segments_for_chord_deviation(max_curv_radius, arc_range, deflection).min(4096)
         }
         EdgeCurve::NurbsCurve(nurbs) => {
             // Adaptive: coarse-pass deviation measurement, then refine if needed.

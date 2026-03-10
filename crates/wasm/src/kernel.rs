@@ -1900,7 +1900,10 @@ impl BrepKernel {
 
             let mesh_uv = match tessellate::tessellate_with_uvs(&self.topo, face_id, deflection) {
                 Ok(m) => m,
-                Err(_) => continue,
+                Err(e) => {
+                    log::warn!("skipping UV face during tessellation: {e}");
+                    continue;
+                }
             };
             for p in &mesh_uv.mesh.positions {
                 all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
