@@ -40,7 +40,6 @@ fn fuse_overlapping_boxes(topo: &mut Topology, s: f64) -> (SolidId, f64) {
 // ── Millimeter scale ────────────────────────────────────────────────
 
 #[test]
-#[ignore = "bug: boolean at mm scale produces non-manifold result (edge shared by 4 faces)"]
 fn test_boolean_at_mm_scale() {
     let mut topo = Topology::new();
     let s = 0.1; // 100 um boxes
