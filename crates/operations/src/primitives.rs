@@ -145,9 +145,9 @@ pub fn make_box(
 
 // ── Cylinder ───────────────────────────────────────────────────────
 
-/// Create a cylinder solid centered at the origin, with its axis along +Z.
+/// Create a cylinder solid with its axis along +Z, base at the origin.
 ///
-/// The cylinder extends from `z = -height/2` to `z = height/2`.
+/// The cylinder extends from `z = 0` to `z = height` (OCCT convention).
 /// Built with one `CylindricalSurface` lateral face and two planar cap faces.
 ///
 /// # Errors

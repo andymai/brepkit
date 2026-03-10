@@ -169,7 +169,11 @@ fn exact_plane_cone(
         let n_dot_apex = dot_np(normal, cone.apex());
         let t = (d - n_dot_apex) / n_dot_axis;
 
-        if t < 1e-10 {
+        // t is the signed distance from apex to plane along the axis.
+        // The cone surface can extend in either direction from the apex
+        // (positive or negative v), so use |t| for the radius.
+        // |t| ≈ 0 means the plane passes through the apex → degenerate point.
+        if t.abs() < 1e-10 {
             return Ok(vec![]);
         }
 
@@ -178,7 +182,7 @@ fn exact_plane_cone(
             cone.apex().y() + t * axis.y(),
             cone.apex().z() + t * axis.z(),
         );
-        let circle_r = t * half_angle.tan();
+        let circle_r = t.abs() * half_angle.tan();
         if circle_r < 1e-15 {
             return Ok(vec![]);
         }
@@ -535,7 +539,8 @@ pub fn intersect_plane_cone(
         }
 
         let v = (d - n_dot_apex) / n_dot_dir;
-        if v > 0.0 && v < 100.0 {
+        // Allow negative v — the cone surface extends in both directions from the apex.
+        if v.abs() > 1e-10 && v.abs() < 100.0 {
             let pt = cone.evaluate(u, v);
             points_3d.push(pt);
             ipoints.push(IntersectionPoint {
