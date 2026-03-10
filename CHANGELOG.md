@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/andymai/brepkit/compare/v0.8.10...v0.9.0) (2026-03-10)
+
+
+### Features
+
+* add checkpoint/restore for topology snapshots ([#153](https://github.com/andymai/brepkit/issues/153)) ([3fab83d](https://github.com/andymai/brepkit/commit/3fab83d607a5330cbbca6d69bcdd807cca6ed550))
+
 ## [0.8.10](https://github.com/andymai/brepkit/compare/v0.8.9...v0.8.10) (2026-03-10)
 
 
