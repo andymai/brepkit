@@ -544,6 +544,8 @@ mod tests {
     use brepkit_topology::face::FaceSurface;
     use brepkit_topology::test_utils::make_unit_square_face;
 
+    use crate::test_helpers::{assert_euler_genus0, euler_characteristic};
+
     use super::*;
 
     #[test]
@@ -574,6 +576,11 @@ mod tests {
                 "full revolution should only have NURBS faces"
             );
         }
+
+        // Full 360° revolution of a rectangle → torus-like topology (genus-1, χ=0).
+        // The profile sweeps fully around, merging start/end into a closed ring.
+        let chi = euler_characteristic(&topo, solid);
+        assert_eq!(chi, 0, "full revolve should have χ=0 (genus-1), got {chi}");
     }
 
     #[test]
@@ -607,6 +614,9 @@ mod tests {
         }
         assert_eq!(planar_count, 2, "should have 2 planar end caps");
         assert_eq!(nurbs_count, 8, "should have 8 NURBS side faces");
+
+        // Half revolution of a rectangle → genus-0 solid (χ=2).
+        assert_euler_genus0(&topo, solid);
     }
 
     #[test]
@@ -731,6 +741,11 @@ mod tests {
             32,
             "full revolve with hole: 16 outer + 16 inner = 32 faces"
         );
+
+        // Full revolution of a face with a hole creates a genus-1 solid
+        // (torus-like, outer + inner passage). χ = 0.
+        let chi = euler_characteristic(&topo, solid);
+        assert_eq!(chi, 0, "genus-1 revolve should have χ=0, got {chi}");
     }
 
     #[test]

@@ -616,6 +616,7 @@ mod tests {
     use brepkit_topology::test_utils::{make_unit_square_face, make_unit_triangle_face};
 
     use super::*;
+    use crate::test_helpers::assert_euler_genus0;
 
     #[test]
     fn extrude_square_creates_box() {
@@ -840,7 +841,7 @@ mod tests {
         // The top surface should be translated by distance 3.0 along Z.
         // Original (0,0) point is at z=0, so top should be at z=3.0.
         assert!(
-            (top_z - 3.0).abs() < 0.1,
+            (top_z - 3.0).abs() < 1e-7,
             "top NURBS surface should be at z≈3.0, got z={top_z}"
         );
     }
@@ -857,6 +858,8 @@ mod tests {
             vol > 0.0,
             "extruded NURBS solid should have positive volume, got {vol}"
         );
+
+        assert_euler_genus0(&topo, solid);
     }
 
     /// Helper: create a square face with a smaller square hole in the center.
@@ -930,6 +933,14 @@ mod tests {
             faces_with_holes_count, 2,
             "bottom and top caps should both have inner wire holes"
         );
+    }
+
+    #[test]
+    fn extrude_zero_distance_errors() {
+        let mut topo = Topology::new();
+        let face = make_unit_square_face(&mut topo);
+        let result = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 0.0);
+        assert!(result.is_err(), "zero distance extrusion should error");
     }
 
     #[test]

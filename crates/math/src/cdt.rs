@@ -1766,4 +1766,33 @@ mod tests {
         });
         assert!(has_diagonal, "diagonal constraint should appear as an edge");
     }
+
+    #[test]
+    fn cdt_near_coincident_points() {
+        // Two points separated by 1e-10 — should not panic
+        let pts = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(1.0, 0.0),
+            Point2::new(0.5, 1.0),
+            Point2::new(0.5 + 1e-10, 1.0),
+        ];
+        let mut cdt = Cdt::new((Point2::new(-1.0, -1.0), Point2::new(2.0, 2.0)));
+        for pt in &pts {
+            let _result = cdt.insert_point(*pt);
+        }
+    }
+
+    #[test]
+    fn cdt_collinear_input() {
+        // All points on a line — CDT should handle gracefully
+        let pts = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(1.0, 0.0),
+            Point2::new(2.0, 0.0),
+        ];
+        let mut cdt = Cdt::new((Point2::new(-1.0, -1.0), Point2::new(3.0, 1.0)));
+        for pt in &pts {
+            let _result = cdt.insert_point(*pt);
+        }
+    }
 }

@@ -461,7 +461,6 @@ fn assemble_wires(
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use brepkit_math::tolerance::Tolerance;
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_topology::Topology;
     use brepkit_topology::test_utils::make_unit_cube_manifold;
@@ -490,9 +489,8 @@ mod tests {
 
         // The cross section of a unit cube at z=0.5 should be a unit square.
         let area = crate::measure::face_area(&topo, result.faces[0], 0.1).unwrap();
-        let tol = Tolerance::loose();
         assert!(
-            tol.approx_eq(area, 1.0),
+            (area - 1.0).abs() < 1e-6,
             "cross-section area should be ~1.0, got {area}"
         );
     }
@@ -514,9 +512,8 @@ mod tests {
 
         // Still a 1×1 square at any height for a cube.
         let area = crate::measure::face_area(&topo, result.faces[0], 0.1).unwrap();
-        let tol = Tolerance::loose();
         assert!(
-            tol.approx_eq(area, 1.0),
+            (area - 1.0).abs() < 1e-6,
             "cross-section area should be ~1.0, got {area}"
         );
     }
@@ -539,9 +536,8 @@ mod tests {
 
         // Cross-section of unit cube at x=0.5 is a 1×1 square in YZ.
         let area = crate::measure::face_area(&topo, result.faces[0], 0.1).unwrap();
-        let tol = Tolerance::loose();
         assert!(
-            tol.approx_eq(area, 1.0),
+            (area - 1.0).abs() < 1e-6,
             "cross-section area should be ~1.0, got {area}"
         );
     }
@@ -609,10 +605,9 @@ mod tests {
         assert_eq!(result.faces.len(), 1);
 
         let area = crate::measure::face_area(&topo, result.faces[0], 0.1).unwrap();
-        let tol = Tolerance::loose();
         // 2×3 = 6
         assert!(
-            tol.approx_eq(area, 6.0),
+            (area - 6.0).abs() < 1e-6,
             "cross-section area should be ~6.0, got {area}"
         );
     }

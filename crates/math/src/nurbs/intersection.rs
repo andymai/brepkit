@@ -2747,7 +2747,7 @@ mod tests {
         for curve in &result {
             for pt in &curve.points {
                 assert!(
-                    pt.point.z().abs() < 0.1,
+                    pt.point.z().abs() < 1e-4,
                     "intersection point should be near z=0, got z={}",
                     pt.point.z()
                 );
@@ -2773,17 +2773,17 @@ mod tests {
 
         let pt = &result[0];
         assert!(
-            (pt.point.x() - 0.5).abs() < 0.05,
+            (pt.point.x() - 0.5).abs() < 1e-4,
             "x should be ~0.5, got {}",
             pt.point.x()
         );
         assert!(
-            (pt.point.y() - 0.5).abs() < 0.05,
+            (pt.point.y() - 0.5).abs() < 1e-4,
             "y should be ~0.5, got {}",
             pt.point.y()
         );
         assert!(
-            pt.point.z().abs() < 0.05,
+            pt.point.z().abs() < 1e-4,
             "z should be ~0.0, got {}",
             pt.point.z()
         );
@@ -2818,7 +2818,7 @@ mod tests {
                 let signed_dist =
                     Vec3::new(pt.point.x(), pt.point.y(), pt.point.z()).dot(normal) - d;
                 assert!(
-                    signed_dist.abs() < 0.01,
+                    signed_dist.abs() < 1e-4,
                     "point should be on plane, signed_dist={signed_dist}"
                 );
             }

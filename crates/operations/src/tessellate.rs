@@ -4084,6 +4084,307 @@ mod tests {
             "filleted box should have few boundary edges, got {boundary}"
         );
     }
+
+    // ── P3: Tessellation Quality tests ────────────────────────────
+
+    #[test]
+    fn test_no_degenerate_triangles() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
+        let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
+
+        let tri_count = mesh.indices.len() / 3;
+        assert!(tri_count > 0, "sphere should produce triangles");
+
+        for t in 0..tri_count {
+            let i0 = mesh.indices[t * 3] as usize;
+            let i1 = mesh.indices[t * 3 + 1] as usize;
+            let i2 = mesh.indices[t * 3 + 2] as usize;
+            let a = mesh.positions[i1] - mesh.positions[i0];
+            let b = mesh.positions[i2] - mesh.positions[i0];
+            let area = 0.5 * a.cross(b).length();
+            assert!(area > 0.0, "triangle {t} is degenerate (area = {area})");
+        }
+    }
+
+    #[test]
+    fn test_min_angle_above_threshold() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+        let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
+
+        let tri_count = mesh.indices.len() / 3;
+        assert!(tri_count > 0, "cylinder should produce triangles");
+
+        let min_angle_threshold = 0.0175; // ~1 degree in radians
+
+        for t in 0..tri_count {
+            let i0 = mesh.indices[t * 3] as usize;
+            let i1 = mesh.indices[t * 3 + 1] as usize;
+            let i2 = mesh.indices[t * 3 + 2] as usize;
+            let p0 = mesh.positions[i0];
+            let p1 = mesh.positions[i1];
+            let p2 = mesh.positions[i2];
+
+            let edges = [(p1 - p0, p2 - p0), (p0 - p1, p2 - p1), (p0 - p2, p1 - p2)];
+
+            for (j, (ea, eb)) in edges.iter().enumerate() {
+                let len_a = ea.length();
+                let len_b = eb.length();
+                if len_a < 1e-15 || len_b < 1e-15 {
+                    continue;
+                }
+                let cos_angle = ea.dot(*eb) / (len_a * len_b);
+                let angle = cos_angle.clamp(-1.0, 1.0).acos();
+                assert!(
+                    angle > min_angle_threshold,
+                    "triangle {t} vertex {j} has angle {:.4} rad ({:.2} deg), below threshold",
+                    angle,
+                    angle.to_degrees()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_max_sag_within_deflection() {
+        let radius = 1.0;
+        let deflection = 0.05;
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_sphere(&mut topo, radius, 16).unwrap();
+        let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+
+        let tri_count = mesh.indices.len() / 3;
+        assert!(tri_count > 0);
+
+        let mut max_sag = 0.0_f64;
+        for t in 0..tri_count {
+            let i0 = mesh.indices[t * 3] as usize;
+            let i1 = mesh.indices[t * 3 + 1] as usize;
+            let i2 = mesh.indices[t * 3 + 2] as usize;
+            let centroid = Point3::new(
+                (mesh.positions[i0].x() + mesh.positions[i1].x() + mesh.positions[i2].x()) / 3.0,
+                (mesh.positions[i0].y() + mesh.positions[i1].y() + mesh.positions[i2].y()) / 3.0,
+                (mesh.positions[i0].z() + mesh.positions[i1].z() + mesh.positions[i2].z()) / 3.0,
+            );
+            let dist_from_origin =
+                (centroid.x().powi(2) + centroid.y().powi(2) + centroid.z().powi(2)).sqrt();
+            let sag = (dist_from_origin - radius).abs();
+            max_sag = max_sag.max(sag);
+        }
+
+        assert!(
+            max_sag < 2.0 * deflection,
+            "max sag {max_sag} exceeds 2*deflection ({})",
+            2.0 * deflection
+        );
+    }
+
+    #[test]
+    fn test_watertight_solid_mesh() {
+        use std::collections::{HashMap, HashSet};
+
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 2.0, 3.0).unwrap();
+        let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
+
+        // Snap vertices to 6 decimal places for position-based matching.
+        let snap = |v: f64| -> i64 { (v * 1_000_000.0).round() as i64 };
+        let snap_pt = |p: Point3| -> (i64, i64, i64) { (snap(p.x()), snap(p.y()), snap(p.z())) };
+
+        // Map snapped positions to canonical indices.
+        let mut pos_map: HashMap<(i64, i64, i64), usize> = HashMap::new();
+        let mut next_id = 0_usize;
+        let canonical: Vec<usize> = mesh
+            .positions
+            .iter()
+            .map(|&p| {
+                let key = snap_pt(p);
+                *pos_map.entry(key).or_insert_with(|| {
+                    let id = next_id;
+                    next_id += 1;
+                    id
+                })
+            })
+            .collect();
+
+        let tri_count = mesh.indices.len() / 3;
+        let mut half_edges: HashSet<(usize, usize)> = HashSet::new();
+        for t in 0..tri_count {
+            let a = canonical[mesh.indices[t * 3] as usize];
+            let b = canonical[mesh.indices[t * 3 + 1] as usize];
+            let c = canonical[mesh.indices[t * 3 + 2] as usize];
+            half_edges.insert((a, b));
+            half_edges.insert((b, c));
+            half_edges.insert((c, a));
+        }
+
+        let boundary_count = half_edges
+            .iter()
+            .filter(|&&(a, b)| !half_edges.contains(&(b, a)))
+            .count();
+
+        assert_eq!(
+            boundary_count, 0,
+            "box mesh should be watertight (0 boundary edges), got {boundary_count}"
+        );
+    }
+
+    #[test]
+    fn test_consistent_winding() {
+        let dx = 2.0;
+        let dy = 3.0;
+        let dz = 4.0;
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, dx, dy, dz).unwrap();
+        let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
+
+        // Signed volume via divergence theorem: sum det([v0,v1,v2]) / 6.
+        let mut signed_vol = 0.0;
+        let tri_count = mesh.indices.len() / 3;
+        for t in 0..tri_count {
+            let v0 = mesh.positions[mesh.indices[t * 3] as usize];
+            let v1 = mesh.positions[mesh.indices[t * 3 + 1] as usize];
+            let v2 = mesh.positions[mesh.indices[t * 3 + 2] as usize];
+            let a = Vec3::new(v0.x(), v0.y(), v0.z());
+            let b = Vec3::new(v1.x(), v1.y(), v1.z());
+            let c = Vec3::new(v2.x(), v2.y(), v2.z());
+            signed_vol += a.dot(b.cross(c));
+        }
+        signed_vol /= 6.0;
+
+        assert!(
+            signed_vol > 0.0,
+            "signed volume should be positive (outward normals), got {signed_vol}"
+        );
+
+        let expected_vol = dx * dy * dz;
+        let rel_err = (signed_vol - expected_vol).abs() / expected_vol;
+        assert!(
+            rel_err < 0.01,
+            "signed volume {signed_vol} differs from expected {expected_vol} by {:.2}%",
+            rel_err * 100.0
+        );
+    }
+
+    #[test]
+    fn test_vertex_on_surface_sphere() {
+        let radius = 2.0;
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_sphere(&mut topo, radius, 16).unwrap();
+        let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
+
+        for (i, p) in mesh.positions.iter().enumerate() {
+            let dist = (p.x().powi(2) + p.y().powi(2) + p.z().powi(2)).sqrt();
+            assert!(
+                (dist - radius).abs() < 1e-6,
+                "vertex {i} at dist {dist} from origin, expected {radius}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_no_t_junctions_box() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
+
+        // A unit box with planar faces should have exactly 8 unique vertices
+        // after position snapping. Any extra vertices indicate T-junctions.
+        let snap = |v: f64| -> i64 { (v * 1_000_000.0).round() as i64 };
+        let unique: std::collections::HashSet<(i64, i64, i64)> = mesh
+            .positions
+            .iter()
+            .map(|p| (snap(p.x()), snap(p.y()), snap(p.z())))
+            .collect();
+
+        assert_eq!(
+            unique.len(),
+            8,
+            "unit box should have 8 unique vertices (no T-junctions), got {}",
+            unique.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "bug: smaller cylinder produces more triangles than larger one — deflection scaling ignores radius"]
+    fn test_circle_deflection_scaling() {
+        let mut topo = Topology::new();
+        let small = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+        let large = crate::primitives::make_cylinder(&mut topo, 10.0, 2.0).unwrap();
+
+        let deflection = 0.1;
+        let mesh_small = tessellate_solid(&topo, small, deflection).unwrap();
+        let mesh_large = tessellate_solid(&topo, large, deflection).unwrap();
+
+        let tri_small = mesh_small.indices.len() / 3;
+        let tri_large = mesh_large.indices.len() / 3;
+
+        assert!(
+            tri_large > tri_small,
+            "larger cylinder should have more triangles ({tri_large}) than smaller ({tri_small})"
+        );
+    }
+
+    #[test]
+    #[ignore = "bug: boolean cut result mesh has boundary edges — face tessellations not stitched at cut seams"]
+    fn test_tessellate_boolean_result_watertight() {
+        use std::collections::{HashMap, HashSet};
+
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 1.5, 1.5, 1.5).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            b,
+            &brepkit_math::mat::Mat4::translation(0.5, 0.5, 0.5),
+        )
+        .unwrap();
+
+        let cut = crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, a, b).unwrap();
+
+        let mesh = tessellate_solid(&topo, cut, 0.1).unwrap();
+
+        // Position-based watertightness check (same approach as test_watertight_solid_mesh).
+        let snap = |v: f64| -> i64 { (v * 1_000_000.0).round() as i64 };
+        let snap_pt = |p: Point3| -> (i64, i64, i64) { (snap(p.x()), snap(p.y()), snap(p.z())) };
+
+        let mut pos_map: HashMap<(i64, i64, i64), usize> = HashMap::new();
+        let mut next_id = 0_usize;
+        let canonical: Vec<usize> = mesh
+            .positions
+            .iter()
+            .map(|&p| {
+                let key = snap_pt(p);
+                *pos_map.entry(key).or_insert_with(|| {
+                    let id = next_id;
+                    next_id += 1;
+                    id
+                })
+            })
+            .collect();
+
+        let tri_count = mesh.indices.len() / 3;
+        let mut half_edges: HashSet<(usize, usize)> = HashSet::new();
+        for t in 0..tri_count {
+            let ca = canonical[mesh.indices[t * 3] as usize];
+            let cb = canonical[mesh.indices[t * 3 + 1] as usize];
+            let cc = canonical[mesh.indices[t * 3 + 2] as usize];
+            half_edges.insert((ca, cb));
+            half_edges.insert((cb, cc));
+            half_edges.insert((cc, ca));
+        }
+
+        let boundary_count = half_edges
+            .iter()
+            .filter(|&&(a, b)| !half_edges.contains(&(b, a)))
+            .count();
+
+        assert_eq!(
+            boundary_count, 0,
+            "boolean cut result should be watertight (0 boundary edges), got {boundary_count}"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -4249,5 +4550,37 @@ mod winding_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn tessellate_box_with_hole_from_boolean() {
+        // Boolean cut creating a hole, then tessellate
+        let mut topo = Topology::new();
+        let base = crate::primitives::make_box(&mut topo, 10.0, 10.0, 2.0).unwrap();
+        let hole = crate::primitives::make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            hole,
+            &brepkit_math::mat::Mat4::translation(5.0, 5.0, -1.0),
+        )
+        .unwrap();
+
+        let cut =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, base, hole).unwrap();
+
+        let mesh = tessellate_solid(&topo, cut, 0.5).unwrap();
+        assert!(!mesh.positions.is_empty(), "should produce vertices");
+        assert!(!mesh.indices.is_empty(), "should produce triangles");
+    }
+
+    #[test]
+    fn tessellate_thin_box() {
+        // Elongated face (1000:1 aspect ratio)
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1000.0, 1.0, 1.0).unwrap();
+
+        let mesh = tessellate_solid(&topo, solid, 1.0).unwrap();
+        assert!(!mesh.positions.is_empty(), "should produce vertices");
+        assert!(!mesh.indices.is_empty(), "should produce triangles");
     }
 }

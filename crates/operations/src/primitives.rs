@@ -769,10 +769,10 @@ mod tests {
 
     use std::f64::consts::PI;
 
-    use brepkit_math::tolerance::Tolerance;
     use brepkit_topology::Topology;
 
     use super::*;
+    use crate::test_helpers::{assert_euler_genus0, euler_characteristic};
 
     // ── Box tests ──────────────────────────────────────────────────
 
@@ -787,11 +787,12 @@ mod tests {
 
         // Verify volume
         let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
-        let tol = Tolerance::loose();
         assert!(
-            tol.approx_eq(vol, 1.0),
-            "unit box volume should be ~1.0, got {vol}"
+            (vol - 1.0).abs() < 1e-10,
+            "unit box volume should be 1.0, got {vol}"
         );
+
+        assert_euler_genus0(&topo, solid);
     }
 
     #[test]
@@ -800,11 +801,12 @@ mod tests {
         let solid = make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
 
         let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
-        let tol = Tolerance::loose();
         assert!(
-            tol.approx_eq(vol, 24.0),
-            "2x3x4 box volume should be ~24.0, got {vol}"
+            (vol - 24.0).abs() < 1e-10,
+            "2x3x4 box volume should be 24.0, got {vol}"
         );
+
+        assert_euler_genus0(&topo, solid);
     }
 
     #[test]
@@ -814,19 +816,18 @@ mod tests {
 
         // Box extends from (0,0,0) to (2,2,2), so center of mass is at (1,1,1).
         let com = crate::measure::solid_center_of_mass(&topo, solid, 0.1).unwrap();
-        let tol = Tolerance::loose();
         assert!(
-            tol.approx_eq(com.x(), 1.0),
+            (com.x() - 1.0).abs() < 1e-6,
             "com x should be ~1, got {}",
             com.x()
         );
         assert!(
-            tol.approx_eq(com.y(), 1.0),
+            (com.y() - 1.0).abs() < 1e-6,
             "com y should be ~1, got {}",
             com.y()
         );
         assert!(
-            tol.approx_eq(com.z(), 1.0),
+            (com.z() - 1.0).abs() < 1e-6,
             "com z should be ~1, got {}",
             com.z()
         );
@@ -870,6 +871,8 @@ mod tests {
 
         // Analytic cylinder: 1 lateral + 2 caps = 3 faces
         assert_eq!(sh.faces().len(), 3, "cylinder should have 3 faces");
+
+        assert_euler_genus0(&topo, solid);
     }
 
     #[test]
@@ -880,7 +883,7 @@ mod tests {
         let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
         let expected = PI * 1.0_f64.powi(2) * 2.0;
         assert!(
-            (vol - expected).abs() / expected < 0.02,
+            (vol - expected).abs() / expected < 1e-6,
             "cylinder volume should be ~{expected}, got {vol} (error: {:.1}%)",
             (vol - expected).abs() / expected * 100.0
         );
@@ -908,6 +911,8 @@ mod tests {
         let s = topo.solid(solid).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
         assert!(!sh.faces().is_empty(), "cone should have faces");
+
+        assert_euler_genus0(&topo, solid);
     }
 
     #[test]
@@ -916,12 +921,14 @@ mod tests {
         let solid = make_cone(&mut topo, 2.0, 1.0, 3.0).unwrap();
 
         let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
-        // V = πh/3 * (r1² + r1*r2 + r2²) ≈ 21.99
-        // The analytic cone tessellation covers the full ConicalSurface
-        // domain (apex to v=1), not just the frustum portion, so volume
-        // computed via signed tetrahedra has limited accuracy.
-        // The volume should still be clearly positive and non-trivial.
-        assert!(vol > 5.0, "frustum should have positive volume, got {vol}");
+        // V = πh/3 * (r1² + r1*r2 + r2²)
+        let expected =
+            std::f64::consts::PI * 3.0 / 3.0 * (2.0_f64.powi(2) + 2.0 * 1.0 + 1.0_f64.powi(2));
+        let rel_error = (vol - expected).abs() / expected;
+        assert!(
+            rel_error < 0.01,
+            "cone frustum volume should be ~{expected:.3}, got {vol:.3} (error: {rel_error:.1}%)",
+        );
     }
 
     #[test]
@@ -946,6 +953,8 @@ mod tests {
         let s = topo.solid(solid).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
         assert!(!sh.faces().is_empty(), "sphere should have faces");
+
+        assert_euler_genus0(&topo, solid);
     }
 
     #[test]
@@ -958,7 +967,7 @@ mod tests {
         let expected = 4.0 / 3.0 * PI;
         // Polygonal approximation — allow 5% tolerance
         assert!(
-            (vol - expected).abs() / expected < 0.05,
+            (vol - expected).abs() / expected < 0.01,
             "sphere volume should be ~{expected}, got {vol} (error: {:.1}%)",
             (vol - expected).abs() / expected * 100.0
         );
@@ -970,19 +979,18 @@ mod tests {
         let solid = make_sphere(&mut topo, 1.0, 16).unwrap();
 
         let com = crate::measure::solid_center_of_mass(&topo, solid, 0.1).unwrap();
-        let tol = Tolerance::loose();
         assert!(
-            tol.approx_eq(com.x(), 0.0),
+            com.x().abs() < 1e-6,
             "sphere com x should be ~0, got {}",
             com.x()
         );
         assert!(
-            tol.approx_eq(com.y(), 0.0),
+            com.y().abs() < 1e-6,
             "sphere com y should be ~0, got {}",
             com.y()
         );
         assert!(
-            tol.approx_eq(com.z(), 0.0),
+            com.z().abs() < 1e-6,
             "sphere com z should be ~0, got {}",
             com.z()
         );
@@ -1019,6 +1027,12 @@ mod tests {
         let s = topo.solid(solid).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
         assert!(!sh.faces().is_empty(), "torus should have faces");
+
+        assert_eq!(
+            euler_characteristic(&topo, solid),
+            0,
+            "torus should be genus-1 (χ=0)"
+        );
     }
 
     #[test]
@@ -1031,7 +1045,7 @@ mod tests {
         let expected = 2.0 * PI * PI * 3.0 * 1.0;
         // Polygonal approximation — allow 5% tolerance
         assert!(
-            (vol - expected).abs() / expected < 0.05,
+            (vol - expected).abs() / expected < 0.01,
             "torus volume should be ~{expected}, got {vol} (error: {:.1}%)",
             (vol - expected).abs() / expected * 100.0
         );
@@ -1050,5 +1064,133 @@ mod tests {
         let mut topo = Topology::new();
         assert!(make_torus(&mut topo, 0.0, 1.0, 8).is_err());
         assert!(make_torus(&mut topo, 3.0, 0.0, 8).is_err());
+    }
+
+    // ── Periodic surface / singular point tests ─────────────────────
+
+    #[test]
+    fn cylinder_seam_continuity() {
+        // Cylinder surface should evaluate to the same point at u=0 and u=2π
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+
+        for fid in &faces {
+            let face = topo.face(*fid).unwrap();
+            if let brepkit_topology::face::FaceSurface::Cylinder(cyl) = face.surface() {
+                let p0 = cyl.evaluate(0.0, 0.5);
+                let p2pi = cyl.evaluate(std::f64::consts::TAU, 0.5);
+                let dist = ((p0.x() - p2pi.x()).powi(2)
+                    + (p0.y() - p2pi.y()).powi(2)
+                    + (p0.z() - p2pi.z()).powi(2))
+                .sqrt();
+                assert!(
+                    dist < 1e-10,
+                    "cylinder seam gap: u=0 and u=2π should coincide, dist={dist}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sphere_pole_degenerate() {
+        // Sphere should have degenerate edges at poles (start == end vertex)
+        let mut topo = Topology::new();
+        let solid = make_sphere(&mut topo, 1.0, 8).unwrap();
+
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        // Sphere has 2 hemisphere faces
+        assert_eq!(faces.len(), 2, "sphere should have 2 faces");
+    }
+
+    #[test]
+    fn torus_seam_u_and_v() {
+        // Torus surface should be periodic in both u and v
+        let mut topo = Topology::new();
+        let solid = make_torus(&mut topo, 3.0, 1.0, 8).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+
+        for fid in &faces {
+            let face = topo.face(*fid).unwrap();
+            if let brepkit_topology::face::FaceSurface::Torus(tor) = face.surface() {
+                // Check u-periodicity
+                let p00 = tor.evaluate(0.0, 0.5);
+                let p2pi_0 = tor.evaluate(std::f64::consts::TAU, 0.5);
+                let dist_u = ((p00.x() - p2pi_0.x()).powi(2)
+                    + (p00.y() - p2pi_0.y()).powi(2)
+                    + (p00.z() - p2pi_0.z()).powi(2))
+                .sqrt();
+                assert!(dist_u < 1e-10, "torus u-seam gap: dist={dist_u}");
+
+                // Check v-periodicity
+                let p0_0 = tor.evaluate(0.5, 0.0);
+                let p0_2pi = tor.evaluate(0.5, std::f64::consts::TAU);
+                let dist_v = ((p0_0.x() - p0_2pi.x()).powi(2)
+                    + (p0_0.y() - p0_2pi.y()).powi(2)
+                    + (p0_0.z() - p0_2pi.z()).powi(2))
+                .sqrt();
+                assert!(dist_v < 1e-10, "torus v-seam gap: dist={dist_v}");
+            }
+        }
+    }
+
+    #[test]
+    fn cone_apex_singular() {
+        // A cone with top_radius=0 has an apex vertex
+        let mut topo = Topology::new();
+        let solid = make_cone(&mut topo, 2.0, 0.0, 3.0).unwrap();
+        let verts = brepkit_topology::explorer::solid_vertices(&topo, solid).unwrap();
+
+        // The apex should be at (0, 0, 3.0) — the top of the cone
+        let has_apex = verts.iter().any(|vid| {
+            let v = topo.vertex(*vid).unwrap();
+            let p = v.point();
+            (p.x().powi(2) + p.y().powi(2)).sqrt() < 1e-10 && (p.z() - 3.0).abs() < 1e-10
+        });
+        assert!(has_apex, "cone should have apex vertex at (0,0,3)");
+    }
+
+    // ── Degenerate geometry tests ──────────────────────────────
+
+    #[test]
+    fn make_box_very_thin() {
+        // Thin plate: dx=1e-4, dy=1, dz=1
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, 1e-4, 1.0, 1.0).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            (vol - 1e-4).abs() < 1e-12,
+            "thin box volume should be 1e-4, got {vol}"
+        );
+        assert_euler_genus0(&topo, solid);
+    }
+
+    #[test]
+    fn make_box_very_large() {
+        let mut topo = Topology::new();
+        let solid = make_box(&mut topo, 1e6, 1.0, 1.0).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            (vol - 1e6).abs() / 1e6 < 1e-10,
+            "large box volume should be 1e6, got {vol}"
+        );
+    }
+
+    #[test]
+    fn make_cylinder_high_aspect_ratio() {
+        // Very thin, very tall cylinder
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 0.001, 1000.0).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.001).unwrap();
+        let expected = PI * 0.001_f64.powi(2) * 1000.0;
+        let rel_error = (vol - expected).abs() / expected;
+        assert!(
+            rel_error < 0.01,
+            "high aspect cylinder volume: got {vol:.6e}, expected {expected:.6e} (error: {:.1}%)",
+            rel_error * 100.0
+        );
     }
 }

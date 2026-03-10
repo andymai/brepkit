@@ -1683,6 +1683,8 @@ mod tests {
     use brepkit_topology::test_utils::make_unit_cube_manifold;
     use brepkit_topology::validation::validate_shell_manifold;
 
+    use crate::test_helpers::assert_euler_genus0;
+
     use super::*;
 
     fn solid_edge_ids(topo: &Topology, solid_id: SolidId) -> Vec<EdgeId> {
@@ -1721,6 +1723,16 @@ mod tests {
             7,
             "expected 7 faces after single-edge fillet"
         );
+    }
+
+    #[test]
+    #[ignore = "bug: fillet produces Euler χ=0 on genus-0 solid (expected χ=2)"]
+    fn fillet_single_edge_euler() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let edges = solid_edge_ids(&topo, cube);
+        let result = fillet(&mut topo, cube, &[edges[0]], 0.1).expect("fillet should succeed");
+        assert_euler_genus0(&topo, result);
     }
 
     #[test]
@@ -1865,6 +1877,9 @@ mod tests {
             7,
             "expected 7 faces after single-edge rolling-ball fillet"
         );
+
+        // Rolling-ball fillet on a box should still be genus-0 (χ=2).
+        assert_euler_genus0(&topo, result);
     }
 
     #[test]

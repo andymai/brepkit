@@ -4626,6 +4626,8 @@ mod tests {
     use brepkit_topology::test_utils::make_unit_cube_manifold_at;
     use brepkit_topology::validation::validate_shell_manifold;
 
+    use crate::test_helpers::assert_volume_near;
+
     use super::*;
 
     /// Helper: get the face count and validate manifoldness.
@@ -4756,6 +4758,7 @@ mod tests {
 
         let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
         assert!(check_result(&topo, result) > 0);
+        assert_volume_near(&topo, result, 1.5, 0.01);
     }
 
     #[test]
@@ -4766,6 +4769,7 @@ mod tests {
 
         let result = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         assert!(check_result(&topo, result) > 0);
+        assert_volume_near(&topo, result, 0.5, 0.01);
     }
 
     #[test]
@@ -4776,6 +4780,7 @@ mod tests {
 
         let result = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
         assert!(check_result(&topo, result) > 0);
+        assert_volume_near(&topo, result, 0.5, 0.01);
     }
 
     // ── 3D overlapping tests (offset on all axes) ───────────────────────
@@ -4788,6 +4793,7 @@ mod tests {
 
         let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
         assert!(check_result(&topo, result) > 0);
+        assert_volume_near(&topo, result, 1.875, 0.01);
     }
 
     #[test]
@@ -4798,6 +4804,7 @@ mod tests {
 
         let result = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         assert!(check_result(&topo, result) > 0);
+        assert_volume_near(&topo, result, 0.125, 0.01);
     }
 
     #[test]
@@ -4808,6 +4815,7 @@ mod tests {
 
         let result = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
         assert!(check_result(&topo, result) > 0);
+        assert_volume_near(&topo, result, 0.875, 0.01);
     }
 
     // ── Flush face test ─────────────────────────────────────────────────
@@ -4820,6 +4828,7 @@ mod tests {
 
         let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
         assert!(check_result(&topo, result) > 0);
+        assert_volume_near(&topo, result, 2.0, 0.01);
     }
 
     // ── NURBS face data collection test ─────────────────────────
@@ -5854,5 +5863,62 @@ mod tests {
             circle_count >= 2,
             "expected at least 2 Circle edges, got {circle_count}"
         );
+    }
+
+    #[test]
+    #[ignore = "bug: fuse produces 36 boundary edges on overlapping 10x10x10 boxes"]
+    fn fuse_overlapping_boxes_validates() {
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(5.0, 5.0, 5.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let fused = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+
+        // Check for boundary edges
+        let edge_map = brepkit_topology::explorer::edge_to_face_map(&topo, fused).unwrap();
+        let boundary: Vec<_> = edge_map
+            .iter()
+            .filter(|(_, faces)| faces.len() == 1)
+            .collect();
+        assert!(
+            boundary.is_empty(),
+            "fuse result has {} boundary edge(s): {:?}",
+            boundary.len(),
+            boundary.iter().map(|(e, _)| e).collect::<Vec<_>>()
+        );
+
+        let report = crate::validate::validate_solid(&topo, fused).unwrap();
+        assert!(
+            report.is_valid(),
+            "fuse(overlapping boxes) should validate: {:?}",
+            report.issues
+        );
+    }
+
+    // ── Degenerate boolean geometry ────────────────────────────
+
+    #[test]
+    fn near_tolerance_overlap() {
+        // Overlap of exactly the linear tolerance amount
+        let mut topo = Topology::new();
+        let tol = brepkit_math::tolerance::Tolerance::new();
+        let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = make_unit_cube_manifold_at(&mut topo, 1.0 - tol.linear, 0.0, 0.0);
+
+        // Should either succeed or error — but not panic
+        let _result = boolean(&mut topo, BooleanOp::Fuse, a, b);
+    }
+
+    #[test]
+    fn boolean_nearly_touching() {
+        // Gap smaller than tolerance
+        let mut topo = Topology::new();
+        let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = make_unit_cube_manifold_at(&mut topo, 1.0 + 1e-9, 0.0, 0.0);
+
+        // Should not panic
+        let _result = boolean(&mut topo, BooleanOp::Fuse, a, b);
     }
 }
