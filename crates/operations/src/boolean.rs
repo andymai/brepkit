@@ -3739,6 +3739,11 @@ fn refine_boundary_edges(
 
     // Compute grid cell size from bounding box and vertex count.
     // Target ~1 vertex per cell on average for O(1) query cost.
+    // NOTE: cell_size is calibrated from the global vertex population.
+    // If boundary faces are concentrated in a small sub-region, the cell
+    // size may be too large, degrading to O(boundary_verts) per query.
+    // This is acceptable for boolean assembly outputs where vertices are
+    // distributed across the full solid extent.
     let (mut bb_min, mut bb_max) = (
         Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
         Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
@@ -3883,7 +3888,10 @@ fn refine_boundary_edges(
         let mut new_oriented_edges = Vec::new();
         for oe in &old_edges {
             if let Some(intermediates) = edge_splits.get(&oe.edge()) {
-                let (start_vid, end_vid) = edge_vertices[&oe.edge()];
+                let (start_vid, end_vid) = match edge_vertices.get(&oe.edge()) {
+                    Some(&v) => v,
+                    None => continue,
+                };
                 let original_curve = topo.edge(oe.edge())?.curve().clone();
 
                 // Build vertex chain in traversal order
