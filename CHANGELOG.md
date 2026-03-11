@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.7](https://github.com/andymai/brepkit/compare/v1.0.6...v1.0.7) (2026-03-11)
+
+
+### Bug Fixes
+
+* handle CW-wound profiles in extrude, sweep, pipe, revolve ([#184](https://github.com/andymai/brepkit/issues/184)) ([ee1f5d6](https://github.com/andymai/brepkit/commit/ee1f5d6f9ad44f07164a2fb2807cd620f3df6dd3))
+
 ## [1.0.6](https://github.com/andymai/brepkit/compare/v1.0.5...v1.0.6) (2026-03-11)
 
 
