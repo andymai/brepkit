@@ -289,11 +289,11 @@ fn main() {
                 run_cylinders(n, false);
             }
             println!("\n=== Fuse overlapping scaling ===");
-            for side in [3, 4, 6, 8] {
+            for side in [3, 4, 6, 8, 12, 16, 22] {
                 run_fuse(side);
             }
             println!("\n=== Fuse touching scaling ===");
-            for side in [3, 4, 6, 8] {
+            for side in [3, 4, 6, 8, 12, 16, 22] {
                 run_fuse_touching(side);
             }
         }

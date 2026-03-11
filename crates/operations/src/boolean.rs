@@ -607,6 +607,19 @@ pub fn boolean_with_options(
     // Classification: parallelize when fragment count justifies rayon overhead.
     let classify_fn = |frag: &FaceFragment| -> FaceClass {
         let centroid = polygon_centroid(&frag.vertices);
+
+        // AABB pre-filter: if the centroid is outside the opposing solid's
+        // overall bounding box, the point is definitely outside that solid.
+        // This skips expensive ray-cast classification for the vast majority
+        // of passthrough fragments in multi-body fuse operations.
+        let outside_aabb = match frag.source {
+            Source::A => !aabb_b.contains_point(centroid),
+            Source::B => !aabb_a.contains_point(centroid),
+        };
+        if outside_aabb {
+            return FaceClass::Outside;
+        }
+
         let fast = match frag.source {
             Source::A => analytic_b.as_ref().and_then(|c| c.classify(centroid, tol)),
             Source::B => analytic_a.as_ref().and_then(|c| c.classify(centroid, tol)),
@@ -2331,6 +2344,13 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
     let shell = topo.shell(s.outer_shell()).ok()?;
     let tol = Tolerance::new();
 
+    // Complex solids (>20 faces) can't be simple analytic shapes (box,
+    // cylinder+caps, sphere). Skip the face-by-face scan to avoid O(F)
+    // overhead on large fused/boolean intermediate results.
+    if shell.faces().len() > 20 {
+        return None;
+    }
+
     let mut sphere_info: Option<(Point3, f64)> = None;
     let mut cylinder_info: Option<(Point3, Vec3, f64)> = None;
     let mut cone_info: Option<(Point3, Vec3, f64)> = None;
@@ -3465,6 +3485,7 @@ fn mesh_boolean_path(
 
     let result = assemble_solid_mixed(topo, &face_specs, tol)?;
     validate_boolean_result(topo, result)?;
+
     Ok(result)
 }
 
@@ -5234,7 +5255,26 @@ fn analytic_boolean(
         })
         .collect();
 
-    // Phase 2: if any fragments are unclassified, build face data and ray-cast.
+    // Phase 2a: AABB pre-filter — classify fragments whose centroids are
+    // outside the opposing solid's bounding box as Outside. This avoids
+    // building expensive face data + BVH for the majority of fragments
+    // in multi-body fuse operations where solids overlap minimally.
+    for (idx, class) in classes.iter_mut().enumerate() {
+        if class.is_some() {
+            continue;
+        }
+        let frag = &fragments[idx];
+        let centroid = polygon_centroid(&frag.vertices);
+        let outside_aabb = match frag.source {
+            Source::A => !b_overall_aabb.contains_point(centroid),
+            Source::B => !a_overall_aabb.contains_point(centroid),
+        };
+        if outside_aabb {
+            *class = Some(FaceClass::Outside);
+        }
+    }
+
+    // Phase 2b: if any fragments are still unclassified, build face data and ray-cast.
     let needs_raycast = classes.iter().any(Option::is_none);
     if needs_raycast {
         let face_data_a = collect_face_data(topo, a, deflection)?;
