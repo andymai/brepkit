@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.5](https://github.com/andymai/brepkit/compare/v1.0.4...v1.0.5) (2026-03-11)
+
+
+### Performance
+
+* BVH buffer reuse, HashMap pre-sizing, shared-boundary fuse ([#176](https://github.com/andymai/brepkit/issues/176)) ([648d3da](https://github.com/andymai/brepkit/commit/648d3da6d6726742237bd02e8ea4597568061fa8))
+* CDT batch split_face for compound_cut (10-50x honeycomb) ([#177](https://github.com/andymai/brepkit/issues/177)) ([cd24361](https://github.com/andymai/brepkit/commit/cd2436124fddafac45233a43e7a876ad1194fade))
+* hash grid + precomputed positions in refine_boundary_edges ([#178](https://github.com/andymai/brepkit/issues/178)) ([56da834](https://github.com/andymai/brepkit/commit/56da834bd0cf6f3c9cf7ed6dc93cc80cdb152440))
+
 ## [1.0.4](https://github.com/andymai/brepkit/compare/v1.0.3...v1.0.4) (2026-03-11)
 
 
