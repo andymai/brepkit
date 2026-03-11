@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/andymai/brepkit/compare/v1.0.0...v1.0.1) (2026-03-11)
+
+
+### Performance
+
+* AABB spatial filtering + compound_cut for batch boolean operations ([#168](https://github.com/andymai/brepkit/issues/168)) ([f4fe924](https://github.com/andymai/brepkit/commit/f4fe924f0c0628b6f5dad9db7977fe0df3b2afd7))
+* boolean engine optimizations - inline AABB, pre-allocate, reduce curve samples ([#167](https://github.com/andymai/brepkit/issues/167)) ([526ccb7](https://github.com/andymai/brepkit/commit/526ccb7bc2aa0ec8a94fc1ee8c8ddc64cceb8e69))
+
 ## [1.0.0](https://github.com/andymai/brepkit/compare/v0.11.0...v1.0.0) (2026-03-10)
 
 
