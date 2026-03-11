@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/andymai/brepkit/compare/v1.0.1...v1.0.2) (2026-03-11)
+
+
+### Performance
+
+* AABB spatial filtering + compound_cut for batch boolean operations ([#170](https://github.com/andymai/brepkit/issues/170)) ([88bbdd6](https://github.com/andymai/brepkit/commit/88bbdd605d97da405e6dbba1dbbe88379ac615b0))
+
 ## [1.0.1](https://github.com/andymai/brepkit/compare/v1.0.0...v1.0.1) (2026-03-11)
 
 
