@@ -2965,20 +2965,33 @@ fn tessellate_face_with_shared_edges(
                 point_to_global,
             )?;
         }
+    } else if matches!(
+        face_data.surface(),
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+    ) {
+        // Cylinder and cone faces are ruled surfaces — their grid has nv=1
+        // and boundary vertices align precisely with the shared edge pool.
+        // Snap-based stitching is much faster than CDT for these surfaces.
+        tessellate_nonplanar_snap(
+            topo,
+            face_id,
+            face_data,
+            deflection,
+            edge_global_indices,
+            merged,
+            point_to_global,
+        )?;
     } else {
-        // For analytic faces (Cylinder, Cone, Sphere, Torus): use CDT-based
-        // tessellation with exact boundary constraints when the boundary forms
-        // a non-degenerate polygon in (u,v) parameter space. Falls back to
-        // snap-based stitching for faces where the boundary is degenerate
-        // (e.g., sphere hemispheres where the equatorial boundary collapses
-        // to a line at v=0 in parameter space).
+        // For sphere and torus faces: use CDT-based tessellation with exact
+        // boundary constraints. These surfaces have non-trivial curvature in
+        // both parameter directions, and polar regions may degenerate in (u,v)
+        // space — CDT ensures watertight boundary stitching.
         //
-        // Save mesh state before CDT attempt so we can roll back if it fails
-        // (CDT may partially insert positions/normals before hitting an error).
+        // Save mesh state before CDT attempt so we can roll back if it fails.
         let pos_save = merged.positions.len();
         let nrm_save = merged.normals.len();
         let idx_save = merged.indices.len();
-        let ptg_save = point_to_global.clone();
+        let ptg_count_save = point_to_global.len();
 
         let cdt_ok = tessellate_nonplanar_cdt(
             topo,
@@ -2991,13 +3004,14 @@ fn tessellate_face_with_shared_edges(
         );
         let cdt_produced_tris = cdt_ok.is_ok() && merged.indices.len() > idx_save;
         if !cdt_produced_tris {
-            // CDT failed or produced zero triangles (e.g., sphere hemisphere
-            // where the boundary degenerates to a line in (u,v) space).
-            // Roll back and fall back to snap-based stitching.
+            // CDT failed or produced zero triangles — roll back and fall back
+            // to snap-based stitching.
             merged.positions.truncate(pos_save);
             merged.normals.truncate(nrm_save);
             merged.indices.truncate(idx_save);
-            *point_to_global = ptg_save;
+            if point_to_global.len() > ptg_count_save {
+                point_to_global.retain(|_, v| (*v as usize) < pos_save);
+            }
 
             tessellate_nonplanar_snap(
                 topo,
@@ -3197,14 +3211,12 @@ fn tessellate_nonplanar_cdt(
     }
 
     // Step 5: Generate interior sample points.
-    // Use a uniform grid at a density matching the deflection criterion.
+    // Use a uniform grid at a density matching the deflection criterion,
+    // with surface-aware resolution per direction.
     let du = u_max - u_min;
     let dv = v_max - v_min;
     if du > 1e-15 && dv > 1e-15 {
-        // Estimate radius for sample density.
-        let avg_radius = estimate_surface_radius(face_data.surface());
-        let n_u = segments_for_chord_deviation(avg_radius, du, deflection).max(2);
-        let n_v = segments_for_chord_deviation(avg_radius, dv, deflection).max(2);
+        let (n_u, n_v) = interior_grid_resolution(face_data.surface(), du, dv, deflection);
 
         for iu in 1..n_u {
             for iv in 1..n_v {
@@ -3385,6 +3397,50 @@ fn estimate_surface_radius(surface: &FaceSurface) -> f64 {
         FaceSurface::Sphere(sphere) => sphere.radius(),
         FaceSurface::Torus(torus) => torus.major_radius() + torus.minor_radius(),
         FaceSurface::Nurbs(_) | FaceSurface::Plane { .. } => 1.0, // conservative estimate
+    }
+}
+
+/// Compute interior grid resolution for `tessellate_nonplanar_cdt`.
+///
+/// Returns `(n_u, n_v)` with surface-aware density:
+/// - **Sphere:** both directions curvature-based
+/// - **Torus:** u = major-radius-based, v = minor-radius-based
+/// - **Plane/NURBS/Cylinder/Cone:** isotropic conservative estimate
+///
+/// Note: cylinder and cone faces are dispatched to the snap fast-path in
+/// `tessellate_solid` and should not reach CDT in practice.
+fn interior_grid_resolution(
+    surface: &FaceSurface,
+    du: f64,
+    dv: f64,
+    deflection: f64,
+) -> (usize, usize) {
+    match surface {
+        // Cylinder and cone are dispatched to the snap fast-path before reaching
+        // CDT, so they never call this function.  Sphere and torus still use CDT.
+        FaceSurface::Sphere(sphere) => {
+            let r = sphere.radius();
+            let n_u = segments_for_chord_deviation(r, du, deflection).max(2);
+            let n_v = segments_for_chord_deviation(r, dv, deflection).max(2);
+            (n_u, n_v)
+        }
+        FaceSurface::Torus(torus) => {
+            let n_u = segments_for_chord_deviation(torus.major_radius(), du, deflection).max(2);
+            let n_v = segments_for_chord_deviation(torus.minor_radius(), dv, deflection).max(2);
+            (n_u, n_v)
+        }
+        FaceSurface::Plane { .. }
+        | FaceSurface::Nurbs(_)
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_) => {
+            // Plane/NURBS: isotropic conservative estimate.
+            // Cylinder/Cone: unreachable via snap fast-path, but included for
+            // exhaustiveness so new FaceSurface variants cause a compile error.
+            let r = estimate_surface_radius(surface);
+            let n_u = segments_for_chord_deviation(r, du, deflection).max(2);
+            let n_v = segments_for_chord_deviation(r, dv, deflection).max(2);
+            (n_u, n_v)
+        }
     }
 }
 
