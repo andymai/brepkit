@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4](https://github.com/andymai/brepkit/compare/v1.0.3...v1.0.4) (2026-03-11)
+
+
+### Performance
+
+* compound_cut raycast + ConvexPolyhedron classifier (8.4x honeycomb) ([#174](https://github.com/andymai/brepkit/issues/174)) ([bab38dd](https://github.com/andymai/brepkit/commit/bab38dd560cef5e889c0f469abcb25f0d181fe30))
+
 ## [1.0.3](https://github.com/andymai/brepkit/compare/v1.0.2...v1.0.3) (2026-03-11)
 
 
