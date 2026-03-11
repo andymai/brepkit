@@ -3051,7 +3051,19 @@ pub(crate) fn assemble_solid_mixed(
 
     // Post-assembly edge refinement: split long boundary edges at
     // intermediate collinear vertices so adjacent faces can share edges.
-    refine_boundary_edges(topo, &mut face_ids, &mut edge_map, tol)?;
+    // Pass precomputed vertex positions from assembly to avoid redundant
+    // face→wire→edge→vertex traversal.
+    let vertex_positions: HashMap<VertexId, Point3> = vertex_map
+        .values()
+        .filter_map(|&vid| topo.vertex(vid).ok().map(|v| (vid, v.point())))
+        .collect();
+    refine_boundary_edges(
+        topo,
+        &mut face_ids,
+        &mut edge_map,
+        tol,
+        Some(&vertex_positions),
+    )?;
 
     // Split non-manifold edges (shared by > 2 faces) into separate copies,
     // pairing faces by angular ordering around the edge.
@@ -3650,15 +3662,24 @@ fn refine_boundary_edges(
     face_ids: &mut [FaceId],
     edge_map: &mut HashMap<(usize, usize), EdgeId>,
     tol: Tolerance,
+    precomputed_positions: Option<&HashMap<VertexId, Point3>>,
 ) -> Result<(), crate::OperationsError> {
-    // Build edge-to-face usage map
+    // Single-pass: build edge-to-face count AND collect edge vertex pairs.
+    // This avoids a second full face→wire→edge→vertex traversal.
     let mut edge_face_count: HashMap<EdgeId, usize> = HashMap::new();
+    let mut edge_vertices: HashMap<EdgeId, (VertexId, VertexId)> = HashMap::new();
     for &fid in face_ids.iter() {
         let face = topo.face(fid)?;
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             let wire = topo.wire(wid)?;
             for oe in wire.edges() {
-                *edge_face_count.entry(oe.edge()).or_default() += 1;
+                let eid = oe.edge();
+                *edge_face_count.entry(eid).or_default() += 1;
+                if let std::collections::hash_map::Entry::Vacant(e) = edge_vertices.entry(eid) {
+                    if let Ok(edge) = topo.edge(eid) {
+                        e.insert((edge.start(), edge.end()));
+                    }
+                }
             }
         }
     }
@@ -3674,48 +3695,97 @@ fn refine_boundary_edges(
         return Ok(());
     }
 
-    // Collect all vertex positions
-    let mut all_vertex_positions: HashMap<VertexId, Point3> = HashMap::new();
-    for &fid in face_ids.iter() {
-        let face = topo.face(fid)?;
-        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            let wire = topo.wire(wid)?;
-            for oe in wire.edges() {
-                let edge = topo.edge(oe.edge())?;
-                if let Ok(v) = topo.vertex(edge.start()) {
-                    all_vertex_positions
-                        .entry(edge.start())
-                        .or_insert_with(|| v.point());
-                }
-                if let Ok(v) = topo.vertex(edge.end()) {
-                    all_vertex_positions
-                        .entry(edge.end())
-                        .or_insert_with(|| v.point());
+    // Build vertex positions. Use precomputed positions from assembly when
+    // available, falling back to topology only for missing vertices
+    // (e.g. passthrough faces not in the assembly's vertex_map).
+    let mut extra_positions: HashMap<VertexId, Point3> = HashMap::new();
+    for &(start, end) in edge_vertices.values() {
+        for &vid in &[start, end] {
+            let in_pre = precomputed_positions.is_some_and(|p| p.contains_key(&vid));
+            if !in_pre {
+                if let std::collections::hash_map::Entry::Vacant(e) = extra_positions.entry(vid) {
+                    if let Ok(v) = topo.vertex(vid) {
+                        e.insert(v.point());
+                    }
                 }
             }
         }
     }
 
     // For each boundary edge, find intermediate collinear vertices.
-    // Build a BVH over vertex positions for O(log V) spatial queries
-    // instead of O(V) brute-force per boundary edge.
-    let vert_list: Vec<(VertexId, Point3)> = all_vertex_positions
-        .iter()
-        .map(|(&vid, &pos)| (vid, pos))
-        .collect();
-    let vert_aabb_entries: Vec<(usize, Aabb3)> = vert_list
-        .iter()
-        .enumerate()
-        .map(|(i, &(_, pos))| (i, Aabb3 { min: pos, max: pos }))
-        .collect();
-    let vert_bvh = Bvh::build(&vert_aabb_entries);
+    // Use a spatial hash grid for O(V) build + O(1) amortized query,
+    // much faster than SAH BVH's O(V log²V) build for point clouds.
+    let get_pos = |vid: &VertexId| -> Option<Point3> {
+        precomputed_positions
+            .and_then(|p| p.get(vid))
+            .or_else(|| extra_positions.get(vid))
+            .copied()
+    };
+    // Build vert_list from both sources, deduplicating by VertexId.
+    let mut seen: HashSet<VertexId> = HashSet::new();
+    let mut vert_list: Vec<(VertexId, Point3)> = Vec::new();
+    if let Some(pre) = precomputed_positions {
+        for (&vid, &pos) in pre {
+            if seen.insert(vid) {
+                vert_list.push((vid, pos));
+            }
+        }
+    }
+    for (&vid, &pos) in &extra_positions {
+        if seen.insert(vid) {
+            vert_list.push((vid, pos));
+        }
+    }
+
+    // Compute grid cell size from bounding box and vertex count.
+    // Target ~1 vertex per cell on average for O(1) query cost.
+    // NOTE: cell_size is calibrated from the global vertex population.
+    // If boundary faces are concentrated in a small sub-region, the cell
+    // size may be too large, degrading to O(boundary_verts) per query.
+    // This is acceptable for boolean assembly outputs where vertices are
+    // distributed across the full solid extent.
+    let (mut bb_min, mut bb_max) = (
+        Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+        Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+    );
+    for &(_, pos) in &vert_list {
+        bb_min = Point3::new(
+            bb_min.x().min(pos.x()),
+            bb_min.y().min(pos.y()),
+            bb_min.z().min(pos.z()),
+        );
+        bb_max = Point3::new(
+            bb_max.x().max(pos.x()),
+            bb_max.y().max(pos.y()),
+            bb_max.z().max(pos.z()),
+        );
+    }
+    let diag = ((bb_max.x() - bb_min.x()).powi(2)
+        + (bb_max.y() - bb_min.y()).powi(2)
+        + (bb_max.z() - bb_min.z()).powi(2))
+    .sqrt();
+    let cell_size = (diag / (vert_list.len() as f64).cbrt()).max(tol.linear);
+    let inv_cell = 1.0 / cell_size;
+
+    let mut grid: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+    for (i, &(_, pos)) in vert_list.iter().enumerate() {
+        let cx = (pos.x() * inv_cell).floor() as i64;
+        let cy = (pos.y() * inv_cell).floor() as i64;
+        let cz = (pos.z() * inv_cell).floor() as i64;
+        grid.entry((cx, cy, cz)).or_default().push(i);
+    }
 
     let mut edge_splits: HashMap<EdgeId, Vec<VertexId>> = HashMap::new();
 
     for &eid in &boundary_edges {
-        let edge = topo.edge(eid)?;
-        let p0 = all_vertex_positions[&edge.start()];
-        let p1 = all_vertex_positions[&edge.end()];
+        let &(start_vid, end_vid) = match edge_vertices.get(&eid) {
+            Some(v) => v,
+            None => continue,
+        };
+        let (p0, p1) = match (get_pos(&start_vid), get_pos(&end_vid)) {
+            (Some(a), Some(b)) => (a, b),
+            _ => continue,
+        };
         let dx = p1.x() - p0.x();
         let dy = p1.y() - p0.y();
         let dz = p1.z() - p0.z();
@@ -3725,42 +3795,55 @@ fn refine_boundary_edges(
         }
         let len = len_sq.sqrt();
 
-        // Query BVH with the edge's AABB expanded by tolerance
+        // Query hash grid with the edge's AABB expanded by tolerance
         let edge_aabb = Aabb3 {
             min: Point3::new(p0.x().min(p1.x()), p0.y().min(p1.y()), p0.z().min(p1.z())),
             max: Point3::new(p0.x().max(p1.x()), p0.y().max(p1.y()), p0.z().max(p1.z())),
         }
         .expanded(tol.linear);
-        let candidates = vert_bvh.query_overlap(&edge_aabb);
+        let min_cx = (edge_aabb.min.x() * inv_cell).floor() as i64;
+        let min_cy = (edge_aabb.min.y() * inv_cell).floor() as i64;
+        let min_cz = (edge_aabb.min.z() * inv_cell).floor() as i64;
+        let max_cx = (edge_aabb.max.x() * inv_cell).floor() as i64;
+        let max_cy = (edge_aabb.max.y() * inv_cell).floor() as i64;
+        let max_cz = (edge_aabb.max.z() * inv_cell).floor() as i64;
 
         let mut intermediates: Vec<(f64, VertexId)> = Vec::new();
 
-        for cand_idx in candidates {
-            let (vid, pos) = vert_list[cand_idx];
-            if vid == edge.start() || vid == edge.end() {
-                continue;
-            }
-            // Project pos onto line p0 + t*(p1-p0)
-            let dpx = pos.x() - p0.x();
-            let dpy = pos.y() - p0.y();
-            let dpz = pos.z() - p0.z();
-            let t = (dpx * dx + dpy * dy + dpz * dz) / len_sq;
+        for gx in min_cx..=max_cx {
+            for gy in min_cy..=max_cy {
+                for gz in min_cz..=max_cz {
+                    if let Some(indices) = grid.get(&(gx, gy, gz)) {
+                        for &cand_idx in indices {
+                            let (vid, pos) = vert_list[cand_idx];
+                            if vid == start_vid || vid == end_vid {
+                                continue;
+                            }
+                            // Project pos onto line p0 + t*(p1-p0)
+                            let dpx = pos.x() - p0.x();
+                            let dpy = pos.y() - p0.y();
+                            let dpz = pos.z() - p0.z();
+                            let t = (dpx * dx + dpy * dy + dpz * dz) / len_sq;
 
-            // Must be strictly between endpoints
-            if t <= tol.linear / len || t >= 1.0 - tol.linear / len {
-                continue;
-            }
+                            // Must be strictly between endpoints
+                            if t <= tol.linear / len || t >= 1.0 - tol.linear / len {
+                                continue;
+                            }
 
-            // Check distance from point to line
-            let proj_x = p0.x() + t * dx;
-            let proj_y = p0.y() + t * dy;
-            let proj_z = p0.z() + t * dz;
-            let dist_sq = (pos.x() - proj_x).powi(2)
-                + (pos.y() - proj_y).powi(2)
-                + (pos.z() - proj_z).powi(2);
+                            // Check distance from point to line
+                            let proj_x = p0.x() + t * dx;
+                            let proj_y = p0.y() + t * dy;
+                            let proj_z = p0.z() + t * dz;
+                            let dist_sq = (pos.x() - proj_x).powi(2)
+                                + (pos.y() - proj_y).powi(2)
+                                + (pos.z() - proj_z).powi(2);
 
-            if dist_sq < tol.linear * tol.linear {
-                intermediates.push((t, vid));
+                            if dist_sq < tol.linear * tol.linear {
+                                intermediates.push((t, vid));
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -3805,10 +3888,11 @@ fn refine_boundary_edges(
         let mut new_oriented_edges = Vec::new();
         for oe in &old_edges {
             if let Some(intermediates) = edge_splits.get(&oe.edge()) {
-                let edge = topo.edge(oe.edge())?;
-                let start_vid = edge.start();
-                let end_vid = edge.end();
-                let original_curve = edge.curve().clone();
+                let (start_vid, end_vid) = match edge_vertices.get(&oe.edge()) {
+                    Some(&v) => v,
+                    None => continue,
+                };
+                let original_curve = topo.edge(oe.edge())?.curve().clone();
 
                 // Build vertex chain in traversal order
                 let chain: Vec<VertexId> = if oe.is_forward() {
@@ -5480,7 +5564,17 @@ fn analytic_boolean(
     // as multiple shorter edges from adjacent split faces. Refine them
     // so edge sharing works correctly.
     let _t_refine = timer_now();
-    refine_boundary_edges(topo, &mut face_ids_out, &mut edge_map, tol)?;
+    let vertex_positions: HashMap<VertexId, Point3> = vertex_map
+        .values()
+        .filter_map(|&vid| topo.vertex(vid).ok().map(|v| (vid, v.point())))
+        .collect();
+    refine_boundary_edges(
+        topo,
+        &mut face_ids_out,
+        &mut edge_map,
+        tol,
+        Some(&vertex_positions),
+    )?;
     log::debug!(
         "[boolean] refine_boundary_edges: {:.3}ms ({} faces)",
         timer_elapsed_ms(_t_refine),
@@ -6788,7 +6882,17 @@ pub fn compound_cut(
         face_ids_out.len()
     );
 
-    refine_boundary_edges(topo, &mut face_ids_out, &mut edge_map, tol)?;
+    let vertex_positions: HashMap<VertexId, Point3> = vertex_map
+        .values()
+        .filter_map(|&vid| topo.vertex(vid).ok().map(|v| (vid, v.point())))
+        .collect();
+    refine_boundary_edges(
+        topo,
+        &mut face_ids_out,
+        &mut edge_map,
+        tol,
+        Some(&vertex_positions),
+    )?;
     let _t_refine = timer_elapsed_ms(_t_total);
     log::debug!("[compound_cut] refine: {:.1}ms", _t_refine - _t_phase5);
     split_nonmanifold_edges(topo, &mut face_ids_out)?;
