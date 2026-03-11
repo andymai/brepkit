@@ -131,7 +131,7 @@ fn tessellate_analytic(
     let mut indices = Vec::new();
 
     let nu = nu.max(4);
-    let nv = nv.max(4);
+    let nv = nv.max(1);
 
     // Build (nu+1) x (nv+1) vertex grid.
     let mut grid = vec![0u32; (nu + 1) * (nv + 1)];
@@ -2150,10 +2150,9 @@ pub fn tessellate_with_uvs(
             let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
             let u_range = compute_angular_range(topo, face_data, |p| cyl.project_point(p));
             let nu = segments_for_chord_deviation(cyl.radius(), u_range.1 - u_range.0, deflection);
-            let v_extent = (v_range.1 - v_range.0).abs();
-            let nv = 4_usize.max(
-                (v_extent / (cyl.radius() * std::f64::consts::TAU / nu as f64)).ceil() as usize,
-            );
+            // Cylinders have zero axial curvature — 1 row (top + bottom)
+            // is geometrically exact. No need for square-grid scaling.
+            let nv = 1;
             let cyl = cyl.clone();
             Ok(tessellate_analytic(
                 |u, v| cyl.evaluate(u, v),
@@ -2177,11 +2176,18 @@ pub fn tessellate_with_uvs(
                 u_range.1 - u_range.0,
                 deflection,
             );
-            let v_extent = (v_range.1 - v_range.0).abs();
-            let nv = 4_usize.max(
-                (v_extent / (max_radius.max(0.01) * std::f64::consts::TAU / nu as f64)).ceil()
-                    as usize,
-            );
+            // Cones have zero curvature along their generators — 1 row
+            // is geometrically exact (linear interpolation matches the
+            // surface). The apex fan handles the degenerate tip separately.
+            let nv = 1;
+            // Only use ConeApex fan when v_range actually starts near the
+            // apex (v≈0). Truncated cones have v_min > 0 and need regular
+            // quads.
+            let kind = if v_range.0.abs() < 1e-10 {
+                AnalyticKind::ConeApex
+            } else {
+                AnalyticKind::General
+            };
             let cone = cone.clone();
             Ok(tessellate_analytic(
                 |u, v| cone.evaluate(u, v),
@@ -2190,7 +2196,7 @@ pub fn tessellate_with_uvs(
                 v_range,
                 nu,
                 nv,
-                AnalyticKind::ConeApex,
+                kind,
             ))
         }
         FaceSurface::Sphere(sphere) => {
