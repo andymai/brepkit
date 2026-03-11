@@ -8,6 +8,22 @@ use std::collections::{HashMap, HashSet};
 
 use rayon::prelude::*;
 
+// WASM-compatible timer: `std::time::Instant` panics on wasm32 targets.
+#[cfg(not(target_arch = "wasm32"))]
+fn timer_now() -> std::time::Instant {
+    std::time::Instant::now()
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn timer_elapsed_ms(t: std::time::Instant) -> f64 {
+    t.elapsed().as_secs_f64() * 1000.0
+}
+#[cfg(target_arch = "wasm32")]
+fn timer_now() -> () {}
+#[cfg(target_arch = "wasm32")]
+fn timer_elapsed_ms(_t: ()) -> f64 {
+    0.0
+}
+
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
 use brepkit_math::plane::plane_plane_intersection;
@@ -3543,7 +3559,7 @@ fn analytic_boolean(
         ExactIntersectionCurve, exact_plane_analytic, intersect_analytic_analytic_bounded,
     };
 
-    let _t_total = std::time::Instant::now();
+    let _t_total = timer_now();
 
     // Collect face info for both solids.
     let solid_a = topo.solid(a)?;
@@ -3583,7 +3599,7 @@ fn analytic_boolean(
             reason: "solid B has no faces".into(),
         })?;
 
-    let _t_snap = std::time::Instant::now();
+    let _t_snap = timer_now();
     let mut snaps_a = Vec::new();
     let mut passthrough_a: Vec<FaceId> = Vec::new();
     for (i, &fid) in face_ids_a.iter().enumerate() {
@@ -3630,7 +3646,7 @@ fn analytic_boolean(
 
     log::debug!(
         "[boolean] snapshots: {:.3}ms (A={} snap + {} pass, B={} snap + {} pass)",
-        _t_snap.elapsed().as_secs_f64() * 1000.0,
+        timer_elapsed_ms(_t_snap),
         snaps_a.len(),
         passthrough_a.len(),
         snaps_b.len(),
@@ -3638,7 +3654,7 @@ fn analytic_boolean(
     );
 
     // Compute AABBs for face pairs (surface-aware for non-planar faces).
-    let _t_aabb = std::time::Instant::now();
+    let _t_aabb = timer_now();
     let aabbs_a: Vec<Aabb3> = snaps_a
         .iter()
         .map(|s| surface_aware_aabb(&s.surface, &s.vertices, tol))
@@ -3692,12 +3708,12 @@ fn analytic_boolean(
     };
     log::debug!(
         "[boolean] aabb+bvh: {:.3}ms (A={}, B={})",
-        _t_aabb.elapsed().as_secs_f64() * 1000.0,
+        timer_elapsed_ms(_t_aabb),
         aabbs_a.len(),
         aabbs_b.len()
     );
 
-    let _t_isect = std::time::Instant::now();
+    let _t_isect = timer_now();
     for (ia, snap_a) in snaps_a.iter().enumerate() {
         // Use BVH for broad-phase when available, otherwise brute-force with AABB check.
         let candidates: Vec<usize> = if let Some(ref bvh) = analytic_bvh_b {
@@ -3908,11 +3924,12 @@ fn analytic_boolean(
     );
     log::debug!(
         "[boolean] intersections: {:.3}ms (isect_a={}, isect_b={})",
-        _t_isect.elapsed().as_secs_f64() * 1000.0,
+        timer_elapsed_ms(_t_isect),
         face_intersections_a.len(),
         face_intersections_b.len()
     );
 
+    let _t_frag = timer_now();
     // ── Build contained-curve lookup sets ──────────────────────────────
 
     // Map: plane_face_idx → list of contained edge curves (keyed by plane source).
@@ -3958,7 +3975,6 @@ fn analytic_boolean(
 
     // ── Split faces into fragments ───────────────────────────────────────
 
-    let _t_frag = std::time::Instant::now();
     let mut fragments: Vec<AnalyticFragment> = Vec::with_capacity(snaps_a.len() + snaps_b.len());
 
     // Process solid A faces.
@@ -4367,14 +4383,14 @@ fn analytic_boolean(
 
     log::debug!(
         "[boolean] fragments: {:.3}ms (count={}, passthrough={})",
-        _t_frag.elapsed().as_secs_f64() * 1000.0,
+        timer_elapsed_ms(_t_frag),
         fragments.len(),
         passthrough_a.len() + passthrough_b.len()
     );
 
     // ── Classification ───────────────────────────────────────────────────
+    let _t_class = timer_now();
 
-    let _t_class = std::time::Instant::now();
     // Try analytic classifiers first (O(1) point-in-solid tests).
     // Only build expensive tessellated face data if needed.
     let analytic_cls_a = try_build_analytic_classifier(topo, a);
@@ -4472,13 +4488,13 @@ fn analytic_boolean(
 
     log::debug!(
         "[boolean] classification: {:.3}ms ({} fragments)",
-        _t_class.elapsed().as_secs_f64() * 1000.0,
+        timer_elapsed_ms(_t_class),
         classes.len()
     );
 
     // ── Selection + Assembly ─────────────────────────────────────────────
+    let _t_asm = timer_now();
 
-    let _t_asm = std::time::Instant::now();
     let resolution = 1.0 / tol.linear;
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
@@ -4740,7 +4756,7 @@ fn analytic_boolean(
 
     log::debug!(
         "[boolean] assembly: {:.3}ms ({} faces)",
-        _t_asm.elapsed().as_secs_f64() * 1000.0,
+        timer_elapsed_ms(_t_asm),
         face_ids_out.len()
     );
 
@@ -4754,29 +4770,26 @@ fn analytic_boolean(
     // Unsplit faces may have long boundary edges that span the same line
     // as multiple shorter edges from adjacent split faces. Refine them
     // so edge sharing works correctly.
-    let _t_refine = std::time::Instant::now();
+    let _t_refine = timer_now();
     refine_boundary_edges(topo, &mut face_ids_out, &mut edge_map, tol)?;
     log::debug!(
         "[boolean] refine_boundary_edges: {:.3}ms ({} faces)",
-        _t_refine.elapsed().as_secs_f64() * 1000.0,
+        timer_elapsed_ms(_t_refine),
         face_ids_out.len()
     );
 
     // Split non-manifold edges (shared by > 2 faces) into separate copies.
-    let _t_nm = std::time::Instant::now();
+    let _t_nm = timer_now();
     split_nonmanifold_edges(topo, &mut face_ids_out)?;
     log::debug!(
         "[boolean] split_nonmanifold_edges: {:.3}ms ({} faces)",
-        _t_nm.elapsed().as_secs_f64() * 1000.0,
+        timer_elapsed_ms(_t_nm),
         face_ids_out.len()
     );
 
     let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.shells.alloc(shell);
-    log::debug!(
-        "[boolean] total: {:.3}ms",
-        _t_total.elapsed().as_secs_f64() * 1000.0
-    );
+    log::debug!("[boolean] total: {:.3}ms", timer_elapsed_ms(_t_total));
     Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
 }
 
@@ -4841,7 +4854,7 @@ pub fn compound_cut(
 
     let tol = opts.tolerance;
     let deflection = opts.deflection;
-    let _t_total = std::time::Instant::now();
+    let _t_total = timer_now();
 
     // ── Phase 0: Precompute tool data ────────────────────────────────────
     struct ToolData {
@@ -5837,10 +5850,7 @@ pub fn compound_cut(
 
     let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.shells.alloc(shell);
-    log::debug!(
-        "[compound_cut] total: {:.3}ms",
-        _t_total.elapsed().as_secs_f64() * 1000.0
-    );
+    log::debug!("[compound_cut] total: {:.3}ms", timer_elapsed_ms(_t_total));
     Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
 }
 
@@ -8052,6 +8062,110 @@ mod tests {
         let target = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
         let result = compound_cut(&mut topo, target, &[], BooleanOptions::default()).unwrap();
         assert_eq!(result, target);
+    }
+
+    #[test]
+    fn diagnose_aabb_filter() {
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+        let target = crate::primitives::make_box(&mut topo, 42.0, 42.0, 7.0).unwrap();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 3.75, 7.0).unwrap();
+        crate::transform::transform_solid(&mut topo, cyl, &Mat4::translation(21.0, 21.0, 0.0))
+            .unwrap();
+
+        let solid_a = topo.solid(target).unwrap();
+        let shell_a = topo.shell(solid_a.outer_shell()).unwrap();
+        let face_ids_a: Vec<brepkit_topology::face::FaceId> = shell_a.faces().to_vec();
+
+        let solid_b = topo.solid(cyl).unwrap();
+        let shell_b = topo.shell(solid_b.outer_shell()).unwrap();
+        let face_ids_b: Vec<brepkit_topology::face::FaceId> = shell_b.faces().to_vec();
+
+        let wire_aabbs_a: Vec<_> = face_ids_a
+            .iter()
+            .map(|&fid| face_wire_aabb(&topo, fid).unwrap())
+            .collect();
+        let wire_aabbs_b: Vec<_> = face_ids_b
+            .iter()
+            .map(|&fid| face_wire_aabb(&topo, fid).unwrap())
+            .collect();
+
+        let a_overall = wire_aabbs_a.iter().copied().reduce(Aabb3::union).unwrap();
+        let b_overall = wire_aabbs_b.iter().copied().reduce(Aabb3::union).unwrap();
+
+        eprintln!(
+            "A overall: ({:.2},{:.2},{:.2})-({:.2},{:.2},{:.2})",
+            a_overall.min.x(),
+            a_overall.min.y(),
+            a_overall.min.z(),
+            a_overall.max.x(),
+            a_overall.max.y(),
+            a_overall.max.z()
+        );
+        eprintln!(
+            "B overall: ({:.2},{:.2},{:.2})-({:.2},{:.2},{:.2})",
+            b_overall.min.x(),
+            b_overall.min.y(),
+            b_overall.min.z(),
+            b_overall.max.x(),
+            b_overall.max.y(),
+            b_overall.max.z()
+        );
+
+        let mut passthrough_count = 0;
+        for (i, &fid) in face_ids_a.iter().enumerate() {
+            let face = topo.face(fid).unwrap();
+            let overlaps = wire_aabbs_a[i].intersects(b_overall);
+            if !overlaps {
+                passthrough_count += 1;
+            }
+            eprintln!(
+                "A[{}] {:?} ({:.2},{:.2},{:.2})-({:.2},{:.2},{:.2}) overlaps={}",
+                i,
+                match face.surface() {
+                    FaceSurface::Plane { .. } => "Plane",
+                    FaceSurface::Cylinder(_) => "Cyl",
+                    _ => "Other",
+                },
+                wire_aabbs_a[i].min.x(),
+                wire_aabbs_a[i].min.y(),
+                wire_aabbs_a[i].min.z(),
+                wire_aabbs_a[i].max.x(),
+                wire_aabbs_a[i].max.y(),
+                wire_aabbs_a[i].max.z(),
+                overlaps
+            );
+        }
+        for (i, &fid) in face_ids_b.iter().enumerate() {
+            let face = topo.face(fid).unwrap();
+            let overlaps = wire_aabbs_b[i].intersects(a_overall);
+            eprintln!(
+                "B[{}] {:?} ({:.2},{:.2},{:.2})-({:.2},{:.2},{:.2}) overlaps={}",
+                i,
+                match face.surface() {
+                    FaceSurface::Plane { .. } => "Plane",
+                    FaceSurface::Cylinder(_) => "Cyl",
+                    _ => "Other",
+                },
+                wire_aabbs_b[i].min.x(),
+                wire_aabbs_b[i].min.y(),
+                wire_aabbs_b[i].min.z(),
+                wire_aabbs_b[i].max.x(),
+                wire_aabbs_b[i].max.y(),
+                wire_aabbs_b[i].max.z(),
+                overlaps
+            );
+        }
+        eprintln!("Passthrough A: {}/{}", passthrough_count, face_ids_a.len());
+
+        let result = boolean(&mut topo, BooleanOp::Cut, target, cyl).unwrap();
+        assert_volume_near(
+            &topo,
+            result,
+            42.0 * 42.0 * 7.0 - std::f64::consts::PI * 3.75 * 3.75 * 7.0,
+            0.05,
+        );
     }
 
     #[test]
