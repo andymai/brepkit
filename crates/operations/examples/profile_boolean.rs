@@ -12,7 +12,7 @@
 //! For flamegraphs:
 //!   cargo flamegraph --profile profiling --example profile_boolean -o flame.svg -- honeycomb
 
-#![allow(clippy::unwrap_used, missing_docs)]
+#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
 
 use std::time::Instant;
 
@@ -163,7 +163,8 @@ fn print_tess_result(
     result: brepkit_topology::solid::SolidId,
 ) {
     let t1 = Instant::now();
-    let mesh = tessellate_solid(topo, result, 0.1).unwrap();
+    let mesh =
+        tessellate_solid(topo, result, 0.1).expect("tessellation of boolean result should succeed");
     let tess_ms = t1.elapsed().as_secs_f64() * 1000.0;
     println!(
         "  bool={bool_ms:.1}ms  tess={tess_ms:.1}ms  total={:.1}ms — {face_count} faces, {} tris, {} verts",

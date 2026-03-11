@@ -527,8 +527,8 @@ pub fn boolean_with_options(
     let faces_a = collect_face_data(topo, a, opts.deflection)?;
     let faces_b = collect_face_data(topo, b, opts.deflection)?;
 
-    let aabb_a = solid_aabb(&faces_a, tol)?;
-    let aabb_b = solid_aabb(&faces_b, tol)?;
+    let aabb_a = solid_aabb(topo, &faces_a, tol)?;
+    let aabb_b = solid_aabb(topo, &faces_b, tol)?;
 
     // Disjoint AABB shortcut.
     if !aabb_a.intersects(aabb_b) {
@@ -927,9 +927,17 @@ fn face_wire_aabb(topo: &Topology, face_id: FaceId) -> Result<Aabb3, crate::Oper
     Ok(aabb)
 }
 
-/// Compute AABB encompassing all face vertices, padded by tolerance.
-fn solid_aabb(faces: &FaceData, tol: Tolerance) -> Result<Aabb3, crate::OperationsError> {
-    Aabb3::try_from_points(
+/// Compute AABB encompassing all face vertices, expanded for surface curvature.
+///
+/// For analytic surfaces (sphere, cylinder, cone, torus), the tessellated
+/// vertices may not reach surface extremes. We call `expand_aabb_for_surface`
+/// on each face to produce a conservative bounding box.
+fn solid_aabb(
+    topo: &Topology,
+    faces: &FaceData,
+    tol: Tolerance,
+) -> Result<Aabb3, crate::OperationsError> {
+    let mut aabb = Aabb3::try_from_points(
         faces
             .iter()
             .flat_map(|(_, verts, _, _)| verts.iter().copied()),
@@ -937,7 +945,15 @@ fn solid_aabb(faces: &FaceData, tol: Tolerance) -> Result<Aabb3, crate::Operatio
     .map(|bb| bb.expanded(tol.linear))
     .ok_or_else(|| crate::OperationsError::InvalidInput {
         reason: "solid has no vertices".into(),
-    })
+    })?;
+
+    for (fid, _, _, _) in faces {
+        if let Ok(face) = topo.face(*fid) {
+            crate::measure::expand_aabb_for_surface(&mut aabb, face.surface());
+        }
+    }
+
+    Ok(aabb)
 }
 
 /// Check if one solid is entirely contained in the other and short-circuit
