@@ -31,5 +31,9 @@ harness = false
 name = "compound_cut_perf"
 harness = false
 
+[[bench]]
+name = "fuse_perf"
+harness = false
+
 [lints]
 workspace = true

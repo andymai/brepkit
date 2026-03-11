@@ -179,7 +179,7 @@ fn bench_compound_cut_honeycomb(c: &mut Criterion) {
     group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
 
-    for &rings in &[1, 2, 3] {
+    for &rings in &[1, 2, 3, 5] {
         let (base_topo, target, tools) = build_honeycomb_grid(rings);
         let n = tools.len();
 
