@@ -1959,10 +1959,14 @@ impl BrepKernel {
 
     // ── Edge wireframe ────────────────────────────────────────────
 
-    /// Sample all edges of a solid into polylines for wireframe rendering.
+    /// Sample edges of a solid into polylines for wireframe rendering.
     ///
     /// Returns a `JsEdgeLines` containing flattened positions and per-edge
     /// offset indices. The `deflection` parameter controls sampling density.
+    ///
+    /// Smooth edges (between faces on the same underlying surface) are
+    /// automatically filtered out to reduce wireframe clutter. These edges
+    /// arise from boolean face-splitting and don't represent visible creases.
     #[wasm_bindgen(js_name = "meshEdges")]
     pub fn mesh_edges(
         &self,
@@ -1971,7 +1975,25 @@ impl BrepKernel {
     ) -> Result<crate::shapes::JsEdgeLines, JsError> {
         validate_positive(deflection, "deflection")?;
         let solid_id = self.resolve_solid(solid)?;
-        let edge_lines = tessellate::sample_solid_edges(&self.topo, solid_id, deflection)?;
+        let edge_lines =
+            tessellate::sample_solid_edges_filtered(&self.topo, solid_id, deflection, true)?;
+        Ok(edge_lines.into())
+    }
+
+    /// Sample ALL edges of a solid (no smooth-edge filtering).
+    ///
+    /// Same as `meshEdges` but includes edges between co-surface faces.
+    /// Useful for debugging topology.
+    #[wasm_bindgen(js_name = "meshEdgesAll")]
+    pub fn mesh_edges_all(
+        &self,
+        solid: u32,
+        deflection: f64,
+    ) -> Result<crate::shapes::JsEdgeLines, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let edge_lines =
+            tessellate::sample_solid_edges_filtered(&self.topo, solid_id, deflection, false)?;
         Ok(edge_lines.into())
     }
 
