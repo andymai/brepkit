@@ -224,6 +224,9 @@ fn run_fuse_touching(side: usize) {
 }
 
 fn main() {
+    // Initialize logger — use RUST_LOG=debug for per-phase timing.
+    env_logger::init();
+
     let args: Vec<String> = std::env::args().collect();
     let workload = args.get(1).map(String::as_str).unwrap_or("all");
 

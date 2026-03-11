@@ -1795,4 +1795,105 @@ mod tests {
             let _result = cdt.insert_point(*pt);
         }
     }
+
+    #[test]
+    fn extract_regions_grid_2x2() {
+        // 36×36 square with 4 cutting lines forming a 3×3 grid of 9 regions.
+        let bounds = (Point2::new(0.0, 0.0), Point2::new(40.0, 40.0));
+        let mut cdt = Cdt::with_capacity(bounds, 20);
+
+        // Polygon vertices (CCW)
+        let v0 = cdt.insert_point(Point2::new(2.0, 2.0)).unwrap();
+        let v1 = cdt.insert_point(Point2::new(38.0, 2.0)).unwrap();
+        let v2 = cdt.insert_point(Point2::new(38.0, 38.0)).unwrap();
+        let v3 = cdt.insert_point(Point2::new(2.0, 38.0)).unwrap();
+
+        // Chord endpoints on boundary
+        let h0l = cdt.insert_point(Point2::new(2.0, 4.0)).unwrap();
+        let h0r = cdt.insert_point(Point2::new(38.0, 4.0)).unwrap();
+        let h1l = cdt.insert_point(Point2::new(2.0, 7.0)).unwrap();
+        let h1r = cdt.insert_point(Point2::new(38.0, 7.0)).unwrap();
+        let v0b = cdt.insert_point(Point2::new(4.0, 2.0)).unwrap();
+        let v0t = cdt.insert_point(Point2::new(4.0, 38.0)).unwrap();
+        let v1b = cdt.insert_point(Point2::new(7.0, 2.0)).unwrap();
+        let v1t = cdt.insert_point(Point2::new(7.0, 38.0)).unwrap();
+
+        // Crossing points
+        let c00 = cdt.insert_point(Point2::new(4.0, 4.0)).unwrap();
+        let c01 = cdt.insert_point(Point2::new(7.0, 4.0)).unwrap();
+        let c10 = cdt.insert_point(Point2::new(4.0, 7.0)).unwrap();
+        let c11 = cdt.insert_point(Point2::new(7.0, 7.0)).unwrap();
+
+        // Boundary constraints (split at chord endpoints)
+        // (2,2)->(38,2)->(38,38)->(2,38)->(2,2) with splits at chord endpoints
+        let boundary = vec![
+            // Bottom: (2,2) -> (38,2) via (4,2) and (7,2)
+            (v0, v0b),
+            (v0b, v1b),
+            (v1b, v1),
+            // Right: (38,2) -> (38,38) via (38,4) and (38,7)
+            (v1, h0r),
+            (h0r, h1r),
+            (h1r, v2),
+            // Top: (38,38) -> (2,38) via (7,38) and (4,38)
+            (v2, v1t),
+            (v1t, v0t),
+            (v0t, v3),
+            // Left: (2,38) -> (2,2) via (2,7) and (2,4)
+            (v3, h1l),
+            (h1l, h0l),
+            (h0l, v0),
+        ];
+
+        for &(a, b) in &boundary {
+            cdt.insert_constraint(a, b).unwrap();
+        }
+
+        // Chord constraints (split at crossings)
+        let separators = vec![
+            // h0 (y=4): h0l -> c00 -> c01 -> h0r
+            (h0l, c00),
+            (c00, c01),
+            (c01, h0r),
+            // h1 (y=7): h1l -> c10 -> c11 -> h1r
+            (h1l, c10),
+            (c10, c11),
+            (c11, h1r),
+            // v0 (x=4): v0b -> c00 -> c10 -> v0t
+            (v0b, c00),
+            (c00, c10),
+            (c10, v0t),
+            // v1 (x=7): v1b -> c01 -> c11 -> v1t
+            (v1b, c01),
+            (c01, c11),
+            (c11, v1t),
+        ];
+
+        for &(a, b) in &separators {
+            cdt.insert_constraint(a, b).unwrap();
+        }
+
+        cdt.remove_exterior(&boundary);
+
+        let regions = cdt.extract_regions(&separators);
+        eprintln!("Grid 2×2 regions: {}", regions.len());
+        for (i, r) in regions.iter().enumerate() {
+            let area = shoelace_area(r);
+            eprintln!("  Region {i}: {} verts, area={area:.1}", r.len());
+        }
+        assert_eq!(
+            regions.len(),
+            9,
+            "2 horizontal + 2 vertical lines → 9 regions"
+        );
+    }
+
+    fn shoelace_area(poly: &[Point2]) -> f64 {
+        let mut a = 0.0;
+        for i in 0..poly.len() {
+            let j = (i + 1) % poly.len();
+            a += poly[i].x() * poly[j].y() - poly[j].x() * poly[i].y();
+        }
+        a.abs() / 2.0
+    }
 }
