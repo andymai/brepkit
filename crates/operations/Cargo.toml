@@ -18,6 +18,7 @@ log.workspace = true
 brepkit-topology = { workspace = true, features = ["test-utils"] }
 proptest.workspace = true
 criterion.workspace = true
+env_logger.workspace = true
 
 [[bench]]
 name = "cad_operations"

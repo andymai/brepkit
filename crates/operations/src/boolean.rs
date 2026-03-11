@@ -1508,7 +1508,18 @@ fn cyrus_beck_clip(
 // Phase 3: Face splitting
 // ---------------------------------------------------------------------------
 
+/// Threshold: use CDT batch splitting for faces with this many or more chords.
+///
+/// Below this threshold, the iterative approach is fast enough and avoids the
+/// CDT setup overhead. Above it, the iterative O(N·F) approach becomes a
+/// bottleneck while CDT stays O(N log N).
+const CDT_CHORD_THRESHOLD: usize = 5;
+
 /// Split a face polygon along intersection chords, producing fragments.
+///
+/// For faces with many chords (≥ `CDT_CHORD_THRESHOLD`), uses CDT-based batch
+/// splitting which is O(N log N). For faces with fewer chords, uses the simpler
+/// iterative approach. Falls back to iterative on any CDT error.
 fn split_face(
     fid: FaceId,
     verts: &[Point3],
@@ -1519,7 +1530,6 @@ fn split_face(
     tol: Tolerance,
 ) -> Vec<FaceFragment> {
     let Some(chords) = chord_map.get(&fid.index()).filter(|c| !c.is_empty()) else {
-        // No chords — the entire face is a single fragment.
         return vec![FaceFragment {
             vertices: verts.to_vec(),
             normal,
@@ -1528,7 +1538,37 @@ fn split_face(
         }];
     };
 
-    // Start with the whole polygon as the only fragment.
+    if chords.len() >= CDT_CHORD_THRESHOLD {
+        if let Ok(regions) = split_face_cdt_inner(verts, normal, d, chords, tol) {
+            return regions
+                .into_iter()
+                .filter(|v| polygon_area_2x(v, &normal) > tol.linear * tol.linear)
+                .map(|vertices| FaceFragment {
+                    vertices,
+                    normal,
+                    d,
+                    source,
+                })
+                .collect();
+        }
+    }
+
+    split_face_iterative(verts, normal, d, source, chords, tol)
+}
+
+/// Iterative face splitting: apply each chord sequentially.
+///
+/// Simple and correct for small chord counts. For N chords, each chord splits
+/// all existing fragments, so total work is O(N · F) where F grows with each
+/// split.
+fn split_face_iterative(
+    verts: &[Point3],
+    normal: Vec3,
+    d: f64,
+    source: Source,
+    chords: &[(Point3, Point3)],
+    tol: Tolerance,
+) -> Vec<FaceFragment> {
     let mut frags: Vec<Vec<Point3>> = vec![verts.to_vec()];
 
     for &(c0, c1) in chords {
@@ -1557,6 +1597,396 @@ fn split_face(
             source,
         })
         .collect()
+}
+
+/// CDT-based batch face splitting — O(N log N) for N chords.
+///
+/// Each chord defines a splitting LINE (not a finite segment). The chord
+/// is extended to the polygon boundary before CDT insertion, matching the
+/// semantics of the iterative `split_polygon_by_chord` which classifies
+/// vertices relative to the chord plane.
+///
+/// After extension, chord-chord crossings are computed and the constraints
+/// are split at intersection points for safe CDT insertion.
+#[allow(clippy::too_many_lines)]
+fn split_face_cdt_inner(
+    verts: &[Point3],
+    normal: Vec3,
+    d: f64,
+    chords: &[(Point3, Point3)],
+    tol: Tolerance,
+) -> Result<Vec<Vec<Point3>>, crate::OperationsError> {
+    use brepkit_math::cdt::Cdt;
+    use brepkit_math::vec::Point2;
+
+    let nv = verts.len();
+    if nv < 3 {
+        return Ok(vec![verts.to_vec()]);
+    }
+
+    // --- Projection: drop the dominant normal axis ---
+    let ax = normal.x().abs();
+    let ay = normal.y().abs();
+    let az = normal.z().abs();
+
+    let project = |p: Point3| -> Point2 {
+        if az >= ax && az >= ay {
+            Point2::new(p.x(), p.y())
+        } else if ay >= ax {
+            Point2::new(p.x(), p.z())
+        } else {
+            Point2::new(p.y(), p.z())
+        }
+    };
+
+    let unproject = |p2: Point2| -> Point3 {
+        if az >= ax && az >= ay {
+            let z = (d - normal.x() * p2.x() - normal.y() * p2.y()) / normal.z();
+            Point3::new(p2.x(), p2.y(), z)
+        } else if ay >= ax {
+            let y = (d - normal.x() * p2.x() - normal.z() * p2.y()) / normal.y();
+            Point3::new(p2.x(), y, p2.y())
+        } else {
+            let x = (d - normal.y() * p2.x() - normal.z() * p2.y()) / normal.x();
+            Point3::new(x, p2.x(), p2.y())
+        }
+    };
+
+    let poly_2d: Vec<Point2> = verts.iter().map(|v| project(*v)).collect();
+
+    // --- Extend each chord LINE to the polygon boundary ---
+    // The iterative approach treats chords as infinite splitting planes.
+    // We match this by extending each chord segment to the polygon boundary.
+    let mut chords_2d: Vec<(Point2, Point2)> = Vec::with_capacity(chords.len());
+    for &(c0, c1) in chords {
+        let p0 = project(c0);
+        let p1 = project(c1);
+        let extended = extend_chord_to_polygon(p0, p1, &poly_2d);
+        chords_2d.push(extended);
+    }
+
+    // Normalize chord direction (c0 < c1 lexicographically) so that
+    // two chords defining the same line but in opposite directions dedup.
+    for chord in &mut chords_2d {
+        let (c0, c1) = *chord;
+        if c0.x() > c1.x() + 1e-12 || (c0.x() - c1.x()).abs() < 1e-12 && c0.y() > c1.y() + 1e-12 {
+            *chord = (c1, c0);
+        }
+    }
+
+    // Deduplicate identical chords (same line, same boundary endpoints).
+    chords_2d.sort_by(|a, b| {
+        a.0.x()
+            .partial_cmp(&b.0.x())
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(
+                a.0.y()
+                    .partial_cmp(&b.0.y())
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+            .then(
+                a.1.x()
+                    .partial_cmp(&b.1.x())
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
+    });
+    chords_2d.dedup_by(|a, b| {
+        let d0 = (a.0.x() - b.0.x()).powi(2) + (a.0.y() - b.0.y()).powi(2);
+        let d1 = (a.1.x() - b.1.x()).powi(2) + (a.1.y() - b.1.y()).powi(2);
+        d0 < tol.linear * tol.linear && d1 < tol.linear * tol.linear
+    });
+
+    // --- Compute chord-chord intersections (on extended segments) ---
+    let mut chord_cross: Vec<Vec<(f64, Point2)>> = vec![Vec::new(); chords_2d.len()];
+
+    for i in 0..chords_2d.len() {
+        for j in (i + 1)..chords_2d.len() {
+            if let Some((ti, tj, pt)) = seg_seg_cross_2d(
+                chords_2d[i].0,
+                chords_2d[i].1,
+                chords_2d[j].0,
+                chords_2d[j].1,
+            ) {
+                chord_cross[i].push((ti, pt));
+                chord_cross[j].push((tj, pt));
+            }
+        }
+    }
+
+    for pts in &mut chord_cross {
+        pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    }
+
+    // --- Compute CDT bounds ---
+    let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
+    let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for &p in &poly_2d {
+        min_x = min_x.min(p.x());
+        min_y = min_y.min(p.y());
+        max_x = max_x.max(p.x());
+        max_y = max_y.max(p.y());
+    }
+    let bounds = (Point2::new(min_x, min_y), Point2::new(max_x, max_y));
+
+    let n_cross: usize = chord_cross.iter().map(Vec::len).sum();
+    let n_pts = nv + chords_2d.len() * 2 + n_cross;
+    let mut cdt = Cdt::with_capacity(bounds, n_pts);
+
+    // --- Insert polygon vertices ---
+    let mut poly_vidxs: Vec<usize> = Vec::with_capacity(nv);
+    for &pt in &poly_2d {
+        poly_vidxs.push(cdt.insert_point(pt)?);
+    }
+
+    // --- Insert chord endpoints (on polygon boundary after extension) ---
+    let mut chord_vidxs: Vec<(usize, usize)> = Vec::with_capacity(chords_2d.len());
+    for &(c0, c1) in &chords_2d {
+        let v0 = cdt.insert_point(c0)?;
+        let v1 = cdt.insert_point(c1)?;
+        chord_vidxs.push((v0, v1));
+    }
+
+    // --- Insert chord-chord intersection points ---
+    // These need to exist as CDT vertices so the on-chord scan finds them.
+    for pts in &chord_cross {
+        for &(_t, pt) in pts {
+            cdt.insert_point(pt)?;
+        }
+    }
+
+    // --- Build boundary constraints ---
+    // Extended chord endpoints lie on polygon edges. Split boundary edges at
+    // these points so CDT constraints don't cross.
+    let snap_dist = tol.linear * 100.0;
+    let mut boundary_edges: Vec<(usize, usize)> = Vec::new();
+
+    for i in 0..nv {
+        let j = (i + 1) % nv;
+        let vi = poly_vidxs[i];
+        let vj = poly_vidxs[j];
+        let edge_a = poly_2d[i];
+        let edge_b = poly_2d[j];
+
+        // Find chord endpoints (CDT indices) that lie on this polygon edge.
+        let mut on_edge: Vec<(f64, usize)> = Vec::new();
+        for &(cv0, cv1) in &chord_vidxs {
+            for &cv in &[cv0, cv1] {
+                if cv == vi || cv == vj {
+                    continue;
+                }
+                let pt = cdt.vertices()[cv];
+                let (t, dist) = point_segment_param_dist_2d(pt, edge_a, edge_b);
+                if dist < snap_dist && t > 1e-12 && t < 1.0 - 1e-12 {
+                    on_edge.push((t, cv));
+                }
+            }
+        }
+
+        on_edge.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        on_edge.dedup_by(|a, b| a.1 == b.1);
+
+        let mut prev = vi;
+        for &(_t, cv) in &on_edge {
+            if cv != prev {
+                boundary_edges.push((prev, cv));
+                prev = cv;
+            }
+        }
+        if vj != prev {
+            boundary_edges.push((prev, vj));
+        }
+    }
+
+    for &(a, b) in &boundary_edges {
+        cdt.insert_constraint(a, b)?;
+    }
+
+    // --- Build chord constraints (split at ALL intermediate vertices) ---
+    //
+    // Chord endpoints may land on other chords (T-junctions at the polygon
+    // boundary). `seg_seg_cross_2d` only detects strict interior crossings,
+    // so these T-junctions are missed. The CDT internally splits constraints
+    // at intermediate vertices, but if we record only (v0, v1) as a separator,
+    // `extract_regions` won't match the sub-edges.
+    //
+    // Fix: for each chord, scan ALL CDT vertices to find those on the chord
+    // segment, sort by parameter, and build separators from consecutive pairs.
+    // Phase A: scan CDT vertices to find intermediate points on each chord
+    // (immutable borrow of cdt).
+    let mut chord_splits: Vec<Vec<(f64, usize)>> = Vec::with_capacity(chord_vidxs.len());
+    {
+        let all_cdt_verts = cdt.vertices();
+        for (i, &(v0, v1)) in chord_vidxs.iter().enumerate() {
+            let mut on_chord: Vec<(f64, usize)> = vec![(0.0, v0), (1.0, v1)];
+            if v0 == v1 {
+                chord_splits.push(on_chord);
+                continue;
+            }
+            let c0 = chords_2d[i].0;
+            let c1 = chords_2d[i].1;
+            for (vidx, &pt) in all_cdt_verts.iter().enumerate() {
+                if vidx == v0 || vidx == v1 {
+                    continue;
+                }
+                let (t, dist) = point_segment_param_dist_2d(pt, c0, c1);
+                if dist < snap_dist && t > 1e-10 && t < 1.0 - 1e-10 {
+                    on_chord.push((t, vidx));
+                }
+            }
+            on_chord.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+            on_chord.dedup_by(|a, b| a.1 == b.1);
+            chord_splits.push(on_chord);
+        }
+    }
+
+    // Phase B: insert constraints and build separator list (mutable borrow).
+    let mut chord_separators: Vec<(usize, usize)> = Vec::new();
+    for on_chord in &chord_splits {
+        if on_chord.len() < 2 || on_chord[0].1 == on_chord[1].1 {
+            continue;
+        }
+        let mut prev = on_chord[0].1;
+        for &(_, vidx) in &on_chord[1..] {
+            if vidx != prev {
+                cdt.insert_constraint(prev, vidx)?;
+                chord_separators.push((prev, vidx));
+                prev = vidx;
+            }
+        }
+    }
+
+    // --- Remove exterior triangles ---
+    cdt.remove_exterior(&boundary_edges);
+
+    // --- Extract regions and unproject to 3D ---
+    let regions_2d = cdt.extract_regions(&chord_separators);
+
+    let regions_3d: Vec<Vec<Point3>> = regions_2d
+        .into_iter()
+        .map(|poly| poly.into_iter().map(&unproject).collect())
+        .collect();
+
+    Ok(regions_3d)
+}
+
+/// Extend a chord segment to the polygon boundary.
+///
+/// The chord defines a LINE through `c0` and `c1`. This function finds
+/// where that line enters and exits the polygon, returning the boundary
+/// intersection points. If the line doesn't cross the polygon (parallel
+/// to an edge and outside), returns the original segment.
+fn extend_chord_to_polygon(
+    c0: brepkit_math::vec::Point2,
+    c1: brepkit_math::vec::Point2,
+    polygon: &[brepkit_math::vec::Point2],
+) -> (brepkit_math::vec::Point2, brepkit_math::vec::Point2) {
+    use brepkit_math::vec::Point2;
+
+    let dx = c1.x() - c0.x();
+    let dy = c1.y() - c0.y();
+
+    if dx.abs() < 1e-15 && dy.abs() < 1e-15 {
+        return (c0, c1);
+    }
+
+    let n = polygon.len();
+    let mut t_vals: Vec<f64> = Vec::new();
+
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let ex = polygon[j].x() - polygon[i].x();
+        let ey = polygon[j].y() - polygon[i].y();
+
+        let denom = dx * ey - dy * ex;
+        if denom.abs() < 1e-15 {
+            continue; // parallel
+        }
+
+        let fx = polygon[i].x() - c0.x();
+        let fy = polygon[i].y() - c0.y();
+
+        let t = (fx * ey - fy * ex) / denom;
+        let u = (fx * dy - fy * dx) / denom;
+
+        // u must be within polygon edge [0, 1]
+        if (-1e-10..=1.0 + 1e-10).contains(&u) {
+            t_vals.push(t);
+        }
+    }
+
+    if t_vals.len() < 2 {
+        return (c0, c1);
+    }
+
+    t_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let t_min = t_vals[0];
+    let t_max = t_vals[t_vals.len() - 1];
+
+    let p_min = Point2::new(dx.mul_add(t_min, c0.x()), dy.mul_add(t_min, c0.y()));
+    let p_max = Point2::new(dx.mul_add(t_max, c0.x()), dy.mul_add(t_max, c0.y()));
+
+    (p_min, p_max)
+}
+
+/// Strict interior intersection of two 2D line segments.
+///
+/// Returns `(t_on_ab, t_on_cd, intersection_point)` where both parameters
+/// are strictly in (ε, 1−ε). Endpoint-touching segments are NOT considered
+/// crossing — only true interior crossings are reported.
+fn seg_seg_cross_2d(
+    a: brepkit_math::vec::Point2,
+    b: brepkit_math::vec::Point2,
+    c: brepkit_math::vec::Point2,
+    d_pt: brepkit_math::vec::Point2,
+) -> Option<(f64, f64, brepkit_math::vec::Point2)> {
+    let dx_ab = b.x() - a.x();
+    let dy_ab = b.y() - a.y();
+    let dx_cd = d_pt.x() - c.x();
+    let dy_cd = d_pt.y() - c.y();
+
+    let denom = dx_ab * dy_cd - dy_ab * dx_cd;
+    if denom.abs() < 1e-15 {
+        return None; // parallel or collinear
+    }
+
+    let dx_ac = c.x() - a.x();
+    let dy_ac = c.y() - a.y();
+
+    let t = (dx_ac * dy_cd - dy_ac * dx_cd) / denom;
+    let u = (dx_ac * dy_ab - dy_ac * dx_ab) / denom;
+
+    let eps = 1e-10;
+    if t > eps && t < 1.0 - eps && u > eps && u < 1.0 - eps {
+        let px = dx_ab.mul_add(t, a.x());
+        let py = dy_ab.mul_add(t, a.y());
+        Some((t, u, brepkit_math::vec::Point2::new(px, py)))
+    } else {
+        None
+    }
+}
+
+/// Parameter and distance from a 2D point to a line segment.
+///
+/// Returns `(t, distance)` where `t ∈ [0, 1]` is the closest parameter
+/// along segment `(a, b)`.
+fn point_segment_param_dist_2d(
+    p: brepkit_math::vec::Point2,
+    a: brepkit_math::vec::Point2,
+    b: brepkit_math::vec::Point2,
+) -> (f64, f64) {
+    let dx = b.x() - a.x();
+    let dy = b.y() - a.y();
+    let len_sq = dx.mul_add(dx, dy * dy);
+    if len_sq < 1e-30 {
+        let dist = ((p.x() - a.x()).powi(2) + (p.y() - a.y()).powi(2)).sqrt();
+        return (0.0, dist);
+    }
+    let t = ((p.x() - a.x()) * dx + (p.y() - a.y()) * dy) / len_sq;
+    let t_clamped = t.clamp(0.0, 1.0);
+    let closest_x = dx.mul_add(t_clamped, a.x());
+    let closest_y = dy.mul_add(t_clamped, a.y());
+    let dist = ((p.x() - closest_x).powi(2) + (p.y() - closest_y).powi(2)).sqrt();
+    (t_clamped, dist)
 }
 
 /// Compute twice the area of a 3D polygon projected along its normal.
@@ -5197,8 +5627,10 @@ pub fn compound_cut(
         return Ok(target);
     }
 
+    let _t_phase0 = timer_elapsed_ms(_t_total);
     log::debug!(
-        "[compound_cut] {} tools overlap target ({} total tool faces)",
+        "[compound_cut] Phase 0: {:.1}ms — {} tools overlap target ({} total tool faces)",
+        _t_phase0,
         tool_data.len(),
         tool_data.iter().map(|td| td.snapshots.len()).sum::<usize>()
     );
@@ -5250,10 +5682,12 @@ pub fn compound_cut(
         .collect();
 
     log::debug!(
-        "[compound_cut] target: {} snap + {} passthrough",
+        "[compound_cut] Phase 1: {:.1}ms — {} snap + {} passthrough",
+        timer_elapsed_ms(_t_total) - _t_phase0,
         snaps_a.len(),
         passthrough_a.len()
     );
+    let _t_phase1 = timer_elapsed_ms(_t_total);
 
     // ── Phase 2: Intersection (all tools at once) ────────────────────────
     use brepkit_math::analytic_intersection::{
@@ -5510,8 +5944,10 @@ pub fn compound_cut(
         &mut analytic_intersection_vranges_a,
     );
 
+    let _t_phase2 = timer_elapsed_ms(_t_total);
     log::debug!(
-        "[compound_cut] intersections: target={} faces with chords",
+        "[compound_cut] Phase 2: {:.1}ms — target={} faces with chords",
+        _t_phase2 - _t_phase1,
         face_intersections_a.len()
     );
 
@@ -5541,6 +5977,7 @@ pub fn compound_cut(
     }
 
     // --- Target face fragments ---
+    let _t_frag_a = timer_now();
     for (ia, snap) in snaps_a.iter().enumerate() {
         if let Some(vranges) = analytic_intersection_vranges_a.get(&ia) {
             if matches!(snap.surface, FaceSurface::Sphere(_)) {
@@ -5673,6 +6110,13 @@ pub fn compound_cut(
         }
     }
 
+    let _frag_a_count = fragments.len();
+    log::debug!(
+        "[compound_cut] Phase 3a (target frags): {:.1}ms — {} fragments",
+        timer_elapsed_ms(_t_frag_a),
+        _frag_a_count
+    );
+    let _t_frag_b = timer_now();
     // --- Tool face fragments (Source::B) ---
     // Compute v-ranges for each tool (must be done before borrowing ti_ref).
     for ti in 0..tool_data.len() {
@@ -5816,6 +6260,11 @@ pub fn compound_cut(
         }
     }
 
+    log::debug!(
+        "[compound_cut] Phase 3b (tool frags): {:.1}ms — {} fragments",
+        timer_elapsed_ms(_t_frag_b),
+        fragments.len() - _frag_a_count
+    );
     // Passthrough target faces (outside all tools → survive Cut).
     for &fid in &passthrough_a {
         let face = topo.face(fid)?;
@@ -5840,8 +6289,10 @@ pub fn compound_cut(
         }
     }
 
+    let _t_phase3 = timer_elapsed_ms(_t_total);
     log::debug!(
-        "[compound_cut] fragments: {} (passthrough={})",
+        "[compound_cut] Phase 3: {:.1}ms — {} fragments (passthrough={})",
+        _t_phase3 - _t_phase2,
         fragments.len(),
         passthrough_a.len()
     );
@@ -6087,6 +6538,11 @@ pub fn compound_cut(
         .collect::<Result<Vec<_>, _>>()?;
 
     // ── Phase 5: Assembly ────────────────────────────────────────────────
+    let _t_phase4 = timer_elapsed_ms(_t_total);
+    log::debug!(
+        "[compound_cut] Phase 4: {:.1}ms — classification",
+        _t_phase4 - _t_phase3,
+    );
     // Reuse the same assembly logic as analytic_boolean (vertex/edge dedup,
     // wire construction, face creation).
     let resolution = 1.0 / tol.linear;
@@ -6294,8 +6750,19 @@ pub fn compound_cut(
     }
 
     // ── Post-assembly ────────────────────────────────────────────────────
+    let _t_phase5 = timer_elapsed_ms(_t_total);
+    log::debug!(
+        "[compound_cut] Phase 5: {:.1}ms — assembly ({} faces)",
+        _t_phase5 - _t_phase4,
+        face_ids_out.len()
+    );
+
     refine_boundary_edges(topo, &mut face_ids_out, &mut edge_map, tol)?;
+    let _t_refine = timer_elapsed_ms(_t_total);
+    log::debug!("[compound_cut] refine: {:.1}ms", _t_refine - _t_phase5);
     split_nonmanifold_edges(topo, &mut face_ids_out)?;
+    let _t_nm = timer_elapsed_ms(_t_total);
+    log::debug!("[compound_cut] split_nm: {:.1}ms", _t_nm - _t_refine);
 
     let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.shells.alloc(shell);
@@ -7146,6 +7613,7 @@ fn sample_edge_curve(curve: &EdgeCurve, n: usize) -> Vec<Point3> {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
+    #![allow(clippy::cast_precision_loss)]
 
     use brepkit_math::tolerance::Tolerance;
     use brepkit_math::vec::{Point3, Vec3};
@@ -9031,6 +9499,92 @@ mod tests {
         assert!(
             rel < 0.02,
             "compound={compound_vol:.4} != seq={seq_vol:.4} (rel={rel:.4})"
+        );
+    }
+
+    #[test]
+    fn cdt_vs_iterative_cross_chords() {
+        // A square face split by 4 crossing chords → should produce identical
+        // fragment count and total area.
+        let verts = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(10.0, 10.0, 0.0),
+            Point3::new(0.0, 10.0, 0.0),
+        ];
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let d = 0.0;
+        let tol = Tolerance::default();
+        let source = super::Source::A;
+
+        let chords = vec![
+            (Point3::new(3.0, 0.0, 0.0), Point3::new(3.0, 10.0, 0.0)),
+            (Point3::new(7.0, 0.0, 0.0), Point3::new(7.0, 10.0, 0.0)),
+            (Point3::new(0.0, 4.0, 0.0), Point3::new(10.0, 4.0, 0.0)),
+            (Point3::new(0.0, 8.0, 0.0), Point3::new(10.0, 8.0, 0.0)),
+        ];
+
+        // CDT path
+        let cdt_regions = super::split_face_cdt_inner(&verts, normal, d, &chords, tol).unwrap();
+        let cdt_area: f64 = cdt_regions
+            .iter()
+            .map(|v| super::polygon_area_2x(v, &normal) / 2.0)
+            .sum();
+
+        // Iterative path
+        let iter_frags = super::split_face_iterative(&verts, normal, d, source, &chords, tol);
+        let iter_area: f64 = iter_frags
+            .iter()
+            .map(|f| super::polygon_area_2x(&f.vertices, &normal) / 2.0)
+            .sum();
+
+        // The total area should equal the face area (100.0).
+        assert!(
+            (cdt_area - 100.0).abs() < 1.0,
+            "CDT total area {cdt_area} != 100.0"
+        );
+        assert!(
+            (iter_area - 100.0).abs() < 1.0,
+            "Iterative total area {iter_area} != 100.0"
+        );
+
+        // Both should produce 9 regions (3 columns × 3 rows).
+        assert_eq!(
+            cdt_regions.len(),
+            iter_frags.len(),
+            "CDT and iterative should produce same number of fragments"
+        );
+    }
+
+    #[test]
+    fn cdt_vs_iterative_negative_normal() {
+        // Same test but with negative normal (tests winding reversal).
+        let verts = [
+            Point3::new(0.0, 0.0, 5.0),
+            Point3::new(0.0, 10.0, 5.0),
+            Point3::new(10.0, 10.0, 5.0),
+            Point3::new(10.0, 0.0, 5.0),
+        ];
+        let normal = Vec3::new(0.0, 0.0, -1.0);
+        let d = -5.0;
+        let tol = Tolerance::default();
+
+        let chords = vec![
+            (Point3::new(5.0, 0.0, 5.0), Point3::new(5.0, 10.0, 5.0)),
+            (Point3::new(0.0, 5.0, 5.0), Point3::new(10.0, 5.0, 5.0)),
+            (Point3::new(3.0, 0.0, 5.0), Point3::new(3.0, 10.0, 5.0)),
+            (Point3::new(7.0, 0.0, 5.0), Point3::new(7.0, 10.0, 5.0)),
+        ];
+
+        let cdt_regions = super::split_face_cdt_inner(&verts, normal, d, &chords, tol).unwrap();
+        let cdt_area: f64 = cdt_regions
+            .iter()
+            .map(|v| super::polygon_area_2x(v, &normal) / 2.0)
+            .sum();
+
+        assert!(
+            (cdt_area - 100.0).abs() < 1.0,
+            "CDT total area {cdt_area} != 100.0 (negative normal)"
         );
     }
 }
