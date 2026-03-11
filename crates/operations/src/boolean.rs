@@ -3633,6 +3633,9 @@ fn try_shared_boundary_fuse(
         vertices: Vec<Point3>,
     }
 
+    /// Area ratio below which two faces are not considered extent-matching.
+    const SHARED_FACE_AREA_RATIO_MIN: f64 = 0.99;
+
     // Only worth it for small solids (avoids pathological cases).
     if face_ids_a.len() > 20 || face_ids_b.len() > 20 {
         return Ok(None);
@@ -3688,20 +3691,8 @@ fn try_shared_boundary_fuse(
                 continue;
             }
 
-            // Check that the face polygons overlap significantly.
-            // Quick test: centroid of A's face should be close to B's face plane.
-            let centroid_a = polygon_centroid(&pa.vertices);
-            let centroid_b = polygon_centroid(&pb.vertices);
-
-            // Centroids should be within tolerance.
-            let dist = (centroid_a - centroid_b).length();
-            // Allow generous tolerance for face matching.
-            if dist > pa.vertices.len() as f64 * tol.linear * 100.0 {
-                continue;
-            }
-
-            // Verify matching extent: project both polygons onto the plane,
-            // check that their areas are approximately equal.
+            // Verify matching extent: both face polygons must have
+            // approximately equal area.
             let area_a = polygon_area_3d(&pa.vertices, pa.normal);
             let area_b = polygon_area_3d(&pb.vertices, pb.normal);
             let area_ratio = if area_a > area_b {
@@ -3709,7 +3700,17 @@ fn try_shared_boundary_fuse(
             } else {
                 area_a / area_b
             };
-            if area_ratio < 0.99 {
+            if area_ratio < SHARED_FACE_AREA_RATIO_MIN {
+                continue;
+            }
+
+            // Centroids should be within a geometry-scaled tolerance.
+            // Use sqrt(area) as the face extent scale.
+            let centroid_a = polygon_centroid(&pa.vertices);
+            let centroid_b = polygon_centroid(&pb.vertices);
+            let dist = (centroid_a - centroid_b).length();
+            let face_extent = area_a.sqrt().max(tol.linear);
+            if dist > face_extent * 1e-6 {
                 continue;
             }
 
@@ -8515,12 +8516,12 @@ mod tests {
             "shared-face fuse volume: {vol} (expected {expected})"
         );
 
-        // Result should have 10 faces (12 - 2 shared).
+        // Result should have exactly 10 faces (12 - 2 shared).
         let shell_id = topo.solid(fused).unwrap().outer_shell();
         let face_count = topo.shell(shell_id).unwrap().faces().len();
-        assert!(
-            face_count <= 12,
-            "shared-face fuse should have ≤12 faces, got {face_count}"
+        assert_eq!(
+            face_count, 10,
+            "shared-face fuse should have exactly 10 faces (12 - 2 shared), got {face_count}"
         );
     }
 
