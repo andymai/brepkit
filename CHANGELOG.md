@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.6](https://github.com/andymai/brepkit/compare/v1.0.5...v1.0.6) (2026-03-11)
+
+
+### Bug Fixes
+
+* loft winding detection + wireframe edge filtering ([#182](https://github.com/andymai/brepkit/issues/182)) ([5507f55](https://github.com/andymai/brepkit/commit/5507f55012ce833d404af0b327491cbebdefd298))
+
+
+### Performance
+
+* 10x faster tessellation for cylinder/cone faces ([#180](https://github.com/andymai/brepkit/issues/180)) ([3e9b792](https://github.com/andymai/brepkit/commit/3e9b79252cdc15aa7fb2c8c906ba1844c6bf5d63))
+
 ## [1.0.5](https://github.com/andymai/brepkit/compare/v1.0.4...v1.0.5) (2026-03-11)
 
 
