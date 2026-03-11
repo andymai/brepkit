@@ -5,6 +5,8 @@
 //!   cargo run --profile profiling --example profile_boolean -- cylinders
 //!   cargo run --profile profiling --example profile_boolean -- fuse
 //!   cargo run --profile profiling --example profile_boolean -- large-honeycomb
+//!   cargo run --profile profiling --example profile_boolean -- scale    # scaling study
+//!   cargo run --profile profiling --example profile_boolean -- xl       # 200+ tool stress
 //!
 //! For flamegraphs:
 //!   cargo flamegraph --profile profiling --example profile_boolean -o flame.svg -- honeycomb
@@ -244,6 +246,32 @@ fn main() {
             run_fuse(4);
             run_fuse_touching(4);
         }
+        "xl" => {
+            // Stress tests: 200+ tools
+            run_honeycomb(8);
+            run_cylinders(256);
+            run_fuse(8);
+            run_fuse_touching(8);
+        }
+        "scale" => {
+            // Scaling study: increasing tool counts
+            println!("=== Honeycomb scaling ===");
+            for rings in [3, 5, 8, 10] {
+                run_honeycomb(rings);
+            }
+            println!("\n=== Cylinder scaling ===");
+            for n in [16, 64, 144, 256] {
+                run_cylinders(n);
+            }
+            println!("\n=== Fuse overlapping scaling ===");
+            for side in [3, 4, 6, 8] {
+                run_fuse(side);
+            }
+            println!("\n=== Fuse touching scaling ===");
+            for side in [3, 4, 6, 8] {
+                run_fuse_touching(side);
+            }
+        }
         "all" => {
             run_honeycomb(3);
             run_cylinders(64);
@@ -254,7 +282,7 @@ fn main() {
         other => {
             eprintln!(
                 "Unknown workload: {other}\n\
-                 Usage: profile_boolean [honeycomb|large-honeycomb|cylinders|fuse|all]"
+                 Usage: profile_boolean [honeycomb|large-honeycomb|cylinders|fuse|xl|scale|all]"
             );
             std::process::exit(1);
         }
