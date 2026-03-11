@@ -3668,50 +3668,58 @@ pub struct EdgeLines {
 /// on the same surface have no visible crease between them, so the shared
 /// edge adds visual noise in wireframe rendering.
 fn surfaces_equivalent(a: &FaceSurface, b: &FaceSurface) -> bool {
-    const LIN_TOL: f64 = 1e-6;
-    const ANG_TOL: f64 = 1e-6;
+    // Use project-standard tolerances. Boolean splits produce surfaces with
+    // identical parameters (bit-for-bit clones), so strict tolerances are
+    // appropriate. The linear tolerance covers minor floating-point drift
+    // in plane `d` values after coordinate transforms.
+    let tol = brepkit_math::tolerance::Tolerance::new();
+    let lin = tol.linear; // 1e-7
+    let ang = tol.angular; // 1e-12
 
     match (a, b) {
         (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
             // Same plane if normals are parallel and signed distances match.
             // Normals may point in opposite directions (reversed faces on same plane).
             let dot = na.dot(*nb);
-            (dot.abs() - 1.0).abs() < ANG_TOL && (da - db * dot.signum()).abs() < LIN_TOL
+            (dot.abs() - 1.0).abs() < ang && (da - db * dot.signum()).abs() < lin
         }
         (FaceSurface::Cylinder(ca), FaceSurface::Cylinder(cb)) => {
-            (ca.radius() - cb.radius()).abs() < LIN_TOL
-                && ca.axis().dot(cb.axis()).abs() > 1.0 - ANG_TOL
+            (ca.radius() - cb.radius()).abs() < lin
+                && ca.axis().dot(cb.axis()).abs() > 1.0 - ang
                 && {
                     // Origins must lie on the same axis line
                     let d = cb.origin() - ca.origin();
                     let cross = d.cross(ca.axis());
-                    cross.dot(cross) < LIN_TOL * LIN_TOL
+                    cross.dot(cross) < lin * lin
                 }
         }
         (FaceSurface::Cone(ca), FaceSurface::Cone(cb)) => {
-            (ca.half_angle() - cb.half_angle()).abs() < ANG_TOL
-                && ca.axis().dot(cb.axis()).abs() > 1.0 - ANG_TOL
+            (ca.half_angle() - cb.half_angle()).abs() < ang
+                && ca.axis().dot(cb.axis()).abs() > 1.0 - ang
                 && {
                     let d = cb.apex() - ca.apex();
-                    d.dot(d) < LIN_TOL * LIN_TOL
+                    d.dot(d) < lin * lin
                 }
         }
         (FaceSurface::Sphere(sa), FaceSurface::Sphere(sb)) => {
-            (sa.radius() - sb.radius()).abs() < LIN_TOL && {
+            (sa.radius() - sb.radius()).abs() < lin && {
                 let d = sb.center() - sa.center();
-                d.dot(d) < LIN_TOL * LIN_TOL
+                d.dot(d) < lin * lin
             }
         }
         (FaceSurface::Torus(ta), FaceSurface::Torus(tb)) => {
-            (ta.major_radius() - tb.major_radius()).abs() < LIN_TOL
-                && (ta.minor_radius() - tb.minor_radius()).abs() < LIN_TOL
-                && ta.z_axis().dot(tb.z_axis()).abs() > 1.0 - ANG_TOL
+            (ta.major_radius() - tb.major_radius()).abs() < lin
+                && (ta.minor_radius() - tb.minor_radius()).abs() < lin
+                && ta.z_axis().dot(tb.z_axis()).abs() > 1.0 - ang
                 && {
                     let d = tb.center() - ta.center();
-                    d.dot(d) < LIN_TOL * LIN_TOL
+                    d.dot(d) < lin * lin
                 }
         }
-        // Different surface types or NURBS — not equivalent
+        // NURBS surfaces: no parameter-based equivalence check (would need
+        // control point comparison). Keep all edges between NURBS faces.
+        (FaceSurface::Nurbs(_), FaceSurface::Nurbs(_)) => false,
+        // Mixed surface types are never equivalent.
         _ => false,
     }
 }

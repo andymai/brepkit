@@ -109,7 +109,16 @@ fn ensure_ccw_winding(profile_verts: &mut [Vec<Point3>]) -> bool {
     let c1 = polygon_centroid(&profile_verts[profile_verts.len() - 1]);
     let stack_dir = c1 - c0;
     let newell = newell_normal(&profile_verts[0]);
-    if newell.dot(stack_dir) < 0.0 {
+    let dot = newell.dot(stack_dir);
+
+    // Degenerate case: profiles share the same centroid (coplanar loft) or
+    // the Newell normal is zero (degenerate polygon). Cannot determine
+    // winding — leave unchanged.
+    if dot.abs() < 1e-30 {
+        return false;
+    }
+
+    if dot < 0.0 {
         for verts in profile_verts.iter_mut() {
             verts.reverse();
         }
