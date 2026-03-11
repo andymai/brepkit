@@ -1,4 +1,4 @@
-//! Profiling harness for boolean operations.
+//! Profiling harness for boolean + tessellation operations.
 //!
 //! Run with per-phase timing:
 //!   cargo run --profile profiling --example profile_boolean -- honeycomb
@@ -7,6 +7,7 @@
 //!   cargo run --profile profiling --example profile_boolean -- large-honeycomb
 //!   cargo run --profile profiling --example profile_boolean -- scale    # scaling study
 //!   cargo run --profile profiling --example profile_boolean -- xl       # 200+ tool stress
+//!   cargo run --profile profiling --example profile_boolean -- tess     # tessellation focus
 //!
 //! For flamegraphs:
 //!   cargo flamegraph --profile profiling --example profile_boolean -o flame.svg -- honeycomb
@@ -19,6 +20,7 @@ use brepkit_math::mat::Mat4;
 use brepkit_operations::boolean::{BooleanOptions, compound_cut};
 use brepkit_operations::compound_ops::fuse_all;
 use brepkit_operations::primitives;
+use brepkit_operations::tessellate::tessellate_solid;
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::compound::Compound;
@@ -150,7 +152,28 @@ fn build_touching_box_grid(side: usize) -> (Topology, Vec<brepkit_topology::soli
 // Workloads
 // ---------------------------------------------------------------------------
 
-fn run_honeycomb(rings: usize) {
+fn print_bool_result(bool_ms: f64, face_count: usize) {
+    println!("  Done in {bool_ms:.1}ms — {face_count} faces");
+}
+
+fn print_tess_result(
+    bool_ms: f64,
+    face_count: usize,
+    topo: &Topology,
+    result: brepkit_topology::solid::SolidId,
+) {
+    let t1 = Instant::now();
+    let mesh = tessellate_solid(topo, result, 0.1).unwrap();
+    let tess_ms = t1.elapsed().as_secs_f64() * 1000.0;
+    println!(
+        "  bool={bool_ms:.1}ms  tess={tess_ms:.1}ms  total={:.1}ms — {face_count} faces, {} tris, {} verts",
+        bool_ms + tess_ms,
+        mesh.indices.len() / 3,
+        mesh.positions.len(),
+    );
+}
+
+fn run_honeycomb(rings: usize, tess: bool) {
     let (mut topo, target, tools) = build_honeycomb_grid(rings);
     println!(
         "Honeycomb rings={rings}: {} tools, starting compound_cut...",
@@ -158,31 +181,33 @@ fn run_honeycomb(rings: usize) {
     );
     let t0 = Instant::now();
     let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
-    let elapsed = t0.elapsed();
+    let bool_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let shell_id = topo.solid(result).unwrap().outer_shell();
     let face_count = topo.shell(shell_id).unwrap().faces().len();
-    println!(
-        "  Done in {:.1}ms — {} faces",
-        elapsed.as_secs_f64() * 1000.0,
-        face_count
-    );
+
+    if tess {
+        print_tess_result(bool_ms, face_count, &topo, result);
+    } else {
+        print_bool_result(bool_ms, face_count);
+    }
 }
 
-fn run_cylinders(n: usize) {
+fn run_cylinders(n: usize, tess: bool) {
     let (mut topo, target, tools) = build_cylinder_grid(n);
     println!("Cylinder grid: {n} tools, starting compound_cut...");
     let t0 = Instant::now();
     let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
-    let elapsed = t0.elapsed();
+    let bool_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     let shell_id = topo.solid(result).unwrap().outer_shell();
     let face_count = topo.shell(shell_id).unwrap().faces().len();
-    println!(
-        "  Done in {:.1}ms — {} faces",
-        elapsed.as_secs_f64() * 1000.0,
-        face_count
-    );
+
+    if tess {
+        print_tess_result(bool_ms, face_count, &topo, result);
+    } else {
+        print_bool_result(bool_ms, face_count);
+    }
 }
 
 fn run_fuse(side: usize) {
@@ -234,13 +259,13 @@ fn main() {
 
     match workload {
         "honeycomb" => {
-            run_honeycomb(3);
+            run_honeycomb(3, false);
         }
         "large-honeycomb" => {
-            run_honeycomb(5);
+            run_honeycomb(5, false);
         }
         "cylinders" => {
-            run_cylinders(64);
+            run_cylinders(64, false);
         }
         "fuse" => {
             run_fuse(4);
@@ -248,8 +273,8 @@ fn main() {
         }
         "xl" => {
             // Stress tests: 200+ tools
-            run_honeycomb(8);
-            run_cylinders(256);
+            run_honeycomb(8, false);
+            run_cylinders(256, false);
             run_fuse(8);
             run_fuse_touching(8);
         }
@@ -257,11 +282,11 @@ fn main() {
             // Scaling study: increasing tool counts
             println!("=== Honeycomb scaling ===");
             for rings in [3, 5, 8, 10] {
-                run_honeycomb(rings);
+                run_honeycomb(rings, false);
             }
             println!("\n=== Cylinder scaling ===");
             for n in [16, 64, 144, 256] {
-                run_cylinders(n);
+                run_cylinders(n, false);
             }
             println!("\n=== Fuse overlapping scaling ===");
             for side in [3, 4, 6, 8] {
@@ -272,10 +297,21 @@ fn main() {
                 run_fuse_touching(side);
             }
         }
+        "tess" => {
+            println!("=== Tessellation profiling (bool + tess) ===");
+            println!("\n--- Honeycomb (planar-dominated) ---");
+            for rings in [3, 5, 8] {
+                run_honeycomb(rings, true);
+            }
+            println!("\n--- Cylinders (analytic curved faces) ---");
+            for n in [16, 64, 144, 256] {
+                run_cylinders(n, true);
+            }
+        }
         "all" => {
-            run_honeycomb(3);
-            run_cylinders(64);
-            run_honeycomb(5);
+            run_honeycomb(3, false);
+            run_cylinders(64, false);
+            run_honeycomb(5, false);
             run_fuse(4);
             run_fuse_touching(4);
         }
