@@ -608,15 +608,10 @@ pub fn boolean_with_options(
     let classify_fn = |frag: &FaceFragment| -> FaceClass {
         let centroid = polygon_centroid(&frag.vertices);
 
-        // AABB pre-filter: if the centroid is outside the opposing solid's
-        // overall bounding box, the point is definitely outside that solid.
-        // This skips expensive ray-cast classification for the vast majority
-        // of passthrough fragments in multi-body fuse operations.
-        let outside_aabb = match frag.source {
-            Source::A => !aabb_b.contains_point(centroid),
-            Source::B => !aabb_a.contains_point(centroid),
-        };
-        if outside_aabb {
+        // AABB pre-filter: skip expensive ray-cast for fragments whose centroid
+        // is outside the opposing solid's bounding box — they are definitively
+        // Outside. Eliminates most ray-casts in large multi-body fuse operations.
+        if centroid_outside_opposing_aabb(frag.source, centroid, aabb_a, aabb_b) {
             return FaceClass::Outside;
         }
 
@@ -948,12 +943,27 @@ fn solid_aabb(
     })?;
 
     for (fid, _, _, _) in faces {
-        if let Ok(face) = topo.face(*fid) {
-            crate::measure::expand_aabb_for_surface(&mut aabb, face.surface());
-        }
+        let face = topo.face(*fid)?;
+        crate::measure::expand_aabb_for_surface(&mut aabb, face.surface());
     }
 
     Ok(aabb)
+}
+
+/// Return `true` if `centroid` is outside the AABB of the solid opposing `source`.
+///
+/// A centroid outside the opposing solid's bounding box is definitively outside
+/// that solid — no ray-cast needed.
+fn centroid_outside_opposing_aabb(
+    source: Source,
+    centroid: Point3,
+    aabb_a: Aabb3,
+    aabb_b: Aabb3,
+) -> bool {
+    match source {
+        Source::A => !aabb_b.contains_point(centroid),
+        Source::B => !aabb_a.contains_point(centroid),
+    }
 }
 
 /// Check if one solid is entirely contained in the other and short-circuit
@@ -5271,7 +5281,7 @@ fn analytic_boolean(
         })
         .collect();
 
-    // Phase 2a: AABB pre-filter — classify fragments whose centroids are
+    // Phase 2a: AABB pre-filter — classify fragments whose centroids fall
     // outside the opposing solid's bounding box as Outside. This avoids
     // building expensive face data + BVH for the majority of fragments
     // in multi-body fuse operations where solids overlap minimally.
@@ -5281,11 +5291,7 @@ fn analytic_boolean(
         }
         let frag = &fragments[idx];
         let centroid = polygon_centroid(&frag.vertices);
-        let outside_aabb = match frag.source {
-            Source::A => !b_overall_aabb.contains_point(centroid),
-            Source::B => !a_overall_aabb.contains_point(centroid),
-        };
-        if outside_aabb {
+        if centroid_outside_opposing_aabb(frag.source, centroid, a_overall_aabb, b_overall_aabb) {
             *class = Some(FaceClass::Outside);
         }
     }
