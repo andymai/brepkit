@@ -23,5 +23,9 @@ criterion.workspace = true
 name = "cad_operations"
 harness = false
 
+[[bench]]
+name = "boolean_perf"
+harness = false
+
 [lints]
 workspace = true

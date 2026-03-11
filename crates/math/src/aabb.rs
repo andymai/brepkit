@@ -50,6 +50,7 @@ impl Aabb2 {
     }
 
     /// Whether this box intersects another.
+    #[inline]
     #[must_use]
     pub fn intersects(self, other: Self) -> bool {
         self.min.x() <= other.max.x()
@@ -68,6 +69,7 @@ impl Aabb2 {
     }
 
     /// Compute the union of two bounding boxes.
+    #[inline]
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self {
@@ -83,6 +85,7 @@ impl Aabb2 {
     }
 
     /// Return a new box expanded by `margin` on each side.
+    #[inline]
     #[must_use]
     pub fn expanded(self, margin: f64) -> Self {
         Self {
@@ -146,6 +149,7 @@ impl Aabb3 {
     }
 
     /// Whether this box intersects another.
+    #[inline]
     #[must_use]
     pub fn intersects(self, other: Self) -> bool {
         self.min.x() <= other.max.x()
@@ -157,6 +161,7 @@ impl Aabb3 {
     }
 
     /// Whether this box contains a point.
+    #[inline]
     #[must_use]
     pub fn contains_point(self, p: Point3) -> bool {
         p.x() >= self.min.x()
@@ -168,6 +173,7 @@ impl Aabb3 {
     }
 
     /// Compute the union of two bounding boxes.
+    #[inline]
     #[must_use]
     pub const fn union(self, other: Self) -> Self {
         Self {
@@ -185,6 +191,7 @@ impl Aabb3 {
     }
 
     /// Return a new box expanded by `margin` on each side.
+    #[inline]
     #[must_use]
     pub fn expanded(self, margin: f64) -> Self {
         Self {

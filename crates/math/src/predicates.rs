@@ -29,6 +29,7 @@ const fn to_coord(p: Point2) -> robust::Coord<f64> {
 ///
 /// Returns a positive value if the points are counter-clockwise,
 /// negative if clockwise, and zero if collinear.
+#[inline]
 #[must_use]
 pub fn orient2d(a: Point2, b: Point2, c: Point2) -> f64 {
     robust::orient2d(to_coord(a), to_coord(b), to_coord(c))
@@ -130,6 +131,7 @@ const fn to_coord3d(p: Point3) -> robust::Coord3D<f64> {
 /// Returns a positive value if `d` lies below the plane (a, b, c appear
 /// counter-clockwise when viewed from above), negative if above, zero if
 /// coplanar. This matches the convention of the `robust` crate.
+#[inline]
 #[must_use]
 pub fn orient3d(a: Point3, b: Point3, c: Point3, d: Point3) -> f64 {
     robust::orient3d(to_coord3d(a), to_coord3d(b), to_coord3d(c), to_coord3d(d))
