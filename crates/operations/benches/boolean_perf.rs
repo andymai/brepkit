@@ -32,6 +32,10 @@ use brepkit_topology::Topology;
 fn box_with_cylinder_cuts(topo: &mut Topology, n: usize) -> brepkit_topology::solid::SolidId {
     let mut result = primitives::make_box(topo, 100.0, 100.0, 10.0).unwrap();
 
+    if n == 0 {
+        return result;
+    }
+
     let cols = (n as f64).sqrt().ceil() as usize;
     let rows = n.div_ceil(cols);
 
