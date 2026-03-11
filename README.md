@@ -72,7 +72,7 @@ For production use today, [brepjs](https://github.com/andymai/brepjs) with the O
 
 ## Architecture
 
-Layered Cargo workspace. Each layer depends only on layers below it. Boundaries are enforced by `scripts/check-boundaries.sh` and checked in CI.
+Layered Cargo workspace. Each layer depends only on layers below it, with one exception: `brepkit-io` also uses `brepkit-operations` for tessellation during mesh export. Boundaries are enforced by `scripts/check-boundaries.sh` and checked in CI.
 
 | Layer | Crate | What it does |
 |-------|-------|-------------|
@@ -91,8 +91,8 @@ Median times from the [brepjs benchmark suite](https://github.com/andymai/brepjs
 | fuse(box, box) | 5.7 ms | 83.7 ms | 15x | 336 µs |
 | cut(box, cylinder) | 4.2 ms | 123.8 ms | 29x | 221 µs |
 | intersect(box, sphere) | 31.9 ms | 107.1 ms | 3.4x | 2.4 ms |
-| box + chamfer | 0.1 ms | 7.8 ms | 70x | 55 µs |
-| box + fillet | 0.3 ms | 8.1 ms | 28x | 75 µs |
+| box + chamfer | 0.1 ms | 7.8 ms | 78x | 55 µs |
+| box + fillet | 0.3 ms | 8.1 ms | 27x | 75 µs |
 | multi-boolean (16 holes) | 1.7 ms | 52.0 ms | 31x | 1.2 ms |
 | mesh sphere (tol=0.01) | 20.0 ms | 61.3 ms | 3.1x | 1.8 ms |
 | exportSTEP (×10) | 0.9 ms | 19.2 ms | 21x | — |
