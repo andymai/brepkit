@@ -27,5 +27,9 @@ harness = false
 name = "boolean_perf"
 harness = false
 
+[[bench]]
+name = "compound_cut_perf"
+harness = false
+
 [lints]
 workspace = true

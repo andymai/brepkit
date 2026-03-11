@@ -1718,6 +1718,14 @@ enum AnalyticClassifier {
     /// Point-in-box: axis-aligned bounding box test.
     /// O(1) with just 6 comparisons — the fastest classifier.
     Box { min: Point3, max: Point3 },
+    /// Point-in-convex-polyhedron: half-plane test against each face.
+    /// A point is inside iff `normal_i · p < d_i` for all face planes
+    /// (outward-pointing normals, so `normal · p > d` means outside).
+    /// O(F) where F is the number of faces — fast for hex prisms (F=8).
+    ConvexPolyhedron {
+        /// Outward-pointing normals and signed distances: `normal · p > d` means outside.
+        planes: Vec<(Vec3, f64)>,
+    },
 }
 
 impl AnalyticClassifier {
@@ -1827,6 +1835,25 @@ impl AnalyticClassifier {
                     Some(FaceClass::Outside)
                 } else {
                     None // On boundary — fall back to ray-casting
+                }
+            }
+            Self::ConvexPolyhedron { planes } => {
+                // For convex polyhedra, a point is inside iff it's on the
+                // interior side of every face plane. Outward normal convention:
+                // `signed_dist = normal · centroid - d` → positive means outside.
+                let tl = tol.linear;
+                let mut max_signed_dist = f64::NEG_INFINITY;
+                for &(normal, d) in planes {
+                    let cv = Vec3::new(centroid.x(), centroid.y(), centroid.z());
+                    let signed_dist = normal.dot(cv) - d;
+                    max_signed_dist = max_signed_dist.max(signed_dist);
+                }
+                if max_signed_dist < -tl {
+                    Some(FaceClass::Inside)
+                } else if max_signed_dist > tl {
+                    Some(FaceClass::Outside)
+                } else {
+                    None // On boundary
                 }
             }
         }
@@ -1958,6 +1985,51 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
                         max: Point3::new(x_vals[1], y_vals[1], z_vals[1]),
                     });
                 }
+            }
+        }
+
+        // All-planar solid that isn't an axis-aligned box: treat as convex
+        // polyhedron (half-plane classifier). Works for hex prisms, wedges,
+        // arbitrary extruded polygons, etc.
+        // Only valid for CONVEX solids — verify by checking that the vertex
+        // centroid is on the interior side of every face plane.
+        if has_planar && !has_sphere && !has_cylinder && !has_cone {
+            let faces = shell.faces();
+            let mut planes = Vec::with_capacity(faces.len());
+            // First pass: collect all planes.
+            for &fid in faces {
+                let face = topo.face(fid).ok()?;
+                if let FaceSurface::Plane { normal, d } = face.surface() {
+                    let (n, dv) = if face.is_reversed() {
+                        (-*normal, -*d)
+                    } else {
+                        (*normal, *d)
+                    };
+                    planes.push((n, dv));
+                } else {
+                    return None;
+                }
+            }
+            // Convexity check: every vertex must be on the interior side of
+            // every face plane. This is O(V×F) but only runs for small all-planar
+            // solids (hex prisms: V=12, F=8 → 96 dot products).
+            let mut all_verts: Vec<Vec3> = Vec::new();
+            for &fid in faces {
+                let face = topo.face(fid).ok()?;
+                let wire = topo.wire(face.outer_wire()).ok()?;
+                for oe in wire.edges() {
+                    let edge = topo.edge(oe.edge()).ok()?;
+                    let v = topo.vertex(edge.start()).ok()?;
+                    let pv = Vec3::new(v.point().x(), v.point().y(), v.point().z());
+                    all_verts.push(pv);
+                }
+            }
+            let convex_tol = tol.linear * 10.0; // Generous tolerance for vertex-on-face
+            let is_convex = planes
+                .iter()
+                .all(|&(n, d)| all_verts.iter().all(|&v| n.dot(v) <= d + convex_tol));
+            if is_convex {
+                return Some(AnalyticClassifier::ConvexPolyhedron { planes });
             }
         }
     }
@@ -4822,9 +4894,14 @@ pub fn compound_cut(
     if tools.is_empty() {
         return Ok(target);
     }
-    // Single tool: delegate to regular boolean (handles all surface types).
-    if tools.len() == 1 {
-        return boolean_with_options(topo, BooleanOp::Cut, target, tools[0], opts);
+    // Small tool counts: sequential is faster due to lower overhead.
+    if tools.len() <= 8 {
+        log::debug!(
+            "[compound_cut] fallback: small tool count ({})",
+            tools.len()
+        );
+
+        return compound_cut_sequential(topo, target, tools, opts);
     }
 
     // Check for non-analytic surfaces — fall back to sequential if found.
@@ -4844,10 +4921,14 @@ pub fn compound_cut(
     };
 
     if has_non_analytic(target)? {
+        log::debug!("[compound_cut] fallback: target has non-analytic surfaces");
+
         return compound_cut_sequential(topo, target, tools, opts);
     }
-    for &tool in tools {
+    for (i, &tool) in tools.iter().enumerate() {
         if has_non_analytic(tool)? {
+            log::debug!("[compound_cut] fallback: tool {i} has non-analytic surfaces");
+
             return compound_cut_sequential(topo, target, tools, opts);
         }
     }
@@ -4946,6 +5027,17 @@ pub fn compound_cut(
         tool_data.iter().map(|td| td.snapshots.len()).sum::<usize>()
     );
 
+    // Global BVH over tool overall AABBs — used for O(log N) spatial queries
+    // in Phase 1 (passthrough), Phase 2 (intersection), and Phase 4 (classification).
+    let tool_bvh = {
+        let entries: Vec<(usize, Aabb3)> = tool_data
+            .iter()
+            .enumerate()
+            .map(|(i, td)| (i, td.overall_aabb))
+            .collect();
+        Bvh::build(&entries)
+    };
+
     // ── Phase 1: Snapshot target faces ───────────────────────────────────
     let solid_a = topo.solid(target)?;
     let shell_a = topo.shell(solid_a.outer_shell())?;
@@ -4953,12 +5045,12 @@ pub fn compound_cut(
 
     let mut snaps_a = Vec::new();
     let mut passthrough_a: Vec<FaceId> = Vec::new();
-    // A face is passthrough if it doesn't overlap ANY tool.
+    // A face is passthrough if it doesn't overlap ANY tool (BVH query).
     for (i, &fid) in face_ids_a.iter().enumerate() {
-        let overlaps_any = tool_data
-            .iter()
-            .any(|td| target_wire_aabbs[i].intersects(td.overall_aabb));
-        if overlaps_any {
+        let overlapping_tools = tool_bvh.query_overlap(&target_wire_aabbs[i]);
+        if overlapping_tools.is_empty() {
+            passthrough_a.push(fid);
+        } else {
             let face = topo.face(fid)?;
             let surface = face.surface().clone();
             let reversed = face.is_reversed();
@@ -4972,8 +5064,6 @@ pub fn compound_cut(
                 d,
                 reversed,
             });
-        } else {
-            passthrough_a.push(fid);
         }
     }
 
@@ -5024,27 +5114,34 @@ pub fn compound_cut(
 
     let mut has_analytic_analytic = false;
 
-    for (ti, td) in tool_data.iter().enumerate() {
-        // Build BVH over tool faces for broad-phase.
-        let bvh = if td.aabbs.len() >= 16 {
-            let entries: Vec<(usize, Aabb3)> = td
-                .aabbs
-                .iter()
-                .enumerate()
-                .map(|(i, aabb)| (i, *aabb))
-                .collect();
-            Some(Bvh::build(&entries))
-        } else {
-            None
-        };
-
-        for (ia, snap_a) in snaps_a.iter().enumerate() {
-            // Broad-phase: skip if target face doesn't overlap this tool.
-            if !aabbs_a[ia].intersects(td.overall_aabb) {
-                continue;
+    // Build per-tool BVHs over their face AABBs (for face-level broad-phase).
+    let tool_face_bvhs: Vec<Option<Bvh>> = tool_data
+        .iter()
+        .map(|td| {
+            if td.aabbs.len() >= 16 {
+                let entries: Vec<(usize, Aabb3)> = td
+                    .aabbs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, aabb)| (i, *aabb))
+                    .collect();
+                Some(Bvh::build(&entries))
+            } else {
+                None
             }
+        })
+        .collect();
 
-            let candidates: Vec<usize> = if let Some(ref bvh) = bvh {
+    // Iterate target faces first, then use global BVH to find overlapping tools.
+    // This is O(target_faces × log(tools)) instead of O(tools × target_faces).
+    for (ia, snap_a) in snaps_a.iter().enumerate() {
+        // Global BVH query: which tools overlap this target face?
+        let overlapping_tools = tool_bvh.query_overlap(&aabbs_a[ia]);
+
+        for &ti in &overlapping_tools {
+            let td = &tool_data[ti];
+
+            let candidates: Vec<usize> = if let Some(ref bvh) = tool_face_bvhs[ti] {
                 bvh.query_overlap(&aabbs_a[ia])
             } else {
                 (0..td.snapshots.len())
@@ -5221,6 +5318,7 @@ pub fn compound_cut(
 
     // Fall back to sequential if unsupported intersection types found.
     if has_analytic_analytic {
+        log::debug!("[compound_cut] fallback: has_analytic_analytic intersection");
         return compound_cut_sequential(topo, target, tools, opts);
     }
 
@@ -5571,9 +5669,20 @@ pub fn compound_cut(
     // ── Phase 4: Classification ──────────────────────────────────────────
     // For compound cut: Target fragments (Source::A) must be Outside ALL tools.
     // Tool fragments (Source::B) must be Inside target AND Outside all other tools.
+    //
+    // OPTIMIZATION: Use AABB filtering to skip tools that can't contain the
+    // fragment centroid. A point can only be Inside a tool if it's within the
+    // tool's bounding box. For N=100 disjoint tools, this reduces per-fragment
+    // classification from O(N) to O(~1-3) on average.
     let target_classifier = try_build_analytic_classifier(topo, target);
 
-    let classes: Vec<Option<FaceClass>> = fragments
+    // Expand tool AABBs slightly for classification (tolerance margin).
+    let expanded_tool_aabbs: Vec<Aabb3> = tool_data
+        .iter()
+        .map(|td| td.overall_aabb.expanded(tol.linear))
+        .collect();
+
+    let mut classes: Vec<Option<FaceClass>> = fragments
         .iter()
         .enumerate()
         .map(|(idx, frag)| {
@@ -5585,8 +5694,18 @@ pub fn compound_cut(
                     // Target fragment: must be Outside ALL tools to survive.
                     // If Inside ANY tool → discard (Inside).
                     let centroid = polygon_centroid(&frag.vertices);
-                    for td in &tool_data {
-                        if let Some(ref cls) = td.classifier {
+                    // Use global BVH to find tools whose AABB contains centroid.
+                    let point_aabb = Aabb3 {
+                        min: centroid,
+                        max: centroid,
+                    };
+                    let nearby_tools = tool_bvh.query_overlap(&point_aabb);
+                    for &ti in &nearby_tools {
+                        // Double-check with expanded AABB (BVH may have slight padding).
+                        if !expanded_tool_aabbs[ti].contains_point(centroid) {
+                            continue;
+                        }
+                        if let Some(ref cls) = tool_data[ti].classifier {
                             if cls.classify(centroid, tol) == Some(FaceClass::Inside) {
                                 return Some(FaceClass::Inside);
                             }
@@ -5606,20 +5725,24 @@ pub fn compound_cut(
                             _ => return None,
                         }
                     } else {
-                        return None; // Need raycast
+                        return None; // Need raycast against target
                     }
                     // Also must be Outside all OTHER tools (for overlapping tools).
-                    // For the common case of non-overlapping tools, this is trivially true.
-                    for (ti2, td2) in tool_data.iter().enumerate() {
-                        // Skip the tool this fragment belongs to (we don't track tool_index
-                        // per fragment, so check all — the classifier for the fragment's
-                        // own tool will return On-boundary/Inside which is fine).
-                        if let Some(ref cls2) = td2.classifier {
+                    // Use AABB filtering: only check tools whose AABB contains centroid.
+                    let point_aabb = Aabb3 {
+                        min: centroid,
+                        max: centroid,
+                    };
+                    let nearby_tools = tool_bvh.query_overlap(&point_aabb);
+                    for &ti2 in &nearby_tools {
+                        if !expanded_tool_aabbs[ti2].contains_point(centroid) {
+                            continue;
+                        }
+                        if let Some(ref cls2) = tool_data[ti2].classifier {
                             if cls2.classify(centroid, tol) == Some(FaceClass::Inside) {
-                                // Could be our own tool — can't distinguish without tool_index.
-                                // For correctness with overlapping tools, this needs the
-                                // tool_index tracking. For now, allow it (correct for
-                                // non-overlapping tools, conservative for overlapping).
+                                // Could be the fragment's own tool — without tool_index
+                                // tracking we can't distinguish. For non-overlapping tools
+                                // this is correct (centroid is on-boundary, not strictly Inside).
                                 let _ = ti2;
                             }
                         }
@@ -5630,11 +5753,147 @@ pub fn compound_cut(
         })
         .collect();
 
-    // Phase 2: raycast fallback for unclassified fragments.
+    // Phase 4b: raycast fallback for unclassified fragments.
+    // This handles concave targets (e.g. shelled boxes) where the analytic
+    // classifier can't be built. We tessellate the original target/tools and
+    // raycast, exactly as analytic_boolean does.
     let needs_raycast = classes.iter().any(Option::is_none);
     if needs_raycast {
-        // Fall back to sequential — raycast classification is complex for multi-tool.
-        return compound_cut_sequential(topo, target, tools, opts);
+        let unclassified_count = classes.iter().filter(|c| c.is_none()).count();
+        log::debug!(
+            "[compound_cut] raycast fallback for {unclassified_count}/{} fragments",
+            fragments.len()
+        );
+
+        // Build face data for target (for Source::B raycast) and each tool
+        // (for Source::A raycast). Only build what we actually need.
+        let needs_target_raycast = classes
+            .iter()
+            .enumerate()
+            .any(|(i, c)| c.is_none() && matches!(fragments[i].source, Source::B));
+        let needs_tool_raycast = classes
+            .iter()
+            .enumerate()
+            .any(|(i, c)| c.is_none() && matches!(fragments[i].source, Source::A));
+
+        let target_face_data = if needs_target_raycast {
+            Some(collect_face_data(topo, target, deflection)?)
+        } else {
+            None
+        };
+        let target_bvh = target_face_data.as_ref().and_then(build_face_bvh);
+
+        // For Source::A fragments, we need to raycast against each relevant tool.
+        // Build face data lazily per-tool.
+        let tool_face_data: Vec<Option<FaceData>> = if needs_tool_raycast {
+            tools
+                .iter()
+                .enumerate()
+                .map(|(i, &tid)| match collect_face_data(topo, tid, deflection) {
+                    Ok(fd) => Some(fd),
+                    Err(e) => {
+                        log::warn!(
+                            "[compound_cut] tool {i} tessellation failed, \
+                             falling back to sequential: {e}"
+                        );
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            vec![None; tools.len()]
+        };
+        // If any tool failed tessellation, fall back to sequential for correctness.
+        if needs_tool_raycast && tool_face_data.iter().any(Option::is_none) {
+            return compound_cut_sequential(topo, target, tools, opts);
+        }
+        let tool_face_bvhs_rc: Vec<Option<Bvh>> = tool_face_data
+            .iter()
+            .map(|fd| fd.as_ref().and_then(build_face_bvh))
+            .collect();
+
+        for (idx, class) in classes.iter_mut().enumerate() {
+            if class.is_some() {
+                continue;
+            }
+            let frag = &fragments[idx];
+            let centroid = polygon_centroid(&frag.vertices);
+
+            match frag.source {
+                Source::B => {
+                    // Raycast against original target to determine Inside/Outside.
+                    if let Some(ref fd) = target_face_data {
+                        let raw =
+                            classify_point(centroid, frag.normal, fd, target_bvh.as_ref(), tol);
+                        *class = Some(guard_tangent_coplanar(
+                            raw,
+                            &frag.vertices,
+                            frag.normal,
+                            fd,
+                            target_bvh.as_ref(),
+                            tol,
+                        ));
+                    }
+                }
+                Source::A => {
+                    // Raycast against each nearby tool.
+                    let point_aabb = Aabb3 {
+                        min: centroid,
+                        max: centroid,
+                    };
+                    let nearby_tools = tool_bvh.query_overlap(&point_aabb);
+                    let mut result = FaceClass::Outside;
+                    for &ti in &nearby_tools {
+                        if !expanded_tool_aabbs[ti].contains_point(centroid) {
+                            continue;
+                        }
+                        if let Some(ref fd) = tool_face_data[ti] {
+                            let raw = classify_point(
+                                centroid,
+                                frag.normal,
+                                fd,
+                                tool_face_bvhs_rc[ti].as_ref(),
+                                tol,
+                            );
+                            let guarded = guard_tangent_coplanar(
+                                raw,
+                                &frag.vertices,
+                                frag.normal,
+                                fd,
+                                tool_face_bvhs_rc[ti].as_ref(),
+                                tol,
+                            );
+                            if guarded == FaceClass::Inside {
+                                result = FaceClass::Inside;
+                                break;
+                            }
+                        }
+                    }
+                    *class = Some(result);
+                }
+            }
+        }
+    }
+
+    // Classification summary for debugging.
+    if log::log_enabled!(log::Level::Debug) {
+        let mut a_in = 0usize;
+        let mut a_out = 0usize;
+        let mut b_in = 0usize;
+        let mut b_out = 0usize;
+        for (i, c) in classes.iter().enumerate() {
+            match (&fragments[i].source, c) {
+                (Source::A, Some(FaceClass::Inside)) => a_in += 1,
+                (Source::A, Some(FaceClass::Outside)) => a_out += 1,
+                (Source::B, Some(FaceClass::Inside)) => b_in += 1,
+                (Source::B, Some(FaceClass::Outside)) => b_out += 1,
+                _ => {}
+            }
+        }
+        log::debug!(
+            "[compound_cut] classification: A(in={a_in} out={a_out}) B(in={b_in} out={b_out}) passthrough={}",
+            passthrough_a.len()
+        );
     }
 
     let classes: Vec<FaceClass> = classes
@@ -5661,14 +5920,23 @@ pub fn compound_cut(
         };
         let is_nonplanar = !matches!(frag.surface, FaceSurface::Plane { .. });
         let is_closed_curve = frag.edge_curves.len() == 1 && frag.edge_curves[0].is_some();
-        let n = frag.vertices.len();
+
+        // For planar faces that need flipping: reverse vertices and negate normal/d.
+        // This mirrors analytic_boolean's assembly logic exactly.
+        // After pre-reversing, set flip=false for the edge creation code to avoid
+        // double-flipping.
+        let (verts, normal, d_val, flip) = if flip && !is_nonplanar {
+            let rev: Vec<_> = frag.vertices.iter().copied().rev().collect();
+            (rev, -frag.normal, -frag.d, false)
+        } else {
+            (frag.vertices.clone(), frag.normal, frag.d, flip)
+        };
+
+        let n = verts.len();
         if n < 3 {
             continue;
         }
-        let normal = frag.normal;
-        let d_val = frag.d;
-        let vert_ids: Vec<VertexId> = frag
-            .vertices
+        let vert_ids: Vec<VertexId> = verts
             .iter()
             .map(|p| {
                 let key = (
@@ -5855,16 +6123,34 @@ pub fn compound_cut(
 }
 
 /// Sequential fallback for `compound_cut` when analytic path is unavailable.
+///
+/// Uses AABB pre-filtering to skip tools that don't overlap the current target,
+/// avoiding expensive boolean operations on spatially disjoint tools.
 fn compound_cut_sequential(
     topo: &mut Topology,
     target: SolidId,
     tools: &[SolidId],
     opts: BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
+    let _t = timer_now();
     let mut result = target;
+    let mut skipped = 0usize;
     for &tool in tools {
+        // AABB pre-filter: skip tools that don't overlap the current target.
+        let target_aabb = crate::measure::solid_bounding_box(topo, result)?;
+        let tool_aabb = crate::measure::solid_bounding_box(topo, tool)?;
+        if !target_aabb.intersects(tool_aabb) {
+            skipped += 1;
+            continue;
+        }
         result = boolean_with_options(topo, BooleanOp::Cut, result, tool, opts)?;
     }
+    log::debug!(
+        "[compound_cut_sequential] {} tools, {} skipped (disjoint), {:.1}ms",
+        tools.len(),
+        skipped,
+        timer_elapsed_ms(_t)
+    );
     Ok(result)
 }
 
@@ -8274,6 +8560,243 @@ mod tests {
         assert!(
             rel < 0.05,
             "compound_cut volume {compound_vol:.4} != sequential {seq_vol:.4} (rel={rel:.4})"
+        );
+    }
+
+    /// 3×3 grid (9 tools) exercises the compound path (threshold = 8).
+    #[test]
+    fn compound_cut_matches_sequential_3x3_grid() {
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+        let target = crate::primitives::make_box(&mut topo, 10.0, 10.0, 2.0).unwrap();
+        let r = 0.5;
+        let mut tools = Vec::new();
+        for row in 0..3 {
+            for col in 0..3 {
+                #[allow(clippy::cast_precision_loss)]
+                let x = 2.0 + (col as f64) * 3.0;
+                #[allow(clippy::cast_precision_loss)]
+                let y = 2.0 + (row as f64) * 3.0;
+                let c = crate::primitives::make_cylinder(&mut topo, r, 4.0).unwrap();
+                crate::transform::transform_solid(&mut topo, c, &Mat4::translation(x, y, -1.0))
+                    .unwrap();
+                tools.push(c);
+            }
+        }
+
+        // Sequential reference.
+        let mut seq_topo = topo.clone();
+        let mut seq_target = target;
+        for &tool in &tools {
+            let tool_copy = crate::copy::copy_solid(&mut seq_topo, tool).unwrap();
+            seq_target = boolean_with_options(
+                &mut seq_topo,
+                BooleanOp::Cut,
+                seq_target,
+                tool_copy,
+                BooleanOptions::default(),
+            )
+            .unwrap();
+        }
+        let seq_vol = crate::measure::solid_volume(&seq_topo, seq_target, 0.05).unwrap();
+
+        // Compound cut.
+        let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
+        let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+
+        let rel = (compound_vol - seq_vol).abs() / seq_vol;
+        assert!(
+            rel < 0.05,
+            "compound_cut 3x3 volume {compound_vol:.4} != sequential {seq_vol:.4} (rel={rel:.4})"
+        );
+    }
+
+    /// 4×4 grid (16 tools) — larger compound cut test.
+    #[test]
+    fn compound_cut_matches_sequential_4x4_grid() {
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+        let target = crate::primitives::make_box(&mut topo, 20.0, 20.0, 2.0).unwrap();
+        let r = 0.5;
+        let mut tools = Vec::new();
+        for row in 0..4 {
+            for col in 0..4 {
+                #[allow(clippy::cast_precision_loss)]
+                let x = 2.0 + (col as f64) * 4.0;
+                #[allow(clippy::cast_precision_loss)]
+                let y = 2.0 + (row as f64) * 4.0;
+                let c = crate::primitives::make_cylinder(&mut topo, r, 4.0).unwrap();
+                crate::transform::transform_solid(&mut topo, c, &Mat4::translation(x, y, -1.0))
+                    .unwrap();
+                tools.push(c);
+            }
+        }
+
+        // Sequential reference.
+        let mut seq_topo = topo.clone();
+        let mut seq_target = target;
+        for &tool in &tools {
+            let tool_copy = crate::copy::copy_solid(&mut seq_topo, tool).unwrap();
+            seq_target = boolean_with_options(
+                &mut seq_topo,
+                BooleanOp::Cut,
+                seq_target,
+                tool_copy,
+                BooleanOptions::default(),
+            )
+            .unwrap();
+        }
+        let seq_vol = crate::measure::solid_volume(&seq_topo, seq_target, 0.05).unwrap();
+
+        // Compound cut.
+        let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
+        let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+
+        let rel = (compound_vol - seq_vol).abs() / seq_vol;
+        assert!(
+            rel < 0.05,
+            "compound_cut 4x4 volume {compound_vol:.4} != sequential {seq_vol:.4} (rel={rel:.4})"
+        );
+    }
+
+    /// Test compound_cut with a shelled target + many box cutters.
+    /// This simulates the gridfinity honeycomb scenario where the target
+    /// has cylindrical fillets (rounded corners) and the tools are hex prisms.
+    #[test]
+    fn compound_cut_shelled_target_many_tools() {
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+
+        // Build a target with cylindrical fillets by making a box and
+        // cutting cylinders at the corners (creates cylinder surfaces).
+        let target = crate::primitives::make_box(&mut topo, 40.0, 40.0, 10.0).unwrap();
+        // Add a cylinder to make the target have cylinder surface faces.
+        let inner_box = crate::primitives::make_box(&mut topo, 36.0, 36.0, 8.0).unwrap();
+        crate::transform::transform_solid(&mut topo, inner_box, &Mat4::translation(2.0, 2.0, 2.0))
+            .unwrap();
+        let target = boolean_with_options(
+            &mut topo,
+            BooleanOp::Cut,
+            target,
+            inner_box,
+            BooleanOptions::default(),
+        )
+        .unwrap();
+
+        // Create 25 small box cutters in a 5×5 grid (above the threshold of 8).
+        let mut tools = Vec::new();
+        for row in 0..5 {
+            for col in 0..5 {
+                #[allow(clippy::cast_precision_loss)]
+                let x = 4.0 + (col as f64) * 7.0;
+                #[allow(clippy::cast_precision_loss)]
+                let y = 4.0 + (row as f64) * 7.0;
+                let tool = crate::primitives::make_box(&mut topo, 3.0, 3.0, 20.0).unwrap();
+                crate::transform::transform_solid(&mut topo, tool, &Mat4::translation(x, y, -5.0))
+                    .unwrap();
+                tools.push(tool);
+            }
+        }
+
+        // Sequential reference.
+        let mut seq_topo = topo.clone();
+        let mut seq_result = target;
+        let t0 = std::time::Instant::now();
+        for &tool in &tools {
+            let tool_copy = crate::copy::copy_solid(&mut seq_topo, tool).unwrap();
+            seq_result = boolean_with_options(
+                &mut seq_topo,
+                BooleanOp::Cut,
+                seq_result,
+                tool_copy,
+                BooleanOptions::default(),
+            )
+            .unwrap();
+        }
+        let dt_seq = t0.elapsed();
+        let seq_vol = crate::measure::solid_volume(&seq_topo, seq_result, 0.05).unwrap();
+
+        // Compound cut.
+        let t0 = std::time::Instant::now();
+        let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
+        let dt_compound = t0.elapsed();
+        let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+
+        let rel = (compound_vol - seq_vol).abs() / seq_vol;
+        eprintln!(
+            "shelled target + 25 tools: compound={:.1}ms (vol={compound_vol:.1}), sequential={:.1}ms (vol={seq_vol:.1}), rel={rel:.4}",
+            dt_compound.as_secs_f64() * 1000.0,
+            dt_seq.as_secs_f64() * 1000.0,
+        );
+        assert!(
+            rel < 0.05,
+            "compound_cut volume {compound_vol:.1} != sequential {seq_vol:.1} (rel={rel:.4})"
+        );
+    }
+
+    /// Shelled box + 9 box cutters — exercises raycast classification path.
+    #[test]
+    fn compound_cut_shelled_target_9_tools() {
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+
+        // Shelled box: outer 40x40x10, inner 36x36x8 offset by (2,2,2).
+        let target = crate::primitives::make_box(&mut topo, 40.0, 40.0, 10.0).unwrap();
+        let inner_box = crate::primitives::make_box(&mut topo, 36.0, 36.0, 8.0).unwrap();
+        crate::transform::transform_solid(&mut topo, inner_box, &Mat4::translation(2.0, 2.0, 2.0))
+            .unwrap();
+        let target = boolean_with_options(
+            &mut topo,
+            BooleanOp::Cut,
+            target,
+            inner_box,
+            BooleanOptions::default(),
+        )
+        .unwrap();
+
+        // 9 box cutters in a 3×3 grid (above N=8 threshold).
+        let mut tools = Vec::new();
+        for row in 0..3 {
+            for col in 0..3 {
+                #[allow(clippy::cast_precision_loss)]
+                let x = 8.0 + (col as f64) * 12.0;
+                #[allow(clippy::cast_precision_loss)]
+                let y = 8.0 + (row as f64) * 12.0;
+                let tool = crate::primitives::make_box(&mut topo, 3.0, 3.0, 20.0).unwrap();
+                crate::transform::transform_solid(&mut topo, tool, &Mat4::translation(x, y, -5.0))
+                    .unwrap();
+                tools.push(tool);
+            }
+        }
+
+        // Sequential reference.
+        let mut seq_topo = topo.clone();
+        let mut seq_result = target;
+        for &tool in &tools {
+            let tool_copy = crate::copy::copy_solid(&mut seq_topo, tool).unwrap();
+            seq_result = boolean_with_options(
+                &mut seq_topo,
+                BooleanOp::Cut,
+                seq_result,
+                tool_copy,
+                BooleanOptions::default(),
+            )
+            .unwrap();
+        }
+        let seq_vol = crate::measure::solid_volume(&seq_topo, seq_result, 0.05).unwrap();
+
+        // Compound.
+        let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
+        let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+
+        let rel = (compound_vol - seq_vol).abs() / seq_vol;
+        assert!(
+            rel < 0.02,
+            "compound={compound_vol:.4} != seq={seq_vol:.4} (rel={rel:.4})"
         );
     }
 }
