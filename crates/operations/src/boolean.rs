@@ -1515,6 +1515,14 @@ fn cyrus_beck_clip(
 /// bottleneck while CDT stays O(N log N).
 const CDT_CHORD_THRESHOLD: usize = 5;
 
+/// Snap distance multiplier for CDT vertex matching.
+///
+/// Chord endpoints are computed by line-edge intersection, which accumulates
+/// floating-point error on the order of ~10× `tol.linear`. Use 100× as the
+/// snap threshold to reliably capture all on-chord/on-boundary vertices
+/// without pulling in nearby-but-off-chord polygon vertices.
+const CDT_SNAP_FACTOR: f64 = 100.0;
+
 /// Split a face polygon along intersection chords, producing fragments.
 ///
 /// For faces with many chords (≥ `CDT_CHORD_THRESHOLD`), uses CDT-based batch
@@ -1669,7 +1677,7 @@ fn split_face_cdt_inner(
     // two chords defining the same line but in opposite directions dedup.
     for chord in &mut chords_2d {
         let (c0, c1) = *chord;
-        if c0.x() > c1.x() + 1e-12 || (c0.x() - c1.x()).abs() < 1e-12 && c0.y() > c1.y() + 1e-12 {
+        if c0.x() > c1.x() + 1e-12 || ((c0.x() - c1.x()).abs() < 1e-12 && c0.y() > c1.y() + 1e-12) {
             *chord = (c1, c0);
         }
     }
@@ -1746,18 +1754,73 @@ fn split_face_cdt_inner(
         chord_vidxs.push((v0, v1));
     }
 
-    // --- Insert chord-chord intersection points ---
-    // These need to exist as CDT vertices so the on-chord scan finds them.
-    for pts in &chord_cross {
-        for &(_t, pt) in pts {
-            cdt.insert_point(pt)?;
+    // --- Insert chord-chord intersection points and build per-chord splits ---
+    // Track the CDT index assigned to each crossing point so we can
+    // construct chord sub-segments directly (avoiding the expensive O(V*C)
+    // scan of all CDT vertices).
+    let mut chord_splits: Vec<Vec<(f64, usize)>> = (0..chords_2d.len())
+        .map(|i| {
+            let (v0, v1) = chord_vidxs[i];
+            vec![(0.0, v0), (1.0, v1)]
+        })
+        .collect();
+
+    for (chord_idx, pts) in chord_cross.iter().enumerate() {
+        for &(t, pt) in pts {
+            let vidx = cdt.insert_point(pt)?;
+            chord_splits[chord_idx].push((t, vidx));
         }
+    }
+
+    // Also check for T-junctions: chord endpoints from OTHER chords that
+    // lie on this chord's segment. Only scan chord endpoints (~2*C vertices),
+    // not all CDT vertices (~15K+).
+    // Chord endpoints are computed by line-edge intersection, which accumulates
+    // floating-point error on the order of ~10× tol.linear. Use 100× as the
+    // snap threshold to reliably capture all on-chord/on-boundary vertices
+    // without pulling in nearby-but-off-chord polygon vertices.
+    let snap_dist = tol.linear * CDT_SNAP_FACTOR;
+    {
+        let all_cdt_verts = cdt.vertices();
+        // Collect unique chord endpoint CDT indices and their 2D positions.
+        let mut endpoint_set: Vec<(usize, brepkit_math::vec::Point2)> =
+            Vec::with_capacity(chord_vidxs.len() * 2);
+        for &(cv0, cv1) in &chord_vidxs {
+            endpoint_set.push((cv0, all_cdt_verts[cv0]));
+            if cv1 != cv0 {
+                endpoint_set.push((cv1, all_cdt_verts[cv1]));
+            }
+        }
+        endpoint_set.sort_unstable_by_key(|&(vi, _)| vi);
+        endpoint_set.dedup_by_key(|e| e.0);
+
+        for (i, &(v0, v1)) in chord_vidxs.iter().enumerate() {
+            if v0 == v1 {
+                continue;
+            }
+            let c0 = chords_2d[i].0;
+            let c1 = chords_2d[i].1;
+            for &(vidx, pt) in &endpoint_set {
+                if vidx == v0 || vidx == v1 {
+                    continue;
+                }
+                let (t, dist) = point_segment_param_dist_2d(pt, c0, c1);
+                if dist < snap_dist && t > 1e-10 && t < 1.0 - 1e-10 {
+                    chord_splits[i].push((t, vidx));
+                }
+            }
+        }
+    }
+
+    // Sort each chord's split points by parameter.
+    for splits in &mut chord_splits {
+        splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        splits.dedup_by(|a, b| a.1 == b.1);
     }
 
     // --- Build boundary constraints ---
     // Extended chord endpoints lie on polygon edges. Split boundary edges at
     // these points so CDT constraints don't cross.
-    let snap_dist = tol.linear * 100.0;
     let mut boundary_edges: Vec<(usize, usize)> = Vec::new();
 
     for i in 0..nv {
@@ -1801,52 +1864,14 @@ fn split_face_cdt_inner(
         cdt.insert_constraint(a, b)?;
     }
 
-    // --- Build chord constraints (split at ALL intermediate vertices) ---
-    //
-    // Chord endpoints may land on other chords (T-junctions at the polygon
-    // boundary). `seg_seg_cross_2d` only detects strict interior crossings,
-    // so these T-junctions are missed. The CDT internally splits constraints
-    // at intermediate vertices, but if we record only (v0, v1) as a separator,
-    // `extract_regions` won't match the sub-edges.
-    //
-    // Fix: for each chord, scan ALL CDT vertices to find those on the chord
-    // segment, sort by parameter, and build separators from consecutive pairs.
-    // Phase A: scan CDT vertices to find intermediate points on each chord
-    // (immutable borrow of cdt).
-    let mut chord_splits: Vec<Vec<(f64, usize)>> = Vec::with_capacity(chord_vidxs.len());
-    {
-        let all_cdt_verts = cdt.vertices();
-        for (i, &(v0, v1)) in chord_vidxs.iter().enumerate() {
-            let mut on_chord: Vec<(f64, usize)> = vec![(0.0, v0), (1.0, v1)];
-            if v0 == v1 {
-                chord_splits.push(on_chord);
-                continue;
-            }
-            let c0 = chords_2d[i].0;
-            let c1 = chords_2d[i].1;
-            for (vidx, &pt) in all_cdt_verts.iter().enumerate() {
-                if vidx == v0 || vidx == v1 {
-                    continue;
-                }
-                let (t, dist) = point_segment_param_dist_2d(pt, c0, c1);
-                if dist < snap_dist && t > 1e-10 && t < 1.0 - 1e-10 {
-                    on_chord.push((t, vidx));
-                }
-            }
-            on_chord.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-            on_chord.dedup_by(|a, b| a.1 == b.1);
-            chord_splits.push(on_chord);
-        }
-    }
-
-    // Phase B: insert constraints and build separator list (mutable borrow).
+    // --- Insert chord constraints (already split at crossings + T-junctions) ---
     let mut chord_separators: Vec<(usize, usize)> = Vec::new();
-    for on_chord in &chord_splits {
-        if on_chord.len() < 2 || on_chord[0].1 == on_chord[1].1 {
+    for splits in &chord_splits {
+        if splits.len() < 2 || splits[0].1 == splits[1].1 {
             continue;
         }
-        let mut prev = on_chord[0].1;
-        for &(_, vidx) in &on_chord[1..] {
+        let mut prev = splits[0].1;
+        for &(_, vidx) in &splits[1..] {
             if vidx != prev {
                 cdt.insert_constraint(prev, vidx)?;
                 chord_separators.push((prev, vidx));
@@ -1875,6 +1900,12 @@ fn split_face_cdt_inner(
 /// where that line enters and exits the polygon, returning the boundary
 /// intersection points. If the line doesn't cross the polygon (parallel
 /// to an edge and outside), returns the original segment.
+///
+/// Hardcoded epsilons:
+/// - `1e-15`: guards against degenerate zero-length chords and parallel-edge
+///   denominator checks (numerical zero for f64 with coordinates up to ~1e7).
+/// - `1e-10`: edge parameter boundary snap — accepts slight overshoot in the
+///   `u ∈ [0, 1]` range due to floating-point arithmetic.
 fn extend_chord_to_polygon(
     c0: brepkit_math::vec::Point2,
     c1: brepkit_math::vec::Point2,
