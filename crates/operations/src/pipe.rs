@@ -56,7 +56,7 @@ pub fn pipe(
     }
 
     let face_data = topo.face(profile)?;
-    let input_normal = match face_data.surface() {
+    let mut input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => {
             return Err(crate::OperationsError::InvalidInput {
@@ -92,7 +92,9 @@ pub fn pipe(
     // Ensure CCW winding relative to path direction at t=0.
     // CW-wound profiles make `edge_dir.cross(path_dir)` point inward.
     let path_tangent_0 = path.tangent(0.0)?;
-    crate::winding::ensure_ccw_positions(&mut input_verts, path_tangent_0);
+    if crate::winding::ensure_ccw_positions(&mut input_verts, path_tangent_0) {
+        input_normal = -input_normal;
+    }
 
     // Compute profile centroid.
     let (cx, cy, cz) = input_verts.iter().fold((0.0, 0.0, 0.0), |(ax, ay, az), p| {
@@ -106,7 +108,7 @@ pub fn pipe(
     let scale_factors = compute_scale_factors(path, guide, num_segments, tol)?;
 
     // Compute frames along the path (reusing sweep's frame logic).
-    let initial_tangent = path.tangent(0.0)?;
+    let initial_tangent = path_tangent_0;
     let initial_up = orthogonalize(input_normal, initial_tangent);
     let initial_right = initial_tangent.cross(initial_up);
 

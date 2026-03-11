@@ -376,7 +376,7 @@ pub fn sweep(
     }
 
     let face_data = topo.face(profile)?;
-    let input_normal = match face_data.surface() {
+    let mut input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => {
             return Err(crate::OperationsError::InvalidInput {
@@ -446,7 +446,11 @@ pub fn sweep(
     // CW-wound profiles (e.g. from brepjs) make `edge_dir.cross(path_dir)` point
     // inward instead of outward, producing inside-out side faces.
     let path_tangent_0 = path.tangent(0.0)?;
-    crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0);
+    if crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0) {
+        // Positions were reversed → stored face normal was from CW winding.
+        // Negate so the up-hint for frame computation is correct.
+        input_normal = -input_normal;
+    }
 
     // Compute profile centroid.
     let (cx, cy, cz) = input_positions
@@ -706,7 +710,7 @@ pub fn sweep_smooth(
     }
 
     let face_data = topo.face(profile)?;
-    let input_normal = match face_data.surface() {
+    let mut input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => {
             return Err(crate::OperationsError::InvalidInput {
@@ -771,7 +775,9 @@ pub fn sweep_smooth(
 
     // Ensure CCW winding relative to path direction (same fix as sweep()).
     let path_tangent_0 = path.tangent(0.0)?;
-    crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0);
+    if crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0) {
+        input_normal = -input_normal;
+    }
 
     // Compute centroid and frames.
     let (cx, cy, cz) = input_positions
@@ -1018,7 +1024,7 @@ pub fn sweep_with_options(
     }
 
     let face_data = topo.face(profile)?;
-    let input_normal = match face_data.surface() {
+    let mut input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => {
             return Err(crate::OperationsError::InvalidInput {
@@ -1080,7 +1086,9 @@ pub fn sweep_with_options(
 
     // Ensure CCW winding relative to path direction (same fix as sweep()).
     let path_tangent_0 = path.tangent(0.0)?;
-    crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0);
+    if crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0) {
+        input_normal = -input_normal;
+    }
 
     let (cx, cy, cz) = input_positions
         .iter()
@@ -1887,6 +1895,73 @@ mod tests {
             rel_err < 0.01,
             "CW sweep volumes should match: origin={vol1}, translated={vol2}, \
              rel_err={rel_err:.2e}"
+        );
+    }
+
+    /// Sweep a CW-wound profile along a NON-PARALLEL axis (X path, XY profile).
+    /// This exercises the `input_normal` negation fix — without it, the
+    /// `orthogonalize(input_normal, path_tangent)` up-hint is wrong and
+    /// the profile is flipped upside-down.
+    #[test]
+    fn sweep_cw_profile_nonparallel_axis() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let tol_val = 1e-7;
+
+        // CW rectangle 1×2 on XY plane: (0,0)→(0,2)→(1,2)→(1,0)
+        let v0 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol_val));
+        let v1 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 2.0, 0.0), tol_val));
+        let v2 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 2.0, 0.0), tol_val));
+        let v3 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol_val));
+
+        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.wires.alloc(wire);
+
+        // CW winding → Newell normal = -Z
+        let face = topo.faces.alloc(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+        ));
+
+        // Sweep along +Z (profile normal is perpendicular to path → up-hint matters)
+        let path = straight_z_path(5.0);
+        let solid = sweep(&mut topo, face, &path).unwrap();
+
+        // Expected: 1×2×5 = 10.0
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            (vol - 10.0).abs() < 0.5,
+            "CW 1×2 rectangle swept along Z should produce volume ~10.0, got {vol}"
         );
     }
 }
