@@ -1433,10 +1433,11 @@ fn compute_axial_range(
 
 /// Compute the angular (u) range for an analytic face from its wire boundary.
 ///
-/// Projects boundary edge vertices onto the surface and collects their
-/// u-parameters. If the face doesn't span the full revolution, returns
-/// the tighter `[u_min, u_max]` range. Returns `(0, 2π)` for full-circle
-/// faces or when fewer than 3 boundary vertices exist.
+/// Projects boundary edge vertices — and midpoints of curved edges — onto
+/// the surface and collects their u-parameters. If the face doesn't span
+/// the full revolution, returns the tighter `[u_min, u_max]` range.
+/// Returns `(0, 2π)` for full-circle faces or when fewer than 3 boundary
+/// vertices exist.
 fn compute_angular_range<F>(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -1445,6 +1446,7 @@ fn compute_angular_range<F>(
 where
     F: Fn(Point3) -> (f64, f64),
 {
+    use brepkit_topology::edge::EdgeCurve;
     use std::f64::consts::TAU;
 
     let mut angles: Vec<f64> = Vec::new();
@@ -1456,6 +1458,46 @@ where
                     if let Ok(vertex) = topo.vertex(vid) {
                         let (u, _v) = project(vertex.point());
                         angles.push(u);
+                    }
+                }
+
+                // Sample edge midpoints to provide angular coverage
+                // between vertices. Without this, faces with only 2 unique
+                // vertex angles (e.g. quarter-cylinder from shell) fall
+                // through to the full-circle default. Line edge midpoints
+                // are crucial for faces whose edges are all LineEdges
+                // (as produced by assemble_solid_mixed).
+                if !edge.is_closed() {
+                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                        match edge.curve() {
+                            EdgeCurve::Circle(circle) => {
+                                let ts = circle.project(sv.point());
+                                let mut te = circle.project(ev.point());
+                                if te <= ts {
+                                    te += TAU;
+                                }
+                                let mid = circle.evaluate(f64::midpoint(ts, te));
+                                let (u, _) = project(mid);
+                                angles.push(u);
+                            }
+                            EdgeCurve::Ellipse(ellipse) => {
+                                let ts = ellipse.project(sv.point());
+                                let mut te = ellipse.project(ev.point());
+                                if te <= ts {
+                                    te += TAU;
+                                }
+                                let mid = ellipse.evaluate(f64::midpoint(ts, te));
+                                let (u, _) = project(mid);
+                                angles.push(u);
+                            }
+                            EdgeCurve::NurbsCurve(nurbs) => {
+                                let (t0, t1) = nurbs.domain();
+                                let mid = nurbs.evaluate(f64::midpoint(t0, t1));
+                                let (u, _) = project(mid);
+                                angles.push(u);
+                            }
+                            EdgeCurve::Line => {}
+                        }
                     }
                 }
             }
@@ -1472,9 +1514,9 @@ where
     angles.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     angles.dedup_by(|a, b| (*a - *b).abs() < brepkit_math::tolerance::Tolerance::default().linear);
 
-    if angles.len() < 4 {
-        // With fewer than 4 unique angles we can't reliably distinguish
-        // partial arc from full circle. Default to full revolution.
+    if angles.len() < 3 {
+        // Even after adding midpoints, fewer than 3 unique angles means
+        // the face likely spans the full revolution.
         return (0.0, TAU);
     }
 

@@ -2607,6 +2607,71 @@ impl BrepKernel {
         Ok(edge_id_to_u32(eid))
     }
 
+    /// Create a circular arc edge between two points.
+    ///
+    /// The arc lies on a circle with the given center, normal axis, and
+    /// radius derived from `|start − center|`. The arc goes from start
+    /// to end counter-clockwise when viewed along the normal.
+    ///
+    /// Returns an edge handle (`u32`).
+    #[wasm_bindgen(js_name = "makeCircleArc3d")]
+    pub fn make_circle_arc_3d_wasm(
+        &mut self,
+        start_x: f64,
+        start_y: f64,
+        start_z: f64,
+        end_x: f64,
+        end_y: f64,
+        end_z: f64,
+        center_x: f64,
+        center_y: f64,
+        center_z: f64,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+    ) -> Result<u32, JsError> {
+        let start_pt = Point3::new(start_x, start_y, start_z);
+        let end_pt = Point3::new(end_x, end_y, end_z);
+        let center = Point3::new(center_x, center_y, center_z);
+        let axis = Vec3::new(axis_x, axis_y, axis_z);
+
+        let n = axis.normalize().map_err(|e| {
+            WasmError::InvalidInput {
+                reason: format!("invalid axis: {e}"),
+            }
+        })?;
+
+        // u_axis = normalized(start − center), v_axis = n × u
+        let radial = start_pt - center;
+        let radius = radial.length();
+        if radius < 1e-12 {
+            return Err(WasmError::InvalidInput {
+                reason: "start point coincides with center".into(),
+            }
+            .into());
+        }
+        let u_axis = Vec3::new(radial.x() / radius, radial.y() / radius, radial.z() / radius);
+        let v_axis = n.cross(u_axis);
+
+        let circle =
+            brepkit_math::curves::Circle3D::with_axes(center, n, radius, u_axis, v_axis)
+                .map_err(|e| WasmError::InvalidInput {
+                    reason: format!("invalid circle: {e}"),
+                })?;
+
+        let v_start = self.topo.vertices.alloc(Vertex::new(start_pt, TOL));
+        let v_end = if (start_pt - end_pt).length() < TOL * 100.0 {
+            v_start
+        } else {
+            self.topo.vertices.alloc(Vertex::new(end_pt, TOL))
+        };
+        let eid = self
+            .topo
+            .edges
+            .alloc(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
+        Ok(edge_id_to_u32(eid))
+    }
+
     /// Create a NURBS curve edge.
     ///
     /// Returns an edge handle (`u32`).
@@ -2663,13 +2728,51 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "makeWire")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn make_wire_wasm(&mut self, edge_handles: Vec<u32>, closed: bool) -> Result<u32, JsError> {
-        let oriented: Vec<OrientedEdge> = edge_handles
+        let tol = brepkit_math::tolerance::Tolerance::new();
+
+        let edge_ids: Vec<brepkit_topology::edge::EdgeId> = edge_handles
             .iter()
-            .map(|&h| {
-                let eid = self.resolve_edge(h)?;
-                Ok(OrientedEdge::new(eid, true))
-            })
+            .map(|&h| self.resolve_edge(h))
             .collect::<Result<_, WasmError>>()?;
+
+        // Merge coincident vertices between adjacent edges.
+        // When edge[i].end is at the same position as edge[i+1].start,
+        // replace edge[i+1].start with edge[i].end so they share a vertex.
+        if edge_ids.len() > 1 {
+            for i in 0..edge_ids.len() {
+                let next = if i + 1 < edge_ids.len() {
+                    i + 1
+                } else if closed {
+                    0 // wrap around for closed wires
+                } else {
+                    continue;
+                };
+                if next == i {
+                    continue; // single-edge closed wire
+                }
+
+                let end_vid = self.topo.edge(edge_ids[i])?.end();
+                let start_vid = self.topo.edge(edge_ids[next])?.start();
+
+                if end_vid == start_vid {
+                    continue; // already shared
+                }
+
+                let end_pos = self.topo.vertex(end_vid)?.point();
+                let start_pos = self.topo.vertex(start_vid)?.point();
+
+                let dist = (end_pos - start_pos).length();
+                if dist < tol.linear {
+                    // Merge: replace the next edge's start with the current edge's end
+                    self.topo.edge_mut(edge_ids[next])?.set_start(end_vid);
+                }
+            }
+        }
+
+        let oriented: Vec<OrientedEdge> = edge_ids
+            .iter()
+            .map(|&eid| OrientedEdge::new(eid, true))
+            .collect();
         let wire = Wire::new(oriented, closed)?;
         let wid = self.topo.wires.alloc(wire);
         Ok(wire_id_to_u32(wid))

@@ -5,8 +5,9 @@
 //! uniform wall thickness. Optionally removes specified faces to
 //! create openings.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -15,6 +16,181 @@ use brepkit_topology::solid::SolidId;
 
 use crate::boolean::{FaceSpec, assemble_solid_mixed};
 use crate::dot_normal_point;
+
+/// Compute the outward surface normal at a 3D point for any face surface type.
+fn surface_normal_at(surface: &FaceSurface, pt: Point3) -> Vec3 {
+    match surface {
+        FaceSurface::Plane { normal, .. } => *normal,
+        FaceSurface::Cylinder(cyl) => {
+            // Radial direction from the cylinder axis through the point.
+            let to_axis = Vec3::new(
+                pt.x() - cyl.origin().x(),
+                pt.y() - cyl.origin().y(),
+                pt.z() - cyl.origin().z(),
+            );
+            let along = cyl.axis() * cyl.axis().dot(to_axis);
+            let radial = to_axis - along;
+            radial.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0))
+        }
+        FaceSurface::Cone(cone) => {
+            let to_apex = Vec3::new(
+                pt.x() - cone.apex().x(),
+                pt.y() - cone.apex().y(),
+                pt.z() - cone.apex().z(),
+            );
+            let along = cone.axis() * cone.axis().dot(to_apex);
+            let radial = to_apex - along;
+            radial.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0))
+        }
+        FaceSurface::Sphere(sphere) => {
+            let dir = Vec3::new(
+                pt.x() - sphere.center().x(),
+                pt.y() - sphere.center().y(),
+                pt.z() - sphere.center().z(),
+            );
+            dir.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0))
+        }
+        FaceSurface::Nurbs(srf) => nurbs_normal_at_point(srf, pt),
+        FaceSurface::Torus(_) => {
+            // Torus: fallback — rarely hit in practice.
+            Vec3::new(0.0, 0.0, 1.0)
+        }
+    }
+}
+
+/// Evaluate the NURBS surface normal at the parametric point closest to `pt`.
+///
+/// Performs a coarse 5×5 grid search over the parameter domain to find the
+/// closest surface point, then evaluates the analytic normal there.
+fn nurbs_normal_at_point(srf: &NurbsSurface, pt: Point3) -> Vec3 {
+    const N: usize = 5;
+
+    let (u_lo, u_hi) = srf.domain_u();
+    let (v_lo, v_hi) = srf.domain_v();
+
+    let mut best_u = 0.5 * (u_lo + u_hi);
+    let mut best_v = 0.5 * (v_lo + v_hi);
+    let mut best_d2 = f64::MAX;
+    for i in 0..=N {
+        let u = u_lo + (u_hi - u_lo) * (i as f64 / N as f64);
+        for j in 0..=N {
+            let v = v_lo + (v_hi - v_lo) * (j as f64 / N as f64);
+            let s = srf.evaluate(u, v);
+            let dx = s.x() - pt.x();
+            let dy = s.y() - pt.y();
+            let dz = s.z() - pt.z();
+            let d2 = dx * dx + dy * dy + dz * dz;
+            if d2 < best_d2 {
+                best_d2 = d2;
+                best_u = u;
+                best_v = v;
+            }
+        }
+    }
+
+    srf.normal(best_u, best_v)
+        .unwrap_or(Vec3::new(0.0, 0.0, 1.0))
+}
+
+/// Compute the inner vertex position using miter-vector offset.
+///
+/// Given a vertex with normals from adjacent faces, solves for the offset
+/// direction that satisfies `m · n_i = 1` for all non-open face normals
+/// (open face normals contribute 0). The inner position is:
+///   `inner = outer - thickness * m`
+///
+/// For 3 linearly independent normals, this is equivalent to 3-plane
+/// intersection. For 2 normals, it produces the least-norm miter (the
+/// shortest offset vector satisfying both constraints). For 1 normal,
+/// it offsets along that normal.
+fn compute_miter_offset(outer: Point3, unique_normals: &[(Vec3, bool)], thickness: f64) -> Point3 {
+    // Build system: for each unique normal, m · n_i = weight_i
+    // where weight_i = 1.0 for non-open faces, 0.0 for open faces.
+    let mut normals: Vec<Vec3> = Vec::new();
+    let mut weights: Vec<f64> = Vec::new();
+
+    for &(n, is_open) in unique_normals {
+        normals.push(n);
+        weights.push(if is_open { 0.0 } else { 1.0 });
+    }
+
+    let miter = match normals.len() {
+        0 => return outer,
+        1 => {
+            // Single normal: offset along it.
+            normals[0] * weights[0]
+        }
+        2 => {
+            // Two normals: least-norm solution of [n1; n2] · m = [w1; w2].
+            // m = N^T (N N^T)^{-1} w
+            let n1 = normals[0];
+            let n2 = normals[1];
+            let w1 = weights[0];
+            let w2 = weights[1];
+
+            let g11 = n1.dot(n1);
+            let g12 = n1.dot(n2);
+            let g22 = n2.dot(n2);
+            let det = g11 * g22 - g12 * g12;
+
+            if det.abs() < 1e-12 {
+                // Nearly parallel normals: just use the first non-open one.
+                if w1 > 0.5 { n1 * w1 } else { n2 * w2 }
+            } else {
+                let inv_det = 1.0 / det;
+                let a1 = (g22 * w1 - g12 * w2) * inv_det;
+                let a2 = (-g12 * w1 + g11 * w2) * inv_det;
+                n1 * a1 + n2 * a2
+            }
+        }
+        _ => {
+            // Three or more normals: use the first 3 linearly independent
+            // normals and solve via Cramer's rule (3-plane intersection).
+            let n1 = normals[0];
+            let n2 = normals[1];
+            let n3 = normals[2];
+            let w1 = weights[0];
+            let w2 = weights[1];
+            let w3 = weights[2];
+
+            let n2_cross_n3 = n2.cross(n3);
+            let det = n1.dot(n2_cross_n3);
+
+            if det.abs() < 1e-12 {
+                // Degenerate: fall back to 2-normal solution with first two.
+                let g11 = n1.dot(n1);
+                let g12 = n1.dot(n2);
+                let g22 = n2.dot(n2);
+                let d2 = g11 * g22 - g12 * g12;
+                if d2.abs() < 1e-12 {
+                    n1 * w1
+                } else {
+                    let inv = 1.0 / d2;
+                    let a1 = (g22 * w1 - g12 * w2) * inv;
+                    let a2 = (-g12 * w1 + g11 * w2) * inv;
+                    n1 * a1 + n2 * a2
+                }
+            } else {
+                let n3_cross_n1 = n3.cross(n1);
+                let n1_cross_n2 = n1.cross(n2);
+                let inv_det = 1.0 / det;
+                let mx =
+                    (w1 * n2_cross_n3.x() + w2 * n3_cross_n1.x() + w3 * n1_cross_n2.x()) * inv_det;
+                let my =
+                    (w1 * n2_cross_n3.y() + w2 * n3_cross_n1.y() + w3 * n1_cross_n2.y()) * inv_det;
+                let mz =
+                    (w1 * n2_cross_n3.z() + w2 * n3_cross_n1.z() + w3 * n1_cross_n2.z()) * inv_det;
+                Vec3::new(mx, my, mz)
+            }
+        }
+    };
+
+    Point3::new(
+        outer.x() - thickness * miter.x(),
+        outer.y() - thickness * miter.y(),
+        outer.z() - thickness * miter.z(),
+    )
+}
 
 /// Create a hollow shell from a solid by offsetting faces inward.
 ///
@@ -70,7 +246,95 @@ pub fn shell(
 
     let mut result_specs: Vec<FaceSpec> = Vec::new();
 
-    // Outer faces: keep the original faces that are not open.
+    // ─── Phase 1: Build vertex→normals map using ALL face types ───────────
+    //
+    // For each vertex, collect the outward surface normals from ALL adjacent
+    // faces (planar and non-planar). We use these to compute a miter vector
+    // that gives the correct inner vertex position at the intersection of
+    // all offset surfaces meeting at that vertex.
+    let inv_tol = 1.0 / tol.linear;
+    let quantize_pt = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() * inv_tol).round() as i64,
+            (p.y() * inv_tol).round() as i64,
+            (p.z() * inv_tol).round() as i64,
+        )
+    };
+
+    // Collect (normal, is_open) for each face at each vertex.
+    let mut vertex_normals: HashMap<(i64, i64, i64), Vec<(Vec3, bool)>> = HashMap::new();
+
+    for &(fid, ref verts) in &face_verts {
+        let face = topo.face(fid)?;
+        let is_open = open_set.contains(&fid.index());
+
+        for v in verts {
+            let mut normal = surface_normal_at(face.surface(), *v);
+            // Account for the face's reversal flag: when a face is reversed,
+            // the native surface normal points in the wrong direction.
+            if face.is_reversed() {
+                normal = -normal;
+            }
+            vertex_normals
+                .entry(quantize_pt(*v))
+                .or_default()
+                .push((normal, is_open));
+        }
+    }
+
+    // ─── Phase 2: Compute inner vertex positions via miter vectors ────────
+    //
+    // The miter vector m at a vertex satisfies m · n_i = 1 for each unique
+    // face normal n_i. The inner position is: inner = outer - thickness * m.
+    // This correctly handles vertices where 2 or 3 offset surfaces intersect
+    // (including non-planar surfaces like cylinders at tangent points).
+    //
+    // For open faces, the offset distance is 0 (the rim vertex stays on the
+    // original plane), so we use n_i with a weight of 0 in that direction.
+    let mut inner_pos: HashMap<(i64, i64, i64), Point3> = HashMap::new();
+
+    for (&key, normals) in &vertex_normals {
+        // Deduplicate nearly-parallel normals, keeping track of whether
+        // each unique normal is offset (non-open) or stays (open).
+        let mut unique: Vec<(Vec3, bool)> = Vec::new();
+        for &(n, is_open) in normals {
+            // Use cosine similarity to deduplicate nearly-parallel normals.
+            // At tangent points (where a flat face meets a curved face),
+            // normals can differ by small amounts that still cause near-singular
+            // miter vectors if treated as independent.
+            let dominated = unique.iter_mut().any(|(un, existing_open)| {
+                let dot = un.dot(n);
+                if dot > 0.995 {
+                    // Nearly parallel — merge. Prefer the non-open (offset) variant.
+                    if *existing_open && !is_open {
+                        *un = n;
+                        *existing_open = false;
+                    }
+                    true
+                } else {
+                    false
+                }
+            });
+            if !dominated {
+                unique.push((n, is_open));
+            }
+        }
+
+        // Reconstruct the outer point from the quantized key.
+        let outer_pt = Point3::new(
+            key.0 as f64 / inv_tol,
+            key.1 as f64 / inv_tol,
+            key.2 as f64 / inv_tol,
+        );
+
+        // Build the miter offset: solve N · m = b where b_i = thickness
+        // for non-open faces, 0 for open faces.
+        let inner = compute_miter_offset(outer_pt, &unique, thickness);
+        inner_pos.insert(key, inner);
+    }
+
+    // ─── Phase 3: Outer faces (non-open, kept as-is) ──────────────────────
+
     for &(fid, ref verts) in &face_verts {
         if open_set.contains(&fid.index()) {
             continue;
@@ -88,38 +352,32 @@ pub fn shell(
                 result_specs.push(FaceSpec::Surface {
                     vertices: verts.clone(),
                     surface: other.clone(),
+                    reversed: false,
                 });
             }
         }
     }
 
-    // Inner faces: offset each non-open face inward using offset_face.
-    for &(fid, ref _verts) in &face_verts {
+    // ─── Phase 4: Inner faces (offset of non-open faces) ──────────────────
+    //
+    // All inner vertex positions come from the miter vector computation in
+    // Phase 2. This ensures watertight geometry at ALL junctions, including
+    // where planar faces meet cylindrical faces at tangent points.
+
+    for &(fid, ref outer_verts) in &face_verts {
         if open_set.contains(&fid.index()) {
             continue;
         }
+        let face = topo.face(fid)?;
 
-        // Use offset_face for the inner surface (handles all surface types).
-        let inner_fid = crate::offset_face::offset_face(topo, fid, -thickness, 8)?;
-        let inner_face = topo.face(inner_fid)?;
+        // Map outer vertices to inner positions (reversed winding for inward normal).
+        let inner_verts: Vec<Point3> = outer_verts
+            .iter()
+            .map(|v| inner_pos.get(&quantize_pt(*v)).copied().unwrap_or(*v))
+            .rev()
+            .collect();
 
-        // Get inner vertices (reversed winding for inward-facing normal).
-        let inner_verts: Vec<Point3> = {
-            let inner_wire = topo.wire(inner_face.outer_wire())?;
-            let mut pts = Vec::new();
-            for oe in inner_wire.edges() {
-                let edge = topo.edge(oe.edge())?;
-                let vid = if oe.is_forward() {
-                    edge.start()
-                } else {
-                    edge.end()
-                };
-                pts.push(topo.vertex(vid)?.point());
-            }
-            pts.into_iter().rev().collect()
-        };
-
-        match inner_face.surface() {
+        match face.surface() {
             FaceSurface::Plane { normal, .. } => {
                 let inner_normal = -*normal;
                 let inner_d = dot_normal_point(inner_normal, inner_verts[0]);
@@ -129,16 +387,78 @@ pub fn shell(
                     d: inner_d,
                 });
             }
-            other => {
+            FaceSurface::Cylinder(cyl) => {
+                let new_radius = cyl.radius() - thickness;
+                if new_radius > tol.linear {
+                    if let Ok(new_cyl) = brepkit_math::surfaces::CylindricalSurface::new(
+                        cyl.origin(),
+                        cyl.axis(),
+                        new_radius,
+                    ) {
+                        // Full-circle cylinders: use Surface (the dense sample
+                        // polygon from face_polygon contains seam-duplicate
+                        // vertices that CylindricalFace can't handle cleanly).
+                        // Partial-arc cylinders: use CylindricalFace to create
+                        // Circle edges that preserve angular range info.
+                        let wire = topo.wire(face.outer_wire())?;
+                        let has_closed_edge = wire
+                            .edges()
+                            .iter()
+                            .any(|oe| topo.edge(oe.edge()).is_ok_and(|e| e.start() == e.end()));
+                        if has_closed_edge {
+                            result_specs.push(FaceSpec::Surface {
+                                vertices: inner_verts,
+                                surface: FaceSurface::Cylinder(new_cyl),
+                                reversed: true,
+                            });
+                        } else {
+                            result_specs.push(FaceSpec::CylindricalFace {
+                                vertices: inner_verts,
+                                cylinder: new_cyl,
+                                reversed: true,
+                            });
+                        }
+                    }
+                }
+            }
+            FaceSurface::Cone(_cone) => {
+                let inner_fid = crate::offset_face::offset_face(topo, fid, -thickness, 8)?;
+                let inner_face = topo.face(inner_fid)?;
                 result_specs.push(FaceSpec::Surface {
                     vertices: inner_verts,
-                    surface: other.clone(),
+                    surface: inner_face.surface().clone(),
+                    reversed: true,
+                });
+            }
+            FaceSurface::Sphere(sphere) => {
+                let new_r = sphere.radius() - thickness;
+                if new_r > tol.linear {
+                    if let Ok(new_sph) =
+                        brepkit_math::surfaces::SphericalSurface::new(sphere.center(), new_r)
+                    {
+                        result_specs.push(FaceSpec::Surface {
+                            vertices: inner_verts,
+                            surface: FaceSurface::Sphere(new_sph),
+                            reversed: true,
+                        });
+                    }
+                }
+            }
+            _other => {
+                let inner_fid = crate::offset_face::offset_face(topo, fid, -thickness, 8)?;
+                let inner_face = topo.face(inner_fid)?;
+                result_specs.push(FaceSpec::Surface {
+                    vertices: inner_verts,
+                    surface: inner_face.surface().clone(),
+                    reversed: true,
                 });
             }
         }
     }
 
-    // Compute approximate solid center from face vertices for rim orientation.
+    // ─── Phase 5: Rim faces (connect outer opening to inner shell) ────────
+
+    // Compute approximate solid center for rim normal orientation.
     let solid_center = {
         let mut cx = 0.0;
         let mut cy = 0.0;
@@ -159,57 +479,37 @@ pub fn shell(
         }
     };
 
-    // Rim faces: for each edge of an open face, connect outer to inner.
     for (fid, verts) in &face_verts {
         if !open_set.contains(&fid.index()) {
             continue;
         }
 
+        // Fallback offset for vertices without mapped inner positions.
         let face = topo.face(*fid)?;
-        let normal = match face.surface() {
-            FaceSurface::Plane { normal, .. } => *normal,
-            FaceSurface::Cylinder(cyl) => cyl.axis(),
-            FaceSurface::Cone(cone) => cone.axis(),
-            FaceSurface::Sphere(sph) => {
-                // Use direction from sphere center to face centroid as normal proxy.
-                let centroid = verts.iter().fold(Vec3::new(0.0, 0.0, 0.0), |acc, v| {
-                    acc + Vec3::new(v.x(), v.y(), v.z())
-                });
-                #[allow(clippy::cast_precision_loss)]
-                let inv = 1.0 / verts.len() as f64;
-                let centroid_pt =
-                    Point3::new(centroid.x() * inv, centroid.y() * inv, centroid.z() * inv);
-                (centroid_pt - sph.center())
-                    .normalize()
-                    .unwrap_or(Vec3::new(0.0, 0.0, 1.0))
-            }
-            FaceSurface::Torus(tor) => tor.z_axis(),
-            FaceSurface::Nurbs(nurbs) => {
-                // Evaluate surface normal at domain center.
-                let (u0, u1) = nurbs.domain_u();
-                let (v0, v1) = nurbs.domain_v();
-                let mid_u = (u0 + u1) * 0.5;
-                let mid_v = (v0 + v1) * 0.5;
-                nurbs
-                    .normal(mid_u, mid_v)
-                    .and_then(Vec3::normalize)
-                    .unwrap_or(Vec3::new(0.0, 0.0, 1.0))
-            }
+        let fallback_offset = match face.surface() {
+            FaceSurface::Plane { normal, .. } => Vec3::new(
+                -normal.x() * thickness,
+                -normal.y() * thickness,
+                -normal.z() * thickness,
+            ),
+            _ => Vec3::new(0.0, 0.0, -thickness),
         };
 
         let n = verts.len();
-        let offset = Vec3::new(
-            -normal.x() * thickness,
-            -normal.y() * thickness,
-            -normal.z() * thickness,
-        );
-
         for i in 0..n {
             let j = (i + 1) % n;
             let outer_a = verts[i];
             let outer_b = verts[j];
-            let inner_a = outer_a + offset;
-            let inner_b = outer_b + offset;
+
+            // Use plane-intersected inner positions when available.
+            let inner_a = inner_pos
+                .get(&quantize_pt(outer_a))
+                .copied()
+                .unwrap_or(outer_a + fallback_offset);
+            let inner_b = inner_pos
+                .get(&quantize_pt(outer_b))
+                .copied()
+                .unwrap_or(outer_b + fallback_offset);
 
             let rim_verts = vec![outer_a, outer_b, inner_b, inner_a];
             let edge1 = outer_b - outer_a;
@@ -309,6 +609,11 @@ mod tests {
 
         // 5 outer + 5 inner + 4 rim = 14 faces
         assert_eq!(sh.faces().len(), 14, "open-top shell should have 14 faces");
+
+        // Check volume accuracy: 1 - 0.8*0.8*0.9 = 0.424
+        let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+        let expected = 1.0 - 0.8 * 0.8 * 0.9;
+        eprintln!("[shell_open_top] volume: {vol:.6}, expected: {expected:.6}");
     }
 
     #[test]
@@ -367,5 +672,249 @@ mod tests {
             vol < 1.0,
             "tube shell volume should be < original 1.0, got {vol}"
         );
+    }
+
+    /// Simulates the gridfinity "1×1 flat no-lip" pipeline:
+    /// rounded rectangle → extrude → shell (open top).
+    /// Reports face count and volume for debugging parity issues.
+    #[test]
+    fn shell_rounded_rect_extrude_diagnostics() {
+        use crate::primitives::make_box;
+
+        let mut topo = Topology::new();
+
+        // Gridfinity dimensions: 41.5×41.5×21mm, 4mm corner radius, 1.2mm wall thickness
+        let w = 41.5;
+        let d = 41.5;
+        let h = 21.0;
+        let thickness = 1.2;
+
+        // Use a simple box (no rounded corners) to isolate shell behavior.
+        let box_solid = make_box(&mut topo, w, d, h).unwrap();
+
+        // Count faces after extrude.
+        let box_shell_data = topo
+            .shell(topo.solid(box_solid).unwrap().outer_shell())
+            .unwrap();
+        let extrude_face_count = box_shell_data.faces().len();
+        eprintln!("[diag] Box extrude face count: {extrude_face_count}");
+        assert_eq!(extrude_face_count, 6);
+
+        // Find top face and shell.
+        let top_faces = find_faces_by_normal(&topo, box_solid, Vec3::new(0.0, 0.0, 1.0));
+        assert_eq!(top_faces.len(), 1, "should find exactly one top face");
+
+        let shelled = shell(&mut topo, box_solid, thickness, &top_faces).unwrap();
+        let sh = topo
+            .shell(topo.solid(shelled).unwrap().outer_shell())
+            .unwrap();
+        let shell_face_count = sh.faces().len();
+        eprintln!("[diag] Box shell face count: {shell_face_count}");
+        // 5 outer + 5 inner + 4 rim = 14
+        assert_eq!(shell_face_count, 14, "box shell should have 14 faces");
+
+        // Verify original box volume first.
+        let box_vol = crate::measure::solid_volume(&topo, box_solid, 0.01).unwrap();
+        let expected_box_vol = w * d * h;
+        eprintln!("[diag] Box volume: {box_vol:.2}, expected: {expected_box_vol:.2}");
+
+        let vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
+        let expected_vol =
+            w * d * h - (w - 2.0 * thickness) * (d - 2.0 * thickness) * (h - thickness);
+        let pct = (vol - expected_vol).abs() / expected_vol;
+        eprintln!("[diag] Shell volume: {vol:.2}, expected: {expected_vol:.2}, diff: {pct:.4}");
+
+        // Also count face surface types.
+        for &fid in sh.faces() {
+            let f = topo.face(fid).unwrap();
+            let kind = match f.surface() {
+                FaceSurface::Plane { .. } => "Plane",
+                FaceSurface::Cylinder(_) => "Cylinder",
+                FaceSurface::Cone(_) => "Cone",
+                FaceSurface::Sphere(_) => "Sphere",
+                FaceSurface::Torus(_) => "Torus",
+                FaceSurface::Nurbs(_) => "Nurbs",
+            };
+            let wire = topo.wire(f.outer_wire()).unwrap();
+            eprintln!(
+                "[diag]   Face {}: {kind}, {} edges",
+                fid.index(),
+                wire.edges().len()
+            );
+        }
+
+        assert!(
+            pct < 0.05,
+            "shell volume should be within 5% of expected, got {pct:.4}"
+        );
+    }
+
+    /// Rounded rectangle extrusion → shell: the gridfinity "1×1 flat no-lip" path.
+    /// This test creates a face with lines + circle arcs, extrudes, then shells.
+    #[test]
+    fn shell_rounded_rect_with_arcs() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let tol = Tolerance::new();
+
+        // Parameters matching gridfinity 1×1.
+        let w = 41.5_f64;
+        let d = 41.5_f64;
+        let h = 21.0_f64;
+        let r = 2.6_f64; // corner radius
+        let thickness = 1.2_f64;
+
+        // Rounded rectangle on XY at z=0:
+        //   4 line segments + 4 quarter-circle arcs.
+        // Vertices at the tangent points (where lines meet arcs).
+        let hw = w / 2.0;
+        let hd = d / 2.0;
+
+        // Tangent points (CCW from bottom-right):
+        let v0 = Point3::new(hw - r, -hd, 0.0);
+        let v1 = Point3::new(hw, -hd + r, 0.0);
+        let v2 = Point3::new(hw, hd - r, 0.0);
+        let v3 = Point3::new(hw - r, hd, 0.0);
+        let v4 = Point3::new(-hw + r, hd, 0.0);
+        let v5 = Point3::new(-hw, hd - r, 0.0);
+        let v6 = Point3::new(-hw, -hd + r, 0.0);
+        let v7 = Point3::new(-hw + r, -hd, 0.0);
+
+        let vids: Vec<_> = [v0, v1, v2, v3, v4, v5, v6, v7]
+            .iter()
+            .map(|p| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+            .collect();
+
+        // Corner centers:
+        let c_br = Point3::new(hw - r, -hd + r, 0.0);
+        let c_tr = Point3::new(hw - r, hd - r, 0.0);
+        let c_tl = Point3::new(-hw + r, hd - r, 0.0);
+        let c_bl = Point3::new(-hw + r, -hd + r, 0.0);
+
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+
+        let mk_line =
+            |topo: &mut Topology, s, e| topo.edges.alloc(Edge::new(s, e, EdgeCurve::Line));
+        let mk_arc = |topo: &mut Topology, s, e, center: Point3| {
+            let circle = Circle3D::new(center, z_axis, r).unwrap();
+            topo.edges.alloc(Edge::new(s, e, EdgeCurve::Circle(circle)))
+        };
+
+        let e_bot = mk_line(&mut topo, vids[7], vids[0]);
+        let e_br = mk_arc(&mut topo, vids[0], vids[1], c_br);
+        let e_right = mk_line(&mut topo, vids[1], vids[2]);
+        let e_tr = mk_arc(&mut topo, vids[2], vids[3], c_tr);
+        let e_top = mk_line(&mut topo, vids[3], vids[4]);
+        let e_tl = mk_arc(&mut topo, vids[4], vids[5], c_tl);
+        let e_left = mk_line(&mut topo, vids[5], vids[6]);
+        let e_bl = mk_arc(&mut topo, vids[6], vids[7], c_bl);
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e_bot, true),
+                OrientedEdge::new(e_br, true),
+                OrientedEdge::new(e_right, true),
+                OrientedEdge::new(e_tr, true),
+                OrientedEdge::new(e_top, true),
+                OrientedEdge::new(e_tl, true),
+                OrientedEdge::new(e_left, true),
+                OrientedEdge::new(e_bl, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire_id = topo.wires.alloc(wire);
+
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let face = Face::new(wire_id, vec![], FaceSurface::Plane { normal, d: 0.0 });
+        let face_id = topo.faces.alloc(face);
+
+        // Extrude up.
+        let solid =
+            crate::extrude::extrude(&mut topo, face_id, Vec3::new(0.0, 0.0, 1.0), h).unwrap();
+
+        // Count faces after extrude.
+        let sh = topo
+            .shell(topo.solid(solid).unwrap().outer_shell())
+            .unwrap();
+        let extrude_fc = sh.faces().len();
+        eprintln!("[rounded] Extrude faces: {extrude_fc}");
+        // Expected: 2 caps + 8 sides (4 planar + 4 cylindrical) = 10
+        assert_eq!(extrude_fc, 10, "extruded rounded rect should have 10 faces");
+
+        // Count face types.
+        let mut plane_count = 0;
+        let mut cyl_count = 0;
+        for &fid in sh.faces() {
+            let f = topo.face(fid).unwrap();
+            match f.surface() {
+                FaceSurface::Plane { .. } => plane_count += 1,
+                FaceSurface::Cylinder(_) => cyl_count += 1,
+                _ => {}
+            }
+        }
+        eprintln!("[rounded] Extrude: {plane_count} planar, {cyl_count} cylinder");
+        assert_eq!(plane_count, 6, "4 flat sides + 2 caps = 6 planar");
+        assert_eq!(cyl_count, 4, "4 corner cylinders");
+
+        // Find top face(s) and shell.
+        let top = find_faces_by_normal(&topo, solid, Vec3::new(0.0, 0.0, 1.0));
+        assert_eq!(top.len(), 1, "one top face");
+
+        let shelled = shell(&mut topo, solid, thickness, &top).unwrap();
+        let sh2 = topo
+            .shell(topo.solid(shelled).unwrap().outer_shell())
+            .unwrap();
+        let shell_fc = sh2.faces().len();
+        eprintln!("[rounded] Shell faces: {shell_fc}");
+
+        // Count surface types in shell.
+        let mut sp = 0;
+        let mut sc = 0;
+        for &fid in sh2.faces() {
+            let f = topo.face(fid).unwrap();
+            match f.surface() {
+                FaceSurface::Plane { .. } => sp += 1,
+                FaceSurface::Cylinder(_) => sc += 1,
+                _ => {}
+            }
+            let w2 = topo.wire(f.outer_wire()).unwrap();
+            let kind = match f.surface() {
+                FaceSurface::Plane { .. } => "Plane",
+                FaceSurface::Cylinder(_) => "Cyl",
+                _ => "Other",
+            };
+            eprintln!(
+                "[rounded]   Face {}: {kind}, {} edges",
+                fid.index(),
+                w2.edges().len()
+            );
+        }
+        eprintln!("[rounded] Shell: {sp} planar, {sc} cylinder");
+
+        // Check face reversal state.
+        for &fid in sh2.faces() {
+            let f = topo.face(fid).unwrap();
+            let kind = match f.surface() {
+                FaceSurface::Plane { .. } => "Plane",
+                FaceSurface::Cylinder(_) => "Cyl",
+                _ => "Other",
+            };
+            if f.is_reversed() {
+                eprintln!("[rounded]   Face {}: {kind} REVERSED", fid.index());
+            }
+        }
+
+        let vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
+        eprintln!("[rounded] Shell volume: {vol:.2}");
+
+        // Check Euler characteristic.
+        let result = crate::validate::validate_solid(&topo, shelled);
+        eprintln!("[rounded] Validation: {result:?}");
     }
 }

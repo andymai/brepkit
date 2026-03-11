@@ -568,21 +568,23 @@ pub fn solid_volume(
         return Ok(v);
     }
 
-    // For solids with faces that have inner wires (holes from boolean ops),
-    // the watertight tessellation may produce cracks at hole boundaries
-    // because hole edges and adjacent curved face edges aren't shared.
-    // Also, the centroid-based winding correction in the per-face fallback
-    // fails for holes where normals correctly point inward.
-    // Use direct signed-volume summation: tessellate() already handles
-    // face reversal (flips winding + normals), so raw signed tets are correct.
-    let has_holed_faces = {
+    // For solids with faces that have inner wires (holes from boolean ops)
+    // or reversed non-planar faces (inner walls from shell/boolean operations),
+    // use direct per-face tessellation with signed-volume summation.
+    // tessellate() handles face reversal (flips winding + normals), so raw
+    // signed tets are correct even without a globally watertight mesh.
+    let needs_direct_tessellation = {
         let s = topo.solid(solid)?;
         let sh = topo.shell(s.outer_shell())?;
-        sh.faces()
-            .iter()
-            .any(|&fid| topo.face(fid).is_ok_and(|f| !f.inner_wires().is_empty()))
+        sh.faces().iter().any(|&fid| {
+            topo.face(fid).is_ok_and(|f| {
+                !f.inner_wires().is_empty()
+                    || (f.is_reversed()
+                        && !matches!(f.surface(), FaceSurface::Plane { .. }))
+            })
+        })
     };
-    if has_holed_faces {
+    if needs_direct_tessellation {
         return volume_from_direct_face_tessellation(topo, solid, deflection);
     }
 
@@ -706,7 +708,7 @@ fn volume_from_per_face_tessellation(
 /// face reversal (via `is_reversed` flag) to produce correctly oriented
 /// triangles. This is more reliable than centroid-based winding correction
 /// for solids with concavities or cylindrical holes.
-fn volume_from_direct_face_tessellation(
+pub(crate) fn volume_from_direct_face_tessellation(
     topo: &Topology,
     solid: SolidId,
     deflection: f64,
@@ -721,6 +723,7 @@ fn volume_from_direct_face_tessellation(
         let pos = &mesh.positions;
         let tri_count = idx.len() / 3;
 
+        let mut face_total = 0.0;
         for t in 0..tri_count {
             let v0 = pos[idx[t * 3] as usize];
             let v1 = pos[idx[t * 3 + 1] as usize];
@@ -730,8 +733,10 @@ fn volume_from_direct_face_tessellation(
             let b = Vec3::new(v1.x(), v1.y(), v1.z());
             let c = Vec3::new(v2.x(), v2.y(), v2.z());
 
-            total += a.dot(b.cross(c));
+            face_total += a.dot(b.cross(c));
         }
+
+        total += face_total;
     }
 
     Ok((total / 6.0).abs())

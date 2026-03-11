@@ -1441,11 +1441,16 @@ mod tests {
 
         let result = crate::shell_op::shell(&mut topo, cube, 1.0, &[open_face]).unwrap();
 
-        // Strict validation fails for shell results
+        // Both strict and relaxed validation should pass for properly
+        // constructed shells (plane-intersected inner vertex positions
+        // ensure watertight geometry).
         let strict = validate_solid(&topo, result).unwrap();
-        assert!(!strict.is_valid(), "shell should fail strict validation");
+        assert!(
+            strict.is_valid(),
+            "shell should pass strict validation: {:?}",
+            strict.issues
+        );
 
-        // Relaxed validation should pass
         let relaxed = validate_solid_relaxed(&topo, result).unwrap();
         assert!(
             relaxed.is_valid(),
