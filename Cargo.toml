@@ -90,3 +90,9 @@ cast_lossless = "allow"
 lto = true
 codegen-units = 1
 opt-level = "z"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+opt-level = 3
+lto = false

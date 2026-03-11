@@ -46,8 +46,18 @@ impl Bvh {
     #[must_use]
     pub fn query_overlap(&self, test: &Aabb3) -> Vec<usize> {
         let mut results = Vec::new();
+        self.query_overlap_into(test, &mut results);
+        results
+    }
+
+    /// Query primitives overlapping `test`, reusing caller-provided buffers.
+    ///
+    /// `results` is cleared before use. This avoids per-call allocation when
+    /// called in a tight loop (e.g. compound boolean inner loops).
+    pub fn query_overlap_into(&self, test: &Aabb3, results: &mut Vec<usize>) {
+        results.clear();
         if self.nodes.is_empty() {
-            return results;
+            return;
         }
         let mut stack = vec![0usize];
         while let Some(idx) = stack.pop() {
@@ -62,7 +72,6 @@ impl Bvh {
                 results.push(node.primitive);
             }
         }
-        results
     }
 
     /// Query all primitives whose AABB is intersected by a ray.
@@ -72,8 +81,18 @@ impl Bvh {
     #[must_use]
     pub fn query_ray(&self, origin: Point3, dir: crate::vec::Vec3) -> Vec<usize> {
         let mut results = Vec::new();
+        self.query_ray_into(origin, dir, &mut results);
+        results
+    }
+
+    /// Query ray-intersecting primitives, reusing caller-provided buffers.
+    ///
+    /// `results` is cleared before use. This avoids per-call allocation when
+    /// called in a tight loop.
+    pub fn query_ray_into(&self, origin: Point3, dir: crate::vec::Vec3, results: &mut Vec<usize>) {
+        results.clear();
         if self.nodes.is_empty() {
-            return results;
+            return;
         }
         // Pre-compute inverse direction for slab tests.
         let inv_dir = crate::vec::Vec3::new(1.0 / dir.x(), 1.0 / dir.y(), 1.0 / dir.z());
@@ -90,7 +109,6 @@ impl Bvh {
                 results.push(node.primitive);
             }
         }
-        results
     }
 
     /// Find the primitive whose AABB is closest to `point`.

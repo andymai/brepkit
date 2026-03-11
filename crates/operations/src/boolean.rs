@@ -2518,8 +2518,10 @@ pub(crate) fn assemble_solid_mixed(
 ) -> Result<SolidId, crate::OperationsError> {
     let resolution = 1.0 / tol.linear;
 
-    let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
-    let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
+    let mut vertex_map: HashMap<(i64, i64, i64), VertexId> =
+        HashMap::with_capacity(face_specs.len() * 4);
+    let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> =
+        HashMap::with_capacity(face_specs.len() * 4);
 
     let mut face_ids = Vec::with_capacity(face_specs.len());
 
@@ -3610,6 +3612,166 @@ fn split_nonmanifold_edges(
     Ok(())
 }
 
+/// Try to fuse two all-planar solids that share exactly one coplanar face.
+///
+/// If solids A and B share a face (opposite normals, coplanar, overlapping
+/// extent), merge them by removing the shared face pair and combining
+/// remaining faces into a new solid via `assemble_solid_mixed`. Returns
+/// `None` if the fast path doesn't apply.
+#[allow(clippy::too_many_lines)]
+fn try_shared_boundary_fuse(
+    topo: &mut Topology,
+    _a: SolidId,
+    _b: SolidId,
+    face_ids_a: &[FaceId],
+    face_ids_b: &[FaceId],
+    tol: Tolerance,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    struct PlaneInfo {
+        normal: Vec3,
+        d: f64,
+        vertices: Vec<Point3>,
+    }
+
+    // Only worth it for small solids (avoids pathological cases).
+    if face_ids_a.len() > 20 || face_ids_b.len() > 20 {
+        return Ok(None);
+    }
+
+    // Require all faces to be planar.
+    for &fid in face_ids_a.iter().chain(face_ids_b.iter()) {
+        if !matches!(topo.face(fid)?.surface(), FaceSurface::Plane { .. }) {
+            return Ok(None);
+        }
+    }
+
+    // Snapshot each face: (normal, d, vertices).
+    let snapshot = |fid: FaceId| -> Result<PlaneInfo, crate::OperationsError> {
+        let face = topo.face(fid)?;
+        let surface = face.surface().clone();
+        let reversed = face.is_reversed();
+        let verts = face_polygon(topo, fid)?;
+        let (mut normal, mut d) = analytic_face_normal_d(&surface, &verts);
+        if reversed {
+            normal = -normal;
+            d = -d;
+        }
+        Ok(PlaneInfo {
+            normal,
+            d,
+            vertices: verts,
+        })
+    };
+
+    let infos_a: Vec<PlaneInfo> = face_ids_a
+        .iter()
+        .map(|&fid| snapshot(fid))
+        .collect::<Result<Vec<_>, _>>()?;
+    let infos_b: Vec<PlaneInfo> = face_ids_b
+        .iter()
+        .map(|&fid| snapshot(fid))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Find shared face pair: coplanar with opposite normals and overlapping extent.
+    let mut shared_a = None;
+    let mut shared_b = None;
+    let mut shared_count = 0;
+
+    for (ia, pa) in infos_a.iter().enumerate() {
+        for (ib, pb) in infos_b.iter().enumerate() {
+            // Opposite normals, same plane (n_a ≈ -n_b, d_a ≈ -d_b).
+            let dot = pa.normal.dot(pb.normal);
+            if dot > -1.0 + tol.angular {
+                continue;
+            }
+            if !tol.approx_eq(pa.d, -pb.d) {
+                continue;
+            }
+
+            // Check that the face polygons overlap significantly.
+            // Quick test: centroid of A's face should be close to B's face plane.
+            let centroid_a = polygon_centroid(&pa.vertices);
+            let centroid_b = polygon_centroid(&pb.vertices);
+
+            // Centroids should be within tolerance.
+            let dist = (centroid_a - centroid_b).length();
+            // Allow generous tolerance for face matching.
+            if dist > pa.vertices.len() as f64 * tol.linear * 100.0 {
+                continue;
+            }
+
+            // Verify matching extent: project both polygons onto the plane,
+            // check that their areas are approximately equal.
+            let area_a = polygon_area_3d(&pa.vertices, pa.normal);
+            let area_b = polygon_area_3d(&pb.vertices, pb.normal);
+            let area_ratio = if area_a > area_b {
+                area_b / area_a
+            } else {
+                area_a / area_b
+            };
+            if area_ratio < 0.99 {
+                continue;
+            }
+
+            shared_a = Some(ia);
+            shared_b = Some(ib);
+            shared_count += 1;
+
+            if shared_count > 1 {
+                // Multiple shared faces → too complex for fast path.
+                return Ok(None);
+            }
+        }
+    }
+
+    let (skip_a, skip_b) = match (shared_a, shared_b) {
+        (Some(a), Some(b)) => (a, b),
+        _ => return Ok(None),
+    };
+
+    // Build face specs from all faces except the shared pair.
+    let mut face_specs: Vec<FaceSpec> = Vec::with_capacity(face_ids_a.len() + face_ids_b.len() - 2);
+
+    for (i, info) in infos_a.iter().enumerate() {
+        if i == skip_a {
+            continue;
+        }
+        face_specs.push(FaceSpec::Planar {
+            vertices: info.vertices.clone(),
+            normal: info.normal,
+            d: info.d,
+        });
+    }
+    for (i, info) in infos_b.iter().enumerate() {
+        if i == skip_b {
+            continue;
+        }
+        face_specs.push(FaceSpec::Planar {
+            vertices: info.vertices.clone(),
+            normal: info.normal,
+            d: info.d,
+        });
+    }
+
+    let result = assemble_solid_mixed(topo, &face_specs, tol)?;
+    Ok(Some(result))
+}
+
+/// Compute the area of a 3D polygon given its vertices and face normal.
+fn polygon_area_3d(vertices: &[Point3], normal: Vec3) -> f64 {
+    if vertices.len() < 3 {
+        return 0.0;
+    }
+    let mut area = Vec3::new(0.0, 0.0, 0.0);
+    let v0 = vertices[0];
+    for i in 1..vertices.len() - 1 {
+        let e1 = vertices[i] - v0;
+        let e2 = vertices[i + 1] - v0;
+        area = area + e1.cross(e2);
+    }
+    (area.dot(normal) * 0.5).abs()
+}
+
 /// Perform an analytic boolean preserving exact surface types.
 ///
 /// This is the fast path for solids with only analytic faces. It computes
@@ -3670,6 +3832,17 @@ fn analytic_boolean(
         .ok_or_else(|| crate::OperationsError::InvalidInput {
             reason: "solid B has no faces".into(),
         })?;
+
+    // ── Shared-boundary Fuse fast path ──────────────────────────────────
+    // For Fuse of two all-planar solids: if they share exactly one coplanar
+    // face (opposite normals, matching extent), merge by removing the shared
+    // face pair and combining remaining faces. O(F) instead of full boolean.
+    if op == BooleanOp::Fuse {
+        if let Some(result) = try_shared_boundary_fuse(topo, a, b, &face_ids_a, &face_ids_b, tol)? {
+            log::debug!("[analytic_boolean] shared-boundary fuse fast path");
+            return Ok(result);
+        }
+    }
 
     let _t_snap = timer_now();
     let mut snaps_a = Vec::new();
@@ -4568,8 +4741,10 @@ fn analytic_boolean(
     let _t_asm = timer_now();
 
     let resolution = 1.0 / tol.linear;
-    let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
-    let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
+    let mut vertex_map: HashMap<(i64, i64, i64), VertexId> =
+        HashMap::with_capacity(fragments.len() * 4);
+    let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> =
+        HashMap::with_capacity(fragments.len() * 4);
     let mut face_ids_out = Vec::with_capacity(fragments.len());
 
     for (idx, (frag, &class)) in fragments.iter().zip(classes.iter()).enumerate() {
@@ -5046,9 +5221,10 @@ pub fn compound_cut(
     let mut snaps_a = Vec::new();
     let mut passthrough_a: Vec<FaceId> = Vec::new();
     // A face is passthrough if it doesn't overlap ANY tool (BVH query).
+    let mut bvh_buf = Vec::new();
     for (i, &fid) in face_ids_a.iter().enumerate() {
-        let overlapping_tools = tool_bvh.query_overlap(&target_wire_aabbs[i]);
-        if overlapping_tools.is_empty() {
+        tool_bvh.query_overlap_into(&target_wire_aabbs[i], &mut bvh_buf);
+        if bvh_buf.is_empty() {
             passthrough_a.push(fid);
         } else {
             let face = topo.face(fid)?;
@@ -5134,22 +5310,25 @@ pub fn compound_cut(
 
     // Iterate target faces first, then use global BVH to find overlapping tools.
     // This is O(target_faces × log(tools)) instead of O(tools × target_faces).
+    let mut overlap_buf = Vec::new();
+    let mut candidate_buf = Vec::new();
     for (ia, snap_a) in snaps_a.iter().enumerate() {
         // Global BVH query: which tools overlap this target face?
-        let overlapping_tools = tool_bvh.query_overlap(&aabbs_a[ia]);
+        tool_bvh.query_overlap_into(&aabbs_a[ia], &mut overlap_buf);
 
-        for &ti in &overlapping_tools {
+        for &ti in &overlap_buf {
             let td = &tool_data[ti];
 
-            let candidates: Vec<usize> = if let Some(ref bvh) = tool_face_bvhs[ti] {
-                bvh.query_overlap(&aabbs_a[ia])
+            if let Some(ref bvh) = tool_face_bvhs[ti] {
+                bvh.query_overlap_into(&aabbs_a[ia], &mut candidate_buf);
             } else {
-                (0..td.snapshots.len())
-                    .filter(|&ib| aabbs_a[ia].intersects(td.aabbs[ib]))
-                    .collect()
-            };
+                candidate_buf.clear();
+                candidate_buf.extend(
+                    (0..td.snapshots.len()).filter(|&ib| aabbs_a[ia].intersects(td.aabbs[ib])),
+                );
+            }
 
-            for &ib in &candidates {
+            for &ib in &candidate_buf {
                 let snap_b = &td.snapshots[ib];
 
                 let is_plane_a = matches!(snap_a.surface, FaceSurface::Plane { .. });
@@ -5910,8 +6089,9 @@ pub fn compound_cut(
     // Reuse the same assembly logic as analytic_boolean (vertex/edge dedup,
     // wire construction, face creation).
     let resolution = 1.0 / tol.linear;
-    let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
-    let mut edge_map: HashMap<(usize, usize), EdgeId> = HashMap::new();
+    let mut vertex_map: HashMap<(i64, i64, i64), VertexId> =
+        HashMap::with_capacity(fragments.len() * 4);
+    let mut edge_map: HashMap<(usize, usize), EdgeId> = HashMap::with_capacity(fragments.len() * 4);
     let mut face_ids_out = Vec::with_capacity(fragments.len());
 
     for (idx, (frag, &class)) in fragments.iter().zip(classes.iter()).enumerate() {
@@ -8312,6 +8492,59 @@ mod tests {
             report.is_valid(),
             "fuse(overlapping boxes) should validate: {:?}",
             report.issues
+        );
+    }
+
+    // ── Shared-boundary fuse ────────────────────────────────────
+
+    #[test]
+    fn fuse_adjacent_boxes_shared_face() {
+        // Two unit cubes sharing a face at x=1: result should be a 2×1×1 box.
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(1.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let fused = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+        let expected = 2.0; // 2×1×1
+        assert!(
+            (vol - expected).abs() < 0.01 * expected,
+            "shared-face fuse volume: {vol} (expected {expected})"
+        );
+
+        // Result should have 10 faces (12 - 2 shared).
+        let shell_id = topo.solid(fused).unwrap().outer_shell();
+        let face_count = topo.shell(shell_id).unwrap().faces().len();
+        assert!(
+            face_count <= 12,
+            "shared-face fuse should have ≤12 faces, got {face_count}"
+        );
+    }
+
+    #[test]
+    fn fuse_adjacent_boxes_3x1_grid() {
+        // Three unit cubes in a row: fuse_all should produce a 3×1×1 box.
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let c = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let mat_b = brepkit_math::mat::Mat4::translation(1.0, 0.0, 0.0);
+        let mat_c = brepkit_math::mat::Mat4::translation(2.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, b, &mat_b).unwrap();
+        crate::transform::transform_solid(&mut topo, c, &mat_c).unwrap();
+
+        let cid = topo
+            .compounds
+            .alloc(brepkit_topology::compound::Compound::new(vec![a, b, c]));
+        let fused = crate::compound_ops::fuse_all(&mut topo, cid).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+        assert!(
+            (vol - 3.0).abs() < 0.03,
+            "3×1 grid fuse volume: {vol} (expected 3.0)"
         );
     }
 
