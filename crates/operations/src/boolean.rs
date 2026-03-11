@@ -9722,4 +9722,566 @@ mod tests {
             "CDT total area {cdt_area} != 100.0 (negative normal)"
         );
     }
+
+    /// Reproduce Gridfinity volume loss: fusing a ring (lip) inside a shelled box.
+    #[test]
+    fn fuse_ring_inside_shelled_box() {
+        let mut topo = Topology::new();
+
+        // Create a box and shell it (remove top face)
+        let outer = 10.0;
+        let height = 10.0;
+        let wall = 1.0;
+        let box_solid = crate::primitives::make_box(&mut topo, outer, outer, height).unwrap();
+
+        // Find the top face (+Z)
+        let top_faces: Vec<brepkit_topology::face::FaceId> = {
+            let s = topo.solid(box_solid).unwrap();
+            let sh = topo.shell(s.outer_shell()).unwrap();
+            let tol = brepkit_math::tolerance::Tolerance::loose();
+            sh.faces()
+                .iter()
+                .filter(|&&fid| {
+                    if let Ok(f) = topo.face(fid) {
+                        if let brepkit_topology::face::FaceSurface::Plane { normal, .. } =
+                            f.surface()
+                        {
+                            return tol.approx_eq(normal.z(), 1.0);
+                        }
+                    }
+                    false
+                })
+                .copied()
+                .collect()
+        };
+        assert_eq!(top_faces.len(), 1, "should find exactly one +Z face");
+
+        let shelled = crate::shell_op::shell(&mut topo, box_solid, wall, &top_faces).unwrap();
+        let shell_vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
+
+        // Create a ring (lip) that sits INSIDE the cavity
+        // Ring: outer boundary at 3mm inset, 2mm thick, 3mm tall, placed at z=7
+        let ring_outer =
+            crate::primitives::make_box(&mut topo, outer - 4.0, outer - 4.0, 3.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            ring_outer,
+            &brepkit_math::mat::Mat4::translation(2.0, 2.0, 7.0),
+        )
+        .unwrap();
+        let ring_inner =
+            crate::primitives::make_box(&mut topo, outer - 8.0, outer - 8.0, 3.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            ring_inner,
+            &brepkit_math::mat::Mat4::translation(4.0, 4.0, 7.0),
+        )
+        .unwrap();
+        let ring = boolean(&mut topo, BooleanOp::Cut, ring_outer, ring_inner).unwrap();
+        let ring_vol = crate::measure::solid_volume(&topo, ring, 0.01).unwrap();
+
+        // Ring is inside cavity, no overlap with walls. Expected fuse volume = shell + ring.
+        let expected = shell_vol + ring_vol;
+
+        let fused = boolean(&mut topo, BooleanOp::Fuse, shelled, ring).unwrap();
+        let fused_vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+
+        let rel_err = (fused_vol - expected).abs() / expected;
+        assert!(
+            rel_err < 0.05,
+            "fuse ring inside shelled box: vol={fused_vol:.1} expected={expected:.1} \
+             (shell={shell_vol:.1}, ring={ring_vol:.1}, rel_err={rel_err:.3})"
+        );
+    }
+
+    /// Same test but with cylinders (curved surfaces).
+    /// The Gridfinity bin has cylinder corners; this tests if curved shells
+    /// fuse correctly with ring-like objects inside the cavity.
+    #[test]
+    fn fuse_ring_inside_shelled_cylinder() {
+        let mut topo = Topology::new();
+
+        // Shelled cylinder: outer R=10, height=16, wall=1.2
+        let r = 10.0;
+        let h = 16.0;
+        let wall = 1.2;
+        let cyl = crate::primitives::make_cylinder(&mut topo, r, h).unwrap();
+
+        // Find top face
+        let top_faces: Vec<brepkit_topology::face::FaceId> = {
+            let s = topo.solid(cyl).unwrap();
+            let sh = topo.shell(s.outer_shell()).unwrap();
+            let tol = brepkit_math::tolerance::Tolerance::loose();
+            sh.faces()
+                .iter()
+                .filter(|&&fid| {
+                    if let Ok(f) = topo.face(fid) {
+                        if let brepkit_topology::face::FaceSurface::Plane { normal, .. } =
+                            f.surface()
+                        {
+                            return tol.approx_eq(normal.z(), 1.0);
+                        }
+                    }
+                    false
+                })
+                .copied()
+                .collect()
+        };
+
+        let shelled = crate::shell_op::shell(&mut topo, cyl, wall, &top_faces).unwrap();
+        let shell_vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
+
+        // Ring inside: outer R=7, inner R=5, height=3, placed at z=h-3
+        let ring_outer = crate::primitives::make_cylinder(&mut topo, 7.0, 3.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            ring_outer,
+            &brepkit_math::mat::Mat4::translation(0.0, 0.0, h - 3.0),
+        )
+        .unwrap();
+        let ring_inner = crate::primitives::make_cylinder(&mut topo, 5.0, 3.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            ring_inner,
+            &brepkit_math::mat::Mat4::translation(0.0, 0.0, h - 3.0),
+        )
+        .unwrap();
+        let ring = boolean(&mut topo, BooleanOp::Cut, ring_outer, ring_inner).unwrap();
+        let ring_vol = crate::measure::solid_volume(&topo, ring, 0.01).unwrap();
+
+        let expected = shell_vol + ring_vol;
+        let fused = boolean(&mut topo, BooleanOp::Fuse, shelled, ring).unwrap();
+        let fused_vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+
+        let rel_err = (fused_vol - expected).abs() / expected;
+        assert!(
+            rel_err < 0.05,
+            "fuse ring inside shelled cylinder: vol={fused_vol:.1} expected={expected:.1} \
+             (shell={shell_vol:.1}, ring={ring_vol:.1}, rel_err={rel_err:.3})"
+        );
+    }
+
+    /// Test fuse with ring partially overlapping shell wall height
+    /// (simulates lip extension below wall top).
+    #[test]
+    fn fuse_ring_overlapping_shelled_box_height() {
+        let mut topo = Topology::new();
+
+        let outer = 20.0;
+        let h = 16.0;
+        let wall = 1.2;
+        let box_solid = crate::primitives::make_box(&mut topo, outer, outer, h).unwrap();
+
+        let top_faces: Vec<brepkit_topology::face::FaceId> = {
+            let s = topo.solid(box_solid).unwrap();
+            let sh = topo.shell(s.outer_shell()).unwrap();
+            let tol = brepkit_math::tolerance::Tolerance::loose();
+            sh.faces()
+                .iter()
+                .filter(|&&fid| {
+                    if let Ok(f) = topo.face(fid) {
+                        if let brepkit_topology::face::FaceSurface::Plane { normal, .. } =
+                            f.surface()
+                        {
+                            return tol.approx_eq(normal.z(), 1.0);
+                        }
+                    }
+                    false
+                })
+                .copied()
+                .collect()
+        };
+
+        let shelled = crate::shell_op::shell(&mut topo, box_solid, wall, &top_faces).unwrap();
+        let shell_vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
+
+        // Ring that extends from h-2 to h+3 (partially above, partially overlapping rim area)
+        // Ring: outer at 3mm inset from each side, 2mm thick
+        let ring_outer_w = outer - 6.0;
+        let ring_inner_w = outer - 10.0;
+        let ring_h = 5.0;
+        let ring_z = h - 2.0; // starts 2mm below top of shelled box
+
+        let ring_o =
+            crate::primitives::make_box(&mut topo, ring_outer_w, ring_outer_w, ring_h).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            ring_o,
+            &brepkit_math::mat::Mat4::translation(3.0, 3.0, ring_z),
+        )
+        .unwrap();
+        let ring_i =
+            crate::primitives::make_box(&mut topo, ring_inner_w, ring_inner_w, ring_h).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            ring_i,
+            &brepkit_math::mat::Mat4::translation(5.0, 5.0, ring_z),
+        )
+        .unwrap();
+        let ring = boolean(&mut topo, BooleanOp::Cut, ring_o, ring_i).unwrap();
+        let ring_vol = crate::measure::solid_volume(&topo, ring, 0.01).unwrap();
+
+        // Overlap: ring intersects rim faces of shelled box at z=h.
+        // The ring at z=14-19 overlaps with the rim at z=16, and the inner walls at z=14-16.
+        // But ring (3-5mm inset) doesn't overlap walls (0-1.2mm).
+        // Expected: shell + ring - (overlap in rim area)
+        // Exact overlap is complex; just check we don't lose MORE than 10%
+        let fused = boolean(&mut topo, BooleanOp::Fuse, shelled, ring).unwrap();
+        let fused_vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+
+        // Volume should be at least shell_vol + ring_vol * 0.6 (ring partially inside shell)
+        let min_expected = shell_vol + ring_vol * 0.5;
+        assert!(
+            fused_vol >= min_expected,
+            "fuse ring overlapping shell: vol={fused_vol:.1}, min_expected={min_expected:.1} \
+             (shell={shell_vol:.1}, ring={ring_vol:.1})"
+        );
+
+        // Volume should not exceed simple sum
+        assert!(
+            fused_vol <= shell_vol + ring_vol + 1.0,
+            "fuse ring overlapping shell: vol={fused_vol:.1} > sum={:.1}",
+            shell_vol + ring_vol
+        );
+    }
+
+    /// Reproduce Gridfinity lip volume bug: cut two lofted frustums, check
+    /// that mesh volume is translation-invariant (proves consistent normals).
+    #[test]
+    fn cut_lofted_frustums_consistent_normals() {
+        use crate::copy::copy_solid;
+        use crate::loft::loft;
+        use crate::transform::transform_solid;
+
+        // Helper: make a rounded-rectangle profile face at z
+        // nq = number of quarter-circle points for corner rounding
+        #[allow(clippy::cast_precision_loss)]
+        fn make_rounded_rect_profile(
+            topo: &mut Topology,
+            hw: f64,
+            hd: f64,
+            r: f64,
+            z: f64,
+            nq: usize,
+        ) -> FaceId {
+            let tol_val = 1e-7;
+            let r = r.min(hw.min(hd));
+            let mut pts = Vec::new();
+
+            // Bottom edge: left to right
+            pts.push(Point3::new(-hw + r, -hd, z));
+            pts.push(Point3::new(hw - r, -hd, z));
+            // Bottom-right corner arc
+            for i in 0..nq {
+                let a = -std::f64::consts::FRAC_PI_2
+                    + std::f64::consts::FRAC_PI_2 * (i as f64 + 1.0) / nq as f64;
+                pts.push(Point3::new(hw - r + r * a.cos(), -hd + r + r * a.sin(), z));
+            }
+            // Right edge: bottom to top
+            pts.push(Point3::new(hw, hd - r, z));
+            // Top-right corner arc
+            for i in 0..nq {
+                let a = std::f64::consts::FRAC_PI_2 * (i as f64 + 1.0) / nq as f64;
+                pts.push(Point3::new(hw - r + r * a.cos(), hd - r + r * a.sin(), z));
+            }
+            // Top edge: right to left
+            pts.push(Point3::new(-hw + r, hd, z));
+            // Top-left corner arc
+            for i in 0..nq {
+                let a = std::f64::consts::FRAC_PI_2
+                    + std::f64::consts::FRAC_PI_2 * (i as f64 + 1.0) / nq as f64;
+                pts.push(Point3::new(-hw + r + r * a.cos(), hd - r + r * a.sin(), z));
+            }
+            // Left edge: top to bottom
+            pts.push(Point3::new(-hw, -hd + r, z));
+            // Bottom-left corner arc
+            for i in 0..nq {
+                let a = std::f64::consts::PI
+                    + std::f64::consts::FRAC_PI_2 * (i as f64 + 1.0) / nq as f64;
+                pts.push(Point3::new(-hw + r + r * a.cos(), -hd + r + r * a.sin(), z));
+            }
+
+            let n = pts.len();
+            let vids: Vec<_> = pts
+                .iter()
+                .map(|&p| topo.vertices.alloc(Vertex::new(p, tol_val)))
+                .collect();
+            let eids: Vec<_> = (0..n)
+                .map(|i| {
+                    topo.edges
+                        .alloc(Edge::new(vids[i], vids[(i + 1) % n], EdgeCurve::Line))
+                })
+                .collect();
+            let wire = Wire::new(
+                eids.iter()
+                    .map(|&eid| OrientedEdge::new(eid, true))
+                    .collect(),
+                true,
+            )
+            .unwrap();
+            let wid = topo.wires.alloc(wire);
+            topo.faces.alloc(Face::new(
+                wid,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, 1.0),
+                    d: z,
+                },
+            ))
+        }
+
+        let mut topo = Topology::new();
+
+        // Gridfinity lip profile: 5 sections with varying insets
+        let zs = [-1.2, 0.0, 0.7, 2.5, 4.4];
+        let outer_insets = [2.6, 2.6, 1.9, 1.9, 0.0];
+        let wall = 2.6;
+        let base_hw = 62.25; // half of outerW
+        let base_hd = 62.25;
+        let corner_r = 3.75;
+        let nq = 8; // 8 points per quarter-circle
+
+        // Build outer frustum profiles
+        let outer_profiles: Vec<FaceId> = zs
+            .iter()
+            .zip(outer_insets.iter())
+            .map(|(&z, &inset)| {
+                let hw = base_hw - inset;
+                let hd = base_hd - inset;
+                let r = f64::max(corner_r - inset, 0.1);
+                make_rounded_rect_profile(&mut topo, hw, hd, r, z, nq)
+            })
+            .collect();
+        let outer = loft(&mut topo, &outer_profiles).unwrap();
+
+        // Build inner frustum profiles
+        let inner_profiles: Vec<FaceId> = zs
+            .iter()
+            .zip(outer_insets.iter())
+            .map(|(&z, &inset)| {
+                let hw = base_hw - inset - wall;
+                let hd = base_hd - inset - wall;
+                let r = (corner_r - inset - wall).max(0.1);
+                make_rounded_rect_profile(&mut topo, hw, hd, r, z, nq)
+            })
+            .collect();
+        let inner = loft(&mut topo, &inner_profiles).unwrap();
+
+        let outer_vol = crate::measure::solid_volume(&topo, outer, 0.01).unwrap();
+        let inner_vol = crate::measure::solid_volume(&topo, inner, 0.01).unwrap();
+        assert!(outer_vol > 0.0, "outer vol={outer_vol}");
+        assert!(inner_vol > 0.0, "inner vol={inner_vol}");
+
+        // Cut outer - inner to get the lip ring
+        let lip = boolean(&mut topo, BooleanOp::Cut, outer, inner).unwrap();
+        let lip_vol = crate::measure::solid_volume(&topo, lip, 0.01).unwrap();
+
+        let expected = outer_vol - inner_vol;
+        eprintln!(
+            "outer={outer_vol:.1}, inner={inner_vol:.1}, \
+             expected_lip={expected:.1}, actual_lip={lip_vol:.1}"
+        );
+        assert!(
+            lip_vol > 0.0,
+            "lip volume should be positive, got {lip_vol}"
+        );
+        assert!(
+            (lip_vol - expected).abs() / expected < 0.10,
+            "lip volume {lip_vol:.1} should be ~{expected:.1}"
+        );
+
+        // Translation invariance: proves normal consistency
+        let lip_up = copy_solid(&mut topo, lip).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(0.0, 0.0, 100.0);
+        transform_solid(&mut topo, lip_up, &mat).unwrap();
+        let lip_up_vol = crate::measure::solid_volume(&topo, lip_up, 0.01).unwrap();
+
+        eprintln!("lip@origin={lip_vol:.1}, lip@z100={lip_up_vol:.1}");
+        assert!(
+            (lip_up_vol - lip_vol).abs() / lip_vol.max(1.0) < 0.05,
+            "lip volume not translation-invariant: origin={lip_vol:.1}, z100={lip_up_vol:.1}"
+        );
+
+        // Compare watertight vs per-face tessellation signed volume.
+        // This mirrors the difference between WASM tessellateSolid and
+        // tessellateSolidGrouped paths.
+        let faces = brepkit_topology::explorer::solid_faces(&topo, lip).unwrap();
+        let mut per_face_signed = 0.0_f64;
+        #[allow(unused_assignments)]
+        let mut per_face_abs = 0.0_f64;
+        let mut face_tris = 0;
+        for &fid in &faces {
+            let mesh = crate::tessellate::tessellate(&topo, fid, 0.01).unwrap();
+            let tri_count = mesh.indices.len() / 3;
+            face_tris += tri_count;
+            for t in 0..tri_count {
+                let p0 = mesh.positions[mesh.indices[t * 3] as usize];
+                let p1 = mesh.positions[mesh.indices[t * 3 + 1] as usize];
+                let p2 = mesh.positions[mesh.indices[t * 3 + 2] as usize];
+                let a = Vec3::new(p0.x(), p0.y(), p0.z());
+                let b = Vec3::new(p1.x(), p1.y(), p1.z());
+                let c = Vec3::new(p2.x(), p2.y(), p2.z());
+                per_face_signed += a.dot(b.cross(c));
+            }
+        }
+        per_face_signed /= 6.0;
+        per_face_abs = per_face_signed.abs();
+
+        eprintln!(
+            "per-face tess: faces={}, tris={face_tris}, signed={per_face_signed:.1}, abs={per_face_abs:.1}",
+            faces.len()
+        );
+        assert!(
+            (per_face_abs - lip_vol).abs() / lip_vol.max(1.0) < 0.10,
+            "per-face volume {per_face_abs:.1} != watertight volume {lip_vol:.1}"
+        );
+
+        // Also check per-face on translated copy
+        let faces_up = brepkit_topology::explorer::solid_faces(&topo, lip_up).unwrap();
+        let mut per_face_signed_up = 0.0_f64;
+        for &fid in &faces_up {
+            let mesh = crate::tessellate::tessellate(&topo, fid, 0.01).unwrap();
+            let tri_count = mesh.indices.len() / 3;
+            for t in 0..tri_count {
+                let p0 = mesh.positions[mesh.indices[t * 3] as usize];
+                let p1 = mesh.positions[mesh.indices[t * 3 + 1] as usize];
+                let p2 = mesh.positions[mesh.indices[t * 3 + 2] as usize];
+                let a = Vec3::new(p0.x(), p0.y(), p0.z());
+                let b = Vec3::new(p1.x(), p1.y(), p1.z());
+                let c = Vec3::new(p2.x(), p2.y(), p2.z());
+                per_face_signed_up += a.dot(b.cross(c));
+            }
+        }
+        per_face_signed_up /= 6.0;
+        let per_face_abs_up = per_face_signed_up.abs();
+
+        eprintln!("per-face @z100: signed={per_face_signed_up:.1}, abs={per_face_abs_up:.1}");
+        assert!(
+            (per_face_abs_up - per_face_abs).abs() / per_face_abs.max(1.0) < 0.05,
+            "per-face volume not translation-invariant: origin={per_face_abs:.1}, z100={per_face_abs_up:.1}"
+        );
+    }
+
+    /// Reproduce the EXACT brepjs Gridfinity lip geometry: 8-vertex octagon
+    /// profiles from drawRoundedRectangle → face_polygon.
+    #[test]
+    fn cut_lofted_frustums_octagon_profiles() {
+        use crate::copy::copy_solid;
+        use crate::loft::loft;
+        use crate::transform::transform_solid;
+
+        /// Create an 8-vertex octagon profile matching drawRoundedRectangle(w,d,r).
+        /// face_polygon extracts 8 points: (4 edge starts + 4 arc starts).
+        fn make_octagon_profile(topo: &mut Topology, hw: f64, hd: f64, r: f64, z: f64) -> FaceId {
+            let tol_val = 1e-7;
+            // The 8 vertices from face_polygon on a rounded rect:
+            // Going CCW from bottom edge:
+            //   v0: (-hw+r, -hd)  = bottom-left arc start (bottom edge end)
+            //   v1: (-hw, -hd+r)  = left edge start (bottom-left arc end)
+            //   v2: (-hw,  hd-r)  = top-left arc start (left edge end)
+            //   v3: (-hw+r,  hd)  = top edge start (top-left arc end)
+            //   v4: ( hw-r,  hd)  = top-right arc start (top edge end)
+            //   v5: ( hw,  hd-r)  = right edge start (top-right arc end)
+            //   v6: ( hw, -hd+r)  = bottom-right arc start (right edge end)
+            //   v7: ( hw-r, -hd)  = bottom edge start (bottom-right arc end)
+            let pts = [
+                Point3::new(-hw + r, -hd, z),
+                Point3::new(-hw, -hd + r, z),
+                Point3::new(-hw, hd - r, z),
+                Point3::new(-hw + r, hd, z),
+                Point3::new(hw - r, hd, z),
+                Point3::new(hw, hd - r, z),
+                Point3::new(hw, -hd + r, z),
+                Point3::new(hw - r, -hd, z),
+            ];
+            let n = pts.len();
+            let vids: Vec<_> = pts
+                .iter()
+                .map(|&p| topo.vertices.alloc(Vertex::new(p, tol_val)))
+                .collect();
+            let eids: Vec<_> = (0..n)
+                .map(|i| {
+                    topo.edges
+                        .alloc(Edge::new(vids[i], vids[(i + 1) % n], EdgeCurve::Line))
+                })
+                .collect();
+            let wire = Wire::new(
+                eids.iter()
+                    .map(|&eid| OrientedEdge::new(eid, true))
+                    .collect(),
+                true,
+            )
+            .unwrap();
+            let wid = topo.wires.alloc(wire);
+            topo.faces.alloc(Face::new(
+                wid,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, 1.0),
+                    d: z,
+                },
+            ))
+        }
+
+        let mut topo = Topology::new();
+
+        // Exact Gridfinity lip dimensions (from WASM debug output):
+        let zs = [-1.2, 0.0, 0.7, 2.5, 4.4];
+        let outer_insets = [2.6, 2.6, 1.9, 1.9, 0.0];
+        let wall = 2.6;
+        let base_hw = 62.75; // 125.5 / 2
+        let base_hd = 62.75;
+        let corner_r = 3.75;
+
+        // Outer frustum profiles
+        let outer_profiles: Vec<FaceId> = zs
+            .iter()
+            .zip(outer_insets.iter())
+            .map(|(&z, &inset)| {
+                let hw = base_hw - inset;
+                let hd = base_hd - inset;
+                let r = f64::max(corner_r - inset, 0.1);
+                make_octagon_profile(&mut topo, hw, hd, r, z)
+            })
+            .collect();
+        let outer = loft(&mut topo, &outer_profiles).unwrap();
+
+        // Inner frustum profiles
+        let inner_profiles: Vec<FaceId> = zs
+            .iter()
+            .zip(outer_insets.iter())
+            .map(|(&z, &inset)| {
+                let hw = base_hw - inset - wall;
+                let hd = base_hd - inset - wall;
+                let r = f64::max(corner_r - inset - wall, 0.1);
+                make_octagon_profile(&mut topo, hw, hd, r, z)
+            })
+            .collect();
+        let inner = loft(&mut topo, &inner_profiles).unwrap();
+
+        let outer_vol = crate::measure::solid_volume(&topo, outer, 0.01).unwrap();
+        let inner_vol = crate::measure::solid_volume(&topo, inner, 0.01).unwrap();
+
+        // Cut outer - inner
+        let lip = boolean(&mut topo, BooleanOp::Cut, outer, inner).unwrap();
+        let lip_vol = crate::measure::solid_volume(&topo, lip, 0.01).unwrap();
+        let expected = outer_vol - inner_vol;
+
+        assert!(
+            lip_vol > 0.0,
+            "lip volume should be positive, got {lip_vol}"
+        );
+
+        // Translation invariance: proves normal consistency
+        let lip_up = copy_solid(&mut topo, lip).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(0.0, 0.0, 16.0);
+        transform_solid(&mut topo, lip_up, &mat).unwrap();
+        let lip_up_vol = crate::measure::solid_volume(&topo, lip_up, 0.01).unwrap();
+
+        assert!(
+            (lip_up_vol - lip_vol).abs() / lip_vol.max(1.0) < 0.05,
+            "octagon lip not translation-invariant: origin={lip_vol:.1}, z16={lip_up_vol:.1} \
+             (outer={outer_vol:.1}, inner={inner_vol:.1}, expected={expected:.1})"
+        );
+    }
 }

@@ -3661,6 +3661,61 @@ pub struct EdgeLines {
     pub offsets: Vec<usize>,
 }
 
+/// Check whether two face surfaces represent the same geometric surface.
+///
+/// This is used to filter out "smooth" edges between faces that were split
+/// by boolean operations but lie on the same underlying surface. Two faces
+/// on the same surface have no visible crease between them, so the shared
+/// edge adds visual noise in wireframe rendering.
+fn surfaces_equivalent(a: &FaceSurface, b: &FaceSurface) -> bool {
+    const LIN_TOL: f64 = 1e-6;
+    const ANG_TOL: f64 = 1e-6;
+
+    match (a, b) {
+        (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
+            // Same plane if normals are parallel and signed distances match.
+            // Normals may point in opposite directions (reversed faces on same plane).
+            let dot = na.dot(*nb);
+            (dot.abs() - 1.0).abs() < ANG_TOL && (da - db * dot.signum()).abs() < LIN_TOL
+        }
+        (FaceSurface::Cylinder(ca), FaceSurface::Cylinder(cb)) => {
+            (ca.radius() - cb.radius()).abs() < LIN_TOL
+                && ca.axis().dot(cb.axis()).abs() > 1.0 - ANG_TOL
+                && {
+                    // Origins must lie on the same axis line
+                    let d = cb.origin() - ca.origin();
+                    let cross = d.cross(ca.axis());
+                    cross.dot(cross) < LIN_TOL * LIN_TOL
+                }
+        }
+        (FaceSurface::Cone(ca), FaceSurface::Cone(cb)) => {
+            (ca.half_angle() - cb.half_angle()).abs() < ANG_TOL
+                && ca.axis().dot(cb.axis()).abs() > 1.0 - ANG_TOL
+                && {
+                    let d = cb.apex() - ca.apex();
+                    d.dot(d) < LIN_TOL * LIN_TOL
+                }
+        }
+        (FaceSurface::Sphere(sa), FaceSurface::Sphere(sb)) => {
+            (sa.radius() - sb.radius()).abs() < LIN_TOL && {
+                let d = sb.center() - sa.center();
+                d.dot(d) < LIN_TOL * LIN_TOL
+            }
+        }
+        (FaceSurface::Torus(ta), FaceSurface::Torus(tb)) => {
+            (ta.major_radius() - tb.major_radius()).abs() < LIN_TOL
+                && (ta.minor_radius() - tb.minor_radius()).abs() < LIN_TOL
+                && ta.z_axis().dot(tb.z_axis()).abs() > 1.0 - ANG_TOL
+                && {
+                    let d = tb.center() - ta.center();
+                    d.dot(d) < LIN_TOL * LIN_TOL
+                }
+        }
+        // Different surface types or NURBS — not equivalent
+        _ => false,
+    }
+}
+
 /// Sample all edges of a solid into polylines for wireframe rendering.
 ///
 /// Each edge is sampled according to the given `deflection` tolerance.
@@ -3674,7 +3729,32 @@ pub fn sample_solid_edges(
     solid: SolidId,
     deflection: f64,
 ) -> Result<EdgeLines, crate::OperationsError> {
+    sample_solid_edges_filtered(topo, solid, deflection, true)
+}
+
+/// Sample edges of a solid, optionally filtering out smooth (co-surface) edges.
+///
+/// When `filter_smooth` is `true`, edges shared by two faces on the same
+/// underlying geometric surface are omitted. These edges arise from boolean
+/// face-splitting and add wireframe clutter without representing visible creases.
+///
+/// # Errors
+///
+/// Returns an error if topology traversal or edge sampling fails.
+pub fn sample_solid_edges_filtered(
+    topo: &Topology,
+    solid: SolidId,
+    deflection: f64,
+    filter_smooth: bool,
+) -> Result<EdgeLines, crate::OperationsError> {
     let edges = brepkit_topology::explorer::solid_edges(topo, solid)?;
+
+    // Build edge-to-face map for filtering
+    let edge_face_map = if filter_smooth {
+        Some(brepkit_topology::explorer::edge_to_face_map(topo, solid)?)
+    } else {
+        None
+    };
 
     let mut result = EdgeLines {
         positions: Vec::new(),
@@ -3682,6 +3762,19 @@ pub fn sample_solid_edges(
     };
 
     for edge_id in &edges {
+        // Check if this edge should be filtered (smooth boundary)
+        if let Some(ref efm) = edge_face_map {
+            if let Some(faces) = efm.get(&edge_id.index()) {
+                if faces.len() == 2 {
+                    let fa = topo.face(faces[0])?;
+                    let fb = topo.face(faces[1])?;
+                    if surfaces_equivalent(fa.surface(), fb.surface()) {
+                        continue;
+                    }
+                }
+            }
+        }
+
         result.offsets.push(result.positions.len());
         let edge = topo.edge(*edge_id)?;
         let points = sample_edge(topo, edge, deflection)?;
@@ -4237,12 +4330,13 @@ mod tests {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 3.0).unwrap();
 
+        // Default (filtered): seam edge is removed (smooth, same cylinder surface
+        // on both sides), leaving the 2 circle edges at top and bottom caps.
         let edge_lines = sample_solid_edges(&topo, solid, 0.1).unwrap();
-
-        // Cylinder has at least 3 edges (2 circles + 1 seam line, or similar).
-        assert!(
-            edge_lines.offsets.len() >= 3,
-            "cylinder should have at least 3 edges, got {}",
+        assert_eq!(
+            edge_lines.offsets.len(),
+            2,
+            "filtered cylinder should have 2 circle edges, got {}",
             edge_lines.offsets.len()
         );
         // Circle edges should have many sample points.
@@ -4250,6 +4344,36 @@ mod tests {
             edge_lines.positions.len() > 10,
             "cylinder edges should have many sample points, got {}",
             edge_lines.positions.len()
+        );
+
+        // Unfiltered: includes the seam edge too.
+        let all_edges = sample_solid_edges_filtered(&topo, solid, 0.1, false).unwrap();
+        assert!(
+            all_edges.offsets.len() >= 3,
+            "unfiltered cylinder should have at least 3 edges, got {}",
+            all_edges.offsets.len()
+        );
+    }
+
+    #[test]
+    fn sample_solid_edges_boolean_filters_coplanar() {
+        // A boolean cut splits faces, creating extra internal edges on the
+        // same planar surface. Filtering should remove these.
+        let mut topo = Topology::new();
+        let big = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let small = crate::primitives::make_box(&mut topo, 3.0, 3.0, 15.0).unwrap();
+        let cut =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, big, small).unwrap();
+
+        let filtered = sample_solid_edges(&topo, cut, 0.1).unwrap();
+        let all = sample_solid_edges_filtered(&topo, cut, 0.1, false).unwrap();
+
+        // Filtered should have fewer edges than unfiltered
+        assert!(
+            filtered.offsets.len() < all.offsets.len(),
+            "filtered ({}) should be fewer than unfiltered ({})",
+            filtered.offsets.len(),
+            all.offsets.len()
         );
     }
 
