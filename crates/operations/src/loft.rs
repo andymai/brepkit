@@ -17,6 +17,7 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::boolean::face_polygon;
 use crate::dot_normal_point;
+use crate::winding::{newell_normal, polygon_centroid};
 
 /// Resample a closed polygon to `target_count` evenly spaced points.
 ///
@@ -66,35 +67,6 @@ fn resample_closed_polygon(points: &[Point3], target_count: usize) -> Vec<Point3
         ));
     }
     result
-}
-
-/// Compute the centroid of a polygon's vertices.
-#[allow(clippy::cast_precision_loss)]
-fn polygon_centroid(verts: &[Point3]) -> Point3 {
-    let inv = 1.0 / verts.len() as f64;
-    let (sx, sy, sz) = verts.iter().fold((0.0, 0.0, 0.0), |(x, y, z), p| {
-        (x + p.x(), y + p.y(), z + p.z())
-    });
-    Point3::new(sx * inv, sy * inv, sz * inv)
-}
-
-/// Compute the Newell normal of a polygon.
-///
-/// The Newell normal is proportional to twice the signed area of the polygon
-/// and points in the direction of the polygon's outward normal (right-hand rule).
-fn newell_normal(verts: &[Point3]) -> Vec3 {
-    let m = verts.len();
-    let mut nx = 0.0_f64;
-    let mut ny = 0.0_f64;
-    let mut nz = 0.0_f64;
-    for i in 0..m {
-        let curr = verts[i];
-        let next = verts[(i + 1) % m];
-        nx += (curr.y() - next.y()) * (curr.z() + next.z());
-        ny += (curr.z() - next.z()) * (curr.x() + next.x());
-        nz += (curr.x() - next.x()) * (curr.y() + next.y());
-    }
-    Vec3::new(nx, ny, nz)
 }
 
 /// Ensure profile vertices wind CCW relative to the stacking direction.

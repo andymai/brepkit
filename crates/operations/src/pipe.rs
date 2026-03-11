@@ -56,7 +56,7 @@ pub fn pipe(
     }
 
     let face_data = topo.face(profile)?;
-    let input_normal = match face_data.surface() {
+    let mut input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => {
             return Err(crate::OperationsError::InvalidInput {
@@ -89,6 +89,13 @@ pub fn pipe(
         input_verts.push(topo.vertex(vid)?.point());
     }
 
+    // Ensure CCW winding relative to path direction at t=0.
+    // CW-wound profiles make `edge_dir.cross(path_dir)` point inward.
+    let path_tangent_0 = path.tangent(0.0)?;
+    if crate::winding::ensure_ccw_positions(&mut input_verts, path_tangent_0) {
+        input_normal = -input_normal;
+    }
+
     // Compute profile centroid.
     let (cx, cy, cz) = input_verts.iter().fold((0.0, 0.0, 0.0), |(ax, ay, az), p| {
         (ax + p.x(), ay + p.y(), az + p.z())
@@ -101,7 +108,7 @@ pub fn pipe(
     let scale_factors = compute_scale_factors(path, guide, num_segments, tol)?;
 
     // Compute frames along the path (reusing sweep's frame logic).
-    let initial_tangent = path.tangent(0.0)?;
+    let initial_tangent = path_tangent_0;
     let initial_up = orthogonalize(input_normal, initial_tangent);
     let initial_right = initial_tangent.cross(initial_up);
 
@@ -547,5 +554,54 @@ mod tests {
         .unwrap();
 
         assert!(pipe(&mut topo, face, &path, None).is_err());
+    }
+
+    /// Pipe a CW-wound profile along a straight path and verify correct volume.
+    #[test]
+    fn pipe_cw_profile_produces_correct_solid() {
+        use brepkit_topology::test_utils::make_cw_unit_square_face;
+
+        let mut topo = Topology::new();
+        let face = make_cw_unit_square_face(&mut topo);
+        let path = straight_z_path(3.0);
+
+        let solid = pipe(&mut topo, face, &path, None).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            (vol - 3.0).abs() < 0.15,
+            "CW profile pipe should produce volume ~3.0, got {vol}"
+        );
+    }
+
+    /// Translation invariance for CW-wound pipe.
+    #[test]
+    fn pipe_cw_profile_translation_invariant() {
+        use brepkit_topology::test_utils::make_cw_unit_square_face;
+
+        let mut topo1 = Topology::new();
+        let face1 = make_cw_unit_square_face(&mut topo1);
+        let path1 = straight_z_path(3.0);
+        let solid1 = pipe(&mut topo1, face1, &path1, None).unwrap();
+        let vol1 = crate::measure::solid_volume(&topo1, solid1, 0.1).unwrap();
+
+        let mut topo2 = Topology::new();
+        let face2 = make_cw_unit_square_face(&mut topo2);
+        let path2 = straight_z_path(3.0);
+        let solid2 = pipe(&mut topo2, face2, &path2, None).unwrap();
+        crate::transform::transform_solid(
+            &mut topo2,
+            solid2,
+            &brepkit_math::mat::Mat4::translation(1000.0, 1000.0, 1000.0),
+        )
+        .unwrap();
+        let vol2 = crate::measure::solid_volume(&topo2, solid2, 0.1).unwrap();
+
+        let rel_err = (vol1 - vol2).abs() / vol1.max(1e-12);
+        assert!(
+            rel_err < 0.01,
+            "CW pipe volumes should match: origin={vol1}, translated={vol2}, \
+             rel_err={rel_err:.2e}"
+        );
     }
 }

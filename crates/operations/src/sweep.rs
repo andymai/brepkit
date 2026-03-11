@@ -376,7 +376,7 @@ pub fn sweep(
     }
 
     let face_data = topo.face(profile)?;
-    let input_normal = match face_data.surface() {
+    let mut input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => {
             return Err(crate::OperationsError::InvalidInput {
@@ -434,13 +434,23 @@ pub fn sweep(
         input_verts.push(vid);
     }
 
-    let input_positions: Vec<Point3> = input_verts
+    let mut input_positions: Vec<Point3> = input_verts
         .iter()
         .map(|&vid| {
             topo.vertex(vid)
                 .map(brepkit_topology::vertex::Vertex::point)
         })
         .collect::<Result<_, _>>()?;
+
+    // Ensure CCW winding relative to the path direction at t=0.
+    // CW-wound profiles (e.g. from brepjs) make `edge_dir.cross(path_dir)` point
+    // inward instead of outward, producing inside-out side faces.
+    let path_tangent_0 = path.tangent(0.0)?;
+    if crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0) {
+        // Positions were reversed → stored face normal was from CW winding.
+        // Negate so the up-hint for frame computation is correct.
+        input_normal = -input_normal;
+    }
 
     // Compute profile centroid.
     let (cx, cy, cz) = input_positions
@@ -457,7 +467,7 @@ pub fn sweep(
 
     // Seed the first frame's up-vector from the profile normal, projected
     // perpendicular to the path tangent at t=0.
-    let up_hint = orthogonalize(input_normal, path.tangent(0.0)?);
+    let up_hint = orthogonalize(input_normal, path_tangent_0);
 
     let frames = compute_frames(path, num_segments, up_hint, is_closed)?;
 
@@ -700,7 +710,7 @@ pub fn sweep_smooth(
     }
 
     let face_data = topo.face(profile)?;
-    let input_normal = match face_data.surface() {
+    let mut input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => {
             return Err(crate::OperationsError::InvalidInput {
@@ -755,13 +765,19 @@ pub fn sweep_smooth(
         input_verts.push(vid);
     }
 
-    let input_positions: Vec<Point3> = input_verts
+    let mut input_positions: Vec<Point3> = input_verts
         .iter()
         .map(|&vid| {
             topo.vertex(vid)
                 .map(brepkit_topology::vertex::Vertex::point)
         })
         .collect::<Result<_, _>>()?;
+
+    // Ensure CCW winding relative to path direction (same fix as sweep()).
+    let path_tangent_0 = path.tangent(0.0)?;
+    if crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0) {
+        input_normal = -input_normal;
+    }
 
     // Compute centroid and frames.
     let (cx, cy, cz) = input_positions
@@ -773,7 +789,7 @@ pub fn sweep_smooth(
     let centroid = Point3::new(cx / n as f64, cy / n as f64, cz / n as f64);
 
     let num_segments = (path.control_points().len() * 2).max(4);
-    let up_hint = orthogonalize(input_normal, path.tangent(0.0)?);
+    let up_hint = orthogonalize(input_normal, path_tangent_0);
     let frames = compute_frames(path, num_segments, up_hint, is_closed)?;
 
     let initial_right = frames[0].right;
@@ -1008,7 +1024,7 @@ pub fn sweep_with_options(
     }
 
     let face_data = topo.face(profile)?;
-    let input_normal = match face_data.surface() {
+    let mut input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => {
             return Err(crate::OperationsError::InvalidInput {
@@ -1060,13 +1076,19 @@ pub fn sweep_with_options(
         input_verts.push(vid);
     }
 
-    let input_positions: Vec<Point3> = input_verts
+    let mut input_positions: Vec<Point3> = input_verts
         .iter()
         .map(|&vid| {
             topo.vertex(vid)
                 .map(brepkit_topology::vertex::Vertex::point)
         })
         .collect::<Result<_, _>>()?;
+
+    // Ensure CCW winding relative to path direction (same fix as sweep()).
+    let path_tangent_0 = path.tangent(0.0)?;
+    if crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0) {
+        input_normal = -input_normal;
+    }
 
     let (cx, cy, cz) = input_positions
         .iter()
@@ -1085,12 +1107,12 @@ pub fn sweep_with_options(
     // Compute frames based on contact mode (open paths only at this point).
     let frames = match options.contact_mode {
         SweepContactMode::RotationMinimizing => {
-            let up_hint = orthogonalize(input_normal, path.tangent(0.0)?);
+            let up_hint = orthogonalize(input_normal, path_tangent_0);
             compute_frames(path, num_segments, up_hint, false)?
         }
         SweepContactMode::Fixed => {
             // Fixed: use the same orientation at every point
-            let tangent0 = path.tangent(0.0)?;
+            let tangent0 = path_tangent_0;
             let up = orthogonalize(input_normal, tangent0);
             let right = tangent0.cross(up);
 
@@ -1824,6 +1846,122 @@ mod tests {
         assert!(
             vol > 0.0,
             "smooth closed sweep should have positive volume, got {vol}"
+        );
+    }
+
+    /// Sweep a CW-wound profile along a straight path and verify correct volume.
+    #[test]
+    fn sweep_cw_profile_produces_correct_solid() {
+        use brepkit_topology::test_utils::make_cw_unit_square_face;
+
+        let mut topo = Topology::new();
+        let face = make_cw_unit_square_face(&mut topo);
+        let path = straight_z_path(3.0);
+
+        let solid = sweep(&mut topo, face, &path).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            (vol - 3.0).abs() < 0.1,
+            "CW profile sweep should produce volume ~3.0, got {vol}"
+        );
+    }
+
+    /// Translation invariance for CW-wound sweep.
+    #[test]
+    fn sweep_cw_profile_translation_invariant() {
+        use brepkit_topology::test_utils::make_cw_unit_square_face;
+
+        let mut topo1 = Topology::new();
+        let face1 = make_cw_unit_square_face(&mut topo1);
+        let path1 = straight_z_path(3.0);
+        let solid1 = sweep(&mut topo1, face1, &path1).unwrap();
+        let vol1 = crate::measure::solid_volume(&topo1, solid1, 0.1).unwrap();
+
+        let mut topo2 = Topology::new();
+        let face2 = make_cw_unit_square_face(&mut topo2);
+        let path2 = straight_z_path(3.0);
+        let solid2 = sweep(&mut topo2, face2, &path2).unwrap();
+        crate::transform::transform_solid(
+            &mut topo2,
+            solid2,
+            &brepkit_math::mat::Mat4::translation(1000.0, 1000.0, 1000.0),
+        )
+        .unwrap();
+        let vol2 = crate::measure::solid_volume(&topo2, solid2, 0.1).unwrap();
+
+        let rel_err = (vol1 - vol2).abs() / vol1.max(1e-12);
+        assert!(
+            rel_err < 0.01,
+            "CW sweep volumes should match: origin={vol1}, translated={vol2}, \
+             rel_err={rel_err:.2e}"
+        );
+    }
+
+    /// Sweep a CW-wound profile along a NON-PARALLEL axis (X path, XY profile).
+    /// This exercises the `input_normal` negation fix — without it, the
+    /// `orthogonalize(input_normal, path_tangent)` up-hint is wrong and
+    /// the profile is flipped upside-down.
+    #[test]
+    fn sweep_cw_profile_nonparallel_axis() {
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let tol_val = 1e-7;
+
+        // CW rectangle 1×2 on XY plane: (0,0)→(0,2)→(1,2)→(1,0)
+        let v0 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol_val));
+        let v1 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 2.0, 0.0), tol_val));
+        let v2 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 2.0, 0.0), tol_val));
+        let v3 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol_val));
+
+        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.wires.alloc(wire);
+
+        // CW winding → Newell normal = -Z
+        let face = topo.faces.alloc(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+        ));
+
+        // Sweep along +Z (profile normal is perpendicular to path → up-hint matters)
+        let path = straight_z_path(5.0);
+        let solid = sweep(&mut topo, face, &path).unwrap();
+
+        // Expected: 1×2×5 = 10.0
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            (vol - 10.0).abs() < 0.5,
+            "CW 1×2 rectangle swept along Z should produce volume ~10.0, got {vol}"
         );
     }
 }
