@@ -2,7 +2,7 @@
 //!
 //! Measures `compound_cut` vs sequential `boolean(Cut)` for:
 //! 1. Cylinder grids: 4, 16, 36, 64 tools
-//! 2. Hex prism grids: 7, 19, 37 tools (honeycomb-like)
+//! 2. Box grids (honeycomb pattern): 7, 19, 37 tools — exercises ConvexPolyhedron classifier
 //!
 //! Run with: `cargo bench -p brepkit-operations --bench compound_cut_perf`
 
@@ -59,7 +59,9 @@ fn build_cylinder_grid(
     (topo, target, tools)
 }
 
-/// Build a hexagonal prism tool at (cx, cy) with given circumradius and height.
+/// Build a box tool at (cx, cy) approximating a hex prism.
+/// Uses `make_box` so the tool has all-planar faces and exercises the
+/// `ConvexPolyhedron` classifier in `compound_cut`.
 fn make_hex_prism(
     topo: &mut Topology,
     cx: f64,
@@ -68,13 +70,12 @@ fn make_hex_prism(
     height: f64,
     z_offset: f64,
 ) -> brepkit_topology::solid::SolidId {
-    // Create a hexagonal prism via extrusion of 6-sided polygon approximated
-    // as a cylinder with 6 segments. For benchmarking, we use a small cylinder
-    // as an approximation that still exercises the same code paths.
-    let cyl = primitives::make_cylinder(topo, circumradius, height).unwrap();
-    let mat = Mat4::translation(cx, cy, z_offset);
-    transform_solid(topo, cyl, &mat).unwrap();
-    cyl
+    // Use a box with side length ≈ circumradius * √3 (inscribed hex width).
+    let side = circumradius * 1.732;
+    let bx = primitives::make_box(topo, side, side, height).unwrap();
+    let mat = Mat4::translation(cx - side / 2.0, cy - side / 2.0, z_offset);
+    transform_solid(topo, bx, &mat).unwrap();
+    bx
 }
 
 /// Build a honeycomb-like pattern of cylinder tools on a box.

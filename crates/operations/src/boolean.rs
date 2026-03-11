@@ -5788,11 +5788,25 @@ pub fn compound_cut(
         let tool_face_data: Vec<Option<FaceData>> = if needs_tool_raycast {
             tools
                 .iter()
-                .map(|&tid| collect_face_data(topo, tid, deflection).ok())
+                .enumerate()
+                .map(|(i, &tid)| match collect_face_data(topo, tid, deflection) {
+                    Ok(fd) => Some(fd),
+                    Err(e) => {
+                        log::warn!(
+                            "[compound_cut] tool {i} tessellation failed, \
+                             falling back to sequential: {e}"
+                        );
+                        None
+                    }
+                })
                 .collect()
         } else {
             vec![None; tools.len()]
         };
+        // If any tool failed tessellation, fall back to sequential for correctness.
+        if needs_tool_raycast && tool_face_data.iter().any(Option::is_none) {
+            return compound_cut_sequential(topo, target, tools, opts);
+        }
         let tool_face_bvhs_rc: Vec<Option<Bvh>> = tool_face_data
             .iter()
             .map(|fd| fd.as_ref().and_then(build_face_bvh))
