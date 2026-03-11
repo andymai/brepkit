@@ -7,7 +7,7 @@ Solid modeling kernel for Rust and WebAssembly.
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0--only-blue.svg)](LICENSE)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
-**[Architecture](#architecture)** · **[Performance](#performance)** · **[Examples](#common-patterns)** · **[Contributing](./CONTRIBUTING.md)**
+**[Architecture](#architecture)** · **[Performance](#performance)** · **[Getting Started](#getting-started)** · **[Contributing](./CONTRIBUTING.md)**
 
 ```rust
 use brepkit_operations::primitives::{make_box, make_cylinder};
@@ -28,13 +28,47 @@ let vol = solid_volume(&topo, drilled, 0.1)?;
 let step = write_step(&topo, &[drilled])?;
 ```
 
-## Overview
+## Why build a CAD kernel?
 
-Solids are boundary representations (B-Rep): faces, edges, and vertices with exact NURBS geometry, not triangle meshes. Booleans, fillets, and STEP export operate on exact curves and surfaces.
+Building a solid modeling kernel from scratch is one of those problems measured in developer-careers, not sprints. Parasolid, ACIS, and OpenCascade represent decades of accumulated effort — surface-surface intersection, robust boolean classification, exact geometric predicates, degenerate case handling. Each is a research domain in its own right.
 
-- No `unsafe`, no `unwrap`, no `panic`. All operations return `Result`
-- Compiles to WebAssembly (browser/Node.js) and runs natively with rayon parallelism
-- 1,200+ tests (proptest, golden files, integration), 60% minimum coverage enforced in CI
+brepkit grew out of building [gridfinitylayouttool.com](https://gridfinitylayouttool.com). I needed parametric CAD in the browser and the existing options were either proprietary or compiled-from-C++ with bridge overhead. OpenCascade works — [brepjs](https://github.com/andymai/brepjs) proves that — but performance ceilings and an 11 MB WASM bundle kept getting in the way.
+
+brepkit is the answer to a simple question: what if the kernel was built for WebAssembly from day one? Rust's type system, no `unsafe`, no `unwrap`, no `panic` — all operations return `Result`. The WASM bundle is 1.8 MB.
+
+## Status
+
+Core operations work and are fast: primitives, booleans, fillets, chamfers, extrude, revolve, sweep, loft, pipe, STEP I/O. The math layer — NURBS evaluation, exact geometric predicates, all analytic surface intersections — is mature. Booleans preserve analytic surfaces (cylinders stay cylinders) and handle compound operations efficiently.
+
+Still maturing: torus booleans fall back to the tessellated path, revolve/sweep/loft/pipe require planar profiles (extrude handles NURBS), and IGES round-trips lose analytic surface types.
+
+For production use today, [brepjs](https://github.com/andymai/brepjs) with the OpenCascade kernel is the stable path. brepkit is the faster replacement in progress — the kernel abstraction layer in brepjs means switching is a one-line change.
+
+## Features
+
+**Modeling** — box, cylinder, cone, sphere, torus plus extrude, revolve, sweep, loft, pipe, helical sweep
+
+**Booleans** — union, cut, intersect with analytic surface preservation
+
+**Modifiers** — fillet (constant + variable radius), chamfer, shell, draft, offset, thicken, mirror, pattern
+
+**Sectioning** — cross-section curves, split by plane or surface
+
+**Measurement** — bounding box, area, volume, center of mass, distance, point classification (in/on/out)
+
+**Geometry** — NURBS evaluation, surface-surface intersection, curve fitting (LSPIA), point projection, self-intersection detection
+
+**Tessellation** — parallel CDT for planar faces, snap tessellation for analytic surfaces
+
+**Repair** — healing, defeaturing, sewing, validation, face filling (Coons patch)
+
+**Feature Recognition** — automatic detection of holes, pockets, slots, bosses, and ribs
+
+**Sketching** — 2D constraint solver for sketch-driven modeling
+
+**Assemblies** — hierarchical product structure with transforms, flattening, BOM
+
+**Evolution** — face provenance tracking through booleans and modeling operations
 
 ## Architecture
 
@@ -44,106 +78,42 @@ Layered Cargo workspace. Each layer depends only on layers below it. Boundaries 
 |-------|-------|-------------|
 | L0 | `brepkit-math` | Points, vectors, matrices, NURBS curves/surfaces, geometric predicates, CDT, convex hull |
 | L1 | `brepkit-topology` | Arena-allocated B-Rep: vertex, edge, wire, face, shell, solid. Half-edge adjacency graph |
-| L2 | `brepkit-operations` | Booleans, fillet, chamfer, extrude, revolve, sweep, loft, shell, measure (40 modules) |
+| L2 | `brepkit-operations` | Booleans, fillet, chamfer, extrude, revolve, sweep, loft, shell, measure |
 | L2 | `brepkit-io` | Import/export for 7 formats (2 B-Rep, 5 mesh). Uses operations for tessellation during mesh export |
 | L3 | `brepkit-wasm` | JavaScript API via wasm-bindgen |
 
-## Features
+## Performance
 
-**Primitives:** box, cylinder, cone, sphere, torus
+Median times from the [brepjs benchmark suite](https://github.com/andymai/brepjs/tree/main/benchmarks) (5 iterations, Node.js, Linux x86_64). WASM is single-threaded; native benchmarks use criterion with rayon.
 
-**Booleans:** union, cut, intersect with analytic surface preservation. Mesh-based (co-refinement) and NURBS-based variants
+| Operation | brepkit (WASM) | OCCT (WASM) | Speedup | brepkit (native) |
+|-----------|---------------|-------------|---------|-----------------|
+| fuse(box, box) | 5.7 ms | 83.7 ms | 15x | 336 µs |
+| cut(box, cylinder) | 4.2 ms | 123.8 ms | 29x | 221 µs |
+| intersect(box, sphere) | 31.9 ms | 107.1 ms | 3.4x | 2.4 ms |
+| box + chamfer | 0.1 ms | 7.8 ms | 70x | 55 µs |
+| box + fillet | 0.3 ms | 8.1 ms | 28x | 75 µs |
+| multi-boolean (16 holes) | 1.7 ms | 52.0 ms | 31x | 1.2 ms |
+| mesh sphere (tol=0.01) | 20.0 ms | 61.3 ms | 3.1x | 1.8 ms |
+| exportSTEP (×10) | 0.9 ms | 19.2 ms | 21x | — |
 
-**Shape modifications:** extrude, revolve, sweep, loft, pipe, helical sweep, chamfer, fillet (constant + variable radius), shell, draft, offset, thicken, mirror, pattern
+Booleans preserve analytic surfaces — cylinders and planes stay as exact geometry, keeping face counts low (72 vs ~7,000 for a 9-step compound boolean).
 
-**Sectioning:** cross-section curves, split by plane/surface
-
-**Measurement:** bounding box, area, volume, center of mass, distance, point classification (in/on/out)
-
-**Geometry:** NURBS evaluation, surface-surface intersection, curve fitting (LSPIA), point projection, self-intersection detection
-
-**Tessellation:** parallel CDT for planar faces, snap tessellation for analytic surfaces
-
-**Repair:** healing, defeaturing, sewing, validation, face filling (Coons patch)
-
-**Sketching:** 2D constraint solver for sketch-driven modeling
-
-**Assemblies:** hierarchical product structure with transforms, flattening, BOM
-
-**Evolution:** face provenance tracking through booleans and modeling operations
+> Native benchmarks: `cargo bench -p brepkit-operations`. WASM comparison: `brepjs/benchmarks/`.
 
 ## Data Exchange
 
 | Format | Type | Import | Export |
 |--------|------|--------|--------|
 | STEP | B-Rep | ✓ | ✓ |
-| IGES | B-Rep | ✓ | ✓ |
+| IGES | B-Rep | ✓ | ✓* |
 | STL | Mesh | ✓ | ✓ |
 | 3MF | Mesh | ✓ | ✓ |
 | OBJ | Mesh | ✓ | ✓ |
 | PLY | Mesh | ✓ | ✓ |
 | glTF | Mesh | ✓ | ✓ |
 
-B-Rep formats preserve exact geometry. Mesh formats export tessellated triangles.
-
-## Performance
-
-Compound boolean staircase (9 sequential union/cut operations):
-
-| Benchmark | brepkit (WASM) | OCCT (WASM) | brepkit (native) |
-|-----------|---------------|-------------|------------------|
-| 9-step boolean staircase | 281 ms | 3,800 ms | 40 ms |
-| Result face count | 72 | ~7,000 | 72 |
-
-The lower face count comes from analytic surface preservation: booleans keep cylinders and planes as exact surfaces instead of tessellating to triangles.
-
-- **Tessellation** (64-hole plate): 29 ms with parallel CDT
-
-> See `crates/operations/benches/` for reproduction. Native benchmarks use rayon; WASM is single-threaded.
-
-## Common Patterns
-
-### Measure a solid
-
-```rust
-use brepkit_operations::measure::{solid_volume, solid_bounding_box};
-
-let vol = solid_volume(&topo, result, 0.1)?;
-let bbox = solid_bounding_box(&topo, result)?;
-println!("Volume: {vol:.2} mm³, bounds: {bbox:?}");
-```
-
-### Export to STEP
-
-```rust
-use brepkit_io::step::writer::write_step;
-
-let step_string = write_step(&topo, &[result])?;
-std::fs::write("output.step", step_string)?;
-```
-
-### Import from STEP
-
-```rust
-use brepkit_io::step::reader::read_step;
-
-let step_data = std::fs::read_to_string("input.step")?;
-let solids = read_step(&step_data, &mut topo)?;
-```
-
-### Error handling
-
-All operations return `Result`. Errors are typed per crate:
-
-```rust
-use brepkit_operations::OperationsError;
-
-match boolean(&mut topo, BooleanOp::Fuse, a, b) {
-    Ok(fused) => { /* use the result */ }
-    Err(OperationsError::InvalidInput { reason }) => eprintln!("Bad input: {reason}"),
-    Err(e) => eprintln!("Operation failed: {e}"),
-}
-```
+STEP preserves exact geometry on round-trip. *IGES export converts analytic surfaces to NURBS. Mesh formats export tessellated triangles.
 
 ## Getting Started
 
@@ -193,7 +163,7 @@ cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release --no-defau
 - [brepjs](https://github.com/andymai/brepjs) - CAD modeling for JavaScript
 - [Gridfinity Layout Tool](https://github.com/andymai/gridfinity-layout-tool) - Web-based Gridfinity storage layout generator
 
-Using brepkit? [Open a PR](https://github.com/andymai/brepkit/pulls) to add your project.
+[Open a PR](https://github.com/andymai/brepkit/pulls) to add your project.
 
 ## License
 
