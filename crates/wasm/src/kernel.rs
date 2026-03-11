@@ -1009,6 +1009,33 @@ impl BrepKernel {
         Ok(solid_id_to_u32(result))
     }
 
+    /// Cut a target solid by multiple tool solids in a single pass.
+    ///
+    /// This is more efficient than sequential `cut()` calls when many tools
+    /// are applied to the same target — it avoids re-processing unchanged
+    /// faces at each step.
+    ///
+    /// `tool_ids` is a JS `Uint32Array` or array of solid handles.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any handle is invalid or the operation fails.
+    #[wasm_bindgen(js_name = "compoundCut")]
+    pub fn compound_cut(&mut self, target: u32, tool_ids: &[u32]) -> Result<u32, JsError> {
+        let target_id = self.resolve_solid(target)?;
+        let tools: Vec<brepkit_topology::solid::SolidId> = tool_ids
+            .iter()
+            .map(|&h| self.resolve_solid(h))
+            .collect::<Result<Vec<_>, _>>()?;
+        let result = brepkit_operations::boolean::compound_cut(
+            &mut self.topo,
+            target_id,
+            &tools,
+            brepkit_operations::boolean::BooleanOptions::default(),
+        )?;
+        Ok(solid_id_to_u32(result))
+    }
+
     // ── Boolean operations with evolution tracking ─────────────────
 
     /// Fuse (union) two solids and return evolution tracking data.
@@ -5687,6 +5714,32 @@ impl BrepKernel {
                 let b_id = self.resolve_solid(b).map_err(|e| e.to_string())?;
                 let result = boolean(&mut self.topo, BooleanOp::Intersect, a_id, b_id)
                     .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
+            "compoundCut" => {
+                let target = get_u32(args, "target")?;
+                let target_id = self.resolve_solid(target).map_err(|e| e.to_string())?;
+                let tool_arr = args["tools"]
+                    .as_array()
+                    .ok_or("missing or invalid 'tools' array")?;
+                let tools: Vec<brepkit_topology::solid::SolidId> = tool_arr
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        let h = v
+                            .as_u64()
+                            .ok_or_else(|| format!("tools[{i}] is not a number"))
+                            .map(|n| n as u32)?;
+                        self.resolve_solid(h).map_err(|e| e.to_string())
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                let result = brepkit_operations::boolean::compound_cut(
+                    &mut self.topo,
+                    target_id,
+                    &tools,
+                    brepkit_operations::boolean::BooleanOptions::default(),
+                )
+                .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             "transform" => {

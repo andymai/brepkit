@@ -51,7 +51,7 @@ fn aabb_include(aabb: &mut Aabb3, p: Point3) {
 }
 
 /// Expand an AABB to include surface-specific extremes that vertices miss.
-fn expand_aabb_for_surface(aabb: &mut Aabb3, surface: &FaceSurface) {
+pub(crate) fn expand_aabb_for_surface(aabb: &mut Aabb3, surface: &FaceSurface) {
     match surface {
         FaceSurface::Sphere(s) => {
             let c = s.center();
