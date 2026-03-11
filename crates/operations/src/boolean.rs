@@ -253,6 +253,7 @@ fn build_v_levels(extent_min: f64, extent_max: f64, merged: &[(f64, f64)]) -> Ve
 ///
 /// Returns +1 for a front-to-back crossing, -1 for back-to-front, or 0 for
 /// no intersection (parallel, behind origin, or outside polygon).
+#[inline]
 fn ray_face_crossing(
     centroid: Point3,
     ray_dir: Vec3,
@@ -282,7 +283,7 @@ fn ray_face_crossing(
 /// in the analytic boolean path. All code paths must use this constant so that
 /// band fragments, cap face polygons, and holed-face inner wires share the
 /// same vertices and edges at their boundaries.
-const CLOSED_CURVE_SAMPLES: usize = 64;
+const CLOSED_CURVE_SAMPLES: usize = 32;
 
 /// Minimum fragment count for parallel classification via rayon.
 /// Below this threshold, sequential iteration is faster due to rayon's
@@ -1244,7 +1245,7 @@ fn polygon_clip_intervals(
     let dy = line_dir.x() * ax2.x() + line_dir.y() * ax2.y() + line_dir.z() * ax2.z();
 
     // Collect crossing parameters where the line crosses *finite* polygon edges.
-    let mut crossings: Vec<f64> = Vec::new();
+    let mut crossings: Vec<f64> = Vec::with_capacity(n);
 
     for i in 0..n {
         let j = (i + 1) % n;
@@ -1512,6 +1513,7 @@ fn split_face(
 /// Used for filtering degenerate (zero-area) fragments. Returns the
 /// magnitude of the cross-product sum (Newell's method), which equals
 /// `2 * area`.
+#[inline]
 fn polygon_area_2x(vertices: &[Point3], normal: &Vec3) -> f64 {
     if vertices.len() < 3 {
         return 0.0;
@@ -2266,6 +2268,7 @@ fn multiray_classify(
 ///
 /// Returns the origin if the polygon is empty (should not happen in
 /// practice since fragments are filtered for `len >= 3`).
+#[inline]
 fn polygon_centroid(vertices: &[Point3]) -> Point3 {
     if vertices.is_empty() {
         return Point3::new(0.0, 0.0, 0.0);
@@ -2279,6 +2282,7 @@ fn polygon_centroid(vertices: &[Point3]) -> Point3 {
 }
 
 /// Test if a 3D point lies inside a planar face polygon by projecting to 2D.
+#[inline]
 fn point_in_face_3d(point: Point3, polygon: &[Point3], normal: &Vec3) -> bool {
     if polygon.len() < 3 {
         return false;
@@ -2315,12 +2319,14 @@ fn point_in_face_3d(point: Point3, polygon: &[Point3], normal: &Vec3) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Quantize a coordinate to a spatial hash key.
+#[inline]
 #[allow(clippy::cast_possible_truncation)] // coordinate * 1e7 fits in i64
 fn quantize(v: f64, resolution: f64) -> i64 {
     (v * resolution).round() as i64
 }
 
 /// Quantize a 3D point to a spatial hash key for vertex deduplication.
+#[inline]
 fn quantize_point(p: Point3, resolution: f64) -> (i64, i64, i64) {
     (
         quantize(p.x(), resolution),
@@ -3104,7 +3110,20 @@ fn refine_boundary_edges(
         }
     }
 
-    // For each boundary edge, find intermediate collinear vertices
+    // For each boundary edge, find intermediate collinear vertices.
+    // Build a BVH over vertex positions for O(log V) spatial queries
+    // instead of O(V) brute-force per boundary edge.
+    let vert_list: Vec<(VertexId, Point3)> = all_vertex_positions
+        .iter()
+        .map(|(&vid, &pos)| (vid, pos))
+        .collect();
+    let vert_aabb_entries: Vec<(usize, Aabb3)> = vert_list
+        .iter()
+        .enumerate()
+        .map(|(i, &(_, pos))| (i, Aabb3 { min: pos, max: pos }))
+        .collect();
+    let vert_bvh = Bvh::build(&vert_aabb_entries);
+
     let mut edge_splits: HashMap<EdgeId, Vec<VertexId>> = HashMap::new();
 
     for &eid in &boundary_edges {
@@ -3120,9 +3139,18 @@ fn refine_boundary_edges(
         }
         let len = len_sq.sqrt();
 
+        // Query BVH with the edge's AABB expanded by tolerance
+        let edge_aabb = Aabb3 {
+            min: Point3::new(p0.x().min(p1.x()), p0.y().min(p1.y()), p0.z().min(p1.z())),
+            max: Point3::new(p0.x().max(p1.x()), p0.y().max(p1.y()), p0.z().max(p1.z())),
+        }
+        .expanded(tol.linear);
+        let candidates = vert_bvh.query_overlap(&edge_aabb);
+
         let mut intermediates: Vec<(f64, VertexId)> = Vec::new();
 
-        for (&vid, &pos) in &all_vertex_positions {
+        for cand_idx in candidates {
+            let (vid, pos) = vert_list[cand_idx];
             if vid == edge.start() || vid == edge.end() {
                 continue;
             }
@@ -3480,6 +3508,8 @@ fn analytic_boolean(
         ExactIntersectionCurve, exact_plane_analytic, intersect_analytic_analytic_bounded,
     };
 
+    let _t_total = std::time::Instant::now();
+
     // Collect face info for both solids.
     let solid_a = topo.solid(a)?;
     let shell_a = topo.shell(solid_a.outer_shell())?;
@@ -3489,6 +3519,7 @@ fn analytic_boolean(
     let shell_b = topo.shell(solid_b.outer_shell())?;
     let face_ids_b: Vec<FaceId> = shell_b.faces().to_vec();
 
+    let _t_snap = std::time::Instant::now();
     let mut snaps_a = Vec::new();
     for &fid in &face_ids_a {
         let face = topo.face(fid)?;
@@ -3523,7 +3554,15 @@ fn analytic_boolean(
         });
     }
 
+    log::debug!(
+        "[boolean] snapshots: {:.3}ms (A={}, B={})",
+        _t_snap.elapsed().as_secs_f64() * 1000.0,
+        snaps_a.len(),
+        snaps_b.len()
+    );
+
     // Compute AABBs for face pairs (surface-aware for non-planar faces).
+    let _t_aabb = std::time::Instant::now();
     let aabbs_a: Vec<Aabb3> = snaps_a
         .iter()
         .map(|s| surface_aware_aabb(&s.surface, &s.vertices, tol))
@@ -3575,7 +3614,14 @@ fn analytic_boolean(
     } else {
         None
     };
+    log::debug!(
+        "[boolean] aabb+bvh: {:.3}ms (A={}, B={})",
+        _t_aabb.elapsed().as_secs_f64() * 1000.0,
+        aabbs_a.len(),
+        aabbs_b.len()
+    );
 
+    let _t_isect = std::time::Instant::now();
     for (ia, snap_a) in snaps_a.iter().enumerate() {
         // Use BVH for broad-phase when available, otherwise brute-force with AABB check.
         let candidates: Vec<usize> = if let Some(ref bvh) = analytic_bvh_b {
@@ -3784,6 +3830,12 @@ fn analytic_boolean(
         &analytic_analytic_faces_b,
         &mut analytic_intersection_vranges_b,
     );
+    log::debug!(
+        "[boolean] intersections: {:.3}ms (isect_a={}, isect_b={})",
+        _t_isect.elapsed().as_secs_f64() * 1000.0,
+        face_intersections_a.len(),
+        face_intersections_b.len()
+    );
 
     // ── Build contained-curve lookup sets ──────────────────────────────
 
@@ -3830,7 +3882,8 @@ fn analytic_boolean(
 
     // ── Split faces into fragments ───────────────────────────────────────
 
-    let mut fragments: Vec<AnalyticFragment> = Vec::new();
+    let _t_frag = std::time::Instant::now();
+    let mut fragments: Vec<AnalyticFragment> = Vec::with_capacity(snaps_a.len() + snaps_b.len());
 
     // Process solid A faces.
     for (ia, snap) in snaps_a.iter().enumerate() {
@@ -4179,8 +4232,15 @@ fn analytic_boolean(
         }
     }
 
+    log::debug!(
+        "[boolean] fragments: {:.3}ms (count={})",
+        _t_frag.elapsed().as_secs_f64() * 1000.0,
+        fragments.len()
+    );
+
     // ── Classification ───────────────────────────────────────────────────
 
+    let _t_class = std::time::Instant::now();
     // Try analytic classifiers first (O(1) point-in-solid tests).
     // Only build expensive tessellated face data if needed.
     let analytic_cls_a = try_build_analytic_classifier(topo, a);
@@ -4276,12 +4336,19 @@ fn analytic_boolean(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    log::debug!(
+        "[boolean] classification: {:.3}ms ({} fragments)",
+        _t_class.elapsed().as_secs_f64() * 1000.0,
+        classes.len()
+    );
+
     // ── Selection + Assembly ─────────────────────────────────────────────
 
+    let _t_asm = std::time::Instant::now();
     let resolution = 1.0 / tol.linear;
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
-    let mut face_ids_out = Vec::new();
+    let mut face_ids_out = Vec::with_capacity(fragments.len());
 
     for (idx, (frag, &class)) in fragments.iter().zip(classes.iter()).enumerate() {
         let Some(flip) = select_fragment(frag.source, class, op) else {
@@ -4537,6 +4604,12 @@ fn analytic_boolean(
         face_ids_out.push(face);
     }
 
+    log::debug!(
+        "[boolean] assembly: {:.3}ms ({} faces)",
+        _t_asm.elapsed().as_secs_f64() * 1000.0,
+        face_ids_out.len()
+    );
+
     if face_ids_out.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "analytic boolean produced no faces".into(),
@@ -4547,13 +4620,29 @@ fn analytic_boolean(
     // Unsplit faces may have long boundary edges that span the same line
     // as multiple shorter edges from adjacent split faces. Refine them
     // so edge sharing works correctly.
+    let _t_refine = std::time::Instant::now();
     refine_boundary_edges(topo, &mut face_ids_out, &mut edge_map, tol)?;
+    log::debug!(
+        "[boolean] refine_boundary_edges: {:.3}ms ({} faces)",
+        _t_refine.elapsed().as_secs_f64() * 1000.0,
+        face_ids_out.len()
+    );
 
     // Split non-manifold edges (shared by > 2 faces) into separate copies.
+    let _t_nm = std::time::Instant::now();
     split_nonmanifold_edges(topo, &mut face_ids_out)?;
+    log::debug!(
+        "[boolean] split_nonmanifold_edges: {:.3}ms ({} faces)",
+        _t_nm.elapsed().as_secs_f64() * 1000.0,
+        face_ids_out.len()
+    );
 
     let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.shells.alloc(shell);
+    log::debug!(
+        "[boolean] total: {:.3}ms",
+        _t_total.elapsed().as_secs_f64() * 1000.0
+    );
     Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
 }
 
