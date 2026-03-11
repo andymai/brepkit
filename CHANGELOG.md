@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/andymai/brepkit/compare/v1.0.2...v1.0.3) (2026-03-11)
+
+
+### Performance
+
+* reduce cylinder/cone tessellation by 10-160x ([#172](https://github.com/andymai/brepkit/issues/172)) ([0278b02](https://github.com/andymai/brepkit/commit/0278b028471045c02974bbdc297b36efceacb799))
+
 ## [1.0.2](https://github.com/andymai/brepkit/compare/v1.0.1...v1.0.2) (2026-03-11)
 
 
