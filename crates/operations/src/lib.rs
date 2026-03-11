@@ -47,6 +47,7 @@ pub mod thicken;
 pub mod transform;
 pub mod untrim;
 pub mod validate;
+pub(crate) mod winding;
 
 #[cfg(test)]
 pub(crate) mod test_helpers;

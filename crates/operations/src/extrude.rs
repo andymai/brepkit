@@ -283,7 +283,7 @@ pub fn extrude(
 
     // Read the input face's data.
     let face_data = topo.face(face)?;
-    let input_surface = face_data.surface().clone();
+    let mut input_surface = face_data.surface().clone();
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<WireId> = face_data.inner_wires().to_vec();
 
@@ -305,6 +305,23 @@ pub fn extrude(
         vertical_edge_ids,
     ) = extrude_wire_vertices(topo, input_wire_id, offset)?;
     let n = input_verts.len();
+
+    // Detect CW-wound outer wire (e.g. from brepjs polygon approximations).
+    // CW winding makes `edge_dir.cross(offset)` point inward instead of outward.
+    let outer_is_cw = crate::winding::is_cw_winding(&input_positions, &offset);
+
+    // If the outer wire is CW, the stored face normal opposes the actual outward
+    // direction. Negate it so cap normals are derived correctly.
+    if outer_is_cw {
+        if let FaceSurface::Plane {
+            ref mut normal,
+            ref mut d,
+        } = input_surface
+        {
+            *normal = -*normal;
+            *d = -*d;
+        }
+    }
 
     let mut all_faces = Vec::with_capacity(n + 2 + inner_wire_ids.len() * 4);
 
@@ -407,10 +424,13 @@ pub fn extrude(
         let p0 = input_positions[i];
         let p1 = input_positions[next];
         let edge_dir = p1 - p0;
-        let side_normal = edge_dir
-            .cross(offset)
-            .normalize()
-            .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+        let side_normal = if outer_is_cw {
+            offset.cross(edge_dir)
+        } else {
+            edge_dir.cross(offset)
+        }
+        .normalize()
+        .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
         let side_d = dot_normal_point(side_normal, p0);
 
         let side_face = topo.faces.alloc(Face::new(
@@ -1162,6 +1182,56 @@ mod tests {
             rel_err < 0.01,
             "CCW circle hole extrusion volume should be ~{expected:.1}, got {vol:.1} \
              (rel_err={rel_err:.2e})"
+        );
+    }
+
+    /// Extrude a CW-wound profile and verify the result has positive volume
+    /// and is translation-invariant (the "killer test" for inside-out normals).
+    #[test]
+    fn extrude_cw_profile_produces_correct_solid() {
+        use brepkit_topology::test_utils::make_cw_unit_square_face;
+
+        let mut topo = Topology::new();
+        let face = make_cw_unit_square_face(&mut topo);
+
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            (vol - 2.0).abs() < 0.01,
+            "CW profile extrusion should produce volume ~2.0, got {vol}"
+        );
+    }
+
+    /// Translation invariance: signed mesh volume should not change when
+    /// the solid is translated far from the origin.
+    #[test]
+    fn extrude_cw_profile_translation_invariant() {
+        use brepkit_topology::test_utils::make_cw_unit_square_face;
+
+        // Build solid at origin
+        let mut topo1 = Topology::new();
+        let face1 = make_cw_unit_square_face(&mut topo1);
+        let solid1 = extrude(&mut topo1, face1, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let vol1 = crate::measure::solid_volume(&topo1, solid1, 0.1).unwrap();
+
+        // Build solid translated by (1000, 1000, 1000)
+        let mut topo2 = Topology::new();
+        let face2 = make_cw_unit_square_face(&mut topo2);
+        let solid2 = extrude(&mut topo2, face2, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        crate::transform::transform_solid(
+            &mut topo2,
+            solid2,
+            &brepkit_math::mat::Mat4::translation(1000.0, 1000.0, 1000.0),
+        )
+        .unwrap();
+        let vol2 = crate::measure::solid_volume(&topo2, solid2, 0.1).unwrap();
+
+        let rel_err = (vol1 - vol2).abs() / vol1.max(1e-12);
+        assert!(
+            rel_err < 0.01,
+            "CW extrusion volumes should match: origin={vol1}, translated={vol2}, \
+             rel_err={rel_err:.2e}"
         );
     }
 }

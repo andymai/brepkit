@@ -202,7 +202,7 @@ pub fn revolve(
 
     // Read input face.
     let face_data = topo.face(face)?;
-    let input_normal = match face_data.surface() {
+    let mut input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => {
             return Err(crate::OperationsError::InvalidInput {
@@ -212,6 +212,31 @@ pub fn revolve(
     };
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
+
+    // Ensure input_normal agrees with actual vertex winding (CCW convention).
+    // If the outer wire is CW-wound (e.g. from brepjs), the Newell normal
+    // opposes the stored normal. Correct by negating so that cap normals,
+    // side face winding, and all downstream logic produce outward-facing faces.
+    {
+        let wire = topo.wire(input_wire_id)?;
+        let oes: Vec<_> = wire.edges().to_vec();
+        let wire_positions: Vec<Point3> = oes
+            .iter()
+            .map(|oe| -> Result<Point3, crate::OperationsError> {
+                let edge = topo.edge(oe.edge())?;
+                let vid = if oe.is_forward() {
+                    edge.start()
+                } else {
+                    edge.end()
+                };
+                Ok(topo.vertex(vid)?.point())
+            })
+            .collect::<Result<_, _>>()?;
+        let newell = crate::winding::newell_normal(&wire_positions);
+        if newell.dot(input_normal) < -1e-30 {
+            input_normal = -input_normal;
+        }
+    }
 
     // --- Arc segmentation ---
 
@@ -917,6 +942,81 @@ mod tests {
         assert!(
             rel_err < 0.05,
             "revolved offset rectangle volume should be 36π ≈ {expected:.2}, \
+             got {vol:.2} (rel_err={rel_err:.2e})"
+        );
+    }
+
+    /// Revolve a CW-wound profile and verify the result has correct volume.
+    #[test]
+    fn revolve_cw_profile_produces_correct_solid() {
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let tol_val = 1e-7;
+
+        // CW-wound rectangle at x=2..3, y=0..1, z=0 (offset from Y axis).
+        // CW order when viewed from +Z: (2,0)→(2,1)→(3,1)→(3,0)
+        let v0 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(2.0, 0.0, 0.0), tol_val));
+        let v1 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(2.0, 1.0, 0.0), tol_val));
+        let v2 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(3.0, 1.0, 0.0), tol_val));
+        let v3 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(3.0, 0.0, 0.0), tol_val));
+
+        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.wires.alloc(wire);
+
+        // CW winding → Newell normal is -Z
+        let face = topo.faces.alloc(Face::new(
+            wid,
+            vec![],
+            brepkit_topology::face::FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+        ));
+
+        // Revolve 360° around Y axis
+        let solid = revolve(
+            &mut topo,
+            face,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            2.0 * PI,
+        )
+        .unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+        // Pappus: V = 2π × centroid_x × area = 2π × 2.5 × 1.0 = 5π ≈ 15.708
+        let expected = 5.0 * PI;
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 0.05,
+            "CW profile revolve volume should be 5π ≈ {expected:.2}, \
              got {vol:.2} (rel_err={rel_err:.2e})"
         );
     }

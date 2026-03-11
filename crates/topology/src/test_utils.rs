@@ -114,6 +114,62 @@ pub fn make_unit_triangle_face(topo: &mut Topology) -> FaceId {
     ))
 }
 
+/// Creates a CW-wound unit square face on the XY plane (z=0).
+///
+/// Same geometry as [`make_unit_square_face`] but with reversed winding:
+/// vertices traverse (0,0)→(0,1)→(1,1)→(1,0) (clockwise from +Z).
+/// The stored normal is -Z (consistent with the CW winding via Newell's method).
+///
+/// This simulates the common case where external callers (e.g. brepjs)
+/// provide CW-wound profiles.
+///
+/// # Panics
+///
+/// Panics if wire creation fails.
+#[must_use]
+pub fn make_cw_unit_square_face(topo: &mut Topology) -> FaceId {
+    let v0 = topo
+        .vertices
+        .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
+    let v1 = topo
+        .vertices
+        .alloc(Vertex::new(Point3::new(0.0, 1.0, 0.0), TOL));
+    let v2 = topo
+        .vertices
+        .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), TOL));
+    let v3 = topo
+        .vertices
+        .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));
+
+    let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(e0, true),
+            OrientedEdge::new(e1, true),
+            OrientedEdge::new(e2, true),
+            OrientedEdge::new(e3, true),
+        ],
+        true,
+    )
+    .expect("test wire creation should not fail");
+
+    let wid = topo.wires.alloc(wire);
+
+    // Newell normal of CW winding → -Z
+    topo.faces.alloc(Face::new(
+        wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: 0.0,
+        },
+    ))
+}
+
 /// Creates an offset unit cube solid with vertices at `(ox,oy,oz)` to
 /// `(ox+1, oy+1, oz+1)`, using manifold shared edges.
 ///
