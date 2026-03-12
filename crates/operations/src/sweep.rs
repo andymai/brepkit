@@ -453,13 +453,7 @@ pub fn sweep(
     }
 
     // Compute profile centroid.
-    let (cx, cy, cz) = input_positions
-        .iter()
-        .fold((0.0, 0.0, 0.0), |(ax, ay, az), p| {
-            (ax + p.x(), ay + p.y(), az + p.z())
-        });
-    #[allow(clippy::cast_precision_loss)]
-    let centroid = Point3::new(cx / n as f64, cy / n as f64, cz / n as f64);
+    let centroid = crate::winding::polygon_centroid(&input_positions);
 
     // --- Compute frames along the path ---
 
@@ -780,13 +774,7 @@ pub fn sweep_smooth(
     }
 
     // Compute centroid and frames.
-    let (cx, cy, cz) = input_positions
-        .iter()
-        .fold((0.0, 0.0, 0.0), |(ax, ay, az), p| {
-            (ax + p.x(), ay + p.y(), az + p.z())
-        });
-    #[allow(clippy::cast_precision_loss)]
-    let centroid = Point3::new(cx / n as f64, cy / n as f64, cz / n as f64);
+    let centroid = crate::winding::polygon_centroid(&input_positions);
 
     let num_segments = (path.control_points().len() * 2).max(4);
     let up_hint = orthogonalize(input_normal, path_tangent_0);
@@ -1090,13 +1078,7 @@ pub fn sweep_with_options(
         input_normal = -input_normal;
     }
 
-    let (cx, cy, cz) = input_positions
-        .iter()
-        .fold((0.0, 0.0, 0.0), |(ax, ay, az), p| {
-            (ax + p.x(), ay + p.y(), az + p.z())
-        });
-    #[allow(clippy::cast_precision_loss)]
-    let centroid = Point3::new(cx / n as f64, cy / n as f64, cz / n as f64);
+    let centroid = crate::winding::polygon_centroid(&input_positions);
 
     let num_segments = if options.segments > 0 {
         options.segments
@@ -1849,21 +1831,13 @@ mod tests {
         );
     }
 
-    /// Sweep a CW-wound profile along a straight path and verify correct volume.
     #[test]
     fn sweep_cw_profile_produces_correct_solid() {
-        use brepkit_topology::test_utils::make_cw_unit_square_face;
-
-        let mut topo = Topology::new();
-        let face = make_cw_unit_square_face(&mut topo);
         let path = straight_z_path(3.0);
-
-        let solid = sweep(&mut topo, face, &path).unwrap();
-
-        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
-        assert!(
-            (vol - 3.0).abs() < 0.1,
-            "CW profile sweep should produce volume ~3.0, got {vol}"
+        crate::test_helpers::assert_cw_profile_produces_valid_solid(
+            |topo, face| sweep(topo, face, &path).unwrap(),
+            3.0,
+            0.05,
         );
     }
 

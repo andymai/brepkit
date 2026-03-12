@@ -23,7 +23,6 @@ use brepkit_topology::solid::SolidId;
 ///
 /// Panics if the relative error exceeds `rel_tol` or if volume
 /// computation fails.
-#[allow(clippy::unwrap_used)]
 pub fn assert_volume_near(topo: &Topology, solid: SolidId, expected: f64, rel_tol: f64) {
     let vol = crate::measure::solid_volume(topo, solid, 0.05).unwrap();
     let rel_error = if expected.abs() < 1e-15 {
@@ -46,7 +45,6 @@ pub fn assert_volume_near(topo: &Topology, solid: SolidId, expected: f64, rel_to
 ///
 /// Panics if the relative error exceeds `rel_tol` or if area
 /// computation fails.
-#[allow(clippy::unwrap_used)]
 pub fn assert_area_near(topo: &Topology, face: FaceId, expected: f64, rel_tol: f64) {
     let area = crate::measure::face_area(topo, face, 0.1).unwrap();
     let rel_error = if expected.abs() < 1e-15 {
@@ -100,7 +98,7 @@ pub fn assert_point_near(actual: Point3, expected: Point3, abs_tol: f64) {
 /// # Panics
 ///
 /// Panics if topology lookups fail.
-#[allow(clippy::unwrap_used, clippy::cast_possible_wrap)]
+#[allow(clippy::cast_possible_wrap)]
 pub fn euler_characteristic(topo: &Topology, solid: SolidId) -> i64 {
     let (f, e, v) = explorer::solid_entity_counts(topo, solid).unwrap();
     (v as i64) - (e as i64) + (f as i64)
@@ -128,7 +126,6 @@ pub fn assert_euler_genus0(topo: &Topology, solid: SolidId) {
 /// # Panics
 ///
 /// Panics if the solid is not manifold or if topology lookups fail.
-#[allow(clippy::unwrap_used)]
 pub fn assert_manifold(topo: &Topology, solid: SolidId) {
     let s = topo.solid(solid).unwrap();
     let sh = topo.shell(s.outer_shell()).unwrap();
@@ -167,4 +164,24 @@ pub fn assert_volume_conservation(
         rel_error * 100.0,
         rel_tol * 100.0,
     );
+}
+
+// ── CW profile assertions ──────────────────────────────────────
+
+/// Assert that a CW-wound profile produces a solid with the expected volume.
+///
+/// Creates a CW unit square face, passes it to `build_solid`, and asserts
+/// the resulting volume is within `rel_tol` of `expected_vol`.
+///
+/// # Panics
+///
+/// Panics if the volume deviates beyond `rel_tol` or if any operation fails.
+pub fn assert_cw_profile_produces_valid_solid<F>(build_solid: F, expected_vol: f64, rel_tol: f64)
+where
+    F: Fn(&mut Topology, FaceId) -> SolidId,
+{
+    let mut topo = Topology::new();
+    let face = brepkit_topology::test_utils::make_cw_unit_square_face(&mut topo);
+    let solid = build_solid(&mut topo, face);
+    assert_volume_near(&topo, solid, expected_vol, rel_tol);
 }

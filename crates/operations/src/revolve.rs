@@ -232,8 +232,7 @@ pub fn revolve(
                 Ok(topo.vertex(vid)?.point())
             })
             .collect::<Result<_, _>>()?;
-        let newell = crate::winding::newell_normal(&wire_positions);
-        if newell.dot(input_normal) < -1e-30 {
+        if crate::winding::is_cw_winding(&wire_positions, &input_normal) {
             input_normal = -input_normal;
         }
     }
