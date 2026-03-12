@@ -17,7 +17,7 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::boolean::face_polygon;
 use crate::dot_normal_point;
-use crate::winding::{newell_normal, polygon_centroid};
+use crate::winding::ensure_ccw_profiles;
 
 /// Resample a closed polygon to `target_count` evenly spaced points.
 ///
@@ -67,37 +67,6 @@ fn resample_closed_polygon(points: &[Point3], target_count: usize) -> Vec<Point3
         ));
     }
     result
-}
-
-/// Ensure profile vertices wind CCW relative to the stacking direction.
-///
-/// Computes the stacking direction from the first to last profile centroid,
-/// then checks the Newell normal of the first profile. If the winding is CW
-/// (Newell normal opposes stacking direction), reverses all profiles.
-///
-/// Returns `true` if the profiles were reversed.
-fn ensure_ccw_winding(profile_verts: &mut [Vec<Point3>]) -> bool {
-    let c0 = polygon_centroid(&profile_verts[0]);
-    let c1 = polygon_centroid(&profile_verts[profile_verts.len() - 1]);
-    let stack_dir = c1 - c0;
-    let newell = newell_normal(&profile_verts[0]);
-    let dot = newell.dot(stack_dir);
-
-    // Degenerate case: profiles share the same centroid (coplanar loft) or
-    // the Newell normal is zero (degenerate polygon). Cannot determine
-    // winding — leave unchanged.
-    if dot.abs() < 1e-30 {
-        return false;
-    }
-
-    if dot < 0.0 {
-        for verts in profile_verts.iter_mut() {
-            verts.reverse();
-        }
-        true
-    } else {
-        false
-    }
 }
 
 /// Extract the outward cap normal from a planar face, accounting for winding reversal.
@@ -183,7 +152,7 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     // Ensure profile vertex winding is CCW relative to the stacking direction.
     // The side normal formula `edge_dir.cross(connect_dir)` gives outward normals
     // only when vertices go CCW from the stacking direction.
-    let winding_reversed = ensure_ccw_winding(&mut profile_verts);
+    let winding_reversed = ensure_ccw_profiles(&mut profile_verts);
 
     let num_profiles = profile_verts.len();
     let num_sections = num_profiles - 1;
@@ -385,7 +354,7 @@ pub fn loft_smooth(
     }
 
     // Ensure profile vertex winding is CCW relative to the stacking direction.
-    let winding_reversed = ensure_ccw_winding(&mut profile_verts);
+    let winding_reversed = ensure_ccw_profiles(&mut profile_verts);
 
     let num_profiles = profile_verts.len();
 
@@ -409,21 +378,6 @@ pub fn loft_smooth(
                     let next = (i + 1) % n;
                     topo.edges
                         .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
-                })
-                .collect()
-        })
-        .collect();
-
-    // Create connecting edges between adjacent profiles (used for topology).
-    let _connect_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = (0..(num_profiles - 1))
-        .map(|s| {
-            (0..n)
-                .map(|i| {
-                    topo.edges.alloc(Edge::new(
-                        ring_verts[s][i],
-                        ring_verts[s + 1][i],
-                        EdgeCurve::Line,
-                    ))
                 })
                 .collect()
         })
@@ -717,6 +671,68 @@ mod tests {
         assert!(
             result.is_ok(),
             "loft with different vertex counts should succeed via resampling"
+        );
+    }
+
+    /// Helper: make a CW-wound square face at z=offset with given size.
+    fn make_cw_square_at(topo: &mut Topology, size: f64, z: f64) -> FaceId {
+        let hs = size / 2.0;
+        let tol_val = 1e-7;
+        // CW order: v0→v3→v2→v1 (reversed from make_square_at)
+        let v0 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(-hs, -hs, z), tol_val));
+        let v1 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(-hs, hs, z), tol_val));
+        let v2 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(hs, hs, z), tol_val));
+        let v3 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(hs, -hs, z), tol_val));
+
+        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.wires.alloc(wire);
+
+        topo.faces.alloc(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: z,
+            },
+        ))
+    }
+
+    #[test]
+    fn loft_cw_profiles_produces_correct_solid() {
+        let mut topo = Topology::new();
+        let bottom = make_cw_square_at(&mut topo, 1.0, 0.0);
+        let top = make_cw_square_at(&mut topo, 1.0, 1.0);
+
+        let solid = loft(&mut topo, &[bottom, top]).unwrap();
+
+        // CW profiles should be auto-corrected to produce a valid solid
+        // with positive volume (not inside-out).
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 0.0,
+            "CW-wound loft should produce positive volume, got {vol}"
         );
     }
 

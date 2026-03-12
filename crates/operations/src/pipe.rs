@@ -6,7 +6,7 @@
 
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::tolerance::Tolerance;
-use brepkit_math::vec::{Point3, Vec3};
+use brepkit_math::vec::Vec3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
@@ -97,11 +97,7 @@ pub fn pipe(
     }
 
     // Compute profile centroid.
-    let (cx, cy, cz) = input_verts.iter().fold((0.0, 0.0, 0.0), |(ax, ay, az), p| {
-        (ax + p.x(), ay + p.y(), az + p.z())
-    });
-    #[allow(clippy::cast_precision_loss)]
-    let centroid = Point3::new(cx / n as f64, cy / n as f64, cz / n as f64);
+    let centroid = crate::winding::polygon_centroid(&input_verts);
 
     // Compute scaling factors from guide curve.
     let num_segments = (path.control_points().len() * 2).max(4);
@@ -556,21 +552,13 @@ mod tests {
         assert!(pipe(&mut topo, face, &path, None).is_err());
     }
 
-    /// Pipe a CW-wound profile along a straight path and verify correct volume.
     #[test]
     fn pipe_cw_profile_produces_correct_solid() {
-        use brepkit_topology::test_utils::make_cw_unit_square_face;
-
-        let mut topo = Topology::new();
-        let face = make_cw_unit_square_face(&mut topo);
         let path = straight_z_path(3.0);
-
-        let solid = pipe(&mut topo, face, &path, None).unwrap();
-
-        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
-        assert!(
-            (vol - 3.0).abs() < 0.15,
-            "CW profile pipe should produce volume ~3.0, got {vol}"
+        crate::test_helpers::assert_cw_profile_produces_valid_solid(
+            |topo, face| pipe(topo, face, &path, None).unwrap(),
+            3.0,
+            0.05,
         );
     }
 

@@ -217,31 +217,6 @@ fn extrude_wire_vertices(
     ))
 }
 
-/// Determine if a polygon (inner wire) is CW when viewed from the
-/// extrusion direction.
-///
-/// Uses the signed area projected onto the extrusion axis: negative = CW,
-/// positive = CCW. This generalizes to non-axis-aligned extrusions.
-/// When the projected area is near-zero (polygon nearly perpendicular to
-/// the extrusion axis), defaults to CW (the standard B-Rep hole convention).
-fn inner_wire_is_cw(positions: &[Point3], offset: &Vec3) -> bool {
-    if positions.len() < 3 {
-        return true; // degenerate — default to CW
-    }
-    let axis = offset.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
-    let p0 = positions[0];
-    let mut signed_area_2 = 0.0;
-    for i in 1..positions.len() - 1 {
-        let a = positions[i] - p0;
-        let b = positions[i + 1] - p0;
-        signed_area_2 += a.cross(b).dot(axis);
-    }
-    // Use a tolerance threshold to avoid floating-point noise flipping
-    // the classification for polygons nearly perpendicular to the axis.
-    // Default to CW (standard B-Rep hole convention) when ambiguous.
-    signed_area_2 < -f64::EPSILON
-}
-
 /// Extrude a planar face along a direction to produce a solid.
 ///
 /// The extrusion creates a prism-like solid from the face. A reversed copy of
@@ -345,15 +320,14 @@ pub fn extrude(
 
     for &iw_id in &inner_wire_ids {
         let (
-            iw_verts,
+            _iw_verts,
             iw_positions,
             iw_oriented,
             iw_edge_ids,
-            iw_top_verts,
+            _iw_top_verts,
             iw_top_edge_ids,
             iw_vert_edge_ids,
         ) = extrude_wire_vertices(topo, iw_id, offset)?;
-        let iw_n = iw_verts.len();
 
         // Bottom inner wire: reversed winding (same as outer wire reversal).
         let reversed_inner_edges: Vec<OrientedEdge> = iw_oriented
@@ -374,8 +348,6 @@ pub fn extrude(
             Wire::new(top_inner_edges, true).map_err(crate::OperationsError::Topology)?;
         top_inner_wire_ids.push(topo.wires.alloc(top_inner_wire));
 
-        let _ = iw_top_verts;
-        let _ = iw_n;
         inner_wire_data.push(InnerWireData {
             positions: iw_positions,
             oriented: iw_oriented,
@@ -452,7 +424,7 @@ pub fn extrude(
         // CW (negative signed area) is the standard B-Rep hole convention;
         // CCW (positive signed area) occurs when callers use math-convention
         // circle generation.  We support both.
-        let is_cw = inner_wire_is_cw(&iwd.positions, &offset);
+        let is_cw = crate::winding::inner_wire_is_cw(&iwd.positions, &offset);
 
         for i in 0..iw_n {
             let next = (i + 1) % iw_n;
@@ -1185,21 +1157,12 @@ mod tests {
         );
     }
 
-    /// Extrude a CW-wound profile and verify the result has positive volume
-    /// and is translation-invariant (the "killer test" for inside-out normals).
     #[test]
     fn extrude_cw_profile_produces_correct_solid() {
-        use brepkit_topology::test_utils::make_cw_unit_square_face;
-
-        let mut topo = Topology::new();
-        let face = make_cw_unit_square_face(&mut topo);
-
-        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
-
-        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
-        assert!(
-            (vol - 2.0).abs() < 0.01,
-            "CW profile extrusion should produce volume ~2.0, got {vol}"
+        crate::test_helpers::assert_cw_profile_produces_valid_solid(
+            |topo, face| extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap(),
+            2.0,
+            0.01,
         );
     }
 
