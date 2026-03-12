@@ -348,6 +348,28 @@ pub fn shell(
                     d: *d,
                 });
             }
+            FaceSurface::Cylinder(cyl) => {
+                // Use CylindricalFace to preserve arc edges (Circle EdgeCurve)
+                // so that tessellation and volume computation remain accurate.
+                let wire = topo.wire(face.outer_wire())?;
+                let has_closed_edge = wire
+                    .edges()
+                    .iter()
+                    .any(|oe| topo.edge(oe.edge()).is_ok_and(|e| e.start() == e.end()));
+                if has_closed_edge {
+                    result_specs.push(FaceSpec::Surface {
+                        vertices: verts.clone(),
+                        surface: FaceSurface::Cylinder(cyl.clone()),
+                        reversed: false,
+                    });
+                } else {
+                    result_specs.push(FaceSpec::CylindricalFace {
+                        vertices: verts.clone(),
+                        cylinder: cyl.clone(),
+                        reversed: false,
+                    });
+                }
+            }
             other => {
                 result_specs.push(FaceSpec::Surface {
                     vertices: verts.clone(),
@@ -456,88 +478,13 @@ pub fn shell(
         }
     }
 
-    // ─── Phase 5: Rim faces (connect outer opening to inner shell) ────────
-
-    // Compute approximate solid center for rim normal orientation.
-    let solid_center = {
-        let mut cx = 0.0;
-        let mut cy = 0.0;
-        let mut cz = 0.0;
-        let mut count = 0.0;
-        for (_, verts) in &face_verts {
-            for v in verts {
-                cx += v.x();
-                cy += v.y();
-                cz += v.z();
-                count += 1.0;
-            }
-        }
-        if count > 0.0 {
-            Point3::new(cx / count, cy / count, cz / count)
-        } else {
-            Point3::new(0.0, 0.0, 0.0)
-        }
-    };
-
-    for (fid, verts) in &face_verts {
-        if !open_set.contains(&fid.index()) {
-            continue;
-        }
-
-        // Fallback offset for vertices without mapped inner positions.
-        let face = topo.face(*fid)?;
-        let fallback_offset = match face.surface() {
-            FaceSurface::Plane { normal, .. } => Vec3::new(
-                -normal.x() * thickness,
-                -normal.y() * thickness,
-                -normal.z() * thickness,
-            ),
-            _ => Vec3::new(0.0, 0.0, -thickness),
-        };
-
-        let n = verts.len();
-        for i in 0..n {
-            let j = (i + 1) % n;
-            let outer_a = verts[i];
-            let outer_b = verts[j];
-
-            // Use plane-intersected inner positions when available.
-            let inner_a = inner_pos
-                .get(&quantize_pt(outer_a))
-                .copied()
-                .unwrap_or(outer_a + fallback_offset);
-            let inner_b = inner_pos
-                .get(&quantize_pt(outer_b))
-                .copied()
-                .unwrap_or(outer_b + fallback_offset);
-
-            let rim_verts = vec![outer_a, outer_b, inner_b, inner_a];
-            let edge1 = outer_b - outer_a;
-            let edge2 = inner_a - outer_a;
-            let mut rim_normal = edge1
-                .cross(edge2)
-                .normalize()
-                .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-
-            // Ensure rim normal points outward (away from solid center).
-            let rim_center = Point3::new(
-                (outer_a.x() + outer_b.x() + inner_a.x() + inner_b.x()) / 4.0,
-                (outer_a.y() + outer_b.y() + inner_a.y() + inner_b.y()) / 4.0,
-                (outer_a.z() + outer_b.z() + inner_a.z() + inner_b.z()) / 4.0,
-            );
-            let to_center = solid_center - rim_center;
-            if rim_normal.dot(to_center) > 0.0 {
-                rim_normal = -rim_normal;
-            }
-
-            let rim_d = dot_normal_point(rim_normal, outer_a);
-            result_specs.push(FaceSpec::Planar {
-                vertices: rim_verts,
-                normal: rim_normal,
-                d: rim_d,
-            });
-        }
-    }
+    // ─── Phase 5: Assemble outer + inner faces, then close rim ─────────────
+    //
+    // Instead of creating disconnected rim quads (which don't share edges
+    // with the outer/inner faces), we first assemble the outer + inner faces
+    // into a solid with open boundaries, then find the boundary edges and
+    // create a single annular rim face per open face. This guarantees edge
+    // sharing and produces a manifold shell matching OCCT's topology.
 
     if result_specs.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
@@ -545,12 +492,249 @@ pub fn shell(
         });
     }
 
-    assemble_solid_mixed(topo, &result_specs, tol)
+    let solid = assemble_solid_mixed(topo, &result_specs, tol)?;
+
+    // Find boundary edges (edges used by exactly 1 face).
+    let edge_face_map = brepkit_topology::explorer::edge_to_face_map(topo, solid)?;
+    let mut boundary_edge_ids: Vec<brepkit_topology::edge::EdgeId> = Vec::new();
+    for (&edge_idx, faces) in &edge_face_map {
+        if faces.len() == 1 {
+            if let Some(eid) = topo.edges.id_from_index(edge_idx) {
+                boundary_edge_ids.push(eid);
+            }
+        }
+    }
+
+    if boundary_edge_ids.is_empty() {
+        // No open boundary — shell is already closed (no open faces, or all faces present).
+        return Ok(solid);
+    }
+
+    // Determine the oriented direction of each boundary edge relative to its single face.
+    // The rim face must use the OPPOSITE orientation so the edge is shared correctly.
+    let mut boundary_oriented: Vec<brepkit_topology::wire::OrientedEdge> = Vec::new();
+    for &eid in &boundary_edge_ids {
+        let face_id = edge_face_map[&eid.index()][0];
+        let face = topo.face(face_id)?;
+        // Find orientation of this edge in its face's wire.
+        let wire = topo.wire(face.outer_wire())?;
+        let mut found = false;
+        for oe in wire.edges() {
+            if oe.edge() == eid {
+                // Rim face uses opposite orientation.
+                boundary_oriented.push(brepkit_topology::wire::OrientedEdge::new(
+                    eid,
+                    !oe.is_forward(),
+                ));
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            // Check inner wires too.
+            for &iw_id in face.inner_wires() {
+                let iw = topo.wire(iw_id)?;
+                for oe in iw.edges() {
+                    if oe.edge() == eid {
+                        boundary_oriented.push(brepkit_topology::wire::OrientedEdge::new(
+                            eid,
+                            !oe.is_forward(),
+                        ));
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
+                    break;
+                }
+            }
+            if !found {
+                // Fallback: use forward orientation.
+                boundary_oriented.push(brepkit_topology::wire::OrientedEdge::new(eid, true));
+            }
+        }
+    }
+
+    // Sort boundary edges into connected loops.
+    let loops = sort_edges_into_loops(topo, &boundary_oriented)?;
+
+    if loops.len() < 2 {
+        // Need at least 2 loops (outer + inner) for an annular face.
+        // If only 1 loop, something is wrong — return the solid as-is.
+        return Ok(solid);
+    }
+
+    // Classify loops: the outer loop has larger average distance from centroid.
+    // Compute centroid of all boundary vertices.
+    let mut centroid = Vec3::new(0.0, 0.0, 0.0);
+    let mut vert_count = 0.0;
+    let mut rim_z = 0.0_f64;
+    for oe in &boundary_oriented {
+        let edge = topo.edge(oe.edge())?;
+        let p = topo.vertex(edge.start())?.point();
+        centroid = centroid + Vec3::new(p.x(), p.y(), p.z());
+        rim_z += p.z();
+        vert_count += 1.0;
+    }
+    if vert_count > 0.0 {
+        centroid = centroid * (1.0 / vert_count);
+        rim_z /= vert_count;
+    }
+
+    // Compute average radial distance for each loop.
+    let mut loop_radii: Vec<(usize, f64)> = Vec::new();
+    for (i, lp) in loops.iter().enumerate() {
+        let mut avg_r = 0.0;
+        let mut n = 0.0;
+        for oe in lp {
+            let edge = topo.edge(oe.edge())?;
+            let p = topo.vertex(edge.start())?.point();
+            let dx = p.x() - centroid.x();
+            let dy = p.y() - centroid.y();
+            avg_r += (dx * dx + dy * dy).sqrt();
+            n += 1.0;
+        }
+        if n > 0.0 {
+            avg_r /= n;
+        }
+        loop_radii.push((i, avg_r));
+    }
+    loop_radii.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Largest loop is the outer wire, all others are inner wires (holes).
+    let outer_loop_idx = loop_radii[0].0;
+
+    let outer_wire = brepkit_topology::wire::Wire::new(loops[outer_loop_idx].clone(), true)
+        .map_err(crate::OperationsError::Topology)?;
+    let outer_wire_id = topo.wires.alloc(outer_wire);
+
+    let mut inner_wire_ids = Vec::new();
+    for &(idx, _) in &loop_radii[1..] {
+        let inner_wire = brepkit_topology::wire::Wire::new(loops[idx].clone(), true)
+            .map_err(crate::OperationsError::Topology)?;
+        inner_wire_ids.push(topo.wires.alloc(inner_wire));
+    }
+
+    // Rim face normal: pointing away from solid center (outward at the rim).
+    // For a top-opened shell, this is typically +Z or -Z.
+    // Compute from the open face's normal.
+    let rim_normal = {
+        let mut n = Vec3::new(0.0, 0.0, 1.0);
+        for &(fid, _) in &face_verts {
+            if open_set.contains(&fid.index()) {
+                if let Ok(f) = topo.face(fid) {
+                    if let FaceSurface::Plane { normal, .. } = f.surface() {
+                        // The rim normal should point in the same direction as the
+                        // removed face's outward normal (away from solid interior).
+                        n = if f.is_reversed() { -*normal } else { *normal };
+                        break;
+                    }
+                }
+            }
+        }
+        n
+    };
+
+    let rim_d =
+        rim_normal.x() * centroid.x() + rim_normal.y() * centroid.y() + rim_normal.z() * rim_z;
+    let rim_face = brepkit_topology::face::Face::new(
+        outer_wire_id,
+        inner_wire_ids,
+        FaceSurface::Plane {
+            normal: rim_normal,
+            d: rim_d,
+        },
+    );
+    let rim_face_id = topo.faces.alloc(rim_face);
+
+    // Add the rim face to the shell.
+    let solid_data = topo.solid(solid)?;
+    let shell_id = solid_data.outer_shell();
+    let shell = topo.shell(shell_id)?;
+    let mut new_faces: Vec<FaceId> = shell.faces().to_vec();
+    new_faces.push(rim_face_id);
+    let new_shell =
+        brepkit_topology::shell::Shell::new(new_faces).map_err(crate::OperationsError::Topology)?;
+    *topo.shell_mut(shell_id)? = new_shell;
+
+    Ok(solid)
+}
+
+/// Sort oriented edges into connected loops.
+///
+/// Takes a set of oriented boundary edges and groups them into closed loops
+/// by following edge connectivity (end vertex → start vertex of next edge).
+fn sort_edges_into_loops(
+    topo: &Topology,
+    edges: &[brepkit_topology::wire::OrientedEdge],
+) -> Result<Vec<Vec<brepkit_topology::wire::OrientedEdge>>, crate::OperationsError> {
+    use brepkit_topology::vertex::VertexId;
+
+    if edges.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Build start_vertex → edge index map.
+    let mut start_map: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut edge_endpoints: Vec<(VertexId, VertexId)> = Vec::new();
+    for (i, oe) in edges.iter().enumerate() {
+        let edge = topo.edge(oe.edge())?;
+        let (sv, ev) = if oe.is_forward() {
+            (edge.start(), edge.end())
+        } else {
+            (edge.end(), edge.start())
+        };
+        start_map.entry(sv.index()).or_default().push(i);
+        edge_endpoints.push((sv, ev));
+    }
+
+    let mut used = vec![false; edges.len()];
+    let mut loops = Vec::new();
+
+    while let Some(start_idx) = used.iter().position(|&u| !u) {
+        let mut current_loop = Vec::new();
+        let mut current = start_idx;
+        let chain_start_vid = edge_endpoints[current].0.index();
+
+        loop {
+            if used[current] {
+                break;
+            }
+            used[current] = true;
+            current_loop.push(edges[current]);
+            let end_vid = edge_endpoints[current].1.index();
+
+            if end_vid == chain_start_vid {
+                break; // Loop closed.
+            }
+
+            // Find next edge starting at end_vid.
+            let mut found = false;
+            if let Some(candidates) = start_map.get(&end_vid) {
+                for &idx in candidates {
+                    if !used[idx] {
+                        current = idx;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if !found {
+                break; // Broken chain — give up on this loop.
+            }
+        }
+
+        if !current_loop.is_empty() {
+            loops.push(current_loop);
+        }
+    }
+
+    Ok(loops)
 }
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::cast_possible_wrap)]
 
     use brepkit_math::tolerance::Tolerance;
     use brepkit_topology::Topology;
@@ -607,8 +791,8 @@ mod tests {
         let s = topo.solid(result).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
 
-        // 5 outer + 5 inner + 4 rim = 14 faces
-        assert_eq!(sh.faces().len(), 14, "open-top shell should have 14 faces");
+        // 5 outer + 5 inner + 1 annular rim = 11 faces
+        assert_eq!(sh.faces().len(), 11, "open-top shell should have 11 faces");
 
         // Check volume accuracy: 1 - 0.8*0.8*0.9 = 0.424
         let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
@@ -710,8 +894,8 @@ mod tests {
             .unwrap();
         let shell_face_count = sh.faces().len();
         eprintln!("[diag] Box shell face count: {shell_face_count}");
-        // 5 outer + 5 inner + 4 rim = 14
-        assert_eq!(shell_face_count, 14, "box shell should have 14 faces");
+        // 5 outer + 5 inner + 1 annular rim = 11
+        assert_eq!(shell_face_count, 11, "box shell should have 11 faces");
 
         // Verify original box volume first.
         let box_vol = crate::measure::solid_volume(&topo, box_solid, 0.01).unwrap();
@@ -747,6 +931,132 @@ mod tests {
             pct < 0.05,
             "shell volume should be within 5% of expected, got {pct:.4}"
         );
+    }
+
+    /// Gridfinity exact parameters (r=4mm corner radius) diagnostic.
+    #[test]
+    fn shell_gridfinity_exact_params() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let tol = Tolerance::new();
+
+        // Exact gridfinity 1×1 flat no-lip parameters
+        let w = 41.5_f64; // 1 × 42 - 0.5 clearance
+        let d = 41.5_f64;
+        let h = 21.0_f64; // 3 height units × 7mm
+        let r = 4.0_f64; // CORNER_RADIUS = SOCKET_CORNER_RADIUS = 4mm
+        let thickness = 1.2_f64;
+
+        let hw = w / 2.0;
+        let hd = d / 2.0;
+
+        let v0 = Point3::new(hw - r, -hd, 0.0);
+        let v1 = Point3::new(hw, -hd + r, 0.0);
+        let v2 = Point3::new(hw, hd - r, 0.0);
+        let v3 = Point3::new(hw - r, hd, 0.0);
+        let v4 = Point3::new(-hw + r, hd, 0.0);
+        let v5 = Point3::new(-hw, hd - r, 0.0);
+        let v6 = Point3::new(-hw, -hd + r, 0.0);
+        let v7 = Point3::new(-hw + r, -hd, 0.0);
+
+        let vids: Vec<_> = [v0, v1, v2, v3, v4, v5, v6, v7]
+            .iter()
+            .map(|p| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+            .collect();
+
+        let c_br = Point3::new(hw - r, -hd + r, 0.0);
+        let c_tr = Point3::new(hw - r, hd - r, 0.0);
+        let c_tl = Point3::new(-hw + r, hd - r, 0.0);
+        let c_bl = Point3::new(-hw + r, -hd + r, 0.0);
+
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+
+        let mk_line =
+            |topo: &mut Topology, s, e| topo.edges.alloc(Edge::new(s, e, EdgeCurve::Line));
+        let mk_arc = |topo: &mut Topology, s, e, center: Point3| {
+            let circle = Circle3D::new(center, z_axis, r).unwrap();
+            topo.edges.alloc(Edge::new(s, e, EdgeCurve::Circle(circle)))
+        };
+
+        let e_bot = mk_line(&mut topo, vids[7], vids[0]);
+        let e_br = mk_arc(&mut topo, vids[0], vids[1], c_br);
+        let e_right = mk_line(&mut topo, vids[1], vids[2]);
+        let e_tr = mk_arc(&mut topo, vids[2], vids[3], c_tr);
+        let e_top = mk_line(&mut topo, vids[3], vids[4]);
+        let e_tl = mk_arc(&mut topo, vids[4], vids[5], c_tl);
+        let e_left = mk_line(&mut topo, vids[5], vids[6]);
+        let e_bl = mk_arc(&mut topo, vids[6], vids[7], c_bl);
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e_bot, true),
+                OrientedEdge::new(e_br, true),
+                OrientedEdge::new(e_right, true),
+                OrientedEdge::new(e_tr, true),
+                OrientedEdge::new(e_top, true),
+                OrientedEdge::new(e_tl, true),
+                OrientedEdge::new(e_left, true),
+                OrientedEdge::new(e_bl, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire_id = topo.wires.alloc(wire);
+        let face = Face::new(
+            wire_id,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        );
+        let face_id = topo.faces.alloc(face);
+
+        let solid =
+            crate::extrude::extrude(&mut topo, face_id, Vec3::new(0.0, 0.0, 1.0), h).unwrap();
+
+        let sh_before = topo
+            .shell(topo.solid(solid).unwrap().outer_shell())
+            .unwrap();
+        let fc_before = sh_before.faces().len();
+        eprintln!("[gf-exact] Faces after extrude: {fc_before}");
+
+        let top = find_faces_by_normal(&topo, solid, Vec3::new(0.0, 0.0, 1.0));
+        assert_eq!(top.len(), 1, "one top face");
+
+        let shelled = shell(&mut topo, solid, thickness, &top).unwrap();
+        let sh2 = topo
+            .shell(topo.solid(shelled).unwrap().outer_shell())
+            .unwrap();
+        let fc_after = sh2.faces().len();
+        eprintln!("[gf-exact] Faces after shell: {fc_after}");
+
+        let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, shelled).unwrap();
+        let chi = v as i64 - e as i64 + f as i64;
+        eprintln!("[gf-exact] F={f}, E={e}, V={v}, χ={chi}");
+
+        let vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
+        eprintln!("[gf-exact] Volume: {vol:.2}");
+
+        let result = crate::validate::validate_solid(&topo, shelled);
+        eprintln!("[gf-exact] Validation: {result:?}");
+
+        // After unify_faces
+        let removed = crate::heal::unify_faces(&mut topo, shelled).unwrap();
+        let sh3 = topo
+            .shell(topo.solid(shelled).unwrap().outer_shell())
+            .unwrap();
+        let fc_unified = sh3.faces().len();
+        eprintln!("[gf-exact] After unify_faces (removed {removed}): {fc_unified} faces");
+
+        let (f2, e2, v2) = brepkit_topology::explorer::solid_entity_counts(&topo, shelled).unwrap();
+        let chi2 = v2 as i64 - e2 as i64 + f2 as i64;
+        eprintln!("[gf-exact] After unify: F={f2}, E={e2}, V={v2}, χ={chi2}");
     }
 
     /// Rounded rectangle extrusion → shell: the gridfinity "1×1 flat no-lip" path.
@@ -862,6 +1172,21 @@ mod tests {
         assert_eq!(plane_count, 6, "4 flat sides + 2 caps = 6 planar");
         assert_eq!(cyl_count, 4, "4 corner cylinders");
 
+        // Volume check after extrude (before shell).
+        // Expected: A = w*d - 4*r^2*(1-pi/4), V = A*h
+        let expected_area = w * d - 4.0 * r * r * (1.0 - std::f64::consts::FRAC_PI_4);
+        let expected_vol = expected_area * h;
+        let extrude_vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        let rel_err = (extrude_vol - expected_vol).abs() / expected_vol;
+        eprintln!(
+            "[rounded] Extrude volume: {extrude_vol:.2} (expected {expected_vol:.2}, diff {:.4}%)",
+            rel_err * 100.0
+        );
+        assert!(
+            rel_err < 0.001,
+            "extrude volume error {rel_err:.6} exceeds 0.1%"
+        );
+
         // Find top face(s) and shell.
         let top = find_faces_by_normal(&topo, solid, Vec3::new(0.0, 0.0, 1.0));
         assert_eq!(top.len(), 1, "one top face");
@@ -897,6 +1222,63 @@ mod tests {
         }
         eprintln!("[rounded] Shell: {sp} planar, {sc} cylinder");
 
+        // Diagnostic: inspect the rim face (last face) in detail.
+        {
+            let rim_fid = *sh2.faces().last().unwrap();
+            let rim_f = topo.face(rim_fid).unwrap();
+            let outer_w = topo.wire(rim_f.outer_wire()).unwrap();
+            eprintln!(
+                "[rim-diag] Rim face {}: outer wire has {} edges, {} inner wires",
+                rim_fid.index(),
+                outer_w.edges().len(),
+                rim_f.inner_wires().len()
+            );
+            for (i, oe) in outer_w.edges().iter().enumerate() {
+                let e = topo.edge(oe.edge()).unwrap();
+                let sv = topo.vertex(e.start()).unwrap().point();
+                let ev = topo.vertex(e.end()).unwrap().point();
+                let kind = match e.curve() {
+                    brepkit_topology::edge::EdgeCurve::Line => "Line",
+                    brepkit_topology::edge::EdgeCurve::Circle(_) => "Circle",
+                    _ => "Other",
+                };
+                eprintln!(
+                    "[rim-diag]   outer[{i}]: {kind} fwd={} ({:.2},{:.2},{:.2})->({:.2},{:.2},{:.2})",
+                    oe.is_forward(),
+                    sv.x(),
+                    sv.y(),
+                    sv.z(),
+                    ev.x(),
+                    ev.y(),
+                    ev.z()
+                );
+            }
+            for (iw_idx, &iw_id) in rim_f.inner_wires().iter().enumerate() {
+                let iw = topo.wire(iw_id).unwrap();
+                eprintln!("[rim-diag] Inner wire {iw_idx}: {} edges", iw.edges().len());
+                for (i, oe) in iw.edges().iter().enumerate() {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    let sv = topo.vertex(e.start()).unwrap().point();
+                    let ev = topo.vertex(e.end()).unwrap().point();
+                    let kind = match e.curve() {
+                        brepkit_topology::edge::EdgeCurve::Line => "Line",
+                        brepkit_topology::edge::EdgeCurve::Circle(_) => "Circle",
+                        _ => "Other",
+                    };
+                    eprintln!(
+                        "[rim-diag]   inner[{i}]: {kind} fwd={} ({:.2},{:.2},{:.2})->({:.2},{:.2},{:.2})",
+                        oe.is_forward(),
+                        sv.x(),
+                        sv.y(),
+                        sv.z(),
+                        ev.x(),
+                        ev.y(),
+                        ev.z()
+                    );
+                }
+            }
+        }
+
         // Check face reversal state.
         for &fid in sh2.faces() {
             let f = topo.face(fid).unwrap();
@@ -912,6 +1294,41 @@ mod tests {
 
         let vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
         eprintln!("[rounded] Shell volume: {vol:.2}");
+        // Per-face signed volume for shell diagnostic.
+        {
+            let mut shell_total = 0.0_f64;
+            for &fid in sh2.faces() {
+                let face = topo.face(fid).unwrap();
+                let kind = match face.surface() {
+                    FaceSurface::Plane { .. } => "Plane",
+                    FaceSurface::Cylinder(_) => "Cyl",
+                    _ => "Other",
+                };
+                let mesh = crate::tessellate::tessellate(&topo, fid, 0.01).unwrap();
+                let tris = mesh.indices.len() / 3;
+                let mut fv = 0.0_f64;
+                for t in 0..tris {
+                    let v0 = mesh.positions[mesh.indices[t * 3] as usize];
+                    let v1 = mesh.positions[mesh.indices[t * 3 + 1] as usize];
+                    let v2 = mesh.positions[mesh.indices[t * 3 + 2] as usize];
+                    let a = Vec3::new(v0.x(), v0.y(), v0.z());
+                    let b = Vec3::new(v1.x(), v1.y(), v1.z());
+                    let c = Vec3::new(v2.x(), v2.y(), v2.z());
+                    fv += a.dot(b.cross(c));
+                }
+                fv /= 6.0;
+                shell_total += fv;
+                eprintln!(
+                    "[shell-vol] Face {} ({kind}, rev={}): {tris} tris, signed={fv:.2}",
+                    fid.index(),
+                    face.is_reversed()
+                );
+            }
+            eprintln!(
+                "[shell-vol] Total signed: {shell_total:.2}, abs: {:.2}",
+                shell_total.abs()
+            );
+        }
 
         // Check Euler characteristic.
         let result = crate::validate::validate_solid(&topo, shelled);

@@ -26,6 +26,31 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
+/// Compute the shorter arc range (≤π) from an edge's start to end on a circle.
+///
+/// Returns `(t_start, t_end)` where the shorter arc goes from `t_start` to `t_end`.
+/// When the shorter arc is CW, `t_end < t_start` so that linear interpolation
+/// between them traces the correct (shorter) path via `circle.evaluate()`.
+fn shorter_arc_range(
+    circle: &brepkit_math::curves::Circle3D,
+    topo: &Topology,
+    edge: &brepkit_topology::edge::Edge,
+) -> Result<(f64, f64), crate::OperationsError> {
+    let sp = topo.vertex(edge.start())?.point();
+    let ep = topo.vertex(edge.end())?.point();
+    let ts = circle.project(sp);
+    let te_raw = circle.project(ep);
+    let fwd_span = (te_raw - ts).rem_euclid(std::f64::consts::TAU);
+    if fwd_span <= std::f64::consts::PI {
+        // CCW arc is the shorter path.
+        Ok((ts, ts + fwd_span))
+    } else {
+        // CW arc is shorter: t_end < t_start so interpolation goes backward.
+        let rev_span = std::f64::consts::TAU - fwd_span;
+        Ok((ts, ts - rev_span))
+    }
+}
+
 /// A triangle mesh produced by tessellation.
 #[derive(Debug, Clone, Default)]
 pub struct TriangleMesh {
@@ -133,6 +158,11 @@ fn tessellate_analytic(
     let nu = nu.max(4);
     let nv = nv.max(1);
 
+    // Only wrap u when the range spans a full period (≈ 2π).
+    // For partial arcs (e.g. quarter-cylinder), the last grid column is a
+    // distinct point that must NOT wrap back to the first column.
+    let u_periodic = (u_range.1 - u_range.0 - std::f64::consts::TAU).abs() < 1e-6;
+
     // Build (nu+1) x (nv+1) vertex grid.
     let mut grid = vec![0u32; (nu + 1) * (nv + 1)];
     for iv in 0..=nv {
@@ -147,9 +177,9 @@ fn tessellate_analytic(
         }
     }
 
-    // Get grid index, wrapping u for the periodic seam.
+    // Get grid index, wrapping u only for periodic seams (full circles).
     let gi = |iu: usize, iv: usize| -> u32 {
-        let iu_w = if iu >= nu { 0 } else { iu };
+        let iu_w = if u_periodic && iu >= nu { 0 } else { iu };
         grid[iv * (nu + 1) + iu_w]
     };
 
@@ -248,16 +278,9 @@ fn tessellate_planar(
                 let (t_start, t_end) = if edge.is_closed() {
                     (0.0, std::f64::consts::TAU)
                 } else {
-                    let sp = topo.vertex(edge.start())?.point();
-                    let ep = topo.vertex(edge.end())?.point();
-                    let ts = circle.project(sp);
-                    let mut te = circle.project(ep);
-                    if te <= ts {
-                        te += std::f64::consts::TAU;
-                    }
-                    (ts, te)
+                    shorter_arc_range(circle, topo, edge)?
                 };
-                let arc_range = t_end - t_start;
+                let arc_range = (t_end - t_start).abs();
                 let n_samples =
                     segments_for_chord_deviation(circle.radius(), arc_range, deflection);
                 #[allow(clippy::cast_precision_loss)]
@@ -426,16 +449,9 @@ fn sample_wire_positions(
                 let (t_start, t_end) = if edge.is_closed() {
                     (0.0, std::f64::consts::TAU)
                 } else {
-                    let sp = topo.vertex(edge.start())?.point();
-                    let ep = topo.vertex(edge.end())?.point();
-                    let ts = circle.project(sp);
-                    let mut te = circle.project(ep);
-                    if te <= ts {
-                        te += std::f64::consts::TAU;
-                    }
-                    (ts, te)
+                    shorter_arc_range(circle, topo, edge)?
                 };
-                let arc_range = t_end - t_start;
+                let arc_range = (t_end - t_start).abs();
                 let n_samples =
                     segments_for_chord_deviation(circle.radius(), arc_range, deflection);
                 #[allow(clippy::cast_precision_loss)]
@@ -1472,21 +1488,28 @@ where
                         match edge.curve() {
                             EdgeCurve::Circle(circle) => {
                                 let ts = circle.project(sv.point());
-                                let mut te = circle.project(ev.point());
-                                if te <= ts {
-                                    te += TAU;
-                                }
-                                let mid = circle.evaluate(f64::midpoint(ts, te));
+                                let te = circle.project(ev.point());
+                                // Choose the shorter arc for the midpoint.
+                                let fwd = (te - ts).rem_euclid(TAU);
+                                let mid_t = if fwd <= std::f64::consts::PI {
+                                    ts + fwd * 0.5
+                                } else {
+                                    ts - (TAU - fwd) * 0.5
+                                };
+                                let mid = circle.evaluate(mid_t);
                                 let (u, _) = project(mid);
                                 angles.push(u);
                             }
                             EdgeCurve::Ellipse(ellipse) => {
                                 let ts = ellipse.project(sv.point());
-                                let mut te = ellipse.project(ev.point());
-                                if te <= ts {
-                                    te += TAU;
-                                }
-                                let mid = ellipse.evaluate(f64::midpoint(ts, te));
+                                let te = ellipse.project(ev.point());
+                                let fwd = (te - ts).rem_euclid(TAU);
+                                let mid_t = if fwd <= std::f64::consts::PI {
+                                    ts + fwd * 0.5
+                                } else {
+                                    ts - (TAU - fwd) * 0.5
+                                };
+                                let mid = ellipse.evaluate(mid_t);
                                 let (u, _) = project(mid);
                                 angles.push(u);
                             }
