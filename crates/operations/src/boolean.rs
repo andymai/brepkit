@@ -9916,8 +9916,9 @@ mod tests {
         let fused_vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
 
         let rel_err = (fused_vol - expected).abs() / expected;
-        // Known boolean engine volume issue: fuse on shelled solids produces
-        // ~20% volume error. Tolerance relaxed until boolean engine is fixed.
+        // TODO: re-tighten to 0.05 once boolean engine volume accuracy is fixed.
+        // Known boolean engine issue: fuse on shelled solids produces ~20%
+        // volume error due to topology explosion in the boolean operation.
         assert!(
             rel_err < 0.25,
             "fuse ring inside shelled box: vol={fused_vol:.1} expected={expected:.1} \
@@ -9985,8 +9986,9 @@ mod tests {
         let fused_vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
 
         let rel_err = (fused_vol - expected).abs() / expected;
-        // Known boolean engine volume issue: fuse on shelled solids produces
-        // ~20% volume error. Tolerance relaxed until boolean engine is fixed.
+        // TODO: re-tighten to 0.05 once boolean engine volume accuracy is fixed.
+        // Known boolean engine issue: fuse on shelled solids produces ~20%
+        // volume error due to topology explosion in the boolean operation.
         assert!(
             rel_err < 0.25,
             "fuse ring inside shelled cylinder: vol={fused_vol:.1} expected={expected:.1} \

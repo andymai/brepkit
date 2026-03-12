@@ -789,7 +789,16 @@ fn surfaces_equivalent(a: &FaceSurface, b: &FaceSurface) -> bool {
                     d.dot(d) < lin * lin
                 }
         }
-        _ => false,
+        // Different surface types are never equivalent.
+        (
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+            _,
+        ) => false,
     }
 }
 

@@ -161,7 +161,8 @@ fn tessellate_analytic(
     // Only wrap u when the range spans a full period (≈ 2π).
     // For partial arcs (e.g. quarter-cylinder), the last grid column is a
     // distinct point that must NOT wrap back to the first column.
-    let u_periodic = (u_range.1 - u_range.0 - std::f64::consts::TAU).abs() < 1e-6;
+    let u_periodic = (u_range.1 - u_range.0 - std::f64::consts::TAU).abs()
+        < brepkit_math::tolerance::Tolerance::new().linear;
 
     // Build (nu+1) x (nv+1) vertex grid.
     let mut grid = vec![0u32; (nu + 1) * (nv + 1)];

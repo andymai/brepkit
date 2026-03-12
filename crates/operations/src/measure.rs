@@ -828,6 +828,11 @@ fn analytic_cylinder_signed_volume(
     // ox = O · x_axis, oy = O · y_axis (origin as vector from world origin).
     // CylindricalSurface doesn't expose x_axis/y_axis directly, so compute
     // them the same way the constructor does.
+    // TODO: expose x_axis()/y_axis() on CylindricalSurface and use them here
+    // instead of recomputing. The current approach is correct only when the
+    // cylinder was constructed via CylindricalSurface::new() with default
+    // axis frame logic. Cylinders from STEP import or boolean ops with custom
+    // axis frames would produce inconsistent u-range / frame pairings.
     let axis = cyl.axis();
     let candidate = if axis.x().abs() < 0.9 {
         Vec3::new(1.0, 0.0, 0.0)

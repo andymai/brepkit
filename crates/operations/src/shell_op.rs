@@ -466,7 +466,7 @@ pub fn shell(
                     }
                 }
             }
-            _other => {
+            FaceSurface::Nurbs(_) | FaceSurface::Torus(_) => {
                 let inner_fid = crate::offset_face::offset_face(topo, fid, -thickness, 8)?;
                 let inner_face = topo.face(inner_fid)?;
                 result_specs.push(FaceSpec::Surface {
