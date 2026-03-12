@@ -84,6 +84,7 @@ pub fn split(
                 other => FaceSpec::Surface {
                     vertices: v,
                     surface: other.clone(),
+                    reversed: false,
                 },
             }
         };

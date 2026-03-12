@@ -67,6 +67,16 @@ impl Edge {
         self.start == self.end
     }
 
+    /// Sets the start vertex of this edge.
+    pub fn set_start(&mut self, start: VertexId) {
+        self.start = start;
+    }
+
+    /// Sets the end vertex of this edge.
+    pub fn set_end(&mut self, end: VertexId) {
+        self.end = end;
+    }
+
     /// Sets the curve geometry of this edge.
     pub fn set_curve(&mut self, curve: EdgeCurve) {
         self.curve = curve;

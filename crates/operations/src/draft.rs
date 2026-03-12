@@ -77,6 +77,7 @@ pub fn draft(
                     result_specs.push(FaceSpec::Surface {
                         vertices: verts,
                         surface: other.clone(),
+                        reversed: false,
                     });
                 }
             }

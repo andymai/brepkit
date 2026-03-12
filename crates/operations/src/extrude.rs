@@ -4,6 +4,7 @@
 //! extrusion translates all control points, preserving the exact surface
 //! representation for both caps.
 
+use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -192,9 +193,11 @@ fn extrude_wire_vertices(
     let mut top_edge_ids = Vec::with_capacity(n);
     for i in 0..n {
         let next = (i + 1) % n;
+        let bottom_curve = topo.edge(edge_ids[i])?.curve().clone();
+        let top_curve = translate_edge_curve(&bottom_curve, offset)?;
         let top_edge = topo
             .edges
-            .alloc(Edge::new(top_verts[i], top_verts[next], EdgeCurve::Line));
+            .alloc(Edge::new(top_verts[i], top_verts[next], top_curve));
         top_edge_ids.push(top_edge);
     }
 
@@ -215,6 +218,151 @@ fn extrude_wire_vertices(
         top_edge_ids,
         vertical_edge_ids,
     ))
+}
+
+/// Build the appropriate `FaceSurface` for a side face created by extruding
+/// the given edge curve along the offset direction.
+///
+/// - `Line` edges produce planar faces.
+/// - `Circle` edges produce cylindrical faces (the cylinder axis is the
+///   extrusion direction, passing through the circle center).
+/// - `NurbsCurve` and `Ellipse` edges produce ruled NURBS surfaces
+///   interpolating between the bottom and translated-top curves.
+///
+/// Returns `(surface, is_reversed)` — `is_reversed` is `true` when the
+/// surface's native normal points inward and the face needs flipping.
+fn side_face_surface(
+    curve: &EdgeCurve,
+    p0: Point3,
+    p1: Point3,
+    offset: Vec3,
+    outer_is_cw: bool,
+) -> Result<(FaceSurface, bool), crate::OperationsError> {
+    match curve {
+        EdgeCurve::Line => {
+            let edge_dir = p1 - p0;
+            let normal = if outer_is_cw {
+                offset.cross(edge_dir)
+            } else {
+                edge_dir.cross(offset)
+            }
+            .normalize()
+            .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+            let d = dot_normal_point(normal, p0);
+            Ok((FaceSurface::Plane { normal, d }, false))
+        }
+        EdgeCurve::Circle(circle) => {
+            // The extruded circle sweeps out a cylinder whose axis is the
+            // extrusion direction, passing through the circle center.
+            let cyl = brepkit_math::surfaces::CylindricalSurface::new(
+                circle.center(),
+                offset.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
+                circle.radius(),
+            )
+            .map_err(crate::OperationsError::Math)?;
+            Ok((FaceSurface::Cylinder(cyl), false))
+        }
+        EdgeCurve::NurbsCurve(nc) => {
+            let surface = ruled_nurbs_surface(nc, offset)?;
+            let reversed = nurbs_needs_reversal(&surface, p0, p1, offset, outer_is_cw);
+            Ok((FaceSurface::Nurbs(surface), reversed))
+        }
+        EdgeCurve::Ellipse(ell) => {
+            let nc = ellipse_to_nurbs(ell);
+            let surface = ruled_nurbs_surface(&nc, offset)?;
+            let reversed = nurbs_needs_reversal(&surface, p0, p1, offset, outer_is_cw);
+            Ok((FaceSurface::Nurbs(surface), reversed))
+        }
+    }
+}
+
+/// Check if the ruled NURBS surface's native normal disagrees with the
+/// expected outward direction for this side face.
+fn nurbs_needs_reversal(
+    surface: &NurbsSurface,
+    p0: Point3,
+    p1: Point3,
+    offset: Vec3,
+    outer_is_cw: bool,
+) -> bool {
+    // Expected outward normal (same formula as for planar side faces).
+    let edge_dir = p1 - p0;
+    let expected = if outer_is_cw {
+        offset.cross(edge_dir)
+    } else {
+        edge_dir.cross(offset)
+    };
+    // Evaluate the surface's native normal at the midpoint of the domain.
+    let (u_lo, u_hi) = surface.domain_u();
+    let (v_lo, v_hi) = surface.domain_v();
+    let u_mid = 0.5 * (u_lo + u_hi);
+    let v_mid = 0.5 * (v_lo + v_hi);
+    if let Ok(native) = surface.normal(u_mid, v_mid) {
+        native.dot(expected) < 0.0
+    } else {
+        false
+    }
+}
+
+/// Build a ruled NURBS surface by linearly interpolating between a bottom
+/// NURBS curve and its translated copy (top curve).
+///
+/// The result is a degree `(curve_degree, 1)` surface with two rows of
+/// control points: the original curve at `v=0` and the translated curve
+/// at `v=1`.
+fn ruled_nurbs_surface(
+    nc: &brepkit_math::nurbs::curve::NurbsCurve,
+    offset: Vec3,
+) -> Result<NurbsSurface, crate::OperationsError> {
+    let bottom_cps: Vec<Point3> = nc.control_points().to_vec();
+    let top_cps: Vec<Point3> = bottom_cps.iter().map(|&p| p + offset).collect();
+    let weights_row: Vec<f64> = nc.weights().to_vec();
+
+    // Surface rows = u-direction (extrusion: 2 rows, degree 1)
+    // Surface cols = v-direction (curve: n control points, original degree)
+    NurbsSurface::new(
+        1,                        // linear in extrusion direction (u = rows)
+        nc.degree(),              // curve degree (v = columns)
+        vec![0.0, 0.0, 1.0, 1.0], // clamped linear knot vector for 2 rows
+        nc.knots().to_vec(),      // curve knot vector for columns
+        vec![bottom_cps, top_cps],
+        vec![weights_row.clone(), weights_row],
+    )
+    .map_err(crate::OperationsError::Math)
+}
+
+/// Convert an `Ellipse3D` to a NURBS curve for ruled-surface construction.
+fn ellipse_to_nurbs(
+    ell: &brepkit_math::curves::Ellipse3D,
+) -> brepkit_math::nurbs::curve::NurbsCurve {
+    // Rational quadratic Bezier representation of a full ellipse:
+    // 9 control points, 4 quarter-arcs joined.
+    let c = ell.center();
+    let u = ell.u_axis();
+    let v = ell.v_axis();
+    let a = ell.semi_major();
+    let b = ell.semi_minor();
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+
+    let control_points = vec![
+        c + u * a,
+        c + u * a + v * b,
+        c + v * b,
+        c + u * (-a) + v * b,
+        c + u * (-a),
+        c + u * (-a) + v * (-b),
+        c + v * (-b),
+        c + u * a + v * (-b),
+        c + u * a,
+    ];
+    let weights = vec![1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0];
+    let knots = vec![
+        0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+    ];
+
+    // This is a well-formed rational quadratic B-spline; unwrap is safe.
+    #[allow(clippy::unwrap_used)]
+    brepkit_math::nurbs::curve::NurbsCurve::new(2, knots, control_points, weights).unwrap()
 }
 
 /// Extrude a planar face along a direction to produce a solid.
@@ -395,24 +543,15 @@ pub fn extrude(
 
         let p0 = input_positions[i];
         let p1 = input_positions[next];
-        let edge_dir = p1 - p0;
-        let side_normal = if outer_is_cw {
-            offset.cross(edge_dir)
-        } else {
-            edge_dir.cross(offset)
-        }
-        .normalize()
-        .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-        let side_d = dot_normal_point(side_normal, p0);
+        let edge_curve = topo.edge(input_edge_ids[i])?.curve().clone();
+        let (surface, reversed) = side_face_surface(&edge_curve, p0, p1, offset, outer_is_cw)?;
 
-        let side_face = topo.faces.alloc(Face::new(
-            side_wire_id,
-            vec![],
-            FaceSurface::Plane {
-                normal: side_normal,
-                d: side_d,
-            },
-        ));
+        let side_face = if reversed {
+            topo.faces
+                .alloc(Face::new_reversed(side_wire_id, vec![], surface))
+        } else {
+            topo.faces.alloc(Face::new(side_wire_id, vec![], surface))
+        };
         all_faces.push(side_face);
     }
 
@@ -429,43 +568,27 @@ pub fn extrude(
         for i in 0..iw_n {
             let next = (i + 1) % iw_n;
 
-            let (side_edges, side_normal) = if is_cw {
+            let side_edges = if is_cw {
                 // CW inner wire: traverse the quad in the reversed pattern
                 // (up, across, down, back) so that the face normal points
                 // into the hole (away from solid material).
-                let edges = vec![
+                vec![
                     OrientedEdge::new(iwd.vertical_edge_ids[i], true),
                     OrientedEdge::new(iwd.top_edge_ids[i], true),
                     OrientedEdge::new(iwd.vertical_edge_ids[next], false),
                     OrientedEdge::new(iwd.edge_ids[i], !iwd.oriented[i].is_forward()),
-                ];
-                let p0 = iwd.positions[i];
-                let p1 = iwd.positions[next];
-                let edge_dir = p1 - p0;
-                let normal = edge_dir
-                    .cross(offset)
-                    .normalize()
-                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-                (edges, normal)
+                ]
             } else {
                 // CCW inner wire: use the same winding pattern as outer
                 // side faces (bottom-edge forward, right up, top back,
                 // left down) which produces inward-pointing normals for
                 // CCW inner geometry.
-                let edges = vec![
+                vec![
                     OrientedEdge::new(iwd.edge_ids[i], iwd.oriented[i].is_forward()),
                     OrientedEdge::new(iwd.vertical_edge_ids[next], true),
                     OrientedEdge::new(iwd.top_edge_ids[i], false),
                     OrientedEdge::new(iwd.vertical_edge_ids[i], false),
-                ];
-                let p0 = iwd.positions[i];
-                let p1 = iwd.positions[next];
-                let edge_dir = p1 - p0;
-                let normal = offset
-                    .cross(edge_dir)
-                    .normalize()
-                    .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-                (edges, normal)
+                ]
             };
 
             let side_wire =
@@ -473,16 +596,18 @@ pub fn extrude(
             let side_wire_id = topo.wires.alloc(side_wire);
 
             let p0 = iwd.positions[i];
-            let side_d = dot_normal_point(side_normal, p0);
+            let p1 = iwd.positions[next];
+            let edge_curve = topo.edge(iwd.edge_ids[i])?.curve().clone();
+            // Inner wires have flipped winding relative to outer
+            let inner_is_cw = !is_cw;
+            let (surface, reversed) = side_face_surface(&edge_curve, p0, p1, offset, inner_is_cw)?;
 
-            let side_face = topo.faces.alloc(Face::new(
-                side_wire_id,
-                vec![],
-                FaceSurface::Plane {
-                    normal: side_normal,
-                    d: side_d,
-                },
-            ));
+            let side_face = if reversed {
+                topo.faces
+                    .alloc(Face::new_reversed(side_wire_id, vec![], surface))
+            } else {
+                topo.faces.alloc(Face::new(side_wire_id, vec![], surface))
+            };
             all_faces.push(side_face);
         }
     }
@@ -597,7 +722,6 @@ fn make_translated_wire(
 ///
 /// Returns an error if constructing the translated curve fails (should
 /// never happen when translating a valid curve).
-#[allow(dead_code)]
 fn translate_edge_curve(
     curve: &EdgeCurve,
     offset: Vec3,
@@ -1195,6 +1319,408 @@ mod tests {
             rel_err < 0.01,
             "CW extrusion volumes should match: origin={vol1}, translated={vol2}, \
              rel_err={rel_err:.2e}"
+        );
+    }
+
+    /// Extruding a face with a NURBS arc edge should produce NURBS side faces
+    /// for the curved edges and planar side faces for the straight edges.
+    #[test]
+    fn extrude_nurbs_arc_edge_produces_nurbs_side_face() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let mut topo = Topology::new();
+        let tol = Tolerance::new();
+
+        // Build a face shaped like a square with one curved edge (quarter-circle arc).
+        // Vertices: v0=(0,0,0), v1=(1,0,0), v2=(1,1,0), v3=(0,1,0)
+        // Replace the edge v1→v2 with a NURBS arc that bulges outward.
+        let v0 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol.linear));
+        let v1 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol.linear));
+        let v2 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), tol.linear));
+        let v3 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 1.0, 0.0), tol.linear));
+
+        // Rational quadratic arc: (1,0,0) → (1.5,0.5,0) → (1,1,0) with weight 1/√2 at midpoint
+        let arc_curve = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.5, 0.5, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+            vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
+        )
+        .unwrap();
+
+        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo
+            .edges
+            .alloc(Edge::new(v1, v2, EdgeCurve::NurbsCurve(arc_curve)));
+        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire_id = topo.wires.alloc(wire);
+        let face = topo.faces.alloc(Face::new(
+            wire_id,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        // 4 side faces + 2 caps = 6 faces
+        assert_eq!(sh.faces().len(), 6, "should have 6 faces");
+
+        // Count surface types: expect 1 NURBS side face (from the arc edge),
+        // 3 planar side faces, and 2 planar caps = 5 planar + 1 NURBS.
+        let nurbs_count = sh
+            .faces()
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
+            .count();
+        assert_eq!(
+            nurbs_count, 1,
+            "exactly 1 side face should be a NURBS ruled surface, got {nurbs_count}"
+        );
+
+        // The NURBS surface should have 2 rows (ruled) and degree 1 in v-direction.
+        let nurbs_face = sh
+            .faces()
+            .iter()
+            .find(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
+            .unwrap();
+        if let FaceSurface::Nurbs(surf) = topo.face(*nurbs_face).unwrap().surface() {
+            assert_eq!(
+                surf.degree_u(),
+                1,
+                "ruled surface should have degree_u=1 (extrusion direction)"
+            );
+            assert_eq!(
+                surf.control_points().len(),
+                2,
+                "ruled surface should have 2 rows of control points"
+            );
+        }
+    }
+
+    /// Extruding a face with a Circle edge should produce a cylindrical side face.
+    #[test]
+    fn extrude_circle_edge_produces_cylinder_side_face() {
+        use brepkit_math::curves::Circle3D;
+
+        let mut topo = Topology::new();
+        let tol = Tolerance::new();
+
+        // Build a face: three line edges + one semicircular arc edge.
+        let v0 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol.linear));
+        let v1 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol.linear));
+        let v2 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), tol.linear));
+        let v3 = topo
+            .vertices
+            .alloc(Vertex::new(Point3::new(0.0, 1.0, 0.0), tol.linear));
+
+        let circle = Circle3D::with_axes(
+            Point3::new(1.0, 0.5, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            0.5,
+            Vec3::new(0.0, -1.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+
+        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo
+            .edges
+            .alloc(Edge::new(v1, v2, EdgeCurve::Circle(circle)));
+        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire_id = topo.wires.alloc(wire);
+        let face = topo.faces.alloc(Face::new(
+            wire_id,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        let solid = extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        let cyl_count = sh
+            .faces()
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .count();
+        assert_eq!(
+            cyl_count, 1,
+            "exactly 1 side face should be a cylinder, got {cyl_count}"
+        );
+    }
+
+    /// NURBS arc extrude → volume should match analytic formula.
+    #[test]
+    fn nurbs_arc_extrude_volume() {
+        use brepkit_math::nurbs::fitting::interpolate;
+        use brepkit_math::tolerance::Tolerance;
+
+        let mut topo = Topology::new();
+        let tol = Tolerance::new();
+
+        let w = 41.5_f64;
+        let d = 41.5_f64;
+        let r = 3.75_f64;
+        let h = 21.0_f64;
+        let hw = w / 2.0;
+        let hd = d / 2.0;
+
+        // Quarter circle via NURBS interpolation (same path as brepjs)
+        let make_arc_nurbs = |cx: f64, cy: f64, start_angle: f64| {
+            let n_pts = 24;
+            let mut pts = Vec::new();
+            for i in 0..=n_pts {
+                let angle = start_angle + std::f64::consts::FRAC_PI_2 * i as f64 / n_pts as f64;
+                pts.push(Point3::new(cx + r * angle.cos(), cy + r * angle.sin(), 0.0));
+            }
+            interpolate(&pts, 3).unwrap()
+        };
+
+        let positions = [
+            Point3::new(hw - r, -hd, 0.0),
+            Point3::new(hw, -hd + r, 0.0),
+            Point3::new(hw, hd - r, 0.0),
+            Point3::new(hw - r, hd, 0.0),
+            Point3::new(-hw + r, hd, 0.0),
+            Point3::new(-hw, hd - r, 0.0),
+            Point3::new(-hw, -hd + r, 0.0),
+            Point3::new(-hw + r, -hd, 0.0),
+        ];
+
+        let vids: Vec<_> = positions
+            .iter()
+            .map(|p| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+            .collect();
+
+        let arcs = [
+            make_arc_nurbs(hw - r, -hd + r, -std::f64::consts::FRAC_PI_2),
+            make_arc_nurbs(hw - r, hd - r, 0.0),
+            make_arc_nurbs(-hw + r, hd - r, std::f64::consts::FRAC_PI_2),
+            make_arc_nurbs(-hw + r, -hd + r, std::f64::consts::PI),
+        ];
+
+        let e_bot = topo
+            .edges
+            .alloc(Edge::new(vids[7], vids[0], EdgeCurve::Line));
+        let e_br = topo.edges.alloc(Edge::new(
+            vids[0],
+            vids[1],
+            EdgeCurve::NurbsCurve(arcs[0].clone()),
+        ));
+        let e_right = topo
+            .edges
+            .alloc(Edge::new(vids[1], vids[2], EdgeCurve::Line));
+        let e_tr = topo.edges.alloc(Edge::new(
+            vids[2],
+            vids[3],
+            EdgeCurve::NurbsCurve(arcs[1].clone()),
+        ));
+        let e_top = topo
+            .edges
+            .alloc(Edge::new(vids[3], vids[4], EdgeCurve::Line));
+        let e_tl = topo.edges.alloc(Edge::new(
+            vids[4],
+            vids[5],
+            EdgeCurve::NurbsCurve(arcs[2].clone()),
+        ));
+        let e_left = topo
+            .edges
+            .alloc(Edge::new(vids[5], vids[6], EdgeCurve::Line));
+        let e_bl = topo.edges.alloc(Edge::new(
+            vids[6],
+            vids[7],
+            EdgeCurve::NurbsCurve(arcs[3].clone()),
+        ));
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e_bot, true),
+                OrientedEdge::new(e_br, true),
+                OrientedEdge::new(e_right, true),
+                OrientedEdge::new(e_tr, true),
+                OrientedEdge::new(e_top, true),
+                OrientedEdge::new(e_tl, true),
+                OrientedEdge::new(e_left, true),
+                OrientedEdge::new(e_bl, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire_id = topo.wires.alloc(wire);
+
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let face = Face::new(wire_id, vec![], FaceSurface::Plane { normal, d: 0.0 });
+        let face_id = topo.faces.alloc(face);
+
+        let solid =
+            crate::extrude::extrude(&mut topo, face_id, Vec3::new(0.0, 0.0, 1.0), h).unwrap();
+
+        let sh = topo
+            .shell(topo.solid(solid).unwrap().outer_shell())
+            .unwrap();
+        assert_eq!(sh.faces().len(), 10, "should have 10 faces");
+
+        // Also try Circle3D edges for comparison
+        let vol_circle = {
+            let mut t2 = Topology::new();
+            let tol2 = Tolerance::new();
+            let z_axis = Vec3::new(0.0, 0.0, 1.0);
+            let vids2: Vec<_> = positions
+                .iter()
+                .map(|p| t2.vertices.alloc(Vertex::new(*p, tol2.linear)))
+                .collect();
+            let mk_line2 =
+                |topo: &mut Topology, s, e| topo.edges.alloc(Edge::new(s, e, EdgeCurve::Line));
+            let mk_arc2 = |topo: &mut Topology, s, e, center: Point3| {
+                let circle = brepkit_math::curves::Circle3D::new(center, z_axis, r).unwrap();
+                topo.edges.alloc(Edge::new(s, e, EdgeCurve::Circle(circle)))
+            };
+            let e2_bot = mk_line2(&mut t2, vids2[7], vids2[0]);
+            let e2_br = mk_arc2(
+                &mut t2,
+                vids2[0],
+                vids2[1],
+                Point3::new(hw - r, -hd + r, 0.0),
+            );
+            let e2_right = mk_line2(&mut t2, vids2[1], vids2[2]);
+            let e2_tr = mk_arc2(
+                &mut t2,
+                vids2[2],
+                vids2[3],
+                Point3::new(hw - r, hd - r, 0.0),
+            );
+            let e2_top = mk_line2(&mut t2, vids2[3], vids2[4]);
+            let e2_tl = mk_arc2(
+                &mut t2,
+                vids2[4],
+                vids2[5],
+                Point3::new(-hw + r, hd - r, 0.0),
+            );
+            let e2_left = mk_line2(&mut t2, vids2[5], vids2[6]);
+            let e2_bl = mk_arc2(
+                &mut t2,
+                vids2[6],
+                vids2[7],
+                Point3::new(-hw + r, -hd + r, 0.0),
+            );
+            let wire2 = Wire::new(
+                vec![
+                    OrientedEdge::new(e2_bot, true),
+                    OrientedEdge::new(e2_br, true),
+                    OrientedEdge::new(e2_right, true),
+                    OrientedEdge::new(e2_tr, true),
+                    OrientedEdge::new(e2_top, true),
+                    OrientedEdge::new(e2_tl, true),
+                    OrientedEdge::new(e2_left, true),
+                    OrientedEdge::new(e2_bl, true),
+                ],
+                true,
+            )
+            .unwrap();
+            let wid2 = t2.wires.alloc(wire2);
+            let face2 = Face::new(wid2, vec![], FaceSurface::Plane { normal, d: 0.0 });
+            let fid2 = t2.faces.alloc(face2);
+            let solid2 =
+                crate::extrude::extrude(&mut t2, fid2, Vec3::new(0.0, 0.0, 1.0), h).unwrap();
+            crate::measure::solid_volume(&t2, solid2, 0.01).unwrap()
+        };
+        eprintln!("[nurbs_arc] Circle3D volume: {vol_circle:.2}");
+
+        // Debug: per-face volume contribution via signed tetrahedra
+        for &fid in sh.faces() {
+            let f = topo.face(fid).unwrap();
+            let kind = match f.surface() {
+                FaceSurface::Plane { .. } => "Plane",
+                FaceSurface::Nurbs(_) => "Nurbs",
+                FaceSurface::Cylinder(_) => "Cylinder",
+                _ => "Other",
+            };
+            let w2 = topo.wire(f.outer_wire()).unwrap();
+            let mesh = crate::tessellate::tessellate(&topo, fid, 0.01).unwrap();
+            let tri_count = mesh.indices.len() / 3;
+            let mut face_vol = 0.0_f64;
+            for t in 0..tri_count {
+                let v0 = mesh.positions[mesh.indices[t * 3] as usize];
+                let v1 = mesh.positions[mesh.indices[t * 3 + 1] as usize];
+                let v2 = mesh.positions[mesh.indices[t * 3 + 2] as usize];
+                let a = Vec3::new(v0.x(), v0.y(), v0.z());
+                let b = Vec3::new(v1.x(), v1.y(), v1.z());
+                let c = Vec3::new(v2.x(), v2.y(), v2.z());
+                face_vol += a.dot(b.cross(c));
+            }
+            face_vol /= 6.0;
+            eprintln!(
+                "[nurbs_arc] Face {}: {kind}, {} edges, {} tris, vol_contrib={face_vol:.2}",
+                fid.index(),
+                w2.edges().len(),
+                tri_count
+            );
+        }
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        let corner_area = (4.0 - std::f64::consts::PI) * r * r;
+        let expected_vol = (w * d - corner_area) * h;
+        let pct = (vol - expected_vol).abs() / expected_vol;
+        eprintln!(
+            "[nurbs_arc] Volume: {vol:.2}, expected: {expected_vol:.2}, err: {:.2}%",
+            pct * 100.0
+        );
+        assert!(
+            pct < 0.05,
+            "NURBS arc extrude volume error too large: {vol:.2} vs {expected_vol:.2} ({:.2}%)",
+            pct * 100.0
         );
     }
 }

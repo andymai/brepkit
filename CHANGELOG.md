@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.8](https://github.com/andymai/brepkit/compare/v1.0.7...v1.0.8) (2026-03-12)
+
+
+### Bug Fixes
+
+* shell operation improvements, cylinder AABB, tessellation, and volume accuracy ([#188](https://github.com/andymai/brepkit/issues/188)) ([d19d224](https://github.com/andymai/brepkit/commit/d19d2248dbdc83af2967d40ea2e0cf2dbcd4f811))
+
 ## [1.0.7](https://github.com/andymai/brepkit/compare/v1.0.6...v1.0.7) (2026-03-11)
 
 
