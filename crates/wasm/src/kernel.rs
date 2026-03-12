@@ -2635,10 +2635,8 @@ impl BrepKernel {
         let center = Point3::new(center_x, center_y, center_z);
         let axis = Vec3::new(axis_x, axis_y, axis_z);
 
-        let n = axis.normalize().map_err(|e| {
-            WasmError::InvalidInput {
-                reason: format!("invalid axis: {e}"),
-            }
+        let n = axis.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid axis: {e}"),
         })?;
 
         // u_axis = normalized(start − center), v_axis = n × u
@@ -2650,14 +2648,17 @@ impl BrepKernel {
             }
             .into());
         }
-        let u_axis = Vec3::new(radial.x() / radius, radial.y() / radius, radial.z() / radius);
+        let u_axis = Vec3::new(
+            radial.x() / radius,
+            radial.y() / radius,
+            radial.z() / radius,
+        );
         let v_axis = n.cross(u_axis);
 
-        let circle =
-            brepkit_math::curves::Circle3D::with_axes(center, n, radius, u_axis, v_axis)
-                .map_err(|e| WasmError::InvalidInput {
-                    reason: format!("invalid circle: {e}"),
-                })?;
+        let circle = brepkit_math::curves::Circle3D::with_axes(center, n, radius, u_axis, v_axis)
+            .map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid circle: {e}"),
+        })?;
 
         let v_start = self.topo.vertices.alloc(Vertex::new(start_pt, TOL));
         let v_end = if (start_pt - end_pt).length() < TOL * 100.0 {
@@ -3422,6 +3423,19 @@ impl BrepKernel {
                 Ok(vec![k1, k2, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
             }
         }
+    }
+
+    /// Unify adjacent faces that lie on the same geometric surface.
+    ///
+    /// Merges co-surface face fragments (produced by boolean operations)
+    /// back into single faces, reducing face count and improving topology.
+    /// Returns the number of faces removed.
+    #[wasm_bindgen(js_name = "unifyFaces")]
+    pub fn unify_faces(&mut self, solid: u32) -> Result<u32, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let removed = brepkit_operations::heal::unify_faces(&mut self.topo, solid_id)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(removed as u32)
     }
 
     /// Heal a solid topology.
@@ -6106,6 +6120,13 @@ impl BrepKernel {
                 )
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
+            "unifyFaces" => {
+                let s = get_u32(args, "solid")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                brepkit_operations::heal::unify_faces(&mut self.topo, solid_id)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(solid_id)))
             }
             "healSolid" => {
                 let s = get_u32(args, "solid")?;

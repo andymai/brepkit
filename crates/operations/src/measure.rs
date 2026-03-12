@@ -579,8 +579,7 @@ pub fn solid_volume(
         sh.faces().iter().any(|&fid| {
             topo.face(fid).is_ok_and(|f| {
                 !f.inner_wires().is_empty()
-                    || (f.is_reversed()
-                        && !matches!(f.surface(), FaceSurface::Plane { .. }))
+                    || (f.is_reversed() && !matches!(f.surface(), FaceSurface::Plane { .. }))
             })
         })
     };

@@ -3045,45 +3045,43 @@ pub(crate) fn assemble_solid_mixed(
                     let (key_min, key_max) = if vi <= vj { (vi, vj) } else { (vj, vi) };
                     let is_forward = vi <= vj;
 
-                    let edge_id =
-                        *edge_map.entry((key_min, key_max)).or_insert_with(|| {
-                            let (start, end) = if vi <= vj {
-                                (vert_ids[i], vert_ids[j])
-                            } else {
-                                (vert_ids[j], vert_ids[i])
-                            };
+                    let edge_id = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
+                        let (start, end) = if vi <= vj {
+                            (vert_ids[i], vert_ids[j])
+                        } else {
+                            (vert_ids[j], vert_ids[i])
+                        };
 
-                            // Determine if this edge is angular (arc) or axial (line)
-                            // by projecting both endpoints onto the cylinder.
-                            let (u1, v1) = cylinder.project_point(verts[i]);
-                            let (u2, v2) = cylinder.project_point(verts[j]);
-                            let u_diff = (u1 - u2).abs();
-                            let v_diff = (v1 - v2).abs();
+                        // Determine if this edge is angular (arc) or axial (line)
+                        // by projecting both endpoints onto the cylinder.
+                        let (u1, v1) = cylinder.project_point(verts[i]);
+                        let (u2, v2) = cylinder.project_point(verts[j]);
+                        let u_diff = (u1 - u2).abs();
+                        let v_diff = (v1 - v2).abs();
 
-                            // Angular edge: endpoints at the same height (v) but different
-                            // angle (u). If v also differs, it's a diagonal/seam → Line.
-                            if u_diff > tol.linear
-                                && u_diff < (std::f64::consts::TAU - tol.linear)
-                                && v_diff < tol.linear * 100.0
-                            {
-                                // Create a Circle3D at the v-level of this edge.
-                                let center =
-                                    cylinder.origin() + cylinder.axis() * ((v1 + v2) * 0.5);
-                                if let Ok(circle) = brepkit_math::curves::Circle3D::new(
-                                    center,
-                                    cylinder.axis(),
-                                    cylinder.radius(),
-                                ) {
-                                    topo.edges
-                                        .alloc(Edge::new(start, end, EdgeCurve::Circle(circle)))
-                                } else {
-                                    topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
-                                }
+                        // Angular edge: endpoints at the same height (v) but different
+                        // angle (u). If v also differs, it's a diagonal/seam → Line.
+                        if u_diff > tol.linear
+                            && u_diff < (std::f64::consts::TAU - tol.linear)
+                            && v_diff < tol.linear * 100.0
+                        {
+                            // Create a Circle3D at the v-level of this edge.
+                            let center = cylinder.origin() + cylinder.axis() * ((v1 + v2) * 0.5);
+                            if let Ok(circle) = brepkit_math::curves::Circle3D::new(
+                                center,
+                                cylinder.axis(),
+                                cylinder.radius(),
+                            ) {
+                                topo.edges
+                                    .alloc(Edge::new(start, end, EdgeCurve::Circle(circle)))
                             } else {
-                                // Axial edge (same angle, different height): line.
                                 topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
                             }
-                        });
+                        } else {
+                            // Axial edge (same angle, different height): line.
+                            topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                        }
+                    });
 
                     oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
                 }
@@ -3146,15 +3144,14 @@ pub(crate) fn assemble_solid_mixed(
                     let (key_min, key_max) = if vi <= vj { (vi, vj) } else { (vj, vi) };
                     let is_forward = vi <= vj;
 
-                    let edge_id =
-                        *edge_map.entry((key_min, key_max)).or_insert_with(|| {
-                            let (start, end) = if vi <= vj {
-                                (vert_ids[i], vert_ids[j])
-                            } else {
-                                (vert_ids[j], vert_ids[i])
-                            };
-                            topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
-                        });
+                    let edge_id = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
+                        let (start, end) = if vi <= vj {
+                            (vert_ids[i], vert_ids[j])
+                        } else {
+                            (vert_ids[j], vert_ids[i])
+                        };
+                        topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                    });
 
                     oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
                 }
