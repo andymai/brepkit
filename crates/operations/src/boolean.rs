@@ -611,7 +611,7 @@ pub fn boolean_with_options(
         // AABB pre-filter: skip expensive ray-cast for fragments whose centroid
         // is outside the opposing solid's bounding box — they are definitively
         // Outside. Eliminates most ray-casts in large multi-body fuse operations.
-        if centroid_outside_opposing_aabb(frag.source, centroid, aabb_a, aabb_b) {
+        if centroid_outside_opposing_aabb(frag.source, centroid, aabb_a, aabb_b, tol.linear) {
             return FaceClass::Outside;
         }
 
@@ -950,20 +950,24 @@ fn solid_aabb(
     Ok(aabb)
 }
 
-/// Return `true` if `centroid` is outside the AABB of the solid opposing `source`.
+/// Return `true` if `centroid` is definitively outside the opposing solid's AABB.
 ///
-/// A centroid outside the opposing solid's bounding box is definitively outside
-/// that solid — no ray-cast needed.
+/// The AABB is expanded by `pad` before the test to avoid false positives from
+/// floating-point rounding — `polygon_centroid` may compute a value that differs
+/// by a few ULP from the vertex coordinates used to build the AABB, so a centroid
+/// on the boundary can appear to be just outside without padding.
 fn centroid_outside_opposing_aabb(
     source: Source,
     centroid: Point3,
     aabb_a: Aabb3,
     aabb_b: Aabb3,
+    pad: f64,
 ) -> bool {
-    match source {
-        Source::A => !aabb_b.contains_point(centroid),
-        Source::B => !aabb_a.contains_point(centroid),
-    }
+    let test = match source {
+        Source::A => aabb_b.expanded(pad),
+        Source::B => aabb_a.expanded(pad),
+    };
+    !test.contains_point(centroid)
 }
 
 /// Check if one solid is entirely contained in the other and short-circuit
@@ -5291,7 +5295,13 @@ fn analytic_boolean(
         }
         let frag = &fragments[idx];
         let centroid = polygon_centroid(&frag.vertices);
-        if centroid_outside_opposing_aabb(frag.source, centroid, a_overall_aabb, b_overall_aabb) {
+        if centroid_outside_opposing_aabb(
+            frag.source,
+            centroid,
+            a_overall_aabb,
+            b_overall_aabb,
+            tol.linear,
+        ) {
             *class = Some(FaceClass::Outside);
         }
     }
