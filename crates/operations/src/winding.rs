@@ -11,8 +11,12 @@
 
 use brepkit_math::vec::{Point3, Vec3};
 
-/// Dot-product threshold for winding classification.
-/// Values below this magnitude are treated as degenerate (coplanar/perpendicular).
+/// Dot-product threshold for winding classification in Newell-normal-based
+/// functions (`is_cw_winding`, `ensure_ccw_profiles`).
+///
+/// `inner_wire_is_cw` intentionally uses the larger `f64::EPSILON` threshold
+/// instead, because its fan-decomposed signed area has different magnitude
+/// characteristics than a Newell-normal dot product.
 const WINDING_DOT_TOL: f64 = 1e-30;
 
 /// Compute the Newell normal of a polygon.
@@ -80,7 +84,8 @@ pub fn ensure_ccw_positions(positions: &mut [Point3], reference_dir: Vec3) -> bo
 /// Uses the signed area projected onto the extrusion axis: negative = CW,
 /// positive = CCW. This generalizes to non-axis-aligned extrusions.
 /// When the projected area is near-zero (polygon nearly perpendicular to
-/// the extrusion axis), defaults to CW (the standard B-Rep hole convention).
+/// the extrusion axis), returns `false` (not CW). Only the degenerate
+/// case (fewer than 3 vertices) defaults to CW.
 pub fn inner_wire_is_cw(positions: &[Point3], offset: &Vec3) -> bool {
     if positions.len() < 3 {
         return true; // degenerate — default to CW
@@ -93,9 +98,9 @@ pub fn inner_wire_is_cw(positions: &[Point3], offset: &Vec3) -> bool {
         let b = positions[i + 1] - p0;
         signed_area_2 += a.cross(b).dot(axis);
     }
-    // Use a tolerance threshold to avoid floating-point noise flipping
-    // the classification for polygons nearly perpendicular to the axis.
-    // Default to CW (standard B-Rep hole convention) when ambiguous.
+    // When |signed_area_2| is below the floating-point noise floor, the polygon
+    // is nearly perpendicular to the extrusion axis and winding cannot be
+    // determined — treat as not-CW.
     signed_area_2 < -f64::EPSILON
 }
 
@@ -245,9 +250,9 @@ mod tests {
     }
 
     #[test]
-    fn inner_wire_perpendicular_defaults_cw() {
-        // Square on XZ plane, extrusion along +Y (perpendicular to polygon)
-        // Signed area projected onto Y is ~zero → default CW
+    fn inner_wire_cw_on_xz_plane_detected() {
+        // Square on XZ plane viewed from +Y: Newell normal is −Y, so the
+        // polygon is CW relative to the +Y extrusion axis (signed_area_2 ≈ −2.0).
         let sq = vec![
             Point3::new(0.0, 0.0, 0.0),
             Point3::new(1.0, 0.0, 0.0),
