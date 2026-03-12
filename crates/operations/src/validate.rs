@@ -106,22 +106,35 @@ pub fn validate_solid(
     // 1. Entity counts and Euler characteristic.
     let (f, e, v) = explorer::solid_entity_counts(topo, solid)?;
 
-    // Euler-Poincaré formula: V - E + F = 2(1 - g) for a closed orientable
-    // surface of genus g. Genus-0 (sphere-like) → 2, genus-1 (torus) → 0,
-    // genus-2 (double torus) → -2, etc.
+    // Euler-Poincaré formula for a cell complex with inner loops:
+    //   V - E + F = 2(1 - g) + L
+    // where g is the genus and L is the total number of inner wire loops
+    // across all faces. For a genus-0 solid with no holes: V-E+F = 2.
+    // With L inner wires: V-E+F = 2 + L.
     //
-    // Rather than computing genus from inner wires (which is fragile),
-    // we check that the Euler characteristic is consistent: it must be an
-    // even integer ≤ 2, giving a non-negative integer genus.
+    // Count total inner wires across all faces.
+    let mut total_inner_loops: i64 = 0;
+    let faces = explorer::solid_faces(topo, solid)?;
+    for fid in &faces {
+        let face = topo.face(*fid)?;
+        #[allow(clippy::cast_possible_wrap)]
+        {
+            total_inner_loops += face.inner_wires().len() as i64;
+        }
+    }
+
     #[allow(clippy::cast_possible_wrap)]
     let euler = (v as i64) - (e as i64) + (f as i64);
-    let genus_times_2 = 2 - euler;
+    // Adjusted Euler: subtract inner loops to get the standard characteristic.
+    let adjusted_euler = euler - total_inner_loops;
+    let genus_times_2 = 2 - adjusted_euler;
     if genus_times_2 < 0 || genus_times_2 % 2 != 0 {
         issues.push(ValidationIssue {
             severity: Severity::Error,
             description: format!(
                 "Euler characteristic V-E+F = {euler} is invalid \
-                 (expected even value ≤ 2 for closed solid, got V={v}, E={e}, F={f})"
+                 (expected V-E+F = 2+L with L={total_inner_loops} inner loops, \
+                 got V={v}, E={e}, F={f})"
             ),
         });
     }
@@ -1441,11 +1454,16 @@ mod tests {
 
         let result = crate::shell_op::shell(&mut topo, cube, 1.0, &[open_face]).unwrap();
 
-        // Strict validation fails for shell results
+        // Both strict and relaxed validation should pass for properly
+        // constructed shells (plane-intersected inner vertex positions
+        // ensure watertight geometry).
         let strict = validate_solid(&topo, result).unwrap();
-        assert!(!strict.is_valid(), "shell should fail strict validation");
+        assert!(
+            strict.is_valid(),
+            "shell should pass strict validation: {:?}",
+            strict.issues
+        );
 
-        // Relaxed validation should pass
         let relaxed = validate_solid_relaxed(&topo, result).unwrap();
         assert!(
             relaxed.is_valid(),

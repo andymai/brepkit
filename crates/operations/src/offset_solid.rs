@@ -242,6 +242,7 @@ fn offset_solid_general(
                 result_specs.push(FaceSpec::Surface {
                     vertices: verts,
                     surface: other.clone(),
+                    reversed: false,
                 });
             }
         }

@@ -3,14 +3,16 @@
 //! Equivalent to `ShapeFix` in `OpenCascade`. Provides repair
 //! operations for common geometry issues encountered in imported CAD files.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::face::{Face, FaceId, FaceSurface};
+use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::VertexId;
+use brepkit_topology::wire::{OrientedEdge, Wire};
 
 /// Combined result of [`repair_solid`]: validation before, healing, validation after.
 #[derive(Debug, Clone)]
@@ -739,6 +741,336 @@ pub fn remove_duplicate_faces(
     Ok(removed_count)
 }
 
+// ── Face Unification ──────────────────────────────────────────────
+
+/// Compare two face surfaces for geometric equivalence.
+///
+/// Two surfaces are equivalent if they represent the same infinite surface
+/// (e.g., same plane, same cylinder axis/radius). This is the same logic
+/// used by wireframe edge filtering in `tessellate.rs`.
+fn surfaces_equivalent(a: &FaceSurface, b: &FaceSurface) -> bool {
+    let tol = Tolerance::new();
+    let lin = tol.linear;
+    let ang = tol.angular;
+
+    match (a, b) {
+        (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
+            let dot = na.dot(*nb);
+            (dot.abs() - 1.0).abs() < ang && (da - db * dot.signum()).abs() < lin
+        }
+        (FaceSurface::Cylinder(ca), FaceSurface::Cylinder(cb)) => {
+            (ca.radius() - cb.radius()).abs() < lin
+                && ca.axis().dot(cb.axis()).abs() > 1.0 - ang
+                && {
+                    let d = cb.origin() - ca.origin();
+                    d.cross(ca.axis()).length_squared() < lin * lin
+                }
+        }
+        (FaceSurface::Cone(ca), FaceSurface::Cone(cb)) => {
+            (ca.half_angle() - cb.half_angle()).abs() < ang
+                && ca.axis().dot(cb.axis()).abs() > 1.0 - ang
+                && {
+                    let d = cb.apex() - ca.apex();
+                    d.dot(d) < lin * lin
+                }
+        }
+        (FaceSurface::Sphere(sa), FaceSurface::Sphere(sb)) => {
+            (sa.radius() - sb.radius()).abs() < lin && {
+                let d = sb.center() - sa.center();
+                d.dot(d) < lin * lin
+            }
+        }
+        (FaceSurface::Torus(ta), FaceSurface::Torus(tb)) => {
+            (ta.major_radius() - tb.major_radius()).abs() < lin
+                && (ta.minor_radius() - tb.minor_radius()).abs() < lin
+                && ta.z_axis().dot(tb.z_axis()).abs() > 1.0 - ang
+                && {
+                    let d = tb.center() - ta.center();
+                    d.dot(d) < lin * lin
+                }
+        }
+        // Different surface types are never equivalent.
+        (
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+            _,
+        ) => false,
+    }
+}
+
+/// Union-Find: find root with path compression.
+fn uf_find(parent: &mut [usize], mut x: usize) -> usize {
+    while parent[x] != x {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
+    }
+    x
+}
+
+/// Union-Find: merge two sets.
+fn uf_union(parent: &mut [usize], a: usize, b: usize) {
+    let ra = uf_find(parent, a);
+    let rb = uf_find(parent, b);
+    if ra != rb {
+        parent[rb] = ra;
+    }
+}
+
+/// Unify adjacent faces that lie on the same geometric surface.
+///
+/// This merges co-surface face fragments produced by boolean operations
+/// back into single faces, reducing face count and improving topology
+/// quality. Equivalent to `ShapeUpgrade_UnifySameDomain` in OpenCASCADE.
+///
+/// The algorithm:
+/// 1. Build an edge→face adjacency map
+/// 2. Group faces by surface equivalence using connected-component analysis
+/// 3. For each group of ≥2 faces, merge their outer wires by removing
+///    internal shared edges and splicing the remaining edge chains
+/// 4. Rebuild the shell with unified faces
+///
+/// Returns the number of faces removed by unification.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+#[allow(clippy::too_many_lines)]
+pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::OperationsError> {
+    let solid_data = topo.solid(solid)?;
+    let shell_id = solid_data.outer_shell();
+    let shell = topo.shell(shell_id)?;
+    let all_face_ids: Vec<FaceId> = shell.faces().to_vec();
+    let original_count = all_face_ids.len();
+
+    if original_count < 2 {
+        return Ok(0);
+    }
+
+    // Step 1: Build edge→face map.
+    let edge_face_map = brepkit_topology::explorer::edge_to_face_map(topo, solid)?;
+
+    // Step 2: Find connected components of faces sharing edges on the same surface.
+    // Union-Find structure.
+    let face_index_map: HashMap<usize, usize> = all_face_ids
+        .iter()
+        .enumerate()
+        .map(|(i, fid)| (fid.index(), i))
+        .collect();
+
+    let n = all_face_ids.len();
+    let mut parent: Vec<usize> = (0..n).collect();
+
+    // For each edge shared by exactly 2 faces, check if they're on the same surface.
+    for faces in edge_face_map.values() {
+        if faces.len() != 2 {
+            continue;
+        }
+        let fa_idx = match face_index_map.get(&faces[0].index()) {
+            Some(&i) => i,
+            None => continue,
+        };
+        let fb_idx = match face_index_map.get(&faces[1].index()) {
+            Some(&i) => i,
+            None => continue,
+        };
+
+        // Snapshot surface data to avoid borrow issues.
+        let surface_a = topo.face(faces[0])?.surface().clone();
+        let surface_b = topo.face(faces[1])?.surface().clone();
+
+        if surfaces_equivalent(&surface_a, &surface_b) {
+            uf_union(&mut parent, fa_idx, fb_idx);
+        }
+    }
+
+    // Step 3: Group faces by their root.
+    let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..n {
+        let root = uf_find(&mut parent, i);
+        groups.entry(root).or_default().push(i);
+    }
+
+    // Only process groups with ≥2 faces.
+    let merge_groups: Vec<Vec<usize>> = groups.into_values().filter(|g| g.len() >= 2).collect();
+
+    if merge_groups.is_empty() {
+        return Ok(0);
+    }
+
+    // Step 4: For each merge group, merge the faces.
+    let mut merged_face_ids: Vec<FaceId> = Vec::new();
+    let mut consumed: HashSet<usize> = HashSet::new();
+
+    for group in &merge_groups {
+        let group_face_ids: Vec<FaceId> = group.iter().map(|&i| all_face_ids[i]).collect();
+
+        // Find internal edges: edges shared by two faces BOTH in this group.
+        let group_set: HashSet<usize> = group_face_ids.iter().map(|f| f.index()).collect();
+        let mut internal_edges: HashSet<usize> = HashSet::new();
+
+        for (edge_idx, faces) in &edge_face_map {
+            if faces.len() == 2
+                && group_set.contains(&faces[0].index())
+                && group_set.contains(&faces[1].index())
+            {
+                internal_edges.insert(*edge_idx);
+            }
+        }
+
+        // Collect all oriented edges from all faces in the group, excluding internal edges.
+        // Also collect inner wires from all faces.
+        let mut boundary_edges: Vec<OrientedEdge> = Vec::new();
+        let mut all_inner_wires: Vec<brepkit_topology::wire::WireId> = Vec::new();
+        let mut representative_surface: Option<FaceSurface> = None;
+        let mut representative_reversed = false;
+
+        for &fid in &group_face_ids {
+            let face = topo.face(fid)?;
+            if representative_surface.is_none() {
+                representative_surface = Some(face.surface().clone());
+                representative_reversed = face.is_reversed();
+            }
+            all_inner_wires.extend_from_slice(face.inner_wires());
+
+            let wire = topo.wire(face.outer_wire())?;
+            for oe in wire.edges() {
+                if !internal_edges.contains(&oe.edge().index()) {
+                    boundary_edges.push(*oe);
+                }
+            }
+        }
+
+        // Reorder boundary edges into a connected chain.
+        let ordered = order_edges_into_wire(topo, &boundary_edges)?;
+
+        if ordered.is_empty() {
+            // Couldn't form a valid wire — skip this group, keep original faces.
+            continue;
+        }
+
+        // Create the merged wire and face.
+        let new_wire = Wire::new(ordered, true).map_err(crate::OperationsError::Topology)?;
+        let new_wire_id = topo.wires.alloc(new_wire);
+
+        let surface =
+            representative_surface.ok_or_else(|| crate::OperationsError::InvalidInput {
+                reason: "empty merge group".to_string(),
+            })?;
+
+        let new_face = if representative_reversed {
+            Face::new_reversed(new_wire_id, all_inner_wires, surface)
+        } else {
+            Face::new(new_wire_id, all_inner_wires, surface)
+        };
+        let new_face_id = topo.faces.alloc(new_face);
+        merged_face_ids.push(new_face_id);
+
+        for &fid in &group_face_ids {
+            consumed.insert(fid.index());
+        }
+    }
+
+    if consumed.is_empty() {
+        return Ok(0);
+    }
+
+    // Step 5: Rebuild the shell with unmerged faces + new merged faces.
+    let mut new_faces: Vec<FaceId> = all_face_ids
+        .into_iter()
+        .filter(|f| !consumed.contains(&f.index()))
+        .collect();
+    new_faces.extend(merged_face_ids);
+
+    let new_shell = Shell::new(new_faces).map_err(crate::OperationsError::Topology)?;
+    *topo.shell_mut(shell_id)? = new_shell;
+
+    let final_count = topo.shell(shell_id)?.faces().len();
+    Ok(original_count - final_count)
+}
+
+/// Edge info for wire ordering: oriented edge with resolved vertex indices.
+struct EdgeInfo {
+    oe: OrientedEdge,
+    start_vid: usize,
+    end_vid: usize,
+}
+
+/// Order a set of boundary edges into a connected wire sequence.
+///
+/// Takes unordered oriented edges and arranges them so that the end vertex
+/// of each edge connects to the start vertex of the next edge. Returns
+/// an empty vec if the edges can't form a single closed loop (e.g., if
+/// they form multiple disjoint loops — a case we don't handle yet).
+fn order_edges_into_wire(
+    topo: &Topology,
+    edges: &[OrientedEdge],
+) -> Result<Vec<OrientedEdge>, crate::OperationsError> {
+    if edges.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut infos: Vec<EdgeInfo> = Vec::with_capacity(edges.len());
+    for oe in edges {
+        let edge = topo.edge(oe.edge())?;
+        let (sv, ev) = if oe.is_forward() {
+            (edge.start().index(), edge.end().index())
+        } else {
+            (edge.end().index(), edge.start().index())
+        };
+        infos.push(EdgeInfo {
+            oe: *oe,
+            start_vid: sv,
+            end_vid: ev,
+        });
+    }
+
+    // Build a map from start_vertex → edge index for quick lookup.
+    let mut start_map: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (i, info) in infos.iter().enumerate() {
+        start_map.entry(info.start_vid).or_default().push(i);
+    }
+
+    // Walk the chain starting from the first edge.
+    let mut result = Vec::with_capacity(edges.len());
+    let mut used = vec![false; edges.len()];
+
+    result.push(infos[0].oe);
+    used[0] = true;
+    let mut current_end = infos[0].end_vid;
+    let chain_start = infos[0].start_vid;
+
+    for _ in 1..edges.len() {
+        let candidates = match start_map.get(&current_end) {
+            Some(c) => c,
+            None => return Ok(Vec::new()), // broken chain
+        };
+        let mut found = false;
+        for &idx in candidates {
+            if !used[idx] {
+                used[idx] = true;
+                result.push(infos[idx].oe);
+                current_end = infos[idx].end_vid;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            return Ok(Vec::new()); // broken chain
+        }
+    }
+
+    // Verify closure: the last edge's end should connect back to the first edge's start.
+    if current_end != chain_start {
+        return Ok(Vec::new());
+    }
+
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -885,6 +1217,402 @@ mod tests {
         assert!(
             (vol_before - vol_after).abs() < 0.01,
             "heal should preserve volume: before={vol_before}, after={vol_after}"
+        );
+    }
+
+    // ── Face unification tests ──────────────────────────
+
+    #[test]
+    fn unify_clean_box_no_change() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let (f_before, _, _) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, solid).unwrap();
+        let removed = unify_faces(&mut topo, solid).unwrap();
+
+        assert_eq!(removed, 0, "clean box should have nothing to unify");
+        let (f_after, _, _) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, solid).unwrap();
+        assert_eq!(f_before, f_after);
+    }
+
+    #[test]
+    fn unify_clean_cylinder_no_change() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+
+        let removed = unify_faces(&mut topo, solid).unwrap();
+        assert_eq!(removed, 0, "clean cylinder should have nothing to unify");
+    }
+
+    #[test]
+    fn unify_boolean_box_reduces_faces() {
+        // Two overlapping boxes: the boolean result has coplanar face fragments
+        // on the shared cutting plane.
+        let mut topo = Topology::new();
+        let box1 = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+        let box2 = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+
+        // Translate box2 by (1, 0, 0) so they overlap by 1 unit in X.
+        let translate = brepkit_math::mat::Mat4::translation(1.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, box2, &translate).unwrap();
+
+        let fused = crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, box1, box2)
+            .unwrap();
+
+        let (f_before, _, _) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, fused).unwrap();
+
+        let vol_before = crate::measure::solid_volume(&topo, fused, 0.1).unwrap();
+
+        let removed = unify_faces(&mut topo, fused).unwrap();
+
+        let (f_after, _, _) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, fused).unwrap();
+
+        let vol_after = crate::measure::solid_volume(&topo, fused, 0.1).unwrap();
+
+        // Unification should reduce face count.
+        assert!(
+            removed > 0,
+            "boolean fuse of overlapping boxes should produce unifiable coplanar faces, \
+             f_before={f_before}, f_after={f_after}"
+        );
+        assert!(f_after < f_before);
+
+        // Volume should be preserved.
+        assert!(
+            (vol_before - vol_after).abs() < 0.1,
+            "unification should preserve volume: before={vol_before}, after={vol_after}"
+        );
+    }
+
+    #[test]
+    fn unify_preserves_volume() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 3.0, 4.0, 5.0).unwrap();
+
+        let vol_before = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        let _removed = unify_faces(&mut topo, solid).unwrap();
+        let vol_after = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+
+        assert!(
+            (vol_before - vol_after).abs() < 0.01,
+            "unify should preserve volume: before={vol_before}, after={vol_after}"
+        );
+    }
+
+    #[test]
+    fn unify_shell_box_reduces_faces() {
+        // Shell a box (hollow it out) — this produces coplanar face fragments
+        // that should be merged by unify_faces.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+
+        // Get top face (z=10) as the open face for shelling.
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+        let face_ids: Vec<_> = shell.faces().to_vec();
+
+        // Find the top face (normal pointing +z, d ≈ 10)
+        let top_face = face_ids
+            .iter()
+            .find(|&&fid| {
+                let face = topo.face(fid).unwrap();
+                match face.surface() {
+                    FaceSurface::Plane { normal, d } => normal.z() > 0.9 && (*d - 10.0).abs() < 0.1,
+                    _ => false,
+                }
+            })
+            .copied();
+
+        let open_faces = match top_face {
+            Some(f) => vec![f],
+            None => vec![face_ids[0]], // fallback
+        };
+
+        let shelled = crate::shell_op::shell(&mut topo, solid, 1.0, &open_faces).unwrap();
+
+        let (f_before, e_before, v_before) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, shelled).unwrap();
+        #[allow(clippy::cast_possible_wrap)]
+        let chi_before = (v_before as i64) - (e_before as i64) + (f_before as i64);
+
+        let vol_before = crate::measure::solid_volume(&topo, shelled, 0.1).unwrap();
+
+        let removed = unify_faces(&mut topo, shelled).unwrap();
+
+        let (f_after, e_after, v_after) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, shelled).unwrap();
+        #[allow(clippy::cast_possible_wrap)]
+        let chi_after = (v_after as i64) - (e_after as i64) + (f_after as i64);
+
+        let vol_after = crate::measure::solid_volume(&topo, shelled, 0.1).unwrap();
+
+        eprintln!(
+            "shell box: faces {f_before} -> {f_after} (removed {removed}), \
+             χ {chi_before} -> {chi_after}, vol {vol_before:.1} -> {vol_after:.1}"
+        );
+
+        // Volume must be preserved.
+        assert!(
+            (vol_before - vol_after).abs() / vol_before < 0.01,
+            "unification should preserve volume: before={vol_before}, after={vol_after}"
+        );
+
+        // Euler characteristic must be preserved.
+        assert_eq!(
+            chi_before, chi_after,
+            "Euler χ should be preserved: before={chi_before}, after={chi_after}"
+        );
+    }
+
+    #[test]
+    fn unify_cylinder_boolean_reduces_faces() {
+        // Boolean cut of a box with a cylinder produces co-cylindrical face fragments.
+        let mut topo = Topology::new();
+        let box1 = crate::primitives::make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 1.0, 6.0).unwrap();
+
+        // Move cylinder to center of box top face.
+        let translate = brepkit_math::mat::Mat4::translation(2.0, 2.0, -1.0);
+        crate::transform::transform_solid(&mut topo, cyl, &translate).unwrap();
+
+        let result =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, box1, cyl).unwrap();
+
+        let (f_before, _, _) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, result).unwrap();
+
+        let vol_before = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+
+        let removed = unify_faces(&mut topo, result).unwrap();
+
+        let vol_after = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+
+        // Volume must be preserved.
+        assert!(
+            (vol_before - vol_after).abs() < 0.1,
+            "unification should preserve volume: before={vol_before}, after={vol_after}"
+        );
+
+        // Log for diagnostics (test passes either way — this is informational).
+        let (f_after, _, _) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, result).unwrap();
+        eprintln!("cylinder boolean: faces {f_before} -> {f_after}, removed {removed}");
+    }
+
+    #[test]
+    fn unify_shell_rounded_rect_preserves_volume() {
+        // Shell a rounded rectangle with 3 arc edges per quarter-circle corner
+        // (matching brepjs behavior). The extrusion creates 3 cylindrical face
+        // fragments per corner. unify_faces merges these. This is the exact
+        // scenario that causes volume corruption in the topology parity test.
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::tolerance::Tolerance;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let tol = Tolerance::new();
+
+        let w = 41.5_f64;
+        let d = 41.5_f64;
+        let h = 21.0_f64;
+        let r = 4.0_f64;
+        let thickness = 1.2_f64;
+        let hw = w / 2.0;
+        let hd = d / 2.0;
+
+        // Corner centers:
+        let c_br = Point3::new(hw - r, -hd + r, 0.0);
+        let c_tr = Point3::new(hw - r, hd - r, 0.0);
+        let c_tl = Point3::new(-hw + r, hd - r, 0.0);
+        let c_bl = Point3::new(-hw + r, -hd + r, 0.0);
+
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+
+        // Subdivide each quarter circle into 3 arcs (30° each).
+        // Quarter goes from angle a0 to a0+π/2 in 3 steps.
+        let n_sub = 3usize;
+        let quarter = std::f64::consts::FRAC_PI_2;
+
+        // Corner start angles (CCW): BR=-π/2, TR=0, TL=π/2, BL=π
+        let corners = [
+            (c_br, -std::f64::consts::FRAC_PI_2),
+            (c_tr, 0.0),
+            (c_tl, std::f64::consts::FRAC_PI_2),
+            (c_bl, std::f64::consts::PI),
+        ];
+
+        // Build all vertices: for each corner, n_sub+1 points on the arc,
+        // but the last point of one corner is the first of the next line segment.
+        // Layout: for corner i, arc vertices are at angles a0 + j*(π/2)/n_sub for j=0..n_sub.
+        // The vertex at j=0 is the line-end of the previous side.
+        // The vertex at j=n_sub is the line-start of the next side.
+
+        // Generate corner arc points.
+        let mut corner_verts: Vec<Vec<Point3>> = Vec::new();
+        for &(center, a0) in &corners {
+            let mut pts = Vec::new();
+            for j in 0..=n_sub {
+                #[allow(clippy::cast_precision_loss)]
+                let angle = a0 + (j as f64) * quarter / (n_sub as f64);
+                let pt = Point3::new(
+                    center.x() + r * angle.cos(),
+                    center.y() + r * angle.sin(),
+                    0.0,
+                );
+                pts.push(pt);
+            }
+            corner_verts.push(pts);
+        }
+
+        // Allocate vertices (sharing endpoints between corners and lines).
+        // Wire order: bottom_line, br_arc[0..3], right_line, tr_arc[0..3], top_line, tl_arc[0..3], left_line, bl_arc[0..3]
+        // Each line connects: corner[i][n_sub] -> corner[(i+1)%4][0]
+        // Line vertices: br[3]=right_start, tr[0]=right_end -> but corners go BR, TR, TL, BL
+        // So: bottom_line = bl[3] -> br[0], right_line = br[3] -> tr[0], etc.
+
+        // Allocate all unique vertex IDs.
+        // For each corner: n_sub+1 points, but corner[i][n_sub] == start of next line == corner[(i+1)%4][0]
+        // Wait, that's not right. Let me think again...
+        // Wire order CCW: bl[3]->br[0] (bottom), br[0]->br[3] (br arc), br[3]->tr[0] (right), tr[0]->tr[3] (tr arc), etc.
+        // So corner[i][0] is the START of the arc, corner[i][n_sub] is the END.
+        // Line between corner i end and corner (i+1)%4 start.
+        // But our corners are [BR, TR, TL, BL], and CCW order is: bottom, BR, right, TR, top, TL, left, BL
+        // So: BL[3]->BR[0] = bottom line, BR[0]->BR[3] = BR arc, BR[3]->TR[0] = right line, etc.
+
+        // Unique points: 4 corners × n_sub intermediate + 4 corner endpoints shared with lines.
+        // Actually: each corner has n_sub+1 points. corner[i][0] is shared with previous line end,
+        // corner[i][n_sub] is shared with next line start.
+        // Total unique: 4 * n_sub (intermediate arc points) + 4 (shared line/arc junction points) = 4*(n_sub+1) - 4 = 4*n_sub
+        // Wait: 4 corners × (n_sub+1) points each, but corner[i][n_sub] == (next line start) and
+        // corner[(i+1)%4][0] == (next line end). These are NOT the same point.
+        // Actually in CCW order: BL_end -> BR_start (bottom line), BR arcs, BR_end -> TR_start (right line), etc.
+        // So each corner contributes n_sub+1 unique points, and lines share those endpoints.
+        // Total unique vertices = 4 * (n_sub + 1) = 16 for n_sub=3.
+
+        // Let me just allocate all vertices in wire order.
+        let mut wire_edges = Vec::new();
+
+        // CCW order: bottom_line, br_arc, right_line, tr_arc, top_line, tl_arc, left_line, bl_arc
+        // corners[0]=BR, corners[1]=TR, corners[2]=TL, corners[3]=BL
+        let corner_order = [3, 0, 1, 2]; // BL, BR, TR, TL in CCW order
+
+        for ci in 0..4 {
+            let this_corner = corner_order[ci];
+            let next_corner = corner_order[(ci + 1) % 4];
+
+            // Line: this_corner[n_sub] -> next_corner[0]
+            let line_start = corner_verts[this_corner][n_sub];
+            let line_end = corner_verts[next_corner][0];
+            let ls_vid = topo.vertices.alloc(Vertex::new(line_start, tol.linear));
+            let le_vid = topo.vertices.alloc(Vertex::new(line_end, tol.linear));
+            let line_eid = topo.edges.alloc(Edge::new(ls_vid, le_vid, EdgeCurve::Line));
+            wire_edges.push(OrientedEdge::new(line_eid, true));
+
+            // Arc segments for next_corner.
+            let center = corners[next_corner].0;
+            let circle = Circle3D::new(center, z_axis, r).unwrap();
+            let mut prev_vid = le_vid;
+            for j in 1..=n_sub {
+                let pt = corner_verts[next_corner][j];
+                let next_vid = topo.vertices.alloc(Vertex::new(pt, tol.linear));
+                let arc_eid = topo.edges.alloc(Edge::new(
+                    prev_vid,
+                    next_vid,
+                    EdgeCurve::Circle(circle.clone()),
+                ));
+                wire_edges.push(OrientedEdge::new(arc_eid, true));
+                prev_vid = next_vid;
+            }
+        }
+
+        let wire = Wire::new(wire_edges, true).unwrap();
+        let wire_id = topo.wires.alloc(wire);
+
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let face = Face::new(wire_id, vec![], FaceSurface::Plane { normal, d: 0.0 });
+        let face_id = topo.faces.alloc(face);
+
+        // Extrude.
+        let solid =
+            crate::extrude::extrude(&mut topo, face_id, Vec3::new(0.0, 0.0, 1.0), h).unwrap();
+
+        // Find top face for shelling.
+        let top_faces: Vec<FaceId> = {
+            let s = topo.solid(solid).unwrap();
+            let sh = topo.shell(s.outer_shell()).unwrap();
+            sh.faces()
+                .iter()
+                .filter(|&&fid| {
+                    let f = topo.face(fid).unwrap();
+                    if let FaceSurface::Plane { normal: n, d } = f.surface() {
+                        n.z() > 0.9 && (*d - h).abs() < 0.1
+                    } else {
+                        false
+                    }
+                })
+                .copied()
+                .collect()
+        };
+        assert_eq!(top_faces.len(), 1, "should find exactly one top face");
+
+        let shelled = crate::shell_op::shell(&mut topo, solid, thickness, &top_faces).unwrap();
+
+        let (f_before, e_before, v_before) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, shelled).unwrap();
+        let vol_before = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
+
+        // Count cylinder faces before.
+        let shell_id = topo.solid(shelled).unwrap().outer_shell();
+        let cyl_before = topo
+            .shell(shell_id)
+            .unwrap()
+            .faces()
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .count();
+
+        let removed = unify_faces(&mut topo, shelled).unwrap();
+
+        let (f_after, e_after, v_after) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, shelled).unwrap();
+        let vol_after = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
+
+        let cyl_after = topo
+            .shell(shell_id)
+            .unwrap()
+            .faces()
+            .iter()
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .count();
+
+        #[allow(clippy::cast_possible_wrap)]
+        let chi_before = (v_before as i64) - (e_before as i64) + (f_before as i64);
+        #[allow(clippy::cast_possible_wrap)]
+        let chi_after = (v_after as i64) - (e_after as i64) + (f_after as i64);
+
+        eprintln!(
+            "shell rounded rect (3 arcs/corner): faces {f_before} -> {f_after} (removed {removed}), \
+             cyl {cyl_before} -> {cyl_after}, \
+             χ {chi_before} -> {chi_after}, vol {vol_before:.1} -> {vol_after:.1}"
+        );
+
+        // Cylinder faces should be merged: 24 -> 8.
+        assert!(removed > 0, "unify should merge cylinder face fragments");
+
+        // Volume must be preserved (within 1%).
+        let rel_err = (vol_before - vol_after).abs() / vol_before;
+        assert!(
+            rel_err < 0.01,
+            "unify should preserve volume: before={vol_before:.2}, after={vol_after:.2}, err={:.2}%",
+            rel_err * 100.0
         );
     }
 

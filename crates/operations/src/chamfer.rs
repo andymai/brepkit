@@ -175,6 +175,7 @@ pub fn chamfer(
             result_specs.push(FaceSpec::Surface {
                 vertices: verts,
                 surface: face.surface().clone(),
+                reversed: false,
             });
             continue;
         };

@@ -63,6 +63,12 @@ pub(crate) fn expand_aabb_for_surface(aabb: &mut Aabb3, surface: &FaceSurface) {
             let origin = c.origin();
             let axis = c.axis();
             let r = c.radius();
+            // Expand by ±r only in radial directions (perpendicular to the
+            // cylinder axis). The axial extent is already covered by vertices.
+            // For each world axis i, the maximum radial reach is r * sqrt(1 - axis_i²).
+            let rx = r * (1.0 - axis.x() * axis.x()).max(0.0).sqrt();
+            let ry = r * (1.0 - axis.y() * axis.y()).max(0.0).sqrt();
+            let rz = r * (1.0 - axis.z() * axis.z()).max(0.0).sqrt();
             for corner in [aabb.min, aabb.max] {
                 let rel = Vec3::new(
                     corner.x() - origin.x(),
@@ -75,8 +81,8 @@ pub(crate) fn expand_aabb_for_surface(aabb: &mut Aabb3, surface: &FaceSurface) {
                     origin.y() + axis.y() * t,
                     origin.z() + axis.z() * t,
                 );
-                aabb_include(aabb, Point3::new(coa.x() - r, coa.y() - r, coa.z() - r));
-                aabb_include(aabb, Point3::new(coa.x() + r, coa.y() + r, coa.z() + r));
+                aabb_include(aabb, Point3::new(coa.x() - rx, coa.y() - ry, coa.z() - rz));
+                aabb_include(aabb, Point3::new(coa.x() + rx, coa.y() + ry, coa.z() + rz));
             }
         }
         FaceSurface::Torus(t) => {
@@ -568,21 +574,22 @@ pub fn solid_volume(
         return Ok(v);
     }
 
-    // For solids with faces that have inner wires (holes from boolean ops),
-    // the watertight tessellation may produce cracks at hole boundaries
-    // because hole edges and adjacent curved face edges aren't shared.
-    // Also, the centroid-based winding correction in the per-face fallback
-    // fails for holes where normals correctly point inward.
-    // Use direct signed-volume summation: tessellate() already handles
-    // face reversal (flips winding + normals), so raw signed tets are correct.
-    let has_holed_faces = {
+    // For solids with faces that have inner wires (holes from boolean ops)
+    // or reversed non-planar faces (inner walls from shell/boolean operations),
+    // use direct per-face tessellation with signed-volume summation.
+    // tessellate() handles face reversal (flips winding + normals), so raw
+    // signed tets are correct even without a globally watertight mesh.
+    let needs_direct_tessellation = {
         let s = topo.solid(solid)?;
         let sh = topo.shell(s.outer_shell())?;
-        sh.faces()
-            .iter()
-            .any(|&fid| topo.face(fid).is_ok_and(|f| !f.inner_wires().is_empty()))
+        sh.faces().iter().any(|&fid| {
+            topo.face(fid).is_ok_and(|f| {
+                !f.inner_wires().is_empty()
+                    || (f.is_reversed() && !matches!(f.surface(), FaceSurface::Plane { .. }))
+            })
+        })
     };
-    if has_holed_faces {
+    if needs_direct_tessellation {
         return volume_from_direct_face_tessellation(topo, solid, deflection);
     }
 
@@ -701,12 +708,162 @@ fn volume_from_per_face_tessellation(
     Ok((total / 6.0).abs())
 }
 
+/// Exact signed volume contribution of a cylindrical face via the
+/// divergence theorem: `V = (1/3) ∫∫ P·n dA`.
+///
+/// For a cylinder parameterised as
+///   `P(u,v) = O + r*(cos u · ex + sin u · ey) + v · a`
+/// the outward normal is `n = cos u · ex + sin u · ey`, dA = r du dv.
+///
+/// Integrating analytically over `u ∈ [u1,u2], v ∈ [v1,v2]`:
+///   `V = (r/3) · h · [ ox·(sin u2 − sin u1) + oy·(−cos u2 + cos u1) + r·(u2 − u1) ]`
+/// where `ox = O·ex`, `oy = O·ey`, `h = v2 − v1`.
+///
+/// For a reversed face the contribution is negated.
+fn analytic_cylinder_signed_volume(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<f64, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let cyl = match face.surface() {
+        FaceSurface::Cylinder(c) => c,
+        _ => {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "analytic_cylinder_signed_volume requires a cylinder face".into(),
+            });
+        }
+    };
+
+    // Collect boundary vertex (u,v) parameters on the cylinder.
+    let wire = topo.wire(face.outer_wire())?;
+    let mut u_vals = Vec::new();
+    let mut v_vals = Vec::new();
+    for oe in wire.edges() {
+        if let Ok(edge) = topo.edge(oe.edge()) {
+            for &vid in &[edge.start(), edge.end()] {
+                if let Ok(vtx) = topo.vertex(vid) {
+                    let (u, v) = cyl.project_point(vtx.point());
+                    u_vals.push(u);
+                    v_vals.push(v);
+                }
+            }
+            // Sample circle-edge midpoints for angular coverage.
+            if !edge.is_closed() {
+                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
+                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                        let ts = circle.project(sv.point());
+                        let te = circle.project(ev.point());
+                        // Choose the shorter arc for the midpoint.
+                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                        let mid_t = if fwd <= std::f64::consts::PI {
+                            ts + fwd * 0.5
+                        } else {
+                            ts - (std::f64::consts::TAU - fwd) * 0.5
+                        };
+                        let mid = circle.evaluate(mid_t);
+                        let (u, _) = cyl.project_point(mid);
+                        u_vals.push(u);
+                    }
+                }
+            }
+        }
+    }
+
+    // Determine v-range (axial).
+    let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
+    let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let h = v_max - v_min;
+    if h.abs() < 1e-15 {
+        return Ok(0.0);
+    }
+
+    // Determine u-range (angular) using the same gap-detection logic as tessellate.
+    let u_range = {
+        use std::f64::consts::TAU;
+        let tol_lin = brepkit_math::tolerance::Tolerance::default().linear;
+
+        u_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        u_vals.dedup_by(|a, b| (*a - *b).abs() < tol_lin);
+
+        if u_vals.len() < 3 {
+            (0.0, TAU)
+        } else {
+            let mut max_gap = 0.0_f64;
+            let mut gap_end_idx = 0_usize;
+            for i in 0..u_vals.len() {
+                let j = (i + 1) % u_vals.len();
+                let gap = if j > i {
+                    u_vals[j] - u_vals[i]
+                } else {
+                    u_vals[j] + TAU - u_vals[i]
+                };
+                if gap > max_gap {
+                    max_gap = gap;
+                    gap_end_idx = j;
+                }
+            }
+            let n_angles = u_vals.len() as f64;
+            let even_gap = TAU / n_angles;
+            let gap_threshold = (2.5 * even_gap).min(TAU / 3.0);
+            if max_gap < gap_threshold {
+                (0.0, TAU)
+            } else {
+                let u_start = u_vals[gap_end_idx];
+                let gap_start_idx = if gap_end_idx == 0 {
+                    u_vals.len() - 1
+                } else {
+                    gap_end_idx - 1
+                };
+                let u_end = u_vals[gap_start_idx];
+                if u_end > u_start {
+                    (u_start, u_end)
+                } else {
+                    (u_start, u_end + TAU)
+                }
+            }
+        }
+    };
+
+    let r = cyl.radius();
+    // ox = O · x_axis, oy = O · y_axis (origin as vector from world origin).
+    // CylindricalSurface doesn't expose x_axis/y_axis directly, so compute
+    // them the same way the constructor does.
+    // TODO: expose x_axis()/y_axis() on CylindricalSurface and use them here
+    // instead of recomputing. The current approach is correct only when the
+    // cylinder was constructed via CylindricalSurface::new() with default
+    // axis frame logic. Cylinders from STEP import or boolean ops with custom
+    // axis frames would produce inconsistent u-range / frame pairings.
+    let axis = cyl.axis();
+    let candidate = if axis.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let x_axis = axis
+        .cross(candidate)
+        .normalize()
+        .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+    let y_axis = axis.cross(x_axis);
+
+    let o_vec = Vec3::new(cyl.origin().x(), cyl.origin().y(), cyl.origin().z());
+    let ox = o_vec.dot(x_axis);
+    let oy = o_vec.dot(y_axis);
+
+    let (u1, u2) = u_range;
+    let (sin1, cos1) = u1.sin_cos();
+    let (sin2, cos2) = u2.sin_cos();
+
+    let vol = (r / 3.0) * h * (ox * (sin2 - sin1) + oy * (-cos2 + cos1) + r * (u2 - u1));
+
+    Ok(if face.is_reversed() { -vol } else { vol })
+}
+
 /// Compute volume by tessellating each face and summing signed tetrahedra
 /// WITHOUT winding correction. Relies on `tessellate()` already handling
 /// face reversal (via `is_reversed` flag) to produce correctly oriented
-/// triangles. This is more reliable than centroid-based winding correction
-/// for solids with concavities or cylindrical holes.
-fn volume_from_direct_face_tessellation(
+/// triangles. For cylinder faces, uses exact analytical integration via
+/// the divergence theorem instead of tessellation.
+pub(crate) fn volume_from_direct_face_tessellation(
     topo: &Topology,
     solid: SolidId,
     deflection: f64,
@@ -716,11 +873,20 @@ fn volume_from_direct_face_tessellation(
 
     let mut total: f64 = 0.0;
     for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+
+        // Use exact analytical volume for cylinder faces.
+        if matches!(face.surface(), FaceSurface::Cylinder(_)) {
+            total += analytic_cylinder_signed_volume(topo, fid)? * 6.0;
+            continue;
+        }
+
         let mesh = tessellate::tessellate(topo, fid, deflection)?;
         let idx = &mesh.indices;
         let pos = &mesh.positions;
         let tri_count = idx.len() / 3;
 
+        let mut face_total = 0.0;
         for t in 0..tri_count {
             let v0 = pos[idx[t * 3] as usize];
             let v1 = pos[idx[t * 3 + 1] as usize];
@@ -730,8 +896,10 @@ fn volume_from_direct_face_tessellation(
             let b = Vec3::new(v1.x(), v1.y(), v1.z());
             let c = Vec3::new(v2.x(), v2.y(), v2.z());
 
-            total += a.dot(b.cross(c));
+            face_total += a.dot(b.cross(c));
         }
+
+        total += face_total;
     }
 
     Ok((total / 6.0).abs())

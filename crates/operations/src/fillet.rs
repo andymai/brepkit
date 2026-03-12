@@ -309,6 +309,7 @@ pub fn fillet(
             result_specs.push(FaceSpec::Surface {
                 vertices: verts,
                 surface: face.surface().clone(),
+                reversed: false,
             });
             continue;
         };
@@ -666,6 +667,7 @@ pub fn fillet_rolling_ball(
             all_specs.push(FaceSpec::Surface {
                 vertices: verts,
                 surface: face.surface().clone(),
+                reversed: false,
             });
             continue;
         };
@@ -961,6 +963,7 @@ pub fn fillet_rolling_ball(
         all_specs.push(FaceSpec::Surface {
             vertices: vec![contact1_start, contact2_start, contact2_end, contact1_end],
             surface: FaceSurface::Nurbs(fillet_surface),
+            reversed: false,
         });
 
         // Track which faces need normal reversal.
@@ -1204,6 +1207,7 @@ pub fn fillet_rolling_ball(
                     all_specs.push(FaceSpec::Surface {
                         vertices: ordered_points,
                         surface: FaceSurface::Nurbs(cap_surface),
+                        reversed: false,
                     });
 
                     // Check if we need to flip this face too.
@@ -1468,6 +1472,7 @@ pub fn fillet_variable(
             all_specs.push(FaceSpec::Surface {
                 vertices: verts,
                 surface: face.surface().clone(),
+                reversed: false,
             });
             continue;
         };
@@ -1702,6 +1707,7 @@ pub fn fillet_variable(
         all_specs.push(FaceSpec::Surface {
             vertices: vec![c1s, c2s, c2e, c1e],
             surface: FaceSurface::Nurbs(surface),
+            reversed: false,
         });
     }
 
