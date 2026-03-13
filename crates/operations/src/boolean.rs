@@ -528,8 +528,8 @@ pub fn boolean_with_options(
     let faces_a = collect_face_data(topo, a, opts.deflection)?;
     let faces_b = collect_face_data(topo, b, opts.deflection)?;
 
-    let aabb_a = solid_aabb(&faces_a, tol)?;
-    let aabb_b = solid_aabb(&faces_b, tol)?;
+    let aabb_a = solid_aabb(topo, &faces_a, tol)?;
+    let aabb_b = solid_aabb(topo, &faces_b, tol)?;
 
     // Disjoint AABB shortcut.
     if !aabb_a.intersects(aabb_b) {
@@ -605,9 +605,27 @@ pub fn boolean_with_options(
     let bvh_a = build_face_bvh(&faces_a);
     let bvh_b = build_face_bvh(&faces_b);
 
+    // Pre-expand opposing AABBs for classification. A centroid outside the
+    // opposing solid's bounding box is definitively Outside, skipping expensive
+    // ray-casts. The padding accounts for floating-point rounding in
+    // `polygon_centroid` which may shift a boundary centroid by a few ULP.
+    let padded_aabb_a = aabb_a.expanded(tol.linear);
+    let padded_aabb_b = aabb_b.expanded(tol.linear);
+
     // Classification: parallelize when fragment count justifies rayon overhead.
     let classify_fn = |frag: &FaceFragment| -> FaceClass {
         let centroid = polygon_centroid(&frag.vertices);
+
+        // AABB pre-filter: skip expensive ray-cast for fragments whose centroid
+        // is outside the opposing solid's bounding box.
+        let opposing_aabb = match frag.source {
+            Source::A => padded_aabb_b,
+            Source::B => padded_aabb_a,
+        };
+        if !opposing_aabb.contains_point(centroid) {
+            return FaceClass::Outside;
+        }
+
         let fast = match frag.source {
             Source::A => analytic_b.as_ref().and_then(|c| c.classify(centroid, tol)),
             Source::B => analytic_a.as_ref().and_then(|c| c.classify(centroid, tol)),
@@ -915,9 +933,17 @@ fn face_wire_aabb(topo: &Topology, face_id: FaceId) -> Result<Aabb3, crate::Oper
     Ok(aabb)
 }
 
-/// Compute AABB encompassing all face vertices, padded by tolerance.
-fn solid_aabb(faces: &FaceData, tol: Tolerance) -> Result<Aabb3, crate::OperationsError> {
-    Aabb3::try_from_points(
+/// Compute AABB encompassing all face vertices, expanded for surface curvature.
+///
+/// For analytic surfaces (sphere, cylinder, cone, torus), the tessellated
+/// vertices may not reach surface extremes. We call `expand_aabb_for_surface`
+/// on each face to produce a conservative bounding box.
+fn solid_aabb(
+    topo: &Topology,
+    faces: &FaceData,
+    tol: Tolerance,
+) -> Result<Aabb3, crate::OperationsError> {
+    let mut aabb = Aabb3::try_from_points(
         faces
             .iter()
             .flat_map(|(_, verts, _, _)| verts.iter().copied()),
@@ -925,7 +951,14 @@ fn solid_aabb(faces: &FaceData, tol: Tolerance) -> Result<Aabb3, crate::Operatio
     .map(|bb| bb.expanded(tol.linear))
     .ok_or_else(|| crate::OperationsError::InvalidInput {
         reason: "solid has no vertices".into(),
-    })
+    })?;
+
+    for (fid, _, _, _) in faces {
+        let face = topo.face(*fid)?;
+        crate::measure::expand_aabb_for_surface(&mut aabb, face.surface());
+    }
+
+    Ok(aabb)
 }
 
 /// Check if one solid is entirely contained in the other and short-circuit
@@ -2332,6 +2365,13 @@ fn try_build_analytic_classifier(topo: &Topology, solid: SolidId) -> Option<Anal
     let shell = topo.shell(s.outer_shell()).ok()?;
     let tol = Tolerance::new();
 
+    // Complex solids (>20 faces) can't be simple analytic shapes (box,
+    // cylinder+caps, sphere). Skip the face-by-face scan to avoid O(F)
+    // overhead on large fused/boolean intermediate results.
+    if shell.faces().len() > 20 {
+        return None;
+    }
+
     let mut sphere_info: Option<(Point3, f64)> = None;
     let mut cylinder_info: Option<(Point3, Vec3, f64)> = None;
     let mut cone_info: Option<(Point3, Vec3, f64)> = None;
@@ -3593,6 +3633,7 @@ fn mesh_boolean_path(
 
     let result = assemble_solid_mixed(topo, &face_specs, tol)?;
     validate_boolean_result(topo, result)?;
+
     Ok(result)
 }
 
@@ -5362,7 +5403,27 @@ fn analytic_boolean(
         })
         .collect();
 
-    // Phase 2: if any fragments are unclassified, build face data and ray-cast.
+    // Phase 2a: AABB pre-filter — classify fragments whose centroids fall
+    // outside the opposing solid's bounding box as Outside. This avoids
+    // building expensive face data + BVH for the majority of fragments
+    // in multi-body fuse operations where solids overlap minimally.
+    let padded_aabb_a = a_overall_aabb.expanded(tol.linear);
+    let padded_aabb_b = b_overall_aabb.expanded(tol.linear);
+    for (class, frag) in classes.iter_mut().zip(&fragments) {
+        if class.is_some() {
+            continue;
+        }
+        let opposing_aabb = match frag.source {
+            Source::A => padded_aabb_b,
+            Source::B => padded_aabb_a,
+        };
+        let centroid = polygon_centroid(&frag.vertices);
+        if !opposing_aabb.contains_point(centroid) {
+            *class = Some(FaceClass::Outside);
+        }
+    }
+
+    // Phase 2b: if any fragments are still unclassified, build face data and ray-cast.
     let needs_raycast = classes.iter().any(Option::is_none);
     if needs_raycast {
         let face_data_a = collect_face_data(topo, a, deflection)?;

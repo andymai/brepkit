@@ -3473,8 +3473,9 @@ fn estimate_surface_radius(surface: &FaceSurface) -> f64 {
 /// - **Torus:** u = major-radius-based, v = minor-radius-based
 /// - **Plane/NURBS/Cylinder/Cone:** isotropic conservative estimate
 ///
-/// Note: cylinder and cone faces are dispatched to the snap fast-path in
-/// `tessellate_solid` and should not reach CDT in practice.
+/// Cylinder and cone faces reach the snap fast-path before CDT is called, so
+/// their arm here exists only for exhaustiveness — new `FaceSurface` variants
+/// will cause a compile error rather than silently using the fallback.
 fn interior_grid_resolution(
     surface: &FaceSurface,
     du: f64,
@@ -3482,8 +3483,6 @@ fn interior_grid_resolution(
     deflection: f64,
 ) -> (usize, usize) {
     match surface {
-        // Cylinder and cone are dispatched to the snap fast-path before reaching
-        // CDT, so they never call this function.  Sphere and torus still use CDT.
         FaceSurface::Sphere(sphere) => {
             let r = sphere.radius();
             let n_u = segments_for_chord_deviation(r, du, deflection).max(2);
@@ -3499,9 +3498,7 @@ fn interior_grid_resolution(
         | FaceSurface::Nurbs(_)
         | FaceSurface::Cylinder(_)
         | FaceSurface::Cone(_) => {
-            // Plane/NURBS: isotropic conservative estimate.
-            // Cylinder/Cone: unreachable via snap fast-path, but included for
-            // exhaustiveness so new FaceSurface variants cause a compile error.
+            // Isotropic conservative estimate using surface radius.
             let r = estimate_surface_radius(surface);
             let n_u = segments_for_chord_deviation(r, du, deflection).max(2);
             let n_v = segments_for_chord_deviation(r, dv, deflection).max(2);
