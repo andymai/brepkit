@@ -7238,12 +7238,18 @@ fn plane_plane_chord_analytic(
     // Intersect the two interval sets (both already sorted by t).
     let overlaps = intersect_interval_lists(&intervals_a, &intervals_b, tol.linear);
 
-    // Pick the largest overlap interval as the chord.
-    let &(t_min, t_max) = overlaps.iter().max_by(|(a_lo, a_hi), (b_lo, b_hi)| {
-        (a_hi - a_lo)
-            .partial_cmp(&(b_hi - b_lo))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    })?;
+    // Pick the largest finite overlap interval as the chord.
+    // polygon_clip_intervals can emit half-infinite sentinel intervals
+    // (e.g. (-inf, t] or [t, inf)) for lines fully inside a concave face;
+    // these must be skipped to avoid degenerate chord endpoints.
+    let &(t_min, t_max) = overlaps
+        .iter()
+        .filter(|(lo, hi)| lo.is_finite() && hi.is_finite())
+        .max_by(|(a_lo, a_hi), (b_lo, b_hi)| {
+            (a_hi - a_lo)
+                .partial_cmp(&(b_hi - b_lo))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })?;
 
     Some((
         point_along_line(&line_origin, &line_dir, t_min),
