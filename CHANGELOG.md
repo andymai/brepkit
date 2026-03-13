@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/andymai/brepkit/compare/v1.1.0...v1.2.0) (2026-03-13)
+
+
+### Features
+
+* analytic ray-surface classify (Phase 4A) ([#200](https://github.com/andymai/brepkit/issues/200)) ([2f82ada](https://github.com/andymai/brepkit/commit/2f82ada334a0600380db5f87c080afbee1a523d8))
+* **wasm:** add liftCurve2dToPlane binding ([#197](https://github.com/andymai/brepkit/issues/197)) ([7f2320c](https://github.com/andymai/brepkit/commit/7f2320c4ae3ad20aa83a616e2bf675060f9bc493))
+
 ## [1.1.0](https://github.com/andymai/brepkit/compare/v1.0.9...v1.1.0) (2026-03-13)
 
 
