@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/andymai/brepkit/compare/v1.0.9...v1.1.0) (2026-03-13)
+
+
+### Features
+
+* **wasm:** add makeTangentArc3d binding ([#198](https://github.com/andymai/brepkit/issues/198)) ([766f54e](https://github.com/andymai/brepkit/commit/766f54e86e8ba3a23e97f96edb33e686c58c6c0a))
+
+
+### Bug Fixes
+
+* shell bbox expansion + analytic volume for boolean parity ([#196](https://github.com/andymai/brepkit/issues/196)) ([65a358a](https://github.com/andymai/brepkit/commit/65a358a2f1642107fdc71ed71daf83fcb412b1e1))
+
 ## [1.0.9](https://github.com/andymai/brepkit/compare/v1.0.8...v1.0.9) (2026-03-13)
 
 
