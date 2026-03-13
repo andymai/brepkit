@@ -393,7 +393,7 @@ fn offset_cone_face(
     // The apex shifts along the axis by d / sin(α).
     let tol = Tolerance::new();
     let sin_ha = cone.half_angle().sin();
-    if sin_ha.abs() < tol.angular {
+    if sin_ha.abs() < tol.linear {
         return Err(OperationsError::InvalidInput {
             reason: "cone half-angle is degenerate (sin ≈ 0)".into(),
         });
