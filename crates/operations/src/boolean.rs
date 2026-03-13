@@ -604,14 +604,24 @@ pub fn boolean_with_options(
     let bvh_a = build_face_bvh(&faces_a);
     let bvh_b = build_face_bvh(&faces_b);
 
+    // Pre-expand opposing AABBs for classification. A centroid outside the
+    // opposing solid's bounding box is definitively Outside, skipping expensive
+    // ray-casts. The padding accounts for floating-point rounding in
+    // `polygon_centroid` which may shift a boundary centroid by a few ULP.
+    let padded_aabb_a = aabb_a.expanded(tol.linear);
+    let padded_aabb_b = aabb_b.expanded(tol.linear);
+
     // Classification: parallelize when fragment count justifies rayon overhead.
     let classify_fn = |frag: &FaceFragment| -> FaceClass {
         let centroid = polygon_centroid(&frag.vertices);
 
         // AABB pre-filter: skip expensive ray-cast for fragments whose centroid
-        // is outside the opposing solid's bounding box — they are definitively
-        // Outside. Eliminates most ray-casts in large multi-body fuse operations.
-        if centroid_outside_opposing_aabb(frag.source, centroid, aabb_a, aabb_b, tol.linear) {
+        // is outside the opposing solid's bounding box.
+        let opposing_aabb = match frag.source {
+            Source::A => padded_aabb_b,
+            Source::B => padded_aabb_a,
+        };
+        if !opposing_aabb.contains_point(centroid) {
             return FaceClass::Outside;
         }
 
@@ -948,26 +958,6 @@ fn solid_aabb(
     }
 
     Ok(aabb)
-}
-
-/// Return `true` if `centroid` is definitively outside the opposing solid's AABB.
-///
-/// The AABB is expanded by `pad` before the test to avoid false positives from
-/// floating-point rounding — `polygon_centroid` may compute a value that differs
-/// by a few ULP from the vertex coordinates used to build the AABB, so a centroid
-/// on the boundary can appear to be just outside without padding.
-fn centroid_outside_opposing_aabb(
-    source: Source,
-    centroid: Point3,
-    aabb_a: Aabb3,
-    aabb_b: Aabb3,
-    pad: f64,
-) -> bool {
-    let test = match source {
-        Source::A => aabb_b.expanded(pad),
-        Source::B => aabb_a.expanded(pad),
-    };
-    !test.contains_point(centroid)
 }
 
 /// Check if one solid is entirely contained in the other and short-circuit
@@ -5289,19 +5279,18 @@ fn analytic_boolean(
     // outside the opposing solid's bounding box as Outside. This avoids
     // building expensive face data + BVH for the majority of fragments
     // in multi-body fuse operations where solids overlap minimally.
-    for (idx, class) in classes.iter_mut().enumerate() {
+    let padded_aabb_a = a_overall_aabb.expanded(tol.linear);
+    let padded_aabb_b = b_overall_aabb.expanded(tol.linear);
+    for (class, frag) in classes.iter_mut().zip(&fragments) {
         if class.is_some() {
             continue;
         }
-        let frag = &fragments[idx];
+        let opposing_aabb = match frag.source {
+            Source::A => padded_aabb_b,
+            Source::B => padded_aabb_a,
+        };
         let centroid = polygon_centroid(&frag.vertices);
-        if centroid_outside_opposing_aabb(
-            frag.source,
-            centroid,
-            a_overall_aabb,
-            b_overall_aabb,
-            tol.linear,
-        ) {
+        if !opposing_aabb.contains_point(centroid) {
             *class = Some(FaceClass::Outside);
         }
     }
