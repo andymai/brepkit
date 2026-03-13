@@ -1334,4 +1334,120 @@ mod tests {
         let result = crate::validate::validate_solid(&topo, shelled);
         eprintln!("[rounded] Validation: {result:?}");
     }
+
+    /// CW-wound rounded rectangle (brepjs convention) → extrude → shell.
+    /// This is the exact scenario where the shell bbox was expanding outward.
+    #[test]
+    fn shell_cw_rounded_rect_bounds_preserved() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let tol = Tolerance::new();
+
+        let w = 41.5_f64;
+        let d = 41.5_f64;
+        let h = 21.0_f64;
+        let r = 4.0_f64;
+        let thickness = 1.2_f64;
+
+        let hw = w / 2.0;
+        let hd = d / 2.0;
+
+        // CW winding (brepjs convention): BOTTOM→RIGHT→TOP→LEFT
+        // Start at bottom-left tangent point, go right
+        let pts = [
+            Point3::new(-hw + r, -hd, 0.0), // 0: bottom-left straight start
+            Point3::new(hw - r, -hd, 0.0),  // 1: bottom-right straight end
+            Point3::new(hw, -hd + r, 0.0),  // 2: right-bottom straight start
+            Point3::new(hw, hd - r, 0.0),   // 3: right-top straight end
+            Point3::new(hw - r, hd, 0.0),   // 4: top-right straight start
+            Point3::new(-hw + r, hd, 0.0),  // 5: top-left straight end
+            Point3::new(-hw, hd - r, 0.0),  // 6: left-top straight start
+            Point3::new(-hw, -hd + r, 0.0), // 7: left-bottom straight end
+        ];
+        let vids: Vec<_> = pts
+            .iter()
+            .map(|p| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+            .collect();
+
+        let c_br = Point3::new(hw - r, -hd + r, 0.0);
+        let c_tr = Point3::new(hw - r, hd - r, 0.0);
+        let c_tl = Point3::new(-hw + r, hd - r, 0.0);
+        let c_bl = Point3::new(-hw + r, -hd + r, 0.0);
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+
+        let mk_line =
+            |topo: &mut Topology, s, e| topo.edges.alloc(Edge::new(s, e, EdgeCurve::Line));
+        let mk_arc = |topo: &mut Topology, s, e, center: Point3| {
+            let circle = Circle3D::new(center, z_axis, r).unwrap();
+            topo.edges.alloc(Edge::new(s, e, EdgeCurve::Circle(circle)))
+        };
+
+        // CW order: bottom→br_arc→right→tr_arc→top→tl_arc→left→bl_arc
+        let e_bot = mk_line(&mut topo, vids[0], vids[1]);
+        let e_br = mk_arc(&mut topo, vids[1], vids[2], c_br);
+        let e_right = mk_line(&mut topo, vids[2], vids[3]);
+        let e_tr = mk_arc(&mut topo, vids[3], vids[4], c_tr);
+        let e_top = mk_line(&mut topo, vids[4], vids[5]);
+        let e_tl = mk_arc(&mut topo, vids[5], vids[6], c_tl);
+        let e_left = mk_line(&mut topo, vids[6], vids[7]);
+        let e_bl = mk_arc(&mut topo, vids[7], vids[0], c_bl);
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e_bot, true),
+                OrientedEdge::new(e_br, true),
+                OrientedEdge::new(e_right, true),
+                OrientedEdge::new(e_tr, true),
+                OrientedEdge::new(e_top, true),
+                OrientedEdge::new(e_tl, true),
+                OrientedEdge::new(e_left, true),
+                OrientedEdge::new(e_bl, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire_id = topo.wires.alloc(wire);
+
+        // CW winding → face normal should be -Z
+        let face = Face::new(
+            wire_id,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+        );
+        let face_id = topo.faces.alloc(face);
+
+        // Extrude upward
+        let solid =
+            crate::extrude::extrude(&mut topo, face_id, Vec3::new(0.0, 0.0, 1.0), h).unwrap();
+
+        // Shell: remove top face
+        let top = find_faces_by_normal(&topo, solid, Vec3::new(0.0, 0.0, 1.0));
+        assert_eq!(top.len(), 1, "one top face");
+
+        let shelled = shell(&mut topo, solid, thickness, &top).unwrap();
+
+        // Key assertion: bounding box should NOT expand beyond the original
+        let bbox = crate::measure::solid_bounding_box(&topo, shelled).unwrap();
+        let bbox_x = bbox.max.x() - bbox.min.x();
+        let bbox_y = bbox.max.y() - bbox.min.y();
+        eprintln!("[cw-shell] bbox X={bbox_x:.3}, Y={bbox_y:.3} (expected ~{w})");
+        assert!(
+            (bbox_x - w).abs() < 0.5,
+            "bbox X should be ~{w}, got {bbox_x:.3} (expanded by {:.3})",
+            bbox_x - w
+        );
+        assert!(
+            (bbox_y - d).abs() < 0.5,
+            "bbox Y should be ~{d}, got {bbox_y:.3} (expanded by {:.3})",
+            bbox_y - d
+        );
+    }
 }
