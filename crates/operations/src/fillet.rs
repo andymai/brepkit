@@ -655,6 +655,58 @@ pub fn fillet_rolling_ball(
         }
     }
 
+    // Phase 2c: Validate radius against adjacent face curvature (analytic surfaces).
+    // The rolling ball rolls on the adjacent face; its radius must not meet or
+    // exceed the minimum principal radius of curvature of that surface, or the
+    // offset surface degenerates (e.g. a cylinder of radius R offset by R
+    // collapses to a line, a sphere offset by its own radius collapses to a point).
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        let p_start = topo.vertex(edge.start())?.point();
+        let p_end = topo.vertex(edge.end())?.point();
+
+        let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
+            continue;
+        };
+        for &fid in face_list {
+            let Some(surf) = face_surfaces.get(&fid.index()) else {
+                continue;
+            };
+            let min_curvature_r: f64 = match surf {
+                // Planar faces have infinite curvature radius — no constraint.
+                // NURBS curvature is not yet estimated analytically — skip.
+                FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => continue,
+                // Cylinder: principal curvature κ₁ = 1/R, κ₂ = 0 → min radius = R.
+                FaceSurface::Cylinder(s) => s.radius(),
+                // Sphere: κ₁ = κ₂ = 1/R → min radius = R.
+                FaceSurface::Sphere(s) => s.radius(),
+                // Torus: κ₁ = 1/r (minor, always) → min radius = r.
+                FaceSurface::Torus(s) => s.minor_radius(),
+                // Cone: circumferential κ₂ = cos(α)/v at distance v from apex.
+                // → min curvature radius = v_min * cos(α).
+                FaceSurface::Cone(s) => {
+                    let (_, v0) = s.project_point(p_start);
+                    let (_, v1) = s.project_point(p_end);
+                    let v_min = v0.min(v1).abs().max(tol.linear);
+                    let cos_a = s.half_angle().cos();
+                    if cos_a < tol.linear {
+                        // Degenerate flat cone (half_angle ≈ π/2); skip.
+                        continue;
+                    }
+                    v_min * cos_a
+                }
+            };
+            if radius >= min_curvature_r {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: format!(
+                        "fillet radius {radius:.6} meets or exceeds minimum surface \
+                         curvature radius {min_curvature_r:.6} of adjacent face"
+                    ),
+                });
+            }
+        }
+    }
+
     // Phase 3: Build modified (trimmed) planar faces.
     let mut all_specs: Vec<FaceSpec> = Vec::new();
     let mut fillet_face_indices: Vec<usize> = Vec::new();
@@ -2242,6 +2294,73 @@ mod tests {
             msg.contains("exceeds"),
             "error should mention exceeds: {msg}"
         );
+    }
+
+    #[test]
+    fn fillet_radius_exceeds_cylinder_curvature_rejected() {
+        // A cylinder of radius 1.0 cannot be filleted with radius >= 1.0:
+        // the offset surface would degenerate to a line.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+        let plane_cyl_edge = {
+            let s = topo.solid(solid).unwrap();
+            let sh = topo.shell(s.outer_shell()).unwrap();
+            let mut edge_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
+            for &fid in sh.faces() {
+                let wire = topo.wire(topo.face(fid).unwrap().outer_wire()).unwrap();
+                for oe in wire.edges() {
+                    edge_faces.entry(oe.edge().index()).or_default().push(fid);
+                }
+            }
+            let mut found = None;
+            'outer: for (&eidx, fids) in &edge_faces {
+                if fids.len() == 2 {
+                    let s1 = topo.face(fids[0]).unwrap().surface().clone();
+                    let s2 = topo.face(fids[1]).unwrap().surface().clone();
+                    let has_plane = matches!(s1, FaceSurface::Plane { .. })
+                        || matches!(s2, FaceSurface::Plane { .. });
+                    let has_cyl = matches!(s1, FaceSurface::Cylinder(_))
+                        || matches!(s2, FaceSurface::Cylinder(_));
+                    if has_plane && has_cyl {
+                        for &fid in sh.faces() {
+                            let wire =
+                                topo.wire(topo.face(fid).unwrap().outer_wire()).unwrap();
+                            for oe in wire.edges() {
+                                if oe.edge().index() == eidx {
+                                    found = Some(oe.edge());
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            found.expect("cylinder must have a plane-cylinder edge")
+        };
+
+        // radius == cylinder radius → curvature radius exactly met → reject.
+        let result = super::fillet_rolling_ball(&mut topo, solid, &[plane_cyl_edge], 1.0);
+        assert!(result.is_err(), "radius == cylinder radius should be rejected");
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("curvature"),
+            "error should mention curvature: {msg}"
+        );
+
+        // radius > cylinder radius → also rejected.
+        let result2 = super::fillet_rolling_ball(&mut topo, solid, &[plane_cyl_edge], 1.5);
+        assert!(result2.is_err(), "radius > cylinder radius should be rejected");
+
+        // radius < cylinder radius → passes curvature check (may succeed or fail
+        // for other fillet reasons, but must not fail on curvature).
+        let result3 = super::fillet_rolling_ball(&mut topo, solid, &[plane_cyl_edge], 0.3);
+        if let Err(ref e) = result3 {
+            let msg = format!("{e}");
+            assert!(
+                !msg.contains("curvature"),
+                "small radius should not fail curvature check: {msg}"
+            );
+        }
     }
 
     #[test]
