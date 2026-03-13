@@ -345,7 +345,7 @@ fn closest_point_on_segment(point: Point3, a: Point3, b: Point3) -> Point3 {
 }
 
 /// Compute the distance from a point to a single face, dispatching by type.
-fn point_to_face_distance(
+pub(crate) fn point_to_face_distance(
     topo: &Topology,
     point: Point3,
     face_id: FaceId,
@@ -765,7 +765,7 @@ fn point_to_polygon_distance(
 }
 
 /// Point-in-polygon test for 3D (projecting to 2D).
-fn point_in_polygon_3d(point: &Point3, polygon: &[Point3], normal: &Vec3) -> bool {
+pub(crate) fn point_in_polygon_3d(point: &Point3, polygon: &[Point3], normal: &Vec3) -> bool {
     use brepkit_math::predicates::point_in_polygon;
     use brepkit_math::vec::Point2;
 

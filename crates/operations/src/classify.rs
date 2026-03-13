@@ -4,18 +4,22 @@
 //! of a solid. This is equivalent to OCCT's `BRepClass3d_SolidClassifier`.
 //!
 //! Three classifiers are provided:
-//! - [`classify_point`]: ray casting (fast, fragile on mesh defects)
-//! - [`classify_point_winding`]: generalized winding numbers (robust to gaps)
+//! - [`classify_point`]: analytic ray casting (fast, no tessellation for analytic faces)
+//! - [`classify_point_winding`]: generalized winding numbers (robust to gaps, uses tessellation)
 //! - [`classify_point_robust`]: winding numbers with ray-casting fallback
 
-use brepkit_math::vec::{Point3, Vec3};
+use brepkit_math::predicates::point_in_polygon;
+use brepkit_math::tolerance::Tolerance;
+use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::face::FaceId;
+use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 use std::f64::consts::PI;
 
 use crate::OperationsError;
+use crate::boolean::face_polygon;
+use crate::distance::{point_in_polygon_3d, point_to_face_distance};
 
 /// Result of classifying a point relative to a solid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,11 +32,12 @@ pub enum PointClassification {
     OnBoundary,
 }
 
-/// Classifies a point relative to a solid using ray casting.
+/// Classifies a point relative to a solid using analytic ray casting.
 ///
 /// Shoots a ray from `point` and counts crossings with the solid's
-/// boundary faces. Uses tessellation for robust intersection with
-/// curved faces.
+/// boundary faces. Uses direct ray-surface intersection for analytic
+/// faces (plane, cylinder, cone, sphere, torus) and tessellation
+/// only for NURBS faces.
 ///
 /// `deflection` controls tessellation quality for NURBS faces.
 /// `tolerance` is the distance threshold for "on boundary" classification.
@@ -49,14 +54,11 @@ pub fn classify_point(
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
-    // First check: is the point within tolerance of any face?
-    if is_on_boundary(topo, shell.faces(), point, deflection, tolerance)? {
+    if is_on_boundary(topo, shell.faces(), point, tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
 
     // Two perpendicular irrational ray directions for dual-ray consensus.
-    // Using two directions handles edge-on degeneracies where a single ray
-    // might give an ambiguous count due to tangent faces.
     let ray_dirs = [
         Vec3::new(
             0.573_576_436_351_046,
@@ -78,7 +80,6 @@ pub fn classify_point(
         }
     }
 
-    // Majority vote: both rays must agree the point is inside
     if inside_votes >= 2 {
         Ok(PointClassification::Inside)
     } else {
@@ -96,7 +97,7 @@ pub fn classify_point(
 /// edges) because it integrates a continuous function rather than counting
 /// discrete crossings.
 ///
-/// `deflection` controls tessellation quality for NURBS faces.
+/// `deflection` controls tessellation quality.
 /// `tolerance` is the distance threshold for "on boundary" classification.
 ///
 /// # Errors
@@ -122,7 +123,7 @@ pub fn classify_point_winding(
 /// Robust point classification combining winding numbers and ray casting.
 ///
 /// Tries generalized winding numbers first (more robust to mesh defects),
-/// then falls back to ray casting if the winding number is ambiguous
+/// then falls back to analytic ray casting if the winding number is ambiguous
 /// (within 0.1 of the 0.5 threshold).
 ///
 /// # Errors
@@ -139,7 +140,6 @@ pub fn classify_point_robust(
         return Ok(PointClassification::OnBoundary);
     }
 
-    // Confident classification: winding number is far from the 0.5 threshold
     if winding > 0.6 {
         return Ok(PointClassification::Inside);
     }
@@ -151,13 +151,452 @@ pub fn classify_point_robust(
     classify_point(topo, solid, point, deflection, tolerance)
 }
 
+// ── Boundary check (analytic, no tessellation) ──────────────────────────
+
+/// Checks if a point is within `tolerance` of any face boundary.
+///
+/// Uses analytic point-to-surface distance for all surface types.
+fn is_on_boundary(
+    topo: &Topology,
+    faces: &[FaceId],
+    point: Point3,
+    tolerance: f64,
+) -> Result<bool, OperationsError> {
+    let tol = Tolerance::new();
+    for &fid in faces {
+        if let Some((dist, _)) = point_to_face_distance(topo, point, fid, tol)? {
+            if dist < tolerance {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+// ── Ray crossing (analytic for analytic faces, tessellation for NURBS) ──
+
+/// Counts the number of times a ray crosses the solid's boundary.
+fn count_ray_crossings(
+    topo: &Topology,
+    faces: &[FaceId],
+    origin: Point3,
+    direction: Vec3,
+    deflection: f64,
+) -> Result<u32, OperationsError> {
+    let mut crossings = 0u32;
+    for &fid in faces {
+        crossings += count_face_ray_crossings(topo, fid, origin, direction, deflection)?;
+    }
+    Ok(crossings)
+}
+
+/// Count ray crossings for a single face, dispatching by surface type.
+#[allow(clippy::too_many_lines)]
+fn count_face_ray_crossings(
+    topo: &Topology,
+    face_id: FaceId,
+    origin: Point3,
+    direction: Vec3,
+    deflection: f64,
+) -> Result<u32, OperationsError> {
+    let face = topo.face(face_id)?;
+    match face.surface() {
+        FaceSurface::Plane { normal, d } => {
+            ray_plane_crossings(topo, face_id, origin, direction, *normal, *d)
+        }
+        FaceSurface::Cylinder(cyl) => {
+            let cyl = cyl.clone();
+            let roots = ray_cylinder_roots(origin, direction, &cyl);
+            count_analytic_crossings(
+                topo,
+                face_id,
+                origin,
+                direction,
+                &roots,
+                |p| cyl.project_point(p),
+                false,
+            )
+        }
+        FaceSurface::Cone(cone) => {
+            let cone = cone.clone();
+            let roots = ray_cone_roots(origin, direction, &cone);
+            count_analytic_crossings(
+                topo,
+                face_id,
+                origin,
+                direction,
+                &roots,
+                |p| cone.project_point(p),
+                false,
+            )
+        }
+        FaceSurface::Sphere(sph) => {
+            // Sphere boundaries are planar (equator, small circles), so
+            // point_in_polygon_3d works. UV projection fails at poles.
+            let sph = sph.clone();
+            let roots = ray_sphere_roots(origin, direction, &sph);
+            count_3d_polygon_crossings(topo, face_id, origin, direction, &roots)
+        }
+        FaceSurface::Torus(tor) => {
+            let tor = tor.clone();
+            let roots = ray_torus_roots(origin, direction, &tor);
+            count_analytic_crossings(
+                topo,
+                face_id,
+                origin,
+                direction,
+                &roots,
+                |p| tor.project_point(p),
+                true,
+            )
+        }
+        FaceSurface::Nurbs(_) => {
+            ray_crossings_via_tessellation(topo, face_id, origin, direction, deflection)
+        }
+    }
+}
+
+/// Ray-plane intersection with point-in-polygon boundary test.
+fn ray_plane_crossings(
+    topo: &Topology,
+    face_id: FaceId,
+    origin: Point3,
+    direction: Vec3,
+    normal: Vec3,
+    d: f64,
+) -> Result<u32, OperationsError> {
+    let denom = normal.dot(direction);
+    if denom.abs() < 1e-15 {
+        return Ok(0);
+    }
+
+    let t = (d - normal.dot(Vec3::new(origin.x(), origin.y(), origin.z()))) / denom;
+    if t <= 1e-12 {
+        return Ok(0);
+    }
+
+    let hit = origin + direction * t;
+    let verts = face_polygon(topo, face_id)?;
+    if verts.len() < 3 {
+        return Ok(0);
+    }
+
+    if point_in_polygon_3d(&hit, &verts, &normal) {
+        Ok(1)
+    } else {
+        Ok(0)
+    }
+}
+
+/// Count crossings using 3D polygon containment (for faces with planar boundaries,
+/// e.g. sphere hemispheres where UV projection has pole singularities).
+///
+/// The polygon normal (from Newell's method) indicates which side of the boundary
+/// plane the face extends into. A hit point must be on that side AND project
+/// inside the boundary polygon.
+fn count_3d_polygon_crossings(
+    topo: &Topology,
+    face_id: FaceId,
+    origin: Point3,
+    direction: Vec3,
+    roots: &[f64],
+) -> Result<u32, OperationsError> {
+    if roots.is_empty() {
+        return Ok(0);
+    }
+
+    let verts = face_polygon(topo, face_id)?;
+    if verts.len() < 3 {
+        return Ok(0);
+    }
+    let mut normal = polygon_normal(&verts);
+    // If the face is reversed, the surface normal is flipped — the face
+    // extends into the opposite side of the boundary plane.
+    let face = topo.face(face_id)?;
+    if face.is_reversed() {
+        normal = normal * -1.0;
+    }
+    // A reference point on the boundary plane.
+    let ref_pt = verts[0];
+
+    let mut crossings = 0u32;
+    for &t in roots {
+        if t <= 1e-12 {
+            continue;
+        }
+        let hit = origin + direction * t;
+
+        // The hit must be on the face's side of the boundary plane.
+        // The polygon normal (from wire winding) points toward the face interior.
+        let side = (hit - ref_pt).dot(normal);
+        if side < -1e-10 {
+            continue;
+        }
+
+        if point_in_polygon_3d(&hit, &verts, &normal) {
+            crossings += 1;
+        }
+    }
+
+    Ok(crossings)
+}
+
+/// Count crossings for analytic (non-planar) faces using UV containment.
+///
+/// Given ray parameter roots (where the ray hits the infinite surface),
+/// checks whether each hit point falls within the face's trimming boundary
+/// by projecting to the surface's (u,v) parameter space.
+///
+/// If the face boundary is degenerate (all vertices coincide, as in a full
+/// torus face with seam edges), every positive-t root is counted as a crossing.
+fn count_analytic_crossings<F>(
+    topo: &Topology,
+    face_id: FaceId,
+    origin: Point3,
+    direction: Vec3,
+    roots: &[f64],
+    project: F,
+    v_periodic: bool,
+) -> Result<u32, OperationsError>
+where
+    F: Fn(Point3) -> (f64, f64),
+{
+    if roots.is_empty() {
+        return Ok(0);
+    }
+
+    // Build UV boundary polygon from face wire
+    let verts = face_polygon(topo, face_id)?;
+
+    // Detect degenerate boundary: a "full-surface" face whose wire has fewer than
+    // 3 distinct vertices (e.g. a torus with only seam edges, where all boundary
+    // vertices project to the same point). Every positive-t root is a crossing.
+    let is_full_surface = verts.len() < 3 || {
+        let ref_pt = verts[0];
+        verts.iter().all(|v| (*v - ref_pt).length_squared() < 1e-12)
+    };
+    if is_full_surface {
+        return Ok(roots.iter().filter(|&&t| t > 1e-12).count() as u32);
+    }
+
+    let uv_boundary = build_uv_boundary(&verts, &project, v_periodic);
+
+    let mut crossings = 0u32;
+    for &t in roots {
+        if t <= 1e-12 {
+            continue;
+        }
+        let hit = origin + direction * t;
+        let (hit_u, hit_v) = project(hit);
+
+        if point_in_uv_boundary(hit_u, hit_v, &uv_boundary) {
+            crossings += 1;
+        }
+    }
+
+    Ok(crossings)
+}
+
+/// Unwrap a step in a periodic (angular) coordinate.
+///
+/// Given the previous unwrapped value `prev` and the next raw value `next`,
+/// returns the next value adjusted so the step lies in `[-PI, PI)`.
+/// This keeps a sequence of angular coordinates continuous (no ±TAU jumps).
+#[inline]
+fn unwrap_angle(prev: f64, next: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    let diff = next - prev;
+    prev + diff - tau * ((diff + PI) / tau).floor()
+}
+
+/// Build a UV boundary polygon from 3D face boundary vertices,
+/// with proper unwrapping of periodic coordinates.
+///
+/// `v_periodic`: whether the v-coordinate is periodic (e.g. torus). Cylinder
+/// and cone have linear v (height / distance), so only u is unwrapped for them.
+fn build_uv_boundary<F>(verts: &[Point3], project: &F, v_periodic: bool) -> Vec<(f64, f64)>
+where
+    F: Fn(Point3) -> (f64, f64),
+{
+    let mut uv: Vec<(f64, f64)> = verts.iter().map(|&p| project(p)).collect();
+
+    for i in 1..uv.len() {
+        // u is always periodic (angular coordinate for all analytic surfaces).
+        uv[i].0 = unwrap_angle(uv[i - 1].0, uv[i].0);
+
+        // v is periodic only for doubly-periodic surfaces (torus).
+        if v_periodic {
+            uv[i].1 = unwrap_angle(uv[i - 1].1, uv[i].1);
+        }
+    }
+
+    uv
+}
+
+/// Test if a (u,v) point is inside the UV boundary polygon.
+///
+/// Adjusts the test point's u coordinate to lie within the unwrapped polygon's
+/// u range before testing.
+fn point_in_uv_boundary(hit_u: f64, hit_v: f64, uv_boundary: &[(f64, f64)]) -> bool {
+    // Find the u range of the unwrapped boundary.
+    let u_min = uv_boundary
+        .iter()
+        .map(|(u, _)| *u)
+        .fold(f64::INFINITY, f64::min);
+    let u_max = uv_boundary
+        .iter()
+        .map(|(u, _)| *u)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let u_center = (u_min + u_max) * 0.5;
+
+    // Shift hit_u to be closest to the polygon's u center.
+    let hu = unwrap_angle(u_center, hit_u);
+
+    let poly: Vec<Point2> = uv_boundary
+        .iter()
+        .map(|(u, v)| Point2::new(*u, *v))
+        .collect();
+    let test = Point2::new(hu, hit_v);
+    point_in_polygon(test, &poly)
+}
+
+// ── Ray-surface intersection roots ──────────────────────────────────────
+
+/// Compute ray-cylinder intersection parameters.
+fn ray_cylinder_roots(
+    origin: Point3,
+    direction: Vec3,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+) -> Vec<f64> {
+    let ov = origin - cyl.origin();
+    let axis = cyl.axis();
+
+    // Project origin and direction onto plane perpendicular to axis.
+    let ov_perp = ov - axis * ov.dot(axis);
+    let d_perp = direction - axis * direction.dot(axis);
+
+    let a = d_perp.dot(d_perp);
+    let b = 2.0 * ov_perp.dot(d_perp);
+    let c = ov_perp.dot(ov_perp) - cyl.radius() * cyl.radius();
+
+    solve_quadratic(a, b, c)
+}
+
+/// Compute ray-cone intersection parameters.
+fn ray_cone_roots(
+    origin: Point3,
+    direction: Vec3,
+    cone: &brepkit_math::surfaces::ConicalSurface,
+) -> Vec<f64> {
+    let ov = origin - cone.apex();
+    let axis = cone.axis();
+    let cos_a = cone.half_angle().cos();
+    let cos2 = cos_a * cos_a;
+
+    let d_dot_a = direction.dot(axis);
+    let ov_dot_a = ov.dot(axis);
+
+    // Cone equation: (P·axis)² cos²θ = |P|² sin²θ
+    // Rearranged: (P·axis)² - |P|² tan²θ = 0
+    // Or equivalently: (d·a)²·t² + 2(d·a)(ov·a)·t + (ov·a)² - (d·d·t² + 2·ov·d·t + ov·ov)·tan²θ
+    // = (cos²θ(d·a)² - (d·d)(1-cos²θ))·t² + ...
+    // Simplify: a = cos²(d·a)² - d·d·sin², etc.
+    let sin2 = 1.0 - cos2;
+
+    let a = cos2 * d_dot_a * d_dot_a - sin2 * (direction.dot(direction) - d_dot_a * d_dot_a);
+    let half_b = cos2 * d_dot_a * ov_dot_a - sin2 * (direction.dot(ov) - d_dot_a * ov_dot_a);
+    let c = cos2 * ov_dot_a * ov_dot_a - sin2 * (ov.dot(ov) - ov_dot_a * ov_dot_a);
+
+    solve_quadratic(a, 2.0 * half_b, c)
+}
+
+/// Compute ray-sphere intersection parameters.
+fn ray_sphere_roots(
+    origin: Point3,
+    direction: Vec3,
+    sph: &brepkit_math::surfaces::SphericalSurface,
+) -> Vec<f64> {
+    let ov = origin - sph.center();
+
+    let a = direction.dot(direction);
+    let b = 2.0 * ov.dot(direction);
+    let c = ov.dot(ov) - sph.radius() * sph.radius();
+
+    solve_quadratic(a, b, c)
+}
+
+/// Compute ray-torus intersection parameters (quartic).
+fn ray_torus_roots(
+    origin: Point3,
+    direction: Vec3,
+    tor: &brepkit_math::surfaces::ToroidalSurface,
+) -> Vec<f64> {
+    // Transform to torus-local coordinates.
+    let z_axis = tor.z_axis();
+    let x_axis = tor.x_axis();
+    let y_axis = z_axis.cross(x_axis);
+
+    let ov = origin - tor.center();
+    let o = Vec3::new(ov.dot(x_axis), ov.dot(y_axis), ov.dot(z_axis));
+    let d = Vec3::new(
+        direction.dot(x_axis),
+        direction.dot(y_axis),
+        direction.dot(z_axis),
+    );
+
+    let big_r = tor.major_radius();
+    let small_r = tor.minor_radius();
+
+    let sum_d_sq = d.dot(d);
+    let sum_od = o.dot(d);
+    let sum_o_sq = o.dot(o);
+    let k = sum_o_sq - small_r * small_r - big_r * big_r;
+
+    let c4 = sum_d_sq * sum_d_sq;
+    let c3 = 4.0 * sum_d_sq * sum_od;
+    let c2 = 2.0 * sum_d_sq * k + 4.0 * sum_od * sum_od + 4.0 * big_r * big_r * d.z() * d.z();
+    let c1 = 4.0 * k * sum_od + 8.0 * big_r * big_r * o.z() * d.z();
+    let c0 = k * k - 4.0 * big_r * big_r * (small_r * small_r - o.z() * o.z());
+
+    solve_quartic(c4, c3, c2, c1, c0)
+}
+
+/// Fallback: count ray crossings via tessellation (for NURBS faces).
+fn ray_crossings_via_tessellation(
+    topo: &Topology,
+    face_id: FaceId,
+    origin: Point3,
+    direction: Vec3,
+    deflection: f64,
+) -> Result<u32, OperationsError> {
+    let mesh = crate::tessellate::tessellate(topo, face_id, deflection)?;
+    let mut crossings = 0u32;
+
+    for tri in mesh.indices.chunks_exact(3) {
+        let v0 = mesh.positions[tri[0] as usize];
+        let v1 = mesh.positions[tri[1] as usize];
+        let v2 = mesh.positions[tri[2] as usize];
+
+        if brepkit_math::ray_triangle::watertight_ray_triangle_intersect(
+            origin, direction, v0, v1, v2,
+        )
+        .is_some()
+        {
+            crossings += 1;
+        }
+    }
+
+    Ok(crossings)
+}
+
+// ── Winding number (still tessellation-based) ───────────────────────────
+
 /// Computes the generalized winding number of a point relative to a solid.
 ///
-/// Returns `(winding_number, is_on_boundary)`. The winding number is the sum
-/// of signed solid angles subtended by each boundary triangle, divided by 4pi.
-/// A value near 1.0 indicates the point is inside; near 0.0 indicates outside.
+/// Returns `(winding_number, is_on_boundary)`.
 ///
-/// Uses the formula from Jacobson, Kavan, and Sorkine-Hornung (2013).
+/// Uses the Van Oosterom-Strackee formula (Jacobson et al. 2013).
+/// This method still uses tessellation for solid angle computation.
 #[allow(clippy::similar_names)]
 fn compute_winding_number(
     topo: &Topology,
@@ -169,8 +608,7 @@ fn compute_winding_number(
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
-    // First check: is the point within tolerance of any face?
-    if is_on_boundary(topo, shell.faces(), point, deflection, tolerance)? {
+    if is_on_boundary(topo, shell.faces(), point, tolerance)? {
         return Ok((0.0, true));
     }
 
@@ -180,23 +618,16 @@ fn compute_winding_number(
         let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
 
         for tri in mesh.indices.chunks_exact(3) {
-            let i0 = tri[0] as usize;
-            let i1 = tri[1] as usize;
-            let i2 = tri[2] as usize;
+            let a = mesh.positions[tri[0] as usize];
+            let mut b = mesh.positions[tri[1] as usize];
+            let mut c = mesh.positions[tri[2] as usize];
 
-            let a = mesh.positions[i0];
-            let mut b = mesh.positions[i1];
-            let mut c = mesh.positions[i2];
-
-            // Ensure consistent outward winding by comparing the triangle's
-            // geometric normal with the tessellation's vertex normal.
             let tri_normal = (b - a).cross(c - a);
-            let mesh_normal = mesh.normals[i0];
+            let mesh_normal = mesh.normals[tri[0] as usize];
             if tri_normal.dot(mesh_normal) < 0.0 {
                 std::mem::swap(&mut b, &mut c);
             }
 
-            // Vectors from point to triangle vertices
             let pa = a - point;
             let pb = b - point;
             let pc = c - point;
@@ -205,179 +636,204 @@ fn compute_winding_number(
             let lb = pb.length();
             let lc = pc.length();
 
-            // Point coincides with a vertex — treat as on boundary
             if la < tolerance || lb < tolerance || lc < tolerance {
                 return Ok((0.0, true));
             }
 
-            // Normalize
             let pa_n = pa * (1.0 / la);
             let pb_n = pb * (1.0 / lb);
             let pc_n = pc * (1.0 / lc);
 
-            // Signed solid angle via the Van Oosterom-Strackee formula
             let numerator = pa_n.dot(pb_n.cross(pc_n));
             let denominator = 1.0 + pa_n.dot(pb_n) + pb_n.dot(pc_n) + pc_n.dot(pa_n);
 
-            let omega = 2.0 * f64::atan2(numerator, denominator);
-            total_omega += omega;
+            total_omega += 2.0 * f64::atan2(numerator, denominator);
         }
     }
 
-    // Use abs(): the vertex-swap above ensures consistent winding per
-    // triangle, but across faces the orientation may vary (common after
-    // boolean operations). abs() makes classification robust to mixed
-    // orientations while still detecting inside vs outside.
     let winding = (total_omega / (4.0 * PI)).abs();
     Ok((winding, false))
 }
 
-/// Checks if a point is within `tolerance` of any face boundary.
-fn is_on_boundary(
-    topo: &Topology,
-    faces: &[FaceId],
-    point: Point3,
-    deflection: f64,
-    tolerance: f64,
-) -> Result<bool, OperationsError> {
-    let tol_sq = tolerance * tolerance;
+// ── Math helpers ─────────────────────────────────────────────────────────
 
-    for &fid in faces {
-        let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
+/// Compute the normal of a polygon via Newell's method.
+fn polygon_normal(verts: &[Point3]) -> Vec3 {
+    let mut nx = 0.0;
+    let mut ny = 0.0;
+    let mut nz = 0.0;
+    let n = verts.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let vi = verts[i];
+        let vj = verts[j];
+        nx += (vi.y() - vj.y()) * (vi.z() + vj.z());
+        ny += (vi.z() - vj.z()) * (vi.x() + vj.x());
+        nz += (vi.x() - vj.x()) * (vi.y() + vj.y());
+    }
+    let len = (nx * nx + ny * ny + nz * nz).sqrt();
+    if len < 1e-30 {
+        Vec3::new(0.0, 0.0, 1.0)
+    } else {
+        Vec3::new(nx / len, ny / len, nz / len)
+    }
+}
 
-        for tri in mesh.indices.chunks_exact(3) {
-            let i0 = tri[0] as usize;
-            let i1 = tri[1] as usize;
-            let i2 = tri[2] as usize;
+/// Solve a·t² + b·t + c = 0, returning real roots.
+fn solve_quadratic(a: f64, b: f64, c: f64) -> Vec<f64> {
+    if a.abs() < 1e-15 {
+        if b.abs() < 1e-15 {
+            return Vec::new();
+        }
+        return vec![-c / b];
+    }
 
-            let v0 = mesh.positions[i0];
-            let v1 = mesh.positions[i1];
-            let v2 = mesh.positions[i2];
+    let disc = b * b - 4.0 * a * c;
+    if disc < -1e-12 {
+        return Vec::new();
+    }
+    if disc < 1e-12 {
+        return vec![-b / (2.0 * a)];
+    }
 
-            let dist_sq = point_triangle_distance_sq(point, v0, v1, v2);
-            if dist_sq < tol_sq {
-                return Ok(true);
-            }
+    let sqrt_disc = disc.sqrt();
+    let q = if b >= 0.0 {
+        -0.5 * (b + sqrt_disc)
+    } else {
+        -0.5 * (b - sqrt_disc)
+    };
+
+    let mut roots = Vec::with_capacity(2);
+    roots.push(q / a);
+    if q.abs() > 1e-15 {
+        roots.push(c / q);
+    }
+    roots
+}
+
+/// Solve a cubic a·t³ + b·t² + c·t + d = 0, returning all real roots.
+fn solve_cubic(a: f64, b: f64, c: f64, d: f64) -> Vec<f64> {
+    if a.abs() < 1e-15 {
+        return solve_quadratic(b, c, d);
+    }
+
+    let p = b / a;
+    let q = c / a;
+    let r = d / a;
+
+    // Depressed cubic u³ + dp·u + dq = 0, where t = u - p/3.
+    let p2 = p * p;
+    let dp = q - p2 / 3.0;
+    let dq = r - p * q / 3.0 + 2.0 * p2 * p / 27.0;
+
+    let disc = dq * dq / 4.0 + dp * dp * dp / 27.0;
+    let shift = -p / 3.0;
+
+    if disc > 1e-12 {
+        // One real root.
+        let sqrt_disc = disc.sqrt();
+        let u = (-dq / 2.0 + sqrt_disc).cbrt() + (-dq / 2.0 - sqrt_disc).cbrt();
+        vec![u + shift]
+    } else if disc < -1e-12 {
+        // Three real roots (casus irreducibilis — trigonometric method).
+        // dp < 0 here, so -dp/3 > 0.
+        // m = sqrt(-dp/3) = cbrt(sqrt(-dp³/27)); factor in each root is 2·m.
+        let m = (-dp / 3.0).sqrt();
+        let theta = (-dq / (2.0 * m * m * m)).clamp(-1.0, 1.0).acos();
+        let tau = std::f64::consts::TAU;
+        vec![
+            2.0 * m * (theta / 3.0).cos() + shift,
+            2.0 * m * ((theta + tau) / 3.0).cos() + shift,
+            2.0 * m * ((theta + 2.0 * tau) / 3.0).cos() + shift,
+        ]
+    } else {
+        // Repeated root.
+        if dq.abs() < 1e-15 {
+            vec![shift] // triple root
+        } else {
+            let u = (dq / 2.0).cbrt();
+            vec![-2.0 * u + shift, u + shift]
         }
     }
-
-    Ok(false)
 }
 
-/// Counts the number of times a ray crosses the solid's boundary.
-fn count_ray_crossings(
-    topo: &Topology,
-    faces: &[FaceId],
-    origin: Point3,
-    direction: Vec3,
-    deflection: f64,
-) -> Result<u32, OperationsError> {
-    let mut crossings = 0u32;
-
-    for &fid in faces {
-        let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
-
-        for tri in mesh.indices.chunks_exact(3) {
-            let i0 = tri[0] as usize;
-            let i1 = tri[1] as usize;
-            let i2 = tri[2] as usize;
-
-            let v0 = mesh.positions[i0];
-            let v1 = mesh.positions[i1];
-            let v2 = mesh.positions[i2];
-
-            if ray_triangle_intersect(origin, direction, v0, v1, v2) {
-                crossings += 1;
-            }
-        }
+/// Solve a quartic equation via Ferrari's method.
+#[allow(clippy::many_single_char_names)]
+fn solve_quartic(a: f64, b: f64, c: f64, d: f64, e: f64) -> Vec<f64> {
+    if a.abs() < 1e-20 {
+        return solve_cubic(b, c, d, e);
     }
 
-    Ok(crossings)
+    let p = b / a;
+    let q = c / a;
+    let r = d / a;
+    let s = e / a;
+
+    // Resolvent cubic: y³ - q·y² + (p·r - 4s)·y - (p²s - 4qs + r²) = 0
+    let rc_b = -q;
+    let rc_c = p * r - 4.0 * s;
+    let rc_d = -(p * p * s - 4.0 * q * s + r * r);
+
+    let y = solve_cubic_one_real(rc_b, rc_c, rc_d);
+
+    let disc1 = p * p * 0.25 - q + y;
+    if disc1 < -1e-10 {
+        return Vec::new();
+    }
+    let disc1 = disc1.max(0.0).sqrt();
+
+    let disc2a = y * y * 0.25 - s;
+    if disc2a < -1e-10 {
+        return Vec::new();
+    }
+    let disc2 = disc2a.max(0.0).sqrt();
+
+    let sign = if p * y * 0.5 - r >= 0.0 { 1.0 } else { -1.0 };
+
+    let mut roots = Vec::with_capacity(4);
+    roots.extend(solve_quadratic(
+        1.0,
+        p * 0.5 + disc1,
+        y * 0.5 + sign * disc2,
+    ));
+    roots.extend(solve_quadratic(
+        1.0,
+        p * 0.5 - disc1,
+        y * 0.5 - sign * disc2,
+    ));
+    roots
 }
 
-/// Watertight ray-triangle intersection test.
-///
-/// Returns true if the ray `origin + t * direction` (t > 0) intersects
-/// the triangle (v0, v1, v2). Delegates to the watertight algorithm from
-/// `brepkit_math` which guarantees no cracks or double-hits on shared edges.
-fn ray_triangle_intersect(
-    origin: Point3,
-    direction: Vec3,
-    v0: Point3,
-    v1: Point3,
-    v2: Point3,
-) -> bool {
-    brepkit_math::ray_triangle::watertight_ray_triangle_intersect(origin, direction, v0, v1, v2)
-        .is_some()
-}
+/// Find one real root of t³ + b·t² + c·t + d = 0 via Cardano.
+fn solve_cubic_one_real(b: f64, c: f64, d: f64) -> f64 {
+    let p = c - b * b / 3.0;
+    let q = d - b * c / 3.0 + 2.0 * b * b * b / 27.0;
 
-/// Computes the squared distance from a point to a triangle.
-///
-/// Uses the projection method: project point onto the triangle's plane,
-/// then check if the projection is inside the triangle. If outside,
-/// compute distance to the nearest edge.
-fn point_triangle_distance_sq(point: Point3, v0: Point3, v1: Point3, v2: Point3) -> f64 {
-    let edge0 = v1 - v0;
-    let edge1 = v2 - v0;
-    let v0_to_p = point - v0;
+    let disc = q * q / 4.0 + p * p * p / 27.0;
 
-    let d00 = edge0.dot(edge0);
-    let d01 = edge0.dot(edge1);
-    let d11 = edge1.dot(edge1);
-    let d20 = v0_to_p.dot(edge0);
-    let d21 = v0_to_p.dot(edge1);
+    let u = if disc >= 0.0 {
+        let sqrt_disc = disc.sqrt();
+        (-q / 2.0 + sqrt_disc).cbrt() + (-q / 2.0 - sqrt_disc).cbrt()
+    } else {
+        let r = (-p * p * p / 27.0).sqrt();
+        let theta = (-q / (2.0 * r)).clamp(-1.0, 1.0).acos();
+        2.0 * r.cbrt() * (theta / 3.0).cos()
+    };
 
-    let denom = d00.mul_add(d11, -(d01 * d01));
-    if denom.abs() < 1e-20 {
-        // Degenerate triangle — use distance to first vertex
-        return v0_to_p.length_squared();
-    }
-
-    let inv_denom = 1.0 / denom;
-    let u = d11.mul_add(d20, -(d01 * d21)) * inv_denom;
-    let v = d00.mul_add(d21, -(d01 * d20)) * inv_denom;
-
-    // If projection is inside the triangle
-    if u >= 0.0 && v >= 0.0 && u + v <= 1.0 {
-        let projected = v0 + edge0 * u + edge1 * v;
-        let diff = point - projected;
-        return diff.length_squared();
-    }
-
-    // Otherwise, find closest point on edges
-    let d_e0 = point_segment_distance_sq(point, v0, v1);
-    let d_e1 = point_segment_distance_sq(point, v1, v2);
-    let d_e2 = point_segment_distance_sq(point, v2, v0);
-
-    d_e0.min(d_e1).min(d_e2)
-}
-
-/// Squared distance from a point to a line segment.
-fn point_segment_distance_sq(point: Point3, seg_start: Point3, seg_end: Point3) -> f64 {
-    let seg = seg_end - seg_start;
-    let seg_len_sq = seg.length_squared();
-
-    if seg_len_sq < 1e-20 {
-        return (point - seg_start).length_squared();
-    }
-
-    let t = ((point - seg_start).dot(seg) / seg_len_sq).clamp(0.0, 1.0);
-    let closest = seg_start + seg * t;
-    (point - closest).length_squared()
+    u - b / 3.0
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::primitives::make_box;
+    use crate::primitives::{make_box, make_cone, make_cylinder, make_sphere, make_torus};
 
     #[test]
     fn point_inside_box() {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
-        // Box extends from (0,0,0) to (2,2,2); center is (1,1,1).
         let result = classify_point(&topo, solid, Point3::new(1.0, 1.0, 1.0), 0.1, 1e-6).unwrap();
         assert_eq!(result, PointClassification::Inside);
     }
@@ -396,7 +852,6 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
-        // Box extends from (0,0,0) to (2,2,2), so face at z=2.0
         let result = classify_point(&topo, solid, Point3::new(1.0, 1.0, 2.0), 0.1, 1e-3).unwrap();
         assert_eq!(result, PointClassification::OnBoundary);
     }
@@ -416,79 +871,138 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
-        // Point inside near corner
         let result = classify_point(&topo, solid, Point3::new(0.9, 0.9, 0.9), 0.1, 1e-6).unwrap();
         assert_eq!(result, PointClassification::Inside);
     }
 
-    // ── Ray-triangle tests ────────────────────────────
+    // ── Analytic surface tests ───────────────────────────
 
     #[test]
-    fn ray_hits_triangle() {
-        assert!(ray_triangle_intersect(
-            Point3::new(0.25, 0.25, -1.0),
-            Vec3::new(0.0, 0.0, 1.0),
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(1.0, 0.0, 0.0),
-            Point3::new(0.0, 1.0, 0.0),
-        ));
+    fn point_inside_cylinder() {
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 2.0, 5.0).unwrap();
+
+        let result = classify_point(&topo, solid, Point3::new(0.0, 0.0, 2.5), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Inside);
     }
 
     #[test]
-    fn ray_misses_triangle() {
-        assert!(!ray_triangle_intersect(
-            Point3::new(2.0, 2.0, -1.0),
-            Vec3::new(0.0, 0.0, 1.0),
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(1.0, 0.0, 0.0),
-            Point3::new(0.0, 1.0, 0.0),
-        ));
+    fn point_outside_cylinder() {
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 2.0, 5.0).unwrap();
+
+        let result = classify_point(&topo, solid, Point3::new(10.0, 0.0, 2.5), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Outside);
     }
 
     #[test]
-    fn ray_backward_no_hit() {
-        // Ray going the wrong way
-        assert!(!ray_triangle_intersect(
-            Point3::new(0.25, 0.25, 1.0),
-            Vec3::new(0.0, 0.0, 1.0),
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(1.0, 0.0, 0.0),
-            Point3::new(0.0, 1.0, 0.0),
-        ));
-    }
+    fn point_inside_sphere() {
+        let mut topo = Topology::new();
+        let solid = make_sphere(&mut topo, 3.0, 32).unwrap();
 
-    // ── Point-triangle distance tests ─────────────────
-
-    #[test]
-    fn point_on_triangle() {
-        let dist = point_triangle_distance_sq(
-            Point3::new(0.25, 0.25, 0.0),
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(1.0, 0.0, 0.0),
-            Point3::new(0.0, 1.0, 0.0),
-        );
-        assert!(dist < 1e-20);
+        let result = classify_point(&topo, solid, Point3::new(0.0, 0.0, 0.0), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Inside);
     }
 
     #[test]
-    fn point_above_triangle() {
-        let dist = point_triangle_distance_sq(
-            Point3::new(0.25, 0.25, 3.0),
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(1.0, 0.0, 0.0),
-            Point3::new(0.0, 1.0, 0.0),
-        );
-        assert!((dist - 9.0).abs() < 1e-10);
+    fn point_outside_sphere() {
+        let mut topo = Topology::new();
+        let solid = make_sphere(&mut topo, 3.0, 32).unwrap();
+
+        let result = classify_point(&topo, solid, Point3::new(5.0, 0.0, 0.0), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Outside);
     }
 
-    // ── Winding number tests ─────────────────────────
+    #[test]
+    fn point_inside_cone() {
+        let mut topo = Topology::new();
+        let solid = make_cone(&mut topo, 2.0, 1.0, 5.0).unwrap();
+
+        // Point on the axis, inside the cone
+        let result = classify_point(&topo, solid, Point3::new(0.0, 0.0, 2.5), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Inside);
+    }
+
+    #[test]
+    fn point_outside_cone() {
+        let mut topo = Topology::new();
+        let solid = make_cone(&mut topo, 2.0, 1.0, 5.0).unwrap();
+
+        let result = classify_point(&topo, solid, Point3::new(10.0, 0.0, 2.5), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Outside);
+    }
+
+    #[test]
+    fn point_inside_torus() {
+        let mut topo = Topology::new();
+        // major=3, minor=1 → tube center at distance 3 from origin
+        let solid = make_torus(&mut topo, 3.0, 1.0, 32).unwrap();
+
+        // Point inside the tube (on the x-axis at distance 3 from origin)
+        let result = classify_point(&topo, solid, Point3::new(3.0, 0.0, 0.0), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Inside);
+    }
+
+    #[test]
+    fn point_outside_torus() {
+        let mut topo = Topology::new();
+        let solid = make_torus(&mut topo, 3.0, 1.0, 32).unwrap();
+
+        // Point at origin — in the hole of the torus
+        let result = classify_point(&topo, solid, Point3::new(0.0, 0.0, 0.0), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Outside);
+    }
+
+    #[test]
+    fn point_outside_torus_far() {
+        let mut topo = Topology::new();
+        let solid = make_torus(&mut topo, 3.0, 1.0, 32).unwrap();
+
+        // Point far from torus
+        let result = classify_point(&topo, solid, Point3::new(10.0, 0.0, 0.0), 0.1, 1e-6).unwrap();
+        assert_eq!(result, PointClassification::Outside);
+    }
+
+    // ── Solver tests ────────────────────────────────────────
+
+    #[test]
+    fn cubic_three_roots() {
+        // (t-1)(t-2)(t-3) = t³ - 6t² + 11t - 6
+        let mut roots = solve_cubic(1.0, -6.0, 11.0, -6.0);
+        roots.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(roots.len(), 3, "expected 3 roots, got {}", roots.len());
+        assert!((roots[0] - 1.0).abs() < 1e-8);
+        assert!((roots[1] - 2.0).abs() < 1e-8);
+        assert!((roots[2] - 3.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn cubic_one_root() {
+        // t³ + t + 2 = 0 has one real root at t = -1
+        // (t+1)(t² - t + 2) = t³ + 2  ... no that's not right
+        // Let's use t³ + 3t + 4: discriminant = 16 + 4 > 0 → one real root
+        let roots = solve_cubic(1.0, 0.0, 3.0, 4.0);
+        assert_eq!(roots.len(), 1, "expected 1 root, got {}", roots.len());
+    }
+
+    #[test]
+    fn quartic_degenerate_to_cubic() {
+        // a ≈ 0: effectively t³ - 6t² + 11t - 6 = 0 → roots 1,2,3
+        let mut roots = solve_quartic(0.0, 1.0, -6.0, 11.0, -6.0);
+        roots.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(roots.len(), 3, "expected 3 roots, got {}", roots.len());
+        assert!((roots[0] - 1.0).abs() < 1e-8);
+        assert!((roots[1] - 2.0).abs() < 1e-8);
+        assert!((roots[2] - 3.0).abs() < 1e-8);
+    }
+
+    // ── Winding number tests ─────────────────────────────
 
     #[test]
     fn winding_point_inside_box() {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
-        // Box extends from (0,0,0) to (2,2,2); center is (1,1,1).
         let result =
             classify_point_winding(&topo, solid, Point3::new(1.0, 1.0, 1.0), 0.1, 1e-6).unwrap();
         assert_eq!(result, PointClassification::Inside);
@@ -504,14 +1018,13 @@ mod tests {
         assert_eq!(result, PointClassification::Outside);
     }
 
-    // ── Robust classifier tests ──────────────────────
+    // ── Robust classifier tests ──────────────────────────
 
     #[test]
     fn robust_point_inside_box() {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
-        // Box extends from (0,0,0) to (2,2,2); center is (1,1,1).
         let result =
             classify_point_robust(&topo, solid, Point3::new(1.0, 1.0, 1.0), 0.1, 1e-6).unwrap();
         assert_eq!(result, PointClassification::Inside);
@@ -525,5 +1038,40 @@ mod tests {
         let result =
             classify_point_robust(&topo, solid, Point3::new(5.0, 5.0, 5.0), 0.1, 1e-6).unwrap();
         assert_eq!(result, PointClassification::Outside);
+    }
+
+    // ── Math helper tests ────────────────────────────────
+
+    #[test]
+    fn quadratic_two_roots() {
+        let mut roots = solve_quadratic(1.0, -5.0, 6.0);
+        assert_eq!(roots.len(), 2);
+        roots.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let sorted = roots;
+        assert!((sorted[0] - 2.0).abs() < 1e-10);
+        assert!((sorted[1] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn quadratic_no_roots() {
+        let roots = solve_quadratic(1.0, 0.0, 1.0);
+        assert!(roots.is_empty());
+    }
+
+    #[test]
+    fn quartic_known_roots() {
+        let mut roots = solve_quartic(1.0, -10.0, 35.0, -50.0, 24.0);
+        assert!(roots.len() >= 4, "expected 4 roots, got {}", roots.len());
+        roots.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let sorted = roots;
+        for (i, &expected) in [1.0, 2.0, 3.0, 4.0].iter().enumerate() {
+            assert!(
+                (sorted[i] - expected).abs() < 1e-6,
+                "root {} expected {}, got {}",
+                i,
+                expected,
+                sorted[i]
+            );
+        }
     }
 }
