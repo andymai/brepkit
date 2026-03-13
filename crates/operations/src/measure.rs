@@ -218,11 +218,171 @@ pub fn face_area(
                 Ok(4.0 * std::f64::consts::PI * r * r)
             }
         }
-        _ => {
+        FaceSurface::Cone(_) => analytic_cone_face_area(topo, face_id),
+        FaceSurface::Torus(_) => analytic_torus_face_area(topo, face_id),
+        FaceSurface::Nurbs(_) => {
             let mesh = tessellate::tessellate(topo, face_id, deflection)?;
             Ok(triangle_mesh_area(&mesh))
         }
     }
+}
+
+/// Compute the area of a conical face analytically.
+///
+/// For a cone parameterised as
+///   `P(u,v) = apex + v*(cos(α)*radial(u) + sin(α)*axis)`
+/// the surface element is `dA = v * cos(α) * du * dv`.
+///
+/// Integrating over `u ∈ [u0,u1], v ∈ [v0,v1]`:
+///   `area = cos(α) * (u1-u0) * (v1²-v0²) / 2`
+///
+/// This equals `π*(r0+r1)*slant*angle_frac` (standard frustum lateral area)
+/// when verified: `r0=v0*cos(α)`, `r1=v1*cos(α)`, slant=|v1-v0|,
+/// angle_frac=(u1-u0)/TAU.
+fn analytic_cone_face_area(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<f64, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let cone = match face.surface() {
+        FaceSurface::Cone(c) => c,
+        _ => {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "analytic_cone_face_area requires a cone face".into(),
+            });
+        }
+    };
+    let wire = topo.wire(face.outer_wire())?;
+
+    let mut u_vals = Vec::new();
+    let mut v_vals = Vec::new();
+    for oe in wire.edges() {
+        if let Ok(edge) = topo.edge(oe.edge()) {
+            for &vid in &[edge.start(), edge.end()] {
+                if let Ok(vtx) = topo.vertex(vid) {
+                    let (u, v) = cone.project_point(vtx.point());
+                    u_vals.push(u);
+                    v_vals.push(v);
+                }
+            }
+            if !edge.is_closed() {
+                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
+                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                        let ts = circle.project(sv.point());
+                        let te = circle.project(ev.point());
+                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                        let mid_t = if fwd <= std::f64::consts::PI {
+                            ts + fwd * 0.5
+                        } else {
+                            ts - (std::f64::consts::TAU - fwd) * 0.5
+                        };
+                        let mid = circle.evaluate(mid_t);
+                        let (u, _) = cone.project_point(mid);
+                        u_vals.push(u);
+                    }
+                }
+            }
+        }
+    }
+
+    if v_vals.is_empty() {
+        return Ok(0.0);
+    }
+    let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
+    let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if (v_max - v_min).abs() < 1e-15 {
+        return Ok(0.0);
+    }
+
+    let u_range = compute_angular_range(&mut u_vals);
+    let (u0, u1) = u_range;
+
+    let cos_a = cone.half_angle().cos();
+    let area = cos_a * (u1 - u0) * (v_max * v_max - v_min * v_min) / 2.0;
+    Ok(area.abs())
+}
+
+/// Compute the area of a toroidal face analytically.
+///
+/// For a torus parameterised as
+///   `P(u,v) = C + (R + r*cos(v))*(cos(u)*x + sin(u)*y) + r*sin(v)*z`
+/// the surface element is `dA = r * (R + r*cos(v)) * du * dv`.
+///
+/// Integrating over `u ∈ [u0,u1], v ∈ [v0,v1]`:
+///   `area = r * (u1-u0) * [R*(v1-v0) + r*(sin(v1)-sin(v0))]`
+///
+/// For a full torus: `area = r * 2π * (R*2π + r*0) = 4π²Rr` ✓
+fn analytic_torus_face_area(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<f64, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let tor = match face.surface() {
+        FaceSurface::Torus(t) => t,
+        _ => {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "analytic_torus_face_area requires a torus face".into(),
+            });
+        }
+    };
+    let wire = topo.wire(face.outer_wire())?;
+
+    let mut u_vals = Vec::new();
+    let mut v_vals = Vec::new();
+    for oe in wire.edges() {
+        if let Ok(edge) = topo.edge(oe.edge()) {
+            for &vid in &[edge.start(), edge.end()] {
+                if let Ok(vtx) = topo.vertex(vid) {
+                    let (u, v) = tor.project_point(vtx.point());
+                    u_vals.push(u);
+                    v_vals.push(v);
+                }
+            }
+            if !edge.is_closed() {
+                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
+                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                        let ts = circle.project(sv.point());
+                        let te = circle.project(ev.point());
+                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                        let mid_t = if fwd <= std::f64::consts::PI {
+                            ts + fwd * 0.5
+                        } else {
+                            ts - (std::f64::consts::TAU - fwd) * 0.5
+                        };
+                        let mid = circle.evaluate(mid_t);
+                        let (u, _) = tor.project_point(mid);
+                        u_vals.push(u);
+                    }
+                }
+            }
+        }
+    }
+
+    if v_vals.is_empty() {
+        return Ok(0.0);
+    }
+    let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
+    let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if (v_max - v_min).abs() < 1e-15 {
+        // Full torus: v wraps from 0 to 2π, all boundary v-vals are the same.
+        // Use full v-range.
+        let u_range = compute_angular_range(&mut u_vals);
+        let (u0, u1) = u_range;
+        let big_r = tor.major_radius();
+        let small_r = tor.minor_radius();
+        let dv = std::f64::consts::TAU;
+        let area = small_r * (u1 - u0) * (big_r * dv + small_r * 0.0);
+        return Ok(area.abs());
+    }
+
+    let u_range = compute_angular_range(&mut u_vals);
+    let (u0, u1) = u_range;
+
+    let big_r = tor.major_radius();
+    let small_r = tor.minor_radius();
+    let area =
+        small_r * (u1 - u0) * (big_r * (v_max - v_min) + small_r * (v_max.sin() - v_min.sin()));
+    Ok(area.abs())
 }
 
 /// Newell's method: compute the area of a planar polygon from its
@@ -2654,6 +2814,56 @@ mod tests {
     }
 
     // ── Error path validation ────────────────────────────────────
+
+    /// Cone total surface area = π*r*l + π*r² (lateral + base cap).
+    /// r=1, h=1: slant l=√2, lateral = π*1*√2 = π√2 ≈ 4.4429.
+    /// Total = π√2 + π ≈ 7.584.
+    #[test]
+    fn cone_face_area_analytic() {
+        use crate::primitives::make_cone;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        let solid = make_cone(&mut topo, 1.0, 0.0, 1.0).unwrap();
+
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+
+        let mut lateral_area = 0.0;
+        let mut cap_area = 0.0;
+        for &fid in shell.faces() {
+            let face = topo.face(fid).unwrap();
+            let area = face_area(&topo, fid, 0.01).unwrap();
+            match face.surface() {
+                FaceSurface::Cone(_) => lateral_area += area,
+                FaceSurface::Plane { .. } => cap_area += area,
+                _ => panic!("unexpected surface type in cone"),
+            }
+        }
+
+        // Lateral area = π*r*l = π*1*√2 ≈ 4.4429
+        let slant = 2.0_f64.sqrt();
+        assert_rel(lateral_area, PI * slant, 1e-8, "cone r=1 h=1 lateral area");
+        // Cap (base disk) = π*r² = π ≈ 3.1416
+        assert_rel(cap_area, PI, 2e-4, "cone r=1 h=1 base cap area");
+    }
+
+    /// Torus total surface area = 4π²*R*r.
+    /// R=2, r=0.5: area = 4π²*2*0.5 = 4π² ≈ 39.478.
+    #[test]
+    fn torus_face_area_analytic() {
+        use crate::primitives::make_torus;
+        use std::f64::consts::PI;
+
+        let mut topo = Topology::new();
+        // Use 32 segments for a decent tessellation of boundary
+        let solid = make_torus(&mut topo, 2.0, 0.5, 32).unwrap();
+
+        let area = solid_surface_area(&topo, solid, 0.01).unwrap();
+        // SA = 4π²Rr = 4π²*2*0.5 = 4π² ≈ 39.478
+        let expected = 4.0 * PI * PI * 2.0 * 0.5;
+        assert_rel(area, expected, 1e-8, "torus R=2 r=0.5 surface area");
+    }
 
     /// face_area with a non-planar face and zero deflection should still
     /// return a reasonable result (tessellation at maximum detail).

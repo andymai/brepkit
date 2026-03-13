@@ -41,6 +41,9 @@ tarpaulin-report.html
 # Claude Code agent memory
 .claude/agent-memory-local/
 
+# Git worktrees
+.worktrees/
+
 # Internal docs (prevent accidental commits)
 *-INTERNAL.md
 ISSUES-*.md

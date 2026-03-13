@@ -230,10 +230,10 @@ fn tessellate_analytic(
     }
 }
 
-/// Tessellate a planar face via ear-clipping triangulation.
+/// Tessellate a planar face using CDT (Constrained Delaunay Triangulation).
 ///
 /// Works for both convex and non-convex (simple) polygons by
-/// projecting to 2D and using the ear-clipping algorithm.
+/// projecting to 2D and using CDT with fan-triangulation fallback for degenerate cases.
 fn tessellate_planar(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -2866,7 +2866,7 @@ pub fn tessellate_solid(
 /// Tessellate a single face, reusing shared edge vertices from the global mesh.
 ///
 /// For planar faces: collects boundary vertices (reusing global indices for
-/// shared edges), then triangulates via ear-clipping.
+/// shared edges), then triangulates via CDT (Constrained Delaunay Triangulation).
 ///
 /// For NURBS and analytic faces: falls back to per-face tessellation and
 /// stitches the boundary vertices to the global mesh by snapping boundary
@@ -2972,7 +2972,7 @@ fn tessellate_face_with_shared_edges(
             .collect();
 
         if face_data.inner_wires().is_empty() {
-            // Simple ear-clip for faces without holes.
+            // Triangulate simple faces (no holes) via CDT with fan-triangulation fallback.
             let mut local_indices = cdt_triangulate_simple(&local_positions, normal);
 
             // Ensure triangle winding matches the face normal.

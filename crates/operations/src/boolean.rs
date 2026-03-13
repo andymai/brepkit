@@ -352,6 +352,13 @@ pub struct BooleanOptions {
     ///
     /// Default: `false`.
     pub unify_faces: bool,
+    /// Run full shape healing on the boolean result via [`heal_solid`].
+    ///
+    /// Use for final results only — healing can corrupt intermediates fed into
+    /// further booleans (non-convex merged faces confuse chord splitting).
+    ///
+    /// Default: `false`.
+    pub heal_after_boolean: bool,
 }
 
 impl Default for BooleanOptions {
@@ -360,6 +367,7 @@ impl Default for BooleanOptions {
             deflection: DEFAULT_BOOLEAN_DEFLECTION,
             tolerance: Tolerance::new(),
             unify_faces: false,
+            heal_after_boolean: false,
         }
     }
 }
@@ -701,6 +709,12 @@ pub fn boolean_with_options(
     // accumulate.  This is analogous to OCCT's same-domain face merging.
     if opts.unify_faces {
         let _ = crate::heal::unify_faces(topo, result)?;
+    }
+    // Full shape healing: vertex merging, small face/edge removal, etc.
+    // Only enabled for final results — healing can corrupt intermediates
+    // fed into further booleans.
+    if opts.heal_after_boolean {
+        let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
     }
 
     // ── Phase 7: Degenerate result check ──────────────────────────────
@@ -2984,6 +2998,27 @@ fn quantize_point(p: Point3, resolution: f64) -> (i64, i64, i64) {
     )
 }
 
+/// Compute a scale-relative spatial-hash resolution from a set of vertex positions.
+///
+/// Uses the bounding-box diagonal of the input points scaled by 1e-7 to keep
+/// the hash cell roughly at tolerance-level relative to the model extent.
+/// Falls back to `1.0 / tol.linear` for degenerate (near-single-point) models.
+fn vertex_merge_resolution(all_pts: impl Iterator<Item = Point3>, tol: Tolerance) -> f64 {
+    let fallback = 1.0 / tol.linear;
+    if let Some(bbox) = Aabb3::try_from_points(all_pts) {
+        let diagonal = (bbox.max - bbox.min).length();
+        if diagonal > tol.linear {
+            // 1e-7 relative factor: same precision as absolute tolerance at unit scale,
+            // but scales correctly for large models (100m+) and sub-mm geometry.
+            1.0 / (diagonal * 1e-7_f64)
+        } else {
+            fallback
+        }
+    } else {
+        fallback
+    }
+}
+
 /// Assemble a solid from a set of planar face polygons with normals.
 ///
 /// Uses spatial hashing for vertex dedup and edge sharing.
@@ -3057,7 +3092,14 @@ pub(crate) fn assemble_solid_mixed(
     face_specs: &[FaceSpec],
     tol: Tolerance,
 ) -> Result<SolidId, crate::OperationsError> {
-    let resolution = 1.0 / tol.linear;
+    let resolution = vertex_merge_resolution(
+        face_specs.iter().flat_map(|s| match s {
+            FaceSpec::Planar { vertices, .. }
+            | FaceSpec::Surface { vertices, .. }
+            | FaceSpec::CylindricalFace { vertices, .. } => vertices.iter().copied(),
+        }),
+        tol,
+    );
 
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> =
         HashMap::with_capacity(face_specs.len() * 4);
@@ -5499,7 +5541,10 @@ fn analytic_boolean(
     // ── Selection + Assembly ─────────────────────────────────────────────
     let _t_asm = timer_now();
 
-    let resolution = 1.0 / tol.linear;
+    let resolution = vertex_merge_resolution(
+        fragments.iter().flat_map(|f| f.vertices.iter().copied()),
+        tol,
+    );
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> =
         HashMap::with_capacity(fragments.len() * 4);
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> =
@@ -6883,7 +6928,10 @@ pub fn compound_cut(
     );
     // Reuse the same assembly logic as analytic_boolean (vertex/edge dedup,
     // wire construction, face creation).
-    let resolution = 1.0 / tol.linear;
+    let resolution = vertex_merge_resolution(
+        fragments.iter().flat_map(|f| f.vertices.iter().copied()),
+        tol,
+    );
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> =
         HashMap::with_capacity(fragments.len() * 4);
     let mut edge_map: HashMap<(usize, usize), EdgeId> = HashMap::with_capacity(fragments.len() * 4);
@@ -7150,7 +7198,41 @@ fn compound_cut_sequential(
     Ok(result)
 }
 
+/// Check whether a polygon (given its vertices and face normal) is convex.
+///
+/// Returns `true` if all cross products of consecutive edge pairs point in the
+/// same direction as `face_normal`. Degenerate edges (cross product near zero)
+/// are treated as locally convex -- correct for both collinear and coincident
+/// vertices.
+fn is_polygon_convex(verts: &[Point3], face_normal: &Vec3) -> bool {
+    let n = verts.len();
+    if n < 3 {
+        return true;
+    }
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let k = (i + 2) % n;
+        let e1 = verts[j] - verts[i];
+        let e2 = verts[k] - verts[j];
+        let cross = e1.cross(e2);
+        // If the cross product opposes the face normal, the polygon is concave
+        // at this vertex. Skip degenerate (zero-length) edges.
+        // 1e-12: degenerate guard on unnormalized cross product (|e1||e2|·sin θ).
+        // For sub-mm edges (0.1mm), smallest detectable concavity is ~1e-4 rad —
+        // well above this threshold.
+        if cross.dot(*face_normal) < -1e-12 {
+            return false;
+        }
+    }
+    true
+}
+
 /// Compute a plane-plane intersection chord clipped to both face polygons.
+///
+/// Uses `cyrus_beck_clip` (fast, exact for convex polygons) as the primary
+/// clipper. Falls back to `polygon_clip_intervals` when a polygon is detected
+/// as non-convex, since `cyrus_beck_clip` silently produces wrong results on
+/// concave boundaries.
 fn plane_plane_chord_analytic(
     normal_a: Vec3,
     d_a: f64,
@@ -7163,18 +7245,83 @@ fn plane_plane_chord_analytic(
     let (line_origin, line_dir) =
         plane_plane_intersection(normal_a, d_a, normal_b, d_b, tol.angular)?;
 
-    let t_range_a = cyrus_beck_clip(&line_origin, &line_dir, verts_a, &normal_a, tol);
-    let t_range_b = cyrus_beck_clip(&line_origin, &line_dir, verts_b, &normal_b, tol);
+    let convex_a = is_polygon_convex(verts_a, &normal_a);
+    let convex_b = is_polygon_convex(verts_b, &normal_b);
 
-    let (t_min_a, t_max_a) = t_range_a?;
-    let (t_min_b, t_max_b) = t_range_b?;
+    // Fast path: both polygons are convex -- use Cyrus-Beck directly.
+    if convex_a && convex_b {
+        let t_range_a = cyrus_beck_clip(&line_origin, &line_dir, verts_a, &normal_a, tol);
+        let t_range_b = cyrus_beck_clip(&line_origin, &line_dir, verts_b, &normal_b, tol);
 
-    let t_min = t_min_a.max(t_min_b);
-    let t_max = t_max_a.min(t_max_b);
+        let (t_min_a, t_max_a) = t_range_a?;
+        let (t_min_b, t_max_b) = t_range_b?;
 
-    if t_max - t_min < tol.linear {
-        return None;
+        let t_min = t_min_a.max(t_min_b);
+        let t_max = t_max_a.min(t_max_b);
+
+        if t_max - t_min < tol.linear {
+            return None;
+        }
+
+        return Some((
+            point_along_line(&line_origin, &line_dir, t_min),
+            point_along_line(&line_origin, &line_dir, t_max),
+        ));
     }
+
+    // Slow path: at least one polygon is concave. Use polygon_clip_intervals
+    // which handles concave boundaries via winding-number interval testing.
+    let intervals_a = if convex_a {
+        match cyrus_beck_clip(&line_origin, &line_dir, verts_a, &normal_a, tol) {
+            Some(iv) => vec![iv],
+            None => return None,
+        }
+    } else {
+        polygon_clip_intervals(&line_origin, &line_dir, verts_a, &normal_a, tol)
+    };
+    let intervals_b = if convex_b {
+        match cyrus_beck_clip(&line_origin, &line_dir, verts_b, &normal_b, tol) {
+            Some(iv) => vec![iv],
+            None => return None,
+        }
+    } else {
+        polygon_clip_intervals(&line_origin, &line_dir, verts_b, &normal_b, tol)
+    };
+
+    // Intersect the two interval sets (both already sorted by t).
+    let overlaps = intersect_interval_lists(&intervals_a, &intervals_b, tol.linear);
+
+    // Pick the largest finite overlap interval as the chord.
+    // polygon_clip_intervals can emit half-infinite sentinel intervals
+    // (e.g. (-inf, t] or [t, inf)) for lines fully inside a concave face;
+    // these must be skipped to avoid degenerate chord endpoints.
+    //
+    // For highly concave faces (C-shape, U-shape) the intersection line may
+    // produce multiple disjoint finite intervals.  We return only the longest
+    // one; secondary intervals are discarded.  This is a known limitation of
+    // the single-chord return type — log a warning in debug builds so the gap
+    // is observable without any release overhead.
+    #[cfg(debug_assertions)]
+    {
+        let finite_count = overlaps
+            .iter()
+            .filter(|(lo, hi)| lo.is_finite() && hi.is_finite())
+            .count();
+        if finite_count > 1 {
+            log::warn!(
+                "plane_plane_chord_analytic: {finite_count} finite overlap intervals for \
+                 concave face; only largest chord returned — secondary intervals discarded"
+            );
+        }
+    }
+    let &(t_min, t_max) = overlaps
+        .iter()
+        .filter(|(lo, hi)| lo.is_finite() && hi.is_finite())
+        .max_by(|(a_lo, a_hi), (b_lo, b_hi)| {
+            (a_hi - a_lo)
+                .partial_cmp(&(b_hi - b_lo))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })?;
 
     Some((
         point_along_line(&line_origin, &line_dir, t_min),
@@ -9373,6 +9520,33 @@ mod tests {
     }
 
     #[test]
+    fn test_boolean_heal_after_boolean_option() {
+        // Test that heal_after_boolean option runs without error and produces
+        // a valid solid.
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(1.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let opts = BooleanOptions {
+            heal_after_boolean: true,
+            ..Default::default()
+        };
+        let fused = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, opts).unwrap();
+
+        // Verify the solid is valid and has the expected volume.
+        let vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+        assert!(
+            (vol - 2.0).abs() < 0.02,
+            "healed fuse volume: {vol} (expected 2.0)"
+        );
+
+        // Verify the solid passes validation.
+        crate::validate::validate_solid(&topo, fused).unwrap();
+    }
+
+    #[test]
     fn fuse_adjacent_boxes_3x1_grid() {
         // Three unit cubes in a row: fuse_all should produce a 3×1×1 box.
         let mut topo = Topology::new();
@@ -10535,5 +10709,102 @@ mod tests {
             "octagon lip not translation-invariant: origin={lip_vol:.1}, z16={lip_up_vol:.1} \
              (outer={outer_vol:.1}, inner={inner_vol:.1}, expected={expected:.1})"
         );
+    }
+
+    // ── Non-convex face chord clip test ────────────────────────────────────
+    //
+    // Regression test for the cyrus_beck_clip → polygon_clip_intervals fix.
+    // cyrus_beck_clip silently produces wrong results on non-convex (concave)
+    // polygons because the Cyrus-Beck algorithm assumes a convex clipping
+    // region. polygon_clip_intervals handles concave polygons correctly.
+    //
+    // Setup: fuse two boxes into an L-shaped solid (volume=3), creating a
+    // non-convex top face at z=1. Then cut the L with a slab whose vertical
+    // planar faces intersect that non-convex top face. plane_plane_chord_analytic
+    // must clip correctly against the L-shaped polygon.
+    //
+    // Without the fix, cyrus_beck_clip may return None (missing the chord) or
+    // an over-extended chord, causing the wrong split and producing a result
+    // solid with an incorrect volume.
+    #[test]
+    fn test_boolean_concave_face_chord_clip() {
+        let mut topo = Topology::new();
+
+        // Box A: 2×1×1, occupies (0,0,0)→(2,1,1)
+        let box_a = crate::primitives::make_box(&mut topo, 2.0, 1.0, 1.0).unwrap();
+
+        // Box B: 1×1×1, occupies (0,0,0)→(1,1,1); translate to (0,1,0)→(1,2,1)
+        let box_b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let translate = brepkit_math::mat::Mat4::translation(0.0, 1.0, 0.0);
+        crate::transform::transform_solid(&mut topo, box_b, &translate).unwrap();
+
+        // L-shape: volume = 2×1×1 + 1×1×1 = 3.0
+        let l_shape = boolean(&mut topo, BooleanOp::Fuse, box_a, box_b).unwrap();
+        assert_volume_near(&topo, l_shape, 3.0, 0.001);
+
+        // Cutting slab: a box that crosses the concave inner corner.
+        // Slab occupies (0.5, 0.5, -0.5)→(1.5, 1.5, 1.5), crossing both arms
+        // of the L. Its vertical faces are planar and will intersect the
+        // non-convex top face (z=1 plane, L-shaped) of l_shape.
+        // The slab volume inside the L spans:
+        //   In the full-arm region (y∈[0.5,1]): x∈[0.5,1.5], dy=0.5, dz=1  → 1.0×0.5×1 = 0.5
+        //   In the narrow-arm region (y∈[1,1.5]): x∈[0.5,1.0], dy=0.5, dz=1 → 0.5×0.5×1 = 0.25
+        //   Total cut volume = 0.75
+        // Expected result: 3.0 - 0.75 = 2.25
+        let slab = crate::primitives::make_box(&mut topo, 1.0, 1.0, 2.0).unwrap();
+        let slab_translate = brepkit_math::mat::Mat4::translation(0.5, 0.5, -0.5);
+        crate::transform::transform_solid(&mut topo, slab, &slab_translate).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Cut, l_shape, slab).unwrap();
+        assert_volume_near(&topo, result, 2.25, 0.001);
+    }
+
+    // ── Convex regression test for polygon_clip_intervals ───────────────────
+    //
+    // Confirms that switching from cyrus_beck_clip to polygon_clip_intervals
+    // does not break the common convex-face case. A large box minus a half-
+    // overlapping smaller box: expected volume = 8.0 - 0.5 = 7.5.
+    #[test]
+    fn test_boolean_convex_face_chord_clip_regression() {
+        let mut topo = Topology::new();
+
+        // Base box: 2×2×2, occupies (0,0,0)→(2,2,2)
+        let base = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+
+        // Tool box: 1×1×1, placed so it half-overlaps the base along x.
+        // Tool occupies (1.5, 0.5, 0.5)→(2.5, 1.5, 1.5).
+        // Overlap region: (1.5,0.5,0.5)→(2,1.5,1.5) = 0.5×1×1 = 0.5
+        // Expected result: 8.0 - 0.5 = 7.5
+        let tool = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let translate = brepkit_math::mat::Mat4::translation(1.5, 0.5, 0.5);
+        crate::transform::transform_solid(&mut topo, tool, &translate).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Cut, base, tool).unwrap();
+        assert_volume_near(&topo, result, 7.5, 0.001);
+    }
+
+    /// Verify boolean works correctly at 100m scale with scale-relative
+    /// vertex merge resolution. Documents expected behavior for large models.
+    #[test]
+    fn test_boolean_large_scale_vertex_merge() {
+        let mut topo = Topology::new();
+
+        // Two 100m cubes, second offset by 50m in x → overlap = 50×100×100
+        let a = crate::primitives::make_box(&mut topo, 100.0, 100.0, 100.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 100.0, 100.0, 100.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(50.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
+
+        let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+        assert!(
+            faces.len() >= 10 && faces.len() < 100,
+            "expected 10..100 faces for large-scale cut, got {}",
+            faces.len()
+        );
+
+        // Expected volume: 100^3 - 50*100*100 = 500_000
+        assert_volume_near(&topo, result, 500_000.0, 0.01);
     }
 }
