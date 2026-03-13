@@ -696,20 +696,31 @@ pub fn fillet_rolling_ball(
                 FaceSurface::Cylinder(s) => s.radius(),
                 // Sphere: κ₁ = κ₂ = 1/R → min radius = R.
                 FaceSurface::Sphere(s) => s.radius(),
-                // Torus: κ₁ = 1/r (minor, always) → min radius = r.
-                FaceSurface::Torus(s) => s.minor_radius(),
-                // Cone: circumferential κ₂ = cos(α)/v at distance v from apex.
-                // → min curvature radius = v_min * cos(α).
+                // Torus: κ₁ = 1/r (minor cross-section, always present).
+                // On the inner equator, the major curvature = 1/(R−r), which
+                // can exceed 1/r for fat tori (R < 2r). Use the tighter bound.
+                FaceSurface::Torus(s) => {
+                    let inner_r = s.major_radius() - s.minor_radius();
+                    if inner_r > tol.linear {
+                        s.minor_radius().min(inner_r)
+                    } else {
+                        s.minor_radius()
+                    }
+                }
+                // Cone: circumferential κ₂ = tan(α)/v at slant distance v from apex,
+                // where α = half_angle from the radial plane.
+                // → min curvature radius = v_min * cos(α) / sin(α).
                 FaceSurface::Cone(s) => {
                     let (_, v0) = s.project_point(p_start);
                     let (_, v1) = s.project_point(p_end);
                     let v_min = v0.min(v1).abs().max(tol.linear);
                     let cos_a = s.half_angle().cos();
-                    if cos_a < tol.linear {
-                        // Degenerate flat cone (half_angle ≈ π/2); skip.
+                    let sin_a = s.half_angle().sin();
+                    if sin_a < tol.linear {
+                        // Near-flat cone (half_angle ≈ 0): curvature radius → ∞, no constraint.
                         continue;
                     }
-                    v_min * cos_a
+                    v_min * cos_a / sin_a
                 }
             };
             if radius >= min_curvature_r {
