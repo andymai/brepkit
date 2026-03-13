@@ -352,6 +352,13 @@ pub struct BooleanOptions {
     ///
     /// Default: `false`.
     pub unify_faces: bool,
+    /// Run full shape healing on the boolean result via [`heal_solid`].
+    ///
+    /// Use for final results only — healing can corrupt intermediates fed into
+    /// further booleans (non-convex merged faces confuse chord splitting).
+    ///
+    /// Default: `false`.
+    pub heal_after_boolean: bool,
 }
 
 impl Default for BooleanOptions {
@@ -360,6 +367,7 @@ impl Default for BooleanOptions {
             deflection: DEFAULT_BOOLEAN_DEFLECTION,
             tolerance: Tolerance::new(),
             unify_faces: false,
+            heal_after_boolean: false,
         }
     }
 }
@@ -701,6 +709,12 @@ pub fn boolean_with_options(
     // accumulate.  This is analogous to OCCT's same-domain face merging.
     if opts.unify_faces {
         let _ = crate::heal::unify_faces(topo, result)?;
+    }
+    // Full shape healing: vertex merging, small face/edge removal, etc.
+    // Only enabled for final results — healing can corrupt intermediates
+    // fed into further booleans.
+    if opts.heal_after_boolean {
+        let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
     }
 
     // ── Phase 7: Degenerate result check ──────────────────────────────
@@ -9447,6 +9461,33 @@ mod tests {
             face_count, 6,
             "unified fuse should have exactly 6 faces, got {face_count}"
         );
+    }
+
+    #[test]
+    fn test_boolean_heal_after_boolean_option() {
+        // Test that heal_after_boolean option runs without error and produces
+        // a valid solid.
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(1.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let opts = BooleanOptions {
+            heal_after_boolean: true,
+            ..Default::default()
+        };
+        let fused = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, opts).unwrap();
+
+        // Verify the solid is valid and has the expected volume.
+        let vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+        assert!(
+            (vol - 2.0).abs() < 0.02,
+            "healed fuse volume: {vol} (expected 2.0)"
+        );
+
+        // Verify the solid passes validation.
+        crate::validate::validate_solid(&topo, fused).unwrap();
     }
 
     #[test]
