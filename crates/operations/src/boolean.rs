@@ -339,6 +339,19 @@ pub struct BooleanOptions {
     /// Controls vertex merging, point classification, and predicate
     /// thresholds throughout the boolean pipeline. Default: `Tolerance::new()`.
     pub tolerance: Tolerance,
+    /// Merge co-surface face fragments after assembly.
+    ///
+    /// When `true`, the pipeline calls `unify_faces` to merge adjacent faces
+    /// that share the same underlying surface (analogous to OCCT's same-domain
+    /// analysis). This dramatically reduces face count — e.g. sequential
+    /// booleans on curved surfaces drop from 2871 to ~106 faces.
+    ///
+    /// **Caveat**: merged faces may have complex (non-convex) wires that
+    /// break subsequent boolean operations on the result. Enable only when
+    /// the result is final and will not be used as input to another boolean.
+    ///
+    /// Default: `false`.
+    pub unify_faces: bool,
 }
 
 impl Default for BooleanOptions {
@@ -346,6 +359,7 @@ impl Default for BooleanOptions {
         Self {
             deflection: DEFAULT_BOOLEAN_DEFLECTION,
             tolerance: Tolerance::new(),
+            unify_faces: false,
         }
     }
 }
@@ -500,6 +514,9 @@ pub fn boolean_with_options(
     if try_analytic {
         if let Ok(solid) = analytic_boolean(topo, op, a, b, tol, opts.deflection) {
             let _ = crate::heal::remove_degenerate_edges(topo, solid, tol.linear)?;
+            if opts.unify_faces {
+                let _ = crate::heal::unify_faces(topo, solid)?;
+            }
             validate_boolean_result(topo, solid)?;
             return Ok(solid);
         }
@@ -678,6 +695,13 @@ pub fn boolean_with_options(
     // orientations. We intentionally skip vertex merging and face removal
     // since they can corrupt valid boolean output with small features.
     let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+    // Merge co-surface faces that were split by the boolean pipeline.
+    // Without this, sequential booleans cause topology explosion (10-27× more
+    // faces than necessary) because each boolean creates fragments that
+    // accumulate.  This is analogous to OCCT's same-domain face merging.
+    if opts.unify_faces {
+        let _ = crate::heal::unify_faces(topo, result)?;
+    }
 
     // ── Phase 7: Degenerate result check ──────────────────────────────
     validate_boolean_result(topo, result)?;
@@ -9315,6 +9339,36 @@ mod tests {
         assert_eq!(
             face_count, 10,
             "shared-face fuse should have exactly 10 faces (12 - 2 shared), got {face_count}"
+        );
+    }
+
+    #[test]
+    fn fuse_adjacent_boxes_with_unify() {
+        // Same as fuse_adjacent_boxes_shared_face but with unify_faces=true.
+        // After merging coplanar faces, the 2×1×1 box should have exactly 6 faces.
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(1.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let opts = BooleanOptions {
+            unify_faces: true,
+            ..Default::default()
+        };
+        let fused = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, opts).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+        assert!(
+            (vol - 2.0).abs() < 0.02,
+            "unified fuse volume: {vol} (expected 2.0)"
+        );
+
+        let shell_id = topo.solid(fused).unwrap().outer_shell();
+        let face_count = topo.shell(shell_id).unwrap().faces().len();
+        assert_eq!(
+            face_count, 6,
+            "unified fuse should have exactly 6 faces, got {face_count}"
         );
     }
 

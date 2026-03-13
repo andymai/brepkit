@@ -944,17 +944,43 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
             }
         }
 
-        // Reorder boundary edges into a connected chain.
-        let ordered = order_edges_into_wire(topo, &boundary_edges)?;
+        // Reorder boundary edges into closed loops.
+        let mut loops = order_edges_into_loops(topo, &boundary_edges)?;
 
-        if ordered.is_empty() {
-            // Couldn't form a valid wire — skip this group, keep original faces.
+        if loops.is_empty() {
+            // Couldn't form any valid loop — skip this group, keep original faces.
             continue;
         }
 
-        // Create the merged wire and face.
-        let new_wire = Wire::new(ordered, true).map_err(crate::OperationsError::Topology)?;
+        // Select the outer wire by enclosed 3D area (Newell normal magnitude).
+        // Edge count is unreliable — a hole tessellated into many short edges
+        // would be misclassified as the outer boundary.
+        let outer_idx = if loops.len() > 1 {
+            loops
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| {
+                    let area_a = loop_area_3d(topo, a);
+                    let area_b = loop_area_3d(topo, b);
+                    area_a
+                        .partial_cmp(&area_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map_or(0, |(i, _)| i)
+        } else {
+            0
+        };
+        let outer_loop = loops.remove(outer_idx);
+
+        let new_wire = Wire::new(outer_loop, true).map_err(crate::OperationsError::Topology)?;
         let new_wire_id = topo.wires.alloc(new_wire);
+
+        // Convert remaining loops to inner wires.
+        for inner_loop in loops {
+            if let Ok(iw) = Wire::new(inner_loop, true) {
+                all_inner_wires.push(topo.wires.alloc(iw));
+            }
+        }
 
         let surface =
             representative_surface.ok_or_else(|| crate::OperationsError::InvalidInput {
@@ -992,6 +1018,33 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
     Ok(original_count - final_count)
 }
 
+/// Compute the enclosed 3D area of a loop of oriented edges using Newell's method.
+///
+/// Returns 0.0 if any vertex lookup fails (defensive fallback).
+fn loop_area_3d(topo: &Topology, loop_edges: &[OrientedEdge]) -> f64 {
+    let mut positions: Vec<Point3> = Vec::with_capacity(loop_edges.len());
+    for oe in loop_edges {
+        let edge = match topo.edge(oe.edge()) {
+            Ok(e) => e,
+            Err(_) => return 0.0,
+        };
+        let vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        match topo.vertex(vid) {
+            Ok(v) => positions.push(v.point()),
+            Err(_) => return 0.0,
+        }
+    }
+    if positions.len() < 3 {
+        return 0.0;
+    }
+    // Newell normal magnitude = 2× enclosed area.
+    crate::winding::newell_normal(&positions).length() * 0.5
+}
+
 /// Edge info for wire ordering: oriented edge with resolved vertex indices.
 struct EdgeInfo {
     oe: OrientedEdge,
@@ -999,16 +1052,15 @@ struct EdgeInfo {
     end_vid: usize,
 }
 
-/// Order a set of boundary edges into a connected wire sequence.
+/// Order boundary edges into one or more closed loops.
 ///
-/// Takes unordered oriented edges and arranges them so that the end vertex
-/// of each edge connects to the start vertex of the next edge. Returns
-/// an empty vec if the edges can't form a single closed loop (e.g., if
-/// they form multiple disjoint loops — a case we don't handle yet).
-fn order_edges_into_wire(
+/// Returns a `Vec<Vec<OrientedEdge>>` where each inner vec is a closed
+/// loop with edges chained end-to-start. Empty if edges can't form any
+/// valid loop.
+fn order_edges_into_loops(
     topo: &Topology,
     edges: &[OrientedEdge],
-) -> Result<Vec<OrientedEdge>, crate::OperationsError> {
+) -> Result<Vec<Vec<OrientedEdge>>, crate::OperationsError> {
     if edges.is_empty() {
         return Ok(Vec::new());
     }
@@ -1034,41 +1086,48 @@ fn order_edges_into_wire(
         start_map.entry(info.start_vid).or_default().push(i);
     }
 
-    // Walk the chain starting from the first edge.
-    let mut result = Vec::with_capacity(edges.len());
     let mut used = vec![false; edges.len()];
+    let mut loops: Vec<Vec<OrientedEdge>> = Vec::new();
 
-    result.push(infos[0].oe);
-    used[0] = true;
-    let mut current_end = infos[0].end_vid;
-    let chain_start = infos[0].start_vid;
+    // Walk chains starting from each unused edge.
+    while let Some(start_idx) = used.iter().position(|&u| !u) {
+        let mut chain = Vec::new();
+        chain.push(infos[start_idx].oe);
+        used[start_idx] = true;
+        let chain_start = infos[start_idx].start_vid;
+        let mut current_end = infos[start_idx].end_vid;
 
-    for _ in 1..edges.len() {
-        let candidates = match start_map.get(&current_end) {
-            Some(c) => c,
-            None => return Ok(Vec::new()), // broken chain
-        };
-        let mut found = false;
-        for &idx in candidates {
-            if !used[idx] {
-                used[idx] = true;
-                result.push(infos[idx].oe);
-                current_end = infos[idx].end_vid;
-                found = true;
-                break;
+        let max_steps = edges.len();
+        for _ in 1..=max_steps {
+            if current_end == chain_start {
+                break; // loop closed
+            }
+            let candidates = match start_map.get(&current_end) {
+                Some(c) => c,
+                None => break, // broken chain
+            };
+            let mut found = false;
+            for &idx in candidates {
+                if !used[idx] {
+                    used[idx] = true;
+                    chain.push(infos[idx].oe);
+                    current_end = infos[idx].end_vid;
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                break; // dead end
             }
         }
-        if !found {
-            return Ok(Vec::new()); // broken chain
+
+        // Only keep the chain if it forms a closed loop.
+        if current_end == chain_start && !chain.is_empty() {
+            loops.push(chain);
         }
     }
 
-    // Verify closure: the last edge's end should connect back to the first edge's start.
-    if current_end != chain_start {
-        return Ok(Vec::new());
-    }
-
-    Ok(result)
+    Ok(loops)
 }
 
 #[cfg(test)]

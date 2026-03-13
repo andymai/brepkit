@@ -260,7 +260,24 @@ fn side_face_surface(
                 circle.radius(),
             )
             .map_err(crate::OperationsError::Math)?;
-            Ok((FaceSurface::Cylinder(cyl), false))
+            // Check whether the cylinder's natural radial normal agrees with
+            // the expected outward direction (same logic as NURBS reversal).
+            let edge_dir = p1 - p0;
+            let expected = if outer_is_cw {
+                offset.cross(edge_dir)
+            } else {
+                edge_dir.cross(offset)
+            };
+            // Cylinder natural normal at p0: radial direction from axis.
+            let to_pt = Vec3::new(
+                p0.x() - circle.center().x(),
+                p0.y() - circle.center().y(),
+                p0.z() - circle.center().z(),
+            );
+            let along_axis = cyl.axis() * cyl.axis().dot(to_pt);
+            let radial = to_pt - along_axis;
+            let reversed = radial.dot(expected) < 0.0;
+            Ok((FaceSurface::Cylinder(cyl), reversed))
         }
         EdgeCurve::NurbsCurve(nc) => {
             let surface = ruled_nurbs_surface(nc, offset)?;

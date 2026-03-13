@@ -85,6 +85,18 @@ impl CylindricalSurface {
         self.radius
     }
 
+    /// Returns the local X axis (first radial direction in the parametric frame).
+    #[must_use]
+    pub const fn x_axis(&self) -> Vec3 {
+        self.x_axis
+    }
+
+    /// Returns the local Y axis (second radial direction in the parametric frame).
+    #[must_use]
+    pub const fn y_axis(&self) -> Vec3 {
+        self.y_axis
+    }
+
     /// Returns a copy of this cylinder with its origin translated by `offset`.
     #[must_use]
     pub fn translated(&self, offset: Vec3) -> Self {
@@ -196,6 +208,18 @@ impl ConicalSurface {
     #[must_use]
     pub const fn half_angle(&self) -> f64 {
         self.half_angle
+    }
+
+    /// Returns the local X axis (first radial direction in the parametric frame).
+    #[must_use]
+    pub const fn x_axis(&self) -> Vec3 {
+        self.x_axis
+    }
+
+    /// Returns the local Y axis (second radial direction in the parametric frame).
+    #[must_use]
+    pub const fn y_axis(&self) -> Vec3 {
+        self.y_axis
     }
 
     /// Returns a copy of this cone with its apex translated by `offset`.
@@ -341,6 +365,24 @@ impl SphericalSurface {
     #[must_use]
     pub const fn radius(&self) -> f64 {
         self.radius
+    }
+
+    /// Returns the local X axis.
+    #[must_use]
+    pub const fn x_axis(&self) -> Vec3 {
+        self.x_axis
+    }
+
+    /// Returns the local Y axis.
+    #[must_use]
+    pub const fn y_axis(&self) -> Vec3 {
+        self.y_axis
+    }
+
+    /// Returns the local Z axis (pole direction).
+    #[must_use]
+    pub const fn z_axis(&self) -> Vec3 {
+        self.z_axis
     }
 
     /// Returns a copy of this sphere with its center translated by `offset`.
@@ -571,6 +613,18 @@ impl ToroidalSurface {
     #[must_use]
     pub const fn minor_radius(&self) -> f64 {
         self.minor_radius
+    }
+
+    /// Returns the local X axis.
+    #[must_use]
+    pub const fn x_axis(&self) -> Vec3 {
+        self.x_axis
+    }
+
+    /// Returns the local Y axis.
+    #[must_use]
+    pub const fn y_axis(&self) -> Vec3 {
+        self.y_axis
     }
 
     /// Returns the torus axis direction (perpendicular to the ring plane).
