@@ -877,10 +877,7 @@ fn analytic_cone_signed_volume(
     //     = apex·(sin_a*radial - cos_a*axis) + v*(cos_a*sin_a - cos_a*sin_a)
     //     = apex·(sin_a*radial(u) - cos_a*axis)
     //
-    // Wait... let me be more careful:
-    // radial(u)·radial(u) = 1, axis·radial(u) = 0, axis·axis = 1
-    // So P·n = a_vec·(sin_a*radial(u) - cos_a*axis) + v*(cos_a*sin_a*1 + sin_a²*0 - cos_a²*0 - cos_a*sin_a*1)
-    //        = a_vec·(sin_a*radial(u) - cos_a*axis)
+    // The v-dependent terms cancel: cos_a*sin_a - cos_a*sin_a = 0, so P·n is v-independent.
     //
     // Full integrand = (1/3) * P·n * dA = (1/3) * [a_vec·(sin_a*radial(u) - cos_a*axis)] * v*cos_a * du * dv
     //
@@ -1257,7 +1254,7 @@ pub(crate) fn volume_from_direct_face_tessellation(
                 total += analytic_torus_signed_volume(topo, fid)? * 6.0;
                 continue;
             }
-            _ => {}
+            FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => {}
         }
 
         let mesh = tessellate::tessellate(topo, fid, deflection)?;

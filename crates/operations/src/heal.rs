@@ -952,11 +952,25 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
             continue;
         }
 
-        // Use the longest loop as the outer wire; shorter loops become inner wires.
-        if loops.len() > 1 {
-            loops.sort_by_key(|l| std::cmp::Reverse(l.len()));
-        }
-        let outer_loop = loops.remove(0);
+        // Select the outer wire by enclosed 3D area (Newell normal magnitude).
+        // Edge count is unreliable — a hole tessellated into many short edges
+        // would be misclassified as the outer boundary.
+        let outer_idx = if loops.len() > 1 {
+            loops
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| {
+                    let area_a = loop_area_3d(topo, a);
+                    let area_b = loop_area_3d(topo, b);
+                    area_a
+                        .partial_cmp(&area_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map_or(0, |(i, _)| i)
+        } else {
+            0
+        };
+        let outer_loop = loops.remove(outer_idx);
 
         let new_wire = Wire::new(outer_loop, true).map_err(crate::OperationsError::Topology)?;
         let new_wire_id = topo.wires.alloc(new_wire);
@@ -1002,6 +1016,33 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
 
     let final_count = topo.shell(shell_id)?.faces().len();
     Ok(original_count - final_count)
+}
+
+/// Compute the enclosed 3D area of a loop of oriented edges using Newell's method.
+///
+/// Returns 0.0 if any vertex lookup fails (defensive fallback).
+fn loop_area_3d(topo: &Topology, loop_edges: &[OrientedEdge]) -> f64 {
+    let mut positions: Vec<Point3> = Vec::with_capacity(loop_edges.len());
+    for oe in loop_edges {
+        let edge = match topo.edge(oe.edge()) {
+            Ok(e) => e,
+            Err(_) => return 0.0,
+        };
+        let vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        match topo.vertex(vid) {
+            Ok(v) => positions.push(v.point()),
+            Err(_) => return 0.0,
+        }
+    }
+    if positions.len() < 3 {
+        return 0.0;
+    }
+    // Newell normal magnitude = 2× enclosed area.
+    crate::winding::newell_normal(&positions).length() * 0.5
 }
 
 /// Edge info for wire ordering: oriented edge with resolved vertex indices.
