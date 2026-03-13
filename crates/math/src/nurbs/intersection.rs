@@ -29,6 +29,7 @@ use crate::bvh::Bvh;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::decompose::{BezierPatch, curve_to_bezier_segments, surface_to_bezier_patches};
 use crate::nurbs::fitting::{approximate_lspia, chord_length_params, interpolate};
+use crate::nurbs::projection::project_point_to_curve;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
@@ -738,10 +739,15 @@ fn build_curves_from_points(
             let mut bbox_min = positions[0];
             let mut bbox_max = positions[0];
             for (i, &t) in fit_params.iter().enumerate() {
-                let fitted_pt = fitted.evaluate(t);
                 let src = positions[i];
-                let d = (fitted_pt.x() - src.x())
-                    .hypot((fitted_pt.y() - src.y()).hypot(fitted_pt.z() - src.z()));
+                // Nearest-point projection gives the true geometric residual.
+                // Fall back to parametric evaluation only for degenerate curves.
+                let d = if let Ok(proj) = project_point_to_curve(&fitted, src, 1e-6) {
+                    proj.distance
+                } else {
+                    let pt = fitted.evaluate(t);
+                    (pt.x() - src.x()).hypot((pt.y() - src.y()).hypot(pt.z() - src.z()))
+                };
                 max_residual = max_residual.max(d);
                 bbox_min = Point3::new(
                     bbox_min.x().min(src.x()),

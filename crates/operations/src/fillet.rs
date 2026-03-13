@@ -595,6 +595,18 @@ pub fn fillet_rolling_ball(
         );
     }
 
+    // Precompute edge → polygon entries for O(|filtered_edges|) Phase 2d lookup
+    // instead of O(|filtered_edges| × |planar_faces|) nested iteration.
+    let mut edge_to_poly_pos: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    for (&face_key, poly) in &face_polygons {
+        for (i, eid) in poly.wire_edge_ids.iter().enumerate() {
+            edge_to_poly_pos
+                .entry(eid.index())
+                .or_default()
+                .push((face_key, i));
+        }
+    }
+
     // Phase 2: Filter to manifold edges and build vertex-to-edge adjacency.
     let filtered_edges: Vec<EdgeId> = edges
         .iter()
@@ -751,10 +763,11 @@ pub fn fillet_rolling_ball(
     // Only applies to planar adjacent faces (face_polygons).  Curved faces are
     // handled by Phase 2c (curvature bound).
     for &edge_id in &filtered_edges {
-        for poly in face_polygons.values() {
-            let Some(i_e) = poly.wire_edge_ids.iter().position(|&e| e == edge_id) else {
-                continue;
-            };
+        let Some(poly_entries) = edge_to_poly_pos.get(&edge_id.index()) else {
+            continue;
+        };
+        for &(face_key, i_e) in poly_entries {
+            let poly = &face_polygons[&face_key];
             let n = poly.positions.len();
             let next_i = (i_e + 1) % n;
             let prev_i = (i_e + n - 1) % n;
