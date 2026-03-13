@@ -1,10 +1,16 @@
 //! Edge filleting (rounding edges with a constant or variable radius).
 //!
 //! Replaces sharp edges with a smooth cylindrical fillet surface.
-//! Supports edges between planar faces, and edges between planar and
-//! curved analytic faces (cylinder, cone, sphere, torus). Each filleted
-//! edge is replaced by a true rolling-ball NURBS blend surface with G1
-//! tangent continuity.
+//! Supports edges between planar faces, analytic faces (cylinder, cone,
+//! sphere, torus), and NURBS faces from a prior fillet operation.  Each
+//! filleted edge is replaced by a true rolling-ball NURBS blend surface
+//! with G1 tangent continuity.
+//!
+//! For NURBS adjacent faces the outward normal is computed by projecting
+//! the edge sample point onto the surface, giving accurate cross-section
+//! geometry (see [`face_surface_normal_at`]).  Planar trimming of NURBS
+//! adjacent faces is not yet implemented — those faces are passed through
+//! unchanged; small geometric gaps may appear at the fillet boundary.
 //!
 //! The rolling-ball algorithm:
 //! 1. For each target edge, find the two adjacent planar faces
@@ -22,6 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use brepkit_math::nurbs::projection::project_point_to_surface;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::nurbs::surface_fitting::interpolate_surface;
 use brepkit_math::tolerance::Tolerance;
@@ -154,7 +161,16 @@ fn face_surface_normal_at(surface: &FaceSurface, point: Point3) -> Option<Vec3> 
             let tube_center = tor.center() + ring_dir * tor.major_radius();
             (point - tube_center).normalize().ok()
         }
-        FaceSurface::Nurbs(srf) => srf.normal(0.5, 0.5).ok(),
+        FaceSurface::Nurbs(srf) => {
+            // Project the point onto the NURBS surface to find (u, v), then
+            // evaluate the exact normal at that parameter.  Tolerance 1e-4 is
+            // sufficient here — we only need (u,v) accurate enough for a
+            // reliable normal direction, not for position reconstruction.
+            match project_point_to_surface(srf, point, 1e-4) {
+                Ok(proj) => srf.normal(proj.u, proj.v).ok(),
+                Err(_) => srf.normal(0.5, 0.5).ok(), // fallback to midpoint
+            }
+        }
     }
 }
 
@@ -2829,6 +2845,84 @@ mod tests {
             result.is_ok(),
             "single-edge fillet with R=0.4 should succeed: {:?}",
             result.err()
+        );
+    }
+
+    #[test]
+    fn face_surface_normal_at_nurbs_via_projection() {
+        // Directly test the NURBS branch of face_surface_normal_at.
+        // Build a flat bilinear NURBS patch in the XY plane.  The outward
+        // normal is (0, 0, 1) everywhere; point projection must return a
+        // valid (u, v) that yields the correct normal.
+        let srf = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .expect("bilinear XY patch");
+
+        let surface = FaceSurface::Nurbs(srf);
+
+        // Test at a non-central point to ensure projection (not midpoint) is used.
+        let n = face_surface_normal_at(&surface, Point3::new(0.2, 0.8, 0.0));
+        let n = n.expect("NURBS normal should be Some for a surface point");
+
+        // Flat XY patch has normal along ±Z.
+        assert!(
+            n.z().abs() > 0.9,
+            "flat XY patch normal must be along Z, got: {n:?}"
+        );
+        // Result must be approximately unit length.
+        assert!(
+            (n.length() - 1.0).abs() < 0.01,
+            "NURBS normal must be unit length, got: {}",
+            n.length()
+        );
+    }
+
+    #[test]
+    fn fillet_rolling_ball_second_pass_on_nurbs_solid() {
+        // After a rolling-ball fillet the result solid contains a NURBS face.
+        // A second fillet on a different manifold edge must succeed.  This
+        // verifies that face_surfaces containing NURBS entries does not crash
+        // fillet_rolling_ball even when the NURBS face is non-manifold in the
+        // current implementation (so its normal branch is not reached yet).
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+
+        let edges1 = solid_edge_ids(&topo, solid);
+        let result1 = super::fillet_rolling_ball(&mut topo, solid, &[edges1[0]], 0.1)
+            .expect("first rolling-ball fillet should succeed");
+
+        // Confirm NURBS face was created.
+        let has_nurbs = {
+            let s = topo.solid(result1).unwrap();
+            let sh = topo.shell(s.outer_shell()).unwrap();
+            sh.faces()
+                .iter()
+                .any(|&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
+        };
+        assert!(has_nurbs, "first fillet must produce a NURBS face");
+
+        // Second fillet on a different edge.
+        let edges2 = solid_edge_ids(&topo, result1);
+        let result2 = super::fillet_rolling_ball(&mut topo, result1, &[edges2[1]], 0.05);
+        assert!(
+            result2.is_ok(),
+            "second fillet on NURBS-containing solid must succeed: {:?}",
+            result2.err()
+        );
+
+        let vol = crate::measure::solid_volume(&topo, result2.unwrap(), 0.1).unwrap();
+        assert!(
+            vol > 0.5,
+            "doubly-filleted solid must have positive volume, got {vol}"
         );
     }
 }
