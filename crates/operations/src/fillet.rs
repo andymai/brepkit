@@ -765,9 +765,7 @@ pub fn fillet_rolling_ball(
             // Setback from start vertex if the previous polygon edge is a target.
             let setback_start: f64 = {
                 let prev_target = target_set.contains(&poly.wire_edge_ids[prev_i].index());
-                if !prev_target {
-                    0.0
-                } else {
+                if prev_target {
                     // Interior angle at start: between (E forward) and (prev backward from start).
                     let d_e = e_vec * (1.0 / e_len);
                     let d_prev_raw = poly.positions[prev_i] - poly.positions[i_e];
@@ -783,15 +781,15 @@ pub fn fillet_rolling_ball(
                         continue;
                     }
                     radius / half_tan
+                } else {
+                    0.0
                 }
             };
 
             // Setback from end vertex if the next polygon edge is also a target.
             let setback_end: f64 = {
                 let next_target = target_set.contains(&poly.wire_edge_ids[next_i].index());
-                if !next_target {
-                    0.0
-                } else {
+                if next_target {
                     // Interior angle at end: between (E backward from end) and (next forward).
                     let d_e_bwd = poly.positions[i_e] - poly.positions[next_i];
                     let d_next_raw = poly.positions[next_next_i] - poly.positions[next_i];
@@ -809,6 +807,8 @@ pub fn fillet_rolling_ball(
                         continue;
                     }
                     radius / half_tan
+                } else {
+                    0.0
                 }
             };
 
@@ -2615,8 +2615,7 @@ mod tests {
                         || matches!(s2, FaceSurface::Cylinder(_));
                     if has_plane && has_cyl {
                         for &fid in sh.faces() {
-                            let wire =
-                                topo.wire(topo.face(fid).unwrap().outer_wire()).unwrap();
+                            let wire = topo.wire(topo.face(fid).unwrap().outer_wire()).unwrap();
                             for oe in wire.edges() {
                                 if oe.edge().index() == eidx {
                                     found = Some(oe.edge());
@@ -2632,7 +2631,10 @@ mod tests {
 
         // radius == cylinder radius → curvature radius exactly met → reject.
         let result = super::fillet_rolling_ball(&mut topo, solid, &[plane_cyl_edge], 1.0);
-        assert!(result.is_err(), "radius == cylinder radius should be rejected");
+        assert!(
+            result.is_err(),
+            "radius == cylinder radius should be rejected"
+        );
         let msg = format!("{}", result.unwrap_err());
         assert!(
             msg.contains("curvature"),
@@ -2641,7 +2643,10 @@ mod tests {
 
         // radius > cylinder radius → also rejected.
         let result2 = super::fillet_rolling_ball(&mut topo, solid, &[plane_cyl_edge], 1.5);
-        assert!(result2.is_err(), "radius > cylinder radius should be rejected");
+        assert!(
+            result2.is_err(),
+            "radius > cylinder radius should be rejected"
+        );
 
         // radius < cylinder radius → passes curvature check (may succeed or fail
         // for other fillet reasons, but must not fail on curvature).
@@ -2789,9 +2794,7 @@ mod tests {
                 len > 3.5
             })
             .copied();
-        let Some(seed_edge) = long_edge else {
-            panic!("could not find a long edge on a 4×1×1 box");
-        };
+        let seed_edge = long_edge.expect("could not find a long edge on a 4×1×1 box");
 
         let result = super::fillet_rolling_ball_propagate_g1(&mut topo, solid, &[seed_edge], 0.1);
         assert!(
