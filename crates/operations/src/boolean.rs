@@ -7150,7 +7150,36 @@ fn compound_cut_sequential(
     Ok(result)
 }
 
+/// Check whether a polygon (given its vertices and face normal) is convex.
+///
+/// Returns `true` if all cross products of consecutive edge pairs point in the
+/// same direction as `face_normal`. Degenerate (zero-length) edges are skipped.
+fn is_polygon_convex(verts: &[Point3], face_normal: &Vec3) -> bool {
+    let n = verts.len();
+    if n < 3 {
+        return true;
+    }
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let k = (i + 2) % n;
+        let e1 = verts[j] - verts[i];
+        let e2 = verts[k] - verts[j];
+        let cross = e1.cross(e2);
+        // If the cross product opposes the face normal, the polygon is concave
+        // at this vertex. Skip degenerate (zero-length) edges.
+        if cross.dot(*face_normal) < -1e-12 {
+            return false;
+        }
+    }
+    true
+}
+
 /// Compute a plane-plane intersection chord clipped to both face polygons.
+///
+/// Uses `cyrus_beck_clip` (fast, exact for convex polygons) as the primary
+/// clipper. Falls back to `polygon_clip_intervals` when a polygon is detected
+/// as non-convex, since `cyrus_beck_clip` silently produces wrong results on
+/// concave boundaries.
 fn plane_plane_chord_analytic(
     normal_a: Vec3,
     d_a: f64,
@@ -7163,14 +7192,63 @@ fn plane_plane_chord_analytic(
     let (line_origin, line_dir) =
         plane_plane_intersection(normal_a, d_a, normal_b, d_b, tol.angular)?;
 
-    let t_range_a = cyrus_beck_clip(&line_origin, &line_dir, verts_a, &normal_a, tol);
-    let t_range_b = cyrus_beck_clip(&line_origin, &line_dir, verts_b, &normal_b, tol);
+    let convex_a = is_polygon_convex(verts_a, &normal_a);
+    let convex_b = is_polygon_convex(verts_b, &normal_b);
 
-    let (t_min_a, t_max_a) = t_range_a?;
-    let (t_min_b, t_max_b) = t_range_b?;
+    // Fast path: both polygons are convex -- use Cyrus-Beck directly.
+    if convex_a && convex_b {
+        let t_range_a = cyrus_beck_clip(&line_origin, &line_dir, verts_a, &normal_a, tol);
+        let t_range_b = cyrus_beck_clip(&line_origin, &line_dir, verts_b, &normal_b, tol);
 
-    let t_min = t_min_a.max(t_min_b);
-    let t_max = t_max_a.min(t_max_b);
+        let (t_min_a, t_max_a) = t_range_a?;
+        let (t_min_b, t_max_b) = t_range_b?;
+
+        let t_min = t_min_a.max(t_min_b);
+        let t_max = t_max_a.min(t_max_b);
+
+        if t_max - t_min < tol.linear {
+            return None;
+        }
+
+        return Some((
+            point_along_line(&line_origin, &line_dir, t_min),
+            point_along_line(&line_origin, &line_dir, t_max),
+        ));
+    }
+
+    // Slow path: at least one polygon is concave. Use polygon_clip_intervals
+    // which handles concave boundaries via winding-number interval testing.
+    let intervals_a = if convex_a {
+        match cyrus_beck_clip(&line_origin, &line_dir, verts_a, &normal_a, tol) {
+            Some(iv) => vec![iv],
+            None => return None,
+        }
+    } else {
+        polygon_clip_intervals(&line_origin, &line_dir, verts_a, &normal_a, tol)
+    };
+    let intervals_b = if convex_b {
+        match cyrus_beck_clip(&line_origin, &line_dir, verts_b, &normal_b, tol) {
+            Some(iv) => vec![iv],
+            None => return None,
+        }
+    } else {
+        polygon_clip_intervals(&line_origin, &line_dir, verts_b, &normal_b, tol)
+    };
+
+    // Intersect the two interval sets and return the bounding envelope.
+    let mut t_min = f64::INFINITY;
+    let mut t_max = f64::NEG_INFINITY;
+
+    for &(a_lo, a_hi) in &intervals_a {
+        for &(b_lo, b_hi) in &intervals_b {
+            let lo = a_lo.max(b_lo);
+            let hi = a_hi.min(b_hi);
+            if hi - lo >= tol.linear {
+                t_min = t_min.min(lo);
+                t_max = t_max.max(hi);
+            }
+        }
+    }
 
     if t_max - t_min < tol.linear {
         return None;
@@ -10535,5 +10613,77 @@ mod tests {
             "octagon lip not translation-invariant: origin={lip_vol:.1}, z16={lip_up_vol:.1} \
              (outer={outer_vol:.1}, inner={inner_vol:.1}, expected={expected:.1})"
         );
+    }
+
+    // ── Non-convex face chord clip test ────────────────────────────────────
+    //
+    // Regression test for the cyrus_beck_clip → polygon_clip_intervals fix.
+    // cyrus_beck_clip silently produces wrong results on non-convex (concave)
+    // polygons because the Cyrus-Beck algorithm assumes a convex clipping
+    // region. polygon_clip_intervals handles concave polygons correctly.
+    //
+    // Setup: fuse two boxes into an L-shaped solid (volume=3), creating a
+    // non-convex top face at z=1. Then cut the L with a slab whose vertical
+    // planar faces intersect that non-convex top face. plane_plane_chord_analytic
+    // must clip correctly against the L-shaped polygon.
+    //
+    // Without the fix, cyrus_beck_clip may return None (missing the chord) or
+    // an over-extended chord, causing the wrong split and producing a result
+    // solid with an incorrect volume.
+    #[test]
+    fn test_boolean_concave_face_chord_clip() {
+        let mut topo = Topology::new();
+
+        // Box A: 2×1×1, occupies (0,0,0)→(2,1,1)
+        let box_a = crate::primitives::make_box(&mut topo, 2.0, 1.0, 1.0).unwrap();
+
+        // Box B: 1×1×1, occupies (0,0,0)→(1,1,1); translate to (0,1,0)→(1,2,1)
+        let box_b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let translate = brepkit_math::mat::Mat4::translation(0.0, 1.0, 0.0);
+        crate::transform::transform_solid(&mut topo, box_b, &translate).unwrap();
+
+        // L-shape: volume = 2×1×1 + 1×1×1 = 3.0
+        let l_shape = boolean(&mut topo, BooleanOp::Fuse, box_a, box_b).unwrap();
+        assert_volume_near(&topo, l_shape, 3.0, 0.001);
+
+        // Cutting slab: a box that crosses the concave inner corner.
+        // Slab occupies (0.5, 0.5, -0.5)→(1.5, 1.5, 1.5), crossing both arms
+        // of the L. Its vertical faces are planar and will intersect the
+        // non-convex top face (z=1 plane, L-shaped) of l_shape.
+        // The slab volume inside the L spans:
+        //   In the full-arm region (y∈[0.5,1]): x∈[0.5,1.5], dy=0.5, dz=1  → 1.0×0.5×1 = 0.5
+        //   In the narrow-arm region (y∈[1,1.5]): x∈[0.5,1.0], dy=0.5, dz=1 → 0.5×0.5×1 = 0.25
+        //   Total cut volume = 0.75
+        // Expected result: 3.0 - 0.75 = 2.25
+        let slab = crate::primitives::make_box(&mut topo, 1.0, 1.0, 2.0).unwrap();
+        let slab_translate = brepkit_math::mat::Mat4::translation(0.5, 0.5, -0.5);
+        crate::transform::transform_solid(&mut topo, slab, &slab_translate).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Cut, l_shape, slab).unwrap();
+        assert_volume_near(&topo, result, 2.25, 0.001);
+    }
+
+    // ── Convex regression test for polygon_clip_intervals ───────────────────
+    //
+    // Confirms that switching from cyrus_beck_clip to polygon_clip_intervals
+    // does not break the common convex-face case. A large box minus a half-
+    // overlapping smaller box: expected volume = 8.0 - 0.5 = 7.5.
+    #[test]
+    fn test_plane_plane_chord_concave_regression() {
+        let mut topo = Topology::new();
+
+        // Base box: 2×2×2, occupies (0,0,0)→(2,2,2)
+        let base = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+
+        // Tool box: 1×1×1, placed so it half-overlaps the base along x.
+        // Tool occupies (1.5, 0.5, 0.5)→(2.5, 1.5, 1.5).
+        // Overlap region: (1.5,0.5,0.5)→(2,1.5,1.5) = 0.5×1×1 = 0.5
+        // Expected result: 8.0 - 0.5 = 7.5
+        let tool = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let translate = brepkit_math::mat::Mat4::translation(1.5, 0.5, 0.5);
+        crate::transform::transform_solid(&mut topo, tool, &translate).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Cut, base, tool).unwrap();
+        assert_volume_near(&topo, result, 7.5, 0.001);
     }
 }
