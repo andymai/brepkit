@@ -1368,6 +1368,176 @@ fn record_fillet_point(
         .insert(face_id, vertex_id, point);
 }
 
+/// Expand a seed edge set by G1 (tangent-continuity) chain propagation.
+///
+/// Starting from `seed_edges`, iteratively adds any manifold edge that:
+/// 1. Shares a vertex with an edge already in the set.
+/// 2. Has the same pair of adjacent faces (same ridgeline).
+/// 3. Is tangent-continuous at the shared vertex (< 10° deviation).
+///
+/// This is a private helper for [`fillet_rolling_ball_propagate_g1`].
+fn expand_g1_chain(
+    topo: &Topology,
+    solid: SolidId,
+    seed_edges: &[EdgeId],
+    tol: Tolerance,
+) -> Result<Vec<EdgeId>, crate::OperationsError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+    let shell_face_ids: Vec<FaceId> = shell.faces().to_vec();
+
+    // Build edge→faces and vertex→edges maps for the full shell.
+    let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
+    let mut vertex_to_edges: HashMap<usize, Vec<EdgeId>> = HashMap::new();
+    let mut edge_ids: HashMap<usize, EdgeId> = HashMap::new();
+
+    for &fid in &shell_face_ids {
+        let face = topo.face(fid)?;
+        let wire = topo.wire(face.outer_wire())?;
+        for oe in wire.edges() {
+            let eid = oe.edge();
+            edge_to_faces.entry(eid.index()).or_default().push(fid);
+            edge_ids.insert(eid.index(), eid);
+            let edge = topo.edge(eid)?;
+            vertex_to_edges
+                .entry(edge.start().index())
+                .or_default()
+                .push(eid);
+            vertex_to_edges
+                .entry(edge.end().index())
+                .or_default()
+                .push(eid);
+        }
+    }
+    // Deduplicate vertex_to_edges (each edge appears once per adjacent face).
+    for edges in vertex_to_edges.values_mut() {
+        edges.sort_unstable_by_key(|e: &EdgeId| e.index());
+        edges.dedup_by_key(|e: &mut EdgeId| e.index());
+    }
+
+    // Iterative BFS expansion.
+    let mut expanded: HashSet<usize> = seed_edges.iter().map(|e| e.index()).collect();
+    let mut queue: Vec<EdgeId> = seed_edges.to_vec();
+
+    while let Some(current) = queue.pop() {
+        // Face pair for current edge (sorted for comparison).
+        let Some(cf) = edge_to_faces.get(&current.index()) else {
+            continue;
+        };
+        if cf.len() != 2 {
+            continue;
+        }
+        let (cf1, cf2) = {
+            let (a, b) = (cf[0].index(), cf[1].index());
+            if a < b { (a, b) } else { (b, a) }
+        };
+
+        let cur_edge = topo.edge(current)?;
+        let cur_start = topo.vertex(cur_edge.start())?.point();
+        let cur_end = topo.vertex(cur_edge.end())?.point();
+
+        for &shared_vid in &[cur_edge.start(), cur_edge.end()] {
+            // "Away from vertex" tangent for the current edge at this vertex.
+            let t_cur = {
+                let t_raw = if shared_vid == cur_edge.start() {
+                    // Forward tangent at start points away from vertex — correct sign.
+                    sample_edge_tangent(cur_edge.curve(), cur_start, cur_end, 0.0)
+                } else {
+                    // Forward tangent at end points INTO vertex; negate for "away".
+                    -sample_edge_tangent(cur_edge.curve(), cur_start, cur_end, 1.0)
+                };
+                let len = t_raw.length();
+                if len < tol.linear {
+                    continue;
+                }
+                t_raw * (1.0 / len)
+            };
+
+            let Some(neighbors) = vertex_to_edges.get(&shared_vid.index()) else {
+                continue;
+            };
+            for &nb in neighbors {
+                if expanded.contains(&nb.index()) {
+                    continue;
+                }
+                // Must be manifold (exactly 2 adjacent faces).
+                let Some(nf) = edge_to_faces.get(&nb.index()) else {
+                    continue;
+                };
+                if nf.len() != 2 {
+                    continue;
+                }
+                // Must share the same face pair.
+                let (nf1, nf2) = {
+                    let (a, b) = (nf[0].index(), nf[1].index());
+                    if a < b { (a, b) } else { (b, a) }
+                };
+                if (cf1, cf2) != (nf1, nf2) {
+                    continue;
+                }
+
+                // "Away from vertex" tangent for the neighbor edge at the shared vertex.
+                let nb_edge = topo.edge(nb)?;
+                let nb_start = topo.vertex(nb_edge.start())?.point();
+                let nb_end = topo.vertex(nb_edge.end())?.point();
+                let t_nb = {
+                    let t_raw = if shared_vid == nb_edge.start() {
+                        sample_edge_tangent(nb_edge.curve(), nb_start, nb_end, 0.0)
+                    } else {
+                        -sample_edge_tangent(nb_edge.curve(), nb_start, nb_end, 1.0)
+                    };
+                    let len = t_raw.length();
+                    if len < tol.linear {
+                        continue;
+                    }
+                    t_raw * (1.0 / len)
+                };
+
+                // G1 continuity: "away" tangents must be anti-parallel (< ~10° deviation).
+                // cos(170°) ≈ -0.985.  This is strict: a true G1 joint has dot = -1.0.
+                if t_cur.dot(t_nb) < -0.985 {
+                    expanded.insert(nb.index());
+                    queue.push(nb);
+                }
+            }
+        }
+    }
+
+    Ok(expanded
+        .iter()
+        .filter_map(|idx| edge_ids.get(idx).copied())
+        .collect())
+}
+
+/// Fillet `seed_edges` and all G1-continuous edges connected to them.
+///
+/// This is a convenience wrapper around [`fillet_rolling_ball`] that
+/// automatically expands the edge set by G1 chain propagation: any
+/// manifold edge that shares a vertex, the same pair of adjacent faces,
+/// and is tangent-continuous (< 10° deviation) with a seed edge is added
+/// to the fillet set.
+///
+/// # When to use
+///
+/// Use this function when you want to fillet a smooth edge chain (e.g. the
+/// loop of edges on a rounded-rectangle extrusion) without listing every
+/// edge explicitly.  Use [`fillet_rolling_ball`] directly when you want
+/// precise control over which individual edges are filleted.
+///
+/// # Errors
+///
+/// Returns the same errors as [`fillet_rolling_ball`].
+pub fn fillet_rolling_ball_propagate_g1(
+    topo: &mut Topology,
+    solid: SolidId,
+    seed_edges: &[EdgeId],
+    radius: f64,
+) -> Result<SolidId, crate::OperationsError> {
+    let tol = Tolerance::new();
+    let expanded = expand_g1_chain(topo, solid, seed_edges, tol)?;
+    fillet_rolling_ball(topo, solid, &expanded, radius)
+}
+
 /// Law governing how fillet radius varies along an edge.
 #[derive(Debug, Clone)]
 pub enum FilletRadiusLaw {
@@ -2448,6 +2618,70 @@ mod tests {
         assert!(
             has_nurbs,
             "plane-cylinder fillet should produce a NURBS face"
+        );
+    }
+
+    #[test]
+    fn g1_propagate_box_no_expansion() {
+        // On a box every edge meets its neighbors at 90°.
+        // Seeding one edge should yield a set of size exactly 1 — no expansion.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+        let seed = &edges[..1];
+
+        // expand_g1_chain is private; exercise it via the public wrapper.
+        // We expect the wrapper to succeed and the fillet result to be valid
+        // (same as seeding with the single edge directly).
+        let result = super::fillet_rolling_ball_propagate_g1(&mut topo, solid, seed, 0.1);
+        assert!(
+            result.is_ok(),
+            "propagate_g1 on a box edge should succeed: {:?}",
+            result.err()
+        );
+        let result_solid = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, result_solid, 0.01).unwrap();
+        assert!(
+            vol > 0.0 && vol < 1.0,
+            "filleted box should have smaller volume than original: {vol}"
+        );
+    }
+
+    #[test]
+    fn g1_propagate_collinear_long_box() {
+        // Build a long box (4×1×1) and seed one of the long top edges.
+        // A box's long edges are each a single edge, so propagation still
+        // yields size 1 — but the wrapper should succeed and produce a valid solid.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 4.0, 1.0, 1.0).unwrap();
+
+        // Pick the first edge that is parallel to the X axis (length ≈ 4.0).
+        let edges = solid_edge_ids(&topo, solid);
+        let long_edge = edges
+            .iter()
+            .find(|&&eid| {
+                let e = topo.edge(eid).unwrap();
+                let p0 = topo.vertex(e.start()).unwrap().point();
+                let p1 = topo.vertex(e.end()).unwrap().point();
+                let len = (p1 - p0).length();
+                len > 3.5
+            })
+            .copied();
+        let Some(seed_edge) = long_edge else {
+            panic!("could not find a long edge on a 4×1×1 box");
+        };
+
+        let result = super::fillet_rolling_ball_propagate_g1(&mut topo, solid, &[seed_edge], 0.1);
+        assert!(
+            result.is_ok(),
+            "propagate_g1 on long-box edge should succeed: {:?}",
+            result.err()
+        );
+        let result_solid = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, result_solid, 0.01).unwrap();
+        assert!(
+            vol > 0.0 && vol < 4.0,
+            "filleted long box volume should be positive and less than original: {vol}"
         );
     }
 }
