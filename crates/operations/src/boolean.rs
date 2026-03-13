@@ -7153,7 +7153,9 @@ fn compound_cut_sequential(
 /// Check whether a polygon (given its vertices and face normal) is convex.
 ///
 /// Returns `true` if all cross products of consecutive edge pairs point in the
-/// same direction as `face_normal`. Degenerate (zero-length) edges are skipped.
+/// same direction as `face_normal`. Degenerate edges (cross product near zero)
+/// are treated as locally convex -- correct for both collinear and coincident
+/// vertices.
 fn is_polygon_convex(verts: &[Point3], face_normal: &Vec3) -> bool {
     let n = verts.len();
     if n < 3 {
@@ -10666,7 +10668,7 @@ mod tests {
     // does not break the common convex-face case. A large box minus a half-
     // overlapping smaller box: expected volume = 8.0 - 0.5 = 7.5.
     #[test]
-    fn test_plane_plane_chord_concave_regression() {
+    fn test_boolean_convex_face_chord_clip_regression() {
         let mut topo = Topology::new();
 
         // Base box: 2×2×2, occupies (0,0,0)→(2,2,2)
