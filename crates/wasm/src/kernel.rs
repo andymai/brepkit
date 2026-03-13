@@ -2723,6 +2723,113 @@ impl BrepKernel {
         Ok(edge_id_to_u32(eid))
     }
 
+    /// Create a circular arc edge defined by start point, tangent direction
+    /// at start, and end point.
+    ///
+    /// If the tangent is parallel to the start→end chord (collinear), falls
+    /// back to a straight line edge.
+    ///
+    /// Returns an edge handle (`u32`).
+    #[wasm_bindgen(js_name = "makeTangentArc3d")]
+    #[allow(clippy::too_many_lines)]
+    pub fn make_tangent_arc_3d(
+        &mut self,
+        start_x: f64,
+        start_y: f64,
+        start_z: f64,
+        tangent_x: f64,
+        tangent_y: f64,
+        tangent_z: f64,
+        end_x: f64,
+        end_y: f64,
+        end_z: f64,
+    ) -> Result<u32, JsError> {
+        validate_finite(start_x, "startX")?;
+        validate_finite(start_y, "startY")?;
+        validate_finite(start_z, "startZ")?;
+        validate_finite(tangent_x, "tangentX")?;
+        validate_finite(tangent_y, "tangentY")?;
+        validate_finite(tangent_z, "tangentZ")?;
+        validate_finite(end_x, "endX")?;
+        validate_finite(end_y, "endY")?;
+        validate_finite(end_z, "endZ")?;
+
+        let start = Point3::new(start_x, start_y, start_z);
+        let end = Point3::new(end_x, end_y, end_z);
+        let tangent = Vec3::new(tangent_x, tangent_y, tangent_z);
+
+        let chord = end - start;
+        if chord.length() < TOL {
+            return Err(WasmError::InvalidInput {
+                reason: "start and end points coincide".into(),
+            }
+            .into());
+        }
+
+        let t_norm = tangent.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid tangent: {e}"),
+        })?;
+
+        // Check collinearity: tangent parallel to chord → line edge.
+        let cross = t_norm.cross(chord);
+        if cross.length() < 1e-10 {
+            let v_start = self.topo.vertices.alloc(Vertex::new(start, TOL));
+            let v_end = self.topo.vertices.alloc(Vertex::new(end, TOL));
+            let eid = self
+                .topo
+                .edges
+                .alloc(Edge::new(v_start, v_end, EdgeCurve::Line));
+            return Ok(edge_id_to_u32(eid));
+        }
+
+        // Compute arc geometry.
+        let normal = cross.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("degenerate arc plane: {e}"),
+        })?;
+        let n_t = normal.cross(t_norm); // perpendicular to tangent in arc plane
+        let s = chord.length_squared() / (2.0 * n_t.dot(chord));
+        let center = start + n_t * s;
+        let radius = s.abs();
+
+        // Build circle basis: u_axis from center→start so evaluate(0) = start.
+        let u_axis_raw = start - center;
+        let u_axis = u_axis_raw
+            .normalize()
+            .map_err(|e| WasmError::InvalidInput {
+                reason: format!("degenerate u_axis: {e}"),
+            })?;
+        let v_axis = normal.cross(u_axis);
+
+        let circle =
+            brepkit_math::curves::Circle3D::with_axes(center, normal, radius, u_axis, v_axis)
+                .map_err(|e| WasmError::InvalidInput {
+                    reason: format!("invalid circle: {e}"),
+                })?;
+
+        // Find arc angle to end point.
+        let end_rel = end - center;
+        let ex = end_rel.dot(u_axis) / radius;
+        let ey = end_rel.dot(v_axis) / radius;
+        let mut angle = ey.atan2(ex);
+        if angle < 0.0 {
+            angle += std::f64::consts::TAU;
+        }
+        // Near-zero angle means end ≈ start on the circle (but they're
+        // distinct points), so the arc wraps all the way around.
+        if angle.abs() < 1e-12 {
+            angle = std::f64::consts::TAU;
+        }
+
+        let end_on_circle = circle.evaluate(angle);
+        let v_start = self.topo.vertices.alloc(Vertex::new(start, TOL));
+        let v_end = self.topo.vertices.alloc(Vertex::new(end_on_circle, TOL));
+        let eid = self
+            .topo
+            .edges
+            .alloc(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
+        Ok(edge_id_to_u32(eid))
+    }
+
     /// Create a closed wire from an ordered array of edge handles.
     ///
     /// Returns a wire handle (`u32`).
@@ -6455,6 +6562,21 @@ impl BrepKernel {
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
+            "makeTangentArc3d" => {
+                let sx = get_f64(args, "startX")?;
+                let sy = get_f64(args, "startY")?;
+                let sz = get_f64(args, "startZ")?;
+                let tx = get_f64(args, "tangentX")?;
+                let ty = get_f64(args, "tangentY")?;
+                let tz = get_f64(args, "tangentZ")?;
+                let ex = get_f64(args, "endX")?;
+                let ey = get_f64(args, "endY")?;
+                let ez = get_f64(args, "endZ")?;
+                let eid = self
+                    .make_tangent_arc_3d(sx, sy, sz, tx, ty, tz, ex, ey, ez)
+                    .map_err(|e| format!("{e:?}"))?;
+                Ok(serde_json::json!(eid))
+            }
             _ => Err(format!("unknown operation: {op}")),
         }
     }
@@ -7495,5 +7617,103 @@ mod batch_tests {
         assert!(parsed[1]["ok"].is_number());
         // Copy should have a different handle
         assert_ne!(parsed[0]["ok"].as_u64(), parsed[1]["ok"].as_u64());
+    }
+}
+
+#[cfg(test)]
+mod tangent_arc_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+
+    #[test]
+    fn semicircle() {
+        let mut k = BrepKernel::new();
+        // start=(1,0,0), tangent=(0,1,0), end=(-1,0,0) → semicircle, center at origin, r=1
+        let eid = k
+            .make_tangent_arc_3d(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 0.0)
+            .unwrap();
+        let edge_id = k.resolve_edge(eid).unwrap();
+        let edge = k.topo.edge(edge_id).unwrap();
+        assert!(matches!(edge.curve(), EdgeCurve::Circle(_)));
+        if let EdgeCurve::Circle(c) = edge.curve() {
+            assert!((c.radius() - 1.0).abs() < 1e-10);
+            let center = c.center();
+            assert!(center.x().abs() < 1e-10);
+            assert!(center.y().abs() < 1e-10);
+            assert!(center.z().abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn quarter_circle() {
+        let mut k = BrepKernel::new();
+        // start=(1,0,0), tangent=(0,1,0), end=(0,1,0) → 90° arc, center at origin
+        let eid = k
+            .make_tangent_arc_3d(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0)
+            .unwrap();
+        let edge_id = k.resolve_edge(eid).unwrap();
+        let edge = k.topo.edge(edge_id).unwrap();
+        assert!(matches!(edge.curve(), EdgeCurve::Circle(_)));
+        if let EdgeCurve::Circle(c) = edge.curve() {
+            assert!((c.radius() - 1.0).abs() < 1e-10);
+        }
+        let s = k.topo.vertex(edge.start()).unwrap().point();
+        let e = k.topo.vertex(edge.end()).unwrap().point();
+        assert!((s.x() - 1.0).abs() < 1e-10);
+        assert!((e.y() - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn tilted_3d_arc() {
+        let mut k = BrepKernel::new();
+        // Arc not in a coordinate plane
+        let eid = k
+            .make_tangent_arc_3d(1.0, 0.0, 1.0, 0.0, 1.0, 0.0, -1.0, 0.0, 1.0)
+            .unwrap();
+        let edge_id = k.resolve_edge(eid).unwrap();
+        let edge = k.topo.edge(edge_id).unwrap();
+        assert!(matches!(edge.curve(), EdgeCurve::Circle(_)));
+        if let EdgeCurve::Circle(c) = edge.curve() {
+            assert!((c.radius() - 1.0).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn collinear_fallback() {
+        let mut k = BrepKernel::new();
+        // tangent parallel to chord → line edge
+        let eid = k
+            .make_tangent_arc_3d(0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 5.0, 0.0, 0.0)
+            .unwrap();
+        let edge_id = k.resolve_edge(eid).unwrap();
+        let edge = k.topo.edge(edge_id).unwrap();
+        assert!(matches!(edge.curve(), EdgeCurve::Line));
+    }
+
+    #[test]
+    fn large_arc_gt_pi() {
+        let mut k = BrepKernel::new();
+        // start=(1,0,0), tangent=(0,-1,0), end=(0,1,0)
+        // tangent points "down", so arc goes CW: (1,0)→(0,-1)→(-1,0)→(0,1) = 270°
+        let eid = k
+            .make_tangent_arc_3d(1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 1.0, 0.0)
+            .unwrap();
+        let edge_id = k.resolve_edge(eid).unwrap();
+        let edge = k.topo.edge(edge_id).unwrap();
+        assert!(matches!(edge.curve(), EdgeCurve::Circle(_)));
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot call wasm-bindgen imported functions on non-wasm targets")]
+    fn coincident_points_error() {
+        let mut k = BrepKernel::new();
+        let _ = k.make_tangent_arc_3d(1.0, 2.0, 3.0, 0.0, 1.0, 0.0, 1.0, 2.0, 3.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot call wasm-bindgen imported functions on non-wasm targets")]
+    fn zero_tangent_error() {
+        let mut k = BrepKernel::new();
+        let _ = k.make_tangent_arc_3d(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0);
     }
 }
