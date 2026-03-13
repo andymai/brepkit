@@ -17,7 +17,7 @@
 use std::f64::consts::PI;
 
 use brepkit_math::curves::{Circle3D, Ellipse3D};
-use brepkit_math::curves2d::{Circle2D, Ellipse2D, Line2D};
+use brepkit_math::curves2d::Line2D;
 use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
@@ -2853,35 +2853,26 @@ impl BrepKernel {
                     .alloc(Edge::new(v_start, v_end, EdgeCurve::Line));
                 Ok(edge_id_to_u32(eid))
             }
-            // ── Circle2D → Circle3D edge ───────────────────────────
+            // ── Circle → Circle3D edge ──────────────────────────────
             1 => {
                 if curve_params.len() != 3 {
                     return Err(WasmError::InvalidInput {
                         reason: format!(
-                            "Circle2D expects 3 params [cx,cy,r], got {}",
+                            "Circle expects 3 params [cx,cy,r], got {}",
                             curve_params.len()
                         ),
                     }
                     .into());
                 }
-                let cx = curve_params[0];
-                let cy = curve_params[1];
+                let center_3d = lift(curve_params[0], curve_params[1]);
                 let radius = curve_params[2];
-                let circle2d = Circle2D::new(Point2::new(cx, cy), radius).map_err(|e| {
-                    WasmError::InvalidInput {
-                        reason: format!("invalid Circle2D: {e}"),
-                    }
-                })?;
-                let center_3d = lift(cx, cy);
                 let circle = Circle3D::with_axes(center_3d, normal, radius, x_axis, y_axis)
                     .map_err(|e| WasmError::InvalidInput {
                         reason: format!("invalid Circle3D: {e}"),
                     })?;
 
-                let p0 = circle2d.evaluate(t_start);
-                let p1 = circle2d.evaluate(t_end);
-                let start_3d = lift(p0.x(), p0.y());
-                let end_3d = lift(p1.x(), p1.y());
+                let start_3d = circle.evaluate(t_start);
+                let end_3d = circle.evaluate(t_end);
 
                 let full_circle = (t_end - t_start).abs() >= std::f64::consts::TAU - 1e-10;
                 let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
@@ -2896,30 +2887,22 @@ impl BrepKernel {
                         .alloc(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
                 Ok(edge_id_to_u32(eid))
             }
-            // ── Ellipse2D → Ellipse3D edge ─────────────────────────
+            // ── Ellipse → Ellipse3D edge ────────────────────────────
             2 => {
                 if curve_params.len() != 5 {
                     return Err(WasmError::InvalidInput {
                         reason: format!(
-                            "Ellipse2D expects 5 params [cx,cy,a,b,rot], got {}",
+                            "Ellipse expects 5 params [cx,cy,a,b,rot], got {}",
                             curve_params.len()
                         ),
                     }
                     .into());
                 }
-                let cx = curve_params[0];
-                let cy = curve_params[1];
                 let semi_major = curve_params[2];
                 let semi_minor = curve_params[3];
                 let rotation = curve_params[4];
-                let ellipse2d =
-                    Ellipse2D::new(Point2::new(cx, cy), semi_major, semi_minor, rotation).map_err(
-                        |e| WasmError::InvalidInput {
-                            reason: format!("invalid Ellipse2D: {e}"),
-                        },
-                    )?;
 
-                let center_3d = lift(cx, cy);
+                let center_3d = lift(curve_params[0], curve_params[1]);
                 let (sin_r, cos_r) = rotation.sin_cos();
                 let u3d = x_axis * cos_r + y_axis * sin_r;
                 let v3d = y_axis * cos_r - x_axis * sin_r;
@@ -2929,10 +2912,8 @@ impl BrepKernel {
                             reason: format!("invalid Ellipse3D: {e}"),
                         })?;
 
-                let p0 = ellipse2d.evaluate(t_start);
-                let p1 = ellipse2d.evaluate(t_end);
-                let start_3d = lift(p0.x(), p0.y());
-                let end_3d = lift(p1.x(), p1.y());
+                let start_3d = ellipse.evaluate(t_start);
+                let end_3d = ellipse.evaluate(t_end);
 
                 let full_ellipse = (t_end - t_start).abs() >= std::f64::consts::TAU - 1e-10;
                 let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
@@ -2964,7 +2945,7 @@ impl BrepKernel {
                     .into());
                 }
                 let n_knots = n_cp + degree + 1;
-                let expected_len = 2 + n_knots + 2 * n_cp + n_cp; // header + knots + 2D coords + weights
+                let expected_len = 2 + n_knots + 3 * n_cp; // header + knots + 2D coords + weights
                 if curve_params.len() != expected_len {
                     return Err(WasmError::InvalidInput {
                         reason: format!(
