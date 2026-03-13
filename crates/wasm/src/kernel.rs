@@ -2779,211 +2779,21 @@ impl BrepKernel {
         t_start: f64,
         t_end: f64,
     ) -> Result<u32, JsError> {
-        validate_finite(origin_x, "originX")?;
-        validate_finite(origin_y, "originY")?;
-        validate_finite(origin_z, "originZ")?;
-        validate_finite(x_axis_x, "xAxisX")?;
-        validate_finite(x_axis_y, "xAxisY")?;
-        validate_finite(x_axis_z, "xAxisZ")?;
-        validate_finite(normal_x, "normalX")?;
-        validate_finite(normal_y, "normalY")?;
-        validate_finite(normal_z, "normalZ")?;
-        validate_finite(t_start, "tStart")?;
-        validate_finite(t_end, "tEnd")?;
-
-        if curve_type > 3 {
-            return Err(WasmError::InvalidInput {
-                reason: format!("curve_type must be 0–3, got {curve_type}"),
-            }
-            .into());
-        }
-
-        // Reconstruct plane basis (re-orthogonalize x_axis against normal).
-        let normal = Vec3::new(normal_x, normal_y, normal_z)
-            .normalize()
-            .map_err(|e| WasmError::InvalidInput {
-                reason: format!("invalid normal: {e}"),
-            })?;
-        let x_raw = Vec3::new(x_axis_x, x_axis_y, x_axis_z);
-        let x_axis = (x_raw - normal * x_raw.dot(normal))
-            .normalize()
-            .map_err(|e| WasmError::InvalidInput {
-                reason: format!("invalid x_axis (parallel to normal?): {e}"),
-            })?;
-        let y_axis = normal.cross(x_axis);
-        let origin = Point3::new(origin_x, origin_y, origin_z);
-
-        // Helper: lift 2D point into 3D plane.
-        let lift = |x: f64, y: f64| -> Point3 { origin + x_axis * x + y_axis * y };
-
-        match curve_type {
-            // ── Line2D → Line edge ─────────────────────────────────
-            0 => {
-                if curve_params.len() != 4 {
-                    return Err(WasmError::InvalidInput {
-                        reason: format!(
-                            "Line2D expects 4 params [ox,oy,dx,dy], got {}",
-                            curve_params.len()
-                        ),
-                    }
-                    .into());
-                }
-                let line2d = Line2D::new(
-                    Point2::new(curve_params[0], curve_params[1]),
-                    Vec2::new(curve_params[2], curve_params[3]),
-                )
-                .map_err(|e| WasmError::InvalidInput {
-                    reason: format!("invalid Line2D: {e}"),
-                })?;
-                let p0 = line2d.evaluate(t_start);
-                let p1 = line2d.evaluate(t_end);
-                let start_3d = lift(p0.x(), p0.y());
-                let end_3d = lift(p1.x(), p1.y());
-                if (end_3d - start_3d).length() < TOL {
-                    return Err(WasmError::InvalidInput {
-                        reason: "degenerate line segment (start ≈ end)".into(),
-                    }
-                    .into());
-                }
-                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
-                let v_end = self.topo.vertices.alloc(Vertex::new(end_3d, TOL));
-                let eid = self
-                    .topo
-                    .edges
-                    .alloc(Edge::new(v_start, v_end, EdgeCurve::Line));
-                Ok(edge_id_to_u32(eid))
-            }
-            // ── Circle → Circle3D edge ──────────────────────────────
-            1 => {
-                if curve_params.len() != 3 {
-                    return Err(WasmError::InvalidInput {
-                        reason: format!(
-                            "Circle expects 3 params [cx,cy,r], got {}",
-                            curve_params.len()
-                        ),
-                    }
-                    .into());
-                }
-                let center_3d = lift(curve_params[0], curve_params[1]);
-                let radius = curve_params[2];
-                let circle = Circle3D::with_axes(center_3d, normal, radius, x_axis, y_axis)
-                    .map_err(|e| WasmError::InvalidInput {
-                        reason: format!("invalid Circle3D: {e}"),
-                    })?;
-
-                let start_3d = circle.evaluate(t_start);
-                let end_3d = circle.evaluate(t_end);
-
-                let full_circle = (t_end - t_start).abs() >= std::f64::consts::TAU - 1e-10;
-                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
-                let v_end = if full_circle {
-                    v_start
-                } else {
-                    self.topo.vertices.alloc(Vertex::new(end_3d, TOL))
-                };
-                let eid =
-                    self.topo
-                        .edges
-                        .alloc(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
-                Ok(edge_id_to_u32(eid))
-            }
-            // ── Ellipse → Ellipse3D edge ────────────────────────────
-            2 => {
-                if curve_params.len() != 5 {
-                    return Err(WasmError::InvalidInput {
-                        reason: format!(
-                            "Ellipse expects 5 params [cx,cy,a,b,rot], got {}",
-                            curve_params.len()
-                        ),
-                    }
-                    .into());
-                }
-                let semi_major = curve_params[2];
-                let semi_minor = curve_params[3];
-                let rotation = curve_params[4];
-
-                let center_3d = lift(curve_params[0], curve_params[1]);
-                let (sin_r, cos_r) = rotation.sin_cos();
-                let u3d = x_axis * cos_r + y_axis * sin_r;
-                let v3d = y_axis * cos_r - x_axis * sin_r;
-                let ellipse =
-                    Ellipse3D::with_axes(center_3d, normal, semi_major, semi_minor, u3d, v3d)
-                        .map_err(|e| WasmError::InvalidInput {
-                            reason: format!("invalid Ellipse3D: {e}"),
-                        })?;
-
-                let start_3d = ellipse.evaluate(t_start);
-                let end_3d = ellipse.evaluate(t_end);
-
-                let full_ellipse = (t_end - t_start).abs() >= std::f64::consts::TAU - 1e-10;
-                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
-                let v_end = if full_ellipse {
-                    v_start
-                } else {
-                    self.topo.vertices.alloc(Vertex::new(end_3d, TOL))
-                };
-                let eid =
-                    self.topo
-                        .edges
-                        .alloc(Edge::new(v_start, v_end, EdgeCurve::Ellipse(ellipse)));
-                Ok(edge_id_to_u32(eid))
-            }
-            // ── NurbsCurve2D → NurbsCurve edge ─────────────────────
-            3 => {
-                if curve_params.len() < 2 {
-                    return Err(WasmError::InvalidInput {
-                        reason: "NURBS params too short (need at least degree + n_cp)".into(),
-                    }
-                    .into());
-                }
-                let degree = curve_params[0] as usize;
-                let n_cp = curve_params[1] as usize;
-                if n_cp == 0 {
-                    return Err(WasmError::InvalidInput {
-                        reason: "n_cp must be > 0".into(),
-                    }
-                    .into());
-                }
-                let n_knots = n_cp + degree + 1;
-                let expected_len = 2 + n_knots + 3 * n_cp; // header + knots + 2D coords + weights
-                if curve_params.len() != expected_len {
-                    return Err(WasmError::InvalidInput {
-                        reason: format!(
-                            "NURBS params: expected {expected_len} elements \
-                             (2 + {n_knots} knots + {} coords + {n_cp} weights), got {}",
-                            2 * n_cp,
-                            curve_params.len()
-                        ),
-                    }
-                    .into());
-                }
-                let knots = curve_params[2..2 + n_knots].to_vec();
-                let coords_start = 2 + n_knots;
-                let weights_start = coords_start + 2 * n_cp;
-                let control_points_3d: Vec<Point3> = curve_params[coords_start..weights_start]
-                    .chunks_exact(2)
-                    .map(|c| lift(c[0], c[1]))
-                    .collect();
-                let weights = curve_params[weights_start..weights_start + n_cp].to_vec();
-
-                let curve = NurbsCurve::new(degree, knots, control_points_3d, weights)?;
-                let start_3d = curve.evaluate(t_start);
-                let end_3d = curve.evaluate(t_end);
-
-                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
-                let v_end = if (start_3d - end_3d).length() < TOL * 100.0 {
-                    v_start
-                } else {
-                    self.topo.vertices.alloc(Vertex::new(end_3d, TOL))
-                };
-                let eid =
-                    self.topo
-                        .edges
-                        .alloc(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
-                Ok(edge_id_to_u32(eid))
-            }
-            _ => unreachable!("curve_type already validated to 0–3"),
-        }
+        Ok(self.lift_curve2d_to_plane_impl(
+            curve_type,
+            curve_params,
+            origin_x,
+            origin_y,
+            origin_z,
+            x_axis_x,
+            x_axis_y,
+            x_axis_z,
+            normal_x,
+            normal_y,
+            normal_z,
+            t_start,
+            t_end,
+        )?)
     }
 
     /// Create a closed wire from an ordered array of edge handles.
@@ -4506,6 +4316,244 @@ impl BrepKernel {
             .edges
             .alloc(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
         Ok(edge_id_to_u32(eid))
+    }
+    /// Inner implementation for [`Self::lift_curve2d_to_plane`].
+    ///
+    /// Returns `WasmError` (which has `Display`) so batch dispatch can
+    /// use `.map_err(|e| e.to_string())` consistently.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn lift_curve2d_to_plane_impl(
+        &mut self,
+        curve_type: u32,
+        curve_params: Vec<f64>,
+        origin_x: f64,
+        origin_y: f64,
+        origin_z: f64,
+        x_axis_x: f64,
+        x_axis_y: f64,
+        x_axis_z: f64,
+        normal_x: f64,
+        normal_y: f64,
+        normal_z: f64,
+        t_start: f64,
+        t_end: f64,
+    ) -> Result<u32, WasmError> {
+        validate_finite(origin_x, "originX")?;
+        validate_finite(origin_y, "originY")?;
+        validate_finite(origin_z, "originZ")?;
+        validate_finite(x_axis_x, "xAxisX")?;
+        validate_finite(x_axis_y, "xAxisY")?;
+        validate_finite(x_axis_z, "xAxisZ")?;
+        validate_finite(normal_x, "normalX")?;
+        validate_finite(normal_y, "normalY")?;
+        validate_finite(normal_z, "normalZ")?;
+        validate_finite(t_start, "tStart")?;
+        validate_finite(t_end, "tEnd")?;
+
+        if curve_type > 3 {
+            return Err(WasmError::InvalidInput {
+                reason: format!("curve_type must be 0–3, got {curve_type}"),
+            });
+        }
+
+        // Validate all curve_params for NaN/Infinity.
+        for (i, &v) in curve_params.iter().enumerate() {
+            validate_finite(v, &format!("curveParams[{i}]"))?;
+        }
+
+        // Reconstruct plane basis (re-orthogonalize x_axis against normal).
+        let normal = Vec3::new(normal_x, normal_y, normal_z)
+            .normalize()
+            .map_err(|e| WasmError::InvalidInput {
+                reason: format!("invalid normal: {e}"),
+            })?;
+        let x_raw = Vec3::new(x_axis_x, x_axis_y, x_axis_z);
+        let x_axis = (x_raw - normal * x_raw.dot(normal))
+            .normalize()
+            .map_err(|e| WasmError::InvalidInput {
+                reason: format!("invalid x_axis (parallel to normal?): {e}"),
+            })?;
+        let y_axis = normal.cross(x_axis);
+        let origin = Point3::new(origin_x, origin_y, origin_z);
+
+        // Helper: lift 2D point into 3D plane.
+        let lift = |x: f64, y: f64| -> Point3 { origin + x_axis * x + y_axis * y };
+
+        match curve_type {
+            // ── Line2D → Line edge ─────────────────────────────────
+            0 => {
+                if curve_params.len() != 4 {
+                    return Err(WasmError::InvalidInput {
+                        reason: format!(
+                            "Line2D expects 4 params [ox,oy,dx,dy], got {}",
+                            curve_params.len()
+                        ),
+                    });
+                }
+                let line2d = Line2D::new(
+                    Point2::new(curve_params[0], curve_params[1]),
+                    Vec2::new(curve_params[2], curve_params[3]),
+                )
+                .map_err(|e| WasmError::InvalidInput {
+                    reason: format!("invalid Line2D: {e}"),
+                })?;
+                let p0 = line2d.evaluate(t_start);
+                let p1 = line2d.evaluate(t_end);
+                let start_3d = lift(p0.x(), p0.y());
+                let end_3d = lift(p1.x(), p1.y());
+                if (end_3d - start_3d).length() < TOL {
+                    return Err(WasmError::InvalidInput {
+                        reason: "degenerate line segment (start ≈ end)".into(),
+                    });
+                }
+                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
+                let v_end = self.topo.vertices.alloc(Vertex::new(end_3d, TOL));
+                let eid = self
+                    .topo
+                    .edges
+                    .alloc(Edge::new(v_start, v_end, EdgeCurve::Line));
+                Ok(edge_id_to_u32(eid))
+            }
+            // ── Circle → Circle3D edge ──────────────────────────────
+            1 => {
+                if curve_params.len() != 3 {
+                    return Err(WasmError::InvalidInput {
+                        reason: format!(
+                            "Circle expects 3 params [cx,cy,r], got {}",
+                            curve_params.len()
+                        ),
+                    });
+                }
+                let center_3d = lift(curve_params[0], curve_params[1]);
+                let radius = curve_params[2];
+                let circle = Circle3D::with_axes(center_3d, normal, radius, x_axis, y_axis)
+                    .map_err(|e| WasmError::InvalidInput {
+                        reason: format!("invalid Circle3D: {e}"),
+                    })?;
+
+                let start_3d = circle.evaluate(t_start);
+                let end_3d = circle.evaluate(t_end);
+
+                let full_circle = (t_end - t_start).abs() >= std::f64::consts::TAU - 1e-10;
+                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
+                let v_end = if full_circle {
+                    v_start
+                } else {
+                    self.topo.vertices.alloc(Vertex::new(end_3d, TOL))
+                };
+                let eid =
+                    self.topo
+                        .edges
+                        .alloc(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
+                Ok(edge_id_to_u32(eid))
+            }
+            // ── Ellipse → Ellipse3D edge ────────────────────────────
+            2 => {
+                if curve_params.len() != 5 {
+                    return Err(WasmError::InvalidInput {
+                        reason: format!(
+                            "Ellipse expects 5 params [cx,cy,a,b,rot], got {}",
+                            curve_params.len()
+                        ),
+                    });
+                }
+                let semi_major = curve_params[2];
+                let semi_minor = curve_params[3];
+                let rotation = curve_params[4];
+
+                let center_3d = lift(curve_params[0], curve_params[1]);
+                let (sin_r, cos_r) = rotation.sin_cos();
+                let u3d = x_axis * cos_r + y_axis * sin_r;
+                let v3d = y_axis * cos_r - x_axis * sin_r;
+                let ellipse =
+                    Ellipse3D::with_axes(center_3d, normal, semi_major, semi_minor, u3d, v3d)
+                        .map_err(|e| WasmError::InvalidInput {
+                            reason: format!("invalid Ellipse3D: {e}"),
+                        })?;
+
+                let start_3d = ellipse.evaluate(t_start);
+                let end_3d = ellipse.evaluate(t_end);
+
+                let full_ellipse = (t_end - t_start).abs() >= std::f64::consts::TAU - 1e-10;
+                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
+                let v_end = if full_ellipse {
+                    v_start
+                } else {
+                    self.topo.vertices.alloc(Vertex::new(end_3d, TOL))
+                };
+                let eid =
+                    self.topo
+                        .edges
+                        .alloc(Edge::new(v_start, v_end, EdgeCurve::Ellipse(ellipse)));
+                Ok(edge_id_to_u32(eid))
+            }
+            // ── NurbsCurve2D → NurbsCurve edge ─────────────────────
+            3 => {
+                if curve_params.len() < 2 {
+                    return Err(WasmError::InvalidInput {
+                        reason: "NURBS params too short (need at least degree + n_cp)".into(),
+                    });
+                }
+                // Validate degree and n_cp before casting to usize.
+                let raw_degree = curve_params[0];
+                let raw_n_cp = curve_params[1];
+                if !(1.0..=16.0).contains(&raw_degree) || raw_degree.fract() != 0.0 {
+                    return Err(WasmError::InvalidInput {
+                        reason: format!(
+                            "NURBS degree must be an integer in [1, 16], got {raw_degree}"
+                        ),
+                    });
+                }
+                if !(1.0..=4096.0).contains(&raw_n_cp) || raw_n_cp.fract() != 0.0 {
+                    return Err(WasmError::InvalidInput {
+                        reason: format!(
+                            "NURBS n_cp must be an integer in [1, 4096], got {raw_n_cp}"
+                        ),
+                    });
+                }
+                let degree = raw_degree as usize;
+                let n_cp = raw_n_cp as usize;
+                let n_knots = n_cp + degree + 1;
+                let expected_len = 2 + n_knots + 3 * n_cp; // header + knots + 2D coords + weights
+                if curve_params.len() != expected_len {
+                    return Err(WasmError::InvalidInput {
+                        reason: format!(
+                            "NURBS params: expected {expected_len} elements \
+                             (2 + {n_knots} knots + {} coords + {n_cp} weights), got {}",
+                            2 * n_cp,
+                            curve_params.len()
+                        ),
+                    });
+                }
+                let knots = curve_params[2..2 + n_knots].to_vec();
+                let coords_start = 2 + n_knots;
+                let weights_start = coords_start + 2 * n_cp;
+                let control_points_3d: Vec<Point3> = curve_params[coords_start..weights_start]
+                    .chunks_exact(2)
+                    .map(|c| lift(c[0], c[1]))
+                    .collect();
+                let weights = curve_params[weights_start..weights_start + n_cp].to_vec();
+
+                let curve = NurbsCurve::new(degree, knots, control_points_3d, weights)?;
+                let start_3d = curve.evaluate(t_start);
+                let end_3d = curve.evaluate(t_end);
+
+                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
+                let v_end = if (start_3d - end_3d).length() < TOL * 100.0 {
+                    v_start
+                } else {
+                    self.topo.vertices.alloc(Vertex::new(end_3d, TOL))
+                };
+                let eid =
+                    self.topo
+                        .edges
+                        .alloc(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
+                Ok(edge_id_to_u32(eid))
+            }
+            _ => Err(WasmError::InvalidInput {
+                reason: format!("curve_type must be 0–3, got {curve_type}"),
+            }),
+        }
     }
 
     /// Build a closed planar face from an ordered sequence of points.
@@ -6855,8 +6903,8 @@ impl BrepKernel {
                 let t0 = get_f64(args, "tStart")?;
                 let t1 = get_f64(args, "tEnd")?;
                 let eid = self
-                    .lift_curve2d_to_plane(ct, cp, ox, oy, oz, xx, xy, xz, nx, ny, nz, t0, t1)
-                    .map_err(|e| format!("{e:?}"))?;
+                    .lift_curve2d_to_plane_impl(ct, cp, ox, oy, oz, xx, xy, xz, nx, ny, nz, t0, t1)
+                    .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(eid))
             }
             _ => Err(format!("unknown operation: {op}")),
@@ -8008,7 +8056,7 @@ mod lift_curve2d_tests {
         let mut k = BrepKernel::new();
         // Line2D origin=(1,0) dir=(1,0), t=0..3 → 3D from (1,0,0) to (4,0,0)
         let eid = k
-            .lift_curve2d_to_plane(
+            .lift_curve2d_to_plane_impl(
                 0,
                 vec![1.0, 0.0, 1.0, 0.0],
                 0.0,
@@ -8039,7 +8087,7 @@ mod lift_curve2d_tests {
     fn circle2d_quarter_arc_xy() {
         let mut k = BrepKernel::new();
         let eid = k
-            .lift_curve2d_to_plane(
+            .lift_curve2d_to_plane_impl(
                 1,
                 vec![0.0, 0.0, 1.0],
                 0.0,
@@ -8072,7 +8120,7 @@ mod lift_curve2d_tests {
         let mut k = BrepKernel::new();
         // Normal=Y → y_axis = Y×X = (0,1,0)×(1,0,0) = (0,0,-1)
         let eid = k
-            .lift_curve2d_to_plane(
+            .lift_curve2d_to_plane_impl(
                 1,
                 vec![0.0, 0.0, 2.0],
                 0.0,
@@ -8106,7 +8154,7 @@ mod lift_curve2d_tests {
     fn circle2d_full_circle() {
         let mut k = BrepKernel::new();
         let eid = k
-            .lift_curve2d_to_plane(
+            .lift_curve2d_to_plane_impl(
                 1,
                 vec![0.0, 0.0, 1.0],
                 0.0,
@@ -8131,7 +8179,7 @@ mod lift_curve2d_tests {
     fn ellipse2d_with_rotation() {
         let mut k = BrepKernel::new();
         let eid = k
-            .lift_curve2d_to_plane(
+            .lift_curve2d_to_plane_impl(
                 2,
                 vec![0.0, 0.0, 2.0, 1.0, PI / 4.0],
                 0.0,
@@ -8160,7 +8208,7 @@ mod lift_curve2d_tests {
     fn ellipse2d_full() {
         let mut k = BrepKernel::new();
         let eid = k
-            .lift_curve2d_to_plane(
+            .lift_curve2d_to_plane_impl(
                 2,
                 vec![0.0, 0.0, 3.0, 1.0, 0.0],
                 0.0,
@@ -8186,7 +8234,7 @@ mod lift_curve2d_tests {
         let mut k = BrepKernel::new();
         // degree=1, n_cp=2, knots=[0,0,1,1], cp=[(0,0),(3,4)], weights=[1,1]
         let eid = k
-            .lift_curve2d_to_plane(
+            .lift_curve2d_to_plane_impl(
                 3,
                 vec![
                     1.0, 2.0, // degree=1, n_cp=2
@@ -8221,48 +8269,49 @@ mod lift_curve2d_tests {
         assert!(matches!(edge.curve(), EdgeCurve::NurbsCurve(_)));
     }
 
-    // Error-path tests: JsError cannot be constructed on non-wasm targets,
-    // so these tests verify the panic from wasm-bindgen's JsError::new().
     #[test]
-    #[should_panic(expected = "cannot call wasm-bindgen imported functions on non-wasm targets")]
     fn invalid_curve_type() {
         let mut k = BrepKernel::new();
-        let _ = k.lift_curve2d_to_plane(
-            5,
-            vec![],
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            1.0,
-        );
+        let err = k
+            .lift_curve2d_to_plane_impl(
+                5,
+                vec![],
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                1.0,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("curve_type"));
     }
 
     #[test]
-    #[should_panic(expected = "cannot call wasm-bindgen imported functions on non-wasm targets")]
     fn wrong_param_count() {
         let mut k = BrepKernel::new();
-        // Circle2D expects 3 params, give 2
-        let _ = k.lift_curve2d_to_plane(
-            1,
-            vec![0.0, 0.0],
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            1.0,
-            0.0,
-            1.0,
-        );
+        let err = k
+            .lift_curve2d_to_plane_impl(
+                1,
+                vec![0.0, 0.0],
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                1.0,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("Circle expects 3 params"));
     }
 }
