@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.9](https://github.com/andymai/brepkit/compare/v1.0.8...v1.0.9) (2026-03-13)
+
+
+### Performance
+
+* AABB pre-filter + analytic classifier early exit (2.3x fuse) ([#181](https://github.com/andymai/brepkit/issues/181)) ([67b0105](https://github.com/andymai/brepkit/commit/67b010560d50c27a57be7edba9d357ef9183ff97))
+
 ## [1.0.8](https://github.com/andymai/brepkit/compare/v1.0.7...v1.0.8) (2026-03-12)
 
 
