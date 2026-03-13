@@ -360,14 +360,40 @@ fn surface_newton_refine(
         let rhs1 = -dot_dv_r;
 
         // Solve 2×2 system via Cramer's rule: det = j00*j11 - j01²
+        // Use a relative threshold so the singularity test stays meaningful
+        // near surface poles / cone apex where both derivatives shrink to zero.
         let det = j00.mul_add(j11, -(j01 * j01));
-        if det.abs() < 1e-30 {
-            // Singular Jacobian — can't improve further.
-            return Ok((u, v, s_pt));
-        }
-
-        let delta_u = rhs0.mul_add(j11, -(rhs1 * j01)) / det;
-        let delta_v = j00.mul_add(rhs1, -(j01 * rhs0)) / det;
+        let (delta_u, delta_v) = if det.abs() < (j00 + j11).max(1e-30) * 1e-12 {
+            // Near-singular: apply Tikhonov (Levenberg–Marquardt) regularisation
+            // by adding λI to the normal equations.  This yields a step biased
+            // toward zero rather than blowing up, preserving convergence near
+            // poles and cone apices.
+            let lambda = (j00 + j11).max(1e-10) * 1e-4;
+            let j00r = j00 + lambda;
+            let j11r = j11 + lambda;
+            let det_r = j00r.mul_add(j11r, -(j01 * j01));
+            if det_r.abs() < 1e-30 {
+                // Still singular even after regularisation — fall back to a 1-D
+                // search along whichever parameter axis has more gradient.
+                if j00 > j11 {
+                    (rhs0 / j00.max(1e-30), 0.0)
+                } else if j11 > 1e-30 {
+                    (0.0, rhs1 / j11)
+                } else {
+                    return Ok((u, v, s_pt));
+                }
+            } else {
+                (
+                    rhs0.mul_add(j11r, -(rhs1 * j01)) / det_r,
+                    j00r.mul_add(rhs1, -(j01 * rhs0)) / det_r,
+                )
+            }
+        } else {
+            (
+                rhs0.mul_add(j11, -(rhs1 * j01)) / det,
+                j00.mul_add(rhs1, -(j01 * rhs0)) / det,
+            )
+        };
 
         let u_new = (u + delta_u).clamp(u_min, u_max);
         let v_new = (v + delta_v).clamp(v_min, v_max);
@@ -575,5 +601,77 @@ mod tests {
         );
         assert!((res.u - 0.5).abs() < TOL, "u={}", res.u);
         assert!((res.v - 0.5).abs() < TOL, "v={}", res.v);
+    }
+
+    /// Bilinear degenerate "cone apex" patch.
+    ///
+    /// Control grid:
+    ///   v=0 row: apex=(0,0,0)  apex=(0,0,0)   ← S_u = 0 everywhere on this row
+    ///   v=1 row: (-1,0,1)      (1,0,1)
+    ///
+    /// Parametric formula: S(u,v) = (v·(2u-1), 0, v)
+    ///
+    /// The Jacobian is rank-1 at v=0 (both S_u and S_v are degenerate there),
+    /// which triggers the LM-regularisation branch in `project_point_to_surface`.
+    fn apex_patch() -> NurbsSurface {
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 0.0)], // v=0: apex
+                vec![Point3::new(-1.0, 0.0, 1.0), Point3::new(1.0, 0.0, 1.0)], // v=1: base
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .expect("valid apex patch")
+    }
+
+    /// Project a point whose nearest surface location is the degenerate apex.
+    ///
+    /// The surface S(u,v)=(v(2u−1), 0, v) lies in the xz-plane.  The query
+    /// point (0, 1, 0) is displaced only in y, so its nearest surface point is
+    /// the apex (0,0,0) — the only point that minimises the xz-distance.
+    /// Without LM regularisation the Newton step blows up at v→0; with it the
+    /// solver should converge and return (u≈0.5, v≈0, dist≈1).
+    #[test]
+    fn project_to_apex_singularity() {
+        let s = apex_patch();
+        let res = project_point_to_surface(&s, Point3::new(0.0, 1.0, 0.0), 1e-6)
+            .expect("should converge at cone apex singularity");
+        // Nearest point must be the apex.
+        assert!(
+            res.point.x().abs() < 1e-6 && res.point.y().abs() < 1e-6 && res.point.z().abs() < 1e-6,
+            "nearest point should be apex, got ({:.4},{:.4},{:.4})",
+            res.point.x(), res.point.y(), res.point.z()
+        );
+        assert!(
+            (res.distance - 1.0).abs() < 1e-6,
+            "distance to apex should be 1.0, got {:.8}",
+            res.distance
+        );
+    }
+
+    /// Project a point off-axis but close to the apex.  The solver must still
+    /// converge despite starting near the singularity.
+    #[test]
+    fn project_near_apex_off_axis() {
+        let s = apex_patch();
+        // S(0.7, 0.05) = (0.05*(2*0.7-1), 0, 0.05) = (0.05*0.4, 0, 0.05) = (0.02, 0, 0.05)
+        // Query close to that surface point but displaced in y.
+        let res = project_point_to_surface(&s, Point3::new(0.02, 0.3, 0.05), 1e-6)
+            .expect("should converge near apex");
+        assert!(
+            res.distance < 0.31,
+            "expected distance ≈ 0.3, got {:.6}",
+            res.distance
+        );
+        // Nearest surface point should be close to S(0.7, 0.05).
+        assert!(
+            res.point.z() < 0.15,
+            "nearest point should be near apex end, got z={:.4}",
+            res.point.z()
+        );
     }
 }

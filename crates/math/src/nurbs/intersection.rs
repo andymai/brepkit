@@ -648,12 +648,35 @@ fn refine_line_surface_point(
         let b2 = sv.dot(r);
 
         let det = a11.mul_add(a22, -(a12 * a12));
-        if det.abs() < 1e-20 {
-            break;
-        }
-
-        let du = b1.mul_add(a22, -(b2 * a12)) / det;
-        let dv = a11.mul_add(b2, -(a12 * b1)) / det;
+        // Relative singularity threshold — catches surface poles/apex where
+        // derivatives shrink to zero (making absolute 1e-20 too lenient).
+        let (du, dv) = if det.abs() < (a11 + a22).max(1e-30) * 1e-12 {
+            // Near-degenerate: Tikhonov regularization.
+            let lambda = (a11 + a22).max(1e-10) * 1e-4;
+            let a11r = a11 + lambda;
+            let a22r = a22 + lambda;
+            let det_r = a11r.mul_add(a22r, -(a12 * a12));
+            if det_r.abs() < 1e-30 {
+                // Truly singular — step along the non-degenerate direction only.
+                if a11 > a22 {
+                    (b1 / a11.max(1e-30), 0.0)
+                } else if a22 > 1e-30 {
+                    (0.0, b2 / a22)
+                } else {
+                    break;
+                }
+            } else {
+                (
+                    b1.mul_add(a22r, -(b2 * a12)) / det_r,
+                    a11r.mul_add(b2, -(a12 * b1)) / det_r,
+                )
+            }
+        } else {
+            (
+                b1.mul_add(a22, -(b2 * a12)) / det,
+                a11.mul_add(b2, -(a12 * b1)) / det,
+            )
+        };
 
         u -= du;
         v -= dv;
@@ -1791,7 +1814,10 @@ fn surface_newton_step(surface: &NurbsSurface, u: f64, v: f64, target: Point3) -
 
     let det = a11.mul_add(a22, -(a12 * a12));
 
-    if det.abs() < 1e-20 {
+    // Relative singularity threshold scales with the Jacobian magnitude,
+    // catching singularities near surface poles/apex where derivatives
+    // shrink toward zero (absolute 1e-20 would be too lenient there).
+    if det.abs() < (a11 + a22).max(1e-30) * 1e-12 {
         // Near-degenerate Jacobian — surface singularity (pole, apex, seam).
         // Apply Tikhonov regularization: add λI to the normal equations.
         // This biases toward smaller steps, preventing divergence.
