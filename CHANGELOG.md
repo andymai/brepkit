@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.3.0](https://github.com/andymai/brepkit/compare/v1.2.0...v1.3.0) (2026-03-13)
+
+
+### Features
+
+* **operations:** fillet radius validation against analytic face curvature ([#24](https://github.com/andymai/brepkit/issues/24)) ([#203](https://github.com/andymai/brepkit/issues/203)) ([ce0bf5a](https://github.com/andymai/brepkit/commit/ce0bf5ad27605aab79955cc1a7f6786249e46d66))
+
+
+### Bug Fixes
+
+* **operations:** robustness sprint — concave booleans, analytic area, vertex merge, healing ([#202](https://github.com/andymai/brepkit/issues/202)) ([ac5976b](https://github.com/andymai/brepkit/commit/ac5976b5b417a3d500c933988852f9e58b04fac1))
+
 ## [1.2.0](https://github.com/andymai/brepkit/compare/v1.1.0...v1.2.0) (2026-03-13)
 
 
