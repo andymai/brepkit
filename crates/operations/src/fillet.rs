@@ -707,6 +707,101 @@ pub fn fillet_rolling_ball(
         }
     }
 
+    // Phase 2d: Detect adjacent fillet overlap on planar faces.
+    // When two target edges share a vertex on a common planar face, the rolling
+    // ball on each edge creates a contact setback along the other edge from that
+    // vertex.  If the sum of setbacks from both vertices of a target edge equals
+    // or exceeds the polygon edge length, the fillet strips would overlap.
+    //
+    // setback along edge E from vertex V (where adjacent edge B is also target):
+    //   setback = R / tan(θ / 2)
+    // where θ is the interior polygon angle at V between E and B.
+    //
+    // Only applies to planar adjacent faces (face_polygons).  Curved faces are
+    // handled by Phase 2c (curvature bound).
+    for &edge_id in &filtered_edges {
+        for poly in face_polygons.values() {
+            let Some(i_e) = poly.wire_edge_ids.iter().position(|&e| e == edge_id) else {
+                continue;
+            };
+            let n = poly.positions.len();
+            let next_i = (i_e + 1) % n;
+            let prev_i = (i_e + n - 1) % n;
+            let next_next_i = (next_i + 1) % n;
+
+            let e_vec = poly.positions[next_i] - poly.positions[i_e];
+            let e_len = e_vec.length();
+            if e_len < tol.linear {
+                continue;
+            }
+
+            // Setback from start vertex if the previous polygon edge is a target.
+            let setback_start: f64 = {
+                let prev_target = target_set.contains(&poly.wire_edge_ids[prev_i].index());
+                if !prev_target {
+                    0.0
+                } else {
+                    // Interior angle at start: between (E forward) and (prev backward from start).
+                    let d_e = e_vec * (1.0 / e_len);
+                    let d_prev_raw = poly.positions[prev_i] - poly.positions[i_e];
+                    let prev_len = d_prev_raw.length();
+                    if prev_len < tol.linear {
+                        continue;
+                    }
+                    let d_prev = d_prev_raw * (1.0 / prev_len);
+                    let cos_t = d_e.dot(d_prev).clamp(-1.0, 1.0);
+                    let theta = cos_t.acos();
+                    let half_tan = (theta / 2.0).tan();
+                    if half_tan < tol.linear {
+                        continue;
+                    }
+                    radius / half_tan
+                }
+            };
+
+            // Setback from end vertex if the next polygon edge is also a target.
+            let setback_end: f64 = {
+                let next_target = target_set.contains(&poly.wire_edge_ids[next_i].index());
+                if !next_target {
+                    0.0
+                } else {
+                    // Interior angle at end: between (E backward from end) and (next forward).
+                    let d_e_bwd = poly.positions[i_e] - poly.positions[next_i];
+                    let d_next_raw = poly.positions[next_next_i] - poly.positions[next_i];
+                    let bwd_len = e_len; // same magnitude as e_len
+                    let next_len = d_next_raw.length();
+                    if next_len < tol.linear {
+                        continue;
+                    }
+                    let d_e_bwd_n = d_e_bwd * (1.0 / bwd_len);
+                    let d_next_n = d_next_raw * (1.0 / next_len);
+                    let cos_t = d_e_bwd_n.dot(d_next_n).clamp(-1.0, 1.0);
+                    let theta = cos_t.acos();
+                    let half_tan = (theta / 2.0).tan();
+                    if half_tan < tol.linear {
+                        continue;
+                    }
+                    radius / half_tan
+                }
+            };
+
+            // Only reject when setbacks come from BOTH ends (one non-target end is
+            // already bounded by Phase 2b; two target-edge ends need this check).
+            if setback_start > 0.0 && setback_end > 0.0 {
+                let total = setback_start + setback_end;
+                if total >= e_len {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: format!(
+                            "adjacent fillet strips overlap: combined setback \
+                             ({setback_start:.6} + {setback_end:.6} = {total:.6}) \
+                             equals or exceeds edge length {e_len:.6}"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
     // Phase 3: Build modified (trimmed) planar faces.
     let mut all_specs: Vec<FaceSpec> = Vec::new();
     let mut fillet_face_indices: Vec<usize> = Vec::new();
@@ -2682,6 +2777,58 @@ mod tests {
         assert!(
             vol > 0.0 && vol < 4.0,
             "filleted long box volume should be positive and less than original: {vol}"
+        );
+    }
+
+    #[test]
+    fn adjacent_fillet_overlap_all_edges_rejected() {
+        // A 1×1×1 box with all 12 edges filleted at R=0.5 must fail:
+        // at each 90° corner the setback from each end is R/tan(45°) = 0.5,
+        // and 0.5 + 0.5 = 1.0 = edge length → strips exactly touch → reject.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+        let result = super::fillet_rolling_ball(&mut topo, solid, &edges, 0.5);
+        assert!(
+            result.is_err(),
+            "all-edge fillet with R=0.5 on unit box should be rejected"
+        );
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("adjacent fillet strips overlap"),
+            "error should mention overlap: {msg}"
+        );
+    }
+
+    #[test]
+    fn adjacent_fillet_overlap_fits_with_small_radius() {
+        // The same box with R=0.4 must succeed: 0.4+0.4=0.8 < 1.0.
+        // (We don't check the full solid validity here — that's covered by
+        // vertex_blend_all_edges_box.  Just verify Phase 2d does not block it.)
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+        let result = super::fillet_rolling_ball(&mut topo, solid, &edges, 0.4);
+        assert!(
+            result.is_ok(),
+            "all-edge fillet with R=0.4 on unit box should be accepted by Phase 2d: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn adjacent_fillet_single_edge_no_phase2d_rejection() {
+        // Filleting one edge of a box has no adjacent target edges — Phase 2d
+        // never fires even for R close to the face size.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+        // Phase 2b caps R at the adjacent edge length (1.0). R=0.4 is well below that.
+        let result = super::fillet_rolling_ball(&mut topo, solid, &edges[..1], 0.4);
+        assert!(
+            result.is_ok(),
+            "single-edge fillet with R=0.4 should succeed: {:?}",
+            result.err()
         );
     }
 }
