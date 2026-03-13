@@ -621,7 +621,9 @@ fn compute_lspia_step_size_weighted(
 /// # Errors
 ///
 /// Returns [`MathError::EmptyInput`] if fewer than 2 points.
-/// Returns [`MathError::ConvergenceFailure`] if not converged after `max_iterations`.
+/// If the iteration has not converged after `max_iterations`, a warning is
+/// logged and the best-effort curve (lowest observed error) is returned as
+/// `Ok`; no error is raised.
 #[allow(clippy::cast_precision_loss)]
 pub fn approximate_lspia(
     points: &[Point3],

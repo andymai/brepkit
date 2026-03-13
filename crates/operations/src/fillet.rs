@@ -166,7 +166,11 @@ fn face_surface_normal_at(surface: &FaceSurface, point: Point3) -> Option<Vec3> 
             // evaluate the exact normal at that parameter.  Tolerance 1e-4 is
             // sufficient here — we only need (u,v) accurate enough for a
             // reliable normal direction, not for position reconstruction.
-            match project_point_to_surface(srf, point, 1e-4) {
+            // Use a projection tolerance derived from the standard linear
+            // tolerance (×1000) — loose enough for normal-direction accuracy
+            // without over-iterating, and scale-aware via Tolerance::new().
+            let proj_tol = Tolerance::new().linear * 1e3;
+            match project_point_to_surface(srf, point, proj_tol) {
                 Ok(proj) => srf.normal(proj.u, proj.v).ok(),
                 Err(_) => srf.normal(0.5, 0.5).ok(), // fallback to midpoint
             }
@@ -763,7 +767,7 @@ pub fn fillet_rolling_ball(
             }
 
             // Setback from start vertex if the previous polygon edge is a target.
-            let setback_start: f64 = {
+            let setback_start: f64 = 'start: {
                 let prev_target = target_set.contains(&poly.wire_edge_ids[prev_i].index());
                 if prev_target {
                     // Interior angle at start: between (E forward) and (prev backward from start).
@@ -771,14 +775,14 @@ pub fn fillet_rolling_ball(
                     let d_prev_raw = poly.positions[prev_i] - poly.positions[i_e];
                     let prev_len = d_prev_raw.length();
                     if prev_len < tol.linear {
-                        continue;
+                        break 'start 0.0;
                     }
                     let d_prev = d_prev_raw * (1.0 / prev_len);
                     let cos_t = d_e.dot(d_prev).clamp(-1.0, 1.0);
                     let theta = cos_t.acos();
                     let half_tan = (theta / 2.0).tan();
                     if half_tan < tol.linear {
-                        continue;
+                        break 'start 0.0;
                     }
                     radius / half_tan
                 } else {
@@ -787,7 +791,7 @@ pub fn fillet_rolling_ball(
             };
 
             // Setback from end vertex if the next polygon edge is also a target.
-            let setback_end: f64 = {
+            let setback_end: f64 = 'end: {
                 let next_target = target_set.contains(&poly.wire_edge_ids[next_i].index());
                 if next_target {
                     // Interior angle at end: between (E backward from end) and (next forward).
@@ -796,7 +800,7 @@ pub fn fillet_rolling_ball(
                     let bwd_len = e_len; // same magnitude as e_len
                     let next_len = d_next_raw.length();
                     if next_len < tol.linear {
-                        continue;
+                        break 'end 0.0;
                     }
                     let d_e_bwd_n = d_e_bwd * (1.0 / bwd_len);
                     let d_next_n = d_next_raw * (1.0 / next_len);
@@ -804,7 +808,7 @@ pub fn fillet_rolling_ball(
                     let theta = cos_t.acos();
                     let half_tan = (theta / 2.0).tan();
                     if half_tan < tol.linear {
-                        continue;
+                        break 'end 0.0;
                     }
                     radius / half_tan
                 } else {
@@ -1515,20 +1519,25 @@ fn expand_g1_chain(
 
     for &fid in &shell_face_ids {
         let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        for oe in wire.edges() {
-            let eid = oe.edge();
-            edge_to_faces.entry(eid.index()).or_default().push(fid);
-            edge_ids.insert(eid.index(), eid);
-            let edge = topo.edge(eid)?;
-            vertex_to_edges
-                .entry(edge.start().index())
-                .or_default()
-                .push(eid);
-            vertex_to_edges
-                .entry(edge.end().index())
-                .or_default()
-                .push(eid);
+        let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+        for wid in wire_ids {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let eid = oe.edge();
+                edge_to_faces.entry(eid.index()).or_default().push(fid);
+                edge_ids.insert(eid.index(), eid);
+                let edge = topo.edge(eid)?;
+                vertex_to_edges
+                    .entry(edge.start().index())
+                    .or_default()
+                    .push(eid);
+                vertex_to_edges
+                    .entry(edge.end().index())
+                    .or_default()
+                    .push(eid);
+            }
         }
     }
     // Deduplicate vertex_to_edges (each edge appears once per adjacent face).
@@ -1625,10 +1634,12 @@ fn expand_g1_chain(
         }
     }
 
-    Ok(expanded
+    let mut result: Vec<EdgeId> = expanded
         .iter()
         .filter_map(|idx| edge_ids.get(idx).copied())
-        .collect())
+        .collect();
+    result.sort_unstable_by_key(|e| e.index());
+    Ok(result)
 }
 
 /// Fillet `seed_edges` and all G1-continuous edges connected to them.
