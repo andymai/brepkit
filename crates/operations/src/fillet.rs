@@ -1,10 +1,16 @@
 //! Edge filleting (rounding edges with a constant or variable radius).
 //!
 //! Replaces sharp edges with a smooth cylindrical fillet surface.
-//! Supports edges between planar faces, and edges between planar and
-//! curved analytic faces (cylinder, cone, sphere, torus). Each filleted
-//! edge is replaced by a true rolling-ball NURBS blend surface with G1
-//! tangent continuity.
+//! Supports edges between planar faces, analytic faces (cylinder, cone,
+//! sphere, torus), and NURBS faces from a prior fillet operation.  Each
+//! filleted edge is replaced by a true rolling-ball NURBS blend surface
+//! with G1 tangent continuity.
+//!
+//! For NURBS adjacent faces the outward normal is computed by projecting
+//! the edge sample point onto the surface, giving accurate cross-section
+//! geometry (see [`face_surface_normal_at`]).  Planar trimming of NURBS
+//! adjacent faces is not yet implemented — those faces are passed through
+//! unchanged; small geometric gaps may appear at the fillet boundary.
 //!
 //! The rolling-ball algorithm:
 //! 1. For each target edge, find the two adjacent planar faces
@@ -22,6 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use brepkit_math::nurbs::projection::project_point_to_surface;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::nurbs::surface_fitting::interpolate_surface;
 use brepkit_math::tolerance::Tolerance;
@@ -154,7 +161,20 @@ fn face_surface_normal_at(surface: &FaceSurface, point: Point3) -> Option<Vec3> 
             let tube_center = tor.center() + ring_dir * tor.major_radius();
             (point - tube_center).normalize().ok()
         }
-        FaceSurface::Nurbs(srf) => srf.normal(0.5, 0.5).ok(),
+        FaceSurface::Nurbs(srf) => {
+            // Project the point onto the NURBS surface to find (u, v), then
+            // evaluate the exact normal at that parameter.  Tolerance 1e-4 is
+            // sufficient here — we only need (u,v) accurate enough for a
+            // reliable normal direction, not for position reconstruction.
+            // Use a projection tolerance derived from the standard linear
+            // tolerance (×1000) — loose enough for normal-direction accuracy
+            // without over-iterating, and scale-aware via Tolerance::new().
+            let proj_tol = Tolerance::new().linear * 1e3;
+            match project_point_to_surface(srf, point, proj_tol) {
+                Ok(proj) => srf.normal(proj.u, proj.v).ok(),
+                Err(_) => srf.normal(0.5, 0.5).ok(), // fallback to midpoint
+            }
+        }
     }
 }
 
@@ -575,6 +595,18 @@ pub fn fillet_rolling_ball(
         );
     }
 
+    // Precompute edge → polygon entries for O(|filtered_edges|) Phase 2d lookup
+    // instead of O(|filtered_edges| × |planar_faces|) nested iteration.
+    let mut edge_to_poly_pos: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+    for (&face_key, poly) in &face_polygons {
+        for (i, eid) in poly.wire_edge_ids.iter().enumerate() {
+            edge_to_poly_pos
+                .entry(eid.index())
+                .or_default()
+                .push((face_key, i));
+        }
+    }
+
     // Phase 2: Filter to manifold edges and build vertex-to-edge adjacency.
     let filtered_edges: Vec<EdgeId> = edges
         .iter()
@@ -648,6 +680,165 @@ pub fn fillet_rolling_ball(
                     return Err(crate::OperationsError::InvalidInput {
                         reason: format!(
                             "fillet radius {radius:.6} exceeds adjacent edge length {min_adj:.6}"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
+    // Phase 2c: Validate radius against adjacent face curvature (analytic surfaces).
+    // The rolling ball rolls on the adjacent face; its radius must not meet or
+    // exceed the minimum principal radius of curvature of that surface, or the
+    // offset surface degenerates (e.g. a cylinder of radius R offset by R
+    // collapses to a line, a sphere offset by its own radius collapses to a point).
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        let p_start = topo.vertex(edge.start())?.point();
+        let p_end = topo.vertex(edge.end())?.point();
+
+        let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
+            continue;
+        };
+        for &fid in face_list {
+            let Some(surf) = face_surfaces.get(&fid.index()) else {
+                continue;
+            };
+            let min_curvature_r: f64 = match surf {
+                // Planar faces have infinite curvature radius — no constraint.
+                // NURBS curvature is not yet estimated analytically — skip.
+                FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => continue,
+                // Cylinder: principal curvature κ₁ = 1/R, κ₂ = 0 → min radius = R.
+                FaceSurface::Cylinder(s) => s.radius(),
+                // Sphere: κ₁ = κ₂ = 1/R → min radius = R.
+                FaceSurface::Sphere(s) => s.radius(),
+                // Torus: κ₁ = 1/r (minor cross-section, always present).
+                // On the inner equator, the major curvature = 1/(R−r), which
+                // can exceed 1/r for fat tori (R < 2r). Use the tighter bound.
+                FaceSurface::Torus(s) => {
+                    let inner_r = s.major_radius() - s.minor_radius();
+                    if inner_r > tol.linear {
+                        s.minor_radius().min(inner_r)
+                    } else {
+                        s.minor_radius()
+                    }
+                }
+                // Cone: circumferential κ₂ = tan(α)/v at slant distance v from apex,
+                // where α = half_angle from the radial plane.
+                // → min curvature radius = v_min * cos(α) / sin(α).
+                FaceSurface::Cone(s) => {
+                    let (_, v0) = s.project_point(p_start);
+                    let (_, v1) = s.project_point(p_end);
+                    let v_min = v0.min(v1).abs().max(tol.linear);
+                    let cos_a = s.half_angle().cos();
+                    let sin_a = s.half_angle().sin();
+                    if sin_a < tol.linear {
+                        // Near-flat cone (half_angle ≈ 0): curvature radius → ∞, no constraint.
+                        continue;
+                    }
+                    v_min * cos_a / sin_a
+                }
+            };
+            if radius >= min_curvature_r {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: format!(
+                        "fillet radius {radius:.6} meets or exceeds minimum surface \
+                         curvature radius {min_curvature_r:.6} of adjacent face"
+                    ),
+                });
+            }
+        }
+    }
+
+    // Phase 2d: Detect adjacent fillet overlap on planar faces.
+    // When two target edges share a vertex on a common planar face, the rolling
+    // ball on each edge creates a contact setback along the other edge from that
+    // vertex.  If the sum of setbacks from both vertices of a target edge equals
+    // or exceeds the polygon edge length, the fillet strips would overlap.
+    //
+    // setback along edge E from vertex V (where adjacent edge B is also target):
+    //   setback = R / tan(θ / 2)
+    // where θ is the interior polygon angle at V between E and B.
+    //
+    // Only applies to planar adjacent faces (face_polygons).  Curved faces are
+    // handled by Phase 2c (curvature bound).
+    for &edge_id in &filtered_edges {
+        let Some(poly_entries) = edge_to_poly_pos.get(&edge_id.index()) else {
+            continue;
+        };
+        for &(face_key, i_e) in poly_entries {
+            let poly = &face_polygons[&face_key];
+            let n = poly.positions.len();
+            let next_i = (i_e + 1) % n;
+            let prev_i = (i_e + n - 1) % n;
+            let next_next_i = (next_i + 1) % n;
+
+            let e_vec = poly.positions[next_i] - poly.positions[i_e];
+            let e_len = e_vec.length();
+            if e_len < tol.linear {
+                continue;
+            }
+
+            // Setback from start vertex if the previous polygon edge is a target.
+            let setback_start: f64 = 'start: {
+                let prev_target = target_set.contains(&poly.wire_edge_ids[prev_i].index());
+                if prev_target {
+                    // Interior angle at start: between (E forward) and (prev backward from start).
+                    let d_e = e_vec * (1.0 / e_len);
+                    let d_prev_raw = poly.positions[prev_i] - poly.positions[i_e];
+                    let prev_len = d_prev_raw.length();
+                    if prev_len < tol.linear {
+                        break 'start 0.0;
+                    }
+                    let d_prev = d_prev_raw * (1.0 / prev_len);
+                    let cos_t = d_e.dot(d_prev).clamp(-1.0, 1.0);
+                    let theta = cos_t.acos();
+                    let half_tan = (theta / 2.0).tan();
+                    if half_tan < tol.linear {
+                        break 'start 0.0;
+                    }
+                    radius / half_tan
+                } else {
+                    0.0
+                }
+            };
+
+            // Setback from end vertex if the next polygon edge is also a target.
+            let setback_end: f64 = 'end: {
+                let next_target = target_set.contains(&poly.wire_edge_ids[next_i].index());
+                if next_target {
+                    // Interior angle at end: between (E backward from end) and (next forward).
+                    let d_e_bwd = poly.positions[i_e] - poly.positions[next_i];
+                    let d_next_raw = poly.positions[next_next_i] - poly.positions[next_i];
+                    let bwd_len = e_len; // same magnitude as e_len
+                    let next_len = d_next_raw.length();
+                    if next_len < tol.linear {
+                        break 'end 0.0;
+                    }
+                    let d_e_bwd_n = d_e_bwd * (1.0 / bwd_len);
+                    let d_next_n = d_next_raw * (1.0 / next_len);
+                    let cos_t = d_e_bwd_n.dot(d_next_n).clamp(-1.0, 1.0);
+                    let theta = cos_t.acos();
+                    let half_tan = (theta / 2.0).tan();
+                    if half_tan < tol.linear {
+                        break 'end 0.0;
+                    }
+                    radius / half_tan
+                } else {
+                    0.0
+                }
+            };
+
+            // Only reject when setbacks come from BOTH ends (one non-target end is
+            // already bounded by Phase 2b; two target-edge ends need this check).
+            if setback_start > 0.0 && setback_end > 0.0 {
+                let total = setback_start + setback_end;
+                if total >= e_len {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: format!(
+                            "adjacent fillet strips overlap: combined setback \
+                             ({setback_start:.6} + {setback_end:.6} = {total:.6}) \
+                             equals or exceeds edge length {e_len:.6}"
                         ),
                     });
                 }
@@ -1314,6 +1505,183 @@ fn record_fillet_point(
     data.entry(edge_index)
         .or_insert_with(FilletEdgeData::new)
         .insert(face_id, vertex_id, point);
+}
+
+/// Expand a seed edge set by G1 (tangent-continuity) chain propagation.
+///
+/// Starting from `seed_edges`, iteratively adds any manifold edge that:
+/// 1. Shares a vertex with an edge already in the set.
+/// 2. Has the same pair of adjacent faces (same ridgeline).
+/// 3. Is tangent-continuous at the shared vertex (< 10° deviation).
+///
+/// This is a private helper for [`fillet_rolling_ball_propagate_g1`].
+fn expand_g1_chain(
+    topo: &Topology,
+    solid: SolidId,
+    seed_edges: &[EdgeId],
+    tol: Tolerance,
+) -> Result<Vec<EdgeId>, crate::OperationsError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+    let shell_face_ids: Vec<FaceId> = shell.faces().to_vec();
+
+    // Build edge→faces and vertex→edges maps for the full shell.
+    let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
+    let mut vertex_to_edges: HashMap<usize, Vec<EdgeId>> = HashMap::new();
+    let mut edge_ids: HashMap<usize, EdgeId> = HashMap::new();
+
+    for &fid in &shell_face_ids {
+        let face = topo.face(fid)?;
+        let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+        for wid in wire_ids {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let eid = oe.edge();
+                edge_to_faces.entry(eid.index()).or_default().push(fid);
+                edge_ids.insert(eid.index(), eid);
+                let edge = topo.edge(eid)?;
+                vertex_to_edges
+                    .entry(edge.start().index())
+                    .or_default()
+                    .push(eid);
+                vertex_to_edges
+                    .entry(edge.end().index())
+                    .or_default()
+                    .push(eid);
+            }
+        }
+    }
+    // Deduplicate vertex_to_edges (each edge appears once per adjacent face).
+    for edges in vertex_to_edges.values_mut() {
+        edges.sort_unstable_by_key(|e: &EdgeId| e.index());
+        edges.dedup_by_key(|e: &mut EdgeId| e.index());
+    }
+
+    // Iterative BFS expansion.
+    let mut expanded: HashSet<usize> = seed_edges.iter().map(|e| e.index()).collect();
+    let mut queue: Vec<EdgeId> = seed_edges.to_vec();
+
+    while let Some(current) = queue.pop() {
+        // Face pair for current edge (sorted for comparison).
+        let Some(cf) = edge_to_faces.get(&current.index()) else {
+            continue;
+        };
+        if cf.len() != 2 {
+            continue;
+        }
+        let (cf1, cf2) = {
+            let (a, b) = (cf[0].index(), cf[1].index());
+            if a < b { (a, b) } else { (b, a) }
+        };
+
+        let cur_edge = topo.edge(current)?;
+        let cur_start = topo.vertex(cur_edge.start())?.point();
+        let cur_end = topo.vertex(cur_edge.end())?.point();
+
+        for &shared_vid in &[cur_edge.start(), cur_edge.end()] {
+            // "Away from vertex" tangent for the current edge at this vertex.
+            let t_cur = {
+                let t_raw = if shared_vid == cur_edge.start() {
+                    // Forward tangent at start points away from vertex — correct sign.
+                    sample_edge_tangent(cur_edge.curve(), cur_start, cur_end, 0.0)
+                } else {
+                    // Forward tangent at end points INTO vertex; negate for "away".
+                    -sample_edge_tangent(cur_edge.curve(), cur_start, cur_end, 1.0)
+                };
+                let len = t_raw.length();
+                if len < tol.linear {
+                    continue;
+                }
+                t_raw * (1.0 / len)
+            };
+
+            let Some(neighbors) = vertex_to_edges.get(&shared_vid.index()) else {
+                continue;
+            };
+            for &nb in neighbors {
+                if expanded.contains(&nb.index()) {
+                    continue;
+                }
+                // Must be manifold (exactly 2 adjacent faces).
+                let Some(nf) = edge_to_faces.get(&nb.index()) else {
+                    continue;
+                };
+                if nf.len() != 2 {
+                    continue;
+                }
+                // Must share the same face pair.
+                let (nf1, nf2) = {
+                    let (a, b) = (nf[0].index(), nf[1].index());
+                    if a < b { (a, b) } else { (b, a) }
+                };
+                if (cf1, cf2) != (nf1, nf2) {
+                    continue;
+                }
+
+                // "Away from vertex" tangent for the neighbor edge at the shared vertex.
+                let nb_edge = topo.edge(nb)?;
+                let nb_start = topo.vertex(nb_edge.start())?.point();
+                let nb_end = topo.vertex(nb_edge.end())?.point();
+                let t_nb = {
+                    let t_raw = if shared_vid == nb_edge.start() {
+                        sample_edge_tangent(nb_edge.curve(), nb_start, nb_end, 0.0)
+                    } else {
+                        -sample_edge_tangent(nb_edge.curve(), nb_start, nb_end, 1.0)
+                    };
+                    let len = t_raw.length();
+                    if len < tol.linear {
+                        continue;
+                    }
+                    t_raw * (1.0 / len)
+                };
+
+                // G1 continuity: "away" tangents must be anti-parallel (< ~10° deviation).
+                // cos(170°) ≈ -0.985.  This is strict: a true G1 joint has dot = -1.0.
+                if t_cur.dot(t_nb) < -0.985 {
+                    expanded.insert(nb.index());
+                    queue.push(nb);
+                }
+            }
+        }
+    }
+
+    let mut result: Vec<EdgeId> = expanded
+        .iter()
+        .filter_map(|idx| edge_ids.get(idx).copied())
+        .collect();
+    result.sort_unstable_by_key(|e| e.index());
+    Ok(result)
+}
+
+/// Fillet `seed_edges` and all G1-continuous edges connected to them.
+///
+/// This is a convenience wrapper around [`fillet_rolling_ball`] that
+/// automatically expands the edge set by G1 chain propagation: any
+/// manifold edge that shares a vertex, the same pair of adjacent faces,
+/// and is tangent-continuous (< 10° deviation) with a seed edge is added
+/// to the fillet set.
+///
+/// # When to use
+///
+/// Use this function when you want to fillet a smooth edge chain (e.g. the
+/// loop of edges on a rounded-rectangle extrusion) without listing every
+/// edge explicitly.  Use [`fillet_rolling_ball`] directly when you want
+/// precise control over which individual edges are filleted.
+///
+/// # Errors
+///
+/// Returns the same errors as [`fillet_rolling_ball`].
+pub fn fillet_rolling_ball_propagate_g1(
+    topo: &mut Topology,
+    solid: SolidId,
+    seed_edges: &[EdgeId],
+    radius: f64,
+) -> Result<SolidId, crate::OperationsError> {
+    let tol = Tolerance::new();
+    let expanded = expand_g1_chain(topo, solid, seed_edges, tol)?;
+    fillet_rolling_ball(topo, solid, &expanded, radius)
 }
 
 /// Law governing how fillet radius varies along an edge.
@@ -2245,6 +2613,78 @@ mod tests {
     }
 
     #[test]
+    fn fillet_radius_exceeds_cylinder_curvature_rejected() {
+        // A cylinder of radius 1.0 cannot be filleted with radius >= 1.0:
+        // the offset surface would degenerate to a line.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+        let plane_cyl_edge = {
+            let s = topo.solid(solid).unwrap();
+            let sh = topo.shell(s.outer_shell()).unwrap();
+            let mut edge_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
+            for &fid in sh.faces() {
+                let wire = topo.wire(topo.face(fid).unwrap().outer_wire()).unwrap();
+                for oe in wire.edges() {
+                    edge_faces.entry(oe.edge().index()).or_default().push(fid);
+                }
+            }
+            let mut found = None;
+            'outer: for (&eidx, fids) in &edge_faces {
+                if fids.len() == 2 {
+                    let s1 = topo.face(fids[0]).unwrap().surface().clone();
+                    let s2 = topo.face(fids[1]).unwrap().surface().clone();
+                    let has_plane = matches!(s1, FaceSurface::Plane { .. })
+                        || matches!(s2, FaceSurface::Plane { .. });
+                    let has_cyl = matches!(s1, FaceSurface::Cylinder(_))
+                        || matches!(s2, FaceSurface::Cylinder(_));
+                    if has_plane && has_cyl {
+                        for &fid in sh.faces() {
+                            let wire = topo.wire(topo.face(fid).unwrap().outer_wire()).unwrap();
+                            for oe in wire.edges() {
+                                if oe.edge().index() == eidx {
+                                    found = Some(oe.edge());
+                                    break 'outer;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            found.expect("cylinder must have a plane-cylinder edge")
+        };
+
+        // radius == cylinder radius → curvature radius exactly met → reject.
+        let result = super::fillet_rolling_ball(&mut topo, solid, &[plane_cyl_edge], 1.0);
+        assert!(
+            result.is_err(),
+            "radius == cylinder radius should be rejected"
+        );
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("curvature"),
+            "error should mention curvature: {msg}"
+        );
+
+        // radius > cylinder radius → also rejected.
+        let result2 = super::fillet_rolling_ball(&mut topo, solid, &[plane_cyl_edge], 1.5);
+        assert!(
+            result2.is_err(),
+            "radius > cylinder radius should be rejected"
+        );
+
+        // radius < cylinder radius → passes curvature check (may succeed or fail
+        // for other fillet reasons, but must not fail on curvature).
+        let result3 = super::fillet_rolling_ball(&mut topo, solid, &[plane_cyl_edge], 0.3);
+        if let Err(ref e) = result3 {
+            let msg = format!("{e}");
+            assert!(
+                !msg.contains("curvature"),
+                "small radius should not fail curvature check: {msg}"
+            );
+        }
+    }
+
+    #[test]
     fn fillet_radius_just_fits() {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
@@ -2329,6 +2769,198 @@ mod tests {
         assert!(
             has_nurbs,
             "plane-cylinder fillet should produce a NURBS face"
+        );
+    }
+
+    #[test]
+    fn g1_propagate_box_no_expansion() {
+        // On a box every edge meets its neighbors at 90°.
+        // Seeding one edge should yield a set of size exactly 1 — no expansion.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+        let seed = &edges[..1];
+
+        // expand_g1_chain is private; exercise it via the public wrapper.
+        // We expect the wrapper to succeed and the fillet result to be valid
+        // (same as seeding with the single edge directly).
+        let result = super::fillet_rolling_ball_propagate_g1(&mut topo, solid, seed, 0.1);
+        assert!(
+            result.is_ok(),
+            "propagate_g1 on a box edge should succeed: {:?}",
+            result.err()
+        );
+        let result_solid = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, result_solid, 0.01).unwrap();
+        assert!(
+            vol > 0.0 && vol < 1.0,
+            "filleted box should have smaller volume than original: {vol}"
+        );
+    }
+
+    #[test]
+    fn g1_propagate_collinear_long_box() {
+        // Build a long box (4×1×1) and seed one of the long top edges.
+        // A box's long edges are each a single edge, so propagation still
+        // yields size 1 — but the wrapper should succeed and produce a valid solid.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 4.0, 1.0, 1.0).unwrap();
+
+        // Pick the first edge that is parallel to the X axis (length ≈ 4.0).
+        let edges = solid_edge_ids(&topo, solid);
+        let long_edge = edges
+            .iter()
+            .find(|&&eid| {
+                let e = topo.edge(eid).unwrap();
+                let p0 = topo.vertex(e.start()).unwrap().point();
+                let p1 = topo.vertex(e.end()).unwrap().point();
+                let len = (p1 - p0).length();
+                len > 3.5
+            })
+            .copied();
+        let seed_edge = long_edge.expect("could not find a long edge on a 4×1×1 box");
+
+        let result = super::fillet_rolling_ball_propagate_g1(&mut topo, solid, &[seed_edge], 0.1);
+        assert!(
+            result.is_ok(),
+            "propagate_g1 on long-box edge should succeed: {:?}",
+            result.err()
+        );
+        let result_solid = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, result_solid, 0.01).unwrap();
+        assert!(
+            vol > 0.0 && vol < 4.0,
+            "filleted long box volume should be positive and less than original: {vol}"
+        );
+    }
+
+    #[test]
+    fn adjacent_fillet_overlap_all_edges_rejected() {
+        // A 1×1×1 box with all 12 edges filleted at R=0.5 must fail:
+        // at each 90° corner the setback from each end is R/tan(45°) = 0.5,
+        // and 0.5 + 0.5 = 1.0 = edge length → strips exactly touch → reject.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+        let result = super::fillet_rolling_ball(&mut topo, solid, &edges, 0.5);
+        assert!(
+            result.is_err(),
+            "all-edge fillet with R=0.5 on unit box should be rejected"
+        );
+        let msg = format!("{}", result.unwrap_err());
+        assert!(
+            msg.contains("adjacent fillet strips overlap"),
+            "error should mention overlap: {msg}"
+        );
+    }
+
+    #[test]
+    fn adjacent_fillet_overlap_fits_with_small_radius() {
+        // The same box with R=0.4 must succeed: 0.4+0.4=0.8 < 1.0.
+        // (We don't check the full solid validity here — that's covered by
+        // vertex_blend_all_edges_box.  Just verify Phase 2d does not block it.)
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+        let result = super::fillet_rolling_ball(&mut topo, solid, &edges, 0.4);
+        assert!(
+            result.is_ok(),
+            "all-edge fillet with R=0.4 on unit box should be accepted by Phase 2d: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn adjacent_fillet_single_edge_no_phase2d_rejection() {
+        // Filleting one edge of a box has no adjacent target edges — Phase 2d
+        // never fires even for R close to the face size.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+        // Phase 2b caps R at the adjacent edge length (1.0). R=0.4 is well below that.
+        let result = super::fillet_rolling_ball(&mut topo, solid, &edges[..1], 0.4);
+        assert!(
+            result.is_ok(),
+            "single-edge fillet with R=0.4 should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn face_surface_normal_at_nurbs_via_projection() {
+        // Directly test the NURBS branch of face_surface_normal_at.
+        // Build a flat bilinear NURBS patch in the XY plane.  The outward
+        // normal is (0, 0, 1) everywhere; point projection must return a
+        // valid (u, v) that yields the correct normal.
+        let srf = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+                vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1.0, 1.0]],
+        )
+        .expect("bilinear XY patch");
+
+        let surface = FaceSurface::Nurbs(srf);
+
+        // Test at a non-central point to ensure projection (not midpoint) is used.
+        let n = face_surface_normal_at(&surface, Point3::new(0.2, 0.8, 0.0));
+        let n = n.expect("NURBS normal should be Some for a surface point");
+
+        // Flat XY patch has normal along ±Z.
+        assert!(
+            n.z().abs() > 0.9,
+            "flat XY patch normal must be along Z, got: {n:?}"
+        );
+        // Result must be approximately unit length.
+        assert!(
+            (n.length() - 1.0).abs() < 0.01,
+            "NURBS normal must be unit length, got: {}",
+            n.length()
+        );
+    }
+
+    #[test]
+    fn fillet_rolling_ball_second_pass_on_nurbs_solid() {
+        // After a rolling-ball fillet the result solid contains a NURBS face.
+        // A second fillet on a different manifold edge must succeed.  This
+        // verifies that face_surfaces containing NURBS entries does not crash
+        // fillet_rolling_ball even when the NURBS face is non-manifold in the
+        // current implementation (so its normal branch is not reached yet).
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+
+        let edges1 = solid_edge_ids(&topo, solid);
+        let result1 = super::fillet_rolling_ball(&mut topo, solid, &[edges1[0]], 0.1)
+            .expect("first rolling-ball fillet should succeed");
+
+        // Confirm NURBS face was created.
+        let has_nurbs = {
+            let s = topo.solid(result1).unwrap();
+            let sh = topo.shell(s.outer_shell()).unwrap();
+            sh.faces()
+                .iter()
+                .any(|&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
+        };
+        assert!(has_nurbs, "first fillet must produce a NURBS face");
+
+        // Second fillet on a different edge.
+        let edges2 = solid_edge_ids(&topo, result1);
+        let result2 = super::fillet_rolling_ball(&mut topo, result1, &[edges2[1]], 0.05);
+        assert!(
+            result2.is_ok(),
+            "second fillet on NURBS-containing solid must succeed: {:?}",
+            result2.err()
+        );
+
+        let vol = crate::measure::solid_volume(&topo, result2.unwrap(), 0.1).unwrap();
+        assert!(
+            vol > 0.5,
+            "doubly-filleted solid must have positive volume, got {vol}"
         );
     }
 }

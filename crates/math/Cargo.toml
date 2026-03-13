@@ -11,6 +11,7 @@ description = "Vector math, transforms, NURBS, and geometric predicates for brep
 robust.workspace = true
 thiserror.workspace = true
 serde = { workspace = true, optional = true }
+log.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
