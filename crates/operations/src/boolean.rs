@@ -7217,6 +7217,9 @@ fn is_polygon_convex(verts: &[Point3], face_normal: &Vec3) -> bool {
         let cross = e1.cross(e2);
         // If the cross product opposes the face normal, the polygon is concave
         // at this vertex. Skip degenerate (zero-length) edges.
+        // 1e-12: degenerate guard on unnormalized cross product (|e1||e2|·sin θ).
+        // For sub-mm edges (0.1mm), smallest detectable concavity is ~1e-4 rad —
+        // well above this threshold.
         if cross.dot(*face_normal) < -1e-12 {
             return false;
         }
@@ -10777,8 +10780,8 @@ mod tests {
 
         let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
         assert!(
-            !faces.is_empty() && faces.len() < 100,
-            "expected sane face count for large-scale cut, got {}",
+            faces.len() >= 10 && faces.len() < 100,
+            "expected 10..100 faces for large-scale cut, got {}",
             faces.len()
         );
 
