@@ -777,73 +777,11 @@ fn analytic_cylinder_signed_volume(
         return Ok(0.0);
     }
 
-    // Determine u-range (angular) using the same gap-detection logic as tessellate.
-    let u_range = {
-        use std::f64::consts::TAU;
-        let tol_lin = brepkit_math::tolerance::Tolerance::default().linear;
-
-        u_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        u_vals.dedup_by(|a, b| (*a - *b).abs() < tol_lin);
-
-        if u_vals.len() < 3 {
-            (0.0, TAU)
-        } else {
-            let mut max_gap = 0.0_f64;
-            let mut gap_end_idx = 0_usize;
-            for i in 0..u_vals.len() {
-                let j = (i + 1) % u_vals.len();
-                let gap = if j > i {
-                    u_vals[j] - u_vals[i]
-                } else {
-                    u_vals[j] + TAU - u_vals[i]
-                };
-                if gap > max_gap {
-                    max_gap = gap;
-                    gap_end_idx = j;
-                }
-            }
-            let n_angles = u_vals.len() as f64;
-            let even_gap = TAU / n_angles;
-            let gap_threshold = (2.5 * even_gap).min(TAU / 3.0);
-            if max_gap < gap_threshold {
-                (0.0, TAU)
-            } else {
-                let u_start = u_vals[gap_end_idx];
-                let gap_start_idx = if gap_end_idx == 0 {
-                    u_vals.len() - 1
-                } else {
-                    gap_end_idx - 1
-                };
-                let u_end = u_vals[gap_start_idx];
-                if u_end > u_start {
-                    (u_start, u_end)
-                } else {
-                    (u_start, u_end + TAU)
-                }
-            }
-        }
-    };
+    let u_range = compute_angular_range(&mut u_vals);
 
     let r = cyl.radius();
-    // ox = O · x_axis, oy = O · y_axis (origin as vector from world origin).
-    // CylindricalSurface doesn't expose x_axis/y_axis directly, so compute
-    // them the same way the constructor does.
-    // TODO: expose x_axis()/y_axis() on CylindricalSurface and use them here
-    // instead of recomputing. The current approach is correct only when the
-    // cylinder was constructed via CylindricalSurface::new() with default
-    // axis frame logic. Cylinders from STEP import or boolean ops with custom
-    // axis frames would produce inconsistent u-range / frame pairings.
-    let axis = cyl.axis();
-    let candidate = if axis.x().abs() < 0.9 {
-        Vec3::new(1.0, 0.0, 0.0)
-    } else {
-        Vec3::new(0.0, 1.0, 0.0)
-    };
-    let x_axis = axis
-        .cross(candidate)
-        .normalize()
-        .unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-    let y_axis = axis.cross(x_axis);
+    let x_axis = cyl.x_axis();
+    let y_axis = cyl.y_axis();
 
     let o_vec = Vec3::new(cyl.origin().x(), cyl.origin().y(), cyl.origin().z());
     let ox = o_vec.dot(x_axis);
@@ -858,11 +796,437 @@ fn analytic_cylinder_signed_volume(
     Ok(if face.is_reversed() { -vol } else { vol })
 }
 
+/// Exact signed volume contribution of a conical face via the divergence
+/// theorem: `V = (1/3) ∫∫ P·n dA`.
+///
+/// For a cone parameterised as
+///   `P(u,v) = apex + v*(cos_a*(cos u · ex + sin u · ey) + sin_a · axis)`
+/// the outward normal is `n = sin_a*(cos u · ex + sin u · ey) - cos_a · axis`,
+/// and `dA = v · cos_a · du dv`.
+///
+/// The integrand `P·n · dA` simplifies to closed form over `[u1,u2] × [v1,v2]`.
+fn analytic_cone_signed_volume(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<f64, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let cone = match face.surface() {
+        FaceSurface::Cone(c) => c,
+        _ => {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "analytic_cone_signed_volume requires a cone face".into(),
+            });
+        }
+    };
+
+    let wire = topo.wire(face.outer_wire())?;
+    let mut u_vals = Vec::new();
+    let mut v_vals = Vec::new();
+    for oe in wire.edges() {
+        if let Ok(edge) = topo.edge(oe.edge()) {
+            for &vid in &[edge.start(), edge.end()] {
+                if let Ok(vtx) = topo.vertex(vid) {
+                    let (u, v) = cone.project_point(vtx.point());
+                    u_vals.push(u);
+                    v_vals.push(v);
+                }
+            }
+            if !edge.is_closed() {
+                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
+                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                        let ts = circle.project(sv.point());
+                        let te = circle.project(ev.point());
+                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                        let mid_t = if fwd <= std::f64::consts::PI {
+                            ts + fwd * 0.5
+                        } else {
+                            ts - (std::f64::consts::TAU - fwd) * 0.5
+                        };
+                        let mid = circle.evaluate(mid_t);
+                        let (u, _) = cone.project_point(mid);
+                        u_vals.push(u);
+                    }
+                }
+            }
+        }
+    }
+
+    let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
+    let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if (v_max - v_min).abs() < 1e-15 {
+        return Ok(0.0);
+    }
+
+    let u_range = compute_angular_range(&mut u_vals);
+
+    let (sin_a, cos_a) = cone.half_angle().sin_cos();
+    let x_axis = cone.x_axis();
+    let y_axis = cone.y_axis();
+    let axis = cone.axis();
+    let apex = cone.apex();
+    let a_vec = Vec3::new(apex.x(), apex.y(), apex.z());
+
+    // Compute the divergence-theorem integral analytically.
+    //
+    // P(u,v) = apex + v*(cos_a*radial(u) + sin_a*axis)
+    // n(u) = sin_a*radial(u) - cos_a*axis   (outward normal direction)
+    // dA = v * cos_a * du * dv
+    //
+    // P·n = apex·(sin_a*radial - cos_a*axis)
+    //     + v*(cos_a*sin_a*(radial·radial) + sin_a²*(axis·radial) - cos_a²*(radial·axis) - cos_a*sin_a*(axis·axis))
+    //     = apex·(sin_a*radial - cos_a*axis) + v*(cos_a*sin_a - cos_a*sin_a)
+    //     = apex·(sin_a*radial(u) - cos_a*axis)
+    //
+    // Wait... let me be more careful:
+    // radial(u)·radial(u) = 1, axis·radial(u) = 0, axis·axis = 1
+    // So P·n = a_vec·(sin_a*radial(u) - cos_a*axis) + v*(cos_a*sin_a*1 + sin_a²*0 - cos_a²*0 - cos_a*sin_a*1)
+    //        = a_vec·(sin_a*radial(u) - cos_a*axis)
+    //
+    // Full integrand = (1/3) * P·n * dA = (1/3) * [a_vec·(sin_a*radial(u) - cos_a*axis)] * v*cos_a * du * dv
+    //
+    // ∫∫ = (cos_a/3) * [(v²/2)|v1..v2] * ∫[sin_a*(ax*cos_u + ay*sin_u) - cos_a*az] du
+    // where ax = a_vec·x_axis, ay = a_vec·y_axis, az = a_vec·axis
+    let ax = a_vec.dot(x_axis);
+    let ay = a_vec.dot(y_axis);
+    let az = a_vec.dot(axis);
+
+    let v2_half = (v_max * v_max - v_min * v_min) / 2.0;
+
+    let (u1, u2) = u_range;
+    let (sin1, cos1) = u1.sin_cos();
+    let (sin2, cos2) = u2.sin_cos();
+
+    let u_integral = sin_a * (ax * (sin2 - sin1) + ay * (-cos2 + cos1)) - cos_a * az * (u2 - u1);
+
+    let vol = (cos_a / 3.0) * v2_half * u_integral;
+
+    Ok(if face.is_reversed() { -vol } else { vol })
+}
+
+/// Exact signed volume contribution of a spherical face via the divergence
+/// theorem: `V = (1/3) ∫∫ P·n dA`.
+///
+/// For a sphere parameterised as
+///   `P(u,v) = C + r*(cos_v*cos_u*ex + cos_v*sin_u*ey + sin_v*ez)`
+/// the outward normal equals the unit radial direction, and `dA = r²*cos_v * du dv`.
+///
+/// `P·n = C·n + r`, so the integrand is `(1/3)*(C·n + r)*r²*cos_v du dv`.
+fn analytic_sphere_signed_volume(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<f64, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let sph = match face.surface() {
+        FaceSurface::Sphere(s) => s,
+        _ => {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "analytic_sphere_signed_volume requires a sphere face".into(),
+            });
+        }
+    };
+
+    let wire = topo.wire(face.outer_wire())?;
+    let mut u_vals = Vec::new();
+    let mut v_vals = Vec::new();
+    for oe in wire.edges() {
+        if let Ok(edge) = topo.edge(oe.edge()) {
+            for &vid in &[edge.start(), edge.end()] {
+                if let Ok(vtx) = topo.vertex(vid) {
+                    let (u, v) = sph.project_point(vtx.point());
+                    u_vals.push(u);
+                    v_vals.push(v);
+                }
+            }
+            if !edge.is_closed() {
+                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
+                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                        let ts = circle.project(sv.point());
+                        let te = circle.project(ev.point());
+                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                        let mid_t = if fwd <= std::f64::consts::PI {
+                            ts + fwd * 0.5
+                        } else {
+                            ts - (std::f64::consts::TAU - fwd) * 0.5
+                        };
+                        let mid = circle.evaluate(mid_t);
+                        let (u, _) = sph.project_point(mid);
+                        u_vals.push(u);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
+    let mut v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+    // For sphere caps (single circle boundary at one latitude), the boundary
+    // vertices all share approximately the same v, so v_max ≈ v_min.
+    // Determine which pole the face covers by checking a face interior point.
+    if (v_max - v_min).abs() < 0.01 {
+        let v_boundary = f64::midpoint(v_min, v_max);
+        let positions = crate::boolean::face_polygon(topo, face_id)?;
+        if positions.is_empty() {
+            return Ok(0.0);
+        }
+        let n = positions.len() as f64;
+        let avg = Point3::new(
+            positions.iter().map(|p| p.x()).sum::<f64>() / n,
+            positions.iter().map(|p| p.y()).sum::<f64>() / n,
+            positions.iter().map(|p| p.z()).sum::<f64>() / n,
+        );
+        let (_, v_interior) = sph.project_point(avg);
+        if v_interior > v_boundary {
+            v_min = v_boundary;
+            v_max = std::f64::consts::FRAC_PI_2;
+        } else {
+            v_min = -std::f64::consts::FRAC_PI_2;
+            v_max = v_boundary;
+        }
+    }
+
+    let u_range = compute_angular_range(&mut u_vals);
+
+    let r = sph.radius();
+    let x_axis = sph.x_axis();
+    let y_axis = sph.y_axis();
+    let z_axis = sph.z_axis();
+    let c = sph.center();
+    let c_vec = Vec3::new(c.x(), c.y(), c.z());
+
+    // P·n = C·(cos_v*cos_u*ex + cos_v*sin_u*ey + sin_v*ez) + r
+    // dA = r² * cos_v * du * dv
+    //
+    // Integrand = (1/3) * (cx*cos_v*cos_u + cy*cos_v*sin_u + cz*sin_v + r) * r² * cos_v
+    // where cx = C·ex, cy = C·ey, cz = C·ez
+    let cx = c_vec.dot(x_axis);
+    let cy = c_vec.dot(y_axis);
+    let cz = c_vec.dot(z_axis);
+
+    let (u1, u2) = u_range;
+    let (sin_u1, cos_u1) = u1.sin_cos();
+    let (sin_u2, cos_u2) = u2.sin_cos();
+    let du = u2 - u1;
+
+    // ∫cos_v*cos_v dv = v/2 + sin(2v)/4
+    let vv_integral = |v: f64| -> f64 { v / 2.0 + (2.0 * v).sin() / 4.0 };
+    let cos2_v = vv_integral(v_max) - vv_integral(v_min);
+
+    // ∫cos_v dv = sin_v
+    let cos_v_int = v_max.sin() - v_min.sin();
+
+    // ∫sin_v*cos_v dv = sin²(v)/2
+    let sincos_v = (v_max.sin().powi(2) - v_min.sin().powi(2)) / 2.0;
+
+    // Full integral:
+    // cx * cos2_v * (sin_u2 - sin_u1)
+    // + cy * cos2_v * (-cos_u2 + cos_u1)
+    // + cz * sincos_v * du
+    // + r * cos_v_int * du
+    let vol = (r * r / 3.0)
+        * (cx * cos2_v * (sin_u2 - sin_u1)
+            + cy * cos2_v * (-cos_u2 + cos_u1)
+            + cz * sincos_v * du
+            + r * cos_v_int * du);
+
+    Ok(if face.is_reversed() { -vol } else { vol })
+}
+
+/// Exact signed volume contribution of a toroidal face via the divergence
+/// theorem: `V = (1/3) ∫∫ P·n dA`.
+///
+/// For a torus parameterised as
+///   `P(u,v) = C + (R + r*cos_v)*(cos_u*ex + sin_u*ey) + r*sin_v*ez`
+/// the outward normal `n = cos_v*(cos_u*ex + sin_u*ey) + sin_v*ez`,
+/// and `dA = r*(R + r*cos_v) du dv`.
+fn analytic_torus_signed_volume(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<f64, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let tor = match face.surface() {
+        FaceSurface::Torus(t) => t,
+        _ => {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "analytic_torus_signed_volume requires a torus face".into(),
+            });
+        }
+    };
+
+    let wire = topo.wire(face.outer_wire())?;
+    let mut u_vals = Vec::new();
+    let mut v_vals = Vec::new();
+    for oe in wire.edges() {
+        if let Ok(edge) = topo.edge(oe.edge()) {
+            for &vid in &[edge.start(), edge.end()] {
+                if let Ok(vtx) = topo.vertex(vid) {
+                    let (u, v) = tor.project_point(vtx.point());
+                    u_vals.push(u);
+                    v_vals.push(v);
+                }
+            }
+            if !edge.is_closed() {
+                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
+                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                        let ts = circle.project(sv.point());
+                        let te = circle.project(ev.point());
+                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                        let mid_t = if fwd <= std::f64::consts::PI {
+                            ts + fwd * 0.5
+                        } else {
+                            ts - (std::f64::consts::TAU - fwd) * 0.5
+                        };
+                        let mid = circle.evaluate(mid_t);
+                        let (u, _) = tor.project_point(mid);
+                        u_vals.push(u);
+                    }
+                }
+            }
+        }
+    }
+
+    let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
+    let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    if (v_max - v_min).abs() < 1e-15 {
+        return Ok(0.0);
+    }
+
+    let u_range = compute_angular_range(&mut u_vals);
+
+    let big_r = tor.major_radius();
+    let small_r = tor.minor_radius();
+    let x_axis = tor.x_axis();
+    let y_axis = tor.y_axis();
+    let z_axis = tor.z_axis();
+    let c = tor.center();
+    let c_vec = Vec3::new(c.x(), c.y(), c.z());
+
+    // P·n = [C + (R+r*cos_v)*radial_u + r*sin_v*ez] · [cos_v*radial_u + sin_v*ez]
+    //     = C·(cos_v*radial_u + sin_v*ez) + (R+r*cos_v)*cos_v + r*sin²_v
+    //     = cos_v*(cx*cos_u + cy*sin_u) + sin_v*cz + (R+r*cos_v)*cos_v + r*sin²_v
+    //     = cos_v*(cx*cos_u + cy*sin_u) + sin_v*cz + R*cos_v + r*cos²_v + r*sin²_v
+    //     = cos_v*(cx*cos_u + cy*sin_u) + sin_v*cz + R*cos_v + r
+    //
+    // dA = r*(R + r*cos_v) du dv
+    //
+    // Full integrand = (1/3) * P·n * dA
+    let cx = c_vec.dot(x_axis);
+    let cy = c_vec.dot(y_axis);
+    let cz = c_vec.dot(z_axis);
+
+    let (u1, u2) = u_range;
+    let (sin_u1, cos_u1) = u1.sin_cos();
+    let (sin_u2, cos_u2) = u2.sin_cos();
+    let du = u2 - u1;
+
+    // We need to integrate over v:
+    // ∫ [cos_v*(cx*cos_u + cy*sin_u) + cz*sin_v + R*cos_v + r] * r*(R + r*cos_v) dv
+    //
+    // Expand the product with (R + r*cos_v):
+    // = r * ∫ [cos_v*(cx*cos_u+cy*sin_u)*(R+r*cos_v)
+    //        + cz*sin_v*(R+r*cos_v)
+    //        + R*cos_v*(R+r*cos_v)
+    //        + r*(R+r*cos_v)] dv
+    //
+    // This is a sum of standard trigonometric integrals.
+    // Let S = cx*cos_u + cy*sin_u (depends on u, integrated separately)
+
+    // Standard integrals over [v1,v2]:
+    let sv1 = v_min.sin();
+    let sv2 = v_max.sin();
+    let cv1 = v_min.cos();
+    let cv2 = v_max.cos();
+    let dv = v_max - v_min;
+
+    // ∫cos_v dv = sin_v
+    let i_cos = sv2 - sv1;
+    // ∫cos²_v dv = v/2 + sin(2v)/4
+    let i_cos2 =
+        (v_max / 2.0 + (2.0 * v_max).sin() / 4.0) - (v_min / 2.0 + (2.0 * v_min).sin() / 4.0);
+    // ∫sin_v dv = -cos_v
+    let i_sin = -cv2 + cv1;
+    // ∫sin_v*cos_v dv = sin²(v)/2
+    let i_sincos = (sv2 * sv2 - sv1 * sv1) / 2.0;
+    // Group terms by u-dependence:
+    // Terms with S (= cx*cos_u + cy*sin_u):
+    //   r*[R*i_cos + r*i_cos2] * ∫S du
+    let s_u_integral = cx * (sin_u2 - sin_u1) + cy * (-cos_u2 + cos_u1);
+    let s_coeff = small_r * (big_r * i_cos + small_r * i_cos2);
+
+    // Terms with cz*sin_v:
+    //   r*cz*[R*i_sin + r*i_sincos] * du
+    let cz_coeff = small_r * cz * (big_r * i_sin + small_r * i_sincos);
+
+    // Terms with R*cos_v:
+    //   r*R*[R*i_cos + r*i_cos2] * du
+    let rcos_coeff = small_r * big_r * (big_r * i_cos + small_r * i_cos2);
+
+    // Terms with r (constant in v):
+    //   r*r*[R*dv + r*i_cos] * du
+    let const_coeff = small_r * small_r * (big_r * dv + small_r * i_cos);
+
+    let vol = (1.0 / 3.0) * (s_coeff * s_u_integral + (cz_coeff + rcos_coeff + const_coeff) * du);
+
+    Ok(if face.is_reversed() { -vol } else { vol })
+}
+
+/// Compute the angular range `(u_start, u_end)` from a set of projected u values.
+///
+/// Detects the largest angular gap and treats it as the boundary between the
+/// face's angular extent. For full revolutions (no significant gap), returns
+/// `(0, 2π)`.
+fn compute_angular_range(u_vals: &mut Vec<f64>) -> (f64, f64) {
+    use std::f64::consts::TAU;
+    let tol_lin = brepkit_math::tolerance::Tolerance::default().linear;
+
+    u_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    u_vals.dedup_by(|a, b| (*a - *b).abs() < tol_lin);
+
+    if u_vals.len() < 3 {
+        return (0.0, TAU);
+    }
+
+    let mut max_gap = 0.0_f64;
+    let mut gap_end_idx = 0_usize;
+    for i in 0..u_vals.len() {
+        let j = (i + 1) % u_vals.len();
+        let gap = if j > i {
+            u_vals[j] - u_vals[i]
+        } else {
+            u_vals[j] + TAU - u_vals[i]
+        };
+        if gap > max_gap {
+            max_gap = gap;
+            gap_end_idx = j;
+        }
+    }
+    let n_angles = u_vals.len() as f64;
+    let even_gap = TAU / n_angles;
+    let gap_threshold = (2.5 * even_gap).min(TAU / 3.0);
+    if max_gap < gap_threshold {
+        (0.0, TAU)
+    } else {
+        let u_start = u_vals[gap_end_idx];
+        let gap_start_idx = if gap_end_idx == 0 {
+            u_vals.len() - 1
+        } else {
+            gap_end_idx - 1
+        };
+        let u_end = u_vals[gap_start_idx];
+        if u_end > u_start {
+            (u_start, u_end)
+        } else {
+            (u_start, u_end + TAU)
+        }
+    }
+}
+
 /// Compute volume by tessellating each face and summing signed tetrahedra
 /// WITHOUT winding correction. Relies on `tessellate()` already handling
 /// face reversal (via `is_reversed` flag) to produce correctly oriented
-/// triangles. For cylinder faces, uses exact analytical integration via
-/// the divergence theorem instead of tessellation.
+/// triangles. For analytic surface faces (cylinder, cone, sphere, torus),
+/// uses exact analytical integration via the divergence theorem instead
+/// of tessellation.
 pub(crate) fn volume_from_direct_face_tessellation(
     topo: &Topology,
     solid: SolidId,
@@ -875,10 +1239,25 @@ pub(crate) fn volume_from_direct_face_tessellation(
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
 
-        // Use exact analytical volume for cylinder faces.
-        if matches!(face.surface(), FaceSurface::Cylinder(_)) {
-            total += analytic_cylinder_signed_volume(topo, fid)? * 6.0;
-            continue;
+        // Use exact analytical volume for analytic surface faces.
+        match face.surface() {
+            FaceSurface::Cylinder(_) => {
+                total += analytic_cylinder_signed_volume(topo, fid)? * 6.0;
+                continue;
+            }
+            FaceSurface::Cone(_) => {
+                total += analytic_cone_signed_volume(topo, fid)? * 6.0;
+                continue;
+            }
+            FaceSurface::Sphere(_) => {
+                total += analytic_sphere_signed_volume(topo, fid)? * 6.0;
+                continue;
+            }
+            FaceSurface::Torus(_) => {
+                total += analytic_torus_signed_volume(topo, fid)? * 6.0;
+                continue;
+            }
+            _ => {}
         }
 
         let mesh = tessellate::tessellate(topo, fid, deflection)?;
