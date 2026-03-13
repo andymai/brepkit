@@ -7235,24 +7235,15 @@ fn plane_plane_chord_analytic(
         polygon_clip_intervals(&line_origin, &line_dir, verts_b, &normal_b, tol)
     };
 
-    // Intersect the two interval sets and return the bounding envelope.
-    let mut t_min = f64::INFINITY;
-    let mut t_max = f64::NEG_INFINITY;
+    // Intersect the two interval sets (both already sorted by t).
+    let overlaps = intersect_interval_lists(&intervals_a, &intervals_b, tol.linear);
 
-    for &(a_lo, a_hi) in &intervals_a {
-        for &(b_lo, b_hi) in &intervals_b {
-            let lo = a_lo.max(b_lo);
-            let hi = a_hi.min(b_hi);
-            if hi - lo >= tol.linear {
-                t_min = t_min.min(lo);
-                t_max = t_max.max(hi);
-            }
-        }
-    }
-
-    if t_max - t_min < tol.linear {
-        return None;
-    }
+    // Pick the largest overlap interval as the chord.
+    let &(t_min, t_max) = overlaps.iter().max_by(|(a_lo, a_hi), (b_lo, b_hi)| {
+        (a_hi - a_lo)
+            .partial_cmp(&(b_hi - b_lo))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    })?;
 
     Some((
         point_along_line(&line_origin, &line_dir, t_min),
