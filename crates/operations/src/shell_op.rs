@@ -1294,41 +1294,6 @@ mod tests {
 
         let vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
         eprintln!("[rounded] Shell volume: {vol:.2}");
-        // Per-face signed volume for shell diagnostic.
-        {
-            let mut shell_total = 0.0_f64;
-            for &fid in sh2.faces() {
-                let face = topo.face(fid).unwrap();
-                let kind = match face.surface() {
-                    FaceSurface::Plane { .. } => "Plane",
-                    FaceSurface::Cylinder(_) => "Cyl",
-                    _ => "Other",
-                };
-                let mesh = crate::tessellate::tessellate(&topo, fid, 0.01).unwrap();
-                let tris = mesh.indices.len() / 3;
-                let mut fv = 0.0_f64;
-                for t in 0..tris {
-                    let v0 = mesh.positions[mesh.indices[t * 3] as usize];
-                    let v1 = mesh.positions[mesh.indices[t * 3 + 1] as usize];
-                    let v2 = mesh.positions[mesh.indices[t * 3 + 2] as usize];
-                    let a = Vec3::new(v0.x(), v0.y(), v0.z());
-                    let b = Vec3::new(v1.x(), v1.y(), v1.z());
-                    let c = Vec3::new(v2.x(), v2.y(), v2.z());
-                    fv += a.dot(b.cross(c));
-                }
-                fv /= 6.0;
-                shell_total += fv;
-                eprintln!(
-                    "[shell-vol] Face {} ({kind}, rev={}): {tris} tris, signed={fv:.2}",
-                    fid.index(),
-                    face.is_reversed()
-                );
-            }
-            eprintln!(
-                "[shell-vol] Total signed: {shell_total:.2}, abs: {:.2}",
-                shell_total.abs()
-            );
-        }
 
         // Check Euler characteristic.
         let result = crate::validate::validate_solid(&topo, shelled);

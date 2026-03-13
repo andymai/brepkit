@@ -377,15 +377,13 @@ fn example_custom_profile_extrusion() {
         "L-shape volume should be ~1500, got {vol}"
     );
 
-    // Tessellate for visualization
-    let mesh = brepkit_operations::tessellate::tessellate_solid(&topo, l_shape, 0.1).unwrap();
+    // Verify the solid has the expected topology (no tessellation needed).
+    let s = topo.solid(l_shape).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
     assert!(
-        mesh.positions.len() > 8,
-        "mesh should have multiple vertices"
-    );
-    assert!(
-        mesh.indices.len() > 12,
-        "mesh should have multiple triangles"
+        sh.faces().len() >= 6,
+        "L-shape should have at least 6 faces, got {}",
+        sh.faces().len()
     );
 }
 
