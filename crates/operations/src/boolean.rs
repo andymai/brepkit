@@ -2998,6 +2998,27 @@ fn quantize_point(p: Point3, resolution: f64) -> (i64, i64, i64) {
     )
 }
 
+/// Compute a scale-relative spatial-hash resolution from a set of vertex positions.
+///
+/// Uses the bounding-box diagonal of the input points scaled by 1e-7 to keep
+/// the hash cell roughly at tolerance-level relative to the model extent.
+/// Falls back to `1.0 / tol.linear` for degenerate (near-single-point) models.
+fn vertex_merge_resolution(all_pts: impl Iterator<Item = Point3>, tol: Tolerance) -> f64 {
+    let fallback = 1.0 / tol.linear;
+    if let Some(bbox) = Aabb3::try_from_points(all_pts) {
+        let diagonal = (bbox.max - bbox.min).length();
+        if diagonal > tol.linear {
+            // 1e-7 relative factor: same precision as absolute tolerance at unit scale,
+            // but scales correctly for large models (100m+) and sub-mm geometry.
+            1.0 / (diagonal * 1e-7_f64)
+        } else {
+            fallback
+        }
+    } else {
+        fallback
+    }
+}
+
 /// Assemble a solid from a set of planar face polygons with normals.
 ///
 /// Uses spatial hashing for vertex dedup and edge sharing.
@@ -3071,7 +3092,14 @@ pub(crate) fn assemble_solid_mixed(
     face_specs: &[FaceSpec],
     tol: Tolerance,
 ) -> Result<SolidId, crate::OperationsError> {
-    let resolution = 1.0 / tol.linear;
+    let resolution = vertex_merge_resolution(
+        face_specs.iter().flat_map(|s| match s {
+            FaceSpec::Planar { vertices, .. }
+            | FaceSpec::Surface { vertices, .. }
+            | FaceSpec::CylindricalFace { vertices, .. } => vertices.iter().copied(),
+        }),
+        tol,
+    );
 
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> =
         HashMap::with_capacity(face_specs.len() * 4);
@@ -5513,7 +5541,10 @@ fn analytic_boolean(
     // ── Selection + Assembly ─────────────────────────────────────────────
     let _t_asm = timer_now();
 
-    let resolution = 1.0 / tol.linear;
+    let resolution = vertex_merge_resolution(
+        fragments.iter().flat_map(|f| f.vertices.iter().copied()),
+        tol,
+    );
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> =
         HashMap::with_capacity(fragments.len() * 4);
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> =
@@ -6897,7 +6928,10 @@ pub fn compound_cut(
     );
     // Reuse the same assembly logic as analytic_boolean (vertex/edge dedup,
     // wire construction, face creation).
-    let resolution = 1.0 / tol.linear;
+    let resolution = vertex_merge_resolution(
+        fragments.iter().flat_map(|f| f.vertices.iter().copied()),
+        tol,
+    );
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> =
         HashMap::with_capacity(fragments.len() * 4);
     let mut edge_map: HashMap<(usize, usize), EdgeId> = HashMap::with_capacity(fragments.len() * 4);
@@ -10725,5 +10759,30 @@ mod tests {
 
         let result = boolean(&mut topo, BooleanOp::Cut, base, tool).unwrap();
         assert_volume_near(&topo, result, 7.5, 0.001);
+    }
+
+    /// Verify boolean works correctly at 100m scale with scale-relative
+    /// vertex merge resolution. Documents expected behavior for large models.
+    #[test]
+    fn test_boolean_large_scale_vertex_merge() {
+        let mut topo = Topology::new();
+
+        // Two 100m cubes, second offset by 50m in x → overlap = 50×100×100
+        let a = crate::primitives::make_box(&mut topo, 100.0, 100.0, 100.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 100.0, 100.0, 100.0).unwrap();
+        let mat = brepkit_math::mat::Mat4::translation(50.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let result = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
+
+        let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+        assert!(
+            !faces.is_empty() && faces.len() < 100,
+            "expected sane face count for large-scale cut, got {}",
+            faces.len()
+        );
+
+        // Expected volume: 100^3 - 50*100*100 = 500_000
+        assert_volume_near(&topo, result, 500_000.0, 0.01);
     }
 }
