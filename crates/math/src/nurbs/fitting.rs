@@ -720,6 +720,16 @@ pub fn approximate_lspia(
 
         // Return best result if this is the last iteration.
         if iter == max_iterations - 1 {
+            // LSPIA did not converge to the requested tolerance.  Warn in debug
+            // builds so callers can detect poorly fitted curves.
+            #[cfg(debug_assertions)]
+            if max_err > tolerance {
+                log::warn!(
+                    "approximate_lspia: did not converge after {max_iterations} iterations \
+                     (max_err={max_err:.2e}, tolerance={tolerance:.2e}, \
+                     num_cps={m}, degree={p})"
+                );
+            }
             return NurbsCurve::new(p, knots, control_points, weights);
         }
     }

@@ -28,7 +28,7 @@ use crate::aabb::Aabb3;
 use crate::bvh::Bvh;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::decompose::{BezierPatch, curve_to_bezier_segments, surface_to_bezier_patches};
-use crate::nurbs::fitting::{approximate_lspia, interpolate};
+use crate::nurbs::fitting::{approximate_lspia, chord_length_params, interpolate};
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
@@ -726,7 +726,50 @@ fn build_curves_from_points(
         };
         let curve = if positions.len() > 50 {
             let num_cps = (positions.len() / 3).max(degree + 1).min(positions.len());
-            approximate_lspia(&positions, degree, num_cps, 1e-6, 100)?
+            let fitted = approximate_lspia(&positions, degree, num_cps, 1e-6, 100)?;
+
+            // Validate fit quality: re-evaluate residual at each sample point
+            // using the same chord-length parameterisation used during fitting.
+            // Use a relative threshold (residual / point-cloud diagonal) so the
+            // check is scale-independent.  A relative residual > 1% warrants a
+            // warning; the intersection curve may be geometrically inaccurate.
+            let fit_params = chord_length_params(&positions);
+            let mut max_residual = 0.0f64;
+            let mut bbox_min = positions[0];
+            let mut bbox_max = positions[0];
+            for (i, &t) in fit_params.iter().enumerate() {
+                let fitted_pt = fitted.evaluate(t);
+                let src = positions[i];
+                let d = (fitted_pt.x() - src.x())
+                    .hypot((fitted_pt.y() - src.y()).hypot(fitted_pt.z() - src.z()));
+                max_residual = max_residual.max(d);
+                bbox_min = Point3::new(
+                    bbox_min.x().min(src.x()),
+                    bbox_min.y().min(src.y()),
+                    bbox_min.z().min(src.z()),
+                );
+                bbox_max = Point3::new(
+                    bbox_max.x().max(src.x()),
+                    bbox_max.y().max(src.y()),
+                    bbox_max.z().max(src.z()),
+                );
+            }
+            let diagonal = (bbox_max.x() - bbox_min.x())
+                .hypot((bbox_max.y() - bbox_min.y()).hypot(bbox_max.z() - bbox_min.z()));
+            let rel_residual = if diagonal > 1e-12 {
+                max_residual / diagonal
+            } else {
+                max_residual
+            };
+            if rel_residual > 1e-2 {
+                log::warn!(
+                    "SSI: LSPIA fit relative residual {rel_residual:.2e} (abs={max_residual:.2e}) \
+                     exceeds 1% of curve extent — intersection curve may be inaccurate \
+                     (degree={degree}, num_cps={num_cps}, samples={})",
+                    positions.len()
+                );
+            }
+            fitted
         } else {
             interpolate(&positions, degree)?
         };
