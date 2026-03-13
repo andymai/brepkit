@@ -21,6 +21,26 @@ use crate::OperationsError;
 use crate::boolean::face_polygon;
 use crate::distance::{point_in_polygon_3d, point_to_face_distance};
 
+// ── Tolerance constants ─────────────────────────────────────────────────
+// Grouped here so they can be tuned together. These are near-zero guards
+// for floating-point arithmetic, NOT geometric tolerance (use `Tolerance`
+// struct for that).
+
+/// Near-zero threshold for floating-point denominators and discriminants.
+const NEAR_ZERO: f64 = 1e-15;
+
+/// Minimum positive ray parameter to count as a forward hit (avoids self-intersection).
+const RAY_T_MIN: f64 = 1e-12;
+
+/// Threshold for half-space sign test (negative side rejection).
+const HALF_SPACE_EPS: f64 = 1e-10;
+
+/// Near-zero threshold for degenerate vector length (e.g. polygon normal).
+const DEGENERATE_LEN: f64 = 1e-30;
+
+/// Threshold for coincident vertex detection (squared distance).
+const COINCIDENT_SQ: f64 = 1e-12;
+
 /// Result of classifying a point relative to a solid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointClassification {
@@ -266,12 +286,12 @@ fn ray_plane_crossings(
     d: f64,
 ) -> Result<u32, OperationsError> {
     let denom = normal.dot(direction);
-    if denom.abs() < 1e-15 {
+    if denom.abs() < NEAR_ZERO {
         return Ok(0);
     }
 
     let t = (d - normal.dot(Vec3::new(origin.x(), origin.y(), origin.z()))) / denom;
-    if t <= 1e-12 {
+    if t <= RAY_T_MIN {
         return Ok(0);
     }
 
@@ -321,7 +341,7 @@ fn count_3d_polygon_crossings(
 
     let mut crossings = 0u32;
     for &t in roots {
-        if t <= 1e-12 {
+        if t <= RAY_T_MIN {
             continue;
         }
         let hit = origin + direction * t;
@@ -329,7 +349,7 @@ fn count_3d_polygon_crossings(
         // The hit must be on the face's side of the boundary plane.
         // The polygon normal (from wire winding) points toward the face interior.
         let side = (hit - ref_pt).dot(normal);
-        if side < -1e-10 {
+        if side < -HALF_SPACE_EPS {
             continue;
         }
 
@@ -373,23 +393,25 @@ where
     // vertices project to the same point). Every positive-t root is a crossing.
     let is_full_surface = verts.len() < 3 || {
         let ref_pt = verts[0];
-        verts.iter().all(|v| (*v - ref_pt).length_squared() < 1e-12)
+        verts
+            .iter()
+            .all(|v| (*v - ref_pt).length_squared() < COINCIDENT_SQ)
     };
     if is_full_surface {
-        return Ok(roots.iter().filter(|&&t| t > 1e-12).count() as u32);
+        return Ok(roots.iter().filter(|&&t| t > RAY_T_MIN).count() as u32);
     }
 
     let uv_boundary = build_uv_boundary(&verts, &project, v_periodic);
 
     let mut crossings = 0u32;
     for &t in roots {
-        if t <= 1e-12 {
+        if t <= RAY_T_MIN {
             continue;
         }
         let hit = origin + direction * t;
         let (hit_u, hit_v) = project(hit);
 
-        if point_in_uv_boundary(hit_u, hit_v, &uv_boundary) {
+        if point_in_uv_boundary(hit_u, hit_v, &uv_boundary, v_periodic) {
             crossings += 1;
         }
     }
@@ -435,9 +457,14 @@ where
 
 /// Test if a (u,v) point is inside the UV boundary polygon.
 ///
-/// Adjusts the test point's u coordinate to lie within the unwrapped polygon's
-/// u range before testing.
-fn point_in_uv_boundary(hit_u: f64, hit_v: f64, uv_boundary: &[(f64, f64)]) -> bool {
+/// Adjusts the test point's u coordinate (and v when periodic) to lie within
+/// the unwrapped polygon's coordinate range before testing.
+fn point_in_uv_boundary(
+    hit_u: f64,
+    hit_v: f64,
+    uv_boundary: &[(f64, f64)],
+    v_periodic: bool,
+) -> bool {
     // Find the u range of the unwrapped boundary.
     let u_min = uv_boundary
         .iter()
@@ -452,11 +479,27 @@ fn point_in_uv_boundary(hit_u: f64, hit_v: f64, uv_boundary: &[(f64, f64)]) -> b
     // Shift hit_u to be closest to the polygon's u center.
     let hu = unwrap_angle(u_center, hit_u);
 
+    // For doubly-periodic surfaces (torus), also shift hit_v.
+    let hv = if v_periodic {
+        let v_min = uv_boundary
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f64::INFINITY, f64::min);
+        let v_max = uv_boundary
+            .iter()
+            .map(|(_, v)| *v)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let v_center = (v_min + v_max) * 0.5;
+        unwrap_angle(v_center, hit_v)
+    } else {
+        hit_v
+    };
+
     let poly: Vec<Point2> = uv_boundary
         .iter()
         .map(|(u, v)| Point2::new(*u, *v))
         .collect();
-    let test = Point2::new(hu, hit_v);
+    let test = Point2::new(hu, hv);
     point_in_polygon(test, &poly)
 }
 
@@ -672,7 +715,7 @@ fn polygon_normal(verts: &[Point3]) -> Vec3 {
         nz += (vi.x() - vj.x()) * (vi.y() + vj.y());
     }
     let len = (nx * nx + ny * ny + nz * nz).sqrt();
-    if len < 1e-30 {
+    if len < DEGENERATE_LEN {
         Vec3::new(0.0, 0.0, 1.0)
     } else {
         Vec3::new(nx / len, ny / len, nz / len)
@@ -681,18 +724,18 @@ fn polygon_normal(verts: &[Point3]) -> Vec3 {
 
 /// Solve a·t² + b·t + c = 0, returning real roots.
 fn solve_quadratic(a: f64, b: f64, c: f64) -> Vec<f64> {
-    if a.abs() < 1e-15 {
-        if b.abs() < 1e-15 {
+    if a.abs() < NEAR_ZERO {
+        if b.abs() < NEAR_ZERO {
             return Vec::new();
         }
         return vec![-c / b];
     }
 
     let disc = b * b - 4.0 * a * c;
-    if disc < -1e-12 {
+    if disc < -RAY_T_MIN {
         return Vec::new();
     }
-    if disc < 1e-12 {
+    if disc < RAY_T_MIN {
         return vec![-b / (2.0 * a)];
     }
 
@@ -705,7 +748,7 @@ fn solve_quadratic(a: f64, b: f64, c: f64) -> Vec<f64> {
 
     let mut roots = Vec::with_capacity(2);
     roots.push(q / a);
-    if q.abs() > 1e-15 {
+    if q.abs() > NEAR_ZERO {
         roots.push(c / q);
     }
     roots
@@ -713,7 +756,7 @@ fn solve_quadratic(a: f64, b: f64, c: f64) -> Vec<f64> {
 
 /// Solve a cubic a·t³ + b·t² + c·t + d = 0, returning all real roots.
 fn solve_cubic(a: f64, b: f64, c: f64, d: f64) -> Vec<f64> {
-    if a.abs() < 1e-15 {
+    if a.abs() < NEAR_ZERO {
         return solve_quadratic(b, c, d);
     }
 
@@ -729,12 +772,12 @@ fn solve_cubic(a: f64, b: f64, c: f64, d: f64) -> Vec<f64> {
     let disc = dq * dq / 4.0 + dp * dp * dp / 27.0;
     let shift = -p / 3.0;
 
-    if disc > 1e-12 {
+    if disc > RAY_T_MIN {
         // One real root.
         let sqrt_disc = disc.sqrt();
         let u = (-dq / 2.0 + sqrt_disc).cbrt() + (-dq / 2.0 - sqrt_disc).cbrt();
         vec![u + shift]
-    } else if disc < -1e-12 {
+    } else if disc < -RAY_T_MIN {
         // Three real roots (casus irreducibilis — trigonometric method).
         // dp < 0 here, so -dp/3 > 0.
         // m = sqrt(-dp/3) = cbrt(sqrt(-dp³/27)); factor in each root is 2·m.
@@ -748,7 +791,7 @@ fn solve_cubic(a: f64, b: f64, c: f64, d: f64) -> Vec<f64> {
         ]
     } else {
         // Repeated root.
-        if dq.abs() < 1e-15 {
+        if dq.abs() < NEAR_ZERO {
             vec![shift] // triple root
         } else {
             let u = (dq / 2.0).cbrt();
@@ -760,7 +803,7 @@ fn solve_cubic(a: f64, b: f64, c: f64, d: f64) -> Vec<f64> {
 /// Solve a quartic equation via Ferrari's method.
 #[allow(clippy::many_single_char_names)]
 fn solve_quartic(a: f64, b: f64, c: f64, d: f64, e: f64) -> Vec<f64> {
-    if a.abs() < 1e-20 {
+    if a.abs() < NEAR_ZERO * NEAR_ZERO {
         return solve_cubic(b, c, d, e);
     }
 
@@ -777,13 +820,13 @@ fn solve_quartic(a: f64, b: f64, c: f64, d: f64, e: f64) -> Vec<f64> {
     let y = solve_cubic_one_real(rc_b, rc_c, rc_d);
 
     let disc1 = p * p * 0.25 - q + y;
-    if disc1 < -1e-10 {
+    if disc1 < -HALF_SPACE_EPS {
         return Vec::new();
     }
     let disc1 = disc1.max(0.0).sqrt();
 
     let disc2a = y * y * 0.25 - s;
-    if disc2a < -1e-10 {
+    if disc2a < -HALF_SPACE_EPS {
         return Vec::new();
     }
     let disc2 = disc2a.max(0.0).sqrt();
