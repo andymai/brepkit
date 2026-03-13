@@ -7295,6 +7295,25 @@ fn plane_plane_chord_analytic(
     // polygon_clip_intervals can emit half-infinite sentinel intervals
     // (e.g. (-inf, t] or [t, inf)) for lines fully inside a concave face;
     // these must be skipped to avoid degenerate chord endpoints.
+    //
+    // For highly concave faces (C-shape, U-shape) the intersection line may
+    // produce multiple disjoint finite intervals.  We return only the longest
+    // one; secondary intervals are discarded.  This is a known limitation of
+    // the single-chord return type — log a warning in debug builds so the gap
+    // is observable without any release overhead.
+    #[cfg(debug_assertions)]
+    {
+        let finite_count = overlaps
+            .iter()
+            .filter(|(lo, hi)| lo.is_finite() && hi.is_finite())
+            .count();
+        if finite_count > 1 {
+            log::warn!(
+                "plane_plane_chord_analytic: {finite_count} finite overlap intervals for \
+                 concave face; only largest chord returned — secondary intervals discarded"
+            );
+        }
+    }
     let &(t_min, t_max) = overlaps
         .iter()
         .filter(|(lo, hi)| lo.is_finite() && hi.is_finite())

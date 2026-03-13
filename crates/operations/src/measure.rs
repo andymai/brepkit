@@ -285,6 +285,9 @@ fn analytic_cone_face_area(
         }
     }
 
+    if v_vals.is_empty() {
+        return Ok(0.0);
+    }
     let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
     let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if (v_max - v_min).abs() < 1e-15 {
@@ -355,6 +358,9 @@ fn analytic_torus_face_area(
         }
     }
 
+    if v_vals.is_empty() {
+        return Ok(0.0);
+    }
     let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
     let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     if (v_max - v_min).abs() < 1e-15 {
