@@ -28,6 +28,7 @@ struct EdgeSnap {
     start_index: usize,
     end_index: usize,
     curve: EdgeCurve,
+    tolerance: Option<f64>,
 }
 
 struct WireSnap {
@@ -133,6 +134,7 @@ pub fn copy_solid(
                         start_index: start_idx,
                         end_index: end_idx,
                         curve: edge.curve().clone(),
+                        tolerance: edge.tolerance(),
                     });
                 }
 
@@ -166,7 +168,12 @@ pub fn copy_solid(
     for esnap in &edge_snaps {
         let new_start = vertex_map[&esnap.start_index];
         let new_end = vertex_map[&esnap.end_index];
-        let copied_edge = topo.add_edge(Edge::new(new_start, new_end, esnap.curve.clone()));
+        let copied_edge = topo.add_edge(Edge::with_tolerance(
+            new_start,
+            new_end,
+            esnap.curve.clone(),
+            esnap.tolerance,
+        ));
         edge_map.insert(esnap.old_index, copied_edge);
     }
 
@@ -331,6 +338,7 @@ pub fn copy_and_transform_solid(
                         start_index: start_idx,
                         end_index: end_idx,
                         curve: edge.curve().clone(),
+                        tolerance: edge.tolerance(),
                     });
                 }
 
@@ -441,7 +449,12 @@ pub fn copy_and_transform_solid(
                 )?)
             }
         };
-        let copied_edge = topo.add_edge(Edge::new(new_start, new_end, new_curve));
+        let copied_edge = topo.add_edge(Edge::with_tolerance(
+            new_start,
+            new_end,
+            new_curve,
+            esnap.tolerance,
+        ));
         edge_map.insert(esnap.old_index, copied_edge);
     }
 
@@ -617,6 +630,7 @@ pub fn copy_wire(topo: &mut Topology, wire_id: WireId) -> Result<WireId, crate::
             start_index: start_idx,
             end_index: end_idx,
             curve: edge.curve().clone(),
+            tolerance: edge.tolerance(),
         });
     }
 
@@ -631,7 +645,12 @@ pub fn copy_wire(topo: &mut Topology, wire_id: WireId) -> Result<WireId, crate::
     for esnap in &edge_snaps {
         let new_start = vertex_map[&esnap.start_index];
         let new_end = vertex_map[&esnap.end_index];
-        let copied_edge = topo.add_edge(Edge::new(new_start, new_end, esnap.curve.clone()));
+        let copied_edge = topo.add_edge(Edge::with_tolerance(
+            new_start,
+            new_end,
+            esnap.curve.clone(),
+            esnap.tolerance,
+        ));
         edge_map.insert(esnap.old_index, copied_edge);
     }
 
