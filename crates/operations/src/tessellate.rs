@@ -2690,11 +2690,27 @@ pub fn tessellate_solid(
                 };
                 let existing: std::collections::HashSet<u32> = gids.iter().copied().collect();
 
+                // For closed edges, the seam vertex is the start/end point.
+                // Skip any vertex within tolerance of the seam to avoid
+                // inserting the seam point as an interior point — it would
+                // get different UV coordinates in the CDT boundary.
+                let seam_pos = topo.vertex(edge_data.start())
+                    .map(|v| v.point())
+                    .ok();
+                let edge_endpoint_positions: Vec<Point3> = [edge_data.start(), edge_data.end()]
+                    .iter()
+                    .filter_map(|vid| topo.vertex(*vid).map(|v| v.point()).ok())
+                    .collect();
+
                 let mut insertions: Vec<(f64, u32)> = Vec::new();
                 #[allow(clippy::cast_possible_truncation)]
                 for (vi, &pos) in merged.positions.iter().enumerate() {
                     let gid = vi as u32;
                     if existing.contains(&gid) {
+                        continue;
+                    }
+                    // Skip vertices near edge endpoints (seam points).
+                    if edge_endpoint_positions.iter().any(|ep| (pos - *ep).length() < tol.linear * 10.0) {
                         continue;
                     }
                     let t = circle.project(pos);
@@ -5382,6 +5398,20 @@ mod winding_tests {
     }
 
     // ── Post-boolean watertight tessellation tests ────────────────
+
+    #[test]
+    fn tessellate_plain_cylinder_watertight() {
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0)
+            .expect("cylinder");
+        let mesh = super::tessellate_solid(&topo, cyl, 0.1)
+            .expect("tessellate");
+        let boundary = super::boundary_edge_count(&mesh);
+        assert_eq!(
+            boundary, 0,
+            "plain cylinder should be watertight, got {boundary} boundary edges"
+        );
+    }
 
     #[test]
     fn tessellate_boolean_cut_cylinder_watertight() {

@@ -5606,13 +5606,49 @@ fn analytic_boolean(
             let Some(ec) = frag.edge_curves[0].clone() else {
                 unreachable!("is_single_closed_curve guarantees Some")
             };
-            let seam_pt = verts[0];
-            let vid = *vertex_map
-                .entry(quantize_point(seam_pt, resolution))
-                .or_insert_with(|| topo.vertices.alloc(Vertex::new(seam_pt, tol.linear)));
-            let eid = *edge_map
-                .entry((vid.index(), vid.index()))
-                .or_insert_with(|| topo.edges.alloc(Edge::new(vid, vid, ec)));
+
+            // Try to find an existing closed circle edge on the same geometric
+            // circle in the edge_map. Barrel fragments (processed earlier) create
+            // closed circle edges with their own seam vertex; disc fragments may
+            // have a different seam vertex for the same circle. Sharing the edge
+            // is required for watertight tessellation.
+            let existing_eid = if let EdgeCurve::Circle(disc_circle) = &ec {
+                let mut found = None;
+                for (&(a, b), &eid) in edge_map.iter() {
+                    if a != b {
+                        continue; // Not a closed edge.
+                    }
+                    if let Ok(edge_data) = topo.edge(eid) {
+                        if let EdgeCurve::Circle(existing_circle) = edge_data.curve() {
+                            let center_dist =
+                                (existing_circle.center() - disc_circle.center()).length();
+                            let radius_diff =
+                                (existing_circle.radius() - disc_circle.radius()).abs();
+                            if center_dist < tol.linear * 10.0
+                                && radius_diff < tol.linear * 10.0
+                            {
+                                found = Some(eid);
+                                break;
+                            }
+                        }
+                    }
+                }
+                found
+            } else {
+                None
+            };
+
+            let eid = if let Some(existing) = existing_eid {
+                existing
+            } else {
+                let seam_pt = verts[0];
+                let vid = *vertex_map
+                    .entry(quantize_point(seam_pt, resolution))
+                    .or_insert_with(|| topo.vertices.alloc(Vertex::new(seam_pt, tol.linear)));
+                *edge_map
+                    .entry((vid.index(), vid.index()))
+                    .or_insert_with(|| topo.edges.alloc(Edge::new(vid, vid, ec)))
+            };
             let wire = Wire::new(vec![OrientedEdge::new(eid, true)], true)
                 .map_err(crate::OperationsError::Topology)?;
             topo.wires.alloc(wire)
