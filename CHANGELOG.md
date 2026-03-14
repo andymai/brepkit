@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.0](https://github.com/andymai/brepkit/compare/v2.1.0...v2.2.0) (2026-03-14)
+
+
+### Features
+
+* **tessellate:** watertight cylinder tessellation ([#23](https://github.com/andymai/brepkit/issues/23)) ([#224](https://github.com/andymai/brepkit/issues/224)) ([dc09220](https://github.com/andymai/brepkit/commit/dc092207e425e5ec9603c8f2415d6f058197fb62))
+
+
+### Bug Fixes
+
+* **boolean+tessellate:** watertight cone tessellation ([#23](https://github.com/andymai/brepkit/issues/23)) ([#225](https://github.com/andymai/brepkit/issues/225)) ([daad8c1](https://github.com/andymai/brepkit/commit/daad8c1913253edd8454714573436f7b7efaa432))
+
 ## [2.1.0](https://github.com/andymai/brepkit/compare/v2.0.0...v2.1.0) (2026-03-14)
 
 
