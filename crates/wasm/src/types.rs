@@ -3,7 +3,7 @@
 //! Types annotated with `Tsify` automatically generate TypeScript definitions
 //! and can be serialized via `serde-wasm-bindgen` for zero-copy JS interop.
 
-use tsify_next::Tsify;
+use tsify::Tsify;
 
 /// Typed result for `tessellateSolidGrouped`.
 #[derive(serde::Serialize, Tsify)]
