@@ -5,6 +5,7 @@
 //! intersection algorithms (e.g., plane-cylinder = ellipse) without sampling.
 
 use crate::MathError;
+use crate::frame::Frame3;
 use crate::vec::{Point3, Vec3};
 
 /// An infinite cylindrical surface.
@@ -33,20 +34,13 @@ impl CylindricalSurface {
                 max: f64::MAX,
             });
         }
-        let a = axis.normalize()?;
-        let candidate = if a.x().abs() < 0.9 {
-            Vec3::new(1.0, 0.0, 0.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        };
-        let x = a.cross(candidate).normalize()?;
-        let y = a.cross(x);
+        let f = Frame3::from_normal(origin, axis)?;
         Ok(Self {
             origin,
-            axis: a,
+            axis: f.z,
             radius,
-            x_axis: x,
-            y_axis: y,
+            x_axis: f.x,
+            y_axis: f.y,
         })
     }
 
@@ -156,20 +150,13 @@ impl ConicalSurface {
                 max: std::f64::consts::FRAC_PI_2,
             });
         }
-        let a = axis.normalize()?;
-        let candidate = if a.x().abs() < 0.9 {
-            Vec3::new(1.0, 0.0, 0.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        };
-        let x = a.cross(candidate).normalize()?;
-        let y = a.cross(x);
+        let f = Frame3::from_normal(apex, axis)?;
         Ok(Self {
             apex,
-            axis: a,
+            axis: f.z,
             half_angle,
-            x_axis: x,
-            y_axis: y,
+            x_axis: f.x,
+            y_axis: f.y,
         })
     }
 
@@ -319,20 +306,13 @@ impl SphericalSurface {
                 max: f64::MAX,
             });
         }
-        let z = z_axis.normalize()?;
-        let candidate = if z.x().abs() < 0.9 {
-            Vec3::new(1.0, 0.0, 0.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        };
-        let x = z.cross(candidate).normalize()?;
-        let y = z.cross(x);
+        let f = Frame3::from_normal(center, z_axis)?;
         Ok(Self {
             center,
             radius,
-            x_axis: x,
-            y_axis: y,
-            z_axis: z,
+            x_axis: f.x,
+            y_axis: f.y,
+            z_axis: f.z,
         })
     }
 
@@ -489,21 +469,14 @@ impl ToroidalSurface {
                 max: f64::MAX,
             });
         }
-        let z = z_axis.normalize()?;
-        let candidate = if z.x().abs() < 0.9 {
-            Vec3::new(1.0, 0.0, 0.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        };
-        let x = z.cross(candidate).normalize()?;
-        let y = z.cross(x);
+        let f = Frame3::from_normal(center, z_axis)?;
         Ok(Self {
             center,
             major_radius,
             minor_radius,
-            x_axis: x,
-            y_axis: y,
-            z_axis: z,
+            x_axis: f.x,
+            y_axis: f.y,
+            z_axis: f.z,
         })
     }
 
@@ -543,27 +516,14 @@ impl ToroidalSurface {
                 max: f64::MAX,
             });
         }
-        let z = z_axis.normalize()?;
-        // Project ref_dir onto the plane perpendicular to z.
-        let ref_proj = ref_dir - z * ref_dir.dot(z);
-        let x = ref_proj.normalize().unwrap_or_else(|_| {
-            // ref_dir parallel to z — fall back to arbitrary perpendicular.
-            let candidate = if z.x().abs() < 0.9 {
-                Vec3::new(1.0, 0.0, 0.0)
-            } else {
-                Vec3::new(0.0, 1.0, 0.0)
-            };
-            #[allow(clippy::unwrap_used)]
-            z.cross(candidate).normalize().unwrap()
-        });
-        let y = z.cross(x);
+        let f = Frame3::from_normal_and_ref(center, z_axis, ref_dir)?;
         Ok(Self {
             center,
             major_radius,
             minor_radius,
-            x_axis: x,
-            y_axis: y,
-            z_axis: z,
+            x_axis: f.x,
+            y_axis: f.y,
+            z_axis: f.z,
         })
     }
 
@@ -707,19 +667,12 @@ impl RevolutionSurface {
                 got: heights.len(),
             });
         }
-        let a = axis.normalize()?;
-        let candidate = if a.x().abs() < 0.9 {
-            Vec3::new(1.0, 0.0, 0.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        };
-        let x = a.cross(candidate).normalize()?;
-        let y = a.cross(x);
+        let f = Frame3::from_normal(origin, axis)?;
         Ok(Self {
             origin,
-            axis: a,
-            x_axis: x,
-            y_axis: y,
+            axis: f.z,
+            x_axis: f.x,
+            y_axis: f.y,
             generatrix_radii: radii,
             generatrix_heights: heights,
         })

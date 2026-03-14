@@ -7,6 +7,7 @@
 use std::f64::consts::PI;
 
 use crate::MathError;
+use crate::frame::Frame3;
 use crate::vec::{Point3, Vec3};
 
 // ── Line3D ─────────────────────────────────────────────────────────
@@ -111,23 +112,13 @@ impl Circle3D {
                 max: f64::INFINITY,
             });
         }
-        let n = normal.normalize()?;
-
-        // Build orthonormal basis in the circle plane.
-        let candidate = if n.x().abs() < 0.9 {
-            Vec3::new(1.0, 0.0, 0.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        };
-        let u = n.cross(candidate).normalize()?;
-        let v = n.cross(u);
-
+        let f = Frame3::from_normal(center, normal)?;
         Ok(Self {
             center,
-            normal: n,
+            normal: f.z,
             radius,
-            u_axis: u,
-            v_axis: v,
+            u_axis: f.x,
+            v_axis: f.y,
         })
     }
 
@@ -265,22 +256,14 @@ impl Ellipse3D {
                 max: semi_major,
             });
         }
-        let n = normal.normalize()?;
-        let candidate = if n.x().abs() < 0.9 {
-            Vec3::new(1.0, 0.0, 0.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        };
-        let u = n.cross(candidate).normalize()?;
-        let v = n.cross(u);
-
+        let f = Frame3::from_normal(center, normal)?;
         Ok(Self {
             center,
-            normal: n,
+            normal: f.z,
             semi_major,
             semi_minor,
-            u_axis: u,
-            v_axis: v,
+            u_axis: f.x,
+            v_axis: f.y,
         })
     }
 
@@ -419,18 +402,12 @@ impl Parabola3D {
                 max: f64::MAX,
             });
         }
-        let axis = axis_dir.normalize()?;
-        let candidate = if axis.x().abs() < 0.9 {
-            Vec3::new(1.0, 0.0, 0.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        };
-        let u = axis.cross(candidate).normalize()?;
+        let f = Frame3::from_normal(vertex, axis_dir)?;
         Ok(Self {
             vertex,
-            axis_dir: axis,
+            axis_dir: f.z,
             focal_length,
-            u_axis: u,
+            u_axis: f.x,
         })
     }
 
@@ -521,22 +498,14 @@ impl Hyperbola3D {
                 max: f64::MAX,
             });
         }
-        let n = normal.normalize()?;
-        let candidate = if n.x().abs() < 0.9 {
-            Vec3::new(1.0, 0.0, 0.0)
-        } else {
-            Vec3::new(0.0, 1.0, 0.0)
-        };
-        let u = n.cross(candidate).normalize()?;
-        let v = n.cross(u);
-
+        let f = Frame3::from_normal(center, normal)?;
         Ok(Self {
             center,
-            normal: n,
+            normal: f.z,
             semi_major,
             semi_minor,
-            u_axis: u,
-            v_axis: v,
+            u_axis: f.x,
+            v_axis: f.y,
         })
     }
 
