@@ -2658,6 +2658,116 @@ pub fn tessellate_solid(
         edge_global_indices.insert(edge_idx, global_ids);
     }
 
+    // Phase 3b: Edge curve refinement.
+    //
+    // Boolean operations produce solids where adjacent faces have separate
+    // edge entities for the same geometric curve. These edges are sampled
+    // independently with different vertex sets. Project ALL global vertices
+    // onto each circle edge and insert those on-curve to unify vertex sets.
+    {
+        use brepkit_topology::edge::EdgeCurve;
+        let tol = brepkit_math::tolerance::Tolerance::default();
+
+        for &edge_idx in &edge_indices {
+            let edge_id = match topo.edges.id_from_index(edge_idx) {
+                Some(id) => id,
+                None => continue,
+            };
+            let edge_data = match topo.edge(edge_id) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+
+            if let EdgeCurve::Circle(circle) = edge_data.curve() {
+                let (t_start, t_end) = match circle_param_range(topo, edge_data, circle) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+
+                let gids = match edge_global_indices.get(&edge_idx) {
+                    Some(g) => g,
+                    None => continue,
+                };
+                let existing: std::collections::HashSet<u32> = gids.iter().copied().collect();
+
+                let mut insertions: Vec<(f64, u32)> = Vec::new();
+                #[allow(clippy::cast_possible_truncation)]
+                for (vi, &pos) in merged.positions.iter().enumerate() {
+                    let gid = vi as u32;
+                    if existing.contains(&gid) {
+                        continue;
+                    }
+                    let t = circle.project(pos);
+                    let proj = circle.evaluate(t);
+                    let dist = (pos - proj).length();
+                    if dist > tol.linear * 10.0 {
+                        continue;
+                    }
+                    // Normalize t into edge's parameter range.
+                    let mut t_adj = t;
+                    if t_end > t_start {
+                        while t_adj < t_start - 1e-10 {
+                            t_adj += std::f64::consts::TAU;
+                        }
+                        while t_adj > t_end + std::f64::consts::TAU - 1e-10 {
+                            t_adj -= std::f64::consts::TAU;
+                        }
+                    }
+                    if t_adj >= t_start - 1e-10 && t_adj <= t_end + 1e-10 {
+                        let range = t_end - t_start;
+                        let frac = if range.abs() > 1e-15 {
+                            (t_adj - t_start) / range
+                        } else {
+                            0.5
+                        };
+                        if frac > 0.001 && frac < 0.999 {
+                            insertions.push((t_adj, gid));
+                        }
+                    }
+                }
+
+                if !insertions.is_empty() {
+                    insertions.sort_by(|a, b| {
+                        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    // Deduplicate by parameter proximity.
+                    let mut deduped: Vec<(f64, u32)> = Vec::new();
+                    for (t, gid) in insertions {
+                        if deduped.last().map_or(true, |&(lt, _)| (t - lt).abs() > 1e-8) {
+                            deduped.push((t, gid));
+                        }
+                    }
+
+                    let old_gids = edge_global_indices.remove(&edge_idx).unwrap_or_default();
+                    let n = old_gids.len();
+                    let old_params: Vec<f64> = old_gids
+                        .iter()
+                        .enumerate()
+                        .map(|(i, _)| {
+                            t_start
+                                + (t_end - t_start) * (i as f64) / ((n - 1).max(1) as f64)
+                        })
+                        .collect();
+
+                    let mut all: Vec<(f64, u32)> =
+                        old_params.into_iter().zip(old_gids).collect();
+                    all.extend(deduped);
+                    all.sort_by(|a, b| {
+                        a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                    let mut seen = std::collections::HashSet::new();
+                    let merged_gids: Vec<u32> = all
+                        .into_iter()
+                        .filter(|&(_, gid)| seen.insert(gid))
+                        .map(|(_, gid)| gid)
+                        .collect();
+
+                    edge_global_indices.insert(edge_idx, merged_gids);
+                }
+            }
+        }
+    }
+
     // Phase 4: Tessellate each face using its boundary edge vertices.
     //
     // For large planar faces with holes, extract CDT inputs first and run
