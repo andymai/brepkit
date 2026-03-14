@@ -924,11 +924,7 @@ pub fn face_polygon(
             }
             pts.extend(sampled);
         } else {
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
+            let vid = oe.oriented_start(edge);
             pts.push(topo.vertex(vid)?.point());
         }
     }

@@ -10,32 +10,7 @@ use crate::arena::Arena;
 use crate::edge::Edge;
 use crate::face::Face;
 use crate::shell::Shell;
-use crate::vertex::VertexId;
-use crate::wire::{OrientedEdge, Wire, WireId};
-
-/// Returns the vertex at the start of traversal for an oriented edge.
-///
-/// When traversed forward the start vertex is `edge.start()`; when reversed
-/// it is `edge.end()`.
-const fn oriented_start(oe: &OrientedEdge, edge: &Edge) -> VertexId {
-    if oe.is_forward() {
-        edge.start()
-    } else {
-        edge.end()
-    }
-}
-
-/// Returns the vertex at the end of traversal for an oriented edge.
-///
-/// When traversed forward the end vertex is `edge.end()`; when reversed
-/// it is `edge.start()`.
-const fn oriented_end(oe: &OrientedEdge, edge: &Edge) -> VertexId {
-    if oe.is_forward() {
-        edge.end()
-    } else {
-        edge.start()
-    }
-}
+use crate::wire::{Wire, WireId};
 
 /// Validates that a wire forms a closed loop.
 ///
@@ -64,7 +39,7 @@ pub fn validate_wire_closed(wire: &Wire, edges: &Arena<Edge>) -> Result<(), Topo
             .get(next.edge())
             .ok_or_else(|| TopologyError::EdgeNotFound(next.edge()))?;
 
-        if oriented_end(current, current_edge) != oriented_start(next, next_edge) {
+        if current.oriented_end(current_edge) != next.oriented_start(next_edge) {
             return Err(TopologyError::WireNotClosed);
         }
     }
@@ -78,7 +53,7 @@ pub fn validate_wire_closed(wire: &Wire, edges: &Arena<Edge>) -> Result<(), Topo
             .get(first.edge())
             .ok_or_else(|| TopologyError::EdgeNotFound(first.edge()))?;
 
-        if oriented_end(last, last_edge) != oriented_start(first, first_edge) {
+        if last.oriented_end(last_edge) != first.oriented_start(first_edge) {
             return Err(TopologyError::WireNotClosed);
         }
     }

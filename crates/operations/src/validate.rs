@@ -280,11 +280,7 @@ pub fn validate_solid(
         let mut positions = Vec::new();
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
+            let vid = oe.oriented_start(edge);
             positions.push(topo.vertex(vid)?.point());
         }
 
@@ -552,11 +548,7 @@ pub fn validate_solid_relaxed(
         let mut positions = Vec::new();
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
+            let vid = oe.oriented_start(edge);
             positions.push(topo.vertex(vid)?.point());
         }
 

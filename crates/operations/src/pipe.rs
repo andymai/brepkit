@@ -81,11 +81,7 @@ pub fn pipe(
     let mut input_verts = Vec::with_capacity(n);
     for oe in &input_oriented {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
+        let vid = oe.oriented_start(edge);
         input_verts.push(topo.vertex(vid)?.point());
     }
 

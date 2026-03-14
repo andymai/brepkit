@@ -2,7 +2,8 @@
 
 use crate::TopologyError;
 use crate::arena;
-use crate::edge::EdgeId;
+use crate::edge::{Edge, EdgeId};
+use crate::vertex::VertexId;
 
 /// Typed handle for a [`Wire`] stored in an [`Arena`](crate::Arena).
 pub type WireId = arena::Id<Wire>;
@@ -36,6 +37,32 @@ impl OrientedEdge {
     #[must_use]
     pub const fn is_forward(&self) -> bool {
         self.forward
+    }
+
+    /// Returns the vertex at the start of traversal for this oriented edge.
+    ///
+    /// When traversed forward the start vertex is `edge.start()`; when reversed
+    /// it is `edge.end()`.
+    #[must_use]
+    pub const fn oriented_start(&self, edge: &Edge) -> VertexId {
+        if self.forward {
+            edge.start()
+        } else {
+            edge.end()
+        }
+    }
+
+    /// Returns the vertex at the end of traversal for this oriented edge.
+    ///
+    /// When traversed forward the end vertex is `edge.end()`; when reversed
+    /// it is `edge.start()`.
+    #[must_use]
+    pub const fn oriented_end(&self, edge: &Edge) -> VertexId {
+        if self.forward {
+            edge.end()
+        } else {
+            edge.start()
+        }
     }
 }
 

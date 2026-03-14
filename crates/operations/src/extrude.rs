@@ -157,11 +157,7 @@ fn extrude_wire_vertices(
     let mut verts: Vec<VertexId> = Vec::with_capacity(oriented.len());
     for oe in &oriented {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
+        let vid = oe.oriented_start(edge);
         verts.push(vid);
     }
 

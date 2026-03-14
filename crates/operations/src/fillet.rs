@@ -235,11 +235,7 @@ pub fn fillet(
 
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
+            let vid = oe.oriented_start(edge);
             vertex_ids.push(vid);
             positions.push(topo.vertex(vid)?.point());
             wire_edge_ids.push(oe.edge());
@@ -549,11 +545,7 @@ pub fn fillet_rolling_ball(
 
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
+            let vid = oe.oriented_start(edge);
             vertex_ids.push(vid);
             positions.push(topo.vertex(vid)?.point());
             wire_edge_ids.push(oe.edge());
@@ -1789,11 +1781,7 @@ pub fn fillet_variable(
 
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
+            let vid = oe.oriented_start(edge);
             vertex_ids.push(vid);
             positions.push(topo.vertex(vid)?.point());
             wire_edge_ids.push(oe.edge());

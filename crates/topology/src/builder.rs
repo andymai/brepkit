@@ -168,11 +168,7 @@ fn sample_wire_points(
 
     for oe in edges {
         let edge = topo.edge(oe.edge())?;
-        let start_vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
+        let start_vid = oe.oriented_start(edge);
         let start_pt = topo.vertex(start_vid)?.point();
         points.push(start_pt);
 

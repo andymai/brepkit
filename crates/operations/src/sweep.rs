@@ -185,11 +185,7 @@ fn sweep_wire_through_frames(
     let mut verts: Vec<VertexId> = Vec::with_capacity(n);
     for oe in &oriented {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
+        let vid = oe.oriented_start(edge);
         verts.push(vid);
     }
 
@@ -425,11 +421,7 @@ pub fn sweep(
     let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
     for oe in &input_oriented {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
+        let vid = oe.oriented_start(edge);
         input_verts.push(vid);
     }
 
@@ -749,11 +741,7 @@ pub fn sweep_smooth(
     let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
     for oe in &input_oriented {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
+        let vid = oe.oriented_start(edge);
         input_verts.push(vid);
     }
 
@@ -1046,11 +1034,7 @@ pub fn sweep_with_options(
     let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
     for oe in &input_oriented {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
+        let vid = oe.oriented_start(edge);
         input_verts.push(vid);
     }
 
