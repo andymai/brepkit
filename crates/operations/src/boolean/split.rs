@@ -164,6 +164,9 @@ pub(super) fn split_face_cdt_inner(
 
     // Normalize chord direction (c0 < c1 lexicographically) so that
     // two chords defining the same line but in opposite directions dedup.
+    // 1e-12: coordinate comparison tolerance — below f64 ULP for typical
+    // model coordinates (~1e3), so this is effectively an exact equality
+    // test that avoids NaN/rounding-induced flip-flop.
     for chord in &mut chords_2d {
         let (c0, c1) = *chord;
         if c0.x() > c1.x() + 1e-12 || ((c0.x() - c1.x()).abs() < 1e-12 && c0.y() > c1.y() + 1e-12) {
@@ -293,6 +296,8 @@ pub(super) fn split_face_cdt_inner(
                     continue;
                 }
                 let (t, dist) = point_segment_param_dist_2d(pt, c0, c1);
+                // 1e-10: parametric boundary guard — exclude points at chord
+                // endpoints (t ≈ 0 or t ≈ 1) which are already in the split list.
                 if dist < snap_dist && t > 1e-10 && t < 1.0 - 1e-10 {
                     chord_splits[i].push((t, vidx));
                 }
@@ -327,6 +332,9 @@ pub(super) fn split_face_cdt_inner(
                 }
                 let pt = cdt.vertices()[cv];
                 let (t, dist) = point_segment_param_dist_2d(pt, edge_a, edge_b);
+                // 1e-12: parametric boundary guard — tighter than chord T-junction
+                // check (1e-10) because boundary edges must not duplicate their
+                // own endpoints. Still well above f64 ULP for unit-scale segments.
                 if dist < snap_dist && t > 1e-12 && t < 1.0 - 1e-12 {
                     on_edge.push((t, cv));
                 }
@@ -453,6 +461,9 @@ fn seg_seg_cross_2d(a: Point2, b: Point2, c: Point2, d_pt: Point2) -> Option<(f6
     let dy_cd = d_pt.y() - c.y();
 
     let denom = dx_ab * dy_cd - dy_ab * dx_cd;
+    // Numerical-zero guard: 1e-15 protects against degenerate parallel/collinear
+    // segments. For unit-scale coordinates, denom = |AB|*|CD|*sin(angle); at
+    // ~1e-15 the angle is ~1e-15 rad — well below any meaningful crossing.
     if denom.abs() < 1e-15 {
         return None; // parallel or collinear
     }
@@ -463,6 +474,9 @@ fn seg_seg_cross_2d(a: Point2, b: Point2, c: Point2, d_pt: Point2) -> Option<(f6
     let t = (dx_ac * dy_cd - dy_ac * dx_cd) / denom;
     let u = (dx_ac * dy_ab - dy_ac * dx_ab) / denom;
 
+    // Parametric interior guard: 1e-10 excludes endpoint-touching segments so
+    // only true interior crossings are reported. This prevents T-junction
+    // false positives from endpoints that coincide within floating-point noise.
     let eps = 1e-10;
     if t > eps && t < 1.0 - eps && u > eps && u < 1.0 - eps {
         let px = dx_ab.mul_add(t, a.x());
@@ -481,6 +495,9 @@ fn point_segment_param_dist_2d(p: Point2, a: Point2, b: Point2) -> (f64, f64) {
     let dx = b.x() - a.x();
     let dy = b.y() - a.y();
     let len_sq = dx.mul_add(dx, dy * dy);
+    // Numerical-zero guard: 1e-30 ≈ (1e-15)^2 catches degenerate zero-length
+    // segments. Using len_sq avoids a sqrt; 1e-30 is far below any meaningful
+    // geometric length squared, so this only triggers for truly collapsed segments.
     if len_sq < 1e-30 {
         let dist = ((p.x() - a.x()).powi(2) + (p.y() - a.y()).powi(2)).sqrt();
         return (0.0, dist);

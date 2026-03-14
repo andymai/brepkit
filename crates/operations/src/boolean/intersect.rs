@@ -299,6 +299,10 @@ pub(super) fn polygon_clip_intervals(
         // → t * dx - s * edx = ex - lx
         // → t * dy - s * edy = ey - ly
         let det = dx * (-edy) - dy * (-edx);
+        // Numerical-zero guard: 1e-15 catches parallel/near-parallel edges.
+        // For unit-scale coordinates, det = |dir|*|edge|*sin(angle); at 1e-15
+        // the angle is negligible and the intersection point is numerically
+        // undefined.
         if det.abs() < 1e-15 {
             continue; // Parallel
         }

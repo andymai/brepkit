@@ -65,6 +65,11 @@ fn merge_vranges_with_padding(
 /// Build an ordered list of v-levels from extent bounds and merged intersection zones.
 ///
 /// Deduplicates levels that are within 1e-10 of each other.
+///
+/// 1e-10 is a parametric-space dedup tolerance: v-parameters on analytic surfaces
+/// (cylinder axis projection, sphere latitude) are in model-space units (meters),
+/// so 1e-10 m = 0.1 nm — well below any meaningful geometric feature while still
+/// catching floating-point duplicates from independent computations.
 fn build_v_levels(extent_min: f64, extent_max: f64, merged: &[(f64, f64)]) -> Vec<f64> {
     let mut levels: Vec<f64> = vec![extent_min];
     for &(iz_lo, iz_hi) in merged {
@@ -312,6 +317,11 @@ pub(super) fn split_cylinder_at_intersection(
     let n_samples: usize = CLOSED_CURVE_SAMPLES;
 
     // Collect face polygon vertices at barrel endpoints for exact vertex matching.
+    // v_tol = 1e-6: axial snap tolerance for classifying face polygon vertices as
+    // belonging to a barrel endpoint level. 1e-6 m = 1 micron — generous enough
+    // to catch floating-point drift from coordinate transforms while still
+    // distinguishing barrel endpoints from interior vertices on any practical
+    // cylinder (minimum height ~0.01 mm).
     let v_tol = 1e-6;
     let mut verts_at_vmin: Vec<Point3> = Vec::new();
     let mut verts_at_vmax: Vec<Point3> = Vec::new();
@@ -344,6 +354,8 @@ pub(super) fn split_cylinder_at_intersection(
 
     // Helper: create a cylinder band fragment between two v-levels.
     let make_band = |v_bot: f64, v_top: f64, frags: &mut Vec<AnalyticFragment>| {
+        // Degenerate band guard: skip bands thinner than 1e-10 m (0.1 nm).
+        // Matches build_v_levels dedup tolerance.
         if (v_top - v_bot).abs() < 1e-10 {
             return;
         }
@@ -422,6 +434,8 @@ pub(super) fn split_sphere_at_intersection(
     let face_vmin = face_v_range.0;
     let face_vmax = face_v_range.1;
 
+    // Degenerate v-extent guard: skip splitting if the face's latitude range is
+    // thinner than 1e-10 rad (~0.006 arcsec). Matches build_v_levels dedup tolerance.
     if (face_vmax - face_vmin).abs() < 1e-10 || vranges.is_empty() {
         fragments.push(AnalyticFragment {
             vertices: face_verts.to_vec(),
@@ -442,6 +456,10 @@ pub(super) fn split_sphere_at_intersection(
     };
 
     let n_samples: usize = CLOSED_CURVE_SAMPLES;
+    // pole_eps = 1e-6 rad (~0.2 arcsec): latitude threshold for treating a
+    // v-level as a sphere pole. At the pole the parallel circle degenerates to
+    // a point, so the sampling switches from N points to 1. 1e-6 rad is tight
+    // enough to avoid misclassifying near-pole latitudes on any practical sphere.
     let pole_eps = 1e-6;
     let is_south_pole = |v: f64| (v + std::f64::consts::FRAC_PI_2).abs() < pole_eps;
     let is_north_pole = |v: f64| (v - std::f64::consts::FRAC_PI_2).abs() < pole_eps;
@@ -464,6 +482,8 @@ pub(super) fn split_sphere_at_intersection(
 
     // Create a spherical cap fragment between two v-levels.
     let make_cap = |v_bot: f64, v_top: f64, frags: &mut Vec<AnalyticFragment>| {
+        // Degenerate cap guard: skip caps thinner than 1e-10 rad.
+        // Matches build_v_levels dedup tolerance.
         if (v_top - v_bot).abs() < 1e-10 {
             return;
         }
@@ -636,6 +656,9 @@ pub(super) fn create_band_fragments(
     let mut levels: Vec<(f64, Option<&EdgeCurve>)> = vec![(v_min, None)];
     for &(cv, ec) in &cut_levels {
         if let Some(last) = levels.last() {
+            // 1e-10: v-parameter dedup tolerance — same as build_v_levels.
+            // Prevents duplicate levels from cut curves that coincide with
+            // barrel endpoints or each other after floating-point rounding.
             if (cv - last.0).abs() > 1e-10 {
                 levels.push((cv, Some(ec)));
             }
@@ -650,6 +673,8 @@ pub(super) fn create_band_fragments(
     // Extract face polygon vertices at each barrel endpoint level.
     // These come from the same Circle3D::evaluate calls that generated the
     // cap face polygons, ensuring exact floating-point match for vertex dedup.
+    // v_tol = 1e-6: axial snap tolerance for barrel endpoint classification
+    // (same rationale as split_cylinder_at_intersection's v_tol).
     let v_tol = 1e-6;
     let mut verts_at_vmin: Vec<Point3> = Vec::new();
     let mut verts_at_vmax: Vec<Point3> = Vec::new();
@@ -834,6 +859,9 @@ pub(super) fn sample_edge_curve(curve: &EdgeCurve, n: usize) -> Vec<Point3> {
             // duplicating the first point at t=u_max.
             let start_pt = nc.evaluate(u0);
             let end_pt = nc.evaluate(u1);
+            // 1e-6 m: closure detection threshold — if start and end points are
+            // within 1 micron, treat the NURBS curve as closed to avoid
+            // duplicating the first point at t=u_max.
             let is_closed = (start_pt - end_pt).length() < 1e-6;
             let divisor = if is_closed { n } else { n - 1 };
             (0..n)

@@ -751,6 +751,8 @@ pub(super) fn split_nonmanifold_edges(
             end_pos.z() - start_pos.z(),
         );
         let edge_len = edge_dir.length();
+        // Numerical-zero guard: skip degenerate zero-length edges that would
+        // cause division-by-zero when normalizing the edge direction below.
         if edge_len < 1e-15 {
             continue;
         }
@@ -768,6 +770,8 @@ pub(super) fn split_nonmanifold_edges(
         };
         let u_axis = edge_axis.cross(perp);
         let u_len = u_axis.length();
+        // Numerical-zero guard: edge_axis nearly parallel to perp — cross
+        // product is degenerate. Skip rather than produce a garbage frame.
         if u_len < 1e-15 {
             continue;
         }
@@ -995,6 +999,10 @@ pub(super) fn try_shared_boundary_fuse(
             let centroid_b = polygon_centroid(&pb.vertices);
             let dist = (centroid_a - centroid_b).length();
             let face_extent = area_a.sqrt().max(tol.linear);
+            // Geometry-scaled centroid coincidence test: centroids must be within
+            // 1e-6 * face_extent (i.e., within one millionth of the face size).
+            // This relative threshold adapts to model scale — a 1m face allows
+            // 1 micron drift, a 1mm face allows 1 nm.
             if dist > face_extent * 1e-6 {
                 continue;
             }

@@ -143,6 +143,13 @@ Quick reference — find the right file for any task:
 **These enums appear in `match` arms across many files. Adding a variant requires updating
 every match site or the code won't compile (unless a `_ =>` wildcard swallows it silently).**
 
+**Delegate methods reduce ripple scope:** `FaceSurface` has delegate methods (`evaluate`,
+`normal`, `project_point`, `estimate_radius`, `type_tag`, `is_planar`, `is_analytic`,
+`as_analytic`) and `EdgeCurve` has delegates (`evaluate_with_endpoints`,
+`tangent_with_endpoints`, `domain_with_endpoints`, `type_tag`) — see `math/src/traits.rs`.
+Call sites using these delegates need no update when adding new variants (only the delegate
+impl needs the new arm). The files below still use direct match arms.
+
 ### Adding an `EdgeCurve` variant
 
 `EdgeCurve` is defined in `topology/src/edge.rs`. Current variants: `Line`, `NurbsCurve`, `Circle`, `Ellipse`.

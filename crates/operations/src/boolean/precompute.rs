@@ -133,6 +133,9 @@ pub(super) fn compute_v_range_hint(surface: &FaceSurface, verts: &[Point3]) -> O
                 v_min = v_min.min(v);
                 v_max = v_max.max(v);
             }
+            // Degenerate v-extent guard: if the cone's v-parameter range is
+            // thinner than 1e-10, the face has no meaningful axial span.
+            // Matches build_v_levels dedup tolerance (1e-10).
             if (v_max - v_min).abs() < 1e-10 {
                 None
             } else {
@@ -154,6 +157,10 @@ pub(super) fn compute_v_range_hint(surface: &FaceSurface, verts: &[Point3]) -> O
 /// Compute the axial extent (v-range) of points projected onto a cylinder axis.
 ///
 /// Returns `None` if the extent is degenerate (< 1e-10).
+///
+/// 1e-10: parametric-space dedup tolerance for axial projection. The v-parameter
+/// is in model-space units (meters), so 1e-10 m = 0.1 nm. This matches the
+/// `build_v_levels` dedup tolerance used throughout the fragment builders.
 pub(super) fn cylinder_v_extent(
     cyl: &brepkit_math::surfaces::CylindricalSurface,
     points: &[Point3],
@@ -255,6 +262,9 @@ pub(super) fn collect_face_data(
                     let cz = (v0.z() + v1.z() + v2.z()) / 3.0;
                     let dir = Vec3::new(cx - center.x(), cy - center.y(), cz - center.z());
                     let len = (dir.x() * dir.x() + dir.y() * dir.y() + dir.z() * dir.z()).sqrt();
+                    // Numerical-zero guard: skip degenerate triangles whose
+                    // centroid coincides with the sphere center (zero-length
+                    // radial direction → cannot compute outward normal).
                     if len < 1e-15 {
                         continue;
                     }

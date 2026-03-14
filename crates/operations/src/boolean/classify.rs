@@ -92,6 +92,10 @@ impl AnalyticClassifier {
                     + radial_vec.z() * radial_vec.z();
                 // Linearly interpolate expected radius between z_min and z_max.
                 let dz = z_max - z_min;
+                // Numerical-zero guard: if the cone's axial height is < 1e-12,
+                // the radius interpolation parameter is undefined — fall back to
+                // midpoint (t = 0.5). 1e-12 is ~1 picometer, well below any
+                // meaningful cone frustum height.
                 let t = if dz.abs() > 1e-12 {
                     (axial - z_min) / dz
                 } else {
@@ -682,6 +686,10 @@ fn multiray_classify(
         };
         let cross_vec = normal.cross(perp);
         let axis_len = cross_vec.length();
+        // Numerical-zero guard: if the cross product has near-zero length,
+        // the fragment normal is nearly parallel to the chosen perpendicular
+        // vector — fall back to using the normal itself for all 3 ray
+        // directions (degenerate but safe; the majority vote still works).
         if axis_len < 1e-12 {
             [normal, normal, normal]
         } else {
