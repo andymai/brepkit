@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.2](https://github.com/andymai/brepkit/compare/v1.3.1...v1.3.2) (2026-03-14)
+
+
+### Bug Fixes
+
+* **math:** scale-relative Mat4 inverse singularity threshold ([#210](https://github.com/andymai/brepkit/issues/210)) ([ae66729](https://github.com/andymai/brepkit/commit/ae66729eb09e81e5c6ccd8dca0a03939fec58a65))
+
 ## [1.3.1](https://github.com/andymai/brepkit/compare/v1.3.0...v1.3.1) (2026-03-14)
 
 
