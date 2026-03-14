@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/andymai/brepkit/compare/v1.3.0...v1.3.1) (2026-03-14)
+
+
+### Bug Fixes
+
+* **math:** harden Newton solvers near surface singularities (poles, apex) ([#206](https://github.com/andymai/brepkit/issues/206)) ([cd6d1bb](https://github.com/andymai/brepkit/commit/cd6d1bb2a1f49e1cfdfb7c9721048f07b66045a7))
+
 ## [1.3.0](https://github.com/andymai/brepkit/compare/v1.2.0...v1.3.0) (2026-03-13)
 
 
