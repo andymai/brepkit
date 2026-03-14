@@ -2687,7 +2687,7 @@ pub fn tessellate_solid(
             };
             let circle = match edge_data.curve() {
                 EdgeCurve::Circle(c) => c,
-                _ => continue,
+                EdgeCurve::Line | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => continue,
             };
 
             // Get edge endpoint positions for seam protection.
@@ -2704,11 +2704,13 @@ pub fn tessellate_solid(
             let (t_min, t_max) = edge_data.curve().domain_with_endpoints(start_pos, end_pos);
             let is_closed = edge_data.start() == edge_data.end();
 
-            // Collect existing GID positions for this edge.
-            let existing_gids: Vec<u32> = edge_global_indices
+            // Collect existing GID positions for this edge (HashSet for O(1) lookup).
+            let existing_gids_vec: Vec<u32> = edge_global_indices
                 .get(&edge_idx)
                 .cloned()
                 .unwrap_or_default();
+            let existing_gids: std::collections::HashSet<u32> =
+                existing_gids_vec.iter().copied().collect();
 
             // Scan all global vertices for candidates near the circle.
             let mut insertions: Vec<(f64, u32)> = Vec::new();
@@ -2755,7 +2757,7 @@ pub fn tessellate_solid(
             insertions.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-8);
 
             // Merge with existing GIDs maintaining parameter order.
-            let mut existing_with_t: Vec<(f64, u32)> = existing_gids
+            let mut existing_with_t: Vec<(f64, u32)> = existing_gids_vec
                 .iter()
                 .map(|&gid| {
                     let pos = merged.positions[gid as usize];
@@ -2764,8 +2766,10 @@ pub fn tessellate_solid(
                 .collect();
             existing_with_t.extend(insertions);
             existing_with_t.sort_by(|a, b| a.0.total_cmp(&b.0));
-            // Deduplicate by GID (same vertex shouldn't appear twice).
-            existing_with_t.dedup_by(|a, b| a.1 == b.1);
+            // Deduplicate by GID — HashSet catches non-adjacent duplicates
+            // that dedup_by would miss after sorting by parameter.
+            let mut seen_gids = std::collections::HashSet::new();
+            existing_with_t.retain(|(_, gid)| seen_gids.insert(*gid));
 
             let refined: Vec<u32> = existing_with_t.iter().map(|&(_, gid)| gid).collect();
             edge_global_indices.insert(edge_idx, refined);
@@ -3389,12 +3393,15 @@ fn tessellate_nonplanar_cdt(
         .map(|p| p.1)
         .fold(f64::NEG_INFINITY, f64::max);
 
-    // Step 2b: Detect and fix degenerate seam edges for full-revolution faces.
+    // Step 2b: Detect and fix degenerate seam edges.
     //
-    // Full-revolution cylinder/cone faces have a seam edge that appears twice
-    // in the wire (forward + backward). Both traversals project to the same
-    // u values, creating a degenerate slit in UV space. Fix: assign u_max for
-    // forward seam, u_min for backward seam, with v interpolated linearly.
+    // Any periodic face (cylinder, cone, sphere, torus) whose wire traverses
+    // the same edge twice (forward + backward) has a degenerate seam: both
+    // traversals project to the same u values, collapsing the UV polygon to a
+    // slit. Fix: assign u_max for the forward seam run, u_min for the backward
+    // run, with v interpolated linearly. The detection is general (wire edge
+    // count > 1), not surface-type-specific, so it also handles NURBS faces
+    // with periodic parameters if they ever appear.
     let (u_min, u_max, v_min, v_max) = {
         let mut wire_edge_counts: HashMap<usize, usize> = HashMap::new();
         for oe in wire.edges() {
@@ -3855,12 +3862,9 @@ fn tessellate_nonplanar_snap(
     }
 
     // Build spatial hash for O(1) snap lookups instead of O(n*m) brute force.
-    // Snap tolerance must bridge the gap between edge sample points and face
-    // tessellation boundary points (which use different segment formulas).
-    // The worst case is half a grid step on the circle arc. For ruled surfaces
-    // (cylinder/cone with nv=1) all face vertices ARE boundary vertices so a
-    // generous tolerance is safe. For general surfaces, deflection is a good
-    // upper bound on the gap between a sample point and its nearest edge point.
+    // Snap tolerance of 1e-6 (1µm) is sufficient because edge sampling now uses
+    // the same segments_for_chord_deviation formula as the analytic grid, so
+    // boundary vertices match to within floating-point precision (~1e-15).
     let snap_tol = 1e-6;
     let inv_cell = 1.0 / snap_tol;
     let mut snap_grid: HashMap<(i64, i64, i64), Vec<u32>> =
@@ -3981,13 +3985,19 @@ pub fn boundary_edge_count(mesh: &TriangleMesh) -> usize {
 /// Count boundary edges using position-based vertex matching.
 ///
 /// Unlike [`boundary_edge_count`] which uses exact index matching, this
-/// function snaps vertex positions to a 1-micron grid to detect "nearly
-/// shared" edges from meshes where boolean operations produced separate
-/// vertex indices for geometrically identical points.
+/// function snaps vertex positions to a 1-micron (1e-6) grid to detect
+/// "nearly shared" edges from meshes where boolean operations produced
+/// separate vertex indices for geometrically identical points.
+///
+/// The 1µm grid is intentionally coarser than `MERGE_GRID` (1e-7) because
+/// this is a diagnostic tool: it detects gaps that the production pipeline
+/// *should* have closed, catching issues from snap tolerance mismatches or
+/// grid-cell boundary splits that 1e-7 can miss.
 ///
 /// Returns 0 for a watertight mesh.
+#[cfg(test)]
 #[must_use]
-pub fn position_based_boundary_count(mesh: &TriangleMesh) -> usize {
+fn position_based_boundary_count(mesh: &TriangleMesh) -> usize {
     use std::collections::{HashMap, HashSet};
 
     // Build canonical vertex ID from snapped position.
@@ -4232,7 +4242,10 @@ fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
     let mut parent: Vec<u32> = (0..n_verts as u32).collect();
 
     // Spatial hash grid for boundary vertices.
-    let weld_tol = deflection.max(1e-6) * 2.0;
+    // Weld tolerance targets numerical mismatch (grid quantization, projection
+    // error), not geometric features. Capped at 1e-4 to avoid merging distinct
+    // boundary vertices on thin features.
+    let weld_tol = (deflection.max(1e-6) * 2.0).min(1e-4);
     let cell_size = weld_tol;
     let inv_cell = 1.0 / cell_size;
 

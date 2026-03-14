@@ -302,6 +302,11 @@ impl Cdt {
         // If found, recursively split the constraint through them so that
         // recover_edge never encounters a collinear interior vertex (which
         // causes flip-recovery deadlocks on full-revolution face seams).
+        //
+        // Optimization: only scan vertices near the segment's AABB rather
+        // than all V vertices, using the dup_grid spatial hash. For typical
+        // CDTs this reduces the scan from O(V) to O(k) where k is the number
+        // of vertices in the segment's bounding cells.
         let p0 = self.vertices[v0];
         let p1 = self.vertices[v1];
         let dx = p1.x() - p0.x();
@@ -310,18 +315,44 @@ impl Cdt {
 
         if seg_len_sq > 0.0 {
             let mut collinear: Vec<(f64, usize)> = Vec::new();
-            for vi in self.super_count..self.vertices.len() {
-                if vi == v0 || vi == v1 {
-                    continue;
+
+            // Collect candidate vertices from dup_grid cells along the segment AABB.
+            let x_lo = p0.x().min(p1.x());
+            let x_hi = p0.x().max(p1.x());
+            let y_lo = p0.y().min(p1.y());
+            let y_hi = p0.y().max(p1.y());
+            // dup_grid uses cell size 1e-5 (see dup_grid_cell).
+            let cell = 1e-5_f64;
+            let inv_cell = 1e5_f64;
+            #[allow(clippy::cast_possible_truncation)]
+            let cx_lo = ((x_lo - cell) * inv_cell).floor() as i64;
+            #[allow(clippy::cast_possible_truncation)]
+            let cx_hi = ((x_hi + cell) * inv_cell).ceil() as i64;
+            #[allow(clippy::cast_possible_truncation)]
+            let cy_lo = ((y_lo - cell) * inv_cell).floor() as i64;
+            #[allow(clippy::cast_possible_truncation)]
+            let cy_hi = ((y_hi + cell) * inv_cell).ceil() as i64;
+
+            let mut candidates = std::collections::HashSet::new();
+            for cx in cx_lo..=cx_hi {
+                for cy in cy_lo..=cy_hi {
+                    if let Some(verts) = self.dup_grid.get(&(cx, cy)) {
+                        for &vi in verts {
+                            if vi != v0 && vi != v1 && vi >= self.super_count {
+                                candidates.insert(vi);
+                            }
+                        }
+                    }
                 }
+            }
+
+            for vi in candidates {
                 let px = self.vertices[vi].x() - p0.x();
                 let py = self.vertices[vi].y() - p0.y();
                 let t = (px * dx + py * dy) / seg_len_sq;
-                // Must be strictly interior to the segment.
                 if t <= 1e-6 || t >= 1.0 - 1e-6 {
                     continue;
                 }
-                // Check perpendicular distance.
                 let cross = px * dy - py * dx;
                 let dist_sq = cross * cross / seg_len_sq;
                 if dist_sq < 1e-12 * seg_len_sq {
@@ -331,9 +362,7 @@ impl Cdt {
 
             if !collinear.is_empty() {
                 collinear.sort_by(|a, b| a.0.total_cmp(&b.0));
-                // Deduplicate by parameter proximity.
                 collinear.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-8);
-                // Recursively insert sub-constraints through collinear vertices.
                 let mut prev = v0;
                 for &(_, vi) in &collinear {
                     self.insert_constraint(prev, vi)?;
