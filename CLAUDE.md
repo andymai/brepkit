@@ -176,9 +176,9 @@ Update these files (22+ match sites across 7+ files):
 - [ ] `operations/src/distance.rs` — point-to-face distance
 - [ ] `operations/src/feature_recognition.rs` — classify surface type (2 sites)
 - [ ] `operations/src/boolean.rs` — extract `AnalyticSurface` (4 sites)
-- [ ] `operations/src/offset_face.rs` — ⚠️ has wildcard catch-all, won't compile-error
-- [ ] `io/src/step/writer.rs` — ⚠️ has wildcard catch-all, won't compile-error
-- [ ] `io/src/iges/writer.rs` — ⚠️ has wildcard catch-all, won't compile-error
+- [ ] `operations/src/offset_face.rs` — offset surface geometry
+- [ ] `io/src/step/writer.rs` — write as STEP entity
+- [ ] `io/src/iges/writer.rs` — write as IGES entity
 - [ ] `wasm/src/kernel.rs` — **8 match sites**: type tag, analytic params, evaluate, domain, project, surface data, NURBS extract, copy surface
 
 Also update if the surface is analytic:
@@ -232,9 +232,10 @@ Multiple `#[wasm_bindgen] impl BrepKernel` blocks are needed — one for public
 JS-exposed methods, one for private helpers. This is a wasm-bindgen requirement.
 
 ### Wildcard match arms
-`_ =>` in STEP/IGES writers will silently swallow new enum variants. When adding
-a new `EdgeCurve` or `FaceSurface` variant, **manually check** these files even
-though the compiler won't force you:
+As of v1.3.2, all `EdgeCurve` and `FaceSurface` match arms use exhaustive
+patterns — no production `_ =>` wildcards remain. When adding a new variant,
+the compiler will flag every match site. Still worth a manual scan of these
+files since `_ =>` could be re-introduced:
 - `io/src/step/writer.rs`
 - `io/src/iges/writer.rs`
 - `operations/src/offset_face.rs`
