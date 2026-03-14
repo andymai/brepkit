@@ -1213,7 +1213,7 @@ mod tests {
                 Point3::new(-1.0, 1.0, z),
             ];
             let wire_id =
-                brepkit_topology::builder::make_polygon_wire(&mut write_topo, &pts).unwrap();
+                brepkit_topology::builder::make_polygon_wire(&mut write_topo, &pts, 1e-7).unwrap();
             let v01 = Vec3::new(
                 pts[1].x() - pts[0].x(),
                 pts[1].y() - pts[0].y(),
@@ -1296,7 +1296,7 @@ mod tests {
                 Point3::new(-1.0, 1.0, z),
             ];
             let wire_id =
-                brepkit_topology::builder::make_polygon_wire(&mut write_topo, &pts).unwrap();
+                brepkit_topology::builder::make_polygon_wire(&mut write_topo, &pts, 1e-7).unwrap();
             let v01 = Vec3::new(
                 pts[1].x() - pts[0].x(),
                 pts[1].y() - pts[0].y(),

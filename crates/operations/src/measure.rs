@@ -2631,7 +2631,7 @@ mod tests {
         use brepkit_topology::builder::make_rectangle_face;
 
         let mut topo = Topology::new();
-        let fid = make_rectangle_face(&mut topo, 3.0, 5.0).unwrap();
+        let fid = make_rectangle_face(&mut topo, 3.0, 5.0, 1e-7).unwrap();
 
         let face = topo.face(fid).unwrap();
         let len = wire_length(&topo, face.outer_wire()).unwrap();

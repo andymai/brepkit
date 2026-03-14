@@ -879,7 +879,11 @@ fn create_face_fragments(
             .collect();
 
         // Create wire from 3D points.
-        let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &points_3d)?;
+        let wire_id = brepkit_topology::builder::make_polygon_wire(
+            topo,
+            &points_3d,
+            brepkit_math::tolerance::Tolerance::default().linear,
+        )?;
 
         // Create face with the same NURBS surface.
         let face = Face::new(wire_id, Vec::new(), FaceSurface::Nurbs(surface.clone()));
@@ -1762,7 +1766,7 @@ mod tests {
                 Point3::new(offset_x + half, half, z),
                 Point3::new(offset_x - half, half, z),
             ];
-            let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts).unwrap();
+            let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts, 1e-7).unwrap();
             // Compute plane normal from first three vertices.
             let v01 = brepkit_math::vec::Vec3::new(
                 pts[1].x() - pts[0].x(),

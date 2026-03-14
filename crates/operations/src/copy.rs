@@ -737,6 +737,7 @@ mod tests {
                 Point3::new(1.0, 0.0, 0.0),
                 Point3::new(1.0, 1.0, 0.0),
             ],
+            1e-7,
         )
         .unwrap();
         let copy = copy_wire(&mut topo, orig).unwrap();
@@ -757,6 +758,7 @@ mod tests {
                 Point3::new(1.0, 0.0, 0.0),
                 Point3::new(1.0, 1.0, 0.0),
             ],
+            1e-7,
         )
         .unwrap();
         let copy = copy_wire(&mut topo, orig).unwrap();
@@ -780,6 +782,7 @@ mod tests {
                 Point3::new(1.0, 0.0, 0.0),
                 Point3::new(1.0, 1.0, 0.0),
             ],
+            1e-7,
         )
         .unwrap();
         let copy = copy_wire(&mut topo, orig).unwrap();

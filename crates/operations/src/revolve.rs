@@ -715,7 +715,8 @@ mod tests {
             Point3::new(3.0, 1.0, 0.0),
             Point3::new(1.0, 1.0, 0.0),
         ];
-        let outer_wire = brepkit_topology::builder::make_polygon_wire(topo, &outer_pts).unwrap();
+        let outer_wire =
+            brepkit_topology::builder::make_polygon_wire(topo, &outer_pts, 1e-7).unwrap();
 
         // Inner: small 0.5×0.5 hole (CW winding).
         let inner_pts = vec![
@@ -724,7 +725,8 @@ mod tests {
             Point3::new(2.5, 0.75, 0.0),
             Point3::new(2.5, 0.25, 0.0),
         ];
-        let inner_wire = brepkit_topology::builder::make_polygon_wire(topo, &inner_pts).unwrap();
+        let inner_wire =
+            brepkit_topology::builder::make_polygon_wire(topo, &inner_pts, 1e-7).unwrap();
 
         let normal = Vec3::new(0.0, 0.0, 1.0);
         let d = 0.0;
@@ -911,7 +913,7 @@ mod tests {
             Point3::new(4.0, 3.0, 0.0),
             Point3::new(2.0, 3.0, 0.0),
         ];
-        let wire = brepkit_topology::builder::make_polygon_wire(&mut topo, &pts).unwrap();
+        let wire = brepkit_topology::builder::make_polygon_wire(&mut topo, &pts, 1e-7).unwrap();
         let face = topo.add_face(brepkit_topology::face::Face::new(
             wire,
             vec![],

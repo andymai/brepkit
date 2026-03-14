@@ -2602,7 +2602,7 @@ impl BrepKernel {
     ) -> Result<u32, JsError> {
         let start = Point3::new(x1, y1, z1);
         let end = Point3::new(x2, y2, z2);
-        let eid = brepkit_topology::builder::make_line_edge(&mut self.topo, start, end)?;
+        let eid = brepkit_topology::builder::make_line_edge(&mut self.topo, start, end, TOL)?;
         Ok(edge_id_to_u32(eid))
     }
 
@@ -4930,6 +4930,7 @@ impl BrepKernel {
             &mut self.topo,
             radius,
             n_sides as usize,
+            TOL,
         )?;
         Ok(wire_id_to_u32(wid))
     }
@@ -4946,8 +4947,12 @@ impl BrepKernel {
             }
             .into());
         }
-        let fid =
-            brepkit_topology::builder::make_circle_face(&mut self.topo, radius, segments as usize)?;
+        let fid = brepkit_topology::builder::make_circle_face(
+            &mut self.topo,
+            radius,
+            segments as usize,
+            TOL,
+        )?;
         Ok(face_id_to_u32(fid))
     }
 
@@ -7235,7 +7240,7 @@ fn create_apex_face(
         ));
     }
 
-    let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts)
+    let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts, TOL)
         .map_err(|e| JsError::new(&e.to_string()))?;
     let face_id = brepkit_topology::builder::make_face_from_wire(topo, wire_id)
         .map_err(|e| JsError::new(&e.to_string()))?;

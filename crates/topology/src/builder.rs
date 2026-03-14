@@ -15,12 +15,9 @@ use crate::face::{Face, FaceId, FaceSurface};
 use crate::vertex::Vertex;
 use crate::wire::{OrientedEdge, Wire, WireId};
 
-/// Default vertex tolerance for builder operations.
-const TOL: f64 = 1e-7;
-
 /// Create a straight-line edge between two points.
 ///
-/// Allocates vertices and the connecting edge.
+/// Allocates vertices with the given `tolerance` and the connecting edge.
 ///
 /// # Errors
 ///
@@ -29,6 +26,7 @@ pub fn make_line_edge(
     topo: &mut Topology,
     start: Point3,
     end: Point3,
+    tolerance: f64,
 ) -> Result<EdgeId, crate::TopologyError> {
     let tol = Tolerance::new();
     if (end - start).length_squared() < tol.linear * tol.linear {
@@ -37,15 +35,16 @@ pub fn make_line_edge(
         });
     }
 
-    let v0 = topo.add_vertex(Vertex::new(start, TOL));
-    let v1 = topo.add_vertex(Vertex::new(end, TOL));
+    let v0 = topo.add_vertex(Vertex::new(start, tolerance));
+    let v1 = topo.add_vertex(Vertex::new(end, tolerance));
     Ok(topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line)))
 }
 
 /// Create a closed wire from an ordered list of points.
 ///
 /// Each consecutive pair of points becomes a line edge, and the last
-/// point connects back to the first.
+/// point connects back to the first. Vertices are created with the
+/// given `tolerance`.
 ///
 /// # Errors
 ///
@@ -53,6 +52,7 @@ pub fn make_line_edge(
 pub fn make_polygon_wire(
     topo: &mut Topology,
     points: &[Point3],
+    tolerance: f64,
 ) -> Result<WireId, crate::TopologyError> {
     let n = points.len();
     if n < 3 {
@@ -63,7 +63,7 @@ pub fn make_polygon_wire(
 
     let verts: Vec<_> = points
         .iter()
-        .map(|&p| topo.add_vertex(Vertex::new(p, TOL)))
+        .map(|&p| topo.add_vertex(Vertex::new(p, tolerance)))
         .collect();
 
     let edges: Vec<_> = (0..n)
@@ -85,6 +85,7 @@ pub fn make_polygon_wire(
 /// Create a regular polygon wire on the XY plane centered at the origin.
 ///
 /// Returns the wire ID of a closed polygon with `n_sides` edges.
+/// Vertices are created with the given `tolerance`.
 ///
 /// # Errors
 ///
@@ -93,6 +94,7 @@ pub fn make_regular_polygon_wire(
     topo: &mut Topology,
     radius: f64,
     n_sides: usize,
+    tolerance: f64,
 ) -> Result<WireId, crate::TopologyError> {
     if n_sides < 3 {
         return Err(crate::TopologyError::Empty {
@@ -113,7 +115,7 @@ pub fn make_regular_polygon_wire(
         })
         .collect();
 
-    make_polygon_wire(topo, &points)
+    make_polygon_wire(topo, &points, tolerance)
 }
 
 /// Create a planar face from a closed wire.
@@ -252,6 +254,8 @@ fn compute_plane_normal(points: &[Point3]) -> Result<Vec3, crate::TopologyError>
 
 /// Create a rectangular face on the XY plane centered at the origin.
 ///
+/// Vertices are created with the given `tolerance`.
+///
 /// # Errors
 ///
 /// Returns an error if `width` or `height` is non-positive.
@@ -259,6 +263,7 @@ pub fn make_rectangle_face(
     topo: &mut Topology,
     width: f64,
     height: f64,
+    tolerance: f64,
 ) -> Result<FaceId, crate::TopologyError> {
     if width <= 0.0 || height <= 0.0 {
         return Err(crate::TopologyError::NonManifold {
@@ -275,13 +280,14 @@ pub fn make_rectangle_face(
         Point3::new(-hw, hh, 0.0),
     ];
 
-    let wid = make_polygon_wire(topo, &points)?;
+    let wid = make_polygon_wire(topo, &points, tolerance)?;
     make_face_from_wire(topo, wid)
 }
 
 /// Create a circular polygon face on the XY plane centered at the origin.
 ///
-/// The circle is approximated with `segments` straight edges.
+/// The circle is approximated with `segments` straight edges. Vertices
+/// are created with the given `tolerance`.
 ///
 /// # Errors
 ///
@@ -290,8 +296,9 @@ pub fn make_circle_face(
     topo: &mut Topology,
     radius: f64,
     segments: usize,
+    tolerance: f64,
 ) -> Result<FaceId, crate::TopologyError> {
-    let wid = make_regular_polygon_wire(topo, radius, segments)?;
+    let wid = make_regular_polygon_wire(topo, radius, segments, tolerance)?;
     make_face_from_wire(topo, wid)
 }
 
@@ -305,6 +312,8 @@ mod tests {
     use super::*;
     use crate::Topology;
 
+    const TOL: f64 = 1e-7;
+
     #[test]
     fn make_line_edge_basic() {
         let mut topo = Topology::new();
@@ -312,6 +321,7 @@ mod tests {
             &mut topo,
             Point3::new(0.0, 0.0, 0.0),
             Point3::new(1.0, 0.0, 0.0),
+            TOL,
         )
         .unwrap();
 
@@ -323,7 +333,7 @@ mod tests {
     fn make_line_edge_coincident_error() {
         let mut topo = Topology::new();
         let p = Point3::new(1.0, 2.0, 3.0);
-        assert!(make_line_edge(&mut topo, p, p).is_err());
+        assert!(make_line_edge(&mut topo, p, p, TOL).is_err());
     }
 
     #[test]
@@ -337,6 +347,7 @@ mod tests {
                 Point3::new(1.0, 1.0, 0.0),
                 Point3::new(0.0, 1.0, 0.0),
             ],
+            TOL,
         )
         .unwrap();
 
@@ -350,7 +361,8 @@ mod tests {
         assert!(
             make_polygon_wire(
                 &mut topo,
-                &[Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)]
+                &[Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)],
+                TOL,
             )
             .is_err()
         );
@@ -359,7 +371,7 @@ mod tests {
     #[test]
     fn make_regular_polygon_wire_hexagon() {
         let mut topo = Topology::new();
-        let wid = make_regular_polygon_wire(&mut topo, 1.0, 6).unwrap();
+        let wid = make_regular_polygon_wire(&mut topo, 1.0, 6, TOL).unwrap();
         let wire = topo.wire(wid).unwrap();
         assert_eq!(wire.edges().len(), 6);
     }
@@ -375,6 +387,7 @@ mod tests {
                 Point3::new(1.0, 1.0, 0.0),
                 Point3::new(0.0, 1.0, 0.0),
             ],
+            TOL,
         )
         .unwrap();
 
@@ -389,7 +402,7 @@ mod tests {
     #[test]
     fn make_rectangle_face_basic() {
         let mut topo = Topology::new();
-        let fid = make_rectangle_face(&mut topo, 2.0, 3.0).unwrap();
+        let fid = make_rectangle_face(&mut topo, 2.0, 3.0, TOL).unwrap();
         let face = topo.face(fid).unwrap();
         assert!(matches!(face.surface(), FaceSurface::Plane { .. }));
     }
@@ -397,13 +410,13 @@ mod tests {
     #[test]
     fn make_rectangle_face_zero_error() {
         let mut topo = Topology::new();
-        assert!(make_rectangle_face(&mut topo, 0.0, 1.0).is_err());
+        assert!(make_rectangle_face(&mut topo, 0.0, 1.0, TOL).is_err());
     }
 
     #[test]
     fn make_circle_face_basic() {
         let mut topo = Topology::new();
-        let fid = make_circle_face(&mut topo, 1.0, 16).unwrap();
+        let fid = make_circle_face(&mut topo, 1.0, 16, TOL).unwrap();
         let face = topo.face(fid).unwrap();
         assert!(matches!(face.surface(), FaceSurface::Plane { .. }));
     }
@@ -411,6 +424,6 @@ mod tests {
     #[test]
     fn make_circle_face_zero_radius_error() {
         let mut topo = Topology::new();
-        assert!(make_circle_face(&mut topo, 0.0, 16).is_err());
+        assert!(make_circle_face(&mut topo, 0.0, 16, TOL).is_err());
     }
 }
