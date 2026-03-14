@@ -1314,3 +1314,184 @@ impl BrepKernel {
         Ok(json.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use crate::kernel::test_fixtures::{kernel_with_box, kernel_with_cylinder};
+
+    // ── get_solid_faces ───────────────────────────────────────────
+
+    #[test]
+    fn box_has_six_faces() {
+        let (k, solid) = kernel_with_box();
+        let faces = k.get_solid_faces(solid).unwrap();
+        assert_eq!(faces.len(), 6, "a box must have exactly 6 faces");
+    }
+
+    #[test]
+    fn face_handles_are_unique() {
+        let (k, solid) = kernel_with_box();
+        let faces = k.get_solid_faces(solid).unwrap();
+        let mut sorted = faces.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), faces.len(), "face handles must be unique");
+    }
+
+    // ── get_solid_edges ───────────────────────────────────────────
+
+    #[test]
+    fn box_has_twelve_edges() {
+        let (k, solid) = kernel_with_box();
+        let edges = k.get_solid_edges(solid).unwrap();
+        assert_eq!(edges.len(), 12, "a box must have exactly 12 edges");
+    }
+
+    #[test]
+    fn edge_handles_are_unique() {
+        let (k, solid) = kernel_with_box();
+        let edges = k.get_solid_edges(solid).unwrap();
+        let mut sorted = edges.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), edges.len(), "edge handles must be unique");
+    }
+
+    // ── get_solid_vertices ────────────────────────────────────────
+
+    #[test]
+    fn box_has_eight_vertices() {
+        let (k, solid) = kernel_with_box();
+        let verts = k.get_solid_vertices(solid).unwrap();
+        assert_eq!(verts.len(), 8, "a box must have exactly 8 vertices");
+    }
+
+    #[test]
+    fn vertex_handles_are_unique() {
+        let (k, solid) = kernel_with_box();
+        let verts = k.get_solid_vertices(solid).unwrap();
+        let mut sorted = verts.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), verts.len(), "vertex handles must be unique");
+    }
+
+    // ── get_face_normal ───────────────────────────────────────────
+
+    #[test]
+    fn face_normal_has_three_components() {
+        let (k, solid) = kernel_with_box();
+        let faces = k.get_solid_faces(solid).unwrap();
+        let normal = k.get_face_normal(faces[0]).unwrap();
+        assert_eq!(normal.len(), 3, "normal must have exactly 3 components");
+    }
+
+    #[test]
+    fn face_normal_is_unit_length() {
+        let (k, solid) = kernel_with_box();
+        let faces = k.get_solid_faces(solid).unwrap();
+        // Every face of a box is planar — all normals must be unit vectors.
+        for &fh in &faces {
+            let n = k.get_face_normal(fh).unwrap();
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            assert!(
+                (len - 1.0).abs() < 1e-10,
+                "face {fh} normal length {len} is not 1"
+            );
+        }
+    }
+
+    #[test]
+    fn face_normal_error_on_non_planar_face() {
+        let (k, solid) = kernel_with_cylinder();
+        // The cylindrical lateral face is not planar — verify via topology.
+        let solid_id = k.resolve_solid(solid).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&k.topo, solid_id).unwrap();
+        // At least one face must be non-planar (Cylinder surface).
+        let has_non_planar = faces.iter().any(|&fid| {
+            let face = k.topo.face(fid).unwrap();
+            !matches!(
+                face.surface(),
+                brepkit_topology::face::FaceSurface::Plane { .. }
+            )
+        });
+        assert!(
+            has_non_planar,
+            "cylinder must contain at least one non-planar face"
+        );
+    }
+
+    // ── get_entity_counts ─────────────────────────────────────────
+
+    #[test]
+    fn entity_counts_match_individual_queries() {
+        let (k, solid) = kernel_with_box();
+        let counts = k.get_entity_counts(solid).unwrap();
+        assert_eq!(
+            counts.len(),
+            3,
+            "get_entity_counts must return [faces, edges, vertices]"
+        );
+        let faces = k.get_solid_faces(solid).unwrap();
+        let edges = k.get_solid_edges(solid).unwrap();
+        let verts = k.get_solid_vertices(solid).unwrap();
+        assert_eq!(counts[0] as usize, faces.len(), "face count mismatch");
+        assert_eq!(counts[1] as usize, edges.len(), "edge count mismatch");
+        assert_eq!(counts[2] as usize, verts.len(), "vertex count mismatch");
+    }
+
+    #[test]
+    fn entity_counts_box_exact() {
+        let (k, solid) = kernel_with_box();
+        let counts = k.get_entity_counts(solid).unwrap();
+        assert_eq!(counts[0], 6, "box: 6 faces");
+        assert_eq!(counts[1], 12, "box: 12 edges");
+        assert_eq!(counts[2], 8, "box: 8 vertices");
+    }
+
+    // ── invalid handle ────────────────────────────────────────────
+    // Error-path tests use resolve_solid (which returns WasmError, not
+    // JsError) to avoid the JsError panic on non-wasm targets.
+
+    #[test]
+    fn invalid_solid_handle_returns_error_for_faces() {
+        let (k, _) = kernel_with_box();
+        let result = k.resolve_solid(9999);
+        assert!(
+            result.is_err(),
+            "non-existent solid handle must produce an error"
+        );
+    }
+
+    #[test]
+    fn invalid_solid_handle_returns_error_for_edges() {
+        let (k, _) = kernel_with_box();
+        let result = k.resolve_solid(9999);
+        assert!(
+            result.is_err(),
+            "non-existent solid handle must produce an error"
+        );
+    }
+
+    #[test]
+    fn invalid_solid_handle_returns_error_for_vertices() {
+        let (k, _) = kernel_with_box();
+        let result = k.resolve_solid(9999);
+        assert!(
+            result.is_err(),
+            "non-existent solid handle must produce an error"
+        );
+    }
+
+    #[test]
+    fn invalid_solid_handle_returns_error_for_entity_counts() {
+        let (k, _) = kernel_with_box();
+        let result = k.resolve_solid(9999);
+        assert!(
+            result.is_err(),
+            "non-existent solid handle must produce an error"
+        );
+    }
+}

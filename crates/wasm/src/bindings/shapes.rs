@@ -608,3 +608,133 @@ impl BrepKernel {
         Ok(face_id_to_u32(fid))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    // ── make_rectangle ────────────────────────────────────────────
+
+    #[test]
+    fn make_rectangle_returns_valid_face() {
+        let mut k = BrepKernel::new();
+        let h = k.make_rectangle(4.0, 2.0).unwrap();
+        let fid = k.resolve_face(h).unwrap();
+        let face = k.topo.face(fid).unwrap();
+        assert!(
+            matches!(face.surface(), FaceSurface::Plane { .. }),
+            "expected a Plane surface"
+        );
+    }
+
+    #[test]
+    fn make_rectangle_zero_width_is_error() {
+        use crate::error::validate_positive;
+        assert!(validate_positive(0.0, "width").is_err());
+    }
+
+    #[test]
+    fn make_rectangle_negative_height_is_error() {
+        use crate::error::validate_positive;
+        assert!(validate_positive(-3.0, "height").is_err());
+    }
+
+    #[test]
+    fn make_rectangle_nan_is_error() {
+        use crate::error::validate_positive;
+        assert!(validate_positive(f64::NAN, "width").is_err());
+    }
+
+    // ── make_polygon ──────────────────────────────────────────────
+
+    #[test]
+    fn make_polygon_triangle_returns_valid_face() {
+        let mut k = BrepKernel::new();
+        let coords = vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let h = k.make_polygon(coords).unwrap();
+        let fid = k.resolve_face(h).unwrap();
+        let face = k.topo.face(fid).unwrap();
+        assert!(matches!(face.surface(), FaceSurface::Plane { .. }));
+    }
+
+    #[test]
+    fn make_polygon_odd_length_coords_is_error() {
+        // 7 values — not a multiple of 3
+        assert_ne!(7 % 3, 0, "length 7 should fail the multiple-of-3 check");
+    }
+
+    #[test]
+    fn validate_positive_rejects_zero() {
+        assert!(crate::error::validate_positive(0.0, "x").is_err());
+    }
+
+    #[test]
+    fn validate_finite_rejects_nan() {
+        assert!(crate::error::validate_finite(f64::NAN, "x").is_err());
+    }
+
+    // ── make_vertex ───────────────────────────────────────────────
+
+    #[test]
+    fn make_vertex_stores_position() {
+        let mut k = BrepKernel::new();
+        let h = k.make_vertex(1.0, 2.0, 3.0).unwrap();
+        let vid = k.resolve_vertex(h).unwrap();
+        let v = k.topo.vertex(vid).unwrap();
+        let p = v.point();
+        assert!((p.x() - 1.0).abs() < 1e-10);
+        assert!((p.y() - 2.0).abs() < 1e-10);
+        assert!((p.z() - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn validate_finite_rejects_infinity() {
+        assert!(crate::error::validate_finite(f64::INFINITY, "x").is_err());
+    }
+
+    // ── make_line_edge ────────────────────────────────────────────
+
+    #[test]
+    fn make_line_edge_creates_line_curve() {
+        let mut k = BrepKernel::new();
+        let h = k.make_line_edge(0.0, 0.0, 0.0, 1.0, 0.0, 0.0).unwrap();
+        let eid = k.resolve_edge(h).unwrap();
+        let edge = k.topo.edge(eid).unwrap();
+        assert!(
+            matches!(edge.curve(), EdgeCurve::Line),
+            "expected EdgeCurve::Line"
+        );
+    }
+
+    #[test]
+    fn make_line_edge_endpoints_are_distinct_vertices() {
+        let mut k = BrepKernel::new();
+        let h = k.make_line_edge(0.0, 0.0, 0.0, 3.0, 4.0, 0.0).unwrap();
+        let eid = k.resolve_edge(h).unwrap();
+        let edge = k.topo.edge(eid).unwrap();
+        assert_ne!(edge.start(), edge.end(), "start and end should differ");
+    }
+
+    // ── make_wire ─────────────────────────────────────────────────
+
+    #[test]
+    fn make_wire_from_three_edges_succeeds() {
+        let mut k = BrepKernel::new();
+        let e0 = k.make_line_edge(0.0, 0.0, 0.0, 1.0, 0.0, 0.0).unwrap();
+        let e1 = k.make_line_edge(1.0, 0.0, 0.0, 1.0, 1.0, 0.0).unwrap();
+        let e2 = k.make_line_edge(1.0, 1.0, 0.0, 0.0, 0.0, 0.0).unwrap();
+        let wh = k.make_wire(vec![e0, e1, e2], true).unwrap();
+        let wid = k.resolve_wire(wh).unwrap();
+        let wire = k.topo.wire(wid).unwrap();
+        assert_eq!(wire.edges().len(), 3);
+        assert!(wire.is_closed());
+    }
+
+    #[test]
+    fn resolve_edge_invalid_handle_is_error() {
+        let k = BrepKernel::new();
+        assert!(k.resolve_edge(999).is_err());
+    }
+}

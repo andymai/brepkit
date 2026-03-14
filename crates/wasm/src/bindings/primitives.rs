@@ -129,3 +129,263 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid_id))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use crate::kernel::BrepKernel;
+
+    /// Helper: parse batch result and check a single op returned ok or error.
+    fn batch_has_ok(result: &str, idx: usize) -> bool {
+        let parsed: serde_json::Value = serde_json::from_str(result).unwrap();
+        parsed[idx]["ok"].is_number()
+    }
+
+    fn batch_has_error(result: &str, idx: usize) -> bool {
+        let parsed: serde_json::Value = serde_json::from_str(result).unwrap();
+        parsed[idx]["error"].is_string()
+    }
+
+    // ── make_box ────────────────────────────────────────────────────
+
+    #[test]
+    fn make_box_happy_path() {
+        let mut k = BrepKernel::new();
+        let r = k
+            .execute_batch(r#"[{"op": "makeBox", "args": {"width": 1, "height": 2, "depth": 3}}]"#);
+        assert!(batch_has_ok(&r, 0));
+    }
+
+    #[test]
+    fn make_box_negative_width() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[{"op": "makeBox", "args": {"width": -1, "height": 2, "depth": 3}}]"#,
+        );
+        assert!(batch_has_error(&r, 0));
+    }
+
+    #[test]
+    fn make_box_zero_height() {
+        let mut k = BrepKernel::new();
+        let r = k
+            .execute_batch(r#"[{"op": "makeBox", "args": {"width": 1, "height": 0, "depth": 3}}]"#);
+        assert!(batch_has_error(&r, 0));
+    }
+
+    #[test]
+    fn make_box_volume() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[
+                {"op": "makeBox", "args": {"width": 2, "height": 3, "depth": 4}},
+                {"op": "volume", "args": {"solid": 0}}
+            ]"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let vol = parsed[1]["ok"].as_f64().unwrap();
+        assert!((vol - 24.0).abs() < 0.1, "expected ~24.0, got {vol}");
+    }
+
+    // ── make_cylinder ───────────────────────────────────────────────
+
+    #[test]
+    fn make_cylinder_happy_path() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(r#"[{"op": "makeCylinder", "args": {"radius": 1, "height": 2}}]"#);
+        assert!(batch_has_ok(&r, 0));
+    }
+
+    #[test]
+    fn make_cylinder_negative_radius() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(r#"[{"op": "makeCylinder", "args": {"radius": -1, "height": 2}}]"#);
+        assert!(batch_has_error(&r, 0));
+    }
+
+    #[test]
+    fn make_cylinder_zero_height() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(r#"[{"op": "makeCylinder", "args": {"radius": 1, "height": 0}}]"#);
+        assert!(batch_has_error(&r, 0));
+    }
+
+    // ── make_sphere ─────────────────────────────────────────────────
+
+    #[test]
+    fn make_sphere_happy_path() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(r#"[{"op": "makeSphere", "args": {"radius": 1}}]"#);
+        assert!(batch_has_ok(&r, 0));
+    }
+
+    #[test]
+    fn make_sphere_negative_radius() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(r#"[{"op": "makeSphere", "args": {"radius": -1}}]"#);
+        assert!(batch_has_error(&r, 0));
+    }
+
+    // ── make_cone ───────────────────────────────────────────────────
+
+    #[test]
+    fn make_cone_happy_path_full_cone() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[{"op": "makeCone", "args": {"bottomRadius": 2, "topRadius": 0, "height": 3}}]"#,
+        );
+        assert!(batch_has_ok(&r, 0));
+    }
+
+    #[test]
+    fn make_cone_happy_path_frustum() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[{"op": "makeCone", "args": {"bottomRadius": 2, "topRadius": 1, "height": 3}}]"#,
+        );
+        assert!(batch_has_ok(&r, 0));
+    }
+
+    #[test]
+    fn make_cone_both_radii_zero() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[{"op": "makeCone", "args": {"bottomRadius": 0, "topRadius": 0, "height": 3}}]"#,
+        );
+        assert!(batch_has_error(&r, 0));
+    }
+
+    #[test]
+    fn make_cone_negative_radius() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[{"op": "makeCone", "args": {"bottomRadius": -1, "topRadius": 1, "height": 3}}]"#,
+        );
+        assert!(batch_has_error(&r, 0));
+    }
+
+    #[test]
+    fn make_cone_zero_height() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[{"op": "makeCone", "args": {"bottomRadius": 1, "topRadius": 0.5, "height": 0}}]"#,
+        );
+        assert!(batch_has_error(&r, 0));
+    }
+
+    // ── make_torus ──────────────────────────────────────────────────
+
+    #[test]
+    fn make_torus_happy_path() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[{"op": "makeTorus", "args": {"majorRadius": 3, "minorRadius": 1}}]"#,
+        );
+        assert!(batch_has_ok(&r, 0));
+    }
+
+    #[test]
+    fn make_torus_minor_equals_major() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[{"op": "makeTorus", "args": {"majorRadius": 2, "minorRadius": 2}}]"#,
+        );
+        assert!(batch_has_error(&r, 0));
+    }
+
+    #[test]
+    fn make_torus_minor_greater_than_major() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[{"op": "makeTorus", "args": {"majorRadius": 1, "minorRadius": 2}}]"#,
+        );
+        assert!(batch_has_error(&r, 0));
+    }
+
+    #[test]
+    fn make_torus_zero_major_radius() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[{"op": "makeTorus", "args": {"majorRadius": 0, "minorRadius": 1}}]"#,
+        );
+        assert!(batch_has_error(&r, 0));
+    }
+
+    // ── make_ellipsoid ──────────────────────────────────────────────
+
+    #[test]
+    fn make_ellipsoid_happy_path() {
+        let mut k = BrepKernel::new();
+        let r =
+            k.execute_batch(r#"[{"op": "makeEllipsoid", "args": {"rx": 1, "ry": 2, "rz": 3}}]"#);
+        assert!(batch_has_ok(&r, 0));
+    }
+
+    #[test]
+    fn make_ellipsoid_negative_rx() {
+        let mut k = BrepKernel::new();
+        let r =
+            k.execute_batch(r#"[{"op": "makeEllipsoid", "args": {"rx": -1, "ry": 2, "rz": 3}}]"#);
+        assert!(batch_has_error(&r, 0));
+    }
+
+    #[test]
+    fn make_ellipsoid_zero_ry() {
+        let mut k = BrepKernel::new();
+        let r =
+            k.execute_batch(r#"[{"op": "makeEllipsoid", "args": {"rx": 1, "ry": 0, "rz": 3}}]"#);
+        assert!(batch_has_error(&r, 0));
+    }
+
+    // ── multiple primitives in one kernel ─────────────────────────────
+
+    #[test]
+    fn multiple_primitives_independent_handles() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[
+                {"op": "makeBox", "args": {"width": 1, "height": 1, "depth": 1}},
+                {"op": "makeCylinder", "args": {"radius": 0.5, "height": 2}},
+                {"op": "makeSphere", "args": {"radius": 0.5}}
+            ]"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let h0 = parsed[0]["ok"].as_u64().unwrap();
+        let h1 = parsed[1]["ok"].as_u64().unwrap();
+        let h2 = parsed[2]["ok"].as_u64().unwrap();
+        assert_ne!(h0, h1);
+        assert_ne!(h1, h2);
+        assert_ne!(h0, h2);
+    }
+
+    #[test]
+    fn all_six_primitives_in_one_kernel() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[
+                {"op": "makeBox", "args": {"width": 1, "height": 2, "depth": 3}},
+                {"op": "makeCylinder", "args": {"radius": 1, "height": 2}},
+                {"op": "makeSphere", "args": {"radius": 1}},
+                {"op": "makeCone", "args": {"bottomRadius": 1, "topRadius": 0.5, "height": 2}},
+                {"op": "makeTorus", "args": {"majorRadius": 3, "minorRadius": 1}},
+                {"op": "makeEllipsoid", "args": {"rx": 1, "ry": 2, "rz": 3}}
+            ]"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        for i in 0..6 {
+            assert!(
+                parsed[i]["ok"].is_number(),
+                "primitive {i} failed: {}",
+                parsed[i]
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_handle_returns_error() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(r#"[{"op": "volume", "args": {"solid": 9999}}]"#);
+        assert!(batch_has_error(&r, 0));
+    }
+}
