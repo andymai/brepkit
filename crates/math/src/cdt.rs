@@ -302,8 +302,8 @@ impl Cdt {
         // If found, split the constraint into sub-segments through them.
         let p0 = self.vertices[v0];
         let p1 = self.vertices[v1];
-        let seg_len_sq = (p1.x() - p0.x()) * (p1.x() - p0.x())
-            + (p1.y() - p0.y()) * (p1.y() - p0.y());
+        let seg_len_sq =
+            (p1.x() - p0.x()) * (p1.x() - p0.x()) + (p1.y() - p0.y()) * (p1.y() - p0.y());
 
         if seg_len_sq > 1e-20 {
             let mut collinear: Vec<(usize, f64)> = Vec::new();
@@ -327,9 +327,8 @@ impl Cdt {
             }
 
             if !collinear.is_empty() {
-                collinear.sort_by(|a, b| {
-                    a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                collinear
+                    .sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
                 let mut prev = v0;
                 for &(vi, _) in &collinear {
                     self.insert_constraint(prev, vi)?;

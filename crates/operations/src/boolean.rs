@@ -5614,6 +5614,7 @@ fn analytic_boolean(
             // is required for watertight tessellation.
             let existing_eid = if let EdgeCurve::Circle(disc_circle) = &ec {
                 let mut found = None;
+                #[allow(clippy::explicit_iter_loop)]
                 for (&(a, b), &eid) in edge_map.iter() {
                     if a != b {
                         continue; // Not a closed edge.
@@ -5624,9 +5625,7 @@ fn analytic_boolean(
                                 (existing_circle.center() - disc_circle.center()).length();
                             let radius_diff =
                                 (existing_circle.radius() - disc_circle.radius()).abs();
-                            if center_dist < tol.linear * 10.0
-                                && radius_diff < tol.linear * 10.0
-                            {
+                            if center_dist < tol.linear * 10.0 && radius_diff < tol.linear * 10.0 {
                                 found = Some(eid);
                                 break;
                             }
