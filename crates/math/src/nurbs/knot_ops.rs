@@ -8,6 +8,13 @@ use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::Point3;
 
+/// Tolerance for knot-value and related parametric-space equality comparisons.
+///
+/// Set near machine epsilon — knot vectors are dimensionless parameters in
+/// [0, 1] (or similar small ranges), so a tolerance of 1e-15 catches
+/// floating-point coincidence without false positives.
+const KNOT_EPS: f64 = 1e-15;
+
 /// Insert knot `u` into the curve `r` times (Boehm's algorithm, A5.1).
 ///
 /// # Errors
@@ -24,7 +31,10 @@ pub fn curve_knot_insert(curve: &NurbsCurve, u: f64, r: usize) -> Result<NurbsCu
     let ws = curve.weights();
 
     // Count existing multiplicity of u.
-    let s = knots.iter().filter(|&&kv| (kv - u).abs() < 1e-15).count();
+    let s = knots
+        .iter()
+        .filter(|&&kv| (kv - u).abs() < KNOT_EPS)
+        .count();
 
     let r = r.min(p.saturating_sub(s)); // Can't insert beyond full multiplicity
     if r == 0 {
@@ -54,7 +64,7 @@ pub fn curve_knot_insert(curve: &NurbsCurve, u: f64, r: usize) -> Result<NurbsCu
         // Compute new points in the affected region.
         for i in (ck - p + 1)..=ck {
             let denom = current_knots[i + p] - current_knots[i];
-            let alpha = if denom.abs() < 1e-15 {
+            let alpha = if denom.abs() < KNOT_EPS {
                 0.0
             } else {
                 (u - current_knots[i]) / denom
@@ -236,7 +246,7 @@ pub fn curve_knot_remove(
     // Find the last index of knot u in the knot vector.
     let mut r_last: Option<usize> = None;
     for (i, &kv) in knots.iter().enumerate() {
-        if (kv - u).abs() < 1e-15 {
+        if (kv - u).abs() < KNOT_EPS {
             r_last = Some(i);
         }
     }
@@ -337,13 +347,13 @@ pub fn curve_knot_remove(
         let mut prev = pw[k - p]; // old[k-p] = new[k-p]
         for idx in (k - p + 1)..=(k) {
             let denom = removed_knots[idx + p] - removed_knots[idx];
-            let alpha = if denom.abs() < 1e-15 {
+            let alpha = if denom.abs() < KNOT_EPS {
                 0.0
             } else {
                 (u - removed_knots[idx]) / denom
             };
             let qi = pw[idx]; // new[idx]
-            let old_i = if alpha.abs() < 1e-15 {
+            let old_i = if alpha.abs() < KNOT_EPS {
                 qi
             } else {
                 [
@@ -363,13 +373,13 @@ pub fn curve_knot_remove(
         let mut next = pw[k + 1]; // old[k] = new[k+1]
         for idx in ((k - p + 1)..=(k)).rev() {
             let denom = removed_knots[idx + p] - removed_knots[idx];
-            let alpha = if denom.abs() < 1e-15 {
+            let alpha = if denom.abs() < KNOT_EPS {
                 0.0
             } else {
                 (u - removed_knots[idx]) / denom
             };
             let qi = pw[idx]; // new[idx]
-            let old_im1 = if (1.0 - alpha).abs() < 1e-15 {
+            let old_im1 = if (1.0 - alpha).abs() < KNOT_EPS {
                 qi
             } else {
                 [
@@ -402,7 +412,7 @@ pub fn curve_knot_remove(
     for idx in 0..p.saturating_sub(1) {
         let lp = left_pts[idx];
         let rp = right_pts[idx + 1];
-        let dist = if lp[3].abs() > 1e-15 && rp[3].abs() > 1e-15 {
+        let dist = if lp[3].abs() > KNOT_EPS && rp[3].abs() > KNOT_EPS {
             let dx = lp[0] / lp[3] - rp[0] / rp[3];
             let dy = lp[1] / lp[3] - rp[1] / rp[3];
             let dz = lp[2] / lp[3] - rp[2] / rp[3];
@@ -501,11 +511,11 @@ pub fn curve_split(curve: &NurbsCurve, u: f64) -> Result<(NurbsCurve, NurbsCurve
     // Find the first and last indices of u in the knot vector.
     let first_u = knots
         .iter()
-        .position(|&k| (k - u).abs() < 1e-15)
+        .position(|&k| (k - u).abs() < KNOT_EPS)
         .ok_or(MathError::EmptyInput)?;
 
     let mut last_u = first_u;
-    while last_u + 1 < knots.len() && (knots[last_u + 1] - u).abs() < 1e-15 {
+    while last_u + 1 < knots.len() && (knots[last_u + 1] - u).abs() < KNOT_EPS {
         last_u += 1;
     }
 
