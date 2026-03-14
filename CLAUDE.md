@@ -132,11 +132,32 @@ Quick reference — find the right file for any task:
 ### L3: wasm (`crates/wasm/src/`)
 | Task | File(s) |
 |------|---------|
-| `BrepKernel` struct & all JS bindings | `kernel.rs` |
-| Error types & validation helpers | `error.rs` |
-| Shape type wrappers | `shapes.rs` |
-| IO-specific bindings | `io.rs` |
-| Operation-specific bindings | `operations.rs` |
+| `BrepKernel` struct, constructor, private helpers | `kernel.rs` |
+| Error types, validation newtypes (`Positive`, `Finite`, `CoordArray3`) | `error.rs` |
+| Shape type wrappers (`JsMesh`, `JsEdgeLines`, `JsPoint3`, `JsVec3`) | `shapes.rs` |
+| Entity handle resolution (`resolve_*`) & ID converters | `handles.rs` |
+| Shared free functions, constants (`TOL`), 2D polygon helpers | `helpers.rs` |
+| Checkpoint & sketch state structs | `state.rs` |
+| Typed result structs (`GroupedMeshResult`, `UvMeshResult`, tsify) | `types.rs` |
+| **Binding modules** (`bindings/`) | |
+| Primitive solid creation | `bindings/primitives.rs` |
+| Shape construction (vertices, edges, wires, faces) | `bindings/shapes.rs` |
+| Modeling operations (extrude, revolve, sweep, loft, fillet, etc.) | `bindings/operations.rs` |
+| Boolean operations (fuse, cut, intersect) | `bindings/booleans.rs` |
+| Transform, copy, mirror, pattern | `bindings/transforms.rs` |
+| Topology query, edge/surface evaluation | `bindings/query.rs` |
+| Measurement (volume, area, bbox, distances) | `bindings/measure.rs` |
+| Tessellation & wireframe | `bindings/tessellate.rs` |
+| File I/O import/export (`#[cfg(feature = "io")]`) | `bindings/io.rs` |
+| Shape healing, validation, feature recognition | `bindings/heal.rs` |
+| Checkpoint / restore | `bindings/checkpoint.rs` |
+| 2D sketch constraint solver | `bindings/sketch.rs` |
+| Assembly management | `bindings/assembly.rs` |
+| 2D polygon operations | `bindings/polygon2d.rs` |
+| NURBS curve/surface manipulation | `bindings/nurbs.rs` |
+| Batch execution & dispatch | `bindings/batch.rs` |
+| **Proc macro crate** (`crates/wasm-macros/`) | |
+| `#[wasm_binding]` attribute (panic safety) | `wasm-macros/src/lib.rs` |
 
 ## Ripple-Effect Checklists
 
@@ -163,7 +184,10 @@ Update these files (16+ match sites across 5 crates):
 - [ ] `operations/src/boolean/` — sample edge curve to points (3 sites across sub-modules)
 - [ ] `io/src/step/writer.rs` — write as STEP entity
 - [ ] `io/src/iges/writer.rs` — write as IGES entity
-- [ ] `wasm/src/kernel.rs` — **8 match sites**: type tag, param range, evaluate, control point data, tessellate, edge geometry query, NURBS data extraction, batch dispatch
+- [ ] `wasm/src/bindings/query.rs` — type tag, param range, evaluate, edge geometry query
+- [ ] `wasm/src/bindings/batch.rs` — batch dispatch match arms
+- [ ] `wasm/src/bindings/tessellate.rs` — tessellation dispatch
+- [ ] `wasm/src/bindings/nurbs.rs` — NURBS data extraction
 
 Also check (may use wildcards that silently swallow):
 - [ ] `io/src/step/reader.rs` — reconstruct from STEP entities
@@ -187,7 +211,10 @@ Update these files (22+ match sites across 7+ files):
 - [ ] `operations/src/offset_face.rs` — offset surface geometry
 - [ ] `io/src/step/writer.rs` — write as STEP entity
 - [ ] `io/src/iges/writer.rs` — write as IGES entity
-- [ ] `wasm/src/kernel.rs` — **8 match sites**: type tag, analytic params, evaluate, domain, project, surface data, NURBS extract, copy surface
+- [ ] `wasm/src/bindings/query.rs` — type tag, analytic params, evaluate, domain, project, surface data
+- [ ] `wasm/src/bindings/batch.rs` — batch dispatch match arms
+- [ ] `wasm/src/bindings/tessellate.rs` — tessellation dispatch
+- [ ] `wasm/src/bindings/nurbs.rs` — NURBS extract
 
 Also update if the surface is analytic:
 - [ ] `math/src/analytic_intersection.rs` — `AnalyticSurface` enum (4 match sites)
@@ -278,8 +305,8 @@ Pattern: see `obj/` module (simplest), `step/` (most complex)
 2. **Add module** to `io/src/lib.rs`
 3. **Writer signature**: `pub fn write_format(topo: &Topology, solid_id: SolidId) -> Result<Vec<u8>, IoError>`
 4. **Reader signature**: `pub fn read_format(topo: &mut Topology, data: &[u8]) -> Result<SolidId, IoError>`
-5. **Add WASM bindings** `importFormat` / `exportFormat` in `kernel.rs`
-6. **Add to `executeBatch` dispatch** if the format is commonly used
+5. **Add WASM bindings** `importFormat` / `exportFormat` in `bindings/io.rs`
+6. **Add to `executeBatch` dispatch** in `bindings/batch.rs` if commonly used
 
 ### Recipe 3: Add a new operation
 
@@ -288,24 +315,29 @@ Pattern: see `extrude.rs` (basic), `boolean.rs` (complex)
 1. **Create file** `operations/src/op_name.rs`
 2. **Define function**: `pub fn op_name(topo: &mut Topology, ...) -> Result<SolidId, OperationsError>`
 3. **Add module** to `operations/src/lib.rs` with `pub mod op_name;`
-4. **Add WASM binding** in `kernel.rs`
-5. **Add to batch dispatch** in `dispatch_op` if applicable
+4. **Add WASM binding** in the appropriate `bindings/` module
+5. **Add to batch dispatch** in `bindings/batch.rs` if applicable
 6. **Add test** — create a known shape, apply operation, verify with `measure`
 
 ### Recipe 4: Add a new WASM binding
 
-Pattern: any method in `kernel.rs`
+Pick the appropriate `bindings/` module (or create a new one). Each module adds
+methods to `BrepKernel` via a separate `#[wasm_bindgen] impl` block.
 
 ```rust
+// In bindings/my_domain.rs:
+use wasm_bindgen::prelude::*;
+use crate::kernel::BrepKernel;
+use crate::error::{WasmError, validate_positive};
+use crate::handles::solid_id_to_u32;
+
 #[wasm_bindgen]
 impl BrepKernel {
     #[wasm_bindgen(js_name = "myOperation")]
-    pub fn my_operation(&mut self, param: f64) -> Result<JsValue, JsValue> {
+    pub fn my_operation(&mut self, param: f64) -> Result<u32, JsError> {
         validate_positive(param, "param")?;
-        let result = some_operation(&mut self.topology, param)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        // Return the entity ID as JsValue
-        Ok(JsValue::from_f64(result.index() as f64))
+        let result = some_operation(&mut self.topo, param)?;
+        Ok(solid_id_to_u32(result))
     }
 }
 ```
@@ -313,8 +345,11 @@ impl BrepKernel {
 Key points:
 - Use `js_name` for camelCase JS naming
 - Validate inputs with helpers from `error.rs`
-- Map errors to `JsValue::from_str`
-- Return entity IDs as `f64` (JS number)
+- Return entity IDs as `u32` (auto-converted to JS number)
+- Errors use `?` operator (WasmError → JsError via blanket `From` impl)
+- Add a `batch_*` companion fn if the op should be in `executeBatch`
+- Add contract tests using `execute_batch()` (not direct method calls,
+  since `JsError` can't be constructed on non-wasm targets)
 
 ## Commands
 

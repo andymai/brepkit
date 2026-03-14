@@ -62,6 +62,7 @@ impl JsVec3 {
 /// Positions and normals are flattened to `[x, y, z, x, y, z, ...]` format
 /// for efficient WASM transfer and direct use as GPU vertex buffers.
 #[wasm_bindgen]
+#[derive(Debug)]
 pub struct JsMesh {
     positions: Vec<f64>,
     normals: Vec<f64>,
@@ -152,6 +153,7 @@ impl JsMesh {
 /// Positions are flattened to `[x, y, z, x, y, z, ...]` format.
 /// Offsets are float-array indices into `positions` (already multiplied by 3).
 #[wasm_bindgen]
+#[derive(Debug)]
 pub struct JsEdgeLines {
     positions: Vec<f64>,
     offsets: Vec<u32>,
