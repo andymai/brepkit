@@ -3215,19 +3215,21 @@ fn tessellate_nonplanar_cdt(
     let wire = topo.wire(face_data.outer_wire())?;
     let tol_dup = 1e-10;
 
-    let mut boundary_3d: Vec<(Point3, u32, EdgeId)> = Vec::new();
+    // Fourth element: is_forward flag from OrientedEdge — needed for seam UV assignment.
+    let mut boundary_3d: Vec<(Point3, u32, EdgeId, bool)> = Vec::new();
     for oe in wire.edges() {
         let edge_id_local = oe.edge();
         let edge_idx = edge_id_local.index();
+        let is_fwd = oe.is_forward();
         if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
-            let ordered: Vec<u32> = if oe.is_forward() {
+            let ordered: Vec<u32> = if is_fwd {
                 global_ids.clone()
             } else {
                 global_ids.iter().rev().copied().collect()
             };
             for (j, &gid) in ordered.iter().enumerate() {
                 if j == 0 && !boundary_3d.is_empty() {
-                    let (_, last_gid, _) = boundary_3d[boundary_3d.len() - 1];
+                    let (_, last_gid, _, _) = boundary_3d[boundary_3d.len() - 1];
                     if last_gid == gid
                         || (merged.positions[last_gid as usize] - merged.positions[gid as usize])
                             .length()
@@ -3236,20 +3238,20 @@ fn tessellate_nonplanar_cdt(
                         continue;
                     }
                 }
-                boundary_3d.push((merged.positions[gid as usize], gid, edge_id_local));
+                boundary_3d.push((merged.positions[gid as usize], gid, edge_id_local, is_fwd));
             }
         } else {
             // Edge not in shared pool — insert directly.
             let edge_data = topo.edge(oe.edge())?;
             let points = sample_edge(topo, edge_data, deflection)?;
-            let ordered: Vec<Point3> = if oe.is_forward() {
+            let ordered: Vec<Point3> = if is_fwd {
                 points
             } else {
                 points.into_iter().rev().collect()
             };
             for (j, &pt) in ordered.iter().enumerate() {
                 if j == 0 && !boundary_3d.is_empty() {
-                    let (last_pos, _, _) = boundary_3d[boundary_3d.len() - 1];
+                    let (last_pos, _, _, _) = boundary_3d[boundary_3d.len() - 1];
                     if (last_pos - pt).length() < tol_dup {
                         continue;
                     }
@@ -3261,14 +3263,14 @@ fn tessellate_nonplanar_cdt(
                     merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
                     idx
                 });
-                boundary_3d.push((pt, gid, edge_id_local));
+                boundary_3d.push((pt, gid, edge_id_local, is_fwd));
             }
         }
     }
 
     // Remove closing duplicate.
     if boundary_3d.len() > 2 {
-        if let (Some(&(_, first_gid, _)), Some(&(_, last_gid, _))) =
+        if let (Some(&(_, first_gid, _, _)), Some(&(_, last_gid, _, _))) =
             (boundary_3d.first(), boundary_3d.last())
         {
             if first_gid == last_gid
@@ -3291,9 +3293,9 @@ fn tessellate_nonplanar_cdt(
     // Step 2: Project boundary 3D points to (u,v) parameter space.
     // For NURBS surfaces, check the PCurve registry first — evaluating a
     // PCurve directly is O(1) vs O(n) Newton projection.
-    let boundary_uv: Vec<(f64, f64)> = boundary_3d
+    let mut boundary_uv: Vec<(f64, f64)> = boundary_3d
         .iter()
-        .map(|(pt, _, edge_id_local)| {
+        .map(|(pt, _, edge_id_local, _)| {
             // Try PCurve lookup first.
             if let Some(pcurve) = topo.pcurves.get(*edge_id_local, face_id) {
                 // We have the edge's PCurve — find the closest t and evaluate.
@@ -3310,6 +3312,144 @@ fn tessellate_nonplanar_cdt(
         .collect::<Result<Vec<_>, _>>()?;
 
     // Compute (u,v) bounding box.
+    let u_min = boundary_uv
+        .iter()
+        .map(|p| p.0)
+        .fold(f64::INFINITY, f64::min);
+    let u_max = boundary_uv
+        .iter()
+        .map(|p| p.0)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let v_min = boundary_uv
+        .iter()
+        .map(|p| p.1)
+        .fold(f64::INFINITY, f64::min);
+    let v_max = boundary_uv
+        .iter()
+        .map(|p| p.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    // Step 2b: Detect and fix degenerate seam edges for full-revolution faces.
+    //
+    // Full-revolution cylinder/cone faces have a seam edge that appears twice
+    // in the wire (forward + backward). Both traversals project to the same
+    // u values, creating a diagonal slit in UV space. Fix: assign u_max for
+    // forward seam, u_min for backward seam, with v interpolated linearly.
+    {
+        let mut wire_edge_counts: HashMap<usize, usize> = HashMap::new();
+        for oe in wire.edges() {
+            *wire_edge_counts.entry(oe.edge().index()).or_default() += 1;
+        }
+        let seam_edge_indices: std::collections::HashSet<usize> = wire_edge_counts
+            .iter()
+            .filter(|&(_, &c)| c > 1)
+            .map(|(&idx, _)| idx)
+            .collect();
+
+        if !seam_edge_indices.is_empty() {
+            // Compute UV bounds from non-seam boundary points.
+            let (u_min_bnd, u_max_bnd, v_min_bnd, v_max_bnd) = {
+                let non_seam_uvs: Vec<_> = boundary_uv
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| !seam_edge_indices.contains(&boundary_3d[*i].2.index()))
+                    .map(|(_, uv)| *uv)
+                    .collect();
+                if non_seam_uvs.is_empty() {
+                    (u_min, u_max, v_min, v_max)
+                } else {
+                    (
+                        non_seam_uvs
+                            .iter()
+                            .map(|p| p.0)
+                            .fold(f64::INFINITY, f64::min),
+                        non_seam_uvs
+                            .iter()
+                            .map(|p| p.0)
+                            .fold(f64::NEG_INFINITY, f64::max),
+                        non_seam_uvs
+                            .iter()
+                            .map(|p| p.1)
+                            .fold(f64::INFINITY, f64::min),
+                        non_seam_uvs
+                            .iter()
+                            .map(|p| p.1)
+                            .fold(f64::NEG_INFINITY, f64::max),
+                    )
+                }
+            };
+
+            // Identify contiguous runs of seam-edge boundary points.
+            #[allow(clippy::items_after_statements)]
+            struct SeamRun {
+                indices: Vec<usize>,
+                is_forward: bool,
+            }
+            let mut seam_runs: Vec<SeamRun> = Vec::new();
+            let mut current_indices: Vec<usize> = Vec::new();
+            let mut current_fwd: Option<bool> = None;
+            for i in 0..n_boundary {
+                let (_, _, edge_id, is_fwd) = boundary_3d[i];
+                if seam_edge_indices.contains(&edge_id.index()) {
+                    current_indices.push(i);
+                    if current_fwd.is_none() {
+                        current_fwd = Some(is_fwd);
+                    }
+                } else if !current_indices.is_empty() {
+                    seam_runs.push(SeamRun {
+                        indices: std::mem::take(&mut current_indices),
+                        is_forward: current_fwd.unwrap_or(true),
+                    });
+                    current_fwd = None;
+                }
+            }
+            if !current_indices.is_empty() {
+                // Check if this run wraps around to the start.
+                if !seam_runs.is_empty()
+                    && seam_edge_indices.contains(&boundary_3d[0].2.index())
+                {
+                    current_indices.extend(seam_runs.remove(0).indices);
+                }
+                seam_runs.push(SeamRun {
+                    indices: current_indices,
+                    is_forward: current_fwd.unwrap_or(true),
+                });
+            }
+
+            // Assign UV for each seam run.
+            // Forward traversal → u_max (right edge of UV rectangle).
+            // Backward traversal → u_min (left edge of UV rectangle).
+            for run in &seam_runs {
+                let u_assign = if run.is_forward {
+                    u_max_bnd
+                } else {
+                    u_min_bnd
+                };
+                let n_pts = run.indices.len();
+
+                // Determine v-direction from the run's first boundary point.
+                let v_first = boundary_uv[run.indices[0]].1;
+                let (v_start, v_end) =
+                    if (v_first - v_min_bnd).abs() < (v_first - v_max_bnd).abs() {
+                        (v_min_bnd, v_max_bnd)
+                    } else {
+                        (v_max_bnd, v_min_bnd)
+                    };
+
+                for (k, &i) in run.indices.iter().enumerate() {
+                    let t = if n_pts > 1 {
+                        k as f64 / (n_pts - 1) as f64
+                    } else {
+                        0.5
+                    };
+                    let v = v_start + t * (v_end - v_start);
+                    boundary_uv[i] = (u_assign, v);
+                }
+            }
+        }
+    }
+
+    // Recompute UV bounding box after seam fix.
     let u_min = boundary_uv
         .iter()
         .map(|p| p.0)
@@ -5100,6 +5240,35 @@ mod winding_tests {
         assert_eq!(
             boundary, 0,
             "mesh should be watertight (0 boundary edges), got {boundary}"
+        );
+    }
+
+    #[test]
+    fn tessellate_boolean_cut_cone_watertight() {
+        let mut topo = Topology::new();
+        let cone = crate::primitives::make_cone(&mut topo, 1.5, 0.5, 4.0)
+            .expect("cone");
+        let tool = crate::primitives::make_box(&mut topo, 3.0, 3.0, 3.0)
+            .expect("box");
+        crate::transform::transform_solid(
+            &mut topo,
+            tool,
+            &brepkit_math::mat::Mat4::translation(-0.5, -0.5, 0.5),
+        )
+        .expect("translate");
+        let cut = crate::boolean::boolean(
+            &mut topo,
+            crate::boolean::BooleanOp::Cut,
+            cone,
+            tool,
+        )
+        .expect("boolean cut");
+        let mesh = super::tessellate_solid(&topo, cut, 0.1)
+            .expect("tessellate");
+        let boundary = super::boundary_edge_count(&mesh);
+        assert_eq!(
+            boundary, 0,
+            "cone mesh should be watertight, got {boundary} boundary edges"
         );
     }
 }
