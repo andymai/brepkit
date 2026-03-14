@@ -298,6 +298,48 @@ impl Cdt {
             return Ok(());
         }
 
+        // Check for existing vertices that lie on the segment v0→v1.
+        // If found, split the constraint into sub-segments through them.
+        let p0 = self.vertices[v0];
+        let p1 = self.vertices[v1];
+        let seg_len_sq = (p1.x() - p0.x()) * (p1.x() - p0.x())
+            + (p1.y() - p0.y()) * (p1.y() - p0.y());
+
+        if seg_len_sq > 1e-20 {
+            let mut collinear: Vec<(usize, f64)> = Vec::new();
+            let sc = self.super_count;
+            for (vi, &pt) in self.vertices.iter().enumerate() {
+                if vi == v0 || vi == v1 || vi < sc {
+                    continue;
+                }
+                let dx = p1.x() - p0.x();
+                let dy = p1.y() - p0.y();
+                let t = ((pt.x() - p0.x()) * dx + (pt.y() - p0.y()) * dy) / seg_len_sq;
+                if t > 1e-6 && t < 1.0 - 1e-6 {
+                    let proj_x = p0.x() + t * dx;
+                    let proj_y = p0.y() + t * dy;
+                    let dist_sq = (pt.x() - proj_x) * (pt.x() - proj_x)
+                        + (pt.y() - proj_y) * (pt.y() - proj_y);
+                    if dist_sq < 1e-12 * seg_len_sq {
+                        collinear.push((vi, t));
+                    }
+                }
+            }
+
+            if !collinear.is_empty() {
+                collinear.sort_by(|a, b| {
+                    a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
+                let mut prev = v0;
+                for &(vi, _) in &collinear {
+                    self.insert_constraint(prev, vi)?;
+                    prev = vi;
+                }
+                self.insert_constraint(prev, v1)?;
+                return Ok(());
+            }
+        }
+
         // Recover the edge by flipping.
         self.recover_edge(v0, v1)?;
         self.constraints.insert(key);
@@ -1895,5 +1937,38 @@ mod tests {
             a += poly[i].x() * poly[j].y() - poly[j].x() * poly[i].y();
         }
         a.abs() / 2.0
+    }
+
+    #[test]
+    fn insert_constraint_through_collinear_vertices() {
+        let bounds = (Point2::new(-1.0, -1.0), Point2::new(11.0, 2.0));
+        let mut cdt = Cdt::with_capacity(bounds, 10);
+        // Insert a row of points along y=0.5.
+        let v0 = cdt.insert_point(Point2::new(0.0, 0.5)).expect("v0");
+        let v1 = cdt.insert_point(Point2::new(2.0, 0.5)).expect("v1");
+        let v2 = cdt.insert_point(Point2::new(5.0, 0.5)).expect("v2");
+        let v3 = cdt.insert_point(Point2::new(8.0, 0.5)).expect("v3");
+        let v4 = cdt.insert_point(Point2::new(10.0, 0.5)).expect("v4");
+        // Off-line points so Delaunay doesn't trivially produce the edge.
+        let _ = cdt.insert_point(Point2::new(3.0, 1.5)).expect("off1");
+        let _ = cdt.insert_point(Point2::new(6.0, -0.5)).expect("off2");
+        // Constraint from v0 to v4 must split through v1, v2, v3.
+        cdt.insert_constraint(v0, v4)
+            .expect("constraint should succeed");
+        let tris = cdt.triangles();
+        let has_edge = |a: usize, b: usize| -> bool {
+            tris.iter().any(|&(i, j, k)| {
+                (i == a && j == b)
+                    || (j == a && k == b)
+                    || (k == a && i == b)
+                    || (i == b && j == a)
+                    || (j == b && k == a)
+                    || (k == b && i == a)
+            })
+        };
+        assert!(has_edge(v0, v1), "missing edge v0-v1");
+        assert!(has_edge(v1, v2), "missing edge v1-v2");
+        assert!(has_edge(v2, v3), "missing edge v2-v3");
+        assert!(has_edge(v3, v4), "missing edge v3-v4");
     }
 }
