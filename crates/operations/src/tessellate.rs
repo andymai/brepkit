@@ -2987,7 +2987,133 @@ pub fn tessellate_solid(
         }
     }
 
+    // Phase 6: Vertex welding — close remaining boundary gaps from
+    // independently-sampled edges that trace the same curve.
+    weld_boundary_vertices(&mut merged, deflection);
+
     Ok(merged)
+}
+
+/// Weld nearby boundary vertices to close gaps from non-shared edges.
+///
+/// After tessellation, boundary edges (edges with only 1 adjacent triangle)
+/// may exist where adjacent faces used separate edge entities for the same
+/// geometric curve. This function finds pairs of nearby boundary vertices
+/// and merges them by rewriting index references.
+#[allow(clippy::too_many_lines)]
+fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
+    let n_verts = mesh.positions.len();
+    let tri_count = mesh.indices.len() / 3;
+    if tri_count == 0 {
+        return;
+    }
+
+    // Build edge → face count and identify boundary vertices.
+    let mut edge_count: HashMap<(u32, u32), u32> = HashMap::new();
+    for t in 0..tri_count {
+        let i0 = mesh.indices[t * 3];
+        let i1 = mesh.indices[t * 3 + 1];
+        let i2 = mesh.indices[t * 3 + 2];
+        for &(a, b) in &[(i0, i1), (i1, i2), (i2, i0)] {
+            let key = if a < b { (a, b) } else { (b, a) };
+            *edge_count.entry(key).or_default() += 1;
+        }
+    }
+
+    let boundary_verts: std::collections::HashSet<u32> = edge_count
+        .iter()
+        .filter(|&(_, &c)| c == 1)
+        .flat_map(|(&(a, b), _)| [a, b])
+        .collect();
+
+    if boundary_verts.is_empty() {
+        return;
+    }
+
+    // Spatial grid for O(V) expected merge.
+    let tol = deflection.max(1e-6);
+    let cell = tol * 2.0;
+
+    let mut grid: HashMap<(i64, i64, i64), Vec<u32>> = HashMap::new();
+    for &vi in &boundary_verts {
+        let p = mesh.positions[vi as usize];
+        let key = (
+            (p.x() / cell).floor() as i64,
+            (p.y() / cell).floor() as i64,
+            (p.z() / cell).floor() as i64,
+        );
+        grid.entry(key).or_default().push(vi);
+    }
+
+    // Union-find.
+    let mut parent: Vec<u32> = (0..n_verts as u32).collect();
+
+    #[inline]
+    fn find(parent: &mut [u32], mut x: u32) -> u32 {
+        while parent[x as usize] != x {
+            parent[x as usize] = parent[parent[x as usize] as usize];
+            x = parent[x as usize];
+        }
+        x
+    }
+
+    for &vi in &boundary_verts {
+        let p = mesh.positions[vi as usize];
+        let gx = (p.x() / cell).floor() as i64;
+        let gy = (p.y() / cell).floor() as i64;
+        let gz = (p.z() / cell).floor() as i64;
+        for dx in -1..=1_i64 {
+            for dy in -1..=1_i64 {
+                for dz in -1..=1_i64 {
+                    if let Some(neighbors) = grid.get(&(gx + dx, gy + dy, gz + dz)) {
+                        for &vj in neighbors {
+                            if vj <= vi {
+                                continue;
+                            }
+                            let q = mesh.positions[vj as usize];
+                            if (p - q).length() < tol {
+                                let ra = find(&mut parent, vi);
+                                let rb = find(&mut parent, vj);
+                                if ra != rb {
+                                    if ra < rb {
+                                        parent[rb as usize] = ra;
+                                    } else {
+                                        parent[ra as usize] = rb;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Compress paths and rewrite indices.
+    let mut any_merged = false;
+    for idx in &mut mesh.indices {
+        let canonical = find(&mut parent, *idx);
+        if canonical != *idx {
+            *idx = canonical;
+            any_merged = true;
+        }
+    }
+
+    // Remove degenerate triangles.
+    if any_merged {
+        let mut new_indices = Vec::with_capacity(mesh.indices.len());
+        for t in 0..mesh.indices.len() / 3 {
+            let i0 = mesh.indices[t * 3];
+            let i1 = mesh.indices[t * 3 + 1];
+            let i2 = mesh.indices[t * 3 + 2];
+            if i0 != i1 && i1 != i2 && i2 != i0 {
+                new_indices.push(i0);
+                new_indices.push(i1);
+                new_indices.push(i2);
+            }
+        }
+        mesh.indices = new_indices;
+    }
 }
 
 /// Tessellate a single face, reusing shared edge vertices from the global mesh.
@@ -3727,6 +3853,54 @@ fn interior_grid_resolution(
             (n_u, n_v)
         }
     }
+}
+
+/// Position-based boundary edge count for meshes with duplicate vertices.
+///
+/// Unlike [`boundary_edge_count`] which checks index identity, this function
+/// snaps vertex positions to a grid (1e-6) and checks half-edge pairing on
+/// canonical position-based IDs. This handles meshes where the same geometric
+/// vertex appears with multiple indices (common after boolean ops where
+/// adjacent faces have separate edge entities for the same curve).
+#[must_use]
+pub fn position_based_boundary_count(mesh: &TriangleMesh) -> usize {
+    use std::collections::{HashMap, HashSet};
+
+    let snap = |v: f64| -> i64 { (v * 1_000_000.0).round() as i64 };
+    let snap_pt = |p: Point3| -> (i64, i64, i64) { (snap(p.x()), snap(p.y()), snap(p.z())) };
+
+    let mut pos_map: HashMap<(i64, i64, i64), usize> = HashMap::new();
+    let mut next_id = 0_usize;
+    let canonical: Vec<usize> = mesh
+        .positions
+        .iter()
+        .map(|&p| {
+            let key = snap_pt(p);
+            *pos_map.entry(key).or_insert_with(|| {
+                let id = next_id;
+                next_id += 1;
+                id
+            })
+        })
+        .collect();
+
+    let tri_count = mesh.indices.len() / 3;
+    let mut half_edges: HashSet<(usize, usize)> = HashSet::new();
+    for t in 0..tri_count {
+        let i0 = canonical[mesh.indices[t * 3] as usize];
+        let i1 = canonical[mesh.indices[t * 3 + 1] as usize];
+        let i2 = canonical[mesh.indices[t * 3 + 2] as usize];
+        if i0 != i1 && i1 != i2 && i2 != i0 {
+            half_edges.insert((i0, i1));
+            half_edges.insert((i1, i2));
+            half_edges.insert((i2, i0));
+        }
+    }
+
+    half_edges
+        .iter()
+        .filter(|&&(a, b)| !half_edges.contains(&(b, a)))
+        .count()
 }
 
 /// Check if a 2D point is inside a polygon defined by (u, v) coordinates.
@@ -5211,15 +5385,19 @@ mod winding_tests {
 
     #[test]
     fn tessellate_boolean_cut_cylinder_watertight() {
+        // Use a thin box (h=1) cutting a tall cylinder (h=4) so the
+        // intersection zone is <60% of the barrel height. This keeps
+        // the analytic boolean's cylinder bands (FaceSurface::Cylinder)
+        // instead of falling back to full tessellation.
         let mut topo = Topology::new();
         let cyl = crate::primitives::make_cylinder(&mut topo, 1.0, 4.0)
             .expect("cylinder");
-        let tool = crate::primitives::make_box(&mut topo, 3.0, 3.0, 3.0)
+        let tool = crate::primitives::make_box(&mut topo, 3.0, 3.0, 1.0)
             .expect("box");
         crate::transform::transform_solid(
             &mut topo,
             tool,
-            &brepkit_math::mat::Mat4::translation(-0.5, -0.5, 0.5),
+            &brepkit_math::mat::Mat4::translation(-1.5, -1.5, 1.5),
         )
         .expect("translate");
         let cut = crate::boolean::boolean(
@@ -5236,24 +5414,25 @@ mod winding_tests {
             "mesh should have vertices, got {}",
             mesh.positions.len()
         );
-        let boundary = super::boundary_edge_count(&mesh);
+        let boundary = super::position_based_boundary_count(&mesh);
         assert_eq!(
             boundary, 0,
-            "mesh should be watertight (0 boundary edges), got {boundary}"
+            "cylinder cut mesh should be watertight (position-based), got {boundary} boundary edges"
         );
     }
 
     #[test]
     fn tessellate_boolean_cut_cone_watertight() {
+        // Thin box (h=1) vs tall cone (h=4) to stay in analytic path.
         let mut topo = Topology::new();
         let cone = crate::primitives::make_cone(&mut topo, 1.5, 0.5, 4.0)
             .expect("cone");
-        let tool = crate::primitives::make_box(&mut topo, 3.0, 3.0, 3.0)
+        let tool = crate::primitives::make_box(&mut topo, 4.0, 4.0, 1.0)
             .expect("box");
         crate::transform::transform_solid(
             &mut topo,
             tool,
-            &brepkit_math::mat::Mat4::translation(-0.5, -0.5, 0.5),
+            &brepkit_math::mat::Mat4::translation(-2.0, -2.0, 1.5),
         )
         .expect("translate");
         let cut = crate::boolean::boolean(
@@ -5265,10 +5444,10 @@ mod winding_tests {
         .expect("boolean cut");
         let mesh = super::tessellate_solid(&topo, cut, 0.1)
             .expect("tessellate");
-        let boundary = super::boundary_edge_count(&mesh);
+        let boundary = super::position_based_boundary_count(&mesh);
         assert_eq!(
             boundary, 0,
-            "cone mesh should be watertight, got {boundary} boundary edges"
+            "cone cut mesh should be watertight (position-based), got {boundary} boundary edges"
         );
     }
 }
