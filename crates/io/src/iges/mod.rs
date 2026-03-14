@@ -5,3 +5,6 @@
 
 pub mod reader;
 pub mod writer;
+
+pub use reader::read_iges;
+pub use writer::write_iges;

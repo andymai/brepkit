@@ -31,6 +31,10 @@ struct InnerWireData {
 /// NURBS edge with start==end) into multiple edges so that downstream
 /// extrusion logic can create proper side faces.
 ///
+/// The `deflection` parameter controls the maximum chord-height deviation
+/// for circular/elliptical edges. For NURBS curves, the control polygon
+/// bounding box is used to estimate the characteristic radius.
+///
 /// If no splitting is needed, returns the original edges unchanged.
 ///
 /// # Errors
@@ -40,6 +44,7 @@ pub fn maybe_split_closed_wire(
     topo: &mut Topology,
     oriented: &[OrientedEdge],
     tol: f64,
+    deflection: f64,
 ) -> Result<Vec<OrientedEdge>, crate::OperationsError> {
     // Only need splitting when the wire has edges whose start==end vertex.
     // Collect all edges that need splitting, and pass through the rest.
@@ -48,9 +53,9 @@ pub fn maybe_split_closed_wire(
         let edge = topo.edge(oe.edge())?;
         if edge.start() == edge.end() {
             // Closed edge — split the curve at evenly-spaced parameters.
-            // Use 32 segments for a good approximation of curved geometry
-            // in the side faces (which are planar quads).
-            let split_edges = split_closed_edge(topo, oe.edge(), 256, tol)?;
+            // Compute segment count from chord-height deviation bound.
+            let n = closed_edge_segments(edge.curve(), deflection);
+            let split_edges = split_closed_edge(topo, oe.edge(), n, tol)?;
             for se in split_edges {
                 result.push(OrientedEdge::new(se, oe.is_forward()));
             }
@@ -59,6 +64,51 @@ pub fn maybe_split_closed_wire(
         }
     }
     Ok(result)
+}
+
+/// Compute the number of segments for splitting a closed edge based on
+/// the chord-height deviation bound.
+///
+/// For circles, uses the exact radius. For ellipses, uses the semi-major
+/// axis (conservative — highest curvature). For NURBS curves, estimates
+/// a characteristic radius from the control polygon bounding box diagonal.
+fn closed_edge_segments(curve: &EdgeCurve, deflection: f64) -> usize {
+    use std::f64::consts::TAU;
+    match curve {
+        EdgeCurve::Circle(c) => {
+            crate::tessellate::segments_for_chord_deviation(c.radius(), TAU, deflection)
+        }
+        EdgeCurve::Ellipse(e) => {
+            crate::tessellate::segments_for_chord_deviation(e.semi_major(), TAU, deflection)
+        }
+        EdgeCurve::NurbsCurve(nc) => {
+            // Estimate characteristic radius from control polygon bounding box.
+            let pts = nc.control_points();
+            if pts.len() < 2 {
+                return 8;
+            }
+            let (mut min_x, mut min_y, mut min_z) = (f64::MAX, f64::MAX, f64::MAX);
+            let (mut max_x, mut max_y, mut max_z) = (f64::MIN, f64::MIN, f64::MIN);
+            for p in pts {
+                min_x = min_x.min(p.x());
+                min_y = min_y.min(p.y());
+                min_z = min_z.min(p.z());
+                max_x = max_x.max(p.x());
+                max_y = max_y.max(p.y());
+                max_z = max_z.max(p.z());
+            }
+            let dx = max_x - min_x;
+            let dy = max_y - min_y;
+            let dz = max_z - min_z;
+            let diag = (dx * dx + dy * dy + dz * dz).sqrt();
+            // Use half the diagonal as a conservative radius estimate.
+            let radius_est = diag / 2.0;
+            crate::tessellate::segments_for_chord_deviation(radius_est, TAU, deflection)
+        }
+        // Lines can't be closed with start==end in a meaningful way;
+        // split_closed_edge already returns early for them.
+        EdgeCurve::Line => 8,
+    }
 }
 
 /// Split a closed edge (start==end) into `n` sub-edges by evaluating the
@@ -152,7 +202,7 @@ fn extrude_wire_vertices(
 
     // Check for closed single-edge wires (e.g. a full circle) and split them
     // into multiple edges so that the extrusion can create proper side faces.
-    let oriented = maybe_split_closed_wire(topo, &original_oriented, tol.linear)?;
+    let oriented = maybe_split_closed_wire(topo, &original_oriented, tol.linear, 0.1)?;
 
     let mut verts: Vec<VertexId> = Vec::with_capacity(oriented.len());
     for oe in &oriented {

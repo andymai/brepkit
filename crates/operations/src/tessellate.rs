@@ -109,7 +109,7 @@ enum AnalyticKind {
 /// an arc subtending angle `θ` is `r*(1 - cos(θ/2))`. Solving for the
 /// number of segments `n` over an arc range: `n = ceil(range / θ)` where
 /// `θ = 2*acos(1 - deflection/r)`.
-fn segments_for_chord_deviation(radius: f64, arc_range: f64, deflection: f64) -> usize {
+pub(crate) fn segments_for_chord_deviation(radius: f64, arc_range: f64, deflection: f64) -> usize {
     if radius <= 0.0 || deflection <= 0.0 || arc_range <= 0.0 {
         return 8;
     }

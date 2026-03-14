@@ -379,17 +379,22 @@ pub fn shell(
             }
             FaceSurface::Sphere(sphere) => {
                 let new_r = sphere.radius() - thickness;
-                if new_r > tol.linear {
-                    if let Ok(new_sph) =
-                        brepkit_math::surfaces::SphericalSurface::new(sphere.center(), new_r)
-                    {
-                        result_specs.push(FaceSpec::Surface {
-                            vertices: inner_verts,
-                            surface: FaceSurface::Sphere(new_sph),
-                            reversed: true,
-                        });
-                    }
+                if new_r <= 0.0 {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: format!(
+                            "shell thickness ({thickness}) exceeds sphere radius ({}), \
+                             resulting inner sphere would have non-positive radius ({new_r})",
+                            sphere.radius(),
+                        ),
+                    });
                 }
+                let new_sph = brepkit_math::surfaces::SphericalSurface::new(sphere.center(), new_r)
+                    .map_err(crate::OperationsError::Math)?;
+                result_specs.push(FaceSpec::Surface {
+                    vertices: inner_verts,
+                    surface: FaceSurface::Sphere(new_sph),
+                    reversed: true,
+                });
             }
             FaceSurface::Nurbs(_) | FaceSurface::Torus(_) => {
                 let inner_fid = crate::offset_face::offset_face(topo, fid, -thickness, 8)?;

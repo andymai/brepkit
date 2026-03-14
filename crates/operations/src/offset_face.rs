@@ -142,9 +142,30 @@ fn offset_nurbs_face(
         curvatures.push(row);
     }
 
+    // Pre-check: if offset distance exceeds the minimum radius of curvature
+    // (1/max_curvature), the offset surface will self-intersect. Log a warning
+    // so callers know the result may be approximate.
+    if max_curvature > 1e-12 {
+        let min_radius_of_curvature = 1.0 / max_curvature;
+        if distance.abs() > min_radius_of_curvature {
+            log::warn!(
+                "offset_face: offset distance ({:.6}) exceeds minimum radius of curvature \
+                 ({:.6}); offset surface will self-intersect and be approximated",
+                distance.abs(),
+                min_radius_of_curvature,
+            );
+        }
+    }
+
     // Pass 2: Build adaptive parameter grid. For each coarse cell, decide
     // the local subdivision level based on curvature × |distance|.
     // High curvature × distance → more samples (up to 4× coarse density).
+    //
+    // The 0.25 factor sets the refinement sensitivity: a cell is refined when
+    // its local `curvature * |distance|` exceeds 25% of the surface-wide
+    // maximum `max_curvature * |distance|`. This ensures at least the top
+    // 75% of curvature variation gets additional samples while avoiding
+    // over-refinement in nearly-flat regions.
     let threshold = max_curvature * distance.abs() * 0.25;
     let mut u_params: Vec<f64> = Vec::new();
     let mut v_params: Vec<f64> = Vec::new();
@@ -241,14 +262,24 @@ fn offset_nurbs_face(
     })?;
 
     // Attempt self-intersection detection and trimming. If trimming fails,
-    // fall back to the raw offset (best-effort improvement).
-    let offset_surface = crate::offset_trim::trim_offset_self_intersections(
+    // fall back to the raw offset surface. This can happen when SSI detection
+    // is inconclusive or the valid region is too small to refit. The raw
+    // offset may contain self-intersections in high-curvature regions.
+    let offset_surface = match crate::offset_trim::trim_offset_self_intersections(
         nurbs,
         &raw_offset,
         distance,
         tol.linear,
-    )
-    .unwrap_or(raw_offset);
+    ) {
+        Ok(trimmed) => trimmed,
+        Err(e) => {
+            log::warn!(
+                "offset_face: self-intersection trimming failed ({e}), \
+                 using raw offset surface"
+            );
+            raw_offset
+        }
+    };
 
     // Copy the wire topology from the original face, offsetting vertices.
     let face = topo.face(face_id)?;
