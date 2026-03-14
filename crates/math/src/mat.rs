@@ -220,7 +220,28 @@ impl Mat4 {
             ),
         );
 
-        if det.abs() < 1e-15 {
+        // Scale-relative singularity check.  The determinant is computed as a
+        // sum of products s_i * c_j of 2x2 minors, so its magnitude scales as
+        // max_minor^2.  Comparing against that avoids the false-singular
+        // problem that a hardcoded threshold (1e-15) causes when matrix entries
+        // are very small or very large.
+        let max_minor = s0
+            .abs()
+            .max(s1.abs())
+            .max(s2.abs())
+            .max(s3.abs())
+            .max(s4.abs())
+            .max(s5.abs())
+            .max(c0.abs())
+            .max(c1.abs())
+            .max(c2.abs())
+            .max(c3.abs())
+            .max(c4.abs())
+            .max(c5.abs());
+        if max_minor == 0.0 {
+            return Err(MathError::SingularMatrix);
+        }
+        if det.abs() < f64::EPSILON * max_minor * max_minor {
             return Err(MathError::SingularMatrix);
         }
 
@@ -350,6 +371,27 @@ mod tests {
             let inv = m.inverse().expect("invertible");
             let product = m * inv;
             prop_assert!(approx_eq_mat4(&product, &Mat4::identity(), 1e-10));
+        }
+
+        /// Verify that inverse works for matrices with small and large entry
+        /// magnitudes (the old hardcoded 1e-15 threshold would reject these).
+        #[test]
+        fn prop_inverse_scaled(
+            tx in -10.0f64..10.0,
+            ty in -10.0f64..10.0,
+            tz in -10.0f64..10.0,
+            angle in 0.0f64..std::f64::consts::TAU,
+            scale_exp in prop::sample::select(&[-8_i32, -6, -4, -2, 2, 4, 6][..]),
+        ) {
+            let scale = 10.0_f64.powi(scale_exp);
+            let m = Mat4::translation(tx * scale, ty * scale, tz * scale)
+                * Mat4::rotation_z(angle)
+                * Mat4::scale(scale, scale, scale);
+            let inv = m.inverse().expect("invertible");
+            let product = m * inv;
+            // Tolerance scales with condition number; 1e-6 is generous enough
+            // for the range of scales we test.
+            prop_assert!(approx_eq_mat4(&product, &Mat4::identity(), 1e-6));
         }
     }
 }
