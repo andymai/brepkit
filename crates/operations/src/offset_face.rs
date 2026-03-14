@@ -120,6 +120,7 @@ fn offset_nurbs_face(
     samples: usize,
 ) -> Result<FaceId, OperationsError> {
     let n = samples.max(4); // Minimum 4×4 grid.
+    let tol = Tolerance::new();
 
     // Pass 1: Evaluate curvature at a coarse grid to identify high-curvature regions.
     let coarse = n.max(4);
@@ -241,9 +242,13 @@ fn offset_nurbs_face(
 
     // Attempt self-intersection detection and trimming. If trimming fails,
     // fall back to the raw offset (best-effort improvement).
-    let offset_surface =
-        crate::offset_trim::trim_offset_self_intersections(nurbs, &raw_offset, distance, 1e-7)
-            .unwrap_or(raw_offset);
+    let offset_surface = crate::offset_trim::trim_offset_self_intersections(
+        nurbs,
+        &raw_offset,
+        distance,
+        tol.linear,
+    )
+    .unwrap_or(raw_offset);
 
     // Copy the wire topology from the original face, offsetting vertices.
     let face = topo.face(face_id)?;
@@ -386,8 +391,9 @@ fn offset_cone_face(
 ) -> Result<FaceId, OperationsError> {
     // The offset of a cone is another cone with the same half-angle.
     // The apex shifts along the axis by d / sin(α).
+    let tol = Tolerance::new();
     let sin_ha = cone.half_angle().sin();
-    if sin_ha.abs() < 1e-12 {
+    if sin_ha.abs() < tol.linear {
         return Err(OperationsError::InvalidInput {
             reason: "cone half-angle is degenerate (sin ≈ 0)".into(),
         });
@@ -572,10 +578,15 @@ fn offset_wire_by_fn(
         snaps.push((start_pt, end_pt, edge.curve().clone(), oe.is_forward()));
     }
 
+    let tol = Tolerance::new();
     let mut new_oriented = Vec::new();
     for (start_pt, end_pt, curve, forward) in snaps {
-        let new_start = topo.vertices.alloc(Vertex::new(offset_fn(start_pt), 1e-7));
-        let new_end = topo.vertices.alloc(Vertex::new(offset_fn(end_pt), 1e-7));
+        let new_start = topo
+            .vertices
+            .alloc(Vertex::new(offset_fn(start_pt), tol.linear));
+        let new_end = topo
+            .vertices
+            .alloc(Vertex::new(offset_fn(end_pt), tol.linear));
         let new_edge = topo.edges.alloc(Edge::new(new_start, new_end, curve));
         new_oriented.push(OrientedEdge::new(new_edge, forward));
     }
@@ -666,10 +677,15 @@ fn offset_wire_vertices(
         edge_snaps.push((start_pt, end_pt, edge.curve().clone(), oe.is_forward()));
     }
 
+    let tol = Tolerance::new();
     let mut new_oriented = Vec::new();
     for (start_pt, end_pt, curve, forward) in edge_snaps {
-        let new_start = topo.vertices.alloc(Vertex::new(start_pt + offset, 1e-7));
-        let new_end = topo.vertices.alloc(Vertex::new(end_pt + offset, 1e-7));
+        let new_start = topo
+            .vertices
+            .alloc(Vertex::new(start_pt + offset, tol.linear));
+        let new_end = topo
+            .vertices
+            .alloc(Vertex::new(end_pt + offset, tol.linear));
         let new_edge = topo.edges.alloc(Edge::new(new_start, new_end, curve));
         new_oriented.push(OrientedEdge::new(new_edge, forward));
     }
@@ -702,13 +718,14 @@ fn offset_wire_along_nurbs(
         snaps.push((start_pt, end_pt, oe.is_forward()));
     }
 
+    let tol = Tolerance::new();
     let mut new_oriented = Vec::new();
     for (start_pt, end_pt, forward) in snaps {
         let new_start_pt = offset_point_on_surface(nurbs, start_pt, distance)?;
         let new_end_pt = offset_point_on_surface(nurbs, end_pt, distance)?;
 
-        let new_start = topo.vertices.alloc(Vertex::new(new_start_pt, 1e-7));
-        let new_end = topo.vertices.alloc(Vertex::new(new_end_pt, 1e-7));
+        let new_start = topo.vertices.alloc(Vertex::new(new_start_pt, tol.linear));
+        let new_end = topo.vertices.alloc(Vertex::new(new_end_pt, tol.linear));
         let new_edge = topo
             .edges
             .alloc(Edge::new(new_start, new_end, EdgeCurve::Line));
@@ -728,7 +745,8 @@ fn offset_point_on_surface(
 ) -> Result<Point3, OperationsError> {
     use brepkit_math::nurbs::projection::project_point_to_surface;
 
-    let proj = project_point_to_surface(nurbs, point, 1e-7).map_err(|e| {
+    let tol = Tolerance::new();
+    let proj = project_point_to_surface(nurbs, point, tol.linear).map_err(|e| {
         OperationsError::InvalidInput {
             reason: format!("surface projection failed: {e}"),
         }
