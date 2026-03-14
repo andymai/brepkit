@@ -1260,7 +1260,7 @@ pub fn fillet_rolling_ball(
             // Normal should point away from the original vertex
             let to_vertex = v_pos - centroid;
             if to_vertex.dot(blend_normal) > 0.0 {
-                Vec3::new(-blend_normal.x(), -blend_normal.y(), -blend_normal.z())
+                -blend_normal
             } else {
                 blend_normal
             }

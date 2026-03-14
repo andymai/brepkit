@@ -83,7 +83,7 @@ pub fn convex_hull_3d(points: &[Point3]) -> Option<ConvexHull> {
         let signed = signed_distance(face, centroid);
         if signed > 0.0 {
             // Normal points inward — flip.
-            face.normal = Vec3::new(-face.normal.x(), -face.normal.y(), -face.normal.z());
+            face.normal = -face.normal;
             face.d = -face.d;
             face.verts.swap(1, 2);
         }

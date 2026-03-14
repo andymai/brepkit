@@ -334,7 +334,7 @@ fn count_3d_polygon_crossings(
     // extends into the opposite side of the boundary plane.
     let face = topo.face(face_id)?;
     if face.is_reversed() {
-        normal = normal * -1.0;
+        normal = -normal;
     }
     // A reference point on the boundary plane.
     let ref_pt = verts[0];
