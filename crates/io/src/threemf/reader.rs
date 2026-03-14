@@ -214,9 +214,9 @@ fn build_mesh(vertices: &[Point3], indices: &[u32]) -> Result<TriangleMesh, IoEr
         let edge2 = v2 - v0;
         let face_normal = edge1.cross(edge2);
 
-        normals[i0] = normals[i0] + face_normal;
-        normals[i1] = normals[i1] + face_normal;
-        normals[i2] = normals[i2] + face_normal;
+        normals[i0] += face_normal;
+        normals[i1] += face_normal;
+        normals[i2] += face_normal;
     }
 
     // Normalize accumulated normals.

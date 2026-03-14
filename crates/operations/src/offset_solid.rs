@@ -137,7 +137,7 @@ pub fn offset_solid(
             // Fewer than 3 faces: use average normal offset
             let mut avg_normal = Vec3::new(0.0, 0.0, 0.0);
             for &fi in adj_faces {
-                avg_normal = avg_normal + face_normals[&fi].0;
+                avg_normal += face_normals[&fi].0;
             }
             if let Ok(avg_n) = avg_normal.normalize() {
                 vertex_offset_pos.insert(vid_idx, original_pos + avg_n * distance);

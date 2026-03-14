@@ -86,6 +86,7 @@ pub mod convex_hull;
 pub mod curves;
 pub mod curves2d;
 pub mod filtered;
+pub mod frame;
 pub mod mat;
 pub mod nurbs;
 pub mod plane;

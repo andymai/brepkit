@@ -135,9 +135,9 @@ fn compute_vertex_normals(positions: &[Point3], indices: &[u32]) -> Vec<Vec3> {
         let e2 = positions[i2] - positions[i0];
         let face_normal = e1.cross(e2);
 
-        normals[i0] = normals[i0] + face_normal;
-        normals[i1] = normals[i1] + face_normal;
-        normals[i2] = normals[i2] + face_normal;
+        normals[i0] += face_normal;
+        normals[i1] += face_normal;
+        normals[i2] += face_normal;
     }
 
     // Normalize

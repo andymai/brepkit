@@ -8,6 +8,7 @@ use std::f64::consts::{FRAC_PI_2, TAU};
 
 use crate::MathError;
 use crate::curves::{Circle3D, Ellipse3D};
+use crate::frame::Frame3;
 use crate::nurbs::fitting::interpolate;
 use crate::nurbs::intersection::{IntersectionCurve, IntersectionPoint};
 use crate::surfaces::{ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface};
@@ -317,13 +318,9 @@ fn sample_plane_sphere(
         h.mul_add(-normal.z(), sphere.center().z()),
     );
 
-    let candidate = if normal.x().abs() < 0.9 {
-        Vec3::new(1.0, 0.0, 0.0)
-    } else {
-        Vec3::new(0.0, 1.0, 0.0)
-    };
-    let u_dir = normal.cross(candidate).normalize()?;
-    let v_dir = normal.cross(u_dir);
+    let basis = Frame3::from_normal(circle_center, normal)?;
+    let u_dir = basis.x;
+    let v_dir = basis.y;
 
     let n_samples = 64_usize;
     let mut points = Vec::with_capacity(n_samples + 1);
@@ -478,13 +475,9 @@ pub fn intersect_plane_sphere(
     );
 
     // Build a local frame on the plane.
-    let candidate = if normal.x().abs() < 0.9 {
-        Vec3::new(1.0, 0.0, 0.0)
-    } else {
-        Vec3::new(0.0, 1.0, 0.0)
-    };
-    let u_dir = normal.cross(candidate).normalize()?;
-    let v_dir = normal.cross(u_dir);
+    let basis = Frame3::from_normal(circle_center, normal)?;
+    let u_dir = basis.x;
+    let v_dir = basis.y;
 
     let n_samples = 64_usize;
     let mut points_3d = Vec::new();
@@ -1029,13 +1022,9 @@ fn algebraic_sphere_cylinder(
     let mut curves = Vec::new();
 
     // Build reference frame perpendicular to axis.
-    let ref_vec = if axis.x().abs() < 0.9 {
-        Vec3::new(1.0, 0.0, 0.0)
-    } else {
-        Vec3::new(0.0, 1.0, 0.0)
-    };
-    let u_dir = axis.cross(ref_vec).normalize()?;
-    let v_dir = axis.cross(u_dir);
+    let basis = Frame3::from_normal(center_axis_pt, axis)?;
+    let u_dir = basis.x;
+    let v_dir = basis.y;
 
     for &z_offset in &[z, -z] {
         let center = Point3::new(
@@ -1148,14 +1137,9 @@ fn algebraic_sphere_sphere(
     );
 
     // Build a reference frame for the circle.
-    // Pick a vector not parallel to axis for the cross product.
-    let ref_vec = if axis.x().abs() < 0.9 {
-        Vec3::new(1.0, 0.0, 0.0)
-    } else {
-        Vec3::new(0.0, 1.0, 0.0)
-    };
-    let u_dir = axis.cross(ref_vec).normalize()?;
-    let v_dir = axis.cross(u_dir);
+    let basis = Frame3::from_normal(center, axis)?;
+    let u_dir = basis.x;
+    let v_dir = basis.y;
 
     // Sample the circle for the IntersectionCurve representation.
     let n_samples = 33; // Odd for symmetry
