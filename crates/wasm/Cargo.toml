@@ -26,6 +26,8 @@ thiserror.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+tsify-next.workspace = true
+serde-wasm-bindgen.workspace = true
 
 [lints]
 workspace = true
