@@ -478,7 +478,8 @@ fn point_in_polygon(pt: Point2, polygon: &[Point2]) -> bool {
 /// segment `(a, b)`. Returns `Some(t)` where `t` is in `[0, 1]` and the
 /// intersection lies on `(a, b)` as well.
 fn segment_intersect_t(p0: Point2, p1: Point2, a: Point2, b: Point2) -> Option<f64> {
-    let eps = Tolerance::default().linear;
+    // Parametric tolerance for t,s ∈ [0,1] — tighter than spatial tolerance.
+    let eps = Tolerance::default().relative;
     let dx = p1.x() - p0.x();
     let dy = p1.y() - p0.y();
     let ex = b.x() - a.x();
@@ -507,7 +508,10 @@ fn clip_polyline_to_polygon(polyline: &[Point2], polygon: &[Point2]) -> Vec<Poin
         return Vec::new();
     }
 
-    let eps = Tolerance::default().linear;
+    // Parametric tolerance for t-value dedup on [0,1] segments.
+    let param_eps = Tolerance::default().relative;
+    // Spatial tolerance for UV-coordinate point dedup.
+    let point_eps = Tolerance::default().linear;
     let mut result: Vec<Point2> = Vec::new();
     let n_poly = polygon.len();
 
@@ -525,7 +529,7 @@ fn clip_polyline_to_polygon(polyline: &[Point2], polygon: &[Point2]) -> Vec<Poin
             }
         }
         intersections.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        intersections.dedup_by(|a, b| (*a - *b).abs() < eps);
+        intersections.dedup_by(|a, b| (*a - *b).abs() < param_eps);
 
         // Build list of candidate points along this segment.
         let mut ts: Vec<f64> = Vec::new();
@@ -533,7 +537,7 @@ fn clip_polyline_to_polygon(polyline: &[Point2], polygon: &[Point2]) -> Vec<Poin
         ts.extend(&intersections);
         ts.push(1.0);
         ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        ts.dedup_by(|a, b| (*a - *b).abs() < eps);
+        ts.dedup_by(|a, b| (*a - *b).abs() < param_eps);
 
         // For each sub-segment, check if its midpoint is inside the polygon.
         for pair in ts.windows(2) {
@@ -554,8 +558,8 @@ fn clip_polyline_to_polygon(polyline: &[Point2], polygon: &[Point2]) -> Vec<Poin
                 // Avoid duplicate points at segment boundaries.
                 if result.is_empty()
                     || (result.last().is_none_or(|last| {
-                        (last.x() - start_pt.x()).abs() > eps
-                            || (last.y() - start_pt.y()).abs() > eps
+                        (last.x() - start_pt.x()).abs() > point_eps
+                            || (last.y() - start_pt.y()).abs() > point_eps
                     }))
                 {
                     result.push(start_pt);
@@ -717,7 +721,8 @@ fn split_region_by_pcurve(region: &[Point2], pcurve: &[Point2]) -> Vec<Vec<Point
         return vec![region.to_vec()];
     }
 
-    let eps = Tolerance::default().linear;
+    // Parametric tolerance for boundary crossing detection on [0,1] segments.
+    let eps = Tolerance::default().relative;
 
     // Find all crossings between pcurve segments and boundary segments.
     let n_boundary = region.len();

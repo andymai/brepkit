@@ -237,7 +237,9 @@ pub(super) fn try_build_analytic_classifier(
             FaceSurface::Plane { .. } => {
                 has_planar = true;
             }
-            _ => return None, // Unsupported surface type
+            // Torus, NURBS, and sphere (without a dedicated classifier)
+            // fall back to ray-casting.
+            FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => return None,
         }
     }
 

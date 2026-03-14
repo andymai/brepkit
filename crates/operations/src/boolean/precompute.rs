@@ -150,7 +150,11 @@ pub(super) fn compute_v_range_hint(surface: &FaceSurface, verts: &[Point3]) -> O
                 Some((lo, v_max + pad))
             }
         }
-        _ => None, // Sphere and torus have fixed parametric ranges
+        // Sphere, torus, plane, and NURBS have fixed or irrelevant v-ranges.
+        FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_)
+        | FaceSurface::Plane { .. }
+        | FaceSurface::Nurbs(_) => None,
     }
 }
 
@@ -273,7 +277,7 @@ pub(super) fn collect_face_data(
                     result.push((fid, vec![v0, v1, v2], n, d));
                 }
             }
-            _ => {
+            FaceSurface::Cone(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => {
                 // Other non-planar: tessellate with coarse deflection.
                 let coarse_deflection = deflection * 4.0;
                 let mesh = crate::tessellate::tessellate(topo, fid, coarse_deflection)?;

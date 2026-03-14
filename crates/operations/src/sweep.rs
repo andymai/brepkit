@@ -414,8 +414,12 @@ pub fn sweep(
 
     // Split closed edges (e.g. full circles) into multiple line segments
     // so that the sweep can create proper side faces.
-    let input_oriented =
-        crate::extrude::maybe_split_closed_wire(topo, &original_oriented, tol.linear, 0.1)?;
+    let input_oriented = crate::extrude::maybe_split_closed_wire(
+        topo,
+        &original_oriented,
+        tol.linear,
+        crate::extrude::DEFAULT_DEFLECTION,
+    )?;
     let n = input_oriented.len();
 
     let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
@@ -734,8 +738,12 @@ pub fn sweep_smooth(
         });
     }
 
-    let input_oriented =
-        crate::extrude::maybe_split_closed_wire(topo, &original_oriented, tol.linear, 0.1)?;
+    let input_oriented = crate::extrude::maybe_split_closed_wire(
+        topo,
+        &original_oriented,
+        tol.linear,
+        crate::extrude::DEFAULT_DEFLECTION,
+    )?;
     let n = input_oriented.len();
 
     let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);
@@ -1027,8 +1035,12 @@ pub fn sweep_with_options(
         });
     }
 
-    let input_oriented =
-        crate::extrude::maybe_split_closed_wire(topo, &original_oriented, tol.linear, 0.1)?;
+    let input_oriented = crate::extrude::maybe_split_closed_wire(
+        topo,
+        &original_oriented,
+        tol.linear,
+        crate::extrude::DEFAULT_DEFLECTION,
+    )?;
     let n = input_oriented.len();
 
     let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);

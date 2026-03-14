@@ -251,8 +251,12 @@ pub fn revolve(
         let original_oriented: Vec<_> = wire.edges().to_vec();
 
         // Split closed edges (e.g. full circles) into line segments.
-        let input_oriented =
-            crate::extrude::maybe_split_closed_wire(topo, &original_oriented, tol.linear, 0.1)?;
+        let input_oriented = crate::extrude::maybe_split_closed_wire(
+            topo,
+            &original_oriented,
+            tol.linear,
+            crate::extrude::DEFAULT_DEFLECTION,
+        )?;
         let n = input_oriented.len();
 
         let mut input_verts: Vec<VertexId> = Vec::with_capacity(n);

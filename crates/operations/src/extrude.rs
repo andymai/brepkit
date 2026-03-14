@@ -6,6 +6,12 @@
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
+
+/// Default tessellation deflection for splitting closed edges.
+///
+/// Used when the operation's public API does not expose a deflection parameter.
+/// Matches `DEFAULT_BOOLEAN_DEFLECTION` in `boolean/types.rs`.
+pub const DEFAULT_DEFLECTION: f64 = 0.1;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
@@ -202,7 +208,8 @@ fn extrude_wire_vertices(
 
     // Check for closed single-edge wires (e.g. a full circle) and split them
     // into multiple edges so that the extrusion can create proper side faces.
-    let oriented = maybe_split_closed_wire(topo, &original_oriented, tol.linear, 0.1)?;
+    let oriented =
+        maybe_split_closed_wire(topo, &original_oriented, tol.linear, DEFAULT_DEFLECTION)?;
 
     let mut verts: Vec<VertexId> = Vec::with_capacity(oriented.len());
     for oe in &oriented {
