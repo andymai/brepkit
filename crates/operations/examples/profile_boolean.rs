@@ -215,7 +215,7 @@ fn run_fuse(side: usize) {
     let (mut topo, solids) = build_overlapping_box_grid(side);
     let n = solids.len();
     println!("Fuse overlapping: {side}×{side} = {n} boxes...");
-    let cid = topo.compounds.alloc(Compound::new(solids));
+    let cid = topo.add_compound(Compound::new(solids));
     let t0 = Instant::now();
     let result = fuse_all(&mut topo, cid).unwrap();
     let elapsed = t0.elapsed();
@@ -235,7 +235,7 @@ fn run_fuse_touching(side: usize) {
     let (mut topo, solids) = build_touching_box_grid(side);
     let n = solids.len();
     println!("Fuse touching: {side}×{side} = {n} boxes...");
-    let cid = topo.compounds.alloc(Compound::new(solids));
+    let cid = topo.add_compound(Compound::new(solids));
     let t0 = Instant::now();
     let result = fuse_all(&mut topo, cid).unwrap();
     let elapsed = t0.elapsed();

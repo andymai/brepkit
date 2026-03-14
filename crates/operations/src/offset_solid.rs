@@ -109,7 +109,7 @@ pub fn offset_solid(
         std::collections::BTreeMap::new();
 
     for (&vid_idx, adj_faces) in &vertex_faces {
-        let vid = topo.vertices.id_from_index(vid_idx);
+        let vid = topo.vertex_id_from_index(vid_idx);
         let original_pos = if let Some(vid) = vid {
             topo.vertex(vid)?.point()
         } else {
@@ -159,11 +159,7 @@ pub fn offset_solid(
 
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
+            let vid = oe.oriented_start(edge);
 
             let pos = vertex_offset_pos
                 .get(&vid.index())

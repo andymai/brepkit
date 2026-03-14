@@ -2545,7 +2545,7 @@ impl BrepKernel {
         let outer_wire = face_data.outer_wire();
         let surface = face_data.surface().clone();
         let new_face = Face::new(outer_wire, vec![], surface);
-        let fid = self.topo.faces.alloc(new_face);
+        let fid = self.topo.add_face(new_face);
         Ok(face_id_to_u32(fid))
     }
 
@@ -2583,10 +2583,7 @@ impl BrepKernel {
         validate_finite(x, "x")?;
         validate_finite(y, "y")?;
         validate_finite(z, "z")?;
-        let id = self
-            .topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(x, y, z), TOL));
+        let id = self.topo.add_vertex(Vertex::new(Point3::new(x, y, z), TOL));
         Ok(vertex_id_to_u32(id))
     }
 
@@ -2605,7 +2602,7 @@ impl BrepKernel {
     ) -> Result<u32, JsError> {
         let start = Point3::new(x1, y1, z1);
         let end = Point3::new(x2, y2, z2);
-        let eid = brepkit_topology::builder::make_line_edge(&mut self.topo, start, end)?;
+        let eid = brepkit_topology::builder::make_line_edge(&mut self.topo, start, end, TOL)?;
         Ok(edge_id_to_u32(eid))
     }
 
@@ -2662,16 +2659,15 @@ impl BrepKernel {
             reason: format!("invalid circle: {e}"),
         })?;
 
-        let v_start = self.topo.vertices.alloc(Vertex::new(start_pt, TOL));
+        let v_start = self.topo.add_vertex(Vertex::new(start_pt, TOL));
         let v_end = if (start_pt - end_pt).length() < TOL * 100.0 {
             v_start
         } else {
-            self.topo.vertices.alloc(Vertex::new(end_pt, TOL))
+            self.topo.add_vertex(Vertex::new(end_pt, TOL))
         };
         let eid = self
             .topo
-            .edges
-            .alloc(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
+            .add_edge(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
         Ok(edge_id_to_u32(eid))
     }
 
@@ -2710,18 +2706,17 @@ impl BrepKernel {
 
         let start_pt = Point3::new(start_x, start_y, start_z);
         let end_pt = Point3::new(end_x, end_y, end_z);
-        let v_start = self.topo.vertices.alloc(Vertex::new(start_pt, TOL));
+        let v_start = self.topo.add_vertex(Vertex::new(start_pt, TOL));
         // When start ≈ end (closed curve), reuse the same vertex so
         // downstream code correctly identifies the edge as closed.
         let v_end = if (start_pt - end_pt).length() < TOL * 100.0 {
             v_start
         } else {
-            self.topo.vertices.alloc(Vertex::new(end_pt, TOL))
+            self.topo.add_vertex(Vertex::new(end_pt, TOL))
         };
         let eid = self
             .topo
-            .edges
-            .alloc(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
+            .add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
         Ok(edge_id_to_u32(eid))
     }
 
@@ -2848,7 +2843,7 @@ impl BrepKernel {
             .map(|&eid| OrientedEdge::new(eid, true))
             .collect();
         let wire = Wire::new(oriented, closed)?;
-        let wid = self.topo.wires.alloc(wire);
+        let wid = self.topo.add_wire(wire);
         Ok(wire_id_to_u32(wid))
     }
 
@@ -2869,7 +2864,7 @@ impl BrepKernel {
     pub fn solid_from_shell_wasm(&mut self, shell: u32) -> Result<u32, JsError> {
         let shell_id = self.resolve_shell(shell)?;
         let solid = brepkit_topology::solid::Solid::new(shell_id, vec![]);
-        let sid = self.topo.solids.alloc(solid);
+        let sid = self.topo.add_solid(solid);
         Ok(solid_id_to_u32(sid))
     }
 
@@ -2885,7 +2880,7 @@ impl BrepKernel {
             .collect::<Result<_, _>>()?;
         let compound = brepkit_topology::compound::Compound::new(solid_ids);
         #[allow(clippy::cast_possible_truncation)]
-        let cid = self.topo.compounds.alloc(compound);
+        let cid = self.topo.add_compound(compound);
         Ok(cid.index() as u32)
     }
 
@@ -3797,7 +3792,7 @@ impl BrepKernel {
         }
 
         let new_face = Face::new(outer_wire, inner_wires, surface);
-        let fid = self.topo.faces.alloc(new_face);
+        let fid = self.topo.add_face(new_face);
         Ok(face_id_to_u32(fid))
     }
 
@@ -3933,7 +3928,7 @@ impl BrepKernel {
         let vertex_ids: Vec<brepkit_topology::vertex::VertexId> = hull
             .vertices
             .iter()
-            .map(|p| self.topo.vertices.alloc(Vertex::new(*p, TOL)))
+            .map(|p| self.topo.add_vertex(Vertex::new(*p, TOL)))
             .collect();
 
         let mut face_ids = Vec::new();
@@ -3942,9 +3937,9 @@ impl BrepKernel {
             let vb = vertex_ids[b];
             let vc = vertex_ids[c];
 
-            let e0 = self.topo.edges.alloc(Edge::new(va, vb, EdgeCurve::Line));
-            let e1 = self.topo.edges.alloc(Edge::new(vb, vc, EdgeCurve::Line));
-            let e2 = self.topo.edges.alloc(Edge::new(vc, va, EdgeCurve::Line));
+            let e0 = self.topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+            let e1 = self.topo.add_edge(Edge::new(vb, vc, EdgeCurve::Line));
+            let e2 = self.topo.add_edge(Edge::new(vc, va, EdgeCurve::Line));
 
             let oriented = vec![
                 OrientedEdge::new(e0, true),
@@ -3952,7 +3947,7 @@ impl BrepKernel {
                 OrientedEdge::new(e2, true),
             ];
             let wire = Wire::new(oriented, true)?;
-            let wid = self.topo.wires.alloc(wire);
+            let wid = self.topo.add_wire(wire);
 
             // Compute face normal.
             let pa = hull.vertices[a];
@@ -3969,17 +3964,16 @@ impl BrepKernel {
                 .x()
                 .mul_add(pa.x(), normal.y().mul_add(pa.y(), normal.z() * pa.z()));
 
-            let fid =
-                self.topo
-                    .faces
-                    .alloc(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
+            let fid = self
+                .topo
+                .add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
             face_ids.push(fid);
         }
 
         let shell = brepkit_topology::shell::Shell::new(face_ids)?;
-        let shell_id = self.topo.shells.alloc(shell);
+        let shell_id = self.topo.add_shell(shell);
         let solid = brepkit_topology::solid::Solid::new(shell_id, vec![]);
-        let solid_id = self.topo.solids.alloc(solid);
+        let solid_id = self.topo.add_solid(solid);
 
         Ok(solid_id_to_u32(solid_id))
     }
@@ -4020,12 +4014,11 @@ impl BrepKernel {
 
         let start = points[0];
         let end = points[points.len() - 1];
-        let v_start = self.topo.vertices.alloc(Vertex::new(start, TOL));
-        let v_end = self.topo.vertices.alloc(Vertex::new(end, TOL));
+        let v_start = self.topo.add_vertex(Vertex::new(start, TOL));
+        let v_end = self.topo.add_vertex(Vertex::new(end, TOL));
         let eid = self
             .topo
-            .edges
-            .alloc(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
+            .add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
         Ok(edge_id_to_u32(eid))
     }
 
@@ -4271,12 +4264,11 @@ impl BrepKernel {
         // Scale-invariant angular check: |t_norm × chord| / |chord| = sin(θ).
         let cross = t_norm.cross(chord);
         if cross.length() < 1e-10 * chord.length() {
-            let v_start = self.topo.vertices.alloc(Vertex::new(start, TOL));
-            let v_end = self.topo.vertices.alloc(Vertex::new(end, TOL));
+            let v_start = self.topo.add_vertex(Vertex::new(start, TOL));
+            let v_end = self.topo.add_vertex(Vertex::new(end, TOL));
             let eid = self
                 .topo
-                .edges
-                .alloc(Edge::new(v_start, v_end, EdgeCurve::Line));
+                .add_edge(Edge::new(v_start, v_end, EdgeCurve::Line));
             return Ok(edge_id_to_u32(eid));
         }
 
@@ -4305,16 +4297,15 @@ impl BrepKernel {
 
         // Reuse v_start for closed edges so downstream code identifies them
         // by vertex ID equality.
-        let v_start = self.topo.vertices.alloc(Vertex::new(start, TOL));
+        let v_start = self.topo.add_vertex(Vertex::new(start, TOL));
         let v_end = if (start - end).length() < TOL * 100.0 {
             v_start
         } else {
-            self.topo.vertices.alloc(Vertex::new(end, TOL))
+            self.topo.add_vertex(Vertex::new(end, TOL))
         };
         let eid = self
             .topo
-            .edges
-            .alloc(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
+            .add_edge(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
         Ok(edge_id_to_u32(eid))
     }
     /// Inner implementation for [`Self::lift_curve2d_to_plane`].
@@ -4406,12 +4397,11 @@ impl BrepKernel {
                         reason: "degenerate line segment (start ≈ end)".into(),
                     });
                 }
-                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
-                let v_end = self.topo.vertices.alloc(Vertex::new(end_3d, TOL));
+                let v_start = self.topo.add_vertex(Vertex::new(start_3d, TOL));
+                let v_end = self.topo.add_vertex(Vertex::new(end_3d, TOL));
                 let eid = self
                     .topo
-                    .edges
-                    .alloc(Edge::new(v_start, v_end, EdgeCurve::Line));
+                    .add_edge(Edge::new(v_start, v_end, EdgeCurve::Line));
                 Ok(edge_id_to_u32(eid))
             }
             // ── Circle → Circle3D edge ──────────────────────────────
@@ -4435,16 +4425,15 @@ impl BrepKernel {
                 let end_3d = circle.evaluate(t_end);
 
                 let full_circle = (t_end - t_start).abs() >= std::f64::consts::TAU - 1e-10;
-                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
+                let v_start = self.topo.add_vertex(Vertex::new(start_3d, TOL));
                 let v_end = if full_circle {
                     v_start
                 } else {
-                    self.topo.vertices.alloc(Vertex::new(end_3d, TOL))
+                    self.topo.add_vertex(Vertex::new(end_3d, TOL))
                 };
-                let eid =
-                    self.topo
-                        .edges
-                        .alloc(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
+                let eid = self
+                    .topo
+                    .add_edge(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
                 Ok(edge_id_to_u32(eid))
             }
             // ── Ellipse → Ellipse3D edge ────────────────────────────
@@ -4475,16 +4464,15 @@ impl BrepKernel {
                 let end_3d = ellipse.evaluate(t_end);
 
                 let full_ellipse = (t_end - t_start).abs() >= std::f64::consts::TAU - 1e-10;
-                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
+                let v_start = self.topo.add_vertex(Vertex::new(start_3d, TOL));
                 let v_end = if full_ellipse {
                     v_start
                 } else {
-                    self.topo.vertices.alloc(Vertex::new(end_3d, TOL))
+                    self.topo.add_vertex(Vertex::new(end_3d, TOL))
                 };
                 let eid =
                     self.topo
-                        .edges
-                        .alloc(Edge::new(v_start, v_end, EdgeCurve::Ellipse(ellipse)));
+                        .add_edge(Edge::new(v_start, v_end, EdgeCurve::Ellipse(ellipse)));
                 Ok(edge_id_to_u32(eid))
             }
             // ── NurbsCurve2D → NurbsCurve edge ─────────────────────
@@ -4538,16 +4526,15 @@ impl BrepKernel {
                 let start_3d = curve.evaluate(t_start);
                 let end_3d = curve.evaluate(t_end);
 
-                let v_start = self.topo.vertices.alloc(Vertex::new(start_3d, TOL));
+                let v_start = self.topo.add_vertex(Vertex::new(start_3d, TOL));
                 let v_end = if (start_3d - end_3d).length() < TOL * 100.0 {
                     v_start
                 } else {
-                    self.topo.vertices.alloc(Vertex::new(end_3d, TOL))
+                    self.topo.add_vertex(Vertex::new(end_3d, TOL))
                 };
                 let eid =
                     self.topo
-                        .edges
-                        .alloc(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
+                        .add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
                 Ok(edge_id_to_u32(eid))
             }
             _ => Err(WasmError::InvalidInput {
@@ -4566,7 +4553,7 @@ impl BrepKernel {
         // Allocate vertices.
         let verts: Vec<_> = points
             .iter()
-            .map(|p| self.topo.vertices.alloc(Vertex::new(*p, TOL)))
+            .map(|p| self.topo.add_vertex(Vertex::new(*p, TOL)))
             .collect();
 
         // Allocate edges connecting consecutive vertices.
@@ -4574,8 +4561,7 @@ impl BrepKernel {
             .map(|i| {
                 let next = (i + 1) % n;
                 self.topo
-                    .edges
-                    .alloc(Edge::new(verts[i], verts[next], EdgeCurve::Line))
+                    .add_edge(Edge::new(verts[i], verts[next], EdgeCurve::Line))
             })
             .collect();
 
@@ -4585,7 +4571,7 @@ impl BrepKernel {
             .map(|&eid| OrientedEdge::new(eid, true))
             .collect();
         let wire = Wire::new(oriented, true)?;
-        let wid = self.topo.wires.alloc(wire);
+        let wid = self.topo.add_wire(wire);
 
         // Compute the face normal from the first three points.
         let a = points[1] - points[0];
@@ -4600,10 +4586,9 @@ impl BrepKernel {
                 .mul_add(points[0].y(), normal.z() * points[0].z()),
         );
 
-        let face_id =
-            self.topo
-                .faces
-                .alloc(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
+        let face_id = self
+            .topo
+            .add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
 
         Ok(face_id)
     }
@@ -4648,8 +4633,7 @@ impl BrepKernel {
     fn resolve_face(&self, handle: u32) -> Result<brepkit_topology::face::FaceId, WasmError> {
         let index = handle as usize;
         self.topo
-            .faces
-            .id_from_index(index)
+            .face_id_from_index(index)
             .ok_or(WasmError::InvalidHandle {
                 entity: "face",
                 index,
@@ -4660,8 +4644,7 @@ impl BrepKernel {
     fn resolve_vertex(&self, handle: u32) -> Result<brepkit_topology::vertex::VertexId, WasmError> {
         let index = handle as usize;
         self.topo
-            .vertices
-            .id_from_index(index)
+            .vertex_id_from_index(index)
             .ok_or(WasmError::InvalidHandle {
                 entity: "vertex",
                 index,
@@ -4672,8 +4655,7 @@ impl BrepKernel {
     fn resolve_edge(&self, handle: u32) -> Result<brepkit_topology::edge::EdgeId, WasmError> {
         let index = handle as usize;
         self.topo
-            .edges
-            .id_from_index(index)
+            .edge_id_from_index(index)
             .ok_or(WasmError::InvalidHandle {
                 entity: "edge",
                 index,
@@ -4684,8 +4666,7 @@ impl BrepKernel {
     fn resolve_solid(&self, handle: u32) -> Result<brepkit_topology::solid::SolidId, WasmError> {
         let index = handle as usize;
         self.topo
-            .solids
-            .id_from_index(index)
+            .solid_id_from_index(index)
             .ok_or(WasmError::InvalidHandle {
                 entity: "solid",
                 index,
@@ -4696,8 +4677,7 @@ impl BrepKernel {
     fn resolve_wire(&self, handle: u32) -> Result<brepkit_topology::wire::WireId, WasmError> {
         let index = handle as usize;
         self.topo
-            .wires
-            .id_from_index(index)
+            .wire_id_from_index(index)
             .ok_or(WasmError::InvalidHandle {
                 entity: "wire",
                 index,
@@ -4708,8 +4688,7 @@ impl BrepKernel {
     fn resolve_shell(&self, handle: u32) -> Result<brepkit_topology::shell::ShellId, WasmError> {
         let index = handle as usize;
         self.topo
-            .shells
-            .id_from_index(index)
+            .shell_id_from_index(index)
             .ok_or(WasmError::InvalidHandle {
                 entity: "shell",
                 index,
@@ -4723,8 +4702,7 @@ impl BrepKernel {
     ) -> Result<brepkit_topology::compound::CompoundId, WasmError> {
         let index = handle as usize;
         self.topo
-            .compounds
-            .id_from_index(index)
+            .compound_id_from_index(index)
             .ok_or(WasmError::InvalidHandle {
                 entity: "compound",
                 index,
@@ -4919,13 +4897,12 @@ impl BrepKernel {
         let n = points.len();
         let verts: Vec<_> = points
             .iter()
-            .map(|p| self.topo.vertices.alloc(Vertex::new(*p, TOL)))
+            .map(|p| self.topo.add_vertex(Vertex::new(*p, TOL)))
             .collect();
         let edges: Vec<_> = (0..n)
             .map(|i| {
                 self.topo
-                    .edges
-                    .alloc(Edge::new(verts[i], verts[(i + 1) % n], EdgeCurve::Line))
+                    .add_edge(Edge::new(verts[i], verts[(i + 1) % n], EdgeCurve::Line))
             })
             .collect();
         let oriented: Vec<_> = edges
@@ -4933,7 +4910,7 @@ impl BrepKernel {
             .map(|&eid| OrientedEdge::new(eid, true))
             .collect();
         let wire = Wire::new(oriented, true)?;
-        let wid = self.topo.wires.alloc(wire);
+        let wid = self.topo.add_wire(wire);
         Ok(wire_id_to_u32(wid))
     }
 
@@ -4953,6 +4930,7 @@ impl BrepKernel {
             &mut self.topo,
             radius,
             n_sides as usize,
+            TOL,
         )?;
         Ok(wire_id_to_u32(wid))
     }
@@ -4969,8 +4947,12 @@ impl BrepKernel {
             }
             .into());
         }
-        let fid =
-            brepkit_topology::builder::make_circle_face(&mut self.topo, radius, segments as usize)?;
+        let fid = brepkit_topology::builder::make_circle_face(
+            &mut self.topo,
+            radius,
+            segments as usize,
+            TOL,
+        )?;
         Ok(face_id_to_u32(fid))
     }
 
@@ -6063,14 +6045,14 @@ impl BrepKernel {
                 other => other.clone(),
             };
             let new_face = Face::new(outer_wire, inner_wires, new_surface);
-            let new_fid = self.topo.faces.alloc(new_face);
+            let new_fid = self.topo.add_face(new_face);
             return Ok(face_id_to_u32(new_fid));
         }
         // Try as edge
         if let Ok(edge_id) = self.resolve_edge(id) {
             let edge = self.topo.edge(edge_id)?;
             let new_edge = Edge::new(edge.end(), edge.start(), edge.curve().clone());
-            let new_eid = self.topo.edges.alloc(new_edge);
+            let new_eid = self.topo.add_edge(new_edge);
             return Ok(edge_id_to_u32(new_eid));
         }
         Err(WasmError::InvalidInput {
@@ -6106,11 +6088,10 @@ impl BrepKernel {
     ) -> brepkit_topology::edge::EdgeId {
         let start = points[0];
         let end = points[points.len() - 1];
-        let v_start = self.topo.vertices.alloc(Vertex::new(start, TOL));
-        let v_end = self.topo.vertices.alloc(Vertex::new(end, TOL));
+        let v_start = self.topo.add_vertex(Vertex::new(start, TOL));
+        let v_end = self.topo.add_vertex(Vertex::new(end, TOL));
         self.topo
-            .edges
-            .alloc(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)))
+            .add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)))
     }
 
     /// Create an edge from a `NurbsCurve`, evaluating its endpoints.
@@ -6120,9 +6101,9 @@ impl BrepKernel {
     ) -> brepkit_topology::edge::EdgeId {
         let start = curve.evaluate(curve.knots()[0]);
         let end = curve.evaluate(*curve.knots().last().unwrap_or(&1.0));
-        let v_start = self.topo.vertices.alloc(Vertex::new(start, TOL));
-        let v_end = self.topo.vertices.alloc(Vertex::new(end, TOL));
-        self.topo.edges.alloc(Edge::new(
+        let v_start = self.topo.add_vertex(Vertex::new(start, TOL));
+        let v_end = self.topo.add_vertex(Vertex::new(end, TOL));
+        self.topo.add_edge(Edge::new(
             v_start,
             v_end,
             EdgeCurve::NurbsCurve(curve.clone()),
@@ -6145,14 +6126,13 @@ impl BrepKernel {
         ];
         let verts: Vec<_> = corners
             .iter()
-            .map(|p| self.topo.vertices.alloc(Vertex::new(*p, TOL)))
+            .map(|p| self.topo.add_vertex(Vertex::new(*p, TOL)))
             .collect();
         let n = verts.len();
         let edges: Vec<_> = (0..n)
             .map(|i| {
                 self.topo
-                    .edges
-                    .alloc(Edge::new(verts[i], verts[(i + 1) % n], EdgeCurve::Line))
+                    .add_edge(Edge::new(verts[i], verts[(i + 1) % n], EdgeCurve::Line))
             })
             .collect();
         let oriented: Vec<_> = edges
@@ -6160,11 +6140,10 @@ impl BrepKernel {
             .map(|&eid| OrientedEdge::new(eid, true))
             .collect();
         let wire = Wire::new(oriented, true)?;
-        let wid = self.topo.wires.alloc(wire);
+        let wid = self.topo.add_wire(wire);
         let face_id = self
             .topo
-            .faces
-            .alloc(Face::new(wid, vec![], FaceSurface::Nurbs(surface)));
+            .add_face(Face::new(wid, vec![], FaceSurface::Nurbs(surface)));
         Ok(face_id)
     }
 
@@ -7261,7 +7240,7 @@ fn create_apex_face(
         ));
     }
 
-    let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts)
+    let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts, TOL)
         .map_err(|e| JsError::new(&e.to_string()))?;
     let face_id = brepkit_topology::builder::make_face_from_wire(topo, wire_id)
         .map_err(|e| JsError::new(&e.to_string()))?;

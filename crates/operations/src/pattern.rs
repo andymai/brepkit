@@ -59,7 +59,7 @@ pub fn linear_pattern(
     }
 
     let compound = Compound::new(solids);
-    Ok(topo.compounds.alloc(compound))
+    Ok(topo.add_compound(compound))
 }
 
 /// Create a circular pattern of a solid.
@@ -105,7 +105,7 @@ pub fn circular_pattern(
     }
 
     let compound = Compound::new(solids);
-    Ok(topo.compounds.alloc(compound))
+    Ok(topo.add_compound(compound))
 }
 
 /// Create a 2D grid pattern of a solid.
@@ -179,7 +179,7 @@ pub fn grid_pattern(
     }
 
     let compound = Compound::new(solids);
-    Ok(topo.compounds.alloc(compound))
+    Ok(topo.add_compound(compound))
 }
 
 /// Build a rotation matrix for a given axis and angle (Rodrigues' formula).

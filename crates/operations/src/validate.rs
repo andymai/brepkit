@@ -238,7 +238,8 @@ pub fn validate_solid(
 
         for wire_id in wire_ids {
             let wire = topo.wire(wire_id)?;
-            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, &topo.edges) {
+            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, topo.edges())
+            {
                 issues.push(ValidationIssue {
                     severity: Severity::Error,
                     description: format!(
@@ -279,11 +280,7 @@ pub fn validate_solid(
         let mut positions = Vec::new();
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
+            let vid = oe.oriented_start(edge);
             positions.push(topo.vertex(vid)?.point());
         }
 
@@ -518,7 +515,8 @@ pub fn validate_solid_relaxed(
 
         for wire_id in wire_ids {
             let wire = topo.wire(wire_id)?;
-            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, &topo.edges) {
+            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, topo.edges())
+            {
                 issues.push(ValidationIssue {
                     severity: Severity::Error,
                     description: format!(
@@ -550,11 +548,7 @@ pub fn validate_solid_relaxed(
         let mut positions = Vec::new();
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
+            let vid = oe.oriented_start(edge);
             positions.push(topo.vertex(vid)?.point());
         }
 
@@ -884,7 +878,7 @@ mod tests {
             Point3::new(1.0, 1.0, 0.0),
         ];
         let outer_wire =
-            brepkit_topology::builder::make_polygon_wire(&mut topo, &outer_pts).unwrap();
+            brepkit_topology::builder::make_polygon_wire(&mut topo, &outer_pts, 1e-7).unwrap();
 
         // Inner: 0.5×0.5 hole.
         let inner_pts = vec![
@@ -894,7 +888,7 @@ mod tests {
             Point3::new(2.5, 0.25, 0.0),
         ];
         let inner_wire =
-            brepkit_topology::builder::make_polygon_wire(&mut topo, &inner_pts).unwrap();
+            brepkit_topology::builder::make_polygon_wire(&mut topo, &inner_pts, 1e-7).unwrap();
 
         let normal = Vec3::new(0.0, 0.0, 1.0);
         let face = Face::new(
@@ -902,7 +896,7 @@ mod tests {
             vec![inner_wire],
             FaceSurface::Plane { normal, d: 0.0 },
         );
-        let face_id = topo.faces.alloc(face);
+        let face_id = topo.add_face(face);
 
         // Full revolution → genus-1 torus topology.
         let solid = crate::revolve::revolve(
@@ -938,7 +932,7 @@ mod tests {
             Point3::new(-1.0, 1.0, 0.0),
         ];
         let outer_wire =
-            brepkit_topology::builder::make_polygon_wire(&mut topo, &outer_pts).unwrap();
+            brepkit_topology::builder::make_polygon_wire(&mut topo, &outer_pts, 1e-7).unwrap();
 
         // Inner: 0.5×0.5 hole.
         let inner_pts = vec![
@@ -948,7 +942,7 @@ mod tests {
             Point3::new(0.25, -0.25, 0.0),
         ];
         let inner_wire =
-            brepkit_topology::builder::make_polygon_wire(&mut topo, &inner_pts).unwrap();
+            brepkit_topology::builder::make_polygon_wire(&mut topo, &inner_pts, 1e-7).unwrap();
 
         let normal = Vec3::new(0.0, 0.0, 1.0);
         let face = Face::new(
@@ -956,7 +950,7 @@ mod tests {
             vec![inner_wire],
             FaceSurface::Plane { normal, d: 0.0 },
         );
-        let face_id = topo.faces.alloc(face);
+        let face_id = topo.add_face(face);
 
         // Extrude → genus-0 (V-E+F=2) with inner walls.
         let solid =

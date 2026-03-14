@@ -403,7 +403,7 @@ fn example_checkpoint_restore() {
 
     // Take a checkpoint (clone the topology)
     let snapshot = topo.clone();
-    let snapshot_vertex_count = snapshot.vertices.len();
+    let snapshot_vertex_count = snapshot.vertices().len();
 
     // Perform a boolean that adds many entities
     let cyl_id = brepkit_operations::primitives::make_cylinder(&mut topo, 3.0, 20.0).unwrap();
@@ -418,11 +418,11 @@ fn example_checkpoint_restore() {
     .unwrap();
 
     // Arena has grown significantly
-    assert!(topo.vertices.len() > snapshot_vertex_count + 10);
+    assert!(topo.vertices().len() > snapshot_vertex_count + 10);
 
     // Restore from snapshot — arena shrinks back
     topo = snapshot;
-    assert_eq!(topo.vertices.len(), snapshot_vertex_count);
+    assert_eq!(topo.vertices().len(), snapshot_vertex_count);
 
     // Original box is still valid and unchanged
     let restored_vol = brepkit_operations::measure::solid_volume(&topo, box_id, 0.1).unwrap();

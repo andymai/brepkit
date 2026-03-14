@@ -81,11 +81,7 @@ pub fn pipe(
     let mut input_verts = Vec::with_capacity(n);
     for oe in &input_oriented {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
-        };
+        let vid = oe.oriented_start(edge);
         input_verts.push(topo.vertex(vid)?.point());
     }
 
@@ -129,7 +125,7 @@ pub fn pipe(
                 let local_u = initial_up.dot(offset) * scale;
                 let local_t = initial_tangent.dot(offset);
                 let transformed = origin + right * local_r + up * local_u + tangent * local_t;
-                topo.vertices.alloc(Vertex::new(transformed, tol.linear))
+                topo.add_vertex(Vertex::new(transformed, tol.linear))
             })
             .collect();
         ring_verts.push(ring);
@@ -172,7 +168,7 @@ pub fn pipe(
                     let local_u = initial_up.dot(offset) * scale;
                     let local_t = initial_tangent.dot(offset);
                     let transformed = origin + right * local_r + up * local_u + tangent * local_t;
-                    topo.vertices.alloc(Vertex::new(transformed, tol.linear))
+                    topo.add_vertex(Vertex::new(transformed, tol.linear))
                 })
                 .collect();
             iw_ring_verts.push(ring);
@@ -184,8 +180,7 @@ pub fn pipe(
             let edges: Vec<_> = (0..iw_n)
                 .map(|i| {
                     let next = (i + 1) % iw_n;
-                    topo.edges
-                        .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+                    topo.add_edge(Edge::new(ring[i], ring[next], EdgeCurve::Line))
                 })
                 .collect();
             iw_ring_edges.push(edges);
@@ -196,7 +191,7 @@ pub fn pipe(
         for seg in 0..num_segments {
             let edges: Vec<_> = (0..iw_n)
                 .map(|i| {
-                    topo.edges.alloc(Edge::new(
+                    topo.add_edge(Edge::new(
                         iw_ring_verts[seg][i],
                         iw_ring_verts[seg + 1][i],
                         EdgeCurve::Line,
@@ -221,8 +216,7 @@ pub fn pipe(
         let edges: Vec<_> = (0..n)
             .map(|i| {
                 let next = (i + 1) % n;
-                topo.edges
-                    .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+                topo.add_edge(Edge::new(ring[i], ring[next], EdgeCurve::Line))
             })
             .collect();
         ring_edges.push(edges);
@@ -232,7 +226,7 @@ pub fn pipe(
     for seg in 0..num_segments {
         let edges: Vec<_> = (0..n)
             .map(|i| {
-                topo.edges.alloc(Edge::new(
+                topo.add_edge(Edge::new(
                     ring_verts[seg][i],
                     ring_verts[seg + 1][i],
                     EdgeCurve::Line,
@@ -250,7 +244,7 @@ pub fn pipe(
         .map(|i| OrientedEdge::new(ring_edges[0][i], false))
         .collect();
     let start_wire = Wire::new(start_reversed, true).map_err(crate::OperationsError::Topology)?;
-    let start_wire_id = topo.wires.alloc(start_wire);
+    let start_wire_id = topo.add_wire(start_wire);
     let start_normal = -(path.tangent(0.0)?);
     let start_d = dot_normal_point(start_normal, topo.vertex(ring_verts[0][0])?.point());
     let mut start_inner_wires = Vec::new();
@@ -260,9 +254,9 @@ pub fn pipe(
             .map(|i| OrientedEdge::new(ipd.ring_edges[0][i], false))
             .collect();
         let iw = Wire::new(iw_edges, true).map_err(crate::OperationsError::Topology)?;
-        start_inner_wires.push(topo.wires.alloc(iw));
+        start_inner_wires.push(topo.add_wire(iw));
     }
-    let start_face = topo.faces.alloc(Face::new(
+    let start_face = topo.add_face(Face::new(
         start_wire_id,
         start_inner_wires,
         FaceSurface::Plane {
@@ -295,8 +289,8 @@ pub fn pipe(
             )
             .map_err(crate::OperationsError::Topology)?;
 
-            let side_wire_id = topo.wires.alloc(side_wire);
-            let side_face = topo.faces.alloc(Face::new(
+            let side_wire_id = topo.add_wire(side_wire);
+            let side_face = topo.add_face(Face::new(
                 side_wire_id,
                 vec![],
                 FaceSurface::Plane {
@@ -335,8 +329,8 @@ pub fn pipe(
                 )
                 .map_err(crate::OperationsError::Topology)?;
 
-                let side_wire_id = topo.wires.alloc(side_wire);
-                let fid = topo.faces.alloc(Face::new(
+                let side_wire_id = topo.add_wire(side_wire);
+                let fid = topo.add_face(Face::new(
                     side_wire_id,
                     vec![],
                     FaceSurface::Plane {
@@ -354,21 +348,21 @@ pub fn pipe(
         .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
         .collect();
     let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
-    let end_wire_id = topo.wires.alloc(end_wire);
+    let end_wire_id = topo.add_wire(end_wire);
     let mut end_inner_wires = Vec::new();
     for ipd in &inner_pipe_data {
         let iw_edges: Vec<OrientedEdge> = (0..ipd.n)
             .map(|i| OrientedEdge::new(ipd.ring_edges[num_segments][i], true))
             .collect();
         let iw = Wire::new(iw_edges, true).map_err(crate::OperationsError::Topology)?;
-        end_inner_wires.push(topo.wires.alloc(iw));
+        end_inner_wires.push(topo.add_wire(iw));
     }
     let end_normal = path.tangent(1.0)?;
     let end_d = dot_normal_point(
         end_normal,
         topo.vertex(ring_verts[num_segments][0])?.point(),
     );
-    let end_face = topo.faces.alloc(Face::new(
+    let end_face = topo.add_face(Face::new(
         end_wire_id,
         end_inner_wires,
         FaceSurface::Plane {
@@ -379,8 +373,8 @@ pub fn pipe(
     all_faces.push(end_face);
 
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 /// Compute scale factors along the path from the guide curve.

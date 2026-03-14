@@ -118,7 +118,7 @@ mod tests {
         let mut topo = Topology::new();
         let s1 = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
         let s2 = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
-        let cid = topo.compounds.alloc(Compound::new(vec![s1, s2]));
+        let cid = topo.add_compound(Compound::new(vec![s1, s2]));
 
         let solids = explode(&topo, cid).unwrap();
         assert_eq!(solids.len(), 2);
@@ -128,7 +128,7 @@ mod tests {
     fn solid_count_works() {
         let mut topo = Topology::new();
         let s1 = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
-        let cid = topo.compounds.alloc(Compound::new(vec![s1]));
+        let cid = topo.add_compound(Compound::new(vec![s1]));
 
         assert_eq!(solid_count(&topo, cid).unwrap(), 1);
     }
@@ -147,7 +147,7 @@ mod tests {
         )
         .unwrap();
 
-        let cid = topo.compounds.alloc(Compound::new(vec![s1, s2]));
+        let cid = topo.add_compound(Compound::new(vec![s1, s2]));
         let bb = compound_bounding_box(&topo, cid).unwrap();
 
         let tol = Tolerance::loose();
@@ -170,7 +170,7 @@ mod tests {
         )
         .unwrap();
 
-        let cid = topo.compounds.alloc(Compound::new(vec![s1, s2]));
+        let cid = topo.add_compound(Compound::new(vec![s1, s2]));
         let fused = fuse_all(&mut topo, cid).unwrap();
 
         let vol = crate::measure::solid_volume(&topo, fused, 0.1).unwrap();

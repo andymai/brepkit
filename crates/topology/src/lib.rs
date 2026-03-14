@@ -10,6 +10,7 @@
 //! via typed index handles ([`VertexId`], [`EdgeId`], etc.). This avoids
 //! reference counting overhead and enables efficient traversal.
 
+pub mod adjacency;
 pub mod arena;
 pub mod builder;
 pub mod compound;

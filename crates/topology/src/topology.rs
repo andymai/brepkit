@@ -4,6 +4,7 @@
 //! create or query topological entities take a reference to this struct.
 
 use crate::TopologyError;
+use crate::adjacency::AdjacencyIndex;
 use crate::arena::Arena;
 use crate::compound::{Compound, CompoundId};
 use crate::compsolid::{CompSolid, CompSolidId};
@@ -17,29 +18,29 @@ use crate::wire::{Wire, WireId};
 
 /// Central context owning all topological entity arenas.
 ///
-/// Fields are `pub` because every operation needs direct arena access for
-/// allocation and lookup; wrapping in getters would be pure boilerplate
-/// with no invariant to protect.
+/// Arena fields are private to enforce invariants through the public API.
+/// Use the typed accessor methods for lookups and the `add_*` methods
+/// for allocation.
 #[derive(Debug, Default, Clone)]
 pub struct Topology {
     /// All vertices in the model.
-    pub vertices: Arena<Vertex>,
+    vertices: Arena<Vertex>,
     /// All edges in the model.
-    pub edges: Arena<Edge>,
+    edges: Arena<Edge>,
     /// All wires in the model.
-    pub wires: Arena<Wire>,
+    wires: Arena<Wire>,
     /// All faces in the model.
-    pub faces: Arena<Face>,
+    faces: Arena<Face>,
     /// All shells in the model.
-    pub shells: Arena<Shell>,
+    shells: Arena<Shell>,
     /// All solids in the model.
-    pub solids: Arena<Solid>,
+    solids: Arena<Solid>,
     /// All compounds in the model.
-    pub compounds: Arena<Compound>,
+    compounds: Arena<Compound>,
     /// All comp-solids in the model.
-    pub compsolids: Arena<CompSolid>,
+    compsolids: Arena<CompSolid>,
     /// `PCurves`: 2D parametric curves mapping edges to face surface parameters.
-    pub pcurves: PCurveRegistry,
+    pcurves: PCurveRegistry,
 }
 
 /// Generates an immutable arena accessor method on [`Topology`].
@@ -74,12 +75,52 @@ macro_rules! arena_get_mut {
     };
 }
 
+/// Generates allocation, read-only arena access, count, and index
+/// reconstruction methods for a single entity type.
+macro_rules! arena_api {
+    (
+        add = $add:ident,
+        arena = $arena:ident,
+        arena_fn = $arena_fn:ident,
+        count = $count:ident,
+        id_from_index = $id_from_index:ident,
+        T = $T:ty,
+        Id = $Id:ty
+    ) => {
+        /// Allocates a new entity in the arena and returns its typed handle.
+        pub fn $add(&mut self, value: $T) -> $Id {
+            self.$arena.alloc(value)
+        }
+
+        /// Returns a shared reference to the arena for iteration and queries.
+        #[must_use]
+        pub fn $arena_fn(&self) -> &Arena<$T> {
+            &self.$arena
+        }
+
+        /// Returns the number of entities in this arena.
+        #[must_use]
+        pub fn $count(&self) -> usize {
+            self.$arena.len()
+        }
+
+        /// Reconstructs a typed ID from a raw index, returning `None` if
+        /// out of bounds. Intended for FFI boundaries (e.g. WASM).
+        #[must_use]
+        pub fn $id_from_index(&self, index: usize) -> Option<$Id> {
+            self.$arena.id_from_index(index)
+        }
+    };
+}
+
 impl Topology {
     /// Creates a new, empty topology context.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
+
+    // ── Single-entity lookup (by ID → Result) ─────────────────────
 
     arena_get!(vertex, vertices, Vertex, VertexId, VertexNotFound);
     arena_get_mut!(vertex_mut, vertices, Vertex, VertexId, VertexNotFound);
@@ -122,6 +163,112 @@ impl Topology {
         CompSolidId,
         CompSolidNotFound
     );
+
+    // ── Allocation + arena access + count + index reconstruction ──
+
+    arena_api!(
+        add = add_vertex,
+        arena = vertices,
+        arena_fn = vertices,
+        count = num_vertices,
+        id_from_index = vertex_id_from_index,
+        T = Vertex,
+        Id = VertexId
+    );
+
+    arena_api!(
+        add = add_edge,
+        arena = edges,
+        arena_fn = edges,
+        count = num_edges,
+        id_from_index = edge_id_from_index,
+        T = Edge,
+        Id = EdgeId
+    );
+
+    arena_api!(
+        add = add_wire,
+        arena = wires,
+        arena_fn = wires,
+        count = num_wires,
+        id_from_index = wire_id_from_index,
+        T = Wire,
+        Id = WireId
+    );
+
+    arena_api!(
+        add = add_face,
+        arena = faces,
+        arena_fn = faces,
+        count = num_faces,
+        id_from_index = face_id_from_index,
+        T = Face,
+        Id = FaceId
+    );
+
+    arena_api!(
+        add = add_shell,
+        arena = shells,
+        arena_fn = shells,
+        count = num_shells,
+        id_from_index = shell_id_from_index,
+        T = Shell,
+        Id = ShellId
+    );
+
+    arena_api!(
+        add = add_solid,
+        arena = solids,
+        arena_fn = solids,
+        count = num_solids,
+        id_from_index = solid_id_from_index,
+        T = Solid,
+        Id = SolidId
+    );
+
+    arena_api!(
+        add = add_compound,
+        arena = compounds,
+        arena_fn = compounds,
+        count = num_compounds,
+        id_from_index = compound_id_from_index,
+        T = Compound,
+        Id = CompoundId
+    );
+
+    arena_api!(
+        add = add_compsolid,
+        arena = compsolids,
+        arena_fn = compsolids,
+        count = num_compsolids,
+        id_from_index = compsolid_id_from_index,
+        T = CompSolid,
+        Id = CompSolidId
+    );
+
+    // ── PCurve registry ───────────────────────────────────────────
+
+    /// Returns a shared reference to the pcurve registry.
+    #[must_use]
+    pub fn pcurves(&self) -> &PCurveRegistry {
+        &self.pcurves
+    }
+
+    /// Returns an exclusive reference to the pcurve registry.
+    pub fn pcurves_mut(&mut self) -> &mut PCurveRegistry {
+        &mut self.pcurves
+    }
+
+    // ── Adjacency ─────────────────────────────────────────────────
+
+    /// Builds an adjacency index for the given solid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TopologyError`] if any referenced entity does not exist.
+    pub fn build_adjacency(&self, solid: SolidId) -> Result<AdjacencyIndex, TopologyError> {
+        AdjacencyIndex::build(self, solid)
+    }
 }
 
 #[cfg(test)]
@@ -135,9 +282,7 @@ mod tests {
     #[test]
     fn allocate_and_lookup_vertex() {
         let mut topo = Topology::new();
-        let vid = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
+        let vid = topo.add_vertex(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
 
         let v = topo.vertex(vid).unwrap();
         assert!((v.point().x() - 1.0).abs() < f64::EPSILON);
@@ -146,19 +291,16 @@ mod tests {
     #[test]
     fn clone_preserves_entities() {
         let mut topo = Topology::new();
-        let vid = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
+        let vid = topo.add_vertex(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
 
         let snapshot = topo.clone();
 
         // Add more entities after the snapshot
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(4.0, 5.0, 6.0), 1e-7));
-        assert_eq!(topo.vertices.len(), 2);
+        topo.add_vertex(Vertex::new(Point3::new(4.0, 5.0, 6.0), 1e-7));
+        assert_eq!(topo.num_vertices(), 2);
 
         // Snapshot still has exactly 1 vertex
-        assert_eq!(snapshot.vertices.len(), 1);
+        assert_eq!(snapshot.num_vertices(), 1);
         let v = snapshot.vertex(vid).unwrap();
         assert!((v.point().x() - 1.0).abs() < f64::EPSILON);
     }
@@ -166,19 +308,16 @@ mod tests {
     #[test]
     fn restore_from_clone() {
         let mut topo = Topology::new();
-        let vid = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
+        let vid = topo.add_vertex(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
 
         let snapshot = topo.clone();
 
         // Mutate after snapshot
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(9.0, 9.0, 9.0), 1e-7));
+        topo.add_vertex(Vertex::new(Point3::new(9.0, 9.0, 9.0), 1e-7));
 
         // Restore from snapshot
         topo = snapshot;
-        assert_eq!(topo.vertices.len(), 1);
+        assert_eq!(topo.num_vertices(), 1);
         let v = topo.vertex(vid).unwrap();
         assert!((v.point().x() - 1.0).abs() < f64::EPSILON);
     }
@@ -187,14 +326,30 @@ mod tests {
     fn invalid_id_returns_error() {
         use crate::arena::Id;
         let topo = Topology::new();
-        // Fabricate an ID that doesn't exist — index 999.
-        // Safety: Id is just a usize + PhantomData, we construct one via alloc trick.
         let mut dummy_arena: Arena<Vertex> = Arena::new();
-        // Alloc 1000 entries would be wasteful, instead just test with the empty topology.
-        // Any ID will fail because there are no vertices.
         let vid = dummy_arena.alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), 0.0));
-        // vid has index 0, but the *topology's* arena is empty, so lookup should fail.
-        let _ = Id::<Vertex>::index(vid); // just to suppress unused import warning
+        let _ = Id::<Vertex>::index(vid);
         assert!(topo.vertex(vid).is_err());
+    }
+
+    #[test]
+    fn arena_accessors_and_counts() {
+        let mut topo = Topology::new();
+        assert_eq!(topo.num_vertices(), 0);
+        assert!(topo.vertices().is_empty());
+
+        let vid = topo.add_vertex(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
+        assert_eq!(topo.num_vertices(), 1);
+        assert!(topo.vertices().get(vid).is_some());
+    }
+
+    #[test]
+    fn id_from_index_roundtrip() {
+        let mut topo = Topology::new();
+        let vid = topo.add_vertex(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
+
+        let reconstructed = topo.vertex_id_from_index(vid.index()).unwrap();
+        assert_eq!(reconstructed, vid);
+        assert!(topo.vertex_id_from_index(999).is_none());
     }
 }

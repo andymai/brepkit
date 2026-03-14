@@ -110,8 +110,8 @@ pub fn import_mesh(
     let shell = Shell::new(face_ids).map_err(|e| IoError::ParseError {
         reason: format!("failed to build shell from mesh: {e}"),
     })?;
-    let shell_id = topo.shells.alloc(shell);
-    let solid_id = topo.solids.alloc(Solid::new(shell_id, Vec::new()));
+    let shell_id = topo.add_shell(shell);
+    let solid_id = topo.add_solid(Solid::new(shell_id, Vec::new()));
 
     Ok(solid_id)
 }
@@ -138,7 +138,7 @@ fn build_vertex_map(
         if let Some(&(_, vid)) = existing {
             map.push(vid);
         } else {
-            let vid = topo.vertices.alloc(Vertex::new(pos, tolerance));
+            let vid = topo.add_vertex(Vertex::new(pos, tolerance));
             unique_verts.push((pos, vid));
             map.push(vid);
         }
@@ -155,9 +155,9 @@ fn build_triangle_face(
     v2: brepkit_topology::vertex::VertexId,
 ) -> Result<brepkit_topology::face::FaceId, IoError> {
     // Create edges.
-    let e01 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-    let e12 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-    let e20 = topo.edges.alloc(Edge::new(v2, v0, EdgeCurve::Line));
+    let e01 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e12 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e20 = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
 
     // Build wire.
     let oriented = vec![
@@ -168,7 +168,7 @@ fn build_triangle_face(
     let wire = Wire::new(oriented, true).map_err(|e| IoError::ParseError {
         reason: format!("failed to build triangle wire: {e}"),
     })?;
-    let wire_id = topo.wires.alloc(wire);
+    let wire_id = topo.add_wire(wire);
 
     // Compute face normal.
     let p0 = topo.vertex(v0).map_err(topo_err)?.point();
@@ -184,7 +184,7 @@ fn build_triangle_face(
     let d = normal.dot(Vec3::new(p0.x(), p0.y(), p0.z()));
 
     let surface = FaceSurface::Plane { normal, d };
-    let face_id = topo.faces.alloc(Face::new(wire_id, Vec::new(), surface));
+    let face_id = topo.add_face(Face::new(wire_id, Vec::new(), surface));
 
     Ok(face_id)
 }
@@ -410,7 +410,7 @@ mod tests {
         let _solid = import_mesh(&mut topo, &mesh, 1e-6).unwrap();
 
         // Should have 4 unique vertices, not 6.
-        assert_eq!(topo.vertices.len(), 4);
+        assert_eq!(topo.vertices().len(), 4);
     }
 
     #[test]

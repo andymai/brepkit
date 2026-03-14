@@ -142,7 +142,7 @@ impl<'a> StepBuilder<'a> {
         })?;
 
         let shell_id = self.build_shell(shell_ref)?;
-        let solid_id = self.topo.solids.alloc(Solid::new(shell_id, Vec::new()));
+        let solid_id = self.topo.add_solid(Solid::new(shell_id, Vec::new()));
         Ok(solid_id)
     }
 
@@ -159,7 +159,7 @@ impl<'a> StepBuilder<'a> {
         let shell = Shell::new(face_ids).map_err(|e| IoError::ParseError {
             reason: format!("failed to build shell from STEP: {e}"),
         })?;
-        let shell_id = self.topo.shells.alloc(shell);
+        let shell_id = self.topo.add_shell(shell);
         Ok(shell_id)
     }
 
@@ -219,12 +219,9 @@ impl<'a> StepBuilder<'a> {
 
         let face_id = if face_reversed {
             self.topo
-                .faces
-                .alloc(Face::new_reversed(outer, inner_wires, surface))
+                .add_face(Face::new_reversed(outer, inner_wires, surface))
         } else {
-            self.topo
-                .faces
-                .alloc(Face::new(outer, inner_wires, surface))
+            self.topo.add_face(Face::new(outer, inner_wires, surface))
         };
         Ok(face_id)
     }
@@ -349,7 +346,7 @@ impl<'a> StepBuilder<'a> {
         let wire = Wire::new(oriented_edges, true).map_err(|e| IoError::ParseError {
             reason: format!("failed to create wire from edge loop #{loop_ref}: {e}"),
         })?;
-        let wire_id = self.topo.wires.alloc(wire);
+        let wire_id = self.topo.add_wire(wire);
         Ok(wire_id)
     }
 
@@ -385,7 +382,7 @@ impl<'a> StepBuilder<'a> {
         // Resolve the actual curve geometry from the third reference.
         let curve = self.build_curve_geometry(refs[2])?;
 
-        let edge_id = self.topo.edges.alloc(Edge::new(start_vp, end_vp, curve));
+        let edge_id = self.topo.add_edge(Edge::new(start_vp, end_vp, curve));
 
         self.edge_cache.insert(ec_ref, edge_id);
         Ok(edge_id)
@@ -546,7 +543,7 @@ impl<'a> StepBuilder<'a> {
         })?;
 
         let point = self.build_cartesian_point(cp_ref)?;
-        let vid = self.topo.vertices.alloc(Vertex::new(point, 1e-7));
+        let vid = self.topo.add_vertex(Vertex::new(point, 1e-7));
 
         self.vertex_cache.insert(vp_ref, vid);
         Ok(vid)
@@ -1216,7 +1213,7 @@ mod tests {
                 Point3::new(-1.0, 1.0, z),
             ];
             let wire_id =
-                brepkit_topology::builder::make_polygon_wire(&mut write_topo, &pts).unwrap();
+                brepkit_topology::builder::make_polygon_wire(&mut write_topo, &pts, 1e-7).unwrap();
             let v01 = Vec3::new(
                 pts[1].x() - pts[0].x(),
                 pts[1].y() - pts[0].y(),
@@ -1230,7 +1227,7 @@ mod tests {
             let normal = v01.cross(v02).normalize().unwrap();
             let d = normal.x() * pts[0].x() + normal.y() * pts[0].y() + normal.z() * pts[0].z();
             let face = Face::new(wire_id, Vec::new(), FaceSurface::Plane { normal, d });
-            profiles.push(write_topo.faces.alloc(face));
+            profiles.push(write_topo.add_face(face));
         }
         let solid = brepkit_operations::loft::loft_smooth(&mut write_topo, &profiles).unwrap();
 
@@ -1299,7 +1296,7 @@ mod tests {
                 Point3::new(-1.0, 1.0, z),
             ];
             let wire_id =
-                brepkit_topology::builder::make_polygon_wire(&mut write_topo, &pts).unwrap();
+                brepkit_topology::builder::make_polygon_wire(&mut write_topo, &pts, 1e-7).unwrap();
             let v01 = Vec3::new(
                 pts[1].x() - pts[0].x(),
                 pts[1].y() - pts[0].y(),
@@ -1313,7 +1310,7 @@ mod tests {
             let normal = v01.cross(v02).normalize().unwrap();
             let d = normal.x() * pts[0].x() + normal.y() * pts[0].y() + normal.z() * pts[0].z();
             let face = Face::new(wire_id, Vec::new(), FaceSurface::Plane { normal, d });
-            profiles.push(write_topo.faces.alloc(face));
+            profiles.push(write_topo.add_face(face));
         }
         let solid = brepkit_operations::loft::loft_smooth(&mut write_topo, &profiles).unwrap();
 

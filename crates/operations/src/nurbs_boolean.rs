@@ -303,8 +303,8 @@ fn register_pcurves(
             };
 
             let lin_tol = brepkit_math::tolerance::Tolerance::default().linear;
-            let start_vid = topo.vertices.alloc(Vertex::new(start_pt, lin_tol));
-            let end_vid = topo.vertices.alloc(Vertex::new(end_pt, lin_tol));
+            let start_vid = topo.add_vertex(Vertex::new(start_pt, lin_tol));
+            let end_vid = topo.add_vertex(Vertex::new(end_pt, lin_tol));
 
             // Fit the 3D SSI points to a NURBS curve for the edge geometry.
             let ssi_points: Vec<Point3> = ssi_curve.points.iter().map(|p| p.point).collect();
@@ -314,16 +314,16 @@ fn register_pcurves(
                 Err(_) => EdgeCurve::Line,
             };
 
-            let edge_id = topo.edges.alloc(Edge::new(start_vid, end_vid, edge_curve));
+            let edge_id = topo.add_edge(Edge::new(start_vid, end_vid, edge_curve));
 
             // Build and register pcurve on face_a.
             if let Some(pcurve_a) = build_pcurve_from_params(&ssi_curve.points, true) {
-                topo.pcurves.set(edge_id, pair.face_a, pcurve_a);
+                topo.pcurves_mut().set(edge_id, pair.face_a, pcurve_a);
             }
 
             // Build and register pcurve on face_b.
             if let Some(pcurve_b) = build_pcurve_from_params(&ssi_curve.points, false) {
-                topo.pcurves.set(edge_id, pair.face_b, pcurve_b);
+                topo.pcurves_mut().set(edge_id, pair.face_b, pcurve_b);
             }
         }
     }
@@ -879,11 +879,15 @@ fn create_face_fragments(
             .collect();
 
         // Create wire from 3D points.
-        let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &points_3d)?;
+        let wire_id = brepkit_topology::builder::make_polygon_wire(
+            topo,
+            &points_3d,
+            brepkit_math::tolerance::Tolerance::default().linear,
+        )?;
 
         // Create face with the same NURBS surface.
         let face = Face::new(wire_id, Vec::new(), FaceSurface::Nurbs(surface.clone()));
-        let face_id = topo.faces.alloc(face);
+        let face_id = topo.add_face(face);
         face_ids.push(face_id);
     }
 
@@ -1063,9 +1067,9 @@ fn assemble_nurbs_boolean(
     }
 
     let shell = Shell::new(result_faces)?;
-    let shell_id = topo.shells.alloc(shell);
+    let shell_id = topo.add_shell(shell);
     let solid = Solid::new(shell_id, Vec::new());
-    let solid_id = topo.solids.alloc(solid);
+    let solid_id = topo.add_solid(solid);
     Ok(solid_id)
 }
 
@@ -1762,7 +1766,7 @@ mod tests {
                 Point3::new(offset_x + half, half, z),
                 Point3::new(offset_x - half, half, z),
             ];
-            let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts).unwrap();
+            let wire_id = brepkit_topology::builder::make_polygon_wire(topo, &pts, 1e-7).unwrap();
             // Compute plane normal from first three vertices.
             let v01 = brepkit_math::vec::Vec3::new(
                 pts[1].x() - pts[0].x(),
@@ -1777,7 +1781,7 @@ mod tests {
             let normal = v01.cross(v02).normalize().unwrap();
             let d = normal.x() * pts[0].x() + normal.y() * pts[0].y() + normal.z() * pts[0].z();
             let face = Face::new(wire_id, Vec::new(), FaceSurface::Plane { normal, d });
-            profiles.push(topo.faces.alloc(face));
+            profiles.push(topo.add_face(face));
         }
         loft_smooth(topo, &profiles).unwrap()
     }

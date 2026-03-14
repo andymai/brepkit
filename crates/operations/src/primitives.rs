@@ -45,40 +45,32 @@ pub fn make_box(
 
     // 8 vertices: corner at origin, extending to (dx, dy, dz)
     let v = [
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol.linear)),
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(dx, 0.0, 0.0), tol.linear)),
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(dx, dy, 0.0), tol.linear)),
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(0.0, dy, 0.0), tol.linear)),
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(0.0, 0.0, dz), tol.linear)),
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(dx, 0.0, dz), tol.linear)),
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(dx, dy, dz), tol.linear)),
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(0.0, dy, dz), tol.linear)),
+        topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol.linear)),
+        topo.add_vertex(Vertex::new(Point3::new(dx, 0.0, 0.0), tol.linear)),
+        topo.add_vertex(Vertex::new(Point3::new(dx, dy, 0.0), tol.linear)),
+        topo.add_vertex(Vertex::new(Point3::new(0.0, dy, 0.0), tol.linear)),
+        topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, dz), tol.linear)),
+        topo.add_vertex(Vertex::new(Point3::new(dx, 0.0, dz), tol.linear)),
+        topo.add_vertex(Vertex::new(Point3::new(dx, dy, dz), tol.linear)),
+        topo.add_vertex(Vertex::new(Point3::new(0.0, dy, dz), tol.linear)),
     ];
 
     // 12 edges (shared between faces)
     // Bottom ring (z=0)
-    let eb0 = topo.edges.alloc(Edge::new(v[0], v[1], EdgeCurve::Line));
-    let eb1 = topo.edges.alloc(Edge::new(v[1], v[2], EdgeCurve::Line));
-    let eb2 = topo.edges.alloc(Edge::new(v[2], v[3], EdgeCurve::Line));
-    let eb3 = topo.edges.alloc(Edge::new(v[3], v[0], EdgeCurve::Line));
+    let eb0 = topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Line));
+    let eb1 = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
+    let eb2 = topo.add_edge(Edge::new(v[2], v[3], EdgeCurve::Line));
+    let eb3 = topo.add_edge(Edge::new(v[3], v[0], EdgeCurve::Line));
     // Top ring (z=dz)
-    let et0 = topo.edges.alloc(Edge::new(v[4], v[5], EdgeCurve::Line));
-    let et1 = topo.edges.alloc(Edge::new(v[5], v[6], EdgeCurve::Line));
-    let et2 = topo.edges.alloc(Edge::new(v[6], v[7], EdgeCurve::Line));
-    let et3 = topo.edges.alloc(Edge::new(v[7], v[4], EdgeCurve::Line));
+    let et0 = topo.add_edge(Edge::new(v[4], v[5], EdgeCurve::Line));
+    let et1 = topo.add_edge(Edge::new(v[5], v[6], EdgeCurve::Line));
+    let et2 = topo.add_edge(Edge::new(v[6], v[7], EdgeCurve::Line));
+    let et3 = topo.add_edge(Edge::new(v[7], v[4], EdgeCurve::Line));
     // Verticals
-    let ev0 = topo.edges.alloc(Edge::new(v[0], v[4], EdgeCurve::Line));
-    let ev1 = topo.edges.alloc(Edge::new(v[1], v[5], EdgeCurve::Line));
-    let ev2 = topo.edges.alloc(Edge::new(v[2], v[6], EdgeCurve::Line));
-    let ev3 = topo.edges.alloc(Edge::new(v[3], v[7], EdgeCurve::Line));
+    let ev0 = topo.add_edge(Edge::new(v[0], v[4], EdgeCurve::Line));
+    let ev1 = topo.add_edge(Edge::new(v[1], v[5], EdgeCurve::Line));
+    let ev2 = topo.add_edge(Edge::new(v[2], v[6], EdgeCurve::Line));
+    let ev3 = topo.add_edge(Edge::new(v[3], v[7], EdgeCurve::Line));
 
     let mk_face = |topo: &mut Topology,
                    edges: [(brepkit_topology::edge::EdgeId, bool); 4],
@@ -93,10 +85,8 @@ pub fn make_box(
             true,
         )
         .map_err(crate::OperationsError::Topology)?;
-        let wid = topo.wires.alloc(wire);
-        Ok(topo
-            .faces
-            .alloc(Face::new(wid, vec![], FaceSurface::Plane { normal, d })))
+        let wid = topo.add_wire(wire);
+        Ok(topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d })))
     };
 
     // Plane 'd' values: signed distance from origin along normal
@@ -139,8 +129,8 @@ pub fn make_box(
 
     let shell = Shell::new(vec![bottom, top, front, back, left, right])
         .map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 // ── Cylinder ───────────────────────────────────────────────────────
@@ -183,12 +173,8 @@ pub fn make_cylinder(
     .map_err(crate::OperationsError::Math)?;
 
     // --- Lateral face: single face with degenerate seam wire ---
-    let v_bot = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(radius, 0.0, 0.0), tol.linear));
-    let v_top = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(radius, 0.0, height), tol.linear));
+    let v_bot = topo.add_vertex(Vertex::new(Point3::new(radius, 0.0, 0.0), tol.linear));
+    let v_top = topo.add_vertex(Vertex::new(Point3::new(radius, 0.0, height), tol.linear));
 
     let bot_circle = brepkit_math::curves::Circle3D::new(
         Point3::new(0.0, 0.0, 0.0),
@@ -203,13 +189,9 @@ pub fn make_cylinder(
     )
     .map_err(crate::OperationsError::Math)?;
 
-    let e_bot_circle = topo
-        .edges
-        .alloc(Edge::new(v_bot, v_bot, EdgeCurve::Circle(bot_circle)));
-    let e_top_circle = topo
-        .edges
-        .alloc(Edge::new(v_top, v_top, EdgeCurve::Circle(top_circle)));
-    let e_seam = topo.edges.alloc(Edge::new(v_bot, v_top, EdgeCurve::Line));
+    let e_bot_circle = topo.add_edge(Edge::new(v_bot, v_bot, EdgeCurve::Circle(bot_circle)));
+    let e_top_circle = topo.add_edge(Edge::new(v_top, v_top, EdgeCurve::Circle(top_circle)));
+    let e_seam = topo.add_edge(Edge::new(v_bot, v_top, EdgeCurve::Line));
 
     let lateral_wire = Wire::new(
         vec![
@@ -221,8 +203,8 @@ pub fn make_cylinder(
         true,
     )
     .map_err(crate::OperationsError::Topology)?;
-    let lateral_wid = topo.wires.alloc(lateral_wire);
-    let lateral_face = topo.faces.alloc(Face::new(
+    let lateral_wid = topo.add_wire(lateral_wire);
+    let lateral_face = topo.add_face(Face::new(
         lateral_wid,
         vec![],
         FaceSurface::Cylinder(cyl_surface),
@@ -233,8 +215,8 @@ pub fn make_cylinder(
     // Reversed orientation: CW from +z corresponds to outward normal -z.
     let bot_cap_wire = Wire::new(vec![OrientedEdge::new(e_bot_circle, false)], true)
         .map_err(crate::OperationsError::Topology)?;
-    let bot_wid = topo.wires.alloc(bot_cap_wire);
-    let bot_face = topo.faces.alloc(Face::new(
+    let bot_wid = topo.add_wire(bot_cap_wire);
+    let bot_face = topo.add_face(Face::new(
         bot_wid,
         vec![],
         FaceSurface::Plane {
@@ -247,8 +229,8 @@ pub fn make_cylinder(
     // Reuse the same circle edge; forward orientation gives outward normal +z.
     let top_cap_wire = Wire::new(vec![OrientedEdge::new(e_top_circle, true)], true)
         .map_err(crate::OperationsError::Topology)?;
-    let top_wid = topo.wires.alloc(top_cap_wire);
-    let top_face = topo.faces.alloc(Face::new(
+    let top_wid = topo.add_wire(top_cap_wire);
+    let top_face = topo.add_face(Face::new(
         top_wid,
         vec![],
         FaceSurface::Plane {
@@ -259,8 +241,8 @@ pub fn make_cylinder(
 
     let shell = Shell::new(vec![lateral_face, bot_face, top_face])
         .map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 // ── Cone ───────────────────────────────────────────────────────────
@@ -358,10 +340,8 @@ pub fn make_cone(
     // --- Lateral conical face ---
     if r_small <= tol.linear {
         // Pointed cone: degenerate wire from base circle to apex
-        let v_apex = topo.vertices.alloc(Vertex::new(apex_pos, tol.linear));
-        let v_base = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(r_big, 0.0, big_z), tol.linear));
+        let v_apex = topo.add_vertex(Vertex::new(apex_pos, tol.linear));
+        let v_base = topo.add_vertex(Vertex::new(Point3::new(r_big, 0.0, big_z), tol.linear));
 
         let base_circle = brepkit_math::curves::Circle3D::new(
             Point3::new(0.0, 0.0, big_z),
@@ -369,10 +349,8 @@ pub fn make_cone(
             r_big,
         )
         .map_err(crate::OperationsError::Math)?;
-        let e_circle = topo
-            .edges
-            .alloc(Edge::new(v_base, v_base, EdgeCurve::Circle(base_circle)));
-        let e_seam = topo.edges.alloc(Edge::new(v_base, v_apex, EdgeCurve::Line));
+        let e_circle = topo.add_edge(Edge::new(v_base, v_base, EdgeCurve::Circle(base_circle)));
+        let e_seam = topo.add_edge(Edge::new(v_base, v_apex, EdgeCurve::Line));
 
         let lateral_wire = Wire::new(
             vec![
@@ -383,8 +361,8 @@ pub fn make_cone(
             true,
         )
         .map_err(crate::OperationsError::Topology)?;
-        let lateral_wid = topo.wires.alloc(lateral_wire);
-        faces.push(topo.faces.alloc(Face::new(
+        let lateral_wid = topo.add_wire(lateral_wire);
+        faces.push(topo.add_face(Face::new(
             lateral_wid,
             vec![],
             FaceSurface::Cone(cone_surface),
@@ -396,9 +374,9 @@ pub fn make_cone(
         let cap_forward = axis_sign > 0.0;
         let cap_wire = Wire::new(vec![OrientedEdge::new(e_circle, cap_forward)], true)
             .map_err(crate::OperationsError::Topology)?;
-        let cap_wid = topo.wires.alloc(cap_wire);
+        let cap_wid = topo.add_wire(cap_wire);
         let cap_normal = Vec3::new(0.0, 0.0, axis_sign);
-        faces.push(topo.faces.alloc(Face::new(
+        faces.push(topo.add_face(Face::new(
             cap_wid,
             vec![],
             FaceSurface::Plane {
@@ -408,11 +386,11 @@ pub fn make_cone(
         )));
     } else {
         // Frustum: two circles
-        let v_bot = topo.vertices.alloc(Vertex::new(
+        let v_bot = topo.add_vertex(Vertex::new(
             Point3::new(bottom_radius, 0.0, 0.0),
             tol.linear,
         ));
-        let v_top = topo.vertices.alloc(Vertex::new(
+        let v_top = topo.add_vertex(Vertex::new(
             Point3::new(top_radius, 0.0, height),
             tol.linear,
         ));
@@ -429,13 +407,9 @@ pub fn make_cone(
             top_radius,
         )
         .map_err(crate::OperationsError::Math)?;
-        let e_bot = topo
-            .edges
-            .alloc(Edge::new(v_bot, v_bot, EdgeCurve::Circle(bot_circle)));
-        let e_top = topo
-            .edges
-            .alloc(Edge::new(v_top, v_top, EdgeCurve::Circle(top_circle)));
-        let e_seam = topo.edges.alloc(Edge::new(v_bot, v_top, EdgeCurve::Line));
+        let e_bot = topo.add_edge(Edge::new(v_bot, v_bot, EdgeCurve::Circle(bot_circle)));
+        let e_top = topo.add_edge(Edge::new(v_top, v_top, EdgeCurve::Circle(top_circle)));
+        let e_seam = topo.add_edge(Edge::new(v_bot, v_top, EdgeCurve::Line));
 
         let lateral_wire = Wire::new(
             vec![
@@ -447,8 +421,8 @@ pub fn make_cone(
             true,
         )
         .map_err(crate::OperationsError::Topology)?;
-        let lateral_wid = topo.wires.alloc(lateral_wire);
-        faces.push(topo.faces.alloc(Face::new(
+        let lateral_wid = topo.add_wire(lateral_wire);
+        faces.push(topo.add_face(Face::new(
             lateral_wid,
             vec![],
             FaceSurface::Cone(cone_surface),
@@ -457,8 +431,8 @@ pub fn make_cone(
         // Bottom cap (z=0): reuse the same circle edge for watertight topology.
         let bot_cap_wire = Wire::new(vec![OrientedEdge::new(e_bot, false)], true)
             .map_err(crate::OperationsError::Topology)?;
-        let bot_wid = topo.wires.alloc(bot_cap_wire);
-        faces.push(topo.faces.alloc(Face::new(
+        let bot_wid = topo.add_wire(bot_cap_wire);
+        faces.push(topo.add_face(Face::new(
             bot_wid,
             vec![],
             FaceSurface::Plane {
@@ -470,8 +444,8 @@ pub fn make_cone(
         // Top cap (z=height): reuse the same circle edge for watertight topology.
         let top_cap_wire = Wire::new(vec![OrientedEdge::new(e_top, true)], true)
             .map_err(crate::OperationsError::Topology)?;
-        let top_wid = topo.wires.alloc(top_cap_wire);
-        faces.push(topo.faces.alloc(Face::new(
+        let top_wid = topo.add_wire(top_cap_wire);
+        faces.push(topo.add_face(Face::new(
             top_wid,
             vec![],
             FaceSurface::Plane {
@@ -482,8 +456,8 @@ pub fn make_cone(
     }
 
     let shell = Shell::new(faces).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 // ── Sphere ─────────────────────────────────────────────────────────
@@ -535,7 +509,7 @@ pub fn make_sphere(
         .map(|i| {
             let theta = TAU * i as f64 / segments as f64;
             let pt = Point3::new(radius * theta.cos(), radius * theta.sin(), 0.0);
-            topo.vertices.alloc(Vertex::new(pt, tol.linear))
+            topo.add_vertex(Vertex::new(pt, tol.linear))
         })
         .collect();
 
@@ -543,8 +517,7 @@ pub fn make_sphere(
     let eq_edges: Vec<_> = (0..segments)
         .map(|i| {
             let j = (i + 1) % segments;
-            topo.edges
-                .alloc(Edge::new(eq_verts[i], eq_verts[j], EdgeCurve::Line))
+            topo.add_edge(Edge::new(eq_verts[i], eq_verts[j], EdgeCurve::Line))
         })
         .collect();
 
@@ -558,10 +531,8 @@ pub fn make_sphere(
         true,
     )
     .map_err(crate::OperationsError::Topology)?;
-    let north_wid = topo.wires.alloc(north_wire);
-    let north_face = topo
-        .faces
-        .alloc(Face::new(north_wid, vec![], FaceSurface::Sphere(surface_n)));
+    let north_wid = topo.add_wire(north_wire);
+    let north_face = topo.add_face(Face::new(north_wid, vec![], FaceSurface::Sphere(surface_n)));
 
     // South hemisphere: equatorial wire traversed backward (CW from +Z).
     // Outward normal points downward (-Z hemisphere).
@@ -574,15 +545,13 @@ pub fn make_sphere(
         true,
     )
     .map_err(crate::OperationsError::Topology)?;
-    let south_wid = topo.wires.alloc(south_wire);
-    let south_face = topo
-        .faces
-        .alloc(Face::new(south_wid, vec![], FaceSurface::Sphere(surface_s)));
+    let south_wid = topo.add_wire(south_wire);
+    let south_face = topo.add_face(Face::new(south_wid, vec![], FaceSurface::Sphere(surface_s)));
 
     let shell =
         Shell::new(vec![north_face, south_face]).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 // ── Torus ──────────────────────────────────────────────────────────
@@ -640,14 +609,14 @@ pub fn make_torus(
     // The torus surface is doubly periodic (two seam curves).
     // Minimal CW complex: 1 vertex, 2 edges, 1 face → V-E+F = 0 (genus 1).
     // The boundary wire follows the fundamental polygon: a → b → a⁻¹ → b⁻¹.
-    let v0 = topo.vertices.alloc(Vertex::new(
+    let v0 = topo.add_vertex(Vertex::new(
         Point3::new(major_radius + minor_radius, 0.0, 0.0),
         tol.linear,
     ));
     // Seam edge a (longitudinal — around the tube)
-    let ea = topo.edges.alloc(Edge::new(v0, v0, EdgeCurve::Line));
+    let ea = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
     // Seam edge b (meridional — around the ring)
-    let eb = topo.edges.alloc(Edge::new(v0, v0, EdgeCurve::Line));
+    let eb = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Line));
 
     let wire = Wire::new(
         vec![
@@ -659,15 +628,13 @@ pub fn make_torus(
         true,
     )
     .map_err(crate::OperationsError::Topology)?;
-    let wid = topo.wires.alloc(wire);
+    let wid = topo.add_wire(wire);
 
-    let face_id = topo
-        .faces
-        .alloc(Face::new(wid, vec![], FaceSurface::Torus(surface)));
+    let face_id = topo.add_face(Face::new(wid, vec![], FaceSurface::Torus(surface)));
 
     let shell = Shell::new(vec![face_id]).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -685,24 +652,18 @@ fn make_trapezoid_xz_face(
 ) -> Result<brepkit_topology::face::FaceId, crate::OperationsError> {
     let tol = Tolerance::new();
 
-    let v0 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 0.0, z_bottom), tol.linear));
-    let v1 = topo.vertices.alloc(Vertex::new(
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, z_bottom), tol.linear));
+    let v1 = topo.add_vertex(Vertex::new(
         Point3::new(bottom_radius, 0.0, z_bottom),
         tol.linear,
     ));
-    let v2 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(top_radius, 0.0, z_top), tol.linear));
-    let v3 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 0.0, z_top), tol.linear));
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(top_radius, 0.0, z_top), tol.linear));
+    let v3 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, z_top), tol.linear));
 
-    let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-    let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-    let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-    let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
     let wire = Wire::new(
         vec![
@@ -714,10 +675,10 @@ fn make_trapezoid_xz_face(
         true,
     )
     .map_err(crate::OperationsError::Topology)?;
-    let wid = topo.wires.alloc(wire);
+    let wid = topo.add_wire(wire);
 
     let normal = Vec3::new(0.0, -1.0, 0.0);
-    Ok(topo.faces.alloc(Face::new(
+    Ok(topo.add_face(Face::new(
         wid,
         vec![],
         FaceSurface::Plane { normal, d: 0.0 },
@@ -735,23 +696,15 @@ fn make_rect_xz_face(
 ) -> Result<brepkit_topology::face::FaceId, crate::OperationsError> {
     let tol = Tolerance::new();
 
-    let v0 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(x0, 0.0, z0), tol.linear));
-    let v1 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(x1, 0.0, z0), tol.linear));
-    let v2 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(x1, 0.0, z1), tol.linear));
-    let v3 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(x0, 0.0, z1), tol.linear));
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(x0, 0.0, z0), tol.linear));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(x1, 0.0, z0), tol.linear));
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(x1, 0.0, z1), tol.linear));
+    let v3 = topo.add_vertex(Vertex::new(Point3::new(x0, 0.0, z1), tol.linear));
 
-    let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-    let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-    let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-    let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
     let wire = Wire::new(
         vec![
@@ -763,13 +716,11 @@ fn make_rect_xz_face(
         true,
     )
     .map_err(crate::OperationsError::Topology)?;
-    let wid = topo.wires.alloc(wire);
+    let wid = topo.add_wire(wire);
 
     let normal = Vec3::new(0.0, -1.0, 0.0);
     let d = 0.0;
-    Ok(topo
-        .faces
-        .alloc(Face::new(wid, vec![], FaceSurface::Plane { normal, d })))
+    Ok(topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d })))
 }
 
 #[cfg(test)]
@@ -864,7 +815,7 @@ mod tests {
         let s = topo.solid(solid).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
 
-        brepkit_topology::validation::validate_shell_manifold(sh, &topo.faces, &topo.wires)
+        brepkit_topology::validation::validate_shell_manifold(sh, topo.faces(), topo.wires())
             .expect("box should be manifold");
     }
 

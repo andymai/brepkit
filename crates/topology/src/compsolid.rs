@@ -49,7 +49,7 @@ impl CompSolid {
     /// Returns the number of solids.
     #[must_use]
     pub fn num_solids(&self) -> usize {
-        self.solids.len()
+        self.solids().len()
     }
 }
 
@@ -75,12 +75,10 @@ mod tests {
         let mut topo = Topology::new();
 
         // Create two minimal solids (just for ID purposes)
-        let _v = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let _v = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
 
         let cs = CompSolid::new(vec![], vec![]);
-        let cs_id = topo.compsolids.alloc(cs);
+        let cs_id = topo.add_compsolid(cs);
 
         let retrieved = topo.compsolid(cs_id).unwrap();
         assert_eq!(retrieved.num_solids(), 0);

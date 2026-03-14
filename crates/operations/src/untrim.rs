@@ -150,7 +150,7 @@ pub fn untrim_topology_face(
     };
 
     // Collect PCurves for all edges on this face.
-    let pcurve_entries = topo.pcurves.pcurves_for_face(face);
+    let pcurve_entries = topo.pcurves().pcurves_for_face(face);
     if pcurve_entries.is_empty() {
         return Err(OperationsError::InvalidInput {
             reason: "face has no PCurves; cannot determine trim boundary".into(),

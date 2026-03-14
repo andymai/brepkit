@@ -1,4 +1,13 @@
 //! Face — a bounded region of a surface.
+//!
+//! # Orientation semantics
+//!
+//! Each face has a `reversed` flag that relates the face's topological
+//! orientation to the geometric surface normal. When `reversed` is `false`,
+//! the face's outward normal coincides with the surface normal. When `true`,
+//! the logical outward normal is opposite to the geometric surface normal.
+//! This is used by boolean operations when a curved face must contribute
+//! with flipped winding without altering the underlying surface definition.
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::surfaces::{
@@ -121,5 +130,29 @@ impl Face {
     /// surface normal.
     pub fn set_reversed(&mut self, reversed: bool) {
         self.reversed = reversed;
+    }
+
+    /// Returns the effective plane normal, accounting for the `reversed` flag.
+    ///
+    /// Returns `None` if the surface is not planar.
+    #[must_use]
+    pub fn effective_plane_normal(&self) -> Option<Vec3> {
+        match &self.surface {
+            FaceSurface::Plane { normal, .. } => {
+                if self.reversed {
+                    Some(-*normal)
+                } else {
+                    Some(*normal)
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Composes orientation: toggles the `reversed` flag if `flip` is true.
+    pub fn compose_orientation(&mut self, flip: bool) {
+        if flip {
+            self.reversed = !self.reversed;
+        }
     }
 }

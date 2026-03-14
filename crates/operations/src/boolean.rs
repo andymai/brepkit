@@ -924,11 +924,7 @@ pub fn face_polygon(
             }
             pts.extend(sampled);
         } else {
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
+            let vid = oe.oriented_start(edge);
             pts.push(topo.vertex(vid)?.point());
         }
     }
@@ -3139,7 +3135,7 @@ pub(crate) fn assemble_solid_mixed(
                         let key = quantize_point(*p, resolution);
                         *vertex_map
                             .entry(key)
-                            .or_insert_with(|| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+                            .or_insert_with(|| topo.add_vertex(Vertex::new(*p, tol.linear)))
                     })
                     .collect();
 
@@ -3178,14 +3174,13 @@ pub(crate) fn assemble_solid_mixed(
                                 cylinder.axis(),
                                 cylinder.radius(),
                             ) {
-                                topo.edges
-                                    .alloc(Edge::new(start, end, EdgeCurve::Circle(circle)))
+                                topo.add_edge(Edge::new(start, end, EdgeCurve::Circle(circle)))
                             } else {
-                                topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                                topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
                             }
                         } else {
                             // Axial edge (same angle, different height): line.
-                            topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                            topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
                         }
                     });
 
@@ -3194,13 +3189,12 @@ pub(crate) fn assemble_solid_mixed(
 
                 let wire =
                     Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
-                let wire_id = topo.wires.alloc(wire);
+                let wire_id = topo.add_wire(wire);
                 let surface = FaceSurface::Cylinder(cylinder.clone());
                 let face = if *reversed {
-                    topo.faces
-                        .alloc(Face::new_reversed(wire_id, vec![], surface))
+                    topo.add_face(Face::new_reversed(wire_id, vec![], surface))
                 } else {
-                    topo.faces.alloc(Face::new(wire_id, vec![], surface))
+                    topo.add_face(Face::new(wire_id, vec![], surface))
                 };
                 face_ids.push(face);
             }
@@ -3238,7 +3232,7 @@ pub(crate) fn assemble_solid_mixed(
                         let key = quantize_point(*p, resolution);
                         *vertex_map
                             .entry(key)
-                            .or_insert_with(|| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+                            .or_insert_with(|| topo.add_vertex(Vertex::new(*p, tol.linear)))
                     })
                     .collect();
 
@@ -3256,7 +3250,7 @@ pub(crate) fn assemble_solid_mixed(
                         } else {
                             (vert_ids[j], vert_ids[i])
                         };
-                        topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                        topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
                     });
 
                     oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
@@ -3264,12 +3258,11 @@ pub(crate) fn assemble_solid_mixed(
 
                 let wire =
                     Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
-                let wire_id = topo.wires.alloc(wire);
+                let wire_id = topo.add_wire(wire);
                 let face = if reversed {
-                    topo.faces
-                        .alloc(Face::new_reversed(wire_id, vec![], surface))
+                    topo.add_face(Face::new_reversed(wire_id, vec![], surface))
                 } else {
-                    topo.faces.alloc(Face::new(wire_id, vec![], surface))
+                    topo.add_face(Face::new(wire_id, vec![], surface))
                 };
                 face_ids.push(face);
             }
@@ -3303,8 +3296,8 @@ pub(crate) fn assemble_solid_mixed(
     split_nonmanifold_edges(topo, &mut face_ids)?;
 
     let shell = Shell::new(face_ids).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 // ---------------------------------------------------------------------------
@@ -4158,7 +4151,7 @@ fn refine_boundary_edges(
                     let fwd = va_idx <= vb_idx;
                     let sub_eid = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
                         let (s, e) = if fwd { (va, vb) } else { (vb, va) };
-                        topo.edges.alloc(Edge::new(s, e, original_curve.clone()))
+                        topo.add_edge(Edge::new(s, e, original_curve.clone()))
                     });
                     new_oriented_edges.push(OrientedEdge::new(sub_eid, fwd));
                 }
@@ -4169,14 +4162,14 @@ fn refine_boundary_edges(
 
         let new_wire =
             Wire::new(new_oriented_edges, true).map_err(crate::OperationsError::Topology)?;
-        let new_wire_id = topo.wires.alloc(new_wire);
+        let new_wire_id = topo.add_wire(new_wire);
 
         let new_face = if is_reversed {
             Face::new_reversed(new_wire_id, inner_wires, surface)
         } else {
             Face::new(new_wire_id, inner_wires, surface)
         };
-        face_ids[fi] = topo.faces.alloc(new_face);
+        face_ids[fi] = topo.add_face(new_face);
     }
 
     Ok(())
@@ -4226,7 +4219,7 @@ fn split_nonmanifold_edges(
     let mut edge_replacements: HashMap<(usize, usize), EdgeId> = HashMap::new();
 
     for (edge_idx, face_refs) in &nonmanifold {
-        let edge_id = topo.edges.id_from_index(*edge_idx).ok_or_else(|| {
+        let edge_id = topo.edge_id_from_index(*edge_idx).ok_or_else(|| {
             crate::OperationsError::InvalidInput {
                 reason: format!("edge index {edge_idx} not found"),
             }
@@ -4334,8 +4327,7 @@ fn split_nonmanifold_edges(
             let new_edge_id = if pair_idx == 0 {
                 edge_id
             } else {
-                topo.edges
-                    .alloc(Edge::new(edge_start, edge_end, edge_curve.clone()))
+                topo.add_edge(Edge::new(edge_start, edge_end, edge_curve.clone()))
             };
 
             edge_replacements.insert((face_angles[i].0, *edge_idx), new_edge_id);
@@ -4376,13 +4368,13 @@ fn split_nonmanifold_edges(
             .collect();
 
         let new_wire = Wire::new(new_edges, true).map_err(crate::OperationsError::Topology)?;
-        let new_wire_id = topo.wires.alloc(new_wire);
+        let new_wire_id = topo.add_wire(new_wire);
         let new_face = if is_reversed {
             Face::new_reversed(new_wire_id, inner_wires, surface)
         } else {
             Face::new(new_wire_id, inner_wires, surface)
         };
-        face_ids[fi] = topo.faces.alloc(new_face);
+        face_ids[fi] = topo.add_face(new_face);
     }
 
     Ok(())
@@ -5576,7 +5568,7 @@ fn analytic_boolean(
                 let key = quantize_point(*p, resolution);
                 *vertex_map
                     .entry(key)
-                    .or_insert_with(|| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+                    .or_insert_with(|| topo.add_vertex(Vertex::new(*p, tol.linear)))
             })
             .collect();
 
@@ -5605,13 +5597,13 @@ fn analytic_boolean(
             let seam_pt = verts[0];
             let vid = *vertex_map
                 .entry(quantize_point(seam_pt, resolution))
-                .or_insert_with(|| topo.vertices.alloc(Vertex::new(seam_pt, tol.linear)));
+                .or_insert_with(|| topo.add_vertex(Vertex::new(seam_pt, tol.linear)));
             let eid = *edge_map
                 .entry((vid.index(), vid.index()))
-                .or_insert_with(|| topo.edges.alloc(Edge::new(vid, vid, ec)));
+                .or_insert_with(|| topo.add_edge(Edge::new(vid, vid, ec)));
             let wire = Wire::new(vec![OrientedEdge::new(eid, true)], true)
                 .map_err(crate::OperationsError::Topology)?;
-            topo.wires.alloc(wire)
+            topo.add_wire(wire)
         } else if let FaceSurface::Cylinder(cyl) = &frag.surface {
             // Cylinder barrel: polygon must have even vertex count and distinct
             // v-levels at verts[0] (bot seam) and verts[last] (top seam).
@@ -5650,13 +5642,13 @@ fn analytic_boolean(
                         } else {
                             (vert_ids[j], vert_ids[i])
                         };
-                        topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                        topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
                     });
                     oriented_edges.push(OrientedEdge::new(eid, fwd));
                 }
                 let wire =
                     Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
-                topo.wires.alloc(wire)
+                topo.add_wire(wire)
             }
         } else {
             let mut oriented_edges = Vec::with_capacity(n);
@@ -5684,13 +5676,13 @@ fn analytic_boolean(
                     } else {
                         (vert_ids[j], vert_ids[i])
                     };
-                    topo.edges.alloc(Edge::new(start, end, edge_curve))
+                    topo.add_edge(Edge::new(start, end, edge_curve))
                 });
 
                 oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
             }
             let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
-            topo.wires.alloc(wire)
+            topo.add_wire(wire)
         };
 
         // Build inner wires for holed faces (new contained curves + existing holes).
@@ -5714,16 +5706,16 @@ fn analytic_boolean(
                     let seam_pt = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES)[0];
                     let vid = *vertex_map
                         .entry(quantize_point(seam_pt, resolution))
-                        .or_insert_with(|| topo.vertices.alloc(Vertex::new(seam_pt, tol.linear)));
+                        .or_insert_with(|| topo.add_vertex(Vertex::new(seam_pt, tol.linear)));
                     let eid = *edge_map
                         .entry((vid.index(), vid.index()))
-                        .or_insert_with(|| topo.edges.alloc(Edge::new(vid, vid, ec.clone())));
+                        .or_insert_with(|| topo.add_edge(Edge::new(vid, vid, ec.clone())));
                     // Hole wires wind CW (reversed circle). When the face is
                     // flipped, the outer wire is already reversed so the hole
                     // keeps its natural (forward) direction.
                     let hw = Wire::new(vec![OrientedEdge::new(eid, flip)], true)
                         .map_err(crate::OperationsError::Topology)?;
-                    topo.wires.alloc(hw)
+                    topo.add_wire(hw)
                 } else {
                     // Non-circle/ellipse: fall back to sampled polygon edges.
                     let mut hole_pts = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES);
@@ -5744,7 +5736,7 @@ fn analytic_boolean(
                             );
                             *vertex_map
                                 .entry(key)
-                                .or_insert_with(|| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+                                .or_insert_with(|| topo.add_vertex(Vertex::new(*p, tol.linear)))
                         })
                         .collect();
 
@@ -5767,13 +5759,13 @@ fn analytic_boolean(
                             } else {
                                 (hole_vert_ids[j], hole_vert_ids[i])
                             };
-                            topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                            topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
                         });
                         hole_edges.push(OrientedEdge::new(eid, is_forward));
                     }
                     let hw =
                         Wire::new(hole_edges, true).map_err(crate::OperationsError::Topology)?;
-                    topo.wires.alloc(hw)
+                    topo.add_wire(hw)
                 };
                 inner_wire_ids.push(hw_id);
             }
@@ -5797,7 +5789,7 @@ fn analytic_boolean(
         } else {
             Face::new(wire_id, inner_wire_ids, surface)
         };
-        let face = topo.faces.alloc(new_face);
+        let face = topo.add_face(new_face);
         face_ids_out.push(face);
     }
 
@@ -5845,9 +5837,9 @@ fn analytic_boolean(
     );
 
     let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
+    let shell_id = topo.add_shell(shell);
     log::debug!("[boolean] total: {:.3}ms", timer_elapsed_ms(_t_total));
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 // ---------------------------------------------------------------------------
@@ -6965,7 +6957,7 @@ pub fn compound_cut(
                 );
                 *vertex_map
                     .entry(key)
-                    .or_insert_with(|| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+                    .or_insert_with(|| topo.add_vertex(Vertex::new(*p, tol.linear)))
             })
             .collect();
 
@@ -6977,10 +6969,10 @@ pub fn compound_cut(
             let vid = vert_ids[0];
             let eid = *edge_map
                 .entry((vid.index(), vid.index()))
-                .or_insert_with(|| topo.edges.alloc(Edge::new(vid, vid, ec.clone())));
+                .or_insert_with(|| topo.add_edge(Edge::new(vid, vid, ec.clone())));
             let wire = Wire::new(vec![OrientedEdge::new(eid, !flip)], true)
                 .map_err(crate::OperationsError::Topology)?;
-            topo.wires.alloc(wire)
+            topo.add_wire(wire)
         } else if is_nonplanar
             && n >= CLOSED_CURVE_SAMPLES
             && (vert_ids.first() == vert_ids.last()
@@ -7008,7 +7000,7 @@ pub fn compound_cut(
                 };
                 let eid = *edge_map.entry(key).or_insert_with(|| {
                     let (start, end) = if is_forward { (vi, vj) } else { (vj, vi) };
-                    topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                    topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
                 });
                 edges.push(OrientedEdge::new(eid, is_forward != flip));
             }
@@ -7016,7 +7008,7 @@ pub fn compound_cut(
                 edges.reverse();
             }
             let wire = Wire::new(edges, true).map_err(crate::OperationsError::Topology)?;
-            topo.wires.alloc(wire)
+            topo.add_wire(wire)
         } else {
             let mut edges = Vec::with_capacity(n);
             for i in 0..n {
@@ -7031,7 +7023,7 @@ pub fn compound_cut(
                 };
                 let eid = *edge_map.entry(key).or_insert_with(|| {
                     let (start, end) = if is_forward { (vi, vj) } else { (vj, vi) };
-                    topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                    topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
                 });
                 edges.push(OrientedEdge::new(eid, is_forward != flip));
             }
@@ -7039,7 +7031,7 @@ pub fn compound_cut(
                 edges.reverse();
             }
             let wire = Wire::new(edges, true).map_err(crate::OperationsError::Topology)?;
-            topo.wires.alloc(wire)
+            topo.add_wire(wire)
         };
 
         let mut inner_wire_ids = Vec::new();
@@ -7052,13 +7044,13 @@ pub fn compound_cut(
                     let seam_pt = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES)[0];
                     let vid = *vertex_map
                         .entry(quantize_point(seam_pt, resolution))
-                        .or_insert_with(|| topo.vertices.alloc(Vertex::new(seam_pt, tol.linear)));
+                        .or_insert_with(|| topo.add_vertex(Vertex::new(seam_pt, tol.linear)));
                     let eid = *edge_map
                         .entry((vid.index(), vid.index()))
-                        .or_insert_with(|| topo.edges.alloc(Edge::new(vid, vid, ec.clone())));
+                        .or_insert_with(|| topo.add_edge(Edge::new(vid, vid, ec.clone())));
                     let hw = Wire::new(vec![OrientedEdge::new(eid, flip)], true)
                         .map_err(crate::OperationsError::Topology)?;
-                    topo.wires.alloc(hw)
+                    topo.add_wire(hw)
                 } else {
                     let mut hole_pts = sample_edge_curve(ec, CLOSED_CURVE_SAMPLES);
                     if !flip {
@@ -7074,7 +7066,7 @@ pub fn compound_cut(
                             );
                             *vertex_map
                                 .entry(key)
-                                .or_insert_with(|| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+                                .or_insert_with(|| topo.add_vertex(Vertex::new(*p, tol.linear)))
                         })
                         .collect();
                     let hm = hole_vert_ids.len();
@@ -7095,13 +7087,13 @@ pub fn compound_cut(
                             } else {
                                 (hole_vert_ids[j], hole_vert_ids[i])
                             };
-                            topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+                            topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
                         });
                         hole_edges.push(OrientedEdge::new(eid, is_forward));
                     }
                     let hw =
                         Wire::new(hole_edges, true).map_err(crate::OperationsError::Topology)?;
-                    topo.wires.alloc(hw)
+                    topo.add_wire(hw)
                 };
                 inner_wire_ids.push(hw_id);
             }
@@ -7121,7 +7113,7 @@ pub fn compound_cut(
         } else {
             Face::new(wire_id, inner_wire_ids, surface)
         };
-        let face = topo.faces.alloc(new_face);
+        let face = topo.add_face(new_face);
         face_ids_out.push(face);
     }
 
@@ -7157,9 +7149,9 @@ pub fn compound_cut(
     log::debug!("[compound_cut] split_nm: {:.1}ms", _t_nm - _t_refine);
 
     let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
+    let shell_id = topo.add_shell(shell);
     log::debug!("[compound_cut] total: {:.3}ms", timer_elapsed_ms(_t_total));
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 /// Sequential fallback for `compound_cut` when analytic path is unavailable.
@@ -8014,23 +8006,21 @@ fn build_cylinder_barrel_wire(
     // Create/lookup vertices at the seam points.
     let bot_vid = *vertex_map
         .entry(quantize_point(bot_seam_pos, resolution))
-        .or_insert_with(|| topo.vertices.alloc(Vertex::new(bot_seam_pos, tol.linear)));
+        .or_insert_with(|| topo.add_vertex(Vertex::new(bot_seam_pos, tol.linear)));
     let top_vid = *vertex_map
         .entry(quantize_point(top_seam_pos, resolution))
-        .or_insert_with(|| topo.vertices.alloc(Vertex::new(top_seam_pos, tol.linear)));
+        .or_insert_with(|| topo.add_vertex(Vertex::new(top_seam_pos, tol.linear)));
 
     // Create/lookup closed Circle edges — dedup key is (v, v) for closed edges.
     let bot_edge = *edge_map
         .entry((bot_vid.index(), bot_vid.index()))
         .or_insert_with(|| {
-            topo.edges
-                .alloc(Edge::new(bot_vid, bot_vid, EdgeCurve::Circle(bot_circle)))
+            topo.add_edge(Edge::new(bot_vid, bot_vid, EdgeCurve::Circle(bot_circle)))
         });
     let top_edge = *edge_map
         .entry((top_vid.index(), top_vid.index()))
         .or_insert_with(|| {
-            topo.edges
-                .alloc(Edge::new(top_vid, top_vid, EdgeCurve::Circle(top_circle)))
+            topo.add_edge(Edge::new(top_vid, top_vid, EdgeCurve::Circle(top_circle)))
         });
 
     // Create/lookup seam line edge. Forward means bot→top in canonical order.
@@ -8046,7 +8036,7 @@ fn build_cylinder_barrel_wire(
         } else {
             (top_vid, bot_vid)
         };
-        topo.edges.alloc(Edge::new(start, end, EdgeCurve::Line))
+        topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
     });
 
     // Wire: bot_circle(fwd) → seam(fwd) → top_circle(rev) → seam(rev)
@@ -8061,7 +8051,7 @@ fn build_cylinder_barrel_wire(
         true,
     )
     .map_err(crate::OperationsError::Topology)?;
-    Ok(topo.wires.alloc(wire))
+    Ok(topo.add_wire(wire))
 }
 
 /// Sample an `EdgeCurve` into N points.
@@ -8121,7 +8111,7 @@ mod tests {
         let s = topo.solid(solid).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
         assert!(
-            validate_shell_manifold(sh, &topo.faces, &topo.wires).is_ok(),
+            validate_shell_manifold(sh, topo.faces(), topo.wires()).is_ok(),
             "result should be manifold"
         );
         sh.faces().len()
@@ -9554,9 +9544,7 @@ mod tests {
         crate::transform::transform_solid(&mut topo, b, &mat_b).unwrap();
         crate::transform::transform_solid(&mut topo, c, &mat_c).unwrap();
 
-        let cid = topo
-            .compounds
-            .alloc(brepkit_topology::compound::Compound::new(vec![a, b, c]));
+        let cid = topo.add_compound(brepkit_topology::compound::Compound::new(vec![a, b, c]));
         let fused = crate::compound_ops::fuse_all(&mut topo, cid).unwrap();
 
         let vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
@@ -10426,13 +10414,10 @@ mod tests {
             let n = pts.len();
             let vids: Vec<_> = pts
                 .iter()
-                .map(|&p| topo.vertices.alloc(Vertex::new(p, tol_val)))
+                .map(|&p| topo.add_vertex(Vertex::new(p, tol_val)))
                 .collect();
             let eids: Vec<_> = (0..n)
-                .map(|i| {
-                    topo.edges
-                        .alloc(Edge::new(vids[i], vids[(i + 1) % n], EdgeCurve::Line))
-                })
+                .map(|i| topo.add_edge(Edge::new(vids[i], vids[(i + 1) % n], EdgeCurve::Line)))
                 .collect();
             let wire = Wire::new(
                 eids.iter()
@@ -10441,8 +10426,8 @@ mod tests {
                 true,
             )
             .unwrap();
-            let wid = topo.wires.alloc(wire);
-            topo.faces.alloc(Face::new(
+            let wid = topo.add_wire(wire);
+            topo.add_face(Face::new(
                 wid,
                 vec![],
                 FaceSurface::Plane {
@@ -10619,13 +10604,10 @@ mod tests {
             let n = pts.len();
             let vids: Vec<_> = pts
                 .iter()
-                .map(|&p| topo.vertices.alloc(Vertex::new(p, tol_val)))
+                .map(|&p| topo.add_vertex(Vertex::new(p, tol_val)))
                 .collect();
             let eids: Vec<_> = (0..n)
-                .map(|i| {
-                    topo.edges
-                        .alloc(Edge::new(vids[i], vids[(i + 1) % n], EdgeCurve::Line))
-                })
+                .map(|i| topo.add_edge(Edge::new(vids[i], vids[(i + 1) % n], EdgeCurve::Line)))
                 .collect();
             let wire = Wire::new(
                 eids.iter()
@@ -10634,8 +10616,8 @@ mod tests {
                 true,
             )
             .unwrap();
-            let wid = topo.wires.alloc(wire);
-            topo.faces.alloc(Face::new(
+            let wid = topo.add_wire(wire);
+            topo.add_face(Face::new(
                 wid,
                 vec![],
                 FaceSurface::Plane {

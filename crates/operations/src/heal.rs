@@ -973,12 +973,12 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
         let outer_loop = loops.remove(outer_idx);
 
         let new_wire = Wire::new(outer_loop, true).map_err(crate::OperationsError::Topology)?;
-        let new_wire_id = topo.wires.alloc(new_wire);
+        let new_wire_id = topo.add_wire(new_wire);
 
         // Convert remaining loops to inner wires.
         for inner_loop in loops {
             if let Ok(iw) = Wire::new(inner_loop, true) {
-                all_inner_wires.push(topo.wires.alloc(iw));
+                all_inner_wires.push(topo.add_wire(iw));
             }
         }
 
@@ -992,7 +992,7 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
         } else {
             Face::new(new_wire_id, all_inner_wires, surface)
         };
-        let new_face_id = topo.faces.alloc(new_face);
+        let new_face_id = topo.add_face(new_face);
         merged_face_ids.push(new_face_id);
 
         for &fid in &group_face_ids {
@@ -1570,9 +1570,9 @@ mod tests {
             // Line: this_corner[n_sub] -> next_corner[0]
             let line_start = corner_verts[this_corner][n_sub];
             let line_end = corner_verts[next_corner][0];
-            let ls_vid = topo.vertices.alloc(Vertex::new(line_start, tol.linear));
-            let le_vid = topo.vertices.alloc(Vertex::new(line_end, tol.linear));
-            let line_eid = topo.edges.alloc(Edge::new(ls_vid, le_vid, EdgeCurve::Line));
+            let ls_vid = topo.add_vertex(Vertex::new(line_start, tol.linear));
+            let le_vid = topo.add_vertex(Vertex::new(line_end, tol.linear));
+            let line_eid = topo.add_edge(Edge::new(ls_vid, le_vid, EdgeCurve::Line));
             wire_edges.push(OrientedEdge::new(line_eid, true));
 
             // Arc segments for next_corner.
@@ -1581,8 +1581,8 @@ mod tests {
             let mut prev_vid = le_vid;
             for j in 1..=n_sub {
                 let pt = corner_verts[next_corner][j];
-                let next_vid = topo.vertices.alloc(Vertex::new(pt, tol.linear));
-                let arc_eid = topo.edges.alloc(Edge::new(
+                let next_vid = topo.add_vertex(Vertex::new(pt, tol.linear));
+                let arc_eid = topo.add_edge(Edge::new(
                     prev_vid,
                     next_vid,
                     EdgeCurve::Circle(circle.clone()),
@@ -1593,11 +1593,11 @@ mod tests {
         }
 
         let wire = Wire::new(wire_edges, true).unwrap();
-        let wire_id = topo.wires.alloc(wire);
+        let wire_id = topo.add_wire(wire);
 
         let normal = Vec3::new(0.0, 0.0, 1.0);
         let face = Face::new(wire_id, vec![], FaceSurface::Plane { normal, d: 0.0 });
-        let face_id = topo.faces.alloc(face);
+        let face_id = topo.add_face(face);
 
         // Extrude.
         let solid =

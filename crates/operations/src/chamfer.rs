@@ -75,11 +75,7 @@ pub fn chamfer(
 
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
-            };
+            let vid = oe.oriented_start(edge);
             vertex_ids.push(vid);
             positions.push(topo.vertex(vid)?.point());
             wire_edge_ids.push(oe.edge());
@@ -600,15 +596,15 @@ mod tests {
         let cube = make_unit_cube_manifold(&mut topo);
 
         // Create a stray edge not part of the cube.
-        let v0 = topo.vertices.alloc(brepkit_topology::vertex::Vertex::new(
+        let v0 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
             Point3::new(99.0, 99.0, 99.0),
             1e-7,
         ));
-        let v1 = topo.vertices.alloc(brepkit_topology::vertex::Vertex::new(
+        let v1 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
             Point3::new(100.0, 100.0, 100.0),
             1e-7,
         ));
-        let stray = topo.edges.alloc(brepkit_topology::edge::Edge::new(
+        let stray = topo.add_edge(brepkit_topology::edge::Edge::new(
             v0,
             v1,
             brepkit_topology::edge::EdgeCurve::Line,
@@ -628,7 +624,7 @@ mod tests {
 
         let result_solid = topo.solid(result).expect("result solid");
         let result_shell = topo.shell(result_solid.outer_shell()).expect("shell");
-        validate_shell_manifold(result_shell, &topo.faces, &topo.wires)
+        validate_shell_manifold(result_shell, topo.faces(), topo.wires())
             .expect("result should be manifold");
     }
 
@@ -667,7 +663,7 @@ mod tests {
             "expected 8 faces after 2 non-adjacent chamfers"
         );
 
-        validate_shell_manifold(result_shell, &topo.faces, &topo.wires)
+        validate_shell_manifold(result_shell, topo.faces(), topo.wires())
             .expect("result should be manifold");
     }
 

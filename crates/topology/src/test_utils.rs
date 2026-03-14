@@ -27,23 +27,15 @@ const TOL: f64 = 1e-7;
 /// Panics if wire creation fails (should never happen with valid input).
 #[must_use]
 pub fn make_unit_square_face(topo: &mut Topology) -> FaceId {
-    let v0 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
-    let v1 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));
-    let v2 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), TOL));
-    let v3 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 1.0, 0.0), TOL));
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), TOL));
+    let v3 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), TOL));
 
-    let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-    let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-    let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-    let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
     let wire = Wire::new(
         vec![
@@ -56,9 +48,9 @@ pub fn make_unit_square_face(topo: &mut Topology) -> FaceId {
     )
     .expect("test wire creation should not fail");
 
-    let wid = topo.wires.alloc(wire);
+    let wid = topo.add_wire(wire);
 
-    topo.faces.alloc(Face::new(
+    topo.add_face(Face::new(
         wid,
         vec![],
         FaceSurface::Plane {
@@ -78,19 +70,13 @@ pub fn make_unit_square_face(topo: &mut Topology) -> FaceId {
 /// Panics if wire creation fails.
 #[must_use]
 pub fn make_unit_triangle_face(topo: &mut Topology) -> FaceId {
-    let v0 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
-    let v1 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));
-    let v2 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 1.0, 0.0), TOL));
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), TOL));
 
-    let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-    let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-    let e2 = topo.edges.alloc(Edge::new(v2, v0, EdgeCurve::Line));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
 
     let wire = Wire::new(
         vec![
@@ -102,9 +88,9 @@ pub fn make_unit_triangle_face(topo: &mut Topology) -> FaceId {
     )
     .expect("test wire creation should not fail");
 
-    let wid = topo.wires.alloc(wire);
+    let wid = topo.add_wire(wire);
 
-    topo.faces.alloc(Face::new(
+    topo.add_face(Face::new(
         wid,
         vec![],
         FaceSurface::Plane {
@@ -128,23 +114,15 @@ pub fn make_unit_triangle_face(topo: &mut Topology) -> FaceId {
 /// Panics if wire creation fails.
 #[must_use]
 pub fn make_cw_unit_square_face(topo: &mut Topology) -> FaceId {
-    let v0 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
-    let v1 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 1.0, 0.0), TOL));
-    let v2 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), TOL));
-    let v3 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));
+    let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
+    let v1 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), TOL));
+    let v2 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), TOL));
+    let v3 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));
 
-    let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-    let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-    let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-    let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
     let wire = Wire::new(
         vec![
@@ -157,10 +135,10 @@ pub fn make_cw_unit_square_face(topo: &mut Topology) -> FaceId {
     )
     .expect("test wire creation should not fail");
 
-    let wid = topo.wires.alloc(wire);
+    let wid = topo.add_wire(wire);
 
     // Newell normal of CW winding → -Z
-    topo.faces.alloc(Face::new(
+    topo.add_face(Face::new(
         wid,
         vec![],
         FaceSurface::Plane {
@@ -184,40 +162,32 @@ pub fn make_cw_unit_square_face(topo: &mut Topology) -> FaceId {
 pub fn make_unit_cube_manifold_at(topo: &mut Topology, ox: f64, oy: f64, oz: f64) -> SolidId {
     // 8 vertices
     let v: [VertexId; 8] = [
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(ox, oy, oz), TOL)), // 0: 000
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(ox + 1.0, oy, oz), TOL)), // 1: 100
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(ox + 1.0, oy + 1.0, oz), TOL)), // 2: 110
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(ox, oy + 1.0, oz), TOL)), // 3: 010
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(ox, oy, oz + 1.0), TOL)), // 4: 001
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(ox + 1.0, oy, oz + 1.0), TOL)), // 5: 101
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(ox + 1.0, oy + 1.0, oz + 1.0), TOL)), // 6: 111
-        topo.vertices
-            .alloc(Vertex::new(Point3::new(ox, oy + 1.0, oz + 1.0), TOL)), // 7: 011
+        topo.add_vertex(Vertex::new(Point3::new(ox, oy, oz), TOL)), // 0: 000
+        topo.add_vertex(Vertex::new(Point3::new(ox + 1.0, oy, oz), TOL)), // 1: 100
+        topo.add_vertex(Vertex::new(Point3::new(ox + 1.0, oy + 1.0, oz), TOL)), // 2: 110
+        topo.add_vertex(Vertex::new(Point3::new(ox, oy + 1.0, oz), TOL)), // 3: 010
+        topo.add_vertex(Vertex::new(Point3::new(ox, oy, oz + 1.0), TOL)), // 4: 001
+        topo.add_vertex(Vertex::new(Point3::new(ox + 1.0, oy, oz + 1.0), TOL)), // 5: 101
+        topo.add_vertex(Vertex::new(Point3::new(ox + 1.0, oy + 1.0, oz + 1.0), TOL)), // 6: 111
+        topo.add_vertex(Vertex::new(Point3::new(ox, oy + 1.0, oz + 1.0), TOL)), // 7: 011
     ];
 
     // 12 edges of a cube (each shared by exactly 2 faces).
     // Bottom ring (z=oz)
-    let e_b0 = topo.edges.alloc(Edge::new(v[0], v[1], EdgeCurve::Line)); // 0→1
-    let e_b1 = topo.edges.alloc(Edge::new(v[1], v[2], EdgeCurve::Line)); // 1→2
-    let e_b2 = topo.edges.alloc(Edge::new(v[2], v[3], EdgeCurve::Line)); // 2→3
-    let e_b3 = topo.edges.alloc(Edge::new(v[3], v[0], EdgeCurve::Line)); // 3→0
+    let e_b0 = topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Line)); // 0→1
+    let e_b1 = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line)); // 1→2
+    let e_b2 = topo.add_edge(Edge::new(v[2], v[3], EdgeCurve::Line)); // 2→3
+    let e_b3 = topo.add_edge(Edge::new(v[3], v[0], EdgeCurve::Line)); // 3→0
     // Top ring (z=oz+1)
-    let e_t0 = topo.edges.alloc(Edge::new(v[4], v[5], EdgeCurve::Line)); // 4→5
-    let e_t1 = topo.edges.alloc(Edge::new(v[5], v[6], EdgeCurve::Line)); // 5→6
-    let e_t2 = topo.edges.alloc(Edge::new(v[6], v[7], EdgeCurve::Line)); // 6→7
-    let e_t3 = topo.edges.alloc(Edge::new(v[7], v[4], EdgeCurve::Line)); // 7→4
+    let e_t0 = topo.add_edge(Edge::new(v[4], v[5], EdgeCurve::Line)); // 4→5
+    let e_t1 = topo.add_edge(Edge::new(v[5], v[6], EdgeCurve::Line)); // 5→6
+    let e_t2 = topo.add_edge(Edge::new(v[6], v[7], EdgeCurve::Line)); // 6→7
+    let e_t3 = topo.add_edge(Edge::new(v[7], v[4], EdgeCurve::Line)); // 7→4
     // Verticals
-    let e_v0 = topo.edges.alloc(Edge::new(v[0], v[4], EdgeCurve::Line)); // 0→4
-    let e_v1 = topo.edges.alloc(Edge::new(v[1], v[5], EdgeCurve::Line)); // 1→5
-    let e_v2 = topo.edges.alloc(Edge::new(v[2], v[6], EdgeCurve::Line)); // 2→6
-    let e_v3 = topo.edges.alloc(Edge::new(v[3], v[7], EdgeCurve::Line)); // 3→7
+    let e_v0 = topo.add_edge(Edge::new(v[0], v[4], EdgeCurve::Line)); // 0→4
+    let e_v1 = topo.add_edge(Edge::new(v[1], v[5], EdgeCurve::Line)); // 1→5
+    let e_v2 = topo.add_edge(Edge::new(v[2], v[6], EdgeCurve::Line)); // 2→6
+    let e_v3 = topo.add_edge(Edge::new(v[3], v[7], EdgeCurve::Line)); // 3→7
 
     // Helper to build a face from 4 oriented edges.
     let mk = |topo: &mut Topology, edges: [(EdgeId, bool); 4], normal: Vec3, d: f64| -> FaceId {
@@ -229,9 +199,8 @@ pub fn make_unit_cube_manifold_at(topo: &mut Topology, ox: f64, oy: f64, oz: f64
             true,
         )
         .expect("test wire");
-        let wid = topo.wires.alloc(wire);
-        topo.faces
-            .alloc(Face::new(wid, vec![], FaceSurface::Plane { normal, d }))
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }))
     };
 
     // Each face is CCW when viewed from outside (along its outward normal).
@@ -293,8 +262,8 @@ pub fn make_unit_cube_manifold_at(topo: &mut Topology, ox: f64, oy: f64, oz: f64
     );
 
     let shell = Shell::new(vec![bottom, top, front, back, left, right]).expect("test shell");
-    let shell_id = topo.shells.alloc(shell);
-    topo.solids.alloc(Solid::new(shell_id, vec![]))
+    let shell_id = topo.add_shell(shell);
+    topo.add_solid(Solid::new(shell_id, vec![]))
 }
 
 /// Creates a unit cube solid at the origin with manifold shared edges.
@@ -319,10 +288,10 @@ fn make_quad_face(
     normal: Vec3,
     d: f64,
 ) -> FaceId {
-    let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-    let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-    let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-    let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+    let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
     let wire = Wire::new(
         vec![
@@ -335,9 +304,8 @@ fn make_quad_face(
     )
     .expect("test wire creation should not fail");
 
-    let wid = topo.wires.alloc(wire);
-    topo.faces
-        .alloc(Face::new(wid, vec![], FaceSurface::Plane { normal, d }))
+    let wid = topo.add_wire(wire);
+    topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }))
 }
 
 /// Creates a unit cube solid with vertices at (0,0,0) to (1,1,1).
@@ -351,30 +319,14 @@ fn make_quad_face(
 #[must_use]
 pub fn make_unit_cube(topo: &mut Topology) -> SolidId {
     // 8 vertices of the unit cube.
-    let v000 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
-    let v100 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));
-    let v110 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), TOL));
-    let v010 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 1.0, 0.0), TOL));
-    let v001 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 0.0, 1.0), TOL));
-    let v101 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(1.0, 0.0, 1.0), TOL));
-    let v111 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(1.0, 1.0, 1.0), TOL));
-    let v011 = topo
-        .vertices
-        .alloc(Vertex::new(Point3::new(0.0, 1.0, 1.0), TOL));
+    let v000 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
+    let v100 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));
+    let v110 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), TOL));
+    let v010 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), TOL));
+    let v001 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 1.0), TOL));
+    let v101 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 1.0), TOL));
+    let v111 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 1.0), TOL));
+    let v011 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 1.0), TOL));
 
     // 6 faces (each has its own edges — simplified for testing).
     // Bottom (z=0): v000, v100, v110, v010  normal -Z
@@ -392,7 +344,7 @@ pub fn make_unit_cube(topo: &mut Topology) -> SolidId {
 
     let shell = Shell::new(vec![bottom, top, front, back, left, right])
         .expect("test shell creation should not fail");
-    let shell_id = topo.shells.alloc(shell);
+    let shell_id = topo.add_shell(shell);
 
-    topo.solids.alloc(Solid::new(shell_id, vec![]))
+    topo.add_solid(Solid::new(shell_id, vec![]))
 }

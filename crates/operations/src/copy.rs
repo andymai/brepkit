@@ -28,6 +28,7 @@ struct EdgeSnap {
     start_index: usize,
     end_index: usize,
     curve: EdgeCurve,
+    tolerance: Option<f64>,
 }
 
 struct WireSnap {
@@ -133,6 +134,7 @@ pub fn copy_solid(
                         start_index: start_idx,
                         end_index: end_idx,
                         curve: edge.curve().clone(),
+                        tolerance: edge.tolerance(),
                     });
                 }
 
@@ -158,7 +160,7 @@ pub fn copy_solid(
 
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
     for vsnap in &vertex_snaps {
-        let new_vid = topo.vertices.alloc(Vertex::new(vsnap.point, vsnap.tol));
+        let new_vid = topo.add_vertex(Vertex::new(vsnap.point, vsnap.tol));
         vertex_map.insert(vsnap.old_index, new_vid);
     }
 
@@ -166,9 +168,12 @@ pub fn copy_solid(
     for esnap in &edge_snaps {
         let new_start = vertex_map[&esnap.start_index];
         let new_end = vertex_map[&esnap.end_index];
-        let copied_edge = topo
-            .edges
-            .alloc(Edge::new(new_start, new_end, esnap.curve.clone()));
+        let copied_edge = topo.add_edge(Edge::with_tolerance(
+            new_start,
+            new_end,
+            esnap.curve.clone(),
+            esnap.tolerance,
+        ));
         edge_map.insert(esnap.old_index, copied_edge);
     }
 
@@ -181,7 +186,7 @@ pub fn copy_solid(
             .collect();
         let new_wire =
             Wire::new(new_edges, wsnap.closed).map_err(crate::OperationsError::Topology)?;
-        wire_map.insert(wsnap.old_index, topo.wires.alloc(new_wire));
+        wire_map.insert(wsnap.old_index, topo.add_wire(new_wire));
     }
 
     let mut new_shell_ids = Vec::new();
@@ -199,17 +204,17 @@ pub fn copy_solid(
             } else {
                 Face::new(new_outer, new_inner, fsnap.surface.clone())
             };
-            let new_fid = topo.faces.alloc(new_face);
+            let new_fid = topo.add_face(new_face);
             new_face_ids.push(new_fid);
         }
         let new_shell = Shell::new(new_face_ids).map_err(crate::OperationsError::Topology)?;
-        new_shell_ids.push(topo.shells.alloc(new_shell));
+        new_shell_ids.push(topo.add_shell(new_shell));
     }
 
     let new_outer = new_shell_ids[0];
     let new_inner: Vec<_> = new_shell_ids[1..].to_vec();
 
-    Ok(topo.solids.alloc(Solid::new(new_outer, new_inner)))
+    Ok(topo.add_solid(Solid::new(new_outer, new_inner)))
 }
 
 /// Create a deep copy of a solid with a simultaneous affine transform.
@@ -333,6 +338,7 @@ pub fn copy_and_transform_solid(
                         start_index: start_idx,
                         end_index: end_idx,
                         curve: edge.curve().clone(),
+                        tolerance: edge.tolerance(),
                     });
                 }
 
@@ -360,7 +366,7 @@ pub fn copy_and_transform_solid(
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
     for vsnap in &vertex_snaps {
         let new_point = matrix.mul_point(vsnap.point);
-        let new_vid = topo.vertices.alloc(Vertex::new(new_point, vsnap.tol));
+        let new_vid = topo.add_vertex(Vertex::new(new_point, vsnap.tol));
         vertex_map.insert(vsnap.old_index, new_vid);
     }
 
@@ -443,7 +449,12 @@ pub fn copy_and_transform_solid(
                 )?)
             }
         };
-        let copied_edge = topo.edges.alloc(Edge::new(new_start, new_end, new_curve));
+        let copied_edge = topo.add_edge(Edge::with_tolerance(
+            new_start,
+            new_end,
+            new_curve,
+            esnap.tolerance,
+        ));
         edge_map.insert(esnap.old_index, copied_edge);
     }
 
@@ -457,7 +468,7 @@ pub fn copy_and_transform_solid(
             .collect();
         let new_wire =
             Wire::new(new_edges, wsnap.closed).map_err(crate::OperationsError::Topology)?;
-        wire_map.insert(wsnap.old_index, topo.wires.alloc(new_wire));
+        wire_map.insert(wsnap.old_index, topo.add_wire(new_wire));
     }
 
     // Shells + faces: transform surfaces inline.
@@ -554,17 +565,17 @@ pub fn copy_and_transform_solid(
             } else {
                 Face::new(new_outer, new_inner, new_surface)
             };
-            let new_fid = topo.faces.alloc(new_face);
+            let new_fid = topo.add_face(new_face);
             new_face_ids.push(new_fid);
         }
         let new_shell = Shell::new(new_face_ids).map_err(crate::OperationsError::Topology)?;
-        new_shell_ids.push(topo.shells.alloc(new_shell));
+        new_shell_ids.push(topo.add_shell(new_shell));
     }
 
     let new_outer = new_shell_ids[0];
     let new_inner: Vec<_> = new_shell_ids[1..].to_vec();
 
-    Ok(topo.solids.alloc(Solid::new(new_outer, new_inner)))
+    Ok(topo.add_solid(Solid::new(new_outer, new_inner)))
 }
 
 /// Create a deep copy of a wire and all its sub-entities.
@@ -619,13 +630,14 @@ pub fn copy_wire(topo: &mut Topology, wire_id: WireId) -> Result<WireId, crate::
             start_index: start_idx,
             end_index: end_idx,
             curve: edge.curve().clone(),
+            tolerance: edge.tolerance(),
         });
     }
 
     // ── Write phase ────────────────────────────────────────────────
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
     for vsnap in &vertex_snaps {
-        let new_vid = topo.vertices.alloc(Vertex::new(vsnap.point, vsnap.tol));
+        let new_vid = topo.add_vertex(Vertex::new(vsnap.point, vsnap.tol));
         vertex_map.insert(vsnap.old_index, new_vid);
     }
 
@@ -633,9 +645,12 @@ pub fn copy_wire(topo: &mut Topology, wire_id: WireId) -> Result<WireId, crate::
     for esnap in &edge_snaps {
         let new_start = vertex_map[&esnap.start_index];
         let new_end = vertex_map[&esnap.end_index];
-        let copied_edge = topo
-            .edges
-            .alloc(Edge::new(new_start, new_end, esnap.curve.clone()));
+        let copied_edge = topo.add_edge(Edge::with_tolerance(
+            new_start,
+            new_end,
+            esnap.curve.clone(),
+            esnap.tolerance,
+        ));
         edge_map.insert(esnap.old_index, copied_edge);
     }
 
@@ -644,7 +659,7 @@ pub fn copy_wire(topo: &mut Topology, wire_id: WireId) -> Result<WireId, crate::
         .map(|&(edge_idx, fwd)| OrientedEdge::new(edge_map[&edge_idx], fwd))
         .collect();
     let new_wire = Wire::new(new_edges, closed).map_err(crate::OperationsError::Topology)?;
-    Ok(topo.wires.alloc(new_wire))
+    Ok(topo.add_wire(new_wire))
 }
 
 #[cfg(test)]
@@ -741,6 +756,7 @@ mod tests {
                 Point3::new(1.0, 0.0, 0.0),
                 Point3::new(1.0, 1.0, 0.0),
             ],
+            1e-7,
         )
         .unwrap();
         let copy = copy_wire(&mut topo, orig).unwrap();
@@ -761,6 +777,7 @@ mod tests {
                 Point3::new(1.0, 0.0, 0.0),
                 Point3::new(1.0, 1.0, 0.0),
             ],
+            1e-7,
         )
         .unwrap();
         let copy = copy_wire(&mut topo, orig).unwrap();
@@ -784,6 +801,7 @@ mod tests {
                 Point3::new(1.0, 0.0, 0.0),
                 Point3::new(1.0, 1.0, 0.0),
             ],
+            1e-7,
         )
         .unwrap();
         let copy = copy_wire(&mut topo, orig).unwrap();
@@ -816,14 +834,12 @@ mod tests {
         let mut topo = Topology::new();
 
         // Create a closed circular wire (single circle edge, start == end).
-        let v = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let v = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
         let circle =
             Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
-        let edge = topo.edges.alloc(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
         let wire = Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap();
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
 
         let copy_wid = copy_wire(&mut topo, wid).unwrap();
         assert_ne!(wid.index(), copy_wid.index());

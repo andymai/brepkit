@@ -163,7 +163,7 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         .map(|verts| {
             verts
                 .iter()
-                .map(|&p| topo.vertices.alloc(Vertex::new(p, tol.linear)))
+                .map(|&p| topo.add_vertex(Vertex::new(p, tol.linear)))
                 .collect()
         })
         .collect();
@@ -175,8 +175,7 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
             (0..n)
                 .map(|i| {
                     let next = (i + 1) % n;
-                    topo.edges
-                        .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+                    topo.add_edge(Edge::new(ring[i], ring[next], EdgeCurve::Line))
                 })
                 .collect()
         })
@@ -187,7 +186,7 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         .map(|s| {
             (0..n)
                 .map(|i| {
-                    topo.edges.alloc(Edge::new(
+                    topo.add_edge(Edge::new(
                         ring_verts[s][i],
                         ring_verts[s + 1][i],
                         EdgeCurve::Line,
@@ -208,9 +207,9 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
             .map(|i| OrientedEdge::new(ring_edges[0][i], false))
             .collect();
         let wire = Wire::new(reversed_edges, true).map_err(crate::OperationsError::Topology)?;
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
         let cap_d = dot_normal_point(cap_normal, profile_verts[0][0]);
-        let fid = topo.faces.alloc(Face::new(
+        let fid = topo.add_face(Face::new(
             wid,
             vec![],
             FaceSurface::Plane {
@@ -249,8 +248,8 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
             )
             .map_err(crate::OperationsError::Topology)?;
 
-            let side_wire_id = topo.wires.alloc(side_wire);
-            let side_face = topo.faces.alloc(Face::new(
+            let side_wire_id = topo.add_wire(side_wire);
+            let side_face = topo.add_face(Face::new(
                 side_wire_id,
                 vec![],
                 FaceSurface::Plane {
@@ -270,9 +269,9 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
             .map(|i| OrientedEdge::new(ring_edges[num_profiles - 1][i], true))
             .collect();
         let wire = Wire::new(edges, true).map_err(crate::OperationsError::Topology)?;
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
         let cap_d = dot_normal_point(cap_normal, profile_verts[num_profiles - 1][0]);
-        let fid = topo.faces.alloc(Face::new(
+        let fid = topo.add_face(Face::new(
             wid,
             vec![],
             FaceSurface::Plane {
@@ -285,8 +284,8 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
 
     // Assemble.
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 /// Loft profiles into a solid with smooth NURBS side surfaces.
@@ -364,7 +363,7 @@ pub fn loft_smooth(
         .map(|verts| {
             verts
                 .iter()
-                .map(|&p| topo.vertices.alloc(Vertex::new(p, tol.linear)))
+                .map(|&p| topo.add_vertex(Vertex::new(p, tol.linear)))
                 .collect()
         })
         .collect();
@@ -376,8 +375,7 @@ pub fn loft_smooth(
             (0..n)
                 .map(|i| {
                     let next = (i + 1) % n;
-                    topo.edges
-                        .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+                    topo.add_edge(Edge::new(ring[i], ring[next], EdgeCurve::Line))
                 })
                 .collect()
         })
@@ -394,9 +392,9 @@ pub fn loft_smooth(
             .map(|i| OrientedEdge::new(ring_edges[0][i], false))
             .collect();
         let wire = Wire::new(reversed_edges, true).map_err(crate::OperationsError::Topology)?;
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
         let cap_d = dot_normal_point(cap_normal, profile_verts[0][0]);
-        let fid = topo.faces.alloc(Face::new(
+        let fid = topo.add_face(Face::new(
             wid,
             vec![],
             FaceSurface::Plane {
@@ -437,12 +435,12 @@ pub fn loft_smooth(
 
         // For the multi-section case, we need edges spanning ALL profiles.
         // Create single edges from first to last profile for the rails.
-        let e_left_rail = topo.edges.alloc(Edge::new(
+        let e_left_rail = topo.add_edge(Edge::new(
             ring_verts[0][i],
             ring_verts[last][i],
             EdgeCurve::Line,
         ));
-        let e_right_rail = topo.edges.alloc(Edge::new(
+        let e_right_rail = topo.add_edge(Edge::new(
             ring_verts[0][next_i],
             ring_verts[last][next_i],
             EdgeCurve::Line,
@@ -459,10 +457,8 @@ pub fn loft_smooth(
         )
         .map_err(crate::OperationsError::Topology)?;
 
-        let side_wire_id = topo.wires.alloc(side_wire);
-        let side_face =
-            topo.faces
-                .alloc(Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface)));
+        let side_wire_id = topo.add_wire(side_wire);
+        let side_face = topo.add_face(Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface)));
         all_faces.push(side_face);
     }
 
@@ -474,9 +470,9 @@ pub fn loft_smooth(
             .map(|i| OrientedEdge::new(ring_edges[num_profiles - 1][i], true))
             .collect();
         let wire = Wire::new(edges, true).map_err(crate::OperationsError::Topology)?;
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
         let cap_d = dot_normal_point(cap_normal, profile_verts[num_profiles - 1][0]);
-        let fid = topo.faces.alloc(Face::new(
+        let fid = topo.add_face(Face::new(
             wid,
             vec![],
             FaceSurface::Plane {
@@ -489,8 +485,8 @@ pub fn loft_smooth(
 
     // Assemble.
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 #[cfg(test)]
@@ -511,23 +507,15 @@ mod tests {
     fn make_square_at(topo: &mut Topology, size: f64, z: f64) -> FaceId {
         let hs = size / 2.0;
         let tol_val = 1e-7;
-        let v0 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(-hs, -hs, z), tol_val));
-        let v1 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(hs, -hs, z), tol_val));
-        let v2 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(hs, hs, z), tol_val));
-        let v3 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(-hs, hs, z), tol_val));
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(-hs, -hs, z), tol_val));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(hs, -hs, z), tol_val));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(hs, hs, z), tol_val));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(-hs, hs, z), tol_val));
 
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
         let wire = Wire::new(
             vec![
@@ -539,9 +527,9 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
 
-        topo.faces.alloc(Face::new(
+        topo.add_face(Face::new(
             wid,
             vec![],
             FaceSurface::Plane {
@@ -633,19 +621,13 @@ mod tests {
 
         // Create a triangle profile.
         let tol_val = 1e-7;
-        let v0 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.0, 0.0, 1.0), tol_val));
-        let v1 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 0.0, 1.0), tol_val));
-        let v2 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.5, 1.0, 1.0), tol_val));
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 1.0), tol_val));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 1.0), tol_val));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(0.5, 1.0, 1.0), tol_val));
 
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v0, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
 
         let wire = Wire::new(
             vec![
@@ -656,8 +638,8 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
-        let tri = topo.faces.alloc(Face::new(
+        let wid = topo.add_wire(wire);
+        let tri = topo.add_face(Face::new(
             wid,
             vec![],
             FaceSurface::Plane {
@@ -679,23 +661,15 @@ mod tests {
         let hs = size / 2.0;
         let tol_val = 1e-7;
         // CW order: v0→v3→v2→v1 (reversed from make_square_at)
-        let v0 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(-hs, -hs, z), tol_val));
-        let v1 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(-hs, hs, z), tol_val));
-        let v2 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(hs, hs, z), tol_val));
-        let v3 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(hs, -hs, z), tol_val));
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(-hs, -hs, z), tol_val));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(-hs, hs, z), tol_val));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(hs, hs, z), tol_val));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(hs, -hs, z), tol_val));
 
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
         let wire = Wire::new(
             vec![
@@ -707,9 +681,9 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
 
-        topo.faces.alloc(Face::new(
+        topo.add_face(Face::new(
             wid,
             vec![],
             FaceSurface::Plane {

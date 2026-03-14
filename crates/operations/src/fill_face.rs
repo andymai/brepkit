@@ -128,15 +128,14 @@ pub fn fill_coons_patch(
     let corners = [p00, p10, p11, p01];
     let verts: Vec<_> = corners
         .iter()
-        .map(|&p| topo.vertices.alloc(Vertex::new(p, 1e-7)))
+        .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
         .collect();
 
     let n_corners = verts.len();
     let edges: Vec<_> = (0..n_corners)
         .map(|i| {
             let next = (i + 1) % n_corners;
-            topo.edges
-                .alloc(Edge::new(verts[i], verts[next], EdgeCurve::Line))
+            topo.add_edge(Edge::new(verts[i], verts[next], EdgeCurve::Line))
         })
         .collect();
 
@@ -145,10 +144,10 @@ pub fn fill_coons_patch(
         .map(|&eid| OrientedEdge::new(eid, true))
         .collect();
     let wire = Wire::new(oriented, true).map_err(OperationsError::Topology)?;
-    let wire_id = topo.wires.alloc(wire);
+    let wire_id = topo.add_wire(wire);
 
     let face = Face::new(wire_id, vec![], FaceSurface::Nurbs(surface));
-    Ok(topo.faces.alloc(face))
+    Ok(topo.add_face(face))
 }
 
 /// Linear blend: (1-t)*a + t*b

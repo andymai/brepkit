@@ -499,7 +499,7 @@ pub fn shell(
     let mut boundary_edge_ids: Vec<brepkit_topology::edge::EdgeId> = Vec::new();
     for (&edge_idx, faces) in &edge_face_map {
         if faces.len() == 1 {
-            if let Some(eid) = topo.edges.id_from_index(edge_idx) {
+            if let Some(eid) = topo.edge_id_from_index(edge_idx) {
                 boundary_edge_ids.push(eid);
             }
         }
@@ -606,13 +606,13 @@ pub fn shell(
 
     let outer_wire = brepkit_topology::wire::Wire::new(loops[outer_loop_idx].clone(), true)
         .map_err(crate::OperationsError::Topology)?;
-    let outer_wire_id = topo.wires.alloc(outer_wire);
+    let outer_wire_id = topo.add_wire(outer_wire);
 
     let mut inner_wire_ids = Vec::new();
     for &(idx, _) in &loop_radii[1..] {
         let inner_wire = brepkit_topology::wire::Wire::new(loops[idx].clone(), true)
             .map_err(crate::OperationsError::Topology)?;
-        inner_wire_ids.push(topo.wires.alloc(inner_wire));
+        inner_wire_ids.push(topo.add_wire(inner_wire));
     }
 
     // Rim face normal: pointing away from solid center (outward at the rim).
@@ -645,7 +645,7 @@ pub fn shell(
             d: rim_d,
         },
     );
-    let rim_face_id = topo.faces.alloc(rim_face);
+    let rim_face_id = topo.add_face(rim_face);
 
     // Add the rim face to the shell.
     let solid_data = topo.solid(solid)?;
@@ -966,7 +966,7 @@ mod tests {
 
         let vids: Vec<_> = [v0, v1, v2, v3, v4, v5, v6, v7]
             .iter()
-            .map(|p| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+            .map(|p| topo.add_vertex(Vertex::new(*p, tol.linear)))
             .collect();
 
         let c_br = Point3::new(hw - r, -hd + r, 0.0);
@@ -976,11 +976,10 @@ mod tests {
 
         let z_axis = Vec3::new(0.0, 0.0, 1.0);
 
-        let mk_line =
-            |topo: &mut Topology, s, e| topo.edges.alloc(Edge::new(s, e, EdgeCurve::Line));
+        let mk_line = |topo: &mut Topology, s, e| topo.add_edge(Edge::new(s, e, EdgeCurve::Line));
         let mk_arc = |topo: &mut Topology, s, e, center: Point3| {
             let circle = Circle3D::new(center, z_axis, r).unwrap();
-            topo.edges.alloc(Edge::new(s, e, EdgeCurve::Circle(circle)))
+            topo.add_edge(Edge::new(s, e, EdgeCurve::Circle(circle)))
         };
 
         let e_bot = mk_line(&mut topo, vids[7], vids[0]);
@@ -1006,7 +1005,7 @@ mod tests {
             true,
         )
         .unwrap();
-        let wire_id = topo.wires.alloc(wire);
+        let wire_id = topo.add_wire(wire);
         let face = Face::new(
             wire_id,
             vec![],
@@ -1015,7 +1014,7 @@ mod tests {
                 d: 0.0,
             },
         );
-        let face_id = topo.faces.alloc(face);
+        let face_id = topo.add_face(face);
 
         let solid =
             crate::extrude::extrude(&mut topo, face_id, Vec3::new(0.0, 0.0, 1.0), h).unwrap();
@@ -1097,7 +1096,7 @@ mod tests {
 
         let vids: Vec<_> = [v0, v1, v2, v3, v4, v5, v6, v7]
             .iter()
-            .map(|p| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+            .map(|p| topo.add_vertex(Vertex::new(*p, tol.linear)))
             .collect();
 
         // Corner centers:
@@ -1108,11 +1107,10 @@ mod tests {
 
         let z_axis = Vec3::new(0.0, 0.0, 1.0);
 
-        let mk_line =
-            |topo: &mut Topology, s, e| topo.edges.alloc(Edge::new(s, e, EdgeCurve::Line));
+        let mk_line = |topo: &mut Topology, s, e| topo.add_edge(Edge::new(s, e, EdgeCurve::Line));
         let mk_arc = |topo: &mut Topology, s, e, center: Point3| {
             let circle = Circle3D::new(center, z_axis, r).unwrap();
-            topo.edges.alloc(Edge::new(s, e, EdgeCurve::Circle(circle)))
+            topo.add_edge(Edge::new(s, e, EdgeCurve::Circle(circle)))
         };
 
         let e_bot = mk_line(&mut topo, vids[7], vids[0]);
@@ -1138,11 +1136,11 @@ mod tests {
             true,
         )
         .unwrap();
-        let wire_id = topo.wires.alloc(wire);
+        let wire_id = topo.add_wire(wire);
 
         let normal = Vec3::new(0.0, 0.0, 1.0);
         let face = Face::new(wire_id, vec![], FaceSurface::Plane { normal, d: 0.0 });
-        let face_id = topo.faces.alloc(face);
+        let face_id = topo.add_face(face);
 
         // Extrude up.
         let solid =
@@ -1336,7 +1334,7 @@ mod tests {
         ];
         let vids: Vec<_> = pts
             .iter()
-            .map(|p| topo.vertices.alloc(Vertex::new(*p, tol.linear)))
+            .map(|p| topo.add_vertex(Vertex::new(*p, tol.linear)))
             .collect();
 
         let c_br = Point3::new(hw - r, -hd + r, 0.0);
@@ -1345,11 +1343,10 @@ mod tests {
         let c_bl = Point3::new(-hw + r, -hd + r, 0.0);
         let z_axis = Vec3::new(0.0, 0.0, 1.0);
 
-        let mk_line =
-            |topo: &mut Topology, s, e| topo.edges.alloc(Edge::new(s, e, EdgeCurve::Line));
+        let mk_line = |topo: &mut Topology, s, e| topo.add_edge(Edge::new(s, e, EdgeCurve::Line));
         let mk_arc = |topo: &mut Topology, s, e, center: Point3| {
             let circle = Circle3D::new(center, z_axis, r).unwrap();
-            topo.edges.alloc(Edge::new(s, e, EdgeCurve::Circle(circle)))
+            topo.add_edge(Edge::new(s, e, EdgeCurve::Circle(circle)))
         };
 
         // CW order: bottom→br_arc→right→tr_arc→top→tl_arc→left→bl_arc
@@ -1376,7 +1373,7 @@ mod tests {
             true,
         )
         .unwrap();
-        let wire_id = topo.wires.alloc(wire);
+        let wire_id = topo.add_wire(wire);
 
         // CW winding → face normal should be -Z
         let face = Face::new(
@@ -1387,7 +1384,7 @@ mod tests {
                 d: 0.0,
             },
         );
-        let face_id = topo.faces.alloc(face);
+        let face_id = topo.add_face(face);
 
         // Extrude upward
         let solid =
