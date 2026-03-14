@@ -399,7 +399,7 @@ pub fn fix_face_orientations(
     for (fid, normal, d) in faces_to_flip {
         let face = topo.face_mut(fid)?;
         face.set_surface(FaceSurface::Plane {
-            normal: Vec3::new(-normal.x(), -normal.y(), -normal.z()),
+            normal: -normal,
             d: -d,
         });
     }

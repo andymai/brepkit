@@ -524,7 +524,7 @@ pub fn intersect_plane_cone(
         let n_dot_apex = dot_np(normal, apex);
         // dir(u) = P(u,1) - apex
         let p1 = cone.evaluate(u, 1.0);
-        let dir = Vec3::new(p1.x() - apex.x(), p1.y() - apex.y(), p1.z() - apex.z());
+        let dir = p1 - apex;
         let n_dot_dir = normal.dot(dir);
 
         if n_dot_dir.abs() < 1e-12 {
