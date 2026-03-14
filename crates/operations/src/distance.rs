@@ -338,10 +338,10 @@ fn closest_point_on_segment(point: Point3, a: Point3, b: Point3) -> Point3 {
     if len_sq < 1e-30 {
         return a;
     }
-    let ap = Vec3::new(point.x() - a.x(), point.y() - a.y(), point.z() - a.z());
+    let ap = point - a;
     let t = ap.dot(ab) / len_sq;
     let t = t.clamp(0.0, 1.0);
-    Point3::new(a.x() + t * ab.x(), a.y() + t * ab.y(), a.z() + t * ab.z())
+    a + ab * t
 }
 
 /// Compute the distance from a point to a single face, dispatching by type.

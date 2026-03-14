@@ -174,8 +174,7 @@ pub fn face_area(
                 let u_vals: Vec<f64> = positions
                     .iter()
                     .map(|p| {
-                        let rel =
-                            Vec3::new(p.x() - origin.x(), p.y() - origin.y(), p.z() - origin.z());
+                        let rel = *p - origin;
                         let along = axis.dot(rel);
                         let radial = rel - axis * along;
                         radial.y().atan2(radial.x())

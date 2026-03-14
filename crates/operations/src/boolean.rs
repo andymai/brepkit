@@ -4307,11 +4307,7 @@ fn split_nonmanifold_edges(
             };
 
             // If face is reversed, flip the effective normal for sorting.
-            let effective_normal = if face.is_reversed() {
-                Vec3::new(-normal.x(), -normal.y(), -normal.z())
-            } else {
-                normal
-            };
+            let effective_normal = if face.is_reversed() { -normal } else { normal };
 
             // Project normal onto perpendicular plane and compute angle.
             let proj_u = effective_normal.dot(u_axis);

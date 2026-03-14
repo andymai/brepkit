@@ -524,7 +524,7 @@ pub fn extrude(
 
     let bottom_surface = match &input_surface {
         FaceSurface::Plane { normal, .. } => {
-            let bottom_normal = Vec3::new(-normal.x(), -normal.y(), -normal.z());
+            let bottom_normal = -*normal;
             let bottom_d = dot_normal_point(bottom_normal, input_positions[0]);
             FaceSurface::Plane {
                 normal: bottom_normal,
