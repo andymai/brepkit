@@ -209,7 +209,9 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>, operation: &str) -
 
 /// Sample a closed periodic curve (period = TAU) into a flat `[x, y, z, ...]` buffer.
 ///
-/// Produces `n` evenly-spaced points in `[0, TAU)` using the supplied `evaluate` function.
+/// Produces `n` evenly-spaced points in `[0, TAU)` — the endpoint at `TAU` is
+/// excluded because it duplicates `t = 0` on periodic curves. Callers that need
+/// a closed polyline should append the first point or close the loop in JS.
 ///
 /// Returns an empty buffer if `n == 0`.
 pub fn sample_full_period_curve(n: usize, evaluate: impl Fn(f64) -> Point3) -> Vec<f64> {
