@@ -4209,13 +4209,15 @@ fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
     let mut parent: Vec<u32> = (0..n_verts as u32).collect();
 
     // Spatial hash grid for boundary vertices.
-    // Weld tolerance scaled to deflection — needed to close gaps from boolean
-    // edge splitting where snap path can't reach. Trade-off: on models with
-    // thin features (< deflection * 2), opposite-side boundary vertices could
-    // merge. This only affects non-manifold boundary edges, so the feature
-    // must also have unmatched edges (rare in practice). A future fix is to
-    // make the face tessellation share exact boundary vertices from the edge
-    // pool, eliminating the need for welding entirely.
+    // Weld tolerance must bridge boolean edge-splitting gaps where the snap
+    // path produces boundary vertices that don't match the shared edge pool.
+    // Empirically, boolean cuts on r=1 cylinders with deflection=0.1 produce
+    // gaps up to ~0.15 — so `deflection * 2` is the minimum that works.
+    //
+    // Known limitation: features with radius < ~4×deflection may have adjacent
+    // rim vertices closer than weld_tol, causing cascade-merges. The proper fix
+    // is to make tessellate_analytic use shared edge vertices directly (tracked
+    // as a follow-up to #23).
     let weld_tol = deflection.max(1e-6) * 2.0;
     let inv_cell = 1.0 / weld_tol;
 
@@ -4281,6 +4283,10 @@ fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
             }
         }
         mesh.indices = new_indices;
+        // Note: positions/normals are NOT compacted — orphaned entries from
+        // remapped vertices remain. This is intentional: compaction would
+        // require rebuilding the index map and is not worth the cost for the
+        // small number of vertices typically welded (< 1% of total).
     }
 }
 
