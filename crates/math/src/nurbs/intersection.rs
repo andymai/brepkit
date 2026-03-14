@@ -42,6 +42,13 @@ const MAX_SEGMENTS: usize = 50;
 /// Maximum branch points detected per march direction.
 const MAX_BRANCHES_PER_DIRECTION: usize = 10;
 
+/// Maximum iterations for Newton-type solvers.
+///
+/// 20 iterations is sufficient for quadratic convergence from reasonable seeds
+/// (quadratic convergence achieves ~1e-12 in ~6 iterations from a 1e-1 seed).
+/// The limit is generous to handle near-singular cases where convergence slows.
+const MAX_NEWTON_ITER: usize = 20;
+
 /// A point on an intersection curve, with parameter values on both surfaces.
 #[derive(Debug, Clone, Copy)]
 pub struct IntersectionPoint {
@@ -395,7 +402,7 @@ fn refine_curve_surface_point(
     let (u_min, u_max) = surface.domain_u();
     let (v_min, v_max) = surface.domain_v();
 
-    for _ in 0..20 {
+    for _ in 0..MAX_NEWTON_ITER {
         let c_pt = curve.evaluate(t);
         let s_pt = surface.evaluate(u, v);
         let residual = c_pt - s_pt;
@@ -496,7 +503,8 @@ fn refine_curve_surface_point(
             .mul_add(residual.y(), residual.z() * residual.z()),
     );
 
-    if dist_sq < (tolerance * 100.0).powi(2) {
+    // 10x relaxation: seed points may be imprecise
+    if dist_sq < (tolerance * 10.0).powi(2) {
         Some(CurveSurfaceHit {
             point: c_pt,
             t,
@@ -547,7 +555,7 @@ fn refine_plane_surface_point(
     let (u_min, u_max) = surface.domain_u();
     let (v_min, v_max) = surface.domain_v();
 
-    for _ in 0..20 {
+    for _ in 0..MAX_NEWTON_ITER {
         let pt = surface.evaluate(u, v);
         let pt_vec = Vec3::new(pt.x(), pt.y(), pt.z());
         let f = plane_normal.dot(pt_vec) - plane_d;
@@ -611,7 +619,7 @@ fn refine_line_surface_point(
     let (u_min, u_max) = surface.domain_u();
     let (v_min, v_max) = surface.domain_v();
 
-    for _ in 0..20 {
+    for _ in 0..MAX_NEWTON_ITER {
         let pt = surface.evaluate(u, v);
         let diff = pt - ray_origin;
         let diff_vec = Vec3::new(diff.x(), diff.y(), diff.z());
@@ -983,6 +991,7 @@ pub fn intersect_nurbs_nurbs(
     // Phase 4: Validate fitted curves against both surfaces.
     // Reject or refit curves whose NURBS approximation deviates too far
     // from the actual intersection.
+    // 10x relaxation: fitted NURBS curve may deviate slightly from sample points
     let validated = validate_intersection_curves(&curves, surface1, surface2, tolerance * 10.0);
 
     Ok(validated)
@@ -1100,7 +1109,9 @@ fn find_ssi_seeds_subdivision(
     }
 
     // Recursively subdivide overlapping pairs to find seeds.
-    let diag_threshold = tolerance * 100.0; // Below this diagonal, try Newton directly
+    // 100x: patch diagonal threshold for Newton seeding — patches this small
+    // are close enough to attempt direct refinement
+    let diag_threshold = tolerance * 100.0;
     let max_depth = 6;
     let mut seeds: Vec<IntersectionPoint> = Vec::new();
 
@@ -1161,6 +1172,7 @@ fn subdivide_for_seeds(
             let v2 = pb.v_mid();
 
             if let Some(refined) = refine_ssi_point(s1, s2, u1, v1, u2, v2, tolerance) {
+                // 100x dedup: multiple patches may converge to the same intersection
                 let is_dup = seeds
                     .iter()
                     .any(|s| (s.point - refined.point).length() < tolerance * 100.0);
@@ -1187,6 +1199,7 @@ fn subdivide_for_seeds(
             let v2 = pb.v_mid();
 
             if let Some(refined) = refine_ssi_point(s1, s2, u1, v1, u2, v2, tolerance) {
+                // 100x dedup: multiple patches may converge to the same intersection
                 let is_dup = seeds
                     .iter()
                     .any(|s| (s.point - refined.point).length() < tolerance * 100.0);
@@ -1617,6 +1630,7 @@ fn find_ssi_seeds_grid(
             let dist = (p1 - p2).length();
             if dist < threshold {
                 if let Some(refined) = refine_ssi_point(s1, s2, u1, v1, u2, v2, tolerance) {
+                    // 100x dedup: multiple grid samples may converge to the same intersection
                     let dup = seeds.iter().any(|s: &IntersectionPoint| {
                         (s.point - refined.point).length() < tolerance * 100.0
                     });
@@ -1650,7 +1664,7 @@ fn refine_ssi_point(
     let mut state = [u1_guess, v1_guess, u2_guess, v2_guess];
     let mut prev_residual = f64::MAX;
 
-    for iteration in 0..20 {
+    for iteration in 0..MAX_NEWTON_ITER {
         let cstate = constrain_state(&state, s1, s2);
         let p1 = s1.evaluate(cstate[0], cstate[1]);
         let p2 = s2.evaluate(cstate[2], cstate[3]);
@@ -1729,10 +1743,11 @@ fn refine_ssi_point(
     }
 
     // Final check with relaxed tolerance.
+    // 10x relaxation: seed points may be imprecise
     let cstate = constrain_state(&state, s1, s2);
     let p1 = s1.evaluate(cstate[0], cstate[1]);
     let p2 = s2.evaluate(cstate[2], cstate[3]);
-    if (p1 - p2).length() < tolerance * 100.0 {
+    if (p1 - p2).length() < tolerance * 10.0 {
         Some(IntersectionPoint {
             point: p1,
             param1: (cstate[0], cstate[1]),
@@ -2603,6 +2618,7 @@ fn march_direction(
                 let d_3d = (refined.point - seed.point).length();
                 // Also check against the second point to detect crossing
                 // the start segment, not just proximity to the seed.
+                // 100x: generous loop-closure detection radius to avoid missed closures
                 let near_seed = d_3d < tolerance * 100.0;
                 let near_first_seg = if points.len() >= 2 {
                     point_to_segment_dist(refined.point, points[0].point, points[1].point)
