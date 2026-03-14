@@ -115,12 +115,7 @@ fn filter_planar_edges(
         if let Some(adj_faces) = edge_faces.get(&eid.index()) {
             let all_planar = adj_faces.iter().all(|&fid| {
                 topo.face(fid)
-                    .map(|f| {
-                        matches!(
-                            f.surface(),
-                            brepkit_topology::face::FaceSurface::Plane { .. }
-                        )
-                    })
+                    .map(|f| f.surface().is_planar())
                     .unwrap_or(false)
             });
             if all_planar {
@@ -2152,14 +2147,7 @@ impl BrepKernel {
             .iter()
             .map(|&fid| -> Result<serde_json::Value, JsError> {
                 let f = self.topo.face(fid)?;
-                let surface_type = match f.surface() {
-                    brepkit_topology::face::FaceSurface::Plane { .. } => "plane",
-                    brepkit_topology::face::FaceSurface::Nurbs(_) => "nurbs",
-                    brepkit_topology::face::FaceSurface::Cylinder(_) => "cylinder",
-                    brepkit_topology::face::FaceSurface::Cone(_) => "cone",
-                    brepkit_topology::face::FaceSurface::Sphere(_) => "sphere",
-                    brepkit_topology::face::FaceSurface::Torus(_) => "torus",
-                };
+                let surface_type = f.surface().type_tag();
                 let outer_wire = self.topo.wire(f.outer_wire())?;
                 let outer_edges: Vec<u32> = outer_wire
                     .edges()
@@ -3238,43 +3226,8 @@ impl BrepKernel {
     pub fn evaluate_surface_normal(&self, face: u32, u: f64, v: f64) -> Result<Vec<f64>, JsError> {
         let face_id = self.resolve_face(face)?;
         let face_data = self.topo.face(face_id)?;
-        match face_data.surface() {
-            FaceSurface::Plane { normal, .. } => Ok(vec![normal.x(), normal.y(), normal.z()]),
-            FaceSurface::Nurbs(surface) => {
-                let derivs = surface.derivatives(u, v, 1);
-                let du = if derivs.len() > 1 && !derivs[1].is_empty() {
-                    derivs[1][0]
-                } else {
-                    Vec3::new(1.0, 0.0, 0.0)
-                };
-                let dv = if !derivs.is_empty() && derivs[0].len() > 1 {
-                    derivs[0][1]
-                } else {
-                    Vec3::new(0.0, 1.0, 0.0)
-                };
-                let n = du.cross(dv);
-                match n.normalize() {
-                    Ok(normal) => Ok(vec![normal.x(), normal.y(), normal.z()]),
-                    Err(_) => Ok(vec![0.0, 0.0, 1.0]),
-                }
-            }
-            FaceSurface::Cylinder(cyl) => {
-                let n = cyl.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-            FaceSurface::Cone(cone) => {
-                let n = cone.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-            FaceSurface::Sphere(sph) => {
-                let n = sph.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-            FaceSurface::Torus(tor) => {
-                let n = tor.normal(u, v);
-                Ok(vec![n.x(), n.y(), n.z()])
-            }
-        }
+        let n = face_data.surface().normal(u, v);
+        Ok(vec![n.x(), n.y(), n.z()])
     }
 
     /// Evaluate a point on a face surface at (u, v).
@@ -3301,11 +3254,10 @@ impl BrepKernel {
                     normal.z() * d + x_axis.z() * u + y_axis.z() * v,
                 )
             }
-            FaceSurface::Nurbs(surface) => surface.evaluate(u, v),
-            FaceSurface::Cylinder(cyl) => cyl.evaluate(u, v),
-            FaceSurface::Cone(cone) => cone.evaluate(u, v),
-            FaceSurface::Sphere(sph) => sph.evaluate(u, v),
-            FaceSurface::Torus(tor) => tor.evaluate(u, v),
+            other => other.evaluate(u, v).unwrap_or_else(|| {
+                // Unreachable: Plane is handled above, all others return Some.
+                Point3::new(0.0, 0.0, 0.0)
+            }),
         };
         Ok(vec![point.x(), point.y(), point.z()])
     }
@@ -3735,12 +3687,8 @@ impl BrepKernel {
                         let u = 2.0 * PI * (iu as f64) / (n_grid as f64);
                         #[allow(clippy::cast_precision_loss)]
                         let v = -PI + 2.0 * PI * (iv as f64) / (n_grid as f64);
-                        let p = match face_data.surface() {
-                            FaceSurface::Cylinder(cyl) => cyl.evaluate(u, v),
-                            FaceSurface::Cone(cone) => cone.evaluate(u, v),
-                            FaceSurface::Sphere(sph) => sph.evaluate(u, v),
-                            FaceSurface::Torus(tor) => tor.evaluate(u, v),
-                            _ => continue,
+                        let Some(p) = face_data.surface().evaluate(u, v) else {
+                            continue;
                         };
                         let d = (p - target).length();
                         if d < best_dist {
@@ -3750,13 +3698,10 @@ impl BrepKernel {
                         }
                     }
                 }
-                let proj = match face_data.surface() {
-                    FaceSurface::Cylinder(cyl) => cyl.evaluate(best_u, best_v),
-                    FaceSurface::Cone(cone) => cone.evaluate(best_u, best_v),
-                    FaceSurface::Sphere(sph) => sph.evaluate(best_u, best_v),
-                    FaceSurface::Torus(tor) => tor.evaluate(best_u, best_v),
-                    _ => target,
-                };
+                let proj = face_data
+                    .surface()
+                    .evaluate(best_u, best_v)
+                    .unwrap_or(target);
                 Ok(vec![
                     best_u,
                     best_v,

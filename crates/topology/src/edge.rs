@@ -2,6 +2,8 @@
 
 use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::traits::ParametricCurve;
+use brepkit_math::vec::{Point3, Vec3};
 
 use crate::arena;
 use crate::vertex::VertexId;
@@ -20,6 +22,65 @@ pub enum EdgeCurve {
     Circle(Circle3D),
     /// An elliptical arc (or full ellipse when the edge is closed).
     Ellipse(Ellipse3D),
+}
+
+impl EdgeCurve {
+    /// Evaluate the curve at parameter `t`.
+    ///
+    /// `Line` has no stored geometry, so it linearly interpolates between
+    /// `start` and `end` with `t` in `[0, 1]`. Circle, Ellipse, and NURBS
+    /// dispatch to their [`ParametricCurve`] implementations.
+    #[must_use]
+    pub fn evaluate_with_endpoints(&self, t: f64, start: Point3, end: Point3) -> Point3 {
+        match self {
+            Self::Line => start + (end - start) * t,
+            Self::Circle(c) => ParametricCurve::evaluate(c, t),
+            Self::Ellipse(e) => ParametricCurve::evaluate(e, t),
+            Self::NurbsCurve(n) => ParametricCurve::evaluate(n, t),
+        }
+    }
+
+    /// Tangent vector at parameter `t`.
+    ///
+    /// For `Line`, returns the normalized `start → end` direction. For curves
+    /// with stored geometry, dispatches to [`ParametricCurve::tangent`].
+    #[must_use]
+    pub fn tangent_with_endpoints(&self, t: f64, start: Point3, end: Point3) -> Vec3 {
+        match self {
+            Self::Line => {
+                let dir = end - start;
+                dir.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0))
+            }
+            Self::Circle(c) => ParametricCurve::tangent(c, t),
+            Self::Ellipse(e) => ParametricCurve::tangent(e, t),
+            Self::NurbsCurve(n) => ParametricCurve::tangent(n, t),
+        }
+    }
+
+    /// Parameter domain of this curve.
+    ///
+    /// `Line` uses `[0, 1]`. Circle and Ellipse use `[0, 2π]`. NURBS uses
+    /// its knot span.
+    #[must_use]
+    pub fn domain_with_endpoints(&self, _start: Point3, _end: Point3) -> (f64, f64) {
+        match self {
+            Self::Line => (0.0, 1.0),
+            Self::Circle(c) => ParametricCurve::domain(c),
+            Self::Ellipse(e) => ParametricCurve::domain(e),
+            Self::NurbsCurve(n) => ParametricCurve::domain(n),
+        }
+    }
+
+    /// Type tag string for debugging and serialization.
+    #[must_use]
+    pub const fn type_tag(&self) -> &'static str {
+        match self {
+            Self::Line => "line",
+            Self::Circle(_) => "circle",
+            Self::Ellipse(_) => "ellipse",
+            Self::NurbsCurve(_) => "nurbs_curve",
+        }
+    }
 }
 
 /// A topological edge: a curve bounded by a start and end vertex.

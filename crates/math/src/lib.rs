@@ -95,6 +95,7 @@ pub mod predicates;
 pub mod ray_triangle;
 pub mod surfaces;
 pub mod tolerance;
+pub mod traits;
 pub mod vec;
 
 #[cfg(feature = "simd")]

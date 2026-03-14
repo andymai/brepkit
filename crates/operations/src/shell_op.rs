@@ -7,7 +7,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -16,81 +15,6 @@ use brepkit_topology::solid::SolidId;
 
 use crate::boolean::{FaceSpec, assemble_solid_mixed};
 use crate::dot_normal_point;
-
-/// Compute the outward surface normal at a 3D point for any face surface type.
-fn surface_normal_at(surface: &FaceSurface, pt: Point3) -> Vec3 {
-    match surface {
-        FaceSurface::Plane { normal, .. } => *normal,
-        FaceSurface::Cylinder(cyl) => {
-            // Radial direction from the cylinder axis through the point.
-            let to_axis = Vec3::new(
-                pt.x() - cyl.origin().x(),
-                pt.y() - cyl.origin().y(),
-                pt.z() - cyl.origin().z(),
-            );
-            let along = cyl.axis() * cyl.axis().dot(to_axis);
-            let radial = to_axis - along;
-            radial.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0))
-        }
-        FaceSurface::Cone(cone) => {
-            let to_apex = Vec3::new(
-                pt.x() - cone.apex().x(),
-                pt.y() - cone.apex().y(),
-                pt.z() - cone.apex().z(),
-            );
-            let along = cone.axis() * cone.axis().dot(to_apex);
-            let radial = to_apex - along;
-            radial.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0))
-        }
-        FaceSurface::Sphere(sphere) => {
-            let dir = Vec3::new(
-                pt.x() - sphere.center().x(),
-                pt.y() - sphere.center().y(),
-                pt.z() - sphere.center().z(),
-            );
-            dir.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0))
-        }
-        FaceSurface::Nurbs(srf) => nurbs_normal_at_point(srf, pt),
-        FaceSurface::Torus(_) => {
-            // Torus: fallback — rarely hit in practice.
-            Vec3::new(0.0, 0.0, 1.0)
-        }
-    }
-}
-
-/// Evaluate the NURBS surface normal at the parametric point closest to `pt`.
-///
-/// Performs a coarse 5×5 grid search over the parameter domain to find the
-/// closest surface point, then evaluates the analytic normal there.
-fn nurbs_normal_at_point(srf: &NurbsSurface, pt: Point3) -> Vec3 {
-    const N: usize = 5;
-
-    let (u_lo, u_hi) = srf.domain_u();
-    let (v_lo, v_hi) = srf.domain_v();
-
-    let mut best_u = 0.5 * (u_lo + u_hi);
-    let mut best_v = 0.5 * (v_lo + v_hi);
-    let mut best_d2 = f64::MAX;
-    for i in 0..=N {
-        let u = u_lo + (u_hi - u_lo) * (i as f64 / N as f64);
-        for j in 0..=N {
-            let v = v_lo + (v_hi - v_lo) * (j as f64 / N as f64);
-            let s = srf.evaluate(u, v);
-            let dx = s.x() - pt.x();
-            let dy = s.y() - pt.y();
-            let dz = s.z() - pt.z();
-            let d2 = dx * dx + dy * dy + dz * dz;
-            if d2 < best_d2 {
-                best_d2 = d2;
-                best_u = u;
-                best_v = v;
-            }
-        }
-    }
-
-    srf.normal(best_u, best_v)
-        .unwrap_or(Vec3::new(0.0, 0.0, 1.0))
-}
 
 /// Compute the inner vertex position using miter-vector offset.
 ///
@@ -269,7 +193,8 @@ pub fn shell(
         let is_open = open_set.contains(&fid.index());
 
         for v in verts {
-            let mut normal = surface_normal_at(face.surface(), *v);
+            let (u, v_param) = face.surface().project_point(*v).unwrap_or((0.0, 0.0));
+            let mut normal = face.surface().normal(u, v_param);
             // Account for the face's reversal flag: when a face is reversed,
             // the native surface normal points in the wrong direction.
             if face.is_reversed() {
@@ -454,17 +379,22 @@ pub fn shell(
             }
             FaceSurface::Sphere(sphere) => {
                 let new_r = sphere.radius() - thickness;
-                if new_r > tol.linear {
-                    if let Ok(new_sph) =
-                        brepkit_math::surfaces::SphericalSurface::new(sphere.center(), new_r)
-                    {
-                        result_specs.push(FaceSpec::Surface {
-                            vertices: inner_verts,
-                            surface: FaceSurface::Sphere(new_sph),
-                            reversed: true,
-                        });
-                    }
+                if new_r <= 0.0 {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: format!(
+                            "shell thickness ({thickness}) exceeds sphere radius ({}), \
+                             resulting inner sphere would have non-positive radius ({new_r})",
+                            sphere.radius(),
+                        ),
+                    });
                 }
+                let new_sph = brepkit_math::surfaces::SphericalSurface::new(sphere.center(), new_r)
+                    .map_err(crate::OperationsError::Math)?;
+                result_specs.push(FaceSpec::Surface {
+                    vertices: inner_verts,
+                    surface: FaceSurface::Sphere(new_sph),
+                    reversed: true,
+                });
             }
             FaceSurface::Nurbs(_) | FaceSurface::Torus(_) => {
                 let inner_fid = crate::offset_face::offset_face(topo, fid, -thickness, 8)?;

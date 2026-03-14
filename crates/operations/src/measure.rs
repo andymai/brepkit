@@ -798,33 +798,17 @@ fn signed_volume_from_mesh(mesh: &tessellate::TriangleMesh) -> f64 {
     (total / 6.0).abs()
 }
 
-/// Compute volume by tessellating each face independently, then
-/// applying winding correction using the solid's approximate centroid.
+/// Compute volume by tessellating each face independently and summing
+/// signed tetrahedra contributions (divergence theorem).
 ///
-/// For each face, we check whether the tessellated triangle normals
-/// point away from the solid centroid (outward). If most triangles'
-/// normals point inward, we flip the sign for that face's volume
-/// contribution.
+/// `tessellate()` already handles face reversal (flipping triangle
+/// winding for reversed faces), so the raw signed tetrahedra sum
+/// produces the correct result without any winding heuristic.
 fn volume_from_per_face_tessellation(
     topo: &Topology,
     solid: SolidId,
     deflection: f64,
 ) -> Result<f64, crate::OperationsError> {
-    // Compute approximate solid centroid from vertex positions.
-    let vertex_points = collect_solid_vertex_points(topo, solid)?;
-    let centroid = if vertex_points.is_empty() {
-        Point3::new(0.0, 0.0, 0.0)
-    } else {
-        let n = vertex_points.len() as f64;
-        let (mut sx, mut sy, mut sz) = (0.0, 0.0, 0.0);
-        for p in &vertex_points {
-            sx += p.x();
-            sy += p.y();
-            sz += p.z();
-        }
-        Point3::new(sx / n, sy / n, sz / n)
-    };
-
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
@@ -834,22 +818,6 @@ fn volume_from_per_face_tessellation(
         let idx = &mesh.indices;
         let pos = &mesh.positions;
         let tri_count = idx.len() / 3;
-        if tri_count == 0 {
-            continue;
-        }
-
-        // Use the face's stored normal for planar faces (more reliable
-        // than centroid-based heuristic for chamfer bevels and other
-        // angled faces).
-        let sign = if let Ok(face) = topo.face(fid) {
-            if let FaceSurface::Plane { normal, .. } = face.surface() {
-                face_winding_sign_from_normal(&mesh, *normal)
-            } else {
-                face_winding_sign_centroid(&mesh, centroid)
-            }
-        } else {
-            face_winding_sign_centroid(&mesh, centroid)
-        };
 
         for t in 0..tri_count {
             let v0 = pos[idx[t * 3] as usize];
@@ -860,11 +828,18 @@ fn volume_from_per_face_tessellation(
             let b = Vec3::new(v1.x(), v1.y(), v1.z());
             let c = Vec3::new(v2.x(), v2.y(), v2.z());
 
-            total += sign * a.dot(b.cross(c));
+            total += a.dot(b.cross(c));
         }
     }
 
-    Ok((total / 6.0).abs())
+    let signed_volume = total / 6.0;
+    if signed_volume < 0.0 {
+        log::debug!(
+            "volume_from_per_face_tessellation: raw signed volume is negative ({signed_volume:.6}), \
+             possible face orientation issue"
+        );
+    }
+    Ok(signed_volume.abs())
 }
 
 /// Exact signed volume contribution of a cylindrical face via the
@@ -1611,21 +1586,8 @@ pub fn solid_center_of_mass(
         return Ok(com);
     }
 
-    // Compute approximate solid centroid from vertex positions.
-    let vertex_points = collect_solid_vertex_points(topo, solid)?;
-    let approx_centroid = if vertex_points.is_empty() {
-        Point3::new(0.0, 0.0, 0.0)
-    } else {
-        let n = vertex_points.len() as f64;
-        let (mut sx, mut sy, mut sz) = (0.0, 0.0, 0.0);
-        for p in &vertex_points {
-            sx += p.x();
-            sy += p.y();
-            sz += p.z();
-        }
-        Point3::new(sx / n, sy / n, sz / n)
-    };
-
+    // tessellate() already handles face reversal (flips winding),
+    // so signed tetrahedra sum is correct without winding heuristics.
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
@@ -1639,11 +1601,6 @@ pub fn solid_center_of_mass(
         let idx = &mesh.indices;
         let pos = &mesh.positions;
         let tri_count = idx.len() / 3;
-        if tri_count == 0 {
-            continue;
-        }
-
-        let sign = face_winding_sign_centroid(&mesh, approx_centroid);
 
         for t in 0..tri_count {
             let v0 = pos[idx[t * 3] as usize];
@@ -1654,7 +1611,7 @@ pub fn solid_center_of_mass(
             let b = Vec3::new(v1.x(), v1.y(), v1.z());
             let c = Vec3::new(v2.x(), v2.y(), v2.z());
 
-            let signed_vol = sign * a.dot(b.cross(c));
+            let signed_vol = a.dot(b.cross(c));
             total_vol += signed_vol;
             cx += signed_vol * (v0.x() + v1.x() + v2.x());
             cy += signed_vol * (v0.y() + v1.y() + v2.y());
@@ -1664,7 +1621,15 @@ pub fn solid_center_of_mass(
 
     if total_vol.abs() < 1e-15 {
         // Volume too small to compute weighted CoM — fall back to vertex centroid.
-        return Ok(approx_centroid);
+        let vertex_points = collect_solid_vertex_points(topo, solid)?;
+        let n = vertex_points.len().max(1) as f64;
+        let (mut sx, mut sy, mut sz) = (0.0, 0.0, 0.0);
+        for p in &vertex_points {
+            sx += p.x();
+            sy += p.y();
+            sz += p.z();
+        }
+        return Ok(Point3::new(sx / n, sy / n, sz / n));
     }
 
     let denom = 4.0 * total_vol;
@@ -1741,82 +1706,6 @@ fn center_of_mass_from_faces(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
-
-/// Determine winding sign correction for a tessellated face using
-/// the topology face's stored surface normal rather than mesh normals.
-/// This is more reliable across platforms (native vs WASM).
-/// Determine the winding sign for volume computation of a face.
-///
-/// For planar faces, uses the face's stored normal. For non-planar faces,
-/// uses the solid's approximate centroid to determine the expected outward
-/// direction, since the surface's geometric normal may not match the
-/// topological outward normal.
-fn face_winding_sign_centroid(mesh: &tessellate::TriangleMesh, solid_centroid: Point3) -> f64 {
-    let idx = &mesh.indices;
-    let pos = &mesh.positions;
-    let tri_count = idx.len() / 3;
-    if tri_count == 0 {
-        return 1.0;
-    }
-
-    // For each triangle, check whether its geometric normal points
-    // away from the solid centroid. Use majority vote.
-    let mut agree: i32 = 0;
-    for t in 0..tri_count {
-        let i0 = idx[t * 3] as usize;
-        let i1 = idx[t * 3 + 1] as usize;
-        let i2 = idx[t * 3 + 2] as usize;
-        let tri_normal = (pos[i1] - pos[i0]).cross(pos[i2] - pos[i0]);
-        if tri_normal.length() < 1e-20 {
-            continue;
-        }
-        // Vector from centroid to triangle midpoint
-        let mid = Point3::new(
-            (pos[i0].x() + pos[i1].x() + pos[i2].x()) / 3.0,
-            (pos[i0].y() + pos[i1].y() + pos[i2].y()) / 3.0,
-            (pos[i0].z() + pos[i1].z() + pos[i2].z()) / 3.0,
-        );
-        let outward = mid - solid_centroid;
-        // If tri_normal points same way as outward, winding is correct
-        agree += if tri_normal.dot(outward) >= 0.0 {
-            1
-        } else {
-            -1
-        };
-    }
-
-    if agree >= 0 { 1.0 } else { -1.0 }
-}
-
-/// Determine winding sign by comparing the mesh triangle normals against
-/// the face's known surface normal. More reliable than centroid-based
-/// heuristic for angled faces (e.g. chamfer bevels).
-fn face_winding_sign_from_normal(mesh: &tessellate::TriangleMesh, face_normal: Vec3) -> f64 {
-    let idx = &mesh.indices;
-    let pos = &mesh.positions;
-    let tri_count = idx.len() / 3;
-    if tri_count == 0 {
-        return 1.0;
-    }
-
-    let mut agree: i32 = 0;
-    for t in 0..tri_count {
-        let i0 = idx[t * 3] as usize;
-        let i1 = idx[t * 3 + 1] as usize;
-        let i2 = idx[t * 3 + 2] as usize;
-        let tri_normal = (pos[i1] - pos[i0]).cross(pos[i2] - pos[i0]);
-        if tri_normal.length() < 1e-20 {
-            continue;
-        }
-        agree += if tri_normal.dot(face_normal) >= 0.0 {
-            1
-        } else {
-            -1
-        };
-    }
-
-    if agree >= 0 { 1.0 } else { -1.0 }
-}
 
 /// Collect deduplicated vertex positions from a solid.
 fn collect_solid_vertex_points(

@@ -28,6 +28,7 @@ use brepkit_math::curves2d::{Curve2D, NurbsCurve2D};
 use brepkit_math::filtered::{SegmentIntersection, segment_intersection};
 use brepkit_math::nurbs::intersection::{IntersectionCurve, IntersectionPoint};
 use brepkit_math::nurbs::surface::NurbsSurface;
+use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point2, Point3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -82,8 +83,11 @@ pub fn nurbs_boolean(
     let (fragments_a, fragments_b) = match split_intersected_faces(topo, &face_pairs, &ssi_results)
     {
         Ok(result) => result,
-        Err(_) => {
+        Err(e) => {
             // Fall back to tessellated boolean if splitting fails
+            log::debug!(
+                "nurbs_boolean: face splitting failed ({e}), falling back to tessellated boolean"
+            );
             return crate::boolean::boolean(topo, op, solid_a, solid_b);
         }
     };
@@ -106,8 +110,11 @@ pub fn nurbs_boolean(
 
     match result {
         Ok(solid) => Ok(solid),
-        Err(_) => {
+        Err(e) => {
             // Fall back to tessellated boolean
+            log::debug!(
+                "nurbs_boolean: assembly failed ({e}), falling back to tessellated boolean"
+            );
             crate::boolean::boolean(topo, op, solid_a, solid_b)
         }
     }
@@ -302,7 +309,7 @@ fn register_pcurves(
                 continue;
             };
 
-            let lin_tol = brepkit_math::tolerance::Tolerance::default().linear;
+            let lin_tol = Tolerance::default().linear;
             let start_vid = topo.add_vertex(Vertex::new(start_pt, lin_tol));
             let end_vid = topo.add_vertex(Vertex::new(end_pt, lin_tol));
 
@@ -471,6 +478,8 @@ fn point_in_polygon(pt: Point2, polygon: &[Point2]) -> bool {
 /// segment `(a, b)`. Returns `Some(t)` where `t` is in `[0, 1]` and the
 /// intersection lies on `(a, b)` as well.
 fn segment_intersect_t(p0: Point2, p1: Point2, a: Point2, b: Point2) -> Option<f64> {
+    // Parametric tolerance for t,s ∈ [0,1] — tighter than spatial tolerance.
+    let eps = Tolerance::default().relative;
     let dx = p1.x() - p0.x();
     let dy = p1.y() - p0.y();
     let ex = b.x() - a.x();
@@ -481,7 +490,7 @@ fn segment_intersect_t(p0: Point2, p1: Point2, a: Point2, b: Point2) -> Option<f
     }
     let t = ((a.x() - p0.x()) * ey - (a.y() - p0.y()) * ex) / denom;
     let s = ((a.x() - p0.x()) * dy - (a.y() - p0.y()) * dx) / denom;
-    if (-1e-10..=1.0 + 1e-10).contains(&t) && (-1e-10..=1.0 + 1e-10).contains(&s) {
+    if (-eps..=1.0 + eps).contains(&t) && (-eps..=1.0 + eps).contains(&s) {
         Some(t.clamp(0.0, 1.0))
     } else {
         None
@@ -499,6 +508,10 @@ fn clip_polyline_to_polygon(polyline: &[Point2], polygon: &[Point2]) -> Vec<Poin
         return Vec::new();
     }
 
+    // Parametric tolerance for t-value dedup on [0,1] segments.
+    let param_eps = Tolerance::default().relative;
+    // Spatial tolerance for UV-coordinate point dedup.
+    let point_eps = Tolerance::default().linear;
     let mut result: Vec<Point2> = Vec::new();
     let n_poly = polygon.len();
 
@@ -516,7 +529,7 @@ fn clip_polyline_to_polygon(polyline: &[Point2], polygon: &[Point2]) -> Vec<Poin
             }
         }
         intersections.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        intersections.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+        intersections.dedup_by(|a, b| (*a - *b).abs() < param_eps);
 
         // Build list of candidate points along this segment.
         let mut ts: Vec<f64> = Vec::new();
@@ -524,7 +537,7 @@ fn clip_polyline_to_polygon(polyline: &[Point2], polygon: &[Point2]) -> Vec<Poin
         ts.extend(&intersections);
         ts.push(1.0);
         ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        ts.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+        ts.dedup_by(|a, b| (*a - *b).abs() < param_eps);
 
         // For each sub-segment, check if its midpoint is inside the polygon.
         for pair in ts.windows(2) {
@@ -545,8 +558,8 @@ fn clip_polyline_to_polygon(polyline: &[Point2], polygon: &[Point2]) -> Vec<Poin
                 // Avoid duplicate points at segment boundaries.
                 if result.is_empty()
                     || (result.last().is_none_or(|last| {
-                        (last.x() - start_pt.x()).abs() > 1e-10
-                            || (last.y() - start_pt.y()).abs() > 1e-10
+                        (last.x() - start_pt.x()).abs() > point_eps
+                            || (last.y() - start_pt.y()).abs() > point_eps
                     }))
                 {
                     result.push(start_pt);
@@ -708,6 +721,9 @@ fn split_region_by_pcurve(region: &[Point2], pcurve: &[Point2]) -> Vec<Vec<Point
         return vec![region.to_vec()];
     }
 
+    // Parametric tolerance for boundary crossing detection on [0,1] segments.
+    let eps = Tolerance::default().relative;
+
     // Find all crossings between pcurve segments and boundary segments.
     let n_boundary = region.len();
     let mut crossings: Vec<(usize, f64, Point2)> = Vec::new(); // (boundary_seg_idx, t_on_boundary, point)
@@ -724,7 +740,7 @@ fn split_region_by_pcurve(region: &[Point2], pcurve: &[Point2]) -> Vec<Vec<Point
                 segment_intersection(bd_a, bd_b, pc_a, pc_b)
             {
                 // Only count crossings where both parameters are truly interior
-                if t1 > 1e-10 && t1 < 1.0 - 1e-10 {
+                if t1 > eps && t1 < 1.0 - eps {
                     #[allow(clippy::cast_precision_loss)]
                     let global_t = bd_seg as f64 + t1;
                     crossings.push((bd_seg, global_t, point));
@@ -882,7 +898,7 @@ fn create_face_fragments(
         let wire_id = brepkit_topology::builder::make_polygon_wire(
             topo,
             &points_3d,
-            brepkit_math::tolerance::Tolerance::default().linear,
+            Tolerance::default().linear,
         )?;
 
         // Create face with the same NURBS surface.
