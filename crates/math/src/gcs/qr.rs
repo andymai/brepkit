@@ -111,13 +111,27 @@ impl QrResult {
                 }
             }
 
-            // Update remaining column norms (downdate)
+            // Update remaining column norms (downdate).
+            // Periodic recomputation prevents accumulated rounding errors
+            // from corrupting pivot selection in large systems.
+            let recompute_interval = (k / 4).max(1);
+            let needs_recompute = (step + 1) % recompute_interval == 0;
+
             for j in (step + 1)..n {
-                let v = data[step * n + j];
-                col_norms[j] -= v * v;
-                // Clamp to avoid negative due to rounding
-                if col_norms[j] < 0.0 {
-                    col_norms[j] = 0.0;
+                if needs_recompute {
+                    // Full recomputation from the sub-column below the diagonal
+                    let mut s = 0.0;
+                    for i in (step + 1)..m {
+                        let v = data[i * n + j];
+                        s += v * v;
+                    }
+                    col_norms[j] = s;
+                } else {
+                    let v = data[step * n + j];
+                    col_norms[j] -= v * v;
+                    if col_norms[j] < 0.0 {
+                        col_norms[j] = 0.0;
+                    }
                 }
             }
         }
