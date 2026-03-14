@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.1.0](https://github.com/andymai/brepkit/compare/v2.0.0...v2.1.0) (2026-03-14)
+
+
+### Features
+
+* **wasm:** add wasm-macros proc macro crate for panic safety ([50f35c9](https://github.com/andymai/brepkit/commit/50f35c95cd1ee58274ae475313d4d6e4f67ce3ea))
+
+
+### Bug Fixes
+
+* **deps:** migrate tsify-next to tsify (RUSTSEC-2025-0048) ([#223](https://github.com/andymai/brepkit/issues/223)) ([dac1a82](https://github.com/andymai/brepkit/commit/dac1a82e99bab6c30725d948f217756c247e769c))
+* **wasm:** address PR review comments ([8fdc7ea](https://github.com/andymai/brepkit/commit/8fdc7ea3a3b76aea1327a8c2b3de1ca12f458ca4))
+* **wasm:** address second round of PR review comments ([88ab36a](https://github.com/andymai/brepkit/commit/88ab36a9c7aaf2715dba2bdb3060cce9df5f08e3))
+
 ## [2.0.0](https://github.com/andymai/brepkit/compare/v1.3.3...v2.0.0) (2026-03-14)
 
 
