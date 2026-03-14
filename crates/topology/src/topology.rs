@@ -4,6 +4,7 @@
 //! create or query topological entities take a reference to this struct.
 
 use crate::TopologyError;
+use crate::adjacency::AdjacencyIndex;
 use crate::arena::Arena;
 use crate::compound::{Compound, CompoundId};
 use crate::compsolid::{CompSolid, CompSolidId};
@@ -256,6 +257,17 @@ impl Topology {
     /// Returns an exclusive reference to the pcurve registry.
     pub fn pcurves_mut(&mut self) -> &mut PCurveRegistry {
         &mut self.pcurves
+    }
+
+    // ── Adjacency ─────────────────────────────────────────────────
+
+    /// Builds an adjacency index for the given solid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TopologyError`] if any referenced entity does not exist.
+    pub fn build_adjacency(&self, solid: SolidId) -> Result<AdjacencyIndex, TopologyError> {
+        AdjacencyIndex::build(self, solid)
     }
 }
 
