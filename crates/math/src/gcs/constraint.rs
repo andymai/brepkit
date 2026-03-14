@@ -73,14 +73,24 @@ pub struct EntitySnapshot {
 
 impl EntitySnapshot {
     /// Look up a point's (x, y) by handle.
+    ///
+    /// Returns `(NaN, NaN)` for stale/missing handles. NaN propagates
+    /// through residual and Jacobian arithmetic, causing the solver to
+    /// detect non-convergence rather than silently using wrong values.
     fn point(&self, id: PointId) -> (f64, f64) {
-        self.points.get(&id).copied().unwrap_or((0.0, 0.0))
+        self.points
+            .get(&id)
+            .copied()
+            .unwrap_or((f64::NAN, f64::NAN))
     }
 
     /// Look up a line's endpoint IDs.
+    ///
+    /// Returns dummy IDs for stale handles. When those IDs are subsequently
+    /// looked up via [`Self::point`], NaN is returned, poisoning downstream
+    /// arithmetic.
     fn line(&self, id: LineId) -> (PointId, PointId) {
         self.lines.get(&id).copied().unwrap_or_else(|| {
-            // Should never happen if constraints are validated
             let dummy = PointId::dummy();
             (dummy, dummy)
         })
@@ -88,7 +98,10 @@ impl EntitySnapshot {
 }
 
 impl Handle<PointData> {
-    /// Create a dummy handle (only for unreachable fallback paths).
+    /// Create a dummy handle for unreachable fallback paths.
+    ///
+    /// Looking up a dummy handle in [`EntitySnapshot::point`] returns NaN,
+    /// which propagates through the solver to signal an error.
     fn dummy() -> Self {
         Self {
             index: u32::MAX,
