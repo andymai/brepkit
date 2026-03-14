@@ -298,6 +298,53 @@ impl Cdt {
             return Ok(());
         }
 
+        // Scan for existing vertices that lie on the constraint segment.
+        // If found, recursively split the constraint through them so that
+        // recover_edge never encounters a collinear interior vertex (which
+        // causes flip-recovery deadlocks on full-revolution face seams).
+        //
+        // This is an O(V) scan per constraint. For typical tessellation CDTs
+        // (< 10K vertices, < 100 constraints) the cost is negligible. A spatial
+        // index could reduce this to O(k) but dup_grid's 1e-5 cell size makes
+        // AABB iteration pathological for long segments.
+        let p0 = self.vertices[v0];
+        let p1 = self.vertices[v1];
+        let dx = p1.x() - p0.x();
+        let dy = p1.y() - p0.y();
+        let seg_len_sq = dx * dx + dy * dy;
+
+        if seg_len_sq > 0.0 {
+            let mut collinear: Vec<(f64, usize)> = Vec::new();
+            for vi in self.super_count..self.vertices.len() {
+                if vi == v0 || vi == v1 {
+                    continue;
+                }
+                let px = self.vertices[vi].x() - p0.x();
+                let py = self.vertices[vi].y() - p0.y();
+                let t = (px * dx + py * dy) / seg_len_sq;
+                if t <= 1e-6 || t >= 1.0 - 1e-6 {
+                    continue;
+                }
+                let cross = px * dy - py * dx;
+                let dist_sq = cross * cross / seg_len_sq;
+                if dist_sq < 1e-12 * seg_len_sq {
+                    collinear.push((t, vi));
+                }
+            }
+
+            if !collinear.is_empty() {
+                collinear.sort_by(|a, b| a.0.total_cmp(&b.0));
+                collinear.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-8);
+                let mut prev = v0;
+                for &(_, vi) in &collinear {
+                    self.insert_constraint(prev, vi)?;
+                    prev = vi;
+                }
+                self.insert_constraint(prev, v1)?;
+                return Ok(());
+            }
+        }
+
         // Recover the edge by flipping.
         self.recover_edge(v0, v1)?;
         self.constraints.insert(key);
@@ -2385,5 +2432,33 @@ mod tests {
             let tris = cdt.triangles();
             prop_assert!(!tris.is_empty());
         }
+    }
+
+    /// Collinear vertex splitting: a constraint from v0→v3 should split through
+    /// collinear intermediate vertices v1 and v2, producing three sub-constraints.
+    #[test]
+    fn cdt_collinear_constraint_splitting() {
+        let mut cdt = Cdt::new((Point2::new(-1.0, -1.0), Point2::new(6.0, 6.0)));
+        // Four collinear points along y=2.
+        let v0 = cdt.insert_point(Point2::new(0.0, 2.0)).unwrap();
+        let v1 = cdt.insert_point(Point2::new(1.0, 2.0)).unwrap();
+        let v2 = cdt.insert_point(Point2::new(3.0, 2.0)).unwrap();
+        let v3 = cdt.insert_point(Point2::new(5.0, 2.0)).unwrap();
+        // Also add off-line points so the triangulation isn't degenerate.
+        cdt.insert_point(Point2::new(2.0, 0.0)).unwrap();
+        cdt.insert_point(Point2::new(2.0, 4.0)).unwrap();
+
+        // Insert constraint spanning all four collinear points.
+        cdt.insert_constraint(v0, v3).unwrap();
+
+        // All three sub-segments should now be constrained.
+        let has = |a, b| cdt.constraints.contains(&sorted_pair(a, b));
+        assert!(has(v0, v1), "sub-constraint v0-v1 missing");
+        assert!(has(v1, v2), "sub-constraint v1-v2 missing");
+        assert!(has(v2, v3), "sub-constraint v2-v3 missing");
+
+        // Triangulation should still be valid.
+        let tris = cdt.triangles();
+        assert!(!tris.is_empty());
     }
 }

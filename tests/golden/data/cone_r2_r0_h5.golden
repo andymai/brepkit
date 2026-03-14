@@ -1,6 +1,6 @@
 # cone r_bottom=2 r_top=0 h=5
-vertices: 51
-triangles: 47
+vertices: 60
+triangles: 56
 volume: 20.943951
 bbox_min: (0.000000, 0.000000, 0.000000)
 bbox_max: (2.000000, 0.000000, 5.000000)
