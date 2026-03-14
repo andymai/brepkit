@@ -183,7 +183,10 @@ fn exact_plane_cone(
             cone.apex().y() + t * axis.y(),
             cone.apex().z() + t * axis.z(),
         );
-        let circle_r = t.abs() * half_angle.tan();
+        // half_angle is the angle from the radial plane to the surface.
+        // Axial distance t = v * sin(half_angle), so v = t / sin(half_angle).
+        // Radius at v = v * cos(half_angle) = t * cos(half_angle) / sin(half_angle).
+        let circle_r = t.abs() * half_angle.cos() / half_angle.sin();
         if circle_r < 1e-15 {
             return Ok(vec![]);
         }

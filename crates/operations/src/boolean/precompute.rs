@@ -183,6 +183,29 @@ pub(super) fn cylinder_v_extent(
     }
 }
 
+/// Compute the v-extent of points projected onto a cone's generator direction.
+///
+/// Returns `None` if the extent is degenerate (< 1e-10).
+///
+/// 1e-10: parametric-space dedup tolerance — same as `cylinder_v_extent`.
+pub(super) fn cone_v_extent(
+    cone: &brepkit_math::surfaces::ConicalSurface,
+    points: &[Point3],
+) -> Option<(f64, f64)> {
+    let mut v_min = f64::MAX;
+    let mut v_max = f64::MIN;
+    for &p in points {
+        let (_, v) = cone.project_point(p);
+        v_min = v_min.min(v);
+        v_max = v_max.max(v);
+    }
+    if (v_max - v_min).abs() < 1e-10 {
+        None
+    } else {
+        Some((v_min, v_max))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Phase 0 helpers
 // ---------------------------------------------------------------------------
