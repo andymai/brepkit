@@ -14,7 +14,6 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
-use super::precompute::face_surface_to_analytic;
 use super::types::{FaceData, FacePairSide, IntersectionSegment};
 
 // ---------------------------------------------------------------------------
@@ -107,7 +106,7 @@ fn try_plane_analytic_pair(
         _ => return None,
     };
 
-    let analytic = face_surface_to_analytic(analytic_surf)?;
+    let analytic = analytic_surf.as_analytic()?;
 
     // Get sample points without NURBS curve fitting.
     let chains = sample_plane_analytic(analytic, normal, d).ok()?;

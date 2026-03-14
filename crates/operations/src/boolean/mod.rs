@@ -69,7 +69,6 @@ use brepkit_topology::solid::SolidId;
 ///
 /// Returns an error if either solid contains NURBS faces, or if the operation
 /// produces an empty or non-manifold result.
-#[allow(clippy::too_many_lines)]
 pub fn boolean(
     topo: &mut Topology,
     op: BooleanOp,

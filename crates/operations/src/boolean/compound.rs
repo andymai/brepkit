@@ -30,8 +30,7 @@ use super::fragments::{
     split_cylinder_at_intersection, split_sphere_at_intersection, tessellate_face_into_fragments,
 };
 use super::precompute::{
-    analytic_face_normal_d, collect_face_data, compute_v_range_hint, face_polygon,
-    face_surface_to_analytic, face_wire_aabb,
+    analytic_face_normal_d, collect_face_data, compute_v_range_hint, face_polygon, face_wire_aabb,
 };
 use super::split::split_face;
 use super::types::{
@@ -355,7 +354,7 @@ pub fn compound_cut(
                             .push((seg.0, seg.1, None));
                     }
                 } else if is_plane_a && !is_plane_b {
-                    let Some(analytic_surf) = face_surface_to_analytic(&snap_b.surface) else {
+                    let Some(analytic_surf) = snap_b.surface.as_analytic() else {
                         has_analytic_analytic = true;
                         continue;
                     };
@@ -411,7 +410,7 @@ pub fn compound_cut(
                         }
                     }
                 } else if !is_plane_a && is_plane_b {
-                    let Some(analytic_surf) = face_surface_to_analytic(&snap_a.surface) else {
+                    let Some(analytic_surf) = snap_a.surface.as_analytic() else {
                         has_analytic_analytic = true;
                         continue;
                     };
@@ -458,8 +457,8 @@ pub fn compound_cut(
                     }
                 } else {
                     // Analytic-analytic.
-                    let surf_a_opt = face_surface_to_analytic(&snap_a.surface);
-                    let surf_b_opt = face_surface_to_analytic(&snap_b.surface);
+                    let surf_a_opt = snap_a.surface.as_analytic();
+                    let surf_b_opt = snap_b.surface.as_analytic();
                     if let (Some(surf_a_an), Some(surf_b_an)) = (surf_a_opt, surf_b_opt) {
                         let v_hint_a = compute_v_range_hint(&snap_a.surface, &snap_a.vertices);
                         let v_hint_b = compute_v_range_hint(&snap_b.surface, &snap_b.vertices);

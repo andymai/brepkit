@@ -22,22 +22,6 @@ use super::types::{BooleanOp, CLASSIFIER_CYL_SEGMENTS, CLOSED_CURVE_SAMPLES, Fac
 // Shared helpers (used across multiple phases)
 // ---------------------------------------------------------------------------
 
-/// Convert a `FaceSurface` reference to an `AnalyticSurface` reference.
-///
-/// Returns `None` for planar and NURBS surfaces.
-pub(super) fn face_surface_to_analytic(
-    surface: &FaceSurface,
-) -> Option<brepkit_math::analytic_intersection::AnalyticSurface<'_>> {
-    use brepkit_math::analytic_intersection::AnalyticSurface;
-    match surface {
-        FaceSurface::Cylinder(c) => Some(AnalyticSurface::Cylinder(c)),
-        FaceSurface::Cone(c) => Some(AnalyticSurface::Cone(c)),
-        FaceSurface::Sphere(s) => Some(AnalyticSurface::Sphere(s)),
-        FaceSurface::Torus(t) => Some(AnalyticSurface::Torus(t)),
-        _ => None,
-    }
-}
-
 /// Deduplicate 3D points by quantized position (spatial hashing).
 ///
 /// Resolution is derived from the tolerance: `1.0 / tol.linear`.

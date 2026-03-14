@@ -69,6 +69,7 @@ Quick reference — find the right file for any task:
 | Ray-triangle intersection | `ray_triangle.rs` |
 | 2D polygon offset | `polygon_offset.rs` |
 | SIMD batch operations | `simd.rs` |
+| Parametric geometry traits | `traits.rs` |
 
 ### L1: topology (`crates/topology/src/`)
 | Task | File(s) |
@@ -88,7 +89,7 @@ Quick reference — find the right file for any task:
 | Task | File(s) |
 |------|---------|
 | Primitives (box, cylinder, cone, sphere, torus) | `primitives.rs` |
-| Boolean (union/cut/intersect) | `boolean.rs`, `nurbs_boolean.rs` |
+| Boolean (union/cut/intersect) | `boolean/` (mod, types, precompute, intersect, split, classify, assembly, analytic, compound, fragments, tests), `nurbs_boolean.rs` |
 | Mesh boolean (co-refinement) | `mesh_boolean.rs` |
 | Extrude, Revolve, Sweep, Loft, Pipe | `extrude.rs`, `revolve.rs`, `sweep.rs`, `loft.rs`, `pipe.rs` |
 | Helical sweep | `helix.rs` |
@@ -152,7 +153,7 @@ Update these files (16+ match sites across 5 crates):
 - [ ] `operations/src/transform.rs` — rebuild/transform curve geometry
 - [ ] `operations/src/copy.rs` — deep-clone curve data
 - [ ] `operations/src/measure.rs` — edge arc-length formula
-- [ ] `operations/src/boolean.rs` — sample edge curve to points (3 sites)
+- [ ] `operations/src/boolean/` — sample edge curve to points (3 sites across sub-modules)
 - [ ] `io/src/step/writer.rs` — write as STEP entity
 - [ ] `io/src/iges/writer.rs` — write as IGES entity
 - [ ] `wasm/src/kernel.rs` — **8 match sites**: type tag, param range, evaluate, control point data, tessellate, edge geometry query, NURBS data extraction, batch dispatch
@@ -165,7 +166,7 @@ Also check (may use wildcards that silently swallow):
 
 ### Adding a `FaceSurface` variant
 
-`FaceSurface` is defined in `topology/src/face.rs`. Current variants: `Planar`, `Nurbs`, `Cylinder`, `Cone`, `Sphere`, `Torus`.
+`FaceSurface` is defined in `topology/src/face.rs`. Current variants: `Plane`, `Nurbs`, `Cylinder`, `Cone`, `Sphere`, `Torus`.
 
 Update these files (22+ match sites across 7+ files):
 
@@ -175,7 +176,7 @@ Update these files (22+ match sites across 7+ files):
 - [ ] `operations/src/section.rs` — find intersection segments
 - [ ] `operations/src/distance.rs` — point-to-face distance
 - [ ] `operations/src/feature_recognition.rs` — classify surface type (2 sites)
-- [ ] `operations/src/boolean.rs` — extract `AnalyticSurface` (4 sites)
+- [ ] `operations/src/boolean/` — extract `AnalyticSurface` (sites across sub-modules)
 - [ ] `operations/src/offset_face.rs` — offset surface geometry
 - [ ] `io/src/step/writer.rs` — write as STEP entity
 - [ ] `io/src/iges/writer.rs` — write as IGES entity

@@ -3322,8 +3322,9 @@ fn tessellate_nonplanar_cdt(
         } else if i >= 3 {
             // Interior vertex: evaluate surface at (u,v) to get 3D position.
             let pt2 = cdt_verts[i];
-            let pt3 = evaluate_surface_at(face_data.surface(), pt2.x(), pt2.y());
-            let nrm = surface_normal_at(face_data.surface(), pt2.x(), pt2.y());
+            let surface = face_data.surface();
+            let pt3 = eval_surface_point(surface, pt2.x(), pt2.y());
+            let nrm = surface.normal(pt2.x(), pt2.y());
 
             let key = (pt3.x().to_bits(), pt3.y().to_bits(), pt3.z().to_bits());
             let gid = *point_to_global.entry(key).or_insert_with(|| {
@@ -3390,7 +3391,7 @@ fn project_via_pcurve(
     for i in 0..=n_samples {
         let t = t_start + (t_end - t_start) * (i as f64) / (n_samples as f64);
         let uv = pcurve.evaluate(t);
-        let p_surf = evaluate_surface_at(surface, uv.x(), uv.y());
+        let p_surf = eval_surface_point(surface, uv.x(), uv.y());
         let d = (p_surf - pt).length();
         if d < best_dist {
             best_dist = d;
@@ -3406,8 +3407,8 @@ fn project_via_pcurve(
         let mid = 0.5 * (lo + hi);
         let uv_lo = pcurve.evaluate(lo);
         let uv_hi = pcurve.evaluate(hi);
-        let d_lo = (evaluate_surface_at(surface, uv_lo.x(), uv_lo.y()) - pt).length();
-        let d_hi = (evaluate_surface_at(surface, uv_hi.x(), uv_hi.y()) - pt).length();
+        let d_lo = (eval_surface_point(surface, uv_lo.x(), uv_lo.y()) - pt).length();
+        let d_hi = (eval_surface_point(surface, uv_hi.x(), uv_hi.y()) - pt).length();
         if d_lo < d_hi {
             hi = mid;
         } else {
@@ -3417,7 +3418,7 @@ fn project_via_pcurve(
 
     let t_final = 0.5 * (lo + hi);
     let uv = pcurve.evaluate(t_final);
-    let p_final = evaluate_surface_at(surface, uv.x(), uv.y());
+    let p_final = eval_surface_point(surface, uv.x(), uv.y());
 
     // Accept if the projected point is close enough to the target.
     if (p_final - pt).length() < brepkit_math::tolerance::Tolerance::default().linear {
@@ -3427,35 +3428,23 @@ fn project_via_pcurve(
     }
 }
 
-/// Evaluate a surface at (u, v) to get a 3D point.
-fn evaluate_surface_at(surface: &FaceSurface, u: f64, v: f64) -> Point3 {
-    match surface {
-        FaceSurface::Cylinder(cyl) => cyl.evaluate(u, v),
-        FaceSurface::Cone(cone) => cone.evaluate(u, v),
-        FaceSurface::Sphere(sphere) => sphere.evaluate(u, v),
-        FaceSurface::Torus(torus) => torus.evaluate(u, v),
-        FaceSurface::Nurbs(surface) => surface.evaluate(u, v),
-        FaceSurface::Plane { normal, d } => {
-            // Shouldn't be called for planes, but provide a fallback.
-            let offset = *normal * (*d);
-            Point3::new(offset.x() + u, offset.y() + v, offset.z())
-        }
-    }
-}
-
-/// Get the surface normal at (u, v).
-fn surface_normal_at(surface: &FaceSurface, u: f64, v: f64) -> Vec3 {
-    match surface {
-        FaceSurface::Cylinder(cyl) => cyl.normal(u, v),
-        FaceSurface::Cone(cone) => cone.normal(u, v),
-        FaceSurface::Sphere(sphere) => sphere.normal(u, v),
-        FaceSurface::Torus(torus) => torus.normal(u, v),
-        FaceSurface::Nurbs(surface) => surface.normal(u, v).unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
-        FaceSurface::Plane { normal, .. } => *normal,
-    }
+/// Evaluate a non-planar surface at `(u, v)` and return a 3D point.
+///
+/// `FaceSurface::evaluate` returns `None` only for the `Plane` variant.
+/// This helper is called exclusively from paths that operate on non-planar
+/// faces (CDT interior vertices, PCurve projection), so `None` is
+/// structurally unreachable. The `Point3::new(0.0, 0.0, 0.0)` fallback
+/// is kept to satisfy the type system without an `expect` or `unwrap`.
+fn eval_surface_point(surface: &FaceSurface, u: f64, v: f64) -> Point3 {
+    surface.evaluate(u, v).unwrap_or(Point3::new(0.0, 0.0, 0.0))
 }
 
 /// Estimate the effective radius of a surface for sample density calculation.
+///
+/// **Not replaced by `FaceSurface::estimate_radius()`** — the delegate uses
+/// different values (e.g. cone → `radius_at(1.0)`, torus → `major_radius()`),
+/// while tessellation intentionally uses conservative estimates (cone → 1.0,
+/// torus → `major + minor`).
 fn estimate_surface_radius(surface: &FaceSurface) -> f64 {
     match surface {
         FaceSurface::Cylinder(cyl) => cyl.radius(),
