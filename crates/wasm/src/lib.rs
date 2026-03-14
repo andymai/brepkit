@@ -7,9 +7,11 @@
 //! The primary entry point is [`kernel::BrepKernel`], which owns all modeling
 //! state and exposes shape creation, operations, and tessellation to JS.
 
+mod bindings;
 pub mod error;
-#[cfg(feature = "io")]
-pub mod io;
+mod handles;
+mod helpers;
 pub mod kernel;
-pub mod operations;
 pub mod shapes;
+mod state;
+mod types;
