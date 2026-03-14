@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.3](https://github.com/andymai/brepkit/compare/v1.3.2...v1.3.3) (2026-03-14)
+
+
+### Bug Fixes
+
+* **math:** harden GCS entity snapshot and QR norm downdate ([#214](https://github.com/andymai/brepkit/issues/214)) ([afba6aa](https://github.com/andymai/brepkit/commit/afba6aa23cefcdec40271afb46ba478c8067b5dc))
+* **math:** harden Newton solvers with unified tolerance and convergence ([#215](https://github.com/andymai/brepkit/issues/215)) ([c8f6343](https://github.com/andymai/brepkit/commit/c8f634375fd57b46f098bbb6467f9aed9bfdb44a))
+
 ## [1.3.2](https://github.com/andymai/brepkit/compare/v1.3.1...v1.3.2) (2026-03-14)
 
 
