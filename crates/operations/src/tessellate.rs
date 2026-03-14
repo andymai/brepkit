@@ -3133,54 +3133,11 @@ fn tessellate_face_with_shared_edges(
                 point_to_global,
             )?;
         }
-    } else if matches!(face_data.surface(), FaceSurface::Nurbs(_)) {
-        // For NURBS faces: use CDT-based boundary-constrained tessellation.
-        // NURBS faces have rectangular non-degenerate parameter domains, so
-        // the boundary projects to a proper closed polygon in (u,v) space.
-        // Falls back to snap-based stitching if CDT fails.
-        let cdt_ok = tessellate_nonplanar_cdt(
-            topo,
-            face_id,
-            face_data,
-            deflection,
-            edge_global_indices,
-            merged,
-            point_to_global,
-        );
-        if cdt_ok.is_err() {
-            tessellate_nonplanar_snap(
-                topo,
-                face_id,
-                face_data,
-                deflection,
-                edge_global_indices,
-                merged,
-                point_to_global,
-            )?;
-        }
-    } else if matches!(
-        face_data.surface(),
-        FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
-    ) {
-        // Cylinder and cone faces are ruled surfaces — their grid has nv=1
-        // and boundary vertices align precisely with the shared edge pool.
-        // Snap-based stitching is much faster than CDT for these surfaces.
-        tessellate_nonplanar_snap(
-            topo,
-            face_id,
-            face_data,
-            deflection,
-            edge_global_indices,
-            merged,
-            point_to_global,
-        )?;
     } else {
-        // For sphere and torus faces: use CDT-based tessellation with exact
-        // boundary constraints. These surfaces have non-trivial curvature in
-        // both parameter directions, and polar regions may degenerate in (u,v)
-        // space — CDT ensures watertight boundary stitching.
-        //
-        // Save mesh state before CDT attempt so we can roll back if it fails.
+        // For all non-planar faces (NURBS, cylinder, cone, sphere, torus):
+        // use CDT-based tessellation with exact boundary constraints.
+        // Falls back to snap-based stitching if CDT fails or produces
+        // zero triangles.
         let pos_save = merged.positions.len();
         let nrm_save = merged.normals.len();
         let idx_save = merged.indices.len();
@@ -3197,8 +3154,6 @@ fn tessellate_face_with_shared_edges(
         );
         let cdt_produced_tris = cdt_ok.is_ok() && merged.indices.len() > idx_save;
         if !cdt_produced_tris {
-            // CDT failed or produced zero triangles — roll back and fall back
-            // to snap-based stitching.
             merged.positions.truncate(pos_save);
             merged.normals.truncate(nrm_save);
             merged.indices.truncate(idx_save);
