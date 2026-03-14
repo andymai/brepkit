@@ -26,6 +26,27 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
+/// Merge-grid cell size for tolerance-based vertex deduplication.
+///
+/// Vertices within this distance are quantized to the same grid cell and share
+/// a single global vertex index. This catches near-identical vertices produced
+/// when boolean operations create separate edge entities for the same curve.
+const MERGE_GRID: f64 = 1e-7;
+
+/// Quantize a 3D point to a spatial grid cell for tolerance-based deduplication.
+///
+/// Two points whose coordinates differ by less than `grid` will (usually) map to
+/// the same `(i64, i64, i64)` key. Grid-boundary splits are possible but rare,
+/// and the subsequent CDT / weld phases handle any remaining gaps.
+fn point_merge_key(pt: Point3, grid: f64) -> (i64, i64, i64) {
+    #[allow(clippy::cast_possible_truncation)]
+    (
+        (pt.x() / grid).round() as i64,
+        (pt.y() / grid).round() as i64,
+        (pt.z() / grid).round() as i64,
+    )
+}
+
 /// Compute the shorter arc range (≤π) from an edge's start to end on a circle.
 ///
 /// Returns `(t_start, t_end)` where the shorter arc goes from `t_start` to `t_end`.
@@ -957,7 +978,7 @@ fn tessellate_planar_shared_with_holes(
     normal: Vec3,
     edge_global_indices: &HashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(u64, u64, u64), u32>,
+    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
@@ -984,7 +1005,7 @@ fn tessellate_planar_shared_with_holes(
                 all_global_ids.push(Some(gid));
             } else {
                 // Fallback: allocate a global vertex for an unshared point.
-                let key = (pos.x().to_bits(), pos.y().to_bits(), pos.z().to_bits());
+                let key = point_merge_key(pos, MERGE_GRID);
                 let gid = *point_to_global.entry(key).or_insert_with(|| {
                     #[allow(clippy::cast_possible_truncation)]
                     let idx = merged.positions.len() as u32;
@@ -2360,15 +2381,15 @@ fn edge_sample_count(
         EdgeCurve::Line => 2,
         EdgeCurve::Circle(c) => {
             let radius = c.radius();
-            // Angular step: acos(1 - deflection/radius), clamped for safety.
-            let ratio = (deflection / radius).min(1.0);
-            let angle_step = (1.0 - ratio).acos().max(0.01);
+            // Use the same segments_for_chord_deviation formula that
+            // tessellate_analytic uses for the grid density. This ensures
+            // edge sample points align with the analytic grid boundary,
+            // allowing the snap path to achieve watertight stitching.
             if let Ok((t_start, t_end)) = circle_param_range(topo, edge, c) {
-                let arc_angle = (t_end - t_start).abs();
-                (arc_angle / angle_step).ceil() as usize + 1
+                let arc_range = (t_end - t_start).abs();
+                segments_for_chord_deviation(radius, arc_range, deflection) + 1
             } else {
-                // Fallback: assume full circle if vertex lookup fails.
-                (std::f64::consts::TAU / angle_step).ceil() as usize + 1
+                segments_for_chord_deviation(radius, std::f64::consts::TAU, deflection) + 1
             }
         }
         EdgeCurve::Ellipse(ellipse) => {
@@ -2614,12 +2635,11 @@ pub fn tessellate_solid(
     // exactly the same vertices along their common edges.
     let mut merged = TriangleMesh::default();
 
-    // Global vertex deduplication: map from Point3 bit pattern to global index.
-    // We use coordinate bit patterns rather than approximate matching to ensure
-    // exact vertex sharing for points that were computed from the same edge
-    // tessellation. Points from different edges that happen to be close but
-    // not identical remain separate (correct behavior for non-manifold edges).
-    let mut point_to_global: HashMap<(u64, u64, u64), u32> = HashMap::new();
+    // Global vertex deduplication: map from quantized grid cell to global index.
+    // We use tolerance-based spatial grid keys (MERGE_GRID = 1e-7) so that
+    // near-identical vertices from independent boolean edge tessellations
+    // collapse to a single global vertex.
+    let mut point_to_global: HashMap<(i64, i64, i64), u32> = HashMap::new();
 
     // edge index → Vec<global vertex indices> (in start→end order).
     let mut edge_global_indices: HashMap<usize, Vec<u32>> = HashMap::new();
@@ -2628,7 +2648,7 @@ pub fn tessellate_solid(
     for (&edge_idx, points) in &edge_points {
         let mut global_ids = Vec::with_capacity(points.len());
         for &pt in points {
-            let key = (pt.x().to_bits(), pt.y().to_bits(), pt.z().to_bits());
+            let key = point_merge_key(pt, MERGE_GRID);
             let idx = point_to_global.entry(key).or_insert_with(|| {
                 #[allow(clippy::cast_possible_truncation)]
                 let idx = merged.positions.len() as u32;
@@ -2639,6 +2659,117 @@ pub fn tessellate_solid(
             global_ids.push(*idx);
         }
         edge_global_indices.insert(edge_idx, global_ids);
+    }
+
+    // Phase 3b: Circle edge refinement.
+    //
+    // For each circle edge, project all global vertices onto the circle and
+    // insert on-curve vertices into the edge's global vertex list. This
+    // unifies vertex sets across co-located circle edges that boolean
+    // operations create as separate EdgeId entities for the same geometric
+    // circle. Without this, adjacent faces along shared circles have
+    // different boundary vertex sets and produce non-watertight meshes.
+    {
+        use brepkit_topology::edge::EdgeCurve;
+
+        let tol_linear = brepkit_math::tolerance::Tolerance::new().linear;
+        let refine_tol = tol_linear * 10.0;
+
+        for &edge_idx in &edge_indices {
+            // Get circle geometry from this edge.
+            let edge_id = match topo.edge_id_from_index(edge_idx) {
+                Some(id) => id,
+                None => continue,
+            };
+            let edge_data = match topo.edge(edge_id) {
+                Ok(d) => d,
+                Err(_) => continue,
+            };
+            let circle = match edge_data.curve() {
+                EdgeCurve::Circle(c) => c,
+                _ => continue,
+            };
+
+            // Get edge endpoint positions for seam protection.
+            let start_pos = match topo.vertex(edge_data.start()) {
+                Ok(v) => v.point(),
+                Err(_) => continue,
+            };
+            let end_pos = match topo.vertex(edge_data.end()) {
+                Ok(v) => v.point(),
+                Err(_) => continue,
+            };
+
+            // Get the edge's parameter domain.
+            let (t_min, t_max) = edge_data.curve().domain_with_endpoints(start_pos, end_pos);
+            let is_closed = edge_data.start() == edge_data.end();
+
+            // Collect existing GID positions for this edge.
+            let existing_gids: Vec<u32> = edge_global_indices
+                .get(&edge_idx)
+                .cloned()
+                .unwrap_or_default();
+
+            // Scan all global vertices for candidates near the circle.
+            let mut insertions: Vec<(f64, u32)> = Vec::new();
+            for (gid, pos) in merged.positions.iter().enumerate() {
+                #[allow(clippy::cast_possible_truncation)]
+                let gid32 = gid as u32;
+                if existing_gids.contains(&gid32) {
+                    continue;
+                }
+                // Skip vertices near edge endpoints (seam protection).
+                if (*pos - start_pos).length() < refine_tol {
+                    continue;
+                }
+                if !is_closed && (*pos - end_pos).length() < refine_tol {
+                    continue;
+                }
+                // Project onto circle and check distance.
+                let t = circle.project(*pos);
+                let on_circle = circle.evaluate(t);
+                let dist = (*pos - on_circle).length();
+                if dist >= refine_tol {
+                    continue;
+                }
+                // Check parameter is within edge domain.
+                let in_range = if is_closed {
+                    true // Full circle: all parameters valid.
+                } else if t_min < t_max {
+                    t >= t_min - 1e-8 && t <= t_max + 1e-8
+                } else {
+                    // Wrapping range: t >= t_min OR t <= t_max
+                    t >= t_min - 1e-8 || t <= t_max + 1e-8
+                };
+                if in_range {
+                    insertions.push((t, gid32));
+                }
+            }
+
+            if insertions.is_empty() {
+                continue;
+            }
+
+            // Sort by parameter, deduplicate by proximity.
+            insertions.sort_by(|a, b| a.0.total_cmp(&b.0));
+            insertions.dedup_by(|a, b| (a.0 - b.0).abs() < 1e-8);
+
+            // Merge with existing GIDs maintaining parameter order.
+            let mut existing_with_t: Vec<(f64, u32)> = existing_gids
+                .iter()
+                .map(|&gid| {
+                    let pos = merged.positions[gid as usize];
+                    (circle.project(pos), gid)
+                })
+                .collect();
+            existing_with_t.extend(insertions);
+            existing_with_t.sort_by(|a, b| a.0.total_cmp(&b.0));
+            // Deduplicate by GID (same vertex shouldn't appear twice).
+            existing_with_t.dedup_by(|a, b| a.1 == b.1);
+
+            let refined: Vec<u32> = existing_with_t.iter().map(|&(_, gid)| gid).collect();
+            edge_global_indices.insert(edge_idx, refined);
+        }
     }
 
     // Phase 4: Tessellate each face using its boundary edge vertices.
@@ -2860,6 +2991,15 @@ pub fn tessellate_solid(
         }
     }
 
+    // Phase 6: Weld boundary vertices.
+    //
+    // Safety net: union-find spatial merge of remaining boundary vertices.
+    // Even with grid-based dedup (Phase 3) and circle edge refinement (Phase 3b),
+    // some edge cases may leave tiny gaps (e.g., grid-cell boundary splits).
+    // This pass identifies boundary (non-manifold) edges and merges coincident
+    // vertices via a spatial hash grid + union-find.
+    weld_boundary_vertices(&mut merged, deflection);
+
     Ok(merged)
 }
 
@@ -2878,7 +3018,7 @@ fn tessellate_face_with_shared_edges(
     deflection: f64,
     edge_global_indices: &HashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(u64, u64, u64), u32>,
+    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
     let face_data = topo.face(face_id)?;
     let is_reversed = face_data.is_reversed();
@@ -2945,7 +3085,7 @@ fn tessellate_face_with_shared_edges(
                             }
                         }
                     }
-                    let key = (pt.x().to_bits(), pt.y().to_bits(), pt.z().to_bits());
+                    let key = point_merge_key(*pt, MERGE_GRID);
                     let gid = point_to_global.entry(key).or_insert_with(|| {
                         #[allow(clippy::cast_possible_truncation)]
                         let idx = merged.positions.len() as u32;
@@ -3036,8 +3176,11 @@ fn tessellate_face_with_shared_edges(
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
     ) {
         // Cylinder and cone faces are ruled surfaces — their grid has nv=1
-        // and boundary vertices align precisely with the shared edge pool.
-        // Snap-based stitching is much faster than CDT for these surfaces.
+        // and the snap-based path produces accurate triangulations.
+        // The CDT path has seam-matching issues for full-revolution faces,
+        // so we use snap universally. Tolerance-based grid merge (Phase 3),
+        // circle edge refinement (Phase 3b), and boundary welding (Phase 6)
+        // handle post-boolean edge mismatches.
         tessellate_nonplanar_snap(
             topo,
             face_id,
@@ -3049,9 +3192,8 @@ fn tessellate_face_with_shared_edges(
         )?;
     } else {
         // For sphere and torus faces: use CDT-based tessellation with exact
-        // boundary constraints. These surfaces have non-trivial curvature in
-        // both parameter directions, and polar regions may degenerate in (u,v)
-        // space — CDT ensures watertight boundary stitching.
+        // boundary constraints. Falls back to snap-based stitching if CDT
+        // fails or produces zero triangles.
         //
         // Save mesh state before CDT attempt so we can roll back if it fails.
         let pos_save = merged.positions.len();
@@ -3122,7 +3264,7 @@ fn tessellate_nonplanar_cdt(
     deflection: f64,
     edge_global_indices: &HashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(u64, u64, u64), u32>,
+    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
@@ -3133,19 +3275,21 @@ fn tessellate_nonplanar_cdt(
     let wire = topo.wire(face_data.outer_wire())?;
     let tol_dup = 1e-10;
 
-    let mut boundary_3d: Vec<(Point3, u32, EdgeId)> = Vec::new();
+    // Fourth element: is_forward flag — needed for seam UV assignment.
+    let mut boundary_3d: Vec<(Point3, u32, EdgeId, bool)> = Vec::new();
     for oe in wire.edges() {
         let edge_id_local = oe.edge();
         let edge_idx = edge_id_local.index();
+        let is_fwd = oe.is_forward();
         if let Some(global_ids) = edge_global_indices.get(&edge_idx) {
-            let ordered: Vec<u32> = if oe.is_forward() {
+            let ordered: Vec<u32> = if is_fwd {
                 global_ids.clone()
             } else {
                 global_ids.iter().rev().copied().collect()
             };
             for (j, &gid) in ordered.iter().enumerate() {
                 if j == 0 && !boundary_3d.is_empty() {
-                    let (_, last_gid, _) = boundary_3d[boundary_3d.len() - 1];
+                    let (_, last_gid, _, _) = boundary_3d[boundary_3d.len() - 1];
                     if last_gid == gid
                         || (merged.positions[last_gid as usize] - merged.positions[gid as usize])
                             .length()
@@ -3154,39 +3298,39 @@ fn tessellate_nonplanar_cdt(
                         continue;
                     }
                 }
-                boundary_3d.push((merged.positions[gid as usize], gid, edge_id_local));
+                boundary_3d.push((merged.positions[gid as usize], gid, edge_id_local, is_fwd));
             }
         } else {
             // Edge not in shared pool — insert directly.
             let edge_data = topo.edge(oe.edge())?;
             let points = sample_edge(topo, edge_data, deflection)?;
-            let ordered: Vec<Point3> = if oe.is_forward() {
+            let ordered: Vec<Point3> = if is_fwd {
                 points
             } else {
                 points.into_iter().rev().collect()
             };
             for (j, &pt) in ordered.iter().enumerate() {
                 if j == 0 && !boundary_3d.is_empty() {
-                    let (last_pos, _, _) = boundary_3d[boundary_3d.len() - 1];
+                    let (last_pos, _, _, _) = boundary_3d[boundary_3d.len() - 1];
                     if (last_pos - pt).length() < tol_dup {
                         continue;
                     }
                 }
-                let key = (pt.x().to_bits(), pt.y().to_bits(), pt.z().to_bits());
+                let key = point_merge_key(pt, MERGE_GRID);
                 let gid = *point_to_global.entry(key).or_insert_with(|| {
                     let idx = merged.positions.len() as u32;
                     merged.positions.push(pt);
                     merged.normals.push(Vec3::new(0.0, 0.0, 0.0));
                     idx
                 });
-                boundary_3d.push((pt, gid, edge_id_local));
+                boundary_3d.push((pt, gid, edge_id_local, is_fwd));
             }
         }
     }
 
     // Remove closing duplicate.
     if boundary_3d.len() > 2 {
-        if let (Some(&(_, first_gid, _)), Some(&(_, last_gid, _))) =
+        if let (Some(&(_, first_gid, _, _)), Some(&(_, last_gid, _, _))) =
             (boundary_3d.first(), boundary_3d.last())
         {
             if first_gid == last_gid
@@ -3209,9 +3353,9 @@ fn tessellate_nonplanar_cdt(
     // Step 2: Project boundary 3D points to (u,v) parameter space.
     // For NURBS surfaces, check the PCurve registry first — evaluating a
     // PCurve directly is O(1) vs O(n) Newton projection.
-    let boundary_uv: Vec<(f64, f64)> = boundary_3d
+    let mut boundary_uv: Vec<(f64, f64)> = boundary_3d
         .iter()
-        .map(|(pt, _, edge_id_local)| {
+        .map(|(pt, _, edge_id_local, _)| {
             // Try PCurve lookup first.
             if let Some(pcurve) = topo.pcurves().get(*edge_id_local, face_id) {
                 // We have the edge's PCurve — find the closest t and evaluate.
@@ -3244,6 +3388,135 @@ fn tessellate_nonplanar_cdt(
         .iter()
         .map(|p| p.1)
         .fold(f64::NEG_INFINITY, f64::max);
+
+    // Step 2b: Detect and fix degenerate seam edges for full-revolution faces.
+    //
+    // Full-revolution cylinder/cone faces have a seam edge that appears twice
+    // in the wire (forward + backward). Both traversals project to the same
+    // u values, creating a degenerate slit in UV space. Fix: assign u_max for
+    // forward seam, u_min for backward seam, with v interpolated linearly.
+    let (u_min, u_max, v_min, v_max) = {
+        let mut wire_edge_counts: HashMap<usize, usize> = HashMap::new();
+        for oe in wire.edges() {
+            *wire_edge_counts.entry(oe.edge().index()).or_default() += 1;
+        }
+        let seam_edge_indices: std::collections::HashSet<usize> = wire_edge_counts
+            .iter()
+            .filter(|&(_, &c)| c > 1)
+            .map(|(&idx, _)| idx)
+            .collect();
+
+        if !seam_edge_indices.is_empty() {
+            // Compute UV bounds from non-seam boundary points only.
+            let non_seam_uvs: Vec<(f64, f64)> = boundary_uv
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !seam_edge_indices.contains(&boundary_3d[*i].2.index()))
+                .map(|(_, &uv)| uv)
+                .collect();
+            let (u_min_bnd, u_max_bnd, v_min_bnd, v_max_bnd) = if non_seam_uvs.is_empty() {
+                (u_min, u_max, v_min, v_max)
+            } else {
+                (
+                    non_seam_uvs
+                        .iter()
+                        .map(|p| p.0)
+                        .fold(f64::INFINITY, f64::min),
+                    non_seam_uvs
+                        .iter()
+                        .map(|p| p.0)
+                        .fold(f64::NEG_INFINITY, f64::max),
+                    non_seam_uvs
+                        .iter()
+                        .map(|p| p.1)
+                        .fold(f64::INFINITY, f64::min),
+                    non_seam_uvs
+                        .iter()
+                        .map(|p| p.1)
+                        .fold(f64::NEG_INFINITY, f64::max),
+                )
+            };
+
+            // Identify contiguous runs of seam-edge boundary points.
+            #[allow(clippy::items_after_statements)]
+            struct SeamRun {
+                indices: Vec<usize>,
+                is_forward: bool,
+            }
+            let mut seam_runs: Vec<SeamRun> = Vec::new();
+            let mut current_indices: Vec<usize> = Vec::new();
+            let mut current_fwd: Option<bool> = None;
+            for i in 0..n_boundary {
+                let (_, _, edge_id, is_fwd) = boundary_3d[i];
+                if seam_edge_indices.contains(&edge_id.index()) {
+                    current_indices.push(i);
+                    if current_fwd.is_none() {
+                        current_fwd = Some(is_fwd);
+                    }
+                } else if !current_indices.is_empty() {
+                    seam_runs.push(SeamRun {
+                        indices: std::mem::take(&mut current_indices),
+                        is_forward: current_fwd.unwrap_or(true),
+                    });
+                    current_fwd = None;
+                }
+            }
+            if !current_indices.is_empty() {
+                if !seam_runs.is_empty() && seam_edge_indices.contains(&boundary_3d[0].2.index()) {
+                    current_indices.extend(seam_runs.remove(0).indices);
+                }
+                seam_runs.push(SeamRun {
+                    indices: current_indices,
+                    is_forward: current_fwd.unwrap_or(true),
+                });
+            }
+
+            // Assign UV for each seam run.
+            // Forward traversal → u_max (right edge of UV rectangle).
+            // Backward traversal → u_min (left edge of UV rectangle).
+            for run in &seam_runs {
+                let u_assign = if run.is_forward { u_max_bnd } else { u_min_bnd };
+                let n_pts = run.indices.len();
+
+                let v_first = boundary_uv[run.indices[0]].1;
+                let (v_start, v_end) = if (v_first - v_min_bnd).abs() < (v_first - v_max_bnd).abs()
+                {
+                    (v_min_bnd, v_max_bnd)
+                } else {
+                    (v_max_bnd, v_min_bnd)
+                };
+
+                for (k, &i) in run.indices.iter().enumerate() {
+                    let t = if n_pts > 1 {
+                        k as f64 / (n_pts - 1) as f64
+                    } else {
+                        0.5
+                    };
+                    let v = v_start + t * (v_end - v_start);
+                    boundary_uv[i] = (u_assign, v);
+                }
+            }
+        }
+
+        // Recompute UV bounding box after seam fix.
+        let u_min = boundary_uv
+            .iter()
+            .map(|p| p.0)
+            .fold(f64::INFINITY, f64::min);
+        let u_max = boundary_uv
+            .iter()
+            .map(|p| p.0)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let v_min = boundary_uv
+            .iter()
+            .map(|p| p.1)
+            .fold(f64::INFINITY, f64::min);
+        let v_max = boundary_uv
+            .iter()
+            .map(|p| p.1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        (u_min, u_max, v_min, v_max)
+    };
 
     let margin = 0.01;
     let bounds = (
@@ -3326,7 +3599,7 @@ fn tessellate_nonplanar_cdt(
             let pt3 = eval_surface_point(surface, pt2.x(), pt2.y());
             let nrm = surface.normal(pt2.x(), pt2.y());
 
-            let key = (pt3.x().to_bits(), pt3.y().to_bits(), pt3.z().to_bits());
+            let key = point_merge_key(pt3, MERGE_GRID);
             let gid = *point_to_global.entry(key).or_insert_with(|| {
                 let idx = merged.positions.len() as u32;
                 merged.positions.push(pt3);
@@ -3535,7 +3808,7 @@ fn tessellate_nonplanar_snap(
     deflection: f64,
     edge_global_indices: &HashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(u64, u64, u64), u32>,
+    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
     let mut face_mesh = tessellate(topo, face_id, deflection)?;
 
@@ -3582,6 +3855,12 @@ fn tessellate_nonplanar_snap(
     }
 
     // Build spatial hash for O(1) snap lookups instead of O(n*m) brute force.
+    // Snap tolerance must bridge the gap between edge sample points and face
+    // tessellation boundary points (which use different segment formulas).
+    // The worst case is half a grid step on the circle arc. For ruled surfaces
+    // (cylinder/cone with nv=1) all face vertices ARE boundary vertices so a
+    // generous tolerance is safe. For general surfaces, deflection is a good
+    // upper bound on the gap between a sample point and its nearest edge point.
     let snap_tol = 1e-6;
     let inv_cell = 1.0 / snap_tol;
     let mut snap_grid: HashMap<(i64, i64, i64), Vec<u32>> =
@@ -3620,7 +3899,7 @@ fn tessellate_nonplanar_snap(
         if let Some(gid) = best_gid {
             local_to_global.push(gid);
         } else {
-            let key = (pos.x().to_bits(), pos.y().to_bits(), pos.z().to_bits());
+            let key = point_merge_key(pos, MERGE_GRID);
             let gid = point_to_global.entry(key).or_insert_with(|| {
                 let idx = merged.positions.len() as u32;
                 merged.positions.push(pos);
@@ -3688,6 +3967,56 @@ pub fn boundary_edge_count(mesh: &TriangleMesh) -> usize {
         let i0 = mesh.indices[t * 3];
         let i1 = mesh.indices[t * 3 + 1];
         let i2 = mesh.indices[t * 3 + 2];
+        half_edges.insert((i0, i1));
+        half_edges.insert((i1, i2));
+        half_edges.insert((i2, i0));
+    }
+
+    half_edges
+        .iter()
+        .filter(|&&(a, b)| !half_edges.contains(&(b, a)))
+        .count()
+}
+
+/// Count boundary edges using position-based vertex matching.
+///
+/// Unlike [`boundary_edge_count`] which uses exact index matching, this
+/// function snaps vertex positions to a 1-micron grid to detect "nearly
+/// shared" edges from meshes where boolean operations produced separate
+/// vertex indices for geometrically identical points.
+///
+/// Returns 0 for a watertight mesh.
+#[must_use]
+pub fn position_based_boundary_count(mesh: &TriangleMesh) -> usize {
+    use std::collections::{HashMap, HashSet};
+
+    // Build canonical vertex ID from snapped position.
+    let mut pos_to_canonical: HashMap<(i64, i64, i64), u32> = HashMap::new();
+    let mut canonical_ids: Vec<u32> = Vec::with_capacity(mesh.positions.len());
+    let mut next_id: u32 = 0;
+
+    for pos in &mesh.positions {
+        #[allow(clippy::cast_possible_truncation)]
+        let key = (
+            (pos.x() * 1_000_000.0).round() as i64,
+            (pos.y() * 1_000_000.0).round() as i64,
+            (pos.z() * 1_000_000.0).round() as i64,
+        );
+        let id = *pos_to_canonical.entry(key).or_insert_with(|| {
+            let id = next_id;
+            next_id += 1;
+            id
+        });
+        canonical_ids.push(id);
+    }
+
+    // Build half-edge set using canonical IDs.
+    let mut half_edges: HashSet<(u32, u32)> = HashSet::new();
+    let tri_count = mesh.indices.len() / 3;
+    for t in 0..tri_count {
+        let i0 = canonical_ids[mesh.indices[t * 3] as usize];
+        let i1 = canonical_ids[mesh.indices[t * 3 + 1] as usize];
+        let i2 = canonical_ids[mesh.indices[t * 3 + 2] as usize];
         half_edges.insert((i0, i1));
         half_edges.insert((i1, i2));
         half_edges.insert((i2, i0));
@@ -3842,6 +4171,137 @@ pub fn sample_solid_edges_filtered(
     }
 
     Ok(result)
+}
+
+/// Weld remaining boundary vertices by merging coincident positions.
+///
+/// Uses union-find over a spatial hash grid to merge boundary vertices that
+/// are within `weld_tol` of each other. Rewrites triangle indices and removes
+/// degenerate triangles (where merged indices create duplicate vertices).
+fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
+    use std::collections::{HashMap, HashSet};
+
+    let n_verts = mesh.positions.len();
+    if n_verts == 0 || mesh.indices.is_empty() {
+        return;
+    }
+
+    // Build half-edge set to find boundary edges.
+    let mut half_edges: HashMap<(u32, u32), usize> = HashMap::new();
+    let n_tris = mesh.indices.len() / 3;
+    for t in 0..n_tris {
+        let i0 = mesh.indices[t * 3];
+        let i1 = mesh.indices[t * 3 + 1];
+        let i2 = mesh.indices[t * 3 + 2];
+        *half_edges.entry((i0, i1)).or_default() += 1;
+        *half_edges.entry((i1, i2)).or_default() += 1;
+        *half_edges.entry((i2, i0)).or_default() += 1;
+    }
+
+    // Boundary vertices: incident on half-edges without a matching reverse.
+    let mut boundary_verts: HashSet<u32> = HashSet::new();
+    for &(a, b) in half_edges.keys() {
+        if !half_edges.contains_key(&(b, a)) {
+            boundary_verts.insert(a);
+            boundary_verts.insert(b);
+        }
+    }
+
+    if boundary_verts.is_empty() {
+        return; // Already watertight.
+    }
+
+    // Union-find helpers (defined before usage for clippy::items_after_statements).
+    #[allow(clippy::items_after_statements)]
+    fn uf_find(parent: &mut [u32], mut x: u32) -> u32 {
+        while parent[x as usize] != x {
+            parent[x as usize] = parent[parent[x as usize] as usize];
+            x = parent[x as usize];
+        }
+        x
+    }
+    #[allow(clippy::items_after_statements)]
+    fn uf_union(parent: &mut [u32], a: u32, b: u32) {
+        let ra = uf_find(parent, a);
+        let rb = uf_find(parent, b);
+        if ra != rb {
+            parent[rb as usize] = ra;
+        }
+    }
+
+    let mut parent: Vec<u32> = (0..n_verts as u32).collect();
+
+    // Spatial hash grid for boundary vertices.
+    let weld_tol = deflection.max(1e-6) * 2.0;
+    let cell_size = weld_tol;
+    let inv_cell = 1.0 / cell_size;
+
+    let mut grid: HashMap<(i64, i64, i64), Vec<u32>> = HashMap::new();
+    for &vid in &boundary_verts {
+        let p = mesh.positions[vid as usize];
+        #[allow(clippy::cast_possible_truncation)]
+        let key = (
+            (p.x() * inv_cell).floor() as i64,
+            (p.y() * inv_cell).floor() as i64,
+            (p.z() * inv_cell).floor() as i64,
+        );
+        grid.entry(key).or_default().push(vid);
+    }
+
+    // Merge boundary vertices within tolerance (3×3×3 neighborhood search).
+    for &vid in &boundary_verts {
+        let p = mesh.positions[vid as usize];
+        #[allow(clippy::cast_possible_truncation)]
+        let cx = (p.x() * inv_cell).floor() as i64;
+        #[allow(clippy::cast_possible_truncation)]
+        let cy = (p.y() * inv_cell).floor() as i64;
+        #[allow(clippy::cast_possible_truncation)]
+        let cz = (p.z() * inv_cell).floor() as i64;
+
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(cell) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                        for &other in cell {
+                            if other <= vid {
+                                continue; // avoid double-processing
+                            }
+                            let q = mesh.positions[other as usize];
+                            if (p - q).length() < weld_tol {
+                                uf_union(&mut parent, vid, other);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Rewrite triangle indices with canonical IDs.
+    let mut changed = false;
+    for idx in &mut mesh.indices {
+        let root = uf_find(&mut parent, *idx);
+        if root != *idx {
+            *idx = root;
+            changed = true;
+        }
+    }
+
+    // Remove degenerate triangles (where merged indices create i0==i1 etc.).
+    if changed {
+        let mut new_indices = Vec::with_capacity(mesh.indices.len());
+        for t in 0..mesh.indices.len() / 3 {
+            let i0 = mesh.indices[t * 3];
+            let i1 = mesh.indices[t * 3 + 1];
+            let i2 = mesh.indices[t * 3 + 2];
+            if i0 != i1 && i1 != i2 && i2 != i0 {
+                new_indices.push(i0);
+                new_indices.push(i1);
+                new_indices.push(i2);
+            }
+        }
+        mesh.indices = new_indices;
+    }
 }
 
 #[cfg(test)]
@@ -4127,6 +4587,64 @@ mod tests {
             "box mesh should be watertight (0 boundary edges), got {boundary}"
         );
         assert!(is_watertight(&mesh), "box mesh should be watertight");
+    }
+
+    #[test]
+    fn tessellate_plain_cylinder_watertight() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+
+        let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
+        let boundary = boundary_edge_count(&mesh);
+        assert_eq!(
+            boundary, 0,
+            "plain cylinder should be watertight (0 boundary edges), got {boundary}"
+        );
+    }
+
+    #[test]
+    fn tessellate_boolean_cut_cylinder_watertight() {
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 1.0, 4.0).unwrap();
+        let box_s = crate::primitives::make_box(&mut topo, 3.0, 3.0, 1.0).unwrap();
+        // Position box at mid-height of cylinder to cut through it.
+        crate::transform::transform_solid(&mut topo, box_s, &Mat4::translation(-1.5, -1.5, 1.5))
+            .unwrap();
+
+        let result =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, cyl, box_s).unwrap();
+
+        let mesh = tessellate_solid(&topo, result, 0.1).unwrap();
+        let boundary = position_based_boundary_count(&mesh);
+        assert_eq!(
+            boundary, 0,
+            "boolean cut cylinder should be watertight (0 position-based boundary edges), got {boundary}"
+        );
+    }
+
+    #[test]
+    #[ignore = "cone boolean watertight: needs ConicalSurface edge/grid formula alignment"]
+    fn tessellate_boolean_cut_cone_watertight() {
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+        let cone = crate::primitives::make_cone(&mut topo, 1.5, 0.5, 4.0).unwrap();
+        let box_s = crate::primitives::make_box(&mut topo, 4.0, 4.0, 1.0).unwrap();
+        crate::transform::transform_solid(&mut topo, box_s, &Mat4::translation(-2.0, -2.0, 1.5))
+            .unwrap();
+
+        let result =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, cone, box_s)
+                .unwrap();
+
+        let mesh = tessellate_solid(&topo, result, 0.1).unwrap();
+        let boundary = position_based_boundary_count(&mesh);
+        assert_eq!(
+            boundary, 0,
+            "boolean cut cone should be watertight (0 position-based boundary edges), got {boundary}"
+        );
     }
 
     #[test]
