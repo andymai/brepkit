@@ -507,9 +507,11 @@ pub(super) fn split_cone_at_intersection(
         verts.extend(top_pts.into_iter().rev());
 
         // Compute normal from a surface point — radial direction on the cone.
+        // Use the projected (u, v) so the normal matches the actual azimuthal
+        // position of the surface point, not a fixed u=0 direction.
         let surface_point = verts[0];
-        let (_, v0) = cone.project_point(surface_point);
-        let band_normal = cone.normal(0.0, v0);
+        let (u0, v0) = cone.project_point(surface_point);
+        let band_normal = cone.normal(u0, v0);
         let centroid = polygon_centroid(&verts);
         let band_d = crate::dot_normal_point(band_normal, centroid);
 
@@ -707,6 +709,18 @@ pub(super) fn collect_analytic_vranges(
     }
 }
 
+/// Map a point to its v-parameter on a cylinder or cone surface.
+///
+/// For a cylinder, v is the signed axial distance from the origin along the axis.
+/// For a cone, v is the generator-length parameter from `project_point`.
+fn surface_v_param(surface: &FaceSurface, p: Point3) -> f64 {
+    match surface {
+        FaceSurface::Cylinder(cyl) => cyl.axis().dot(p - cyl.origin()),
+        FaceSurface::Cone(cone) => cone.project_point(p).1,
+        _ => 0.0,
+    }
+}
+
 /// Create band fragments for a non-planar (analytic) face that has contained
 /// curves. Splits the face into bands between the contained curves and the
 /// face's natural boundary circles.
@@ -728,24 +742,10 @@ pub(super) fn create_band_fragments(
     tol: Tolerance,
     fragments: &mut Vec<AnalyticFragment>,
 ) {
-    // Extract surface-specific v-projection and extent.
-    #[allow(clippy::type_complexity)]
-    let (v_of_center, v_extent): (Box<dyn Fn(Point3) -> f64>, Option<(f64, f64)>) = match surface {
-        FaceSurface::Cylinder(cyl) => {
-            let axis = cyl.axis();
-            let origin = cyl.origin();
-            (
-                Box::new(move |p| axis.dot(p - origin)),
-                cylinder_v_extent(cyl, face_verts),
-            )
-        }
-        FaceSurface::Cone(cone) => {
-            let cone_c = cone.clone();
-            (
-                Box::new(move |p| cone_c.project_point(p).1),
-                cone_v_extent(cone, face_verts),
-            )
-        }
+    // Compute surface-specific v-extent. Bail out for unsupported surfaces.
+    let v_extent: Option<(f64, f64)> = match surface {
+        FaceSurface::Cylinder(cyl) => cylinder_v_extent(cyl, face_verts),
+        FaceSurface::Cone(cone) => cone_v_extent(cone, face_verts),
         _ => {
             // For unsupported analytic faces, fall back to unsplit fragment.
             fragments.push(AnalyticFragment {
@@ -771,7 +771,7 @@ pub(super) fn create_band_fragments(
             EdgeCurve::Ellipse(e) => e.center(),
             _ => continue,
         };
-        let v = v_of_center(center);
+        let v = surface_v_param(surface, center);
         cut_levels.push((v, ec));
     }
 
@@ -827,7 +827,7 @@ pub(super) fn create_band_fragments(
     let mut verts_at_vmin: Vec<Point3> = Vec::new();
     let mut verts_at_vmax: Vec<Point3> = Vec::new();
     for &p in face_verts {
-        let v = v_of_center(p);
+        let v = surface_v_param(surface, p);
         if (v - v_min).abs() < v_tol {
             verts_at_vmin.push(p);
         } else if (v - v_max).abs() < v_tol {
@@ -894,8 +894,8 @@ pub(super) fn create_band_fragments(
             .normalize()
             .unwrap_or(normal),
             FaceSurface::Cone(cone) => {
-                let (_, v0) = cone.project_point(surface_point);
-                cone.normal(0.0, v0)
+                let (u0, v0) = cone.project_point(surface_point);
+                cone.normal(u0, v0)
             }
             _ => normal,
         };
@@ -1003,7 +1003,7 @@ pub(super) fn build_cylinder_barrel_wire(
 /// Build a proper cone barrel wire with Circle edges + seam line.
 ///
 /// Cone barrel fragments have the same polygon layout as cylinder barrels:
-///   `bot[0..n/2] ++ top_reversed[0..n/2]`  (2n vertices total)
+///   `bot[0..n] ++ top_reversed[0..n]`  (2n vertices total)
 /// but circles at different v-levels have different radii.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_cone_barrel_wire(

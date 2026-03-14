@@ -1721,7 +1721,7 @@ pub(super) fn analytic_boolean(
                     tol,
                 )?
             } else {
-                // Chord-split or degenerate cylinder fragment — use generic polygon edges.
+                // Chord-split or degenerate cone fragment — use generic polygon edges.
                 let mut oriented_edges = Vec::with_capacity(n);
                 for i in 0..n {
                     let j = (i + 1) % n;
