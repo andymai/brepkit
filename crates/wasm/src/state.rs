@@ -12,8 +12,8 @@ pub struct Checkpoint {
 
 /// Internal state for an in-progress sketch.
 ///
-/// Wraps a `GcsSystem` for the new entity-based API, with index-based
-/// lookup vectors for backward compatibility with the JS API.
+/// Stores points and constraints for the legacy index-based JS API.
+/// A `GcsSystem` is created on-the-fly during `sketch_solve`.
 #[derive(Default, Clone)]
 pub struct SketchState {
     /// Legacy point/constraint storage for backward-compat API.

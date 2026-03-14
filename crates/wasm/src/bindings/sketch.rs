@@ -95,8 +95,8 @@ impl BrepKernel {
         sk.points = sketch_obj.points;
         sk.constraints = sketch_obj.constraints;
         let (converged, iterations, max_residual) = match &result {
-            Ok(r) => (r.converged, r.iterations, r.max_residual),
-            Err(_) => (false, max_iterations as usize, f64::NAN),
+            Ok(r) => (r.converged, r.iterations, Some(r.max_residual)),
+            Err(_) => (false, max_iterations as usize, None),
         };
         let pts: Vec<serde_json::Value> = sk
             .points

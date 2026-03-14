@@ -47,14 +47,22 @@ pub fn parse_point_grid(
     rows: usize,
     cols: usize,
 ) -> Result<Vec<Vec<Point3>>, JsError> {
+    if rows == 0 || cols == 0 {
+        return Err(WasmError::InvalidInput {
+            reason: format!("rows and cols must be > 0, got {rows}x{cols}"),
+        }
+        .into());
+    }
+    let total = rows
+        .checked_mul(cols)
+        .ok_or_else(|| WasmError::InvalidInput {
+            reason: format!("rows*cols overflow: {rows}*{cols}"),
+        })?;
     let points = parse_points(coords)?;
-    if points.len() != rows * cols {
+    if points.len() != total {
         return Err(WasmError::InvalidInput {
             reason: format!(
-                "expected {} points ({}x{}), got {}",
-                rows * cols,
-                rows,
-                cols,
+                "expected {total} points ({rows}x{cols}), got {}",
                 points.len()
             ),
         }
@@ -202,10 +210,19 @@ pub fn panic_message(payload: &Box<dyn std::any::Any + Send>, operation: &str) -
 /// Sample a closed periodic curve (period = TAU) into a flat `[x, y, z, ...]` buffer.
 ///
 /// Produces `n` evenly-spaced points in `[0, TAU)` using the supplied `evaluate` function.
+///
+/// Returns an empty buffer if `n == 0`.
 pub fn sample_full_period_curve(n: usize, evaluate: impl Fn(f64) -> Point3) -> Vec<f64> {
+    if n <= 1 {
+        if n == 1 {
+            let p = evaluate(0.0);
+            return vec![p.x(), p.y(), p.z()];
+        }
+        return Vec::new();
+    }
     let mut result = Vec::with_capacity(n * 3);
     for i in 0..n {
-        let t = std::f64::consts::TAU * (i as f64) / ((n - 1) as f64);
+        let t = std::f64::consts::TAU * (i as f64) / (n as f64);
         let p = evaluate(t);
         result.push(p.x());
         result.push(p.y());

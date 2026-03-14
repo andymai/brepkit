@@ -71,16 +71,15 @@ impl BrepKernel {
             let idx_offset = (all_positions.len() / 3) as u32;
             face_offsets.push(all_indices.len() as u32);
 
-            if let Ok(mesh) = tessellate::tessellate(&self.topo, face_id, deflection) {
-                for p in &mesh.positions {
-                    all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
-                }
-                for n in &mesh.normals {
-                    all_normals.extend_from_slice(&[n.x(), n.y(), n.z()]);
-                }
-                for &idx in &mesh.indices {
-                    all_indices.push(idx + idx_offset);
-                }
+            let mesh = tessellate::tessellate(&self.topo, face_id, deflection)?;
+            for p in &mesh.positions {
+                all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
+            }
+            for n in &mesh.normals {
+                all_normals.extend_from_slice(&[n.x(), n.y(), n.z()]);
+            }
+            for &idx in &mesh.indices {
+                all_indices.push(idx + idx_offset);
             }
         }
         #[allow(clippy::cast_possible_truncation)]
@@ -122,13 +121,7 @@ impl BrepKernel {
             #[allow(clippy::cast_possible_truncation)]
             let idx_offset = (all_positions.len() / 3) as u32;
 
-            let mesh_uv = match tessellate::tessellate_with_uvs(&self.topo, face_id, deflection) {
-                Ok(m) => m,
-                Err(e) => {
-                    log::warn!("skipping UV face during tessellation: {e}");
-                    continue;
-                }
-            };
+            let mesh_uv = tessellate::tessellate_with_uvs(&self.topo, face_id, deflection)?;
             for p in &mesh_uv.mesh.positions {
                 all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
             }
