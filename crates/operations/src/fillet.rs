@@ -1393,8 +1393,9 @@ pub fn fillet_rolling_ball(
                     // v=1 boundary degenerates to single point p2.
                     //
                     // Weight grid — per-edge weights on each boundary arc,
-                    // apex weight in the interior, 1.0 at corners, 1.0 on
-                    // the degenerate row (p2, p2, p2).
+                    // apex weight in the interior, 1.0 at corners.
+                    // Column 2 (degenerate, all CPs = p2) uses 1.0
+                    // for symmetric interior parametrization.
                     let cap_surface = NurbsSurface::new(
                         2,
                         2,
@@ -1403,7 +1404,7 @@ pub fn fillet_rolling_ball(
                         vec![vec![p0, m20, p2], vec![m01, apex, p2], vec![p1, m12, p2]],
                         vec![
                             vec![1.0, w20, 1.0],
-                            vec![w01, w_apex, w12],
+                            vec![w01, w_apex, 1.0],
                             vec![1.0, w12, 1.0],
                         ],
                     )
