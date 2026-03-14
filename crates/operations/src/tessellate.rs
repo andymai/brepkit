@@ -957,7 +957,7 @@ fn tessellate_planar_shared_with_holes(
     normal: Vec3,
     edge_global_indices: &HashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(u64, u64, u64), u32>,
+    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
@@ -984,7 +984,7 @@ fn tessellate_planar_shared_with_holes(
                 all_global_ids.push(Some(gid));
             } else {
                 // Fallback: allocate a global vertex for an unshared point.
-                let key = (pos.x().to_bits(), pos.y().to_bits(), pos.z().to_bits());
+                let key = point_merge_key(pos, brepkit_math::tolerance::Tolerance::default().linear);
                 let gid = *point_to_global.entry(key).or_insert_with(|| {
                     #[allow(clippy::cast_possible_truncation)]
                     let idx = merged.positions.len() as u32;
@@ -2537,6 +2537,21 @@ fn sample_edge(
 
 /// Tessellate all faces of a solid into a single watertight triangle mesh.
 ///
+/// Compute a tolerance-based grid key for vertex deduplication.
+///
+/// Vertices within the same grid cell merge to a single global ID.
+/// Grid size uses `Tolerance::default().linear` (1e-7) which handles
+/// boolean results where adjacent faces have separate edge entities
+/// for the same geometric curve.
+#[inline]
+fn point_merge_key(pt: Point3, grid: f64) -> (i64, i64, i64) {
+    (
+        (pt.x() / grid).round() as i64,
+        (pt.y() / grid).round() as i64,
+        (pt.z() / grid).round() as i64,
+    )
+}
+
 /// Unlike per-face `tessellate()`, this function coordinates tessellation across
 /// all faces of the solid by pre-computing shared edge tessellations. When two
 /// faces share an edge, the edge is tessellated once and both faces receive
@@ -2614,12 +2629,14 @@ pub fn tessellate_solid(
     // exactly the same vertices along their common edges.
     let mut merged = TriangleMesh::default();
 
-    // Global vertex deduplication: map from Point3 bit pattern to global index.
-    // We use coordinate bit patterns rather than approximate matching to ensure
-    // exact vertex sharing for points that were computed from the same edge
-    // tessellation. Points from different edges that happen to be close but
-    // not identical remain separate (correct behavior for non-manifold edges).
-    let mut point_to_global: HashMap<(u64, u64, u64), u32> = HashMap::new();
+    // Global vertex deduplication: tolerance-based spatial grid.
+    // Vertices within the same grid cell (1e-7) merge to a single global ID.
+    // This handles boolean results where adjacent faces have separate edge
+    // entities for the same geometric curve, sampled independently with
+    // near-identical but not bit-identical vertices.
+    let merge_tol = brepkit_math::tolerance::Tolerance::default();
+    let merge_grid = merge_tol.linear;
+    let mut point_to_global: HashMap<(i64, i64, i64), u32> = HashMap::new();
 
     // edge index → Vec<global vertex indices> (in start→end order).
     let mut edge_global_indices: HashMap<usize, Vec<u32>> = HashMap::new();
@@ -2628,7 +2645,7 @@ pub fn tessellate_solid(
     for (&edge_idx, points) in &edge_points {
         let mut global_ids = Vec::with_capacity(points.len());
         for &pt in points {
-            let key = (pt.x().to_bits(), pt.y().to_bits(), pt.z().to_bits());
+            let key = point_merge_key(pt, merge_grid);
             let idx = point_to_global.entry(key).or_insert_with(|| {
                 #[allow(clippy::cast_possible_truncation)]
                 let idx = merged.positions.len() as u32;
@@ -2878,7 +2895,7 @@ fn tessellate_face_with_shared_edges(
     deflection: f64,
     edge_global_indices: &HashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(u64, u64, u64), u32>,
+    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
     let face_data = topo.face(face_id)?;
     let is_reversed = face_data.is_reversed();
@@ -2945,7 +2962,7 @@ fn tessellate_face_with_shared_edges(
                             }
                         }
                     }
-                    let key = (pt.x().to_bits(), pt.y().to_bits(), pt.z().to_bits());
+                    let key = point_merge_key(*pt, brepkit_math::tolerance::Tolerance::default().linear);
                     let gid = point_to_global.entry(key).or_insert_with(|| {
                         #[allow(clippy::cast_possible_truncation)]
                         let idx = merged.positions.len() as u32;
@@ -3122,7 +3139,7 @@ fn tessellate_nonplanar_cdt(
     deflection: f64,
     edge_global_indices: &HashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(u64, u64, u64), u32>,
+    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
@@ -3172,7 +3189,7 @@ fn tessellate_nonplanar_cdt(
                         continue;
                     }
                 }
-                let key = (pt.x().to_bits(), pt.y().to_bits(), pt.z().to_bits());
+                let key = point_merge_key(pt, brepkit_math::tolerance::Tolerance::default().linear);
                 let gid = *point_to_global.entry(key).or_insert_with(|| {
                     let idx = merged.positions.len() as u32;
                     merged.positions.push(pt);
@@ -3325,7 +3342,7 @@ fn tessellate_nonplanar_cdt(
             let pt3 = evaluate_surface_at(face_data.surface(), pt2.x(), pt2.y());
             let nrm = surface_normal_at(face_data.surface(), pt2.x(), pt2.y());
 
-            let key = (pt3.x().to_bits(), pt3.y().to_bits(), pt3.z().to_bits());
+            let key = point_merge_key(pt3, brepkit_math::tolerance::Tolerance::default().linear);
             let gid = *point_to_global.entry(key).or_insert_with(|| {
                 let idx = merged.positions.len() as u32;
                 merged.positions.push(pt3);
@@ -3546,7 +3563,7 @@ fn tessellate_nonplanar_snap(
     deflection: f64,
     edge_global_indices: &HashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(u64, u64, u64), u32>,
+    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
     let mut face_mesh = tessellate(topo, face_id, deflection)?;
 
@@ -3631,7 +3648,7 @@ fn tessellate_nonplanar_snap(
         if let Some(gid) = best_gid {
             local_to_global.push(gid);
         } else {
-            let key = (pos.x().to_bits(), pos.y().to_bits(), pos.z().to_bits());
+            let key = point_merge_key(pos, brepkit_math::tolerance::Tolerance::default().linear);
             let gid = point_to_global.entry(key).or_insert_with(|| {
                 let idx = merged.positions.len() as u32;
                 merged.positions.push(pos);
@@ -4983,5 +5000,41 @@ mod winding_tests {
         let mesh = tessellate_solid(&topo, solid, 1.0).unwrap();
         assert!(!mesh.positions.is_empty(), "should produce vertices");
         assert!(!mesh.indices.is_empty(), "should produce triangles");
+    }
+
+    // ── Post-boolean watertight tessellation tests ────────────────
+
+    #[test]
+    fn tessellate_boolean_cut_cylinder_watertight() {
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 1.0, 4.0)
+            .expect("cylinder");
+        let tool = crate::primitives::make_box(&mut topo, 3.0, 3.0, 3.0)
+            .expect("box");
+        crate::transform::transform_solid(
+            &mut topo,
+            tool,
+            &brepkit_math::mat::Mat4::translation(-0.5, -0.5, 0.5),
+        )
+        .expect("translate");
+        let cut = crate::boolean::boolean(
+            &mut topo,
+            crate::boolean::BooleanOp::Cut,
+            cyl,
+            tool,
+        )
+        .expect("boolean cut");
+        let mesh = super::tessellate_solid(&topo, cut, 0.1)
+            .expect("tessellate");
+        assert!(
+            mesh.positions.len() > 10,
+            "mesh should have vertices, got {}",
+            mesh.positions.len()
+        );
+        let boundary = super::boundary_edge_count(&mesh);
+        assert_eq!(
+            boundary, 0,
+            "mesh should be watertight (0 boundary edges), got {boundary}"
+        );
     }
 }
