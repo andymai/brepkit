@@ -109,7 +109,7 @@ pub fn offset_solid(
         std::collections::BTreeMap::new();
 
     for (&vid_idx, adj_faces) in &vertex_faces {
-        let vid = topo.vertices.id_from_index(vid_idx);
+        let vid = topo.vertex_id_from_index(vid_idx);
         let original_pos = if let Some(vid) = vid {
             topo.vertex(vid)?.point()
         } else {

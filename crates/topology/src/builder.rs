@@ -37,9 +37,9 @@ pub fn make_line_edge(
         });
     }
 
-    let v0 = topo.vertices.alloc(Vertex::new(start, TOL));
-    let v1 = topo.vertices.alloc(Vertex::new(end, TOL));
-    Ok(topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line)))
+    let v0 = topo.add_vertex(Vertex::new(start, TOL));
+    let v1 = topo.add_vertex(Vertex::new(end, TOL));
+    Ok(topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line)))
 }
 
 /// Create a closed wire from an ordered list of points.
@@ -63,14 +63,13 @@ pub fn make_polygon_wire(
 
     let verts: Vec<_> = points
         .iter()
-        .map(|&p| topo.vertices.alloc(Vertex::new(p, TOL)))
+        .map(|&p| topo.add_vertex(Vertex::new(p, TOL)))
         .collect();
 
     let edges: Vec<_> = (0..n)
         .map(|i| {
             let next = (i + 1) % n;
-            topo.edges
-                .alloc(Edge::new(verts[i], verts[next], EdgeCurve::Line))
+            topo.add_edge(Edge::new(verts[i], verts[next], EdgeCurve::Line))
         })
         .collect();
 
@@ -80,7 +79,7 @@ pub fn make_polygon_wire(
         .collect();
 
     let wire = Wire::new(oriented, true)?;
-    Ok(topo.wires.alloc(wire))
+    Ok(topo.add_wire(wire))
 }
 
 /// Create a regular polygon wire on the XY plane centered at the origin.
@@ -151,9 +150,7 @@ pub fn make_face_from_wire(
             .mul_add(sample_points[0].y(), normal.z() * sample_points[0].z()),
     );
 
-    let face_id = topo
-        .faces
-        .alloc(Face::new(wire_id, vec![], FaceSurface::Plane { normal, d }));
+    let face_id = topo.add_face(Face::new(wire_id, vec![], FaceSurface::Plane { normal, d }));
 
     Ok(face_id)
 }

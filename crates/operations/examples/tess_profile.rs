@@ -55,9 +55,9 @@ fn main() {
     // Arena sizes
     eprintln!(
         "Arena: vertices={} edges={} faces={}",
-        topo.vertices.len(),
-        topo.edges.len(),
-        topo.faces.len()
+        topo.vertices().len(),
+        topo.edges().len(),
+        topo.faces().len()
     );
 
     // Time

@@ -2578,7 +2578,7 @@ pub fn tessellate_solid(
         let results: Vec<Result<(usize, Vec<Point3>), crate::OperationsError>> = edge_indices
             .par_iter()
             .filter_map(|&edge_idx| {
-                let edge_id = topo.edges.id_from_index(edge_idx)?;
+                let edge_id = topo.edge_id_from_index(edge_idx)?;
                 let edge_data = match topo.edge(edge_id) {
                     Ok(d) => d,
                     Err(e) => return Some(Err(crate::OperationsError::Topology(e))),
@@ -2595,7 +2595,7 @@ pub fn tessellate_solid(
     } else {
         let mut map = HashMap::new();
         for &edge_idx in &edge_indices {
-            if let Some(edge_id) = topo.edges.id_from_index(edge_idx) {
+            if let Some(edge_id) = topo.edge_id_from_index(edge_idx) {
                 if let Ok(edge_data) = topo.edge(edge_id) {
                     let points = sample_edge(topo, edge_data, deflection)?;
                     map.insert(edge_idx, points);
@@ -3213,7 +3213,7 @@ fn tessellate_nonplanar_cdt(
         .iter()
         .map(|(pt, _, edge_id_local)| {
             // Try PCurve lookup first.
-            if let Some(pcurve) = topo.pcurves.get(*edge_id_local, face_id) {
+            if let Some(pcurve) = topo.pcurves().get(*edge_id_local, face_id) {
                 // We have the edge's PCurve — find the closest t and evaluate.
                 // For boundary points sampled along the edge, approximate t
                 // by projecting onto the PCurve's parameter range.
@@ -3917,23 +3917,15 @@ mod tests {
 
         // Create a wire around the surface boundary (not strictly needed for
         // NURBS tessellation, but required for a valid Face).
-        let v0 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
-        let v1 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
-        let v2 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), 1e-7));
-        let v3 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.0, 1.0, 0.0), 1e-7));
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), 1e-7));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), 1e-7));
 
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
         let wire = Wire::new(
             vec![
@@ -3945,11 +3937,9 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
 
-        let face = topo
-            .faces
-            .alloc(Face::new(wid, vec![], FaceSurface::Nurbs(surface)));
+        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Nurbs(surface)));
 
         let mesh = tessellate(&topo, face, 0.25).unwrap();
 
@@ -3986,15 +3976,14 @@ mod tests {
 
         let verts: Vec<_> = points
             .iter()
-            .map(|&p| topo.vertices.alloc(Vertex::new(p, 1e-7)))
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
             .collect();
 
         let n = verts.len();
         let edges: Vec<_> = (0..n)
             .map(|i| {
                 let next = (i + 1) % n;
-                topo.edges
-                    .alloc(Edge::new(verts[i], verts[next], EdgeCurve::Line))
+                topo.add_edge(Edge::new(verts[i], verts[next], EdgeCurve::Line))
             })
             .collect();
 
@@ -4003,9 +3992,9 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
 
-        let face = topo.faces.alloc(Face::new(
+        let face = topo.add_face(Face::new(
             wid,
             vec![],
             FaceSurface::Plane {
@@ -4843,11 +4832,11 @@ mod winding_tests {
         let mut rev_face_ids = Vec::new();
         for (outer_wire, inner_wires, surface) in face_copies {
             let new_face = Face::new_reversed(outer_wire, inner_wires, surface);
-            rev_face_ids.push(topo.faces.alloc(new_face));
+            rev_face_ids.push(topo.add_face(new_face));
         }
         let rev_shell = Shell::new(rev_face_ids).unwrap();
-        let rev_shell_id = topo.shells.alloc(rev_shell);
-        let rev_solid = topo.solids.alloc(Solid::new(rev_shell_id, vec![]));
+        let rev_shell_id = topo.add_shell(rev_shell);
+        let rev_solid = topo.add_solid(Solid::new(rev_shell_id, vec![]));
 
         let mesh_reversed = tessellate_solid(&topo, rev_solid, 0.05).unwrap();
         let vol_reversed = signed_volume_raw(&mesh_reversed);

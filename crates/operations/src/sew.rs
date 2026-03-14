@@ -91,7 +91,7 @@ pub fn sew_faces(
                 (p.z() * resolution).round() as i64,
             );
             *map.entry(key)
-                .or_insert_with(|| topo.vertices.alloc(Vertex::new(p, tol)))
+                .or_insert_with(|| topo.add_vertex(Vertex::new(p, tol)))
         };
 
     // Phase 3: Create merged edges and rebuild faces.
@@ -119,26 +119,23 @@ pub fn sew_faces(
                 } else {
                     (v_end, v_start)
                 };
-                topo.edges
-                    .alloc(Edge::new(canonical_start, canonical_end, EdgeCurve::Line))
+                topo.add_edge(Edge::new(canonical_start, canonical_end, EdgeCurve::Line))
             });
 
             oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
         }
 
         let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
-        let wire_id = topo.wires.alloc(wire);
+        let wire_id = topo.add_wire(wire);
 
-        let face_id = topo
-            .faces
-            .alloc(Face::new(wire_id, vec![], snap.surface.clone()));
+        let face_id = topo.add_face(Face::new(wire_id, vec![], snap.surface.clone()));
         new_face_ids.push(face_id);
     }
 
     // Phase 4: Assemble into shell and solid.
     let shell = Shell::new(new_face_ids).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 /// Snapshot of a face's geometry for the sewing algorithm.
@@ -172,15 +169,15 @@ mod tests {
         d: f64,
     ) -> FaceId {
         let tol_val = 1e-7;
-        let v0 = topo.vertices.alloc(Vertex::new(p0, tol_val));
-        let v1 = topo.vertices.alloc(Vertex::new(p1, tol_val));
-        let v2 = topo.vertices.alloc(Vertex::new(p2, tol_val));
-        let v3 = topo.vertices.alloc(Vertex::new(p3, tol_val));
+        let v0 = topo.add_vertex(Vertex::new(p0, tol_val));
+        let v1 = topo.add_vertex(Vertex::new(p1, tol_val));
+        let v2 = topo.add_vertex(Vertex::new(p2, tol_val));
+        let v3 = topo.add_vertex(Vertex::new(p3, tol_val));
 
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
         let wire = Wire::new(
             vec![
@@ -192,9 +189,8 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
-        topo.faces
-            .alloc(Face::new(wid, vec![], FaceSurface::Plane { normal, d }))
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }))
     }
 
     #[test]

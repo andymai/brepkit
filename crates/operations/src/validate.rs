@@ -238,7 +238,8 @@ pub fn validate_solid(
 
         for wire_id in wire_ids {
             let wire = topo.wire(wire_id)?;
-            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, &topo.edges) {
+            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, topo.edges())
+            {
                 issues.push(ValidationIssue {
                     severity: Severity::Error,
                     description: format!(
@@ -518,7 +519,8 @@ pub fn validate_solid_relaxed(
 
         for wire_id in wire_ids {
             let wire = topo.wire(wire_id)?;
-            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, &topo.edges) {
+            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, topo.edges())
+            {
                 issues.push(ValidationIssue {
                     severity: Severity::Error,
                     description: format!(
@@ -902,7 +904,7 @@ mod tests {
             vec![inner_wire],
             FaceSurface::Plane { normal, d: 0.0 },
         );
-        let face_id = topo.faces.alloc(face);
+        let face_id = topo.add_face(face);
 
         // Full revolution → genus-1 torus topology.
         let solid = crate::revolve::revolve(
@@ -956,7 +958,7 @@ mod tests {
             vec![inner_wire],
             FaceSurface::Plane { normal, d: 0.0 },
         );
-        let face_id = topo.faces.alloc(face);
+        let face_id = topo.add_face(face);
 
         // Extrude → genus-0 (V-E+F=2) with inner walls.
         let solid =

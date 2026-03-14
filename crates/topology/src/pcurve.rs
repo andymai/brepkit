@@ -171,19 +171,13 @@ mod tests {
     fn make_simple_topology() -> (Topology, EdgeId, FaceId) {
         let mut topo = Topology::new();
 
-        let v0 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
-        let v1 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
-        let v2 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), 1e-7));
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), 1e-7));
 
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v0, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
 
         let wire = Wire::new(
             vec![
@@ -194,7 +188,7 @@ mod tests {
             true,
         )
         .unwrap();
-        let wire_id = topo.wires.alloc(wire);
+        let wire_id = topo.add_wire(wire);
 
         let face = Face::new(
             wire_id,
@@ -204,7 +198,7 @@ mod tests {
                 d: 0.0,
             },
         );
-        let face_id = topo.faces.alloc(face);
+        let face_id = topo.add_face(face);
 
         (topo, e0, face_id)
     }
@@ -216,10 +210,10 @@ mod tests {
         let line = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
         let pcurve = PCurve::new(Curve2D::Line(line), 0.0, 1.0);
 
-        topo.pcurves.set(edge_id, face_id, pcurve);
+        topo.pcurves_mut().set(edge_id, face_id, pcurve);
 
-        assert!(topo.pcurves.contains(edge_id, face_id));
-        let pc = topo.pcurves.get(edge_id, face_id).unwrap();
+        assert!(topo.pcurves().contains(edge_id, face_id));
+        let pc = topo.pcurves().get(edge_id, face_id).unwrap();
         assert!((pc.t_start() - 0.0).abs() < f64::EPSILON);
         assert!((pc.t_end() - 1.0).abs() < f64::EPSILON);
     }
@@ -247,12 +241,12 @@ mod tests {
         let (mut topo, edge_id, face_id) = make_simple_topology();
 
         let line = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
-        topo.pcurves
+        topo.pcurves_mut()
             .set(edge_id, face_id, PCurve::new(Curve2D::Line(line), 0.0, 1.0));
 
-        assert!(topo.pcurves.contains(edge_id, face_id));
-        topo.pcurves.remove(edge_id, face_id);
-        assert!(!topo.pcurves.contains(edge_id, face_id));
+        assert!(topo.pcurves().contains(edge_id, face_id));
+        topo.pcurves_mut().remove(edge_id, face_id);
+        assert!(!topo.pcurves().contains(edge_id, face_id));
     }
 
     #[test]
@@ -260,10 +254,10 @@ mod tests {
         let (mut topo, edge_id, face_id) = make_simple_topology();
 
         let line = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
-        topo.pcurves
+        topo.pcurves_mut()
             .set(edge_id, face_id, PCurve::new(Curve2D::Line(line), 0.0, 1.0));
 
-        let pcurves = topo.pcurves.pcurves_for_face(face_id);
+        let pcurves = topo.pcurves().pcurves_for_face(face_id);
         assert_eq!(pcurves.len(), 1);
         assert_eq!(pcurves[0].0, edge_id);
     }

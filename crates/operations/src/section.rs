@@ -171,9 +171,7 @@ pub fn section(
     // Create faces from wires.
     let mut result_faces = Vec::with_capacity(wires.len());
     for wid in wires {
-        let face = topo
-            .faces
-            .alloc(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
+        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
         result_faces.push(face);
     }
 
@@ -438,20 +436,18 @@ fn assemble_wires(
         let n = chain.len();
         let vert_ids: Vec<_> = chain
             .iter()
-            .map(|&p| topo.vertices.alloc(Vertex::new(p, tol.linear)))
+            .map(|&p| topo.add_vertex(Vertex::new(p, tol.linear)))
             .collect();
 
         let mut oriented_edges = Vec::with_capacity(n);
         for i in 0..n {
             let j = (i + 1) % n;
-            let edge = topo
-                .edges
-                .alloc(Edge::new(vert_ids[i], vert_ids[j], EdgeCurve::Line));
+            let edge = topo.add_edge(Edge::new(vert_ids[i], vert_ids[j], EdgeCurve::Line));
             oriented_edges.push(OrientedEdge::new(edge, true));
         }
 
         let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
-        wires.push(topo.wires.alloc(wire));
+        wires.push(topo.add_wire(wire));
     }
 
     Ok(wires)

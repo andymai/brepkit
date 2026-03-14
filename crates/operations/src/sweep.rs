@@ -215,7 +215,7 @@ fn sweep_wire_through_frames(
                     initial_tangent,
                     frame,
                 );
-                topo.vertices.alloc(Vertex::new(transformed, tol.linear))
+                topo.add_vertex(Vertex::new(transformed, tol.linear))
             })
             .collect();
         ring_verts.push(ring);
@@ -238,8 +238,7 @@ fn sweep_wire_through_frames(
         let edges: Vec<_> = (0..n)
             .map(|i| {
                 let next = (i + 1) % n;
-                topo.edges
-                    .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+                topo.add_edge(Edge::new(ring[i], ring[next], EdgeCurve::Line))
             })
             .collect();
         ring_edges.push(edges);
@@ -253,7 +252,7 @@ fn sweep_wire_through_frames(
     for seg in 0..num_segments {
         let edges: Vec<_> = (0..n)
             .map(|i| {
-                topo.edges.alloc(Edge::new(
+                topo.add_edge(Edge::new(
                     ring_verts[seg][i],
                     ring_verts[seg + 1][i],
                     EdgeCurve::Line,
@@ -307,8 +306,8 @@ fn build_inner_side_faces(
             )
             .map_err(crate::OperationsError::Topology)?;
 
-            let side_wire_id = topo.wires.alloc(side_wire);
-            let fid = topo.faces.alloc(Face::new(
+            let side_wire_id = topo.add_wire(side_wire);
+            let fid = topo.add_face(Face::new(
                 side_wire_id,
                 vec![],
                 FaceSurface::Plane {
@@ -343,7 +342,7 @@ fn build_inner_cap_wires(
                 .collect()
         };
         let wire = Wire::new(edges, true).map_err(crate::OperationsError::Topology)?;
-        wires.push(topo.wires.alloc(wire));
+        wires.push(topo.add_wire(wire));
     }
     Ok(wires)
 }
@@ -491,7 +490,7 @@ pub fn sweep(
                     initial_tangent,
                     frame,
                 );
-                topo.vertices.alloc(Vertex::new(transformed, tol.linear))
+                topo.add_vertex(Vertex::new(transformed, tol.linear))
             })
             .collect();
         ring_verts.push(ring);
@@ -518,8 +517,7 @@ pub fn sweep(
         let edges: Vec<_> = (0..n)
             .map(|i| {
                 let next = (i + 1) % n;
-                topo.edges
-                    .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+                topo.add_edge(Edge::new(ring[i], ring[next], EdgeCurve::Line))
             })
             .collect();
         ring_edges.push(edges);
@@ -537,7 +535,7 @@ pub fn sweep(
     for seg in 0..num_segments {
         let edges: Vec<_> = (0..n)
             .map(|i| {
-                topo.edges.alloc(Edge::new(
+                topo.add_edge(Edge::new(
                     ring_verts[seg][i],
                     ring_verts[seg + 1][i],
                     EdgeCurve::Line,
@@ -576,12 +574,12 @@ pub fn sweep(
             .collect();
         let start_wire =
             Wire::new(start_reversed_edges, true).map_err(crate::OperationsError::Topology)?;
-        let start_wire_id = topo.wires.alloc(start_wire);
+        let start_wire_id = topo.add_wire(start_wire);
         let start_inner_wires = build_inner_cap_wires(topo, &inner_swept, 0, true)?;
 
         let start_normal = -frames[0].tangent;
         let start_d = dot_normal_point(start_normal, topo.vertex(ring_verts[0][0])?.point());
-        let start_face = topo.faces.alloc(Face::new(
+        let start_face = topo.add_face(Face::new(
             start_wire_id,
             start_inner_wires,
             FaceSurface::Plane {
@@ -622,8 +620,8 @@ pub fn sweep(
             )
             .map_err(crate::OperationsError::Topology)?;
 
-            let side_wire_id = topo.wires.alloc(side_wire);
-            let side_face = topo.faces.alloc(Face::new(
+            let side_wire_id = topo.add_wire(side_wire);
+            let side_face = topo.add_face(Face::new(
                 side_wire_id,
                 vec![],
                 FaceSurface::Plane {
@@ -647,7 +645,7 @@ pub fn sweep(
             .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
             .collect();
         let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
-        let end_wire_id = topo.wires.alloc(end_wire);
+        let end_wire_id = topo.add_wire(end_wire);
         let end_inner_wires = build_inner_cap_wires(topo, &inner_swept, num_segments, false)?;
 
         let end_normal = frames[num_segments].tangent;
@@ -655,7 +653,7 @@ pub fn sweep(
             end_normal,
             topo.vertex(ring_verts[num_segments][0])?.point(),
         );
-        let end_face = topo.faces.alloc(Face::new(
+        let end_face = topo.add_face(Face::new(
             end_wire_id,
             end_inner_wires,
             FaceSurface::Plane {
@@ -668,8 +666,8 @@ pub fn sweep(
 
     // Assemble shell and solid.
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    let solid = topo.solids.alloc(Solid::new(shell_id, vec![]));
+    let shell_id = topo.add_shell(shell);
+    let solid = topo.add_solid(Solid::new(shell_id, vec![]));
 
     Ok(solid)
 }
@@ -815,26 +813,24 @@ pub fn sweep_smooth(
     // Create vertices for first and last rings only (for edge topology).
     let first_ring: Vec<VertexId> = ring_positions[0]
         .iter()
-        .map(|&p| topo.vertices.alloc(Vertex::new(p, tol.linear)))
+        .map(|&p| topo.add_vertex(Vertex::new(p, tol.linear)))
         .collect();
     let last_ring: Vec<VertexId> = ring_positions[num_rings - 1]
         .iter()
-        .map(|&p| topo.vertices.alloc(Vertex::new(p, tol.linear)))
+        .map(|&p| topo.add_vertex(Vertex::new(p, tol.linear)))
         .collect();
 
     // Create profile edges for first and last rings.
     let first_ring_edges: Vec<_> = (0..n)
         .map(|i| {
             let next = (i + 1) % n;
-            topo.edges
-                .alloc(Edge::new(first_ring[i], first_ring[next], EdgeCurve::Line))
+            topo.add_edge(Edge::new(first_ring[i], first_ring[next], EdgeCurve::Line))
         })
         .collect();
     let last_ring_edges: Vec<_> = (0..n)
         .map(|i| {
             let next = (i + 1) % n;
-            topo.edges
-                .alloc(Edge::new(last_ring[i], last_ring[next], EdgeCurve::Line))
+            topo.add_edge(Edge::new(last_ring[i], last_ring[next], EdgeCurve::Line))
         })
         .collect();
 
@@ -862,11 +858,11 @@ pub fn sweep_smooth(
         .map(|i| OrientedEdge::new(first_ring_edges[i], false))
         .collect();
     let start_wire = Wire::new(start_reversed, true).map_err(crate::OperationsError::Topology)?;
-    let start_wire_id = topo.wires.alloc(start_wire);
+    let start_wire_id = topo.add_wire(start_wire);
     let start_inner_wires_smooth = build_inner_cap_wires(topo, &inner_swept_smooth, 0, true)?;
     let start_normal = -frames[0].tangent;
     let start_d = dot_normal_point(start_normal, ring_positions[0][0]);
-    all_faces.push(topo.faces.alloc(Face::new(
+    all_faces.push(topo.add_face(Face::new(
         start_wire_id,
         start_inner_wires_smooth,
         FaceSurface::Plane {
@@ -891,10 +887,8 @@ pub fn sweep_smooth(
             interpolate_surface(&grid, degree_u, degree_v).map_err(crate::OperationsError::Math)?;
 
         // Rail edges from first to last ring.
-        let e_left_rail = topo
-            .edges
-            .alloc(Edge::new(first_ring[i], last_ring[i], EdgeCurve::Line));
-        let e_right_rail = topo.edges.alloc(Edge::new(
+        let e_left_rail = topo.add_edge(Edge::new(first_ring[i], last_ring[i], EdgeCurve::Line));
+        let e_right_rail = topo.add_edge(Edge::new(
             first_ring[next_i],
             last_ring[next_i],
             EdgeCurve::Line,
@@ -911,12 +905,8 @@ pub fn sweep_smooth(
         )
         .map_err(crate::OperationsError::Topology)?;
 
-        let side_wire_id = topo.wires.alloc(side_wire);
-        all_faces.push(topo.faces.alloc(Face::new(
-            side_wire_id,
-            vec![],
-            FaceSurface::Nurbs(surface),
-        )));
+        let side_wire_id = topo.add_wire(side_wire);
+        all_faces.push(topo.add_face(Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface))));
     }
 
     // Inner side faces for smooth variant.
@@ -930,12 +920,12 @@ pub fn sweep_smooth(
         .map(|i| OrientedEdge::new(last_ring_edges[i], true))
         .collect();
     let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
-    let end_wire_id = topo.wires.alloc(end_wire);
+    let end_wire_id = topo.add_wire(end_wire);
     let end_inner_wires_smooth =
         build_inner_cap_wires(topo, &inner_swept_smooth, num_segments, false)?;
     let end_normal = frames[num_segments].tangent;
     let end_d = dot_normal_point(end_normal, ring_positions[num_rings - 1][0]);
-    all_faces.push(topo.faces.alloc(Face::new(
+    all_faces.push(topo.add_face(Face::new(
         end_wire_id,
         end_inner_wires_smooth,
         FaceSurface::Plane {
@@ -945,8 +935,8 @@ pub fn sweep_smooth(
     )));
 
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 /// Contact mode for advanced sweep operations.
@@ -1160,7 +1150,7 @@ pub fn sweep_with_options(
                     transformed = frame.origin
                         + Vec3::new(offset.x() * scale, offset.y() * scale, offset.z() * scale);
                 }
-                topo.vertices.alloc(Vertex::new(transformed, tol.linear))
+                topo.add_vertex(Vertex::new(transformed, tol.linear))
             })
             .collect();
         ring_verts.push(ring);
@@ -1173,8 +1163,7 @@ pub fn sweep_with_options(
         let edges: Vec<_> = (0..n)
             .map(|i| {
                 let next = (i + 1) % n;
-                topo.edges
-                    .alloc(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+                topo.add_edge(Edge::new(ring[i], ring[next], EdgeCurve::Line))
             })
             .collect();
         ring_edges.push(edges);
@@ -1184,7 +1173,7 @@ pub fn sweep_with_options(
     for seg in 0..num_segments {
         let edges: Vec<_> = (0..n)
             .map(|i| {
-                topo.edges.alloc(Edge::new(
+                topo.add_edge(Edge::new(
                     ring_verts[seg][i],
                     ring_verts[seg + 1][i],
                     EdgeCurve::Line,
@@ -1220,11 +1209,11 @@ pub fn sweep_with_options(
         .collect();
     let start_wire =
         Wire::new(start_reversed_edges, true).map_err(crate::OperationsError::Topology)?;
-    let start_wire_id = topo.wires.alloc(start_wire);
+    let start_wire_id = topo.add_wire(start_wire);
     let start_inner_wires_opts = build_inner_cap_wires(topo, &inner_swept_opts, 0, true)?;
     let start_normal = -frames[0].tangent;
     let start_d = dot_normal_point(start_normal, topo.vertex(ring_verts[0][0])?.point());
-    let start_face = topo.faces.alloc(Face::new(
+    let start_face = topo.add_face(Face::new(
         start_wire_id,
         start_inner_wires_opts,
         FaceSurface::Plane {
@@ -1260,8 +1249,8 @@ pub fn sweep_with_options(
             )
             .map_err(crate::OperationsError::Topology)?;
 
-            let side_wire_id = topo.wires.alloc(side_wire);
-            let side_face = topo.faces.alloc(Face::new(
+            let side_wire_id = topo.add_wire(side_wire);
+            let side_face = topo.add_face(Face::new(
                 side_wire_id,
                 vec![],
                 FaceSurface::Plane {
@@ -1284,14 +1273,14 @@ pub fn sweep_with_options(
         .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
         .collect();
     let end_wire = Wire::new(end_edges, true).map_err(crate::OperationsError::Topology)?;
-    let end_wire_id = topo.wires.alloc(end_wire);
+    let end_wire_id = topo.add_wire(end_wire);
     let end_inner_wires_opts = build_inner_cap_wires(topo, &inner_swept_opts, num_segments, false)?;
     let end_normal = frames[num_segments].tangent;
     let end_d = dot_normal_point(
         end_normal,
         topo.vertex(ring_verts[num_segments][0])?.point(),
     );
-    let end_face = topo.faces.alloc(Face::new(
+    let end_face = topo.add_face(Face::new(
         end_wire_id,
         end_inner_wires_opts,
         FaceSurface::Plane {
@@ -1302,8 +1291,8 @@ pub fn sweep_with_options(
     all_faces.push(end_face);
 
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.shells.alloc(shell);
-    Ok(topo.solids.alloc(Solid::new(shell_id, vec![])))
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 #[cfg(test)]
@@ -1726,25 +1715,17 @@ mod tests {
         let lin = Tolerance::new().linear;
 
         // Outer square: 2x2 centered at origin in XY plane
-        let ov0 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(-1.0, -1.0, 0.0), lin));
-        let ov1 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, -1.0, 0.0), lin));
-        let ov2 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), lin));
-        let ov3 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(-1.0, 1.0, 0.0), lin));
+        let ov0 = topo.add_vertex(Vertex::new(Point3::new(-1.0, -1.0, 0.0), lin));
+        let ov1 = topo.add_vertex(Vertex::new(Point3::new(1.0, -1.0, 0.0), lin));
+        let ov2 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), lin));
+        let ov3 = topo.add_vertex(Vertex::new(Point3::new(-1.0, 1.0, 0.0), lin));
 
-        let oe0 = topo.edges.alloc(Edge::new(ov0, ov1, EdgeCurve::Line));
-        let oe1 = topo.edges.alloc(Edge::new(ov1, ov2, EdgeCurve::Line));
-        let oe2 = topo.edges.alloc(Edge::new(ov2, ov3, EdgeCurve::Line));
-        let oe3 = topo.edges.alloc(Edge::new(ov3, ov0, EdgeCurve::Line));
+        let oe0 = topo.add_edge(Edge::new(ov0, ov1, EdgeCurve::Line));
+        let oe1 = topo.add_edge(Edge::new(ov1, ov2, EdgeCurve::Line));
+        let oe2 = topo.add_edge(Edge::new(ov2, ov3, EdgeCurve::Line));
+        let oe3 = topo.add_edge(Edge::new(ov3, ov0, EdgeCurve::Line));
 
-        let outer_wire = topo.wires.alloc(
+        let outer_wire = topo.add_wire(
             Wire::new(
                 vec![
                     OrientedEdge::new(oe0, true),
@@ -1758,25 +1739,17 @@ mod tests {
         );
 
         // Inner square: 0.5x0.5 centered at origin (hole)
-        let iv0 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(-0.25, -0.25, 0.0), lin));
-        let iv1 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.25, -0.25, 0.0), lin));
-        let iv2 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.25, 0.25, 0.0), lin));
-        let iv3 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(-0.25, 0.25, 0.0), lin));
+        let iv0 = topo.add_vertex(Vertex::new(Point3::new(-0.25, -0.25, 0.0), lin));
+        let iv1 = topo.add_vertex(Vertex::new(Point3::new(0.25, -0.25, 0.0), lin));
+        let iv2 = topo.add_vertex(Vertex::new(Point3::new(0.25, 0.25, 0.0), lin));
+        let iv3 = topo.add_vertex(Vertex::new(Point3::new(-0.25, 0.25, 0.0), lin));
 
-        let ie0 = topo.edges.alloc(Edge::new(iv0, iv1, EdgeCurve::Line));
-        let ie1 = topo.edges.alloc(Edge::new(iv1, iv2, EdgeCurve::Line));
-        let ie2 = topo.edges.alloc(Edge::new(iv2, iv3, EdgeCurve::Line));
-        let ie3 = topo.edges.alloc(Edge::new(iv3, iv0, EdgeCurve::Line));
+        let ie0 = topo.add_edge(Edge::new(iv0, iv1, EdgeCurve::Line));
+        let ie1 = topo.add_edge(Edge::new(iv1, iv2, EdgeCurve::Line));
+        let ie2 = topo.add_edge(Edge::new(iv2, iv3, EdgeCurve::Line));
+        let ie3 = topo.add_edge(Edge::new(iv3, iv0, EdgeCurve::Line));
 
-        let inner_wire = topo.wires.alloc(
+        let inner_wire = topo.add_wire(
             Wire::new(
                 vec![
                     OrientedEdge::new(ie0, true),
@@ -1789,7 +1762,7 @@ mod tests {
             .unwrap(),
         );
 
-        topo.faces.alloc(Face::new(
+        topo.add_face(Face::new(
             outer_wire,
             vec![inner_wire],
             FaceSurface::Plane {
@@ -1887,23 +1860,15 @@ mod tests {
         let tol_val = 1e-7;
 
         // CW rectangle 1×2 on XY plane: (0,0)→(0,2)→(1,2)→(1,0)
-        let v0 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol_val));
-        let v1 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.0, 2.0, 0.0), tol_val));
-        let v2 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 2.0, 0.0), tol_val));
-        let v3 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol_val));
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol_val));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(0.0, 2.0, 0.0), tol_val));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(1.0, 2.0, 0.0), tol_val));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol_val));
 
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
         let wire = Wire::new(
             vec![
@@ -1915,10 +1880,10 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
 
         // CW winding → Newell normal = -Z
-        let face = topo.faces.alloc(Face::new(
+        let face = topo.add_face(Face::new(
             wid,
             vec![],
             FaceSurface::Plane {

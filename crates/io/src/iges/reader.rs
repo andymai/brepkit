@@ -166,8 +166,8 @@ fn build_topology(topo: &mut Topology, entities: &[IgesEntity]) -> Result<Vec<So
     let shell = Shell::new(face_ids).map_err(|e| IoError::ParseError {
         reason: format!("failed to build shell: {e}"),
     })?;
-    let shell_id = topo.shells.alloc(shell);
-    let solid_id = topo.solids.alloc(Solid::new(shell_id, Vec::new()));
+    let shell_id = topo.add_shell(shell);
+    let solid_id = topo.add_solid(Solid::new(shell_id, Vec::new()));
 
     Ok(vec![solid_id])
 }
@@ -228,15 +228,15 @@ fn build_plane_face(
     let p2 = offset_point(origin, u_dir, half, v_dir, half);
     let p3 = offset_point(origin, u_dir, -half, v_dir, half);
 
-    let v0 = topo.vertices.alloc(Vertex::new(p0, 1e-7));
-    let v1 = topo.vertices.alloc(Vertex::new(p1, 1e-7));
-    let v2 = topo.vertices.alloc(Vertex::new(p2, 1e-7));
-    let v3 = topo.vertices.alloc(Vertex::new(p3, 1e-7));
+    let v0 = topo.add_vertex(Vertex::new(p0, 1e-7));
+    let v1 = topo.add_vertex(Vertex::new(p1, 1e-7));
+    let v2 = topo.add_vertex(Vertex::new(p2, 1e-7));
+    let v3 = topo.add_vertex(Vertex::new(p3, 1e-7));
 
-    let e01 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-    let e12 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-    let e23 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-    let e30 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+    let e01 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+    let e12 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+    let e23 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+    let e30 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
     let wire = Wire::new(
         vec![
@@ -250,13 +250,13 @@ fn build_plane_face(
     .map_err(|e| IoError::ParseError {
         reason: format!("failed to build wire: {e}"),
     })?;
-    let wire_id = topo.wires.alloc(wire);
+    let wire_id = topo.add_wire(wire);
 
     let surface = FaceSurface::Plane {
         normal: unit_normal,
         d: d / norm_len,
     };
-    let face_id = topo.faces.alloc(Face::new(wire_id, Vec::new(), surface));
+    let face_id = topo.add_face(Face::new(wire_id, Vec::new(), surface));
 
     Ok(face_id)
 }

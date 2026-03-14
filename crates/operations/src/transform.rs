@@ -563,7 +563,7 @@ mod tests {
 
         // All vertices should have x shifted by 1.0.
         let tol = Tolerance::new();
-        for (_id, v) in topo.vertices.iter() {
+        for (_id, v) in topo.vertices().iter() {
             let x = v.point().x();
             assert!(
                 tol.approx_eq(x, 1.0) || tol.approx_eq(x, 2.0),
@@ -577,12 +577,12 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_unit_cube(&mut topo);
 
-        let before: Vec<_> = topo.vertices.iter().map(|(_, v)| v.point()).collect();
+        let before: Vec<_> = topo.vertices().iter().map(|(_, v)| v.point()).collect();
 
         transform_solid(&mut topo, solid, &Mat4::identity()).unwrap();
 
         let tol = Tolerance::new();
-        for (i, (_, v)) in topo.vertices.iter().enumerate() {
+        for (i, (_, v)) in topo.vertices().iter().enumerate() {
             assert!(tol.approx_eq(v.point().x(), before[i].x()));
             assert!(tol.approx_eq(v.point().y(), before[i].y()));
             assert!(tol.approx_eq(v.point().z(), before[i].z()));
@@ -656,23 +656,15 @@ mod tests {
         use brepkit_topology::wire::{OrientedEdge, Wire};
 
         let tol = 1e-7;
-        let v0 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol));
-        let v1 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol));
-        let v2 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 1.0, 0.0), tol));
-        let v3 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.0, 1.0, 0.0), tol));
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), tol));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), tol));
 
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
         let wire = Wire::new(
             vec![
@@ -684,11 +676,11 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
-        let fid = topo.faces.alloc(Face::new(wid, vec![], surface));
+        let wid = topo.add_wire(wire);
+        let fid = topo.add_face(Face::new(wid, vec![], surface));
         let shell = Shell::new(vec![fid]).unwrap();
-        let shell_id = topo.shells.alloc(shell);
-        topo.solids.alloc(Solid::new(shell_id, vec![]))
+        let shell_id = topo.add_shell(shell);
+        topo.add_solid(Solid::new(shell_id, vec![]))
     }
 
     // ── Cylinder surface transform ────────────────────────────────────────────
@@ -954,23 +946,15 @@ mod tests {
         // Create a small rectangular face at x=[2,3], z=[0,1], y=0.
         // This is offset from the Y axis so the revolve doesn't self-intersect.
         let tol_val = 1e-10;
-        let v0 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(2.0, 0.0, 0.0), tol_val));
-        let v1 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(3.0, 0.0, 0.0), tol_val));
-        let v2 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(3.0, 0.0, 1.0), tol_val));
-        let v3 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(2.0, 0.0, 1.0), tol_val));
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), tol_val));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(3.0, 0.0, 0.0), tol_val));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(3.0, 0.0, 1.0), tol_val));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 1.0), tol_val));
 
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
         let wire = Wire::new(
             vec![
@@ -982,10 +966,10 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
 
         let normal = brepkit_math::vec::Vec3::new(0.0, -1.0, 0.0);
-        let rect = topo.faces.alloc(Face::new(
+        let rect = topo.add_face(Face::new(
             wid,
             vec![],
             FaceSurface::Plane { normal, d: 0.0 },
@@ -1108,14 +1092,12 @@ mod tests {
         use brepkit_topology::wire::{OrientedEdge, Wire};
 
         let mut topo = Topology::new();
-        let v = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let v = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
         let circle =
             Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
-        let edge = topo.edges.alloc(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
         let wire = Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap();
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
 
         transform_wire(&mut topo, wid, &Mat4::translation(5.0, 0.0, 0.0)).unwrap();
 

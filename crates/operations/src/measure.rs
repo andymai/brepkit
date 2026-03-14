@@ -2368,23 +2368,15 @@ mod tests {
 
         let mut topo = Topology::new();
 
-        let v0 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-10));
-        let v1 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(2.0, 0.0, 0.0), 1e-10));
-        let v2 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(2.0, 3.0, 0.0), 1e-10));
-        let v3 = topo
-            .vertices
-            .alloc(Vertex::new(Point3::new(0.0, 3.0, 0.0), 1e-10));
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-10));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), 1e-10));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(2.0, 3.0, 0.0), 1e-10));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(0.0, 3.0, 0.0), 1e-10));
 
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
         let wire = Wire::new(
             vec![
@@ -2396,8 +2388,8 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
-        let face_id = topo.faces.alloc(Face::new(
+        let wid = topo.add_wire(wire);
+        let face_id = topo.add_face(Face::new(
             wid,
             vec![],
             FaceSurface::Plane {

@@ -33,7 +33,7 @@ fn vol(topo: &Topology, solid: SolidId) -> f64 {
 fn check_manifold(topo: &Topology, solid: SolidId) {
     let s = topo.solid(solid).unwrap();
     let sh = topo.shell(s.outer_shell()).unwrap();
-    validate_shell_manifold(sh, &topo.faces, &topo.wires).expect("result should be manifold");
+    validate_shell_manifold(sh, topo.faces(), topo.wires()).expect("result should be manifold");
 }
 
 // ── Tangent solids ──────────────────────────────────────────────────

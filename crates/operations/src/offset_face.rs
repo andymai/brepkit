@@ -94,7 +94,7 @@ fn offset_planar_face(
     }
 
     let new_surface = FaceSurface::Plane { normal, d: new_d };
-    let face_id = topo.faces.alloc(brepkit_topology::face::Face::new(
+    let face_id = topo.add_face(brepkit_topology::face::Face::new(
         new_outer,
         new_inner,
         new_surface,
@@ -265,7 +265,7 @@ fn offset_nurbs_face(
     }
 
     let new_surface = FaceSurface::Nurbs(offset_surface);
-    let face_id = topo.faces.alloc(brepkit_topology::face::Face::new(
+    let face_id = topo.add_face(brepkit_topology::face::Face::new(
         new_outer,
         new_inner,
         new_surface,
@@ -321,7 +321,7 @@ fn offset_cylinder_face(
         new_inner.push(offset_wire_by_fn(topo, iw, &radial_offset)?);
     }
 
-    let face_id = topo.faces.alloc(brepkit_topology::face::Face::new(
+    let face_id = topo.add_face(brepkit_topology::face::Face::new(
         new_outer,
         new_inner,
         FaceSurface::Cylinder(new_cyl),
@@ -369,7 +369,7 @@ fn offset_sphere_face(
         new_inner.push(offset_wire_by_fn(topo, iw, &radial_offset)?);
     }
 
-    let face_id = topo.faces.alloc(brepkit_topology::face::Face::new(
+    let face_id = topo.add_face(brepkit_topology::face::Face::new(
         new_outer,
         new_inner,
         FaceSurface::Sphere(new_sphere),
@@ -428,7 +428,7 @@ fn offset_cone_face(
         new_inner.push(offset_wire_by_fn(topo, iw, &radial_offset)?);
     }
 
-    let face_id = topo.faces.alloc(brepkit_topology::face::Face::new(
+    let face_id = topo.add_face(brepkit_topology::face::Face::new(
         new_outer,
         new_inner,
         FaceSurface::Cone(new_cone),
@@ -499,7 +499,7 @@ fn offset_torus_face(
         new_inner.push(offset_wire_by_fn(topo, iw, &radial_offset)?);
     }
 
-    let face_id = topo.faces.alloc(brepkit_topology::face::Face::new(
+    let face_id = topo.add_face(brepkit_topology::face::Face::new(
         new_outer,
         new_inner,
         FaceSurface::Torus(new_torus),
@@ -581,17 +581,13 @@ fn offset_wire_by_fn(
     let tol = Tolerance::new();
     let mut new_oriented = Vec::new();
     for (start_pt, end_pt, curve, forward) in snaps {
-        let new_start = topo
-            .vertices
-            .alloc(Vertex::new(offset_fn(start_pt), tol.linear));
-        let new_end = topo
-            .vertices
-            .alloc(Vertex::new(offset_fn(end_pt), tol.linear));
-        let new_edge = topo.edges.alloc(Edge::new(new_start, new_end, curve));
+        let new_start = topo.add_vertex(Vertex::new(offset_fn(start_pt), tol.linear));
+        let new_end = topo.add_vertex(Vertex::new(offset_fn(end_pt), tol.linear));
+        let new_edge = topo.add_edge(Edge::new(new_start, new_end, curve));
         new_oriented.push(OrientedEdge::new(new_edge, forward));
     }
 
-    let new_wire = topo.wires.alloc(Wire::new(new_oriented, true)?);
+    let new_wire = topo.add_wire(Wire::new(new_oriented, true)?);
     Ok(new_wire)
 }
 
@@ -608,7 +604,7 @@ fn copy_face(topo: &mut Topology, face_id: FaceId) -> Result<FaceId, OperationsE
         new_inner.push(copy_wire(topo, iw)?);
     }
 
-    let new_face = topo.faces.alloc(brepkit_topology::face::Face::new(
+    let new_face = topo.add_face(brepkit_topology::face::Face::new(
         new_outer, new_inner, surface,
     ));
     Ok(new_face)
@@ -645,13 +641,13 @@ fn copy_wire(
 
     let mut new_oriented = Vec::new();
     for (start_pt, start_tol, end_pt, end_tol, curve, forward) in edge_snaps {
-        let new_start = topo.vertices.alloc(Vertex::new(start_pt, start_tol));
-        let new_end = topo.vertices.alloc(Vertex::new(end_pt, end_tol));
-        let new_edge = topo.edges.alloc(Edge::new(new_start, new_end, curve));
+        let new_start = topo.add_vertex(Vertex::new(start_pt, start_tol));
+        let new_end = topo.add_vertex(Vertex::new(end_pt, end_tol));
+        let new_edge = topo.add_edge(Edge::new(new_start, new_end, curve));
         new_oriented.push(OrientedEdge::new(new_edge, forward));
     }
 
-    let new_wire = topo.wires.alloc(Wire::new(new_oriented, true)?);
+    let new_wire = topo.add_wire(Wire::new(new_oriented, true)?);
     Ok(new_wire)
 }
 
@@ -680,17 +676,13 @@ fn offset_wire_vertices(
     let tol = Tolerance::new();
     let mut new_oriented = Vec::new();
     for (start_pt, end_pt, curve, forward) in edge_snaps {
-        let new_start = topo
-            .vertices
-            .alloc(Vertex::new(start_pt + offset, tol.linear));
-        let new_end = topo
-            .vertices
-            .alloc(Vertex::new(end_pt + offset, tol.linear));
-        let new_edge = topo.edges.alloc(Edge::new(new_start, new_end, curve));
+        let new_start = topo.add_vertex(Vertex::new(start_pt + offset, tol.linear));
+        let new_end = topo.add_vertex(Vertex::new(end_pt + offset, tol.linear));
+        let new_edge = topo.add_edge(Edge::new(new_start, new_end, curve));
         new_oriented.push(OrientedEdge::new(new_edge, forward));
     }
 
-    let new_wire = topo.wires.alloc(Wire::new(new_oriented, true)?);
+    let new_wire = topo.add_wire(Wire::new(new_oriented, true)?);
     Ok(new_wire)
 }
 
@@ -724,15 +716,13 @@ fn offset_wire_along_nurbs(
         let new_start_pt = offset_point_on_surface(nurbs, start_pt, distance)?;
         let new_end_pt = offset_point_on_surface(nurbs, end_pt, distance)?;
 
-        let new_start = topo.vertices.alloc(Vertex::new(new_start_pt, tol.linear));
-        let new_end = topo.vertices.alloc(Vertex::new(new_end_pt, tol.linear));
-        let new_edge = topo
-            .edges
-            .alloc(Edge::new(new_start, new_end, EdgeCurve::Line));
+        let new_start = topo.add_vertex(Vertex::new(new_start_pt, tol.linear));
+        let new_end = topo.add_vertex(Vertex::new(new_end_pt, tol.linear));
+        let new_edge = topo.add_edge(Edge::new(new_start, new_end, EdgeCurve::Line));
         new_oriented.push(OrientedEdge::new(new_edge, forward));
     }
 
-    let new_wire = topo.wires.alloc(Wire::new(new_oriented, true)?);
+    let new_wire = topo.add_wire(Wire::new(new_oriented, true)?);
     Ok(new_wire)
 }
 
@@ -904,23 +894,15 @@ mod tests {
 
         // Wire: unit square in XY at z_height.
         let tol = 1e-7;
-        let v0 = topo
-            .vertices
-            .alloc(Vertex::new(P::new(0.0, 0.0, z_height), tol));
-        let v1 = topo
-            .vertices
-            .alloc(Vertex::new(P::new(1.0, 0.0, z_height), tol));
-        let v2 = topo
-            .vertices
-            .alloc(Vertex::new(P::new(1.0, 1.0, z_height), tol));
-        let v3 = topo
-            .vertices
-            .alloc(Vertex::new(P::new(0.0, 1.0, z_height), tol));
+        let v0 = topo.add_vertex(Vertex::new(P::new(0.0, 0.0, z_height), tol));
+        let v1 = topo.add_vertex(Vertex::new(P::new(1.0, 0.0, z_height), tol));
+        let v2 = topo.add_vertex(Vertex::new(P::new(1.0, 1.0, z_height), tol));
+        let v3 = topo.add_vertex(Vertex::new(P::new(0.0, 1.0, z_height), tol));
 
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
         let wire = Wire::new(
             vec![
@@ -932,10 +914,9 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
 
-        topo.faces
-            .alloc(Face::new(wid, vec![], FaceSurface::Nurbs(nurbs)))
+        topo.add_face(Face::new(wid, vec![], FaceSurface::Nurbs(nurbs)))
     }
 
     // ── NURBS face offset tests ───────────────────────────────────────────────
@@ -1036,14 +1017,14 @@ mod tests {
         let mut topo = Topology::new();
 
         let tol = 1e-7;
-        let v0 = topo.vertices.alloc(Vertex::new(P::new(1.0, 0.0, 0.0), tol));
-        let v1 = topo.vertices.alloc(Vertex::new(P::new(0.0, 1.0, 0.0), tol));
-        let v2 = topo.vertices.alloc(Vertex::new(P::new(0.0, 1.0, 1.0), tol));
-        let v3 = topo.vertices.alloc(Vertex::new(P::new(1.0, 0.0, 1.0), tol));
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = topo.edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-        let e3 = topo.edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
+        let v0 = topo.add_vertex(Vertex::new(P::new(1.0, 0.0, 0.0), tol));
+        let v1 = topo.add_vertex(Vertex::new(P::new(0.0, 1.0, 0.0), tol));
+        let v2 = topo.add_vertex(Vertex::new(P::new(0.0, 1.0, 1.0), tol));
+        let v3 = topo.add_vertex(Vertex::new(P::new(1.0, 0.0, 1.0), tol));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
         let wire = Wire::new(
             vec![
                 OrientedEdge::new(e0, true),
@@ -1054,12 +1035,10 @@ mod tests {
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
         let cyl =
             CylindricalSurface::new(P::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
-        let face_id = topo
-            .faces
-            .alloc(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
+        let face_id = topo.add_face(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
 
         // Offset should succeed and produce a cylinder with larger radius.
         let result = offset_face(&mut topo, face_id, 0.5, 6).unwrap();
@@ -1088,21 +1067,19 @@ mod tests {
         let mut topo = Topology::new();
 
         let tol = 1e-7;
-        let v0 = topo.vertices.alloc(Vertex::new(P::new(0.5, 0.0, 0.0), tol));
-        let v1 = topo.vertices.alloc(Vertex::new(P::new(0.0, 0.5, 0.0), tol));
-        let e0 = topo.edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = topo.edges.alloc(Edge::new(v1, v0, EdgeCurve::Line));
+        let v0 = topo.add_vertex(Vertex::new(P::new(0.5, 0.0, 0.0), tol));
+        let v1 = topo.add_vertex(Vertex::new(P::new(0.0, 0.5, 0.0), tol));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v0, EdgeCurve::Line));
         let wire = Wire::new(
             vec![OrientedEdge::new(e0, true), OrientedEdge::new(e1, true)],
             true,
         )
         .unwrap();
-        let wid = topo.wires.alloc(wire);
+        let wid = topo.add_wire(wire);
         let cyl =
             CylindricalSurface::new(P::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.5).unwrap();
-        let face_id = topo
-            .faces
-            .alloc(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
+        let face_id = topo.add_face(Face::new(wid, vec![], FaceSurface::Cylinder(cyl)));
 
         // Offset by -0.6 would produce negative radius.
         let result = offset_face(&mut topo, face_id, -0.6, 6);

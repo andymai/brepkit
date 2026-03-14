@@ -75,7 +75,7 @@ fn bench_fuse_balanced(c: &mut Criterion) {
             let (base_topo, solids) = build_overlapping_box_grid(side);
             b.iter(|| {
                 let mut topo = base_topo.clone();
-                let cid = topo.compounds.alloc(Compound::new(solids.clone()));
+                let cid = topo.add_compound(Compound::new(solids.clone()));
                 black_box(fuse_all(&mut topo, cid).unwrap());
             });
         });
@@ -107,7 +107,7 @@ fn bench_fuse_touching_boxes(c: &mut Criterion) {
             let (base_topo, solids) = build_box_grid(side);
             b.iter(|| {
                 let mut topo = base_topo.clone();
-                let cid = topo.compounds.alloc(Compound::new(solids.clone()));
+                let cid = topo.add_compound(Compound::new(solids.clone()));
                 black_box(fuse_all(&mut topo, cid).unwrap());
             });
         });
