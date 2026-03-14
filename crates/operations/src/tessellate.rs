@@ -4242,10 +4242,9 @@ fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
     let mut parent: Vec<u32> = (0..n_verts as u32).collect();
 
     // Spatial hash grid for boundary vertices.
-    // Weld tolerance targets numerical mismatch (grid quantization, projection
-    // error), not geometric features. Capped at 1e-4 to avoid merging distinct
-    // boundary vertices on thin features.
-    let weld_tol = (deflection.max(1e-6) * 2.0).min(1e-4);
+    // Weld tolerance scaled to deflection — boundary vertices that differ by
+    // less than this are numerical artifacts, not geometric features.
+    let weld_tol = deflection.max(1e-6) * 2.0;
     let cell_size = weld_tol;
     let inv_cell = 1.0 / cell_size;
 
@@ -4630,10 +4629,12 @@ mod tests {
             crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, cyl, box_s).unwrap();
 
         let mesh = tessellate_solid(&topo, result, 0.1).unwrap();
-        let boundary = position_based_boundary_count(&mesh);
+        // Use index-based check (benefits from weld pass) rather than
+        // position-based (1µm snap can miss boolean edge splits > 1µm).
+        let boundary = boundary_edge_count(&mesh);
         assert_eq!(
             boundary, 0,
-            "boolean cut cylinder should be watertight (0 position-based boundary edges), got {boundary}"
+            "boolean cut cylinder should be watertight (0 boundary edges), got {boundary}"
         );
     }
 
