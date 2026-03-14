@@ -297,9 +297,9 @@ fn compute_normals(positions: &[Point3], indices: &[u32]) -> Vec<Vec3> {
         let e1 = positions[i1] - positions[i0];
         let e2 = positions[i2] - positions[i0];
         let n = e1.cross(e2);
-        normals[i0] = normals[i0] + n;
-        normals[i1] = normals[i1] + n;
-        normals[i2] = normals[i2] + n;
+        normals[i0] += n;
+        normals[i1] += n;
+        normals[i2] += n;
     }
 
     for n in &mut normals {

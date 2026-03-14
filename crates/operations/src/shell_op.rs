@@ -572,7 +572,7 @@ pub fn shell(
     for oe in &boundary_oriented {
         let edge = topo.edge(oe.edge())?;
         let p = topo.vertex(edge.start())?.point();
-        centroid = centroid + Vec3::new(p.x(), p.y(), p.z());
+        centroid += Vec3::new(p.x(), p.y(), p.z());
         rim_z += p.z();
         vert_count += 1.0;
     }

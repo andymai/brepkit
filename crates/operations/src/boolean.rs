@@ -4548,7 +4548,7 @@ fn polygon_area_3d(vertices: &[Point3], normal: Vec3) -> f64 {
     for i in 1..vertices.len() - 1 {
         let e1 = vertices[i] - v0;
         let e2 = vertices[i + 1] - v0;
-        area = area + e1.cross(e2);
+        area += e1.cross(e2);
     }
     (area.dot(normal) * 0.5).abs()
 }

@@ -683,7 +683,7 @@ fn polygon_area_3d(positions: &[brepkit_math::vec::Point3]) -> f64 {
     for i in 1..positions.len() - 1 {
         let a = positions[i] - p0;
         let b = positions[i + 1] - p0;
-        sum = sum + a.cross(b);
+        sum += a.cross(b);
     }
 
     sum.length() * 0.5

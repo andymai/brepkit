@@ -329,14 +329,14 @@ pub fn fix_face_orientations(
         for oe in edges {
             let edge = topo.edge(oe.edge())?;
             let pos = topo.vertex(edge.start())?.point();
-            face_center = face_center + Vec3::new(pos.x(), pos.y(), pos.z());
+            face_center += Vec3::new(pos.x(), pos.y(), pos.z());
         }
 
         let vert_count = edges.len();
         if vert_count > 0 {
             #[allow(clippy::cast_precision_loss)]
             let inv = 1.0 / vert_count as f64;
-            center = center + face_center * inv;
+            center += face_center * inv;
             total_faces += 1;
         }
     }
@@ -670,7 +670,7 @@ pub fn remove_duplicate_faces(
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
             let pos = topo.vertex(edge.start())?.point();
-            centroid = centroid + Vec3::new(pos.x(), pos.y(), pos.z());
+            centroid += Vec3::new(pos.x(), pos.y(), pos.z());
             count += 1;
         }
 

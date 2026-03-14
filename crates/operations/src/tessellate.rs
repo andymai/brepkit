@@ -2844,13 +2844,13 @@ pub fn tessellate_solid(
         let b = merged.positions[i2] - merged.positions[i0];
         let face_normal = a.cross(b); // area-weighted (unnormalized)
         if needs_normal[i0] {
-            accum[i0] = accum[i0] + face_normal;
+            accum[i0] += face_normal;
         }
         if needs_normal[i1] {
-            accum[i1] = accum[i1] + face_normal;
+            accum[i1] += face_normal;
         }
         if needs_normal[i2] {
-            accum[i2] = accum[i2] + face_normal;
+            accum[i2] += face_normal;
         }
     }
 

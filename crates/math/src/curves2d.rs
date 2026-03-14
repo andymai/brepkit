@@ -340,8 +340,8 @@ impl NurbsCurve2D {
             let cp = &self.control_points[idx];
             let cp_vec = Vec2::new(cp.x(), cp.y());
 
-            curve_pt = curve_pt + cp_vec * (wi * basis_ders);
-            curve_deriv = curve_deriv + cp_vec * (wi * ders[1][j]);
+            curve_pt += cp_vec * (wi * basis_ders);
+            curve_deriv += cp_vec * (wi * ders[1][j]);
             weight_sum += wi * basis_ders;
             weight_deriv += wi * ders[1][j];
         }
