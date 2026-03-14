@@ -378,7 +378,7 @@ fn surface_newton_refine(
                 if j00 > j11 {
                     (rhs0 / j00.max(1e-30), 0.0)
                 } else if j11 > 1e-30 {
-                    (0.0, rhs1 / j11)
+                    (0.0, rhs1 / j11.max(1e-30))
                 } else {
                     return Ok((u, v, s_pt));
                 }
@@ -644,7 +644,9 @@ mod tests {
         assert!(
             res.point.x().abs() < 1e-6 && res.point.y().abs() < 1e-6 && res.point.z().abs() < 1e-6,
             "nearest point should be apex, got ({:.4},{:.4},{:.4})",
-            res.point.x(), res.point.y(), res.point.z()
+            res.point.x(),
+            res.point.y(),
+            res.point.z()
         );
         assert!(
             (res.distance - 1.0).abs() < 1e-6,
@@ -663,14 +665,14 @@ mod tests {
         let res = project_point_to_surface(&s, Point3::new(0.02, 0.3, 0.05), 1e-6)
             .expect("should converge near apex");
         assert!(
-            res.distance < 0.31,
+            (res.distance - 0.3).abs() < 0.02,
             "expected distance ≈ 0.3, got {:.6}",
             res.distance
         );
-        // Nearest surface point should be close to S(0.7, 0.05).
+        // Nearest surface point should be close to S(0.7, 0.05) = (0.02, 0, 0.05).
         assert!(
-            res.point.z() < 0.15,
-            "nearest point should be near apex end, got z={:.4}",
+            (res.point.z() - 0.05).abs() < 0.02,
+            "nearest point z should be ≈ 0.05, got z={:.4}",
             res.point.z()
         );
     }

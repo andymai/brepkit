@@ -661,7 +661,7 @@ fn refine_line_surface_point(
                 if a11 > a22 {
                     (b1 / a11.max(1e-30), 0.0)
                 } else if a22 > 1e-30 {
-                    (0.0, b2 / a22)
+                    (0.0, b2 / a22.max(1e-30))
                 } else {
                     break;
                 }
@@ -1829,10 +1829,10 @@ fn surface_newton_step(surface: &NurbsSurface, u: f64, v: f64, target: Point3) -
             // Still degenerate — try stepping along whichever derivative is non-zero.
             let su_len = su.dot(su);
             let sv_len = sv.dot(sv);
-            if su_len > 1e-20 {
+            if su_len > 1e-30 {
                 return (b1 / su_len, 0.0);
             }
-            if sv_len > 1e-20 {
+            if sv_len > 1e-30 {
                 return (0.0, b2 / sv_len);
             }
             return (0.0, 0.0);
