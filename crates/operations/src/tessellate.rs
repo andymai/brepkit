@@ -2594,7 +2594,7 @@ pub fn tessellate_solid(
     // Parallelized with rayon when there are enough edges to amortize
     // thread-pool synchronization overhead.
     let edge_indices: Vec<usize> = edge_face_map.keys().copied().collect();
-    let edge_points: HashMap<usize, Vec<Point3>> = if edge_indices.len() >= 32 {
+    let mut edge_points: HashMap<usize, Vec<Point3>> = if edge_indices.len() >= 32 {
         use rayon::prelude::*;
         let results: Vec<Result<(usize, Vec<Point3>), crate::OperationsError>> = edge_indices
             .par_iter()
@@ -2625,6 +2625,74 @@ pub fn tessellate_solid(
         }
         map
     };
+
+    // Phase 2b: Synchronize circle edge samples with face grid density.
+    //
+    // Cone faces compute their grid nu from max_radius (the larger circle),
+    // but edge_sample_count uses each circle's own radius. A circle edge at
+    // a smaller radius produces fewer points than the grid row it must match,
+    // breaking snap-based vertex pairing. Resample those edges to match the
+    // face grid so every boundary row has a 1:1 vertex correspondence.
+    {
+        use brepkit_topology::edge::EdgeCurve;
+
+        for &face_id in &all_faces {
+            let face_data = topo.face(face_id)?;
+            let face_nu = match face_data.surface() {
+                FaceSurface::Cone(cone) => {
+                    let v_range =
+                        compute_v_param_range(topo, face_data, |p| cone.project_point(p).1);
+                    let u_range = compute_angular_range(topo, face_data, |p| cone.project_point(p));
+                    let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
+                    segments_for_chord_deviation(
+                        max_radius.max(0.01),
+                        u_range.1 - u_range.0,
+                        deflection,
+                    )
+                }
+                FaceSurface::Cylinder(cyl) => {
+                    let u_range = compute_angular_range(topo, face_data, |p| cyl.project_point(p));
+                    segments_for_chord_deviation(cyl.radius(), u_range.1 - u_range.0, deflection)
+                }
+                _ => continue,
+            };
+            let expected_count = face_nu + 1;
+
+            // Check circle edges in all wires (outer + inner).
+            let mut wire_ids = vec![face_data.outer_wire()];
+            wire_ids.extend_from_slice(face_data.inner_wires());
+            for &wire_id in &wire_ids {
+                let wire = topo.wire(wire_id)?;
+                for oe in wire.edges() {
+                    let edge_idx = oe.edge().index();
+                    let Some(edge_id) = topo.edge_id_from_index(edge_idx) else {
+                        continue;
+                    };
+                    let Ok(edge_data) = topo.edge(edge_id) else {
+                        continue;
+                    };
+                    let EdgeCurve::Circle(circle) = edge_data.curve() else {
+                        continue;
+                    };
+
+                    if let Some(pts) = edge_points.get(&edge_idx) {
+                        if pts.len() < expected_count {
+                            let (t_start, t_end) = circle_param_range(topo, edge_data, circle)?;
+                            let mut new_pts = Vec::with_capacity(expected_count);
+                            #[allow(clippy::cast_precision_loss)]
+                            for i in 0..expected_count {
+                                let t = t_start
+                                    + (t_end - t_start) * (i as f64)
+                                        / ((expected_count - 1).max(1) as f64);
+                                new_pts.push(circle.evaluate(t));
+                            }
+                            edge_points.insert(edge_idx, new_pts);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Phase 3: Build merged mesh with shared edge vertices.
     //
@@ -4613,7 +4681,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "cone boolean watertight: needs ConicalSurface edge/grid formula alignment"]
     fn tessellate_boolean_cut_cone_watertight() {
         use brepkit_math::mat::Mat4;
 

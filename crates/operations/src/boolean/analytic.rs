@@ -30,9 +30,9 @@ use super::classify::{
     try_build_analytic_classifier,
 };
 use super::fragments::{
-    build_cylinder_barrel_wire, collect_analytic_vranges, create_band_fragments,
-    curve_boundary_crossings, sample_edge_curve, split_cylinder_at_intersection,
-    split_sphere_at_intersection, tessellate_face_into_fragments,
+    build_cone_barrel_wire, build_cylinder_barrel_wire, collect_analytic_vranges,
+    create_band_fragments, curve_boundary_crossings, sample_edge_curve, split_cone_at_intersection,
+    split_cylinder_at_intersection, split_sphere_at_intersection, tessellate_face_into_fragments,
 };
 use super::intersect::{
     cyrus_beck_clip, intersect_interval_lists, point_along_line, polygon_clip_intervals,
@@ -1032,6 +1032,23 @@ pub(super) fn analytic_boolean(
                 )?;
                 continue;
             }
+            if matches!(snap.surface, FaceSurface::Cone(_)) {
+                split_cone_at_intersection(
+                    &snap.surface,
+                    &snap.vertices,
+                    snap.normal,
+                    snap.d,
+                    Source::A,
+                    snap.reversed,
+                    vranges,
+                    topo,
+                    snap.id,
+                    deflection,
+                    tol,
+                    &mut fragments,
+                )?;
+                continue;
+            }
             split_cylinder_at_intersection(
                 &snap.surface,
                 &snap.vertices,
@@ -1206,6 +1223,23 @@ pub(super) fn analytic_boolean(
                     topo,
                     snap.id,
                     deflection,
+                    &mut fragments,
+                )?;
+                continue;
+            }
+            if matches!(snap.surface, FaceSurface::Cone(_)) {
+                split_cone_at_intersection(
+                    &snap.surface,
+                    &snap.vertices,
+                    snap.normal,
+                    snap.d,
+                    Source::B,
+                    snap.reversed,
+                    vranges,
+                    topo,
+                    snap.id,
+                    deflection,
+                    tol,
                     &mut fragments,
                 )?;
                 continue;
@@ -1636,6 +1670,50 @@ pub(super) fn analytic_boolean(
                 build_cylinder_barrel_wire(
                     topo,
                     cyl,
+                    &verts,
+                    &mut vertex_map,
+                    &mut edge_map,
+                    resolution,
+                    tol,
+                )?
+            } else {
+                // Chord-split or degenerate cylinder fragment — use generic polygon edges.
+                let mut oriented_edges = Vec::with_capacity(n);
+                for i in 0..n {
+                    let j = (i + 1) % n;
+                    let vi_idx = vert_ids[i].index();
+                    let vj_idx = vert_ids[j].index();
+                    let (key_min, key_max) = if vi_idx <= vj_idx {
+                        (vi_idx, vj_idx)
+                    } else {
+                        (vj_idx, vi_idx)
+                    };
+                    let fwd = vi_idx <= vj_idx;
+                    let eid = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
+                        let (start, end) = if fwd {
+                            (vert_ids[i], vert_ids[j])
+                        } else {
+                            (vert_ids[j], vert_ids[i])
+                        };
+                        topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
+                    });
+                    oriented_edges.push(OrientedEdge::new(eid, fwd));
+                }
+                let wire =
+                    Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
+                topo.add_wire(wire)
+            }
+        } else if let FaceSurface::Cone(cone) = &frag.surface {
+            // Cone barrel: same band layout as cylinder but with varying radii.
+            let has_band_layout = verts.len() >= 4 && verts.len() % 2 == 0 && {
+                let (_, v0) = cone.project_point(verts[0]);
+                let (_, v1) = cone.project_point(verts[verts.len() - 1]);
+                (v0 - v1).abs() > tol.linear
+            };
+            if has_band_layout {
+                build_cone_barrel_wire(
+                    topo,
+                    cone,
                     &verts,
                     &mut vertex_map,
                     &mut edge_map,

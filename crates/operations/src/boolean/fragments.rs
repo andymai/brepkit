@@ -17,7 +17,7 @@ use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use super::assembly::quantize_point;
 use super::classify::polygon_centroid;
-use super::precompute::{cylinder_v_extent, dedup_points_by_position};
+use super::precompute::{cone_v_extent, cylinder_v_extent, dedup_points_by_position};
 use super::types::{
     AnalyticFragment, CLOSED_CURVE_SAMPLES, CurveClassification, FaceSnapshot, Source,
 };
@@ -403,6 +403,137 @@ pub(super) fn split_cylinder_at_intersection(
     Ok(())
 }
 
+/// Split a cone face into band fragments at intersection v-levels.
+///
+/// Analogous to `split_cylinder_at_intersection` but for conical geometry.
+/// Each band preserves `FaceSurface::Cone`. Circles at each v-level have
+/// different radii (`cone.radius_at(v)`).
+#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
+pub(super) fn split_cone_at_intersection(
+    surface: &FaceSurface,
+    face_verts: &[Point3],
+    normal: Vec3,
+    d: f64,
+    source: Source,
+    source_reversed: bool,
+    vranges: &[(f64, f64)],
+    topo: &Topology,
+    face_id: FaceId,
+    deflection: f64,
+    tol: Tolerance,
+    fragments: &mut Vec<AnalyticFragment>,
+) -> Result<(), crate::OperationsError> {
+    let FaceSurface::Cone(cone) = surface else {
+        return tessellate_face_into_fragments(topo, face_id, source, deflection, fragments);
+    };
+
+    // Compute the barrel's v extent from boundary vertices.
+    let Some((barrel_vmin, barrel_vmax)) = cone_v_extent(cone, face_verts) else {
+        fragments.push(AnalyticFragment {
+            vertices: face_verts.to_vec(),
+            surface: surface.clone(),
+            normal,
+            d,
+            source,
+            edge_curves: vec![None; face_verts.len()],
+            source_reversed,
+        });
+        return Ok(());
+    };
+
+    if vranges.is_empty() {
+        fragments.push(AnalyticFragment {
+            vertices: face_verts.to_vec(),
+            surface: surface.clone(),
+            normal,
+            d,
+            source,
+            edge_curves: vec![None; face_verts.len()],
+            source_reversed,
+        });
+        return Ok(());
+    }
+
+    // Merge overlapping v-ranges with padding. Fall back to full tessellation
+    // if intersection zones cover >60% of the barrel height.
+    let Some(merged) = merge_vranges_with_padding(vranges, barrel_vmin, barrel_vmax, 0.05) else {
+        return tessellate_face_into_fragments(topo, face_id, source, deflection, fragments);
+    };
+
+    let n_samples: usize = CLOSED_CURVE_SAMPLES;
+
+    // Collect face polygon vertices at barrel endpoints for exact vertex matching.
+    let v_tol = 1e-6;
+    let mut verts_at_vmin: Vec<Point3> = Vec::new();
+    let mut verts_at_vmax: Vec<Point3> = Vec::new();
+    for &p in face_verts {
+        let (_, v) = cone.project_point(p);
+        if (v - barrel_vmin).abs() < v_tol {
+            verts_at_vmin.push(p);
+        } else if (v - barrel_vmax).abs() < v_tol {
+            verts_at_vmax.push(p);
+        }
+    }
+    dedup_points_by_position(&mut verts_at_vmin, tol);
+    dedup_points_by_position(&mut verts_at_vmax, tol);
+
+    #[allow(clippy::cast_precision_loss)]
+    let sample_circle_at_v = |v: f64| -> Vec<Point3> {
+        if (v - barrel_vmin).abs() < v_tol && verts_at_vmin.len() >= 3 {
+            verts_at_vmin.clone()
+        } else if (v - barrel_vmax).abs() < v_tol && verts_at_vmax.len() >= 3 {
+            verts_at_vmax.clone()
+        } else {
+            (0..n_samples)
+                .map(|i| {
+                    let u = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                    cone.evaluate(u, v)
+                })
+                .collect()
+        }
+    };
+
+    // Helper: create a cone band fragment between two v-levels.
+    let make_band = |v_bot: f64, v_top: f64, frags: &mut Vec<AnalyticFragment>| {
+        if (v_top - v_bot).abs() < 1e-10 {
+            return;
+        }
+        let bot_pts = sample_circle_at_v(v_bot);
+        let top_pts = sample_circle_at_v(v_top);
+
+        let mut verts = Vec::with_capacity(bot_pts.len() + top_pts.len());
+        verts.extend_from_slice(&bot_pts);
+        verts.extend(top_pts.into_iter().rev());
+
+        // Compute normal from a surface point — radial direction on the cone.
+        let surface_point = verts[0];
+        let (_, v0) = cone.project_point(surface_point);
+        let band_normal = cone.normal(0.0, v0);
+        let centroid = polygon_centroid(&verts);
+        let band_d = crate::dot_normal_point(band_normal, centroid);
+
+        let n_verts = verts.len();
+        frags.push(AnalyticFragment {
+            vertices: verts,
+            surface: surface.clone(),
+            normal: band_normal,
+            d: band_d,
+            source,
+            edge_curves: vec![None; n_verts],
+            source_reversed,
+        });
+    };
+
+    let levels = build_v_levels(barrel_vmin, barrel_vmax, &merged);
+
+    for w in levels.windows(2) {
+        make_band(w[0], w[1], fragments);
+    }
+
+    Ok(())
+}
+
 /// Split a sphere face into spherical cap fragments at intersection v-levels.
 ///
 /// Analogous to `split_cylinder_at_intersection` but for spherical geometry.
@@ -555,6 +686,10 @@ pub(super) fn collect_analytic_vranges(
                 let sph = sph.clone();
                 Box::new(move |p| sph.project_point(p).1)
             }
+            FaceSurface::Cone(cone) => {
+                let cone = cone.clone();
+                Box::new(move |p| cone.project_point(p).1)
+            }
             _ => continue,
         };
         let mut vmin = f64::MAX;
@@ -576,7 +711,7 @@ pub(super) fn collect_analytic_vranges(
 /// curves. Splits the face into bands between the contained curves and the
 /// face's natural boundary circles.
 ///
-/// Currently supports cylinder faces. Other surface types fall through without
+/// Supports cylinder and cone faces. Other surface types fall through without
 /// creating bands (the face stays as one unsplit fragment via the caller's
 /// else branch, but this path shouldn't be reached for unsupported types).
 #[allow(clippy::too_many_lines)]
@@ -593,23 +728,42 @@ pub(super) fn create_band_fragments(
     tol: Tolerance,
     fragments: &mut Vec<AnalyticFragment>,
 ) {
-    let FaceSurface::Cylinder(cyl) = surface else {
-        // For non-cylinder analytic faces, fall back to unsplit fragment.
-        fragments.push(AnalyticFragment {
-            vertices: face_verts.to_vec(),
-            surface: surface.clone(),
-            normal,
-            d,
-            source,
-            edge_curves: vec![None; face_verts.len()],
-            source_reversed,
-        });
-        return;
+    // Extract surface-specific v-projection and extent.
+    #[allow(clippy::type_complexity)]
+    let (v_of_center, v_extent): (Box<dyn Fn(Point3) -> f64>, Option<(f64, f64)>) = match surface {
+        FaceSurface::Cylinder(cyl) => {
+            let axis = cyl.axis();
+            let origin = cyl.origin();
+            (
+                Box::new(move |p| axis.dot(p - origin)),
+                cylinder_v_extent(cyl, face_verts),
+            )
+        }
+        FaceSurface::Cone(cone) => {
+            let cone_c = cone.clone();
+            (
+                Box::new(move |p| cone_c.project_point(p).1),
+                cone_v_extent(cone, face_verts),
+            )
+        }
+        _ => {
+            // For unsupported analytic faces, fall back to unsplit fragment.
+            fragments.push(AnalyticFragment {
+                vertices: face_verts.to_vec(),
+                surface: surface.clone(),
+                normal,
+                d,
+                source,
+                edge_curves: vec![None; face_verts.len()],
+                source_reversed,
+            });
+            return;
+        }
     };
 
     let n_samples: usize = CLOSED_CURVE_SAMPLES;
 
-    // Pair each contained curve with its v-parameter on the cylinder axis.
+    // Pair each contained curve with its v-parameter.
     let mut cut_levels: Vec<(f64, &EdgeCurve)> = Vec::new();
     for ec in contained_curves {
         let center = match ec {
@@ -617,7 +771,7 @@ pub(super) fn create_band_fragments(
             EdgeCurve::Ellipse(e) => e.center(),
             _ => continue,
         };
-        let v = cyl.axis().dot(center - cyl.origin());
+        let v = v_of_center(center);
         cut_levels.push((v, ec));
     }
 
@@ -635,7 +789,7 @@ pub(super) fn create_band_fragments(
     }
 
     // Compute the barrel's v extent from its boundary vertices.
-    let Some((v_min, v_max)) = cylinder_v_extent(cyl, face_verts) else {
+    let Some((v_min, v_max)) = v_extent else {
         fragments.push(AnalyticFragment {
             vertices: face_verts.to_vec(),
             surface: surface.clone(),
@@ -657,8 +811,6 @@ pub(super) fn create_band_fragments(
     for &(cv, ec) in &cut_levels {
         if let Some(last) = levels.last() {
             // 1e-10: v-parameter dedup tolerance — same as build_v_levels.
-            // Prevents duplicate levels from cut curves that coincide with
-            // barrel endpoints or each other after floating-point rounding.
             if (cv - last.0).abs() > 1e-10 {
                 levels.push((cv, Some(ec)));
             }
@@ -671,15 +823,11 @@ pub(super) fn create_band_fragments(
     }
 
     // Extract face polygon vertices at each barrel endpoint level.
-    // These come from the same Circle3D::evaluate calls that generated the
-    // cap face polygons, ensuring exact floating-point match for vertex dedup.
-    // v_tol = 1e-6: axial snap tolerance for barrel endpoint classification
-    // (same rationale as split_cylinder_at_intersection's v_tol).
     let v_tol = 1e-6;
     let mut verts_at_vmin: Vec<Point3> = Vec::new();
     let mut verts_at_vmax: Vec<Point3> = Vec::new();
     for &p in face_verts {
-        let v = cyl.axis().dot(p - cyl.origin());
+        let v = v_of_center(p);
         if (v - v_min).abs() < v_tol {
             verts_at_vmin.push(p);
         } else if (v - v_max).abs() < v_tol {
@@ -703,12 +851,21 @@ pub(super) fn create_band_fragments(
         } else if (v - v_max).abs() < v_tol && verts_at_vmax.len() >= 3 {
             verts_at_vmax.clone()
         } else {
-            (0..n_samples)
-                .map(|i| {
-                    let u = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
-                    cyl.evaluate(u, v)
-                })
-                .collect()
+            match surface {
+                FaceSurface::Cylinder(cyl) => (0..n_samples)
+                    .map(|i| {
+                        let u = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                        cyl.evaluate(u, v)
+                    })
+                    .collect(),
+                FaceSurface::Cone(cone) => (0..n_samples)
+                    .map(|i| {
+                        let u = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                        cone.evaluate(u, v)
+                    })
+                    .collect(),
+                _ => vec![],
+            }
         }
     };
 
@@ -727,14 +884,21 @@ pub(super) fn create_band_fragments(
 
         // Compute representative normal and d for the band.
         // Use a surface point (first vertex) for the outward normal, not
-        // the polygon centroid -- the centroid of a full-circle band falls
-        // on the cylinder axis, making the radial direction degenerate.
+        // the polygon centroid — the centroid of a full-circle band falls
+        // on the axis, making the radial direction degenerate.
         let surface_point = verts[0];
-        let band_normal = (surface_point
-            - cyl.origin()
-            - cyl.axis() * cyl.axis().dot(surface_point - cyl.origin()))
-        .normalize()
-        .unwrap_or(normal);
+        let band_normal = match surface {
+            FaceSurface::Cylinder(cyl) => (surface_point
+                - cyl.origin()
+                - cyl.axis() * cyl.axis().dot(surface_point - cyl.origin()))
+            .normalize()
+            .unwrap_or(normal),
+            FaceSurface::Cone(cone) => {
+                let (_, v0) = cone.project_point(surface_point);
+                cone.normal(0.0, v0)
+            }
+            _ => normal,
+        };
         let centroid = polygon_centroid(&verts);
         let band_d = crate::dot_normal_point(band_normal, centroid);
 
@@ -823,6 +987,89 @@ pub(super) fn build_cylinder_barrel_wire(
 
     // Wire: bot_circle(fwd) -> seam(fwd) -> top_circle(rev) -> seam(rev)
     // This matches the canonical cylinder lateral wire from make_cylinder.
+    let wire = Wire::new(
+        vec![
+            OrientedEdge::new(bot_edge, true),
+            OrientedEdge::new(seam_edge, seam_fwd),
+            OrientedEdge::new(top_edge, false),
+            OrientedEdge::new(seam_edge, !seam_fwd),
+        ],
+        true,
+    )
+    .map_err(crate::OperationsError::Topology)?;
+    Ok(topo.add_wire(wire))
+}
+
+/// Build a proper cone barrel wire with Circle edges + seam line.
+///
+/// Cone barrel fragments have the same polygon layout as cylinder barrels:
+///   `bot[0..n/2] ++ top_reversed[0..n/2]`  (2n vertices total)
+/// but circles at different v-levels have different radii.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn build_cone_barrel_wire(
+    topo: &mut Topology,
+    cone: &brepkit_math::surfaces::ConicalSurface,
+    verts: &[Point3],
+    vertex_map: &mut HashMap<(i64, i64, i64), VertexId>,
+    edge_map: &mut HashMap<(usize, usize), EdgeId>,
+    resolution: f64,
+    tol: Tolerance,
+) -> Result<WireId, crate::OperationsError> {
+    // Same layout as cylinder: bot[0..n/2] + top_reversed[0..n/2].
+    let bot_seam_pos = verts[0];
+    let top_seam_pos = verts[verts.len() - 1];
+
+    // Compute v-levels from vertex positions on the cone.
+    let (_, v_bot) = cone.project_point(bot_seam_pos);
+    let (_, v_top) = cone.project_point(top_seam_pos);
+
+    // Create Circle3D at each level.
+    let r_bot = cone.radius_at(v_bot);
+    let r_top = cone.radius_at(v_top);
+    let bot_center = cone.apex() + cone.axis() * (v_bot * cone.half_angle().sin());
+    let top_center = cone.apex() + cone.axis() * (v_top * cone.half_angle().sin());
+    let bot_circle = brepkit_math::curves::Circle3D::new(bot_center, cone.axis(), r_bot)
+        .map_err(crate::OperationsError::Math)?;
+    let top_circle = brepkit_math::curves::Circle3D::new(top_center, cone.axis(), r_top)
+        .map_err(crate::OperationsError::Math)?;
+
+    // Create/lookup vertices at the seam points.
+    let bot_vid = *vertex_map
+        .entry(quantize_point(bot_seam_pos, resolution))
+        .or_insert_with(|| topo.add_vertex(Vertex::new(bot_seam_pos, tol.linear)));
+    let top_vid = *vertex_map
+        .entry(quantize_point(top_seam_pos, resolution))
+        .or_insert_with(|| topo.add_vertex(Vertex::new(top_seam_pos, tol.linear)));
+
+    // Create/lookup closed Circle edges.
+    let bot_edge = *edge_map
+        .entry((bot_vid.index(), bot_vid.index()))
+        .or_insert_with(|| {
+            topo.add_edge(Edge::new(bot_vid, bot_vid, EdgeCurve::Circle(bot_circle)))
+        });
+    let top_edge = *edge_map
+        .entry((top_vid.index(), top_vid.index()))
+        .or_insert_with(|| {
+            topo.add_edge(Edge::new(top_vid, top_vid, EdgeCurve::Circle(top_circle)))
+        });
+
+    // Create/lookup seam line edge.
+    let seam_fwd = bot_vid.index() <= top_vid.index();
+    let seam_key = if seam_fwd {
+        (bot_vid.index(), top_vid.index())
+    } else {
+        (top_vid.index(), bot_vid.index())
+    };
+    let seam_edge = *edge_map.entry(seam_key).or_insert_with(|| {
+        let (start, end) = if seam_fwd {
+            (bot_vid, top_vid)
+        } else {
+            (top_vid, bot_vid)
+        };
+        topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
+    });
+
+    // Wire: bot_circle(fwd) -> seam(fwd) -> top_circle(rev) -> seam(rev)
     let wire = Wire::new(
         vec![
             OrientedEdge::new(bot_edge, true),
