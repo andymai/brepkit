@@ -701,14 +701,30 @@ impl BrepKernel {
                             reason: format!("edge {id}: nurbs missing knots"),
                         }
                     })?;
-                    let knots: Vec<f64> = knots_arr.iter().filter_map(|v| v.as_f64()).collect();
+                    let knots: Vec<f64> = knots_arr
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            v.as_f64().ok_or_else(|| WasmError::InvalidInput {
+                                reason: format!("edge {id}: knot[{i}] is not a number"),
+                            })
+                        })
+                        .collect::<Result<_, _>>()?;
                     let weights_arr =
                         p.get("weights").and_then(|v| v.as_array()).ok_or_else(|| {
                             WasmError::InvalidInput {
                                 reason: format!("edge {id}: nurbs missing weights"),
                             }
                         })?;
-                    let weights: Vec<f64> = weights_arr.iter().filter_map(|v| v.as_f64()).collect();
+                    let weights: Vec<f64> = weights_arr
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            v.as_f64().ok_or_else(|| WasmError::InvalidInput {
+                                reason: format!("edge {id}: weight[{i}] is not a number"),
+                            })
+                        })
+                        .collect::<Result<_, _>>()?;
                     let cps_arr = p
                         .get("controlPoints")
                         .and_then(|v| v.as_array())
@@ -828,7 +844,12 @@ impl BrepKernel {
                     })?;
                     let origin = Self::parse_point3(origin_arr, "origin")?;
                     let axis = Self::parse_vec3(axis_arr, "axis")?;
-                    let cyl = CylindricalSurface::new(origin, axis, radius)?;
+                    let cyl = if let Some(ref_arr) = p.get("refDir").and_then(|v| v.as_array()) {
+                        let ref_dir = Self::parse_vec3(ref_arr, "refDir")?;
+                        CylindricalSurface::with_ref_dir(origin, axis, radius, ref_dir)?
+                    } else {
+                        CylindricalSurface::new(origin, axis, radius)?
+                    };
                     FaceSurface::Cylinder(cyl)
                 }
                 "cone" => {
@@ -853,7 +874,12 @@ impl BrepKernel {
                         })?;
                     let apex = Self::parse_point3(apex_arr, "apex")?;
                     let axis = Self::parse_vec3(axis_arr, "axis")?;
-                    let cone = ConicalSurface::new(apex, axis, half_angle)?;
+                    let cone = if let Some(ref_arr) = p.get("refDir").and_then(|v| v.as_array()) {
+                        let ref_dir = Self::parse_vec3(ref_arr, "refDir")?;
+                        ConicalSurface::with_ref_dir(apex, axis, half_angle, ref_dir)?
+                    } else {
+                        ConicalSurface::new(apex, axis, half_angle)?
+                    };
                     FaceSurface::Cone(cone)
                 }
                 "sphere" => {
@@ -921,24 +947,36 @@ impl BrepKernel {
                             reason: "nurbs surface missing degreeV".into(),
                         }
                     })? as usize;
-                    let knots_u: Vec<f64> = p
-                        .get("knotsU")
-                        .and_then(|v| v.as_array())
-                        .ok_or_else(|| WasmError::InvalidInput {
-                            reason: "nurbs surface missing knotsU".into(),
-                        })?
+                    let knots_u_arr =
+                        p.get("knotsU").and_then(|v| v.as_array()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: "nurbs surface missing knotsU".into(),
+                            }
+                        })?;
+                    let knots_u: Vec<f64> = knots_u_arr
                         .iter()
-                        .filter_map(|v| v.as_f64())
-                        .collect();
-                    let knots_v: Vec<f64> = p
-                        .get("knotsV")
-                        .and_then(|v| v.as_array())
-                        .ok_or_else(|| WasmError::InvalidInput {
-                            reason: "nurbs surface missing knotsV".into(),
-                        })?
+                        .enumerate()
+                        .map(|(i, v)| {
+                            v.as_f64().ok_or_else(|| WasmError::InvalidInput {
+                                reason: format!("nurbs surface knotsU[{i}] is not a number"),
+                            })
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let knots_v_arr =
+                        p.get("knotsV").and_then(|v| v.as_array()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: "nurbs surface missing knotsV".into(),
+                            }
+                        })?;
+                    let knots_v: Vec<f64> = knots_v_arr
                         .iter()
-                        .filter_map(|v| v.as_f64())
-                        .collect();
+                        .enumerate()
+                        .map(|(i, v)| {
+                            v.as_f64().ok_or_else(|| WasmError::InvalidInput {
+                                reason: format!("nurbs surface knotsV[{i}] is not a number"),
+                            })
+                        })
+                        .collect::<Result<_, _>>()?;
                     let cps_grid = p
                         .get("controlPoints")
                         .and_then(|v| v.as_array())
@@ -982,7 +1020,17 @@ impl BrepKernel {
                                 row.as_array().ok_or_else(|| WasmError::InvalidInput {
                                     reason: format!("nurbs weights[{ri}] is not an array"),
                                 })?;
-                            Ok(row_arr.iter().filter_map(|v| v.as_f64()).collect())
+                            row_arr
+                                .iter()
+                                .enumerate()
+                                .map(|(ci, v)| {
+                                    v.as_f64().ok_or_else(|| WasmError::InvalidInput {
+                                        reason: format!(
+                                            "nurbs surface weights[{ri}][{ci}] is not a number"
+                                        ),
+                                    })
+                                })
+                                .collect::<Result<_, _>>()
                         })
                         .collect::<Result<_, _>>()?;
                     let ns = NurbsSurface::new(

@@ -91,6 +91,37 @@ impl CylindricalSurface {
         self.y_axis
     }
 
+    /// Creates a cylindrical surface with a specified reference direction.
+    ///
+    /// `ref_dir` defines the x-axis of the parametric frame (projected
+    /// perpendicular to `axis`). This preserves the parametric orientation
+    /// from STEP `AXIS2_PLACEMENT_3D` or BREP round-trips.
+    ///
+    /// # Errors
+    /// Returns an error if radius is not positive or axis is zero.
+    pub fn with_ref_dir(
+        origin: Point3,
+        axis: Vec3,
+        radius: f64,
+        ref_dir: Vec3,
+    ) -> Result<Self, MathError> {
+        if radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: radius,
+                min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        let f = Frame3::from_normal_and_ref(origin, axis, ref_dir)?;
+        Ok(Self {
+            origin,
+            axis: f.z,
+            radius,
+            x_axis: f.x,
+            y_axis: f.y,
+        })
+    }
+
     /// Returns a copy of this cylinder with its origin translated by `offset`.
     #[must_use]
     pub fn translated(&self, offset: Vec3) -> Self {
@@ -207,6 +238,37 @@ impl ConicalSurface {
     #[must_use]
     pub const fn y_axis(&self) -> Vec3 {
         self.y_axis
+    }
+
+    /// Creates a conical surface with a specified reference direction.
+    ///
+    /// `ref_dir` defines the x-axis of the parametric frame (projected
+    /// perpendicular to `axis`). This preserves the parametric orientation
+    /// from STEP `AXIS2_PLACEMENT_3D` or BREP round-trips.
+    ///
+    /// # Errors
+    /// Returns an error if half-angle is not in `(0, π/2)` or axis is zero.
+    pub fn with_ref_dir(
+        apex: Point3,
+        axis: Vec3,
+        half_angle: f64,
+        ref_dir: Vec3,
+    ) -> Result<Self, MathError> {
+        if half_angle <= 0.0 || half_angle >= std::f64::consts::FRAC_PI_2 {
+            return Err(MathError::ParameterOutOfRange {
+                value: half_angle,
+                min: f64::EPSILON,
+                max: std::f64::consts::FRAC_PI_2,
+            });
+        }
+        let f = Frame3::from_normal_and_ref(apex, axis, ref_dir)?;
+        Ok(Self {
+            apex,
+            axis: f.z,
+            half_angle,
+            x_axis: f.x,
+            y_axis: f.y,
+        })
     }
 
     /// Returns a copy of this cone with its apex translated by `offset`.
