@@ -27,12 +27,12 @@ use intersect::{compute_analytic_segments, compute_intersection_segments};
 pub use precompute::face_polygon;
 use precompute::{collect_face_data, handle_disjoint, solid_aabb, try_containment_shortcut};
 use split::split_face;
-use types::{BooleanContext, FaceClass, FaceFragment, PARALLEL_THRESHOLD, Source, select_fragment};
+#[cfg(not(target_arch = "wasm32"))]
+use types::PARALLEL_THRESHOLD;
+use types::{BooleanContext, FaceClass, FaceFragment, Source, select_fragment};
 pub use types::{BooleanOp, BooleanOptions, FaceSpec};
 
 use std::collections::HashMap;
-
-use rayon::prelude::*;
 
 // WASM-compatible timer: `std::time::Instant` panics on wasm32 targets.
 #[cfg(not(target_arch = "wasm32"))]
@@ -268,11 +268,16 @@ pub fn boolean_with_options(
         classify_fragment(frag, opposite, bvh, tol)
     };
 
+    // Rayon panics on wasm32 (no thread pool) — use sequential iteration only.
+    #[cfg(not(target_arch = "wasm32"))]
     let classes: Vec<FaceClass> = if fragments.len() >= PARALLEL_THRESHOLD {
+        use rayon::prelude::*;
         fragments.par_iter().map(classify_fn).collect()
     } else {
         fragments.iter().map(classify_fn).collect()
     };
+    #[cfg(target_arch = "wasm32")]
+    let classes: Vec<FaceClass> = fragments.iter().map(classify_fn).collect();
 
     // ── Phase 5: Selection ───────────────────────────────────────────────
 
