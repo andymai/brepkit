@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.5.0](https://github.com/andymai/brepkit/compare/v2.4.1...v2.5.0) (2026-03-15)
+
+
+### Features
+
+* brepjs parity — 11 upstream fixes ([#250](https://github.com/andymai/brepkit/issues/250)) ([b72866c](https://github.com/andymai/brepkit/commit/b72866ceb7440b8477602fc7ca2a9b0a39ad7e28))
+
+
+### Performance
+
+* **nurbs:** buffer-reuse + power-basis Horner evaluation ([#8](https://github.com/andymai/brepkit/issues/8)) ([#251](https://github.com/andymai/brepkit/issues/251)) ([62e7013](https://github.com/andymai/brepkit/commit/62e70134adafbf6a15fbba5e1b05ce57f56dec76))
+
 ## [2.4.1](https://github.com/andymai/brepkit/compare/v2.4.0...v2.4.1) (2026-03-15)
 
 
