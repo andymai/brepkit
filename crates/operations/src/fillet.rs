@@ -1566,14 +1566,8 @@ pub fn fillet_rolling_ball(
                                 let e_start = edge.start();
                                 let e_end = edge.end();
                                 let curve = edge.curve().clone();
-                                let p_s = topo
-                                    .vertex(e_start)
-                                    .map(brepkit_topology::vertex::Vertex::point)
-                                    .unwrap_or(v_pos);
-                                let p_e = topo
-                                    .vertex(e_end)
-                                    .map(brepkit_topology::vertex::Vertex::point)
-                                    .unwrap_or(v_pos);
+                                let p_s = topo.vertex(e_start)?.point();
+                                let p_e = topo.vertex(e_end)?.point();
                                 let (t_param, sign) = if e_start.index() == vi {
                                     let (t0, _) = curve.domain_with_endpoints(p_s, p_e);
                                     (t0, 1.0)

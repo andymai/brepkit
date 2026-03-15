@@ -27,7 +27,9 @@ use brepkit_operations::revolve::revolve;
 use brepkit_operations::sweep::sweep;
 
 /// Parse a join type string into a [`JoinType`] enum value.
-fn parse_join_type(s: &str) -> Result<JoinType, JsError> {
+///
+/// Used by both the direct WASM binding and the batch dispatcher.
+pub fn parse_join_type_str(s: &str) -> Result<JoinType, WasmError> {
     match s {
         "intersection" => Ok(JoinType::Intersection),
         "arc" => Ok(JoinType::Arc),
@@ -36,8 +38,7 @@ fn parse_join_type(s: &str) -> Result<JoinType, JsError> {
             reason: format!(
                 "unknown join type '{s}', expected 'intersection', 'arc', or 'chamfer'"
             ),
-        }
-        .into()),
+        }),
     }
 }
 
@@ -1140,7 +1141,7 @@ impl BrepKernel {
         join_type: &str,
     ) -> Result<u32, JsError> {
         let face_id = self.resolve_face(face)?;
-        let jt = parse_join_type(join_type)?;
+        let jt = parse_join_type_str(join_type)?;
         let wire_id = brepkit_operations::offset_wire::offset_wire_with_join(
             &mut self.topo,
             face_id,

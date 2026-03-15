@@ -142,7 +142,9 @@ pub fn validate_solid_with_options(
 ) -> Result<ValidationReport, crate::OperationsError> {
     let mut issues = Vec::new();
     let tol = Tolerance::new();
-    let scale = options.tolerance_scale.max(1.0);
+    // Clamp to [0.1, 1000]: below 0.1 risks false positives on exact
+    // geometry, above 1000 makes the check meaningless.
+    let scale = options.tolerance_scale.clamp(0.1, 1000.0);
 
     // 1. Entity counts and Euler characteristic.
     let (f, e, v) = explorer::solid_entity_counts(topo, solid)?;
@@ -526,7 +528,9 @@ pub fn validate_solid_relaxed_with_options(
 ) -> Result<ValidationReport, crate::OperationsError> {
     let mut issues = Vec::new();
     let tol = Tolerance::new();
-    let scale = options.tolerance_scale.max(1.0);
+    // Clamp to [0.1, 1000]: below 0.1 risks false positives on exact
+    // geometry, above 1000 makes the check meaningless.
+    let scale = options.tolerance_scale.clamp(0.1, 1000.0);
 
     let faces = explorer::solid_faces(topo, solid)?;
 

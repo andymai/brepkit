@@ -986,16 +986,8 @@ impl BrepKernel {
                 let jt_str = args["joinType"]
                     .as_str()
                     .ok_or("missing or invalid 'joinType' string")?;
-                let jt = match jt_str {
-                    "intersection" => brepkit_operations::offset_wire::JoinType::Intersection,
-                    "arc" => brepkit_operations::offset_wire::JoinType::Arc,
-                    "chamfer" => brepkit_operations::offset_wire::JoinType::Chamfer,
-                    _ => {
-                        return Err(format!(
-                            "unknown joinType '{jt_str}', expected 'intersection', 'arc', or 'chamfer'"
-                        ));
-                    }
-                };
+                let jt =
+                    super::operations::parse_join_type_str(jt_str).map_err(|e| e.to_string())?;
                 let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
                 let wire_id = brepkit_operations::offset_wire::offset_wire_with_join(
                     &mut self.topo,
