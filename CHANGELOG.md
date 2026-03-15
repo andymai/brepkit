@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.3.0](https://github.com/andymai/brepkit/compare/v2.2.0...v2.3.0) (2026-03-15)
+
+
+### Features
+
+* **boolean:** improve surface preservation in mesh boolean ([#30](https://github.com/andymai/brepkit/issues/30)) ([#231](https://github.com/andymai/brepkit/issues/231)) ([d3dd4d8](https://github.com/andymai/brepkit/commit/d3dd4d86fabb9fe7c06ea8f0e358cf38b774cefa))
+* SSI turning point continuation + smooth surface normals ([#32](https://github.com/andymai/brepkit/issues/32), [#36](https://github.com/andymai/brepkit/issues/36)) ([#229](https://github.com/andymai/brepkit/issues/229)) ([e34e2e5](https://github.com/andymai/brepkit/commit/e34e2e5dc08421cb6234ecbd27b1f4a84c74ec0f))
+* validate SSI curves + G1 fillet chain propagation ([#34](https://github.com/andymai/brepkit/issues/34), [#37](https://github.com/andymai/brepkit/issues/37)) ([#228](https://github.com/andymai/brepkit/issues/228)) ([17c09cd](https://github.com/andymai/brepkit/commit/17c09cd2c0d686fcd1045b6e3e01398d717ddf77))
+
+
+### Bug Fixes
+
+* **fillet:** correct vertex blend spherical cap geometry ([#25](https://github.com/andymai/brepkit/issues/25), closes [#26](https://github.com/andymai/brepkit/issues/26)) ([#227](https://github.com/andymai/brepkit/issues/227)) ([f361e60](https://github.com/andymai/brepkit/commit/f361e6006b29a02d6ae88766e2b9454a0e38ec14))
+
 ## [2.2.0](https://github.com/andymai/brepkit/compare/v2.1.0...v2.2.0) (2026-03-14)
 
 
