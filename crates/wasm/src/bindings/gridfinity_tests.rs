@@ -435,7 +435,7 @@ fn fillet_box_bbox_unchanged() {
     ]"#,
     );
     let parsed = parse_batch(&result);
-    assert_ok(&parsed, 0);
+    assert_ok(&parsed, 1); // boundingBox on unfilleted box
     let bbox_before = ok_bbox(&parsed, 1);
 
     // Fillet might fail — only check bbox if it succeeded.

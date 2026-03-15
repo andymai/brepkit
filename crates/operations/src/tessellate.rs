@@ -5644,11 +5644,7 @@ mod gridfinity_tess_tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use brepkit_topology::Topology;
-
-    /// Get all edge IDs for a solid.
-    fn all_edges(topo: &Topology, solid: SolidId) -> Vec<brepkit_topology::edge::EdgeId> {
-        brepkit_topology::explorer::solid_edges(topo, solid).unwrap()
-    }
+    use brepkit_topology::explorer;
 
     /// Fillet box: triangle count should not explode relative to the box alone.
     ///
@@ -5661,7 +5657,7 @@ mod gridfinity_tess_tests {
         let box_mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
         let box_tris = box_mesh.indices.len() / 3;
 
-        let edges = all_edges(&topo, solid);
+        let edges = explorer::solid_edges(&topo, solid).unwrap();
         let filleted = crate::fillet::fillet_rolling_ball(&mut topo, solid, &edges[..1], 1.0);
         if let Ok(filleted_id) = filleted {
             let fillet_mesh = tessellate_solid(&topo, filleted_id, 0.1).unwrap();
@@ -5681,7 +5677,7 @@ mod gridfinity_tess_tests {
     fn fillet_small_radius_tessellation() {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_box(&mut topo, 20.0, 20.0, 10.0).unwrap();
-        let edges = all_edges(&topo, solid);
+        let edges = explorer::solid_edges(&topo, solid).unwrap();
         let filleted = crate::fillet::fillet_rolling_ball(&mut topo, solid, &edges[..1], 0.5);
         if let Ok(filleted_id) = filleted {
             let mesh = tessellate_solid(&topo, filleted_id, 0.1).unwrap();
@@ -5712,7 +5708,7 @@ mod gridfinity_tess_tests {
     fn fillet_cylinder_triangle_count() {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_cylinder(&mut topo, 5.0, 10.0).unwrap();
-        let edges = all_edges(&topo, solid);
+        let edges = explorer::solid_edges(&topo, solid).unwrap();
         let filleted = crate::fillet::fillet_rolling_ball(&mut topo, solid, &edges[..1], 0.5);
         if let Ok(filleted_id) = filleted {
             let mesh = tessellate_solid(&topo, filleted_id, 0.1).unwrap();
