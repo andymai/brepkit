@@ -560,18 +560,18 @@ fn compound_cut_bbox_accurate() {
 // face count explosion.
 // ═══════════════════════════════════════════════════════════════════════
 
-/// Lip fuse + cut: face count should stay bounded.
+/// Fillet + fuse lip: volume should be reasonable.
 ///
 /// Reproduces the gridfinity stacking lip scenario from #270:
-/// makeBox → fillet edge → fuse lip shape → measure.
-/// With `unify_faces: true` (default), face count stays bounded.
+/// makeBox → fillet edge → fuse lip shape → measure volume.
+/// Exercises the NURBS/torus surface path that caused face explosion.
 ///
-/// Solids: 0=box, 1=lip_box, 2=lip_copy (translated up), 3=fused
+/// Solids: 0=box, 1=filleted, 2=lip_box, 3=fused
 #[test]
-fn gridfinity_lip_fuse_cut_face_count() {
+fn gridfinity_lip_fillet_fuse_volume() {
     let mut k = BrepKernel::new();
 
-    // Batch 1: create box + query edges + fillet one edge.
+    // Batch 1: create box + query edges.
     let r1 = k.execute_batch(
         r#"[
         {"op": "makeBox", "args": {"width": 42, "height": 42, "depth": 7}},
@@ -587,17 +587,15 @@ fn gridfinity_lip_fuse_cut_face_count() {
     assert!(!edges.is_empty(), "box should have edges");
     let edge0 = edges[0].as_u64().unwrap();
 
-    // Fillet first edge.
+    // Fillet first edge — assert success.
     let r2 = k.execute_batch(&format!(
         r#"[{{"op": "fillet", "args": {{"solid": 0, "radius": 0.8, "edges": [{edge0}]}}}}]"#
     ));
     let p2 = parse_batch(&r2);
-    if p2[0].get("error").is_some() {
-        return; // Fillet failed — skip the rest.
-    }
+    assert_ok(&p2, 0);
     let filleted_handle = p2[0]["ok"].as_u64().unwrap();
 
-    // Batch 3: create lip shape, fuse, then measure.
+    // Create lip shape, fuse, then measure volume.
     let r3 = k.execute_batch(&format!(
         r#"[
         {{"op": "makeBox", "args": {{"width": 44, "height": 44, "depth": 2}}}},
@@ -607,18 +605,14 @@ fn gridfinity_lip_fuse_cut_face_count() {
     ]"#,
     ));
     let p3 = parse_batch(&r3);
-
-    // Fuse may fail for complex filleted geometry — verify if it succeeded.
-    if p3[2].get("ok").is_some() {
-        let vol = ok_f64(&p3, 3);
-        // Box volume = 42×42×7 = 12348, lip = 44×44×2 = 3872.
-        // They're adjacent (sharing z=7 plane), so expected ≈ 16220 minus
-        // fillet material. Volume must be positive and reasonable.
-        assert!(
-            vol > 10000.0 && vol < 20000.0,
-            "gridfinity lip fuse volume should be ~16000: got {vol:.0} (issue #270)"
-        );
-    }
+    assert_ok(&p3, 2);
+    let vol = ok_f64(&p3, 3);
+    // Box 42×42×7 = 12348, lip 44×44×2 = 3872, adjacent at z=7.
+    // Expected ≈ 16220 minus fillet material.
+    assert!(
+        vol > 10000.0 && vol < 20000.0,
+        "gridfinity lip fuse volume should be ~16000: got {vol:.0} (issue #270)"
+    );
 }
 
 /// Box volume sanity check.
