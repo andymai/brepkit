@@ -825,6 +825,10 @@ impl BrepKernel {
     /// Apply variable-radius fillets to edges.
     ///
     /// `json` is a JSON string: `[{"edge": u32, "law": "constant"|"linear"|"scurve", "start": f64, "end": f64}]`
+    ///
+    /// Also accepts brepjs-style fields: `startRadius`/`endRadius` as aliases for `start`/`end`.
+    /// When `law` is omitted and `startRadius` != `endRadius`, the law auto-detects as `"linear"`.
+    ///
     /// Returns a new solid handle.
     #[wasm_bindgen(js_name = "filletVariable")]
     pub fn fillet_variable(&mut self, solid: u32, json: &str) -> Result<u32, JsError> {
@@ -841,23 +845,32 @@ impl BrepKernel {
                     reason: "missing 'edge' in fillet spec".into(),
                 })? as u32;
             let edge_id = self.resolve_edge(edge_handle)?;
-            let law_str = spec["law"].as_str().unwrap_or("constant");
+            // Accept both brepkit-native ("start"/"end") and brepjs ("startRadius"/"endRadius")
+            let start_val = spec["start"]
+                .as_f64()
+                .or_else(|| spec["startRadius"].as_f64());
+            let end_val = spec["end"].as_f64().or_else(|| spec["endRadius"].as_f64());
+
+            // Auto-detect law: if no "law" field but start != end, use "linear"
+            let law_str = spec["law"]
+                .as_str()
+                .unwrap_or_else(|| match (start_val, end_val) {
+                    (Some(s), Some(e)) if (s - e).abs() > f64::EPSILON => "linear",
+                    _ => "constant",
+                });
             let law = match law_str {
                 "linear" => {
-                    let s = spec["start"].as_f64().unwrap_or(1.0);
-                    let e = spec["end"].as_f64().unwrap_or(1.0);
+                    let s = start_val.unwrap_or(1.0);
+                    let e = end_val.unwrap_or(1.0);
                     brepkit_operations::fillet::FilletRadiusLaw::Linear { start: s, end: e }
                 }
                 "scurve" => {
-                    let s = spec["start"].as_f64().unwrap_or(1.0);
-                    let e = spec["end"].as_f64().unwrap_or(1.0);
+                    let s = start_val.unwrap_or(1.0);
+                    let e = end_val.unwrap_or(1.0);
                     brepkit_operations::fillet::FilletRadiusLaw::SCurve { start: s, end: e }
                 }
                 _ => {
-                    let r = spec["radius"]
-                        .as_f64()
-                        .or_else(|| spec["start"].as_f64())
-                        .unwrap_or(1.0);
+                    let r = spec["radius"].as_f64().or(start_val).unwrap_or(1.0);
                     brepkit_operations::fillet::FilletRadiusLaw::Constant(r)
                 }
             };
