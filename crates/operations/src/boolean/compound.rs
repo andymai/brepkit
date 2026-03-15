@@ -1361,18 +1361,7 @@ fn compound_cut_sequential(
     let mut result = target;
     let mut skipped = 0usize;
 
-    // For many-tool sequences, enable unify_faces on intermediate results to
-    // prevent topology explosion from multiplicative chord splitting.
-    // The final tool uses the caller's original options.
-    let intermediate_opts = if tools.len() > 3 {
-        let mut o = opts;
-        o.unify_faces = true;
-        o
-    } else {
-        opts
-    };
-
-    for (i, &tool) in tools.iter().enumerate() {
+    for &tool in tools {
         // AABB pre-filter: skip tools that don't overlap the current target.
         let target_aabb = crate::measure::solid_bounding_box(topo, result)?;
         let tool_aabb = crate::measure::solid_bounding_box(topo, tool)?;
@@ -1380,12 +1369,7 @@ fn compound_cut_sequential(
             skipped += 1;
             continue;
         }
-        let use_opts = if i < tools.len() - 1 {
-            intermediate_opts
-        } else {
-            opts
-        };
-        result = boolean_with_options(topo, BooleanOp::Cut, result, tool, use_opts)?;
+        result = boolean_with_options(topo, BooleanOp::Cut, result, tool, opts)?;
     }
 
     // Post-pass: unify co-surface faces when many tools cause fragmentation.

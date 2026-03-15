@@ -82,11 +82,12 @@ impl Default for ValidationOptions {
     }
 }
 
-/// Compute the Euler characteristic (V - E + F) for a solid.
+/// Compute the raw Euler characteristic (V - E + F) for a solid.
 ///
-/// A closed, manifold solid should have Euler characteristic 2.
-/// Values other than 2 indicate topological defects (missing faces,
-/// non-manifold edges, etc.).
+/// Returns the unmodified V - E + F value. For a genus-0 closed manifold
+/// solid without inner wire loops this equals 2. Solids with through-holes
+/// (genus > 0) or inner loops will have different values — use
+/// [`validate_solid`] for a full topological check that accounts for these.
 ///
 /// # Errors
 ///

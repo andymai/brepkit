@@ -2721,7 +2721,7 @@ fn boolean_fuse_overlapping_boxes_positive_volume() {
 /// Sequential compound cut with many tools should produce a valid solid
 /// with bounded face count (unify_faces prevents explosion).
 #[test]
-fn compound_cut_sequential_preserves_volume() {
+fn compound_cut_sequential_reduces_volume() {
     let mut topo = Topology::new();
     let target = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
     let original_vol = crate::measure::solid_volume(&topo, target, 0.01).unwrap();
