@@ -85,17 +85,17 @@ pub fn uniform_knot_step(knots: &[f64], degree: usize) -> Option<f64> {
     Some(step)
 }
 
-/// Compute the non-zero basis functions at parameter `u` (A2.2).
+/// Maximum output degree for stack-allocated caller buffers.
 ///
-/// Returns a vector of length `degree + 1` containing `N_{span-degree,degree}(u)`
-/// through `N_{span,degree}(u)`.
+/// Callers can use `[f64; MAX_STACK_OUTPUT + 1]` for degrees up to this value.
+/// Covers all practical CAD usage (cubic through septic).
+pub const MAX_STACK_OUTPUT: usize = 8;
+
+/// Write non-zero basis function values into `out` (A2.2, zero-allocation variant).
 ///
-/// The `left` and `right` temporaries are stack-allocated for degrees up to
-/// [`MAX_STACK_DEGREE`] (covers all practical CAD usage), falling back to heap
-/// allocation for higher degrees.
-#[must_use]
-pub fn basis_funs(span: usize, u: f64, degree: usize, knots: &[f64]) -> Vec<f64> {
-    let mut n = vec![0.0; degree + 1];
+/// `out` must have length >= `degree + 1`. Writes `N_{span-degree,degree}(u)`
+/// through `N_{span,degree}(u)` into `out[0..=degree]`.
+pub fn basis_funs_into(span: usize, u: f64, degree: usize, knots: &[f64], out: &mut [f64]) {
     // Stack-allocate left/right temporaries for typical degrees.
     let mut left_buf = [0.0_f64; MAX_STACK_DEGREE + 1];
     let mut right_buf = [0.0_f64; MAX_STACK_DEGREE + 1];
@@ -109,20 +109,33 @@ pub fn basis_funs(span: usize, u: f64, degree: usize, knots: &[f64]) -> Vec<f64>
         (&mut left_vec, &mut right_vec)
     };
 
-    n[0] = 1.0;
+    out[0] = 1.0;
 
     for j in 1..=degree {
         left[j] = u - knots[span + 1 - j];
         right[j] = knots[span + j] - u;
         let mut saved = 0.0;
         for r in 0..j {
-            let temp = n[r] / (right[r + 1] + left[j - r]);
-            n[r] = right[r + 1].mul_add(temp, saved);
+            let temp = out[r] / (right[r + 1] + left[j - r]);
+            out[r] = right[r + 1].mul_add(temp, saved);
             saved = left[j - r] * temp;
         }
-        n[j] = saved;
+        out[j] = saved;
     }
+}
 
+/// Compute the non-zero basis functions at parameter `u` (A2.2).
+///
+/// Returns a vector of length `degree + 1` containing `N_{span-degree,degree}(u)`
+/// through `N_{span,degree}(u)`.
+///
+/// The `left` and `right` temporaries are stack-allocated for degrees up to
+/// [`MAX_STACK_DEGREE`] (covers all practical CAD usage), falling back to heap
+/// allocation for higher degrees.
+#[must_use]
+pub fn basis_funs(span: usize, u: f64, degree: usize, knots: &[f64]) -> Vec<f64> {
+    let mut n = vec![0.0; degree + 1];
+    basis_funs_into(span, u, degree, knots, &mut n);
     n
 }
 
@@ -340,9 +353,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn basis_funs_into_matches_basis_funs() {
+        let knots = cubic_knots();
+        let span = find_span(6, 3, 1.5, &knots);
+        let expected = basis_funs(span, 1.5, 3, &knots);
+        let mut out = [0.0f64; 4];
+        basis_funs_into(span, 1.5, 3, &knots, &mut out);
+        for (a, b) in expected.iter().zip(out.iter()) {
+            assert!((a - b).abs() < 1e-15, "mismatch: {a} vs {b}");
+        }
+    }
+
     use proptest::prelude::*;
 
     proptest! {
+        #[test]
+        fn prop_basis_funs_into_matches(u in 0.0f64..=3.0) {
+            let knots = cubic_knots();
+            let span = find_span(6, 3, u, &knots);
+            let expected = basis_funs(span, u, 3, &knots);
+            let mut out = [0.0f64; 4];
+            basis_funs_into(span, u, 3, &knots, &mut out);
+            for (a, b) in expected.iter().zip(out.iter()) {
+                prop_assert!((a - b).abs() < 1e-14);
+            }
+        }
+
         #[test]
         fn prop_partition_of_unity(u in 0.0f64..=3.0) {
             let knots = cubic_knots();
