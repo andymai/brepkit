@@ -962,6 +962,7 @@ impl BrepKernel {
 
         let options = SweepOptions {
             contact_mode: mode,
+            corner_mode: brepkit_operations::sweep::SweepCornerMode::default(),
             scale_law,
             segments: segments as usize,
         };
