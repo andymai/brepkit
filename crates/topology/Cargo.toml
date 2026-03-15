@@ -10,6 +10,7 @@ description = "B-Rep topological data structures for brepkit"
 [dependencies]
 brepkit-math.workspace = true
 thiserror.workspace = true
+smallvec.workspace = true
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]

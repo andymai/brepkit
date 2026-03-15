@@ -6,6 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use smallvec::SmallVec;
+
 use crate::Topology;
 use crate::TopologyError;
 use crate::edge::EdgeId;
@@ -138,8 +140,8 @@ pub fn face_vertices(topo: &Topology, face: FaceId) -> Result<Vec<VertexId>, Top
 pub fn edge_to_face_map(
     topo: &Topology,
     solid: SolidId,
-) -> Result<HashMap<usize, Vec<FaceId>>, TopologyError> {
-    let mut map: HashMap<usize, Vec<FaceId>> = HashMap::new();
+) -> Result<HashMap<usize, SmallVec<[FaceId; 2]>>, TopologyError> {
+    let mut map: HashMap<usize, SmallVec<[FaceId; 2]>> = HashMap::new();
 
     for face_id in solid_faces(topo, solid)? {
         // Iterate wire edges directly (without deduplication) so that seam
@@ -190,17 +192,17 @@ pub fn shared_edges(
 /// # Errors
 ///
 /// Returns an error if any topology lookup fails.
-pub fn adjacent_faces(
+pub fn adjacent_faces<V: std::ops::Deref<Target = [FaceId]>>(
     topo: &Topology,
     face: FaceId,
-    edge_face_map: &HashMap<usize, Vec<FaceId>, impl std::hash::BuildHasher>,
+    edge_face_map: &HashMap<usize, V, impl std::hash::BuildHasher>,
 ) -> Result<Vec<FaceId>, TopologyError> {
     let mut seen = HashSet::new();
     let mut neighbors = Vec::new();
 
     for eid in face_edges(topo, face)? {
         if let Some(faces) = edge_face_map.get(&eid.index()) {
-            for &fid in faces {
+            for &fid in &**faces {
                 if fid.index() != face.index() && seen.insert(fid.index()) {
                     neighbors.push(fid);
                 }

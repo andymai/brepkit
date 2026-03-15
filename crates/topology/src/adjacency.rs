@@ -6,6 +6,8 @@
 
 use std::collections::HashMap;
 
+use smallvec::SmallVec;
+
 use crate::Topology;
 use crate::TopologyError;
 use crate::edge::EdgeId;
@@ -19,9 +21,9 @@ use crate::solid::SolidId;
 #[derive(Debug, Clone)]
 pub struct AdjacencyIndex {
     /// Maps each edge to the faces that reference it.
-    edge_faces: HashMap<EdgeId, Vec<FaceId>>,
+    edge_faces: HashMap<EdgeId, SmallVec<[FaceId; 2]>>,
     /// Maps each face to its neighbor faces (those sharing an edge).
-    face_neighbors: HashMap<FaceId, Vec<FaceId>>,
+    face_neighbors: HashMap<FaceId, SmallVec<[FaceId; 6]>>,
     /// Edges referenced by more than 2 faces.
     non_manifold_edges: Vec<EdgeId>,
     /// Edges referenced by exactly 1 face.
@@ -55,7 +57,7 @@ impl AdjacencyIndex {
     /// Returns [`TopologyError`] if any referenced face or wire does not
     /// exist in the topology.
     pub fn build_from_faces(topo: &Topology, faces: &[FaceId]) -> Result<Self, TopologyError> {
-        let mut edge_faces: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
+        let mut edge_faces: HashMap<EdgeId, SmallVec<[FaceId; 2]>> = HashMap::new();
 
         // Walk all faces -> wires -> oriented edges to build edge_faces map.
         for &face_id in faces {
@@ -78,7 +80,7 @@ impl AdjacencyIndex {
         // Classify edges and build face neighbors.
         let mut non_manifold_edges = Vec::new();
         let mut boundary_edges = Vec::new();
-        let mut face_neighbors: HashMap<FaceId, Vec<FaceId>> = HashMap::new();
+        let mut face_neighbors: HashMap<FaceId, SmallVec<[FaceId; 6]>> = HashMap::new();
 
         // Pre-populate face_neighbors with empty vecs for all faces.
         for &face_id in faces {
@@ -119,9 +121,7 @@ impl AdjacencyIndex {
     /// Returns an empty slice if the edge is not in this index.
     #[must_use]
     pub fn faces_for_edge(&self, edge: EdgeId) -> &[FaceId] {
-        self.edge_faces
-            .get(&edge)
-            .map_or(&[], std::vec::Vec::as_slice)
+        self.edge_faces.get(&edge).map_or(&[], SmallVec::as_slice)
     }
 
     /// Returns the neighbor faces of the given face.
@@ -131,7 +131,7 @@ impl AdjacencyIndex {
     pub fn neighbors_of_face(&self, face: FaceId) -> &[FaceId] {
         self.face_neighbors
             .get(&face)
-            .map_or(&[], std::vec::Vec::as_slice)
+            .map_or(&[], SmallVec::as_slice)
     }
 
     /// Returns `true` if all edges are shared by exactly 2 faces (manifold)
@@ -156,8 +156,10 @@ impl AdjacencyIndex {
     /// Returns the full edge-to-faces map.
     ///
     /// Provided as a compatibility shim for callers that need direct map access.
+    /// Values are `SmallVec<[FaceId; 2]>` (inline for manifold edges); access
+    /// through `Deref<Target=[FaceId]>` for forward-compatible code.
     #[must_use]
-    pub fn edge_faces_map(&self) -> &HashMap<EdgeId, Vec<FaceId>> {
+    pub fn edge_faces_map(&self) -> &HashMap<EdgeId, SmallVec<[FaceId; 2]>> {
         &self.edge_faces
     }
 }
