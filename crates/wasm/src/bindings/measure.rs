@@ -174,6 +174,32 @@ impl BrepKernel {
         Ok(report.error_count() as u32)
     }
 
+    /// Validate a solid with configurable tolerance scaling.
+    ///
+    /// `tolerance_scale` multiplies geometric tolerances used for the
+    /// face-normal and face-area checks. Use `10.0` to reduce false
+    /// positives on NURBS faces from fillet/shell operations.
+    ///
+    /// Returns 0 if the solid is valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "validateSolidWithOptions")]
+    pub fn validate_solid_with_options(
+        &self,
+        solid: u32,
+        tolerance_scale: f64,
+    ) -> Result<u32, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let options = brepkit_operations::validate::ValidationOptions { tolerance_scale };
+        let report = brepkit_operations::validate::validate_solid_with_options(
+            &self.topo, solid_id, &options,
+        )?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(report.error_count() as u32)
+    }
+
     // ── Distance ──────────────────────────────────────────────────
 
     /// Compute minimum distance from a point to a solid.
