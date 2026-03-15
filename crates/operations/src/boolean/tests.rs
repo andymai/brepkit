@@ -2680,10 +2680,10 @@ fn test_boolean_large_scale_vertex_merge() {
 
 // ── Surface preservation in mesh boolean path ────────────────────
 
-/// Fuse a box and cylinder, then verify the result has a cylinder face
-/// surface preserved (not degraded to planar triangles).
+/// Fuse a box and cylinder, then verify the result has positive volume.
+/// Uses the analytic path since face counts are below the mesh boolean threshold.
 #[test]
-fn mesh_boolean_preserves_cylinder_surface() {
+fn boolean_fuse_box_cylinder_positive_volume() {
     let mut topo = Topology::new();
     let b = crate::primitives::make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
     let c = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
@@ -2696,33 +2696,13 @@ fn mesh_boolean_preserves_cylinder_surface() {
     assert!(result.is_ok(), "fuse should succeed: {:?}", result.err());
 
     let result_solid = result.unwrap();
-    let solid = topo.solid(result_solid).unwrap();
-    let shell = topo.shell(solid.outer_shell()).unwrap();
-
-    // Check if any result face has a Cylinder surface.
-    let has_cylinder = shell.faces().iter().any(|&fid| {
-        let face = topo.face(fid).unwrap();
-        matches!(face.surface(), FaceSurface::Cylinder(_))
-    });
-
-    // The analytic path preserves cylinders; if mesh boolean path was used,
-    // the reclassification should also preserve them. Either way, check that
-    // the result is geometrically valid with positive volume.
     let vol = crate::measure::solid_volume(&topo, result_solid, 0.01).unwrap();
     assert!(vol > 0.0, "fused solid should have positive volume: {vol}");
-
-    // If the cylinder surface was preserved (expected for both analytic and
-    // mesh paths with reclassification), assert it.
-    if !has_cylinder {
-        // Not a hard failure — the analytic path may handle this without
-        // needing reclassification. Log it for diagnostics.
-        eprintln!("NOTE: no cylinder face found in result — check boolean path selection");
-    }
 }
 
-/// Sanity check: boolean result of overlapping boxes should have positive volume.
+/// Sanity check: boolean fuse of overlapping boxes should have positive volume.
 #[test]
-fn mesh_boolean_result_has_positive_volume() {
+fn boolean_fuse_overlapping_boxes_positive_volume() {
     let mut topo = Topology::new();
     let a = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
     let b = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
