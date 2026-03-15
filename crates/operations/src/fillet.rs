@@ -1545,17 +1545,71 @@ pub fn fillet_rolling_ball(
                     }
                 }
 
+                // Determine whether this vertex corner is convex or concave
+                // by computing the triple product of edge tangent vectors
+                // pointing away from the vertex. A positive triple product
+                // indicates a convex corner; negative indicates concave.
+                let is_concave = if let Some(fillet_edges) = vertex_fillet_edges.get(&vi) {
+                    if fillet_edges.len() >= 3 {
+                        // Collect tangent vectors pointing away from the vertex.
+                        let mut tangents: Vec<Vec3> = Vec::new();
+                        for &eid in fillet_edges.iter().take(3) {
+                            if let Ok(edge) = topo.edge(eid) {
+                                let e_start = edge.start();
+                                let e_end = edge.end();
+                                let curve = edge.curve().clone();
+                                let p_s = topo
+                                    .vertex(e_start)
+                                    .map(brepkit_topology::vertex::Vertex::point)
+                                    .unwrap_or(v_pos);
+                                let p_e = topo
+                                    .vertex(e_end)
+                                    .map(brepkit_topology::vertex::Vertex::point)
+                                    .unwrap_or(v_pos);
+                                let (t_param, sign) = if e_start.index() == vi {
+                                    // Vertex is at start → tangent at t=0 points away
+                                    let (t0, _) = curve.domain_with_endpoints(p_s, p_e);
+                                    (t0, 1.0)
+                                } else {
+                                    // Vertex is at end → tangent at t=1 points toward
+                                    // vertex, so negate
+                                    let (_, t1) = curve.domain_with_endpoints(p_s, p_e);
+                                    (t1, -1.0)
+                                };
+                                let tan = curve.tangent_with_endpoints(t_param, p_s, p_e);
+                                if let Ok(n) = (tan * sign).normalize() {
+                                    tangents.push(n);
+                                }
+                            }
+                        }
+                        if tangents.len() == 3 {
+                            // Triple product: t0 · (t1 × t2)
+                            // Negative → concave corner
+                            tangents[0].dot(tangents[1].cross(tangents[2])) < 0.0
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
                 // Sphere center: vertex offset inward by R along each face normal.
-                // For outward-pointing face normals, "inward" means subtracting.
+                // For outward-pointing face normals on a convex corner, "inward"
+                // means subtracting. For concave corners the offset direction
+                // is reversed (we add instead of subtract).
                 let normal_sum = face_normals
                     .iter()
                     .fold(Vec3::new(0.0, 0.0, 0.0), |acc, n| {
                         Vec3::new(acc.x() + n.x(), acc.y() + n.y(), acc.z() + n.z())
                     });
+                let offset_sign = if is_concave { 1.0 } else { -1.0 };
                 let sphere_center = Point3::new(
-                    v_pos.x() - radius * normal_sum.x(),
-                    v_pos.y() - radius * normal_sum.y(),
-                    v_pos.z() - radius * normal_sum.z(),
+                    v_pos.x() + offset_sign * radius * normal_sum.x(),
+                    v_pos.y() + offset_sign * radius * normal_sum.y(),
+                    v_pos.z() + offset_sign * radius * normal_sum.z(),
                 );
 
                 let p0 = ordered_points[0];
