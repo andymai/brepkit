@@ -156,10 +156,10 @@ impl BrepKernel {
             .map(|&eid| -> Result<serde_json::Value, JsError> {
                 let e = self.topo.edge(eid)?;
                 let curve_type = match e.curve() {
-                    brepkit_topology::edge::EdgeCurve::Line => "line",
-                    brepkit_topology::edge::EdgeCurve::Circle(_) => "circle",
-                    brepkit_topology::edge::EdgeCurve::Ellipse(_) => "ellipse",
-                    brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => "nurbs",
+                    EdgeCurve::Line => "line",
+                    EdgeCurve::Circle(_) => "circle",
+                    EdgeCurve::Ellipse(_) => "ellipse",
+                    EdgeCurve::NurbsCurve(_) => "nurbs",
                 };
                 let curve_params = match e.curve() {
                     EdgeCurve::Line => serde_json::json!(null),
@@ -235,18 +235,25 @@ impl BrepKernel {
                         "majorRadius": t.major_radius(),
                         "minorRadius": t.minor_radius(),
                     }),
-                    FaceSurface::Nurbs(n) => serde_json::json!({
-                        "degreeU": n.degree_u(),
-                        "degreeV": n.degree_v(),
-                        "controlPoints": n.control_points().iter()
-                            .map(|row| row.iter()
-                                .map(|p| [p.x(), p.y(), p.z()])
-                                .collect::<Vec<_>>())
-                            .collect::<Vec<_>>(),
-                        "weights": n.weights().to_vec(),
-                        "knotsU": n.knots_u().to_vec(),
-                        "knotsV": n.knots_v().to_vec(),
-                    }),
+                    FaceSurface::Nurbs(n) => {
+                        let cps: Vec<Vec<serde_json::Value>> = n
+                            .control_points()
+                            .iter()
+                            .map(|row| {
+                                row.iter()
+                                    .map(|p| serde_json::json!([p.x(), p.y(), p.z()]))
+                                    .collect()
+                            })
+                            .collect();
+                        serde_json::json!({
+                            "degreeU": n.degree_u(),
+                            "degreeV": n.degree_v(),
+                            "controlPoints": cps,
+                            "weights": n.weights(),
+                            "knotsU": n.knots_u(),
+                            "knotsV": n.knots_v(),
+                        })
+                    }
                 };
                 let outer_wire = self.topo.wire(f.outer_wire())?;
                 let outer_edges: Vec<u32> = outer_wire
@@ -303,10 +310,11 @@ impl BrepKernel {
 
     /// Reconstruct a solid from a `toBREP` JSON string.
     ///
-    /// Currently supports planar faces with line edges. Non-line edges are
-    /// approximated as lines (straight segments between start/end vertices).
-    /// Non-planar surfaces are approximated as planes computed from the wire
-    /// vertex positions.
+    /// Supports all edge curve types (line, circle, ellipse, NURBS) and
+    /// all surface types (plane, cylinder, cone, sphere, torus, NURBS)
+    /// via `curveParams` and `surfaceParams` in the JSON. Unrecognized
+    /// edge types fall back to lines; unrecognized surface types fall back
+    /// to planes computed from wire vertices.
     ///
     /// Returns a solid handle.
     ///
