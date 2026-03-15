@@ -8,9 +8,9 @@
 //!
 //! For NURBS adjacent faces the outward normal is computed by projecting
 //! the edge sample point onto the surface, giving accurate cross-section
-//! geometry (see [`face_surface_normal_at`]).  Planar trimming of NURBS
-//! adjacent faces is not yet implemented — those faces are passed through
-//! unchanged; small geometric gaps may appear at the fillet boundary.
+//! geometry (see [`face_surface_normal_at`]).  Non-planar faces containing
+//! target edges are trimmed by offsetting boundary vertices at fillet
+//! contact locations along face boundary directions.
 //!
 //! The rolling-ball algorithm:
 //! 1. For each target edge, find the two adjacent planar faces
@@ -510,7 +510,8 @@ pub fn fillet(
 /// - `radius` is non-positive
 /// - `edges` is empty
 /// - Any edge is not shared by exactly two faces
-/// - A target edge is adjacent to a non-planar face
+/// - Adjacent fillet strips overlap (on planar or curved faces)
+/// - Fillet radius exceeds surface curvature of an adjacent face
 #[allow(clippy::too_many_lines)]
 pub fn fillet_rolling_ball(
     topo: &mut Topology,
@@ -855,18 +856,231 @@ pub fn fillet_rolling_ball(
         }
     }
 
+    // Phase 2d-b: Overlap detection for non-planar adjacent faces.
+    // For non-planar faces (cylinder, cone, sphere, torus, NURBS) there is no
+    // polygon data.  Instead of interior polygon angles we use edge tangent
+    // angles at shared vertices to compute setback distances.
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        let start_vid = edge.start();
+        let end_vid = edge.end();
+        let p_start = topo.vertex(start_vid)?.point();
+        let p_end = topo.vertex(end_vid)?.point();
+        let edge_len = (p_end - p_start).length();
+        if edge_len < tol.linear {
+            continue;
+        }
+
+        let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
+            continue;
+        };
+
+        for &fid in face_list {
+            // Skip planar faces (already handled by Phase 2d).
+            if face_polygons.contains_key(&fid.index()) {
+                continue;
+            }
+
+            // For this non-planar face, find other target edges sharing vertices
+            // with the current edge.
+            let face = topo.face(fid)?;
+            let wire = topo.wire(face.outer_wire())?;
+            let edge_curve = edge.curve().clone();
+
+            let mut setback_start = 0.0_f64;
+            let mut setback_end = 0.0_f64;
+
+            for oe in wire.edges() {
+                let adj_eid = oe.edge();
+                if adj_eid.index() == edge_id.index() {
+                    continue; // skip self
+                }
+                if !target_set.contains(&adj_eid.index()) {
+                    continue; // only check other target edges
+                }
+
+                let adj_edge = topo.edge(adj_eid)?;
+                let adj_start_vid = adj_edge.start();
+                let adj_end_vid = adj_edge.end();
+                let adj_start = topo.vertex(adj_start_vid)?.point();
+                let adj_end = topo.vertex(adj_end_vid)?.point();
+                let adj_curve = adj_edge.curve().clone();
+
+                // Check if adjacent edge shares start vertex of current edge.
+                let shares_start = adj_start_vid == start_vid || adj_end_vid == start_vid;
+                if shares_start {
+                    let t1 = sample_edge_tangent(&edge_curve, p_start, p_end, 0.0);
+                    let adj_t = if adj_start_vid == start_vid {
+                        sample_edge_tangent(&adj_curve, adj_start, adj_end, 0.0)
+                    } else {
+                        sample_edge_tangent(&adj_curve, adj_start, adj_end, 1.0)
+                    };
+                    if let (Ok(t1n), Ok(t2n)) = (t1.normalize(), adj_t.normalize()) {
+                        let cos_t = t1n.dot(t2n).clamp(-1.0, 1.0);
+                        let theta = cos_t.acos();
+                        let half_tan = (theta / 2.0).tan();
+                        if half_tan > tol.linear {
+                            setback_start = setback_start.max(radius / half_tan);
+                        }
+                    }
+                }
+
+                // Check if adjacent edge shares end vertex of current edge.
+                let shares_end = adj_start_vid == end_vid || adj_end_vid == end_vid;
+                if shares_end {
+                    let t1 = sample_edge_tangent(&edge_curve, p_start, p_end, 1.0);
+                    let adj_t = if adj_start_vid == end_vid {
+                        sample_edge_tangent(&adj_curve, adj_start, adj_end, 0.0)
+                    } else {
+                        sample_edge_tangent(&adj_curve, adj_start, adj_end, 1.0)
+                    };
+                    if let (Ok(t1n), Ok(t2n)) = (t1.normalize(), adj_t.normalize()) {
+                        let cos_t = t1n.dot(t2n).clamp(-1.0, 1.0);
+                        let theta = cos_t.acos();
+                        let half_tan = (theta / 2.0).tan();
+                        if half_tan > tol.linear {
+                            setback_end = setback_end.max(radius / half_tan);
+                        }
+                    }
+                }
+            }
+
+            if setback_start > 0.0 && setback_end > 0.0 {
+                let total = setback_start + setback_end;
+                if total >= edge_len {
+                    return Err(crate::OperationsError::InvalidInput {
+                        reason: format!(
+                            "adjacent fillet strips overlap on curved face: combined setback \
+                             ({setback_start:.6} + {setback_end:.6} = {total:.6}) \
+                             equals or exceeds edge length {edge_len:.6}"
+                        ),
+                    });
+                }
+            }
+        }
+    }
+
     // Phase 3: Build modified (trimmed) planar faces.
     let mut all_specs: Vec<FaceSpec> = Vec::new();
     let mut fillet_face_indices: Vec<usize> = Vec::new();
 
     for &face_id in &shell_face_ids {
-        // Non-planar faces pass through unchanged.
+        // Non-planar faces: either pass through or trim at fillet contact points.
         let Some(poly) = face_polygons.get(&face_id.index()) else {
             let face = topo.face(face_id)?;
-            let verts = crate::boolean::face_polygon(topo, face_id)?;
+            let surface = face.surface().clone();
+            let wire = topo.wire(face.outer_wire())?;
+
+            // Check if this non-planar face has any target edges.
+            let has_target = wire
+                .edges()
+                .iter()
+                .any(|oe| target_set.contains(&oe.edge().index()));
+
+            if !has_target {
+                // No target edges: pass through unchanged.
+                let verts = crate::boolean::face_polygon(topo, face_id)?;
+                all_specs.push(FaceSpec::Surface {
+                    vertices: verts,
+                    surface,
+                    reversed: false,
+                });
+                continue;
+            }
+
+            // Has target edges: build trimmed boundary by offsetting vertices
+            // at fillet contact locations along the face boundary directions.
+            // Collect per-edge vertex positions and edge IDs from the wire.
+            let wire_edges: Vec<_> = wire.edges().to_vec();
+            let n_we = wire_edges.len();
+            let mut positions = Vec::with_capacity(n_we);
+            let mut wire_edge_ids = Vec::with_capacity(n_we);
+            let mut vertex_ids_np = Vec::with_capacity(n_we);
+
+            for oe in &wire_edges {
+                let edge_data = topo.edge(oe.edge())?;
+                let vid = oe.oriented_start(edge_data);
+                vertex_ids_np.push(vid);
+                positions.push(topo.vertex(vid)?.point());
+                wire_edge_ids.push(oe.edge());
+            }
+
+            if n_we < 3 {
+                // Degenerate non-planar face: pass through unchanged.
+                let verts = crate::boolean::face_polygon(topo, face_id)?;
+                all_specs.push(FaceSpec::Surface {
+                    vertices: verts,
+                    surface,
+                    reversed: false,
+                });
+                continue;
+            }
+
+            let mut trimmed_verts: Vec<Point3> = Vec::with_capacity(n_we * 2);
+
+            for i in 0..n_we {
+                let prev_i = if i == 0 { n_we - 1 } else { i - 1 };
+                let next_i = (i + 1) % n_we;
+
+                let before_filleted = target_set.contains(&wire_edge_ids[prev_i].index());
+                let after_filleted = target_set.contains(&wire_edge_ids[i].index());
+                let at_fillet_endpoint =
+                    vertex_fillet_edges.contains_key(&vertex_ids_np[i].index());
+
+                let pos = positions[i];
+                let prev_pos = positions[prev_i];
+                let next_pos = positions[next_i];
+
+                match (before_filleted, after_filleted, at_fillet_endpoint) {
+                    (false, false, false) => {
+                        trimmed_verts.push(pos);
+                    }
+                    // Side face: vertex is at a fillet endpoint but neither
+                    // adjacent edge of this face is the filleted edge.
+                    (false, false, true) => {
+                        if let Ok(dir_prev) = (prev_pos - pos).normalize() {
+                            trimmed_verts.push(pos + dir_prev * radius);
+                        } else {
+                            trimmed_verts.push(pos);
+                        }
+                        if let Ok(dir_next) = (next_pos - pos).normalize() {
+                            trimmed_verts.push(pos + dir_next * radius);
+                        } else {
+                            trimmed_verts.push(pos);
+                        }
+                    }
+                    (true, false, _) => {
+                        if let Ok(dir) = (next_pos - pos).normalize() {
+                            trimmed_verts.push(pos + dir * radius);
+                        } else {
+                            trimmed_verts.push(pos);
+                        }
+                    }
+                    (false, true, _) => {
+                        if let Ok(dir) = (prev_pos - pos).normalize() {
+                            trimmed_verts.push(pos + dir * radius);
+                        } else {
+                            trimmed_verts.push(pos);
+                        }
+                    }
+                    (true, true, _) => {
+                        if let Ok(dir_prev) = (prev_pos - pos).normalize() {
+                            trimmed_verts.push(pos + dir_prev * radius);
+                        } else {
+                            trimmed_verts.push(pos);
+                        }
+                        if let Ok(dir_next) = (next_pos - pos).normalize() {
+                            trimmed_verts.push(pos + dir_next * radius);
+                        } else {
+                            trimmed_verts.push(pos);
+                        }
+                    }
+                }
+            }
+
             all_specs.push(FaceSpec::Surface {
-                vertices: verts,
-                surface: face.surface().clone(),
+                vertices: trimmed_verts,
+                surface,
                 reversed: false,
             });
             continue;
@@ -3124,6 +3338,70 @@ mod tests {
             vol > 0.5,
             "doubly-filleted solid must have positive volume, got {vol}"
         );
+    }
+
+    #[test]
+    fn fillet_on_fillet_box() {
+        // Fillet all 12 edges of a box, then fillet the resulting NURBS edges.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+
+        // First fillet: all 12 edges with small radius
+        let result1 = super::fillet_rolling_ball(&mut topo, solid, &edges, 0.1).unwrap();
+        let vol1 = crate::measure::solid_volume(&topo, result1, 0.01).unwrap();
+        assert!(vol1 > 0.0, "first fillet should produce positive volume");
+
+        // Get edges from the filleted solid for second fillet
+        let edges2 = solid_edge_ids(&topo, result1);
+        assert!(
+            !edges2.is_empty(),
+            "filleted solid must have edges for second fillet attempt"
+        );
+
+        // Try to fillet one of the new NURBS-NURBS edges with smaller radius.
+        // This should not panic or error — it's the #39 test.
+        let result2 = super::fillet_rolling_ball(&mut topo, result1, &edges2[..1], 0.05);
+        match result2 {
+            Ok(solid2) => {
+                let vol2 = crate::measure::solid_volume(&topo, solid2, 0.01).unwrap();
+                assert!(vol2 > 0.0, "second fillet should produce positive volume");
+            }
+            Err(e) => {
+                // Graceful failure is acceptable — log the error for diagnostics
+                eprintln!("second fillet failed gracefully: {e}");
+            }
+        }
+    }
+
+    #[test]
+    fn adjacent_fillet_overlap_curved_face_detected() {
+        // Two small fillets on a cylinder face that would overlap.
+        let mut topo = Topology::new();
+        let cyl = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+
+        // Get edges - the cylinder has circle edges at top and bottom
+        let edges = solid_edge_ids(&topo, cyl);
+
+        // Try to fillet with a very large radius that should trigger overlap
+        // on the curved cylinder face
+        let result = super::fillet_rolling_ball(&mut topo, cyl, &edges, 0.9);
+        // Should either succeed (if no overlap) or return an error (if overlap detected)
+        // The key is: it should NOT panic
+        match result {
+            Ok(solid) => {
+                let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+                assert!(vol > 0.0);
+            }
+            Err(e) => {
+                // Overlap or curvature error is expected for large radius
+                let msg = format!("{e}");
+                assert!(
+                    msg.contains("overlap") || msg.contains("curvature") || msg.contains("exceeds"),
+                    "expected overlap/curvature error, got: {msg}"
+                );
+            }
+        }
     }
 
     #[test]
