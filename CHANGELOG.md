@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.2](https://github.com/andymai/brepkit/compare/v2.6.1...v2.6.2) (2026-03-15)
+
+
+### Bug Fixes
+
+* restore mesh boolean guard for high face-data entry counts ([#273](https://github.com/andymai/brepkit/issues/273)) ([6ee11f6](https://github.com/andymai/brepkit/commit/6ee11f65258a59c71cb4a9d7c765048dd1d8a9d0)), closes [#270](https://github.com/andymai/brepkit/issues/270)
+
 ## [2.6.1](https://github.com/andymai/brepkit/compare/v2.6.0...v2.6.1) (2026-03-15)
 
 
