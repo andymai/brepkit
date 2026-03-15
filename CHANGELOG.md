@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.3.2](https://github.com/andymai/brepkit/compare/v2.3.1...v2.3.2) (2026-03-15)
+
+
+### Performance
+
+* **math:** stack-allocate basis temporaries, add uniform find_span (perf [#7](https://github.com/andymai/brepkit/issues/7)) ([#239](https://github.com/andymai/brepkit/issues/239)) ([44963e2](https://github.com/andymai/brepkit/commit/44963e22df8724fcefdabdee1c1a54f163f4a094))
+* **tessellate:** pre-allocate output vectors (perf [#5](https://github.com/andymai/brepkit/issues/5)) ([#238](https://github.com/andymai/brepkit/issues/238)) ([b81b373](https://github.com/andymai/brepkit/commit/b81b37370fb57565e5bfef15577e9729f86fe3bd))
+* **wasm:** enable simd128 by default (perf [#2](https://github.com/andymai/brepkit/issues/2)) ([#235](https://github.com/andymai/brepkit/issues/235)) ([1b22d97](https://github.com/andymai/brepkit/commit/1b22d972d36c5c3497d9d4ffb56fb0670ba01c8c))
+
 ## [2.3.1](https://github.com/andymai/brepkit/compare/v2.3.0...v2.3.1) (2026-03-15)
 
 
