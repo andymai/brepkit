@@ -62,7 +62,9 @@ fn box_with_cylinder_cuts(topo: &mut Topology, n: usize) -> brepkit_topology::so
 
 fn bench_sequential_cylinder_cuts(c: &mut Criterion) {
     let mut group = c.benchmark_group("sequential_cylinder_cuts");
-    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
 
     for &n in &[4, 16, 64] {
         group.bench_function(format!("N={n}"), |b| {
@@ -82,7 +84,9 @@ fn bench_sequential_cylinder_cuts(c: &mut Criterion) {
 
 fn bench_single_boolean_at_face_count(c: &mut Criterion) {
     let mut group = c.benchmark_group("single_boolean_at_face_count");
-    group.measurement_time(Duration::from_secs(10));
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
 
     // (label, number of pre-cuts to reach approximate initial face count)
     // F=6: bare box (0 pre-cuts)
