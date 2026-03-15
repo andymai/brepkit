@@ -1703,9 +1703,9 @@ pub fn fillet_rolling_ball_propagate_g1(
     seed_edges: &[EdgeId],
     radius: f64,
 ) -> Result<SolidId, crate::OperationsError> {
-    let tol = Tolerance::new();
-    let expanded = expand_g1_chain(topo, solid, seed_edges, tol)?;
-    fillet_rolling_ball(topo, solid, &expanded, radius)
+    // fillet_rolling_ball now performs G1 chain expansion internally,
+    // so we forward directly to avoid expanding twice.
+    fillet_rolling_ball(topo, solid, seed_edges, radius)
 }
 
 /// Law governing how fillet radius varies along an edge.

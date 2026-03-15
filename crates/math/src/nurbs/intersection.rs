@@ -1047,29 +1047,39 @@ fn validate_intersection_curves(
             max_dev = max_dev.max(dev);
         }
 
-        if max_dev > tolerance {
-            // Re-fit from stored sample points with higher fidelity.
-            let refit_curve = refit_from_samples(ic);
-            result.push(refit_curve);
-            continue;
-        }
+        // Use the refitted curve if Phase 1 failed, otherwise the original.
+        let working_curve = if max_dev > tolerance {
+            refit_from_samples(ic)
+        } else {
+            ic.clone()
+        };
 
         // Phase 2: Dual-surface validation — verify the curve lies on
         // both input surfaces by projecting evenly-spaced curve points.
+        let (wt_min, wt_max) = working_curve.curve.domain();
         let n_surface_check = 5;
         let mut max_surface_dev = 0.0_f64;
+        let mut successful_projections = 0_u32;
         for i in 0..n_surface_check {
-            let t = t_min + (t_max - t_min) * i as f64 / (n_surface_check - 1).max(1) as f64;
-            let curve_pt = ic.curve.evaluate(t.clamp(t_min, t_max));
+            let t = wt_min + (wt_max - wt_min) * i as f64 / (n_surface_check - 1).max(1) as f64;
+            let curve_pt = working_curve.curve.evaluate(t.clamp(wt_min, wt_max));
 
             // Project onto surface 1 and measure deviation.
             if let Ok(proj) = project_point_to_surface(s1, curve_pt, tolerance) {
                 max_surface_dev = max_surface_dev.max(proj.distance);
+                successful_projections += 1;
             }
             // Project onto surface 2 and measure deviation.
             if let Ok(proj) = project_point_to_surface(s2, curve_pt, tolerance) {
                 max_surface_dev = max_surface_dev.max(proj.distance);
+                successful_projections += 1;
             }
+        }
+
+        if successful_projections == 0 {
+            // No projections succeeded — can't validate, keep curve as-is.
+            result.push(working_curve);
+            continue;
         }
 
         if max_surface_dev > tolerance {
@@ -1080,7 +1090,7 @@ fn validate_intersection_curves(
             let refit_curve = refit_from_samples(ic);
             result.push(refit_curve);
         } else {
-            result.push(ic.clone());
+            result.push(working_curve);
         }
     }
 
