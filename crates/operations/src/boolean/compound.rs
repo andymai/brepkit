@@ -1387,6 +1387,21 @@ fn compound_cut_sequential(
         };
         result = boolean_with_options(topo, BooleanOp::Cut, result, tool, use_opts)?;
     }
+
+    // Post-pass: unify co-surface faces when many tools cause fragmentation.
+    // This replaces the old per-step intermediate_opts approach which leaked
+    // unify_faces=true onto the final result when trailing tools were skipped.
+    if tools.len() > 3 && !opts.unify_faces && skipped < tools.len() {
+        match crate::heal::unify_faces(topo, result) {
+            Ok(merged) => {
+                log::debug!("[compound_cut_sequential] post-pass unified {merged} face(s)");
+            }
+            Err(e) => {
+                log::debug!("[compound_cut_sequential] unify_faces skipped: {e}");
+            }
+        }
+    }
+
     log::debug!(
         "[compound_cut_sequential] {} tools, {} skipped (disjoint), {:.1}ms",
         tools.len(),
