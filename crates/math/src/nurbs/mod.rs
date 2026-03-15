@@ -7,9 +7,11 @@ pub mod basis;
 pub mod bezier_clip;
 pub mod curve;
 pub mod decompose;
+pub mod evaluator;
 pub mod fitting;
 pub mod intersection;
 pub mod knot_ops;
+pub mod power_basis;
 pub mod projection;
 pub mod self_intersection;
 pub mod surface;
@@ -23,11 +25,13 @@ pub use curve::NurbsCurve;
 pub use decompose::{
     BezierPatch, curve_degree_elevate, curve_to_bezier_segments, surface_to_bezier_patches,
 };
+pub use evaluator::SurfaceEvaluator;
 pub use fitting::{approximate, interpolate};
 pub use knot_ops::{
     curve_knot_insert, curve_knot_refine, curve_knot_remove, curve_split, surface_knot_insert_u,
     surface_knot_insert_v,
 };
+pub use power_basis::PowerBasis1D;
 pub use projection::{
     CurveProjection, SurfaceProjection, project_point_to_curve, project_point_to_surface,
 };

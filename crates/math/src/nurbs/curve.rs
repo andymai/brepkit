@@ -161,7 +161,8 @@ impl NurbsCurve {
         let p = self.degree;
         let n = self.control_points.len();
         let span = basis::find_span(n, p, u, &self.knots);
-        let bf = basis::basis_funs(span, u, p, &self.knots);
+        let mut bf = [0.0f64; basis::MAX_STACK_OUTPUT + 1];
+        basis::basis_funs_into(span, u, p, &self.knots, &mut bf[..=p]);
 
         // Weighted sum in homogeneous coordinates.
         let mut wx = 0.0;
@@ -199,12 +200,23 @@ impl NurbsCurve {
         let n = self.control_points.len();
         let span = basis::find_span(n, p, u, &self.knots);
         let du = d.min(p);
-        let ders_bf = basis::ders_basis_funs(span, u, p, du, &self.knots);
+        let stride = p + 1;
+        let mut ders_bf_buf =
+            [0.0f64; (basis::MAX_STACK_OUTPUT + 1) * (basis::MAX_STACK_OUTPUT + 1)];
+        basis::ders_basis_funs_into(
+            span,
+            u,
+            p,
+            du,
+            &self.knots,
+            &mut ders_bf_buf[..(du + 1) * stride],
+        );
 
         // Compute homogeneous derivatives: Aw[k] = (Aw_x, Aw_y, Aw_z, w) for k-th deriv.
         let mut aw = vec![[0.0f64; 4]; du + 1];
         for (k, aw_k) in aw.iter_mut().enumerate().take(du + 1) {
-            for (j, &db) in ders_bf[k].iter().enumerate().take(p + 1) {
+            for j in 0..=p {
+                let db = ders_bf_buf[k * stride + j];
                 let idx = span - p + j;
                 let pt = &self.control_points[idx];
                 let w = self.weights[idx];
