@@ -146,24 +146,34 @@ pub fn boolean_with_options(
             );
             let mesh_a = crate::tessellate::tessellate_solid(topo, a, opts.deflection)?;
             let mesh_b = crate::tessellate::tessellate_solid(topo, b, opts.deflection)?;
-            if let Ok(mb_result) =
-                crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, opts.deflection)
-            {
-                let face_specs = mesh_result_to_face_specs(&mb_result);
-                if !face_specs.is_empty() {
-                    let result = assemble_solid_mixed(topo, &face_specs, tol)?;
-                    let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-                    if opts.unify_faces {
-                        let _ = crate::heal::unify_faces(topo, result)?;
+            match crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, opts.deflection) {
+                Ok(mb_result) => {
+                    let face_specs = mesh_result_to_face_specs(&mb_result);
+                    if !face_specs.is_empty() {
+                        let result = assemble_solid_mixed(topo, &face_specs, tol)?;
+                        let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+                        if opts.unify_faces {
+                            let _ = crate::heal::unify_faces(topo, result)?;
+                        }
+                        if opts.heal_after_boolean {
+                            let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
+                        }
+                        validate_boolean_result(topo, result)?;
+                        log::info!(
+                            "boolean {op:?}: mesh boolean path → solid {} ({} faces, surface types lost)",
+                            result.index(),
+                            face_specs.len()
+                        );
+                        return Ok(result);
                     }
-                    if opts.heal_after_boolean {
-                        let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
-                    }
-                    validate_boolean_result(topo, result)?;
-                    return Ok(result);
+                }
+                Err(e) => {
+                    log::debug!(
+                        "boolean {op:?}: mesh boolean failed ({e}), falling through to chord-based path"
+                    );
                 }
             }
-            // Mesh boolean failed; continue with chord-based path.
+            // Mesh boolean failed or empty; continue with chord-based path.
         }
     }
 
