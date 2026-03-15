@@ -3,6 +3,12 @@
 //! Free functions extracted from curve/surface types so both can share them.
 //! Algorithm numbers refer to Piegl & Tiller, *The NURBS Book*.
 
+/// Maximum degree that uses stack-allocated temporaries in basis functions.
+///
+/// CAD practice uses at most degree 7 (cubic and quartic are by far the most
+/// common). This gives a generous buffer while keeping the stack arrays small.
+const MAX_STACK_DEGREE: usize = 10;
+
 /// Find the knot span index for parameter `u` (A2.1).
 ///
 /// Returns the index `i` such that `knots[i] <= u < knots[i+1]`,
@@ -34,15 +40,74 @@ pub fn find_span(n: usize, degree: usize, u: f64, knots: &[f64]) -> usize {
     mid
 }
 
+/// O(1) span lookup for uniform knot vectors.
+///
+/// `step` is the constant spacing between internal knots (as returned by
+/// [`uniform_knot_step`]). The caller must verify the knot vector is uniform
+/// before using this — passing an incorrect `step` gives wrong results.
+#[must_use]
+pub fn find_span_uniform(n: usize, degree: usize, u: f64, knots: &[f64], step: f64) -> usize {
+    if u >= knots[n] {
+        return n - 1;
+    }
+    if u <= knots[degree] {
+        return degree;
+    }
+    let span = degree + ((u - knots[degree]) / step) as usize;
+    span.min(n - 1)
+}
+
+/// Check if internal knots are uniformly spaced.
+///
+/// Returns the step size if the internal knots `knots[degree..=n]` are
+/// equidistant (within 1e-12), or `None` otherwise.
+#[must_use]
+pub fn uniform_knot_step(knots: &[f64], degree: usize) -> Option<f64> {
+    let n = knots.len() - degree - 1; // number of control points
+    if n <= degree + 1 {
+        return None; // Bezier or too few knots to be meaningfully uniform
+    }
+    let first_internal = degree;
+    let last_internal = n; // knots[degree..=n] are internal
+    if last_internal <= first_internal + 1 {
+        return None;
+    }
+    let step = knots[first_internal + 1] - knots[first_internal];
+    if step <= 0.0 {
+        return None;
+    }
+    for i in (first_internal + 1)..last_internal {
+        let actual_step = knots[i + 1] - knots[i];
+        if (actual_step - step).abs() > 1e-12 {
+            return None;
+        }
+    }
+    Some(step)
+}
+
 /// Compute the non-zero basis functions at parameter `u` (A2.2).
 ///
 /// Returns a vector of length `degree + 1` containing `N_{span-degree,degree}(u)`
 /// through `N_{span,degree}(u)`.
+///
+/// The `left` and `right` temporaries are stack-allocated for degrees up to
+/// [`MAX_STACK_DEGREE`] (covers all practical CAD usage), falling back to heap
+/// allocation for higher degrees.
 #[must_use]
 pub fn basis_funs(span: usize, u: f64, degree: usize, knots: &[f64]) -> Vec<f64> {
     let mut n = vec![0.0; degree + 1];
-    let mut left = vec![0.0; degree + 1];
-    let mut right = vec![0.0; degree + 1];
+    // Stack-allocate left/right temporaries for typical degrees.
+    let mut left_buf = [0.0_f64; MAX_STACK_DEGREE + 1];
+    let mut right_buf = [0.0_f64; MAX_STACK_DEGREE + 1];
+    let mut left_vec;
+    let mut right_vec;
+    let (left, right): (&mut [f64], &mut [f64]) = if degree <= MAX_STACK_DEGREE {
+        (&mut left_buf[..=degree], &mut right_buf[..=degree])
+    } else {
+        left_vec = vec![0.0; degree + 1];
+        right_vec = vec![0.0; degree + 1];
+        (&mut left_vec, &mut right_vec)
+    };
 
     n[0] = 1.0;
 
@@ -66,6 +131,9 @@ pub fn basis_funs(span: usize, u: f64, degree: usize, knots: &[f64]) -> Vec<f64>
 /// Returns a 2D vector `ders[k][j]` where `ders[k][j]` is the `k`-th derivative
 /// of the basis function `N_{span-degree+j, degree}` evaluated at `u`.
 /// `k` ranges from `0` to `n_derivs`, `j` from `0` to `degree`.
+///
+/// The `left` and `right` temporaries are stack-allocated for degrees up to
+/// [`MAX_STACK_DEGREE`].
 #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 #[must_use]
 pub fn ders_basis_funs(
@@ -77,8 +145,18 @@ pub fn ders_basis_funs(
 ) -> Vec<Vec<f64>> {
     let p = degree;
     let mut ndu = vec![vec![0.0; p + 1]; p + 1];
-    let mut left = vec![0.0; p + 1];
-    let mut right = vec![0.0; p + 1];
+    // Stack-allocate left/right temporaries for typical degrees.
+    let mut left_buf = [0.0_f64; MAX_STACK_DEGREE + 1];
+    let mut right_buf = [0.0_f64; MAX_STACK_DEGREE + 1];
+    let mut left_vec;
+    let mut right_vec;
+    let (left, right): (&mut [f64], &mut [f64]) = if p <= MAX_STACK_DEGREE {
+        (&mut left_buf[..=p], &mut right_buf[..=p])
+    } else {
+        left_vec = vec![0.0; p + 1];
+        right_vec = vec![0.0; p + 1];
+        (&mut left_vec, &mut right_vec)
+    };
 
     ndu[0][0] = 1.0;
 
@@ -291,6 +369,78 @@ mod tests {
             let ders = ders_basis_funs(span, u, 3, 1, &knots);
             let sum: f64 = ders[1].iter().sum();
             prop_assert!(sum.abs() < 1e-10, "first deriv sum = {}", sum);
+        }
+
+        #[test]
+        fn prop_find_span_uniform_matches_binary(u in 0.0f64..=3.0) {
+            let knots = cubic_knots();
+            let step = uniform_knot_step(&knots, 3).expect("cubic_knots is uniform");
+            let expected = find_span(6, 3, u, &knots);
+            let got = find_span_uniform(6, 3, u, &knots, step);
+            prop_assert_eq!(got, expected, "u={}", u);
+        }
+    }
+
+    // ── Uniform knot helpers ──────────────────────────────────────────
+
+    #[test]
+    fn uniform_knot_step_detects_uniform() {
+        let knots = cubic_knots(); // [0,0,0,0, 1,2,3, 3,3,3,3] — step=1.0
+        let step = uniform_knot_step(&knots, 3);
+        assert_eq!(step, Some(1.0));
+    }
+
+    #[test]
+    fn uniform_knot_step_rejects_non_uniform() {
+        // Knots with non-uniform internal spacing
+        let knots = vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.5, 4.0, 4.0, 4.0, 4.0];
+        assert_eq!(uniform_knot_step(&knots, 3), None);
+    }
+
+    #[test]
+    fn uniform_knot_step_rejects_bezier() {
+        // Single-span Bezier: no internal knots to be "uniform" over
+        let knots = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        assert_eq!(uniform_knot_step(&knots, 3), None);
+    }
+
+    #[test]
+    fn find_span_uniform_interior() {
+        let knots = cubic_knots();
+        let step = uniform_knot_step(&knots, 3).expect("uniform");
+        assert_eq!(find_span_uniform(6, 3, 0.5, &knots, step), 3);
+        assert_eq!(find_span_uniform(6, 3, 1.5, &knots, step), 4);
+        assert_eq!(find_span_uniform(6, 3, 2.5, &knots, step), 5);
+    }
+
+    #[test]
+    fn find_span_uniform_endpoints() {
+        let knots = cubic_knots();
+        let step = uniform_knot_step(&knots, 3).expect("uniform");
+        assert_eq!(find_span_uniform(6, 3, 0.0, &knots, step), 3);
+        assert_eq!(find_span_uniform(6, 3, 3.0, &knots, step), 5);
+    }
+
+    #[test]
+    fn find_span_uniform_at_knot() {
+        let knots = cubic_knots();
+        let step = uniform_knot_step(&knots, 3).expect("uniform");
+        assert_eq!(find_span_uniform(6, 3, 1.0, &knots, step), 4);
+        assert_eq!(find_span_uniform(6, 3, 2.0, &knots, step), 5);
+    }
+
+    #[test]
+    fn find_span_uniform_quadratic() {
+        // Quadratic with more internal knots: [0,0,0, 0.25,0.5,0.75, 1,1,1]
+        // 6 control points, degree 2
+        let knots = vec![0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0];
+        let step = uniform_knot_step(&knots, 2).expect("uniform");
+        assert!((step - 0.25).abs() < 1e-15);
+        for i in 0..=100 {
+            let u = i as f64 / 100.0;
+            let expected = find_span(6, 2, u, &knots);
+            let got = find_span_uniform(6, 2, u, &knots, step);
+            assert_eq!(got, expected, "mismatch at u={u}");
         }
     }
 }
