@@ -7,7 +7,6 @@ use std::f64::consts::PI;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::edge::{Edge, EdgeCurve};
-use brepkit_topology::face::{Face, FaceSurface};
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 use wasm_bindgen::prelude::*;
@@ -439,13 +438,13 @@ impl BrepKernel {
 
     /// Build a convex hull solid from a point cloud.
     ///
-    /// Uses a simple Quickhull-inspired algorithm for 3D point sets.
+    /// Uses the Quickhull algorithm for 3D point sets.
     ///
     /// Returns a solid handle (`u32`).
     ///
     /// # Errors
     ///
-    /// Returns an error if fewer than 4 points are provided.
+    /// Returns an error if fewer than 4 non-coplanar points are provided.
     #[wasm_bindgen(js_name = "convexHull")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn convex_hull(&mut self, coords: Vec<f64>) -> Result<u32, JsError> {
@@ -472,64 +471,7 @@ impl BrepKernel {
             .into());
         }
 
-        // Build a proper convex hull using Quickhull.
-        let hull = brepkit_math::convex_hull::convex_hull_3d(&points).ok_or_else(|| {
-            WasmError::InvalidInput {
-                reason: "points are coplanar or degenerate — cannot form a 3D convex hull".into(),
-            }
-        })?;
-
-        // Convert hull to B-Rep: vertices → edges → faces → shell → solid.
-        let vertex_ids: Vec<brepkit_topology::vertex::VertexId> = hull
-            .vertices
-            .iter()
-            .map(|p| self.topo.add_vertex(Vertex::new(*p, TOL)))
-            .collect();
-
-        let mut face_ids = Vec::new();
-        for &[a, b, c] in &hull.faces {
-            let va = vertex_ids[a];
-            let vb = vertex_ids[b];
-            let vc = vertex_ids[c];
-
-            let e0 = self.topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
-            let e1 = self.topo.add_edge(Edge::new(vb, vc, EdgeCurve::Line));
-            let e2 = self.topo.add_edge(Edge::new(vc, va, EdgeCurve::Line));
-
-            let oriented = vec![
-                OrientedEdge::new(e0, true),
-                OrientedEdge::new(e1, true),
-                OrientedEdge::new(e2, true),
-            ];
-            let wire = Wire::new(oriented, true)?;
-            let wid = self.topo.add_wire(wire);
-
-            // Compute face normal.
-            let pa = hull.vertices[a];
-            let pb = hull.vertices[b];
-            let pc = hull.vertices[c];
-            let ab = pb - pa;
-            let ac = pc - pa;
-            let normal = ab.cross(ac);
-            let normal = match normal.normalize() {
-                Ok(n) => n,
-                Err(_) => Vec3::new(0.0, 0.0, 1.0),
-            };
-            let d = normal
-                .x()
-                .mul_add(pa.x(), normal.y().mul_add(pa.y(), normal.z() * pa.z()));
-
-            let fid = self
-                .topo
-                .add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
-            face_ids.push(fid);
-        }
-
-        let shell = brepkit_topology::shell::Shell::new(face_ids)?;
-        let shell_id = self.topo.add_shell(shell);
-        let solid = brepkit_topology::solid::Solid::new(shell_id, vec![]);
-        let solid_id = self.topo.add_solid(solid);
-
+        let solid_id = brepkit_operations::primitives::make_convex_hull(&mut self.topo, &points)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -614,6 +556,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use brepkit_topology::face::FaceSurface;
 
     // ── make_rectangle ────────────────────────────────────────────
 
