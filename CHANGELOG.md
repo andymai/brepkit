@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.3](https://github.com/andymai/brepkit/compare/v2.5.2...v2.5.3) (2026-03-15)
+
+
+### Bug Fixes
+
+* skip unify_faces post-pass when all tools are disjoint ([447b21f](https://github.com/andymai/brepkit/commit/447b21fb2d04975f7c4f9dedef30257a7304966b))
+
 ## [2.5.2](https://github.com/andymai/brepkit/compare/v2.5.1...v2.5.2) (2026-03-15)
 
 
