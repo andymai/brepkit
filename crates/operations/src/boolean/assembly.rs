@@ -359,13 +359,6 @@ pub(super) fn validate_boolean_result(
         });
     }
 
-    // Euler characteristic diagnostic: V - E + F should be 2 for a closed solid.
-    #[allow(clippy::cast_possible_wrap)]
-    let euler = (v as i64) - (e as i64) + (f as i64);
-    if euler != 2 {
-        log::warn!("boolean result: Euler V-E+F = {euler} (expected 2; V={v}, E={e}, F={f})");
-    }
-
     // Full topological validation: Euler characteristic, manifold edges,
     // boundary edges, wire closure, degenerate faces.
     // Logged as warnings rather than hard errors — many boolean results have
