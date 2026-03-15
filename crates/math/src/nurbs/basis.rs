@@ -139,6 +139,143 @@ pub fn basis_funs(span: usize, u: f64, degree: usize, knots: &[f64]) -> Vec<f64>
     n
 }
 
+/// Write basis function derivatives into flat row-major `out` (A2.3, zero-allocation variant).
+///
+/// `out` must have length >= `(n_derivs + 1) * (degree + 1)`. Output is stored as
+/// `out[k * (degree + 1) + j]` = k-th derivative of basis function j.
+#[allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::too_many_lines
+)]
+pub fn ders_basis_funs_into(
+    span: usize,
+    u: f64,
+    degree: usize,
+    n_derivs: usize,
+    knots: &[f64],
+    out: &mut [f64],
+) {
+    let p = degree;
+    let stride = p + 1;
+
+    // ndu matrix: (p+1) x (p+1) flat row-major
+    let mut ndu_stack = [0.0_f64; (MAX_STACK_DEGREE + 1) * (MAX_STACK_DEGREE + 1)];
+    let mut ndu_heap;
+    let ndu: &mut [f64] = if p <= MAX_STACK_DEGREE {
+        &mut ndu_stack[..stride * stride]
+    } else {
+        ndu_heap = vec![0.0; stride * stride];
+        &mut ndu_heap
+    };
+
+    // Stack-allocate left/right temporaries for typical degrees.
+    let mut left_buf = [0.0_f64; MAX_STACK_DEGREE + 1];
+    let mut right_buf = [0.0_f64; MAX_STACK_DEGREE + 1];
+    let mut left_vec;
+    let mut right_vec;
+    let (left, right): (&mut [f64], &mut [f64]) = if p <= MAX_STACK_DEGREE {
+        (&mut left_buf[..=p], &mut right_buf[..=p])
+    } else {
+        left_vec = vec![0.0; p + 1];
+        right_vec = vec![0.0; p + 1];
+        (&mut left_vec, &mut right_vec)
+    };
+
+    ndu[0] = 1.0; // ndu[0][0]
+
+    for j in 1..=p {
+        left[j] = u - knots[span + 1 - j];
+        right[j] = knots[span + j] - u;
+        let mut saved = 0.0;
+        for r in 0..j {
+            // Lower triangle: ndu[j][r]
+            ndu[j * stride + r] = right[r + 1] + left[j - r];
+            let temp = ndu[r * stride + j - 1] / ndu[j * stride + r];
+            // Upper triangle: ndu[r][j]
+            ndu[r * stride + j] = right[r + 1].mul_add(temp, saved);
+            saved = left[j - r] * temp;
+        }
+        ndu[j * stride + j] = saved;
+    }
+
+    // Load the basis functions into out[0..stride]
+    for j in 0..=p {
+        out[j] = ndu[j * stride + p]; // ders[0][j] = ndu[j][p]
+    }
+
+    // a matrix: 2 x (p+1) flat row-major
+    let mut a_stack = [0.0_f64; 2 * (MAX_STACK_DEGREE + 1)];
+    let mut a_heap;
+    let a: &mut [f64] = if p <= MAX_STACK_DEGREE {
+        &mut a_stack[..2 * stride]
+    } else {
+        a_heap = vec![0.0; 2 * stride];
+        &mut a_heap
+    };
+
+    // Compute derivatives (Eq. [2.9])
+    for r in 0..=p {
+        let mut s1 = 0usize;
+        let mut s2 = 1usize;
+        a[0] = 1.0; // a[0][0]
+
+        // Compute k-th derivative
+        for k in 1..=n_derivs {
+            let mut d = 0.0;
+            let rk = r as isize - k as isize;
+            let pk = (p as isize) - (k as isize);
+
+            if rk >= 0 {
+                // a[s2][0] = a[s1][0] / ndu[pk+1][rk]
+                a[s2 * stride] = a[s1 * stride] / ndu[(pk + 1) as usize * stride + rk as usize];
+                // d = a[s2][0] * ndu[rk][pk]
+                d = a[s2 * stride] * ndu[rk as usize * stride + pk as usize];
+            }
+
+            let j1 = if rk >= -1 { 1usize } else { (-rk) as usize };
+            let j2 = if (r as isize - 1) <= pk {
+                k - 1
+            } else {
+                (p as isize - rk) as usize
+            };
+
+            for j in j1..=j2 {
+                // a[s2][j] = (a[s1][j] - a[s1][j-1]) / ndu[pk+1][rk+j]
+                a[s2 * stride + j] = (a[s1 * stride + j] - a[s1 * stride + j - 1])
+                    / ndu[(pk + 1) as usize * stride + (rk + j as isize) as usize];
+                // d += a[s2][j] * ndu[rk+j][pk]
+                d += a[s2 * stride + j] * ndu[(rk + j as isize) as usize * stride + pk as usize];
+            }
+
+            if (r as isize) <= pk {
+                // a[s2][k] = -a[s1][k-1] / ndu[pk+1][r]
+                a[s2 * stride + k] = -a[s1 * stride + k - 1] / ndu[(pk + 1) as usize * stride + r];
+                // d += a[s2][k] * ndu[r][pk]
+                d += a[s2 * stride + k] * ndu[r * stride + pk as usize];
+            }
+
+            out[k * stride + r] = d; // ders[k][r]
+
+            // Switch rows
+            std::mem::swap(&mut s1, &mut s2);
+        }
+    }
+
+    // Multiply through by the correct factors (Eq. [2.9])
+    // Degree values are always small, so usize→f64 is lossless in practice.
+    #[allow(clippy::cast_precision_loss)]
+    let mut r = p as f64;
+    for idx in 1..=n_derivs {
+        for j in 0..=p {
+            out[idx * stride + j] *= r;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let factor = (p as isize - idx as isize) as f64;
+        r *= factor;
+    }
+}
+
 /// Compute basis function derivatives at parameter `u` (A2.3).
 ///
 /// Returns a 2D vector `ders[k][j]` where `ders[k][j]` is the `k`-th derivative
@@ -156,101 +293,12 @@ pub fn ders_basis_funs(
     n_derivs: usize,
     knots: &[f64],
 ) -> Vec<Vec<f64>> {
-    let p = degree;
-    let mut ndu = vec![vec![0.0; p + 1]; p + 1];
-    // Stack-allocate left/right temporaries for typical degrees.
-    let mut left_buf = [0.0_f64; MAX_STACK_DEGREE + 1];
-    let mut right_buf = [0.0_f64; MAX_STACK_DEGREE + 1];
-    let mut left_vec;
-    let mut right_vec;
-    let (left, right): (&mut [f64], &mut [f64]) = if p <= MAX_STACK_DEGREE {
-        (&mut left_buf[..=p], &mut right_buf[..=p])
-    } else {
-        left_vec = vec![0.0; p + 1];
-        right_vec = vec![0.0; p + 1];
-        (&mut left_vec, &mut right_vec)
-    };
-
-    ndu[0][0] = 1.0;
-
-    for j in 1..=p {
-        left[j] = u - knots[span + 1 - j];
-        right[j] = knots[span + j] - u;
-        let mut saved = 0.0;
-        for r in 0..j {
-            // Lower triangle
-            ndu[j][r] = right[r + 1] + left[j - r];
-            let temp = ndu[r][j - 1] / ndu[j][r];
-            // Upper triangle
-            ndu[r][j] = right[r + 1].mul_add(temp, saved);
-            saved = left[j - r] * temp;
-        }
-        ndu[j][j] = saved;
-    }
-
-    // Load the basis functions
-    let mut ders = vec![vec![0.0; p + 1]; n_derivs + 1];
-    for j in 0..=p {
-        ders[0][j] = ndu[j][p];
-    }
-
-    // Compute derivatives (Eq. [2.9])
-    let mut a = vec![vec![0.0; p + 1]; 2];
-    for r in 0..=p {
-        let mut s1 = 0usize;
-        let mut s2 = 1usize;
-        a[0][0] = 1.0;
-
-        // Compute k-th derivative
-        for k in 1..=n_derivs {
-            let mut d = 0.0;
-            let rk = r as isize - k as isize;
-            let pk = (p as isize) - (k as isize);
-
-            if rk >= 0 {
-                a[s2][0] = a[s1][0] / ndu[(pk + 1) as usize][rk as usize];
-                d = a[s2][0] * ndu[rk as usize][pk as usize];
-            }
-
-            let j1 = if rk >= -1 { 1usize } else { (-rk) as usize };
-            let j2 = if (r as isize - 1) <= pk {
-                k - 1
-            } else {
-                (p as isize - rk) as usize
-            };
-
-            for j in j1..=j2 {
-                a[s2][j] =
-                    (a[s1][j] - a[s1][j - 1]) / ndu[(pk + 1) as usize][(rk + j as isize) as usize];
-                d += a[s2][j] * ndu[(rk + j as isize) as usize][pk as usize];
-            }
-
-            if (r as isize) <= pk {
-                a[s2][k] = -a[s1][k - 1] / ndu[(pk + 1) as usize][r];
-                d += a[s2][k] * ndu[r][pk as usize];
-            }
-
-            ders[k][r] = d;
-
-            // Switch rows
-            std::mem::swap(&mut s1, &mut s2);
-        }
-    }
-
-    // Multiply through by the correct factors (Eq. [2.9])
-    // Degree values are always small, so usize→f64 is lossless in practice.
-    #[allow(clippy::cast_precision_loss)]
-    let mut r = p as f64;
-    for (idx, row) in ders.iter_mut().enumerate().skip(1).take(n_derivs) {
-        for val in &mut row[..=p] {
-            *val *= r;
-        }
-        #[allow(clippy::cast_precision_loss)]
-        let factor = (p as isize - idx as isize) as f64;
-        r *= factor;
-    }
-
-    ders
+    let stride = degree + 1;
+    let mut flat = vec![0.0; (n_derivs + 1) * stride];
+    ders_basis_funs_into(span, u, degree, n_derivs, knots, &mut flat);
+    (0..=n_derivs)
+        .map(|k| flat[k * stride..(k + 1) * stride].to_vec())
+        .collect()
 }
 
 /// Binomial coefficient C(n, k) via iterative multiplication.
@@ -365,6 +413,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ders_basis_funs_into_matches_original() {
+        let knots = cubic_knots();
+        let u = 1.5;
+        let span = find_span(6, 3, u, &knots);
+        let expected = ders_basis_funs(span, u, 3, 2, &knots);
+        let mut out = [0.0f64; 12];
+        ders_basis_funs_into(span, u, 3, 2, &knots, &mut out);
+        for k in 0..=2 {
+            for j in 0..=3 {
+                let exp = expected[k][j];
+                let got = out[k * 4 + j];
+                assert!((exp - got).abs() < 1e-14, "ders[{k}][{j}]: {exp} vs {got}");
+            }
+        }
+    }
+
     use proptest::prelude::*;
 
     proptest! {
@@ -377,6 +442,20 @@ mod tests {
             basis_funs_into(span, u, 3, &knots, &mut out);
             for (a, b) in expected.iter().zip(out.iter()) {
                 prop_assert!((a - b).abs() < 1e-14);
+            }
+        }
+
+        #[test]
+        fn prop_ders_into_matches(u in 0.0f64..=3.0, n_derivs in 0usize..=2) {
+            let knots = cubic_knots();
+            let span = find_span(6, 3, u, &knots);
+            let expected = ders_basis_funs(span, u, 3, n_derivs, &knots);
+            let mut out = [0.0f64; 12]; // (2+1) * 4
+            ders_basis_funs_into(span, u, 3, n_derivs, &knots, &mut out);
+            for k in 0..=n_derivs {
+                for j in 0..=3 {
+                    prop_assert!((expected[k][j] - out[k * 4 + j]).abs() < 1e-14);
+                }
             }
         }
 

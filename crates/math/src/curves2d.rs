@@ -298,7 +298,8 @@ impl NurbsCurve2D {
         let n = self.control_points.len();
         let p = self.degree;
         let span = crate::nurbs::basis::find_span(n, p, u, &self.knots);
-        let basis = crate::nurbs::basis::basis_funs(span, u, p, &self.knots);
+        let mut basis = [0.0f64; crate::nurbs::basis::MAX_STACK_OUTPUT + 1];
+        crate::nurbs::basis::basis_funs_into(span, u, p, &self.knots, &mut basis[..=p]);
 
         let mut wx = 0.0;
         let mut wy = 0.0;
@@ -327,23 +328,34 @@ impl NurbsCurve2D {
         let num_pts = self.control_points.len();
         let deg = self.degree;
         let span = crate::nurbs::basis::find_span(num_pts, deg, param, &self.knots);
-        let ders = crate::nurbs::basis::ders_basis_funs(span, param, deg, 1, &self.knots);
+        let stride = deg + 1;
+        let mut ders_buf = [0.0f64; 2 * (crate::nurbs::basis::MAX_STACK_OUTPUT + 1)];
+        crate::nurbs::basis::ders_basis_funs_into(
+            span,
+            param,
+            deg,
+            1,
+            &self.knots,
+            &mut ders_buf[..2 * stride],
+        );
 
         let mut curve_pt = Vec2::new(0.0, 0.0);
         let mut curve_deriv = Vec2::new(0.0, 0.0);
         let mut weight_sum = 0.0;
         let mut weight_deriv = 0.0;
 
-        for (j, basis_ders) in ders[0].iter().enumerate().take(deg + 1) {
+        for j in 0..=deg {
+            let basis_val = ders_buf[j];
+            let basis_deriv = ders_buf[stride + j];
             let idx = span - deg + j;
             let wi = self.weights[idx];
             let cp = &self.control_points[idx];
             let cp_vec = Vec2::new(cp.x(), cp.y());
 
-            curve_pt += cp_vec * (wi * basis_ders);
-            curve_deriv += cp_vec * (wi * ders[1][j]);
-            weight_sum += wi * basis_ders;
-            weight_deriv += wi * ders[1][j];
+            curve_pt += cp_vec * (wi * basis_val);
+            curve_deriv += cp_vec * (wi * basis_deriv);
+            weight_sum += wi * basis_val;
+            weight_deriv += wi * basis_deriv;
         }
 
         if weight_sum.abs() < f64::EPSILON {

@@ -211,8 +211,10 @@ impl NurbsSurface {
 
         let span_u = basis::find_span(n_rows, pu, u, &self.knots_u);
         let span_v = basis::find_span(n_cols, pv, v, &self.knots_v);
-        let nu = basis::basis_funs(span_u, u, pu, &self.knots_u);
-        let nv = basis::basis_funs(span_v, v, pv, &self.knots_v);
+        let mut nu = [0.0f64; basis::MAX_STACK_OUTPUT + 1];
+        basis::basis_funs_into(span_u, u, pu, &self.knots_u, &mut nu[..=pu]);
+        let mut nv = [0.0f64; basis::MAX_STACK_OUTPUT + 1];
+        basis::basis_funs_into(span_v, v, pv, &self.knots_v, &mut nv[..=pv]);
 
         // Contract along v first for each relevant u-row, then along u.
         let mut wx = 0.0;
@@ -268,8 +270,28 @@ impl NurbsSurface {
         let span_v = basis::find_span(n_cols, pv, v, &self.knots_v);
         let du = d.min(pu);
         let dv = d.min(pv);
-        let ders_u = basis::ders_basis_funs(span_u, u, pu, du, &self.knots_u);
-        let ders_v = basis::ders_basis_funs(span_v, v, pv, dv, &self.knots_v);
+        let stride_u = pu + 1;
+        let mut ders_u_buf =
+            [0.0f64; (basis::MAX_STACK_OUTPUT + 1) * (basis::MAX_STACK_OUTPUT + 1)];
+        basis::ders_basis_funs_into(
+            span_u,
+            u,
+            pu,
+            du,
+            &self.knots_u,
+            &mut ders_u_buf[..(du + 1) * stride_u],
+        );
+        let stride_v = pv + 1;
+        let mut ders_v_buf =
+            [0.0f64; (basis::MAX_STACK_OUTPUT + 1) * (basis::MAX_STACK_OUTPUT + 1)];
+        basis::ders_basis_funs_into(
+            span_v,
+            v,
+            pv,
+            dv,
+            &self.knots_v,
+            &mut ders_v_buf[..(dv + 1) * stride_v],
+        );
 
         // Compute homogeneous derivatives Aw[k][l] = (wx, wy, wz, w)
         let mut aw = vec![vec![[0.0f64; 4]; d + 1]; d + 1];
@@ -278,9 +300,11 @@ impl NurbsSurface {
                 if k + l > d {
                     continue;
                 }
-                for (i, &du_ki) in ders_u[k].iter().enumerate().take(pu + 1) {
+                for i in 0..=pu {
+                    let du_ki = ders_u_buf[k * stride_u + i];
                     let u_idx = span_u - pu + i;
-                    for (j, &dv_lj) in ders_v[l].iter().enumerate().take(pv + 1) {
+                    for j in 0..=pv {
+                        let dv_lj = ders_v_buf[l * stride_v + j];
                         let v_idx = span_v - pv + j;
                         let pt = &self.control_points[u_idx][v_idx];
                         let w = self.weights[u_idx][v_idx];
