@@ -144,36 +144,15 @@ pub fn boolean_with_options(
             log::debug!(
                 "boolean {op:?}: high face count ({count_a} + {count_b}), using mesh boolean"
             );
-            let mesh_a = crate::tessellate::tessellate_solid(topo, a, opts.deflection)?;
-            let mesh_b = crate::tessellate::tessellate_solid(topo, b, opts.deflection)?;
-            match crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, opts.deflection) {
-                Ok(mb_result) => {
-                    let face_specs = mesh_result_to_face_specs(&mb_result);
-                    if !face_specs.is_empty() {
-                        let result = assemble_solid_mixed(topo, &face_specs, tol)?;
-                        let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-                        if opts.unify_faces {
-                            let _ = crate::heal::unify_faces(topo, result)?;
-                        }
-                        if opts.heal_after_boolean {
-                            let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
-                        }
-                        validate_boolean_result(topo, result)?;
-                        log::info!(
-                            "boolean {op:?}: mesh boolean path → solid {} ({} faces, surface types lost)",
-                            result.index(),
-                            face_specs.len()
-                        );
-                        return Ok(result);
-                    }
-                }
+            match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
+                Ok(result) => return Ok(result),
                 Err(e) => {
                     log::debug!(
-                        "boolean {op:?}: mesh boolean failed ({e}), falling through to chord-based path"
+                        "boolean {op:?}: mesh boolean fallback failed ({e}), \
+                         falling through to chord-based path"
                     );
                 }
             }
-            // Mesh boolean failed or empty; continue with chord-based path.
         }
     }
 
@@ -483,6 +462,48 @@ pub fn boolean_with_evolution(
 // ---------------------------------------------------------------------------
 // Mesh boolean helpers
 // ---------------------------------------------------------------------------
+
+/// Best-effort mesh boolean fallback for high face-count solids.
+///
+/// Tessellates both solids, runs mesh co-refinement, assembles the result,
+/// and applies the same post-processing as the other boolean paths.
+/// Returns `Err` on any failure so the caller can fall through to the
+/// chord-based path.
+fn mesh_boolean_fallback(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+    deflection: f64,
+    tol: brepkit_math::tolerance::Tolerance,
+    opts: &BooleanOptions,
+) -> Result<SolidId, crate::OperationsError> {
+    let mesh_a = crate::tessellate::tessellate_solid(topo, a, deflection)?;
+    let mesh_b = crate::tessellate::tessellate_solid(topo, b, deflection)?;
+
+    let mb_result = crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, tol.linear)?;
+    let face_specs = mesh_result_to_face_specs(&mb_result);
+    if face_specs.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "mesh boolean produced empty result".into(),
+        });
+    }
+    let result = assemble_solid_mixed(topo, &face_specs, tol)?;
+    let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+    if opts.unify_faces {
+        let _ = crate::heal::unify_faces(topo, result)?;
+    }
+    if opts.heal_after_boolean {
+        let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
+    }
+    validate_boolean_result(topo, result)?;
+    log::info!(
+        "boolean {op:?}: mesh boolean path → solid {} ({} faces, surface types lost)",
+        result.index(),
+        face_specs.len()
+    );
+    Ok(result)
+}
 
 /// Convert a mesh boolean result into `FaceSpec` entries for solid assembly.
 fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) -> Vec<FaceSpec> {
