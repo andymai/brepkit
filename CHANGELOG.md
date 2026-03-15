@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.4.0](https://github.com/andymai/brepkit/compare/v2.3.2...v2.4.0) (2026-03-15)
+
+
+### Features
+
+* **fillet:** curved face overlap detection + fillet-on-fillet ([#38](https://github.com/andymai/brepkit/issues/38), [#39](https://github.com/andymai/brepkit/issues/39)) ([#230](https://github.com/andymai/brepkit/issues/230)) ([02e752b](https://github.com/andymai/brepkit/commit/02e752b8e8c114cbea8f9842ee3dd5580118fe60))
+
+
+### Bug Fixes
+
+* **tessellate:** tighter capacity bound for planar CDT output ([#241](https://github.com/andymai/brepkit/issues/241)) ([775a6d2](https://github.com/andymai/brepkit/commit/775a6d2cd2915503d6886448d841a9c3f71a6add))
+
 ## [2.3.2](https://github.com/andymai/brepkit/compare/v2.3.1...v2.3.2) (2026-03-15)
 
 
