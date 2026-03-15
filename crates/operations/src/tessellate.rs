@@ -1711,7 +1711,8 @@ fn safe_normal(surface: &brepkit_math::nurbs::surface::NurbsSurface, u: f64, v: 
 ///
 /// Returns the maximum of all metrics in deflection-compatible world units.
 /// The midpoint sag and edge sag are already in world units; normal deviation
-/// is converted via `normal_sag = (1 - cos θ) × cell_diagonal / 2`.
+/// is scaled to world units via `normal_sag = (1 - cos θ) × max_diagonal / 2`
+/// (a conservative heuristic, not exact chord-height).
 #[allow(clippy::similar_names)]
 fn cell_refinement_error(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
@@ -1779,10 +1780,13 @@ fn cell_refinement_error(
         max_edge_sag = max_edge_sag.max(edge_sag);
     }
 
-    // Convert unitless normal deviation to world-space sag approximation.
-    // A cell spanning `diag` world units with normal deviation `d = 1 - cos(θ)`
-    // has approximate chord-height sag of `d × diag / 2`.
-    let diag = (p11 - p00).length();
+    // Heuristic: scale unitless normal deviation to world-space units.
+    // For a cell spanning `diag` world units with normal deviation `d = 1 - cos(θ)`,
+    // we approximate the equivalent sag as `d × diag / 2`. This is a conservative
+    // upper bound (not exact chord-height) but ensures refinement terminates
+    // at the same order-of-magnitude as the distance-based metrics.
+    // Use the longer diagonal to avoid underestimating on skewed quads.
+    let diag = (p11 - p00).length().max((p10 - p01).length());
     let normal_sag = max_normal_dev * diag * 0.5;
 
     sag.max(max_edge_sag).max(normal_sag)
