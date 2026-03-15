@@ -35,14 +35,12 @@ use crate::dot_normal_point;
 /// - any edge is not shared by exactly two faces in the solid
 /// - any face is a NURBS surface (only planar faces are supported)
 /// - the result cannot be assembled into a valid solid
-#[allow(clippy::too_many_lines)]
 pub fn chamfer(
     topo: &mut Topology,
     solid: SolidId,
     edges: &[EdgeId],
     distance: f64,
 ) -> Result<SolidId, crate::OperationsError> {
-    // -- Validation --
     if distance <= 0.0 {
         return Err(crate::OperationsError::InvalidInput {
             reason: format!("chamfer distance must be positive, got {distance}"),
@@ -53,7 +51,101 @@ pub fn chamfer(
             reason: "no edges specified for chamfer".into(),
         });
     }
+    chamfer_core(topo, solid, edges, ChamferDistances::Symmetric(distance))
+}
 
+/// Asymmetric chamfer: `d1` on the first adjacent face, `d2` on the second.
+///
+/// Each target edge is replaced by a flat bevel face. Unlike [`chamfer()`],
+/// the two adjacent faces can have different setback distances, producing
+/// a non-symmetric bevel.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - either distance is zero or negative
+/// - any edge is not shared by exactly two faces in the solid
+/// - any face is a NURBS surface (only planar faces are supported)
+/// - the result cannot be assembled into a valid solid
+pub fn chamfer_asymmetric(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    d1: f64,
+    d2: f64,
+) -> Result<SolidId, crate::OperationsError> {
+    if d1 <= 0.0 || d2 <= 0.0 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!("chamfer distances must be positive, got d1={d1}, d2={d2}"),
+        });
+    }
+    if edges.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "no edges specified for chamfer".into(),
+        });
+    }
+    chamfer_core(topo, solid, edges, ChamferDistances::Asymmetric { d1, d2 })
+}
+
+// ---------------------------------------------------------------------------
+// Distances helper
+// ---------------------------------------------------------------------------
+
+/// How chamfer distances are assigned to edges.
+enum ChamferDistances {
+    /// Same distance on both adjacent faces.
+    Symmetric(f64),
+    /// `d1` on face\[0\], `d2` on face\[1\] (per `edge_to_faces` order).
+    Asymmetric { d1: f64, d2: f64 },
+}
+
+impl ChamferDistances {
+    /// Resolve the chamfer distance for a specific edge on a specific face.
+    fn distance_for(
+        &self,
+        edge_index: usize,
+        face_id: FaceId,
+        edge_to_faces: &HashMap<usize, Vec<FaceId>>,
+    ) -> f64 {
+        match self {
+            Self::Symmetric(d) => *d,
+            Self::Asymmetric { d1, d2 } => {
+                if let Some(faces) = edge_to_faces.get(&edge_index) {
+                    if faces.len() == 2 {
+                        if faces[0] == face_id {
+                            return *d1;
+                        }
+                        if faces[1] == face_id {
+                            return *d2;
+                        }
+                    }
+                }
+                // Fallback (shouldn't happen for filtered manifold edges).
+                *d1
+            }
+        }
+    }
+
+    /// Maximum distance across all faces (used for side-face corner offsets).
+    fn max_distance(&self) -> f64 {
+        match self {
+            Self::Symmetric(d) => *d,
+            Self::Asymmetric { d1, d2 } => d1.max(*d2),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Core implementation
+// ---------------------------------------------------------------------------
+
+#[allow(clippy::too_many_lines)]
+fn chamfer_core(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    distances: ChamferDistances,
+) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
 
     // -- Phase 1: Collect face data --
@@ -139,10 +231,19 @@ pub fn chamfer(
 
     // Vertices at endpoints of chamfered edges (used to detect side-face corners).
     let mut vertex_chamfer_endpoints: HashSet<usize> = HashSet::new();
+    // For side-face corners, compute max distance from any chamfered edge meeting
+    // at each vertex so the offset stays consistent with the largest adjacent bevel.
+    let mut vertex_max_distance: HashMap<usize, f64> = HashMap::new();
     for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
-        vertex_chamfer_endpoints.insert(edge.start().index());
-        vertex_chamfer_endpoints.insert(edge.end().index());
+        let max_d = distances.max_distance();
+        for vid in [edge.start(), edge.end()] {
+            vertex_chamfer_endpoints.insert(vid.index());
+            let entry = vertex_max_distance.entry(vid.index()).or_insert(0.0_f64);
+            if max_d > *entry {
+                *entry = max_d;
+            }
+        }
     }
 
     // -- Phase 3: Build modified polygons + collect chamfer face data --
@@ -203,16 +304,28 @@ pub fn chamfer(
                     // Side face corner: vertex is at a chamfered edge endpoint
                     // but neither adjacent edge of THIS face is chamfered.
                     // Split into two offset points along the face's own edges.
+                    // Use the max distance from any chamfered edge at this vertex
+                    // so the side-face split stays consistent with the largest bevel.
+                    let side_dist = vertex_max_distance
+                        .get(&poly.vertex_ids[i].index())
+                        .copied()
+                        .unwrap_or_else(|| distances.max_distance());
+
                     let dir_prev = (prev_pos - pos).normalize()?;
-                    new_verts.push(pos + dir_prev * distance);
+                    new_verts.push(pos + dir_prev * side_dist);
 
                     let dir_next = (next_pos - pos).normalize()?;
-                    new_verts.push(pos + dir_next * distance);
+                    new_verts.push(pos + dir_next * side_dist);
                 }
                 (true, false, _) => {
                     // Only the edge before is chamfered. Offset toward V[next].
+                    let dist = distances.distance_for(
+                        poly.wire_edge_ids[prev_i].index(),
+                        face_id,
+                        &edge_to_faces,
+                    );
                     let dir = (next_pos - pos).normalize()?;
-                    let c = pos + dir * distance;
+                    let c = pos + dir * dist;
                     new_verts.push(c);
 
                     record_chamfer_point(
@@ -225,8 +338,13 @@ pub fn chamfer(
                 }
                 (false, true, _) => {
                     // Only the edge after is chamfered. Offset toward V[prev].
+                    let dist = distances.distance_for(
+                        poly.wire_edge_ids[i].index(),
+                        face_id,
+                        &edge_to_faces,
+                    );
                     let dir = (prev_pos - pos).normalize()?;
-                    let c = pos + dir * distance;
+                    let c = pos + dir * dist;
                     new_verts.push(c);
 
                     record_chamfer_point(
@@ -241,13 +359,24 @@ pub fn chamfer(
                     // Both adjacent edges are chamfered. Compute a single
                     // intersection point where the two trim planes meet on
                     // this face, rather than two separate offset points.
-                    let d1 = (next_pos - pos).normalize()?;
-                    let d2_dir = (pos - prev_pos).normalize()?;
+                    let dist_after = distances.distance_for(
+                        poly.wire_edge_ids[i].index(),
+                        face_id,
+                        &edge_to_faces,
+                    );
+                    let dist_before = distances.distance_for(
+                        poly.wire_edge_ids[prev_i].index(),
+                        face_id,
+                        &edge_to_faces,
+                    );
+
+                    let dir_next = (next_pos - pos).normalize()?;
+                    let dir_from_prev = (pos - prev_pos).normalize()?;
 
                     // Inward perpendiculars within the face plane.
                     // For CCW winding (matching outward normal), inward = n × d.
-                    let p1 = poly.normal.cross(d1);
-                    let p2 = poly.normal.cross(d2_dir);
+                    let p1 = poly.normal.cross(dir_next);
+                    let p2 = poly.normal.cross(dir_from_prev);
 
                     let cos_angle = p1.dot(p2);
                     let denom = 1.0 + cos_angle;
@@ -260,10 +389,50 @@ pub fn chamfer(
                             (prev_pos.z() + next_pos.z()) * 0.5,
                         );
                         let dir = (mid - pos).normalize()?;
-                        pos + dir * distance
+                        let avg_dist = (dist_before + dist_after) * 0.5;
+                        pos + dir * avg_dist
                     } else {
-                        let scale = distance / denom;
-                        pos + (p1 + p2) * scale
+                        // General asymmetric case: find intersection of two
+                        // offset lines in the face plane.
+                        //
+                        // Trim line from "after" edge: pos + dist_after * p1 + t * dir_next
+                        // Trim line from "before" edge: pos + dist_before * p2 + s * (-dir_from_prev)
+                        //
+                        // Equating and solving in the 2D face-plane basis
+                        // (p1, dir_next) vs (p2, dir_from_prev):
+                        //
+                        // For the symmetric case (dist_after == dist_before == d):
+                        //   intersection = pos + d * (p1 + p2) / (1 + cos_angle)
+                        //
+                        // For asymmetric, we solve the 2×2 system directly.
+                        // The offset vectors from `pos` are:
+                        //   a = dist_after * p1 (point on after-trim-line)
+                        //   b = dist_before * p2 (point on before-trim-line)
+                        // The directions along the trim lines are:
+                        //   u = dir_next (along after-edge direction)
+                        //   v = -dir_from_prev (along before-edge direction, toward prev)
+                        //
+                        // We need: a + t*u = b + s*v
+                        //   => t*u - s*v = b - a
+                        //
+                        // Using cross products (projected onto face normal) to solve:
+                        let a = p1 * dist_after;
+                        let b = p2 * dist_before;
+                        let diff = b - a;
+                        let v = dir_from_prev * (-1.0); // direction along before-trim-line
+
+                        // t = (diff × v) · n / (u × v) · n
+                        let u_cross_v = dir_next.cross(v);
+                        let det = u_cross_v.dot(poly.normal);
+
+                        if det.abs() < 1e-12 {
+                            // Parallel trim lines — use weighted average.
+                            pos + (a + b) * 0.5
+                        } else {
+                            let diff_cross_v = diff.cross(v);
+                            let t = diff_cross_v.dot(poly.normal) / det;
+                            pos + a + dir_next * t
+                        }
                     };
 
                     new_verts.push(intersection);
@@ -729,5 +898,97 @@ mod tests {
             "single-edge chamfer d=0.2 on unit cube: expected {expected}, got {vol} \
              (rel_err={rel_err:.2e})"
         );
+    }
+
+    // -- Asymmetric chamfer tests --
+
+    #[test]
+    fn chamfer_asymmetric_single_edge() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let edges = solid_edge_ids(&topo, cube);
+
+        let result = chamfer_asymmetric(&mut topo, cube, &[edges[0]], 0.2, 0.3)
+            .expect("asymmetric chamfer should succeed");
+
+        let result_solid = topo.solid(result).expect("result solid");
+        let result_shell = topo.shell(result_solid.outer_shell()).expect("shell");
+        assert_eq!(
+            result_shell.faces().len(),
+            7,
+            "expected 7 faces after single-edge chamfer"
+        );
+
+        validate_shell_manifold(result_shell, topo.faces(), topo.wires())
+            .expect("result should be manifold");
+    }
+
+    /// Asymmetric single-edge chamfer volume on a unit cube.
+    ///
+    /// Removes a right-triangular prism with legs d1=0.2 and d2=0.3, length 1.0.
+    /// The cross-section is a right triangle with legs d1 and d2.
+    /// V_removed = (d1 * d2 / 2) × L = 0.03.
+    /// Side-face corner offsets use max(d1,d2)=0.3, which introduces
+    /// small extra triangular wedges at each end, giving V ≈ 0.965.
+    #[test]
+    fn chamfer_asymmetric_single_edge_volume() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let edges = solid_edge_ids(&topo, cube);
+
+        let result = chamfer_asymmetric(&mut topo, cube, &[edges[0]], 0.2, 0.3).unwrap();
+
+        let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+        let expected = 0.965;
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 1e-3,
+            "asymmetric chamfer d1=0.2, d2=0.3 on unit cube: expected {expected}, got {vol} \
+             (rel_err={rel_err:.2e})"
+        );
+    }
+
+    /// Asymmetric chamfer with d1 == d2 should match symmetric chamfer.
+    #[test]
+    fn chamfer_asymmetric_equal_matches_symmetric() {
+        let mut topo_sym = Topology::new();
+        let cube_sym = make_unit_cube_manifold(&mut topo_sym);
+        let edges_sym = solid_edge_ids(&topo_sym, cube_sym);
+        let result_sym = chamfer(&mut topo_sym, cube_sym, &[edges_sym[0]], 0.2).unwrap();
+        let vol_sym = crate::measure::solid_volume(&topo_sym, result_sym, 0.01).unwrap();
+
+        let mut topo_asym = Topology::new();
+        let cube_asym = make_unit_cube_manifold(&mut topo_asym);
+        let edges_asym = solid_edge_ids(&topo_asym, cube_asym);
+        let result_asym =
+            chamfer_asymmetric(&mut topo_asym, cube_asym, &[edges_asym[0]], 0.2, 0.2).unwrap();
+        let vol_asym = crate::measure::solid_volume(&topo_asym, result_asym, 0.01).unwrap();
+
+        let rel_err = (vol_sym - vol_asym).abs() / vol_sym;
+        assert!(
+            rel_err < 1e-6,
+            "asymmetric(d,d) should match symmetric(d): sym={vol_sym}, asym={vol_asym} \
+             (rel_err={rel_err:.2e})"
+        );
+    }
+
+    #[test]
+    fn chamfer_asymmetric_zero_d1_error() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let edges = solid_edge_ids(&topo, cube);
+
+        let result = chamfer_asymmetric(&mut topo, cube, &[edges[0]], 0.0, 0.3);
+        assert!(result.is_err(), "zero d1 should fail");
+    }
+
+    #[test]
+    fn chamfer_asymmetric_negative_d2_error() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let edges = solid_edge_ids(&topo, cube);
+
+        let result = chamfer_asymmetric(&mut topo, cube, &[edges[0]], 0.2, -0.1);
+        assert!(result.is_err(), "negative d2 should fail");
     }
 }

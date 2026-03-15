@@ -26,7 +26,7 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 use wasm_bindgen::prelude::*;
 
 use crate::error::{WasmError, validate_finite};
-use crate::handles::edge_id_to_u32;
+use crate::handles::{edge_id_to_u32, solid_id_to_u32};
 use crate::helpers::TOL;
 use crate::state::{Checkpoint, SketchState};
 
@@ -461,6 +461,274 @@ impl BrepKernel {
         } else {
             Ok((-1.0, 1.0))
         }
+    }
+
+    /// Compute a plane surface from the vertices of a wire.
+    ///
+    /// Uses the first three non-collinear vertex positions of the wire's
+    /// edges to derive a plane normal and signed distance `d`.
+    fn compute_plane_from_wire(
+        &self,
+        wire_id: brepkit_topology::wire::WireId,
+    ) -> Result<FaceSurface, WasmError> {
+        let wire = self.topo.wire(wire_id)?;
+        let mut points = Vec::new();
+        for oe in wire.edges() {
+            let edge = self.topo.edge(oe.edge())?;
+            let start_pos = self.topo.vertex(edge.start())?.point();
+            points.push(start_pos);
+        }
+        if points.len() < 3 {
+            return Err(WasmError::InvalidInput {
+                reason: "need at least 3 vertices to compute a plane".into(),
+            });
+        }
+        let e1 = points[1] - points[0];
+        let e2 = points[2] - points[0];
+        let normal = e1.cross(e2).normalize()?;
+        let p0 = points[0];
+        let d = normal
+            .x()
+            .mul_add(p0.x(), normal.y().mul_add(p0.y(), normal.z() * p0.z()));
+        Ok(FaceSurface::Plane { normal, d })
+    }
+
+    /// Internal implementation of `fromBREP` that returns `WasmError`
+    /// for easier testing in native (non-WASM) contexts.
+    #[allow(clippy::too_many_lines, clippy::wrong_self_convention)]
+    pub(crate) fn from_brep_impl(&mut self, json: &str) -> Result<u32, WasmError> {
+        let parsed: serde_json::Value =
+            serde_json::from_str(json).map_err(|e| WasmError::InvalidInput {
+                reason: format!("invalid BREP JSON: {e}"),
+            })?;
+
+        // 1. Reconstruct vertices
+        let vertices = parsed["vertices"]
+            .as_array()
+            .ok_or_else(|| WasmError::InvalidInput {
+                reason: "missing vertices array".into(),
+            })?;
+        let mut vertex_map: std::collections::HashMap<u32, brepkit_topology::vertex::VertexId> =
+            std::collections::HashMap::new();
+
+        for v in vertices {
+            let id = v["id"].as_u64().ok_or_else(|| WasmError::InvalidInput {
+                reason: "vertex missing id".into(),
+            })? as u32;
+            let pos = v["position"]
+                .as_array()
+                .ok_or_else(|| WasmError::InvalidInput {
+                    reason: "vertex missing position".into(),
+                })?;
+            let x =
+                pos.first()
+                    .and_then(|v| v.as_f64())
+                    .ok_or_else(|| WasmError::InvalidInput {
+                        reason: "invalid vertex x coordinate".into(),
+                    })?;
+            let y = pos
+                .get(1)
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| WasmError::InvalidInput {
+                    reason: "invalid vertex y coordinate".into(),
+                })?;
+            let z = pos
+                .get(2)
+                .and_then(|v| v.as_f64())
+                .ok_or_else(|| WasmError::InvalidInput {
+                    reason: "invalid vertex z coordinate".into(),
+                })?;
+            let vid = self.topo.add_vertex(Vertex::new(Point3::new(x, y, z), TOL));
+            vertex_map.insert(id, vid);
+        }
+
+        // 2. Reconstruct edges (line edges from start/end vertices)
+        let edges = parsed["edges"]
+            .as_array()
+            .ok_or_else(|| WasmError::InvalidInput {
+                reason: "missing edges array".into(),
+            })?;
+        let mut edge_map: std::collections::HashMap<u32, brepkit_topology::edge::EdgeId> =
+            std::collections::HashMap::new();
+
+        for e in edges {
+            let id = e["id"].as_u64().ok_or_else(|| WasmError::InvalidInput {
+                reason: "edge missing id".into(),
+            })? as u32;
+            let start_v = e["startVertex"]
+                .as_u64()
+                .ok_or_else(|| WasmError::InvalidInput {
+                    reason: "edge missing startVertex".into(),
+                })? as u32;
+            let end_v = e["endVertex"]
+                .as_u64()
+                .ok_or_else(|| WasmError::InvalidInput {
+                    reason: "edge missing endVertex".into(),
+                })? as u32;
+
+            let start_vid = *vertex_map
+                .get(&start_v)
+                .ok_or_else(|| WasmError::InvalidInput {
+                    reason: format!("edge {id} references unknown start vertex {start_v}"),
+                })?;
+            let end_vid = *vertex_map
+                .get(&end_v)
+                .ok_or_else(|| WasmError::InvalidInput {
+                    reason: format!("edge {id} references unknown end vertex {end_v}"),
+                })?;
+
+            let curve_type = e["curveType"].as_str().unwrap_or("line");
+            let curve = match curve_type {
+                "line" => EdgeCurve::Line,
+                // TODO: reconstruct circle/ellipse/nurbs curves from geometry data
+                other => {
+                    log::warn!(
+                        "fromBREP: edge {id} has unsupported curve type '{other}', \
+                         approximating as line"
+                    );
+                    EdgeCurve::Line
+                }
+            };
+
+            let eid = self.topo.add_edge(Edge::new(start_vid, end_vid, curve));
+            edge_map.insert(id, eid);
+        }
+
+        // 3. Reconstruct faces
+        let faces = parsed["faces"]
+            .as_array()
+            .ok_or_else(|| WasmError::InvalidInput {
+                reason: "missing faces array".into(),
+            })?;
+        let mut face_ids: Vec<brepkit_topology::face::FaceId> = Vec::new();
+
+        for f in faces {
+            let outer_edge_ids =
+                f["outerWireEdges"]
+                    .as_array()
+                    .ok_or_else(|| WasmError::InvalidInput {
+                        reason: "face missing outerWireEdges".into(),
+                    })?;
+            let outer_orientations = f
+                .get("outerWireOrientations")
+                .and_then(|v| v.as_array().cloned());
+
+            // Build oriented edges for the outer wire
+            let mut oriented_edges = Vec::new();
+            for (i, eid_val) in outer_edge_ids.iter().enumerate() {
+                let eid = eid_val.as_u64().ok_or_else(|| WasmError::InvalidInput {
+                    reason: "invalid edge id in outerWireEdges".into(),
+                })? as u32;
+                let edge_id = *edge_map.get(&eid).ok_or_else(|| WasmError::InvalidInput {
+                    reason: format!("wire references unknown edge {eid}"),
+                })?;
+                let forward = outer_orientations
+                    .as_ref()
+                    .and_then(|arr| arr.get(i))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                oriented_edges.push(OrientedEdge::new(edge_id, forward));
+            }
+
+            let wire = Wire::new(oriented_edges, true)?;
+            let wire_id = self.topo.add_wire(wire);
+
+            // Reconstruct surface
+            let surface_type = f["surfaceType"].as_str().unwrap_or("plane");
+            let reversed = f["reversed"].as_bool().unwrap_or(false);
+
+            let surface = match surface_type {
+                "plane" => {
+                    // Prefer surfaceParams if available
+                    if let Some(params) = f.get("surfaceParams").and_then(|p| p.as_object()) {
+                        if let (Some(normal_arr), Some(d)) = (
+                            params.get("normal").and_then(|n| n.as_array()),
+                            params.get("d").and_then(|d| d.as_f64()),
+                        ) {
+                            let nx = normal_arr.first().and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            let ny = normal_arr.get(1).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                            let nz = normal_arr.get(2).and_then(|v| v.as_f64()).unwrap_or(1.0);
+                            FaceSurface::Plane {
+                                normal: Vec3::new(nx, ny, nz),
+                                d,
+                            }
+                        } else {
+                            self.compute_plane_from_wire(wire_id)?
+                        }
+                    } else {
+                        self.compute_plane_from_wire(wire_id)?
+                    }
+                }
+                other => {
+                    log::warn!(
+                        "fromBREP: face has unsupported surface type '{other}', \
+                         approximating as plane from vertices"
+                    );
+                    self.compute_plane_from_wire(wire_id)?
+                }
+            };
+
+            // Handle inner wires (holes)
+            let mut inner_wire_ids = Vec::new();
+            if let Some(inner_wires) = f["innerWires"].as_array() {
+                for iw in inner_wires {
+                    // Support both old format (array of edge IDs) and new format
+                    // (object with "edges" and "orientations")
+                    let (edge_arr, orient_arr) = if let Some(obj) = iw.as_object() {
+                        let e = obj
+                            .get("edges")
+                            .and_then(|v| v.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        let o = obj.get("orientations").and_then(|v| v.as_array()).cloned();
+                        (e, o)
+                    } else if let Some(arr) = iw.as_array() {
+                        (arr.clone(), None)
+                    } else {
+                        continue;
+                    };
+
+                    let mut inner_oriented = Vec::new();
+                    for (i, eid_val) in edge_arr.iter().enumerate() {
+                        if let Some(eid) = eid_val.as_u64() {
+                            if let Some(&edge_id) = edge_map.get(&(eid as u32)) {
+                                let fwd = orient_arr
+                                    .as_ref()
+                                    .and_then(|arr| arr.get(i))
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(true);
+                                inner_oriented.push(OrientedEdge::new(edge_id, fwd));
+                            }
+                        }
+                    }
+                    if !inner_oriented.is_empty() {
+                        let inner_wire = Wire::new(inner_oriented, true)?;
+                        inner_wire_ids.push(self.topo.add_wire(inner_wire));
+                    }
+                }
+            }
+
+            let mut face = Face::new(wire_id, inner_wire_ids, surface);
+            if reversed {
+                face.set_reversed(true);
+            }
+
+            face_ids.push(self.topo.add_face(face));
+        }
+
+        // 4. Build shell and solid
+        if face_ids.is_empty() {
+            return Err(WasmError::InvalidInput {
+                reason: "fromBREP: no faces reconstructed".into(),
+            });
+        }
+
+        let shell = brepkit_topology::shell::Shell::new(face_ids)?;
+        let shell_id = self.topo.add_shell(shell);
+        let solid = brepkit_topology::solid::Solid::new(shell_id, vec![]);
+        let solid_id = self.topo.add_solid(solid);
+
+        Ok(solid_id_to_u32(solid_id))
     }
 }
 
