@@ -339,9 +339,27 @@ fn classify_triangle_surface(
                 let along = dp_vec.dot(cone.axis());
                 let radial = dp_vec - cone.axis() * along;
                 let r = radial.length();
-                let expected_r = along.abs() * cone.half_angle().tan();
+                // Cone parameterization: r = v*cos(a), along = v*sin(a)
+                // → expected r = along * cos(a)/sin(a) = along / tan(a)
+                let ha_tan = cone.half_angle().tan();
+                let expected_r = if ha_tan.abs() > 1e-12 {
+                    along.abs() / ha_tan
+                } else {
+                    // Near-flat cone (half_angle ≈ 0): infinite radius, skip.
+                    continue;
+                };
                 if (r - expected_r).abs() < tol.linear * 100.0 && along > 0.0 {
-                    return Some(surface.clone());
+                    // Check normal consistency: cone normal is
+                    // radial * sin(half_angle) - axis * cos(half_angle).
+                    if let Ok(radial_n) = radial.normalize() {
+                        let ha = cone.half_angle();
+                        let cone_normal = radial_n * ha.sin() - cone.axis() * ha.cos();
+                        if let Ok(cn) = cone_normal.normalize() {
+                            if cn.dot(normal).abs() > 0.8 {
+                                return Some(surface.clone());
+                            }
+                        }
+                    }
                 }
             }
             FaceSurface::Torus(tor) => {
@@ -353,14 +371,33 @@ fn classify_triangle_surface(
                     let tube_center = tor.center() + ring_dir * tor.major_radius();
                     let tube_dist = (centroid - tube_center).length();
                     if (tube_dist - tor.minor_radius()).abs() < tol.linear * 100.0 {
-                        return Some(surface.clone());
+                        // Normal consistency: torus surface normal at a point is
+                        // the direction from the tube center to that point.
+                        let tube_normal = (centroid - tube_center).normalize();
+                        if let Ok(tn) = tube_normal {
+                            if tn.dot(normal).abs() > 0.8 {
+                                return Some(surface.clone());
+                            }
+                        }
                     }
                 }
             }
-            FaceSurface::Nurbs(_) => {
-                // NURBS surface matching would require Newton projection,
-                // which is too expensive for per-triangle classification.
-                // Skip — these triangles stay as planar.
+            FaceSurface::Nurbs(nurbs) => {
+                // Use Newton projection to check if centroid lies on the
+                // NURBS surface. This is O(1) per triangle (one Newton
+                // solve), acceptable since the mesh boolean path is already
+                // O(N) expensive.
+                use brepkit_math::nurbs::projection::project_point_to_surface;
+                if let Ok(proj) = project_point_to_surface(nurbs, centroid, tol.linear * 100.0) {
+                    if proj.distance < tol.linear * 100.0 {
+                        // Also check normal consistency.
+                        if let Ok(surf_normal) = nurbs.normal(proj.u, proj.v) {
+                            if surf_normal.dot(normal).abs() > 0.8 {
+                                return Some(surface.clone());
+                            }
+                        }
+                    }
+                }
             }
         }
     }

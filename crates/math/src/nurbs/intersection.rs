@@ -29,7 +29,7 @@ use crate::bvh::Bvh;
 use crate::nurbs::curve::NurbsCurve;
 use crate::nurbs::decompose::{BezierPatch, curve_to_bezier_segments, surface_to_bezier_patches};
 use crate::nurbs::fitting::{approximate_lspia, chord_length_params, interpolate};
-use crate::nurbs::projection::project_point_to_curve;
+use crate::nurbs::projection::{project_point_to_curve, project_point_to_surface};
 use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
@@ -998,20 +998,25 @@ pub fn intersect_nurbs_nurbs(
 }
 
 /// Validate intersection curves by checking that the fitted NURBS curve
-/// matches the stored sample points within tolerance.
+/// matches the stored sample points within tolerance, and that the curve
+/// actually lies on both input surfaces.
 ///
-/// This is a lightweight check: instead of projecting curve points onto
-/// both surfaces (expensive), we verify that the curve passes near its
-/// own sample points. Since those sample points are known to lie on the
-/// intersection, large deviations indicate a bad LSPIA fit.
+/// Two-phase validation:
+/// 1. **Sample-point check**: verify the curve passes near its own sample
+///    points. Since those sample points are known to lie on the
+///    intersection, large deviations indicate a bad LSPIA fit.
+/// 2. **Dual-surface check**: project evenly-spaced curve points onto
+///    both surfaces and verify they are within tolerance.  Curves that
+///    pass phase 1 but fail phase 2 are re-fitted via interpolation
+///    (exact through sample points).
 ///
 /// Curves that deviate too far are re-fitted via interpolation (exact
 /// through sample points). If refitting fails, the curve is kept as-is.
 #[allow(clippy::cast_precision_loss)]
 fn validate_intersection_curves(
     curves: &[IntersectionCurve],
-    _s1: &NurbsSurface,
-    _s2: &NurbsSurface,
+    s1: &NurbsSurface,
+    s2: &NurbsSurface,
     tolerance: f64,
 ) -> Vec<IntersectionCurve> {
     let mut result = Vec::with_capacity(curves.len());
@@ -1022,7 +1027,7 @@ fn validate_intersection_curves(
             continue;
         }
 
-        // Check deviation at a subset of stored sample points.
+        // Phase 1: Check deviation at a subset of stored sample points.
         // Evaluate the curve at evenly spaced parameters and compare
         // against the nearest sample point.
         let (t_min, t_max) = ic.curve.domain();
@@ -1042,28 +1047,74 @@ fn validate_intersection_curves(
             max_dev = max_dev.max(dev);
         }
 
-        if max_dev <= tolerance {
-            result.push(ic.clone());
+        // Use the refitted curve if Phase 1 failed, otherwise the original.
+        let working_curve = if max_dev > tolerance {
+            refit_from_samples(ic)
         } else {
-            // Re-fit from stored sample points with higher fidelity.
-            let positions: Vec<Point3> = ic.points.iter().map(|p| p.point).collect();
-            let degree = if positions.len() <= 3 {
-                1
-            } else {
-                3.min(positions.len() - 1)
-            };
-            if let Ok(refit) = interpolate(&positions, degree) {
-                result.push(IntersectionCurve {
-                    curve: refit,
-                    points: ic.points.clone(),
-                });
-            } else {
-                result.push(ic.clone());
+            ic.clone()
+        };
+
+        // Phase 2: Dual-surface validation — verify the curve lies on
+        // both input surfaces by projecting evenly-spaced curve points.
+        let (wt_min, wt_max) = working_curve.curve.domain();
+        let n_surface_check = 5;
+        let mut max_surface_dev = 0.0_f64;
+        let mut successful_projections = 0_u32;
+        for i in 0..n_surface_check {
+            let t = wt_min + (wt_max - wt_min) * i as f64 / (n_surface_check - 1).max(1) as f64;
+            let curve_pt = working_curve.curve.evaluate(t.clamp(wt_min, wt_max));
+
+            // Project onto surface 1 and measure deviation.
+            if let Ok(proj) = project_point_to_surface(s1, curve_pt, tolerance) {
+                max_surface_dev = max_surface_dev.max(proj.distance);
+                successful_projections += 1;
             }
+            // Project onto surface 2 and measure deviation.
+            if let Ok(proj) = project_point_to_surface(s2, curve_pt, tolerance) {
+                max_surface_dev = max_surface_dev.max(proj.distance);
+                successful_projections += 1;
+            }
+        }
+
+        if successful_projections == 0 {
+            // No projections succeeded — can't validate, keep curve as-is.
+            result.push(working_curve);
+            continue;
+        }
+
+        if max_surface_dev > tolerance {
+            log::warn!(
+                "SSI: curve deviates {max_surface_dev:.2e} from surface(s) \
+                 (tolerance={tolerance:.2e}), re-fitting from sample points"
+            );
+            let refit_curve = refit_from_samples(ic);
+            result.push(refit_curve);
+        } else {
+            result.push(working_curve);
         }
     }
 
     result
+}
+
+/// Re-fit an intersection curve from its stored sample points via
+/// interpolation.  Falls back to the original curve if interpolation
+/// fails.
+fn refit_from_samples(ic: &IntersectionCurve) -> IntersectionCurve {
+    let positions: Vec<Point3> = ic.points.iter().map(|p| p.point).collect();
+    let degree = if positions.len() <= 3 {
+        1
+    } else {
+        3.min(positions.len() - 1)
+    };
+    if let Ok(refit) = interpolate(&positions, degree) {
+        IntersectionCurve {
+            curve: refit,
+            points: ic.points.clone(),
+        }
+    } else {
+        ic.clone()
+    }
 }
 
 /// Find SSI seed points using recursive Bezier patch subdivision + BVH overlap.
@@ -2457,10 +2508,15 @@ fn march_direction(
     tolerance: f64,
     max_steps: usize,
 ) -> Vec<IntersectionPoint> {
+    // Maximum number of turning points (tangent reversals) to traverse.
+    // Realistic SSI curves have at most 2-3 turning points; the limit
+    // prevents infinite loops on degenerate near-tangential cases.
+    const MAX_TURNING_POINTS: usize = 3;
+
     let mut points = Vec::new();
     let mut current = *seed;
 
-    let sign = if forward { 1.0 } else { -1.0 };
+    let mut sign = if forward { 1.0 } else { -1.0 };
     let mut h = step_size;
     // Minimum step: don't go below 1/1000th of the initial step.
     // Using tolerance (1e-6) as h_min caused runaway step-halving in
@@ -2489,6 +2545,7 @@ fn march_direction(
 
     let mut total_evals = 0_usize;
     let max_evals = max_steps * 3;
+    let mut turning_points_count = 0_usize;
 
     for _ in 0..max_steps {
         let y = [
@@ -2571,21 +2628,33 @@ fn march_direction(
                 if cos_angle < 0.0 {
                     // Turning point detected: tangent reversed direction.
                     // This happens when the intersection curve has a cusp
-                    // or reversal in parameter space. Use bisection to find
-                    // the turning point more precisely, then stop marching
-                    // in this direction (the other direction's march will
-                    // continue past the turning point).
+                    // or reversal in parameter space. Use bisection to
+                    // locate the turning point precisely, then continue
+                    // marching through it by flipping the sign.
                     if h > h_min * 4.0 {
                         // Retry with much smaller step to get closer to the
-                        // turning point before stopping.
+                        // turning point before continuing.
                         h = (h * 0.25).max(h_min);
                         // Don't add this point; we'll re-step.
                         continue;
                     }
-                    // At minimum step: accept the point as the turning point
-                    // and stop marching.
+                    // At minimum step: accept the turning point and
+                    // continue marching past it. The tangent has reversed,
+                    // so flip the sign to keep following the curve in the
+                    // new direction.
                     points.push(refined);
-                    break;
+                    current = refined;
+                    sign = -sign;
+                    // cur_tangent was computed with the old sign. After
+                    // flipping, negate it so the angular deviation check
+                    // on the next step sees a consistent forward direction.
+                    prev_tangent = cur_tangent.map(|t| Vec3::new(-t.x(), -t.y(), -t.z()));
+                    h = step_size; // Reset step size for the new direction.
+                    turning_points_count += 1;
+                    if turning_points_count >= MAX_TURNING_POINTS {
+                        break;
+                    }
+                    continue;
                 } else if angle > max_angle && h > h_min {
                     // High curvature — reduce step size for next iteration.
                     h = (h * 0.5).max(h_min);
@@ -3855,5 +3924,47 @@ mod tests {
             &far,
             0.1
         ));
+    }
+
+    #[test]
+    fn dual_surface_validation_passes_for_known_intersection() {
+        use crate::nurbs::projection::project_point_to_surface;
+
+        // Two transversely intersecting planar NURBS surfaces: flat (z=0) and
+        // tilted (z goes from -0.5 to +0.5 across x). Their intersection is a
+        // line at x=0.5 that must lie on both surfaces within tolerance.
+        let s1 = flat_surface();
+        let s2 = tilted_surface();
+
+        let curves = intersect_nurbs_nurbs(&s1, &s2, 15, 0.02).unwrap();
+        assert!(
+            !curves.is_empty(),
+            "transverse planar surfaces should produce at least one intersection curve"
+        );
+
+        let tol = 1e-3;
+        for ic in &curves {
+            let (t_min, t_max) = ic.curve.domain();
+            for i in 0..5 {
+                let t = t_min + (t_max - t_min) * i as f64 / 4.0;
+                let pt = ic.curve.evaluate(t);
+
+                // Point must be close to surface 1.
+                let proj1 = project_point_to_surface(&s1, pt, tol).unwrap();
+                assert!(
+                    proj1.distance < tol,
+                    "curve point at t={t:.3} deviates {:.2e} from surface 1",
+                    proj1.distance
+                );
+
+                // Point must be close to surface 2.
+                let proj2 = project_point_to_surface(&s2, pt, tol).unwrap();
+                assert!(
+                    proj2.distance < tol,
+                    "curve point at t={t:.3} deviates {:.2e} from surface 2",
+                    proj2.distance
+                );
+            }
+        }
     }
 }

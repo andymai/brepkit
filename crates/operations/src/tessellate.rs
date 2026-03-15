@@ -171,13 +171,15 @@ fn tessellate_analytic(
     nv: usize,
     kind: AnalyticKind,
 ) -> TriangleMeshUV {
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut uvs = Vec::new();
-    let mut indices = Vec::new();
-
     let nu = nu.max(4);
     let nv = nv.max(1);
+
+    let num_verts = (nu + 1) * (nv + 1);
+    let num_indices = nu * nv * 6;
+    let mut positions = Vec::with_capacity(num_verts);
+    let mut normals = Vec::with_capacity(num_verts);
+    let mut uvs = Vec::with_capacity(num_verts);
+    let mut indices = Vec::with_capacity(num_indices);
 
     // Only wrap u when the range spans a full period (≈ 2π).
     // For partial arcs (e.g. quarter-cylinder), the last grid column is a
@@ -712,9 +714,10 @@ fn tessellate_planar_with_holes(
     // Extract triangles and build mesh.
     let cdt_triangles = cdt.triangles();
     let cdt_verts = cdt.vertices();
-    let mut positions_out = Vec::new();
-    let mut normals_out = Vec::new();
-    let mut indices_out = Vec::new();
+    let num_tris = cdt_triangles.len();
+    let mut positions_out = Vec::with_capacity(num_tris);
+    let mut normals_out = Vec::with_capacity(num_tris);
+    let mut indices_out = Vec::with_capacity(num_tris * 3);
 
     // Build O(1) reverse map: CDT vertex index → original position index.
     let mut vi_to_orig: HashMap<usize, usize> = HashMap::new();
@@ -2097,11 +2100,12 @@ fn tessellate_nurbs(
 
     // Collect leaf cells and emit triangles.
     // Cache surface evaluations by parameter pair (as bit patterns) to avoid duplicates.
+    let leaf_count = cells.iter().filter(|c| c.children.is_none()).count();
     let mut eval_cache: HashMap<(u64, u64), (Point3, Vec3)> = HashMap::new();
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut uvs: Vec<[f64; 2]> = Vec::new();
-    let mut indices = Vec::new();
+    let mut positions = Vec::with_capacity(leaf_count * 4);
+    let mut normals = Vec::with_capacity(leaf_count * 4);
+    let mut uvs: Vec<[f64; 2]> = Vec::with_capacity(leaf_count * 4);
+    let mut indices = Vec::with_capacity(leaf_count * 6);
     // Map from (u_bits, v_bits) to vertex index.
     let mut vertex_map: HashMap<(u64, u64), u32> = HashMap::new();
 
@@ -3016,8 +3020,10 @@ pub fn tessellate_solid(
     //
     // Interior (non-shared) vertices already have surface-evaluated normals
     // from the face tessellation phase. Shared edge vertices start with
-    // placeholder normals (0,0,0) from Phase 3. For these, compute
-    // area-weighted averages from adjacent triangles.
+    // placeholder normals (0,0,0) from Phase 3. For these, evaluate the
+    // actual surface normals from adjacent faces and average them. This
+    // produces smooth shading across face boundaries instead of faceted
+    // triangle-averaged normals.
     //
     // We do NOT split vertices at creases — that would break watertightness
     // (index-based half-edge pairing). Crease splitting is a rendering-layer
@@ -3026,9 +3032,7 @@ pub fn tessellate_solid(
     let n_verts = merged.positions.len();
     let tri_count = merged.indices.len() / 3;
 
-    // Accumulate area-weighted triangle normals into every vertex that
-    // still has a zero placeholder normal.
-    let mut accum: Vec<Vec3> = vec![Vec3::new(0.0, 0.0, 0.0); n_verts];
+    // Identify vertices that still have zero placeholder normals.
     let mut needs_normal = vec![false; n_verts];
     for i in 0..n_verts {
         let n = &merged.normals[i];
@@ -3037,27 +3041,88 @@ pub fn tessellate_solid(
         }
     }
 
-    for t in 0..tri_count {
-        let i0 = merged.indices[t * 3] as usize;
-        let i1 = merged.indices[t * 3 + 1] as usize;
-        let i2 = merged.indices[t * 3 + 2] as usize;
-        let a = merged.positions[i1] - merged.positions[i0];
-        let b = merged.positions[i2] - merged.positions[i0];
-        let face_normal = a.cross(b); // area-weighted (unnormalized)
-        if needs_normal[i0] {
-            accum[i0] += face_normal;
-        }
-        if needs_normal[i1] {
-            accum[i1] += face_normal;
-        }
-        if needs_normal[i2] {
-            accum[i2] += face_normal;
-        }
-    }
+    // Build vertex → face adjacency from edge-face relationships.
+    // Each edge's global vertex indices map to the faces sharing that edge.
+    {
+        use std::collections::HashSet;
 
-    for i in 0..n_verts {
-        if needs_normal[i] {
-            merged.normals[i] = accum[i].normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+        let mut vertex_faces: HashMap<usize, HashSet<FaceId>> = HashMap::new();
+        for (&edge_idx, global_ids) in &edge_global_indices {
+            if let Some(face_ids) = edge_face_map.get(&edge_idx) {
+                for &gid in global_ids {
+                    let gi = gid as usize;
+                    if gi < n_verts && needs_normal[gi] {
+                        let entry = vertex_faces.entry(gi).or_default();
+                        for &fid in face_ids {
+                            entry.insert(fid);
+                        }
+                    }
+                }
+            }
+        }
+
+        // For each vertex that needs a normal, evaluate the surface normal
+        // from each adjacent face and average. Falls back to area-weighted
+        // triangle normals if surface evaluation fails.
+        let mut fallback_needed = vec![false; n_verts];
+        for i in 0..n_verts {
+            if !needs_normal[i] {
+                continue;
+            }
+            let pos = merged.positions[i];
+            let mut normal_sum = Vec3::new(0.0, 0.0, 0.0);
+            let mut count = 0_u32;
+            if let Some(faces) = vertex_faces.get(&i) {
+                for &fid in faces {
+                    if let Ok(face_data) = topo.face(fid) {
+                        let surf = face_data.surface();
+                        if let Some(n) = crate::fillet::face_surface_normal_at(surf, pos) {
+                            // Respect face orientation: if the face is reversed,
+                            // the outward normal is opposite to the surface normal.
+                            let oriented = if face_data.is_reversed() {
+                                Vec3::new(-n.x(), -n.y(), -n.z())
+                            } else {
+                                n
+                            };
+                            normal_sum += oriented;
+                            count += 1;
+                        }
+                    }
+                }
+            }
+            if count > 0 {
+                merged.normals[i] = normal_sum.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+            } else {
+                fallback_needed[i] = true;
+            }
+        }
+
+        // Fallback: area-weighted triangle normals for vertices where
+        // surface evaluation failed (e.g., degenerate parametrization).
+        if fallback_needed.iter().any(|&f| f) {
+            let mut accum: Vec<Vec3> = vec![Vec3::new(0.0, 0.0, 0.0); n_verts];
+            for t in 0..tri_count {
+                let i0 = merged.indices[t * 3] as usize;
+                let i1 = merged.indices[t * 3 + 1] as usize;
+                let i2 = merged.indices[t * 3 + 2] as usize;
+                let a = merged.positions[i1] - merged.positions[i0];
+                let b = merged.positions[i2] - merged.positions[i0];
+                let face_normal = a.cross(b); // area-weighted (unnormalized)
+                if fallback_needed.get(i0).copied().unwrap_or(false) {
+                    accum[i0] += face_normal;
+                }
+                if fallback_needed.get(i1).copied().unwrap_or(false) {
+                    accum[i1] += face_normal;
+                }
+                if fallback_needed.get(i2).copied().unwrap_or(false) {
+                    accum[i2] += face_normal;
+                }
+            }
+            for i in 0..n_verts {
+                if fallback_needed[i] {
+                    merged.normals[i] = accum[i].normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                }
+            }
         }
     }
 

@@ -138,8 +138,9 @@ fn build_honeycomb_grid(
 
 fn bench_compound_cut_cylinders(c: &mut Criterion) {
     let mut group = c.benchmark_group("compound_cut_cylinders");
-    group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
 
     for &n in &[4, 16, 36, 64] {
         // compound_cut (single-pass)
@@ -176,8 +177,9 @@ fn bench_compound_cut_cylinders(c: &mut Criterion) {
 
 fn bench_compound_cut_honeycomb(c: &mut Criterion) {
     let mut group = c.benchmark_group("compound_cut_honeycomb");
-    group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
 
     for &rings in &[1, 2, 3, 5] {
         let (base_topo, target, tools) = build_honeycomb_grid(rings);

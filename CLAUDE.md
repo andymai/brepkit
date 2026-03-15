@@ -362,6 +362,18 @@ cargo build -p brepkit-wasm --target wasm32-unknown-unknown  # WASM
 ./scripts/check-boundaries.sh              # Verify layer deps
 ```
 
+### Profiling
+
+The `[profile.profiling]` block in `Cargo.toml` inherits from release with debug symbols and no LTO for fast builds with full symbol resolution.
+
+```bash
+cargo flamegraph --profile profiling \     # Flamegraph a single benchmark
+  --bench cad_operations \
+  -p brepkit-operations \
+  -o /tmp/flamegraph.svg \
+  -- --bench "bench_name_filter"
+```
+
 ## Key Patterns
 
 ### Error handling
