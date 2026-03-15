@@ -126,7 +126,7 @@ fn edge_v_samples(curve: &EdgeCurve) -> usize {
 /// For NURBS surfaces, uses the midpoint normal as an approximation (full
 /// point-inversion would be needed for exactness, but this suffices for fillet
 /// cross-section geometry where the point is known to lie on the surface).
-fn face_surface_normal_at(surface: &FaceSurface, point: Point3) -> Option<Vec3> {
+pub(crate) fn face_surface_normal_at(surface: &FaceSurface, point: Point3) -> Option<Vec3> {
     match surface {
         FaceSurface::Plane { normal, .. } => Some(*normal),
         FaceSurface::Cylinder(cyl) => {

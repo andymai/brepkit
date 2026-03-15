@@ -2457,10 +2457,15 @@ fn march_direction(
     tolerance: f64,
     max_steps: usize,
 ) -> Vec<IntersectionPoint> {
+    // Maximum number of turning points (tangent reversals) to traverse.
+    // Realistic SSI curves have at most 2-3 turning points; the limit
+    // prevents infinite loops on degenerate near-tangential cases.
+    const MAX_TURNING_POINTS: usize = 3;
+
     let mut points = Vec::new();
     let mut current = *seed;
 
-    let sign = if forward { 1.0 } else { -1.0 };
+    let mut sign = if forward { 1.0 } else { -1.0 };
     let mut h = step_size;
     // Minimum step: don't go below 1/1000th of the initial step.
     // Using tolerance (1e-6) as h_min caused runaway step-halving in
@@ -2489,6 +2494,7 @@ fn march_direction(
 
     let mut total_evals = 0_usize;
     let max_evals = max_steps * 3;
+    let mut turning_points_count = 0_usize;
 
     for _ in 0..max_steps {
         let y = [
@@ -2571,21 +2577,33 @@ fn march_direction(
                 if cos_angle < 0.0 {
                     // Turning point detected: tangent reversed direction.
                     // This happens when the intersection curve has a cusp
-                    // or reversal in parameter space. Use bisection to find
-                    // the turning point more precisely, then stop marching
-                    // in this direction (the other direction's march will
-                    // continue past the turning point).
+                    // or reversal in parameter space. Use bisection to
+                    // locate the turning point precisely, then continue
+                    // marching through it by flipping the sign.
                     if h > h_min * 4.0 {
                         // Retry with much smaller step to get closer to the
-                        // turning point before stopping.
+                        // turning point before continuing.
                         h = (h * 0.25).max(h_min);
                         // Don't add this point; we'll re-step.
                         continue;
                     }
-                    // At minimum step: accept the point as the turning point
-                    // and stop marching.
+                    // At minimum step: accept the turning point and
+                    // continue marching past it. The tangent has reversed,
+                    // so flip the sign to keep following the curve in the
+                    // new direction.
                     points.push(refined);
-                    break;
+                    current = refined;
+                    sign = -sign;
+                    // cur_tangent was computed with the old sign. After
+                    // flipping, negate it so the angular deviation check
+                    // on the next step sees a consistent forward direction.
+                    prev_tangent = cur_tangent.map(|t| Vec3::new(-t.x(), -t.y(), -t.z()));
+                    h = step_size; // Reset step size for the new direction.
+                    turning_points_count += 1;
+                    if turning_points_count >= MAX_TURNING_POINTS {
+                        break;
+                    }
+                    continue;
                 } else if angle > max_angle && h > h_min {
                     // High curvature — reduce step size for next iteration.
                     h = (h * 0.5).max(h_min);
