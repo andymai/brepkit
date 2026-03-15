@@ -1360,7 +1360,19 @@ fn compound_cut_sequential(
     let _t = timer_now();
     let mut result = target;
     let mut skipped = 0usize;
-    for &tool in tools {
+
+    // For many-tool sequences, enable unify_faces on intermediate results to
+    // prevent topology explosion from multiplicative chord splitting.
+    // The final tool uses the caller's original options.
+    let intermediate_opts = if tools.len() > 3 {
+        let mut o = opts;
+        o.unify_faces = true;
+        o
+    } else {
+        opts
+    };
+
+    for (i, &tool) in tools.iter().enumerate() {
         // AABB pre-filter: skip tools that don't overlap the current target.
         let target_aabb = crate::measure::solid_bounding_box(topo, result)?;
         let tool_aabb = crate::measure::solid_bounding_box(topo, tool)?;
@@ -1368,7 +1380,12 @@ fn compound_cut_sequential(
             skipped += 1;
             continue;
         }
-        result = boolean_with_options(topo, BooleanOp::Cut, result, tool, opts)?;
+        let use_opts = if i < tools.len() - 1 {
+            intermediate_opts
+        } else {
+            opts
+        };
+        result = boolean_with_options(topo, BooleanOp::Cut, result, tool, use_opts)?;
     }
     log::debug!(
         "[compound_cut_sequential] {} tools, {} skipped (disjoint), {:.1}ms",

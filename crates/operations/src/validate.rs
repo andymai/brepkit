@@ -82,6 +82,25 @@ impl Default for ValidationOptions {
     }
 }
 
+/// Compute the Euler characteristic (V - E + F) for a solid.
+///
+/// A closed, manifold solid should have Euler characteristic 2.
+/// Values other than 2 indicate topological defects (missing faces,
+/// non-manifold edges, etc.).
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub fn euler_characteristic(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<i64, crate::OperationsError> {
+    let (f, e, v) = explorer::solid_entity_counts(topo, solid)?;
+    #[allow(clippy::cast_possible_wrap)]
+    let euler = (v as i64) - (e as i64) + (f as i64);
+    Ok(euler)
+}
+
 /// Validate a solid, returning a report of all issues found.
 ///
 /// Checks performed:

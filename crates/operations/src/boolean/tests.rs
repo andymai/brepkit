@@ -2717,3 +2717,55 @@ fn boolean_fuse_overlapping_boxes_positive_volume() {
         "fused overlapping boxes should have positive volume: {vol}"
     );
 }
+
+/// Sequential compound cut with many tools should produce a valid solid
+/// with bounded face count (unify_faces prevents explosion).
+#[test]
+fn compound_cut_sequential_preserves_volume() {
+    let mut topo = Topology::new();
+    let target = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let original_vol = crate::measure::solid_volume(&topo, target, 0.01).unwrap();
+
+    // Create 5 cylinder tools at different positions along X.
+    let mut tools = Vec::new();
+    for i in 0..5 {
+        let cyl = crate::primitives::make_cylinder(&mut topo, 0.5, 12.0).unwrap();
+        let offset = 2.0 * (i as f64) + 1.0;
+        let t = brepkit_math::mat::Mat4::translation(offset, 5.0, 0.0);
+        crate::transform::transform_solid(&mut topo, cyl, &t).unwrap();
+        tools.push(cyl);
+    }
+
+    let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default());
+    assert!(
+        result.is_ok(),
+        "compound_cut with 5 tools should succeed: {:?}",
+        result.err()
+    );
+    let result_id = result.unwrap();
+
+    // Volume must be positive and less than original.
+    let vol = crate::measure::solid_volume(&topo, result_id, 0.01).unwrap();
+    assert!(
+        vol > 0.0 && vol < original_vol,
+        "volume should decrease: original={original_vol}, result={vol}"
+    );
+
+    // Face count should be bounded (unify_faces prevents explosion).
+    let s = topo.solid(result_id).unwrap();
+    let shell = topo.shell(s.outer_shell()).unwrap();
+    let face_count = shell.faces().len();
+    assert!(
+        face_count < 500,
+        "face count should be bounded: got {face_count}"
+    );
+}
+
+/// Euler characteristic function should return 2 for valid simple solids.
+#[test]
+fn euler_characteristic_box_is_two() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let euler = crate::validate::euler_characteristic(&topo, solid).unwrap();
+    assert_eq!(euler, 2, "box Euler V-E+F should be 2, got {euler}");
+}
