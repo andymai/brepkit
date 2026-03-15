@@ -473,4 +473,30 @@ mod tests {
             "cut must reduce volume: {vol_before} -> {vol_after}"
         );
     }
+
+    // ── compound_cut volume regression ───────────────────────────────
+
+    #[test]
+    fn compound_cut_volume_decreases() {
+        let mut k = BrepKernel::new();
+        // Target: 10x10x10 box at origin. Tool: 1x1x1 box at origin.
+        // The tool overlaps one corner, so volume decreases.
+        let r = k.execute_batch(
+            r#"[
+                {"op": "makeBox", "args": {"width": 10, "height": 10, "depth": 10}},
+                {"op": "makeBox", "args": {"width": 1, "height": 1, "depth": 1}},
+                {"op": "volume", "args": {"solid": 0}},
+                {"op": "compoundCut", "args": {"target": 0, "tools": [1]}},
+                {"op": "volume", "args": {"solid": 2}}
+            ]"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let vol_before = parsed[2]["ok"].as_f64().unwrap();
+        assert!(batch_has_ok(&r, 3), "compoundCut must succeed: {r}");
+        let vol_after = parsed[4]["ok"].as_f64().unwrap();
+        assert!(
+            vol_after < vol_before && vol_after > 0.0,
+            "compound_cut must reduce volume: {vol_before} -> {vol_after}"
+        );
+    }
 }
