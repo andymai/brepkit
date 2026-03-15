@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.6.1](https://github.com/andymai/brepkit/compare/v2.6.0...v2.6.1) (2026-03-15)
+
+
+### Bug Fixes
+
+* boolean face explosion regression ([#270](https://github.com/andymai/brepkit/issues/270)) ([#271](https://github.com/andymai/brepkit/issues/271)) ([270bf28](https://github.com/andymai/brepkit/commit/270bf280d43080520cd97005c992402422d0259c))
+* cfg-gate rayon par_iter for wasm32 targets ([#261](https://github.com/andymai/brepkit/issues/261)) ([620b8d0](https://github.com/andymai/brepkit/commit/620b8d0198b13f31248800f8b2ab0b38d5fde3be)), closes [#258](https://github.com/andymai/brepkit/issues/258)
+
 ## [2.6.0](https://github.com/andymai/brepkit/compare/v2.5.3...v2.6.0) (2026-03-15)
 
 
