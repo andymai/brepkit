@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
+use brepkit_math::obb::Obb3;
 use brepkit_math::plane::plane_plane_intersection;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -162,7 +163,7 @@ pub(super) fn compute_intersection_segments(
 ) -> Vec<IntersectionSegment> {
     let mut segments = Vec::new();
 
-    // Build BVH over solid B's faces.
+    // Build BVH over solid B's faces (AABB broad phase).
     let b_entries: Vec<(usize, Aabb3)> = faces_b
         .iter()
         .enumerate()
@@ -170,11 +171,25 @@ pub(super) fn compute_intersection_segments(
         .collect();
     let bvh = Bvh::build(&b_entries);
 
+    // Pre-compute OBBs for tighter secondary filtering.
+    // For planar faces, use normal-guided OBB (near-zero thickness);
+    // for others, use PCA-based OBB.
+    let obbs_b: Vec<Obb3> = faces_b
+        .iter()
+        .map(|(_, verts, normal, _)| Obb3::from_points_with_normal(verts.iter().copied(), *normal))
+        .collect();
+
     for &(fid_a, ref verts_a, n_a, d_a) in faces_a {
         let aabb_a = Aabb3::from_points(verts_a.iter().copied());
+        let obb_a = Obb3::from_points_with_normal(verts_a.iter().copied(), n_a);
         let candidates = bvh.query_overlap(&aabb_a);
 
         for &b_idx in &candidates {
+            // OBB-OBB secondary filter: reject false positives from loose AABBs.
+            if !obb_a.intersects(&obbs_b[b_idx]) {
+                continue;
+            }
+
             let (fid_b, ref verts_b, n_b, d_b) = faces_b[b_idx];
 
             // Skip face pairs already handled by the analytic fast path.
