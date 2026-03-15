@@ -4,7 +4,10 @@
 //! `brepjs/benchmarks/kernel-comparison.bench.test.ts` for 1:1 comparison
 //! against OCCT. Each benchmark name matches the JS counterpart.
 //!
-//! Run with: `cargo bench -p brepkit-operations`
+//! Run with:
+//!   `cargo bench-fast`               — this file only, 20 samples (~2 min)
+//!   `cargo bench-full`               — all bench files, full settings
+//!   `cargo bench -p brepkit-operations`  — all bench files (same as bench-full)
 
 #![allow(
     clippy::unwrap_used,
@@ -13,6 +16,7 @@
 )]
 
 use std::hint::black_box;
+use std::time::Duration;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 
@@ -30,6 +34,17 @@ use brepkit_operations::shell_op;
 use brepkit_operations::tessellate;
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
+
+// ---------------------------------------------------------------------------
+// Criterion config — fast defaults for development iteration
+// ---------------------------------------------------------------------------
+
+fn fast_config() -> Criterion {
+    Criterion::default()
+        .sample_size(20)
+        .warm_up_time(Duration::from_millis(500))
+        .measurement_time(Duration::from_secs(2))
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -578,65 +593,93 @@ fn bench_tessellate_boolean_result(c: &mut Criterion) {
 // Criterion groups — organized to mirror JS benchmark sections
 // ===========================================================================
 
-criterion_group!(
-    primitives_bench,
-    bench_make_box_x100,
-    bench_make_cylinder_x100,
-    bench_make_sphere_x100,
-    bench_make_sphere_single,
-    bench_make_cylinder_single,
-);
+criterion_group! {
+    name = primitives_bench;
+    config = fast_config();
+    targets =
+        bench_make_box_x100,
+        bench_make_cylinder_x100,
+        bench_make_sphere_x100,
+        bench_make_sphere_single,
+        bench_make_cylinder_single,
+}
 
-criterion_group!(
-    booleans_bench,
-    bench_fuse_box_box_x10,
-    bench_cut_box_cyl_x10,
-    bench_intersect_box_sphere_x10,
-);
+criterion_group! {
+    name = booleans_bench;
+    config = fast_config();
+    targets =
+        bench_fuse_box_box_x10,
+        bench_cut_box_cyl_x10,
+        bench_intersect_box_sphere_x10,
+}
 
-criterion_group!(transforms_bench, bench_translate_x1000, bench_rotate_x100,);
+criterion_group! {
+    name = transforms_bench;
+    config = fast_config();
+    targets = bench_translate_x1000, bench_rotate_x100,
+}
 
-criterion_group!(meshing_bench, bench_mesh_box_coarse, bench_mesh_sphere_fine,);
+criterion_group! {
+    name = meshing_bench;
+    config = fast_config();
+    targets = bench_mesh_box_coarse, bench_mesh_sphere_fine,
+}
 
-criterion_group!(
-    measurement_bench,
-    bench_volume_x100,
-    bench_bounding_box_x100,
-);
+criterion_group! {
+    name = measurement_bench;
+    config = fast_config();
+    targets =
+        bench_volume_x100,
+        bench_bounding_box_x100,
+}
 
-criterion_group!(shell_bench, bench_shell_box,);
+criterion_group! {
+    name = shell_bench;
+    config = fast_config();
+    targets = bench_shell_box,
+}
 
-criterion_group!(
-    pattern_bench,
-    bench_linear_pattern_10,
-    bench_grid_pattern_3x3,
-);
+criterion_group! {
+    name = pattern_bench;
+    config = fast_config();
+    targets =
+        bench_linear_pattern_10,
+        bench_grid_pattern_3x3,
+}
 
-criterion_group!(
-    endtoend_bench,
-    bench_box_chamfer_all,
-    bench_box_fillet_all,
-    bench_multi_boolean,
-);
+criterion_group! {
+    name = endtoend_bench;
+    config = fast_config();
+    targets =
+        bench_box_chamfer_all,
+        bench_box_fillet_all,
+        bench_multi_boolean,
+}
 
-criterion_group!(
-    gridfinity_bench,
-    bench_gridfinity_1x1_bin,
-    bench_gridfinity_3x3_baseplate,
-);
+criterion_group! {
+    name = gridfinity_bench;
+    config = fast_config();
+    targets =
+        bench_gridfinity_1x1_bin,
+        bench_gridfinity_3x3_baseplate,
+}
 
-criterion_group!(
-    optimization_bench,
-    bench_translate_fused_x1000,
-    bench_intersect_box_sphere_single,
-);
+criterion_group! {
+    name = optimization_bench;
+    config = fast_config();
+    targets =
+        bench_translate_fused_x1000,
+        bench_intersect_box_sphere_single,
+}
 
-criterion_group!(
-    stress_bench,
-    bench_tessellate_64_hole_plate,
-    bench_boolean_64_holes,
-    bench_tessellate_boolean_result,
-);
+criterion_group! {
+    name = stress_bench;
+    config = fast_config();
+    targets =
+        bench_tessellate_64_hole_plate,
+        bench_boolean_64_holes,
+        bench_tessellate_boolean_result,
+}
 
 criterion_main!(
     primitives_bench,

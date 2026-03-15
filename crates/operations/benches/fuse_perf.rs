@@ -66,8 +66,9 @@ fn build_overlapping_box_grid(n: usize) -> (Topology, Vec<brepkit_topology::soli
 
 fn bench_fuse_balanced(c: &mut Criterion) {
     let mut group = c.benchmark_group("fuse_balanced");
-    group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
 
     for &side in &[2, 3, 4, 5] {
         let n = side * side;
@@ -98,8 +99,9 @@ fn bench_fuse_balanced(c: &mut Criterion) {
 
 fn bench_fuse_touching_boxes(c: &mut Criterion) {
     let mut group = c.benchmark_group("fuse_touching");
-    group.measurement_time(Duration::from_secs(15));
     group.sample_size(10);
+    group.warm_up_time(Duration::from_secs(1));
+    group.measurement_time(Duration::from_secs(5));
 
     for &side in &[2, 3, 4] {
         let n = side * side;
