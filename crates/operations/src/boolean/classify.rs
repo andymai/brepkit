@@ -587,7 +587,6 @@ pub(super) fn classify_point(
     // For coplanar test we need faces near the centroid's plane, so use
     // BVH point-containment if available, otherwise linear scan.
     let coplanar_indices: Vec<usize> = if let Some(bvh) = bvh {
-        // Expand a tiny AABB around centroid to find nearby faces.
         let probe = Aabb3 {
             min: centroid + Vec3::new(-tol.linear, -tol.linear, -tol.linear),
             max: centroid + Vec3::new(tol.linear, tol.linear, tol.linear),
@@ -724,11 +723,16 @@ fn multiray_classify(
         }
     };
 
+    // Reuse a single candidate buffer across all 3 ray queries to avoid
+    // per-ray Vec allocation. The buffer grows on the first query and is
+    // cleared+reused on subsequent queries.
     let mut inside_votes = 0u8;
+    let mut candidates = Vec::new();
     for ray_dir in &ray_dirs {
         let mut crossings = 0i32;
         if let Some(bvh) = bvh {
-            for idx in bvh.query_ray(point, *ray_dir) {
+            bvh.query_ray_into(point, *ray_dir, &mut candidates);
+            for &idx in &candidates {
                 let (_, ref verts, n_opp, d_opp) = opposite[idx];
                 crossings += ray_face_crossing(point, *ray_dir, verts, n_opp, d_opp, tol);
             }
