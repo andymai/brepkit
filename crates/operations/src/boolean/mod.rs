@@ -157,6 +157,7 @@ pub fn boolean_with_options(
             let face_specs = mesh_result_to_face_specs(&mb_result);
             if !face_specs.is_empty() {
                 let result = assemble_solid_mixed(topo, &face_specs, tol)?;
+                let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
                 validate_boolean_result(topo, result)?;
                 return Ok(result);
             }
