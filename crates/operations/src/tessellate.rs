@@ -2598,6 +2598,8 @@ pub fn tessellate_solid(
     // Parallelized with rayon when there are enough edges to amortize
     // thread-pool synchronization overhead.
     let edge_indices: Vec<usize> = edge_face_map.keys().copied().collect();
+    // Rayon panics on wasm32 (no thread pool) — use sequential iteration only.
+    #[cfg(not(target_arch = "wasm32"))]
     let mut edge_points: HashMap<usize, Vec<Point3>> = if edge_indices.len() >= 32 {
         use rayon::prelude::*;
         let results: Vec<Result<(usize, Vec<Point3>), crate::OperationsError>> = edge_indices
@@ -2618,6 +2620,19 @@ pub fn tessellate_solid(
         }
         map
     } else {
+        let mut map = HashMap::new();
+        for &edge_idx in &edge_indices {
+            if let Some(edge_id) = topo.edge_id_from_index(edge_idx) {
+                if let Ok(edge_data) = topo.edge(edge_id) {
+                    let points = sample_edge(topo, edge_data, deflection)?;
+                    map.insert(edge_idx, points);
+                }
+            }
+        }
+        map
+    };
+    #[cfg(target_arch = "wasm32")]
+    let mut edge_points: HashMap<usize, Vec<Point3>> = {
         let mut map = HashMap::new();
         for &edge_idx in &edge_indices {
             if let Some(edge_id) = topo.edge_id_from_index(edge_idx) {
@@ -2953,6 +2968,8 @@ pub fn tessellate_solid(
     }
 
     // Phase 4b: Run CDTs in parallel for large planar faces.
+    // Rayon panics on wasm32 (no thread pool) — use sequential iteration only.
+    #[cfg(not(target_arch = "wasm32"))]
     let cdt_results: Vec<CdtResult> = if cdt_jobs.len() >= 2 {
         use rayon::prelude::*;
         cdt_jobs
@@ -2965,6 +2982,11 @@ pub fn tessellate_solid(
             .map(|job| run_planar_cdt(&job.pts2d, job.outer_count, &job.inner_wire_ranges))
             .collect()
     };
+    #[cfg(target_arch = "wasm32")]
+    let cdt_results: Vec<CdtResult> = cdt_jobs
+        .iter()
+        .map(|job| run_planar_cdt(&job.pts2d, job.outer_count, &job.inner_wire_ranges))
+        .collect();
 
     // Phase 4c: Merge CDT results into the shared mesh (sequential).
     for (job, result) in cdt_jobs.iter().zip(cdt_results) {

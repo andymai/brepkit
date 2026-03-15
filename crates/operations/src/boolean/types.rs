@@ -20,6 +20,7 @@ pub(super) const CLOSED_CURVE_SAMPLES: usize = 32;
 /// Minimum fragment count for parallel classification via rayon.
 /// Below this threshold, sequential iteration is faster due to rayon's
 /// thread-pool synchronization overhead (~5-20us).
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) const PARALLEL_THRESHOLD: usize = 64;
 
 /// Default tessellation deflection for non-planar faces in boolean operations.
