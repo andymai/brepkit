@@ -192,17 +192,17 @@ pub fn shared_edges(
 /// # Errors
 ///
 /// Returns an error if any topology lookup fails.
-pub fn adjacent_faces(
+pub fn adjacent_faces<V: std::ops::Deref<Target = [FaceId]>>(
     topo: &Topology,
     face: FaceId,
-    edge_face_map: &HashMap<usize, SmallVec<[FaceId; 2]>, impl std::hash::BuildHasher>,
+    edge_face_map: &HashMap<usize, V, impl std::hash::BuildHasher>,
 ) -> Result<Vec<FaceId>, TopologyError> {
     let mut seen = HashSet::new();
     let mut neighbors = Vec::new();
 
     for eid in face_edges(topo, face)? {
         if let Some(faces) = edge_face_map.get(&eid.index()) {
-            for &fid in faces {
+            for &fid in &**faces {
                 if fid.index() != face.index() && seen.insert(fid.index()) {
                     neighbors.push(fid);
                 }
