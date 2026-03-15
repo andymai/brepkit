@@ -136,6 +136,34 @@ pub fn boolean_with_options(
     let faces_a = collect_face_data(topo, a, opts.deflection)?;
     let faces_b = collect_face_data(topo, b, opts.deflection)?;
 
+    // ── Mesh boolean guard for high entry counts ──────────────────────
+    // When NURBS/torus/sphere faces are tessellated into triangles,
+    // collect_face_data produces many entries. The chord-based path is
+    // O(N²) on these entries; fall back to mesh boolean (co-refinement,
+    // O(N log N)) when either side exceeds the threshold.
+    if faces_a.len() > types::MESH_BOOLEAN_ENTRY_THRESHOLD
+        || faces_b.len() > types::MESH_BOOLEAN_ENTRY_THRESHOLD
+    {
+        log::debug!(
+            "boolean {op:?}: high entry count ({}, {}), using mesh boolean",
+            faces_a.len(),
+            faces_b.len(),
+        );
+        let mesh_a = crate::tessellate::tessellate_solid(topo, a, opts.deflection)?;
+        let mesh_b = crate::tessellate::tessellate_solid(topo, b, opts.deflection)?;
+        if let Ok(mb_result) =
+            crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, opts.deflection)
+        {
+            let face_specs = mesh_result_to_face_specs(&mb_result);
+            if !face_specs.is_empty() {
+                let result = assemble_solid_mixed(topo, &face_specs, tol)?;
+                validate_boolean_result(topo, result)?;
+                return Ok(result);
+            }
+        }
+        // Mesh boolean failed; continue with chord-based path.
+    }
+
     let aabb_a = solid_aabb(topo, &faces_a, tol)?;
     let aabb_b = solid_aabb(topo, &faces_b, tol)?;
 
@@ -432,6 +460,33 @@ pub fn boolean_with_evolution(
     }
 
     Ok((result, evo))
+}
+
+// ---------------------------------------------------------------------------
+// Mesh boolean helpers
+// ---------------------------------------------------------------------------
+
+/// Convert a mesh boolean result into `FaceSpec` entries for solid assembly.
+fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) -> Vec<FaceSpec> {
+    let mut specs = Vec::new();
+    for tri in result.mesh.indices.chunks_exact(3) {
+        let v0 = result.mesh.positions[tri[0] as usize];
+        let v1 = result.mesh.positions[tri[1] as usize];
+        let v2 = result.mesh.positions[tri[2] as usize];
+
+        let edge1 = v1 - v0;
+        let edge2 = v2 - v0;
+        let Ok(normal) = edge1.cross(edge2).normalize() else {
+            continue;
+        };
+        let d = crate::dot_normal_point(normal, v0);
+        specs.push(FaceSpec::Planar {
+            vertices: vec![v0, v1, v2],
+            normal,
+            d,
+        });
+    }
+    specs
 }
 
 #[cfg(test)]
