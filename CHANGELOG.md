@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.5.2](https://github.com/andymai/brepkit/compare/v2.5.1...v2.5.2) (2026-03-15)
+
+
+### Bug Fixes
+
+* enable unify_faces for intermediate compound booleans ([#263](https://github.com/andymai/brepkit/issues/263)) ([5e2d175](https://github.com/andymai/brepkit/commit/5e2d1752a7dfd0ca02745398ac6ac3b919a831cd)), closes [#260](https://github.com/andymai/brepkit/issues/260)
+* scale normal deviation to world-space sag in tessellation ([#262](https://github.com/andymai/brepkit/issues/262)) ([21a5e27](https://github.com/andymai/brepkit/commit/21a5e277eb63cc674bba17ee5e0ed75ef21116b0)), closes [#259](https://github.com/andymai/brepkit/issues/259)
+
 ## [2.5.1](https://github.com/andymai/brepkit/compare/v2.5.0...v2.5.1) (2026-03-15)
 
 
