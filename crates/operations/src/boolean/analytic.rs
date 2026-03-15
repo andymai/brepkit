@@ -341,7 +341,17 @@ fn classify_triangle_surface(
                 let r = radial.length();
                 let expected_r = along.abs() * cone.half_angle().tan();
                 if (r - expected_r).abs() < tol.linear * 100.0 && along > 0.0 {
-                    return Some(surface.clone());
+                    // Check normal consistency: cone normal is
+                    // radial * sin(half_angle) - axis * cos(half_angle).
+                    if let Ok(radial_n) = radial.normalize() {
+                        let ha = cone.half_angle();
+                        let cone_normal = radial_n * ha.sin() - cone.axis() * ha.cos();
+                        if let Ok(cn) = cone_normal.normalize() {
+                            if cn.dot(normal).abs() > 0.8 {
+                                return Some(surface.clone());
+                            }
+                        }
+                    }
                 }
             }
             FaceSurface::Torus(tor) => {
@@ -357,10 +367,22 @@ fn classify_triangle_surface(
                     }
                 }
             }
-            FaceSurface::Nurbs(_) => {
-                // NURBS surface matching would require Newton projection,
-                // which is too expensive for per-triangle classification.
-                // Skip — these triangles stay as planar.
+            FaceSurface::Nurbs(nurbs) => {
+                // Use Newton projection to check if centroid lies on the
+                // NURBS surface. This is O(1) per triangle (one Newton
+                // solve), acceptable since the mesh boolean path is already
+                // O(N) expensive.
+                use brepkit_math::nurbs::projection::project_point_to_surface;
+                if let Ok(proj) = project_point_to_surface(nurbs, centroid, tol.linear * 100.0) {
+                    if proj.distance < tol.linear * 100.0 {
+                        // Also check normal consistency.
+                        if let Ok(surf_normal) = nurbs.normal(proj.u, proj.v) {
+                            if surf_normal.dot(normal).abs() > 0.8 {
+                                return Some(surface.clone());
+                            }
+                        }
+                    }
+                }
             }
         }
     }
