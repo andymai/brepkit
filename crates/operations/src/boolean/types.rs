@@ -36,14 +36,13 @@ pub(super) const DEFAULT_BOOLEAN_DEFLECTION: f64 = 0.1;
 /// sufficient for correct ray-crossing parity.
 pub(super) const CLASSIFIER_CYL_SEGMENTS: usize = 16;
 
-/// Face-data entry count above which the chord-based tessellated path is
-/// too expensive (O(N²) intersection). Falls back to the mesh boolean
-/// (co-refinement on triangle meshes, O(N log N)).
+/// Combined face count (A + B) above which the chord-based tessellated
+/// path is too expensive. Falls back to the mesh boolean (co-refinement
+/// on triangle meshes, O(N log N)).
 ///
-/// The count includes tessellated triangles from NURBS/torus/sphere faces,
-/// not just raw topology faces. A solid with 20 NURBS faces can produce
-/// 500+ entries after tessellation.
-pub(super) const MESH_BOOLEAN_ENTRY_THRESHOLD: usize = 500;
+/// Checked BEFORE `collect_face_data` to avoid expensive NURBS
+/// tessellation when the mesh boolean will be used anyway.
+pub(super) const MESH_BOOLEAN_FACE_THRESHOLD: usize = 500;
 
 /// Threshold: use CDT batch splitting for faces with this many or more chords.
 ///

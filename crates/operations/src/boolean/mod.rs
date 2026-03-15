@@ -131,39 +131,46 @@ pub fn boolean_with_options(
         // Analytic path failed; fall back to tessellated boolean.
     }
 
+    // ── Mesh boolean guard for high face counts ─────────────────────
+    // When either solid has many topology faces (e.g. from NURBS/torus
+    // tessellation in prior booleans), the chord-based path is O(N²).
+    // Fall back to mesh boolean (co-refinement, O(N log N)).
+    // This check is O(1) and avoids the expensive collect_face_data
+    // tessellation that would otherwise run first.
+    {
+        let count_a = topo.shell(topo.solid(a)?.outer_shell())?.faces().len();
+        let count_b = topo.shell(topo.solid(b)?.outer_shell())?.faces().len();
+        if count_a + count_b > types::MESH_BOOLEAN_FACE_THRESHOLD {
+            log::debug!(
+                "boolean {op:?}: high face count ({count_a} + {count_b}), using mesh boolean"
+            );
+            let mesh_a = crate::tessellate::tessellate_solid(topo, a, opts.deflection)?;
+            let mesh_b = crate::tessellate::tessellate_solid(topo, b, opts.deflection)?;
+            if let Ok(mb_result) =
+                crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, opts.deflection)
+            {
+                let face_specs = mesh_result_to_face_specs(&mb_result);
+                if !face_specs.is_empty() {
+                    let result = assemble_solid_mixed(topo, &face_specs, tol)?;
+                    let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+                    if opts.unify_faces {
+                        let _ = crate::heal::unify_faces(topo, result)?;
+                    }
+                    if opts.heal_after_boolean {
+                        let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
+                    }
+                    validate_boolean_result(topo, result)?;
+                    return Ok(result);
+                }
+            }
+            // Mesh boolean failed; continue with chord-based path.
+        }
+    }
+
     // ── Phase 0: Guard + Precompute ──────────────────────────────────────
 
     let faces_a = collect_face_data(topo, a, opts.deflection)?;
     let faces_b = collect_face_data(topo, b, opts.deflection)?;
-
-    // ── Mesh boolean guard for high entry counts ──────────────────────
-    // When NURBS/torus/sphere faces are tessellated into triangles,
-    // collect_face_data produces many entries. The chord-based path is
-    // O(N²) on these entries; fall back to mesh boolean (co-refinement,
-    // O(N log N)) when either side exceeds the threshold.
-    if faces_a.len() > types::MESH_BOOLEAN_ENTRY_THRESHOLD
-        || faces_b.len() > types::MESH_BOOLEAN_ENTRY_THRESHOLD
-    {
-        log::debug!(
-            "boolean {op:?}: high entry count ({}, {}), using mesh boolean",
-            faces_a.len(),
-            faces_b.len(),
-        );
-        let mesh_a = crate::tessellate::tessellate_solid(topo, a, opts.deflection)?;
-        let mesh_b = crate::tessellate::tessellate_solid(topo, b, opts.deflection)?;
-        if let Ok(mb_result) =
-            crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, opts.deflection)
-        {
-            let face_specs = mesh_result_to_face_specs(&mb_result);
-            if !face_specs.is_empty() {
-                let result = assemble_solid_mixed(topo, &face_specs, tol)?;
-                let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-                validate_boolean_result(topo, result)?;
-                return Ok(result);
-            }
-        }
-        // Mesh boolean failed; continue with chord-based path.
-    }
 
     let aabb_a = solid_aabb(topo, &faces_a, tol)?;
     let aabb_b = solid_aabb(topo, &faces_b, tol)?;
