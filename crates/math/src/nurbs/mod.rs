@@ -10,6 +10,7 @@ pub mod decompose;
 pub mod fitting;
 pub mod intersection;
 pub mod knot_ops;
+pub mod power_basis;
 pub mod projection;
 pub mod self_intersection;
 pub mod surface;
@@ -28,6 +29,7 @@ pub use knot_ops::{
     curve_knot_insert, curve_knot_refine, curve_knot_remove, curve_split, surface_knot_insert_u,
     surface_knot_insert_v,
 };
+pub use power_basis::PowerBasis1D;
 pub use projection::{
     CurveProjection, SurfaceProjection, project_point_to_curve, project_point_to_surface,
 };
