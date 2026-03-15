@@ -1,6 +1,7 @@
 [alias]
 xtask = "run --manifest-path xtask/Cargo.toml --"
 
-# Note: WASM SIMD flags (-C target-feature=+simd128) are set by xtask via
-# RUSTFLAGS, not here, because rustflags in config.toml overrides (doesn't
-# append to) env RUSTFLAGS, and CI sets RUSTFLAGS=-Dwarnings globally.
+# Note: WASM SIMD flags (-C target-feature=+simd128) are enabled by default
+# via xtask (disable with --no-simd). Not set here because rustflags in
+# config.toml overrides (doesn't append to) env RUSTFLAGS, and CI sets
+# RUSTFLAGS=-Dwarnings globally.

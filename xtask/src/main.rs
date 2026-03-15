@@ -13,9 +13,9 @@ struct Cli {
 enum Command {
     /// Build WASM package with dual targets, merge, and validate.
     WasmBuild {
-        /// Enable SIMD optimizations (wasm simd128).
+        /// Disable SIMD optimizations (simd128 is enabled by default).
         #[arg(long)]
-        simd: bool,
+        no_simd: bool,
 
         /// Skip wasm-opt optimization pass.
         #[arg(long)]
@@ -28,9 +28,9 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
 
-        /// Enable SIMD optimizations.
+        /// Disable SIMD optimizations (simd128 is enabled by default).
         #[arg(long)]
-        simd: bool,
+        no_simd: bool,
     },
 }
 
@@ -38,9 +38,9 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::WasmBuild { simd, skip_opt } => {
+        Command::WasmBuild { no_simd, skip_opt } => {
             wasm::check_tools()?;
-            wasm::build_both_targets(simd)?;
+            wasm::build_both_targets(!no_simd)?;
             if !skip_opt {
                 wasm::run_wasm_opt()?;
             }
@@ -49,9 +49,9 @@ fn main() -> anyhow::Result<()> {
             println!("\n✅ WASM build complete. Run smoke test with:");
             println!("   node scripts/test-wasm-smoke.mjs");
         }
-        Command::WasmPublish { dry_run, simd } => {
+        Command::WasmPublish { dry_run, no_simd } => {
             wasm::check_tools()?;
-            wasm::build_both_targets(simd)?;
+            wasm::build_both_targets(!no_simd)?;
             wasm::run_wasm_opt()?;
             wasm::merge_packages()?;
             wasm::validate_output()?;
