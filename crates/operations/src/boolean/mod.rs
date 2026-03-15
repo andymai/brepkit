@@ -131,6 +131,31 @@ pub fn boolean_with_options(
         // Analytic path failed; fall back to tessellated boolean.
     }
 
+    // ── Mesh boolean guard for high face counts ─────────────────────
+    // When either solid has many topology faces (e.g. from NURBS/torus
+    // tessellation in prior booleans), the chord-based path is O(N²).
+    // Fall back to mesh boolean (co-refinement, O(N log N)).
+    // This check is O(1) and avoids the expensive collect_face_data
+    // tessellation that would otherwise run first.
+    {
+        let count_a = topo.shell(topo.solid(a)?.outer_shell())?.faces().len();
+        let count_b = topo.shell(topo.solid(b)?.outer_shell())?.faces().len();
+        if count_a + count_b > types::MESH_BOOLEAN_FACE_THRESHOLD {
+            log::debug!(
+                "boolean {op:?}: high face count ({count_a} + {count_b}), using mesh boolean"
+            );
+            match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    log::debug!(
+                        "boolean {op:?}: mesh boolean fallback failed ({e}), \
+                         falling through to chord-based path"
+                    );
+                }
+            }
+        }
+    }
+
     // ── Phase 0: Guard + Precompute ──────────────────────────────────────
 
     let faces_a = collect_face_data(topo, a, opts.deflection)?;
@@ -432,6 +457,75 @@ pub fn boolean_with_evolution(
     }
 
     Ok((result, evo))
+}
+
+// ---------------------------------------------------------------------------
+// Mesh boolean helpers
+// ---------------------------------------------------------------------------
+
+/// Best-effort mesh boolean fallback for high face-count solids.
+///
+/// Tessellates both solids, runs mesh co-refinement, assembles the result,
+/// and applies the same post-processing as the other boolean paths.
+/// Returns `Err` on any failure so the caller can fall through to the
+/// chord-based path.
+fn mesh_boolean_fallback(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+    deflection: f64,
+    tol: brepkit_math::tolerance::Tolerance,
+    opts: &BooleanOptions,
+) -> Result<SolidId, crate::OperationsError> {
+    let mesh_a = crate::tessellate::tessellate_solid(topo, a, deflection)?;
+    let mesh_b = crate::tessellate::tessellate_solid(topo, b, deflection)?;
+
+    let mb_result = crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, tol.linear)?;
+    let face_specs = mesh_result_to_face_specs(&mb_result);
+    if face_specs.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "mesh boolean produced empty result".into(),
+        });
+    }
+    let result = assemble_solid_mixed(topo, &face_specs, tol)?;
+    let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+    if opts.unify_faces {
+        let _ = crate::heal::unify_faces(topo, result)?;
+    }
+    if opts.heal_after_boolean {
+        let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
+    }
+    validate_boolean_result(topo, result)?;
+    log::info!(
+        "boolean {op:?}: mesh boolean path → solid {} ({} faces, surface types lost)",
+        result.index(),
+        face_specs.len()
+    );
+    Ok(result)
+}
+
+/// Convert a mesh boolean result into `FaceSpec` entries for solid assembly.
+fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) -> Vec<FaceSpec> {
+    let mut specs = Vec::new();
+    for tri in result.mesh.indices.chunks_exact(3) {
+        let v0 = result.mesh.positions[tri[0] as usize];
+        let v1 = result.mesh.positions[tri[1] as usize];
+        let v2 = result.mesh.positions[tri[2] as usize];
+
+        let edge1 = v1 - v0;
+        let edge2 = v2 - v0;
+        let Ok(normal) = edge1.cross(edge2).normalize() else {
+            continue;
+        };
+        let d = crate::dot_normal_point(normal, v0);
+        specs.push(FaceSpec::Planar {
+            vertices: vec![v0, v1, v2],
+            normal,
+            d,
+        });
+    }
+    specs
 }
 
 #[cfg(test)]
