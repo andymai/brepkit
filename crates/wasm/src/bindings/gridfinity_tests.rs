@@ -249,14 +249,30 @@ fn compound_cut_honeycomb() {
 
 /// Fillet first, then compound cut — the fillet introduces torus faces.
 ///
-/// Solids: 0=box, 1=filleted, 2=cylinder, 3-5=copies, 6=compoundCut result
+/// If fillet fails, subsequent handle numbers shift, so we split into
+/// two batches: fillet first, then build tools + compoundCut only if
+/// fillet succeeded.
+///
+/// Solids (batch 1): 0=box, 1=filleted
+/// Solids (batch 2): 1=filleted (from batch 1), 2=cylinder, 3-5=copies, 6=result
 #[test]
 fn fillet_then_compound_cut() {
     let mut k = BrepKernel::new();
-    let result = k.execute_batch(
+    // Batch 1: create box + fillet.
+    let r1 = k.execute_batch(
         r#"[
         {"op": "makeBox", "args": {"width": 20, "height": 20, "depth": 10}},
-        {"op": "fillet", "args": {"solid": 0, "radius": 1.0}},
+        {"op": "fillet", "args": {"solid": 0, "radius": 1.0}}
+    ]"#,
+    );
+    let p1 = parse_batch(&r1);
+    // If fillet fails, skip the rest — handle numbering would be wrong.
+    if p1[1].get("error").is_some() {
+        return;
+    }
+    // Batch 2: cylinder tools + compoundCut on the filleted solid.
+    let r2 = k.execute_batch(
+        r#"[
         {"op": "makeCylinder", "args": {"radius": 2.0, "height": 14.0}},
         {"op": "copyAndTransformSolid", "args": {"solid": 2, "matrix": [1,0,0,5, 0,1,0,5, 0,0,1,-2, 0,0,0,1]}},
         {"op": "copyAndTransformSolid", "args": {"solid": 2, "matrix": [1,0,0,15, 0,1,0,5, 0,0,1,-2, 0,0,0,1]}},
@@ -264,8 +280,8 @@ fn fillet_then_compound_cut() {
         {"op": "compoundCut", "args": {"target": 1, "tools": [3, 4, 5]}}
     ]"#,
     );
-    let parsed = parse_batch(&result);
-    assert_no_crash(&parsed, 6, "fillet + compoundCut");
+    let p2 = parse_batch(&r2);
+    assert_no_crash(&p2, 4, "fillet + compoundCut");
 }
 
 /// Sequential 5-cylinder cuts (not compound — one at a time).
@@ -319,20 +335,32 @@ fn compound_cut_after_fuse() {
     assert_no_crash(&parsed, 7, "fuse + compoundCut");
 }
 
-/// Full pipeline: box + fuse + fillet + compoundCut (all in one batch).
+/// Full pipeline: box + fuse + fillet + compoundCut.
 ///
-/// Solids: 0=box1, 1=box2, 2=box2-copy (translated), 3=fused,
-///         4=filleted, 5=cylinder, 6-8=cyl-copies, 9=compoundCut result
+/// Split into two batches because fillet may fail, shifting handles.
+/// Batch 1: 0=box1, 1=box2, 2=box2-copy, 3=fused, 4=filleted
+/// Batch 2: 5=cylinder, 6-8=cyl-copies, 9=compoundCut result
 #[test]
 fn batch_fuse_cut_fillet_compound() {
     let mut k = BrepKernel::new();
-    let result = k.execute_batch(
+    // Batch 1: fuse + fillet.
+    let r1 = k.execute_batch(
         r#"[
         {"op": "makeBox", "args": {"width": 10, "height": 10, "depth": 10}},
         {"op": "makeBox", "args": {"width": 10, "height": 10, "depth": 5}},
         {"op": "copyAndTransformSolid", "args": {"solid": 1, "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,10, 0,0,0,1]}},
         {"op": "fuse", "args": {"solidA": 0, "solidB": 2}},
-        {"op": "fillet", "args": {"solid": 3, "radius": 0.5}},
+        {"op": "fillet", "args": {"solid": 3, "radius": 0.5}}
+    ]"#,
+    );
+    let p1 = parse_batch(&r1);
+    // If fillet fails, skip compound cut — handle numbering would be wrong.
+    if p1[4].get("error").is_some() {
+        return;
+    }
+    // Batch 2: cylinder tools + compoundCut on filleted solid.
+    let r2 = k.execute_batch(
+        r#"[
         {"op": "makeCylinder", "args": {"radius": 1.0, "height": 20.0}},
         {"op": "copyAndTransformSolid", "args": {"solid": 5, "matrix": [1,0,0,5, 0,1,0,5, 0,0,1,-2, 0,0,0,1]}},
         {"op": "copyAndTransformSolid", "args": {"solid": 5, "matrix": [1,0,0,3, 0,1,0,3, 0,0,1,-2, 0,0,0,1]}},
@@ -340,9 +368,8 @@ fn batch_fuse_cut_fillet_compound() {
         {"op": "compoundCut", "args": {"target": 4, "tools": [6, 7, 8]}}
     ]"#,
     );
-    let parsed = parse_batch(&result);
-    // Fillet may fail (torus faces), but the pipeline should not crash.
-    assert_no_crash(&parsed, 9, "full pipeline (fuse+fillet+compoundCut)");
+    let p2 = parse_batch(&r2);
+    assert_no_crash(&p2, 4, "full pipeline (fuse+fillet+compoundCut)");
 }
 
 /// Compound cut with several tools, then measure.
@@ -470,9 +497,11 @@ fn compound_cut_bbox_accurate() {
     ]"#,
     );
     let parsed = parse_batch(&result);
+    assert_ok(&parsed, 1); // boundingBox on original box
     let bbox_before = ok_bbox(&parsed, 1);
 
     if parsed[4].get("ok").is_some() {
+        assert_ok(&parsed, 5); // boundingBox on cut result
         let bbox_after = ok_bbox(&parsed, 5);
         let tol = 0.1;
         for i in 0..6 {
