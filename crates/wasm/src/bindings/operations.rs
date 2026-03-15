@@ -901,6 +901,7 @@ impl BrepKernel {
     ///
     /// `contact_mode`: "rmf" (default), "fixed", or "constantNormal:x,y,z"
     /// `scale_values`: flat `[t0,s0,t1,s1,...]` pairs for piecewise-linear scale law.
+    /// `corner_mode`: "smooth" (default), "miter", or "round"
     /// Returns a solid handle.
     #[wasm_bindgen(js_name = "sweepWithOptions")]
     #[allow(clippy::needless_pass_by_value)]
@@ -911,8 +912,9 @@ impl BrepKernel {
         contact_mode: &str,
         scale_values: Vec<f64>,
         segments: u32,
+        corner_mode: &str,
     ) -> Result<u32, JsError> {
-        use brepkit_operations::sweep::{SweepContactMode, SweepOptions};
+        use brepkit_operations::sweep::{SweepContactMode, SweepCornerMode, SweepOptions};
 
         let face_id = self.resolve_face(profile)?;
         let path_curve = self.extract_nurbs_curve(path_edge)?;
@@ -960,9 +962,15 @@ impl BrepKernel {
                 None
             };
 
+        let cm = match corner_mode {
+            "miter" => SweepCornerMode::Miter,
+            "round" => SweepCornerMode::Round,
+            _ => SweepCornerMode::Smooth,
+        };
+
         let options = SweepOptions {
             contact_mode: mode,
-            corner_mode: brepkit_operations::sweep::SweepCornerMode::default(),
+            corner_mode: cm,
             scale_law,
             segments: segments as usize,
         };

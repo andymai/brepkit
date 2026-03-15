@@ -964,6 +964,9 @@ pub enum SweepCornerMode {
     /// are joined by miter faces on the bisector plane of the two
     /// tangent directions. Produces clean geometry at sharp turns.
     Miter,
+    /// At each kink, insert a smooth fillet blend by rotating the profile
+    /// through the turn angle in small angular steps.
+    Round,
 }
 
 /// Options for advanced sweep operations.
@@ -1017,8 +1020,11 @@ pub fn sweep_with_options(
         });
     }
 
-    // Dispatch to miter sweep if corner mode is Miter.
-    if matches!(options.corner_mode, SweepCornerMode::Miter) {
+    // Dispatch to miter sweep if corner mode is Miter or Round.
+    if matches!(
+        options.corner_mode,
+        SweepCornerMode::Miter | SweepCornerMode::Round
+    ) {
         return sweep_miter(topo, profile, path, options);
     }
 
