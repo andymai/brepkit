@@ -3042,14 +3042,15 @@ pub fn tessellate_solid(
     {
         use std::collections::HashSet;
 
-        let mut vertex_faces: Vec<HashSet<FaceId>> = vec![HashSet::new(); n_verts];
+        let mut vertex_faces: HashMap<usize, HashSet<FaceId>> = HashMap::new();
         for (&edge_idx, global_ids) in &edge_global_indices {
             if let Some(face_ids) = edge_face_map.get(&edge_idx) {
                 for &gid in global_ids {
                     let gi = gid as usize;
                     if gi < n_verts && needs_normal[gi] {
+                        let entry = vertex_faces.entry(gi).or_default();
                         for &fid in face_ids {
-                            vertex_faces[gi].insert(fid);
+                            entry.insert(fid);
                         }
                     }
                 }
@@ -3067,19 +3068,21 @@ pub fn tessellate_solid(
             let pos = merged.positions[i];
             let mut normal_sum = Vec3::new(0.0, 0.0, 0.0);
             let mut count = 0_u32;
-            for &fid in &vertex_faces[i] {
-                if let Ok(face_data) = topo.face(fid) {
-                    let surf = face_data.surface();
-                    if let Some(n) = crate::fillet::face_surface_normal_at(surf, pos) {
-                        // Respect face orientation: if the face is reversed,
-                        // the outward normal is opposite to the surface normal.
-                        let oriented = if face_data.is_reversed() {
-                            Vec3::new(-n.x(), -n.y(), -n.z())
-                        } else {
-                            n
-                        };
-                        normal_sum += oriented;
-                        count += 1;
+            if let Some(faces) = vertex_faces.get(&i) {
+                for &fid in faces {
+                    if let Ok(face_data) = topo.face(fid) {
+                        let surf = face_data.surface();
+                        if let Some(n) = crate::fillet::face_surface_normal_at(surf, pos) {
+                            // Respect face orientation: if the face is reversed,
+                            // the outward normal is opposite to the surface normal.
+                            let oriented = if face_data.is_reversed() {
+                                Vec3::new(-n.x(), -n.y(), -n.z())
+                            } else {
+                                n
+                            };
+                            normal_sum += oriented;
+                            count += 1;
+                        }
                     }
                 }
             }
