@@ -971,6 +971,41 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(eid))
             }
+            "offsetWire" => {
+                let f = get_u32(args, "face")?;
+                let dist = get_f64(args, "distance")?;
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let wire_id =
+                    brepkit_operations::offset_wire::offset_wire(&mut self.topo, face_id, dist)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(wire_id_to_u32(wire_id)))
+            }
+            "offsetWireWithJoinType" => {
+                let f = get_u32(args, "face")?;
+                let dist = get_f64(args, "distance")?;
+                let jt_str = args["joinType"]
+                    .as_str()
+                    .ok_or("missing or invalid 'joinType' string")?;
+                let jt = match jt_str {
+                    "intersection" => brepkit_operations::offset_wire::JoinType::Intersection,
+                    "arc" => brepkit_operations::offset_wire::JoinType::Arc,
+                    "chamfer" => brepkit_operations::offset_wire::JoinType::Chamfer,
+                    _ => {
+                        return Err(format!(
+                            "unknown joinType '{jt_str}', expected 'intersection', 'arc', or 'chamfer'"
+                        ));
+                    }
+                };
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let wire_id = brepkit_operations::offset_wire::offset_wire_with_join(
+                    &mut self.topo,
+                    face_id,
+                    dist,
+                    jt,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(wire_id_to_u32(wire_id)))
+            }
             _ => Err(format!("unknown operation: {op}")),
         }
     }

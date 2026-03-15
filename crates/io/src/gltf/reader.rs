@@ -252,7 +252,7 @@ fn parse_accessors(json: &str) -> Vec<AccessorInfo> {
 
     let arr_str = extract_json_array(json, arr_offset);
 
-    for obj in arr_str.split('}') {
+    for obj in split_json_objects(arr_str) {
         let bv = extract_int(obj, "bufferView");
         let count = extract_int(obj, "count");
         let component_type = extract_int(obj, "componentType");
@@ -283,7 +283,7 @@ fn parse_buffer_views(json: &str) -> Vec<BufferViewInfo> {
 
     let arr_str = extract_json_array(json, arr_offset);
 
-    for obj in arr_str.split('}') {
+    for obj in split_json_objects(arr_str) {
         let offset = extract_int(obj, "byteOffset").unwrap_or(0);
         let length = extract_int(obj, "byteLength");
         if let Some(length) = length {
@@ -322,8 +322,7 @@ fn parse_mesh_primitives(json: &str) -> Vec<MeshPrimitive> {
             let prim_arr_str = extract_json_array(meshes_str, prim_arr_offset);
 
             // Each primitive is a JSON object within the primitives array.
-            // Split by '}' to get individual primitive objects.
-            for prim_obj in prim_arr_str.split('}') {
+            for prim_obj in split_json_objects(prim_arr_str) {
                 let pos = extract_attribute_accessor(prim_obj, "POSITION");
                 let norm = extract_attribute_accessor(prim_obj, "NORMAL");
                 let idx = extract_int(prim_obj, "indices");
@@ -392,6 +391,34 @@ fn extract_json_array(json: &str, arr_offset: usize) -> &str {
         }
     }
     &json[arr_offset + 1..arr_end]
+}
+
+/// Split a JSON array's inner text into top-level objects by tracking brace depth.
+fn split_json_objects(array_content: &str) -> Vec<&str> {
+    let mut objects = Vec::new();
+    let mut depth = 0;
+    let mut obj_start = None;
+    for (i, ch) in array_content.char_indices() {
+        match ch {
+            '{' => {
+                if depth == 0 {
+                    obj_start = Some(i);
+                }
+                depth += 1;
+            }
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(start) = obj_start {
+                        objects.push(&array_content[start..=i]);
+                    }
+                    obj_start = None;
+                }
+            }
+            _ => {}
+        }
+    }
+    objects
 }
 
 /// Extract an integer value for a given key from a JSON-like string.

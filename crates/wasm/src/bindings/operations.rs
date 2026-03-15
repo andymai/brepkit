@@ -22,8 +22,24 @@ use crate::helpers::{
 use crate::kernel::BrepKernel;
 
 use brepkit_operations::extrude::extrude;
+use brepkit_operations::offset_wire::JoinType;
 use brepkit_operations::revolve::revolve;
 use brepkit_operations::sweep::sweep;
+
+/// Parse a join type string into a [`JoinType`] enum value.
+fn parse_join_type(s: &str) -> Result<JoinType, JsError> {
+    match s {
+        "intersection" => Ok(JoinType::Intersection),
+        "arc" => Ok(JoinType::Arc),
+        "chamfer" => Ok(JoinType::Chamfer),
+        _ => Err(WasmError::InvalidInput {
+            reason: format!(
+                "unknown join type '{s}', expected 'intersection', 'arc', or 'chamfer'"
+            ),
+        }
+        .into()),
+    }
+}
 
 #[wasm_bindgen]
 impl BrepKernel {
@@ -1095,6 +1111,33 @@ impl BrepKernel {
         let face_id = self.resolve_face(face)?;
         let wire_id =
             brepkit_operations::offset_wire::offset_wire(&mut self.topo, face_id, distance)?;
+        Ok(wire_id_to_u32(wire_id))
+    }
+
+    /// Offset a wire on a planar face with a specific join type.
+    ///
+    /// `join_type` must be one of `"intersection"`, `"arc"`, or `"chamfer"`.
+    /// Returns a new wire handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid, the join type string
+    /// is unrecognized, or the offset operation fails.
+    #[wasm_bindgen(js_name = "offsetWireWithJoinType")]
+    pub fn offset_wire_with_join_type(
+        &mut self,
+        face: u32,
+        distance: f64,
+        join_type: &str,
+    ) -> Result<u32, JsError> {
+        let face_id = self.resolve_face(face)?;
+        let jt = parse_join_type(join_type)?;
+        let wire_id = brepkit_operations::offset_wire::offset_wire_with_join(
+            &mut self.topo,
+            face_id,
+            distance,
+            jt,
+        )?;
         Ok(wire_id_to_u32(wire_id))
     }
 
