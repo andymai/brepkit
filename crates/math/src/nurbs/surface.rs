@@ -3,6 +3,7 @@
 use crate::MathError;
 use crate::aabb::Aabb3;
 use crate::nurbs::basis;
+use crate::nurbs::evaluator::SurfaceEvaluator;
 use crate::vec::{Point3, Vec3};
 
 /// A Non-Uniform Rational B-Spline (NURBS) surface in 3D space.
@@ -423,6 +424,15 @@ impl NurbsSurface {
                 .iter()
                 .flat_map(|row| row.iter().copied()),
         )
+    }
+
+    /// Create a cached evaluator for repeated evaluation.
+    ///
+    /// The evaluator lazily precomputes polynomial coefficients for Horner
+    /// evaluation, amortising the setup cost over many evaluations.
+    #[must_use]
+    pub fn evaluator(&self) -> SurfaceEvaluator<'_> {
+        SurfaceEvaluator::new(self)
     }
 }
 
