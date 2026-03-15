@@ -207,17 +207,25 @@ impl BrepKernel {
 
     /// Compute minimum distance between two solids.
     ///
-    /// Returns `[distance]`.
+    /// Returns `[distance, point_a_x, point_a_y, point_a_z, point_b_x, point_b_y, point_b_z]`.
     ///
     /// # Errors
     ///
     /// Returns an error if either solid handle is invalid.
     #[wasm_bindgen(js_name = "solidToSolidDistance")]
-    pub fn solid_to_solid_distance(&self, a: u32, b: u32) -> Result<f64, JsError> {
+    pub fn solid_to_solid_distance(&self, a: u32, b: u32) -> Result<Vec<f64>, JsError> {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
         let result = brepkit_operations::distance::solid_to_solid_distance(&self.topo, a_id, b_id)?;
-        Ok(result.distance)
+        Ok(vec![
+            result.distance,
+            result.point_a.x(),
+            result.point_a.y(),
+            result.point_a.z(),
+            result.point_b.x(),
+            result.point_b.y(),
+            result.point_b.z(),
+        ])
     }
 
     /// Compute minimum distance from a point to a face.
