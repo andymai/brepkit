@@ -1,11 +1,13 @@
 //! Checkpoint and sketch state types used by [`super::kernel::BrepKernel`].
 
+use std::rc::Rc;
+
 use brepkit_topology::Topology;
 
 /// A saved snapshot of the kernel state that can be restored.
 #[derive(Clone)]
 pub struct Checkpoint {
-    pub topo: Topology,
+    pub topo: Rc<Topology>,
     pub assemblies: Vec<brepkit_operations::assembly::Assembly>,
     pub sketches: Vec<SketchState>,
 }

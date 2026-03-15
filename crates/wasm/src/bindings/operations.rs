@@ -74,7 +74,7 @@ impl BrepKernel {
         validate_finite(nz, "nz")?;
         let solid_id = self.resolve_solid(solid)?;
         let result = brepkit_operations::section::section(
-            &mut self.topo,
+            self.topo_mut(),
             solid_id,
             Point3::new(px, py, pz),
             Vec3::new(nx, ny, nz),
@@ -100,7 +100,7 @@ impl BrepKernel {
             .iter()
             .map(|&h| self.resolve_face(h))
             .collect::<Result<_, _>>()?;
-        let solid_id = brepkit_operations::loft::loft(&mut self.topo, &face_ids)?;
+        let solid_id = brepkit_operations::loft::loft(self.topo_mut(), &face_ids)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -123,7 +123,7 @@ impl BrepKernel {
             .iter()
             .map(|&h| self.resolve_face(h))
             .collect::<Result<_, _>>()?;
-        let solid_id = brepkit_operations::loft::loft_smooth(&mut self.topo, &face_ids)?;
+        let solid_id = brepkit_operations::loft::loft_smooth(self.topo_mut(), &face_ids)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -151,7 +151,7 @@ impl BrepKernel {
                 let x = sp[0].as_f64().unwrap_or(0.0);
                 let y = sp[1].as_f64().unwrap_or(0.0);
                 let z = sp[2].as_f64().unwrap_or(0.0);
-                let apex_face = create_apex_face(&mut self.topo, Point3::new(x, y, z), &face_ids)?;
+                let apex_face = create_apex_face(self.topo_mut(), Point3::new(x, y, z), &face_ids)?;
                 face_ids.insert(0, apex_face);
             }
         }
@@ -162,7 +162,7 @@ impl BrepKernel {
                 let x = ep[0].as_f64().unwrap_or(0.0);
                 let y = ep[1].as_f64().unwrap_or(0.0);
                 let z = ep[2].as_f64().unwrap_or(0.0);
-                let apex_face = create_apex_face(&mut self.topo, Point3::new(x, y, z), &face_ids)?;
+                let apex_face = create_apex_face(self.topo_mut(), Point3::new(x, y, z), &face_ids)?;
                 face_ids.push(apex_face);
             }
         }
@@ -173,9 +173,9 @@ impl BrepKernel {
             .unwrap_or(true);
 
         let solid_id = if ruled {
-            brepkit_operations::loft::loft(&mut self.topo, &face_ids)?
+            brepkit_operations::loft::loft(self.topo_mut(), &face_ids)?
         } else {
-            brepkit_operations::loft::loft_smooth(&mut self.topo, &face_ids)?
+            brepkit_operations::loft::loft_smooth(self.topo_mut(), &face_ids)?
         };
         Ok(solid_id_to_u32(solid_id))
     }
@@ -205,7 +205,7 @@ impl BrepKernel {
             .map(|&h| self.resolve_face(h))
             .collect::<Result<_, _>>()?;
         let result = brepkit_operations::shell_op::shell(
-            &mut self.topo,
+            self.topo_mut(),
             solid_id,
             thickness,
             &open_face_ids,
@@ -237,7 +237,7 @@ impl BrepKernel {
             .map(|&h| self.resolve_edge(h))
             .collect::<Result<_, _>>()?;
         let result =
-            brepkit_operations::chamfer::chamfer(&mut self.topo, solid_id, &edge_ids, distance)?;
+            brepkit_operations::chamfer::chamfer(self.topo_mut(), solid_id, &edge_ids, distance)?;
         Ok(solid_id_to_u32(result))
     }
 
@@ -273,7 +273,8 @@ impl BrepKernel {
         // WASM FFI boundary, which would abort the entire WASM instance.
         let result =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
-                let solid = if let Ok(s) = try_fillet(&mut self.topo, solid_id, &edge_ids, radius) {
+                let solid = if let Ok(s) = try_fillet(self.topo_mut(), solid_id, &edge_ids, radius)
+                {
                     s
                 } else {
                     // Filter to edges where both adjacent faces are planar.
@@ -281,7 +282,7 @@ impl BrepKernel {
                     if planar_edges.is_empty() {
                         solid_id
                     } else {
-                        try_fillet(&mut self.topo, solid_id, &planar_edges, radius)
+                        try_fillet(self.topo_mut(), solid_id, &planar_edges, radius)
                             .map_err(|e| JsError::new(&e.to_string()))?
                     }
                 };
@@ -321,7 +322,7 @@ impl BrepKernel {
 
         let face_id = self.resolve_face(face)?;
         let direction = Vec3::new(dir_x, dir_y, dir_z);
-        let solid_id = extrude(&mut self.topo, face_id, direction, distance)?;
+        let solid_id = extrude(self.topo_mut(), face_id, direction, distance)?;
 
         Ok(solid_id_to_u32(solid_id))
     }
@@ -369,7 +370,7 @@ impl BrepKernel {
         let direction = Vec3::new(dx, dy, dz);
         let angle_radians = angle_degrees.to_radians();
 
-        let solid_id = revolve(&mut self.topo, face_id, origin, direction, angle_radians)?;
+        let solid_id = revolve(self.topo_mut(), face_id, origin, direction, angle_radians)?;
 
         Ok(solid_id_to_u32(solid_id))
     }
@@ -454,7 +455,7 @@ impl BrepKernel {
             path_weights,
         )?;
 
-        let solid_id = sweep(&mut self.topo, face_id, &path_curve)?;
+        let solid_id = sweep(self.topo_mut(), face_id, &path_curve)?;
 
         Ok(solid_id_to_u32(solid_id))
     }
@@ -517,7 +518,7 @@ impl BrepKernel {
         )?;
 
         let solid_id =
-            brepkit_operations::sweep::sweep_smooth(&mut self.topo, face_id, &path_curve)?;
+            brepkit_operations::sweep::sweep_smooth(self.topo_mut(), face_id, &path_curve)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -535,7 +536,7 @@ impl BrepKernel {
         validate_finite(distance, "distance")?;
         let face_id = self.resolve_face(face)?;
         let result = brepkit_operations::offset_face::offset_face(
-            &mut self.topo,
+            self.topo_mut(),
             face_id,
             distance,
             samples as usize,
@@ -576,7 +577,7 @@ impl BrepKernel {
         let axis_dir = brepkit_math::vec::Vec3::new(axis_dir_x, axis_dir_y, axis_dir_z);
 
         let solid_id = brepkit_operations::helix::helical_sweep(
-            &mut self.topo,
+            self.topo_mut(),
             face_id,
             origin,
             axis_dir,
@@ -617,7 +618,7 @@ impl BrepKernel {
         validate_finite(nz, "nz")?;
         let solid_id = self.resolve_solid(solid)?;
         let result = brepkit_operations::split::split(
-            &mut self.topo,
+            self.topo_mut(),
             solid_id,
             Point3::new(px, py, pz),
             Vec3::new(nx, ny, nz),
@@ -659,7 +660,7 @@ impl BrepKernel {
             .map(|&h| self.resolve_face(h))
             .collect::<Result<_, _>>()?;
         let result = brepkit_operations::draft::draft(
-            &mut self.topo,
+            self.topo_mut(),
             solid_id,
             &face_ids,
             Vec3::new(pull_x, pull_y, pull_z),
@@ -711,7 +712,7 @@ impl BrepKernel {
             path_weights,
         )?;
 
-        let solid_id = brepkit_operations::pipe::pipe(&mut self.topo, face_id, &path_curve, None)?;
+        let solid_id = brepkit_operations::pipe::pipe(self.topo_mut(), face_id, &path_curve, None)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -799,7 +800,7 @@ impl BrepKernel {
         let path_curve = brepkit_math::nurbs::fitting::interpolate(&points, degree)?;
 
         let face_id = self.resolve_face(face)?;
-        let solid_id = sweep(&mut self.topo, face_id, &path_curve)?;
+        let solid_id = sweep(self.topo_mut(), face_id, &path_curve)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -817,7 +818,7 @@ impl BrepKernel {
         validate_finite(distance, "distance")?;
         let solid_id = self.resolve_solid(solid)?;
         let result =
-            brepkit_operations::offset_solid::offset_solid(&mut self.topo, solid_id, distance)?;
+            brepkit_operations::offset_solid::offset_solid(self.topo_mut(), solid_id, distance)?;
         Ok(solid_id_to_u32(result))
     }
 
@@ -833,7 +834,7 @@ impl BrepKernel {
     pub fn thicken_face(&mut self, face: u32, thickness: f64) -> Result<u32, JsError> {
         validate_finite(thickness, "thickness")?;
         let face_id = self.resolve_face(face)?;
-        let result = brepkit_operations::thicken::thicken(&mut self.topo, face_id, thickness)?;
+        let result = brepkit_operations::thicken::thicken(self.topo_mut(), face_id, thickness)?;
         Ok(solid_id_to_u32(result))
     }
 
@@ -894,7 +895,7 @@ impl BrepKernel {
             edge_laws.push((edge_id, law));
         }
         let result =
-            brepkit_operations::fillet::fillet_variable(&mut self.topo, solid_id, &edge_laws)?;
+            brepkit_operations::fillet::fillet_variable(self.topo_mut(), solid_id, &edge_laws)?;
         Ok(solid_id_to_u32(result))
     }
 
@@ -977,7 +978,7 @@ impl BrepKernel {
         };
 
         let result = brepkit_operations::sweep::sweep_with_options(
-            &mut self.topo,
+            self.topo_mut(),
             face_id,
             &path_curve,
             &options,
@@ -1064,7 +1065,7 @@ impl BrepKernel {
             curves.push(points[offset..offset + l].to_vec());
             offset += l;
         }
-        let face_id = brepkit_operations::fill_face::fill_coons_patch(&mut self.topo, &curves)?;
+        let face_id = brepkit_operations::fill_face::fill_coons_patch(self.topo_mut(), &curves)?;
         Ok(face_id_to_u32(face_id))
     }
 
@@ -1120,7 +1121,7 @@ impl BrepKernel {
     pub fn offset_wire(&mut self, face: u32, distance: f64) -> Result<u32, JsError> {
         let face_id = self.resolve_face(face)?;
         let wire_id =
-            brepkit_operations::offset_wire::offset_wire(&mut self.topo, face_id, distance)?;
+            brepkit_operations::offset_wire::offset_wire(self.topo_mut(), face_id, distance)?;
         Ok(wire_id_to_u32(wire_id))
     }
 
@@ -1143,7 +1144,7 @@ impl BrepKernel {
         let face_id = self.resolve_face(face)?;
         let jt = parse_join_type_str(join_type)?;
         let wire_id = brepkit_operations::offset_wire::offset_wire_with_join(
-            &mut self.topo,
+            self.topo_mut(),
             face_id,
             distance,
             jt,
@@ -1190,14 +1191,14 @@ impl BrepKernel {
                 other => other.clone(),
             };
             let new_face = Face::new(outer_wire, inner_wires, new_surface);
-            let new_fid = self.topo.add_face(new_face);
+            let new_fid = self.topo_mut().add_face(new_face);
             return Ok(face_id_to_u32(new_fid));
         }
         // Try as edge
         if let Ok(edge_id) = self.resolve_edge(id) {
             let edge = self.topo.edge(edge_id)?;
             let new_edge = Edge::new(edge.end(), edge.start(), edge.curve().clone());
-            let new_eid = self.topo.add_edge(new_edge);
+            let new_eid = self.topo_mut().add_edge(new_edge);
             return Ok(edge_id_to_u32(new_eid));
         }
         Err(WasmError::InvalidInput {

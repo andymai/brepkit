@@ -1225,7 +1225,7 @@ impl BrepKernel {
         }
 
         let new_face = Face::new(outer_wire, inner_wires, surface);
-        let fid = self.topo.add_face(new_face);
+        let fid = self.topo_mut().add_face(new_face);
         Ok(face_id_to_u32(fid))
     }
 
@@ -1828,7 +1828,7 @@ mod tests {
     #[test]
     fn to_brep_sphere_surface_params() {
         let mut k = crate::kernel::BrepKernel::new();
-        let id = brepkit_operations::primitives::make_sphere(&mut k.topo, 3.0, 16).unwrap();
+        let id = brepkit_operations::primitives::make_sphere(k.topo_mut(), 3.0, 16).unwrap();
         #[allow(clippy::cast_possible_truncation)]
         let solid = id.index() as u32;
         let brep = build_brep_json(&k, solid);
@@ -1853,7 +1853,7 @@ mod tests {
     #[test]
     fn to_brep_cone_surface_params() {
         let mut k = crate::kernel::BrepKernel::new();
-        let id = brepkit_operations::primitives::make_cone(&mut k.topo, 2.0, 0.5, 4.0).unwrap();
+        let id = brepkit_operations::primitives::make_cone(k.topo_mut(), 2.0, 0.5, 4.0).unwrap();
         #[allow(clippy::cast_possible_truncation)]
         let solid = id.index() as u32;
         let brep = build_brep_json(&k, solid);
@@ -1879,7 +1879,7 @@ mod tests {
     #[test]
     fn to_brep_torus_surface_params() {
         let mut k = crate::kernel::BrepKernel::new();
-        let id = brepkit_operations::primitives::make_torus(&mut k.topo, 5.0, 1.0, 16).unwrap();
+        let id = brepkit_operations::primitives::make_torus(k.topo_mut(), 5.0, 1.0, 16).unwrap();
         #[allow(clippy::cast_possible_truncation)]
         let solid = id.index() as u32;
         let brep = build_brep_json(&k, solid);

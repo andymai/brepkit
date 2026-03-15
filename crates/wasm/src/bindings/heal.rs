@@ -28,7 +28,7 @@ impl BrepKernel {
             .iter()
             .map(|&h| self.resolve_face(h))
             .collect::<Result<_, _>>()?;
-        let solid = brepkit_operations::sew::sew_faces(&mut self.topo, &face_ids, tolerance)?;
+        let solid = brepkit_operations::sew::sew_faces(self.topo_mut(), &face_ids, tolerance)?;
         Ok(solid_id_to_u32(solid))
     }
 
@@ -44,7 +44,7 @@ impl BrepKernel {
             .map(|&h| self.resolve_face(h))
             .collect::<Result<_, _>>()?;
         let tolerance = brepkit_math::tolerance::Tolerance::new().linear;
-        let solid = brepkit_operations::sew::sew_faces(&mut self.topo, &face_ids, tolerance)?;
+        let solid = brepkit_operations::sew::sew_faces(self.topo_mut(), &face_ids, tolerance)?;
         Ok(solid_id_to_u32(solid))
     }
 
@@ -56,7 +56,7 @@ impl BrepKernel {
         let outer_wire = face_data.outer_wire();
         let surface = face_data.surface().clone();
         let new_face = Face::new(outer_wire, vec![], surface);
-        let fid = self.topo.add_face(new_face);
+        let fid = self.topo_mut().add_face(new_face);
         Ok(face_id_to_u32(fid))
     }
 
@@ -80,7 +80,7 @@ impl BrepKernel {
         } else {
             brepkit_math::tolerance::Tolerance::new().linear
         };
-        let solid = brepkit_operations::sew::sew_faces(&mut self.topo, &face_ids, tol)?;
+        let solid = brepkit_operations::sew::sew_faces(self.topo_mut(), &face_ids, tol)?;
         Ok(solid_id_to_u32(solid))
     }
 
@@ -94,7 +94,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "unifyFaces")]
     pub fn unify_faces(&mut self, solid: u32) -> Result<u32, JsError> {
         let solid_id = self.resolve_solid(solid)?;
-        let removed = brepkit_operations::heal::unify_faces(&mut self.topo, solid_id)?;
+        let removed = brepkit_operations::heal::unify_faces(self.topo_mut(), solid_id)?;
         #[allow(clippy::cast_possible_truncation)]
         Ok(removed as u32)
     }
@@ -105,7 +105,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "healSolid")]
     pub fn heal_solid(&mut self, solid: u32) -> Result<u32, JsError> {
         let solid_id = self.resolve_solid(solid)?;
-        let report = brepkit_operations::heal::heal_solid(&mut self.topo, solid_id, TOL)?;
+        let report = brepkit_operations::heal::heal_solid(self.topo_mut(), solid_id, TOL)?;
         #[allow(clippy::cast_possible_truncation)]
         Ok((report.vertices_merged
             + report.degenerate_edges_removed
@@ -126,7 +126,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "repairSolid")]
     pub fn repair_solid(&mut self, solid: u32) -> Result<u32, JsError> {
         let solid_id = self.resolve_solid(solid)?;
-        let report = brepkit_operations::heal::repair_solid(&mut self.topo, solid_id, TOL)?;
+        let report = brepkit_operations::heal::repair_solid(self.topo_mut(), solid_id, TOL)?;
         #[allow(clippy::cast_possible_truncation)]
         Ok(report.after.error_count() as u32)
     }
@@ -137,8 +137,11 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "removeDegenerateEdges")]
     pub fn remove_degenerate_edges(&mut self, solid: u32, tolerance: f64) -> Result<u32, JsError> {
         let solid_id = self.resolve_solid(solid)?;
-        let count =
-            brepkit_operations::heal::remove_degenerate_edges(&mut self.topo, solid_id, tolerance)?;
+        let count = brepkit_operations::heal::remove_degenerate_edges(
+            self.topo_mut(),
+            solid_id,
+            tolerance,
+        )?;
         #[allow(clippy::cast_possible_truncation)]
         Ok(count as u32)
     }
@@ -149,7 +152,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "fixFaceOrientations")]
     pub fn fix_face_orientations(&mut self, solid: u32) -> Result<u32, JsError> {
         let solid_id = self.resolve_solid(solid)?;
-        let count = brepkit_operations::heal::fix_face_orientations(&mut self.topo, solid_id)?;
+        let count = brepkit_operations::heal::fix_face_orientations(self.topo_mut(), solid_id)?;
         #[allow(clippy::cast_possible_truncation)]
         Ok(count as u32)
     }
@@ -168,7 +171,8 @@ impl BrepKernel {
             .iter()
             .map(|&h| self.resolve_face(h))
             .collect::<Result<Vec<_>, _>>()?;
-        let result = brepkit_operations::defeature::defeature(&mut self.topo, solid_id, &face_ids)?;
+        let result =
+            brepkit_operations::defeature::defeature(self.topo_mut(), solid_id, &face_ids)?;
         Ok(solid_id_to_u32(result))
     }
 

@@ -27,7 +27,7 @@ impl BrepKernel {
     pub fn fuse(&mut self, a: u32, b: u32) -> Result<u32, JsError> {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
-        let result = boolean(&mut self.topo, BooleanOp::Fuse, a_id, b_id)?;
+        let result = boolean(self.topo_mut(), BooleanOp::Fuse, a_id, b_id)?;
         Ok(solid_id_to_u32(result))
     }
 
@@ -43,7 +43,7 @@ impl BrepKernel {
     pub fn cut(&mut self, a: u32, b: u32) -> Result<u32, JsError> {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
-        let result = boolean(&mut self.topo, BooleanOp::Cut, a_id, b_id)?;
+        let result = boolean(self.topo_mut(), BooleanOp::Cut, a_id, b_id)?;
         Ok(solid_id_to_u32(result))
     }
 
@@ -59,7 +59,7 @@ impl BrepKernel {
     pub fn intersect_solids(&mut self, a: u32, b: u32) -> Result<u32, JsError> {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
-        let result = boolean(&mut self.topo, BooleanOp::Intersect, a_id, b_id)?;
+        let result = boolean(self.topo_mut(), BooleanOp::Intersect, a_id, b_id)?;
         Ok(solid_id_to_u32(result))
     }
 
@@ -82,7 +82,7 @@ impl BrepKernel {
             .map(|&h| self.resolve_solid(h))
             .collect::<Result<Vec<_>, _>>()?;
         let result = brepkit_operations::boolean::compound_cut(
-            &mut self.topo,
+            self.topo_mut(),
             target_id,
             &tools,
             brepkit_operations::boolean::BooleanOptions::default(),
@@ -105,7 +105,7 @@ impl BrepKernel {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
         let (result, evo) = brepkit_operations::boolean::boolean_with_evolution(
-            &mut self.topo,
+            self.topo_mut(),
             BooleanOp::Fuse,
             a_id,
             b_id,
@@ -131,7 +131,7 @@ impl BrepKernel {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
         let (result, evo) = brepkit_operations::boolean::boolean_with_evolution(
-            &mut self.topo,
+            self.topo_mut(),
             BooleanOp::Cut,
             a_id,
             b_id,
@@ -157,7 +157,7 @@ impl BrepKernel {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
         let (result, evo) = brepkit_operations::boolean::boolean_with_evolution(
-            &mut self.topo,
+            self.topo_mut(),
             BooleanOp::Intersect,
             a_id,
             b_id,
