@@ -171,13 +171,15 @@ fn tessellate_analytic(
     nv: usize,
     kind: AnalyticKind,
 ) -> TriangleMeshUV {
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut uvs = Vec::new();
-    let mut indices = Vec::new();
-
     let nu = nu.max(4);
     let nv = nv.max(1);
+
+    let num_verts = (nu + 1) * (nv + 1);
+    let num_indices = nu * nv * 6;
+    let mut positions = Vec::with_capacity(num_verts);
+    let mut normals = Vec::with_capacity(num_verts);
+    let mut uvs = Vec::with_capacity(num_verts);
+    let mut indices = Vec::with_capacity(num_indices);
 
     // Only wrap u when the range spans a full period (≈ 2π).
     // For partial arcs (e.g. quarter-cylinder), the last grid column is a
@@ -712,9 +714,10 @@ fn tessellate_planar_with_holes(
     // Extract triangles and build mesh.
     let cdt_triangles = cdt.triangles();
     let cdt_verts = cdt.vertices();
-    let mut positions_out = Vec::new();
-    let mut normals_out = Vec::new();
-    let mut indices_out = Vec::new();
+    let num_tris = cdt_triangles.len();
+    let mut positions_out = Vec::with_capacity(num_tris);
+    let mut normals_out = Vec::with_capacity(num_tris);
+    let mut indices_out = Vec::with_capacity(num_tris * 3);
 
     // Build O(1) reverse map: CDT vertex index → original position index.
     let mut vi_to_orig: HashMap<usize, usize> = HashMap::new();
@@ -2097,11 +2100,12 @@ fn tessellate_nurbs(
 
     // Collect leaf cells and emit triangles.
     // Cache surface evaluations by parameter pair (as bit patterns) to avoid duplicates.
+    let leaf_count = cells.iter().filter(|c| c.children.is_none()).count();
     let mut eval_cache: HashMap<(u64, u64), (Point3, Vec3)> = HashMap::new();
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut uvs: Vec<[f64; 2]> = Vec::new();
-    let mut indices = Vec::new();
+    let mut positions = Vec::with_capacity(leaf_count * 4);
+    let mut normals = Vec::with_capacity(leaf_count * 4);
+    let mut uvs: Vec<[f64; 2]> = Vec::with_capacity(leaf_count * 4);
+    let mut indices = Vec::with_capacity(leaf_count * 6);
     // Map from (u_bits, v_bits) to vertex index.
     let mut vertex_map: HashMap<(u64, u64), u32> = HashMap::new();
 
