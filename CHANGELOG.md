@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.3.1](https://github.com/andymai/brepkit/compare/v2.3.0...v2.3.1) (2026-03-15)
+
+
+### Performance
+
+* fast benchmark suite under 2 minutes ([#236](https://github.com/andymai/brepkit/issues/236)) ([18d6f6c](https://github.com/andymai/brepkit/commit/18d6f6c13e9f8a4a0c4f066c9b2fe961906616ea))
+* switch release opt-level from "z" to 3 (perf [#1](https://github.com/andymai/brepkit/issues/1)) ([#234](https://github.com/andymai/brepkit/issues/234)) ([7691423](https://github.com/andymai/brepkit/commit/769142358b1bbca35177a2e55a2105a10f04c1aa))
+
 ## [2.3.0](https://github.com/andymai/brepkit/compare/v2.2.0...v2.3.0) (2026-03-15)
 
 
