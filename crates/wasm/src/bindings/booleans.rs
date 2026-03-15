@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::*;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 
 use crate::handles::solid_id_to_u32;
-use crate::helpers::{build_triangle_mesh, parse_boolean_op, triangle_mesh_to_js};
+use crate::helpers::{build_triangle_mesh, panic_message, parse_boolean_op, triangle_mesh_to_js};
 use crate::kernel::BrepKernel;
 use crate::shapes::JsMesh;
 
@@ -60,33 +60,6 @@ impl BrepKernel {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
         let result = boolean(self.topo_mut(), BooleanOp::Intersect, a_id, b_id)?;
-        Ok(solid_id_to_u32(result))
-    }
-
-    /// Cut a target solid by multiple tool solids in a single pass.
-    ///
-    /// This is more efficient than sequential `cut()` calls when many tools
-    /// are applied to the same target — it avoids re-processing unchanged
-    /// faces at each step.
-    ///
-    /// `tool_ids` is a JS `Uint32Array` or array of solid handles.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any handle is invalid or the operation fails.
-    #[wasm_bindgen(js_name = "compoundCut")]
-    pub fn compound_cut(&mut self, target: u32, tool_ids: &[u32]) -> Result<u32, JsError> {
-        let target_id = self.resolve_solid(target)?;
-        let tools: Vec<brepkit_topology::solid::SolidId> = tool_ids
-            .iter()
-            .map(|&h| self.resolve_solid(h))
-            .collect::<Result<Vec<_>, _>>()?;
-        let result = brepkit_operations::boolean::compound_cut(
-            self.topo_mut(),
-            target_id,
-            &tools,
-            brepkit_operations::boolean::BooleanOptions::default(),
-        )?;
         Ok(solid_id_to_u32(result))
     }
 
@@ -194,6 +167,53 @@ impl BrepKernel {
         let result =
             brepkit_operations::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, bool_op, tolerance)?;
         Ok(triangle_mesh_to_js(&result.mesh))
+    }
+}
+
+// Separate impl block: `compound_cut` uses manual `catch_unwind` for panic
+// safety — any panic that unwinds across the wasm-bindgen boundary leaves
+// its internal RefCell borrowed, breaking all subsequent JS calls.
+#[wasm_bindgen]
+impl BrepKernel {
+    /// Cut a target solid by multiple tool solids in a single pass.
+    ///
+    /// This is more efficient than sequential `cut()` calls when many tools
+    /// are applied to the same target — it avoids re-processing unchanged
+    /// faces at each step.
+    ///
+    /// `tool_ids` is a JS `Uint32Array` or array of solid handles.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any handle is invalid or the operation fails.
+    #[wasm_bindgen(js_name = "compoundCut")]
+    pub fn compound_cut(&mut self, target: u32, tool_ids: &[u32]) -> Result<u32, JsError> {
+        if self.poisoned {
+            return Err(JsError::new(
+                "Kernel poisoned after panic. Create a new BrepKernel instance.",
+            ));
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let target_id = self.resolve_solid(target)?;
+            let tools: Vec<brepkit_topology::solid::SolidId> = tool_ids
+                .iter()
+                .map(|&h| self.resolve_solid(h))
+                .collect::<Result<Vec<_>, _>>()?;
+            let result = brepkit_operations::boolean::compound_cut(
+                self.topo_mut(),
+                target_id,
+                &tools,
+                brepkit_operations::boolean::BooleanOptions::default(),
+            )?;
+            Ok(solid_id_to_u32(result))
+        }));
+        match result {
+            Ok(inner) => inner.map_err(|e: crate::error::WasmError| JsError::new(&e.to_string())),
+            Err(panic_info) => {
+                self.poisoned = true;
+                Err(JsError::new(&panic_message(&panic_info, "compoundCut")))
+            }
+        }
     }
 }
 
