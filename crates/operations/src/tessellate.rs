@@ -1709,9 +1709,10 @@ fn safe_normal(surface: &brepkit_math::nurbs::surface::NurbsSurface, u: f64, v: 
 ///    normals at the 5 sample points (4 corners + center). This catches
 ///    sharp curvature changes where the surface folds quickly.
 ///
-/// Returns the maximum of both metrics (in deflection-compatible units).
-/// The midpoint sag is in world units; normal deviation is converted via
-/// the approximation `sag ≈ (1 - cos θ) × cell_diagonal / 2`.
+/// Returns the maximum of all metrics in deflection-compatible world units.
+/// The midpoint sag and edge sag are already in world units; normal deviation
+/// is scaled to world units via `normal_sag = (1 - cos θ) × max_diagonal / 2`
+/// (a conservative heuristic, not exact chord-height).
 #[allow(clippy::similar_names)]
 fn cell_refinement_error(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
@@ -1779,8 +1780,16 @@ fn cell_refinement_error(
         max_edge_sag = max_edge_sag.max(edge_sag);
     }
 
-    // Return the maximum of all three metrics.
-    sag.max(max_edge_sag).max(max_normal_dev)
+    // Heuristic: scale unitless normal deviation to world-space units.
+    // For a cell spanning `diag` world units with normal deviation `d = 1 - cos(θ)`,
+    // we approximate the equivalent sag as `d × diag / 2`. This is a conservative
+    // upper bound (not exact chord-height) but ensures refinement terminates
+    // at the same order-of-magnitude as the distance-based metrics.
+    // Use the longer diagonal to avoid underestimating on skewed quads.
+    let diag = (p11 - p00).length().max((p10 - p01).length());
+    let normal_sag = max_normal_dev * diag * 0.5;
+
+    sag.max(max_edge_sag).max(normal_sag)
 }
 
 /// Linear interpolation (midpoint) of two points.
@@ -5596,5 +5605,27 @@ mod winding_tests {
         let mesh = tessellate_solid(&topo, solid, 1.0).unwrap();
         assert!(!mesh.positions.is_empty(), "should produce vertices");
         assert!(!mesh.indices.is_empty(), "should produce triangles");
+    }
+
+    /// Regression: small-radius torus should not produce excessive triangles.
+    ///
+    /// Before the fix, `cell_refinement_error()` compared unitless normal
+    /// deviation (0-2 range) directly against world-space deflection,
+    /// causing MAX_DEPTH quadtree explosion on high-curvature surfaces.
+    #[test]
+    fn tessellate_small_torus_reasonable_count() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_torus(&mut topo, 5.0, 0.1, 32).unwrap();
+
+        let mesh = tessellate_solid(&topo, solid, 0.01).unwrap();
+        let tri_count = mesh.indices.len() / 3;
+        assert!(
+            tri_count > 100,
+            "torus should produce enough triangles: got {tri_count}"
+        );
+        assert!(
+            tri_count < 10_000,
+            "small torus should not over-tessellate: got {tri_count} triangles (expected <10000)"
+        );
     }
 }
