@@ -182,26 +182,50 @@ impl BrepKernel {
                     brepkit_topology::face::FaceSurface::Sphere(_) => "sphere",
                     brepkit_topology::face::FaceSurface::Torus(_) => "torus",
                 };
+                let surface_params = match f.surface() {
+                    FaceSurface::Plane { normal, d } => serde_json::json!({
+                        "normal": [normal.x(), normal.y(), normal.z()],
+                        "d": d,
+                    }),
+                    _ => serde_json::json!(null),
+                };
                 let outer_wire = self.topo.wire(f.outer_wire())?;
                 let outer_edges: Vec<u32> = outer_wire
                     .edges()
                     .iter()
                     .map(|e| edge_id_to_u32(e.edge()))
                     .collect();
-                let inner_wires: Vec<Vec<u32>> =
-                    f.inner_wires()
-                        .iter()
-                        .filter_map(|&wid| {
-                            self.topo.wire(wid).ok().map(|w| {
-                                w.edges().iter().map(|e| edge_id_to_u32(e.edge())).collect()
+                let outer_edge_orientations: Vec<bool> = outer_wire
+                    .edges()
+                    .iter()
+                    .map(brepkit_topology::wire::OrientedEdge::is_forward)
+                    .collect();
+                let inner_wires: Vec<serde_json::Value> = f
+                    .inner_wires()
+                    .iter()
+                    .filter_map(|&wid| {
+                        self.topo.wire(wid).ok().map(|w| {
+                            let edges: Vec<u32> =
+                                w.edges().iter().map(|e| edge_id_to_u32(e.edge())).collect();
+                            let orientations: Vec<bool> = w
+                                .edges()
+                                .iter()
+                                .map(brepkit_topology::wire::OrientedEdge::is_forward)
+                                .collect();
+                            serde_json::json!({
+                                "edges": edges,
+                                "orientations": orientations,
                             })
                         })
-                        .collect();
+                    })
+                    .collect();
                 Ok(serde_json::json!({
                     "id": face_id_to_u32(fid),
                     "surfaceType": surface_type,
+                    "surfaceParams": surface_params,
                     "reversed": f.is_reversed(),
                     "outerWireEdges": outer_edges,
+                    "outerWireOrientations": outer_edge_orientations,
                     "innerWires": inner_wires,
                 }))
             })
@@ -216,6 +240,24 @@ impl BrepKernel {
         }))
         .map_err(|e| JsError::new(&e.to_string()))?
         .into())
+    }
+
+    /// Reconstruct a solid from a `toBREP` JSON string.
+    ///
+    /// Currently supports planar faces with line edges. Non-line edges are
+    /// approximated as lines (straight segments between start/end vertices).
+    /// Non-planar surfaces are approximated as planes computed from the wire
+    /// vertex positions.
+    ///
+    /// Returns a solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the JSON is invalid or reconstruction fails.
+    #[wasm_bindgen(js_name = "fromBREP")]
+    #[allow(clippy::wrong_self_convention)]
+    pub fn from_brep(&mut self, json: &str) -> Result<u32, JsError> {
+        Ok(self.from_brep_impl(json)?)
     }
 
     /// Get the face normal of a planar face.
