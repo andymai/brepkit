@@ -715,8 +715,8 @@ fn tessellate_planar_with_holes(
     let cdt_triangles = cdt.triangles();
     let cdt_verts = cdt.vertices();
     let num_tris = cdt_triangles.len();
-    let mut positions_out = Vec::with_capacity(num_tris);
-    let mut normals_out = Vec::with_capacity(num_tris);
+    let mut positions_out = Vec::with_capacity(cdt_verts.len());
+    let mut normals_out = Vec::with_capacity(cdt_verts.len());
     let mut indices_out = Vec::with_capacity(num_tris * 3);
 
     // Build O(1) reverse map: CDT vertex index → original position index.
