@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.1](https://github.com/andymai/brepkit/compare/v2.4.0...v2.4.1) (2026-03-15)
+
+
+### Performance
+
+* **tessellate:** use Hilbert-ordered CDT point insertion ([#247](https://github.com/andymai/brepkit/issues/247)) ([172afdb](https://github.com/andymai/brepkit/commit/172afdb3b25594e2cf2002723924d93c76065c78))
+* **topology:** use SmallVec for adjacency lists ([#248](https://github.com/andymai/brepkit/issues/248)) ([915cfc5](https://github.com/andymai/brepkit/commit/915cfc5be710466f8bf6308d5c65fee2e9592e87))
+
 ## [2.4.0](https://github.com/andymai/brepkit/compare/v2.3.2...v2.4.0) (2026-03-15)
 
 
