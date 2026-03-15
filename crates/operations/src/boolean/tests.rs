@@ -1809,6 +1809,14 @@ fn compound_cut_shelled_target_many_tools() {
 
     let mut topo = Topology::new();
 
+    // Use unify_faces=false for both paths so compound vs sequential comparison
+    // is apples-to-apples (face merging changes intermediate geometry differently
+    // in each path, causing artificial divergence).
+    let opts = BooleanOptions {
+        unify_faces: false,
+        ..Default::default()
+    };
+
     // Build a target with cylindrical fillets by making a box and
     // cutting cylinders at the corners (creates cylinder surfaces).
     let target = crate::primitives::make_box(&mut topo, 40.0, 40.0, 10.0).unwrap();
@@ -1816,14 +1824,7 @@ fn compound_cut_shelled_target_many_tools() {
     let inner_box = crate::primitives::make_box(&mut topo, 36.0, 36.0, 8.0).unwrap();
     crate::transform::transform_solid(&mut topo, inner_box, &Mat4::translation(2.0, 2.0, 2.0))
         .unwrap();
-    let target = boolean_with_options(
-        &mut topo,
-        BooleanOp::Cut,
-        target,
-        inner_box,
-        BooleanOptions::default(),
-    )
-    .unwrap();
+    let target = boolean_with_options(&mut topo, BooleanOp::Cut, target, inner_box, opts).unwrap();
 
     // Create 25 small box cutters in a 5×5 grid (above the threshold of 8).
     let mut tools = Vec::new();
@@ -1846,21 +1847,16 @@ fn compound_cut_shelled_target_many_tools() {
     let t0 = std::time::Instant::now();
     for &tool in &tools {
         let tool_copy = crate::copy::copy_solid(&mut seq_topo, tool).unwrap();
-        seq_result = boolean_with_options(
-            &mut seq_topo,
-            BooleanOp::Cut,
-            seq_result,
-            tool_copy,
-            BooleanOptions::default(),
-        )
-        .unwrap();
+        seq_result =
+            boolean_with_options(&mut seq_topo, BooleanOp::Cut, seq_result, tool_copy, opts)
+                .unwrap();
     }
     let dt_seq = t0.elapsed();
     let seq_vol = crate::measure::solid_volume(&seq_topo, seq_result, 0.05).unwrap();
 
     // Compound cut.
     let t0 = std::time::Instant::now();
-    let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
+    let result = compound_cut(&mut topo, target, &tools, opts).unwrap();
     let dt_compound = t0.elapsed();
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
@@ -1870,10 +1866,8 @@ fn compound_cut_shelled_target_many_tools() {
         dt_compound.as_secs_f64() * 1000.0,
         dt_seq.as_secs_f64() * 1000.0,
     );
-    // With unify_faces=true (default), compound analytic path and sequential
-    // path diverge because intermediate face merging alters geometry at each step.
     assert!(
-        rel < 0.12,
+        rel < 0.05,
         "compound_cut volume {compound_vol:.1} != sequential {seq_vol:.1} (rel={rel:.4})"
     );
 }
@@ -1885,19 +1879,18 @@ fn compound_cut_shelled_target_9_tools() {
 
     let mut topo = Topology::new();
 
+    // Use unify_faces=false for apples-to-apples compound vs sequential comparison.
+    let opts = BooleanOptions {
+        unify_faces: false,
+        ..Default::default()
+    };
+
     // Shelled box: outer 40x40x10, inner 36x36x8 offset by (2,2,2).
     let target = crate::primitives::make_box(&mut topo, 40.0, 40.0, 10.0).unwrap();
     let inner_box = crate::primitives::make_box(&mut topo, 36.0, 36.0, 8.0).unwrap();
     crate::transform::transform_solid(&mut topo, inner_box, &Mat4::translation(2.0, 2.0, 2.0))
         .unwrap();
-    let target = boolean_with_options(
-        &mut topo,
-        BooleanOp::Cut,
-        target,
-        inner_box,
-        BooleanOptions::default(),
-    )
-    .unwrap();
+    let target = boolean_with_options(&mut topo, BooleanOp::Cut, target, inner_box, opts).unwrap();
 
     // 9 box cutters in a 3×3 grid (above N=8 threshold).
     let mut tools = Vec::new();
@@ -1919,25 +1912,19 @@ fn compound_cut_shelled_target_9_tools() {
     let mut seq_result = target;
     for &tool in &tools {
         let tool_copy = crate::copy::copy_solid(&mut seq_topo, tool).unwrap();
-        seq_result = boolean_with_options(
-            &mut seq_topo,
-            BooleanOp::Cut,
-            seq_result,
-            tool_copy,
-            BooleanOptions::default(),
-        )
-        .unwrap();
+        seq_result =
+            boolean_with_options(&mut seq_topo, BooleanOp::Cut, seq_result, tool_copy, opts)
+                .unwrap();
     }
     let seq_vol = crate::measure::solid_volume(&seq_topo, seq_result, 0.05).unwrap();
 
     // Compound.
-    let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
+    let result = compound_cut(&mut topo, target, &tools, opts).unwrap();
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
     let rel = (compound_vol - seq_vol).abs() / seq_vol;
-    // With unify_faces=true (default), intermediate merging causes expected divergence.
     assert!(
-        rel < 0.05,
+        rel < 0.02,
         "compound={compound_vol:.4} != seq={seq_vol:.4} (rel={rel:.4})"
     );
 }
@@ -2798,8 +2785,7 @@ fn sequential_boolean_face_count_bounded() {
         result = boolean(&mut topo, BooleanOp::Fuse, result, next).unwrap();
     }
 
-    let shell_id = topo.solid(result).unwrap().outer_shell();
-    let face_count = topo.shell(shell_id).unwrap().faces().len();
+    let face_count = check_result(&topo, result);
     assert!(
         face_count < 50,
         "sequential fuse of 5 boxes should have < 50 faces, got {face_count}"
