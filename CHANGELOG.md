@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.5.1](https://github.com/andymai/brepkit/compare/v2.5.0...v2.5.1) (2026-03-15)
+
+
+### Performance
+
+* **boolean:** reuse BVH query buffers in classification ([#255](https://github.com/andymai/brepkit/issues/255)) ([1c93ecc](https://github.com/andymai/brepkit/commit/1c93eccf9d083b51506dad5b2b9528fd9663a2f3))
+* **math:** OBB secondary filter for boolean intersection ([#254](https://github.com/andymai/brepkit/issues/254)) ([83f1372](https://github.com/andymai/brepkit/commit/83f13728388050fc5dd64f533c548bb567b4621b))
+* **topology:** arena pre-allocation for boolean assembly ([#253](https://github.com/andymai/brepkit/issues/253)) ([94fac29](https://github.com/andymai/brepkit/commit/94fac296c3a98a5b0712b11ca9a11357ea0a28d4))
+* **wasm:** copy-on-write checkpoints via Rc&lt;Topology&gt; ([#256](https://github.com/andymai/brepkit/issues/256)) ([9e9051c](https://github.com/andymai/brepkit/commit/9e9051c4d2617628e87d9c2960d33cbb38f7e1a2))
+
 ## [2.5.0](https://github.com/andymai/brepkit/compare/v2.4.1...v2.5.0) (2026-03-15)
 
 
