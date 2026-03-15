@@ -172,16 +172,16 @@ pub(super) fn compute_intersection_segments(
     let bvh = Bvh::build(&b_entries);
 
     // Pre-compute OBBs for tighter secondary filtering.
-    // For planar faces, use normal-guided OBB (near-zero thickness);
-    // for others, use PCA-based OBB.
+    // Use normal-guided OBB for all faces — the face normal from tessellation
+    // is available for all surface types.
     let obbs_b: Vec<Obb3> = faces_b
         .iter()
-        .map(|(_, verts, normal, _)| Obb3::from_points_with_normal(verts.iter().copied(), *normal))
+        .map(|(_, verts, normal, _)| Obb3::from_slice_with_normal(verts, *normal))
         .collect();
 
     for &(fid_a, ref verts_a, n_a, d_a) in faces_a {
         let aabb_a = Aabb3::from_points(verts_a.iter().copied());
-        let obb_a = Obb3::from_points_with_normal(verts_a.iter().copied(), n_a);
+        let obb_a = Obb3::from_slice_with_normal(verts_a, n_a);
         let candidates = bvh.query_overlap(&aabb_a);
 
         for &b_idx in &candidates {

@@ -25,16 +25,29 @@ impl Obb3 {
     /// Computes the covariance matrix of the points, extracts eigenvectors as
     /// the OBB axes, then projects all points to find the extents.
     ///
-    /// Falls back to an axis-aligned box if the point set is degenerate
-    /// (collinear or coincident).
+    /// Uses canonical axes for degenerate point sets (collinear or coincident).
     ///
     /// # Panics
     ///
     /// Panics if the iterator yields fewer than 1 point.
     #[must_use]
-    #[allow(clippy::expect_used, clippy::missing_panics_doc)]
+    #[allow(clippy::missing_panics_doc)]
     pub fn from_points(points: impl IntoIterator<Item = Point3>) -> Self {
         let pts: Vec<Point3> = points.into_iter().collect();
+        Self::from_points_slice(&pts)
+    }
+
+    /// Build an OBB from a slice of points using PCA (principal component analysis).
+    ///
+    /// Same as [`from_points`](Self::from_points) but avoids an allocation when the
+    /// caller already has a slice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slice is empty.
+    #[must_use]
+    #[allow(clippy::missing_panics_doc)]
+    pub fn from_points_slice(pts: &[Point3]) -> Self {
         assert!(!pts.is_empty(), "OBB requires at least one point");
 
         let n = pts.len() as f64;
@@ -43,7 +56,7 @@ impl Obb3 {
         let mut cx = 0.0_f64;
         let mut cy = 0.0_f64;
         let mut cz = 0.0_f64;
-        for p in &pts {
+        for p in pts {
             cx += p.x();
             cy += p.y();
             cz += p.z();
@@ -52,9 +65,9 @@ impl Obb3 {
         cy /= n;
         cz /= n;
 
-        // Compute covariance matrix (symmetric 3×3).
+        // Compute covariance matrix (symmetric 3x3).
         let mut cov = [0.0_f64; 6]; // [xx, xy, xz, yy, yz, zz]
-        for p in &pts {
+        for p in pts {
             let dx = p.x() - cx;
             let dy = p.y() - cy;
             let dz = p.z() - cz;
@@ -66,10 +79,10 @@ impl Obb3 {
             cov[5] += dz * dz;
         }
 
-        // Extract eigenvectors via Jacobi iteration on the symmetric 3×3.
+        // Extract eigenvectors via Jacobi iteration on the symmetric 3x3.
         let axes = eigen_axes_3x3(cov);
 
-        Self::from_axes_and_points(Point3::new(cx, cy, cz), axes, &pts)
+        Self::from_axes_and_points(Point3::new(cx, cy, cz), axes, pts)
     }
 
     /// Build an OBB with a known primary axis (e.g. face normal for planar faces).
@@ -84,6 +97,20 @@ impl Obb3 {
     #[allow(clippy::missing_panics_doc)]
     pub fn from_points_with_normal(points: impl IntoIterator<Item = Point3>, normal: Vec3) -> Self {
         let pts: Vec<Point3> = points.into_iter().collect();
+        Self::from_slice_with_normal(&pts, normal)
+    }
+
+    /// Build an OBB with a known primary axis from a slice of points.
+    ///
+    /// Same as [`from_points_with_normal`](Self::from_points_with_normal) but avoids
+    /// an allocation when the caller already has a slice.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slice is empty.
+    #[must_use]
+    #[allow(clippy::missing_panics_doc)]
+    pub fn from_slice_with_normal(pts: &[Point3], normal: Vec3) -> Self {
         assert!(!pts.is_empty(), "OBB requires at least one point");
 
         let n = pts.len() as f64;
@@ -92,7 +119,7 @@ impl Obb3 {
         let mut cx = 0.0_f64;
         let mut cy = 0.0_f64;
         let mut cz = 0.0_f64;
-        for p in &pts {
+        for p in pts {
             cx += p.x();
             cy += p.y();
             cz += p.z();
@@ -108,7 +135,7 @@ impl Obb3 {
             Vec3::new(normal.x() / len, normal.y() / len, normal.z() / len)
         } else {
             // Degenerate normal, fall back to full PCA.
-            return Self::from_points(pts);
+            return Self::from_points_slice(pts);
         };
 
         // Find a perpendicular direction for in-plane PCA.
@@ -142,7 +169,7 @@ impl Obb3 {
         let mut cov_uu = 0.0_f64;
         let mut cov_uv = 0.0_f64;
         let mut cov_vv = 0.0_f64;
-        for p in &pts {
+        for p in pts {
             let d = Vec3::new(p.x() - cx, p.y() - cy, p.z() - cz);
             let du = d.dot(u);
             let dv = d.dot(v);
@@ -151,7 +178,7 @@ impl Obb3 {
             cov_vv += dv * dv;
         }
 
-        // 2×2 eigendecomposition for in-plane axes.
+        // 2x2 eigendecomposition for in-plane axes.
         let (angle, _e1, _e2) = eigen_2x2(cov_uu, cov_uv, cov_vv);
         let (sin_a, cos_a) = angle.sin_cos();
 
@@ -167,7 +194,7 @@ impl Obb3 {
             -sin_a * u.z() + cos_a * v.z(),
         );
 
-        Self::from_axes_and_points(Point3::new(cx, cy, cz), [axis0, axis1, axis2], &pts)
+        Self::from_axes_and_points(Point3::new(cx, cy, cz), [axis0, axis1, axis2], pts)
     }
 
     /// Build OBB from pre-computed axes by projecting points to find extents.
@@ -232,7 +259,7 @@ impl Obb3 {
         let ea = &self.half_extents;
         let eb = &other.half_extents;
 
-        // Precompute rotation matrix R[i][j] = a[i] · b[j]
+        // Precompute rotation matrix R[i][j] = a[i] . b[j]
         // and absolute values with epsilon for parallel edge cases.
         #[allow(clippy::items_after_statements)]
         const EPS: f64 = 1e-12;
@@ -245,11 +272,15 @@ impl Obb3 {
             }
         }
 
+        // Precompute dot products of t with each OBB's axes.
+        let t_a = [t.dot(a[0]), t.dot(a[1]), t.dot(a[2])];
+        let t_b = [t.dot(b[0]), t.dot(b[1]), t.dot(b[2])];
+
         // Test axes a[0], a[1], a[2]
         for i in 0..3 {
             let ra = ea[i];
             let rb = eb[0] * abs_r[i][0] + eb[1] * abs_r[i][1] + eb[2] * abs_r[i][2];
-            if t.dot(a[i]).abs() > ra + rb {
+            if t_a[i].abs() > ra + rb {
                 return false;
             }
         }
@@ -258,96 +289,95 @@ impl Obb3 {
         for j in 0..3 {
             let ra = ea[0] * abs_r[0][j] + ea[1] * abs_r[1][j] + ea[2] * abs_r[2][j];
             let rb = eb[j];
-            let d = t.dot(b[j]).abs();
-            if d > ra + rb {
+            if t_b[j].abs() > ra + rb {
                 return false;
             }
         }
 
-        // Test 9 cross-product axes: a[i] × b[j]
-        // a[0] × b[0]
+        // Test 9 cross-product axes: a[i] x b[j]
+        // a[0] x b[0]
         {
             let ra = ea[1] * abs_r[2][0] + ea[2] * abs_r[1][0];
             let rb = eb[1] * abs_r[0][2] + eb[2] * abs_r[0][1];
-            let d = (t.dot(a[2]) * r[1][0] - t.dot(a[1]) * r[2][0]).abs();
+            let d = (t_a[2] * r[1][0] - t_a[1] * r[2][0]).abs();
             if d > ra + rb {
                 return false;
             }
         }
-        // a[0] × b[1]
+        // a[0] x b[1]
         {
             let ra = ea[1] * abs_r[2][1] + ea[2] * abs_r[1][1];
             let rb = eb[0] * abs_r[0][2] + eb[2] * abs_r[0][0];
-            let d = (t.dot(a[2]) * r[1][1] - t.dot(a[1]) * r[2][1]).abs();
+            let d = (t_a[2] * r[1][1] - t_a[1] * r[2][1]).abs();
             if d > ra + rb {
                 return false;
             }
         }
-        // a[0] × b[2]
+        // a[0] x b[2]
         {
             let ra = ea[1] * abs_r[2][2] + ea[2] * abs_r[1][2];
             let rb = eb[0] * abs_r[0][1] + eb[1] * abs_r[0][0];
-            let d = (t.dot(a[2]) * r[1][2] - t.dot(a[1]) * r[2][2]).abs();
+            let d = (t_a[2] * r[1][2] - t_a[1] * r[2][2]).abs();
             if d > ra + rb {
                 return false;
             }
         }
-        // a[1] × b[0]
+        // a[1] x b[0]
         {
             let ra = ea[0] * abs_r[2][0] + ea[2] * abs_r[0][0];
             let rb = eb[1] * abs_r[1][2] + eb[2] * abs_r[1][1];
-            let d = (t.dot(a[0]) * r[2][0] - t.dot(a[2]) * r[0][0]).abs();
+            let d = (t_a[0] * r[2][0] - t_a[2] * r[0][0]).abs();
             if d > ra + rb {
                 return false;
             }
         }
-        // a[1] × b[1]
+        // a[1] x b[1]
         {
             let ra = ea[0] * abs_r[2][1] + ea[2] * abs_r[0][1];
             let rb = eb[0] * abs_r[1][2] + eb[2] * abs_r[1][0];
-            let d = (t.dot(a[0]) * r[2][1] - t.dot(a[2]) * r[0][1]).abs();
+            let d = (t_a[0] * r[2][1] - t_a[2] * r[0][1]).abs();
             if d > ra + rb {
                 return false;
             }
         }
-        // a[1] × b[2]
+        // a[1] x b[2]
         {
             let ra = ea[0] * abs_r[2][2] + ea[2] * abs_r[0][2];
             let rb = eb[0] * abs_r[1][1] + eb[1] * abs_r[1][0];
-            let d = (t.dot(a[0]) * r[2][2] - t.dot(a[2]) * r[0][2]).abs();
+            let d = (t_a[0] * r[2][2] - t_a[2] * r[0][2]).abs();
             if d > ra + rb {
                 return false;
             }
         }
-        // a[2] × b[0]
+        // a[2] x b[0]
         {
             let ra = ea[0] * abs_r[1][0] + ea[1] * abs_r[0][0];
             let rb = eb[1] * abs_r[2][2] + eb[2] * abs_r[2][1];
-            let d = (t.dot(a[1]) * r[0][0] - t.dot(a[0]) * r[1][0]).abs();
+            let d = (t_a[1] * r[0][0] - t_a[0] * r[1][0]).abs();
             if d > ra + rb {
                 return false;
             }
         }
-        // a[2] × b[1]
+        // a[2] x b[1]
         {
             let ra = ea[0] * abs_r[1][1] + ea[1] * abs_r[0][1];
             let rb = eb[0] * abs_r[2][2] + eb[2] * abs_r[2][0];
-            let d = (t.dot(a[1]) * r[0][1] - t.dot(a[0]) * r[1][1]).abs();
+            let d = (t_a[1] * r[0][1] - t_a[0] * r[1][1]).abs();
             if d > ra + rb {
                 return false;
             }
         }
-        // a[2] × b[2]
+        // a[2] x b[2]
         {
             let ra = ea[0] * abs_r[1][2] + ea[1] * abs_r[0][2];
             let rb = eb[0] * abs_r[2][1] + eb[1] * abs_r[2][0];
-            let d = (t.dot(a[1]) * r[0][2] - t.dot(a[0]) * r[1][2]).abs();
+            let d = (t_a[1] * r[0][2] - t_a[0] * r[1][2]).abs();
             if d > ra + rb {
                 return false;
             }
         }
 
-        // No separating axis found — OBBs overlap.
+        // No separating axis found -- OBBs overlap.
         true
     }
 }
@@ -356,7 +386,7 @@ impl Obb3 {
 // Eigendecomposition helpers (no external deps)
 // ---------------------------------------------------------------------------
 
-/// Eigenvalues and rotation angle for a symmetric 2×2 matrix `[[a, b], [b, c]]`.
+/// Eigenvalues and rotation angle for a symmetric 2x2 matrix `[[a, b], [b, c]]`.
 ///
 /// Returns `(angle, eigenvalue_1, eigenvalue_2)` where `angle` rotates the
 /// standard basis to the eigenvector basis.
@@ -364,7 +394,7 @@ fn eigen_2x2(a: f64, b: f64, c: f64) -> (f64, f64, f64) {
     if b.abs() < 1e-30 {
         return (0.0, a, c);
     }
-    let theta = 0.5 * (c - a).atan2(2.0 * b);
+    let theta = 0.5 * (2.0 * b).atan2(a - c);
     let trace = a + c;
     let det = a * c - b * b;
     let disc = (trace * trace - 4.0 * det).max(0.0).sqrt();
@@ -373,7 +403,7 @@ fn eigen_2x2(a: f64, b: f64, c: f64) -> (f64, f64, f64) {
     (theta, e1, e2)
 }
 
-/// Extract principal axes from a symmetric 3×3 covariance matrix using
+/// Extract principal axes from a symmetric 3x3 covariance matrix using
 /// Jacobi eigenvalue iteration.
 ///
 /// Input: `cov = [xx, xy, xz, yy, yz, zz]` (upper triangle, row-major).
@@ -459,7 +489,7 @@ fn eigen_axes_3x3(cov: [f64; 6]) -> [Vec3; 3] {
         if len > 1e-15 {
             Vec3::new(v[0][col] / len, v[1][col] / len, v[2][col] / len)
         } else {
-            // Degenerate — use canonical axis.
+            // Degenerate -- use canonical axis.
             match col {
                 0 => Vec3::new(1.0, 0.0, 0.0),
                 1 => Vec3::new(0.0, 1.0, 0.0),
@@ -581,5 +611,53 @@ mod tests {
         ]);
         // Edge-touching should still be considered intersecting.
         assert!(a.intersects(&b));
+    }
+
+    #[test]
+    fn obb_from_points_slice_matches_from_points() {
+        let pts = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(2.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        let obb_iter = Obb3::from_points(pts.iter().copied());
+        let obb_slice = Obb3::from_points_slice(&pts);
+        assert!((obb_iter.center.x() - obb_slice.center.x()).abs() < 1e-15);
+        assert!((obb_iter.center.y() - obb_slice.center.y()).abs() < 1e-15);
+        assert!((obb_iter.center.z() - obb_slice.center.z()).abs() < 1e-15);
+        for i in 0..3 {
+            assert!((obb_iter.half_extents[i] - obb_slice.half_extents[i]).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn obb_from_slice_with_normal_matches_iterator() {
+        let pts = vec![
+            Point3::new(0.0, 0.0, 5.0),
+            Point3::new(2.0, 0.0, 5.0),
+            Point3::new(2.0, 3.0, 5.0),
+            Point3::new(0.0, 3.0, 5.0),
+        ];
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let obb_iter = Obb3::from_points_with_normal(pts.iter().copied(), normal);
+        let obb_slice = Obb3::from_slice_with_normal(&pts, normal);
+        assert!((obb_iter.center.x() - obb_slice.center.x()).abs() < 1e-15);
+        assert!((obb_iter.center.y() - obb_slice.center.y()).abs() < 1e-15);
+        assert!((obb_iter.center.z() - obb_slice.center.z()).abs() < 1e-15);
+        for i in 0..3 {
+            assert!((obb_iter.half_extents[i] - obb_slice.half_extents[i]).abs() < 1e-15);
+        }
+    }
+
+    #[test]
+    fn eigen_2x2_correct_angle() {
+        // For a = 3, b = 1, c = 1: theta = 0.5 * atan2(2, 2) = pi/8
+        let (theta, _e1, _e2) = super::eigen_2x2(3.0, 1.0, 1.0);
+        let expected = 0.5 * (2.0_f64).atan2(2.0);
+        assert!(
+            (theta - expected).abs() < 1e-15,
+            "theta={theta}, expected={expected}"
+        );
     }
 }
