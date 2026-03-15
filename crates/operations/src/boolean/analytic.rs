@@ -1621,7 +1621,7 @@ pub(super) fn analytic_boolean(
 
     // Pre-allocate topology arenas based on expected output size.
     let nf = fragments.len();
-    topo.reserve(nf * 2, nf * 3, nf, nf, 1, 1);
+    topo.reserve(nf.saturating_mul(2), nf.saturating_mul(3), nf, nf, 1, 1);
 
     let resolution = vertex_merge_resolution(
         fragments.iter().flat_map(|f| f.vertices.iter().copied()),

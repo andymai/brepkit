@@ -163,7 +163,10 @@ pub fn copy_solid(
         vertex_snaps.len(),
         edge_snaps.len(),
         wire_snaps.len(),
-        shell_snaps.iter().map(|s| s.faces.len()).sum(),
+        shell_snaps
+            .iter()
+            .map(|s| s.faces.len())
+            .fold(0usize, usize::saturating_add),
         shell_snaps.len(),
         1,
     );
@@ -377,7 +380,10 @@ pub fn copy_and_transform_solid(
         vertex_snaps.len(),
         edge_snaps.len(),
         wire_snaps.len(),
-        shell_snaps.iter().map(|s| s.faces.len()).sum(),
+        shell_snaps
+            .iter()
+            .map(|s| s.faces.len())
+            .fold(0usize, usize::saturating_add),
         shell_snaps.len(),
         1,
     );

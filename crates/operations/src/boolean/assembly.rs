@@ -110,7 +110,7 @@ pub(crate) fn assemble_solid_mixed(
     // Pre-allocate topology arenas based on expected output size.
     // Typical face → ~2 unique vertices, ~3 edges, 1 wire, 1 face.
     let n = face_specs.len();
-    topo.reserve(n * 2, n * 3, n, n, 1, 1);
+    topo.reserve(n.saturating_mul(2), n.saturating_mul(3), n, n, 1, 1);
 
     let resolution = vertex_merge_resolution(
         face_specs.iter().flat_map(|s| match s {

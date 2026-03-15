@@ -120,9 +120,13 @@ impl Topology {
         Self::default()
     }
 
-    /// Reserves capacity for the given number of additional entities in each
-    /// arena. Useful for pre-allocating before bulk insertion (e.g. boolean
-    /// assembly) to avoid repeated reallocations.
+    /// Reserves capacity for the given number of additional entities in the
+    /// six primary entity arenas (vertices, edges, wires, faces, shells, solids).
+    ///
+    /// Does **not** cover compounds, comp-solids, or the pcurve registry.
+    ///
+    /// Useful for pre-allocating before bulk insertion (e.g. boolean assembly)
+    /// to avoid repeated reallocations.
     pub fn reserve(
         &mut self,
         vertices: usize,
