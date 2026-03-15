@@ -89,6 +89,7 @@ pub mod filtered;
 pub mod frame;
 pub mod mat;
 pub mod nurbs;
+pub mod obb;
 pub mod plane;
 pub mod polygon_offset;
 pub mod predicates;
