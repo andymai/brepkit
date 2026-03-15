@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use smallvec::SmallVec;
+
 use crate::TopologyError;
 use crate::arena::Arena;
 use crate::face::{Face, FaceId};
@@ -14,7 +16,7 @@ use crate::wire::Wire;
 #[derive(Debug, Clone)]
 pub struct TopologyGraph {
     /// Map from each face index to its list of adjacent faces.
-    adjacency: HashMap<usize, Vec<FaceId>>,
+    adjacency: HashMap<usize, SmallVec<[FaceId; 6]>>,
 }
 
 impl TopologyGraph {
@@ -32,7 +34,7 @@ impl TopologyGraph {
         wires: &Arena<Wire>,
     ) -> Result<Self, TopologyError> {
         // Map from edge index → list of face IDs that reference it.
-        let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
+        let mut edge_to_faces: HashMap<usize, SmallVec<[FaceId; 2]>> = HashMap::new();
 
         for &face_id in shell.faces() {
             let face = faces
@@ -58,7 +60,7 @@ impl TopologyGraph {
 
         // Build adjacency: for each edge shared by exactly 2 faces,
         // record mutual adjacency.
-        let mut adjacency: HashMap<usize, Vec<FaceId>> = HashMap::new();
+        let mut adjacency: HashMap<usize, SmallVec<[FaceId; 6]>> = HashMap::new();
         for face_ids in edge_to_faces.values() {
             if face_ids.len() == 2 {
                 let a = face_ids[0];
@@ -81,7 +83,9 @@ impl TopologyGraph {
     /// if the face is not present in the graph.
     #[must_use]
     pub fn adjacent_faces(&self, face: FaceId) -> &[FaceId] {
-        self.adjacency.get(&face.index()).map_or(&[], Vec::as_slice)
+        self.adjacency
+            .get(&face.index())
+            .map_or(&[], SmallVec::as_slice)
     }
 }
 
