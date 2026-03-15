@@ -211,6 +211,9 @@ fn build_intersection_wire(
 /// inserted. The arc is centered at the original (pre-offset) vertex
 /// with radius `|distance|`, sweeping from the endpoint of the
 /// previous offset edge to the start of the next offset edge.
+///
+/// Vertices are pre-allocated so that adjacent edges share vertex IDs,
+/// which is required for wire connectivity.
 fn build_arc_wire(
     topo: &mut Topology,
     verts: &[Point3],
@@ -234,30 +237,77 @@ fn build_arc_wire(
         offset_ends.push(verts[j] + offset);
     }
 
-    // Build edges: for each corner i, we have:
-    //   - A line edge along the offset of edge i: from offset_starts[i] to offset_ends[i]
-    //   - An arc edge at the corner between edge i and edge (i+1):
-    //     from offset_ends[i] to offset_starts[(i+1)%n], centered at verts[(i+1)%n]
+    // Pre-allocate vertices so adjacent edges share IDs.
+    //
+    // At each corner between edge i and edge (i+1), the offset produces
+    // two points: offset_ends[i] and offset_starts[(i+1)%n]. If they
+    // are coincident (parallel adjacent edges), a single shared vertex
+    // is used and no arc is inserted. Otherwise, two vertices are
+    // created and an arc edge connects them.
+    //
+    // line_start_vids[i] = start vertex of line edge i
+    // line_end_vids[i]   = end vertex of line edge i (= arc start at corner i+1)
+    // For each corner, either:
+    //   - coincident: line_end_vids[i] == line_start_vids[(i+1)%n]  (shared vertex)
+    //   - non-coincident: arc from line_end_vids[i] to line_start_vids[(i+1)%n]
+
+    // First pass: determine which corners are coincident vs need arcs.
+    let mut corner_coincident = Vec::with_capacity(n);
+    for i in 0..n {
+        let next = (i + 1) % n;
+        corner_coincident.push((offset_ends[i] - offset_starts[next]).length() < tol.linear);
+    }
+
+    // Second pass: create vertices. For each edge i we need a start and end vertex.
+    // The start vertex of edge i is either:
+    //   - A new vertex at offset_starts[i] (if the previous corner had an arc, the
+    //     arc's end vertex will be this same ID), OR
+    //   - The same ID as the previous line edge's end vertex (if previous corner was coincident).
+    //
+    // Strategy: create all line-start and line-end vertices, then for
+    // coincident corners, make line_start[next] = line_end[i].
+
+    let mut line_start_vids = Vec::with_capacity(n);
+    let mut line_end_vids = Vec::with_capacity(n);
+
+    // Create line-end vertices (the offset_ends points) for all edges.
+    for i in 0..n {
+        line_end_vids.push(topo.add_vertex(Vertex::new(offset_ends[i], tol.linear)));
+    }
+
+    // Create line-start vertices. At corner between edge (prev) and
+    // edge i: if coincident, reuse line_end of prev edge; otherwise
+    // create a new vertex at offset_starts[i] (arc end will use this ID).
+    for i in 0..n {
+        let prev = if i == 0 { n - 1 } else { i - 1 };
+        if corner_coincident[prev] {
+            // Coincident corner: the end of the previous line IS the
+            // start of this line (no arc between them).
+            line_start_vids.push(line_end_vids[prev]);
+        } else {
+            // Non-coincident corner: the arc's end vertex is a distinct
+            // point at offset_starts[i].
+            line_start_vids.push(topo.add_vertex(Vertex::new(offset_starts[i], tol.linear)));
+        }
+    }
+
+    // Build edges with shared vertex IDs.
     let mut oriented_edges = Vec::with_capacity(2 * n);
 
     for i in 0..n {
         let next = (i + 1) % n;
 
         // Line edge for offset edge i.
-        let line_start_pt = offset_starts[i];
-        let line_end_pt = offset_ends[i];
-        let v_line_start = topo.add_vertex(Vertex::new(line_start_pt, tol.linear));
-        let v_line_end = topo.add_vertex(Vertex::new(line_end_pt, tol.linear));
-        let line_edge = topo.add_edge(Edge::new(v_line_start, v_line_end, EdgeCurve::Line));
+        let line_edge = topo.add_edge(Edge::new(
+            line_start_vids[i],
+            line_end_vids[i],
+            EdgeCurve::Line,
+        ));
         oriented_edges.push(OrientedEdge::new(line_edge, true));
 
-        // Arc edge at corner (i+1) from offset_ends[i] to offset_starts[next].
-        let arc_start_pt = line_end_pt;
-        let arc_end_pt = offset_starts[next];
-
-        // Check if the arc endpoints are coincident (parallel edges).
-        if (arc_end_pt - arc_start_pt).length() < tol.linear {
-            // Skip degenerate arc for parallel edges.
+        // Arc edge at corner (i+1): from line_end_vids[i] to line_start_vids[next].
+        if corner_coincident[i] {
+            // Coincident endpoints — vertices already shared, no arc needed.
             continue;
         }
 
@@ -265,9 +315,11 @@ fn build_arc_wire(
         let circle =
             Circle3D::new(center, face_normal, radius).map_err(crate::OperationsError::Math)?;
 
-        let v_arc_start = topo.add_vertex(Vertex::new(arc_start_pt, tol.linear));
-        let v_arc_end = topo.add_vertex(Vertex::new(arc_end_pt, tol.linear));
-        let arc_edge = topo.add_edge(Edge::new(v_arc_start, v_arc_end, EdgeCurve::Circle(circle)));
+        let arc_edge = topo.add_edge(Edge::new(
+            line_end_vids[i],
+            line_start_vids[next],
+            EdgeCurve::Circle(circle),
+        ));
         oriented_edges.push(OrientedEdge::new(arc_edge, true));
     }
 
@@ -280,6 +332,9 @@ fn build_arc_wire(
 /// At each corner, the two adjacent offset edge endpoints are
 /// connected by a straight line segment instead of intersecting
 /// the offset lines.
+///
+/// Vertices are pre-allocated so that adjacent edges share vertex IDs,
+/// which is required for wire connectivity.
 fn build_chamfer_wire(
     topo: &mut Topology,
     verts: &[Point3],
@@ -299,37 +354,61 @@ fn build_chamfer_wire(
         offset_ends.push(verts[j] + offset);
     }
 
-    // Build edges: for each edge i, we have:
-    //   - A line edge along the offset of edge i
-    //   - A chamfer line connecting the end of offset edge i to the
-    //     start of offset edge (i+1)
+    // Pre-allocate vertices so adjacent edges share IDs.
+    // Same strategy as build_arc_wire: at each corner, if the two
+    // offset endpoints are coincident, share a single vertex; otherwise
+    // create two vertices connected by a chamfer edge.
+
+    let mut corner_coincident = Vec::with_capacity(n);
+    for i in 0..n {
+        let next = (i + 1) % n;
+        corner_coincident.push((offset_ends[i] - offset_starts[next]).length() < tol.linear);
+    }
+
+    // Create line-end vertices for all edges.
+    let mut line_end_vids = Vec::with_capacity(n);
+    for i in 0..n {
+        line_end_vids.push(topo.add_vertex(Vertex::new(offset_ends[i], tol.linear)));
+    }
+
+    // Create line-start vertices. At the corner between edge (prev) and
+    // edge i: if coincident, reuse line_end of prev; otherwise create
+    // a new vertex at offset_starts[i].
+    let mut line_start_vids = Vec::with_capacity(n);
+    for i in 0..n {
+        let prev = if i == 0 { n - 1 } else { i - 1 };
+        if corner_coincident[prev] {
+            line_start_vids.push(line_end_vids[prev]);
+        } else {
+            line_start_vids.push(topo.add_vertex(Vertex::new(offset_starts[i], tol.linear)));
+        }
+    }
+
+    // Build edges with shared vertex IDs.
     let mut oriented_edges = Vec::with_capacity(2 * n);
 
     for i in 0..n {
         let next = (i + 1) % n;
 
         // Line edge for offset edge i.
-        let line_start_pt = offset_starts[i];
-        let line_end_pt = offset_ends[i];
-        let v_line_start = topo.add_vertex(Vertex::new(line_start_pt, tol.linear));
-        let v_line_end = topo.add_vertex(Vertex::new(line_end_pt, tol.linear));
-        let line_edge = topo.add_edge(Edge::new(v_line_start, v_line_end, EdgeCurve::Line));
+        let line_edge = topo.add_edge(Edge::new(
+            line_start_vids[i],
+            line_end_vids[i],
+            EdgeCurve::Line,
+        ));
         oriented_edges.push(OrientedEdge::new(line_edge, true));
 
-        // Chamfer line at corner: from offset_ends[i] to offset_starts[next].
-        let chamfer_start_pt = line_end_pt;
-        let chamfer_end_pt = offset_starts[next];
-
-        // Check if endpoints are coincident (parallel edges).
-        if (chamfer_end_pt - chamfer_start_pt).length() < tol.linear {
-            // Skip degenerate chamfer for parallel edges.
+        // Chamfer edge at corner (i+1): from line_end_vids[i] to line_start_vids[next].
+        if corner_coincident[i] {
+            // Coincident endpoints — vertices already shared, no chamfer needed.
             continue;
         }
 
-        let v_chamfer_start = topo.add_vertex(Vertex::new(chamfer_start_pt, tol.linear));
-        let v_chamfer_end = topo.add_vertex(Vertex::new(chamfer_end_pt, tol.linear));
-        let chamfer_edge =
-            topo.add_edge(Edge::new(v_chamfer_start, v_chamfer_end, EdgeCurve::Line));
+        let chamfer_edge = topo.add_edge(Edge::new(
+            line_end_vids[i],
+            line_start_vids[next],
+            EdgeCurve::Line,
+        ));
         oriented_edges.push(OrientedEdge::new(chamfer_edge, true));
     }
 

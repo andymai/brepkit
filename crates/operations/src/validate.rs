@@ -1620,8 +1620,8 @@ mod tests {
             face.outer_wire(),
             face.inner_wires().to_vec(),
             brepkit_topology::face::FaceSurface::Plane {
-                // Normal length 0.999 — off by ~1e-3 which exceeds default 1e-7
-                normal: brepkit_math::vec::Vec3::new(0.0, 0.0, 0.999),
+                // Normal length ~0.99999 — off by ~1e-5 which exceeds default 1e-7
+                normal: brepkit_math::vec::Vec3::new(0.0, 0.0, 0.99999),
                 d: 0.0,
             },
         );
@@ -1638,9 +1638,9 @@ mod tests {
             "default tolerance should warn on non-unit normal"
         );
 
-        // Scaled up 10000x: should not warn (1e-3 < 1e-7 * 10000 = 1e-3)
+        // Scaled up 100x: should not warn (1e-5 < 1e-7 * 100 = 1e-5)
         let opts = ValidationOptions {
-            tolerance_scale: 100_000.0,
+            tolerance_scale: 100.0,
         };
         let scaled_report = validate_solid_with_options(&topo, solid, &opts).unwrap();
         let normal_warnings_scaled = scaled_report
