@@ -120,6 +120,26 @@ impl Topology {
         Self::default()
     }
 
+    /// Reserves capacity for the given number of additional entities in each
+    /// arena. Useful for pre-allocating before bulk insertion (e.g. boolean
+    /// assembly) to avoid repeated reallocations.
+    pub fn reserve(
+        &mut self,
+        vertices: usize,
+        edges: usize,
+        wires: usize,
+        faces: usize,
+        shells: usize,
+        solids: usize,
+    ) {
+        self.vertices.reserve(vertices);
+        self.edges.reserve(edges);
+        self.wires.reserve(wires);
+        self.faces.reserve(faces);
+        self.shells.reserve(shells);
+        self.solids.reserve(solids);
+    }
+
     // ── Single-entity lookup (by ID → Result) ─────────────────────
 
     arena_get!(vertex, vertices, Vertex, VertexId, VertexNotFound);
@@ -351,5 +371,24 @@ mod tests {
         let reconstructed = topo.vertex_id_from_index(vid.index()).unwrap();
         assert_eq!(reconstructed, vid);
         assert!(topo.vertex_id_from_index(999).is_none());
+    }
+
+    #[test]
+    fn reserve_preserves_existing_entities() {
+        let mut topo = Topology::new();
+        let vid = topo.add_vertex(Vertex::new(Point3::new(1.0, 2.0, 3.0), 1e-7));
+        assert_eq!(topo.num_vertices(), 1);
+
+        topo.reserve(100, 50, 25, 25, 2, 2);
+        assert_eq!(topo.num_vertices(), 1);
+
+        let v = topo.vertex(vid).unwrap();
+        assert!((v.point().x() - 1.0).abs() < f64::EPSILON);
+
+        // New allocations still work after reserve.
+        let vid2 = topo.add_vertex(Vertex::new(Point3::new(4.0, 5.0, 6.0), 1e-7));
+        assert_eq!(topo.num_vertices(), 2);
+        let v2 = topo.vertex(vid2).unwrap();
+        assert!((v2.point().x() - 4.0).abs() < f64::EPSILON);
     }
 }

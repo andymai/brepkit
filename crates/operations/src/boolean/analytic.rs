@@ -1619,6 +1619,10 @@ pub(super) fn analytic_boolean(
     // ── Selection + Assembly ─────────────────────────────────────────────
     let _t_asm = timer_now();
 
+    // Pre-allocate topology arenas based on expected output size.
+    let nf = fragments.len();
+    topo.reserve(nf * 2, nf * 3, nf, nf, 1, 1);
+
     let resolution = vertex_merge_resolution(
         fragments.iter().flat_map(|f| f.vertices.iter().copied()),
         tol,
