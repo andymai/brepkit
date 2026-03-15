@@ -491,6 +491,12 @@ pub fn fillet(
 /// Produces true NURBS cylindrical fillet surfaces with G1 tangent
 /// continuity, replacing the flat-quad approximation of [`fillet`].
 ///
+/// **G1 chain propagation**: the edge set is automatically expanded to
+/// include all G1-continuous neighbors that share the same face pair
+/// (< 10 degree tangent deviation).  This ensures that selecting one edge
+/// from a smooth chain (e.g. a rounded-rectangle profile) fillets the
+/// entire chain.
+///
 /// For each target edge between two planar faces:
 /// 1. Offset both face planes inward by `radius`
 /// 2. Intersect offset planes to find the fillet center line
@@ -600,7 +606,7 @@ pub fn fillet_rolling_ball(
     }
 
     // Phase 2: Filter to manifold edges and build vertex-to-edge adjacency.
-    let filtered_edges: Vec<EdgeId> = edges
+    let user_edges: Vec<EdgeId> = edges
         .iter()
         .copied()
         .filter(|edge_id| {
@@ -610,10 +616,21 @@ pub fn fillet_rolling_ball(
         })
         .collect();
 
-    if filtered_edges.is_empty() {
+    if user_edges.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "no manifold edges to fillet (all edges are boundary or missing)".into(),
         });
+    }
+
+    // Phase 2a: G1 chain propagation — automatically expand the edge set to
+    // include all G1-continuous neighbors sharing the same face pair.
+    let filtered_edges = expand_g1_chain(topo, solid, &user_edges, tol)?;
+    if filtered_edges.len() > user_edges.len() {
+        log::info!(
+            "G1 chain: expanded {} edges to {} edges",
+            user_edges.len(),
+            filtered_edges.len()
+        );
     }
 
     let target_set: HashSet<usize> = filtered_edges.iter().map(|e| e.index()).collect();
@@ -1672,18 +1689,10 @@ fn expand_g1_chain(
 
 /// Fillet `seed_edges` and all G1-continuous edges connected to them.
 ///
-/// This is a convenience wrapper around [`fillet_rolling_ball`] that
-/// automatically expands the edge set by G1 chain propagation: any
-/// manifold edge that shares a vertex, the same pair of adjacent faces,
-/// and is tangent-continuous (< 10° deviation) with a seed edge is added
-/// to the fillet set.
-///
-/// # When to use
-///
-/// Use this function when you want to fillet a smooth edge chain (e.g. the
-/// loop of edges on a rounded-rectangle extrusion) without listing every
-/// edge explicitly.  Use [`fillet_rolling_ball`] directly when you want
-/// precise control over which individual edges are filleted.
+/// **Note:** As of the G1 chain propagation integration, [`fillet_rolling_ball`]
+/// now performs the same automatic expansion internally.  This wrapper is
+/// retained for backward compatibility but is equivalent to calling
+/// `fillet_rolling_ball` directly.
 ///
 /// # Errors
 ///
@@ -1694,9 +1703,9 @@ pub fn fillet_rolling_ball_propagate_g1(
     seed_edges: &[EdgeId],
     radius: f64,
 ) -> Result<SolidId, crate::OperationsError> {
-    let tol = Tolerance::new();
-    let expanded = expand_g1_chain(topo, solid, seed_edges, tol)?;
-    fillet_rolling_ball(topo, solid, &expanded, radius)
+    // fillet_rolling_ball now performs G1 chain expansion internally,
+    // so we forward directly to avoid expanding twice.
+    fillet_rolling_ball(topo, solid, seed_edges, radius)
 }
 
 /// Law governing how fillet radius varies along an edge.
@@ -3114,6 +3123,58 @@ mod tests {
         assert!(
             vol > 0.5,
             "doubly-filleted solid must have positive volume, got {vol}"
+        );
+    }
+
+    #[test]
+    fn g1_chain_no_expansion_for_box() {
+        // Box edges meet at 90 degrees — no G1 chains should be detected.
+        // Filleting a single edge should succeed without expanding.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+        let edges = solid_edge_ids(&topo, solid);
+
+        // Fillet a single edge with a small radius.
+        let result = super::fillet_rolling_ball(&mut topo, solid, &edges[..1], 0.1);
+        assert!(
+            result.is_ok(),
+            "single-edge fillet on box should succeed: {:?}",
+            result.err()
+        );
+
+        let result_solid = result.unwrap();
+        let vol = crate::measure::solid_volume(&topo, result_solid, 0.01).unwrap();
+        // Original box volume: 8.0; fillet removes a small amount.
+        assert!(
+            vol > 7.0 && vol < 8.0,
+            "filleted box volume should be slightly less than 8.0, got {vol}"
+        );
+    }
+
+    #[test]
+    fn g1_chain_integrated_matches_explicit_wrapper() {
+        // Since fillet_rolling_ball now does G1 expansion internally,
+        // calling it directly on a seed should give the same result as
+        // the explicit propagate_g1 wrapper.
+        let mut topo1 = Topology::new();
+        let solid1 = crate::primitives::make_box(&mut topo1, 1.0, 1.0, 1.0).unwrap();
+        let edges1 = solid_edge_ids(&topo1, solid1);
+        let result1 = super::fillet_rolling_ball(&mut topo1, solid1, &edges1[..1], 0.1);
+        assert!(result1.is_ok(), "direct call should succeed");
+        let vol1 = crate::measure::solid_volume(&topo1, result1.unwrap(), 0.01).unwrap();
+
+        let mut topo2 = Topology::new();
+        let solid2 = crate::primitives::make_box(&mut topo2, 1.0, 1.0, 1.0).unwrap();
+        let edges2 = solid_edge_ids(&topo2, solid2);
+        let result2 =
+            super::fillet_rolling_ball_propagate_g1(&mut topo2, solid2, &edges2[..1], 0.1);
+        assert!(result2.is_ok(), "wrapper call should succeed");
+        let vol2 = crate::measure::solid_volume(&topo2, result2.unwrap(), 0.01).unwrap();
+
+        // Both should produce the same volume (within tolerance).
+        assert!(
+            (vol1 - vol2).abs() < 0.01,
+            "volumes should match: direct={vol1}, wrapper={vol2}"
         );
     }
 }
