@@ -7,6 +7,7 @@
 //! the given [`Topology`]. The solids are built with correct manifold
 //! topology and outward-pointing face normals.
 
+use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use brepkit_math::tolerance::Tolerance;
@@ -753,26 +754,31 @@ pub fn make_convex_hull(
         .map(|p| topo.add_vertex(Vertex::new(*p, tol.linear)))
         .collect();
 
-    // Create faces from hull triangles.
+    // Create faces from hull triangles, sharing edges between adjacent faces.
+    // Each undirected edge (min_vertex, max_vertex) is created once; the second
+    // face that references it uses reverse orientation.
+    let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
     let mut face_ids = Vec::with_capacity(hull.faces.len());
     for &[a, b, c] in &hull.faces {
         let va = vertex_ids[a];
         let vb = vertex_ids[b];
         let vc = vertex_ids[c];
 
-        let e0 = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
-        let e1 = topo.add_edge(Edge::new(vb, vc, EdgeCurve::Line));
-        let e2 = topo.add_edge(Edge::new(vc, va, EdgeCurve::Line));
+        let pairs = [(a, b, va, vb), (b, c, vb, vc), (c, a, vc, va)];
+        let mut oriented_edges = Vec::with_capacity(3);
+        for (idx_a, idx_b, v_a, v_b) in pairs {
+            let key = (idx_a.min(idx_b), idx_a.max(idx_b));
+            let (eid, forward) = if let Some(&existing) = edge_map.get(&key) {
+                (existing, false)
+            } else {
+                let eid = topo.add_edge(Edge::new(v_a, v_b, EdgeCurve::Line));
+                edge_map.insert(key, eid);
+                (eid, true)
+            };
+            oriented_edges.push(OrientedEdge::new(eid, forward));
+        }
 
-        let wire = Wire::new(
-            vec![
-                OrientedEdge::new(e0, true),
-                OrientedEdge::new(e1, true),
-                OrientedEdge::new(e2, true),
-            ],
-            true,
-        )
-        .map_err(crate::OperationsError::Topology)?;
+        let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
         let wid = topo.add_wire(wire);
 
         // Compute face plane from triangle vertices.
