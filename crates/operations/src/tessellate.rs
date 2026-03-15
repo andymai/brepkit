@@ -5074,11 +5074,22 @@ mod tests {
     fn sample_solid_edges_boolean_filters_coplanar() {
         // A boolean cut splits faces, creating extra internal edges on the
         // same planar surface. Filtering should remove these.
+        // Use unify_faces=false so coplanar fragments remain for filtering.
         let mut topo = Topology::new();
         let big = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let small = crate::primitives::make_box(&mut topo, 3.0, 3.0, 15.0).unwrap();
-        let cut =
-            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, big, small).unwrap();
+        let opts = crate::boolean::BooleanOptions {
+            unify_faces: false,
+            ..Default::default()
+        };
+        let cut = crate::boolean::boolean_with_options(
+            &mut topo,
+            crate::boolean::BooleanOp::Cut,
+            big,
+            small,
+            opts,
+        )
+        .unwrap();
 
         let filtered = sample_solid_edges(&topo, cut, 0.1).unwrap();
         let all = sample_solid_edges_filtered(&topo, cut, 0.1, false).unwrap();

@@ -1308,7 +1308,8 @@ mod tests {
     #[test]
     fn unify_boolean_box_reduces_faces() {
         // Two overlapping boxes: the boolean result has coplanar face fragments
-        // on the shared cutting plane.
+        // on the shared cutting plane. Use unify_faces=false so the fragments
+        // remain for this test to verify explicit unification.
         let mut topo = Topology::new();
         let box1 = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
         let box2 = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
@@ -1317,8 +1318,18 @@ mod tests {
         let translate = brepkit_math::mat::Mat4::translation(1.0, 0.0, 0.0);
         crate::transform::transform_solid(&mut topo, box2, &translate).unwrap();
 
-        let fused = crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, box1, box2)
-            .unwrap();
+        let opts = crate::boolean::BooleanOptions {
+            unify_faces: false,
+            ..Default::default()
+        };
+        let fused = crate::boolean::boolean_with_options(
+            &mut topo,
+            crate::boolean::BooleanOp::Fuse,
+            box1,
+            box2,
+            opts,
+        )
+        .unwrap();
 
         let (f_before, _, _) =
             brepkit_topology::explorer::solid_entity_counts(&topo, fused).unwrap();

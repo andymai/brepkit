@@ -16,7 +16,7 @@
 use std::f64::consts::PI;
 
 use brepkit_math::mat::Mat4;
-use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean, boolean_with_options};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_box, make_cone, make_cylinder, make_sphere};
 use brepkit_operations::transform::transform_solid;
@@ -293,12 +293,18 @@ fn test_sequential_boolean_vertex_drift() {
 fn test_alternating_union_cut() {
     // A|B - C pattern.
     // A: (0-2, 0-1, 0-1), B: (1-3, 0-1, 0-1), C: (1-2, 0-1, 0-1).
+    // Use unify_faces=false — this test exercises chord-clipping precision
+    // on fuse results; face merging alters intermediate polygon boundaries.
+    let no_unify = BooleanOptions {
+        unify_faces: false,
+        ..Default::default()
+    };
     let mut topo = Topology::new();
     let a = make_box(&mut topo, 2.0, 1.0, 1.0).unwrap();
     let b = make_box(&mut topo, 2.0, 1.0, 1.0).unwrap();
     transform_solid(&mut topo, b, &Mat4::translation(1.0, 0.0, 0.0)).unwrap();
 
-    let fused = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+    let fused = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, no_unify).unwrap();
     let fused_vol = vol(&topo, fused);
     let rel_fused = (fused_vol - 3.0).abs() / 3.0;
     assert!(rel_fused < 0.01, "fused volume {fused_vol:.4} not near 3.0");
@@ -306,7 +312,7 @@ fn test_alternating_union_cut() {
     let c = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
     transform_solid(&mut topo, c, &Mat4::translation(1.0, 0.0, 0.0)).unwrap();
 
-    let result = boolean(&mut topo, BooleanOp::Cut, fused, c).unwrap();
+    let result = boolean_with_options(&mut topo, BooleanOp::Cut, fused, c, no_unify).unwrap();
     let v = vol(&topo, result);
     let rel = (v - 2.0).abs() / 2.0;
     assert!(rel < 0.01, "A|B - C volume {v:.4} not near 2.0");
