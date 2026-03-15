@@ -845,8 +845,10 @@ pub fn fillet_rolling_ball(
     // angles at shared vertices to compute setback distances.
     for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
-        let p_start = topo.vertex(edge.start())?.point();
-        let p_end = topo.vertex(edge.end())?.point();
+        let start_vid = edge.start();
+        let end_vid = edge.end();
+        let p_start = topo.vertex(start_vid)?.point();
+        let p_end = topo.vertex(end_vid)?.point();
         let edge_len = (p_end - p_start).length();
         if edge_len < tol.linear {
             continue;
@@ -881,16 +883,17 @@ pub fn fillet_rolling_ball(
                 }
 
                 let adj_edge = topo.edge(adj_eid)?;
-                let adj_start = topo.vertex(adj_edge.start())?.point();
-                let adj_end = topo.vertex(adj_edge.end())?.point();
+                let adj_start_vid = adj_edge.start();
+                let adj_end_vid = adj_edge.end();
+                let adj_start = topo.vertex(adj_start_vid)?.point();
+                let adj_end = topo.vertex(adj_end_vid)?.point();
                 let adj_curve = adj_edge.curve().clone();
 
                 // Check if adjacent edge shares start vertex of current edge.
-                if (adj_start - p_start).length() < tol.linear * 10.0
-                    || (adj_end - p_start).length() < tol.linear * 10.0
-                {
+                let shares_start = adj_start_vid == start_vid || adj_end_vid == start_vid;
+                if shares_start {
                     let t1 = sample_edge_tangent(&edge_curve, p_start, p_end, 0.0);
-                    let adj_t = if (adj_start - p_start).length() < tol.linear * 10.0 {
+                    let adj_t = if adj_start_vid == start_vid {
                         sample_edge_tangent(&adj_curve, adj_start, adj_end, 0.0)
                     } else {
                         sample_edge_tangent(&adj_curve, adj_start, adj_end, 1.0)
@@ -900,17 +903,16 @@ pub fn fillet_rolling_ball(
                         let theta = cos_t.acos();
                         let half_tan = (theta / 2.0).tan();
                         if half_tan > tol.linear {
-                            setback_start = radius / half_tan;
+                            setback_start = setback_start.max(radius / half_tan);
                         }
                     }
                 }
 
                 // Check if adjacent edge shares end vertex of current edge.
-                if (adj_start - p_end).length() < tol.linear * 10.0
-                    || (adj_end - p_end).length() < tol.linear * 10.0
-                {
+                let shares_end = adj_start_vid == end_vid || adj_end_vid == end_vid;
+                if shares_end {
                     let t1 = sample_edge_tangent(&edge_curve, p_start, p_end, 1.0);
-                    let adj_t = if (adj_start - p_end).length() < tol.linear * 10.0 {
+                    let adj_t = if adj_start_vid == end_vid {
                         sample_edge_tangent(&adj_curve, adj_start, adj_end, 0.0)
                     } else {
                         sample_edge_tangent(&adj_curve, adj_start, adj_end, 1.0)
@@ -920,7 +922,7 @@ pub fn fillet_rolling_ball(
                         let theta = cos_t.acos();
                         let half_tan = (theta / 2.0).tan();
                         if half_tan > tol.linear {
-                            setback_end = radius / half_tan;
+                            setback_end = setback_end.max(radius / half_tan);
                         }
                     }
                 }
@@ -1021,9 +1023,13 @@ pub fn fillet_rolling_ball(
                     (false, false, true) => {
                         if let Ok(dir_prev) = (prev_pos - pos).normalize() {
                             trimmed_verts.push(pos + dir_prev * radius);
+                        } else {
+                            trimmed_verts.push(pos);
                         }
                         if let Ok(dir_next) = (next_pos - pos).normalize() {
                             trimmed_verts.push(pos + dir_next * radius);
+                        } else {
+                            trimmed_verts.push(pos);
                         }
                     }
                     (true, false, _) => {
@@ -1043,9 +1049,13 @@ pub fn fillet_rolling_ball(
                     (true, true, _) => {
                         if let Ok(dir_prev) = (prev_pos - pos).normalize() {
                             trimmed_verts.push(pos + dir_prev * radius);
+                        } else {
+                            trimmed_verts.push(pos);
                         }
                         if let Ok(dir_next) = (next_pos - pos).normalize() {
                             trimmed_verts.push(pos + dir_next * radius);
+                        } else {
+                            trimmed_verts.push(pos);
                         }
                     }
                 }
@@ -3335,20 +3345,22 @@ mod tests {
 
         // Get edges from the filleted solid for second fillet
         let edges2 = solid_edge_ids(&topo, result1);
-        // Try to fillet some of the new NURBS-NURBS edges with smaller radius
-        // This should not panic or error — it's the #39 test
-        if !edges2.is_empty() {
-            let result2 = super::fillet_rolling_ball(
-                &mut topo,
-                result1,
-                &edges2[..1.min(edges2.len())],
-                0.05,
-            );
-            // Even if fillet fails (not all edges are manifold after first fillet),
-            // it should fail gracefully, not panic
-            if let Ok(solid2) = result2 {
+        assert!(
+            !edges2.is_empty(),
+            "filleted solid must have edges for second fillet attempt"
+        );
+
+        // Try to fillet one of the new NURBS-NURBS edges with smaller radius.
+        // This should not panic or error — it's the #39 test.
+        let result2 = super::fillet_rolling_ball(&mut topo, result1, &edges2[..1], 0.05);
+        match result2 {
+            Ok(solid2) => {
                 let vol2 = crate::measure::solid_volume(&topo, solid2, 0.01).unwrap();
                 assert!(vol2 > 0.0, "second fillet should produce positive volume");
+            }
+            Err(e) => {
+                // Graceful failure is acceptable — log the error for diagnostics
+                eprintln!("second fillet failed gracefully: {e}");
             }
         }
     }
