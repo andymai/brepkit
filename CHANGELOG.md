@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.6.0](https://github.com/andymai/brepkit/compare/v2.5.3...v2.6.0) (2026-03-15)
+
+
+### Features
+
+* add solidEdges batch op, fix vacuous fillet tests ([#268](https://github.com/andymai/brepkit/issues/268)) ([53b46be](https://github.com/andymai/brepkit/commit/53b46be0cce1cae6dd14b7530e53cb50f141bedb))
+
+
+### Bug Fixes
+
+* address PR [#263](https://github.com/andymai/brepkit/issues/263) review comments ([#266](https://github.com/andymai/brepkit/issues/266)) ([24e1773](https://github.com/andymai/brepkit/commit/24e17731c5f4bb44feb98623ab6cce8add680349))
+
 ## [2.5.3](https://github.com/andymai/brepkit/compare/v2.5.2...v2.5.3) (2026-03-15)
 
 
