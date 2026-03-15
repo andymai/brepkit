@@ -22,8 +22,25 @@ use crate::helpers::{
 use crate::kernel::BrepKernel;
 
 use brepkit_operations::extrude::extrude;
+use brepkit_operations::offset_wire::JoinType;
 use brepkit_operations::revolve::revolve;
 use brepkit_operations::sweep::sweep;
+
+/// Parse a join type string into a [`JoinType`] enum value.
+///
+/// Used by both the direct WASM binding and the batch dispatcher.
+pub fn parse_join_type_str(s: &str) -> Result<JoinType, WasmError> {
+    match s {
+        "intersection" => Ok(JoinType::Intersection),
+        "arc" => Ok(JoinType::Arc),
+        "chamfer" => Ok(JoinType::Chamfer),
+        _ => Err(WasmError::InvalidInput {
+            reason: format!(
+                "unknown join type '{s}', expected 'intersection', 'arc', or 'chamfer'"
+            ),
+        }),
+    }
+}
 
 #[wasm_bindgen]
 impl BrepKernel {
@@ -825,6 +842,10 @@ impl BrepKernel {
     /// Apply variable-radius fillets to edges.
     ///
     /// `json` is a JSON string: `[{"edge": u32, "law": "constant"|"linear"|"scurve", "start": f64, "end": f64}]`
+    ///
+    /// Also accepts brepjs-style fields: `startRadius`/`endRadius` as aliases for `start`/`end`.
+    /// When `law` is omitted and `startRadius` != `endRadius`, the law auto-detects as `"linear"`.
+    ///
     /// Returns a new solid handle.
     #[wasm_bindgen(js_name = "filletVariable")]
     pub fn fillet_variable(&mut self, solid: u32, json: &str) -> Result<u32, JsError> {
@@ -841,23 +862,32 @@ impl BrepKernel {
                     reason: "missing 'edge' in fillet spec".into(),
                 })? as u32;
             let edge_id = self.resolve_edge(edge_handle)?;
-            let law_str = spec["law"].as_str().unwrap_or("constant");
+            // Accept both brepkit-native ("start"/"end") and brepjs ("startRadius"/"endRadius")
+            let start_val = spec["start"]
+                .as_f64()
+                .or_else(|| spec["startRadius"].as_f64());
+            let end_val = spec["end"].as_f64().or_else(|| spec["endRadius"].as_f64());
+
+            // Auto-detect law: if no "law" field but start != end, use "linear"
+            let law_str = spec["law"]
+                .as_str()
+                .unwrap_or_else(|| match (start_val, end_val) {
+                    (Some(s), Some(e)) if (s - e).abs() > f64::EPSILON => "linear",
+                    _ => "constant",
+                });
             let law = match law_str {
                 "linear" => {
-                    let s = spec["start"].as_f64().unwrap_or(1.0);
-                    let e = spec["end"].as_f64().unwrap_or(1.0);
+                    let s = start_val.unwrap_or(1.0);
+                    let e = end_val.unwrap_or(1.0);
                     brepkit_operations::fillet::FilletRadiusLaw::Linear { start: s, end: e }
                 }
                 "scurve" => {
-                    let s = spec["start"].as_f64().unwrap_or(1.0);
-                    let e = spec["end"].as_f64().unwrap_or(1.0);
+                    let s = start_val.unwrap_or(1.0);
+                    let e = end_val.unwrap_or(1.0);
                     brepkit_operations::fillet::FilletRadiusLaw::SCurve { start: s, end: e }
                 }
                 _ => {
-                    let r = spec["radius"]
-                        .as_f64()
-                        .or_else(|| spec["start"].as_f64())
-                        .unwrap_or(1.0);
+                    let r = spec["radius"].as_f64().or(start_val).unwrap_or(1.0);
                     brepkit_operations::fillet::FilletRadiusLaw::Constant(r)
                 }
             };
@@ -872,6 +902,7 @@ impl BrepKernel {
     ///
     /// `contact_mode`: "rmf" (default), "fixed", or "constantNormal:x,y,z"
     /// `scale_values`: flat `[t0,s0,t1,s1,...]` pairs for piecewise-linear scale law.
+    /// `corner_mode`: "smooth" (default), "miter", or "round"
     /// Returns a solid handle.
     #[wasm_bindgen(js_name = "sweepWithOptions")]
     #[allow(clippy::needless_pass_by_value)]
@@ -882,8 +913,9 @@ impl BrepKernel {
         contact_mode: &str,
         scale_values: Vec<f64>,
         segments: u32,
+        corner_mode: &str,
     ) -> Result<u32, JsError> {
-        use brepkit_operations::sweep::{SweepContactMode, SweepOptions};
+        use brepkit_operations::sweep::{SweepContactMode, SweepCornerMode, SweepOptions};
 
         let face_id = self.resolve_face(profile)?;
         let path_curve = self.extract_nurbs_curve(path_edge)?;
@@ -931,8 +963,15 @@ impl BrepKernel {
                 None
             };
 
+        let cm = match corner_mode {
+            "miter" => SweepCornerMode::Miter,
+            "round" => SweepCornerMode::Round,
+            _ => SweepCornerMode::Smooth,
+        };
+
         let options = SweepOptions {
             contact_mode: mode,
+            corner_mode: cm,
             scale_law,
             segments: segments as usize,
         };
@@ -1082,6 +1121,33 @@ impl BrepKernel {
         let face_id = self.resolve_face(face)?;
         let wire_id =
             brepkit_operations::offset_wire::offset_wire(&mut self.topo, face_id, distance)?;
+        Ok(wire_id_to_u32(wire_id))
+    }
+
+    /// Offset a wire on a planar face with a specific join type.
+    ///
+    /// `join_type` must be one of `"intersection"`, `"arc"`, or `"chamfer"`.
+    /// Returns a new wire handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid, the join type string
+    /// is unrecognized, or the offset operation fails.
+    #[wasm_bindgen(js_name = "offsetWireWithJoinType")]
+    pub fn offset_wire_with_join_type(
+        &mut self,
+        face: u32,
+        distance: f64,
+        join_type: &str,
+    ) -> Result<u32, JsError> {
+        let face_id = self.resolve_face(face)?;
+        let jt = parse_join_type_str(join_type)?;
+        let wire_id = brepkit_operations::offset_wire::offset_wire_with_join(
+            &mut self.topo,
+            face_id,
+            distance,
+            jt,
+        )?;
         Ok(wire_id_to_u32(wire_id))
     }
 

@@ -1546,16 +1546,62 @@ pub fn fillet_rolling_ball(
                 }
 
                 // Sphere center: vertex offset inward by R along each face normal.
-                // For outward-pointing face normals, "inward" means subtracting.
                 let normal_sum = face_normals
                     .iter()
                     .fold(Vec3::new(0.0, 0.0, 0.0), |acc, n| {
                         Vec3::new(acc.x() + n.x(), acc.y() + n.y(), acc.z() + n.z())
                     });
+
+                // Determine whether this vertex corner is convex or concave.
+                // For a convex corner the face normals (outward) and edge
+                // tangents (pointing away from vertex, i.e. inward) point in
+                // opposite directions: normal_sum · avg_tangent < 0.
+                // For concave corners they align: dot > 0.
+                let is_concave = if let Some(fillet_edges) = vertex_fillet_edges.get(&vi) {
+                    if fillet_edges.len() >= 3 {
+                        let mut tangent_sum = Vec3::new(0.0, 0.0, 0.0);
+                        let mut count = 0;
+                        for &eid in fillet_edges {
+                            if let Ok(edge) = topo.edge(eid) {
+                                let e_start = edge.start();
+                                let e_end = edge.end();
+                                let curve = edge.curve().clone();
+                                let p_s = topo.vertex(e_start)?.point();
+                                let p_e = topo.vertex(e_end)?.point();
+                                let (t_param, sign) = if e_start.index() == vi {
+                                    let (t0, _) = curve.domain_with_endpoints(p_s, p_e);
+                                    (t0, 1.0)
+                                } else {
+                                    let (_, t1) = curve.domain_with_endpoints(p_s, p_e);
+                                    (t1, -1.0)
+                                };
+                                let tan = curve.tangent_with_endpoints(t_param, p_s, p_e);
+                                if let Ok(n) = (tan * sign).normalize() {
+                                    tangent_sum = Vec3::new(
+                                        tangent_sum.x() + n.x(),
+                                        tangent_sum.y() + n.y(),
+                                        tangent_sum.z() + n.z(),
+                                    );
+                                    count += 1;
+                                }
+                            }
+                        }
+                        count >= 3 && normal_sum.dot(tangent_sum) > 0.0
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                // For outward-pointing face normals on a convex corner, "inward"
+                // means subtracting. For concave corners the offset direction
+                // is reversed (we add instead of subtract).
+                let offset_sign = if is_concave { 1.0 } else { -1.0 };
                 let sphere_center = Point3::new(
-                    v_pos.x() - radius * normal_sum.x(),
-                    v_pos.y() - radius * normal_sum.y(),
-                    v_pos.z() - radius * normal_sum.z(),
+                    v_pos.x() + offset_sign * radius * normal_sum.x(),
+                    v_pos.y() + offset_sign * radius * normal_sum.y(),
+                    v_pos.z() + offset_sign * radius * normal_sum.z(),
                 );
 
                 let p0 = ordered_points[0];

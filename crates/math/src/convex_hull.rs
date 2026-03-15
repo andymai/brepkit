@@ -356,4 +356,215 @@ mod tests {
         ];
         assert!(convex_hull_3d(&points).is_none());
     }
+
+    /// Compute volume of a triangle mesh via the signed tetrahedron method
+    /// (divergence theorem: V = sum of signed tets formed with the origin).
+    fn mesh_volume(hull: &ConvexHull) -> f64 {
+        let mut vol = 0.0;
+        for &[a, b, c] in &hull.faces {
+            let pa = hull.vertices[a];
+            let pb = hull.vertices[b];
+            let pc = hull.vertices[c];
+            // Signed volume of tetrahedron (origin, pa, pb, pc).
+            vol += pa.x() * (pb.y() * pc.z() - pb.z() * pc.y())
+                + pa.y() * (pb.z() * pc.x() - pb.x() * pc.z())
+                + pa.z() * (pb.x() * pc.y() - pb.y() * pc.x());
+        }
+        vol / 6.0
+    }
+
+    #[test]
+    fn hull_cube_volume() {
+        let points = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(1.0, 0.0, 1.0),
+            Point3::new(0.0, 1.0, 1.0),
+            Point3::new(1.0, 1.0, 1.0),
+        ];
+        let hull = convex_hull_3d(&points).expect("hull should succeed");
+        let vol = mesh_volume(&hull);
+        assert!(
+            (vol - 1.0).abs() < 1e-10,
+            "unit cube volume should be 1.0, got {vol}"
+        );
+    }
+
+    #[test]
+    fn hull_displaced_cube_volume() {
+        // Cube at (5, 5, 5) to (6, 6, 6) — volume should still be 1.0.
+        let points = vec![
+            Point3::new(5.0, 5.0, 5.0),
+            Point3::new(6.0, 5.0, 5.0),
+            Point3::new(5.0, 6.0, 5.0),
+            Point3::new(6.0, 6.0, 5.0),
+            Point3::new(5.0, 5.0, 6.0),
+            Point3::new(6.0, 5.0, 6.0),
+            Point3::new(5.0, 6.0, 6.0),
+            Point3::new(6.0, 6.0, 6.0),
+        ];
+        let hull = convex_hull_3d(&points).expect("hull should succeed");
+        let vol = mesh_volume(&hull);
+        assert!(
+            (vol - 1.0).abs() < 1e-10,
+            "displaced unit cube volume should be 1.0, got {vol}"
+        );
+    }
+
+    #[test]
+    fn hull_minkowski_sum_two_unit_cubes() {
+        // Minkowski sum of [0,1]^3 with [0,1]^3 = [0,2]^3, volume = 8.
+        // Generate all 64 pairwise vertex sums.
+        let cube_a: Vec<Point3> = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(1.0, 0.0, 1.0),
+            Point3::new(0.0, 1.0, 1.0),
+            Point3::new(1.0, 1.0, 1.0),
+        ];
+        let cube_b = cube_a.clone();
+
+        let mut sum_points = Vec::with_capacity(64);
+        for &a in &cube_a {
+            for &b in &cube_b {
+                sum_points.push(Point3::new(a.x() + b.x(), a.y() + b.y(), a.z() + b.z()));
+            }
+        }
+        assert_eq!(sum_points.len(), 64);
+
+        let hull = convex_hull_3d(&sum_points).expect("hull should succeed");
+        let vol = mesh_volume(&hull);
+        assert!(
+            (vol - 8.0).abs() < 1e-8,
+            "Minkowski sum of two unit cubes should have volume 8.0, got {vol}"
+        );
+    }
+
+    #[test]
+    fn hull_minkowski_sum_displaced_cubes() {
+        // Cube A at origin [0,1]^3, Cube B at (5,5,5) to (6,6,6).
+        // Minkowski sum vertices span [0+5, 1+6] = [5,7] in each axis.
+        // So the hull is a 2x2x2 cube, volume = 8.
+        let cube_a = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(1.0, 0.0, 1.0),
+            Point3::new(0.0, 1.0, 1.0),
+            Point3::new(1.0, 1.0, 1.0),
+        ];
+        let cube_b = vec![
+            Point3::new(5.0, 5.0, 5.0),
+            Point3::new(6.0, 5.0, 5.0),
+            Point3::new(5.0, 6.0, 5.0),
+            Point3::new(6.0, 6.0, 5.0),
+            Point3::new(5.0, 5.0, 6.0),
+            Point3::new(6.0, 5.0, 6.0),
+            Point3::new(5.0, 6.0, 6.0),
+            Point3::new(6.0, 6.0, 6.0),
+        ];
+
+        let mut sum_points = Vec::with_capacity(64);
+        for &a in &cube_a {
+            for &b in &cube_b {
+                sum_points.push(Point3::new(a.x() + b.x(), a.y() + b.y(), a.z() + b.z()));
+            }
+        }
+
+        let hull = convex_hull_3d(&sum_points).expect("hull should succeed");
+        let vol = mesh_volume(&hull);
+        assert!(
+            (vol - 8.0).abs() < 1e-8,
+            "Minkowski sum of two displaced unit cubes should have volume 8.0, got {vol}"
+        );
+    }
+
+    #[test]
+    fn hull_large_point_cloud_sphere() {
+        // Generate points on a unit sphere — hull volume should approach 4*pi/3.
+        use std::f64::consts::PI;
+        let n_phi = 20;
+        let n_theta = 40;
+        let mut points = Vec::new();
+        for i in 0..=n_phi {
+            #[allow(clippy::cast_precision_loss)]
+            let phi = PI * (i as f64) / (n_phi as f64);
+            for j in 0..n_theta {
+                #[allow(clippy::cast_precision_loss)]
+                let theta = 2.0 * PI * (j as f64) / (n_theta as f64);
+                points.push(Point3::new(
+                    phi.sin() * theta.cos(),
+                    phi.sin() * theta.sin(),
+                    phi.cos(),
+                ));
+            }
+        }
+
+        let hull = convex_hull_3d(&points).expect("hull should succeed");
+        let vol = mesh_volume(&hull);
+        let expected = 4.0 * PI / 3.0;
+        // With 20x40 = 800 points, the inscribed polyhedron volume should be
+        // close but slightly less than the true sphere volume.
+        assert!(
+            vol > 0.95 * expected,
+            "sphere hull volume {vol} should be close to {expected}"
+        );
+        assert!(
+            vol <= expected + 1e-6,
+            "sphere hull volume {vol} should not exceed true sphere volume {expected}"
+        );
+    }
+
+    #[test]
+    fn hull_faces_outward_winding() {
+        // All face normals should point outward (positive signed distance
+        // from centroid to each face plane should be negative).
+        let points = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+            Point3::new(0.0, 0.0, 2.0),
+            Point3::new(2.0, 2.0, 0.0),
+            Point3::new(2.0, 0.0, 2.0),
+            Point3::new(0.0, 2.0, 2.0),
+            Point3::new(2.0, 2.0, 2.0),
+        ];
+        let hull = convex_hull_3d(&points).expect("hull should succeed");
+
+        // Compute centroid of all hull vertices.
+        let n = hull.vertices.len() as f64;
+        let cx: f64 = hull.vertices.iter().map(|p| p.x()).sum::<f64>() / n;
+        let cy: f64 = hull.vertices.iter().map(|p| p.y()).sum::<f64>() / n;
+        let cz: f64 = hull.vertices.iter().map(|p| p.z()).sum::<f64>() / n;
+        let centroid = Point3::new(cx, cy, cz);
+
+        for &[a, b, c] in &hull.faces {
+            let pa = hull.vertices[a];
+            let pb = hull.vertices[b];
+            let pc = hull.vertices[c];
+            let ab = pb - pa;
+            let ac = pc - pa;
+            let normal = ab.cross(ac);
+            // Dot with vector from face vertex to centroid should be negative
+            // (centroid is inside, normal points outward).
+            let to_centroid = Vec3::new(
+                centroid.x() - pa.x(),
+                centroid.y() - pa.y(),
+                centroid.z() - pa.z(),
+            );
+            let dot = normal.dot(to_centroid);
+            assert!(
+                dot <= 0.0,
+                "face [{a},{b},{c}] normal should point away from centroid, dot = {dot}"
+            );
+        }
+    }
 }

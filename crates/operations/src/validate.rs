@@ -60,6 +60,28 @@ impl ValidationReport {
     }
 }
 
+/// Options for controlling validation tolerance.
+///
+/// Operations like fillet and shell produce NURBS faces where geometric
+/// checks (normal length, face area) may trigger false positives at
+/// default tolerance. Increasing `tolerance_scale` relaxes these
+/// thresholds.
+#[derive(Debug, Clone)]
+pub struct ValidationOptions {
+    /// Multiplier applied to geometric tolerances for the face normal
+    /// length check and the degenerate face area check. Default is `1.0`.
+    /// A value of `10.0` means tolerances are 10x more permissive.
+    pub tolerance_scale: f64,
+}
+
+impl Default for ValidationOptions {
+    fn default() -> Self {
+        Self {
+            tolerance_scale: 1.0,
+        }
+    }
+}
+
 /// Validate a solid, returning a report of all issues found.
 ///
 /// Checks performed:
@@ -100,8 +122,29 @@ pub fn validate_solid(
     topo: &Topology,
     solid: SolidId,
 ) -> Result<ValidationReport, crate::OperationsError> {
+    validate_solid_with_options(topo, solid, &ValidationOptions::default())
+}
+
+/// Validate a solid with configurable tolerance options.
+///
+/// Same checks as [`validate_solid`] but with tolerance scaling.
+/// Use `ValidationOptions { tolerance_scale: 10.0, .. }` to relax
+/// geometric checks for NURBS faces produced by fillet/shell operations.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+#[allow(clippy::too_many_lines)]
+pub fn validate_solid_with_options(
+    topo: &Topology,
+    solid: SolidId,
+    options: &ValidationOptions,
+) -> Result<ValidationReport, crate::OperationsError> {
     let mut issues = Vec::new();
     let tol = Tolerance::new();
+    // Clamp to [0.1, 1000]: below 0.1 risks false positives on exact
+    // geometry, above 1000 makes the check meaningless.
+    let scale = options.tolerance_scale.clamp(0.1, 1000.0);
 
     // 1. Entity counts and Euler characteristic.
     let (f, e, v) = explorer::solid_entity_counts(topo, solid)?;
@@ -213,11 +256,16 @@ pub fn validate_solid(
     }
 
     // 5. Face normal consistency.
+    let scaled_tol = Tolerance {
+        linear: tol.linear * scale,
+        angular: tol.angular * scale,
+        relative: tol.relative * scale,
+    };
     for fid in &faces {
         let face = topo.face(*fid)?;
         if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface() {
             let len = normal.length();
-            if !tol.approx_eq(len, 1.0) {
+            if !scaled_tol.approx_eq(len, 1.0) {
                 issues.push(ValidationIssue {
                     severity: Severity::Warning,
                     description: format!(
@@ -258,7 +306,7 @@ pub fn validate_solid(
     // The polygon area formula uses vertex positions, which is
     // meaningless when edges are curved (e.g. a cylinder cap has
     // 1 vertex → zero polygon area despite being a valid disc).
-    let area_tol_sq = tol.linear * tol.linear;
+    let area_tol_sq = scaled_tol.linear * scaled_tol.linear;
     for fid in &faces {
         let face = topo.face(*fid)?;
 
@@ -461,8 +509,28 @@ pub fn validate_solid_relaxed(
     topo: &Topology,
     solid: SolidId,
 ) -> Result<ValidationReport, crate::OperationsError> {
+    validate_solid_relaxed_with_options(topo, solid, &ValidationOptions::default())
+}
+
+/// Validate a solid with relaxed checks and configurable tolerance options.
+///
+/// Combines the relaxed check set of [`validate_solid_relaxed`] with the
+/// tolerance scaling of [`validate_solid_with_options`].
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+#[allow(clippy::too_many_lines)]
+pub fn validate_solid_relaxed_with_options(
+    topo: &Topology,
+    solid: SolidId,
+    options: &ValidationOptions,
+) -> Result<ValidationReport, crate::OperationsError> {
     let mut issues = Vec::new();
     let tol = Tolerance::new();
+    // Clamp to [0.1, 1000]: below 0.1 risks false positives on exact
+    // geometry, above 1000 makes the check meaningless.
+    let scale = options.tolerance_scale.clamp(0.1, 1000.0);
 
     let faces = explorer::solid_faces(topo, solid)?;
 
@@ -490,11 +558,16 @@ pub fn validate_solid_relaxed(
     }
 
     // Face normal consistency (planar faces).
+    let scaled_tol = Tolerance {
+        linear: tol.linear * scale,
+        angular: tol.angular * scale,
+        relative: tol.relative * scale,
+    };
     for fid in &faces {
         let face = topo.face(*fid)?;
         if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface() {
             let len = normal.length();
-            if !tol.approx_eq(len, 1.0) {
+            if !scaled_tol.approx_eq(len, 1.0) {
                 issues.push(ValidationIssue {
                     severity: Severity::Warning,
                     description: format!(
@@ -530,7 +603,7 @@ pub fn validate_solid_relaxed(
     }
 
     // Degenerate face area (planar + straight edges only).
-    let area_tol_sq = tol.linear * tol.linear;
+    let area_tol_sq = scaled_tol.linear * scaled_tol.linear;
     for fid in &faces {
         let face = topo.face(*fid)?;
 
@@ -1508,6 +1581,108 @@ mod tests {
         assert!(
             !report.is_valid(),
             "open wire should fail even relaxed validation: {:?}",
+            report.issues
+        );
+    }
+
+    // ── ValidationOptions tolerance tuning ──────────────
+
+    #[test]
+    fn validation_options_default() {
+        let opts = ValidationOptions::default();
+        assert!((opts.tolerance_scale - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn with_options_default_matches_validate_solid() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+
+        let default_report = validate_solid(&topo, solid).unwrap();
+        let opts_report =
+            validate_solid_with_options(&topo, solid, &ValidationOptions::default()).unwrap();
+
+        assert_eq!(default_report.error_count(), opts_report.error_count());
+        assert_eq!(default_report.warning_count(), opts_report.warning_count());
+    }
+
+    #[test]
+    fn scaled_tolerance_reduces_normal_warnings() {
+        // Corrupt a face normal to be slightly off from unit length.
+        // Default tolerance should warn; scaled tolerance should not.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let shell_id = topo.solid(solid).unwrap().outer_shell();
+        let face_id = topo.shell(shell_id).unwrap().faces()[0];
+        let face = topo.face_mut(face_id).unwrap();
+        *face = brepkit_topology::face::Face::new(
+            face.outer_wire(),
+            face.inner_wires().to_vec(),
+            brepkit_topology::face::FaceSurface::Plane {
+                // Normal length ~0.99999 — off by ~1e-5 which exceeds default 1e-7
+                normal: brepkit_math::vec::Vec3::new(0.0, 0.0, 0.99999),
+                d: 0.0,
+            },
+        );
+
+        // Default: should warn
+        let default_report = validate_solid(&topo, solid).unwrap();
+        let normal_warnings_default = default_report
+            .issues
+            .iter()
+            .filter(|i| i.description.contains("non-unit normal"))
+            .count();
+        assert!(
+            normal_warnings_default > 0,
+            "default tolerance should warn on non-unit normal"
+        );
+
+        // Scaled up 100x: should not warn (1e-5 < 1e-7 * 100 = 1e-5)
+        let opts = ValidationOptions {
+            tolerance_scale: 100.0,
+        };
+        let scaled_report = validate_solid_with_options(&topo, solid, &opts).unwrap();
+        let normal_warnings_scaled = scaled_report
+            .issues
+            .iter()
+            .filter(|i| i.description.contains("non-unit normal"))
+            .count();
+        assert!(
+            normal_warnings_scaled < normal_warnings_default,
+            "scaled tolerance should produce fewer normal warnings ({normal_warnings_scaled} vs {normal_warnings_default})"
+        );
+    }
+
+    #[test]
+    fn fillet_box_with_options() {
+        let mut topo = Topology::new();
+        let cube = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+
+        let s = topo.solid(cube).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        let mut edges = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for &fid in sh.faces() {
+            let face = topo.face(fid).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            for oe in wire.edges() {
+                if seen.insert(oe.edge().index()) {
+                    edges.push(oe.edge());
+                }
+            }
+        }
+
+        let result = crate::fillet::fillet_rolling_ball(&mut topo, cube, &[edges[0]], 2.0).unwrap();
+
+        // With relaxed + scaled options, should pass clean
+        let opts = ValidationOptions {
+            tolerance_scale: 10.0,
+        };
+        let report = validate_solid_relaxed_with_options(&topo, result, &opts).unwrap();
+        assert!(
+            report.is_valid(),
+            "fillet should pass relaxed+scaled validation: {:?}",
             report.issues
         );
     }

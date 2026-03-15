@@ -350,6 +350,24 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!([com.x(), com.y(), com.z()]))
             }
+            "solidToSolidDistance" => {
+                let a = get_u32(args, "solidA")?;
+                let b = get_u32(args, "solidB")?;
+                let a_id = self.resolve_solid(a).map_err(|e| e.to_string())?;
+                let b_id = self.resolve_solid(b).map_err(|e| e.to_string())?;
+                let result =
+                    brepkit_operations::distance::solid_to_solid_distance(&self.topo, a_id, b_id)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!([
+                    result.distance,
+                    result.point_a.x(),
+                    result.point_a.y(),
+                    result.point_a.z(),
+                    result.point_b.x(),
+                    result.point_b.y(),
+                    result.point_b.z(),
+                ]))
+            }
             "copySolid" => {
                 let s = get_u32(args, "solid")?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
@@ -482,6 +500,54 @@ impl BrepKernel {
                         return Err(panic_message(&panic_info, "Fillet"));
                     }
                 };
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
+            "filletVariable" => {
+                let s = get_u32(args, "solid")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let specs = args["specs"]
+                    .as_array()
+                    .ok_or_else(|| "missing 'specs' array".to_string())?;
+                let mut edge_laws = Vec::with_capacity(specs.len());
+                for spec in specs {
+                    let edge_handle = spec["edge"]
+                        .as_u64()
+                        .ok_or_else(|| "missing 'edge' in fillet spec".to_string())?
+                        as u32;
+                    let edge_id = self.resolve_edge(edge_handle).map_err(|e| e.to_string())?;
+                    let start_val = spec["start"]
+                        .as_f64()
+                        .or_else(|| spec["startRadius"].as_f64());
+                    let end_val = spec["end"].as_f64().or_else(|| spec["endRadius"].as_f64());
+                    let law_str =
+                        spec["law"]
+                            .as_str()
+                            .unwrap_or_else(|| match (start_val, end_val) {
+                                (Some(sv), Some(ev)) if (sv - ev).abs() > f64::EPSILON => "linear",
+                                _ => "constant",
+                            });
+                    let law = match law_str {
+                        "linear" => brepkit_operations::fillet::FilletRadiusLaw::Linear {
+                            start: start_val.unwrap_or(1.0),
+                            end: end_val.unwrap_or(1.0),
+                        },
+                        "scurve" => brepkit_operations::fillet::FilletRadiusLaw::SCurve {
+                            start: start_val.unwrap_or(1.0),
+                            end: end_val.unwrap_or(1.0),
+                        },
+                        _ => {
+                            let r = spec["radius"].as_f64().or(start_val).unwrap_or(1.0);
+                            brepkit_operations::fillet::FilletRadiusLaw::Constant(r)
+                        }
+                    };
+                    edge_laws.push((edge_id, law));
+                }
+                let result = brepkit_operations::fillet::fillet_variable(
+                    &mut self.topo,
+                    solid_id,
+                    &edge_laws,
+                )
+                .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             "shell" => {
@@ -904,6 +970,33 @@ impl BrepKernel {
                     .lift_curve2d_to_plane_impl(ct, cp, ox, oy, oz, xx, xy, xz, nx, ny, nz, t0, t1)
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(eid))
+            }
+            "offsetWire" => {
+                let f = get_u32(args, "face")?;
+                let dist = get_f64(args, "distance")?;
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let wire_id =
+                    brepkit_operations::offset_wire::offset_wire(&mut self.topo, face_id, dist)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(wire_id_to_u32(wire_id)))
+            }
+            "offsetWireWithJoinType" => {
+                let f = get_u32(args, "face")?;
+                let dist = get_f64(args, "distance")?;
+                let jt_str = args["joinType"]
+                    .as_str()
+                    .ok_or("missing or invalid 'joinType' string")?;
+                let jt =
+                    super::operations::parse_join_type_str(jt_str).map_err(|e| e.to_string())?;
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let wire_id = brepkit_operations::offset_wire::offset_wire_with_join(
+                    &mut self.topo,
+                    face_id,
+                    dist,
+                    jt,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(wire_id_to_u32(wire_id)))
             }
             _ => Err(format!("unknown operation: {op}")),
         }

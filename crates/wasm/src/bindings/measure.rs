@@ -174,6 +174,32 @@ impl BrepKernel {
         Ok(report.error_count() as u32)
     }
 
+    /// Validate a solid with configurable tolerance scaling.
+    ///
+    /// `tolerance_scale` multiplies geometric tolerances used for the
+    /// face-normal and face-area checks. Use `10.0` to reduce false
+    /// positives on NURBS faces from fillet/shell operations.
+    ///
+    /// Returns 0 if the solid is valid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "validateSolidWithOptions")]
+    pub fn validate_solid_with_options(
+        &self,
+        solid: u32,
+        tolerance_scale: f64,
+    ) -> Result<u32, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let options = brepkit_operations::validate::ValidationOptions { tolerance_scale };
+        let report = brepkit_operations::validate::validate_solid_with_options(
+            &self.topo, solid_id, &options,
+        )?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(report.error_count() as u32)
+    }
+
     // ── Distance ──────────────────────────────────────────────────
 
     /// Compute minimum distance from a point to a solid.
@@ -207,17 +233,25 @@ impl BrepKernel {
 
     /// Compute minimum distance between two solids.
     ///
-    /// Returns `[distance]`.
+    /// Returns `[distance, point_a_x, point_a_y, point_a_z, point_b_x, point_b_y, point_b_z]`.
     ///
     /// # Errors
     ///
     /// Returns an error if either solid handle is invalid.
     #[wasm_bindgen(js_name = "solidToSolidDistance")]
-    pub fn solid_to_solid_distance(&self, a: u32, b: u32) -> Result<f64, JsError> {
+    pub fn solid_to_solid_distance(&self, a: u32, b: u32) -> Result<Vec<f64>, JsError> {
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
         let result = brepkit_operations::distance::solid_to_solid_distance(&self.topo, a_id, b_id)?;
-        Ok(result.distance)
+        Ok(vec![
+            result.distance,
+            result.point_a.x(),
+            result.point_a.y(),
+            result.point_a.z(),
+            result.point_b.x(),
+            result.point_b.y(),
+            result.point_b.z(),
+        ])
     }
 
     /// Compute minimum distance from a point to a face.

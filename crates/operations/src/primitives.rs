@@ -7,6 +7,7 @@
 //! the given [`Topology`]. The solids are built with correct manifold
 //! topology and outward-pointing face normals.
 
+use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
 use brepkit_math::tolerance::Tolerance;
@@ -723,6 +724,84 @@ fn make_rect_xz_face(
     Ok(topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d })))
 }
 
+// ── Convex hull ───────────────────────────────────────────────────
+
+/// Create a solid from the 3D convex hull of a point cloud.
+///
+/// Uses the Quickhull algorithm to compute the convex hull, then
+/// converts the resulting triangulated surface to a B-Rep solid with
+/// planar triangular faces.
+///
+/// # Errors
+///
+/// Returns an error if fewer than 4 non-coplanar points are provided.
+pub fn make_convex_hull(
+    topo: &mut Topology,
+    points: &[Point3],
+) -> Result<SolidId, crate::OperationsError> {
+    let hull = brepkit_math::convex_hull::convex_hull_3d(points).ok_or_else(|| {
+        crate::OperationsError::InvalidInput {
+            reason: "points are coplanar or degenerate — cannot form a 3D convex hull".into(),
+        }
+    })?;
+
+    let tol = Tolerance::new();
+
+    // Create vertices in the topology arena.
+    let vertex_ids: Vec<_> = hull
+        .vertices
+        .iter()
+        .map(|p| topo.add_vertex(Vertex::new(*p, tol.linear)))
+        .collect();
+
+    // Create faces from hull triangles, sharing edges between adjacent faces.
+    // Each undirected edge (min_vertex, max_vertex) is created once; the second
+    // face that references it uses reverse orientation.
+    let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
+    let mut face_ids = Vec::with_capacity(hull.faces.len());
+    for &[a, b, c] in &hull.faces {
+        let va = vertex_ids[a];
+        let vb = vertex_ids[b];
+        let vc = vertex_ids[c];
+
+        let pairs = [(a, b, va, vb), (b, c, vb, vc), (c, a, vc, va)];
+        let mut oriented_edges = Vec::with_capacity(3);
+        for (idx_a, idx_b, v_a, v_b) in pairs {
+            let key = (idx_a.min(idx_b), idx_a.max(idx_b));
+            let (eid, forward) = if let Some(&existing) = edge_map.get(&key) {
+                (existing, false)
+            } else {
+                let eid = topo.add_edge(Edge::new(v_a, v_b, EdgeCurve::Line));
+                edge_map.insert(key, eid);
+                (eid, true)
+            };
+            oriented_edges.push(OrientedEdge::new(eid, forward));
+        }
+
+        let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
+        let wid = topo.add_wire(wire);
+
+        // Compute face plane from triangle vertices.
+        let pa = hull.vertices[a];
+        let pb = hull.vertices[b];
+        let pc = hull.vertices[c];
+        let ab = pb - pa;
+        let ac = pc - pa;
+        let normal = ab.cross(ac).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+        let d = normal
+            .x()
+            .mul_add(pa.x(), normal.y().mul_add(pa.y(), normal.z() * pa.z()));
+
+        let fid = topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
+        face_ids.push(fid);
+    }
+
+    let shell = Shell::new(face_ids).map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.add_shell(shell);
+    let solid = Solid::new(shell_id, vec![]);
+    Ok(topo.add_solid(solid))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -732,7 +811,7 @@ mod tests {
     use brepkit_topology::Topology;
 
     use super::*;
-    use crate::test_helpers::{assert_euler_genus0, euler_characteristic};
+    use crate::test_helpers::{assert_euler_genus0, assert_volume_near, euler_characteristic};
 
     // ── Box tests ──────────────────────────────────────────────────
 
@@ -1152,5 +1231,148 @@ mod tests {
             "high aspect cylinder volume: got {vol:.6e}, expected {expected:.6e} (error: {:.1}%)",
             rel_error * 100.0
         );
+    }
+
+    // ── Convex hull tests ─────────────────────────────────────────
+
+    #[test]
+    fn convex_hull_unit_cube() {
+        let mut topo = Topology::new();
+        let points = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(1.0, 0.0, 1.0),
+            Point3::new(0.0, 1.0, 1.0),
+            Point3::new(1.0, 1.0, 1.0),
+        ];
+        let solid = make_convex_hull(&mut topo, &points).unwrap();
+        assert_volume_near(&topo, solid, 1.0, 1e-10);
+    }
+
+    #[test]
+    fn convex_hull_larger_box() {
+        let mut topo = Topology::new();
+        let points = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(3.0, 0.0, 0.0),
+            Point3::new(0.0, 4.0, 0.0),
+            Point3::new(3.0, 4.0, 0.0),
+            Point3::new(0.0, 0.0, 5.0),
+            Point3::new(3.0, 0.0, 5.0),
+            Point3::new(0.0, 4.0, 5.0),
+            Point3::new(3.0, 4.0, 5.0),
+        ];
+        let solid = make_convex_hull(&mut topo, &points).unwrap();
+        assert_volume_near(&topo, solid, 60.0, 1e-10);
+    }
+
+    #[test]
+    fn convex_hull_minkowski_sum_volume() {
+        // Minkowski sum of [0,1]^3 with [0,1]^3 = [0,2]^3, volume = 8.
+        let cube: Vec<Point3> = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(1.0, 0.0, 1.0),
+            Point3::new(0.0, 1.0, 1.0),
+            Point3::new(1.0, 1.0, 1.0),
+        ];
+
+        let mut sum_points = Vec::with_capacity(64);
+        for &a in &cube {
+            for &b in &cube {
+                sum_points.push(Point3::new(a.x() + b.x(), a.y() + b.y(), a.z() + b.z()));
+            }
+        }
+
+        let mut topo = Topology::new();
+        let solid = make_convex_hull(&mut topo, &sum_points).unwrap();
+        assert_volume_near(&topo, solid, 8.0, 1e-8);
+    }
+
+    #[test]
+    fn convex_hull_minkowski_displaced_cubes_volume() {
+        // Cube A at origin [0,1]^3, Cube B at (5,5,5) to (6,6,6).
+        // Hull of pairwise sums spans [5,7]^3, volume = 8.
+        let cube_a = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(1.0, 0.0, 1.0),
+            Point3::new(0.0, 1.0, 1.0),
+            Point3::new(1.0, 1.0, 1.0),
+        ];
+        let cube_b = vec![
+            Point3::new(5.0, 5.0, 5.0),
+            Point3::new(6.0, 5.0, 5.0),
+            Point3::new(5.0, 6.0, 5.0),
+            Point3::new(6.0, 6.0, 5.0),
+            Point3::new(5.0, 5.0, 6.0),
+            Point3::new(6.0, 5.0, 6.0),
+            Point3::new(5.0, 6.0, 6.0),
+            Point3::new(6.0, 6.0, 6.0),
+        ];
+
+        let mut sum_points = Vec::with_capacity(64);
+        for &a in &cube_a {
+            for &b in &cube_b {
+                sum_points.push(Point3::new(a.x() + b.x(), a.y() + b.y(), a.z() + b.z()));
+            }
+        }
+
+        let mut topo = Topology::new();
+        let solid = make_convex_hull(&mut topo, &sum_points).unwrap();
+        assert_volume_near(&topo, solid, 8.0, 1e-8);
+    }
+
+    #[test]
+    fn convex_hull_with_interior_points_volume() {
+        // 8 cube corners + interior points — volume should be 1.0.
+        let mut points = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 1.0),
+            Point3::new(1.0, 0.0, 1.0),
+            Point3::new(0.0, 1.0, 1.0),
+            Point3::new(1.0, 1.0, 1.0),
+        ];
+        points.push(Point3::new(0.5, 0.5, 0.5));
+        points.push(Point3::new(0.2, 0.3, 0.7));
+
+        let mut topo = Topology::new();
+        let solid = make_convex_hull(&mut topo, &points).unwrap();
+        assert_volume_near(&topo, solid, 1.0, 1e-10);
+    }
+
+    #[test]
+    fn convex_hull_rejects_coplanar_points() {
+        let mut topo = Topology::new();
+        let points = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        ];
+        assert!(make_convex_hull(&mut topo, &points).is_err());
+    }
+
+    #[test]
+    fn convex_hull_rejects_too_few_points() {
+        let mut topo = Topology::new();
+        let points = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        assert!(make_convex_hull(&mut topo, &points).is_err());
     }
 }

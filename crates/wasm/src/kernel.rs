@@ -17,6 +17,10 @@
 use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::curves2d::Line2D;
 use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::nurbs::surface::NurbsSurface;
+use brepkit_math::surfaces::{
+    ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
+};
 use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
@@ -493,6 +497,35 @@ impl BrepKernel {
         Ok(FaceSurface::Plane { normal, d })
     }
 
+    /// Parse a JSON array of 3 floats into a `Vec3`.
+    fn parse_vec3(arr: &[serde_json::Value], name: &str) -> Result<Vec3, WasmError> {
+        let x = arr
+            .first()
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| WasmError::InvalidInput {
+                reason: format!("{name}[0] is not a number"),
+            })?;
+        let y = arr
+            .get(1)
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| WasmError::InvalidInput {
+                reason: format!("{name}[1] is not a number"),
+            })?;
+        let z = arr
+            .get(2)
+            .and_then(|v| v.as_f64())
+            .ok_or_else(|| WasmError::InvalidInput {
+                reason: format!("{name}[2] is not a number"),
+            })?;
+        Ok(Vec3::new(x, y, z))
+    }
+
+    /// Parse a JSON array of 3 floats into a `Point3`.
+    fn parse_point3(arr: &[serde_json::Value], name: &str) -> Result<Point3, WasmError> {
+        let v = Self::parse_vec3(arr, name)?;
+        Ok(Point3::new(v.x(), v.y(), v.z()))
+    }
+
     /// Internal implementation of `fromBREP` that returns `WasmError`
     /// for easier testing in native (non-WASM) contexts.
     #[allow(clippy::too_many_lines, clippy::wrong_self_convention)]
@@ -578,9 +611,139 @@ impl BrepKernel {
                 })?;
 
             let curve_type = e["curveType"].as_str().unwrap_or("line");
+            let params = e.get("curveParams").and_then(|p| p.as_object());
             let curve = match curve_type {
                 "line" => EdgeCurve::Line,
-                // TODO: reconstruct circle/ellipse/nurbs curves from geometry data
+                "circle" => {
+                    let p = params.ok_or_else(|| WasmError::InvalidInput {
+                        reason: format!("edge {id}: circle missing curveParams"),
+                    })?;
+                    let center_arr =
+                        p.get("center").and_then(|v| v.as_array()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: format!("edge {id}: circle missing center"),
+                            }
+                        })?;
+                    let axis_arr = p.get("axis").and_then(|v| v.as_array()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: format!("edge {id}: circle missing axis"),
+                        }
+                    })?;
+                    let radius = p.get("radius").and_then(|v| v.as_f64()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: format!("edge {id}: circle missing radius"),
+                        }
+                    })?;
+                    let center = Self::parse_point3(center_arr, "center")?;
+                    let axis = Self::parse_vec3(axis_arr, "axis")?;
+                    // Use xAxis if available for exact round-trip, else derive from axis
+                    let circle = if let Some(x_axis_arr) = p.get("xAxis").and_then(|v| v.as_array())
+                    {
+                        let x_axis = Self::parse_vec3(x_axis_arr, "xAxis")?;
+                        let v_axis = axis.cross(x_axis);
+                        Circle3D::with_axes(center, axis, radius, x_axis, v_axis)?
+                    } else {
+                        Circle3D::new(center, axis, radius)?
+                    };
+                    EdgeCurve::Circle(circle)
+                }
+                "ellipse" => {
+                    let p = params.ok_or_else(|| WasmError::InvalidInput {
+                        reason: format!("edge {id}: ellipse missing curveParams"),
+                    })?;
+                    let center_arr =
+                        p.get("center").and_then(|v| v.as_array()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: format!("edge {id}: ellipse missing center"),
+                            }
+                        })?;
+                    let axis_arr = p.get("axis").and_then(|v| v.as_array()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: format!("edge {id}: ellipse missing axis"),
+                        }
+                    })?;
+                    let major_r =
+                        p.get("majorRadius")
+                            .and_then(|v| v.as_f64())
+                            .ok_or_else(|| WasmError::InvalidInput {
+                                reason: format!("edge {id}: ellipse missing majorRadius"),
+                            })?;
+                    let minor_r =
+                        p.get("minorRadius")
+                            .and_then(|v| v.as_f64())
+                            .ok_or_else(|| WasmError::InvalidInput {
+                                reason: format!("edge {id}: ellipse missing minorRadius"),
+                            })?;
+                    let center = Self::parse_point3(center_arr, "center")?;
+                    let axis = Self::parse_vec3(axis_arr, "axis")?;
+                    // Use majorAxis if available for exact round-trip
+                    let ellipse =
+                        if let Some(major_arr) = p.get("majorAxis").and_then(|v| v.as_array()) {
+                            let u_axis = Self::parse_vec3(major_arr, "majorAxis")?;
+                            let v_axis = axis.cross(u_axis);
+                            Ellipse3D::with_axes(center, axis, major_r, minor_r, u_axis, v_axis)?
+                        } else {
+                            Ellipse3D::new(center, axis, major_r, minor_r)?
+                        };
+                    EdgeCurve::Ellipse(ellipse)
+                }
+                "nurbs" => {
+                    let p = params.ok_or_else(|| WasmError::InvalidInput {
+                        reason: format!("edge {id}: nurbs missing curveParams"),
+                    })?;
+                    let degree = p.get("degree").and_then(|v| v.as_u64()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: format!("edge {id}: nurbs missing degree"),
+                        }
+                    })? as usize;
+                    let knots_arr = p.get("knots").and_then(|v| v.as_array()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: format!("edge {id}: nurbs missing knots"),
+                        }
+                    })?;
+                    let knots: Vec<f64> = knots_arr
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            v.as_f64().ok_or_else(|| WasmError::InvalidInput {
+                                reason: format!("edge {id}: knot[{i}] is not a number"),
+                            })
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let weights_arr =
+                        p.get("weights").and_then(|v| v.as_array()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: format!("edge {id}: nurbs missing weights"),
+                            }
+                        })?;
+                    let weights: Vec<f64> = weights_arr
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            v.as_f64().ok_or_else(|| WasmError::InvalidInput {
+                                reason: format!("edge {id}: weight[{i}] is not a number"),
+                            })
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let cps_arr = p
+                        .get("controlPoints")
+                        .and_then(|v| v.as_array())
+                        .ok_or_else(|| WasmError::InvalidInput {
+                            reason: format!("edge {id}: nurbs missing controlPoints"),
+                        })?;
+                    let control_points: Vec<Point3> = cps_arr
+                        .iter()
+                        .enumerate()
+                        .map(|(i, cp)| -> Result<Point3, WasmError> {
+                            let arr = cp.as_array().ok_or_else(|| WasmError::InvalidInput {
+                                reason: format!("edge {id}: controlPoints[{i}] is not an array"),
+                            })?;
+                            Self::parse_point3(arr, &format!("controlPoints[{i}]"))
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let nc = NurbsCurve::new(degree, knots, control_points, weights)?;
+                    EdgeCurve::NurbsCurve(nc)
+                }
                 other => {
                     log::warn!(
                         "fromBREP: edge {id} has unsupported curve type '{other}', \
@@ -637,10 +800,10 @@ impl BrepKernel {
             let surface_type = f["surfaceType"].as_str().unwrap_or("plane");
             let reversed = f["reversed"].as_bool().unwrap_or(false);
 
+            let surface_params = f.get("surfaceParams").and_then(|p| p.as_object());
             let surface = match surface_type {
                 "plane" => {
-                    // Prefer surfaceParams if available
-                    if let Some(params) = f.get("surfaceParams").and_then(|p| p.as_object()) {
+                    if let Some(params) = surface_params {
                         if let (Some(normal_arr), Some(d)) = (
                             params.get("normal").and_then(|n| n.as_array()),
                             params.get("d").and_then(|d| d.as_f64()),
@@ -658,6 +821,227 @@ impl BrepKernel {
                     } else {
                         self.compute_plane_from_wire(wire_id)?
                     }
+                }
+                "cylinder" => {
+                    let p = surface_params.ok_or_else(|| WasmError::InvalidInput {
+                        reason: "cylinder face missing surfaceParams".into(),
+                    })?;
+                    let origin_arr =
+                        p.get("origin").and_then(|v| v.as_array()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: "cylinder missing origin".into(),
+                            }
+                        })?;
+                    let axis_arr = p.get("axis").and_then(|v| v.as_array()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: "cylinder missing axis".into(),
+                        }
+                    })?;
+                    let radius = p.get("radius").and_then(|v| v.as_f64()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: "cylinder missing radius".into(),
+                        }
+                    })?;
+                    let origin = Self::parse_point3(origin_arr, "origin")?;
+                    let axis = Self::parse_vec3(axis_arr, "axis")?;
+                    let cyl = if let Some(ref_arr) = p.get("refDir").and_then(|v| v.as_array()) {
+                        let ref_dir = Self::parse_vec3(ref_arr, "refDir")?;
+                        CylindricalSurface::with_ref_dir(origin, axis, radius, ref_dir)?
+                    } else {
+                        CylindricalSurface::new(origin, axis, radius)?
+                    };
+                    FaceSurface::Cylinder(cyl)
+                }
+                "cone" => {
+                    let p = surface_params.ok_or_else(|| WasmError::InvalidInput {
+                        reason: "cone face missing surfaceParams".into(),
+                    })?;
+                    let apex_arr = p.get("apex").and_then(|v| v.as_array()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: "cone missing apex".into(),
+                        }
+                    })?;
+                    let axis_arr = p.get("axis").and_then(|v| v.as_array()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: "cone missing axis".into(),
+                        }
+                    })?;
+                    let half_angle =
+                        p.get("halfAngle").and_then(|v| v.as_f64()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: "cone missing halfAngle".into(),
+                            }
+                        })?;
+                    let apex = Self::parse_point3(apex_arr, "apex")?;
+                    let axis = Self::parse_vec3(axis_arr, "axis")?;
+                    let cone = if let Some(ref_arr) = p.get("refDir").and_then(|v| v.as_array()) {
+                        let ref_dir = Self::parse_vec3(ref_arr, "refDir")?;
+                        ConicalSurface::with_ref_dir(apex, axis, half_angle, ref_dir)?
+                    } else {
+                        ConicalSurface::new(apex, axis, half_angle)?
+                    };
+                    FaceSurface::Cone(cone)
+                }
+                "sphere" => {
+                    let p = surface_params.ok_or_else(|| WasmError::InvalidInput {
+                        reason: "sphere face missing surfaceParams".into(),
+                    })?;
+                    let center_arr =
+                        p.get("center").and_then(|v| v.as_array()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: "sphere missing center".into(),
+                            }
+                        })?;
+                    let radius = p.get("radius").and_then(|v| v.as_f64()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: "sphere missing radius".into(),
+                        }
+                    })?;
+                    let center = Self::parse_point3(center_arr, "center")?;
+                    let sphere = SphericalSurface::new(center, radius)?;
+                    FaceSurface::Sphere(sphere)
+                }
+                "torus" => {
+                    let p = surface_params.ok_or_else(|| WasmError::InvalidInput {
+                        reason: "torus face missing surfaceParams".into(),
+                    })?;
+                    let center_arr =
+                        p.get("center").and_then(|v| v.as_array()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: "torus missing center".into(),
+                            }
+                        })?;
+                    let axis_arr = p.get("axis").and_then(|v| v.as_array()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: "torus missing axis".into(),
+                        }
+                    })?;
+                    let major_r =
+                        p.get("majorRadius")
+                            .and_then(|v| v.as_f64())
+                            .ok_or_else(|| WasmError::InvalidInput {
+                                reason: "torus missing majorRadius".into(),
+                            })?;
+                    let minor_r =
+                        p.get("minorRadius")
+                            .and_then(|v| v.as_f64())
+                            .ok_or_else(|| WasmError::InvalidInput {
+                                reason: "torus missing minorRadius".into(),
+                            })?;
+                    let center = Self::parse_point3(center_arr, "center")?;
+                    let axis = Self::parse_vec3(axis_arr, "axis")?;
+                    let torus = ToroidalSurface::with_axis(center, major_r, minor_r, axis)?;
+                    FaceSurface::Torus(torus)
+                }
+                "nurbs" => {
+                    let p = surface_params.ok_or_else(|| WasmError::InvalidInput {
+                        reason: "nurbs face missing surfaceParams".into(),
+                    })?;
+                    let degree_u = p.get("degreeU").and_then(|v| v.as_u64()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: "nurbs surface missing degreeU".into(),
+                        }
+                    })? as usize;
+                    let degree_v = p.get("degreeV").and_then(|v| v.as_u64()).ok_or_else(|| {
+                        WasmError::InvalidInput {
+                            reason: "nurbs surface missing degreeV".into(),
+                        }
+                    })? as usize;
+                    let knots_u_arr =
+                        p.get("knotsU").and_then(|v| v.as_array()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: "nurbs surface missing knotsU".into(),
+                            }
+                        })?;
+                    let knots_u: Vec<f64> = knots_u_arr
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            v.as_f64().ok_or_else(|| WasmError::InvalidInput {
+                                reason: format!("nurbs surface knotsU[{i}] is not a number"),
+                            })
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let knots_v_arr =
+                        p.get("knotsV").and_then(|v| v.as_array()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: "nurbs surface missing knotsV".into(),
+                            }
+                        })?;
+                    let knots_v: Vec<f64> = knots_v_arr
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            v.as_f64().ok_or_else(|| WasmError::InvalidInput {
+                                reason: format!("nurbs surface knotsV[{i}] is not a number"),
+                            })
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let cps_grid = p
+                        .get("controlPoints")
+                        .and_then(|v| v.as_array())
+                        .ok_or_else(|| WasmError::InvalidInput {
+                            reason: "nurbs surface missing controlPoints".into(),
+                        })?;
+                    let control_points: Vec<Vec<Point3>> = cps_grid
+                        .iter()
+                        .enumerate()
+                        .map(|(ri, row)| -> Result<Vec<Point3>, WasmError> {
+                            let row_arr =
+                                row.as_array().ok_or_else(|| WasmError::InvalidInput {
+                                    reason: format!("nurbs controlPoints[{ri}] is not an array"),
+                                })?;
+                            row_arr
+                                .iter()
+                                .enumerate()
+                                .map(|(ci, cp)| -> Result<Point3, WasmError> {
+                                    let arr =
+                                        cp.as_array().ok_or_else(|| WasmError::InvalidInput {
+                                            reason: format!(
+                                                "nurbs controlPoints[{ri}][{ci}] is not an array"
+                                            ),
+                                        })?;
+                                    Self::parse_point3(arr, &format!("controlPoints[{ri}][{ci}]"))
+                                })
+                                .collect()
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let weights_grid =
+                        p.get("weights").and_then(|v| v.as_array()).ok_or_else(|| {
+                            WasmError::InvalidInput {
+                                reason: "nurbs surface missing weights".into(),
+                            }
+                        })?;
+                    let weights: Vec<Vec<f64>> = weights_grid
+                        .iter()
+                        .enumerate()
+                        .map(|(ri, row)| -> Result<Vec<f64>, WasmError> {
+                            let row_arr =
+                                row.as_array().ok_or_else(|| WasmError::InvalidInput {
+                                    reason: format!("nurbs weights[{ri}] is not an array"),
+                                })?;
+                            row_arr
+                                .iter()
+                                .enumerate()
+                                .map(|(ci, v)| {
+                                    v.as_f64().ok_or_else(|| WasmError::InvalidInput {
+                                        reason: format!(
+                                            "nurbs surface weights[{ri}][{ci}] is not a number"
+                                        ),
+                                    })
+                                })
+                                .collect::<Result<_, _>>()
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let ns = NurbsSurface::new(
+                        degree_u,
+                        degree_v,
+                        knots_u,
+                        knots_v,
+                        control_points,
+                        weights,
+                    )?;
+                    FaceSurface::Nurbs(ns)
                 }
                 other => {
                     log::warn!(
