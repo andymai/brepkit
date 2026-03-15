@@ -586,17 +586,15 @@ pub(super) fn classify_point(
     // First check for coplanar faces — must scan candidates only.
     // For coplanar test we need faces near the centroid's plane, so use
     // BVH point-containment if available, otherwise linear scan.
-    let mut coplanar_indices: Vec<usize> = Vec::new();
-    if let Some(bvh) = bvh {
-        // Expand a tiny AABB around centroid to find nearby faces.
+    let coplanar_indices: Vec<usize> = if let Some(bvh) = bvh {
         let probe = Aabb3 {
             min: centroid + Vec3::new(-tol.linear, -tol.linear, -tol.linear),
             max: centroid + Vec3::new(tol.linear, tol.linear, tol.linear),
         };
-        bvh.query_overlap_into(&probe, &mut coplanar_indices);
+        bvh.query_overlap(&probe)
     } else {
-        coplanar_indices.extend(0..opposite.len());
-    }
+        (0..opposite.len()).collect()
+    };
 
     for &i in &coplanar_indices {
         let (_, ref verts, n_opp, d_opp) = opposite[i];
