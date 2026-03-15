@@ -553,6 +553,68 @@ fn compound_cut_bbox_accurate() {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// Category C: Face explosion regression (#270)
+//
+// These test that sequential booleans with fillet/fuse/cut do not cause
+// face count explosion.
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Fillet + fuse lip: volume should be reasonable.
+///
+/// Reproduces the gridfinity stacking lip scenario from #270:
+/// makeBox → fillet edge → fuse lip shape → measure volume.
+/// Exercises the NURBS/torus surface path that caused face explosion.
+///
+/// Solids: 0=box, 1=filleted, 2=lip_box, 3=fused
+#[test]
+fn gridfinity_lip_fillet_fuse_volume() {
+    let mut k = BrepKernel::new();
+
+    // Batch 1: create box + query edges.
+    let r1 = k.execute_batch(
+        r#"[
+        {"op": "makeBox", "args": {"width": 42, "height": 42, "depth": 7}},
+        {"op": "solidEdges", "args": {"solid": 0}}
+    ]"#,
+    );
+    let p1 = parse_batch(&r1);
+    assert_ok(&p1, 0);
+    assert_ok(&p1, 1);
+    let edges = p1[1]["ok"]
+        .as_array()
+        .expect("solidEdges should return array");
+    assert!(!edges.is_empty(), "box should have edges");
+    let edge0 = edges[0].as_u64().unwrap();
+
+    // Fillet first edge — assert success.
+    let r2 = k.execute_batch(&format!(
+        r#"[{{"op": "fillet", "args": {{"solid": 0, "radius": 0.8, "edges": [{edge0}]}}}}]"#
+    ));
+    let p2 = parse_batch(&r2);
+    assert_ok(&p2, 0);
+    let filleted_handle = p2[0]["ok"].as_u64().unwrap();
+
+    // Create lip shape, fuse, then measure volume.
+    let r3 = k.execute_batch(&format!(
+        r#"[
+        {{"op": "makeBox", "args": {{"width": 44, "height": 44, "depth": 2}}}},
+        {{"op": "transform", "args": {{"solid": 2, "matrix": [1,0,0,-1, 0,1,0,-1, 0,0,1,7, 0,0,0,1]}}}},
+        {{"op": "fuse", "args": {{"solidA": {filleted_handle}, "solidB": 2}}}},
+        {{"op": "volume", "args": {{"solid": 3}}}}
+    ]"#,
+    ));
+    let p3 = parse_batch(&r3);
+    assert_ok(&p3, 2);
+    let vol = ok_f64(&p3, 3);
+    // Box 42×42×7 = 12348, lip 44×44×2 = 3872, adjacent at z=7.
+    // Expected ≈ 16220 minus fillet material.
+    assert!(
+        vol > 10000.0 && vol < 20000.0,
+        "gridfinity lip fuse volume should be ~16000: got {vol:.0} (issue #270)"
+    );
+}
+
 /// Box volume sanity check.
 #[test]
 fn box_volume_sanity() {

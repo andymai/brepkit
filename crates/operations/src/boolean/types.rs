@@ -135,11 +135,11 @@ pub struct BooleanOptions {
     /// analysis). This dramatically reduces face count -- e.g. sequential
     /// booleans on curved surfaces drop from 2871 to ~106 faces.
     ///
-    /// **Caveat**: merged faces may have complex (non-convex) wires that
-    /// break subsequent boolean operations on the result. Enable only when
-    /// the result is final and will not be used as input to another boolean.
+    /// Non-convex merged faces are handled correctly by the
+    /// `polygon_clip_intervals` fallback in the analytic chord splitter,
+    /// so this is safe for intermediate results fed into further booleans.
     ///
-    /// Default: `false`.
+    /// Default: `true`.
     pub unify_faces: bool,
     /// Run full shape healing on the boolean result via [`heal_solid`].
     ///
@@ -155,7 +155,7 @@ impl Default for BooleanOptions {
         Self {
             deflection: DEFAULT_BOOLEAN_DEFLECTION,
             tolerance: Tolerance::new(),
-            unify_faces: false,
+            unify_faces: true,
             heal_after_boolean: false,
         }
     }

@@ -13,10 +13,7 @@ mod intersect;
 mod precompute;
 mod split;
 mod types;
-use analytic::{
-    analytic_boolean, collect_face_signatures, face_count, has_torus, is_all_analytic,
-    mesh_boolean_path,
-};
+use analytic::{analytic_boolean, collect_face_signatures, has_torus, is_all_analytic};
 use assembly::validate_boolean_result;
 pub(crate) use assembly::{assemble_solid, assemble_solid_mixed};
 use classify::{
@@ -132,23 +129,6 @@ pub fn boolean_with_options(
             return Ok(solid);
         }
         // Analytic path failed; fall back to tessellated boolean.
-    }
-
-    // ── Mesh boolean fast path for high-face-count solids ─────────────
-    // When either solid has many faces (e.g. from a prior tessellated boolean),
-    // the chord-based splitting approach is too slow. Use the mesh boolean
-    // which operates on triangle meshes directly.
-    {
-        let count_a = face_count(topo, a)?;
-        let count_b = face_count(topo, b)?;
-        if count_a > 100 || count_b > 100 {
-            log::debug!(
-                "boolean {op:?}: high face count ({count_a}, {count_b}), using mesh boolean"
-            );
-            if let Ok(result) = mesh_boolean_path(topo, op, a, b, opts.deflection) {
-                return Ok(result);
-            }
-        }
     }
 
     // ── Phase 0: Guard + Precompute ──────────────────────────────────────
