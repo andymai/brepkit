@@ -96,9 +96,13 @@ jobs:
 
       - name: Build WASM (bundler target for browsers)
         run: wasm-pack build crates/wasm --target bundler --release --out-dir pkg
+        env:
+          RUSTFLAGS: "-Dwarnings -C target-feature=+simd128"
 
       - name: Build WASM (nodejs target for Node.js/vitest)
         run: wasm-pack build crates/wasm --target nodejs --release --out-dir pkg-node
+        env:
+          RUSTFLAGS: "-Dwarnings -C target-feature=+simd128"
 
       - name: Merge dual targets into single package
         working-directory: crates/wasm
