@@ -47,7 +47,7 @@ impl BrepKernel {
         let rows = std::array::from_fn(|i| std::array::from_fn(|j| matrix[i * 4 + j]));
         let mat = Mat4(rows);
 
-        transform_solid(&mut self.topo, solid_id, &mat)?;
+        transform_solid(self.topo_mut(), solid_id, &mat)?;
         Ok(())
     }
 
@@ -98,7 +98,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "copySolid")]
     pub fn copy_solid(&mut self, solid: u32) -> Result<u32, JsError> {
         let solid_id = self.resolve_solid(solid)?;
-        let copy = brepkit_operations::copy::copy_solid(&mut self.topo, solid_id)?;
+        let copy = brepkit_operations::copy::copy_solid(self.topo_mut(), solid_id)?;
         Ok(solid_id_to_u32(copy))
     }
 
@@ -110,7 +110,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "copyWire")]
     pub fn copy_wire(&mut self, wire: u32) -> Result<u32, JsError> {
         let wire_id = self.resolve_wire(wire)?;
-        let copy = brepkit_operations::copy::copy_wire(&mut self.topo, wire_id)?;
+        let copy = brepkit_operations::copy::copy_wire(self.topo_mut(), wire_id)?;
         Ok(wire_id_to_u32(copy))
     }
 
@@ -145,7 +145,7 @@ impl BrepKernel {
         let wire_id = self.resolve_wire(wire)?;
         let rows = std::array::from_fn(|i| std::array::from_fn(|j| matrix[i * 4 + j]));
         let mat = Mat4(rows);
-        brepkit_operations::transform::transform_wire(&mut self.topo, wire_id, &mat)?;
+        brepkit_operations::transform::transform_wire(self.topo_mut(), wire_id, &mat)?;
         Ok(())
     }
 
@@ -188,7 +188,7 @@ impl BrepKernel {
         let mat = Mat4(rows);
 
         let copy =
-            brepkit_operations::copy::copy_and_transform_solid(&mut self.topo, solid_id, &mat)?;
+            brepkit_operations::copy::copy_and_transform_solid(self.topo_mut(), solid_id, &mat)?;
         Ok(solid_id_to_u32(copy))
     }
 
@@ -219,7 +219,7 @@ impl BrepKernel {
         validate_finite(nz, "nz")?;
         let solid_id = self.resolve_solid(solid)?;
         let result = brepkit_operations::mirror::mirror(
-            &mut self.topo,
+            self.topo_mut(),
             solid_id,
             Point3::new(px, py, pz),
             Vec3::new(nx, ny, nz),
@@ -251,7 +251,7 @@ impl BrepKernel {
         validate_positive(spacing, "spacing")?;
         let solid_id = self.resolve_solid(solid)?;
         let compound = brepkit_operations::pattern::linear_pattern(
-            &mut self.topo,
+            self.topo_mut(),
             solid_id,
             Vec3::new(dx, dy, dz),
             spacing,
@@ -291,7 +291,7 @@ impl BrepKernel {
         validate_positive(spacing_y, "spacing_y")?;
         let solid_id = self.resolve_solid(solid)?;
         let compound = brepkit_operations::pattern::grid_pattern(
-            &mut self.topo,
+            self.topo_mut(),
             solid_id,
             Vec3::new(dir_x_x, dir_x_y, dir_x_z),
             Vec3::new(dir_y_x, dir_y_y, dir_y_z),
@@ -318,7 +318,7 @@ impl BrepKernel {
         let solid_id = self.resolve_solid(solid)?;
         let axis = Vec3::new(ax, ay, az);
         let compound = brepkit_operations::pattern::circular_pattern(
-            &mut self.topo,
+            self.topo_mut(),
             solid_id,
             axis,
             count as usize,
@@ -337,7 +337,7 @@ impl BrepKernel {
     ) -> Result<u32, JsError> {
         let solid_id = self.resolve_solid(solid)?;
         let count = brepkit_operations::heal::merge_coincident_vertices(
-            &mut self.topo,
+            self.topo_mut(),
             solid_id,
             tolerance,
         )?;

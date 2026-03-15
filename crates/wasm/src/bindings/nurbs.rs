@@ -47,10 +47,10 @@ impl BrepKernel {
 
         let start = points[0];
         let end = points[points.len() - 1];
-        let v_start = self.topo.add_vertex(Vertex::new(start, TOL));
-        let v_end = self.topo.add_vertex(Vertex::new(end, TOL));
+        let v_start = self.topo_mut().add_vertex(Vertex::new(start, TOL));
+        let v_end = self.topo_mut().add_vertex(Vertex::new(end, TOL));
         let eid = self
-            .topo
+            .topo_mut()
             .add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
         Ok(edge_id_to_u32(eid))
     }

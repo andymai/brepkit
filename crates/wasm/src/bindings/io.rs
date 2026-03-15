@@ -126,7 +126,7 @@ impl BrepKernel {
             reason: format!("OBJ must be valid UTF-8: {e}"),
         })?;
         let mesh = brepkit_io::obj::read_obj(text)?;
-        let solid_id = brepkit_io::stl::import::import_mesh(&mut self.topo, &mesh, 1e-7)?;
+        let solid_id = brepkit_io::stl::import::import_mesh(self.topo_mut(), &mesh, 1e-7)?;
         #[allow(clippy::cast_possible_truncation)]
         Ok(solid_id.index() as u32)
     }
@@ -139,7 +139,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "importGlb")]
     pub fn import_glb(&mut self, data: &[u8]) -> Result<u32, JsError> {
         let mesh = brepkit_io::gltf::read_glb(data)?;
-        let solid_id = brepkit_io::stl::import::import_mesh(&mut self.topo, &mesh, 1e-7)?;
+        let solid_id = brepkit_io::stl::import::import_mesh(self.topo_mut(), &mesh, 1e-7)?;
         #[allow(clippy::cast_possible_truncation)]
         Ok(solid_id.index() as u32)
     }
@@ -155,7 +155,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "importStl")]
     pub fn import_stl(&mut self, data: &[u8]) -> Result<u32, JsError> {
         let mesh = brepkit_io::stl::reader::read_stl(data)?;
-        let solid_id = brepkit_io::stl::import::import_mesh(&mut self.topo, &mesh, TOL)?;
+        let solid_id = brepkit_io::stl::import::import_mesh(self.topo_mut(), &mesh, TOL)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -171,7 +171,7 @@ impl BrepKernel {
         let meshes = brepkit_io::threemf::reader::read_threemf(data)?;
         let mut handles = Vec::new();
         for mesh in &meshes {
-            let solid_id = brepkit_io::stl::import::import_mesh(&mut self.topo, mesh, TOL)?;
+            let solid_id = brepkit_io::stl::import::import_mesh(self.topo_mut(), mesh, TOL)?;
             handles.push(solid_id_to_u32(solid_id));
         }
         Ok(handles)
@@ -222,7 +222,7 @@ impl BrepKernel {
             indices: indices.to_vec(),
         };
 
-        let solid_id = brepkit_io::stl::import::import_mesh(&mut self.topo, &mesh, TOL)?;
+        let solid_id = brepkit_io::stl::import::import_mesh(self.topo_mut(), &mesh, TOL)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -251,7 +251,7 @@ impl BrepKernel {
     pub fn import_step(&mut self, data: &[u8]) -> Result<Vec<u32>, JsError> {
         let text = std::str::from_utf8(data)
             .map_err(|e| JsError::new(&format!("STEP data is not valid UTF-8: {e}")))?;
-        let solid_ids = brepkit_io::step::reader::read_step(text, &mut self.topo)?;
+        let solid_ids = brepkit_io::step::reader::read_step(text, self.topo_mut())?;
         Ok(solid_ids.iter().map(|id| solid_id_to_u32(*id)).collect())
     }
 
@@ -280,7 +280,7 @@ impl BrepKernel {
     pub fn import_iges(&mut self, data: &[u8]) -> Result<Vec<u32>, JsError> {
         let text = std::str::from_utf8(data)
             .map_err(|e| JsError::new(&format!("IGES data is not valid UTF-8: {e}")))?;
-        let solid_ids = brepkit_io::iges::reader::read_iges(text, &mut self.topo)?;
+        let solid_ids = brepkit_io::iges::reader::read_iges(text, self.topo_mut())?;
         Ok(solid_ids.iter().map(|id| solid_id_to_u32(*id)).collect())
     }
 }

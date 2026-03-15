@@ -24,7 +24,7 @@ impl BrepKernel {
         validate_positive(dx, "dx")?;
         validate_positive(dy, "dy")?;
         validate_positive(dz, "dz")?;
-        let solid_id = brepkit_operations::primitives::make_box(&mut self.topo, dx, dy, dz)?;
+        let solid_id = brepkit_operations::primitives::make_box(self.topo_mut(), dx, dy, dz)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -40,7 +40,7 @@ impl BrepKernel {
         validate_positive(radius, "radius")?;
         validate_positive(height, "height")?;
         let solid_id =
-            brepkit_operations::primitives::make_cylinder(&mut self.topo, radius, height)?;
+            brepkit_operations::primitives::make_cylinder(self.topo_mut(), radius, height)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -54,8 +54,11 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "makeSphere")]
     pub fn make_sphere_solid(&mut self, radius: f64, segments: u32) -> Result<u32, JsError> {
         validate_positive(radius, "radius")?;
-        let solid_id =
-            brepkit_operations::primitives::make_sphere(&mut self.topo, radius, segments as usize)?;
+        let solid_id = brepkit_operations::primitives::make_sphere(
+            self.topo_mut(),
+            radius,
+            segments as usize,
+        )?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -77,7 +80,7 @@ impl BrepKernel {
         validate_finite(top_radius, "top_radius")?;
         validate_positive(height, "height")?;
         let solid_id = brepkit_operations::primitives::make_cone(
-            &mut self.topo,
+            self.topo_mut(),
             bottom_radius,
             top_radius,
             height,
@@ -102,7 +105,7 @@ impl BrepKernel {
         validate_positive(major_radius, "major_radius")?;
         validate_positive(minor_radius, "minor_radius")?;
         let solid_id = brepkit_operations::primitives::make_torus(
-            &mut self.topo,
+            self.topo_mut(),
             major_radius,
             minor_radius,
             segments as usize,
@@ -123,9 +126,9 @@ impl BrepKernel {
         validate_positive(ry, "ry")?;
         validate_positive(rz, "rz")?;
         // Create a unit sphere, then scale it non-uniformly.
-        let solid_id = brepkit_operations::primitives::make_sphere(&mut self.topo, 1.0, 16)?;
+        let solid_id = brepkit_operations::primitives::make_sphere(self.topo_mut(), 1.0, 16)?;
         let mat = brepkit_math::mat::Mat4::scale(rx, ry, rz);
-        transform_solid(&mut self.topo, solid_id, &mat)?;
+        transform_solid(self.topo_mut(), solid_id, &mat)?;
         Ok(solid_id_to_u32(solid_id))
     }
 }

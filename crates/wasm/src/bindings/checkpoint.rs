@@ -1,5 +1,7 @@
 //! Checkpoint / restore bindings for [`BrepKernel`].
 
+use std::rc::Rc;
+
 use wasm_bindgen::prelude::*;
 
 use crate::kernel::BrepKernel;
@@ -18,7 +20,7 @@ impl BrepKernel {
     pub fn checkpoint(&mut self) -> u32 {
         let id = self.checkpoints.len();
         self.checkpoints.push(Checkpoint {
-            topo: self.topo.clone(),
+            topo: Rc::clone(&self.topo),
             assemblies: self.assemblies.clone(),
             sketches: self.sketches.clone(),
         });
@@ -44,7 +46,7 @@ impl BrepKernel {
             .checkpoints
             .get(idx)
             .ok_or_else(|| JsError::new(&format!("invalid checkpoint id: {checkpoint_id}")))?;
-        self.topo = cp.topo.clone();
+        self.topo = Rc::clone(&cp.topo);
         self.assemblies = cp.assemblies.clone();
         self.sketches = cp.sketches.clone();
         // Discard checkpoints created after the restored one
