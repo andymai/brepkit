@@ -1020,11 +1020,13 @@ pub fn sweep_with_options(
         });
     }
 
-    // Dispatch to miter sweep if corner mode is Miter or Round.
-    if matches!(
-        options.corner_mode,
-        SweepCornerMode::Miter | SweepCornerMode::Round
-    ) {
+    // Dispatch to miter sweep for Miter corners, but only if the path
+    // actually has kinks. This avoids entering sweep_miter just to fall
+    // back to smooth sweep, which would drop the caller's scale_law
+    // (Box<dyn Fn> is not Clone).
+    // Round is not yet implemented — fall through to smooth sweep as the safe default.
+    // TODO: implement proper fillet-blend round corners.
+    if matches!(options.corner_mode, SweepCornerMode::Miter) && !detect_kinks(path).is_empty() {
         return sweep_miter(topo, profile, path, options);
     }
 
@@ -1331,7 +1333,11 @@ pub fn sweep_with_options(
 ///
 /// Returns the kink parameter values (not including the path endpoints).
 fn detect_kinks(path: &NurbsCurve) -> Vec<f64> {
-    let tol = Tolerance::new();
+    /// Small epsilon for comparing knot parameter values (dimensionless).
+    const KNOT_EPS: f64 = 1e-10;
+    /// Angular threshold for tangent discontinuity detection (~1 degree).
+    const KINK_ANGLE_RAD: f64 = 0.0175;
+
     let p = path.degree();
     let knots = path.knots();
     let (u_min, u_max) = path.domain();
@@ -1343,14 +1349,14 @@ fn detect_kinks(path: &NurbsCurve) -> Vec<f64> {
         let u = knots[i];
 
         // Skip endpoint knots.
-        if u <= u_min + tol.linear || u >= u_max - tol.linear {
+        if u <= u_min + KNOT_EPS || u >= u_max - KNOT_EPS {
             i += 1;
             continue;
         }
 
         // Count multiplicity.
         let mut mult = 1;
-        while i + mult < knots.len() && (knots[i + mult] - u).abs() < tol.linear {
+        while i + mult < knots.len() && (knots[i + mult] - u).abs() < KNOT_EPS {
             mult += 1;
         }
 
@@ -1363,11 +1369,11 @@ fn detect_kinks(path: &NurbsCurve) -> Vec<f64> {
             // the tangent just before and just after the knot.
             let eps = 1e-8;
             if let (Ok(t_before), Ok(t_after)) = (path.tangent(u - eps), path.tangent(u + eps)) {
-                let dot = t_before.dot(t_after);
-                // If tangents are nearly parallel (dot ~ 1.0), skip.
-                // This handles cases where a high-multiplicity knot still
-                // gives a smooth tangent (e.g., collinear polyline segments).
-                if dot < 1.0 - tol.linear {
+                let dot = t_before.dot(t_after).clamp(-1.0, 1.0);
+                // Compare using angular threshold: if the angle between
+                // tangents exceeds ~1 degree, it's a kink.
+                let angle = dot.acos();
+                if angle > KINK_ANGLE_RAD {
                     kinks.push(u);
                 }
             }
@@ -1400,18 +1406,13 @@ fn sweep_miter(
 
     let tol = Tolerance::new();
 
-    // Detect kinks in the path.
+    // Detect kinks in the path. The caller (sweep_with_options) already
+    // checks for empty kinks before dispatching here.
     let kinks = detect_kinks(path);
-    if kinks.is_empty() {
-        // No kinks found — fall back to smooth sweep.
-        let smooth_options = SweepOptions {
-            contact_mode: options.contact_mode,
-            corner_mode: SweepCornerMode::Smooth,
-            scale_law: None, // scale_law can't be cloned, skip for fallback
-            segments: options.segments,
-        };
-        return sweep_with_options(topo, profile, path, &smooth_options);
-    }
+    debug_assert!(
+        !kinks.is_empty(),
+        "sweep_miter should only be called when the path has kinks"
+    );
 
     // Validate profile.
     let face_data = topo.face(profile)?;
@@ -1456,8 +1457,9 @@ fn sweep_miter(
         })
         .collect::<Result<_, _>>()?;
 
-    // Ensure CCW winding relative to the path direction at t=0.
-    let path_tangent_0 = path.tangent(0.0)?;
+    // Ensure CCW winding relative to the path direction at domain start.
+    let (domain_start, _domain_end) = path.domain();
+    let path_tangent_0 = path.tangent(domain_start)?;
     if crate::winding::ensure_ccw_positions(&mut input_positions, path_tangent_0) {
         input_normal = -input_normal;
     }
@@ -1467,7 +1469,6 @@ fn sweep_miter(
     // Split the path at each kink to get smooth sub-curves.
     let mut sub_paths: Vec<NurbsCurve> = Vec::with_capacity(kinks.len() + 1);
     let mut remaining = path.clone();
-    let (domain_start, _) = path.domain();
     let mut offset = domain_start;
 
     for &kink_u in &kinks {
@@ -1642,8 +1643,6 @@ fn sweep_miter(
                 }
             })?;
 
-            let miter_d = dot_normal_point(bisector, kink_point);
-
             // Side faces connecting prev_end_ring to miter_ring.
             let prev_to_miter_path_edges: Vec<brepkit_topology::edge::EdgeId> = (0..n)
                 .map(|i| topo.add_edge(Edge::new(prev_ring[i], miter_ring[i], EdgeCurve::Line)))
@@ -1685,39 +1684,11 @@ fn sweep_miter(
                 )));
             }
 
-            // Build the miter cap face (planar face on the bisector plane).
-            let miter_cap_edges: Vec<OrientedEdge> = (0..n)
-                .map(|i| OrientedEdge::new(miter_ring_edges[i], true))
-                .collect();
-            let miter_cap_wire =
-                Wire::new(miter_cap_edges, true).map_err(crate::OperationsError::Topology)?;
-            let miter_cap_wire_id = topo.add_wire(miter_cap_wire);
-
-            // Inner miter cap (reversed) — closes the previous segment.
-            let miter_cap_rev_edges: Vec<OrientedEdge> = (0..n)
-                .rev()
-                .map(|i| OrientedEdge::new(miter_ring_edges[i], false))
-                .collect();
-            let miter_cap_rev_wire =
-                Wire::new(miter_cap_rev_edges, true).map_err(crate::OperationsError::Topology)?;
-            let miter_cap_rev_wire_id = topo.add_wire(miter_cap_rev_wire);
-
-            // We don't add separate miter cap faces — the miter ring edges
-            // serve as the boundary between the transition quad faces and
-            // the next segment's first ring. Instead, replace ring_verts[0]
-            // with the miter ring so the next segment starts there.
-
-            // Actually, we need path edges from the miter ring to ring_verts[1]
-            // and side faces from miter to ring_verts[1]. So just replace
-            // ring_verts[0] with the miter ring.
+            // Replace this segment's start ring with the miter ring so the
+            // next segment's side faces connect miter→ring[1]. No separate
+            // miter cap faces are needed — the transition quad faces already
+            // connect prev_end_ring→miter_ring.
             ring_verts[0] = miter_ring;
-
-            // We need to skip the separate miter cap faces since the
-            // transition quads already connect prev→miter and the next
-            // segment's side faces connect miter→ring[1].
-            let _ = miter_cap_wire_id;
-            let _ = miter_cap_rev_wire_id;
-            let _ = miter_d;
         }
 
         // Create ring edges.
