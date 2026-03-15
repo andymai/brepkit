@@ -5629,3 +5629,95 @@ mod winding_tests {
         );
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Gridfinity tessellation reproducers (#259)
+//
+// These test the analytic tessellation path for fillet/torus faces.
+// The NURBS quadtree fix in `cell_refinement_error()` does NOT apply to
+// analytic surfaces which go through `tessellate_analytic` via
+// `segments_for_chord_deviation`. Issue #259 reports 77-347× over-
+// tessellation on lip geometry.
+// ═══════════════════════════════════════════════════════════════════════
+#[cfg(test)]
+mod gridfinity_tess_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_topology::Topology;
+    use brepkit_topology::explorer;
+
+    /// Fillet box: triangle count should not explode relative to the box alone.
+    ///
+    /// Reproduces #259: torus faces from fillet go through the analytic
+    /// tessellation path which doesn't benefit from the NURBS quadtree fix.
+    #[test]
+    fn fillet_box_triangle_count() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let box_mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
+        let box_tris = box_mesh.indices.len() / 3;
+
+        let edges = explorer::solid_edges(&topo, solid).unwrap();
+        let filleted = crate::fillet::fillet_rolling_ball(&mut topo, solid, &edges[..1], 1.0);
+        if let Ok(filleted_id) = filleted {
+            let fillet_mesh = tessellate_solid(&topo, filleted_id, 0.1).unwrap();
+            let fillet_tris = fillet_mesh.indices.len() / 3;
+            // Fillet adds curved faces, so expect more triangles — but not 10x more.
+            let ratio = fillet_tris as f64 / box_tris as f64;
+            assert!(
+                ratio < 10.0,
+                "fillet should not over-tessellate: box={box_tris}, fillet={fillet_tris}, \
+                 ratio={ratio:.1}x (issue #259)"
+            );
+        }
+    }
+
+    /// Small-radius fillet: absolute triangle count should stay reasonable.
+    #[test]
+    fn fillet_small_radius_tessellation() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 20.0, 20.0, 10.0).unwrap();
+        let edges = explorer::solid_edges(&topo, solid).unwrap();
+        let filleted = crate::fillet::fillet_rolling_ball(&mut topo, solid, &edges[..1], 0.5);
+        if let Ok(filleted_id) = filleted {
+            let mesh = tessellate_solid(&topo, filleted_id, 0.1).unwrap();
+            let tri_count = mesh.indices.len() / 3;
+            assert!(
+                tri_count < 50_000,
+                "small-radius fillet should not over-tessellate: got {tri_count} triangles \
+                 (issue #259)"
+            );
+        }
+    }
+
+    /// Standalone torus: the analytic tessellation path should be bounded.
+    #[test]
+    fn torus_tessellation_count() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_torus(&mut topo, 5.0, 0.1, 32).unwrap();
+        let mesh = tessellate_solid(&topo, solid, 0.01).unwrap();
+        let tri_count = mesh.indices.len() / 3;
+        assert!(
+            tri_count < 10_000,
+            "torus tessellation should be bounded: got {tri_count} triangles (issue #259)"
+        );
+    }
+
+    /// Fillet on a cylinder: check that torus blend faces don't explode.
+    #[test]
+    fn fillet_cylinder_triangle_count() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 5.0, 10.0).unwrap();
+        let edges = explorer::solid_edges(&topo, solid).unwrap();
+        let filleted = crate::fillet::fillet_rolling_ball(&mut topo, solid, &edges[..1], 0.5);
+        if let Ok(filleted_id) = filleted {
+            let mesh = tessellate_solid(&topo, filleted_id, 0.1).unwrap();
+            let tri_count = mesh.indices.len() / 3;
+            assert!(
+                tri_count < 50_000,
+                "fillet on cylinder should not over-tessellate: got {tri_count} triangles \
+                 (issue #259)"
+            );
+        }
+    }
+}
