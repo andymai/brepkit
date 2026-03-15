@@ -639,12 +639,10 @@ fn tessellate_planar_with_holes(
 
     let mut cdt = Cdt::with_capacity(bounds, pts2d.len());
 
-    // Insert all points.
-    let mut cdt_indices: Vec<usize> = Vec::with_capacity(pts2d.len());
-    for &p in &pts2d {
-        let idx = cdt.insert_point(p).map_err(crate::OperationsError::Math)?;
-        cdt_indices.push(idx);
-    }
+    // Insert all points (Hilbert-ordered for O(1) amortized locate).
+    let cdt_indices = cdt
+        .insert_points_hilbert(&pts2d)
+        .map_err(crate::OperationsError::Math)?;
 
     // Insert outer boundary constraints.
     let mut all_constraints: Vec<(usize, usize)> = Vec::new();
@@ -1040,11 +1038,9 @@ fn tessellate_planar_shared_with_holes(
     let bounds = compute_cdt_bounds(&pts2d);
 
     let mut cdt = Cdt::with_capacity(bounds, pts2d.len());
-    let mut cdt_indices: Vec<usize> = Vec::with_capacity(pts2d.len());
-    for &p in &pts2d {
-        let idx = cdt.insert_point(p).map_err(crate::OperationsError::Math)?;
-        cdt_indices.push(idx);
-    }
+    let cdt_indices = cdt
+        .insert_points_hilbert(&pts2d)
+        .map_err(crate::OperationsError::Math)?;
 
     // Insert outer boundary constraints.
     let mut all_constraints: Vec<(usize, usize)> = Vec::new();
@@ -1188,11 +1184,9 @@ fn run_planar_cdt(
     let bounds = compute_cdt_bounds(pts2d);
 
     let mut cdt = Cdt::with_capacity(bounds, pts2d.len());
-    let mut cdt_indices: Vec<usize> = Vec::with_capacity(pts2d.len());
-    for &p in pts2d {
-        let idx = cdt.insert_point(p).map_err(crate::OperationsError::Math)?;
-        cdt_indices.push(idx);
-    }
+    let cdt_indices = cdt
+        .insert_points_hilbert(pts2d)
+        .map_err(crate::OperationsError::Math)?;
 
     // Insert outer boundary constraints.
     let mut all_constraints: Vec<(usize, usize)> = Vec::new();
@@ -1310,14 +1304,11 @@ fn cdt_triangulate_simple(positions: &[Point3], normal: Vec3) -> Vec<u32> {
     let bounds = compute_cdt_bounds(&pts2d);
     let mut cdt = Cdt::with_capacity(bounds, n);
 
-    // Insert polygon vertices.
-    let mut cdt_indices = Vec::with_capacity(n);
-    for &p in &pts2d {
-        match cdt.insert_point(p) {
-            Ok(idx) => cdt_indices.push(idx),
-            Err(_) => return fan_triangulate(n),
-        }
-    }
+    // Insert polygon vertices (Hilbert-ordered for O(1) amortized locate).
+    let cdt_indices = match cdt.insert_points_hilbert(&pts2d) {
+        Ok(indices) => indices,
+        Err(_) => return fan_triangulate(n),
+    };
 
     // Insert boundary constraints.
     let mut constraints = Vec::with_capacity(n);
@@ -3641,16 +3632,19 @@ fn tessellate_nonplanar_cdt(
     // cdt_idx → Option<global mesh index> (None for super-triangle vertices).
     let mut cdt_to_global: Vec<Option<u32>> = vec![None; 3]; // 3 super-triangle verts
 
-    let mut boundary_cdt_ids: Vec<usize> = Vec::with_capacity(n_boundary);
-    for (i, &(u, v)) in boundary_uv.iter().enumerate() {
-        let cdt_idx = cdt
-            .insert_point(Point2::new(u, v))
-            .map_err(crate::OperationsError::Math)?;
-        while cdt_to_global.len() <= cdt_idx {
-            cdt_to_global.push(None);
-        }
+    let boundary_pts: Vec<Point2> = boundary_uv
+        .iter()
+        .map(|&(u, v)| Point2::new(u, v))
+        .collect();
+    let boundary_cdt_ids = cdt
+        .insert_points_hilbert(&boundary_pts)
+        .map_err(crate::OperationsError::Math)?;
+    let max_cdt_idx = boundary_cdt_ids.iter().copied().max().unwrap_or(2);
+    if cdt_to_global.len() <= max_cdt_idx {
+        cdt_to_global.resize(max_cdt_idx + 1, None);
+    }
+    for (i, &cdt_idx) in boundary_cdt_ids.iter().enumerate() {
         cdt_to_global[cdt_idx] = Some(boundary_3d[i].1);
-        boundary_cdt_ids.push(cdt_idx);
     }
 
     // Step 4: Insert boundary constraints (consecutive edges + closing edge).
@@ -3669,21 +3663,24 @@ fn tessellate_nonplanar_cdt(
     if du > 1e-15 && dv > 1e-15 {
         let (n_u, n_v) = interior_grid_resolution(face_data.surface(), du, dv, deflection);
 
-        for iu in 1..n_u {
-            for iv in 1..n_v {
-                let u = u_min + du * (iu as f64 / n_u as f64);
-                let v = v_min + dv * (iv as f64 / n_v as f64);
-                // Only insert points that are inside the boundary polygon.
-                let pt2 = Point2::new(u, v);
-                if point_in_polygon_2d(&boundary_uv, pt2) {
-                    let cdt_idx = cdt
-                        .insert_point(pt2)
-                        .map_err(crate::OperationsError::Math)?;
-                    while cdt_to_global.len() <= cdt_idx {
-                        cdt_to_global.push(None);
-                    }
-                    // Interior points will get assigned global IDs later.
-                }
+        let boundary_uv_ref = &boundary_uv;
+        let interior_pts: Vec<Point2> = (1..n_u)
+            .flat_map(|iu| {
+                (1..n_v).filter_map(move |iv| {
+                    let u = u_min + du * (iu as f64 / n_u as f64);
+                    let v = v_min + dv * (iv as f64 / n_v as f64);
+                    let pt2 = Point2::new(u, v);
+                    point_in_polygon_2d(boundary_uv_ref, pt2).then_some(pt2)
+                })
+            })
+            .collect();
+        if !interior_pts.is_empty() {
+            let interior_cdt_ids = cdt
+                .insert_points_hilbert(&interior_pts)
+                .map_err(crate::OperationsError::Math)?;
+            let max_interior = interior_cdt_ids.iter().copied().max().unwrap_or(0);
+            if cdt_to_global.len() <= max_interior {
+                cdt_to_global.resize(max_interior + 1, None);
             }
         }
     }
