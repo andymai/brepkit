@@ -24,7 +24,9 @@ use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::error::WasmError;
-use crate::handles::{compound_id_to_u32, face_id_to_u32, solid_id_to_u32, wire_id_to_u32};
+use crate::handles::{
+    compound_id_to_u32, edge_id_to_u32, face_id_to_u32, solid_id_to_u32, wire_id_to_u32,
+};
 use crate::helpers::{TOL, classify_to_string, get_f64, get_u32, panic_message, try_fillet};
 use crate::kernel::BrepKernel;
 
@@ -349,6 +351,14 @@ impl BrepKernel {
                 let com = measure::solid_center_of_mass(&self.topo, solid_id, deflection)
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!([com.x(), com.y(), com.z()]))
+            }
+            "solidEdges" => {
+                let s = get_u32(args, "solid")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let edges = brepkit_topology::explorer::solid_edges(&self.topo, solid_id)
+                    .map_err(|e| e.to_string())?;
+                let handles: Vec<u32> = edges.iter().map(|&e| edge_id_to_u32(e)).collect();
+                Ok(serde_json::json!(handles))
             }
             "solidToSolidDistance" => {
                 let a = get_u32(args, "solidA")?;
