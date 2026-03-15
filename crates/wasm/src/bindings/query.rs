@@ -161,9 +161,34 @@ impl BrepKernel {
                     brepkit_topology::edge::EdgeCurve::Ellipse(_) => "ellipse",
                     brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => "nurbs",
                 };
+                let curve_params = match e.curve() {
+                    EdgeCurve::Line => serde_json::json!(null),
+                    EdgeCurve::Circle(c) => serde_json::json!({
+                        "center": [c.center().x(), c.center().y(), c.center().z()],
+                        "axis": [c.normal().x(), c.normal().y(), c.normal().z()],
+                        "xAxis": [c.u_axis().x(), c.u_axis().y(), c.u_axis().z()],
+                        "radius": c.radius(),
+                    }),
+                    EdgeCurve::Ellipse(el) => serde_json::json!({
+                        "center": [el.center().x(), el.center().y(), el.center().z()],
+                        "axis": [el.normal().x(), el.normal().y(), el.normal().z()],
+                        "majorAxis": [el.u_axis().x(), el.u_axis().y(), el.u_axis().z()],
+                        "majorRadius": el.semi_major(),
+                        "minorRadius": el.semi_minor(),
+                    }),
+                    EdgeCurve::NurbsCurve(n) => serde_json::json!({
+                        "degree": n.degree(),
+                        "controlPoints": n.control_points().iter()
+                            .map(|p| [p.x(), p.y(), p.z()])
+                            .collect::<Vec<_>>(),
+                        "weights": n.weights().to_vec(),
+                        "knots": n.knots().to_vec(),
+                    }),
+                };
                 Ok(serde_json::json!({
                     "id": edge_id_to_u32(eid),
                     "curveType": curve_type,
+                    "curveParams": curve_params,
                     "startVertex": vertex_id_to_u32(e.start()),
                     "endVertex": vertex_id_to_u32(e.end()),
                 }))
@@ -187,7 +212,41 @@ impl BrepKernel {
                         "normal": [normal.x(), normal.y(), normal.z()],
                         "d": d,
                     }),
-                    _ => serde_json::json!(null),
+                    FaceSurface::Cylinder(c) => serde_json::json!({
+                        "origin": [c.origin().x(), c.origin().y(), c.origin().z()],
+                        "axis": [c.axis().x(), c.axis().y(), c.axis().z()],
+                        "refDir": [c.x_axis().x(), c.x_axis().y(), c.x_axis().z()],
+                        "radius": c.radius(),
+                    }),
+                    FaceSurface::Cone(c) => serde_json::json!({
+                        "apex": [c.apex().x(), c.apex().y(), c.apex().z()],
+                        "axis": [c.axis().x(), c.axis().y(), c.axis().z()],
+                        "refDir": [c.x_axis().x(), c.x_axis().y(), c.x_axis().z()],
+                        "halfAngle": c.half_angle(),
+                    }),
+                    FaceSurface::Sphere(s) => serde_json::json!({
+                        "center": [s.center().x(), s.center().y(), s.center().z()],
+                        "axis": [s.z_axis().x(), s.z_axis().y(), s.z_axis().z()],
+                        "radius": s.radius(),
+                    }),
+                    FaceSurface::Torus(t) => serde_json::json!({
+                        "center": [t.center().x(), t.center().y(), t.center().z()],
+                        "axis": [t.z_axis().x(), t.z_axis().y(), t.z_axis().z()],
+                        "majorRadius": t.major_radius(),
+                        "minorRadius": t.minor_radius(),
+                    }),
+                    FaceSurface::Nurbs(n) => serde_json::json!({
+                        "degreeU": n.degree_u(),
+                        "degreeV": n.degree_v(),
+                        "controlPoints": n.control_points().iter()
+                            .map(|row| row.iter()
+                                .map(|p| [p.x(), p.y(), p.z()])
+                                .collect::<Vec<_>>())
+                            .collect::<Vec<_>>(),
+                        "weights": n.weights().to_vec(),
+                        "knotsU": n.knots_u().to_vec(),
+                        "knotsV": n.knots_v().to_vec(),
+                    }),
                 };
                 let outer_wire = self.topo.wire(f.outer_wire())?;
                 let outer_edges: Vec<u32> = outer_wire
@@ -1535,5 +1594,307 @@ mod tests {
             result.is_err(),
             "non-existent solid handle must produce an error"
         );
+    }
+
+    // ── toBREP geometry data ─────────────────────────────────────
+    //
+    // `to_brep` returns JsValue which panics on non-wasm targets, so we
+    // replicate the JSON serialization logic in a helper and verify the
+    // same field structure that `to_brep` emits.
+
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
+
+    /// Build the toBREP JSON for a solid using the same logic as
+    /// `to_brep`, but returning `serde_json::Value` directly so the
+    /// test can run on non-wasm targets.
+    fn build_brep_json(k: &crate::kernel::BrepKernel, solid: u32) -> serde_json::Value {
+        let solid_id = k.resolve_solid(solid).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&k.topo, solid_id).unwrap();
+        let edges = brepkit_topology::explorer::solid_edges(&k.topo, solid_id).unwrap();
+        let verts = brepkit_topology::explorer::solid_vertices(&k.topo, solid_id).unwrap();
+
+        let edge_json: Vec<serde_json::Value> = edges
+            .iter()
+            .map(|&eid| {
+                let e = k.topo.edge(eid).unwrap();
+                let curve_type = e.curve().type_tag();
+                let curve_params = match e.curve() {
+                    EdgeCurve::Line => serde_json::json!(null),
+                    EdgeCurve::Circle(c) => serde_json::json!({
+                        "center": [c.center().x(), c.center().y(), c.center().z()],
+                        "axis": [c.normal().x(), c.normal().y(), c.normal().z()],
+                        "xAxis": [c.u_axis().x(), c.u_axis().y(), c.u_axis().z()],
+                        "radius": c.radius(),
+                    }),
+                    EdgeCurve::Ellipse(el) => serde_json::json!({
+                        "center": [el.center().x(), el.center().y(), el.center().z()],
+                        "axis": [el.normal().x(), el.normal().y(), el.normal().z()],
+                        "majorAxis": [el.u_axis().x(), el.u_axis().y(), el.u_axis().z()],
+                        "majorRadius": el.semi_major(),
+                        "minorRadius": el.semi_minor(),
+                    }),
+                    EdgeCurve::NurbsCurve(n) => serde_json::json!({
+                        "degree": n.degree(),
+                        "controlPoints": n.control_points().iter()
+                            .map(|p| [p.x(), p.y(), p.z()])
+                            .collect::<Vec<_>>(),
+                        "weights": n.weights().to_vec(),
+                        "knots": n.knots().to_vec(),
+                    }),
+                };
+                serde_json::json!({
+                    "id": eid.index(),
+                    "curveType": curve_type,
+                    "curveParams": curve_params,
+                })
+            })
+            .collect();
+
+        let face_json: Vec<serde_json::Value> = faces
+            .iter()
+            .map(|&fid| {
+                let f = k.topo.face(fid).unwrap();
+                let surface_type = f.surface().type_tag();
+                let surface_params = match f.surface() {
+                    FaceSurface::Plane { normal, d } => serde_json::json!({
+                        "normal": [normal.x(), normal.y(), normal.z()],
+                        "d": d,
+                    }),
+                    FaceSurface::Cylinder(c) => serde_json::json!({
+                        "origin": [c.origin().x(), c.origin().y(), c.origin().z()],
+                        "axis": [c.axis().x(), c.axis().y(), c.axis().z()],
+                        "refDir": [c.x_axis().x(), c.x_axis().y(), c.x_axis().z()],
+                        "radius": c.radius(),
+                    }),
+                    FaceSurface::Cone(c) => serde_json::json!({
+                        "apex": [c.apex().x(), c.apex().y(), c.apex().z()],
+                        "axis": [c.axis().x(), c.axis().y(), c.axis().z()],
+                        "refDir": [c.x_axis().x(), c.x_axis().y(), c.x_axis().z()],
+                        "halfAngle": c.half_angle(),
+                    }),
+                    FaceSurface::Sphere(s) => serde_json::json!({
+                        "center": [s.center().x(), s.center().y(), s.center().z()],
+                        "axis": [s.z_axis().x(), s.z_axis().y(), s.z_axis().z()],
+                        "radius": s.radius(),
+                    }),
+                    FaceSurface::Torus(t) => serde_json::json!({
+                        "center": [t.center().x(), t.center().y(), t.center().z()],
+                        "axis": [t.z_axis().x(), t.z_axis().y(), t.z_axis().z()],
+                        "majorRadius": t.major_radius(),
+                        "minorRadius": t.minor_radius(),
+                    }),
+                    FaceSurface::Nurbs(n) => serde_json::json!({
+                        "degreeU": n.degree_u(),
+                        "degreeV": n.degree_v(),
+                        "controlPoints": n.control_points().iter()
+                            .map(|row| row.iter()
+                                .map(|p| [p.x(), p.y(), p.z()])
+                                .collect::<Vec<_>>())
+                            .collect::<Vec<_>>(),
+                        "weights": n.weights().to_vec(),
+                        "knotsU": n.knots_u().to_vec(),
+                        "knotsV": n.knots_v().to_vec(),
+                    }),
+                };
+                serde_json::json!({
+                    "id": fid.index(),
+                    "surfaceType": surface_type,
+                    "surfaceParams": surface_params,
+                })
+            })
+            .collect();
+
+        serde_json::json!({
+            "vertices": verts.len(),
+            "edges": edge_json,
+            "faces": face_json,
+        })
+    }
+
+    #[test]
+    fn to_brep_box_edges_have_null_curve_params() {
+        let (k, solid) = kernel_with_box();
+        let brep = build_brep_json(&k, solid);
+        let edges = brep["edges"].as_array().unwrap();
+        assert_eq!(edges.len(), 12, "box must have 12 edges");
+        for edge in edges {
+            assert_eq!(edge["curveType"].as_str().unwrap(), "line");
+            assert!(
+                edge["curveParams"].is_null(),
+                "line edges should have null curveParams"
+            );
+        }
+    }
+
+    #[test]
+    fn to_brep_box_faces_have_plane_surface_params() {
+        let (k, solid) = kernel_with_box();
+        let brep = build_brep_json(&k, solid);
+        let faces = brep["faces"].as_array().unwrap();
+        assert_eq!(faces.len(), 6, "box must have 6 faces");
+        for face in faces {
+            assert_eq!(face["surfaceType"].as_str().unwrap(), "plane");
+            let params = &face["surfaceParams"];
+            let normal = params["normal"].as_array().unwrap();
+            assert_eq!(normal.len(), 3, "plane normal must have 3 components");
+            let len: f64 = normal
+                .iter()
+                .map(|v| v.as_f64().unwrap().powi(2))
+                .sum::<f64>()
+                .sqrt();
+            assert!(
+                (len - 1.0).abs() < 1e-10,
+                "plane normal must be unit length, got {len}"
+            );
+            assert!(
+                params["d"].as_f64().is_some(),
+                "plane params must include 'd'"
+            );
+        }
+    }
+
+    #[test]
+    fn to_brep_cylinder_circle_edge_params() {
+        let (k, solid) = kernel_with_cylinder();
+        let brep = build_brep_json(&k, solid);
+        let edges = brep["edges"].as_array().unwrap();
+        let circle_edges: Vec<_> = edges
+            .iter()
+            .filter(|e| e["curveType"].as_str().unwrap() == "circle")
+            .collect();
+        assert!(!circle_edges.is_empty(), "cylinder must have circle edges");
+        for ce in &circle_edges {
+            let params = &ce["curveParams"];
+            assert!(!params.is_null(), "circle edge must have curveParams");
+            let center = params["center"].as_array().unwrap();
+            assert_eq!(center.len(), 3);
+            let axis = params["axis"].as_array().unwrap();
+            assert_eq!(axis.len(), 3);
+            // axis must be unit length
+            let axis_len: f64 = axis
+                .iter()
+                .map(|v| v.as_f64().unwrap().powi(2))
+                .sum::<f64>()
+                .sqrt();
+            assert!(
+                (axis_len - 1.0).abs() < 1e-10,
+                "circle axis must be unit length, got {axis_len}"
+            );
+            let x_axis = params["xAxis"].as_array().unwrap();
+            assert_eq!(x_axis.len(), 3);
+            let radius = params["radius"].as_f64().unwrap();
+            assert!(
+                (radius - 1.0).abs() < 1e-10,
+                "circle radius should be 1.0, got {radius}"
+            );
+        }
+    }
+
+    #[test]
+    fn to_brep_cylinder_surface_params() {
+        let (k, solid) = kernel_with_cylinder();
+        let brep = build_brep_json(&k, solid);
+        let faces = brep["faces"].as_array().unwrap();
+        let cyl_faces: Vec<_> = faces
+            .iter()
+            .filter(|f| f["surfaceType"].as_str().unwrap() == "cylinder")
+            .collect();
+        assert!(
+            !cyl_faces.is_empty(),
+            "cylinder solid must have cylinder faces"
+        );
+        for cf in &cyl_faces {
+            let params = &cf["surfaceParams"];
+            assert!(params["origin"].as_array().unwrap().len() == 3);
+            assert!(params["axis"].as_array().unwrap().len() == 3);
+            assert!(params["refDir"].as_array().unwrap().len() == 3);
+            let radius = params["radius"].as_f64().unwrap();
+            assert!(
+                (radius - 1.0).abs() < 1e-10,
+                "cylinder radius should be 1.0, got {radius}"
+            );
+        }
+    }
+
+    #[test]
+    fn to_brep_sphere_surface_params() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let id = brepkit_operations::primitives::make_sphere(&mut k.topo, 3.0, 16).unwrap();
+        #[allow(clippy::cast_possible_truncation)]
+        let solid = id.index() as u32;
+        let brep = build_brep_json(&k, solid);
+        let faces = brep["faces"].as_array().unwrap();
+        let sph_faces: Vec<_> = faces
+            .iter()
+            .filter(|f| f["surfaceType"].as_str().unwrap() == "sphere")
+            .collect();
+        assert!(!sph_faces.is_empty(), "sphere solid must have sphere faces");
+        for sf in &sph_faces {
+            let params = &sf["surfaceParams"];
+            assert!(params["center"].as_array().unwrap().len() == 3);
+            assert!(params["axis"].as_array().unwrap().len() == 3);
+            let radius = params["radius"].as_f64().unwrap();
+            assert!(
+                (radius - 3.0).abs() < 1e-10,
+                "sphere radius should be 3.0, got {radius}"
+            );
+        }
+    }
+
+    #[test]
+    fn to_brep_cone_surface_params() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let id = brepkit_operations::primitives::make_cone(&mut k.topo, 2.0, 0.5, 4.0).unwrap();
+        #[allow(clippy::cast_possible_truncation)]
+        let solid = id.index() as u32;
+        let brep = build_brep_json(&k, solid);
+        let faces = brep["faces"].as_array().unwrap();
+        let cone_faces: Vec<_> = faces
+            .iter()
+            .filter(|f| f["surfaceType"].as_str().unwrap() == "cone")
+            .collect();
+        assert!(!cone_faces.is_empty(), "cone solid must have cone faces");
+        for cf in &cone_faces {
+            let params = &cf["surfaceParams"];
+            assert!(params["apex"].as_array().unwrap().len() == 3);
+            assert!(params["axis"].as_array().unwrap().len() == 3);
+            assert!(params["refDir"].as_array().unwrap().len() == 3);
+            let half_angle = params["halfAngle"].as_f64().unwrap();
+            assert!(
+                half_angle > 0.0 && half_angle < std::f64::consts::FRAC_PI_2,
+                "cone halfAngle must be in (0, pi/2), got {half_angle}"
+            );
+        }
+    }
+
+    #[test]
+    fn to_brep_torus_surface_params() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let id = brepkit_operations::primitives::make_torus(&mut k.topo, 5.0, 1.0, 16).unwrap();
+        #[allow(clippy::cast_possible_truncation)]
+        let solid = id.index() as u32;
+        let brep = build_brep_json(&k, solid);
+        let faces = brep["faces"].as_array().unwrap();
+        let tor_faces: Vec<_> = faces
+            .iter()
+            .filter(|f| f["surfaceType"].as_str().unwrap() == "torus")
+            .collect();
+        assert!(!tor_faces.is_empty(), "torus solid must have torus faces");
+        for tf in &tor_faces {
+            let params = &tf["surfaceParams"];
+            assert!(params["center"].as_array().unwrap().len() == 3);
+            assert!(params["axis"].as_array().unwrap().len() == 3);
+            let major_r = params["majorRadius"].as_f64().unwrap();
+            assert!(
+                (major_r - 5.0).abs() < 1e-10,
+                "torus major radius should be 5.0, got {major_r}"
+            );
+            let minor_r = params["minorRadius"].as_f64().unwrap();
+            assert!(
+                (minor_r - 1.0).abs() < 1e-10,
+                "torus minor radius should be 1.0, got {minor_r}"
+            );
+        }
     }
 }
