@@ -2851,7 +2851,7 @@ fn non_convex_face_survives_subsequent_cut() {
 
     let result = boolean(&mut topo, BooleanOp::Cut, l_shape, cutter).unwrap();
 
-    // Volume should be 3.0 - 0.5*0.5*1.0 = 2.75 (within 5% due to merged face
-    // chord clipping precision on the non-convex boundary).
-    assert_volume_near(&topo, result, 2.75, 0.05);
+    // Cutter overlaps L-shape partially: 0.5*0.25 in box_a + 0.25*0.25 in
+    // box_b, height 1.0 → removed = 0.1875, expected = 3.0 - 0.1875 = 2.8125.
+    assert_volume_near(&topo, result, 2.8125, 0.025);
 }
