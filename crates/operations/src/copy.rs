@@ -158,6 +158,19 @@ pub fn copy_solid(
 
     // ── Write phase: allocate new entities ─────────────────────────
 
+    // Pre-allocate topology arenas for the copy.
+    topo.reserve(
+        vertex_snaps.len(),
+        edge_snaps.len(),
+        wire_snaps.len(),
+        shell_snaps
+            .iter()
+            .map(|s| s.faces.len())
+            .fold(0usize, usize::saturating_add),
+        shell_snaps.len(),
+        1,
+    );
+
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
     for vsnap in &vertex_snaps {
         let new_vid = topo.add_vertex(Vertex::new(vsnap.point, vsnap.tol));
@@ -361,6 +374,19 @@ pub fn copy_and_transform_solid(
     }
 
     // ── Write phase: allocate transformed entities ─────────────────
+
+    // Pre-allocate topology arenas for the copy.
+    topo.reserve(
+        vertex_snaps.len(),
+        edge_snaps.len(),
+        wire_snaps.len(),
+        shell_snaps
+            .iter()
+            .map(|s| s.faces.len())
+            .fold(0usize, usize::saturating_add),
+        shell_snaps.len(),
+        1,
+    );
 
     // Vertices: apply matrix during allocation.
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();

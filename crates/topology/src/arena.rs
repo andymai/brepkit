@@ -82,6 +82,11 @@ impl<T> Arena<T> {
         }
     }
 
+    /// Reserves capacity for at least `additional` more entries.
+    pub fn reserve(&mut self, additional: usize) {
+        self.items.reserve(additional);
+    }
+
     /// Allocates a new entry in the arena and returns its typed handle.
     pub fn alloc(&mut self, value: T) -> Id<T> {
         let index = self.items.len();
@@ -186,5 +191,19 @@ mod tests {
         arena.alloc("one".into());
         assert!(arena.id_from_index(1).is_none());
         assert!(arena.id_from_index(100).is_none());
+    }
+
+    #[test]
+    fn reserve_does_not_change_len() {
+        let mut arena: Arena<String> = Arena::new();
+        arena.alloc("first".into());
+        assert_eq!(arena.len(), 1);
+
+        arena.reserve(100);
+        assert_eq!(arena.len(), 1);
+
+        let id = arena.alloc("second".into());
+        assert_eq!(arena.len(), 2);
+        assert_eq!(arena.get(id).unwrap(), "second");
     }
 }
