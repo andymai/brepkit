@@ -10,6 +10,7 @@
 
 use brepkit_math::predicates::point_in_polygon;
 use brepkit_math::tolerance::Tolerance;
+use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -217,7 +218,7 @@ fn count_face_ray_crossings(
     face_id: FaceId,
     origin: Point3,
     direction: Vec3,
-    deflection: f64,
+    _deflection: f64,
 ) -> Result<u32, OperationsError> {
     let face = topo.face(face_id)?;
     match face.surface() {
@@ -270,8 +271,8 @@ fn count_face_ray_crossings(
                 true,
             )
         }
-        FaceSurface::Nurbs(_) => {
-            ray_crossings_via_tessellation(topo, face_id, origin, direction, deflection)
+        FaceSurface::Nurbs(surface) => {
+            ray_crossings_nurbs(topo, face_id, origin, direction, surface)
         }
     }
 }
@@ -604,27 +605,53 @@ fn ray_torus_roots(
     solve_quartic(c4, c3, c2, c1, c0)
 }
 
-/// Fallback: count ray crossings via tessellation (for NURBS faces).
-fn ray_crossings_via_tessellation(
+/// Count ray crossings for a NURBS face using ray-surface intersection.
+///
+/// Uses `intersect_line_nurbs` to find ray-surface hits, then tests each
+/// hit against the face's UV boundary polygon.
+fn ray_crossings_nurbs(
     topo: &Topology,
     face_id: FaceId,
     origin: Point3,
     direction: Vec3,
-    deflection: f64,
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
 ) -> Result<u32, OperationsError> {
-    let mesh = crate::tessellate::tessellate(topo, face_id, deflection)?;
+    use brepkit_math::nurbs::intersection::intersect_line_nurbs;
+
+    let hits = intersect_line_nurbs(surface, origin, direction, 20)?;
+    if hits.is_empty() {
+        return Ok(0);
+    }
+
+    // Build UV boundary from face wire vertices.
+    let verts = face_polygon(topo, face_id)?;
+    if verts.len() < 3 {
+        // Full-surface face — every forward hit is a crossing.
+        return Ok(hits
+            .iter()
+            .filter(|h| {
+                let diff = h.point - origin;
+                let t = Vec3::new(diff.x(), diff.y(), diff.z()).dot(direction);
+                t > RAY_T_MIN
+            })
+            .count() as u32);
+    }
+
+    let project = |p: Point3| -> (f64, f64) { surface.project_point(p) };
+    let uv_boundary = build_uv_boundary(&verts, &project, false);
+
     let mut crossings = 0u32;
+    for hit in &hits {
+        // Check ray parameter is positive (forward hit).
+        let diff = hit.point - origin;
+        let t = Vec3::new(diff.x(), diff.y(), diff.z()).dot(direction) / direction.dot(direction);
+        if t <= RAY_T_MIN {
+            continue;
+        }
 
-    for tri in mesh.indices.chunks_exact(3) {
-        let v0 = mesh.positions[tri[0] as usize];
-        let v1 = mesh.positions[tri[1] as usize];
-        let v2 = mesh.positions[tri[2] as usize];
-
-        if brepkit_math::ray_triangle::watertight_ray_triangle_intersect(
-            origin, direction, v0, v1, v2,
-        )
-        .is_some()
-        {
+        // Use the UV parameters from the intersection result.
+        let (hit_u, hit_v) = hit.param1;
+        if point_in_uv_boundary(hit_u, hit_v, &uv_boundary, false) {
             crossings += 1;
         }
     }
@@ -638,8 +665,9 @@ fn ray_crossings_via_tessellation(
 ///
 /// Returns `(winding_number, is_on_boundary)`.
 ///
-/// Uses the Van Oosterom-Strackee formula (Jacobson et al. 2013).
-/// This method still uses tessellation for solid angle computation.
+/// Uses ray casting to determine inside/outside classification. Counts
+/// total ray crossings across all faces using the same analytic + NURBS
+/// dispatch as `count_face_ray_crossings`.
 #[allow(clippy::similar_names)]
 fn compute_winding_number(
     topo: &Topology,
@@ -655,46 +683,15 @@ fn compute_winding_number(
         return Ok((0.0, true));
     }
 
-    let mut total_omega = 0.0;
-
+    // Use ray casting: count crossings in a fixed direction.
+    let direction = Vec3::new(1.0, 0.3, 0.1); // avoid axis-aligned rays
+    let mut crossings = 0u32;
     for &fid in shell.faces() {
-        let mesh = crate::tessellate::tessellate(topo, fid, deflection)?;
-
-        for tri in mesh.indices.chunks_exact(3) {
-            let a = mesh.positions[tri[0] as usize];
-            let mut b = mesh.positions[tri[1] as usize];
-            let mut c = mesh.positions[tri[2] as usize];
-
-            let tri_normal = (b - a).cross(c - a);
-            let mesh_normal = mesh.normals[tri[0] as usize];
-            if tri_normal.dot(mesh_normal) < 0.0 {
-                std::mem::swap(&mut b, &mut c);
-            }
-
-            let pa = a - point;
-            let pb = b - point;
-            let pc = c - point;
-
-            let la = pa.length();
-            let lb = pb.length();
-            let lc = pc.length();
-
-            if la < tolerance || lb < tolerance || lc < tolerance {
-                return Ok((0.0, true));
-            }
-
-            let pa_n = pa * (1.0 / la);
-            let pb_n = pb * (1.0 / lb);
-            let pc_n = pc * (1.0 / lc);
-
-            let numerator = pa_n.dot(pb_n.cross(pc_n));
-            let denominator = 1.0 + pa_n.dot(pb_n) + pb_n.dot(pc_n) + pc_n.dot(pa_n);
-
-            total_omega += 2.0 * f64::atan2(numerator, denominator);
-        }
+        crossings += count_face_ray_crossings(topo, fid, point, direction, deflection)?;
     }
 
-    let winding = (total_omega / (4.0 * PI)).abs();
+    // Odd crossings = inside (winding ~1.0), even = outside (winding ~0.0).
+    let winding = if crossings % 2 == 1 { 1.0 } else { 0.0 };
     Ok((winding, false))
 }
 

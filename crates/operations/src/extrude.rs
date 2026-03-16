@@ -82,10 +82,10 @@ fn closed_edge_segments(curve: &EdgeCurve, deflection: f64) -> usize {
     use std::f64::consts::TAU;
     match curve {
         EdgeCurve::Circle(c) => {
-            crate::tessellate::segments_for_chord_deviation(c.radius(), TAU, deflection)
+            brepkit_math::chord::segments_for_chord_deviation(c.radius(), TAU, deflection)
         }
         EdgeCurve::Ellipse(e) => {
-            crate::tessellate::segments_for_chord_deviation(e.semi_major(), TAU, deflection)
+            brepkit_math::chord::segments_for_chord_deviation(e.semi_major(), TAU, deflection)
         }
         EdgeCurve::NurbsCurve(nc) => {
             // Estimate characteristic radius from control polygon bounding box.
@@ -109,7 +109,7 @@ fn closed_edge_segments(curve: &EdgeCurve, deflection: f64) -> usize {
             let diag = (dx * dx + dy * dy + dz * dz).sqrt();
             // Use half the diagonal as a conservative radius estimate.
             let radius_est = diag / 2.0;
-            crate::tessellate::segments_for_chord_deviation(radius_est, TAU, deflection)
+            brepkit_math::chord::segments_for_chord_deviation(radius_est, TAU, deflection)
         }
         // Lines can't be closed with start==end in a meaningful way;
         // split_closed_edge already returns early for them.

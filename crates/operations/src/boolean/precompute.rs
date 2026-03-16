@@ -165,7 +165,7 @@ pub(super) fn compute_v_range_hint(surface: &FaceSurface, verts: &[Point3]) -> O
 /// 1e-10: parametric-space dedup tolerance for axial projection. The v-parameter
 /// is in model-space units (meters), so 1e-10 m = 0.1 nm. This matches the
 /// `build_v_levels` dedup tolerance used throughout the fragment builders.
-pub(super) fn cylinder_v_extent(
+pub fn cylinder_v_extent(
     cyl: &brepkit_math::surfaces::CylindricalSurface,
     points: &[Point3],
 ) -> Option<(f64, f64)> {
@@ -188,7 +188,7 @@ pub(super) fn cylinder_v_extent(
 /// Returns `None` if the extent is degenerate (< 1e-10).
 ///
 /// 1e-10: parametric-space dedup tolerance — same as `cylinder_v_extent`.
-pub(super) fn cone_v_extent(
+pub fn cone_v_extent(
     cone: &brepkit_math::surfaces::ConicalSurface,
     points: &[Point3],
 ) -> Option<(f64, f64)> {
@@ -196,6 +196,50 @@ pub(super) fn cone_v_extent(
     let mut v_max = f64::MIN;
     for &p in points {
         let (_, v) = cone.project_point(p);
+        v_min = v_min.min(v);
+        v_max = v_max.max(v);
+    }
+    if (v_max - v_min).abs() < 1e-10 {
+        None
+    } else {
+        Some((v_min, v_max))
+    }
+}
+
+/// Compute the v-extent (latitude range) of points projected onto a sphere.
+///
+/// Returns `None` if the extent is degenerate (< 1e-10).
+#[allow(dead_code)] // used by boolean_v2 (upcoming)
+pub fn sphere_v_extent(
+    sph: &brepkit_math::surfaces::SphericalSurface,
+    points: &[Point3],
+) -> Option<(f64, f64)> {
+    let mut v_min = f64::MAX;
+    let mut v_max = f64::MIN;
+    for &p in points {
+        let (_, v) = sph.project_point(p);
+        v_min = v_min.min(v);
+        v_max = v_max.max(v);
+    }
+    if (v_max - v_min).abs() < 1e-10 {
+        None
+    } else {
+        Some((v_min, v_max))
+    }
+}
+
+#[allow(dead_code)] // used by boolean_v2 (upcoming)
+/// Compute the v-extent (minor angle range) of points projected onto a torus.
+///
+/// Returns `None` if the extent is degenerate (< 1e-10).
+pub fn torus_v_extent(
+    tor: &brepkit_math::surfaces::ToroidalSurface,
+    points: &[Point3],
+) -> Option<(f64, f64)> {
+    let mut v_min = f64::MAX;
+    let mut v_max = f64::MIN;
+    for &p in points {
+        let (_, v) = tor.project_point(p);
         v_min = v_min.min(v);
         v_max = v_max.max(v);
     }
@@ -219,7 +263,7 @@ pub(super) fn cone_v_extent(
 pub(super) fn collect_face_data(
     topo: &Topology,
     solid_id: SolidId,
-    deflection: f64,
+    _deflection: f64,
 ) -> Result<FaceData, crate::OperationsError> {
     let solid = topo.solid(solid_id)?;
     let shell = topo.shell(solid.outer_shell())?;
@@ -227,9 +271,9 @@ pub(super) fn collect_face_data(
 
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
+        let verts = face_polygon(topo, fid)?;
         match face.surface() {
             FaceSurface::Plane { normal, d } => {
-                let verts = face_polygon(topo, fid)?;
                 result.push((fid, verts, *normal, *d));
             }
             FaceSurface::Cylinder(cyl) => {
@@ -237,7 +281,6 @@ pub(super) fn collect_face_data(
                 // classifier. Much faster than full tessellation (~16 quads
                 // vs ~800 triangles per band) while giving correct crossing
                 // parity for ray-casting.
-                let verts = face_polygon(topo, fid)?;
                 let Some((v_min, v_max)) = cylinder_v_extent(cyl, &verts) else {
                     continue;
                 };
@@ -263,65 +306,166 @@ pub(super) fn collect_face_data(
                 }
             }
             FaceSurface::Sphere(sph) => {
-                // Use the sphere's center-to-centroid direction for normals
-                // rather than cross products from tessellated triangles, since
-                // the tessellation winding order may not match face orientation.
-                // Respect the face's `reversed` flag to flip the normal when the
-                // face's topological orientation opposes the geometric surface.
-                let coarse_deflection = deflection * 4.0;
-                let mesh = crate::tessellate::tessellate(topo, fid, coarse_deflection)?;
-                let center = sph.center();
+                // Approximate sphere face as a (u,v) grid of planar quads.
+                // Use compute_sphere_v_range to correctly handle hemisphere caps
+                // (boundary vertices are at the equator, face extends to pole).
                 let face_data = topo.face(fid)?;
                 let sign = if face_data.is_reversed() { -1.0 } else { 1.0 };
-                for tri in mesh.indices.chunks_exact(3) {
-                    let i0 = tri[0] as usize;
-                    let i1 = tri[1] as usize;
-                    let i2 = tri[2] as usize;
+                let center = sph.center();
 
-                    let v0 = mesh.positions[i0];
-                    let v1 = mesh.positions[i1];
-                    let v2 = mesh.positions[i2];
+                let n_u = CLASSIFIER_CYL_SEGMENTS;
+                let n_v = 8;
+                let (v_min, v_max) =
+                    crate::tessellate::compute_sphere_v_range(topo, face_data, sph);
 
-                    // Radial direction from sphere center → outward normal,
-                    // then flip if face is reversed.
-                    let cx = (v0.x() + v1.x() + v2.x()) / 3.0;
-                    let cy = (v0.y() + v1.y() + v2.y()) / 3.0;
-                    let cz = (v0.z() + v1.z() + v2.z()) / 3.0;
-                    let dir = Vec3::new(cx - center.x(), cy - center.y(), cz - center.z());
-                    let len = (dir.x() * dir.x() + dir.y() * dir.y() + dir.z() * dir.z()).sqrt();
-                    // Numerical-zero guard: skip degenerate triangles whose
-                    // centroid coincides with the sphere center (zero-length
-                    // radial direction → cannot compute outward normal).
-                    if len < 1e-15 {
-                        continue;
+                #[allow(clippy::cast_precision_loss)]
+                for j in 0..n_v {
+                    let vp0 = v_min + (v_max - v_min) * j as f64 / n_v as f64;
+                    let vp1 = v_min + (v_max - v_min) * (j + 1) as f64 / n_v as f64;
+                    for i in 0..n_u {
+                        let u0 = std::f64::consts::TAU * i as f64 / n_u as f64;
+                        let u1 = std::f64::consts::TAU * (i + 1) as f64 / n_u as f64;
+                        let b0 = sph.evaluate(u0, vp0);
+                        let b1 = sph.evaluate(u1, vp0);
+                        let t0 = sph.evaluate(u0, vp1);
+                        let t1 = sph.evaluate(u1, vp1);
+
+                        for tri in &[[b0, b1, t1], [b0, t1, t0]] {
+                            // Radial normal from sphere center.
+                            let cx = (tri[0].x() + tri[1].x() + tri[2].x()) / 3.0;
+                            let cy = (tri[0].y() + tri[1].y() + tri[2].y()) / 3.0;
+                            let cz = (tri[0].z() + tri[1].z() + tri[2].z()) / 3.0;
+                            let dir = Vec3::new(cx - center.x(), cy - center.y(), cz - center.z());
+                            let len = dir.length();
+                            if len < 1e-15 {
+                                continue;
+                            }
+                            let n = dir * (sign / len);
+                            let d_val = crate::dot_normal_point(n, tri[0]);
+                            result.push((fid, tri.to_vec(), n, d_val));
+                        }
                     }
-                    let n = dir * (sign / len);
-                    let d = n.x() * v0.x() + n.y() * v0.y() + n.z() * v0.z();
-                    result.push((fid, vec![v0, v1, v2], n, d));
                 }
             }
-            FaceSurface::Cone(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => {
-                // Other non-planar: tessellate with coarse deflection.
-                let coarse_deflection = deflection * 4.0;
-                let mesh = crate::tessellate::tessellate(topo, fid, coarse_deflection)?;
-                for tri in mesh.indices.chunks_exact(3) {
-                    let i0 = tri[0] as usize;
-                    let i1 = tri[1] as usize;
-                    let i2 = tri[2] as usize;
+            FaceSurface::Cone(cone) => {
+                // Approximate cone face as a (u,v) grid of planar quads.
+                let face_data = topo.face(fid)?;
+                let sign = if face_data.is_reversed() { -1.0 } else { 1.0 };
+                let Some((v_min, v_max)) = cone_v_extent(cone, &verts) else {
+                    continue;
+                };
+                let n_u = CLASSIFIER_CYL_SEGMENTS;
 
-                    let v0 = mesh.positions[i0];
-                    let v1 = mesh.positions[i1];
-                    let v2 = mesh.positions[i2];
+                #[allow(clippy::cast_precision_loss)]
+                for i in 0..n_u {
+                    let u0 = std::f64::consts::TAU * i as f64 / n_u as f64;
+                    let u1 = std::f64::consts::TAU * (i + 1) as f64 / n_u as f64;
+                    let b0 = cone.evaluate(u0, v_min);
+                    let b1 = cone.evaluate(u1, v_min);
+                    let t0 = cone.evaluate(u0, v_max);
+                    let t1 = cone.evaluate(u1, v_max);
 
-                    let edge1 = v1 - v0;
-                    let edge2 = v2 - v0;
-                    let cross = edge1.cross(edge2);
-                    let Ok(normal) = cross.normalize() else {
-                        continue; // Skip degenerate triangles (e.g. at cone apex)
-                    };
-                    let d = crate::dot_normal_point(normal, v0);
+                    for tri in &[[b0, b1, t1], [b0, t1, t0]] {
+                        let edge1 = tri[1] - tri[0];
+                        let edge2 = tri[2] - tri[0];
+                        let cross = edge1.cross(edge2);
+                        let Ok(mut n) = cross.normalize() else {
+                            continue;
+                        };
+                        // Ensure normal points outward (radial from cone axis).
+                        let mid_u = f64::midpoint(u0, u1);
+                        let mid_v = f64::midpoint(v_min, v_max);
+                        let surf_n = cone.normal(mid_u, mid_v);
+                        if n.dot(surf_n) * sign < 0.0 {
+                            n = -n;
+                        }
+                        let d_val = crate::dot_normal_point(n, tri[0]);
+                        result.push((fid, tri.to_vec(), n, d_val));
+                    }
+                }
+            }
+            FaceSurface::Torus(tor) => {
+                // Approximate torus face as a (u,v) grid of planar quads.
+                let face_data = topo.face(fid)?;
+                let sign = if face_data.is_reversed() { -1.0 } else { 1.0 };
+                let n_u = CLASSIFIER_CYL_SEGMENTS;
+                let n_v = CLASSIFIER_CYL_SEGMENTS;
 
-                    result.push((fid, vec![v0, v1, v2], normal, d));
+                let v_vals: Vec<f64> = verts.iter().map(|p| tor.project_point(*p).1).collect();
+                let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
+                let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+
+                #[allow(clippy::cast_precision_loss)]
+                for j in 0..n_v {
+                    let vp0 = v_min + (v_max - v_min) * j as f64 / n_v as f64;
+                    let vp1 = v_min + (v_max - v_min) * (j + 1) as f64 / n_v as f64;
+                    for i in 0..n_u {
+                        let u0 = std::f64::consts::TAU * i as f64 / n_u as f64;
+                        let u1 = std::f64::consts::TAU * (i + 1) as f64 / n_u as f64;
+                        let b0 = tor.evaluate(u0, vp0);
+                        let b1 = tor.evaluate(u1, vp0);
+                        let t0 = tor.evaluate(u0, vp1);
+                        let t1 = tor.evaluate(u1, vp1);
+
+                        for tri in &[[b0, b1, t1], [b0, t1, t0]] {
+                            let edge1 = tri[1] - tri[0];
+                            let edge2 = tri[2] - tri[0];
+                            let cross = edge1.cross(edge2);
+                            let Ok(mut n) = cross.normalize() else {
+                                continue;
+                            };
+                            let mid_u = f64::midpoint(u0, u1);
+                            let mid_v = f64::midpoint(vp0, vp1);
+                            let surf_n = tor.normal(mid_u, mid_v);
+                            if n.dot(surf_n) * sign < 0.0 {
+                                n = -n;
+                            }
+                            let d_val = crate::dot_normal_point(n, tri[0]);
+                            result.push((fid, tri.to_vec(), n, d_val));
+                        }
+                    }
+                }
+            }
+            FaceSurface::Nurbs(surface) => {
+                // Approximate NURBS face as a coarse (u,v) grid.
+                let face_data = topo.face(fid)?;
+                let sign = if face_data.is_reversed() { -1.0 } else { 1.0 };
+                let n_u = 8;
+                let n_v = 8;
+                let (u_min, u_max) = surface.domain_u();
+                let (v_min, v_max) = surface.domain_v();
+
+                #[allow(clippy::cast_precision_loss)]
+                for j in 0..n_v {
+                    let vp0 = v_min + (v_max - v_min) * j as f64 / n_v as f64;
+                    let vp1 = v_min + (v_max - v_min) * (j + 1) as f64 / n_v as f64;
+                    for i in 0..n_u {
+                        let up0 = u_min + (u_max - u_min) * i as f64 / n_u as f64;
+                        let up1 = u_min + (u_max - u_min) * (i + 1) as f64 / n_u as f64;
+                        let b0 = surface.evaluate(up0, vp0);
+                        let b1 = surface.evaluate(up1, vp0);
+                        let t0 = surface.evaluate(up0, vp1);
+                        let t1 = surface.evaluate(up1, vp1);
+
+                        for tri in &[[b0, b1, t1], [b0, t1, t0]] {
+                            let edge1 = tri[1] - tri[0];
+                            let edge2 = tri[2] - tri[0];
+                            let cross = edge1.cross(edge2);
+                            let Ok(mut n) = cross.normalize() else {
+                                continue;
+                            };
+                            let mid_u = f64::midpoint(up0, up1);
+                            let mid_v = f64::midpoint(vp0, vp1);
+                            let Ok(surf_n) = surface.normal(mid_u, mid_v) else {
+                                continue;
+                            };
+                            if n.dot(surf_n) * sign < 0.0 {
+                                n = -n;
+                            }
+                            let d_val = crate::dot_normal_point(n, tri[0]);
+                            result.push((fid, tri.to_vec(), n, d_val));
+                        }
+                    }
                 }
             }
         }

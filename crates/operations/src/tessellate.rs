@@ -126,28 +126,9 @@ enum AnalyticKind {
 /// Compute the angular resolution needed for a circular arc to achieve
 /// a given chord deviation (sag).
 ///
-/// For a circle of radius `r`, the chord deviation at the midpoint of
-/// an arc subtending angle `θ` is `r*(1 - cos(θ/2))`. Solving for the
-/// number of segments `n` over an arc range: `n = ceil(range / θ)` where
-/// `θ = 2*acos(1 - deflection/r)`.
+/// Delegates to [`brepkit_math::chord::segments_for_chord_deviation`].
 pub(crate) fn segments_for_chord_deviation(radius: f64, arc_range: f64, deflection: f64) -> usize {
-    if radius <= 0.0 || deflection <= 0.0 || arc_range <= 0.0 {
-        return 8;
-    }
-    let ratio = (deflection / radius).min(0.5); // clamp to avoid near-degenerate arcs
-    let theta = 2.0 * (1.0 - ratio).acos(); // max angle per segment
-    if theta <= 0.0 {
-        return 8;
-    }
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let n = (arc_range / theta).ceil() as usize;
-    // Minimum segment count for doubly-curved surfaces (e.g. spheres) where
-    // the geometric formula under-samples because it only considers single-
-    // direction curvature. Scales with sqrt(radius/deflection) so larger
-    // radii correctly produce more segments.
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let n_min = (arc_range * (radius / deflection).sqrt()).ceil() as usize;
-    n.max(n_min).max(4)
+    brepkit_math::chord::segments_for_chord_deviation(radius, arc_range, deflection)
 }
 
 /// Tessellate an analytic surface on a `(nu × nv)` grid.
