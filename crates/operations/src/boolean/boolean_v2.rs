@@ -94,6 +94,7 @@ pub fn boolean_v2(
         op,
         classifier_a.as_ref(),
         classifier_b.as_ref(),
+        &tol,
     )?;
 
     // Stage 5: Assemble result.
@@ -259,12 +260,10 @@ fn split_all_faces(
     a: SolidId,
     b: SolidId,
     pipeline: &mut BooleanPipeline,
-    _tol: &Tolerance,
+    tol: &Tolerance,
 ) -> Result<(), OperationsError> {
     let faces_a = collect_solid_faces(topo, a)?;
     let faces_b = collect_solid_faces(topo, b)?;
-
-    let uv_tol = 1e-7;
 
     // Collect section edges per face.
     let mut sections_for_face: HashMap<FaceId, Vec<SectionEdge>> = HashMap::new();
@@ -281,7 +280,7 @@ fn split_all_faces(
             .get(&fid)
             .map_or(&[][..], |v| v.as_slice());
         let frame = pipeline.plane_frames.get(&fid);
-        let sub = split_face_2d(topo, fid, sections, Source::A, uv_tol, frame);
+        let sub = split_face_2d(topo, fid, sections, Source::A, tol, frame);
         pipeline.sub_faces.extend(sub);
     }
 
@@ -291,7 +290,7 @@ fn split_all_faces(
             .get(&fid)
             .map_or(&[][..], |v| v.as_slice());
         let frame = pipeline.plane_frames.get(&fid);
-        let sub = split_face_2d(topo, fid, sections, Source::B, uv_tol, frame);
+        let sub = split_face_2d(topo, fid, sections, Source::B, tol, frame);
         pipeline.sub_faces.extend(sub);
     }
 
@@ -308,6 +307,7 @@ fn classify_sub_faces(
     op: BooleanOp,
     classifier_a: Option<&AnalyticClassifier>,
     classifier_b: Option<&AnalyticClassifier>,
+    tol: &Tolerance,
 ) -> Result<(), OperationsError> {
     let solid_a = pipeline
         .solid_a
@@ -323,7 +323,6 @@ fn classify_sub_faces(
     // Collect polygons for both solids (for ray-cast fallback).
     let polys_a = collect_solid_face_polygons(topo, solid_a)?;
     let polys_b = collect_solid_face_polygons(topo, solid_b)?;
-    let tol = Tolerance::new();
 
     // Classify each sub-face and mark for selection.
     let mut selected = Vec::new();
@@ -338,10 +337,10 @@ fn classify_sub_faces(
         // the ray-cast (which can also be degenerate at corners/edges).
         let class = match sub_face.source {
             Source::A => {
-                classify_with_fallback(test_pt, &sub_face.outer_wire, classifier_b, &polys_b, tol)
+                classify_with_fallback(test_pt, &sub_face.outer_wire, classifier_b, &polys_b, *tol)
             }
             Source::B => {
-                classify_with_fallback(test_pt, &sub_face.outer_wire, classifier_a, &polys_a, tol)
+                classify_with_fallback(test_pt, &sub_face.outer_wire, classifier_a, &polys_a, *tol)
             }
         };
 
@@ -762,15 +761,26 @@ fn handle_disjoint_v2(
     tol: &Tolerance,
 ) -> Result<SolidId, OperationsError> {
     // Check if B is inside A or A is inside B.
+    // Try the analytic classifier first; fall back to ray-cast polygon test
+    // if no classifier is available (e.g. non-axis-aligned planar solids in
+    // future steps where try_build_analytic_classifier returns None).
     let sample_b = sample_solid_vertex(topo, b)?;
     let sample_a = sample_solid_vertex(topo, a)?;
 
     let b_in_a = classifier_a
         .and_then(|c| c.classify(sample_b, *tol))
-        .is_some_and(|c| c == FaceClass::Inside);
+        .unwrap_or_else(|| {
+            let polys = collect_solid_face_polygons(topo, a).unwrap_or_default();
+            classify_point_against_solid(sample_b, &polys)
+        })
+        == FaceClass::Inside;
     let a_in_b = classifier_b
         .and_then(|c| c.classify(sample_a, *tol))
-        .is_some_and(|c| c == FaceClass::Inside);
+        .unwrap_or_else(|| {
+            let polys = collect_solid_face_polygons(topo, b).unwrap_or_default();
+            classify_point_against_solid(sample_a, &polys)
+        })
+        == FaceClass::Inside;
 
     if b_in_a {
         // B is entirely inside A.

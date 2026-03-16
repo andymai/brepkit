@@ -30,7 +30,7 @@ use super::wire_builder::build_wire_loops;
 /// - `face_id` — the face to split
 /// - `sections` — intersection curves that cut this face (already trimmed)
 /// - `source` — which solid this face belongs to (A or B)
-/// - `tol` — UV-space tolerance for vertex deduplication
+/// - `tol` — tolerance (`.linear` for 3D matching, UV tol derived internally)
 /// - `frame` — cached `PlaneFrame` for this face (avoids origin mismatch)
 #[allow(clippy::too_many_lines)]
 pub fn split_face_2d(
@@ -38,7 +38,7 @@ pub fn split_face_2d(
     face_id: FaceId,
     sections: &[SectionEdge],
     source: Source,
-    tol: f64,
+    tol: &brepkit_math::tolerance::Tolerance,
     frame: Option<&PlaneFrame>,
 ) -> Vec<SubFace> {
     let face = match topo.face(face_id) {
@@ -80,7 +80,7 @@ pub fn split_face_2d(
     // UV tolerance mismatch from different PlaneFrame origins.
     let split_pts_3d: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
     let boundary_edges =
-        split_boundary_edges_at_3d_points(boundary_edges, &split_pts_3d, frame, tol);
+        split_boundary_edges_at_3d_points(boundary_edges, &split_pts_3d, frame, tol.linear);
 
     // Convert section edges to OrientedPCurveEdge (both orientations).
     // Use the cached frame for UV projection so coordinates are consistent
@@ -117,7 +117,7 @@ pub fn split_face_2d(
     }
 
     // Build wire loops via angular-sorting traversal.
-    let loops = build_wire_loops(&all_edges, tol, false, false);
+    let loops = build_wire_loops(&all_edges, tol.linear, false, false);
 
     // Classify each loop as outer (positive area) or hole (negative).
     let mut outers: Vec<(Vec<OrientedPCurveEdge>, f64)> = Vec::new();
