@@ -1410,7 +1410,61 @@ fn gridfinity_d5_box_with_filleted_lip() {
     };
 
     let lc = k.get_entity_counts(lip_final).unwrap();
-    eprintln!("D5 lip after fillet: F={}", lc[0]);
+    let lip_val = k.validate_solid(lip_final).unwrap();
+    let lip_euler = (lc[2] as i64) - (lc[1] as i64) + (lc[0] as i64);
+    eprintln!(
+        "D5 lip after fillet: F={} E={} V={} euler={lip_euler} val={lip_val}",
+        lc[0], lc[1], lc[2]
+    );
+    {
+        let lip_id = k.resolve_solid(lip_final).unwrap();
+        if let Ok(report) = brepkit_operations::validate::validate_solid(&k.topo, lip_id) {
+            for issue in &report.issues {
+                if issue.severity == brepkit_operations::validate::Severity::Error {
+                    eprintln!("  D5 lip ERR: {}", issue.description);
+                }
+            }
+        }
+        // Dump boundary edges
+        let solid_data = k.topo.solid(lip_id).unwrap();
+        let shell = k.topo.shell(solid_data.outer_shell()).unwrap();
+        let mut efc = std::collections::HashMap::<usize, usize>::new();
+        for &fid in shell.faces() {
+            let face = k.topo.face(fid).unwrap();
+            let wire = k.topo.wire(face.outer_wire()).unwrap();
+            for oe in wire.edges() {
+                *efc.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+        let bounds: Vec<usize> = efc
+            .iter()
+            .filter(|&(_, &c)| c == 1)
+            .map(|(&e, _)| e)
+            .collect();
+        eprintln!("  D5 lip boundary edges: {}", bounds.len());
+        for &eidx in bounds.iter().take(4) {
+            if let Some(eid) = k.topo.edge_id_from_index(eidx) {
+                if let Ok(edge) = k.topo.edge(eid) {
+                    let s = k.topo.vertex(edge.start()).unwrap().point();
+                    let e = k.topo.vertex(edge.end()).unwrap().point();
+                    let curve = match edge.curve() {
+                        brepkit_topology::edge::EdgeCurve::Line => "line",
+                        brepkit_topology::edge::EdgeCurve::Circle(_) => "circle",
+                        _ => "other",
+                    };
+                    eprintln!(
+                        "    edge[{eidx}] {curve}: ({:.2},{:.2},{:.2})→({:.2},{:.2},{:.2})",
+                        s.x(),
+                        s.y(),
+                        s.z(),
+                        e.x(),
+                        e.y(),
+                        e.z()
+                    );
+                }
+            }
+        }
+    }
 
     // Translate lip
     let mat = translate_matrix(0.0, 0.0, WALL_HEIGHT);
