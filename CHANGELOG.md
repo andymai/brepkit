@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.7.0](https://github.com/andymai/brepkit/compare/v2.6.3...v2.7.0) (2026-03-16)
+
+
+### Features
+
+* add Gauss quadrature, chord deviation to math; remove tessellation from classify + precompute ([38256d8](https://github.com/andymai/brepkit/commit/38256d810cd1fcdc87759cccd81c0c049f1c92be))
+* **boolean_v2:** parameter-space boolean pipeline — step 1 (plane-only) ([#279](https://github.com/andymai/brepkit/issues/279)) ([ee63b09](https://github.com/andymai/brepkit/commit/ee63b094f8413269ef49d9cec3ea1970810fd5d6))
+
+
+### Bug Fixes
+
+* correct fillet contact direction and NURBS AABB computation ([9166cf4](https://github.com/andymai/brepkit/commit/9166cf480ec6b632e3dc51070316e996703621b9))
+* force mesh boolean when torus faces present below threshold ([15ddff7](https://github.com/andymai/brepkit/commit/15ddff79bfe2575a6a19a4309166cd630ef791ae))
+* inject coplanar polygon edges as chords for lofted boolean cuts ([17bff8a](https://github.com/andymai/brepkit/commit/17bff8af68599fadb5d8062797dd5eb3ca98fd0b))
+* preserve inner wires through fillet + boolean surface preservation ([7080567](https://github.com/andymai/brepkit/commit/7080567b579da8736878c030a1b5dd2fb6a8dbcb))
+* relax unify_faces plane tolerance and reduce torus tessellation ([95efb82](https://github.com/andymai/brepkit/commit/95efb8273443fe3e113afad1b72c500a610e2593))
+* run unify_faces after fillet to minimize face count ([4bc8ee6](https://github.com/andymai/brepkit/commit/4bc8ee66a307228cbe1b1913f8c17371fe98aa46))
+* stitch boundary edges from spatial-hash cell-boundary straddling ([70ff533](https://github.com/andymai/brepkit/commit/70ff533bf2ed55ee1a16a9f71fc92d0db7c00a0b))
+
 ## [2.6.3](https://github.com/andymai/brepkit/compare/v2.6.2...v2.6.3) (2026-03-16)
 
 
