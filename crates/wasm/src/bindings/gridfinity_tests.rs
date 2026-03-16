@@ -1303,6 +1303,11 @@ fn gridfinity_d3_shelled_box_with_lip() {
     let p6 = parse_batch(&r6);
     assert_ok(&p6, 0);
 
+    // Check face counts before fuse
+    let bc = k.get_entity_counts(box_handle).unwrap();
+    let lc = k.get_entity_counts(lip_handle).unwrap();
+    eprintln!("D3 before fuse: box F={}, lip F={}", bc[0], lc[0]);
+
     // Fuse box + lip
     let r7 = k.execute_batch(&format!(
         r#"[{{"op": "fuse", "args": {{"solidA": {box_handle}, "solidB": {lip_handle}}}}}]"#

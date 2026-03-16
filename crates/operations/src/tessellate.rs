@@ -2320,11 +2320,15 @@ pub fn tessellate_with_uvs(
         FaceSurface::Torus(torus) => {
             let u_range = compute_angular_range(topo, face_data, |p| torus.project_point(p));
             let v_range = (0.0, std::f64::consts::TAU);
+            // u-direction: curvature from major radius (path around the edge).
+            // Using major_radius alone instead of major+minor prevents 4-10×
+            // over-tessellation on small-radius fillet surfaces (#259).
             let nu = segments_for_chord_deviation(
-                torus.major_radius() + torus.minor_radius(),
+                torus.major_radius(),
                 u_range.1 - u_range.0,
                 deflection,
             );
+            // v-direction: curvature from minor radius (fillet cross-section).
             let nv = segments_for_chord_deviation(
                 torus.minor_radius(),
                 v_range.1 - v_range.0,

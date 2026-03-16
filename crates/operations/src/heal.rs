@@ -755,8 +755,15 @@ fn surfaces_equivalent(a: &FaceSurface, b: &FaceSurface) -> bool {
 
     match (a, b) {
         (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
+            // Relaxed tolerance for plane comparison. Mesh boolean and face
+            // splitting create coplanar triangles whose normals differ by
+            // varying amounts from floating-point cross-product computation.
+            // 1e-4 radians (~0.006°) and 1e-3 mm are tight enough to avoid
+            // false merges while allowing mesh-derived coplanar faces to unify.
+            let plane_ang = 1e-4_f64;
+            let plane_lin = 1e-3_f64;
             let dot = na.dot(*nb);
-            (dot.abs() - 1.0).abs() < ang && (da - db * dot.signum()).abs() < lin
+            (dot.abs() - 1.0).abs() < plane_ang && (da - db * dot.signum()).abs() < plane_lin
         }
         (FaceSurface::Cylinder(ca), FaceSurface::Cylinder(cb)) => {
             (ca.radius() - cb.radius()).abs() < lin
