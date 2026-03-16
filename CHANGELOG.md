@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.3](https://github.com/andymai/brepkit/compare/v2.6.2...v2.6.3) (2026-03-16)
+
+
+### Bug Fixes
+
+* prevent boolean hang on complex solids from unify_faces ([#275](https://github.com/andymai/brepkit/issues/275)) ([4d7a372](https://github.com/andymai/brepkit/commit/4d7a3728045a94a5d5d8ec5517bfede53f6a2670))
+
 ## [2.6.2](https://github.com/andymai/brepkit/compare/v2.6.1...v2.6.2) (2026-03-15)
 
 
