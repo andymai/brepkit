@@ -61,6 +61,19 @@ pub fn split_face_2d(
         }];
     }
 
+    // Stage 2: Split boundary edges at section edge endpoints.
+    // Section edges start/end on boundary edges. We need to add vertices
+    // at these points so the wire builder can connect them.
+    let split_pts: Vec<Point2> = sections
+        .iter()
+        .flat_map(|s| {
+            let start_uv = project_point_on_surface(s.start, &surface, &wire_pts);
+            let end_uv = project_point_on_surface(s.end, &surface, &wire_pts);
+            vec![start_uv, end_uv]
+        })
+        .collect();
+    let boundary_edges = split_boundary_edges_at_points(boundary_edges, &split_pts, tol);
+
     // Convert section edges to OrientedPCurveEdge (both orientations).
     let mut all_edges = boundary_edges;
     for section in sections {
@@ -198,6 +211,121 @@ pub fn interior_point_3d(sub_face: &SubFace, wire_pts: &[Point3]) -> Point3 {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Split boundary edges at points where section edges start/end.
+///
+/// For each split point that lies on a boundary edge (within tolerance),
+/// replace that edge with two sub-edges: start→split and split→end.
+fn split_boundary_edges_at_points(
+    edges: Vec<OrientedPCurveEdge>,
+    split_pts: &[Point2],
+    tol: f64,
+) -> Vec<OrientedPCurveEdge> {
+    let mut result = Vec::new();
+    for edge in edges {
+        // Find all split points that lie on this edge.
+        let mut splits_on_edge: Vec<(f64, Point2)> = Vec::new();
+        for &sp in split_pts {
+            if let Some(t) = point_on_edge_parameter(&edge, sp, tol) {
+                if t > tol && t < 1.0 - tol {
+                    splits_on_edge.push((t, sp));
+                }
+            }
+        }
+
+        if splits_on_edge.is_empty() {
+            result.push(edge);
+            continue;
+        }
+
+        // Sort by parameter.
+        splits_on_edge.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        // Dedup close splits.
+        splits_on_edge.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
+
+        // Split edge into segments.
+        let mut prev_uv = edge.start_uv;
+        let mut prev_3d = edge.start_3d;
+        for (t, split_uv) in &splits_on_edge {
+            // Interpolate 3D position.
+            let split_3d = Point3::new(
+                edge.start_3d.x() + (edge.end_3d.x() - edge.start_3d.x()) * t,
+                edge.start_3d.y() + (edge.end_3d.y() - edge.start_3d.y()) * t,
+                edge.start_3d.z() + (edge.end_3d.z() - edge.start_3d.z()) * t,
+            );
+            let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                &edge.curve_3d,
+                prev_3d,
+                split_3d,
+                &brepkit_topology::face::FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, 1.0),
+                    d: 0.0,
+                },
+                &[prev_3d],
+            );
+            result.push(OrientedPCurveEdge {
+                curve_3d: edge.curve_3d.clone(),
+                pcurve,
+                start_uv: prev_uv,
+                end_uv: *split_uv,
+                start_3d: prev_3d,
+                end_3d: split_3d,
+                forward: edge.forward,
+            });
+            prev_uv = *split_uv;
+            prev_3d = split_3d;
+        }
+        // Final segment.
+        let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+            &edge.curve_3d,
+            prev_3d,
+            edge.end_3d,
+            &brepkit_topology::face::FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+            &[prev_3d],
+        );
+        result.push(OrientedPCurveEdge {
+            curve_3d: edge.curve_3d.clone(),
+            pcurve,
+            start_uv: prev_uv,
+            end_uv: edge.end_uv,
+            start_3d: prev_3d,
+            end_3d: edge.end_3d,
+            forward: edge.forward,
+        });
+    }
+    result
+}
+
+/// Check if a 2D point lies on an edge and return the parameter t ∈ [0,1].
+fn point_on_edge_parameter(edge: &OrientedPCurveEdge, point: Point2, tol: f64) -> Option<f64> {
+    let dx = edge.end_uv.x() - edge.start_uv.x();
+    let dy = edge.end_uv.y() - edge.start_uv.y();
+    let len_sq = dx * dx + dy * dy;
+    if len_sq < tol * tol {
+        return None; // Degenerate edge.
+    }
+    let px = point.x() - edge.start_uv.x();
+    let py = point.y() - edge.start_uv.y();
+
+    // Parameter along the edge.
+    let t = (px * dx + py * dy) / len_sq;
+    if t < -tol || t > 1.0 + tol {
+        return None;
+    }
+
+    // Distance from point to the edge line.
+    let dist = (px * dy - py * dx).abs() / len_sq.sqrt();
+    if dist > tol * 100.0 {
+        // Allow wider tolerance because UV coordinates come from different
+        // projections (boundary vs. section) and may have rounding.
+        return None;
+    }
+
+    Some(t.clamp(0.0, 1.0))
+}
 
 fn collect_wire_points(topo: &Topology, wire_id: brepkit_topology::wire::WireId) -> Vec<Point3> {
     let wire = match topo.wire(wire_id) {

@@ -151,27 +151,24 @@ fn intersect_two_plane_faces(
     let poly_a = collect_face_polygon(topo, fa)?;
     let poly_b = collect_face_polygon(topo, fb)?;
 
-    // Trim the infinite line to face A's boundary.
+    // Trim the infinite line to both face boundaries independently.
+    // Both use the same line_origin so t-values are compatible.
     let frame_a = plane_frame_for_polygon(na, &poly_a);
-    let segments_a = trim_line_to_polygon_3d(&line_origin, &line_dir_n, &poly_a, &frame_a);
-
-    // Trim each segment further to face B's boundary.
     let frame_b = plane_frame_for_polygon(nb, &poly_b);
-    let mut result = Vec::new();
+    let segments_a = trim_line_to_polygon_3d(&line_origin, &line_dir_n, &poly_a, &frame_a);
+    let segments_b = trim_line_to_polygon_3d(&line_origin, &line_dir_n, &poly_b, &frame_b);
 
-    for (t0, t1) in segments_a {
-        let seg_start = line_origin + line_dir_n * t0;
-        let seg_end = line_origin + line_dir_n * t1;
-        // Re-trim this segment against face B.
-        let sub_segs =
-            trim_segment_to_polygon_3d(&seg_start, &seg_end, &line_dir_n, &poly_b, &frame_b);
-        for (s0, s1) in sub_segs {
-            let start = line_origin + line_dir_n * s0;
-            let end = line_origin + line_dir_n * s1;
-            if (end - start).length() < 1e-10 {
-                continue; // Degenerate segment.
+    // Intersect the two interval sets to find the overlap.
+    let mut result = Vec::new();
+    for &(a0, a1) in &segments_a {
+        for &(b0, b1) in &segments_b {
+            let t0 = a0.max(b0);
+            let t1 = a1.min(b1);
+            if t1 - t0 < 1e-10 {
+                continue; // No overlap or degenerate.
             }
-            // Compute pcurves on each face.
+            let start = line_origin + line_dir_n * t0;
+            let end = line_origin + line_dir_n * t1;
             let pcurve_a = compute_line_pcurve(&frame_a, start, end);
             let pcurve_b = compute_line_pcurve(&frame_b, start, end);
             result.push(SectionEdge {
@@ -661,6 +658,190 @@ mod tests {
     }
 
     #[test]
+    fn trim_line_to_square_polygon_2d() {
+        // Square [0,10]×[0,10] in 2D. Vertical line through x=5.
+        let polygon = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(10.0, 0.0),
+            Point2::new(10.0, 10.0),
+            Point2::new(0.0, 10.0),
+        ];
+        // Line: origin=(5, -5), direction=(0, 1).
+        let origin = Point2::new(5.0, -5.0);
+        let dir = Vec2::new(0.0, 1.0);
+        let segments = trim_line_to_polygon_2d(origin, dir, &polygon);
+
+        assert_eq!(segments.len(), 1, "expected 1 segment, got {segments:?}");
+        let (t0, t1) = segments[0];
+        // At t=5, we reach y=0 (bottom edge). At t=15, we reach y=10 (top edge).
+        assert!((t0 - 5.0).abs() < 1e-6, "t0 = {t0}, expected ~5.0");
+        assert!((t1 - 15.0).abs() < 1e-6, "t1 = {t1}, expected ~15.0");
+    }
+
+    #[test]
+    fn trim_line_missing_polygon_2d() {
+        let polygon = vec![
+            Point2::new(0.0, 0.0),
+            Point2::new(10.0, 0.0),
+            Point2::new(10.0, 10.0),
+            Point2::new(0.0, 10.0),
+        ];
+        // Line that misses the polygon entirely: x=15.
+        let origin = Point2::new(15.0, -5.0);
+        let dir = Vec2::new(0.0, 1.0);
+        let segments = trim_line_to_polygon_2d(origin, dir, &polygon);
+        assert!(
+            segments.is_empty(),
+            "expected no segments for miss, got {segments:?}"
+        );
+    }
+
+    #[test]
+    fn solve_two_planes_gives_point_on_both() {
+        // Plane A: z=5 → normal=(0,0,1), d=5
+        // Plane B: x=3 → normal=(1,0,0), d=3
+        let na = Vec3::new(0.0, 0.0, 1.0);
+        let nb = Vec3::new(1.0, 0.0, 0.0);
+        let line_dir = na.cross(nb).normalize().unwrap();
+        let origin = solve_two_planes_origin(na, 5.0, nb, 3.0, line_dir).unwrap();
+
+        // Origin should satisfy both planes: z=5 and x=3.
+        assert!(
+            (origin.z() - 5.0).abs() < 1e-10,
+            "origin.z = {}, expected 5.0",
+            origin.z()
+        );
+        assert!(
+            (origin.x() - 3.0).abs() < 1e-10,
+            "origin.x = {}, expected 3.0",
+            origin.x()
+        );
+    }
+
+    #[test]
+    fn trim_3d_line_to_box_face() {
+        // Face A is z=0 plane of a 10×10×10 box: polygon at z=0.
+        // Intersection line: x=5, z=0, y=variable.
+        let polygon = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(10.0, 10.0, 0.0),
+            Point3::new(0.0, 10.0, 0.0),
+        ];
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let frame = PlaneFrame::from_plane_face(normal, &polygon);
+
+        let line_origin = Point3::new(5.0, 0.0, 0.0);
+        let line_dir = Vec3::new(0.0, 1.0, 0.0);
+
+        let segments = trim_line_to_polygon_3d(&line_origin, &line_dir, &polygon, &frame);
+        assert_eq!(segments.len(), 1, "expected 1 segment, got {segments:?}");
+
+        let (t0, t1) = segments[0];
+        // Should trim to y=[0,10].
+        let start = line_origin + line_dir * t0;
+        let end = line_origin + line_dir * t1;
+        assert!(
+            start.y().abs() < 0.1 && (end.y() - 10.0).abs() < 0.1,
+            "segment ({:.2},{:.2},{:.2})→({:.2},{:.2},{:.2}), expected y=[0,10]",
+            start.x(),
+            start.y(),
+            start.z(),
+            end.x(),
+            end.y(),
+            end.z()
+        );
+    }
+
+    #[test]
+    fn intersect_two_actual_box_faces() {
+        // Create a box and inspect its face geometry.
+        let mut topo = Topology::new();
+        let (a, b) = make_overlapping_boxes(&mut topo);
+        let faces_a = collect_solid_faces(&topo, a).unwrap();
+        let faces_b = collect_solid_faces(&topo, b).unwrap();
+
+        // Print face info for debugging.
+        for &fid in &faces_a {
+            let face = topo.face(fid).unwrap();
+            if let FaceSurface::Plane { normal, d } = face.surface() {
+                let poly = collect_face_polygon(&topo, fid).unwrap();
+                eprintln!(
+                    "A face {:?}: n=({:.2},{:.2},{:.2}) d={:.2} rev={} poly={:?}",
+                    fid,
+                    normal.x(),
+                    normal.y(),
+                    normal.z(),
+                    d,
+                    face.is_reversed(),
+                    poly.iter()
+                        .map(|p| format!("({:.1},{:.1},{:.1})", p.x(), p.y(), p.z()))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+        for &fid in &faces_b {
+            let face = topo.face(fid).unwrap();
+            if let FaceSurface::Plane { normal, d } = face.surface() {
+                let poly = collect_face_polygon(&topo, fid).unwrap();
+                eprintln!(
+                    "B face {:?}: n=({:.2},{:.2},{:.2}) d={:.2} rev={} poly={:?}",
+                    fid,
+                    normal.x(),
+                    normal.y(),
+                    normal.z(),
+                    d,
+                    face.is_reversed(),
+                    poly.iter()
+                        .map(|p| format!("({:.1},{:.1},{:.1})", p.x(), p.y(), p.z()))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+
+        // Try intersecting specific face pairs and check the result.
+        let mut total_sections = 0;
+        for &fa in &faces_a {
+            for &fb in &faces_b {
+                let sections = intersect_two_plane_faces(&topo, fa, fb).unwrap();
+                if !sections.is_empty() {
+                    for s in &sections {
+                        eprintln!(
+                            "  {:?}×{:?}: ({:.2},{:.2},{:.2})→({:.2},{:.2},{:.2})",
+                            fa,
+                            fb,
+                            s.start.x(),
+                            s.start.y(),
+                            s.start.z(),
+                            s.end.x(),
+                            s.end.y(),
+                            s.end.z()
+                        );
+                        // Verify section edge is within bounds of both boxes.
+                        assert!(
+                            s.start.x() >= -0.1 && s.start.x() <= 10.1,
+                            "section start x={:.2} out of bounds",
+                            s.start.x()
+                        );
+                        assert!(
+                            s.start.y() >= -0.1 && s.start.y() <= 12.1,
+                            "section start y={:.2} out of bounds",
+                            s.start.y()
+                        );
+                        assert!(
+                            s.start.z() >= -0.1 && s.start.z() <= 11.1,
+                            "section start z={:.2} out of bounds",
+                            s.start.z()
+                        );
+                    }
+                    total_sections += sections.len();
+                }
+            }
+        }
+        assert!(total_sections > 0, "no sections found");
+    }
+
+    #[test]
     fn stage1_intersection_produces_section_edges() {
         let mut topo = Topology::new();
         let (a, b) = make_overlapping_boxes(&mut topo);
@@ -770,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "WIP: intersection trimming produces out-of-bounds section edges"]
+    #[ignore = "WIP: face splitting partially works (18/expected ~24 sub-faces), classification needs tuning"]
     fn boolean_v2_box_cut_box() {
         let mut topo = Topology::new();
         let (a, b) = make_overlapping_boxes(&mut topo);
@@ -786,7 +967,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "WIP: intersection trimming produces out-of-bounds section edges"]
+    #[ignore = "WIP: face splitting partially works (18/expected ~24 sub-faces), classification needs tuning"]
     fn boolean_v2_box_fuse_box() {
         let mut topo = Topology::new();
         let (a, b) = make_overlapping_boxes(&mut topo);
@@ -800,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "WIP: intersection trimming produces out-of-bounds section edges"]
+    #[ignore = "WIP: face splitting partially works (18/expected ~24 sub-faces), classification needs tuning"]
     fn boolean_v2_box_intersect_box() {
         let mut topo = Topology::new();
         let (a, b) = make_overlapping_boxes(&mut topo);
