@@ -15,10 +15,16 @@ use brepkit_math::vec::{Point2, Vec2};
 ///
 /// `loop_pts` must be the vertices of a closed polygon (≥3 points).
 pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
-    assert!(
-        loop_pts.len() >= 3,
-        "need at least 3 points for interior sampling"
-    );
+    // Graceful fallback for degenerate inputs instead of panicking.
+    if loop_pts.is_empty() {
+        return Point2::new(0.0, 0.0);
+    }
+    if loop_pts.len() < 3 {
+        let n = loop_pts.len() as f64;
+        let cx = loop_pts.iter().map(|p| p.x()).sum::<f64>() / n;
+        let cy = loop_pts.iter().map(|p| p.y()).sum::<f64>() / n;
+        return Point2::new(cx, cy);
+    }
 
     // 1. Compute centroid.
     let n = loop_pts.len() as f64;

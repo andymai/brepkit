@@ -170,7 +170,13 @@ pub fn build_wire_loops(
 
 /// Quantize a 2D point to an integer key for vertex deduplication.
 fn quantize_uv(p: Point2, tol: f64) -> (i64, i64) {
-    let resolution = 1.0 / tol;
+    // Guard against non-positive or non-finite tolerance.
+    let safe_tol = if tol <= 0.0 || !tol.is_finite() {
+        1e-7
+    } else {
+        tol
+    };
+    let resolution = 1.0 / safe_tol;
     (
         (p.x() * resolution).round() as i64,
         (p.y() * resolution).round() as i64,

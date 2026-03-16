@@ -121,13 +121,20 @@ fn intersect_two_plane_faces(
     let face_a = topo.face(fa)?;
     let face_b = topo.face(fb)?;
 
-    let (na, da) = match face_a.surface() {
-        FaceSurface::Plane { normal, d } => (*normal, *d),
-        _ => return Ok(Vec::new()),
+    // Guarded by `all_faces_plane()` at the entry point of `boolean_v2()`.
+    let Some((na, da)) = (match face_a.surface() {
+        FaceSurface::Plane { normal, d } => Some((*normal, *d)),
+        _ => None,
+    }) else {
+        debug_assert!(false, "non-plane face reached intersect_two_plane_faces");
+        return Ok(Vec::new());
     };
-    let (nb, db) = match face_b.surface() {
-        FaceSurface::Plane { normal, d } => (*normal, *d),
-        _ => return Ok(Vec::new()),
+    let Some((nb, db)) = (match face_b.surface() {
+        FaceSurface::Plane { normal, d } => Some((*normal, *d)),
+        _ => None,
+    }) else {
+        debug_assert!(false, "non-plane face reached intersect_two_plane_faces");
+        return Ok(Vec::new());
     };
 
     // Plane-plane intersection: line direction = na × nb.
@@ -284,9 +291,10 @@ fn classify_point_against_solid(
     point: Point3,
     face_polys: &[(Vec<Point3>, Vec3, f64)],
 ) -> FaceClass {
-    // Cast a ray along +Z and count crossings.
+    // Cast a ray along +Z and count crossings using even-odd parity.
+    // Odd crossing count = inside, even = outside.
     let ray_dir = Vec3::new(0.0, 0.0, 1.0);
-    let mut crossings = 0i32;
+    let mut crossings = 0u32;
 
     for (verts, normal, d) in face_polys {
         // Check if the ray from `point` in `ray_dir` crosses this face polygon.
@@ -302,11 +310,11 @@ fn classify_point_against_solid(
         // Check if hit point is inside the face polygon using 2D projection.
         // Project onto the face's dominant plane.
         if point_in_face_polygon_3d(hit, verts, normal) {
-            crossings += if denom > 0.0 { 1 } else { -1 };
+            crossings += 1;
         }
     }
 
-    if crossings > 0 {
+    if crossings != 0 && crossings % 2 != 0 {
         FaceClass::Inside
     } else {
         FaceClass::Outside
@@ -463,14 +471,14 @@ fn compute_line_pcurve(
     start: Point3,
     end: Point3,
 ) -> brepkit_math::curves2d::Curve2D {
-    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::curves2d::Curve2D;
     let p0 = frame.project(start);
     let p1 = frame.project(end);
     let dir = Vec2::new(p1.x() - p0.x(), p1.y() - p0.y());
-    Curve2D::Line(Line2D::new(p0, dir).unwrap_or_else(|_| {
-        #[allow(clippy::unwrap_used)]
-        Line2D::new(p0, Vec2::new(1.0, 0.0)).unwrap()
-    }))
+    // Build a Line2D from the projected direction. If degenerate
+    // (zero-length), fall back to unit x-axis via make_line2d_safe which
+    // centralizes the single #[allow(clippy::unwrap_used)].
+    Curve2D::Line(super::pcurve_compute::make_line2d_safe(p0, dir))
 }
 
 // ---------------------------------------------------------------------------
@@ -624,6 +632,9 @@ fn handle_disjoint_v2(
         BooleanOp::Fuse => {
             // For disjoint fuse, return a copy of both solids merged.
             // Simple approach: copy solid A.
+            // TODO: Step 1 limitation — this discards solid B. A full
+            // implementation should copy both solids into a compound or
+            // merged shell so the result contains all geometry.
             Ok(crate::copy::copy_solid(topo, a)?)
         }
         BooleanOp::Cut => {

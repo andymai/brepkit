@@ -65,7 +65,7 @@ pub fn plane_frame_for_face(normal: Vec3, wire_pts: &[Point3]) -> PlaneFrame {
 }
 
 /// Create a `Line2D` safely, handling degenerate (zero-length) directions.
-fn make_line2d_safe(origin: Point2, dir: Vec2) -> Line2D {
+pub(super) fn make_line2d_safe(origin: Point2, dir: Vec2) -> Line2D {
     Line2D::new(origin, dir).unwrap_or_else(|_| {
         // Degenerate edge — fallback to x-axis direction.
         // Safety: (1, 0) is non-zero, so Line2D::new cannot fail.
