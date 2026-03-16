@@ -10,6 +10,7 @@ mod classify;
 mod compound;
 mod fragments;
 mod intersect;
+pub(crate) mod pcurve_compute;
 pub(crate) mod pipeline;
 pub(crate) mod plane_frame;
 mod precompute;
