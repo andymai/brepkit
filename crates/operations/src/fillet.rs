@@ -1742,6 +1742,11 @@ pub fn fillet_rolling_ball(
         }
     }
 
+    // Merge co-surface faces that the fillet may have split. This keeps the
+    // face count minimal, preventing the downstream boolean from triggering
+    // the mesh boolean fallback on moderate-complexity filleted solids.
+    let _ = crate::heal::unify_faces(topo, solid_id);
+
     Ok(solid_id)
 }
 
