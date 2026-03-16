@@ -147,12 +147,19 @@ pub fn boolean_with_options(
     {
         let count_a = topo.shell(topo.solid(a)?.outer_shell())?.faces().len();
         let count_b = topo.shell(topo.solid(b)?.outer_shell())?.faces().len();
+        // Also force mesh boolean when either solid has torus faces and the
+        // analytic path was skipped. The chord-based path tessellates torus
+        // faces into hundreds of triangles, making O(N²) intersection
+        // prohibitively slow. Mesh boolean handles this in O(N log N).
+        let has_torus_faces = !try_analytic
+            && (has_torus(topo, a).unwrap_or(false) || has_torus(topo, b).unwrap_or(false));
         if count_a > types::MESH_BOOLEAN_PER_SOLID_THRESHOLD
             || count_b > types::MESH_BOOLEAN_PER_SOLID_THRESHOLD
             || count_a + count_b > types::MESH_BOOLEAN_FACE_THRESHOLD
+            || has_torus_faces
         {
             log::debug!(
-                "boolean {op:?}: high face count ({count_a} + {count_b}), using mesh boolean"
+                "boolean {op:?}: high face count ({count_a} + {count_b}) or torus, using mesh boolean"
             );
             match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
                 Ok(result) => return Ok(result),
