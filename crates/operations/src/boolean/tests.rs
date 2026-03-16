@@ -2863,3 +2863,257 @@ fn non_convex_face_survives_subsequent_cut() {
     // box_b, height 1.0 → removed = 0.1875, expected = 3.0 - 0.1875 = 2.8125.
     assert_volume_near(&topo, result, 2.8125, 0.025);
 }
+
+/// Reproducer: fuse a shelled rounded-rect box with a planar socket loft.
+///
+/// This mimics the gridfinity bin pipeline: extruded rounded-rect box → shell
+/// (remove top face) → fuse with a simple lofted socket shape. The box has
+/// cylindrical barrel faces at the 4 rounded corners. The socket loft has only
+/// planar faces. The analytic boolean handles this fuse (both are "analytic"
+/// surface types: plane + cylinder).
+///
+/// Expected: manifold solid with euler=2, no boundary edges.
+/// Observed: non-manifold topology, cylinder faces appear disconnected.
+#[test]
+fn fuse_shelled_box_with_socket_loft() {
+    use brepkit_math::curves::Circle3D;
+
+    // Helper: create a rounded-rect profile with Circle arc edges at corners.
+    // This matches what brepjs drawRoundedRectangle() produces, giving
+    // cylindrical barrel faces when extruded.
+    fn make_rr_profile_with_arcs(topo: &mut Topology, hw: f64, hd: f64, r: f64, z: f64) -> FaceId {
+        let tol_val = 1e-7;
+        let r = r.min(hw.min(hd));
+        // 8 vertices: 4 straight segments + 4 arc segments
+        // Corners: bottom-right, top-right, top-left, bottom-left
+        let corner_centers = [
+            Point3::new(hw - r, -hd + r, z),  // BR
+            Point3::new(hw - r, hd - r, z),   // TR
+            Point3::new(-hw + r, hd - r, z),  // TL
+            Point3::new(-hw + r, -hd + r, z), // BL
+        ];
+        // Start/end points of each arc (CCW from bottom)
+        let arc_pts = [
+            // BR: from (hw-r,-hd) going CW to (hw,-hd+r) — actually CCW from bottom
+            (Point3::new(hw - r, -hd, z), Point3::new(hw, -hd + r, z)),
+            // TR: from (hw, hd-r) to (hw-r, hd)
+            (Point3::new(hw, hd - r, z), Point3::new(hw - r, hd, z)),
+            // TL: from (hw-r, hd) — actually (-hw+r, hd) to (-hw, hd-r)
+            (Point3::new(-hw + r, hd, z), Point3::new(-hw, hd - r, z)),
+            // BL: from (-hw, -hd+r) to (-hw+r, -hd)
+            (Point3::new(-hw, -hd + r, z), Point3::new(-hw + r, -hd, z)),
+        ];
+
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let mut vids = Vec::new();
+        let mut edges = Vec::new();
+
+        // Build 8 vertices (start of each segment)
+        for i in 0..4 {
+            let (p_start, _) = arc_pts[i];
+            let (_, p_end) = arc_pts[i];
+            vids.push(topo.add_vertex(Vertex::new(p_start, tol_val)));
+            vids.push(topo.add_vertex(Vertex::new(p_end, tol_val)));
+        }
+        // vids: [BR_start, BR_end, TR_start, TR_end, TL_start, TL_end, BL_start, BL_end]
+
+        // Build edges: line, arc, line, arc, line, arc, line, arc (CCW from bottom)
+        // Bottom line: BL_end → BR_start
+        edges.push(topo.add_edge(Edge::new(vids[7], vids[0], EdgeCurve::Line)));
+        // BR arc: BR_start → BR_end
+        let br_circle = Circle3D::new(corner_centers[0], axis, r).unwrap();
+        edges.push(topo.add_edge(Edge::new(vids[0], vids[1], EdgeCurve::Circle(br_circle))));
+        // Right line: BR_end → TR_start
+        edges.push(topo.add_edge(Edge::new(vids[1], vids[2], EdgeCurve::Line)));
+        // TR arc: TR_start → TR_end
+        let tr_circle = Circle3D::new(corner_centers[1], axis, r).unwrap();
+        edges.push(topo.add_edge(Edge::new(vids[2], vids[3], EdgeCurve::Circle(tr_circle))));
+        // Top line: TR_end → TL_start
+        edges.push(topo.add_edge(Edge::new(vids[3], vids[4], EdgeCurve::Line)));
+        // TL arc: TL_start → TL_end
+        let tl_circle = Circle3D::new(corner_centers[2], axis, r).unwrap();
+        edges.push(topo.add_edge(Edge::new(vids[4], vids[5], EdgeCurve::Circle(tl_circle))));
+        // Left line: TL_end → BL_start
+        edges.push(topo.add_edge(Edge::new(vids[5], vids[6], EdgeCurve::Line)));
+        // BL arc: BL_start → BL_end
+        let bl_circle = Circle3D::new(corner_centers[3], axis, r).unwrap();
+        edges.push(topo.add_edge(Edge::new(vids[6], vids[7], EdgeCurve::Circle(bl_circle))));
+
+        let wire = Wire::new(
+            edges
+                .iter()
+                .map(|&eid| OrientedEdge::new(eid, true))
+                .collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: z,
+            },
+        ))
+    }
+
+    // Helper: polygon-based profile (for socket loft — no arcs).
+    fn make_rr_profile_poly(
+        topo: &mut Topology,
+        hw: f64,
+        hd: f64,
+        r: f64,
+        z: f64,
+        nq: usize,
+    ) -> FaceId {
+        let tol_val = 1e-7;
+        let r = r.min(hw.min(hd));
+        let mut pts = Vec::new();
+        pts.push(Point3::new(-hw + r, -hd, z));
+        pts.push(Point3::new(hw - r, -hd, z));
+        for i in 0..nq {
+            let a = -std::f64::consts::FRAC_PI_2
+                + std::f64::consts::FRAC_PI_2 * (i as f64 + 1.0) / nq as f64;
+            pts.push(Point3::new(hw - r + r * a.cos(), -hd + r + r * a.sin(), z));
+        }
+        pts.push(Point3::new(hw, hd - r, z));
+        for i in 0..nq {
+            let a = std::f64::consts::FRAC_PI_2 * (i as f64 + 1.0) / nq as f64;
+            pts.push(Point3::new(hw - r + r * a.cos(), hd - r + r * a.sin(), z));
+        }
+        pts.push(Point3::new(-hw + r, hd, z));
+        for i in 0..nq {
+            let a = std::f64::consts::FRAC_PI_2
+                + std::f64::consts::FRAC_PI_2 * (i as f64 + 1.0) / nq as f64;
+            pts.push(Point3::new(-hw + r + r * a.cos(), hd - r + r * a.sin(), z));
+        }
+        pts.push(Point3::new(-hw, -hd + r, z));
+        for i in 0..nq {
+            let a =
+                std::f64::consts::PI + std::f64::consts::FRAC_PI_2 * (i as f64 + 1.0) / nq as f64;
+            pts.push(Point3::new(-hw + r + r * a.cos(), -hd + r + r * a.sin(), z));
+        }
+        let n = pts.len();
+        let vids: Vec<_> = pts
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, tol_val)))
+            .collect();
+        let eids: Vec<_> = (0..n)
+            .map(|i| topo.add_edge(Edge::new(vids[i], vids[(i + 1) % n], EdgeCurve::Line)))
+            .collect();
+        let wire = Wire::new(
+            eids.iter()
+                .map(|&eid| OrientedEdge::new(eid, true))
+                .collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: z,
+            },
+        ))
+    }
+
+    let mut topo = Topology::new();
+
+    // Step 1: Create a rounded-rect profile WITH CIRCLE ARCS and extrude it.
+    // This creates a box with 4 cylindrical barrel faces at the corners.
+    let hw: f64 = 20.75;
+    let hd: f64 = 20.75;
+    let r: f64 = 4.0;
+    let nq: usize = 8;
+    let profile = make_rr_profile_with_arcs(&mut topo, hw, hd, r, 0.0);
+    let box_solid =
+        crate::extrude::extrude(&mut topo, profile, Vec3::new(0.0, 0.0, 1.0), 16.0).unwrap();
+
+    let box_vol = crate::measure::solid_volume(&topo, box_solid, 0.01).unwrap();
+    eprintln!("box volume: {box_vol:.1}");
+    assert!(box_vol > 0.0);
+
+    // Verify box has cylinder faces.
+    let box_shell = topo
+        .shell(topo.solid(box_solid).unwrap().outer_shell())
+        .unwrap();
+    let cyl_count = box_shell
+        .faces()
+        .iter()
+        .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cylinder(_)))
+        .count();
+    eprintln!("box cylinder faces: {cyl_count}");
+    assert!(cyl_count >= 4, "box should have cylinder faces at corners");
+
+    // Step 2: Shell the box (remove top face).
+    let top_faces: Vec<FaceId> = box_shell
+        .faces()
+        .iter()
+        .filter(|&&fid| {
+            let face = topo.face(fid).unwrap();
+            if let FaceSurface::Plane { normal, .. } = face.surface() {
+                normal.z() > 0.5
+            } else {
+                false
+            }
+        })
+        .copied()
+        .collect();
+    assert_eq!(top_faces.len(), 1, "should have exactly 1 top face");
+    let shelled = crate::shell_op::shell(&mut topo, box_solid, 1.2, &top_faces).unwrap();
+
+    let shelled_vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
+    eprintln!("shelled volume: {shelled_vol:.1}");
+    assert!(shelled_vol > 0.0);
+
+    // Step 3: Create a simple 2-section socket loft (polygon edges, no arcs).
+    let socket_top = make_rr_profile_poly(&mut topo, hw, hd, r, 0.0, nq);
+    let socket_bot = make_rr_profile_poly(
+        &mut topo,
+        hw - 2.0,
+        hd - 2.0,
+        (r - 2.0_f64).max(0.1),
+        -5.0,
+        nq,
+    );
+    let socket = crate::loft::loft(&mut topo, &[socket_bot, socket_top]).unwrap();
+
+    let socket_vol = crate::measure::solid_volume(&topo, socket, 0.01).unwrap();
+    eprintln!("socket volume: {socket_vol:.1}");
+    assert!(socket_vol > 0.0);
+
+    // Step 4: Fuse socket with shelled box.
+    // This is where the analytic boolean handles plane-cylinder intersections.
+    let fused = boolean(&mut topo, BooleanOp::Fuse, shelled, socket).unwrap();
+
+    let fused_shell = topo
+        .shell(topo.solid(fused).unwrap().outer_shell())
+        .unwrap();
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, fused).unwrap();
+    #[allow(clippy::cast_possible_wrap)]
+    let euler = (v as i64) - (e as i64) + (f as i64);
+    let fused_vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+
+    eprintln!("fused: F={f}, E={e}, V={v}, euler={euler}, vol={fused_vol:.1}");
+
+    // The fused solid should be manifold.
+    let val_result = brepkit_topology::validation::validate_shell_manifold(
+        fused_shell,
+        topo.faces(),
+        topo.wires(),
+    );
+    let is_manifold = val_result.is_ok();
+    if let Err(ref issues) = val_result {
+        eprintln!("manifold issues: {issues:?}");
+    }
+
+    assert!(fused_vol > 0.0, "fused volume should be positive");
+    assert!(
+        euler == 2,
+        "fused euler should be 2, got {euler} (F={f}, E={e}, V={v})"
+    );
+    assert!(is_manifold, "fused solid should be manifold");
+}
