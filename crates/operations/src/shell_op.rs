@@ -271,6 +271,7 @@ pub fn shell(
                     vertices: verts.clone(),
                     normal: *normal,
                     d: *d,
+                    inner_wires: vec![],
                 });
             }
             FaceSurface::Cylinder(cyl) => {
@@ -286,12 +287,14 @@ pub fn shell(
                         vertices: verts.clone(),
                         surface: FaceSurface::Cylinder(cyl.clone()),
                         reversed: false,
+                        inner_wires: vec![],
                     });
                 } else {
                     result_specs.push(FaceSpec::CylindricalFace {
                         vertices: verts.clone(),
                         cylinder: cyl.clone(),
                         reversed: false,
+                        inner_wires: vec![],
                     });
                 }
             }
@@ -300,6 +303,7 @@ pub fn shell(
                     vertices: verts.clone(),
                     surface: other.clone(),
                     reversed: false,
+                    inner_wires: vec![],
                 });
             }
         }
@@ -332,6 +336,7 @@ pub fn shell(
                     vertices: inner_verts,
                     normal: inner_normal,
                     d: inner_d,
+                    inner_wires: vec![],
                 });
             }
             FaceSurface::Cylinder(cyl) => {
@@ -357,12 +362,14 @@ pub fn shell(
                                 vertices: inner_verts,
                                 surface: FaceSurface::Cylinder(new_cyl),
                                 reversed: true,
+                                inner_wires: vec![],
                             });
                         } else {
                             result_specs.push(FaceSpec::CylindricalFace {
                                 vertices: inner_verts,
                                 cylinder: new_cyl,
                                 reversed: true,
+                                inner_wires: vec![],
                             });
                         }
                     }
@@ -375,6 +382,7 @@ pub fn shell(
                     vertices: inner_verts,
                     surface: inner_face.surface().clone(),
                     reversed: true,
+                    inner_wires: vec![],
                 });
             }
             FaceSurface::Sphere(sphere) => {
@@ -394,6 +402,7 @@ pub fn shell(
                     vertices: inner_verts,
                     surface: FaceSurface::Sphere(new_sph),
                     reversed: true,
+                    inner_wires: vec![],
                 });
             }
             FaceSurface::Nurbs(_) | FaceSurface::Torus(_) => {
@@ -403,6 +412,7 @@ pub fn shell(
                     vertices: inner_verts,
                     surface: inner_face.surface().clone(),
                     reversed: true,
+                    inner_wires: vec![],
                 });
             }
         }

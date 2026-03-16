@@ -249,13 +249,22 @@ pub fn fillet(
         // Inner wire edges also contribute to adjacency: an edge shared
         // between a face's inner wire (hole boundary) and another face's
         // outer wire should be counted for both faces.
+        // Also extract inner wire vertex positions for preservation.
+        let mut face_inner_wires = Vec::new();
         for &inner_wid in face.inner_wires() {
             let inner_wire = topo.wire(inner_wid)?;
+            let mut iw_positions = Vec::new();
             for oe in inner_wire.edges() {
                 edge_to_faces
                     .entry(oe.edge().index())
                     .or_default()
                     .push(face_id);
+                let edge = topo.edge(oe.edge())?;
+                let vid = oe.oriented_start(edge);
+                iw_positions.push(topo.vertex(vid)?.point());
+            }
+            if !iw_positions.is_empty() {
+                face_inner_wires.push(iw_positions);
             }
         }
 
@@ -278,6 +287,7 @@ pub fn fillet(
                 wire_edge_ids,
                 normal,
                 d,
+                inner_wires: face_inner_wires,
             },
         );
     }
@@ -322,10 +332,12 @@ pub fn fillet(
         let Some(poly) = face_polygons.get(&face_id.index()) else {
             let face = topo.face(face_id)?;
             let verts = crate::boolean::face_polygon(topo, face_id)?;
+            let np_inner = extract_inner_wire_positions(topo, face)?;
             result_specs.push(FaceSpec::Surface {
                 vertices: verts,
                 surface: face.surface().clone(),
                 reversed: false,
+                inner_wires: np_inner,
             });
             continue;
         };
@@ -414,6 +426,7 @@ pub fn fillet(
             vertices: new_verts,
             normal: poly.normal,
             d: new_d,
+            inner_wires: poly.inner_wires.clone(),
         });
     }
 
@@ -480,6 +493,7 @@ pub fn fillet(
             vertices: quad,
             normal,
             d,
+            inner_wires: vec![],
         });
     }
 
@@ -564,13 +578,22 @@ pub fn fillet_rolling_ball(
         }
 
         // Inner wire edges also contribute to adjacency.
+        // Also extract inner wire vertex positions for preservation.
+        let mut face_inner_wires = Vec::new();
         for &inner_wid in face.inner_wires() {
             let inner_wire = topo.wire(inner_wid)?;
+            let mut iw_positions = Vec::new();
             for oe in inner_wire.edges() {
                 edge_to_faces
                     .entry(oe.edge().index())
                     .or_default()
                     .push(face_id);
+                let edge = topo.edge(oe.edge())?;
+                let vid = oe.oriented_start(edge);
+                iw_positions.push(topo.vertex(vid)?.point());
+            }
+            if !iw_positions.is_empty() {
+                face_inner_wires.push(iw_positions);
             }
         }
 
@@ -590,6 +613,7 @@ pub fn fillet_rolling_ball(
                 wire_edge_ids,
                 normal,
                 d,
+                inner_wires: face_inner_wires,
             },
         );
     }
@@ -1093,10 +1117,12 @@ pub fn fillet_rolling_ball(
             if !has_target {
                 // No target edges: pass through unchanged.
                 let verts = crate::boolean::face_polygon(topo, face_id)?;
+                let np_inner = extract_inner_wire_positions(topo, face)?;
                 all_specs.push(FaceSpec::Surface {
                     vertices: verts,
                     surface,
                     reversed: false,
+                    inner_wires: np_inner,
                 });
                 continue;
             }
@@ -1121,10 +1147,12 @@ pub fn fillet_rolling_ball(
             if n_we < 3 {
                 // Degenerate non-planar face: pass through unchanged.
                 let verts = crate::boolean::face_polygon(topo, face_id)?;
+                let np_inner = extract_inner_wire_positions(topo, face)?;
                 all_specs.push(FaceSpec::Surface {
                     vertices: verts,
                     surface,
                     reversed: false,
+                    inner_wires: np_inner,
                 });
                 continue;
             }
@@ -1248,10 +1276,12 @@ pub fn fillet_rolling_ball(
                 }
             }
 
+            let np_inner = extract_inner_wire_positions(topo, face)?;
             all_specs.push(FaceSpec::Surface {
                 vertices: trimmed_verts,
                 surface,
                 reversed: false,
+                inner_wires: np_inner,
             });
             continue;
         };
@@ -1264,6 +1294,7 @@ pub fn fillet_rolling_ball(
                 vertices: poly.positions.clone(),
                 normal: poly.normal,
                 d: poly.d,
+                inner_wires: poly.inner_wires.clone(),
             });
             continue;
         }
@@ -1374,6 +1405,7 @@ pub fn fillet_rolling_ball(
             vertices: new_verts,
             normal: poly.normal,
             d: new_d,
+            inner_wires: poly.inner_wires.clone(),
         });
     }
 
@@ -1567,6 +1599,7 @@ pub fn fillet_rolling_ball(
             vertices: vec![contact1_start, contact2_start, contact2_end, contact1_end],
             surface: FaceSurface::Nurbs(fillet_surface),
             reversed: false,
+            inner_wires: vec![],
         });
 
         // Track which faces need normal reversal.
@@ -1880,6 +1913,7 @@ pub fn fillet_rolling_ball(
                         vertices: ordered_points,
                         surface: FaceSurface::Nurbs(cap_surface),
                         reversed: false,
+                        inner_wires: vec![],
                     });
 
                     // Check if we need to flip this face.
@@ -1906,6 +1940,7 @@ pub fn fillet_rolling_ball(
             vertices: ordered_points,
             normal: blend_normal,
             d: blend_d,
+            inner_wires: vec![],
         });
     }
 
@@ -1984,8 +2019,22 @@ pub fn fillet_rolling_ball(
                 }
             }
         }
+        // Also collect inner wire vertex positions.
+        for poly in face_polygons.values() {
+            for iw in &poly.inner_wires {
+                for &p in iw {
+                    let already = original_verts
+                        .iter()
+                        .any(|existing| (*existing - p).length() < tol.linear);
+                    if !already {
+                        original_verts.push(p);
+                    }
+                }
+            }
+        }
         let snap_tol = tol.linear * 100.0;
         for spec in &mut all_specs {
+            // Snap outer wire vertices.
             let verts = match spec {
                 FaceSpec::Planar { vertices, .. }
                 | FaceSpec::Surface { vertices, .. }
@@ -2003,6 +2052,23 @@ pub fn fillet_rolling_ball(
                     })
                 {
                     *v = *closest;
+                }
+            }
+            // Snap inner wire vertices.
+            for iw in spec.inner_wires_mut() {
+                for v in iw.iter_mut() {
+                    if let Some(closest) = original_verts
+                        .iter()
+                        .filter(|ov| (**ov - *v).length() < snap_tol)
+                        .min_by(|a, b| {
+                            (**a - *v)
+                                .length()
+                                .partial_cmp(&(**b - *v).length())
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                    {
+                        *v = *closest;
+                    }
                 }
             }
         }
@@ -2035,6 +2101,32 @@ pub fn fillet_rolling_ball(
     Ok(solid_id)
 }
 
+// ── Internal helpers ───────────────────────────────────────────────
+
+/// Extract inner wire vertex positions from a face's topology.
+///
+/// Used for non-planar faces that don't have a `FacePolygon` (planar faces
+/// store inner wires in `FacePolygon::inner_wires` instead).
+fn extract_inner_wire_positions(
+    topo: &brepkit_topology::Topology,
+    face: &brepkit_topology::face::Face,
+) -> Result<Vec<Vec<Point3>>, crate::OperationsError> {
+    let mut result = Vec::new();
+    for &inner_wid in face.inner_wires() {
+        let inner_wire = topo.wire(inner_wid)?;
+        let mut iw_positions = Vec::new();
+        for oe in inner_wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let vid = oe.oriented_start(edge);
+            iw_positions.push(topo.vertex(vid)?.point());
+        }
+        if !iw_positions.is_empty() {
+            result.push(iw_positions);
+        }
+    }
+    Ok(result)
+}
+
 // ── Internal data structures ───────────────────────────────────────
 
 struct FacePolygon {
@@ -2044,6 +2136,8 @@ struct FacePolygon {
     normal: Vec3,
     #[allow(dead_code)]
     d: f64,
+    /// Inner wire vertex positions (holes in the face).
+    inner_wires: Vec<Vec<Point3>>,
 }
 
 struct FilletEdgeData {
@@ -2376,6 +2470,25 @@ pub fn fillet_variable(
                 .push(face_id);
         }
 
+        // Extract inner wire vertex positions for preservation.
+        let mut face_inner_wires = Vec::new();
+        for &inner_wid in face.inner_wires() {
+            let inner_wire = topo.wire(inner_wid)?;
+            let mut iw_positions = Vec::new();
+            for oe in inner_wire.edges() {
+                edge_to_faces
+                    .entry(oe.edge().index())
+                    .or_default()
+                    .push(face_id);
+                let edge_data = topo.edge(oe.edge())?;
+                let vid = oe.oriented_start(edge_data);
+                iw_positions.push(topo.vertex(vid)?.point());
+            }
+            if !iw_positions.is_empty() {
+                face_inner_wires.push(iw_positions);
+            }
+        }
+
         // Build polygon data for planar faces (used for trimming).
         let normal = match face.surface() {
             FaceSurface::Plane { normal, .. } => *normal,
@@ -2390,6 +2503,7 @@ pub fn fillet_variable(
                 wire_edge_ids,
                 normal,
                 d: 0.0,
+                inner_wires: face_inner_wires,
             },
         );
     }
@@ -2410,10 +2524,12 @@ pub fn fillet_variable(
         let Some(poly) = face_polygons.get(&face_id.index()) else {
             let face = topo.face(face_id)?;
             let verts = crate::boolean::face_polygon(topo, face_id)?;
+            let np_inner = extract_inner_wire_positions(topo, face)?;
             all_specs.push(FaceSpec::Surface {
                 vertices: verts,
                 surface: face.surface().clone(),
                 reversed: false,
+                inner_wires: np_inner,
             });
             continue;
         };
@@ -2425,6 +2541,7 @@ pub fn fillet_variable(
                 vertices: poly.positions.clone(),
                 normal: poly.normal,
                 d: poly.d,
+                inner_wires: poly.inner_wires.clone(),
             });
             continue;
         }
@@ -2474,6 +2591,7 @@ pub fn fillet_variable(
             vertices: new_verts,
             normal: poly.normal,
             d: new_d,
+            inner_wires: poly.inner_wires.clone(),
         });
     }
 
@@ -2654,6 +2772,7 @@ pub fn fillet_variable(
             vertices: vec![c1s, c2s, c2e, c1e],
             surface: FaceSurface::Nurbs(surface),
             reversed: false,
+            inner_wires: vec![],
         });
     }
 

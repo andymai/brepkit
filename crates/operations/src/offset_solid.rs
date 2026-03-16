@@ -232,6 +232,7 @@ fn offset_solid_general(
                     vertices: verts,
                     normal: *normal,
                     d: *d,
+                    inner_wires: vec![],
                 });
             }
             other => {
@@ -239,6 +240,7 @@ fn offset_solid_general(
                     vertices: verts,
                     surface: other.clone(),
                     reversed: false,
+                    inner_wires: vec![],
                 });
             }
         }

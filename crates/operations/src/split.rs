@@ -79,12 +79,14 @@ pub fn split(
                         vertices: v,
                         normal: *fn_,
                         d: *fd,
+                        inner_wires: vec![],
                     }
                 }
                 other => FaceSpec::Surface {
                     vertices: v,
                     surface: other.clone(),
                     reversed: false,
+                    inner_wires: vec![],
                 },
             }
         };
@@ -129,11 +131,13 @@ pub fn split(
             vertices: cap_verts.clone(),
             normal: -cap_normal,
             d: -cap_d,
+            inner_wires: vec![],
         });
         negative_specs.push(FaceSpec::Planar {
             vertices: cap_verts,
             normal: cap_normal,
             d: cap_d,
+            inner_wires: vec![],
         });
     }
 

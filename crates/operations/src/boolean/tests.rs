@@ -472,6 +472,7 @@ fn assemble_mixed_planar_only() {
             ],
             normal: Vec3::new(0.0, 0.0, -1.0),
             d: 0.0,
+            inner_wires: vec![],
         },
         FaceSpec::Planar {
             vertices: vec![
@@ -482,6 +483,7 @@ fn assemble_mixed_planar_only() {
             ],
             normal: Vec3::new(0.0, 0.0, 1.0),
             d: 1.0,
+            inner_wires: vec![],
         },
         FaceSpec::Planar {
             vertices: vec![
@@ -492,6 +494,7 @@ fn assemble_mixed_planar_only() {
             ],
             normal: Vec3::new(0.0, -1.0, 0.0),
             d: 0.0,
+            inner_wires: vec![],
         },
         FaceSpec::Planar {
             vertices: vec![
@@ -502,6 +505,7 @@ fn assemble_mixed_planar_only() {
             ],
             normal: Vec3::new(0.0, 1.0, 0.0),
             d: 1.0,
+            inner_wires: vec![],
         },
         FaceSpec::Planar {
             vertices: vec![
@@ -512,6 +516,7 @@ fn assemble_mixed_planar_only() {
             ],
             normal: Vec3::new(-1.0, 0.0, 0.0),
             d: 0.0,
+            inner_wires: vec![],
         },
         FaceSpec::Planar {
             vertices: vec![
@@ -522,6 +527,7 @@ fn assemble_mixed_planar_only() {
             ],
             normal: Vec3::new(1.0, 0.0, 0.0),
             d: 1.0,
+            inner_wires: vec![],
         },
     ];
 
@@ -565,6 +571,7 @@ fn assemble_mixed_with_nurbs() {
             ],
             normal: Vec3::new(0.0, 0.0, -1.0),
             d: 0.0,
+            inner_wires: vec![],
         },
         FaceSpec::Surface {
             vertices: vec![
@@ -575,6 +582,7 @@ fn assemble_mixed_with_nurbs() {
             ],
             surface: FaceSurface::Nurbs(nurbs),
             reversed: false,
+            inner_wires: vec![],
         },
     ];
 

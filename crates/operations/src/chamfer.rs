@@ -273,6 +273,7 @@ fn chamfer_core(
                 vertices: verts,
                 surface: face.surface().clone(),
                 reversed: false,
+                inner_wires: vec![],
             });
             continue;
         };
@@ -470,6 +471,7 @@ fn chamfer_core(
             vertices: new_verts,
             normal: poly.normal,
             d: new_d,
+            inner_wires: vec![],
         });
     }
 
@@ -527,6 +529,7 @@ fn chamfer_core(
             vertices: quad,
             normal,
             d,
+            inner_wires: vec![],
         });
     }
 
@@ -621,6 +624,7 @@ fn chamfer_core(
             vertices: corner_verts,
             normal: cn,
             d: cd,
+            inner_wires: vec![],
         });
     }
 

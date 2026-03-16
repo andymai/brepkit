@@ -102,6 +102,8 @@ pub enum FaceSpec {
         normal: Vec3,
         /// Plane equation signed distance (n * p = d).
         d: f64,
+        /// Inner wire vertex loops (holes in the face).
+        inner_wires: Vec<Vec<Point3>>,
     },
     /// A face with a pre-built surface and vertex positions for the boundary wire.
     Surface {
@@ -111,6 +113,8 @@ pub enum FaceSpec {
         surface: FaceSurface,
         /// Whether the face's surface normal should be reversed.
         reversed: bool,
+        /// Inner wire vertex loops (holes in the face).
+        inner_wires: Vec<Vec<Point3>>,
     },
     /// A cylindrical face with circle edges on angular boundaries.
     ///
@@ -124,7 +128,30 @@ pub enum FaceSpec {
         cylinder: CylindricalSurface,
         /// Whether the face's surface normal should be reversed.
         reversed: bool,
+        /// Inner wire vertex loops (holes in the face).
+        inner_wires: Vec<Vec<Point3>>,
     },
+}
+
+impl FaceSpec {
+    /// Returns a reference to this face's inner wires.
+    #[must_use]
+    pub fn inner_wires(&self) -> &[Vec<Point3>] {
+        match self {
+            Self::Planar { inner_wires, .. }
+            | Self::Surface { inner_wires, .. }
+            | Self::CylindricalFace { inner_wires, .. } => inner_wires,
+        }
+    }
+
+    /// Returns a mutable reference to this face's inner wires.
+    pub fn inner_wires_mut(&mut self) -> &mut Vec<Vec<Point3>> {
+        match self {
+            Self::Planar { inner_wires, .. }
+            | Self::Surface { inner_wires, .. }
+            | Self::CylindricalFace { inner_wires, .. } => inner_wires,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

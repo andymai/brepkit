@@ -88,9 +88,66 @@ pub(crate) fn assemble_solid(
             vertices: verts.clone(),
             normal: *normal,
             d: *d,
+            inner_wires: vec![],
         })
         .collect();
     assemble_solid_mixed(topo, &specs, tol)
+}
+
+/// Build inner wire topology from vertex position lists.
+///
+/// For each inner wire (a closed loop of vertex positions), creates vertices
+/// (via `vertex_map` dedup), edges (via `edge_map` sharing), and a `Wire`.
+/// Returns the list of `WireId`s to pass as inner wires when constructing a `Face`.
+fn build_inner_wires(
+    topo: &mut Topology,
+    inner_wire_specs: &[Vec<Point3>],
+    vertex_map: &mut HashMap<(i64, i64, i64), VertexId>,
+    edge_map: &mut HashMap<(usize, usize), EdgeId>,
+    resolution: f64,
+    tol: Tolerance,
+) -> Result<Vec<WireId>, crate::OperationsError> {
+    let mut inner_wire_ids = Vec::with_capacity(inner_wire_specs.len());
+    for iw_verts in inner_wire_specs {
+        let iw_n = iw_verts.len();
+        if iw_n < 3 {
+            continue;
+        }
+
+        let iw_vert_ids: Vec<VertexId> = iw_verts
+            .iter()
+            .map(|p| {
+                let key = quantize_point(*p, resolution);
+                *vertex_map
+                    .entry(key)
+                    .or_insert_with(|| topo.add_vertex(Vertex::new(*p, tol.linear)))
+            })
+            .collect();
+
+        let mut iw_oriented_edges = Vec::with_capacity(iw_n);
+        for i in 0..iw_n {
+            let j = (i + 1) % iw_n;
+            let vi = iw_vert_ids[i].index();
+            let vj = iw_vert_ids[j].index();
+            let (key_min, key_max) = if vi <= vj { (vi, vj) } else { (vj, vi) };
+            let is_forward = vi <= vj;
+
+            let edge_id = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
+                let (start, end) = if vi <= vj {
+                    (iw_vert_ids[i], iw_vert_ids[j])
+                } else {
+                    (iw_vert_ids[j], iw_vert_ids[i])
+                };
+                topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
+            });
+
+            iw_oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
+        }
+
+        let wire = Wire::new(iw_oriented_edges, true).map_err(crate::OperationsError::Topology)?;
+        inner_wire_ids.push(topo.add_wire(wire));
+    }
+    Ok(inner_wire_ids)
 }
 
 /// Assemble a solid from a set of face specifications with mixed surface types.
@@ -146,6 +203,7 @@ pub(crate) fn assemble_solid_mixed(
                 vertices,
                 cylinder,
                 reversed,
+                ..
             } => {
                 let verts = vertices;
                 let n = verts.len();
@@ -214,11 +272,22 @@ pub(crate) fn assemble_solid_mixed(
                 let wire =
                     Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
                 let wire_id = topo.add_wire(wire);
+
+                // Build inner wires from FaceSpec.
+                let inner_wire_ids = build_inner_wires(
+                    topo,
+                    spec.inner_wires(),
+                    &mut vertex_map,
+                    &mut edge_map,
+                    resolution,
+                    tol,
+                )?;
+
                 let surface = FaceSurface::Cylinder(cylinder.clone());
                 let face = if *reversed {
-                    topo.add_face(Face::new_reversed(wire_id, vec![], surface))
+                    topo.add_face(Face::new_reversed(wire_id, inner_wire_ids, surface))
                 } else {
-                    topo.add_face(Face::new(wire_id, vec![], surface))
+                    topo.add_face(Face::new(wire_id, inner_wire_ids, surface))
                 };
                 face_ids.push(face);
             }
@@ -229,6 +298,7 @@ pub(crate) fn assemble_solid_mixed(
                         vertices,
                         normal,
                         d,
+                        ..
                     } => (
                         vertices.clone(),
                         FaceSurface::Plane {
@@ -241,6 +311,7 @@ pub(crate) fn assemble_solid_mixed(
                         vertices,
                         surface,
                         reversed,
+                        ..
                     } => (vertices.clone(), surface.clone(), *reversed),
                     FaceSpec::CylindricalFace { .. } => unreachable!(),
                 };
@@ -283,10 +354,21 @@ pub(crate) fn assemble_solid_mixed(
                 let wire =
                     Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
                 let wire_id = topo.add_wire(wire);
+
+                // Build inner wires from FaceSpec.
+                let inner_wire_ids = build_inner_wires(
+                    topo,
+                    spec.inner_wires(),
+                    &mut vertex_map,
+                    &mut edge_map,
+                    resolution,
+                    tol,
+                )?;
+
                 let face = if reversed {
-                    topo.add_face(Face::new_reversed(wire_id, vec![], surface))
+                    topo.add_face(Face::new_reversed(wire_id, inner_wire_ids, surface))
                 } else {
-                    topo.add_face(Face::new(wire_id, vec![], surface))
+                    topo.add_face(Face::new(wire_id, inner_wire_ids, surface))
                 };
                 face_ids.push(face);
             }
@@ -732,16 +814,19 @@ pub(super) fn stitch_boundary_edges(
     for (fi, &fid) in face_ids.iter().enumerate() {
         let face = topo.face(fid)?;
         let outer_wire_id = face.outer_wire();
-        let wire = topo.wire(outer_wire_id)?;
-        for oe in wire.edges() {
-            let eid = oe.edge();
-            *edge_face_count.entry(eid).or_default() += 1;
-            if let std::collections::hash_map::Entry::Vacant(e) = edge_vertices.entry(eid) {
-                if let Ok(edge) = topo.edge(eid) {
-                    e.insert((edge.start(), edge.end()));
+        // Traverse outer wire and all inner wires for edge counting.
+        for wid in std::iter::once(outer_wire_id).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let eid = oe.edge();
+                *edge_face_count.entry(eid).or_default() += 1;
+                if let std::collections::hash_map::Entry::Vacant(e) = edge_vertices.entry(eid) {
+                    if let Ok(edge) = topo.edge(eid) {
+                        e.insert((edge.start(), edge.end()));
+                    }
                 }
+                edge_owner.entry(eid).or_insert((fi, outer_wire_id));
             }
-            edge_owner.entry(eid).or_insert((fi, outer_wire_id));
         }
     }
 
@@ -1029,12 +1114,15 @@ pub(super) fn split_nonmanifold_edges(
     let mut edge_faces: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
     for (fi, &fid) in face_ids.iter().enumerate() {
         let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        for oe in wire.edges() {
-            edge_faces
-                .entry(oe.edge().index())
-                .or_default()
-                .push((fi, oe.is_forward()));
+        // Traverse outer wire and all inner wires.
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                edge_faces
+                    .entry(oe.edge().index())
+                    .or_default()
+                    .push((fi, oe.is_forward()));
+            }
         }
     }
 
@@ -1355,6 +1443,7 @@ pub(super) fn try_shared_boundary_fuse(
             vertices: info.vertices.clone(),
             normal: info.normal,
             d: info.d,
+            inner_wires: vec![],
         });
     }
     for (i, info) in infos_b.iter().enumerate() {
@@ -1365,6 +1454,7 @@ pub(super) fn try_shared_boundary_fuse(
             vertices: info.vertices.clone(),
             normal: info.normal,
             d: info.d,
+            inner_wires: vec![],
         });
     }
 

@@ -29,7 +29,7 @@ use types::PARALLEL_THRESHOLD;
 use types::{BooleanContext, FaceClass, FaceFragment, Source, select_fragment};
 pub use types::{BooleanOp, BooleanOptions, FaceSpec};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // WASM-compatible timer: `std::time::Instant` panics on wasm32 targets.
 #[cfg(not(target_arch = "wasm32"))]
@@ -49,6 +49,7 @@ pub(super) fn timer_elapsed_ms(_t: ()) -> f64 {
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
 // ---------------------------------------------------------------------------
@@ -218,11 +219,51 @@ pub fn boolean_with_options(
             .push((seg.p0, seg.p1));
     }
 
+    // ── Surface preservation: unsplit faces keep their original surface ──
+    //
+    // The chord-based path tessellates non-planar faces (NURBS, cone, sphere)
+    // into planar triangles for intersection testing. Faces that don't
+    // intersect the other solid (no chords) are preserved with their original
+    // surface type, avoiding face-count explosion from unnecessary tessellation.
+
+    let split_fids: HashSet<usize> = chord_map.keys().copied().collect();
+
+    // Build surface + polygon map for original non-planar faces.
+    // Each entry: (FaceSurface, is_reversed, polygon_vertices).
+    let build_surface_map =
+        |topo: &Topology, solid: SolidId| -> HashMap<usize, (FaceSurface, bool, Vec<Point3>)> {
+            let mut map = HashMap::new();
+            let Ok(s) = topo.solid(solid) else { return map };
+            let Ok(shell) = topo.shell(s.outer_shell()) else {
+                return map;
+            };
+            for &fid in shell.faces() {
+                let Ok(face) = topo.face(fid) else { continue };
+                if matches!(face.surface(), FaceSurface::Plane { .. }) {
+                    continue; // Planar faces don't need surface preservation.
+                }
+                if let Ok(polygon) = face_polygon(topo, fid) {
+                    map.insert(
+                        fid.index(),
+                        (face.surface().clone(), face.is_reversed(), polygon),
+                    );
+                }
+            }
+            map
+        };
+    let surface_map_a = build_surface_map(topo, a);
+    let surface_map_b = build_surface_map(topo, b);
+
     // ── Phase 3: Face splitting ──────────────────────────────────────────
+    // Only split faces that actually have intersection chords. Unsplit faces
+    // are handled separately below.
 
     let mut fragments: Vec<FaceFragment> = Vec::new();
 
     for &(fid, ref verts, normal, d) in &faces_a {
+        if !split_fids.contains(&fid.index()) {
+            continue;
+        }
         fragments.extend(split_face(
             fid,
             verts,
@@ -234,6 +275,9 @@ pub fn boolean_with_options(
         ));
     }
     for &(fid, ref verts, normal, d) in &faces_b {
+        if !split_fids.contains(&fid.index()) {
+            continue;
+        }
         fragments.extend(split_face(
             fid,
             verts,
@@ -247,27 +291,17 @@ pub fn boolean_with_options(
 
     // ── Phase 4: Classification ──────────────────────────────────────────
 
-    // Build analytic classifiers for O(1) point-in-solid tests when possible.
     let analytic_a = try_build_analytic_classifier(topo, a);
     let analytic_b = try_build_analytic_classifier(topo, b);
 
-    // Build BVH acceleration structures for face data.
     let bvh_a = build_face_bvh(&faces_a);
     let bvh_b = build_face_bvh(&faces_b);
 
-    // Pre-expand opposing AABBs for classification. A centroid outside the
-    // opposing solid's bounding box is definitively Outside, skipping expensive
-    // ray-casts. The padding accounts for floating-point rounding in
-    // `polygon_centroid` which may shift a boundary centroid by a few ULP.
     let padded_aabb_a = aabb_a.expanded(tol.linear);
     let padded_aabb_b = aabb_b.expanded(tol.linear);
 
-    // Classification: parallelize when fragment count justifies rayon overhead.
     let classify_fn = |frag: &FaceFragment| -> FaceClass {
         let centroid = polygon_centroid(&frag.vertices);
-
-        // AABB pre-filter: skip expensive ray-cast for fragments whose centroid
-        // is outside the opposing solid's bounding box.
         let opposing_aabb = match frag.source {
             Source::A => padded_aabb_b,
             Source::B => padded_aabb_a,
@@ -275,7 +309,6 @@ pub fn boolean_with_options(
         if !opposing_aabb.contains_point(centroid) {
             return FaceClass::Outside;
         }
-
         let fast = match frag.source {
             Source::A => analytic_b.as_ref().and_then(|c| c.classify(centroid, tol)),
             Source::B => analytic_a.as_ref().and_then(|c| c.classify(centroid, tol)),
@@ -290,7 +323,6 @@ pub fn boolean_with_options(
         classify_fragment(frag, opposite, bvh, tol)
     };
 
-    // Rayon panics on wasm32 (no thread pool) — use sequential iteration only.
     #[cfg(not(target_arch = "wasm32"))]
     let classes: Vec<FaceClass> = if fragments.len() >= PARALLEL_THRESHOLD {
         use rayon::prelude::*;
@@ -303,22 +335,148 @@ pub fn boolean_with_options(
 
     // ── Phase 5: Selection ───────────────────────────────────────────────
 
-    let mut selected: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
+    let mut selected_specs: Vec<FaceSpec> = Vec::new();
 
+    // 5a: Select split face fragments (planar triangles from tessellation).
     for (frag, &class) in fragments.iter().zip(classes.iter()) {
         if let Some(flip) = select_fragment(frag.source, class, op) {
-            // When flipping, negate the plane and reverse winding to keep CCW from outside.
             let (verts, normal, d) = if flip {
                 let rev: Vec<_> = frag.vertices.iter().copied().rev().collect();
                 (rev, -frag.normal, -frag.d)
             } else {
                 (frag.vertices.clone(), frag.normal, frag.d)
             };
-            selected.push((verts, normal, d));
+            selected_specs.push(FaceSpec::Planar {
+                vertices: verts,
+                normal,
+                d,
+                inner_wires: vec![],
+            });
         }
     }
 
-    if selected.is_empty() {
+    // 5b: Select unsplit faces — classify once per face, preserve original surface.
+    // For tessellated non-planar faces, collect_face_data produces multiple entries
+    // per FaceId. We classify using the first entry's centroid and emit a single
+    // FaceSpec with the original surface (instead of N planar triangles).
+    let mut processed_unsplit: HashSet<(usize, u8)> = HashSet::new(); // (fid, source)
+
+    let classify_unsplit = |centroid: Point3, source: Source| -> FaceClass {
+        let opposing_aabb = match source {
+            Source::A => padded_aabb_b,
+            Source::B => padded_aabb_a,
+        };
+        if !opposing_aabb.contains_point(centroid) {
+            return FaceClass::Outside;
+        }
+        let fast = match source {
+            Source::A => analytic_b.as_ref().and_then(|c| c.classify(centroid, tol)),
+            Source::B => analytic_a.as_ref().and_then(|c| c.classify(centroid, tol)),
+        };
+        if let Some(class) = fast {
+            return class;
+        }
+        // Build a temporary fragment for ray-cast classification.
+        let dummy = FaceFragment {
+            vertices: vec![centroid],
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+            source,
+        };
+        let (opposite, bvh) = match source {
+            Source::A => (&faces_b, bvh_b.as_ref()),
+            Source::B => (&faces_a, bvh_a.as_ref()),
+        };
+        classify_fragment(&dummy, opposite, bvh, tol)
+    };
+
+    // Process unsplit faces from solid A.
+    for &(fid, ref verts, normal, d) in &faces_a {
+        if split_fids.contains(&fid.index()) {
+            continue;
+        }
+        let key = (fid.index(), 0u8);
+        if !processed_unsplit.insert(key) {
+            continue;
+        } // Skip duplicate tessellation entries.
+
+        let centroid = polygon_centroid(verts);
+        let class = classify_unsplit(centroid, Source::A);
+        if let Some(flip) = select_fragment(Source::A, class, op) {
+            if let Some((surface, reversed, polygon)) = surface_map_a.get(&fid.index()) {
+                // Non-planar face: preserve original surface.
+                let r = if flip { !reversed } else { *reversed };
+                let face_verts = if flip {
+                    polygon.iter().copied().rev().collect()
+                } else {
+                    polygon.clone()
+                };
+                selected_specs.push(FaceSpec::Surface {
+                    vertices: face_verts,
+                    surface: surface.clone(),
+                    reversed: r,
+                    inner_wires: vec![],
+                });
+            } else {
+                // Planar face: emit as FaceSpec::Planar.
+                let (v, n, dd) = if flip {
+                    (verts.iter().copied().rev().collect(), -normal, -d)
+                } else {
+                    (verts.clone(), normal, d)
+                };
+                selected_specs.push(FaceSpec::Planar {
+                    vertices: v,
+                    normal: n,
+                    d: dd,
+                    inner_wires: vec![],
+                });
+            }
+        }
+    }
+
+    // Process unsplit faces from solid B.
+    for &(fid, ref verts, normal, d) in &faces_b {
+        if split_fids.contains(&fid.index()) {
+            continue;
+        }
+        let key = (fid.index(), 1u8);
+        if !processed_unsplit.insert(key) {
+            continue;
+        }
+
+        let centroid = polygon_centroid(verts);
+        let class = classify_unsplit(centroid, Source::B);
+        if let Some(flip) = select_fragment(Source::B, class, op) {
+            if let Some((surface, reversed, polygon)) = surface_map_b.get(&fid.index()) {
+                let r = if flip { !reversed } else { *reversed };
+                let face_verts = if flip {
+                    polygon.iter().copied().rev().collect()
+                } else {
+                    polygon.clone()
+                };
+                selected_specs.push(FaceSpec::Surface {
+                    vertices: face_verts,
+                    surface: surface.clone(),
+                    reversed: r,
+                    inner_wires: vec![],
+                });
+            } else {
+                let (v, n, dd) = if flip {
+                    (verts.iter().copied().rev().collect(), -normal, -d)
+                } else {
+                    (verts.clone(), normal, d)
+                };
+                selected_specs.push(FaceSpec::Planar {
+                    vertices: v,
+                    normal: n,
+                    d: dd,
+                    inner_wires: vec![],
+                });
+            }
+        }
+    }
+
+    if selected_specs.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "boolean operation produced no faces (empty result)".into(),
         });
@@ -326,7 +484,7 @@ pub fn boolean_with_options(
 
     // ── Phase 6: Assembly ────────────────────────────────────────────────
 
-    let result = assemble_solid(topo, &selected, tol)?;
+    let result = assemble_solid_mixed(topo, &selected_specs, tol)?;
 
     // ── Phase 6b: Post-boolean healing ─────────────────────────────────
     // Light healing: remove degenerate (zero-length) edges and fix face
@@ -353,7 +511,7 @@ pub fn boolean_with_options(
     log::info!(
         "boolean {op:?}: tessellated path succeeded → solid {} ({} faces)",
         result.index(),
-        selected.len()
+        selected_specs.len()
     );
     Ok(result)
 }
@@ -540,6 +698,7 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
             vertices: vec![v0, v1, v2],
             normal,
             d,
+            inner_wires: vec![],
         });
     }
     specs

@@ -71,6 +71,7 @@ pub fn draft(
                         vertices: verts,
                         normal: *normal,
                         d,
+                        inner_wires: vec![],
                     });
                 }
                 other => {
@@ -78,6 +79,7 @@ pub fn draft(
                         vertices: verts,
                         surface: other.clone(),
                         reversed: false,
+                        inner_wires: vec![],
                     });
                 }
             }
@@ -144,6 +146,7 @@ pub fn draft(
                 vertices: new_verts,
                 normal: new_normal,
                 d: new_d,
+                inner_wires: vec![],
             });
         }
     }
