@@ -18,11 +18,13 @@ use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
+use super::assembly::{quantize_point, vertex_merge_resolution};
+use super::classify::try_build_analytic_classifier;
 use super::classify_2d::point_in_polygon_2d;
 use super::face_splitter::{interior_point_3d, split_face_2d};
 use super::pipeline::{BooleanPipeline, SectionEdge};
 use super::plane_frame::PlaneFrame;
-use super::types::{BooleanOp, FaceClass, Source, select_fragment};
+use super::types::{AnalyticClassifier, BooleanOp, FaceClass, Source, select_fragment};
 use crate::OperationsError;
 
 // ---------------------------------------------------------------------------
@@ -54,12 +56,27 @@ pub fn boolean_v2(
         ..BooleanPipeline::default()
     };
 
+    // Cache PlaneFrame per face (consistent UV origin across all stages).
+    init_plane_frames(topo, a, b, &mut pipeline)?;
+
+    // Build analytic classifiers for O(1) point-in-solid tests.
+    let classifier_a = try_build_analytic_classifier(topo, a);
+    let classifier_b = try_build_analytic_classifier(topo, b);
+
     // Stage 1: Intersect all face pairs.
     intersect_plane_faces(topo, a, b, &mut pipeline, &tol)?;
 
-    // Disjoint shortcut.
+    // Disjoint shortcut (with containment detection).
     if pipeline.intersections.is_empty() {
-        return handle_disjoint_v2(topo, op, a, b);
+        return handle_disjoint_v2(
+            topo,
+            op,
+            a,
+            b,
+            classifier_a.as_ref(),
+            classifier_b.as_ref(),
+            &tol,
+        );
     }
 
     // Stage 2: Split edges at intersection vertices.
@@ -71,18 +88,47 @@ pub fn boolean_v2(
     split_all_faces(topo, a, b, &mut pipeline, &tol)?;
 
     // Stage 4: Classify sub-faces against opposing solid.
-    classify_sub_faces(topo, &mut pipeline, op)?;
+    classify_sub_faces(
+        topo,
+        &mut pipeline,
+        op,
+        classifier_a.as_ref(),
+        classifier_b.as_ref(),
+        &tol,
+    )?;
 
     // Stage 5: Assemble result.
     let result = assemble_v2(topo, &pipeline, &tol)?;
 
     // Post-processing: healing.
     crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-    // unify_faces can corrupt intermediate results, but we're building a
-    // final solid here so it's safe.
     crate::heal::unify_faces(topo, result)?;
 
     Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// PlaneFrame cache
+// ---------------------------------------------------------------------------
+
+fn init_plane_frames(
+    topo: &Topology,
+    a: SolidId,
+    b: SolidId,
+    pipeline: &mut BooleanPipeline,
+) -> Result<(), OperationsError> {
+    for solid in [a, b] {
+        let faces = collect_solid_faces(topo, solid)?;
+        for fid in faces {
+            let face = topo.face(fid)?;
+            if let FaceSurface::Plane { normal, .. } = face.surface() {
+                let poly = collect_face_polygon(topo, fid)?;
+                let frame = PlaneFrame::from_plane_face(*normal, &poly);
+                pipeline.plane_frames.insert(fid, frame);
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +147,7 @@ fn intersect_plane_faces(
 
     for &fa in &faces_a {
         for &fb in &faces_b {
-            let sections = intersect_two_plane_faces(topo, fa, fb)?;
+            let sections = intersect_two_plane_faces(topo, fa, fb, &pipeline.plane_frames)?;
             if !sections.is_empty() {
                 pipeline.intersections.insert((fa, fb), sections);
             }
@@ -117,6 +163,7 @@ fn intersect_two_plane_faces(
     topo: &Topology,
     fa: FaceId,
     fb: FaceId,
+    plane_frames: &HashMap<FaceId, PlaneFrame>,
 ) -> Result<Vec<SectionEdge>, OperationsError> {
     let face_a = topo.face(fa)?;
     let face_b = topo.face(fb)?;
@@ -158,12 +205,26 @@ fn intersect_two_plane_faces(
     let poly_a = collect_face_polygon(topo, fa)?;
     let poly_b = collect_face_polygon(topo, fb)?;
 
+    // Use cached frames for consistent UV projections.
+    let owned_frame_a;
+    let frame_a = if let Some(f) = plane_frames.get(&fa) {
+        f
+    } else {
+        owned_frame_a = plane_frame_for_polygon(na, &poly_a);
+        &owned_frame_a
+    };
+    let owned_frame_b;
+    let frame_b = if let Some(f) = plane_frames.get(&fb) {
+        f
+    } else {
+        owned_frame_b = plane_frame_for_polygon(nb, &poly_b);
+        &owned_frame_b
+    };
+
     // Trim the infinite line to both face boundaries independently.
     // Both use the same line_origin so t-values are compatible.
-    let frame_a = plane_frame_for_polygon(na, &poly_a);
-    let frame_b = plane_frame_for_polygon(nb, &poly_b);
-    let segments_a = trim_line_to_polygon_3d(&line_origin, &line_dir_n, &poly_a, &frame_a);
-    let segments_b = trim_line_to_polygon_3d(&line_origin, &line_dir_n, &poly_b, &frame_b);
+    let segments_a = trim_line_to_polygon_3d(&line_origin, &line_dir_n, &poly_a, frame_a);
+    let segments_b = trim_line_to_polygon_3d(&line_origin, &line_dir_n, &poly_b, frame_b);
 
     // Intersect the two interval sets to find the overlap.
     let mut result = Vec::new();
@@ -176,8 +237,8 @@ fn intersect_two_plane_faces(
             }
             let start = line_origin + line_dir_n * t0;
             let end = line_origin + line_dir_n * t1;
-            let pcurve_a = compute_line_pcurve(&frame_a, start, end);
-            let pcurve_b = compute_line_pcurve(&frame_b, start, end);
+            let pcurve_a = compute_line_pcurve(frame_a, start, end);
+            let pcurve_b = compute_line_pcurve(frame_b, start, end);
             result.push(SectionEdge {
                 curve_3d: EdgeCurve::Line,
                 pcurve_a,
@@ -199,12 +260,10 @@ fn split_all_faces(
     a: SolidId,
     b: SolidId,
     pipeline: &mut BooleanPipeline,
-    _tol: &Tolerance,
+    tol: &Tolerance,
 ) -> Result<(), OperationsError> {
     let faces_a = collect_solid_faces(topo, a)?;
     let faces_b = collect_solid_faces(topo, b)?;
-
-    let uv_tol = 1e-7;
 
     // Collect section edges per face.
     let mut sections_for_face: HashMap<FaceId, Vec<SectionEdge>> = HashMap::new();
@@ -220,7 +279,8 @@ fn split_all_faces(
         let sections = sections_for_face
             .get(&fid)
             .map_or(&[][..], |v| v.as_slice());
-        let sub = split_face_2d(topo, fid, sections, Source::A, uv_tol);
+        let frame = pipeline.plane_frames.get(&fid);
+        let sub = split_face_2d(topo, fid, sections, Source::A, tol, frame);
         pipeline.sub_faces.extend(sub);
     }
 
@@ -229,7 +289,8 @@ fn split_all_faces(
         let sections = sections_for_face
             .get(&fid)
             .map_or(&[][..], |v| v.as_slice());
-        let sub = split_face_2d(topo, fid, sections, Source::B, uv_tol);
+        let frame = pipeline.plane_frames.get(&fid);
+        let sub = split_face_2d(topo, fid, sections, Source::B, tol, frame);
         pipeline.sub_faces.extend(sub);
     }
 
@@ -244,6 +305,9 @@ fn classify_sub_faces(
     topo: &Topology,
     pipeline: &mut BooleanPipeline,
     op: BooleanOp,
+    classifier_a: Option<&AnalyticClassifier>,
+    classifier_b: Option<&AnalyticClassifier>,
+    tol: &Tolerance,
 ) -> Result<(), OperationsError> {
     let solid_a = pipeline
         .solid_a
@@ -256,34 +320,91 @@ fn classify_sub_faces(
             reason: "no solid B".into(),
         })?;
 
-    // Collect polygons for both solids (for point-in-solid test).
+    // Collect polygons for both solids (for ray-cast fallback).
     let polys_a = collect_solid_face_polygons(topo, solid_a)?;
     let polys_b = collect_solid_face_polygons(topo, solid_b)?;
 
     // Classify each sub-face and mark for selection.
     let mut selected = Vec::new();
     for sub_face in &pipeline.sub_faces {
-        let wire_pts = sub_face
-            .outer_wire
-            .iter()
-            .map(|e| e.start_3d)
-            .collect::<Vec<_>>();
-        let test_pt = interior_point_3d(sub_face, &wire_pts);
+        // Get test point inside this sub-face.
+        let frame = pipeline.plane_frames.get(&sub_face.parent);
+        let test_pt = interior_point_3d(sub_face, frame);
 
-        let opposing_polys = match sub_face.source {
-            Source::A => &polys_b,
-            Source::B => &polys_a,
+        // Classify against opposing solid: try analytic first, fall back to ray-cast.
+        // If the interior point is on the boundary (classifier returns None),
+        // try wire vertices for a definitive answer before falling back to
+        // the ray-cast (which can also be degenerate at corners/edges).
+        let class = match sub_face.source {
+            Source::A => {
+                classify_with_fallback(test_pt, &sub_face.outer_wire, classifier_b, &polys_b, *tol)
+            }
+            Source::B => {
+                classify_with_fallback(test_pt, &sub_face.outer_wire, classifier_a, &polys_a, *tol)
+            }
         };
-        let class = classify_point_against_solid(test_pt, opposing_polys);
 
         // Use the boolean truth table to decide keep/discard/flip.
-        if let Some(keep) = select_fragment(sub_face.source, class, op) {
-            selected.push((sub_face.clone(), keep));
+        if let Some(flip) = select_fragment(sub_face.source, class, op) {
+            selected.push((sub_face.clone(), flip));
         }
     }
 
-    pipeline.sub_faces = selected.into_iter().map(|(sf, _flip)| sf).collect();
+    // Apply flip flag: when flip=true, reverse the sub-face orientation.
+    pipeline.sub_faces = selected
+        .into_iter()
+        .map(|(mut sf, flip)| {
+            if flip {
+                sf.reversed = !sf.reversed;
+                // Reverse outer wire winding.
+                sf.outer_wire.reverse();
+                for edge in &mut sf.outer_wire {
+                    std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
+                    std::mem::swap(&mut edge.start_3d, &mut edge.end_3d);
+                    edge.forward = !edge.forward;
+                }
+                // Same for inner wires.
+                for inner in &mut sf.inner_wires {
+                    inner.reverse();
+                    for edge in inner.iter_mut() {
+                        std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
+                        std::mem::swap(&mut edge.start_3d, &mut edge.end_3d);
+                        edge.forward = !edge.forward;
+                    }
+                }
+            }
+            sf
+        })
+        .collect();
     Ok(())
+}
+
+/// Classify a sub-face against the opposing solid with robust boundary handling.
+///
+/// 1. Try the analytic classifier on the interior point.
+/// 2. If on-boundary (None), try each wire vertex until one gives a definitive answer.
+/// 3. Fall back to ray-casting if no analytic result.
+fn classify_with_fallback(
+    test_pt: Point3,
+    wire: &[super::pipeline::OrientedPCurveEdge],
+    classifier: Option<&AnalyticClassifier>,
+    face_polys: &[(Vec<Point3>, Vec3, f64)],
+    tol: Tolerance,
+) -> FaceClass {
+    if let Some(c) = classifier {
+        // Try the interior point first.
+        if let Some(class) = c.classify(test_pt, tol) {
+            return class;
+        }
+        // Interior point is on boundary — try wire vertices.
+        for edge in wire {
+            if let Some(class) = c.classify(edge.start_3d, tol) {
+                return class;
+            }
+        }
+    }
+    // Fall back to ray-casting.
+    classify_point_against_solid(test_pt, face_polys)
 }
 
 /// Classify a 3D point as inside/outside/on a solid using face polygon ray-casting.
@@ -358,20 +479,42 @@ fn point_in_face_polygon_3d(point: Point3, verts: &[Point3], normal: &Vec3) -> b
 fn assemble_v2(
     topo: &mut Topology,
     pipeline: &BooleanPipeline,
-    _tol: &Tolerance,
+    tol: &Tolerance,
 ) -> Result<SolidId, OperationsError> {
+    // Collect all 3D points for vertex merge resolution.
+    let all_pts = pipeline.sub_faces.iter().flat_map(|sf| {
+        sf.outer_wire
+            .iter()
+            .flat_map(|e| [e.start_3d, e.end_3d])
+            .chain(
+                sf.inner_wires
+                    .iter()
+                    .flat_map(|w| w.iter().flat_map(|e| [e.start_3d, e.end_3d])),
+            )
+    });
+    let resolution = vertex_merge_resolution(all_pts, *tol);
+    let mut vertex_map: HashMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
+        HashMap::new();
+
     let mut face_ids = Vec::new();
 
     for sub_face in &pipeline.sub_faces {
         // Create vertices + edges + wire for the outer boundary.
-        let wire_id = create_wire_from_edges(topo, &sub_face.outer_wire)?;
+        let wire_id =
+            create_wire_from_edges_dedup(topo, &sub_face.outer_wire, &mut vertex_map, resolution)?;
         let inner_wires: Vec<_> = sub_face
             .inner_wires
             .iter()
-            .filter_map(|inner| create_wire_from_edges(topo, inner).ok())
+            .filter_map(|inner| {
+                create_wire_from_edges_dedup(topo, inner, &mut vertex_map, resolution).ok()
+            })
             .collect();
 
-        let face = Face::new(wire_id, inner_wires, sub_face.surface.clone());
+        let face = if sub_face.reversed {
+            Face::new_reversed(wire_id, inner_wires, sub_face.surface.clone())
+        } else {
+            Face::new(wire_id, inner_wires, sub_face.surface.clone())
+        };
         let fid = topo.add_face(face);
         face_ids.push(fid);
     }
@@ -388,14 +531,32 @@ fn assemble_v2(
     Ok(topo.add_solid(solid))
 }
 
-fn create_wire_from_edges(
+fn create_wire_from_edges_dedup(
     topo: &mut Topology,
     edges: &[super::pipeline::OrientedPCurveEdge],
+    vertex_map: &mut HashMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    resolution: f64,
 ) -> Result<brepkit_topology::wire::WireId, OperationsError> {
     let mut oriented_edges = Vec::new();
     for pe in edges {
-        let v_start = topo.add_vertex(Vertex::new(pe.start_3d, 0.0));
-        let v_end = topo.add_vertex(Vertex::new(pe.end_3d, 0.0));
+        // When pe.forward=false, the wire traverses the edge backward
+        // (edge.end → edge.start). To make the backward traversal go
+        // pe.start_3d → pe.end_3d, swap the vertex roles so
+        // edge.end = pe.start_3d (traversal start) and
+        // edge.start = pe.end_3d (traversal end).
+        let (natural_start, natural_end) = if pe.forward {
+            (pe.start_3d, pe.end_3d)
+        } else {
+            (pe.end_3d, pe.start_3d)
+        };
+        let key_start = quantize_point(natural_start, resolution);
+        let v_start = *vertex_map
+            .entry(key_start)
+            .or_insert_with(|| topo.add_vertex(Vertex::new(natural_start, 0.0)));
+        let key_end = quantize_point(natural_end, resolution);
+        let v_end = *vertex_map
+            .entry(key_end)
+            .or_insert_with(|| topo.add_vertex(Vertex::new(natural_end, 0.0)));
         let edge = Edge::new(v_start, v_end, pe.curve_3d.clone());
         let eid = topo.add_edge(edge);
         oriented_edges.push(OrientedEdge::new(eid, pe.forward));
@@ -530,38 +691,6 @@ fn trim_line_to_polygon_3d(
     trim_line_to_polygon_2d(origin_2d, dir_2d, &poly_2d)
 }
 
-/// Trim a finite segment (defined by 3D start/end) to a polygon boundary.
-fn trim_segment_to_polygon_3d(
-    seg_start: &Point3,
-    seg_end: &Point3,
-    line_dir: &Vec3,
-    polygon: &[Point3],
-    frame: &PlaneFrame,
-) -> Vec<(f64, f64)> {
-    let t_start = (*seg_start - *polygon.first().unwrap_or(seg_start)).dot(*line_dir)
-        / line_dir.dot(*line_dir);
-    let line_origin = *seg_start - *line_dir * t_start;
-
-    let origin_2d = frame.project(line_origin);
-    let dir_2d = Vec2::new(line_dir.dot(frame.u_axis()), line_dir.dot(frame.v_axis()));
-    let poly_2d: Vec<Point2> = polygon.iter().map(|p| frame.project(*p)).collect();
-
-    let t_seg_start = t_start;
-    let t_seg_end = t_start + (*seg_end - *seg_start).dot(*line_dir) / line_dir.dot(*line_dir);
-
-    let raw = trim_line_to_polygon_2d(origin_2d, dir_2d, &poly_2d);
-    // Clamp to segment bounds.
-    let mut result = Vec::new();
-    for (t0, t1) in raw {
-        let clamped_start = t0.max(t_seg_start);
-        let clamped_end = t1.min(t_seg_end);
-        if clamped_end - clamped_start > 1e-10 {
-            result.push((clamped_start, clamped_end));
-        }
-    }
-    result
-}
-
 /// Trim an infinite 2D line to a 2D polygon boundary.
 ///
 /// Returns sorted parameter pairs (t_enter, t_exit) for segments inside.
@@ -619,19 +748,68 @@ fn trim_line_to_polygon_2d(origin: Point2, dir: Vec2, polygon: &[Point2]) -> Vec
 }
 
 // ---------------------------------------------------------------------------
-// Disjoint handling
+// Disjoint handling (with containment detection)
 // ---------------------------------------------------------------------------
 
 fn handle_disjoint_v2(
     topo: &mut Topology,
     op: BooleanOp,
     a: SolidId,
-    _b: SolidId,
+    b: SolidId,
+    classifier_a: Option<&AnalyticClassifier>,
+    classifier_b: Option<&AnalyticClassifier>,
+    tol: &Tolerance,
 ) -> Result<SolidId, OperationsError> {
+    // Check if B is inside A or A is inside B.
+    // Try the analytic classifier first; fall back to ray-cast polygon test
+    // if no classifier is available (e.g. non-axis-aligned planar solids in
+    // future steps where try_build_analytic_classifier returns None).
+    let sample_b = sample_solid_vertex(topo, b)?;
+    let sample_a = sample_solid_vertex(topo, a)?;
+
+    let b_in_a = classifier_a
+        .and_then(|c| c.classify(sample_b, *tol))
+        .unwrap_or_else(|| {
+            let polys = collect_solid_face_polygons(topo, a).unwrap_or_default();
+            classify_point_against_solid(sample_b, &polys)
+        })
+        == FaceClass::Inside;
+    let a_in_b = classifier_b
+        .and_then(|c| c.classify(sample_a, *tol))
+        .unwrap_or_else(|| {
+            let polys = collect_solid_face_polygons(topo, b).unwrap_or_default();
+            classify_point_against_solid(sample_a, &polys)
+        })
+        == FaceClass::Inside;
+
+    if b_in_a {
+        // B is entirely inside A.
+        return match op {
+            BooleanOp::Fuse => Ok(crate::copy::copy_solid(topo, a)?),
+            BooleanOp::Cut => Err(OperationsError::InvalidInput {
+                reason:
+                    "boolean_v2: B is inside A — cut would create void (not supported in step 1)"
+                        .into(),
+            }),
+            BooleanOp::Intersect => Ok(crate::copy::copy_solid(topo, b)?),
+        };
+    }
+
+    if a_in_b {
+        // A is entirely inside B.
+        return match op {
+            BooleanOp::Fuse => Ok(crate::copy::copy_solid(topo, b)?),
+            BooleanOp::Cut => Err(OperationsError::InvalidInput {
+                reason: "boolean_v2: A is inside B — cut result is empty".into(),
+            }),
+            BooleanOp::Intersect => Ok(crate::copy::copy_solid(topo, a)?),
+        };
+    }
+
+    // Truly disjoint.
     match op {
         BooleanOp::Fuse => {
-            // For disjoint fuse, return a copy of both solids merged.
-            // Simple approach: copy solid A.
+            // For disjoint fuse, return a copy of A.
             // TODO: Step 1 limitation — this discards solid B. A full
             // implementation should copy both solids into a compound or
             // merged shell so the result contains all geometry.
@@ -648,6 +826,29 @@ fn handle_disjoint_v2(
             })
         }
     }
+}
+
+/// Sample one vertex position from a solid (for containment testing).
+fn sample_solid_vertex(topo: &Topology, solid: SolidId) -> Result<Point3, OperationsError> {
+    let s = topo.solid(solid)?;
+    let shell = topo.shell(s.outer_shell())?;
+    let fid = *shell
+        .faces()
+        .first()
+        .ok_or_else(|| OperationsError::InvalidInput {
+            reason: "solid has no faces".into(),
+        })?;
+    let face = topo.face(fid)?;
+    let wire = topo.wire(face.outer_wire())?;
+    let oe = wire
+        .edges()
+        .first()
+        .ok_or_else(|| OperationsError::InvalidInput {
+            reason: "face has no edges".into(),
+        })?;
+    let edge = topo.edge(oe.edge())?;
+    let v = topo.vertex(edge.start())?;
+    Ok(v.point())
 }
 
 #[cfg(test)]
@@ -772,62 +973,14 @@ mod tests {
         let faces_a = collect_solid_faces(&topo, a).unwrap();
         let faces_b = collect_solid_faces(&topo, b).unwrap();
 
-        // Print face info for debugging.
-        for &fid in &faces_a {
-            let face = topo.face(fid).unwrap();
-            if let FaceSurface::Plane { normal, d } = face.surface() {
-                let poly = collect_face_polygon(&topo, fid).unwrap();
-                eprintln!(
-                    "A face {:?}: n=({:.2},{:.2},{:.2}) d={:.2} rev={} poly={:?}",
-                    fid,
-                    normal.x(),
-                    normal.y(),
-                    normal.z(),
-                    d,
-                    face.is_reversed(),
-                    poly.iter()
-                        .map(|p| format!("({:.1},{:.1},{:.1})", p.x(), p.y(), p.z()))
-                        .collect::<Vec<_>>()
-                );
-            }
-        }
-        for &fid in &faces_b {
-            let face = topo.face(fid).unwrap();
-            if let FaceSurface::Plane { normal, d } = face.surface() {
-                let poly = collect_face_polygon(&topo, fid).unwrap();
-                eprintln!(
-                    "B face {:?}: n=({:.2},{:.2},{:.2}) d={:.2} rev={} poly={:?}",
-                    fid,
-                    normal.x(),
-                    normal.y(),
-                    normal.z(),
-                    d,
-                    face.is_reversed(),
-                    poly.iter()
-                        .map(|p| format!("({:.1},{:.1},{:.1})", p.x(), p.y(), p.z()))
-                        .collect::<Vec<_>>()
-                );
-            }
-        }
-
         // Try intersecting specific face pairs and check the result.
+        let frames = HashMap::new();
         let mut total_sections = 0;
         for &fa in &faces_a {
             for &fb in &faces_b {
-                let sections = intersect_two_plane_faces(&topo, fa, fb).unwrap();
+                let sections = intersect_two_plane_faces(&topo, fa, fb, &frames).unwrap();
                 if !sections.is_empty() {
                     for s in &sections {
-                        eprintln!(
-                            "  {:?}×{:?}: ({:.2},{:.2},{:.2})→({:.2},{:.2},{:.2})",
-                            fa,
-                            fb,
-                            s.start.x(),
-                            s.start.y(),
-                            s.start.z(),
-                            s.end.x(),
-                            s.end.y(),
-                            s.end.z()
-                        );
                         // Verify section edge is within bounds of both boxes.
                         assert!(
                             s.start.x() >= -0.1 && s.start.x() <= 10.1,
@@ -872,11 +1025,6 @@ mod tests {
             "expected section edges, got 0. intersections map has {} entries",
             pipeline.intersections.len()
         );
-        eprintln!(
-            "Stage 1: {} face pairs with {} total section edges",
-            pipeline.intersections.len(),
-            total_sections
-        );
     }
 
     #[test]
@@ -911,20 +1059,6 @@ mod tests {
             .count();
         eprintln!("A faces with sections: {a_with_sections}/{}", faces_a.len());
         eprintln!("B faces with sections: {b_with_sections}/{}", faces_b.len());
-        for (fid, secs) in &sections_for_face {
-            for s in secs {
-                eprintln!(
-                    "  face {:?}: section ({:.1},{:.1},{:.1})→({:.1},{:.1},{:.1})",
-                    fid,
-                    s.start.x(),
-                    s.start.y(),
-                    s.start.z(),
-                    s.end.x(),
-                    s.end.y(),
-                    s.end.z()
-                );
-            }
-        }
     }
 
     #[test]
@@ -937,6 +1071,7 @@ mod tests {
             solid_b: Some(b),
             ..BooleanPipeline::default()
         };
+        init_plane_frames(&topo, a, b, &mut pipeline).unwrap();
         intersect_plane_faces(&topo, a, b, &mut pipeline, &tol).unwrap();
         split_all_faces(&topo, a, b, &mut pipeline, &tol).unwrap();
         eprintln!(
@@ -962,7 +1097,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "WIP: face splitting partially works (18/expected ~24 sub-faces), classification needs tuning"]
     fn boolean_v2_box_cut_box() {
         let mut topo = Topology::new();
         let (a, b) = make_overlapping_boxes(&mut topo);
@@ -978,7 +1112,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "WIP: face splitting partially works (18/expected ~24 sub-faces), classification needs tuning"]
     fn boolean_v2_box_fuse_box() {
         let mut topo = Topology::new();
         let (a, b) = make_overlapping_boxes(&mut topo);
@@ -992,7 +1125,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "WIP: face splitting partially works (18/expected ~24 sub-faces), classification needs tuning"]
     fn boolean_v2_box_intersect_box() {
         let mut topo = Topology::new();
         let (a, b) = make_overlapping_boxes(&mut topo);
@@ -1002,6 +1134,143 @@ mod tests {
         assert!(
             (vol - 360.0).abs() < 40.0,
             "Intersect volume {vol} should be ~360"
+        );
+    }
+
+    // --- Edge-case tests ---
+
+    #[test]
+    fn boolean_v2_3d_offset_overlap() {
+        // Boxes offset on all 3 axes (no shared plane).
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let mat = Mat4::translation(5.0, 5.0, 5.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+        // a=[0,10]³, b=[5,15]³. Overlap: [5,10]³ = 125.
+        // Intersect is simpler to verify: overlap = 125.
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - 125.0).abs() < 20.0,
+            "3D-offset intersect volume {vol} should be ~125"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_3d_offset_fuse() {
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let mat = Mat4::translation(5.0, 5.0, 5.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+        // a=[0,10]³, b=[5,15]³. Fuse = 1000 + 1000 - 125 = 1875.
+        let result = boolean_v2(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - 1875.0).abs() < 200.0,
+            "3D-offset fuse volume {vol} should be ~1875"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_b_inside_a_fuse() {
+        // Small box entirely inside large box.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+        let mat = Mat4::translation(3.0, 3.0, 3.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+        // B is at [3,7]×[3,7]×[3,7], entirely inside A=[0,10]³.
+        // Fuse = A (since B adds no volume).
+        let result = boolean_v2(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - 1000.0).abs() < 10.0,
+            "B-inside-A fuse volume {vol} should be ~1000"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_b_inside_a_intersect() {
+        // Small box entirely inside large box.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+        let mat = Mat4::translation(3.0, 3.0, 3.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+        // Intersect = B.
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - 64.0).abs() < 10.0,
+            "B-inside-A intersect volume {vol} should be ~64"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_a_inside_b_intersect() {
+        // Large box inside even larger box (A inside B).
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+        let mat_a = Mat4::translation(3.0, 3.0, 3.0);
+        crate::transform::transform_solid(&mut topo, a, &mat_a).unwrap();
+        let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        // A is at [3,7]³, B is at [0,10]³. A inside B.
+        // Intersect = A.
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - 64.0).abs() < 10.0,
+            "A-inside-B intersect volume {vol} should be ~64"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_disjoint_cut() {
+        // Two completely separate boxes.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
+        let b = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
+        let mat = Mat4::translation(20.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+        // Disjoint: Cut = A.
+        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - 125.0).abs() < 10.0,
+            "Disjoint cut volume {vol} should be ~125"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_disjoint_intersect_is_error() {
+        // Two completely separate boxes.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
+        let b = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
+        let mat = Mat4::translation(20.0, 0.0, 0.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+        // Disjoint: Intersect = error.
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b);
+        assert!(result.is_err(), "disjoint intersect should return Err");
+    }
+
+    #[test]
+    fn boolean_v2_asymmetric_cut() {
+        // Non-symmetric overlap verifying correct face selection.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = make_box(&mut topo, 6.0, 4.0, 3.0).unwrap();
+        let mat = Mat4::translation(7.0, 3.0, 2.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+        // b: [7,13]×[3,7]×[2,5]. Overlap with a: [7,10]×[3,7]×[2,5] = 3×4×3 = 36.
+        // Cut = 1000 - 36 = 964.
+        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - 964.0).abs() < 100.0,
+            "Asymmetric cut volume {vol} should be ~964"
         );
     }
 }

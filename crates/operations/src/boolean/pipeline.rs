@@ -14,6 +14,7 @@ use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
+use super::plane_frame::PlaneFrame;
 use super::types::Source;
 
 // ---------------------------------------------------------------------------
@@ -114,6 +115,8 @@ pub struct BooleanPipeline {
     pub face_edges: HashMap<FaceId, FaceEdgeSet>,
     /// All sub-faces after wire-builder splitting + classification.
     pub sub_faces: Vec<SubFace>,
+    /// Cached `PlaneFrame` per face (consistent UV origin across all stages).
+    pub plane_frames: HashMap<FaceId, PlaneFrame>,
     /// Solid A handle.
     pub solid_a: Option<SolidId>,
     /// Solid B handle.
