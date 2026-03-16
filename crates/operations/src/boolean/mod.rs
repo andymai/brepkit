@@ -133,14 +133,24 @@ pub fn boolean_with_options(
 
     // ── Mesh boolean guard for high face counts ─────────────────────
     // When either solid has many topology faces (e.g. from NURBS/torus
-    // tessellation in prior booleans), the chord-based path is O(N²).
-    // Fall back to mesh boolean (co-refinement, O(N log N)).
+    // tessellation in prior booleans or merged faces from unify_faces),
+    // the chord-based path is O(N²). Fall back to mesh boolean
+    // (co-refinement, O(N log N)).
+    //
+    // Two thresholds:
+    // - Per-solid: >100 faces (catches individual complex solids, e.g.
+    //   shelled+filleted geometry with merged faces)
+    // - Combined: >500 faces (catches pairs of moderate-complexity solids)
+    //
     // This check is O(1) and avoids the expensive collect_face_data
     // tessellation that would otherwise run first.
     {
         let count_a = topo.shell(topo.solid(a)?.outer_shell())?.faces().len();
         let count_b = topo.shell(topo.solid(b)?.outer_shell())?.faces().len();
-        if count_a + count_b > types::MESH_BOOLEAN_FACE_THRESHOLD {
+        if count_a > types::MESH_BOOLEAN_PER_SOLID_THRESHOLD
+            || count_b > types::MESH_BOOLEAN_PER_SOLID_THRESHOLD
+            || count_a + count_b > types::MESH_BOOLEAN_FACE_THRESHOLD
+        {
             log::debug!(
                 "boolean {op:?}: high face count ({count_a} + {count_b}), using mesh boolean"
             );
