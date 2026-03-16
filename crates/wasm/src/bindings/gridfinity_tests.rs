@@ -913,6 +913,7 @@ fn gridfinity_d1_lip_ring_loft_cut() {
 
     // Check Euler characteristic and validation via direct API
     let lip_handle = p3[0]["ok"].as_u64().unwrap() as u32;
+    let lip_id = k.resolve_solid(lip_handle).unwrap();
     let val = k.validate_solid(lip_handle).unwrap();
     let counts = k.get_entity_counts(lip_handle).unwrap();
     let f = counts[0] as usize;
@@ -920,6 +921,13 @@ fn gridfinity_d1_lip_ring_loft_cut() {
     let v = counts[2] as usize;
     let euler = (v as i64) - (e as i64) + (f as i64);
     eprintln!("D1 lip ring: F={f}, E={e}, V={v}, euler={euler}, vol={vol:.1}, val={val}");
+    if let Ok(report) = brepkit_operations::validate::validate_solid(&k.topo, lip_id) {
+        for issue in &report.issues {
+            if issue.severity == brepkit_operations::validate::Severity::Error {
+                eprintln!("  ERR: {}", issue.description);
+            }
+        }
+    }
     assert!(
         val == 0,
         "lip ring should have 0 validation issues: got {val}"
