@@ -6,6 +6,7 @@
 
 mod analytic;
 mod assembly;
+pub mod boolean_v2;
 mod classify;
 pub(crate) mod classify_2d;
 mod compound;
