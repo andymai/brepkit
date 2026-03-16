@@ -10,6 +10,7 @@ mod classify;
 mod compound;
 mod fragments;
 mod intersect;
+pub(crate) mod plane_frame;
 mod precompute;
 mod split;
 mod types;
