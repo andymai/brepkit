@@ -7,7 +7,9 @@
 mod analytic;
 mod assembly;
 mod classify;
+pub(crate) mod classify_2d;
 mod compound;
+pub(crate) mod face_splitter;
 mod fragments;
 mod intersect;
 pub(crate) mod pcurve_compute;
