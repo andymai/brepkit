@@ -117,9 +117,19 @@ pub(crate) fn expand_aabb_for_surface(aabb: &mut Aabb3, surface: &FaceSurface) {
             );
         }
         FaceSurface::Nurbs(nurbs) => {
-            for row in nurbs.control_points() {
-                for pt in row {
-                    aabb_include(aabb, *pt);
+            // Evaluate the actual surface at a parameter grid instead of using
+            // control points. NURBS control polyhedra can overshoot the surface,
+            // especially for fillet blend surfaces where interpolation fitting
+            // pushes control points beyond the data extent.
+            let (u_min, u_max) = nurbs.domain_u();
+            let (v_min, v_max) = nurbs.domain_v();
+            let n_samples = 8;
+            #[allow(clippy::cast_precision_loss)]
+            for iu in 0..=n_samples {
+                let u = u_min + (u_max - u_min) * (iu as f64) / (n_samples as f64);
+                for iv in 0..=n_samples {
+                    let v = v_min + (v_max - v_min) * (iv as f64) / (n_samples as f64);
+                    aabb_include(aabb, nurbs.evaluate(u, v));
                 }
             }
         }
