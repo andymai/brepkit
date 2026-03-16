@@ -210,7 +210,7 @@ impl Default for BooleanOptions {
 
 /// Which operand a face fragment originated from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Source {
+pub enum Source {
     A,
     B,
 }
