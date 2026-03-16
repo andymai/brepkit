@@ -28,9 +28,16 @@ pub fn compute_pcurve_on_surface(
     end: Point3,
     surface: &FaceSurface,
     wire_pts: &[Point3],
+    frame: Option<&PlaneFrame>,
 ) -> Curve2D {
     let (p0, p1) = if let FaceSurface::Plane { normal, .. } = surface {
-        let frame = PlaneFrame::from_plane_face(*normal, wire_pts);
+        let owned;
+        let frame = if let Some(f) = frame {
+            f
+        } else {
+            owned = PlaneFrame::from_plane_face(*normal, wire_pts);
+            &owned
+        };
         (frame.project(start), frame.project(end))
     } else {
         // For non-plane surfaces, project endpoints via ParametricSurface.
@@ -49,9 +56,20 @@ pub fn compute_pcurve_on_surface(
 ///
 /// For planes, uses `PlaneFrame`. For analytic/NURBS, uses
 /// `ParametricSurface::project_point()`.
-pub fn project_point_on_surface(p: Point3, surface: &FaceSurface, wire_pts: &[Point3]) -> Point2 {
+pub fn project_point_on_surface(
+    p: Point3,
+    surface: &FaceSurface,
+    wire_pts: &[Point3],
+    frame: Option<&PlaneFrame>,
+) -> Point2 {
     if let FaceSurface::Plane { normal, .. } = surface {
-        let frame = PlaneFrame::from_plane_face(*normal, wire_pts);
+        let owned;
+        let frame = if let Some(f) = frame {
+            f
+        } else {
+            owned = PlaneFrame::from_plane_face(*normal, wire_pts);
+            &owned
+        };
         frame.project(p)
     } else {
         let (u, v) = surface.project_point(p).unwrap_or((0.0, 0.0));
@@ -94,7 +112,8 @@ mod tests {
             Point3::new(0.0, 10.0, 0.0),
         ];
 
-        let pcurve = compute_pcurve_on_surface(&EdgeCurve::Line, start, end, &surface, &wire_pts);
+        let pcurve =
+            compute_pcurve_on_surface(&EdgeCurve::Line, start, end, &surface, &wire_pts, None);
 
         // Line2D normalizes its direction, so t is arc-length parameterized.
         // At t=0 → projected start, at t=|end-start| → projected end.
@@ -126,7 +145,8 @@ mod tests {
             Point3::new(0.0, 10.0, 5.0),
         ];
 
-        let pcurve = compute_pcurve_on_surface(&EdgeCurve::Line, start, end, &surface, &wire_pts);
+        let pcurve =
+            compute_pcurve_on_surface(&EdgeCurve::Line, start, end, &surface, &wire_pts, None);
 
         // Line2D normalizes direction: t is arc-length, not [0,1].
         let frame = PlaneFrame::from_plane_face(normal, &wire_pts);
@@ -158,7 +178,7 @@ mod tests {
             Point3::new(0.0, 10.0, 0.0),
         ];
         let p = Point3::new(5.0, 3.0, 0.0);
-        let uv = project_point_on_surface(p, &surface, &wire_pts);
+        let uv = project_point_on_surface(p, &surface, &wire_pts, None);
 
         // Roundtrip check.
         let frame = PlaneFrame::from_plane_face(Vec3::new(0.0, 0.0, 1.0), &wire_pts);

@@ -12,6 +12,7 @@ use brepkit_math::vec::{Point2, Point3, Vec3};
 ///
 /// `project(p3) → Point2` and `evaluate(u, v) → Point3` convert between
 /// 3D world space and the plane's 2D parameter space.
+#[derive(Debug, Clone)]
 pub struct PlaneFrame {
     origin: Point3,
     u_axis: Vec3,
