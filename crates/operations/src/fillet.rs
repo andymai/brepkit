@@ -960,6 +960,119 @@ pub fn fillet_rolling_ball(
         }
     }
 
+    // G1 chain detection — moved before the contact pre-pass so that G1
+    // junction vertices are known when computing canonical contacts.
+    // Detect chains of consecutive fillet edges that share a vertex.
+    // When two fillet strips meet at a vertex on the same pair of faces,
+    // they should share contact points for G1 tangent continuity.
+    let mut vertex_fillet_adjacency: HashMap<usize, Vec<(usize, usize, usize)>> = HashMap::new();
+    for &edge_id in &filtered_edges {
+        let edge = topo.edge(edge_id)?;
+        if let Some(faces) = edge_to_faces.get(&edge_id.index()) {
+            if faces.len() >= 2 {
+                let f1 = faces[0].index();
+                let f2 = faces[1].index();
+                let (fa, fb) = if f1 < f2 { (f1, f2) } else { (f2, f1) };
+                vertex_fillet_adjacency
+                    .entry(edge.start().index())
+                    .or_default()
+                    .push((edge_id.index(), fa, fb));
+                vertex_fillet_adjacency
+                    .entry(edge.end().index())
+                    .or_default()
+                    .push((edge_id.index(), fa, fb));
+            }
+        }
+    }
+    let mut g1_chain_vertices: HashSet<usize> = HashSet::new();
+    for (vi, adj) in &vertex_fillet_adjacency {
+        if adj.len() == 2 && adj[0].1 == adj[1].1 && adj[0].2 == adj[1].2 {
+            g1_chain_vertices.insert(*vi);
+        }
+    }
+
+    // Pre-pass: precompute fillet strip endpoint contacts using Phase 4's
+    // cross-product method.  Phase 3's face trimming will look up these exact
+    // values instead of recomputing them from polygon neighbour directions.
+    // This ensures both phases produce bitwise-identical positions, preventing
+    // duplicate vertices (and thus boundary edges) in assemble_solid_mixed.
+    //
+    // Key: (vertex_index, edge_index, face_index) → contact Point3
+    let fillet_contact_map: HashMap<(usize, usize, usize), Point3> = {
+        let mut map = HashMap::new();
+        // For G1 junctions: keep the first edge's contacts (entry().or_insert).
+        for &edge_id in &filtered_edges {
+            let edge = topo.edge(edge_id)?;
+            let p_start = topo.vertex(edge.start())?.point();
+            let p_end = topo.vertex(edge.end())?.point();
+
+            let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
+                continue;
+            };
+            if face_list.len() < 2 {
+                continue;
+            }
+            let f1 = face_list[0];
+            let f2 = face_list[1];
+
+            let (Some(surf1), Some(surf2)) = (
+                face_surfaces.get(&f1.index()),
+                face_surfaces.get(&f2.index()),
+            ) else {
+                continue;
+            };
+
+            let edge_curve = edge.curve().clone();
+            let edge_tan_start = sample_edge_tangent(&edge_curve, p_start, p_end, 0.0);
+            if edge_tan_start.length() < tol.linear {
+                continue;
+            }
+
+            // Compute contacts at start (t=0) and end (t=1).
+            for &(t, vid) in &[(0.0_f64, edge.start()), (1.0_f64, edge.end())] {
+                let p = sample_edge_point(&edge_curve, p_start, p_end, t);
+                let tan = sample_edge_tangent(&edge_curve, p_start, p_end, t);
+                let local_dir = match tan.normalize() {
+                    Ok(d) => d,
+                    Err(_) => continue,
+                };
+
+                let ln1 = match face_surface_normal_at(surf1, p) {
+                    Some(n) => n,
+                    None => continue,
+                };
+                let ln2 = match face_surface_normal_at(surf2, p) {
+                    Some(n) => n,
+                    None => continue,
+                };
+
+                // Cross-product directions — same sign convention as Phase 4.
+                let c1 = local_dir.cross(ln1);
+                let c2 = local_dir.cross(ln2);
+                let ld1 = if c1.dot(ln2) < 0.0 { c1 } else { -c1 };
+                let ld2 = if c2.dot(ln1) < 0.0 { c2 } else { -c2 };
+                let ld1 = ld1.normalize().unwrap_or(c1);
+                let ld2 = ld2.normalize().unwrap_or(c2);
+
+                let contact1 = p + ld1 * radius;
+                let contact2 = p + ld2 * radius;
+
+                // At G1 junctions, keep the first edge's contacts.
+                if g1_chain_vertices.contains(&vid.index()) {
+                    map.entry((vid.index(), edge_id.index(), f1.index()))
+                        .or_insert(contact1);
+                    map.entry((vid.index(), edge_id.index(), f2.index()))
+                        .or_insert(contact2);
+                } else {
+                    map.insert((vid.index(), edge_id.index(), f1.index()), contact1);
+                    map.insert((vid.index(), edge_id.index(), f2.index()), contact2);
+                }
+            }
+        }
+        map
+    };
+    log::debug!("fillet contact map: {} entries", fillet_contact_map.len());
+
     // Phase 3: Build modified (trimmed) planar faces.
     let mut all_specs: Vec<FaceSpec> = Vec::new();
     let mut fillet_face_indices: Vec<usize> = Vec::new();
@@ -1031,45 +1144,102 @@ pub fn fillet_rolling_ball(
                 let prev_pos = positions[prev_i];
                 let next_pos = positions[next_i];
 
+                // For fillet-adjacent vertices, use Phase 4's exact contact
+                // to ensure the trimmed boundary matches the fillet strip.
+                let vi = vertex_ids_np[i].index();
+                let fi = face_id.index();
                 match (before_filleted, after_filleted, at_fillet_endpoint) {
                     (false, false, false) => {
                         trimmed_verts.push(pos);
                     }
                     // Side face: vertex is at a fillet endpoint but neither
                     // adjacent edge of this face is the filleted edge.
+                    // Use the two unique Phase 4 fillet contacts at this vertex,
+                    // paired by proximity to boundary offsets.
                     (false, false, true) => {
-                        if let Ok(dir_prev) = (prev_pos - pos).normalize() {
-                            trimmed_verts.push(pos + dir_prev * radius);
-                        } else {
-                            trimmed_verts.push(pos);
+                        let mut unique_contacts: Vec<Point3> = Vec::new();
+                        for (&(vi_k, _, _), &pt) in &fillet_contact_map {
+                            if vi_k == vi {
+                                let already = unique_contacts
+                                    .iter()
+                                    .any(|uc| (*uc - pt).length() < tol.linear);
+                                if !already {
+                                    unique_contacts.push(pt);
+                                }
+                            }
                         }
-                        if let Ok(dir_next) = (next_pos - pos).normalize() {
-                            trimmed_verts.push(pos + dir_next * radius);
+
+                        if unique_contacts.len() >= 2 {
+                            // Pair by proximity: assign closer-to-prev first,
+                            // force the other for next (prevents both mapping
+                            // to the same contact).
+                            let approx_prev = if let Ok(d) = (prev_pos - pos).normalize() {
+                                pos + d * radius
+                            } else {
+                                pos
+                            };
+                            let d0 = (unique_contacts[0] - approx_prev).length();
+                            let d1 = (unique_contacts[1] - approx_prev).length();
+                            if d0 <= d1 {
+                                trimmed_verts.push(unique_contacts[0]);
+                                trimmed_verts.push(unique_contacts[1]);
+                            } else {
+                                trimmed_verts.push(unique_contacts[1]);
+                                trimmed_verts.push(unique_contacts[0]);
+                            }
                         } else {
-                            trimmed_verts.push(pos);
+                            // Fallback: original boundary offset computation.
+                            if let Ok(dir_prev) = (prev_pos - pos).normalize() {
+                                trimmed_verts.push(pos + dir_prev * radius);
+                            } else {
+                                trimmed_verts.push(pos);
+                            }
+                            if let Ok(dir_next) = (next_pos - pos).normalize() {
+                                trimmed_verts.push(pos + dir_next * radius);
+                            } else {
+                                trimmed_verts.push(pos);
+                            }
                         }
                     }
                     (true, false, _) => {
-                        if let Ok(dir) = (next_pos - pos).normalize() {
+                        // The "before" edge is filleted — use its specific contact.
+                        let ei = wire_edge_ids[prev_i].index();
+                        if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
+                            trimmed_verts.push(pt);
+                        } else if let Ok(dir) = (next_pos - pos).normalize() {
                             trimmed_verts.push(pos + dir * radius);
                         } else {
                             trimmed_verts.push(pos);
                         }
                     }
                     (false, true, _) => {
-                        if let Ok(dir) = (prev_pos - pos).normalize() {
+                        // The "after" edge is filleted — use its specific contact.
+                        let ei = wire_edge_ids[i].index();
+                        if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
+                            trimmed_verts.push(pt);
+                        } else if let Ok(dir) = (prev_pos - pos).normalize() {
                             trimmed_verts.push(pos + dir * radius);
                         } else {
                             trimmed_verts.push(pos);
                         }
                     }
                     (true, true, _) => {
-                        if let Ok(dir_prev) = (prev_pos - pos).normalize() {
+                        // dir_prev (along "before" edge) is perpendicular to
+                        // the "after" fillet edge → use the "after" edge's contact.
+                        let ei_after = wire_edge_ids[i].index();
+                        if let Some(&pt) = fillet_contact_map.get(&(vi, ei_after, fi)) {
+                            trimmed_verts.push(pt);
+                        } else if let Ok(dir_prev) = (prev_pos - pos).normalize() {
                             trimmed_verts.push(pos + dir_prev * radius);
                         } else {
                             trimmed_verts.push(pos);
                         }
-                        if let Ok(dir_next) = (next_pos - pos).normalize() {
+                        // dir_next (along "after" edge) is perpendicular to
+                        // the "before" fillet edge → use the "before" edge's contact.
+                        let ei_before = wire_edge_ids[prev_i].index();
+                        if let Some(&pt) = fillet_contact_map.get(&(vi, ei_before, fi)) {
+                            trimmed_verts.push(pt);
+                        } else if let Ok(dir_next) = (next_pos - pos).normalize() {
                             trimmed_verts.push(pos + dir_next * radius);
                         } else {
                             trimmed_verts.push(pos);
@@ -1117,34 +1287,84 @@ pub fn fillet_rolling_ball(
             // filleted edge — they need the corner split into two contact points.
             let at_fillet_endpoint = vertex_fillet_edges.contains_key(&poly.vertex_ids[i].index());
 
+            // For fillet-adjacent vertices, use Phase 4's exact contact.
+            let vi = poly.vertex_ids[i].index();
+            let fi = face_id.index();
             match (before_filleted, after_filleted, at_fillet_endpoint) {
                 (false, false, false) => {
                     new_verts.push(pos);
                 }
-                // Side face: vertex is at a fillet endpoint but neither adjacent
-                // edge of this face is the filleted edge. Split into two contact
-                // points along the face's own edges.
+                // Side face: use the two unique Phase 4 fillet contacts,
+                // paired by proximity to boundary offsets.
                 (false, false, true) => {
-                    let dir_prev = (prev_pos - pos).normalize()?;
-                    new_verts.push(pos + dir_prev * radius);
+                    let mut unique_contacts: Vec<Point3> = Vec::new();
+                    for (&(vi_k, _, _), &pt) in &fillet_contact_map {
+                        if vi_k == vi {
+                            let already = unique_contacts
+                                .iter()
+                                .any(|uc| (*uc - pt).length() < tol.linear);
+                            if !already {
+                                unique_contacts.push(pt);
+                            }
+                        }
+                    }
 
-                    let dir_next = (next_pos - pos).normalize()?;
-                    new_verts.push(pos + dir_next * radius);
+                    if unique_contacts.len() >= 2 {
+                        let dir_prev = (prev_pos - pos).normalize()?;
+                        let approx_prev = pos + dir_prev * radius;
+                        let d0 = (unique_contacts[0] - approx_prev).length();
+                        let d1 = (unique_contacts[1] - approx_prev).length();
+                        if d0 <= d1 {
+                            new_verts.push(unique_contacts[0]);
+                            new_verts.push(unique_contacts[1]);
+                        } else {
+                            new_verts.push(unique_contacts[1]);
+                            new_verts.push(unique_contacts[0]);
+                        }
+                    } else {
+                        let dir_prev = (prev_pos - pos).normalize()?;
+                        new_verts.push(pos + dir_prev * radius);
+                        let dir_next = (next_pos - pos).normalize()?;
+                        new_verts.push(pos + dir_next * radius);
+                    }
                 }
                 (true, false, _) => {
-                    let dir = (next_pos - pos).normalize()?;
-                    new_verts.push(pos + dir * radius);
+                    let ei = poly.wire_edge_ids[prev_i].index();
+                    if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
+                        new_verts.push(pt);
+                    } else {
+                        let dir = (next_pos - pos).normalize()?;
+                        new_verts.push(pos + dir * radius);
+                    }
                 }
                 (false, true, _) => {
-                    let dir = (prev_pos - pos).normalize()?;
-                    new_verts.push(pos + dir * radius);
+                    let ei = poly.wire_edge_ids[i].index();
+                    if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
+                        new_verts.push(pt);
+                    } else {
+                        let dir = (prev_pos - pos).normalize()?;
+                        new_verts.push(pos + dir * radius);
+                    }
                 }
                 (true, true, _) => {
-                    let dir_prev = (prev_pos - pos).normalize()?;
-                    new_verts.push(pos + dir_prev * radius);
-
-                    let dir_next = (next_pos - pos).normalize()?;
-                    new_verts.push(pos + dir_next * radius);
+                    // dir_prev (along "before" edge) → perpendicular to
+                    // the "after" fillet edge → use "after" edge's contact.
+                    let ei_after = poly.wire_edge_ids[i].index();
+                    if let Some(&pt) = fillet_contact_map.get(&(vi, ei_after, fi)) {
+                        new_verts.push(pt);
+                    } else {
+                        let dir_prev = (prev_pos - pos).normalize()?;
+                        new_verts.push(pos + dir_prev * radius);
+                    }
+                    // dir_next (along "after" edge) → perpendicular to
+                    // the "before" fillet edge → use "before" edge's contact.
+                    let ei_before = poly.wire_edge_ids[prev_i].index();
+                    if let Some(&pt) = fillet_contact_map.get(&(vi, ei_before, fi)) {
+                        new_verts.push(pt);
+                    } else {
+                        let dir_next = (next_pos - pos).normalize()?;
+                        new_verts.push(pos + dir_next * radius);
+                    }
                 }
             }
         }
@@ -1155,40 +1375,6 @@ pub fn fillet_rolling_ball(
             normal: poly.normal,
             d: new_d,
         });
-    }
-
-    // Phase 3b: G1 chain detection.
-    // Detect chains of consecutive fillet edges that share a vertex.
-    // When two fillet strips meet at a vertex on the same pair of faces,
-    // they should share contact points for G1 tangent continuity.
-    // Build a map: vertex_index → Vec<(edge_idx, face1_idx, face2_idx)>
-    let mut vertex_fillet_adjacency: HashMap<usize, Vec<(usize, usize, usize)>> = HashMap::new();
-    for &edge_id in &filtered_edges {
-        let edge = topo.edge(edge_id)?;
-        if let Some(faces) = edge_to_faces.get(&edge_id.index()) {
-            if faces.len() >= 2 {
-                let f1 = faces[0].index();
-                let f2 = faces[1].index();
-                let (fa, fb) = if f1 < f2 { (f1, f2) } else { (f2, f1) };
-                vertex_fillet_adjacency
-                    .entry(edge.start().index())
-                    .or_default()
-                    .push((edge_id.index(), fa, fb));
-                vertex_fillet_adjacency
-                    .entry(edge.end().index())
-                    .or_default()
-                    .push((edge_id.index(), fa, fb));
-            }
-        }
-    }
-    // Identify G1 chain junctions: vertices where exactly 2 fillet edges share
-    // the same face pair. At these junctions, the fillet strips should merge
-    // smoothly. We store the shared vertex info for use during Phase 4.
-    let mut g1_chain_vertices: HashSet<usize> = HashSet::new();
-    for (vi, adj) in &vertex_fillet_adjacency {
-        if adj.len() == 2 && adj[0].1 == adj[1].1 && adj[0].2 == adj[1].2 {
-            g1_chain_vertices.insert(*vi);
-        }
     }
 
     // Phase 4: Build NURBS fillet faces for each target edge.
@@ -1721,6 +1907,105 @@ pub fn fillet_rolling_ball(
             normal: blend_normal,
             d: blend_d,
         });
+    }
+
+    // Phase 5c: Remove zero-length edges from face specs.
+    // Two fillet contacts can coincide when two fillet strips meet at the
+    // same point on a face (e.g., two target edges sharing a vertex on the
+    // same face pair).  Remove consecutive duplicate vertices.
+    // Only apply to faces where we actually detected fillet contact lookups
+    // (indicated by having both (true,true) case AND coincident contacts).
+    for spec in &mut all_specs {
+        let verts = match spec {
+            FaceSpec::Planar { vertices, .. }
+            | FaceSpec::Surface { vertices, .. }
+            | FaceSpec::CylindricalFace { vertices, .. } => vertices,
+        };
+        // Only dedup if there are actually zero-length edges (consecutive
+        // vertices within tolerance). Count them first.
+        if verts.len() > 3 {
+            let has_zero_len = verts
+                .windows(2)
+                .any(|w| (w[0] - w[1]).length() < tol.linear)
+                || (verts
+                    .first()
+                    .zip(verts.last())
+                    .is_some_and(|(f, l)| (*f - *l).length() < tol.linear));
+            if has_zero_len {
+                let mut deduped: Vec<Point3> = Vec::with_capacity(verts.len());
+                for (i, &v) in verts.iter().enumerate() {
+                    let next = verts[(i + 1) % verts.len()];
+                    if (v - next).length() > tol.linear {
+                        deduped.push(v);
+                    }
+                }
+                if deduped.len() >= 3 && deduped.len() < verts.len() {
+                    *verts = deduped;
+                }
+            }
+        }
+    }
+
+    // Phase 5d: Snap passthrough face vertices to original solid positions.
+    // Residual precision drift from polygon extraction can produce vertices
+    // that are nearly coincident with original positions.
+    {
+        let mut original_verts: Vec<Point3> = Vec::new();
+        for poly in face_polygons.values() {
+            for &p in &poly.positions {
+                let already = original_verts
+                    .iter()
+                    .any(|existing| (*existing - p).length() < tol.linear);
+                if !already {
+                    original_verts.push(p);
+                }
+            }
+        }
+        for &fid in &shell_face_ids {
+            if face_polygons.contains_key(&fid.index()) {
+                continue;
+            }
+            if let Ok(face) = topo.face(fid) {
+                if let Ok(wire) = topo.wire(face.outer_wire()) {
+                    for oe in wire.edges() {
+                        if let Ok(edge_data) = topo.edge(oe.edge()) {
+                            let vid = oe.oriented_start(edge_data);
+                            if let Ok(v) = topo.vertex(vid) {
+                                let p = v.point();
+                                let already = original_verts
+                                    .iter()
+                                    .any(|existing| (*existing - p).length() < tol.linear);
+                                if !already {
+                                    original_verts.push(p);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let snap_tol = tol.linear * 100.0;
+        for spec in &mut all_specs {
+            let verts = match spec {
+                FaceSpec::Planar { vertices, .. }
+                | FaceSpec::Surface { vertices, .. }
+                | FaceSpec::CylindricalFace { vertices, .. } => vertices,
+            };
+            for v in verts.iter_mut() {
+                if let Some(closest) = original_verts
+                    .iter()
+                    .filter(|ov| (**ov - *v).length() < snap_tol)
+                    .min_by(|a, b| {
+                        (**a - *v)
+                            .length()
+                            .partial_cmp(&(**b - *v).length())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                {
+                    *v = *closest;
+                }
+            }
+        }
     }
 
     // Phase 6: Assemble the solid using mixed-surface assembly.

@@ -23,7 +23,7 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use super::assembly::{
     quantize, quantize_point, refine_boundary_edges, split_nonmanifold_edges,
-    try_shared_boundary_fuse, vertex_merge_resolution,
+    stitch_boundary_edges, try_shared_boundary_fuse, vertex_merge_resolution,
 };
 use super::classify::{
     self, build_face_bvh, classify_point, guard_tangent_coplanar, polygon_centroid,
@@ -1809,6 +1809,16 @@ pub(super) fn analytic_boolean(
     log::debug!(
         "[boolean] refine_boundary_edges: {:.3}ms ({} faces)",
         timer_elapsed_ms(_t_refine),
+        face_ids_out.len()
+    );
+
+    // Stitch boundary edge pairs from spatial-hash cell-boundary straddling.
+    let _t_stitch = timer_now();
+    let stitched = stitch_boundary_edges(topo, &mut face_ids_out, tol)?;
+    log::debug!(
+        "[boolean] stitch_boundary_edges: {:.3}ms ({} stitched, {} faces)",
+        timer_elapsed_ms(_t_stitch),
+        stitched,
         face_ids_out.len()
     );
 

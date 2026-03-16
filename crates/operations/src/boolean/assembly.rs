@@ -315,6 +315,10 @@ pub(crate) fn assemble_solid_mixed(
         Some(&vertex_positions),
     )?;
 
+    // Stitch boundary edge pairs that should be shared but were assigned
+    // different VertexIds by the spatial hash (cell-boundary straddling).
+    stitch_boundary_edges(topo, &mut face_ids, tol)?;
+
     // Split non-manifold edges (shared by > 2 faces) into separate copies,
     // pairing faces by angular ordering around the edge.
     split_nonmanifold_edges(topo, &mut face_ids)?;
@@ -687,6 +691,318 @@ pub(super) fn refine_boundary_edges(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Post-assembly boundary edge stitching
+// ---------------------------------------------------------------------------
+
+/// Merge geometrically-coincident boundary edge pairs.
+///
+/// After boolean assembly, the spatial-hash vertex deduplication may map
+/// coincident vertices to different hash cells when positions straddle a
+/// cell boundary. This creates separate `VertexId`s → separate `EdgeId`s →
+/// boundary edges even though the geometry matches. This function finds
+/// such pairs and stitches them by rewriting one face's wire to reference
+/// the other face's edge.
+///
+/// Returns the number of edges stitched.
+#[allow(clippy::too_many_lines)]
+pub(super) fn stitch_boundary_edges(
+    topo: &mut Topology,
+    face_ids: &mut [FaceId],
+    tol: Tolerance,
+) -> Result<usize, crate::OperationsError> {
+    struct BoundaryEdgeInfo {
+        edge_id: EdgeId,
+        start_vid: VertexId,
+        end_vid: VertexId,
+        start_pos: Point3,
+        end_pos: Point3,
+        midpoint: Point3,
+        face_idx: usize,
+    }
+
+    // 1. Build edge→face count and collect edge metadata.
+    let mut edge_face_count: HashMap<EdgeId, usize> = HashMap::new();
+    let mut edge_vertices: HashMap<EdgeId, (VertexId, VertexId)> = HashMap::new();
+    // Track which face and wire own each edge for later rewriting.
+    let mut edge_owner: HashMap<EdgeId, (usize, WireId)> = HashMap::new();
+
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        let face = topo.face(fid)?;
+        let outer_wire_id = face.outer_wire();
+        let wire = topo.wire(outer_wire_id)?;
+        for oe in wire.edges() {
+            let eid = oe.edge();
+            *edge_face_count.entry(eid).or_default() += 1;
+            if let std::collections::hash_map::Entry::Vacant(e) = edge_vertices.entry(eid) {
+                if let Ok(edge) = topo.edge(eid) {
+                    e.insert((edge.start(), edge.end()));
+                }
+            }
+            edge_owner.entry(eid).or_insert((fi, outer_wire_id));
+        }
+    }
+
+    // 2. Collect boundary edges (count == 1) with endpoint positions.
+    let mut boundary_edges: Vec<BoundaryEdgeInfo> = Vec::new();
+    for (&eid, &count) in &edge_face_count {
+        if count != 1 {
+            continue;
+        }
+        let &(sv, ev) = match edge_vertices.get(&eid) {
+            Some(v) => v,
+            None => continue,
+        };
+        let sp = topo.vertex(sv)?.point();
+        let ep = topo.vertex(ev)?.point();
+        let mid = Point3::new(
+            (sp.x() + ep.x()) * 0.5,
+            (sp.y() + ep.y()) * 0.5,
+            (sp.z() + ep.z()) * 0.5,
+        );
+        let &(fi, _wid) = match edge_owner.get(&eid) {
+            Some(v) => v,
+            None => continue,
+        };
+        boundary_edges.push(BoundaryEdgeInfo {
+            edge_id: eid,
+            start_vid: sv,
+            end_vid: ev,
+            start_pos: sp,
+            end_pos: ep,
+            midpoint: mid,
+            face_idx: fi,
+        });
+    }
+
+    if boundary_edges.len() < 2 {
+        return Ok(0);
+    }
+
+    // 3. Build spatial hash grid of boundary edge midpoints.
+    let tol_linear = tol.linear;
+    let cell_size = boundary_edges
+        .iter()
+        .map(|be| {
+            let dx = be.end_pos.x() - be.start_pos.x();
+            let dy = be.end_pos.y() - be.start_pos.y();
+            let dz = be.end_pos.z() - be.start_pos.z();
+            (dx * dx + dy * dy + dz * dz).sqrt() * 0.5
+        })
+        .fold(f64::INFINITY, f64::min)
+        .max(tol_linear * 10.0);
+    let inv_cell = 1.0 / cell_size;
+
+    let mut grid: HashMap<(i64, i64, i64), Vec<usize>> = HashMap::new();
+    for (i, be) in boundary_edges.iter().enumerate() {
+        let cx = (be.midpoint.x() * inv_cell).floor() as i64;
+        let cy = (be.midpoint.y() * inv_cell).floor() as i64;
+        let cz = (be.midpoint.z() * inv_cell).floor() as i64;
+        grid.entry((cx, cy, cz)).or_default().push(i);
+    }
+
+    // 4. Find matching pairs.
+    let mut stitched: HashSet<EdgeId> = HashSet::new();
+    // Map: (face_idx, old_edge_id) → replacement_edge_id
+    let mut replacements: HashMap<(usize, EdgeId), EdgeId> = HashMap::new();
+    // Map: old_vertex → new_vertex for cascading vertex remaps
+    let mut vertex_remap: HashMap<VertexId, VertexId> = HashMap::new();
+    let mut stitch_count = 0;
+
+    let tol_sq = tol_linear * tol_linear;
+
+    for i in 0..boundary_edges.len() {
+        let be1 = &boundary_edges[i];
+        if stitched.contains(&be1.edge_id) {
+            continue;
+        }
+
+        let mid = be1.midpoint;
+        let cx = (mid.x() * inv_cell).floor() as i64;
+        let cy = (mid.y() * inv_cell).floor() as i64;
+        let cz = (mid.z() * inv_cell).floor() as i64;
+
+        // Query 3×3×3 neighborhood
+        let mut best_match: Option<usize> = None;
+        let mut best_dist_sq = f64::INFINITY;
+
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    if let Some(indices) = grid.get(&(cx + dx, cy + dy, cz + dz)) {
+                        for &j in indices {
+                            if j <= i {
+                                continue;
+                            }
+                            let be2 = &boundary_edges[j];
+                            if stitched.contains(&be2.edge_id) {
+                                continue;
+                            }
+                            // Must be from different faces
+                            if be1.face_idx == be2.face_idx {
+                                continue;
+                            }
+
+                            // Check endpoint matching (same or reversed direction)
+                            let same_dir = (be1.start_pos - be2.start_pos).length_squared()
+                                < tol_sq
+                                && (be1.end_pos - be2.end_pos).length_squared() < tol_sq;
+                            let rev_dir = (be1.start_pos - be2.end_pos).length_squared() < tol_sq
+                                && (be1.end_pos - be2.start_pos).length_squared() < tol_sq;
+
+                            if !same_dir && !rev_dir {
+                                continue;
+                            }
+
+                            let mid_dist_sq = (be1.midpoint - be2.midpoint).length_squared();
+                            if mid_dist_sq < best_dist_sq {
+                                best_dist_sq = mid_dist_sq;
+                                best_match = Some(j);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(j) = best_match {
+            let be2 = &boundary_edges[j];
+
+            // E1 (from be1) is the "keeper". E2 (from be2) gets replaced.
+            // Remap be2's vertices to be1's vertices.
+            let same_dir = (be1.start_pos - be2.start_pos).length_squared() < tol_sq;
+
+            if same_dir {
+                // be2.start → be1.start, be2.end → be1.end
+                if be2.start_vid != be1.start_vid {
+                    vertex_remap.insert(be2.start_vid, be1.start_vid);
+                }
+                if be2.end_vid != be1.end_vid {
+                    vertex_remap.insert(be2.end_vid, be1.end_vid);
+                }
+            } else {
+                // Reversed: be2.start → be1.end, be2.end → be1.start
+                if be2.start_vid != be1.end_vid {
+                    vertex_remap.insert(be2.start_vid, be1.end_vid);
+                }
+                if be2.end_vid != be1.start_vid {
+                    vertex_remap.insert(be2.end_vid, be1.start_vid);
+                }
+            }
+
+            // Replace be2's edge with be1's edge in be2's face wire
+            replacements.insert((be2.face_idx, be2.edge_id), be1.edge_id);
+
+            stitched.insert(be1.edge_id);
+            stitched.insert(be2.edge_id);
+            stitch_count += 1;
+        }
+    }
+
+    if stitch_count == 0 {
+        return Ok(0);
+    }
+
+    log::debug!(
+        "[boolean] stitch_boundary_edges: {} pairs, {} vertex remaps",
+        stitch_count,
+        vertex_remap.len()
+    );
+
+    // 5. Apply vertex remaps to ALL edges in affected faces.
+    //    Cascade: if A→B and B→C, then A→C.
+    let mut resolved_remap: HashMap<VertexId, VertexId> = HashMap::new();
+    for (&from, &to) in &vertex_remap {
+        let mut target = to;
+        let mut depth = 0;
+        while let Some(&next) = vertex_remap.get(&target) {
+            if next == target || depth > 10 {
+                break;
+            }
+            target = next;
+            depth += 1;
+        }
+        resolved_remap.insert(from, target);
+    }
+
+    // Collect which faces need rebuilding (faces that have edge replacements
+    // OR contain edges with remapped vertices).
+    let affected_face_indices: HashSet<usize> = replacements.keys().map(|(fi, _)| *fi).collect();
+
+    for &fi in &affected_face_indices {
+        let fid = face_ids[fi];
+        let face = topo.face(fid)?;
+        let outer_wire_id = face.outer_wire();
+        let wire = topo.wire(outer_wire_id)?;
+        let surface = face.surface().clone();
+        let is_reversed = face.is_reversed();
+        let inner_wires: Vec<WireId> = face.inner_wires().to_vec();
+        let old_edges: Vec<OrientedEdge> = wire.edges().to_vec();
+
+        let mut new_oriented_edges: Vec<OrientedEdge> = Vec::with_capacity(old_edges.len());
+
+        for oe in &old_edges {
+            if let Some(&replacement_eid) = replacements.get(&(fi, oe.edge())) {
+                // This edge is being replaced by the keeper edge.
+                // The keeper edge's canonical direction may differ from
+                // the replaced edge's direction in this wire, so we need
+                // to compute the correct orientation.
+                let keeper = topo.edge(replacement_eid)?;
+                let keeper_start = keeper.start();
+                let keeper_end = keeper.end();
+
+                // What vertex does this wire position expect at the start
+                // of traversal for this oriented edge?
+                let old_edge = topo.edge(oe.edge())?;
+                let expected_start = if oe.is_forward() {
+                    old_edge.start()
+                } else {
+                    old_edge.end()
+                };
+                let resolved_expected = resolved_remap
+                    .get(&expected_start)
+                    .copied()
+                    .unwrap_or(expected_start);
+
+                // If keeper's start matches expected start, traverse forward;
+                // otherwise traverse reversed.
+                let is_forward =
+                    keeper_start == resolved_expected || keeper_end != resolved_expected;
+                new_oriented_edges.push(OrientedEdge::new(replacement_eid, is_forward));
+            } else {
+                // Keep the original edge, but remap its vertices if needed.
+                let edge = topo.edge(oe.edge())?;
+                let old_start = edge.start();
+                let old_end = edge.end();
+                let new_start = resolved_remap.get(&old_start).copied();
+                let new_end = resolved_remap.get(&old_end).copied();
+
+                if new_start.is_some() || new_end.is_some() {
+                    let curve = edge.curve().clone();
+                    let s = new_start.unwrap_or(old_start);
+                    let e = new_end.unwrap_or(old_end);
+                    let new_eid = topo.add_edge(Edge::new(s, e, curve));
+                    new_oriented_edges.push(OrientedEdge::new(new_eid, oe.is_forward()));
+                } else {
+                    new_oriented_edges.push(*oe);
+                }
+            }
+        }
+
+        let new_wire =
+            Wire::new(new_oriented_edges, true).map_err(crate::OperationsError::Topology)?;
+        let new_wire_id = topo.add_wire(new_wire);
+        let new_face = if is_reversed {
+            Face::new_reversed(new_wire_id, inner_wires, surface)
+        } else {
+            Face::new(new_wire_id, inner_wires, surface)
+        };
+        face_ids[fi] = topo.add_face(new_face);
+    }
+
+    Ok(stitch_count)
 }
 
 // ---------------------------------------------------------------------------

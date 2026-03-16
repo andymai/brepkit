@@ -1390,6 +1390,19 @@ fn gridfinity_d5_box_with_filleted_lip() {
     assert_ok(&p5, 0);
     let lip_handle = p5[0]["ok"].as_u64().unwrap() as u32;
 
+    // Pre-fillet diagnostic: verify the boolean cut produces a valid solid
+    let pre_lc = k.get_entity_counts(lip_handle).unwrap();
+    let pre_val = k.validate_solid(lip_handle).unwrap();
+    let pre_euler = (pre_lc[2] as i64) - (pre_lc[1] as i64) + (pre_lc[0] as i64);
+    eprintln!(
+        "D5 lip before fillet: F={} E={} V={} euler={pre_euler} val={pre_val}",
+        pre_lc[0], pre_lc[1], pre_lc[2]
+    );
+    assert!(
+        pre_euler >= 2,
+        "lip solid should have euler >= 2 before fillet, got {pre_euler}"
+    );
+
     // Fillet peak edges
     let r5b = k.execute_batch(&format!(
         r#"[{{"op": "solidEdges", "args": {{"solid": {lip_handle}}}}}]"#
@@ -1465,6 +1478,20 @@ fn gridfinity_d5_box_with_filleted_lip() {
             }
         }
     }
+
+    // The boolean cut now produces a manifold lip (val=0 before fillet).
+    // The fillet re-introduces boundary edges at cap planes (z=4.40, z=-1.20)
+    // because trimmed faces don't share edges with untouched cap faces —
+    // a separate fillet-level issue. Assert the fillet doesn't make things
+    // worse than the known 16 boundary edges (2 validation errors).
+    assert!(
+        lip_val <= 2,
+        "filleted lip should have <= 2 validation issues, got {lip_val}"
+    );
+    assert!(
+        lip_euler >= 2,
+        "filleted lip Euler characteristic should be >= 2, got {lip_euler}"
+    );
 
     // Translate lip
     let mat = translate_matrix(0.0, 0.0, WALL_HEIGHT);
