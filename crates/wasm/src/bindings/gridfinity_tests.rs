@@ -928,6 +928,48 @@ fn gridfinity_d1_lip_ring_loft_cut() {
             }
         }
     }
+    // Dump boundary edge positions for debugging
+    {
+        use std::collections::HashMap;
+        let solid_data = k.topo.solid(lip_id).unwrap();
+        let shell = k.topo.shell(solid_data.outer_shell()).unwrap();
+        let mut edge_face_count: HashMap<usize, usize> = HashMap::new();
+        for &fid in shell.faces() {
+            let face = k.topo.face(fid).unwrap();
+            let wire = k.topo.wire(face.outer_wire()).unwrap();
+            for oe in wire.edges() {
+                *edge_face_count.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+        let boundary: Vec<usize> = edge_face_count
+            .iter()
+            .filter(|&(_, &c)| c == 1)
+            .map(|(&e, _)| e)
+            .collect();
+        eprintln!("  Boundary edges: {}", boundary.len());
+        for &eidx in boundary.iter().take(8) {
+            if let Some(eid) = k.topo.edge_id_from_index(eidx) {
+                if let Ok(edge) = k.topo.edge(eid) {
+                    let s = k.topo.vertex(edge.start()).unwrap().point();
+                    let e = k.topo.vertex(edge.end()).unwrap().point();
+                    let curve = match edge.curve() {
+                        brepkit_topology::edge::EdgeCurve::Line => "line",
+                        brepkit_topology::edge::EdgeCurve::Circle(_) => "circle",
+                        _ => "other",
+                    };
+                    eprintln!(
+                        "    edge[{eidx}] {curve}: ({:.3},{:.3},{:.3}) → ({:.3},{:.3},{:.3})",
+                        s.x(),
+                        s.y(),
+                        s.z(),
+                        e.x(),
+                        e.y(),
+                        e.z()
+                    );
+                }
+            }
+        }
+    }
     assert!(
         val == 0,
         "lip ring should have 0 validation issues: got {val}"
