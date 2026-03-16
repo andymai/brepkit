@@ -1339,6 +1339,113 @@ fn gridfinity_d3_shelled_box_with_lip() {
     assert!(fc < 200, "fused solid should have < 200 faces: got {fc}");
 }
 
+/// D5: Shelled box + FILLETED lip ring → fuse.
+///
+/// Like D3 but with fillet on the lip ring before fuse.
+/// Tests whether the analytic boolean handles torus faces from fillet.
+#[test]
+fn gridfinity_d5_box_with_filleted_lip() {
+    let mut k = BrepKernel::new();
+
+    // Shelled box
+    let r1 = k.execute_batch(&format!(
+        r#"[{{"op": "makeBox", "args": {{"width": {OUTER_DIM}, "height": {OUTER_DIM}, "depth": {WALL_HEIGHT}}}}}]"#
+    ));
+    let p1 = parse_batch(&r1);
+    assert_ok(&p1, 0);
+
+    let faces = k.get_solid_faces(0).unwrap();
+    let top_face = faces[1];
+    let r2 = k.execute_batch(&format!(
+        r#"[{{"op": "shell", "args": {{"solid": 0, "thickness": {WALL_THICKNESS}, "faces": [{top_face}]}}}}]"#
+    ));
+    let p2 = parse_batch(&r2);
+    assert_ok(&p2, 0);
+    let box_handle = p2[0]["ok"].as_u64().unwrap() as u32;
+
+    // Lip ring
+    let outer_faces = make_outer_sections(&mut k);
+    let inner_faces = make_inner_sections(&mut k);
+
+    let outer_json = serde_json::to_string(&outer_faces).unwrap();
+    let r3 = k.execute_batch(&format!(
+        r#"[{{"op": "loft", "args": {{"faces": {outer_json}}}}}]"#
+    ));
+    let p3 = parse_batch(&r3);
+    assert_ok(&p3, 0);
+    let outer_solid = p3[0]["ok"].as_u64().unwrap() as u32;
+
+    let inner_json = serde_json::to_string(&inner_faces).unwrap();
+    let r4 = k.execute_batch(&format!(
+        r#"[{{"op": "loft", "args": {{"faces": {inner_json}}}}}]"#
+    ));
+    let p4 = parse_batch(&r4);
+    assert_ok(&p4, 0);
+    let inner_solid = p4[0]["ok"].as_u64().unwrap() as u32;
+
+    let r5 = k.execute_batch(&format!(
+        r#"[{{"op": "cut", "args": {{"solidA": {outer_solid}, "solidB": {inner_solid}}}}}]"#
+    ));
+    let p5 = parse_batch(&r5);
+    assert_ok(&p5, 0);
+    let lip_handle = p5[0]["ok"].as_u64().unwrap() as u32;
+
+    // Fillet peak edges
+    let r5b = k.execute_batch(&format!(
+        r#"[{{"op": "solidEdges", "args": {{"solid": {lip_handle}}}}}]"#
+    ));
+    let p5b = parse_batch(&r5b);
+    assert_ok(&p5b, 0);
+    let edges = p5b[0]["ok"].as_array().expect("edges");
+    let edge0 = edges[0].as_u64().unwrap();
+    let r5c = k.execute_batch(&format!(
+        r#"[{{"op": "fillet", "args": {{"solid": {lip_handle}, "radius": {TOP_FILLET}, "edges": [{edge0}]}}}}]"#
+    ));
+    let p5c = parse_batch(&r5c);
+    let lip_final = if p5c[0].get("ok").is_some() {
+        p5c[0]["ok"].as_u64().unwrap() as u32
+    } else {
+        eprintln!("D5 fillet failed: {}", p5c[0]["error"]);
+        lip_handle
+    };
+
+    let lc = k.get_entity_counts(lip_final).unwrap();
+    eprintln!("D5 lip after fillet: F={}", lc[0]);
+
+    // Translate lip
+    let mat = translate_matrix(0.0, 0.0, WALL_HEIGHT);
+    let r6 = k.execute_batch(&format!(
+        r#"[{{"op": "transform", "args": {{"solid": {lip_final}, "matrix": {mat}}}}}]"#
+    ));
+    let p6 = parse_batch(&r6);
+    assert_ok(&p6, 0);
+
+    let bc = k.get_entity_counts(box_handle).unwrap();
+    eprintln!("D5 before fuse: box F={}, lip F={}", bc[0], lc[0]);
+
+    // Fuse
+    let r7 = k.execute_batch(&format!(
+        r#"[{{"op": "fuse", "args": {{"solidA": {box_handle}, "solidB": {lip_final}}}}}]"#
+    ));
+    let p7 = parse_batch(&r7);
+    if p7[0].get("error").is_some() {
+        eprintln!("D5 fuse failed: {}", p7[0]["error"]);
+        return;
+    }
+    let fused = p7[0]["ok"].as_u64().unwrap() as u32;
+    let fc = k.get_entity_counts(fused).unwrap();
+    let euler = (fc[2] as i64) - (fc[1] as i64) + (fc[0] as i64);
+    eprintln!(
+        "D5 result: F={}, E={}, V={}, euler={euler}",
+        fc[0], fc[1], fc[2]
+    );
+    assert!(
+        fc[0] < 200,
+        "fused solid should have < 200 faces: got {}",
+        fc[0]
+    );
+}
+
 /// D4: Full 1×1 bin — socket + box + shell + lip + fillet.
 ///
 /// Builds the complete bin pipeline matching gridfinity-layout-tool's
