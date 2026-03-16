@@ -16,6 +16,7 @@ pub(crate) mod plane_frame;
 mod precompute;
 mod split;
 mod types;
+pub(crate) mod wire_builder;
 use analytic::{analytic_boolean, collect_face_signatures, has_torus, is_all_analytic};
 use assembly::validate_boolean_result;
 pub(crate) use assembly::{assemble_solid, assemble_solid_mixed};
