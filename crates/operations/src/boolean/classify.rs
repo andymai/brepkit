@@ -776,7 +776,7 @@ pub(super) fn polygon_centroid(vertices: &[Point3]) -> Point3 {
 
 /// Test if a 3D point lies inside a planar face polygon by projecting to 2D.
 #[inline]
-fn point_in_face_3d(point: Point3, polygon: &[Point3], normal: &Vec3) -> bool {
+pub(super) fn point_in_face_3d(point: Point3, polygon: &[Point3], normal: &Vec3) -> bool {
     if polygon.len() < 3 {
         return false;
     }

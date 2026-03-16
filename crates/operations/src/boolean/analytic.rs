@@ -26,7 +26,7 @@ use super::assembly::{
     try_shared_boundary_fuse, vertex_merge_resolution,
 };
 use super::classify::{
-    build_face_bvh, classify_point, guard_tangent_coplanar, polygon_centroid,
+    self, build_face_bvh, classify_point, guard_tangent_coplanar, polygon_centroid,
     try_build_analytic_classifier,
 };
 use super::fragments::{
@@ -522,6 +522,12 @@ pub(super) fn analytic_boolean(
     let mut face_intersections_b: HashMap<usize, Vec<(Point3, Point3, Option<EdgeCurve>)>> =
         HashMap::new();
 
+    // Deferred coplanar edge injection: B's polygon edges to add as chords on
+    // A's cap (and vice versa). Only applied AFTER the intersection loop, and
+    // only when the cap face ALSO has chord entries from non-coplanar pairs.
+    let mut deferred_coplanar_edges_a: HashMap<usize, Vec<(Point3, Point3)>> = HashMap::new();
+    let mut deferred_coplanar_edges_b: HashMap<usize, Vec<(Point3, Point3)>> = HashMap::new();
+
     // Track which faces have non-planar intersection partners (analytic-analytic).
     let mut has_analytic_analytic = false;
 
@@ -581,6 +587,40 @@ pub(super) fn analytic_boolean(
             let is_plane_b = matches!(snap_b.surface, FaceSurface::Plane { .. });
 
             if is_plane_a && is_plane_b {
+                // Detect coplanar containment for deferred edge injection.
+                {
+                    let d_diff = (snap_a.d - snap_b.d).abs();
+                    let dot = snap_a.normal.dot(snap_b.normal);
+                    if d_diff < tol.linear && dot > 1.0 - tol.angular {
+                        let b_in_a = snap_b.vertices.iter().all(|v| {
+                            classify::point_in_face_3d(*v, &snap_a.vertices, &snap_a.normal)
+                        });
+                        let a_in_b = snap_a.vertices.iter().all(|v| {
+                            classify::point_in_face_3d(*v, &snap_b.vertices, &snap_b.normal)
+                        });
+                        if b_in_a && !a_in_b {
+                            deferred_coplanar_edges_a
+                                .entry(ia)
+                                .or_default()
+                                .extend(snap_b.vertices.windows(2).map(|w| (w[0], w[1])));
+                            let n = snap_b.vertices.len();
+                            deferred_coplanar_edges_a
+                                .entry(ia)
+                                .or_default()
+                                .push((snap_b.vertices[n - 1], snap_b.vertices[0]));
+                        } else if a_in_b && !b_in_a {
+                            deferred_coplanar_edges_b
+                                .entry(ib)
+                                .or_default()
+                                .extend(snap_a.vertices.windows(2).map(|w| (w[0], w[1])));
+                            let n = snap_a.vertices.len();
+                            deferred_coplanar_edges_b
+                                .entry(ib)
+                                .or_default()
+                                .push((snap_a.vertices[n - 1], snap_a.vertices[0]));
+                        }
+                    }
+                }
                 // Plane-plane: use existing logic (chord intersection).
                 if let Some(seg) = plane_plane_chord_analytic(
                     snap_a.normal,
@@ -779,6 +819,32 @@ pub(super) fn analytic_boolean(
         face_intersections_a.len(),
         face_intersections_b.len()
     );
+
+    // Apply deferred coplanar edge injections, but ONLY for faces that
+    // already have chord entries from non-coplanar face pairs (e.g., angled
+    // side faces). This ensures that caps with diagonal chords get proper
+    // inner-profile chords, while caps without chords (like box-cylinder
+    // top caps) remain unaffected.
+    for (ia, edges) in deferred_coplanar_edges_a {
+        if face_intersections_a.contains_key(&ia) {
+            for (p0, p1) in edges {
+                face_intersections_a
+                    .entry(ia)
+                    .or_default()
+                    .push((p0, p1, None));
+            }
+        }
+    }
+    for (ib, edges) in deferred_coplanar_edges_b {
+        if face_intersections_b.contains_key(&ib) {
+            for (p0, p1) in edges {
+                face_intersections_b
+                    .entry(ib)
+                    .or_default()
+                    .push((p0, p1, None));
+            }
+        }
+    }
 
     let _t_frag = timer_now();
     // ── Build contained-curve lookup sets ──────────────────────────────
