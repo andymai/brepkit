@@ -1880,7 +1880,10 @@ fn conforming_pass(
     cells: &mut Vec<AdaptiveCell>,
 ) {
     // Iterate until no more conforming subdivisions are needed.
-    loop {
+    // Safety: bound iterations to MAX_DEPTH to prevent infinite loops on
+    // degenerate surfaces. Each pass can only reduce the maximum level
+    // difference by 1, so MAX_DEPTH passes is a conservative upper bound.
+    for _pass in 0..MAX_DEPTH {
         // Collect leaf cells that need subdivision for conformity.
         let mut to_subdivide = Vec::new();
 
@@ -1996,6 +1999,11 @@ fn force_subdivide(
     cell_idx: usize,
 ) {
     let cell = &cells[cell_idx];
+    // Safety: never subdivide beyond MAX_DEPTH + 2 to prevent unbounded
+    // conforming subdivision cascades on degenerate surfaces.
+    if cell.depth >= MAX_DEPTH + 2 {
+        return;
+    }
     let u_min = cell.u_min;
     let u_max = cell.u_max;
     let v_min = cell.v_min;

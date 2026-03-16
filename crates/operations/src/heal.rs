@@ -840,6 +840,12 @@ fn uf_union(parent: &mut [usize], a: usize, b: usize) {
 /// Returns an error if topology lookups fail.
 #[allow(clippy::too_many_lines)]
 pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::OperationsError> {
+    /// Maximum boundary edges for a merged face. Groups whose boundary
+    /// exceeds this are skipped to prevent O(N²) slowdowns in subsequent
+    /// boolean intersection computations. 200 edges is generous for any
+    /// practical merged face (a merged rectangle has 4-20 edges).
+    const MAX_BOUNDARY_EDGES: usize = 200;
+
     let solid_data = topo.solid(solid)?;
     let shell_id = solid_data.outer_shell();
     let shell = topo.shell(shell_id)?;
@@ -942,6 +948,18 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
                     boundary_edges.push(*oe);
                 }
             }
+        }
+
+        // Skip groups whose merged boundary would be too complex.
+        // A face with hundreds of boundary edges can cause O(N²) or worse
+        // performance in subsequent boolean intersection computations.
+        if boundary_edges.len() > MAX_BOUNDARY_EDGES {
+            log::debug!(
+                "unify_faces: skipping merge group with {} boundary edges (limit {})",
+                boundary_edges.len(),
+                MAX_BOUNDARY_EDGES
+            );
+            continue;
         }
 
         // Reorder boundary edges into closed loops.
