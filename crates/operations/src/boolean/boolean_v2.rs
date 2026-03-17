@@ -249,7 +249,8 @@ fn intersect_face_pair(
             }
             Ok(sections)
         }
-        // Any remaining NURBS pair (analytic-NURBS, NURBS-NURBS): general SSI.
+        // NURBS-NURBS pairs. Analytic-NURBS currently returns empty
+        // (TODO: convert analytic → NURBS for mixed pairs).
         _ if matches!(surf_a, FaceSurface::Nurbs(_)) || matches!(surf_b, FaceSurface::Nurbs(_)) => {
             intersect_nurbs_general_faces(topo, fa, fb, pipeline, tol)
         }
@@ -598,10 +599,10 @@ fn intersect_plane_nurbs_faces(
     Ok(result)
 }
 
-/// Intersect two faces where at least one is NURBS (general case).
+/// Intersect two NURBS-NURBS face pairs.
 ///
-/// Converts analytic surfaces to NURBS representation if needed, then
-/// uses `intersect_nurbs_nurbs` from the math crate.
+/// Currently only handles pairs where BOTH faces are NURBS. Mixed
+/// analytic-NURBS pairs return empty (TODO: convert analytic → NURBS).
 #[allow(clippy::too_many_lines)]
 fn intersect_nurbs_general_faces(
     topo: &Topology,
@@ -1126,7 +1127,7 @@ fn create_wire_from_edges_dedup(
 fn all_faces_supported(topo: &Topology, solid: SolidId) -> Result<bool, OperationsError> {
     let faces = collect_solid_faces(topo, solid)?;
     for fid in faces {
-        let surface = topo.face(fid)?.surface().clone();
+        let surface = topo.face(fid)?.surface();
         // Analytic (Plane, Cylinder, Cone, Sphere, Torus) + NURBS are supported.
         if !surface.is_analytic() && !matches!(surface, FaceSurface::Nurbs(_)) {
             return Ok(false);
