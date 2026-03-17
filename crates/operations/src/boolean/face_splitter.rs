@@ -536,24 +536,20 @@ fn uv_endpoints_from_pcurve(
 
     match pcurve {
         Curve2D::Line(line) => {
-            // Line2D: evaluate at t=0 for start, at t=length for end.
+            // Line2D: start is at t=0. End is estimated by projecting the
+            // 3D endpoint and computing the 2D distance along the line.
             let su = line.evaluate(0.0);
-            let _dir = line.direction();
-            let dx = end_3d.x() - start_3d.x();
-            let dy = end_3d.y() - start_3d.y();
-            let dz = end_3d.z() - start_3d.z();
-            let _len_3d = (dx * dx + dy * dy + dz * dz).sqrt();
-            // For a Line2D on an analytic surface, the 2D length may differ
-            // from 3D. Estimate via endpoint projection and use the 2D length.
             let eu_proj = project_point_on_surface(end_3d, surface, wire_pts, None);
             let du = eu_proj.x() - su.x();
             let dv = eu_proj.y() - su.y();
             let len_2d = (du * du + dv * dv).sqrt();
-            // If the Line2D direction is approximately correct, use it.
             let eu = line.evaluate(len_2d);
-            // Sanity: if the evaluated point is way off from the projected point,
-            // fall back to projection.
-            if (eu.x() - eu_proj.x()).abs() > 1.0 || (eu.y() - eu_proj.y()).abs() > 1.0 {
+            // Sanity: if the Line2D evaluation diverges from the projected
+            // endpoint by more than π (half a period), the line direction
+            // is wrong — fall back to direct projection.
+            if (eu.x() - eu_proj.x()).abs() > std::f64::consts::PI
+                || (eu.y() - eu_proj.y()).abs() > std::f64::consts::PI
+            {
                 (su, eu_proj)
             } else {
                 (su, eu)

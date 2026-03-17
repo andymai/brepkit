@@ -1393,6 +1393,7 @@ fn build_seam_split_sections(
     let seam_3d = samples[seam_idx];
     let anti_3d = samples[anti_idx];
     let seam_v = raw_uv[seam_idx].y();
+    let anti_v = raw_uv[anti_idx].y();
 
     // Classify each sample into arc 1 (u ∈ [0, π]) or arc 2 (u ∈ [π, 2π])
     // using the RAW u coordinate (in [0, 2π)).
@@ -1428,7 +1429,7 @@ fn build_seam_split_sections(
             start_uv_a: None,
             end_uv_a: None,
             start_uv_b: Some(Point2::new(0.0, seam_v)),
-            end_uv_b: Some(Point2::new(std::f64::consts::PI, seam_v)),
+            end_uv_b: Some(Point2::new(std::f64::consts::PI, anti_v)),
         });
     }
 
@@ -1447,7 +1448,7 @@ fn build_seam_split_sections(
             end: seam_3d,
             start_uv_a: None,
             end_uv_a: None,
-            start_uv_b: Some(Point2::new(std::f64::consts::PI, seam_v)),
+            start_uv_b: Some(Point2::new(std::f64::consts::PI, anti_v)),
             end_uv_b: Some(Point2::new(period, seam_v)),
         });
     }
@@ -1484,49 +1485,6 @@ fn split_closed_segment(
 }
 
 /// Find the 3D point where a circle crosses a periodic surface's u=0 seam.
-///
-/// For a cylinder/cone/sphere/torus, the seam is at u=0 in parameter space,
-/// which corresponds to the surface's `x_axis` direction from its center.
-/// This function finds the point on the circle that projects closest to u=0
-/// on the given surface.
-///
-/// Returns `None` for non-periodic surfaces or if projection fails.
-fn find_seam_point_on_circle(
-    circle: &brepkit_math::curves::Circle3D,
-    surface: &FaceSurface,
-) -> Option<Point3> {
-    use std::f64::consts::TAU;
-    const N: usize = 64;
-
-    let (u_period, _) = surface_periods(surface);
-    // Only meaningful for u-periodic surfaces.
-    u_period?;
-
-    // Sample ~64 points on the circle, project each onto the surface,
-    // and find the one with the smallest |u mod 2pi|.
-    let mut best_idx = 0;
-    let mut best_u_dist = f64::INFINITY;
-
-    #[allow(clippy::cast_precision_loss)]
-    for i in 0..N {
-        let t = -std::f64::consts::PI + TAU * (i as f64) / (N as f64);
-        let p = circle.evaluate(t);
-        let (u, _v) = surface.project_point(p)?;
-        // Distance to seam: u=0 (or u=2pi, which is the same seam).
-        let u_mod = u.rem_euclid(TAU);
-        let dist = u_mod.min(TAU - u_mod);
-        if dist < best_u_dist {
-            best_u_dist = dist;
-            best_idx = i;
-        }
-    }
-
-    // Refine: evaluate the circle at the best angle.
-    #[allow(clippy::cast_precision_loss)]
-    let best_t = -std::f64::consts::PI + TAU * (best_idx as f64) / (N as f64);
-    Some(circle.evaluate(best_t))
-}
-
 /// Fit a 2D pcurve from 3D sample points projected onto a surface's UV space.
 ///
 /// Like [`fit_pcurve_from_3d_samples`] but projects via `surface.project_point()`
