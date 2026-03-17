@@ -760,7 +760,8 @@ fn has_partial_coplanar_faces(
         return false;
     };
 
-    let coplanar_tol = tol.linear * 10.0;
+    // Match the 1e-7 threshold used in intersect_two_plane_faces.
+    let coplanar_tol = tol.linear;
 
     // Compute the centroid of a face's outer wire vertices.
     let face_centroid = |fid| -> Option<Point3> {
@@ -800,10 +801,13 @@ fn has_partial_coplanar_faces(
             }
             // Coplanar pair found. Check for partial overlap: identical polygons
             // have coincident centroids; partially overlapping polygons do not.
-            if let (Some(ca), Some(cb)) = (face_centroid(fa), face_centroid(fb)) {
-                if (ca - cb).length() > coplanar_tol {
-                    return true; // Partial overlap: different centroids.
+            // Use a generous threshold (1e-3) since centroids of nearly-identical
+            // but offset polygons can still be close.
+            match (face_centroid(fa), face_centroid(fb)) {
+                (Some(ca), Some(cb)) if (ca - cb).length() <= 1e-3 => {
+                    // Coincident centroids → likely identical faces, skip.
                 }
+                _ => return true, // Partial overlap or unknown → try v2.
             }
         }
     }

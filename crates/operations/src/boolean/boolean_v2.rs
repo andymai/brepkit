@@ -1753,9 +1753,13 @@ fn handle_disjoint_v2(
     match op {
         BooleanOp::Fuse => {
             // Copy both solids into a merged shell.
+            // NOTE: merging two disjoint shells into one produces a
+            // non-manifold topology (two disconnected components in one
+            // shell). validate_boolean_result in the caller will reject
+            // this, falling back to the chord-based path. The orphaned
+            // copy_a/copy_b entities remain in the arena (no dealloc).
             let copy_a = crate::copy::copy_solid(topo, a)?;
             let copy_b = crate::copy::copy_solid(topo, b)?;
-            // Collect all faces from both copies into one shell + solid.
             let shell_a = topo.solid(copy_a)?.outer_shell();
             let shell_b = topo.solid(copy_b)?.outer_shell();
             let mut all_faces = topo.shell(shell_a)?.faces().to_vec();
