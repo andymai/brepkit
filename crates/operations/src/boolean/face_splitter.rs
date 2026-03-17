@@ -1065,6 +1065,18 @@ fn split_sphere_face_direct(
     face_id: FaceId,
     wire_pts: &[Point3],
 ) -> Vec<SubFace> {
+    // Helper: return the face unsplit (used in fallback paths).
+    let unsplit = || {
+        vec![SubFace {
+            surface: surface.clone(),
+            outer_wire: boundary_edges.to_vec(),
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            source,
+        }]
+    };
+
     // Collect section forward/reverse edges on this face.
     let mut cap_edges = Vec::new();
     let mut hole_edges = Vec::new();
@@ -1082,34 +1094,19 @@ fn split_sphere_face_direct(
             continue;
         }
 
-        let (start_uv, end_uv) = match source {
-            Source::A => {
-                if let (Some(su), Some(eu)) = (section.start_uv_a, section.end_uv_a) {
-                    (su, eu)
-                } else {
-                    uv_endpoints_from_pcurve(
-                        pcurve_on_this_face,
-                        section.start,
-                        section.end,
-                        surface,
-                        wire_pts,
-                    )
-                }
-            }
-            Source::B => {
-                if let (Some(su), Some(eu)) = (section.start_uv_b, section.end_uv_b) {
-                    (su, eu)
-                } else {
-                    uv_endpoints_from_pcurve(
-                        pcurve_on_this_face,
-                        section.start,
-                        section.end,
-                        surface,
-                        wire_pts,
-                    )
-                }
-            }
+        let precomputed_uv = match source {
+            Source::A => section.start_uv_a.zip(section.end_uv_a),
+            Source::B => section.start_uv_b.zip(section.end_uv_b),
         };
+        let (start_uv, end_uv) = precomputed_uv.unwrap_or_else(|| {
+            uv_endpoints_from_pcurve(
+                pcurve_on_this_face,
+                section.start,
+                section.end,
+                surface,
+                wire_pts,
+            )
+        });
 
         // Forward: for the cap outer wire.
         cap_edges.push(OrientedPCurveEdge {
@@ -1136,14 +1133,7 @@ fn split_sphere_face_direct(
 
     if cap_edges.is_empty() {
         // No valid section edges — return the face unsplit.
-        return vec![SubFace {
-            surface: surface.clone(),
-            outer_wire: boundary_edges.to_vec(),
-            inner_wires: Vec::new(),
-            reversed,
-            parent: face_id,
-            source,
-        }];
+        return unsplit();
     }
 
     // Validate: cap edges must form a single closed loop (last end ≈ first start).
@@ -1156,14 +1146,7 @@ fn split_sphere_face_direct(
             .map_or(Point3::new(0.0, 0.0, 0.0), |e| e.start_3d))
     .length();
     if loop_gap > brepkit_math::tolerance::Tolerance::new().linear * 100.0 {
-        return vec![SubFace {
-            surface: surface.clone(),
-            outer_wire: boundary_edges.to_vec(),
-            inner_wires: Vec::new(),
-            reversed,
-            parent: face_id,
-            source,
-        }];
+        return unsplit();
     }
 
     // Cap sub-face: outer wire = section forward half-arcs.

@@ -143,6 +143,11 @@ pub(crate) fn segments_for_chord_deviation(radius: f64, arc_range: f64, deflecti
 ///
 /// Used for faces with non-rectangular boundaries (e.g., boolean sub-faces
 /// bounded by intersection curves). Fan-triangulates from the UV centroid.
+// TODO: Handle inner wires (holes) — currently only tessellates the outer wire.
+// The "outside" sub-face from `split_face_with_internal_loops` has holes that
+// are ignored here. This is OK for now because the outside sub-face is discarded
+// by classification in the Steinmetz case, but will need fixing for correct
+// rendering of boolean results with internal loops.
 fn tessellate_analytic_with_boundary(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -2371,19 +2376,21 @@ pub fn tessellate_with_uvs(
         FaceSurface::Cylinder(cyl) => {
             // Check if the boundary is non-standard (e.g., boolean result
             // with arbitrary polyline boundary instead of circles + seams).
+            // Two cases: any NURBS edge, or all-Line with >4 edges (polyline boundary).
             let has_non_standard_boundary = {
                 let wire = topo.wire(face_data.outer_wire())?;
-                wire.edges().iter().any(|oe| {
-                    topo.edge(oe.edge())
-                        .is_ok_and(|e| matches!(e.curve(), EdgeCurve::NurbsCurve(_)))
-                }) || {
-                    // Also detect all-Line boundary with >4 edges (polyline boundary).
-                    let all_line = wire.edges().iter().all(|oe| {
-                        topo.edge(oe.edge())
-                            .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
-                    });
-                    all_line && wire.edges().len() > 4
+                let mut has_nurbs = false;
+                let mut all_line = true;
+                for oe in wire.edges() {
+                    if let Ok(e) = topo.edge(oe.edge()) {
+                        match e.curve() {
+                            EdgeCurve::NurbsCurve(_) => has_nurbs = true,
+                            EdgeCurve::Line => {}
+                            _ => all_line = false,
+                        }
+                    }
                 }
+                has_nurbs || (all_line && wire.edges().len() > 4)
             };
 
             if has_non_standard_boundary {

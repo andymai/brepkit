@@ -1127,8 +1127,10 @@ fn algebraic_cylinder_cylinder(
     let mut curve_minus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
     let u_offset = TAU / (n_samples as f64 * 2.0); // half a step
 
+    // Sample n_samples DISTINCT points (no duplicate at closure).
+    // After the loop, explicitly close each curve by copying the first point.
     #[allow(clippy::cast_precision_loss)]
-    for i in 0..=n_samples {
+    for i in 0..n_samples {
         let u = u_offset + TAU * i as f64 / n_samples as f64;
         let (sin_u, cos_u) = u.sin_cos();
 
@@ -1157,6 +1159,15 @@ fn algebraic_cylinder_cylinder(
 
         curve_plus.push(c1.evaluate(u, v_plus));
         curve_minus.push(c1.evaluate(u, v_minus));
+    }
+
+    // Explicitly close each curve by copying the first point (exact match
+    // avoids near-zero chord length in NURBS interpolation).
+    if !curve_plus.is_empty() {
+        curve_plus.push(curve_plus[0]);
+    }
+    if !curve_minus.is_empty() {
+        curve_minus.push(curve_minus[0]);
     }
 
     let mut curves = Vec::new();
@@ -1542,7 +1553,8 @@ fn project_analytic(
 }
 
 /// Returns `true` if the surface's u-parameter is periodic (wraps around 2π).
-/// All analytic surfaces (cylinder, cone, sphere, torus) have periodic u.
+/// All current `AnalyticSurface` variants have periodic u — this is trivially
+/// true today but exists as a guard for future non-periodic analytic types.
 fn is_u_periodic(surface: &AnalyticSurface<'_>) -> bool {
     matches!(
         surface,
