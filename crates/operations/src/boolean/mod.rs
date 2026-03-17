@@ -136,7 +136,33 @@ pub fn boolean_with_options(
             validate_boolean_result(topo, solid)?;
             return Ok(solid);
         }
-        // Analytic path failed; fall back to tessellated boolean.
+        // Analytic path failed; try v2 pipeline before chord-based fallback.
+    }
+
+    // ── Try v2 parameter-space pipeline ──────────────────────────────────
+    // The v2 pipeline handles coplanar faces (overlapping boxes) that the
+    // v1 analytic path skips. Only invoked when v1 analytic fails AND the
+    // solids have coplanar face pairs (partially overlapping boxes).
+    //
+    // Identical solids (fully overlapping, all faces coplanar) are excluded
+    // since v2's non-coplanar intersection edges on shared cube edges produce
+    // degenerate splits. The chord-based v1 path handles that case correctly.
+    if try_analytic && has_partial_coplanar_faces(topo, a, b, tol) {
+        match boolean_v2::boolean_v2(topo, op, a, b) {
+            Ok(solid) if validate_boolean_result(topo, solid).is_ok() => {
+                log::info!(
+                    "boolean {op:?}: v2 pipeline succeeded → solid {}",
+                    solid.index()
+                );
+                return Ok(solid);
+            }
+            Ok(_) => {
+                log::debug!("boolean {op:?}: v2 result failed validation, falling back");
+            }
+            Err(e) => {
+                log::debug!("boolean {op:?}: v2 pipeline failed ({e}), falling back");
+            }
+        }
     }
 
     // ── Mesh boolean guard for high face counts ─────────────────────
@@ -709,6 +735,79 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
         });
     }
     specs
+}
+
+/// Check if two solids have coplanar face pairs with partial (not full) overlap.
+///
+/// Returns `true` when some face pairs share the same plane with partially
+/// overlapping boundaries — the case where v2's coplanar handling is needed
+/// (e.g., two overlapping boxes offset on one axis).
+///
+/// Returns `false` for identical solids (coplanar face polygons are identical)
+/// or solids with no coplanar faces.
+fn has_partial_coplanar_faces(
+    topo: &Topology,
+    a: SolidId,
+    b: SolidId,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    let Ok(sa) = topo.solid(a) else { return false };
+    let Ok(sb) = topo.solid(b) else { return false };
+    let Ok(shell_a) = topo.shell(sa.outer_shell()) else {
+        return false;
+    };
+    let Ok(shell_b) = topo.shell(sb.outer_shell()) else {
+        return false;
+    };
+
+    let coplanar_tol = tol.linear * 10.0;
+
+    // Compute the centroid of a face's outer wire vertices.
+    let face_centroid = |fid| -> Option<Point3> {
+        let w = topo.wire(topo.face(fid).ok()?.outer_wire()).ok()?;
+        let mut sum = Point3::new(0.0, 0.0, 0.0);
+        let mut count = 0u32;
+        for oe in w.edges() {
+            let e = topo.edge(oe.edge()).ok()?;
+            let vid = if oe.is_forward() { e.start() } else { e.end() };
+            let p = topo.vertex(vid).ok()?.point();
+            sum = Point3::new(sum.x() + p.x(), sum.y() + p.y(), sum.z() + p.z());
+            count += 1;
+        }
+        (count > 0).then(|| {
+            #[allow(clippy::cast_precision_loss)]
+            let n = count as f64;
+            Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
+        })
+    };
+
+    for &fa in shell_a.faces() {
+        let Ok(face_a) = topo.face(fa) else { continue };
+        let FaceSurface::Plane { normal: na, d: da } = face_a.surface() else {
+            continue;
+        };
+        for &fb in shell_b.faces() {
+            let Ok(face_b) = topo.face(fb) else { continue };
+            let FaceSurface::Plane { normal: nb, d: db } = face_b.surface() else {
+                continue;
+            };
+            let cross_len = na.cross(*nb).length();
+            if cross_len >= 1e-10 {
+                continue; // Not parallel.
+            }
+            if (da - db).abs() >= coplanar_tol && (da + db).abs() >= coplanar_tol {
+                continue; // Parallel but not coincident.
+            }
+            // Coplanar pair found. Check for partial overlap: identical polygons
+            // have coincident centroids; partially overlapping polygons do not.
+            if let (Some(ca), Some(cb)) = (face_centroid(fa), face_centroid(fb)) {
+                if (ca - cb).length() > coplanar_tol {
+                    return true; // Partial overlap: different centroids.
+                }
+            }
+        }
+    }
+    false
 }
 
 #[cfg(test)]
