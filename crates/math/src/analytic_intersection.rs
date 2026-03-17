@@ -877,6 +877,8 @@ pub fn intersect_analytic_analytic_bounded(
             u_range_b,
             v_range_b,
             march_step,
+            is_u_periodic(&a),
+            is_u_periodic(&b),
         );
 
         if march_result.len() >= 2 {
@@ -931,7 +933,6 @@ fn try_algebraic_intersection(
             algebraic_sphere_sphere(s1, s2).map(Some)
         }
         (AnalyticSurface::Cylinder(c1), AnalyticSurface::Cylinder(c2)) => {
-            // Only specialize for coaxial cylinders.
             let axis_dot = c1.axis().dot(c2.axis()).abs();
             if axis_dot > 1.0 - 1e-10 {
                 // Axes are parallel — check if they're the same line.
@@ -948,7 +949,8 @@ fn try_algebraic_intersection(
                     return Ok(Some(vec![])); // Coaxial, different radii
                 }
             }
-            Ok(None) // Non-coaxial: fall through to marching
+            // Non-coaxial: algebraic quadratic in v.
+            algebraic_cylinder_cylinder(c1, c2)
         }
         // Sphere-cylinder (both orderings).
         (AnalyticSurface::Sphere(s), AnalyticSurface::Cylinder(c))
@@ -1064,6 +1066,123 @@ fn algebraic_sphere_cylinder(
     // If z is effectively 0, the two circles coincide (tangent case).
     if z < 1e-10 {
         curves.pop(); // Remove duplicate
+    }
+
+    Ok(Some(curves))
+}
+
+/// Algebraic cylinder-cylinder intersection for non-coaxial cylinders.
+///
+/// For two cylinders with axes that are NOT parallel, the intersection
+/// consists of up to two closed space curves. These are found by
+/// parameterizing one cylinder's angular coordinate `u ∈ [0, 2π]` and
+/// solving a quadratic in the axial parameter `v` to find where each
+/// "ring" of cylinder A sits on cylinder B.
+///
+/// The quadratic is:
+///   `v²·(1 - α²) + 2v·(q·a₁ - α·q·a₂) + (|q|² - (q·a₂)² - r₂²) = 0`
+/// where `α = a₁·a₂`, `q(u)` is the radial point on cylinder 1 minus
+/// cylinder 2's origin, `a₁`/`a₂` are the cylinder axes, and `r₂` is
+/// cylinder 2's radius.
+#[allow(clippy::too_many_lines, clippy::unnecessary_wraps)]
+fn algebraic_cylinder_cylinder(
+    c1: &CylindricalSurface,
+    c2: &CylindricalSurface,
+) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    let alpha = c1.axis().dot(c2.axis());
+    let a_coeff = 1.0 - alpha * alpha;
+
+    // Should only be called for non-parallel axes.
+    if a_coeff.abs() < 1e-12 {
+        return Ok(None);
+    }
+
+    let r1 = c1.radius();
+    let r2 = c2.radius();
+    let o1 = c1.origin();
+    let o2 = c2.origin();
+    let a1 = c1.axis();
+    let a2 = c2.axis();
+    let x1 = c1.x_axis();
+    let y1 = c1.y_axis();
+
+    // Separation check: distance between axes vs sum of radii.
+    // Closest approach of two skew lines:
+    let delta = Vec3::new(o1.x() - o2.x(), o1.y() - o2.y(), o1.z() - o2.z());
+    let cross = a1.cross(a2);
+    let cross_len = cross.length();
+    if cross_len > 1e-12 {
+        let axis_dist = delta.dot(cross).abs() / cross_len;
+        if axis_dist > r1 + r2 + 1e-8 {
+            return Ok(Some(vec![])); // No intersection
+        }
+    }
+
+    // Sample u from 0 to 2π on cylinder 1. Offset by half a step to avoid
+    // landing exactly on crossing points where disc=0 and both curves coincide.
+    // This ensures the two algebraic branches have distinct sample endpoints,
+    // so the face splitter's wire builder doesn't face 4-way junction ambiguity.
+    let n_samples = 128;
+    let mut curve_plus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
+    let mut curve_minus: Vec<Point3> = Vec::with_capacity(n_samples + 1);
+    let u_offset = TAU / (n_samples as f64 * 2.0); // half a step
+
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..=n_samples {
+        let u = u_offset + TAU * i as f64 / n_samples as f64;
+        let (sin_u, cos_u) = u.sin_cos();
+
+        // Radial point on c1 at angle u, height v=0:
+        // q = c1.origin + r1*(cos(u)*x1 + sin(u)*y1) - c2.origin
+        let qx = o1.x() + r1 * (cos_u * x1.x() + sin_u * y1.x()) - o2.x();
+        let qy = o1.y() + r1 * (cos_u * x1.y() + sin_u * y1.y()) - o2.y();
+        let qz = o1.z() + r1 * (cos_u * x1.z() + sin_u * y1.z()) - o2.z();
+
+        let q_dot_a1 = qx * a1.x() + qy * a1.y() + qz * a1.z();
+        let q_dot_a2 = qx * a2.x() + qy * a2.y() + qz * a2.z();
+        let q_sq = qx * qx + qy * qy + qz * qz;
+
+        let b_coeff = 2.0 * (q_dot_a1 - alpha * q_dot_a2);
+        let c_coeff = q_sq - q_dot_a2 * q_dot_a2 - r2 * r2;
+
+        let disc = b_coeff * b_coeff - 4.0 * a_coeff * c_coeff;
+        if disc < 0.0 {
+            // No real solutions at this u — curves are partial.
+            continue;
+        }
+
+        let sqrt_disc = disc.sqrt();
+        let v_plus = (-b_coeff + sqrt_disc) / (2.0 * a_coeff);
+        let v_minus = (-b_coeff - sqrt_disc) / (2.0 * a_coeff);
+
+        curve_plus.push(c1.evaluate(u, v_plus));
+        curve_minus.push(c1.evaluate(u, v_minus));
+    }
+
+    let mut curves = Vec::new();
+
+    for pts in [&curve_plus, &curve_minus] {
+        if pts.len() < 4 {
+            continue;
+        }
+
+        // Build intersection points (params filled later by the caller).
+        let ipts: Vec<IntersectionPoint> = pts
+            .iter()
+            .map(|&p| IntersectionPoint {
+                point: p,
+                param1: (0.0, 0.0),
+                param2: (0.0, 0.0),
+            })
+            .collect();
+
+        let degree = 3.min(pts.len() - 1);
+        if let Ok(curve) = interpolate(pts, degree) {
+            curves.push(IntersectionCurve {
+                curve,
+                points: ipts,
+            });
+        }
     }
 
     Ok(Some(curves))
@@ -1285,10 +1404,16 @@ fn march_analytic_intersection(
     u_range_b: (f64, f64),
     v_range_b: (f64, f64),
     initial_step: f64,
+    u_periodic_a: bool,
+    u_periodic_b: bool,
 ) -> Vec<Point3> {
     let max_steps = 500;
     let h_min = 1e-6;
     let h_max = initial_step * 4.0;
+    // Fixed closure threshold: the adaptive step `h` varies with curvature
+    // and can shrink below the actual miss distance at the seed re-approach.
+    // Use `initial_step * 5` to robustly detect closure on the first pass.
+    let closure_dist = initial_step * 5.0;
     // Angular thresholds for curvature-adaptive stepping.
     let max_angle = 10.0_f64.to_radians();
     let min_angle = 2.0_f64.to_radians();
@@ -1345,12 +1470,10 @@ fn march_analytic_intersection(
                 (pa.y() + pb.y()) * 0.5,
                 (pa.z() + pb.z()) * 0.5,
             );
-            let out_a = ua2 <= u_range_a.0
-                || ua2 >= u_range_a.1
+            let out_a = (!u_periodic_a && (ua2 <= u_range_a.0 || ua2 >= u_range_a.1))
                 || va2 <= v_range_a.0
                 || va2 >= v_range_a.1;
-            let out_b = ub2 <= u_range_b.0
-                || ub2 >= u_range_b.1
+            let out_b = (!u_periodic_b && (ub2 <= u_range_b.0 || ub2 >= u_range_b.1))
                 || vb2 <= v_range_b.0
                 || vb2 >= v_range_b.1;
 
@@ -1360,7 +1483,9 @@ fn march_analytic_intersection(
 
             // Check for loop closure — if we've collected enough points and
             // the current point is close to the seed, the curve is closed.
-            if points.len() > 3 && (mid - seed).length() < h * 2.0 {
+            // Require ≥10 steps to avoid premature closure near the seed.
+            let dist_to_seed = (mid - seed).length();
+            if points.len() > 10 && dist_to_seed < closure_dist {
                 points.push(seed);
                 break;
             }
@@ -1414,6 +1539,18 @@ fn project_analytic(
             (u.clamp(u_range.0, u_range.1), v.clamp(v_range.0, v_range.1))
         }
     }
+}
+
+/// Returns `true` if the surface's u-parameter is periodic (wraps around 2π).
+/// All analytic surfaces (cylinder, cone, sphere, torus) have periodic u.
+fn is_u_periodic(surface: &AnalyticSurface<'_>) -> bool {
+    matches!(
+        surface,
+        AnalyticSurface::Cylinder(_)
+            | AnalyticSurface::Cone(_)
+            | AnalyticSurface::Sphere(_)
+            | AnalyticSurface::Torus(_)
+    )
 }
 
 /// Extract closures and parameter ranges for an analytic surface.

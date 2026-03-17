@@ -6,7 +6,7 @@
 
 #![allow(dead_code)] // Used by later boolean_v2 pipeline stages.
 
-use brepkit_math::vec::{Point2, Point3, Vec3};
+use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -100,6 +100,35 @@ pub fn split_face_2d(
         .all(|e| matches!(e.curve_3d, EdgeCurve::Line));
     if matches!(surface, brepkit_topology::face::FaceSurface::Sphere(_)) && all_boundary_line {
         return split_sphere_face_direct(
+            &surface,
+            &boundary_edges,
+            sections,
+            source,
+            reversed,
+            face_id,
+            &wire_pts,
+        );
+    }
+
+    // Internal section edge shortcut: when section edges form closed loops
+    // entirely within the face (not connecting to boundary edges), the wire
+    // builder struggles with periodic UV and 4-way junctions. Instead, group
+    // the section edges into closed loops and construct sub-faces directly.
+    //
+    // Heuristic: NURBS section edges on non-planar faces come from
+    // analytic-analytic intersection (e.g., cylinder-cylinder) and form
+    // internal loops. Circle/Ellipse/Line sections come from plane-analytic
+    // intersection and connect to boundary edges.
+    let all_sections_internal = if !is_plane && !sections.is_empty() {
+        sections
+            .iter()
+            .all(|s| matches!(s.curve_3d, EdgeCurve::NurbsCurve(_)))
+    } else {
+        false
+    };
+
+    if all_sections_internal {
+        return split_face_with_internal_loops(
             &surface,
             &boundary_edges,
             sections,
@@ -1158,4 +1187,223 @@ fn split_sphere_face_direct(
             source,
         },
     ]
+}
+
+// ---------------------------------------------------------------------------
+// Internal-loop face splitting
+// ---------------------------------------------------------------------------
+
+/// Split a face when ALL section edges are interior (don't touch the boundary).
+///
+/// Groups section edges into closed loops by chaining shared 3D endpoints.
+/// Each closed loop produces:
+/// - An "inside" sub-face with the loop as outer wire
+/// - A reversed copy added as an inner wire (hole) of the "outside" sub-face
+///
+/// The "outside" sub-face has the original boundary as outer wire with all
+/// loops as holes.
+#[allow(clippy::too_many_arguments)]
+fn split_face_with_internal_loops(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    sections: &[SectionEdge],
+    source: Source,
+    reversed: bool,
+    face_id: FaceId,
+    _wire_pts: &[Point3],
+) -> Vec<SubFace> {
+    let tol_3d = brepkit_math::tolerance::Tolerance::new().linear;
+
+    // Convert each section edge to a polyline of Line edges.
+    // Using NURBS edges on analytic surfaces causes tessellation failures
+    // (the tessellator uses a rectangular UV grid that ignores NURBS boundaries).
+    // Polyline approximation with ~32 Line segments per half-arc preserves
+    // the cylindrical surface while giving correct boundary polygons.
+    let mut forward_edges: Vec<OrientedPCurveEdge> = Vec::new();
+    let n_seg = 32_usize;
+
+    for section in sections {
+        // Sample the NURBS curve at n_seg+1 points.
+        let sample_pts: Vec<Point3> = match &section.curve_3d {
+            EdgeCurve::NurbsCurve(nc) => {
+                let domain = nc.domain();
+                (0..=n_seg)
+                    .map(|i| {
+                        #[allow(clippy::cast_precision_loss)]
+                        let t = domain.0 + (domain.1 - domain.0) * (i as f64 / n_seg as f64);
+                        nc.evaluate(t)
+                    })
+                    .collect()
+            }
+            _ => {
+                // For non-NURBS curves, just use start and end.
+                vec![section.start, section.end]
+            }
+        };
+
+        // Project sample points to UV, unwrapping u across the seam.
+        let u_period = match surface {
+            FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => Some(std::f64::consts::TAU),
+            _ => None,
+        };
+
+        let mut uv_samples: Vec<(f64, f64)> = Vec::with_capacity(sample_pts.len());
+        for &pt in &sample_pts {
+            let (mut u, v) = surface.project_point(pt).unwrap_or((0.0, 0.0));
+            // Unwrap u to be continuous with the previous sample.
+            if let (Some(period), Some(&(prev_u, _))) = (u_period, uv_samples.last()) {
+                let diff = u - prev_u;
+                let shifts = (diff / period + 0.5).floor();
+                u -= shifts * period;
+            }
+            uv_samples.push((u, v));
+        }
+
+        // Create Line edges between consecutive samples.
+        for i in 0..sample_pts.len() - 1 {
+            let p0 = sample_pts[i];
+            let p1 = sample_pts[i + 1];
+            let uv0 = uv_samples[i];
+            let uv1 = uv_samples[i + 1];
+
+            let dir = Vec2::new(uv1.0 - uv0.0, uv1.1 - uv0.1);
+            let pcurve = if let Ok(line) =
+                brepkit_math::curves2d::Line2D::new(Point2::new(uv0.0, uv0.1), dir)
+            {
+                brepkit_math::curves2d::Curve2D::Line(line)
+            } else {
+                // Degenerate — zero-length edge, skip.
+                continue;
+            };
+
+            forward_edges.push(OrientedPCurveEdge {
+                curve_3d: EdgeCurve::Line,
+                pcurve,
+                start_uv: Point2::new(uv0.0, uv0.1),
+                end_uv: Point2::new(uv1.0, uv1.1),
+                start_3d: p0,
+                end_3d: p1,
+                forward: true,
+            });
+        }
+    }
+
+    // Group edges into closed loops by chaining: edge.end_3d ≈ next.start_3d.
+    let mut used = vec![false; forward_edges.len()];
+    let mut loops: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
+
+    for start_idx in 0..forward_edges.len() {
+        if used[start_idx] {
+            continue;
+        }
+        used[start_idx] = true;
+        let mut chain = vec![forward_edges[start_idx].clone()];
+        let loop_start_3d = chain[0].start_3d;
+
+        // Follow the chain until we close the loop.
+        loop {
+            let last_end = chain.last().map_or(loop_start_3d, |e| e.end_3d);
+
+            // Check if the loop is closed.
+            if chain.len() > 1 && (last_end - loop_start_3d).length() < tol_3d * 100.0 {
+                break;
+            }
+
+            // Find the next unused edge whose start matches last_end.
+            let next = forward_edges
+                .iter()
+                .enumerate()
+                .find(|(i, e)| !used[*i] && (e.start_3d - last_end).length() < tol_3d * 100.0);
+
+            if let Some((idx, _)) = next {
+                used[idx] = true;
+                chain.push(forward_edges[idx].clone());
+            } else {
+                break; // Can't continue — open chain.
+            }
+        }
+
+        if chain.len() >= 2 {
+            loops.push(chain);
+        }
+    }
+
+    // Build sub-faces.
+    let mut result = Vec::new();
+
+    // For each closed loop: create an "inside" sub-face.
+    // The loop winding determines which region of the face is enclosed.
+    // We want the SMALLER region (the Steinmetz lobe), so check signed area
+    // in UV and reverse if the loop encloses the larger region.
+    let mut all_holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
+    for loop_edges in &mut loops {
+        // Compute signed area in UV.
+        let mut signed_area = 0.0;
+        for edge in loop_edges.iter() {
+            signed_area +=
+                (edge.end_uv.x() - edge.start_uv.x()) * (edge.end_uv.y() + edge.start_uv.y());
+        }
+        // If signed area is positive (CW in standard UV), the loop encloses
+        // the "right" region. If negative (CCW), it encloses the complement.
+        // For interior loops on analytic faces, the Steinmetz lobe is the
+        // SMALLER region. Check by comparing signed area magnitude to the
+        // face's total UV area estimate. If > half, reverse.
+        // Heuristic: use signed_area sign directly. The section edges are
+        // ordered so that CCW in UV = exterior. Reverse to get interior.
+        if signed_area < 0.0 {
+            // CCW → enclosing exterior. Reverse to CW → interior.
+            loop_edges.reverse();
+            for edge in loop_edges.iter_mut() {
+                std::mem::swap(&mut edge.start_uv, &mut edge.end_uv);
+                std::mem::swap(&mut edge.start_3d, &mut edge.end_3d);
+                edge.forward = !edge.forward;
+            }
+        }
+
+        // The loop as outer wire of the inside sub-face.
+        result.push(SubFace {
+            surface: surface.clone(),
+            outer_wire: loop_edges.clone(),
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            source,
+        });
+
+        // Build reversed loop for the outside sub-face's hole.
+        let hole: Vec<OrientedPCurveEdge> = loop_edges
+            .iter()
+            .rev()
+            .map(|e| OrientedPCurveEdge {
+                curve_3d: e.curve_3d.clone(),
+                pcurve: e.pcurve.clone(),
+                start_uv: e.end_uv,
+                end_uv: e.start_uv,
+                start_3d: e.end_3d,
+                end_3d: e.start_3d,
+                forward: !e.forward,
+            })
+            .collect();
+        // Verify hole is closed.
+        if let (Some(first), Some(last)) = (hole.first(), hole.last()) {
+            if (last.end_3d - first.start_3d).length() < tol_3d * 100.0 {
+                all_holes.push(hole);
+            }
+        }
+    }
+
+    // The "outside" sub-face: original boundary with all loops as holes.
+    result.push(SubFace {
+        surface: surface.clone(),
+        outer_wire: boundary_edges.to_vec(),
+        inner_wires: all_holes,
+        reversed,
+        parent: face_id,
+        source,
+    });
+
+    result
 }
