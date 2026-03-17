@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.10.0](https://github.com/andymai/brepkit/compare/v2.9.0...v2.10.0) (2026-03-17)
+
+
+### Features
+
+* **boolean_v2:** wire builder band formation — step 3c ([#287](https://github.com/andymai/brepkit/issues/287)) ([15777e1](https://github.com/andymai/brepkit/commit/15777e15fb1e90fb217e435cc20880ff402e20b3))
+
 ## [2.9.0](https://github.com/andymai/brepkit/compare/v2.8.0...v2.9.0) (2026-03-17)
 
 
