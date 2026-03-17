@@ -289,7 +289,7 @@ fn intersect_plane_analytic_faces(
 
     for curve in curves {
         // Sample 3D points along the intersection curve.
-        let samples = sample_intersection_curve(&curve, 32);
+        let samples = sample_intersection_curve(&curve, 64);
         if samples.len() < 2 {
             continue;
         }
@@ -364,7 +364,7 @@ fn intersect_analytic_analytic_faces(
     let v_range_b = estimate_v_range(topo, fb, surf_b);
 
     let curves = analytic_intersection::intersect_analytic_analytic_bounded(
-        analytic_a, analytic_b, 32, v_range_a, v_range_b,
+        analytic_a, analytic_b, 64, v_range_a, v_range_b,
     )
     .map_err(OperationsError::Math)?;
 
