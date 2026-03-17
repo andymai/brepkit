@@ -185,7 +185,9 @@ impl CylindricalSurface {
             ws.push(vec![circle_weights[i], circle_weights[i]]);
         }
 
-        let knots_u = vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.5, 1.5, 2.0, 2.0, 2.0];
+        let knots_u = vec![
+            0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+        ];
         let knots_v = vec![0.0, 0.0, 1.0, 1.0];
         NurbsSurface::new(2, 1, knots_u, knots_v, cps, ws)
     }
@@ -866,8 +868,10 @@ impl RevolutionSurface {
 
 /// Sample an analytic surface on a grid and build a degree (1,1) NURBS surface.
 ///
-/// Evaluates the surface at a regular grid of (u, v) parameters and constructs
-/// a `NurbsSurface` whose control points pass through the sampled positions.
+/// APPROXIMATE: piecewise-bilinear interpolation through a 33×9 grid.
+/// Max chord-height error ≈ 0.5% of surface radius (R × (1-cos(π/32))).
+/// Used only for intersection seed-finding — the output face retains
+/// the original analytic `FaceSurface`, so final geometry is exact.
 fn analytic_to_nurbs_sampled(
     surface_fn: impl Fn(f64, f64) -> Point3,
     u_range: (f64, f64),

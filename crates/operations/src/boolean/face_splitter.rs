@@ -96,9 +96,12 @@ pub fn split_face_2d(
     // seam connections to form rectangular bands). Construct cap + band
     // sub-faces directly instead. Applies to sphere hemispheres and any
     // other face topology without seam edges.
-    let all_boundary_line = boundary_edges
-        .iter()
-        .all(|e| matches!(e.curve_3d, EdgeCurve::Line));
+    let all_boundary_line = boundary_edges.iter().all(|e| {
+        matches!(e.curve_3d, EdgeCurve::Line)
+            // Exclude degenerate seam edges (start ≈ end) — those are periodic
+            // seam connections (e.g., torus), not true line boundaries.
+            && (e.start_3d - e.end_3d).length() > tol.linear
+    });
     if all_boundary_line && !is_plane {
         return split_noseam_face_direct(
             &surface,

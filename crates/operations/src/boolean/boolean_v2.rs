@@ -601,8 +601,8 @@ fn intersect_plane_nurbs_faces(
 
 /// Intersect two NURBS-NURBS face pairs.
 ///
-/// Currently only handles pairs where BOTH faces are NURBS. Mixed
-/// analytic-NURBS pairs return empty (TODO: convert analytic → NURBS).
+/// Handles NURBS-NURBS and analytic-NURBS pairs. Analytic surfaces
+/// are converted to NURBS via `face_surface_to_nurbs` before intersection.
 #[allow(clippy::too_many_lines)]
 fn intersect_nurbs_general_faces(
     topo: &Topology,
@@ -2958,17 +2958,14 @@ mod tests {
         let top = make_square_face_at(&mut topo, 6.0, 5.0, 5.0, 10.0);
         let loft = crate::loft::loft(&mut topo, &[bottom, top]).unwrap();
 
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, loft, cyl);
-        // This may fail if marching doesn't find the intersection — that's OK.
-        // The test verifies the pipeline doesn't panic or return InvalidInput.
-        if let Ok(solid) = result {
-            let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
-            // Loft volume = 6×6×10 = 360. Cylinder inside loft ≈ π×9×10 ≈ 283.
-            // But cylinder extends beyond loft, so intersection is smaller.
-            assert!(
-                vol > 0.0,
-                "cylinder-vs-loft cut should have positive volume, got {vol}"
-            );
-        }
+        // Must not return InvalidInput (analytic-NURBS conversion must work).
+        let result = boolean_v2(&mut topo, BooleanOp::Cut, loft, cyl).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        // Loft volume = 6×6×10 = 360. Cylinder inside loft ≈ π×9×10 ≈ 283.
+        // But cylinder extends beyond loft, so intersection is smaller.
+        assert!(
+            vol > 0.0,
+            "cylinder-vs-loft cut should have positive volume, got {vol}"
+        );
     }
 }
