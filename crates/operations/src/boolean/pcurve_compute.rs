@@ -116,6 +116,15 @@ pub(super) fn make_line2d_safe(origin: Point2, dir: Vec2) -> Line2D {
     })
 }
 
+/// Unwrap periodic UV parameters (public wrapper for use by other modules).
+pub(super) fn unwrap_periodic_params_pub(
+    pts: &mut [Point2],
+    u_period: Option<f64>,
+    v_period: Option<f64>,
+) {
+    unwrap_periodic_params(pts, u_period, v_period);
+}
+
 /// Returns `(u_period, v_period)` for a surface — `Some(TAU)` if periodic.
 pub(super) fn surface_periods(surface: &FaceSurface) -> (Option<f64>, Option<f64>) {
     match surface {
@@ -140,7 +149,7 @@ fn sample_edge_to_uv(
     surface: &FaceSurface,
 ) -> Vec<Point2> {
     let n = PCURVE_SAMPLES;
-    let mut pts_3d = Vec::with_capacity(n);
+    let mut pts_3d = Vec::with_capacity(n + 1);
     for i in 0..=n {
         #[allow(clippy::cast_precision_loss)]
         let t = i as f64 / n as f64;

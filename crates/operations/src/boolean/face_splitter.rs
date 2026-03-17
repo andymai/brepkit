@@ -245,9 +245,10 @@ pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Poin
 
 /// Split boundary edges at 3D points where section edges start/end.
 ///
-/// For each split point, projects onto the edge's 3D geometry and checks
-/// distance. Handles both line edges (projection onto 3D line) and curved
-/// edges (projection via parameter search).
+/// For each split point, projects onto the edge's 3D line segment
+/// (`start_3d→end_3d`) and checks distance. Currently handles line
+/// edges only — curved boundary edges (Circle/Ellipse) fall through
+/// unsplit when the linear projection doesn't match.
 fn split_boundary_edges_at_3d_points(
     edges: Vec<OrientedPCurveEdge>,
     split_pts_3d: &[Point3],

@@ -20,6 +20,7 @@ use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
+use super::analytic::surface_aware_aabb;
 use super::assembly::{quantize_point, vertex_merge_resolution};
 use super::classify::try_build_analytic_classifier;
 use super::classify_2d::point_in_polygon_2d;
@@ -161,12 +162,18 @@ fn intersect_all_faces(
     let faces_b = collect_solid_faces(topo, b)?;
 
     // Pre-compute face AABBs for fast rejection.
+    // Uses surface_aware_aabb which expands wire-vertex AABBs to account
+    // for curved surfaces (e.g. cylinder radius, sphere poles).
     let aabb_cache: HashMap<FaceId, Aabb3> = faces_a
         .iter()
         .chain(faces_b.iter())
         .filter_map(|&fid| {
+            let face = topo.face(fid).ok()?;
             let poly = collect_face_polygon(topo, fid).ok()?;
-            let aabb = Aabb3::try_from_points(poly.into_iter())?;
+            if poly.is_empty() {
+                return None;
+            }
+            let aabb = surface_aware_aabb(face.surface(), &poly, *tol);
             Some((fid, aabb))
         })
         .collect();
@@ -1215,14 +1222,25 @@ fn extract_contiguous_segments(flags: &[bool]) -> Vec<(usize, usize)> {
 }
 
 /// Build a UV polygon for an analytic face (for containment testing).
+///
+/// Projects boundary vertices to UV and unwraps periodic parameters
+/// so the polygon is contiguous (no seam jumps).
 fn face_uv_polygon(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Vec<Point2> {
     let poly = collect_face_polygon(topo, face_id).unwrap_or_default();
-    poly.iter()
+    let mut uv_pts: Vec<Point2> = poly
+        .iter()
         .map(|&p| {
             let (u, v) = surface.project_point(p).unwrap_or((0.0, 0.0));
             Point2::new(u, v)
         })
-        .collect()
+        .collect();
+
+    // Unwrap periodicity so the polygon doesn't have seam jumps.
+    let (u_period, v_period) = surface_periods(surface);
+    if u_period.is_some() || v_period.is_some() {
+        super::pcurve_compute::unwrap_periodic_params_pub(&mut uv_pts, u_period, v_period);
+    }
+    uv_pts
 }
 
 /// Test if a 3D point is inside an analytic face using UV polygon containment.
