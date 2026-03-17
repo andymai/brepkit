@@ -1,6 +1,6 @@
 //! Boolean operation bindings.
 
-#![allow(clippy::missing_errors_doc, unused_variables)]
+#![allow(clippy::missing_errors_doc)]
 
 use wasm_bindgen::prelude::*;
 
@@ -144,22 +144,13 @@ impl BrepKernel {
         Ok(JsValue::from_str(&json))
     }
 
-    /// Perform a mesh boolean on raw triangle data.
-    ///
-    /// Returns a `JsMesh` with the result.
-    #[wasm_bindgen(js_name = "meshBoolean")]
-    #[allow(
-        clippy::needless_pass_by_value,
-        clippy::too_many_arguments,
-        clippy::unused_self
-    )]
     /// Boolean operation using the OCCT-style parameter-space pipeline (v2).
     ///
     /// Supports all surface types (plane, cylinder, cone, sphere, torus, NURBS).
-    /// Preserves analytic surface types on output faces. Use this instead of
-    /// `fuse`/`cut`/`intersect` for higher-quality results.
+    /// Preserves analytic surface types on output faces.
     ///
-    /// `op` must be one of `"fuse"`, `"cut"`, `"intersect"`.
+    /// `op` accepts `"fuse"` / `"union"`, `"cut"` / `"difference"`,
+    /// `"intersect"` / `"intersection"`.
     ///
     /// # Errors
     ///
@@ -174,8 +165,15 @@ impl BrepKernel {
         Ok(solid_id_to_u32(result))
     }
 
-    /// Perform a boolean operation on two triangle meshes.
-    #[allow(clippy::unused_self)]
+    /// Perform a mesh boolean on raw triangle data.
+    ///
+    /// Returns a `JsMesh` with the result.
+    #[wasm_bindgen(js_name = "meshBoolean")]
+    #[allow(
+        clippy::needless_pass_by_value,
+        clippy::too_many_arguments,
+        clippy::unused_self
+    )]
     pub fn mesh_boolean(
         &self,
         positions_a: Vec<f64>,
