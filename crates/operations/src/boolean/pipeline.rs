@@ -100,6 +100,50 @@ pub struct SubFace {
 }
 
 // ---------------------------------------------------------------------------
+// Surface info cache
+// ---------------------------------------------------------------------------
+
+/// Cached surface info per face for consistent UV operations across stages.
+///
+/// For plane faces, stores a [`PlaneFrame`] for 3D↔UV projection.
+/// For analytic faces (cylinder, cone, sphere, torus), stores periodicity
+/// flags — UV projection uses the surface's native parameterization.
+#[derive(Debug, Clone)]
+pub enum SurfaceInfo {
+    /// Plane face with a cached reference frame.
+    Plane(PlaneFrame),
+    /// Parametric surface with native UV. Periodicity flags indicate whether
+    /// the u or v parameter wraps (e.g. cylinder u ∈ [0, 2π)).
+    Parametric {
+        /// Whether the u parameter is periodic.
+        u_periodic: bool,
+        /// Whether the v parameter is periodic.
+        v_periodic: bool,
+    },
+}
+
+impl SurfaceInfo {
+    /// Returns the `PlaneFrame` if this is a plane face, `None` otherwise.
+    pub fn as_plane_frame(&self) -> Option<&PlaneFrame> {
+        match self {
+            Self::Plane(f) => Some(f),
+            Self::Parametric { .. } => None,
+        }
+    }
+
+    /// Returns `(u_periodic, v_periodic)`.
+    pub fn periodicity(&self) -> (bool, bool) {
+        match self {
+            Self::Plane(_) => (false, false),
+            Self::Parametric {
+                u_periodic,
+                v_periodic,
+            } => (*u_periodic, *v_periodic),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Pipeline state
 // ---------------------------------------------------------------------------
 
@@ -115,8 +159,13 @@ pub struct BooleanPipeline {
     pub face_edges: HashMap<FaceId, FaceEdgeSet>,
     /// All sub-faces after wire-builder splitting + classification.
     pub sub_faces: Vec<SubFace>,
-    /// Cached `PlaneFrame` per face (consistent UV origin across all stages).
+    /// Cached `PlaneFrame` per plane face (consistent UV origin across all stages).
+    ///
+    /// Retained for backward compatibility with plane-only code paths.
+    /// New code should prefer `surface_info` which covers all surface types.
     pub plane_frames: HashMap<FaceId, PlaneFrame>,
+    /// Cached surface info per face (plane frame or parametric periodicity).
+    pub surface_info: HashMap<FaceId, SurfaceInfo>,
     /// Solid A handle.
     pub solid_a: Option<SolidId>,
     /// Solid B handle.
