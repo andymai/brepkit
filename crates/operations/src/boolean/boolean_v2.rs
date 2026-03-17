@@ -321,17 +321,18 @@ fn intersect_plane_analytic_faces(
 
             if is_closed {
                 // Closed intersection curve (full circle). Split into two
-                // arcs at the surface's u=0 seam and the u=π antipodal point.
+                // arcs at the face's topological seam and its antipodal point.
                 //
-                // Strategy: project ALL samples to the analytic surface's UV,
-                // find the seam (u≈0) and antipodal (u≈π) samples, then build
-                // arcs by collecting samples sorted by INCREASING u. This
-                // avoids depending on the circle's traversal direction.
+                // The seam u-value is where the boundary vertex sits (NOT
+                // necessarily u=0 in the surface parameterization). We detect
+                // it by projecting a boundary vertex onto the surface.
+                let seam_u = detect_topological_seam_u(topo, analytic_face_id, analytic_surface);
                 let closed_sections = build_seam_split_sections(
                     &samples[seg_start..=seg_end],
                     &curve_3d,
                     analytic_surface,
                     frame_plane,
+                    seam_u,
                 );
                 result.extend(closed_sections);
             } else if (end_3d - start_3d).length() >= tol.linear {
@@ -1324,6 +1325,44 @@ fn fit_pcurve_from_3d_samples(
     }
 }
 
+/// Detect the topological seam u-value for a periodic face.
+///
+/// Projects the first boundary vertex onto the surface to find the u-angle
+/// where the seam edge (Line edge connecting top and bottom circles) sits.
+/// Falls back to u=0 if the face or surface can't be queried.
+fn detect_topological_seam_u(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> f64 {
+    let face = match topo.face(face_id) {
+        Ok(f) => f,
+        Err(_) => return 0.0,
+    };
+    let wire = match topo.wire(face.outer_wire()) {
+        Ok(w) => w,
+        Err(_) => return 0.0,
+    };
+    // Find a Line edge in the wire — this is the seam.
+    for oe in wire.edges() {
+        let edge = match topo.edge(oe.edge()) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        if !matches!(edge.curve(), EdgeCurve::Line) {
+            continue;
+        }
+        let vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        let vertex = match topo.vertex(vid) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let (u, _v) = surface.project_point(vertex.point()).unwrap_or((0.0, 0.0));
+        return u;
+    }
+    0.0
+}
+
 /// Build two seam-split section edges from a closed intersection curve.
 ///
 /// Projects all 3D samples to the analytic surface's UV, finds the seam (u≈0)
@@ -1339,6 +1378,7 @@ fn build_seam_split_sections(
     curve_3d: &EdgeCurve,
     analytic_surface: &FaceSurface,
     frame_plane: &PlaneFrame,
+    seam_u: f64,
 ) -> Vec<SectionEdge> {
     use super::pcurve_compute::surface_periods;
     use std::f64::consts::TAU;
@@ -1359,32 +1399,26 @@ fn build_seam_split_sections(
     let (u_period, _v_period) = surface_periods(analytic_surface);
     let period = u_period.unwrap_or(TAU);
 
-    // Find the seam sample: the one with raw u closest to 0 (or period).
+    // Find the seam sample: the one with raw u closest to the topological seam.
     let seam_idx = raw_uv
         .iter()
         .enumerate()
         .min_by(|(_, a), (_, b)| {
-            let da = a
-                .x()
-                .rem_euclid(period)
-                .min(period - a.x().rem_euclid(period));
-            let db = b
-                .x()
-                .rem_euclid(period)
-                .min(period - b.x().rem_euclid(period));
+            let da = angular_distance(a.x(), seam_u, period);
+            let db = angular_distance(b.x(), seam_u, period);
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|(i, _)| i)
         .unwrap_or(0);
 
-    // Find the antipodal sample: raw u closest to π.
-    let target_u = std::f64::consts::PI;
+    // Find the antipodal sample: raw u closest to seam + π.
+    let target_u = (seam_u + std::f64::consts::PI).rem_euclid(period);
     let anti_idx = raw_uv
         .iter()
         .enumerate()
         .min_by(|(_, a), (_, b)| {
-            let da = (a.x().rem_euclid(period) - target_u).abs();
-            let db = (b.x().rem_euclid(period) - target_u).abs();
+            let da = angular_distance(a.x(), target_u, period);
+            let db = angular_distance(b.x(), target_u, period);
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|(i, _)| i)
@@ -1395,21 +1429,24 @@ fn build_seam_split_sections(
     let seam_v = raw_uv[seam_idx].y();
     let anti_v = raw_uv[anti_idx].y();
 
-    // Classify each sample into arc 1 (u ∈ [0, π]) or arc 2 (u ∈ [π, 2π])
-    // using the RAW u coordinate (in [0, 2π)).
-    let mut arc1_indexed: Vec<(usize, f64)> = Vec::new(); // (idx, raw_u)
+    // Classify each sample into arc 1 (seam → antipodal in +u direction)
+    // or arc 2 (antipodal → seam+period). Use angular distance from seam_u.
+    let mut arc1_indexed: Vec<(usize, f64)> = Vec::new(); // (idx, angular_offset_from_seam)
     let mut arc2_indexed: Vec<(usize, f64)> = Vec::new();
+    let half = std::f64::consts::PI;
     for (i, uv) in raw_uv.iter().enumerate() {
         let u = uv.x().rem_euclid(period);
-        if u <= target_u + 0.05 {
-            arc1_indexed.push((i, u));
+        // Angular offset from seam in [0, period).
+        let offset = (u - seam_u).rem_euclid(period);
+        if offset <= half + 0.05 {
+            arc1_indexed.push((i, offset));
         }
-        if u >= target_u - 0.05 {
-            arc2_indexed.push((i, u));
+        if offset >= half - 0.05 {
+            arc2_indexed.push((i, offset));
         }
     }
 
-    // Sort by raw u.
+    // Sort by angular offset from seam.
     arc1_indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
     arc2_indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -1428,8 +1465,8 @@ fn build_seam_split_sections(
             end: anti_3d,
             start_uv_a: None,
             end_uv_a: None,
-            start_uv_b: Some(Point2::new(0.0, seam_v)),
-            end_uv_b: Some(Point2::new(std::f64::consts::PI, anti_v)),
+            start_uv_b: Some(Point2::new(seam_u, seam_v)),
+            end_uv_b: Some(Point2::new(seam_u + std::f64::consts::PI, anti_v)),
         });
     }
 
@@ -1448,8 +1485,8 @@ fn build_seam_split_sections(
             end: seam_3d,
             start_uv_a: None,
             end_uv_a: None,
-            start_uv_b: Some(Point2::new(std::f64::consts::PI, anti_v)),
-            end_uv_b: Some(Point2::new(period, seam_v)),
+            start_uv_b: Some(Point2::new(seam_u + std::f64::consts::PI, anti_v)),
+            end_uv_b: Some(Point2::new(seam_u + period, seam_v)),
         });
     }
 
@@ -1485,6 +1522,12 @@ fn split_closed_segment(
 }
 
 /// Find the 3D point where a circle crosses a periodic surface's u=0 seam.
+/// Angular distance between two u-values on a periodic surface.
+fn angular_distance(u1: f64, u2: f64, period: f64) -> f64 {
+    let d = (u1 - u2).rem_euclid(period);
+    d.min(period - d)
+}
+
 /// Fit a 2D pcurve from 3D sample points projected onto a surface's UV space.
 ///
 /// Like [`fit_pcurve_from_3d_samples`] but projects via `surface.project_point()`
@@ -2312,7 +2355,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
     fn boolean_v2_cylinder_through_box_cut() {
         // Cylinder r=2, h=20 centered at (5,5) goes through box [0,10]³.
         // Cut = box minus cylinder slice within box.
@@ -2335,7 +2377,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
     fn boolean_v2_cylinder_through_box_intersect() {
         // Same geometry: intersect = cylinder slice within box.
         let mut topo = Topology::new();
@@ -2355,7 +2396,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
     fn boolean_v2_cylinder_through_box_fuse() {
         // Fuse = box + cylinder - overlap.
         let mut topo = Topology::new();
@@ -2377,7 +2417,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
     fn boolean_v2_cylinder_partially_through_box_cut() {
         // Cylinder r=2, base at z=2, top at z=17 — exits top face only.
         // Overlap: z ∈ [2, 10], h_overlap = 8, vol_overlap = π·4·8 ≈ 100.53.
@@ -2399,7 +2438,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
+    #[ignore = "Sphere intersection with non-horizontal plane needs different seam handling"]
     fn boolean_v2_sphere_cap_cut() {
         // Sphere r=5 centered at (5, 5, 10) — top face of box.
         // Spherical cap height h = 5 (sphere center at box top).
@@ -2421,7 +2460,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
+    #[ignore = "Cone seam splitting needs surface-specific UV mapping"]
     fn boolean_v2_cone_through_box_intersect() {
         // Frustum r₁=3, r₂=1, h=20 through box [0,10]³.
         // Frustum slice z∈[0,10]: r varies linearly from r₁ to midpoint.
@@ -2452,7 +2491,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
     fn boolean_v2_offset_cylinder_through_box_cut() {
         // Cylinder off-center at (3, 7) to avoid seam alignment with box faces.
         let mut topo = Topology::new();
@@ -2472,7 +2510,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
+    #[ignore = "Steinmetz (cylinder-cylinder) needs analytic-analytic seam splitting"]
     fn boolean_v2_two_cylinders_intersect() {
         // Two perpendicular cylinders (Steinmetz-like).
         // Cylinder A along z-axis, Cylinder B along x-axis, both r=3.
