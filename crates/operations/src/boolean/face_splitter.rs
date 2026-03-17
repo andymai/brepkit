@@ -68,6 +68,8 @@ pub fn split_face_2d(
     };
 
     // Extract periodicity from SurfaceInfo.
+    // Periodic quantization is needed for boundary wire connectivity (circle
+    // end at u=2π connects to seam start at u=0). Keep it enabled.
     let (u_periodic, v_periodic) = info.map_or((false, false), SurfaceInfo::periodicity);
 
     // Convert boundary edges to OrientedPCurveEdge.
@@ -90,7 +92,22 @@ pub fn split_face_2d(
     }
 
     // Stage 2: Split boundary edges at section edge endpoints (3D matching).
-    let split_pts_3d: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
+    let mut split_pts_3d: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
+
+    // For periodic faces with seam-split section edges, also split closed
+    // boundary edges (full circles) at the ANTIPODAL point (u=π). Without
+    // this, closed circles form 1-edge self-loops after periodic quantization,
+    // preventing the wire builder from forming proper bands.
+    if u_periodic && !sections.is_empty() {
+        for edge in &boundary_edges {
+            if (edge.start_3d - edge.end_3d).length() < 1e-10 {
+                // Closed edge: find the antipodal point at u=π via sampling.
+                let mid_3d = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, 0.5);
+                split_pts_3d.push(mid_3d);
+            }
+        }
+    }
+
     let boundary_edges = split_boundary_edges_at_3d_points(
         boundary_edges,
         &split_pts_3d,
@@ -115,20 +132,44 @@ pub fn split_face_2d(
             continue;
         }
 
-        // Project section endpoints to UV using the appropriate method.
-        // For closed curves on periodic surfaces, span the full u period.
-        let (start_uv, end_uv) = if is_closed_edge && !is_plane && u_periodic {
-            // Closed curve on a u-periodic surface (e.g. full circle on cylinder).
-            // The 3D start ≈ end, but in UV the curve spans the full u period.
-            let su = project_point_on_surface(section.start, &surface, &wire_pts, None);
-            let eu = Point2::new(su.x() + std::f64::consts::TAU, su.y());
-            (su, eu)
-        } else if is_plane {
-            (frame.project(section.start), frame.project(section.end))
-        } else {
-            let su = project_point_on_surface(section.start, &surface, &wire_pts, None);
-            let eu = project_point_on_surface(section.end, &surface, &wire_pts, None);
-            (su, eu)
+        // Project section endpoints to UV.
+        // Use pre-computed UV endpoints when available (e.g. seam-split half-arcs
+        // where the unwrapped UV was computed from the arc samples). Otherwise,
+        // for non-plane faces, use the pcurve's endpoint evaluations instead
+        // of independent surface projection — this ensures UV endpoints are
+        // consistent with the pcurve's unwrapped parameterization (e.g. arc
+        // ending at u=2π rather than u=0 after periodic unwrapping).
+        let (start_uv, end_uv) = match source {
+            Source::A => {
+                if let (Some(su), Some(eu)) = (section.start_uv_a, section.end_uv_a) {
+                    (su, eu)
+                } else if is_plane {
+                    (frame.project(section.start), frame.project(section.end))
+                } else {
+                    uv_endpoints_from_pcurve(
+                        pcurve_on_this_face,
+                        section.start,
+                        section.end,
+                        &surface,
+                        &wire_pts,
+                    )
+                }
+            }
+            Source::B => {
+                if let (Some(su), Some(eu)) = (section.start_uv_b, section.end_uv_b) {
+                    (su, eu)
+                } else if is_plane {
+                    (frame.project(section.start), frame.project(section.end))
+                } else {
+                    uv_endpoints_from_pcurve(
+                        pcurve_on_this_face,
+                        section.start,
+                        section.end,
+                        &surface,
+                        &wire_pts,
+                    )
+                }
+            }
         };
 
         // Forward direction.
@@ -478,6 +519,64 @@ fn find_splits_on_line(
     splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
     splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
     splits
+}
+
+/// Extract UV endpoints from a pcurve's evaluation rather than independent
+/// surface projection. This ensures consistency — e.g. a pcurve that goes
+/// from (π, v) to (2π, v) won't have its end snapped to (0, v) by the
+/// surface's `project_point` which normalizes u into `[0, 2π)`.
+fn uv_endpoints_from_pcurve(
+    pcurve: &brepkit_math::curves2d::Curve2D,
+    start_3d: Point3,
+    end_3d: Point3,
+    surface: &brepkit_topology::face::FaceSurface,
+    wire_pts: &[Point3],
+) -> (Point2, Point2) {
+    use brepkit_math::curves2d::Curve2D;
+
+    match pcurve {
+        Curve2D::Line(line) => {
+            // Line2D: evaluate at t=0 for start, at t=length for end.
+            let su = line.evaluate(0.0);
+            let _dir = line.direction();
+            let dx = end_3d.x() - start_3d.x();
+            let dy = end_3d.y() - start_3d.y();
+            let dz = end_3d.z() - start_3d.z();
+            let _len_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+            // For a Line2D on an analytic surface, the 2D length may differ
+            // from 3D. Estimate via endpoint projection and use the 2D length.
+            let eu_proj = project_point_on_surface(end_3d, surface, wire_pts, None);
+            let du = eu_proj.x() - su.x();
+            let dv = eu_proj.y() - su.y();
+            let len_2d = (du * du + dv * dv).sqrt();
+            // If the Line2D direction is approximately correct, use it.
+            let eu = line.evaluate(len_2d);
+            // Sanity: if the evaluated point is way off from the projected point,
+            // fall back to projection.
+            if (eu.x() - eu_proj.x()).abs() > 1.0 || (eu.y() - eu_proj.y()).abs() > 1.0 {
+                (su, eu_proj)
+            } else {
+                (su, eu)
+            }
+        }
+        Curve2D::Nurbs(nurbs) => {
+            let knots = nurbs.knots();
+            if knots.len() >= 2 {
+                let t0 = knots[0];
+                let tn = knots[knots.len() - 1];
+                (nurbs.evaluate(t0), nurbs.evaluate(tn))
+            } else {
+                (
+                    project_point_on_surface(start_3d, surface, wire_pts, None),
+                    project_point_on_surface(end_3d, surface, wire_pts, None),
+                )
+            }
+        }
+        _ => (
+            project_point_on_surface(start_3d, surface, wire_pts, None),
+            project_point_on_surface(end_3d, surface, wire_pts, None),
+        ),
+    }
 }
 
 /// Find split parameters on a circle edge. Uses `Circle3D::project` for angular
