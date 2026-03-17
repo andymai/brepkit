@@ -1649,9 +1649,6 @@ fn face_uv_polygon(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> V
             .unwrap_or(Point3::new(0.0, 0.0, 0.0));
 
         // Sample N points along the edge (excluding the last — it's the next edge's first).
-        // For closed circle edges (start ≈ end), evaluate starting from the
-        // vertex angle instead of the Circle3D's parametric origin. This keeps
-        // the UV samples aligned with seam edge endpoints.
         // For closed circle edges (start ≈ end), pre-compute the vertex angle
         // so we evaluate starting from the boundary vertex, not the Circle3D's
         // parametric origin. Hoisted outside the sample loop.
@@ -1699,7 +1696,8 @@ fn face_uv_polygon(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> V
             .iter()
             .map(|p| p.y())
             .fold(f64::NEG_INFINITY, f64::max);
-        if (v_max - v_min) < 0.1 {
+        // Hemisphere boundary spans < ~0.6° in latitude → degenerate.
+        if (v_max - v_min) < 0.01 {
             // Degenerate. Determine which hemisphere from the u-direction
             // of the boundary traversal: u increasing → north (v > 0),
             // u decreasing → south (v < 0).

@@ -23,6 +23,7 @@ use std::collections::HashMap;
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
@@ -138,6 +139,148 @@ pub(crate) fn segments_for_chord_deviation(radius: f64, arc_range: f64, deflecti
 /// `segments_for_chord_deviation`). Special handling is applied at poles
 /// (sphere) and apexes (cone) to avoid degenerate triangles by using
 /// triangle fans instead of quads.
+/// Tessellate a cylindrical face using its actual boundary polygon (CDT-based).
+///
+/// Used for faces with non-rectangular boundaries (e.g., boolean sub-faces
+/// bounded by intersection curves). Projects boundary to UV, CDT-triangulates,
+/// then evaluates each vertex on the cylinder surface.
+// TODO: Handle inner wires (holes) — currently only tessellates the outer wire.
+// The "outside" sub-face from `split_face_with_internal_loops` has holes that
+// are ignored here. This is OK for now because the outside sub-face is discarded
+// by classification in the Steinmetz case, but will need fixing for correct
+// rendering of boolean results with internal loops.
+fn tessellate_analytic_with_boundary(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+    _deflection: f64,
+) -> Result<TriangleMeshUV, crate::OperationsError> {
+    // NOTE: Do NOT handle is_reversed here — `tessellate_with_uvs` applies
+    // a common reversal pass for all face types after this function returns.
+    let wire = topo.wire(face_data.outer_wire())?;
+
+    // Collect boundary vertices in order, projecting to UV with seam unwrapping.
+    let mut uv_pts: Vec<(f64, f64)> = Vec::new();
+    let mut positions_3d: Vec<Point3> = Vec::new();
+
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        let pos = topo.vertex(vid)?.point();
+        let (mut u, v) = cyl.project_point(pos);
+
+        // Unwrap u to be continuous with the previous sample.
+        if let Some(&(prev_u, _)) = uv_pts.last() {
+            let diff = u - prev_u;
+            let shifts = (diff / std::f64::consts::TAU + 0.5).floor();
+            u -= shifts * std::f64::consts::TAU;
+        }
+
+        uv_pts.push((u, v));
+        positions_3d.push(pos);
+    }
+
+    if uv_pts.len() < 3 {
+        return Ok(TriangleMeshUV::default());
+    }
+
+    // Ensure CCW winding in UV (positive signed area).
+    // For non-reversed cylinder faces, CCW UV → outward normal.
+    // If the polygon is CW (negative area), reverse to get CCW.
+    {
+        let mut signed_area = 0.0;
+        for i in 0..uv_pts.len() {
+            let j = (i + 1) % uv_pts.len();
+            signed_area += uv_pts[i].0 * uv_pts[j].1 - uv_pts[j].0 * uv_pts[i].1;
+        }
+        if signed_area < 0.0 {
+            uv_pts.reverse();
+            positions_3d.reverse();
+        }
+    }
+
+    // CDT-triangulate the UV boundary polygon.
+    let uv_p2: Vec<brepkit_math::vec::Point2> = uv_pts
+        .iter()
+        .map(|&(u, v)| brepkit_math::vec::Point2::new(u, v))
+        .collect();
+    let u_min = uv_pts.iter().map(|p| p.0).fold(f64::INFINITY, f64::min) - 1.0;
+    let u_max = uv_pts.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max) + 1.0;
+    let v_min = uv_pts.iter().map(|p| p.1).fold(f64::INFINITY, f64::min) - 1.0;
+    let v_max = uv_pts.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max) + 1.0;
+    let mut cdt = brepkit_math::cdt::Cdt::with_capacity(
+        (
+            brepkit_math::vec::Point2::new(u_min, v_min),
+            brepkit_math::vec::Point2::new(u_max, v_max),
+        ),
+        uv_p2.len() + 4,
+    );
+
+    let n_verts = uv_p2.len();
+    let cdt_ids: Vec<usize> = match cdt.insert_points_hilbert(&uv_p2) {
+        Ok(ids) => ids,
+        Err(_) => return Ok(TriangleMeshUV::default()),
+    };
+
+    // Insert boundary constraints — only record successfully inserted ones
+    // so remove_exterior doesn't rely on non-existent barriers.
+    let mut boundary_segs = Vec::with_capacity(n_verts);
+    for i in 0..n_verts {
+        let j = (i + 1) % n_verts;
+        if cdt.insert_constraint(cdt_ids[i], cdt_ids[j]).is_ok() {
+            boundary_segs.push((cdt_ids[i], cdt_ids[j]));
+        }
+    }
+
+    // Remove exterior triangles.
+    cdt.remove_exterior(&boundary_segs);
+
+    let tris = cdt.triangles();
+    let cdt_verts = cdt.vertices();
+
+    // Build mesh: evaluate 3D positions on the cylinder surface.
+    let mut positions = Vec::with_capacity(cdt_verts.len());
+    let mut normals_out = Vec::with_capacity(cdt_verts.len());
+    let mut uvs = Vec::with_capacity(cdt_verts.len());
+    for pt in cdt_verts {
+        let u = pt.x();
+        let v = pt.y();
+        positions.push(cyl.evaluate(u, v));
+        let nm = cyl.normal(u, 0.0);
+        normals_out.push(nm);
+        uvs.push([u, v]);
+    }
+
+    // Override boundary vertices with exact 3D positions from topology.
+    for (i, &cdt_id) in cdt_ids.iter().enumerate() {
+        if cdt_id < positions.len() {
+            positions[cdt_id] = positions_3d[i];
+        }
+    }
+
+    // Build index buffer (standard CCW winding — reversal handled by caller).
+    let mut indices = Vec::with_capacity(tris.len() * 3);
+    #[allow(clippy::cast_possible_truncation)]
+    for &(a, b, c) in &tris {
+        indices.push(a as u32);
+        indices.push(b as u32);
+        indices.push(c as u32);
+    }
+
+    Ok(TriangleMeshUV {
+        mesh: TriangleMesh {
+            positions,
+            normals: normals_out,
+            indices,
+        },
+        uvs,
+    })
+}
+
 #[allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -2227,22 +2370,47 @@ pub fn tessellate_with_uvs(
         }
         FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection)),
         FaceSurface::Cylinder(cyl) => {
-            let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
-            let u_range = compute_angular_range(topo, face_data, |p| cyl.project_point(p));
-            let nu = segments_for_chord_deviation(cyl.radius(), u_range.1 - u_range.0, deflection);
-            // Cylinders have zero axial curvature — 1 row (top + bottom)
-            // is geometrically exact. No need for square-grid scaling.
-            let nv = 1;
-            let cyl = cyl.clone();
-            Ok(tessellate_analytic(
-                |u, v| cyl.evaluate(u, v),
-                |u, v| cyl.normal(u, v),
-                u_range,
-                v_range,
-                nu,
-                nv,
-                AnalyticKind::General,
-            ))
+            // Check if the boundary is non-standard (e.g., boolean result
+            // with arbitrary polyline boundary instead of circles + seams).
+            // Two cases: any NURBS edge, or all-Line with >4 edges (polyline boundary).
+            let has_non_standard_boundary = {
+                let wire = topo.wire(face_data.outer_wire())?;
+                let mut has_nurbs = false;
+                let mut all_line = true;
+                for oe in wire.edges() {
+                    if let Ok(e) = topo.edge(oe.edge()) {
+                        match e.curve() {
+                            EdgeCurve::NurbsCurve(_) => has_nurbs = true,
+                            EdgeCurve::Line => {}
+                            _ => all_line = false,
+                        }
+                    }
+                }
+                has_nurbs || (all_line && wire.edges().len() > 4)
+            };
+
+            if has_non_standard_boundary {
+                // Use CDT-based tessellation from boundary polygon.
+                tessellate_analytic_with_boundary(topo, face_data, cyl, deflection)
+            } else {
+                let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
+                let u_range = compute_angular_range(topo, face_data, |p| cyl.project_point(p));
+                let nu =
+                    segments_for_chord_deviation(cyl.radius(), u_range.1 - u_range.0, deflection);
+                // Cylinders have zero axial curvature — 1 row (top + bottom)
+                // is geometrically exact. No need for square-grid scaling.
+                let nv = 1;
+                let cyl = cyl.clone();
+                Ok(tessellate_analytic(
+                    |u, v| cyl.evaluate(u, v),
+                    |u, v| cyl.normal(u, v),
+                    u_range,
+                    v_range,
+                    nu,
+                    nv,
+                    AnalyticKind::General,
+                ))
+            }
         }
         FaceSurface::Cone(cone) => {
             // Use project_point to get the true v-parameter range, not the
