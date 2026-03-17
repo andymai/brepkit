@@ -3493,35 +3493,19 @@ fn tessellate_face_with_shared_edges(
         face_data.surface(),
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
     ) {
-        // Check if the boundary is non-standard (polyline from boolean results
-        // instead of the usual circles + seam lines).
-        let has_non_standard = {
+        // Detect the standard rectangular boundary: ≤4 edges, all
+        // Circle or Line. Everything else (NURBS, Ellipse, polylines
+        // from boolean results) needs CDT for correct boundary shape.
+        let is_standard_rect = {
             let wire = topo.wire(face_data.outer_wire())?;
-            wire.edges().iter().any(|oe| {
-                topo.edge(oe.edge())
-                    .is_ok_and(|e| matches!(e.curve(), EdgeCurve::NurbsCurve(_)))
-            }) || {
-                let all_line = wire.edges().iter().all(|oe| {
+            wire.edges().len() <= 4
+                && wire.edges().iter().all(|oe| {
                     topo.edge(oe.edge())
-                        .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
-                });
-                all_line && wire.edges().len() > 4
-            }
+                        .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line | EdgeCurve::Circle(_)))
+                })
         };
 
-        if has_non_standard {
-            // Non-rectangular boundary — use CDT with shared vertices for
-            // correct watertight tessellation of boolean sub-faces.
-            tessellate_nonplanar_cdt(
-                topo,
-                face_id,
-                face_data,
-                deflection,
-                edge_global_indices,
-                merged,
-                point_to_global,
-            )?;
-        } else {
+        if is_standard_rect {
             // Standard rectangular boundary — snap path is fine.
             tessellate_nonplanar_snap(
                 topo,
@@ -3532,6 +3516,37 @@ fn tessellate_face_with_shared_edges(
                 merged,
                 point_to_global,
             )?;
+        } else {
+            // Non-rectangular boundary — use CDT with shared vertices.
+            // Save mesh state for rollback if CDT fails.
+            let pos_save = merged.positions.len();
+            let nrm_save = merged.normals.len();
+            let idx_save = merged.indices.len();
+            let cdt_ok = tessellate_nonplanar_cdt(
+                topo,
+                face_id,
+                face_data,
+                deflection,
+                edge_global_indices,
+                merged,
+                point_to_global,
+            );
+            if cdt_ok.is_err() || merged.indices.len() == idx_save {
+                // CDT failed or produced no triangles — rollback and
+                // fall through to snap as best-effort.
+                merged.positions.truncate(pos_save);
+                merged.normals.truncate(nrm_save);
+                merged.indices.truncate(idx_save);
+                tessellate_nonplanar_snap(
+                    topo,
+                    face_id,
+                    face_data,
+                    deflection,
+                    edge_global_indices,
+                    merged,
+                    point_to_global,
+                )?;
+            }
         }
     } else {
         // For sphere and torus faces: use CDT-based tessellation with exact
@@ -3728,7 +3743,8 @@ fn tessellate_nonplanar_cdt(
                 | FaceSurface::Sphere(_)
                 | FaceSurface::Torus(_)
         );
-        if is_periodic {
+        if is_periodic && !boundary_uv.is_empty() {
+            // Unwrap consecutive pairs.
             for i in 1..boundary_uv.len() {
                 let prev_u = boundary_uv[i - 1].0;
                 let mut u = boundary_uv[i].0;
@@ -3736,6 +3752,23 @@ fn tessellate_nonplanar_cdt(
                 let shifts = (diff / std::f64::consts::TAU + 0.5).floor();
                 u -= shifts * std::f64::consts::TAU;
                 boundary_uv[i].0 = u;
+            }
+            // Also check the closing segment (last → first). If a large
+            // jump remains, shift all points so the polygon doesn't
+            // self-intersect across the seam.
+            let first_u = boundary_uv[0].0;
+            let last_u = boundary_uv.last().map_or(first_u, |p| p.0);
+            let close_diff = first_u - last_u;
+            if close_diff.abs() > std::f64::consts::PI {
+                // The closing segment crosses the seam. Shift all points
+                // so the midpoint of the u-range is centered, minimizing
+                // the chance of a cross-seam closing edge.
+                let u_mid = boundary_uv.iter().map(|p| p.0).sum::<f64>() / boundary_uv.len() as f64;
+                let target_mid = std::f64::consts::PI;
+                let shift = target_mid - u_mid;
+                for pt in &mut boundary_uv {
+                    pt.0 += shift;
+                }
             }
         }
     }
