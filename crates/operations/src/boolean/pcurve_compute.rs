@@ -142,7 +142,7 @@ pub(super) fn surface_periods(surface: &FaceSurface) -> (Option<f64>, Option<f64
 /// Sample points along a 3D edge curve and project each to surface UV.
 ///
 /// Returns UV points with periodicity unwrapped.
-fn sample_edge_to_uv(
+pub(super) fn sample_edge_to_uv(
     curve_3d: &EdgeCurve,
     start: Point3,
     end: Point3,
@@ -177,7 +177,7 @@ fn sample_edge_to_uv(
 ///
 /// For `Line`, linearly interpolates between start and end.
 /// For `Circle`/`Ellipse`/`NurbsCurve`, uses `evaluate_with_endpoints`.
-fn evaluate_edge_at_t(curve: &EdgeCurve, start: Point3, end: Point3, t: f64) -> Point3 {
+pub(super) fn evaluate_edge_at_t(curve: &EdgeCurve, start: Point3, end: Point3, t: f64) -> Point3 {
     if matches!(curve, EdgeCurve::Line) {
         Point3::new(
             start.x() + (end.x() - start.x()) * t,
