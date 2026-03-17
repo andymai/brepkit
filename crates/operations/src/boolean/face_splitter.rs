@@ -9,7 +9,7 @@
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
-use brepkit_topology::face::FaceId;
+use brepkit_topology::face::{FaceId, FaceSurface};
 
 use super::classify_2d::{sample_interior_point, signed_area_2d};
 use super::pcurve_compute::{
@@ -89,6 +89,25 @@ pub fn split_face_2d(
             parent: face_id,
             source,
         }];
+    }
+
+    // Sphere cap shortcut: sphere hemisphere faces have no seam edges (only
+    // equatorial Line edges), so the wire builder can't form proper bands.
+    // Construct cap + band sub-faces directly instead.
+    // Guard: only apply when ALL boundary edges are equatorial Lines (no seam edges).
+    let all_boundary_line = boundary_edges
+        .iter()
+        .all(|e| matches!(e.curve_3d, EdgeCurve::Line));
+    if matches!(surface, brepkit_topology::face::FaceSurface::Sphere(_)) && all_boundary_line {
+        return split_sphere_face_direct(
+            &surface,
+            &boundary_edges,
+            sections,
+            source,
+            reversed,
+            face_id,
+            &wire_pts,
+        );
     }
 
     // Stage 2: Split boundary edges at section edge endpoints (3D matching).
@@ -363,14 +382,105 @@ pub fn split_face_2d(
 
 /// Get a point guaranteed inside a sub-face's outer wire (in UV space),
 /// not inside any inner wire (hole), then evaluate it to 3D via the surface.
+#[allow(clippy::too_many_lines)]
 pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Point3 {
     let pts_2d = sample_wire_loop_uv(&sub_face.outer_wire);
     let mut interior_uv = sample_interior_point(&pts_2d);
+
+    // Sphere cap fix: sphere sub-faces with degenerate UV boundaries (thin
+    // strip at constant v) need the interior UV offset toward the pole.
+    // The outer wire of a sphere cap maps to a horizontal line in UV,
+    // producing a near-zero-area polygon whose centroid lies on the boundary.
+    if let FaceSurface::Sphere(_) = &sub_face.surface {
+        if !pts_2d.is_empty() {
+            let v_min = pts_2d.iter().map(|p| p.y()).fold(f64::INFINITY, f64::min);
+            let v_max = pts_2d
+                .iter()
+                .map(|p| p.y())
+                .fold(f64::NEG_INFINITY, f64::max);
+            if (v_max - v_min) < 0.1 {
+                let v_boundary = (v_min + v_max) * 0.5;
+                let v_pole = if v_boundary >= 0.0 {
+                    std::f64::consts::FRAC_PI_2
+                } else {
+                    -std::f64::consts::FRAC_PI_2
+                };
+                let u_center = pts_2d.iter().map(|p| p.x()).sum::<f64>() / pts_2d.len() as f64;
+                interior_uv = Point2::new(u_center, (v_boundary + v_pole) * 0.5);
+            }
+        }
+    }
 
     // If the point falls inside a hole, find a point between the outer wire
     // and the nearest hole boundary.
     if is_inside_any_hole(&interior_uv, &sub_face.inner_wires) {
         interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
+    }
+
+    // Secondary hole check: sample_wire_loop_uv for curved hole wires may
+    // produce an under-sampled polygon that misses containment. Cross-check
+    // using the hole's 3D boundary: if the interior 3D point is close to
+    // the centroid of any hole, it's likely inside and needs displacement.
+    if !sub_face.inner_wires.is_empty() {
+        let eval_3d = |uv: Point2| -> Option<Point3> {
+            if let Some(p) = sub_face.surface.evaluate(uv.x(), uv.y()) {
+                return Some(p);
+            }
+            if let FaceSurface::Plane { normal, .. } = &sub_face.surface {
+                if let Some(f) = frame {
+                    return Some(f.evaluate(uv.x(), uv.y()));
+                }
+                let wire_pts: Vec<Point3> =
+                    sub_face.outer_wire.iter().map(|e| e.start_3d).collect();
+                let f = PlaneFrame::from_plane_face(*normal, &wire_pts);
+                return Some(f.evaluate(uv.x(), uv.y()));
+            }
+            None
+        };
+
+        if let Some(test_3d) = eval_3d(interior_uv) {
+            for hole in &sub_face.inner_wires {
+                // Compute hole centroid in 3D.
+                if hole.is_empty() {
+                    continue;
+                }
+                let hc: Point3 = {
+                    let sum = hole.iter().fold(Point3::new(0.0, 0.0, 0.0), |acc, e| {
+                        acc + (e.start_3d - Point3::new(0.0, 0.0, 0.0))
+                    });
+                    let n = hole.len() as f64;
+                    Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
+                };
+                // Compute hole boundary radius from centroid.
+                let max_r = hole
+                    .iter()
+                    .map(|e| (e.start_3d - hc).length())
+                    .fold(0.0_f64, f64::max);
+
+                if (test_3d - hc).length() < max_r * 0.95 {
+                    // Interior point is inside the hole in 3D. Try outer wire
+                    // vertex that's farthest from the hole centroid.
+                    let best = sub_face
+                        .outer_wire
+                        .iter()
+                        .max_by(|a, b| {
+                            let da = (a.start_3d - hc).length();
+                            let db = (b.start_3d - hc).length();
+                            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .map(|e| e.start_uv);
+                    if let Some(uv) = best {
+                        // Nudge slightly toward the centroid so the point
+                        // is strictly interior, not on the boundary vertex.
+                        interior_uv = Point2::new(
+                            uv.x() * 0.95 + interior_uv.x() * 0.05,
+                            uv.y() * 0.95 + interior_uv.y() * 0.05,
+                        );
+                    }
+                    break;
+                }
+            }
+        }
     }
 
     // Evaluate back to 3D.
@@ -379,7 +489,7 @@ pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Poin
     }
 
     // For plane faces, evaluate via PlaneFrame.
-    if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = &sub_face.surface {
+    if let FaceSurface::Plane { normal, .. } = &sub_face.surface {
         if let Some(f) = frame {
             return f.evaluate(interior_uv.x(), interior_uv.y());
         }
@@ -900,4 +1010,152 @@ fn boundary_edges_to_pcurve(
         });
     }
     result
+}
+
+// ---------------------------------------------------------------------------
+// Sphere-specific face splitting
+// ---------------------------------------------------------------------------
+
+/// Split a sphere hemisphere face directly into cap + band sub-faces.
+///
+/// Sphere hemispheres have no seam edges — their boundary is entirely equatorial
+/// Line edges. The generic wire builder can't form proper rectangular bands
+/// because there are no vertical connections between the equator (v≈0) and the
+/// section circle (at some other v). This function bypasses the wire builder
+/// and constructs the sub-faces geometrically:
+///
+/// - **Cap**: bounded by the section circle (2 half-arcs), covers the pole side.
+/// - **Band**: bounded by the equatorial boundary, with the section circle as hole.
+#[allow(clippy::too_many_arguments)]
+fn split_sphere_face_direct(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    sections: &[SectionEdge],
+    source: Source,
+    reversed: bool,
+    face_id: FaceId,
+    wire_pts: &[Point3],
+) -> Vec<SubFace> {
+    // Collect section forward/reverse edges on this face.
+    let mut cap_edges = Vec::new();
+    let mut hole_edges = Vec::new();
+
+    for section in sections {
+        let pcurve_on_this_face = match source {
+            Source::A => &section.pcurve_a,
+            Source::B => &section.pcurve_b,
+        };
+
+        // Skip full-circle section edges (start ≈ end in 3D) — only use
+        // the half-arcs produced by build_seam_split_sections.
+        if (section.start - section.end).length() < brepkit_math::tolerance::Tolerance::new().linear
+        {
+            continue;
+        }
+
+        let (start_uv, end_uv) = match source {
+            Source::A => {
+                if let (Some(su), Some(eu)) = (section.start_uv_a, section.end_uv_a) {
+                    (su, eu)
+                } else {
+                    uv_endpoints_from_pcurve(
+                        pcurve_on_this_face,
+                        section.start,
+                        section.end,
+                        surface,
+                        wire_pts,
+                    )
+                }
+            }
+            Source::B => {
+                if let (Some(su), Some(eu)) = (section.start_uv_b, section.end_uv_b) {
+                    (su, eu)
+                } else {
+                    uv_endpoints_from_pcurve(
+                        pcurve_on_this_face,
+                        section.start,
+                        section.end,
+                        surface,
+                        wire_pts,
+                    )
+                }
+            }
+        };
+
+        // Forward: for the cap outer wire.
+        cap_edges.push(OrientedPCurveEdge {
+            curve_3d: section.curve_3d.clone(),
+            pcurve: pcurve_on_this_face.clone(),
+            start_uv,
+            end_uv,
+            start_3d: section.start,
+            end_3d: section.end,
+            forward: true,
+        });
+
+        // Reverse: for the band's inner wire (hole).
+        hole_edges.push(OrientedPCurveEdge {
+            curve_3d: section.curve_3d.clone(),
+            pcurve: pcurve_on_this_face.clone(),
+            start_uv: end_uv,
+            end_uv: start_uv,
+            start_3d: section.end,
+            end_3d: section.start,
+            forward: false,
+        });
+    }
+
+    if cap_edges.is_empty() {
+        // No valid section edges — return the face unsplit.
+        return vec![SubFace {
+            surface: surface.clone(),
+            outer_wire: boundary_edges.to_vec(),
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            source,
+        }];
+    }
+
+    // Validate: cap edges must form a single closed loop (last end ≈ first start).
+    // If the topology is unexpected (multiple loops, open chain), fall back to unsplit.
+    let loop_gap = (cap_edges
+        .last()
+        .map_or(Point3::new(0.0, 0.0, 0.0), |e| e.end_3d)
+        - cap_edges
+            .first()
+            .map_or(Point3::new(0.0, 0.0, 0.0), |e| e.start_3d))
+    .length();
+    if loop_gap > brepkit_math::tolerance::Tolerance::new().linear * 100.0 {
+        return vec![SubFace {
+            surface: surface.clone(),
+            outer_wire: boundary_edges.to_vec(),
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            source,
+        }];
+    }
+
+    // Cap sub-face: outer wire = section forward half-arcs.
+    // The half-arcs connect end-to-end, forming a closed loop (the section circle).
+    // Band sub-face: outer wire = equatorial boundary, inner wire = section reversed.
+    vec![
+        SubFace {
+            surface: surface.clone(),
+            outer_wire: cap_edges,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            source,
+        },
+        SubFace {
+            surface: surface.clone(),
+            outer_wire: boundary_edges.to_vec(),
+            inner_wires: vec![hole_edges],
+            reversed,
+            parent: face_id,
+            source,
+        },
+    ]
 }

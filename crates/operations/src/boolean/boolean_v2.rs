@@ -1649,10 +1649,36 @@ fn face_uv_polygon(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> V
             .unwrap_or(Point3::new(0.0, 0.0, 0.0));
 
         // Sample N points along the edge (excluding the last — it's the next edge's first).
+        // For closed circle edges (start ≈ end), evaluate starting from the
+        // vertex angle instead of the Circle3D's parametric origin. This keeps
+        // the UV samples aligned with seam edge endpoints.
+        // For closed circle edges (start ≈ end), pre-compute the vertex angle
+        // so we evaluate starting from the boundary vertex, not the Circle3D's
+        // parametric origin. Hoisted outside the sample loop.
+        let closed_circle_angle = if matches!(edge.curve(), EdgeCurve::Circle(_))
+            && (start_v - end_v).length() < Tolerance::new().linear
+        {
+            if let EdgeCurve::Circle(circle) = edge.curve() {
+                Some((circle, circle.project(start_v)))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         #[allow(clippy::cast_precision_loss)]
         for i in 0..SAMPLES_PER_EDGE {
             let t = i as f64 / SAMPLES_PER_EDGE as f64;
-            let p3d = evaluate_edge_at_t(edge.curve(), start_v, end_v, t);
+            let p3d = if let Some((circle, vertex_angle)) = closed_circle_angle {
+                let angle = if oe.is_forward() {
+                    vertex_angle + std::f64::consts::TAU * t
+                } else {
+                    vertex_angle - std::f64::consts::TAU * t
+                };
+                circle.evaluate(angle)
+            } else {
+                evaluate_edge_at_t(edge.curve(), start_v, end_v, t)
+            };
             let (u, v) = surface.project_point(p3d).unwrap_or((0.0, 0.0));
             uv_pts.push(Point2::new(u, v));
         }
@@ -1663,6 +1689,47 @@ fn face_uv_polygon(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> V
     if u_period.is_some() || v_period.is_some() {
         super::pcurve_compute::unwrap_periodic_params_pub(&mut uv_pts, u_period, v_period);
     }
+
+    // Sphere cap fix: hemisphere faces have an equatorial boundary that maps
+    // to a degenerate zero-area strip in UV (all points at v ≈ 0). Extend
+    // the polygon to the appropriate pole so point_in_polygon_2d works.
+    if matches!(surface, FaceSurface::Sphere(_)) && uv_pts.len() >= 3 {
+        let v_min = uv_pts.iter().map(|p| p.y()).fold(f64::INFINITY, f64::min);
+        let v_max = uv_pts
+            .iter()
+            .map(|p| p.y())
+            .fold(f64::NEG_INFINITY, f64::max);
+        if (v_max - v_min) < 0.1 {
+            // Degenerate. Determine which hemisphere from the u-direction
+            // of the boundary traversal: u increasing → north (v > 0),
+            // u decreasing → south (v < 0).
+            let u_first = uv_pts.first().map_or(0.0, |p| p.x());
+            let u_last = uv_pts.last().map_or(0.0, |p| p.x());
+            let v_pole = if u_last > u_first {
+                std::f64::consts::FRAC_PI_2
+            } else {
+                -std::f64::consts::FRAC_PI_2
+            };
+            // Add pole corners. Extend u slightly past the sampled range
+            // to cover the full period — Line edge sampling leaves a gap
+            // (~TAU/segments) between the last sample and the first.
+            let u_gap = (u_last - u_first).abs() / uv_pts.len() as f64;
+            let (u_lo, u_hi) = if u_last < u_first {
+                (u_last - u_gap, u_first + u_gap)
+            } else {
+                (u_first - u_gap, u_last + u_gap)
+            };
+            // Ensure rectangle connects: last boundary → bottom-left → bottom-right → first boundary
+            if u_last < u_first {
+                uv_pts.push(Point2::new(u_lo, v_pole));
+                uv_pts.push(Point2::new(u_hi, v_pole));
+            } else {
+                uv_pts.push(Point2::new(u_hi, v_pole));
+                uv_pts.push(Point2::new(u_lo, v_pole));
+            }
+        }
+    }
+
     uv_pts
 }
 
@@ -2438,17 +2505,18 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Sphere intersection with non-horizontal plane needs different seam handling"]
     fn boolean_v2_sphere_cap_cut() {
-        // Sphere r=5 centered at (5, 5, 10) — top face of box.
-        // Spherical cap height h = 5 (sphere center at box top).
-        // Cap volume = πh²(3r-h)/3 = π·25·10/3 ≈ 261.80.
+        // Sphere r=5 centered at (5, 5, 12) — overlaps box top by 3 units.
+        // Sphere bottom at z=7, box top at z=10. Cap from z=7..10 inside box.
+        // Cap height h = 3, volume = πh²(3r−h)/3 = π·9·12/3 = 36π ≈ 113.10.
+        // Center at z=12 (not z=10) so the cutting plane at z=10 is inside the
+        // lower hemisphere face, not on the equator boundary.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let r = 5.0;
-        let b = make_centered_sphere(&mut topo, r, 5.0, 5.0, 10.0);
+        let b = make_centered_sphere(&mut topo, r, 5.0, 5.0, 12.0);
 
-        let h = 5.0; // sphere dips 5 units into box
+        let h = 3.0; // sphere dips 3 units into box (z=7..10)
         let cap_vol = std::f64::consts::PI * h * h * (3.0 * r - h) / 3.0;
         let expected = 1000.0 - cap_vol;
         let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
@@ -2460,7 +2528,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Cone seam splitting needs surface-specific UV mapping"]
     fn boolean_v2_cone_through_box_intersect() {
         // Frustum r₁=3, r₂=1, h=20 through box [0,10]³.
         // Frustum slice z∈[0,10]: r varies linearly from r₁ to midpoint.
@@ -2510,7 +2577,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Steinmetz (cylinder-cylinder) needs analytic-analytic seam splitting"]
+    #[ignore = "Steinmetz (cylinder-cylinder) needs analytic-analytic pipeline improvements"]
     fn boolean_v2_two_cylinders_intersect() {
         // Two perpendicular cylinders (Steinmetz-like).
         // Cylinder A along z-axis, Cylinder B along x-axis, both r=3.
