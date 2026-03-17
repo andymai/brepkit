@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.9.0](https://github.com/andymai/brepkit/compare/v2.8.0...v2.9.0) (2026-03-17)
+
+
+### Features
+
+* **boolean_v2:** face-crossing intersection infrastructure — step 3 ([#284](https://github.com/andymai/brepkit/issues/284)) ([cfbf788](https://github.com/andymai/brepkit/commit/cfbf7883555e481cb29666a59b51737343b37aa9))
+* **boolean_v2:** seam-splitting for periodic surfaces — step 3b ([#285](https://github.com/andymai/brepkit/issues/285)) ([420f5da](https://github.com/andymai/brepkit/commit/420f5dafeaf22dd6047744ad3e203c5809f94ddd))
+
 ## [2.8.0](https://github.com/andymai/brepkit/compare/v2.7.0...v2.8.0) (2026-03-17)
 
 
