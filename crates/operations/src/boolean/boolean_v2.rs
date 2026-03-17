@@ -1652,8 +1652,8 @@ fn face_uv_polygon(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> V
         // For closed circle edges (start ≈ end), evaluate starting from the
         // vertex angle instead of the Circle3D's parametric origin. This keeps
         // the UV samples aligned with seam edge endpoints.
-        let is_closed_circle =
-            matches!(edge.curve(), EdgeCurve::Circle(_)) && (start_v - end_v).length() < 1e-10;
+        let is_closed_circle = matches!(edge.curve(), EdgeCurve::Circle(_))
+            && (start_v - end_v).length() < Tolerance::new().linear;
         #[allow(clippy::cast_precision_loss)]
         for i in 0..SAMPLES_PER_EDGE {
             let t = i as f64 / SAMPLES_PER_EDGE as f64;
@@ -1707,8 +1707,6 @@ fn face_uv_polygon(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> V
             // Add pole corners. Extend u slightly past the sampled range
             // to cover the full period — Line edge sampling leaves a gap
             // (~TAU/segments) between the last sample and the first.
-            let u_last = uv_pts.last().map_or(0.0, |p| p.x());
-            let u_first = uv_pts.first().map_or(0.0, |p| p.x());
             let u_gap = (u_last - u_first).abs() / uv_pts.len() as f64;
             let (u_lo, u_hi) = if u_last < u_first {
                 (u_last - u_gap, u_first + u_gap)

@@ -94,7 +94,11 @@ pub fn split_face_2d(
     // Sphere cap shortcut: sphere hemisphere faces have no seam edges (only
     // equatorial Line edges), so the wire builder can't form proper bands.
     // Construct cap + band sub-faces directly instead.
-    if matches!(surface, brepkit_topology::face::FaceSurface::Sphere(_)) {
+    // Guard: only apply when ALL boundary edges are equatorial Lines (no seam edges).
+    let all_boundary_line = boundary_edges
+        .iter()
+        .all(|e| matches!(e.curve_3d, EdgeCurve::Line));
+    if matches!(surface, brepkit_topology::face::FaceSurface::Sphere(_)) && all_boundary_line {
         return split_sphere_face_direct(
             &surface,
             &boundary_edges,
@@ -388,20 +392,22 @@ pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Poin
     // The outer wire of a sphere cap maps to a horizontal line in UV,
     // producing a near-zero-area polygon whose centroid lies on the boundary.
     if let FaceSurface::Sphere(_) = &sub_face.surface {
-        let v_min = pts_2d.iter().map(|p| p.y()).fold(f64::INFINITY, f64::min);
-        let v_max = pts_2d
-            .iter()
-            .map(|p| p.y())
-            .fold(f64::NEG_INFINITY, f64::max);
-        if (v_max - v_min) < 0.1 {
-            let v_boundary = (v_min + v_max) * 0.5;
-            let v_pole = if v_boundary >= 0.0 {
-                std::f64::consts::FRAC_PI_2
-            } else {
-                -std::f64::consts::FRAC_PI_2
-            };
-            let u_center = pts_2d.iter().map(|p| p.x()).sum::<f64>() / pts_2d.len() as f64;
-            interior_uv = Point2::new(u_center, (v_boundary + v_pole) * 0.5);
+        if !pts_2d.is_empty() {
+            let v_min = pts_2d.iter().map(|p| p.y()).fold(f64::INFINITY, f64::min);
+            let v_max = pts_2d
+                .iter()
+                .map(|p| p.y())
+                .fold(f64::NEG_INFINITY, f64::max);
+            if (v_max - v_min) < 0.1 {
+                let v_boundary = (v_min + v_max) * 0.5;
+                let v_pole = if v_boundary >= 0.0 {
+                    std::f64::consts::FRAC_PI_2
+                } else {
+                    -std::f64::consts::FRAC_PI_2
+                };
+                let u_center = pts_2d.iter().map(|p| p.x()).sum::<f64>() / pts_2d.len() as f64;
+                interior_uv = Point2::new(u_center, (v_boundary + v_pole) * 0.5);
+            }
         }
     }
 
@@ -1037,7 +1043,8 @@ fn split_sphere_face_direct(
 
         // Skip full-circle section edges (start ≈ end in 3D) — only use
         // the half-arcs produced by build_seam_split_sections.
-        if (section.start - section.end).length() < 1e-10 {
+        if (section.start - section.end).length() < brepkit_math::tolerance::Tolerance::new().linear
+        {
             continue;
         }
 
