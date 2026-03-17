@@ -601,8 +601,8 @@ fn intersect_plane_nurbs_faces(
 
 /// Intersect two NURBS-NURBS face pairs.
 ///
-/// Currently only handles pairs where BOTH faces are NURBS. Mixed
-/// analytic-NURBS pairs return empty (TODO: convert analytic → NURBS).
+/// Handles NURBS-NURBS and analytic-NURBS pairs. Analytic surfaces
+/// are converted to NURBS via `face_surface_to_nurbs` before intersection.
 #[allow(clippy::too_many_lines)]
 fn intersect_nurbs_general_faces(
     topo: &Topology,
@@ -616,18 +616,16 @@ fn intersect_nurbs_general_faces(
     let surf_a = face_a.surface();
     let surf_b = face_b.surface();
 
-    // Extract NurbsSurface from each face. For analytic surfaces, convert.
-    let nurbs_a = match surf_a {
-        FaceSurface::Nurbs(s) => s.clone(),
-        _ => return Ok(Vec::new()), // TODO: convert analytic → NURBS
-    };
-    let nurbs_b = match surf_b {
-        FaceSurface::Nurbs(s) => s.clone(),
-        _ => return Ok(Vec::new()), // TODO: convert analytic → NURBS
+    // Extract or convert to NurbsSurface for each face.
+    let nurbs_a = face_surface_to_nurbs(topo, fa, surf_a)?;
+    let nurbs_b = face_surface_to_nurbs(topo, fb, surf_b)?;
+
+    let (Some(na), Some(nb)) = (nurbs_a, nurbs_b) else {
+        return Ok(Vec::new()); // Unsupported surface type
     };
 
     let curves = brepkit_math::nurbs::intersection::intersect_nurbs_nurbs(
-        &nurbs_a, &nurbs_b, 30, 0.0, // adaptive march step
+        &na, &nb, 30, 0.0, // adaptive march step
     )
     .map_err(OperationsError::Math)?;
 
@@ -1999,6 +1997,36 @@ fn periodic_candidates(val: f64, period: Option<f64>) -> Vec<f64> {
     }
 }
 
+/// Convert a `FaceSurface` to a `NurbsSurface` for intersection.
+///
+/// For NURBS faces, clones the surface directly.
+/// For analytic faces (cylinder, cone, sphere, torus), uses `to_nurbs()`.
+/// For planes, returns `None` (plane-NURBS uses a dedicated path).
+fn face_surface_to_nurbs(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &FaceSurface,
+) -> Result<Option<brepkit_math::nurbs::surface::NurbsSurface>, OperationsError> {
+    match surface {
+        FaceSurface::Nurbs(s) => Ok(Some(s.clone())),
+        FaceSurface::Cylinder(cyl) => {
+            let v_range = estimate_v_range(topo, face_id, surface).unwrap_or((-1.0, 1.0));
+            cyl.to_nurbs(v_range.0, v_range.1)
+                .map(Some)
+                .map_err(OperationsError::Math)
+        }
+        FaceSurface::Cone(cone) => {
+            let v_range = estimate_v_range(topo, face_id, surface).unwrap_or((0.01, 2.0));
+            cone.to_nurbs(v_range.0, v_range.1)
+                .map(Some)
+                .map_err(OperationsError::Math)
+        }
+        FaceSurface::Sphere(sphere) => sphere.to_nurbs().map(Some).map_err(OperationsError::Math),
+        FaceSurface::Torus(torus) => torus.to_nurbs().map(Some).map_err(OperationsError::Math),
+        FaceSurface::Plane { .. } => Ok(None), // Plane-NURBS uses dedicated path
+    }
+}
+
 /// Estimate the v-parameter range for an analytic face from its boundary vertices.
 fn estimate_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Option<(f64, f64)> {
     let poly = collect_face_polygon(topo, face_id).ok()?;
@@ -2912,6 +2940,32 @@ mod tests {
         assert!(
             (vol - expected).abs() / expected < 0.10,
             "loft-box intersect volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_cylinder_vs_loft_cut() {
+        // Cylinder (analytic) vs loft (NURBS) — tests analytic-NURBS intersection.
+        // Cylinder r=3 along z, centered at (5,5), from z=-1 to z=11.
+        // Loft 6×6 square prism centered at (5,5), z=0 to z=10.
+        // The cylinder pokes through the loft's NURBS side faces.
+        let mut topo = Topology::new();
+        let cyl = make_cylinder(&mut topo, 3.0, 12.0).unwrap();
+        let mat = Mat4::translation(5.0, 5.0, -1.0);
+        crate::transform::transform_solid(&mut topo, cyl, &mat).unwrap();
+
+        let bottom = make_square_face_at(&mut topo, 6.0, 5.0, 5.0, 0.0);
+        let top = make_square_face_at(&mut topo, 6.0, 5.0, 5.0, 10.0);
+        let loft = crate::loft::loft(&mut topo, &[bottom, top]).unwrap();
+
+        // Must not return InvalidInput (analytic-NURBS conversion must work).
+        let result = boolean_v2(&mut topo, BooleanOp::Cut, loft, cyl).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        // Loft volume = 6×6×10 = 360. Cylinder inside loft ≈ π×9×10 ≈ 283.
+        // But cylinder extends beyond loft, so intersection is smaller.
+        assert!(
+            vol > 0.0,
+            "cylinder-vs-loft cut should have positive volume, got {vol}"
         );
     }
 }
