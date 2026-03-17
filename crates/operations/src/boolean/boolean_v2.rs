@@ -205,7 +205,7 @@ fn intersect_face_pair(
     topo: &Topology,
     fa: FaceId,
     fb: FaceId,
-    pipeline: &BooleanPipeline,
+    pipeline: &mut BooleanPipeline,
     tol: &Tolerance,
 ) -> Result<Vec<SectionEdge>, OperationsError> {
     let face_a = topo.face(fa)?;
@@ -215,8 +215,14 @@ fn intersect_face_pair(
 
     match (surf_a, surf_b) {
         (FaceSurface::Plane { .. }, FaceSurface::Plane { .. }) => {
-            // Plane-plane: existing intersection.
-            intersect_two_plane_faces(topo, fa, fb, &pipeline.plane_frames)
+            // Plane-plane: existing intersection (handles coplanar case too).
+            intersect_two_plane_faces(
+                topo,
+                fa,
+                fb,
+                &pipeline.plane_frames,
+                &mut pipeline.coplanar_pairs,
+            )
         }
         (FaceSurface::Plane { normal, d }, _) if surf_b.is_analytic() => {
             // Plane-analytic: plane is face A.
@@ -376,6 +382,7 @@ fn intersect_plane_analytic_faces(
                     end_uv_a: None,
                     start_uv_b: None,
                     end_uv_b: None,
+                    target_face: None,
                 });
             }
         }
@@ -479,6 +486,7 @@ fn intersect_analytic_analytic_faces(
                     end_uv_a: None,
                     start_uv_b: None,
                     end_uv_b: None,
+                    target_face: None,
                 });
             }
         }
@@ -591,6 +599,7 @@ fn intersect_plane_nurbs_faces(
                     end_uv_a: None,
                     start_uv_b: None,
                     end_uv_b: None,
+                    target_face: None,
                 });
             }
         }
@@ -692,6 +701,7 @@ fn intersect_nurbs_general_faces(
                     end_uv_a: None,
                     start_uv_b: None,
                     end_uv_b: None,
+                    target_face: None,
                 });
             }
         }
@@ -703,11 +713,14 @@ fn intersect_nurbs_general_faces(
 /// Compute the intersection of two plane faces.
 ///
 /// Returns trimmed section edges (finite line segments where the faces overlap).
+/// For coplanar faces, produces targeted section edges (each edge applies to
+/// only one face) and records the coplanar pair in `coplanar_pairs`.
 fn intersect_two_plane_faces(
     topo: &Topology,
     fa: FaceId,
     fb: FaceId,
     plane_frames: &HashMap<FaceId, PlaneFrame>,
+    coplanar_pairs: &mut Vec<(FaceId, FaceId, bool)>,
 ) -> Result<Vec<SectionEdge>, OperationsError> {
     let face_a = topo.face(fa)?;
     let face_b = topo.face(fb)?;
@@ -728,11 +741,31 @@ fn intersect_two_plane_faces(
         return Ok(Vec::new());
     };
 
+    // Effective normals: account for face reversal.
+    let eff_na = if face_a.is_reversed() { -na } else { na };
+    let eff_nb = if face_b.is_reversed() { -nb } else { nb };
+
     // Plane-plane intersection: line direction = na × nb.
     let line_dir = na.cross(nb);
     let line_len = line_dir.length();
     if line_len < 1e-10 {
-        // Parallel or coincident planes — no intersection curve.
+        // Parallel planes — check if coincident (coplanar).
+        // Two planes are coincident when their signed distances match:
+        //   same normal direction: |da - db| < tol
+        //   opposite normal direction: |da + db| < tol
+        let coplanar_tol = 1e-7;
+        let same_dir = (da - db).abs() < coplanar_tol;
+        let opp_dir = (da + db).abs() < coplanar_tol;
+        if same_dir || opp_dir {
+            // Coplanar faces. Determine orientation from effective normals.
+            let same_orientation = eff_na.dot(eff_nb) > 0.0;
+            let sections = intersect_coplanar_plane_faces(topo, fa, fb, plane_frames)?;
+            if !sections.is_empty() {
+                coplanar_pairs.push((fa, fb, same_orientation));
+            }
+            return Ok(sections);
+        }
+        // Parallel but separated — no intersection.
         return Ok(Vec::new());
     }
     let line_dir_n = Vec3::new(
@@ -793,15 +826,286 @@ fn intersect_two_plane_faces(
                 end_uv_a: None,
                 start_uv_b: None,
                 end_uv_b: None,
+                target_face: None,
             });
         }
     }
     Ok(result)
 }
 
+/// Intersect two coplanar plane faces.
+///
+/// When two faces share the same infinite plane, there's no intersection
+/// *line* — the intersection is a 2D *region*. We handle this by clipping
+/// each face's boundary edges against the other face's interior:
+///
+/// - Edges of B clipped to A's interior → section edges targeting face A
+/// - Edges of A clipped to B's interior → section edges targeting face B
+///
+/// These targeted section edges split each face along the other's boundary,
+/// enabling the classifier to identify the overlap region.
+#[allow(clippy::too_many_lines)]
+fn intersect_coplanar_plane_faces(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    plane_frames: &HashMap<FaceId, PlaneFrame>,
+) -> Result<Vec<SectionEdge>, OperationsError> {
+    let face_a = topo.face(fa)?;
+
+    let na = match face_a.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        _ => return Ok(Vec::new()),
+    };
+
+    let poly_a = collect_face_polygon(topo, fa)?;
+    let poly_b = collect_face_polygon(topo, fb)?;
+
+    if poly_a.len() < 3 || poly_b.len() < 3 {
+        return Ok(Vec::new());
+    }
+
+    // Use cached or computed frames. Both faces share the same plane,
+    // so we use face A's frame for all 2D projections.
+    let owned_frame;
+    let frame = if let Some(f) = plane_frames.get(&fa) {
+        f
+    } else {
+        owned_frame = plane_frame_for_polygon(na, &poly_a);
+        &owned_frame
+    };
+
+    // Project both polygons to 2D.
+    let poly_a_2d: Vec<Point2> = poly_a.iter().map(|p| frame.project(*p)).collect();
+    let poly_b_2d: Vec<Point2> = poly_b.iter().map(|p| frame.project(*p)).collect();
+
+    let mut result = Vec::new();
+
+    // Clip edges of B against interior of A → section edges targeting face A.
+    clip_polygon_edges_to_interior(&poly_b, &poly_b_2d, &poly_a_2d, frame, fa, &mut result);
+
+    // Clip edges of A against interior of B → section edges targeting face B.
+    clip_polygon_edges_to_interior(&poly_a, &poly_a_2d, &poly_b_2d, frame, fb, &mut result);
+
+    Ok(result)
+}
+
+/// Clip edges of `source_poly` to the **strict interior** of `target_poly`.
+///
+/// For each edge of `source_poly`, finds the segment(s) that lie inside
+/// `target_poly` (excluding segments that run along `target_poly`'s boundary)
+/// and creates section edges targeting `target_face`.
+///
+/// Boundary-coincident segments are excluded because they don't create new
+/// splits — the target face's wire builder already has these boundary edges.
+fn clip_polygon_edges_to_interior(
+    source_3d: &[Point3],
+    source_2d: &[Point2],
+    target_2d: &[Point2],
+    frame: &PlaneFrame,
+    target_face: FaceId,
+    result: &mut Vec<SectionEdge>,
+) {
+    let n = source_3d.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let p0_2d = source_2d[i];
+        let p1_2d = source_2d[j];
+        let p0_3d = source_3d[i];
+        let p1_3d = source_3d[j];
+
+        // Clip this edge against the target polygon.
+        let segments = clip_edge_to_polygon_2d(p0_2d, p1_2d, target_2d);
+
+        for (t0, t1) in segments {
+            // Compute 2D midpoint to check if it's strictly inside target.
+            let t_mid = (t0 + t1) * 0.5;
+            let mid_2d = Point2::new(
+                p0_2d.x() + (p1_2d.x() - p0_2d.x()) * t_mid,
+                p0_2d.y() + (p1_2d.y() - p0_2d.y()) * t_mid,
+            );
+
+            // Skip segments that lie on the target polygon's boundary.
+            // These don't create new splits — they're already boundary edges.
+            if point_near_polygon_boundary_2d(mid_2d, target_2d, 1e-7) {
+                continue;
+            }
+
+            // Compute 3D endpoints by interpolation.
+            let start = Point3::new(
+                p0_3d.x() + (p1_3d.x() - p0_3d.x()) * t0,
+                p0_3d.y() + (p1_3d.y() - p0_3d.y()) * t0,
+                p0_3d.z() + (p1_3d.z() - p0_3d.z()) * t0,
+            );
+            let end = Point3::new(
+                p0_3d.x() + (p1_3d.x() - p0_3d.x()) * t1,
+                p0_3d.y() + (p1_3d.y() - p0_3d.y()) * t1,
+                p0_3d.z() + (p1_3d.z() - p0_3d.z()) * t1,
+            );
+
+            if (end - start).length() < 1e-10 {
+                continue; // Degenerate.
+            }
+
+            // Compute pcurves on the shared plane frame.
+            // Both faces share the same plane, so pcurve_a and pcurve_b
+            // are identical (both are projections into the same plane).
+            let pcurve = compute_line_pcurve(frame, start, end);
+
+            result.push(SectionEdge {
+                curve_3d: EdgeCurve::Line,
+                pcurve_a: pcurve.clone(),
+                pcurve_b: pcurve,
+                start,
+                end,
+                start_uv_a: None,
+                end_uv_a: None,
+                start_uv_b: None,
+                end_uv_b: None,
+                target_face: Some(target_face),
+            });
+        }
+    }
+}
+
+/// Check if a 2D point is within `tol` of any edge of a 2D polygon.
+fn point_near_polygon_boundary_2d(pt: Point2, polygon: &[Point2], tol: f64) -> bool {
+    let n = polygon.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let a = polygon[i];
+        let b = polygon[j];
+        let ab = Vec2::new(b.x() - a.x(), b.y() - a.y());
+        let ap = Vec2::new(pt.x() - a.x(), pt.y() - a.y());
+        let len_sq = ab.x() * ab.x() + ab.y() * ab.y();
+        if len_sq < 1e-30 {
+            continue;
+        }
+        let t_raw = (ap.x() * ab.x() + ap.y() * ab.y()) / len_sq;
+        if !(-0.01..=1.01).contains(&t_raw) {
+            continue;
+        }
+        // Clamp to segment endpoints for correct point-to-segment distance.
+        let t = t_raw.clamp(0.0, 1.0);
+        let proj = Point2::new(a.x() + ab.x() * t, a.y() + ab.y() * t);
+        let dx = pt.x() - proj.x();
+        let dy = pt.y() - proj.y();
+        let dist = (dx * dx + dy * dy).sqrt();
+        if dist < tol {
+            return true;
+        }
+    }
+    false
+}
+
+/// Clip a 2D edge segment to a 2D polygon.
+///
+/// Returns parameter pairs `(t0, t1)` where `0 <= t0 < t1 <= 1`, representing
+/// segments of the edge `p0→p1` that lie inside the polygon.
+fn clip_edge_to_polygon_2d(p0: Point2, p1: Point2, polygon: &[Point2]) -> Vec<(f64, f64)> {
+    let n = polygon.len();
+    if n < 3 {
+        return Vec::new();
+    }
+
+    let edge_dir = Vec2::new(p1.x() - p0.x(), p1.y() - p0.y());
+    let edge_len_sq = edge_dir.x() * edge_dir.x() + edge_dir.y() * edge_dir.y();
+    if edge_len_sq < 1e-30 {
+        return Vec::new();
+    }
+
+    // Collect intersection parameters where the edge crosses polygon edges.
+    let mut hits: Vec<f64> = vec![0.0, 1.0]; // Include edge endpoints.
+
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let qi = polygon[i];
+        let qj = polygon[j];
+        let poly_dir = Vec2::new(qj.x() - qi.x(), qj.y() - qi.y());
+
+        let denom = edge_dir.x() * poly_dir.y() - edge_dir.y() * poly_dir.x();
+        if denom.abs() < 1e-15 {
+            continue; // Parallel.
+        }
+
+        let dp = Vec2::new(qi.x() - p0.x(), qi.y() - p0.y());
+        let t = (dp.x() * poly_dir.y() - dp.y() * poly_dir.x()) / denom;
+        let u = (dp.x() * edge_dir.y() - dp.y() * edge_dir.x()) / denom;
+
+        // t must be within the edge [0, 1], u within the polygon edge [0, 1].
+        if (-1e-10..=1.0 + 1e-10).contains(&t) && (-1e-10..=1.0 + 1e-10).contains(&u) {
+            hits.push(t.clamp(0.0, 1.0));
+        }
+    }
+
+    // Sort and dedup.
+    hits.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    hits.dedup_by(|a, b| (*a - *b).abs() < 1e-10);
+
+    // Check midpoint of each interval for containment.
+    let mut segments = Vec::new();
+    for w in hits.windows(2) {
+        let t0 = w[0];
+        let t1 = w[1];
+        if t1 - t0 < 1e-10 {
+            continue;
+        }
+        let t_mid = (t0 + t1) * 0.5;
+        let mid = Point2::new(p0.x() + edge_dir.x() * t_mid, p0.y() + edge_dir.y() * t_mid);
+        if point_in_polygon_2d(mid, polygon) {
+            segments.push((t0, t1));
+        }
+    }
+
+    // Merge adjacent segments (can happen when a hit point is degenerate).
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for seg in segments {
+        if let Some(last) = merged.last_mut() {
+            if (seg.0 - last.1).abs() < 1e-10 {
+                last.1 = seg.1;
+                continue;
+            }
+        }
+        merged.push(seg);
+    }
+
+    merged
+}
+
 // ---------------------------------------------------------------------------
 // Stage 3: Split faces
 // ---------------------------------------------------------------------------
+
+/// Remove duplicate section edges that share the same endpoints (possibly reversed).
+///
+/// Coplanar face handling can produce edges that overlap with non-coplanar
+/// intersection edges (e.g., A's boundary at x=1 inside B is also the intersection
+/// of A's x=1 face with B). Keeping both confuses the wire builder.
+fn dedup_section_edges(sections: &mut Vec<SectionEdge>) {
+    let tol = 1e-7;
+    let mut keep = vec![true; sections.len()];
+    for i in 0..sections.len() {
+        if !keep[i] {
+            continue;
+        }
+        for j in (i + 1)..sections.len() {
+            if !keep[j] {
+                continue;
+            }
+            // Check forward match: (s[i].start≈s[j].start, s[i].end≈s[j].end)
+            let fwd = (sections[i].start - sections[j].start).length() < tol
+                && (sections[i].end - sections[j].end).length() < tol;
+            // Check reverse match: (s[i].start≈s[j].end, s[i].end≈s[j].start)
+            let rev = (sections[i].start - sections[j].end).length() < tol
+                && (sections[i].end - sections[j].start).length() < tol;
+            if fwd || rev {
+                keep[j] = false;
+            }
+        }
+    }
+    let mut keep_iter = keep.into_iter();
+    sections.retain(|_| keep_iter.next().unwrap_or(false));
+}
 
 fn split_all_faces(
     topo: &Topology,
@@ -813,12 +1117,41 @@ fn split_all_faces(
     let faces_a = collect_solid_faces(topo, a)?;
     let faces_b = collect_solid_faces(topo, b)?;
 
-    // Collect section edges per face.
+    // Collect section edges per face, respecting target_face filtering.
+    // When target_face is None, the edge applies to both faces in the pair.
+    // When target_face is Some(id), only distribute to that specific face.
+    //
+    // Sort face pairs for deterministic iteration order (HashMap is unordered).
     let mut sections_for_face: HashMap<FaceId, Vec<SectionEdge>> = HashMap::new();
-    for ((fa, fb), sections) in &pipeline.intersections {
+    let mut sorted_pairs: Vec<_> = pipeline.intersections.iter().collect();
+    sorted_pairs.sort_by_key(|((fa, fb), _)| (fa.index(), fb.index()));
+    for ((fa, fb), sections) in sorted_pairs {
         for s in sections {
-            sections_for_face.entry(*fa).or_default().push(s.clone());
-            sections_for_face.entry(*fb).or_default().push(s.clone());
+            if s.target_face.is_none() || s.target_face == Some(*fa) {
+                sections_for_face.entry(*fa).or_default().push(s.clone());
+            }
+            if s.target_face.is_none() || s.target_face == Some(*fb) {
+                sections_for_face.entry(*fb).or_default().push(s.clone());
+            }
+        }
+    }
+
+    // Dedup section edges: only on faces involved in coplanar relationships.
+    // Coplanar clipping can produce edges that overlap with non-coplanar
+    // intersection edges (same segment in opposite directions). Keep the
+    // first occurrence; remove duplicates based on endpoint proximity.
+    //
+    // Only dedup faces with coplanar partners to avoid false-positive
+    // dedup on non-coplanar faces (e.g., cylinder-through-box edges that
+    // coincidentally share endpoints from different intersection pairs).
+    let coplanar_face_set: std::collections::HashSet<FaceId> = pipeline
+        .coplanar_pairs
+        .iter()
+        .flat_map(|&(a, b, _)| [a, b])
+        .collect();
+    for (fid, sections) in &mut sections_for_face {
+        if coplanar_face_set.contains(fid) {
+            dedup_section_edges(sections);
         }
     }
 
@@ -874,6 +1207,31 @@ fn classify_sub_faces(
     let polys_a = collect_solid_face_polygons(topo, solid_a)?;
     let polys_b = collect_solid_face_polygons(topo, solid_b)?;
 
+    // Build coplanar lookup: for each face, collect its coplanar opposing
+    // faces and orientation. A face from solid A has coplanar partners from
+    // solid B, and vice versa.
+    let mut coplanar_opposing: HashMap<FaceId, Vec<(FaceId, bool)>> = HashMap::new();
+    for &(fa, fb, same_ori) in &pipeline.coplanar_pairs {
+        coplanar_opposing
+            .entry(fa)
+            .or_default()
+            .push((fb, same_ori));
+        coplanar_opposing
+            .entry(fb)
+            .or_default()
+            .push((fa, same_ori));
+    }
+
+    // Pre-compute face boundary polygons for coplanar containment tests.
+    let mut face_poly_cache: HashMap<FaceId, Vec<Point3>> = HashMap::new();
+    for &(fa, fb, _) in &pipeline.coplanar_pairs {
+        for fid in [fa, fb] {
+            face_poly_cache
+                .entry(fid)
+                .or_insert_with(|| collect_face_polygon(topo, fid).unwrap_or_default());
+        }
+    }
+
     // Classify each sub-face and mark for selection.
     let mut selected = Vec::new();
     for sub_face in &pipeline.sub_faces {
@@ -884,17 +1242,38 @@ fn classify_sub_faces(
             .and_then(SurfaceInfo::as_plane_frame);
         let test_pt = interior_point_3d(sub_face, frame);
 
-        // Classify against opposing solid: try analytic first, fall back to ray-cast.
-        // If the interior point is on the boundary (classifier returns None),
-        // try wire vertices for a definitive answer before falling back to
-        // the ray-cast (which can also be degenerate at corners/edges).
-        let class = match sub_face.source {
+        let standard_class = || match sub_face.source {
             Source::A => {
                 classify_with_fallback(test_pt, &sub_face.outer_wire, classifier_b, &polys_b, *tol)
             }
             Source::B => {
                 classify_with_fallback(test_pt, &sub_face.outer_wire, classifier_a, &polys_a, *tol)
             }
+        };
+
+        // Check if this sub-face's parent has coplanar opposing faces.
+        let class = if let Some(opposing) = coplanar_opposing.get(&sub_face.parent) {
+            // Test if the interior point is inside any opposing coplanar face.
+            let coplanar_class = opposing.iter().find_map(|&(opp_fid, same_ori)| {
+                let opp_poly = face_poly_cache.get(&opp_fid)?;
+                let n = match topo.face(opp_fid).ok()?.surface() {
+                    FaceSurface::Plane { normal, .. } => *normal,
+                    _ => return None,
+                };
+                if point_in_face_polygon_3d(test_pt, opp_poly, &n) {
+                    Some(if same_ori {
+                        FaceClass::CoplanarSame
+                    } else {
+                        FaceClass::CoplanarOpposite
+                    })
+                } else {
+                    None
+                }
+            });
+            // Fall through to standard classification when not inside any coplanar face.
+            coplanar_class.unwrap_or_else(standard_class)
+        } else {
+            standard_class()
         };
 
         // Use the boolean truth table to decide keep/discard/flip.
@@ -1373,11 +1752,20 @@ fn handle_disjoint_v2(
     // Truly disjoint.
     match op {
         BooleanOp::Fuse => {
-            // For disjoint fuse, return a copy of A.
-            // TODO: Step 1 limitation — this discards solid B. A full
-            // implementation should copy both solids into a compound or
-            // merged shell so the result contains all geometry.
-            Ok(crate::copy::copy_solid(topo, a)?)
+            // Copy both solids into a merged shell.
+            // NOTE: merging two disjoint shells into one produces a
+            // non-manifold topology (two disconnected components in one
+            // shell). validate_boolean_result in the caller will reject
+            // this, falling back to the chord-based path. The orphaned
+            // copy_a/copy_b entities remain in the arena (no dealloc).
+            let copy_a = crate::copy::copy_solid(topo, a)?;
+            let copy_b = crate::copy::copy_solid(topo, b)?;
+            let shell_a = topo.solid(copy_a)?.outer_shell();
+            let shell_b = topo.solid(copy_b)?.outer_shell();
+            let mut all_faces = topo.shell(shell_a)?.faces().to_vec();
+            all_faces.extend(topo.shell(shell_b)?.faces().to_vec());
+            let new_shell = topo.add_shell(brepkit_topology::shell::Shell::new(all_faces)?);
+            Ok(topo.add_solid(brepkit_topology::solid::Solid::new(new_shell, vec![])))
         }
         BooleanOp::Cut => {
             // A - B where B doesn't touch A → result is A.
@@ -1699,6 +2087,7 @@ fn build_seam_split_sections(
             end_uv_a: None,
             start_uv_b: Some(Point2::new(seam_u, seam_v)),
             end_uv_b: Some(Point2::new(seam_u + std::f64::consts::PI, anti_v)),
+            target_face: None,
         });
     }
 
@@ -1719,6 +2108,7 @@ fn build_seam_split_sections(
             end_uv_a: None,
             start_uv_b: Some(Point2::new(seam_u + std::f64::consts::PI, anti_v)),
             end_uv_b: Some(Point2::new(seam_u + period, seam_v)),
+            target_face: None,
         });
     }
 
@@ -2204,7 +2594,8 @@ mod tests {
         let mut total_sections = 0;
         for &fa in &faces_a {
             for &fb in &faces_b {
-                let sections = intersect_two_plane_faces(&topo, fa, fb, &frames).unwrap();
+                let sections =
+                    intersect_two_plane_faces(&topo, fa, fb, &frames, &mut Vec::new()).unwrap();
                 if !sections.is_empty() {
                     for s in &sections {
                         // Verify section edge is within bounds of both boxes.

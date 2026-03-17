@@ -68,6 +68,11 @@ pub struct SectionEdge {
     pub start_uv_b: Option<Point2>,
     /// Optional pre-computed UV endpoint on face B.
     pub end_uv_b: Option<Point2>,
+    /// When set, this section edge only applies to this face during splitting.
+    /// `None` means the edge applies to both faces in the pair (normal case).
+    /// `Some(id)` means only distribute to that face (coplanar case — each
+    /// face gets boundary edges clipped to the other's interior).
+    pub target_face: Option<FaceId>,
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +180,13 @@ pub struct BooleanPipeline {
     pub plane_frames: HashMap<FaceId, PlaneFrame>,
     /// Cached surface info per face (plane frame or parametric periodicity).
     pub surface_info: HashMap<FaceId, SurfaceInfo>,
+    /// Coplanar face pairs: `(face_a, face_b, same_orientation)`.
+    ///
+    /// Two faces are coplanar when they lie on the same infinite plane.
+    /// `same_orientation` is `true` when effective normals point in the same
+    /// direction, `false` when opposite. Used during classification to assign
+    /// `CoplanarSame`/`CoplanarOpposite` to sub-faces in the overlap region.
+    pub coplanar_pairs: Vec<(FaceId, FaceId, bool)>,
     /// Solid A handle.
     pub solid_a: Option<SolidId>,
     /// Solid B handle.
