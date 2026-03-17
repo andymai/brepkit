@@ -6,7 +6,7 @@
 
 #![allow(dead_code)] // Used by later boolean_v2 pipeline stages.
 
-use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
+use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -91,15 +91,16 @@ pub fn split_face_2d(
         }];
     }
 
-    // Sphere cap shortcut: sphere hemisphere faces have no seam edges (only
-    // equatorial Line edges), so the wire builder can't form proper bands.
-    // Construct cap + band sub-faces directly instead.
-    // Guard: only apply when ALL boundary edges are equatorial Lines (no seam edges).
+    // No-seam face shortcut: faces whose boundary is entirely Line edges
+    // (no seam edges) can't be split by the wire builder (it needs vertical
+    // seam connections to form rectangular bands). Construct cap + band
+    // sub-faces directly instead. Applies to sphere hemispheres and any
+    // other face topology without seam edges.
     let all_boundary_line = boundary_edges
         .iter()
         .all(|e| matches!(e.curve_3d, EdgeCurve::Line));
-    if matches!(surface, brepkit_topology::face::FaceSurface::Sphere(_)) && all_boundary_line {
-        return split_sphere_face_direct(
+    if all_boundary_line && !is_plane {
+        return split_noseam_face_direct(
             &surface,
             &boundary_edges,
             sections,
@@ -115,14 +116,18 @@ pub fn split_face_2d(
     // builder struggles with periodic UV and 4-way junctions. Instead, group
     // the section edges into closed loops and construct sub-faces directly.
     //
-    // Heuristic: NURBS section edges on non-planar faces come from
-    // analytic-analytic intersection (e.g., cylinder-cylinder) and form
-    // internal loops. Circle/Ellipse/Line sections come from plane-analytic
-    // intersection and connect to boundary edges.
+    // Detection: check if ALL section endpoints are far from the face
+    // boundary in UV space. Project each section endpoint to UV and test
+    // if it lies on any boundary edge's UV segment (within tolerance).
+    // This is surface-type agnostic and handles curved boundary edges.
     let all_sections_internal = if !is_plane && !sections.is_empty() {
-        sections
-            .iter()
-            .all(|s| matches!(s.curve_3d, EdgeCurve::NurbsCurve(_)))
+        let uv_tol = 0.01; // ~0.6° in angular coordinates
+        sections.iter().all(|s| {
+            let start_on_boundary =
+                is_point_on_boundary_uv(s.start, &surface, &boundary_edges, uv_tol);
+            let end_on_boundary = is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol);
+            !start_on_boundary && !end_on_boundary
+        })
     } else {
         false
     };
@@ -1041,22 +1046,68 @@ fn boundary_edges_to_pcurve(
     result
 }
 
+/// Check if a 3D point lies on any boundary edge in UV space.
+///
+/// Projects the point to UV, then checks if the projected UV is within
+/// `tol` of any boundary edge's UV segment (linear interpolation between
+/// the edge's start_uv and end_uv).
+fn is_point_on_boundary_uv(
+    point: Point3,
+    surface: &FaceSurface,
+    boundary: &[OrientedPCurveEdge],
+    tol: f64,
+) -> bool {
+    let Some((pu, pv)) = surface.project_point(point) else {
+        return false;
+    };
+    let pt_uv = Point2::new(pu, pv);
+
+    for edge in boundary {
+        // For each boundary edge, check distance from pt_uv to the UV
+        // line segment (start_uv → end_uv). For closed edges (start ≈ end
+        // in UV), also check v-distance only (the edge spans all u at
+        // constant v, like a circle at a fixed height on a cylinder).
+        let su = edge.start_uv;
+        let eu = edge.end_uv;
+        let dx = eu.x() - su.x();
+        let dy = eu.y() - su.y();
+        let seg_len_sq = dx * dx + dy * dy;
+
+        if seg_len_sq < 1e-20 {
+            // Closed edge (circle) — check v-distance only.
+            if (pv - su.y()).abs() < tol {
+                return true;
+            }
+        } else {
+            // Open edge — project onto segment.
+            let t = ((pt_uv.x() - su.x()) * dx + (pt_uv.y() - su.y()) * dy) / seg_len_sq;
+            let t = t.clamp(0.0, 1.0);
+            let closest = Point2::new(su.x() + t * dx, su.y() + t * dy);
+            let dist =
+                ((pt_uv.x() - closest.x()).powi(2) + (pt_uv.y() - closest.y()).powi(2)).sqrt();
+            if dist < tol {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 // ---------------------------------------------------------------------------
-// Sphere-specific face splitting
+// No-seam face splitting
 // ---------------------------------------------------------------------------
 
-/// Split a sphere hemisphere face directly into cap + band sub-faces.
+/// Split a face with no seam edges directly into cap + band sub-faces.
 ///
-/// Sphere hemispheres have no seam edges — their boundary is entirely equatorial
-/// Line edges. The generic wire builder can't form proper rectangular bands
-/// because there are no vertical connections between the equator (v≈0) and the
-/// section circle (at some other v). This function bypasses the wire builder
-/// and constructs the sub-faces geometrically:
+/// Faces whose boundary consists entirely of Line edges (no seam edges)
+/// can't be split by the wire builder (it needs vertical seam connections).
+/// This function bypasses the wire builder and constructs sub-faces
+/// geometrically from the section edges:
 ///
-/// - **Cap**: bounded by the section circle (2 half-arcs), covers the pole side.
-/// - **Band**: bounded by the equatorial boundary, with the section circle as hole.
+/// - **Cap**: bounded by the section circle (2 half-arcs).
+/// - **Band**: bounded by the original boundary, with the section as hole.
 #[allow(clippy::too_many_arguments)]
-fn split_sphere_face_direct(
+fn split_noseam_face_direct(
     surface: &FaceSurface,
     boundary_edges: &[OrientedPCurveEdge],
     sections: &[SectionEdge],
@@ -1197,83 +1248,34 @@ fn split_face_with_internal_loops(
 ) -> Vec<SubFace> {
     let tol_3d = brepkit_math::tolerance::Tolerance::new().linear;
 
-    // Convert each section edge to a polyline of Line edges.
-    // Using NURBS edges on analytic surfaces causes tessellation failures
-    // (the tessellator uses a rectangular UV grid that ignores NURBS boundaries).
-    // Polyline approximation with ~32 Line segments per half-arc preserves
-    // the cylindrical surface while giving correct boundary polygons.
+    // Convert each section edge to an OrientedPCurveEdge, preserving the
+    // original EdgeCurve (NURBS, Circle, etc.) without polyline approximation.
     let mut forward_edges: Vec<OrientedPCurveEdge> = Vec::new();
-    let n_seg = 32_usize;
 
     for section in sections {
-        // Sample the NURBS curve at n_seg+1 points.
-        let sample_pts: Vec<Point3> = match &section.curve_3d {
-            EdgeCurve::NurbsCurve(nc) => {
-                let domain = nc.domain();
-                (0..=n_seg)
-                    .map(|i| {
-                        #[allow(clippy::cast_precision_loss)]
-                        let t = domain.0 + (domain.1 - domain.0) * (i as f64 / n_seg as f64);
-                        nc.evaluate(t)
-                    })
-                    .collect()
-            }
-            _ => {
-                // For non-NURBS curves, just use start and end.
-                vec![section.start, section.end]
-            }
+        let pcurve_on_face = match source {
+            Source::A => &section.pcurve_a,
+            Source::B => &section.pcurve_b,
         };
 
-        // Project sample points to UV, unwrapping u across the seam.
-        let u_period = match surface {
-            FaceSurface::Cylinder(_)
-            | FaceSurface::Cone(_)
-            | FaceSurface::Sphere(_)
-            | FaceSurface::Torus(_) => Some(std::f64::consts::TAU),
-            _ => None,
+        let (start_uv, end_uv) = match source {
+            Source::A => section.start_uv_a.zip(section.end_uv_a).unwrap_or_else(|| {
+                uv_endpoints_from_pcurve(pcurve_on_face, section.start, section.end, surface, &[])
+            }),
+            Source::B => section.start_uv_b.zip(section.end_uv_b).unwrap_or_else(|| {
+                uv_endpoints_from_pcurve(pcurve_on_face, section.start, section.end, surface, &[])
+            }),
         };
 
-        let mut uv_samples: Vec<(f64, f64)> = Vec::with_capacity(sample_pts.len());
-        for &pt in &sample_pts {
-            let Some((mut u, v)) = surface.project_point(pt) else {
-                continue; // Skip — corrupted UV would break the chain.
-            };
-            // Unwrap u to be continuous with the previous sample.
-            if let (Some(period), Some(&(prev_u, _))) = (u_period, uv_samples.last()) {
-                let diff = u - prev_u;
-                let shifts = (diff / period + 0.5).floor();
-                u -= shifts * period;
-            }
-            uv_samples.push((u, v));
-        }
-
-        // Create Line edges between consecutive samples.
-        for i in 0..sample_pts.len() - 1 {
-            let p0 = sample_pts[i];
-            let p1 = sample_pts[i + 1];
-            let uv0 = uv_samples[i];
-            let uv1 = uv_samples[i + 1];
-
-            let dir = Vec2::new(uv1.0 - uv0.0, uv1.1 - uv0.1);
-            let pcurve = if let Ok(line) =
-                brepkit_math::curves2d::Line2D::new(Point2::new(uv0.0, uv0.1), dir)
-            {
-                brepkit_math::curves2d::Curve2D::Line(line)
-            } else {
-                // Degenerate — zero-length edge, skip.
-                continue;
-            };
-
-            forward_edges.push(OrientedPCurveEdge {
-                curve_3d: EdgeCurve::Line,
-                pcurve,
-                start_uv: Point2::new(uv0.0, uv0.1),
-                end_uv: Point2::new(uv1.0, uv1.1),
-                start_3d: p0,
-                end_3d: p1,
-                forward: true,
-            });
-        }
+        forward_edges.push(OrientedPCurveEdge {
+            curve_3d: section.curve_3d.clone(),
+            pcurve: pcurve_on_face.clone(),
+            start_uv,
+            end_uv,
+            start_3d: section.start,
+            end_3d: section.end,
+            forward: true,
+        });
     }
 
     // Group edges into closed loops by chaining: edge.end_3d ≈ next.start_3d.

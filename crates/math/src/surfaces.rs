@@ -6,6 +6,7 @@
 
 use crate::MathError;
 use crate::frame::Frame3;
+use crate::nurbs::surface::NurbsSurface;
 use crate::vec::{Point3, Vec3};
 
 /// An infinite cylindrical surface.
@@ -147,6 +148,46 @@ impl CylindricalSurface {
         let y = self.y_axis.dot(radial);
         let u = y.atan2(x).rem_euclid(std::f64::consts::TAU);
         (u, v)
+    }
+
+    /// Convert to an exact rational NURBS surface over the given v-range.
+    ///
+    /// Uses degree (2, 1) with 9 control points per ring (standard rational
+    /// representation of a full circle). The result is geometrically exact.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `NurbsSurface` construction fails.
+    pub fn to_nurbs(&self, v_min: f64, v_max: f64) -> Result<NurbsSurface, MathError> {
+        // 9 CPs for a full circle (degree 2, 4 arcs of 90°).
+        let w1 = std::f64::consts::FRAC_1_SQRT_2;
+        let circle_weights = [1.0, w1, 1.0, w1, 1.0, w1, 1.0, w1, 1.0];
+        // Directions at 0°, 45°, 90°, ... 360° in the (x_axis, y_axis) plane.
+        let dirs: [(f64, f64); 9] = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ];
+
+        let mut cps = Vec::with_capacity(9);
+        let mut ws = Vec::with_capacity(9);
+        for (i, &(dx, dy)) in dirs.iter().enumerate() {
+            let radial = self.x_axis * (self.radius * dx) + self.y_axis * (self.radius * dy);
+            let p_bot = self.origin + radial + self.axis * v_min;
+            let p_top = self.origin + radial + self.axis * v_max;
+            cps.push(vec![p_bot, p_top]);
+            ws.push(vec![circle_weights[i], circle_weights[i]]);
+        }
+
+        let knots_u = vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.5, 1.5, 2.0, 2.0, 2.0];
+        let knots_v = vec![0.0, 0.0, 1.0, 1.0];
+        NurbsSurface::new(2, 1, knots_u, knots_v, cps, ws)
     }
 }
 
@@ -319,6 +360,19 @@ impl ConicalSurface {
 
         (u, v)
     }
+
+    /// Convert to an approximate NURBS surface over the given v-range.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `NurbsSurface` construction fails.
+    pub fn to_nurbs(&self, v_min: f64, v_max: f64) -> Result<NurbsSurface, MathError> {
+        analytic_to_nurbs_sampled(
+            |u, v| self.evaluate(u, v),
+            (0.0, std::f64::consts::TAU),
+            (v_min, v_max),
+        )
+    }
 }
 
 /// An infinite spherical surface (actually a sphere).
@@ -456,6 +510,19 @@ impl SphericalSurface {
         let u = y.atan2(x).rem_euclid(std::f64::consts::TAU);
         let v = (z / r).clamp(-1.0, 1.0).asin();
         (u, v)
+    }
+
+    /// Convert to an approximate NURBS surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `NurbsSurface` construction fails.
+    pub fn to_nurbs(&self) -> Result<NurbsSurface, MathError> {
+        analytic_to_nurbs_sampled(
+            |u, v| self.evaluate(u, v),
+            (0.0, std::f64::consts::TAU),
+            (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+        )
     }
 }
 
@@ -689,6 +756,19 @@ impl ToroidalSurface {
         let v = z_comp.atan2(r_comp).rem_euclid(std::f64::consts::TAU);
         (u, v)
     }
+
+    /// Convert to an approximate NURBS surface.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `NurbsSurface` construction fails.
+    pub fn to_nurbs(&self) -> Result<NurbsSurface, MathError> {
+        analytic_to_nurbs_sampled(
+            |u, v| self.evaluate(u, v),
+            (0.0, std::f64::consts::TAU),
+            (0.0, std::f64::consts::TAU),
+        )
+    }
 }
 
 /// A surface of revolution created by revolving a curve around an axis.
@@ -778,6 +858,67 @@ impl RevolutionSurface {
     pub const fn axis(&self) -> Vec3 {
         self.axis
     }
+}
+
+// ---------------------------------------------------------------------------
+// Analytic → NURBS conversion helper
+// ---------------------------------------------------------------------------
+
+/// Sample an analytic surface on a grid and build a degree (1,1) NURBS surface.
+///
+/// Evaluates the surface at a regular grid of (u, v) parameters and constructs
+/// a `NurbsSurface` whose control points pass through the sampled positions.
+fn analytic_to_nurbs_sampled(
+    surface_fn: impl Fn(f64, f64) -> Point3,
+    u_range: (f64, f64),
+    v_range: (f64, f64),
+) -> Result<NurbsSurface, MathError> {
+    let nu = 17; // 16 spans in u (enough for circular geometry)
+    let nv = 5; // 4 spans in v
+
+    let mut cps = Vec::with_capacity(nu);
+    let mut weights = Vec::with_capacity(nu);
+
+    #[allow(clippy::cast_precision_loss)]
+    for iu in 0..nu {
+        let u = u_range.0 + (u_range.1 - u_range.0) * (iu as f64 / (nu - 1) as f64);
+        let mut row = Vec::with_capacity(nv);
+        let mut w_row = Vec::with_capacity(nv);
+        for iv in 0..nv {
+            let v = v_range.0 + (v_range.1 - v_range.0) * (iv as f64 / (nv - 1) as f64);
+            row.push(surface_fn(u, v));
+            w_row.push(1.0);
+        }
+        cps.push(row);
+        weights.push(w_row);
+    }
+
+    // Uniform clamped knot vectors for degree 1 (bilinear interpolation
+    // through the sample grid — control points ARE surface points).
+    let degree_u = 1;
+    let degree_v = 1;
+    let knots_u = {
+        let n = nu;
+        let mut k = vec![0.0; degree_u + 1];
+        #[allow(clippy::cast_precision_loss)]
+        for i in 1..n - degree_u {
+            k.push(i as f64 / (n - degree_u) as f64);
+        }
+        k.extend(vec![1.0; degree_u + 1]);
+        k
+    };
+    let knots_v = {
+        let n = nv;
+        let mut k = vec![0.0; degree_v + 1];
+        #[allow(clippy::cast_precision_loss)]
+        for i in 1..n - degree_v {
+            k.push(i as f64 / (n - degree_v) as f64);
+        }
+        k.extend(vec![1.0; degree_v + 1]);
+        k
+    };
+
+    NurbsSurface::new(degree_u, degree_v, knots_u, knots_v, cps, weights)
 }
 
 #[cfg(test)]
