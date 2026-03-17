@@ -3493,21 +3493,46 @@ fn tessellate_face_with_shared_edges(
         face_data.surface(),
         FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
     ) {
-        // Cylinder and cone faces are ruled surfaces — their grid has nv=1
-        // and the snap-based path produces accurate triangulations.
-        // The CDT path has seam-matching issues for full-revolution faces,
-        // so we use snap universally. Tolerance-based grid merge (Phase 3),
-        // circle edge refinement (Phase 3b), and boundary welding (Phase 6)
-        // handle post-boolean edge mismatches.
-        tessellate_nonplanar_snap(
-            topo,
-            face_id,
-            face_data,
-            deflection,
-            edge_global_indices,
-            merged,
-            point_to_global,
-        )?;
+        // Check if the boundary is non-standard (polyline from boolean results
+        // instead of the usual circles + seam lines).
+        let has_non_standard = {
+            let wire = topo.wire(face_data.outer_wire())?;
+            wire.edges().iter().any(|oe| {
+                topo.edge(oe.edge())
+                    .is_ok_and(|e| matches!(e.curve(), EdgeCurve::NurbsCurve(_)))
+            }) || {
+                let all_line = wire.edges().iter().all(|oe| {
+                    topo.edge(oe.edge())
+                        .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+                });
+                all_line && wire.edges().len() > 4
+            }
+        };
+
+        if has_non_standard {
+            // Non-rectangular boundary — use CDT with shared vertices for
+            // correct watertight tessellation of boolean sub-faces.
+            tessellate_nonplanar_cdt(
+                topo,
+                face_id,
+                face_data,
+                deflection,
+                edge_global_indices,
+                merged,
+                point_to_global,
+            )?;
+        } else {
+            // Standard rectangular boundary — snap path is fine.
+            tessellate_nonplanar_snap(
+                topo,
+                face_id,
+                face_data,
+                deflection,
+                edge_global_indices,
+                merged,
+                point_to_global,
+            )?;
+        }
     } else {
         // For sphere and torus faces: use CDT-based tessellation with exact
         // boundary constraints. Falls back to snap-based stitching if CDT
@@ -3690,6 +3715,30 @@ fn tessellate_nonplanar_cdt(
             project_to_surface_uv(face_data.surface(), *pt)
         })
         .collect::<Result<Vec<_>, _>>()?;
+
+    // Step 2a: Unwrap periodic u across the seam for polyline boundaries.
+    // Polyline edges from boolean sub-faces wrap around the cylinder but
+    // aren't detected as seam edges (they appear only once in the wire).
+    // Ensure consecutive u values are continuous by shifting across jumps.
+    {
+        let is_periodic = matches!(
+            face_data.surface(),
+            FaceSurface::Cylinder(_)
+                | FaceSurface::Cone(_)
+                | FaceSurface::Sphere(_)
+                | FaceSurface::Torus(_)
+        );
+        if is_periodic {
+            for i in 1..boundary_uv.len() {
+                let prev_u = boundary_uv[i - 1].0;
+                let mut u = boundary_uv[i].0;
+                let diff = u - prev_u;
+                let shifts = (diff / std::f64::consts::TAU + 0.5).floor();
+                u -= shifts * std::f64::consts::TAU;
+                boundary_uv[i].0 = u;
+            }
+        }
+    }
 
     // Compute (u,v) bounding box from a set of UV pairs.
     #[allow(clippy::items_after_statements)]

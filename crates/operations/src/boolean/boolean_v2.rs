@@ -2575,7 +2575,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Steinmetz (cylinder-cylinder) needs analytic-analytic pipeline improvements"]
     fn boolean_v2_two_cylinders_intersect() {
         // Two perpendicular cylinders (Steinmetz-like).
         // Cylinder A along z-axis, Cylinder B along x-axis, both r=3.
