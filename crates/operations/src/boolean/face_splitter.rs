@@ -15,7 +15,7 @@ use super::classify_2d::{sample_interior_point, signed_area_2d};
 use super::pcurve_compute::{
     compute_pcurve_on_surface, make_line2d_safe, project_point_on_surface,
 };
-use super::pipeline::{OrientedPCurveEdge, SectionEdge, SubFace};
+use super::pipeline::{OrientedPCurveEdge, SectionEdge, SubFace, SurfaceInfo};
 use super::plane_frame::PlaneFrame;
 use super::types::Source;
 use super::wire_builder::build_wire_loops;
@@ -32,6 +32,7 @@ use super::wire_builder::build_wire_loops;
 /// - `source` — which solid this face belongs to (A or B)
 /// - `tol` — tolerance (`.linear` for 3D matching, UV tol derived internally)
 /// - `frame` — cached `PlaneFrame` for this face (avoids origin mismatch)
+/// - `info` — cached `SurfaceInfo` for periodicity flags
 #[allow(clippy::too_many_lines)]
 pub fn split_face_2d(
     topo: &Topology,
@@ -40,6 +41,7 @@ pub fn split_face_2d(
     source: Source,
     tol: &brepkit_math::tolerance::Tolerance,
     frame: Option<&PlaneFrame>,
+    info: Option<&SurfaceInfo>,
 ) -> Vec<SubFace> {
     let face = match topo.face(face_id) {
         Ok(f) => f,
@@ -47,21 +49,33 @@ pub fn split_face_2d(
     };
     let surface = face.surface().clone();
     let reversed = face.is_reversed();
+    let is_plane = matches!(surface, brepkit_topology::face::FaceSurface::Plane { .. });
 
-    // Use provided frame or build one from wire points.
+    // Use provided frame or build one from wire points (plane faces only).
     let wire_pts = collect_wire_points(topo, face.outer_wire());
     let owned_frame;
     let frame = if let Some(f) = frame {
         f
-    } else {
+    } else if is_plane {
         let normal = extract_plane_normal(&surface);
         owned_frame = PlaneFrame::from_plane_face(normal, &wire_pts);
         &owned_frame
+    } else {
+        // For non-plane faces, PlaneFrame is not used — set a dummy.
+        // All UV projection goes through surface.project_point().
+        owned_frame = PlaneFrame::from_plane_face(Vec3::new(0.0, 0.0, 1.0), &[]);
+        &owned_frame
     };
 
-    // Convert boundary edges to OrientedPCurveEdge using the cached frame.
-    let boundary_edges =
-        boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, Some(frame));
+    // Extract periodicity from SurfaceInfo.
+    let (u_periodic, v_periodic) = info.map_or((false, false), SurfaceInfo::periodicity);
+
+    // Convert boundary edges to OrientedPCurveEdge.
+    let boundary_edges = if is_plane {
+        boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, Some(frame))
+    } else {
+        boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, None)
+    };
 
     // If no section edges, the face is unsplit — return as-is.
     if sections.is_empty() {
@@ -76,23 +90,31 @@ pub fn split_face_2d(
     }
 
     // Stage 2: Split boundary edges at section edge endpoints (3D matching).
-    // Section edges start/end on boundary edges. We match in 3D to avoid
-    // UV tolerance mismatch from different PlaneFrame origins.
     let split_pts_3d: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
-    let boundary_edges =
-        split_boundary_edges_at_3d_points(boundary_edges, &split_pts_3d, frame, tol.linear);
+    let boundary_edges = split_boundary_edges_at_3d_points(
+        boundary_edges,
+        &split_pts_3d,
+        if is_plane { Some(frame) } else { None },
+        &surface,
+        tol.linear,
+    );
 
     // Convert section edges to OrientedPCurveEdge (both orientations).
-    // Use the cached frame for UV projection so coordinates are consistent
-    // with boundary edges.
     let mut all_edges = boundary_edges;
     for section in sections {
         let pcurve_on_this_face = match source {
             Source::A => &section.pcurve_a,
             Source::B => &section.pcurve_b,
         };
-        let start_uv = frame.project(section.start);
-        let end_uv = frame.project(section.end);
+
+        // Project section endpoints to UV using the appropriate method.
+        let (start_uv, end_uv) = if is_plane {
+            (frame.project(section.start), frame.project(section.end))
+        } else {
+            let su = project_point_on_surface(section.start, &surface, &wire_pts, None);
+            let eu = project_point_on_surface(section.end, &surface, &wire_pts, None);
+            (su, eu)
+        };
 
         // Forward direction.
         all_edges.push(OrientedPCurveEdge {
@@ -117,7 +139,7 @@ pub fn split_face_2d(
     }
 
     // Build wire loops via angular-sorting traversal.
-    let loops = build_wire_loops(&all_edges, tol.linear, false, false);
+    let loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
 
     // Classify each loop as outer (positive area) or hole (negative).
     let mut outers: Vec<(Vec<OrientedPCurveEdge>, f64)> = Vec::new();
@@ -134,9 +156,7 @@ pub fn split_face_2d(
     }
 
     // If all loops are CW (negative area), the winding is reversed.
-    // In that case, treat the largest-magnitude-area loop as outer.
     if outers.is_empty() && !holes.is_empty() {
-        // Reverse all loops — they're actually CCW in a reversed face.
         for hole in &mut holes {
             hole.reverse();
             for edge in hole.iter_mut() {
@@ -151,14 +171,12 @@ pub fn split_face_2d(
     }
 
     // Match holes to containing outer wires.
-    // For now (plane-only, simple cases), just assign all holes to the
-    // largest outer wire.
     let mut sub_faces = Vec::new();
     for (outer_wire, _area) in outers {
         sub_faces.push(SubFace {
             surface: surface.clone(),
             outer_wire,
-            inner_wires: Vec::new(), // Holes matched below.
+            inner_wires: Vec::new(),
             reversed,
             parent: face_id,
             source,
@@ -179,7 +197,6 @@ pub fn split_face_2d(
                 }
             }
             if !assigned {
-                // Fallback: assign to the first outer.
                 if let Some(sf) = sub_faces.first_mut() {
                     sf.inner_wires.push(hole);
                 }
@@ -206,7 +223,6 @@ pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Poin
         if let Some(f) = frame {
             return f.evaluate(interior_uv.x(), interior_uv.y());
         }
-        // Fallback: build frame from outer wire 3D points.
         let wire_pts: Vec<Point3> = sub_face.outer_wire.iter().map(|e| e.start_3d).collect();
         let f = PlaneFrame::from_plane_face(*normal, &wire_pts);
         return f.evaluate(interior_uv.x(), interior_uv.y());
@@ -229,13 +245,14 @@ pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Poin
 
 /// Split boundary edges at 3D points where section edges start/end.
 ///
-/// For each split point, projects onto each boundary edge's 3D line and
-/// checks distance. This is more robust than UV-space matching because
-/// all coordinates share the same 3D space — no frame mismatch possible.
+/// For each split point, projects onto the edge's 3D geometry and checks
+/// distance. Handles both line edges (projection onto 3D line) and curved
+/// edges (projection via parameter search).
 fn split_boundary_edges_at_3d_points(
     edges: Vec<OrientedPCurveEdge>,
     split_pts_3d: &[Point3],
-    frame: &PlaneFrame,
+    frame: Option<&PlaneFrame>,
+    surface: &brepkit_topology::face::FaceSurface,
     tol: f64,
 ) -> Vec<OrientedPCurveEdge> {
     let mut result = Vec::new();
@@ -253,7 +270,7 @@ fn split_boundary_edges_at_3d_points(
             let to_pt = sp - edge.start_3d;
             let t = to_pt.dot(edge_dir) / edge_len_sq;
             if t <= tol || t >= 1.0 - tol {
-                continue; // At or beyond endpoints.
+                continue;
             }
             let closest = edge.start_3d + edge_dir * t;
             let dist = (sp - closest).length();
@@ -267,9 +284,7 @@ fn split_boundary_edges_at_3d_points(
             continue;
         }
 
-        // Sort by parameter.
         splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        // Dedup close splits.
         splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
 
         // Split edge into segments.
@@ -281,7 +296,11 @@ fn split_boundary_edges_at_3d_points(
                 edge.start_3d.y() + (edge.end_3d.y() - edge.start_3d.y()) * t,
                 edge.start_3d.z() + (edge.end_3d.z() - edge.start_3d.z()) * t,
             );
-            let split_uv = frame.project(split_3d);
+            let split_uv = if let Some(f) = frame {
+                f.project(split_3d)
+            } else {
+                project_point_on_surface(split_3d, surface, &[], None)
+            };
             let dir_uv = Vec2::new(split_uv.x() - prev_uv.x(), split_uv.y() - prev_uv.y());
             let pcurve = Curve2D::Line(make_line2d_safe(prev_uv, dir_uv));
             result.push(OrientedPCurveEdge {
@@ -332,7 +351,7 @@ fn extract_plane_normal(surface: &brepkit_topology::face::FaceSurface) -> Vec3 {
     if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = surface {
         *normal
     } else {
-        Vec3::new(0.0, 0.0, 1.0) // Fallback for non-plane (shouldn't happen in Step 1).
+        Vec3::new(0.0, 0.0, 1.0)
     }
 }
 

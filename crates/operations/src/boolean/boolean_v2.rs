@@ -8,6 +8,8 @@
 
 use std::collections::HashMap;
 
+use brepkit_math::aabb::Aabb3;
+use brepkit_math::analytic_intersection::{self, ExactIntersectionCurve};
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
 use brepkit_topology::Topology;
@@ -22,7 +24,8 @@ use super::assembly::{quantize_point, vertex_merge_resolution};
 use super::classify::try_build_analytic_classifier;
 use super::classify_2d::point_in_polygon_2d;
 use super::face_splitter::{interior_point_3d, split_face_2d};
-use super::pipeline::{BooleanPipeline, SectionEdge};
+use super::pcurve_compute::{compute_pcurve_on_surface, surface_periods};
+use super::pipeline::{BooleanPipeline, SectionEdge, SurfaceInfo};
 use super::plane_frame::PlaneFrame;
 use super::types::{AnalyticClassifier, BooleanOp, FaceClass, Source, select_fragment};
 use crate::OperationsError;
@@ -33,8 +36,8 @@ use crate::OperationsError;
 
 /// Perform a boolean operation using the v2 parameter-space pipeline.
 ///
-/// Currently supports solids composed entirely of `FaceSurface::Plane` faces.
-/// Returns `Err` for solids containing non-plane faces.
+/// Supports solids composed entirely of analytic faces: `Plane`, `Cylinder`,
+/// `Cone`, `Sphere`, `Torus`. Returns `Err` for solids containing NURBS faces.
 pub fn boolean_v2(
     topo: &mut Topology,
     op: BooleanOp,
@@ -43,10 +46,11 @@ pub fn boolean_v2(
 ) -> Result<SolidId, OperationsError> {
     let tol = Tolerance::new();
 
-    // Guard: all faces must be plane (step 1 limitation).
-    if !all_faces_plane(topo, a)? || !all_faces_plane(topo, b)? {
+    // Guard: all faces must be analytic (no NURBS).
+    if !all_faces_analytic(topo, a)? || !all_faces_analytic(topo, b)? {
         return Err(OperationsError::InvalidInput {
-            reason: "boolean_v2 step 1: only plane faces supported".into(),
+            reason: "boolean_v2: only analytic faces (plane/cylinder/cone/sphere/torus) supported"
+                .into(),
         });
     }
 
@@ -56,15 +60,15 @@ pub fn boolean_v2(
         ..BooleanPipeline::default()
     };
 
-    // Cache PlaneFrame per face (consistent UV origin across all stages).
-    init_plane_frames(topo, a, b, &mut pipeline)?;
+    // Cache surface info per face (PlaneFrame for planes, periodicity for others).
+    init_surface_info(topo, a, b, &mut pipeline)?;
 
     // Build analytic classifiers for O(1) point-in-solid tests.
     let classifier_a = try_build_analytic_classifier(topo, a);
     let classifier_b = try_build_analytic_classifier(topo, b);
 
     // Stage 1: Intersect all face pairs.
-    intersect_plane_faces(topo, a, b, &mut pipeline, &tol)?;
+    intersect_all_faces(topo, a, b, &mut pipeline, &tol)?;
 
     // Disjoint shortcut (with containment detection).
     if pipeline.intersections.is_empty() {
@@ -80,9 +84,8 @@ pub fn boolean_v2(
     }
 
     // Stage 2: Split edges at intersection vertices.
-    // For plane-plane, the boundary edges are pre-split during face splitting
-    // (the wire builder handles the split edges naturally via section edges).
-    // No explicit edge splitting needed in Step 1.
+    // Boundary edges are pre-split during face splitting (stage 3) —
+    // the wire builder handles section edge insertion naturally.
 
     // Stage 3: Split faces via wire builder.
     split_all_faces(topo, a, b, &mut pipeline, &tol)?;
@@ -108,10 +111,10 @@ pub fn boolean_v2(
 }
 
 // ---------------------------------------------------------------------------
-// PlaneFrame cache
+// Surface info cache
 // ---------------------------------------------------------------------------
 
-fn init_plane_frames(
+fn init_surface_info(
     topo: &Topology,
     a: SolidId,
     b: SolidId,
@@ -121,10 +124,21 @@ fn init_plane_frames(
         let faces = collect_solid_faces(topo, solid)?;
         for fid in faces {
             let face = topo.face(fid)?;
-            if let FaceSurface::Plane { normal, .. } = face.surface() {
+            let surface = face.surface();
+            if let FaceSurface::Plane { normal, .. } = surface {
                 let poly = collect_face_polygon(topo, fid)?;
                 let frame = PlaneFrame::from_plane_face(*normal, &poly);
-                pipeline.plane_frames.insert(fid, frame);
+                pipeline.plane_frames.insert(fid, frame.clone());
+                pipeline.surface_info.insert(fid, SurfaceInfo::Plane(frame));
+            } else {
+                let (u_per, v_per) = surface_periods(surface);
+                pipeline.surface_info.insert(
+                    fid,
+                    SurfaceInfo::Parametric {
+                        u_periodic: u_per.is_some(),
+                        v_periodic: v_per.is_some(),
+                    },
+                );
             }
         }
     }
@@ -132,28 +146,287 @@ fn init_plane_frames(
 }
 
 // ---------------------------------------------------------------------------
-// Stage 1: Intersect plane faces
+// Stage 1: Intersect all face pairs
 // ---------------------------------------------------------------------------
 
-fn intersect_plane_faces(
+#[allow(clippy::too_many_lines)]
+fn intersect_all_faces(
     topo: &Topology,
     a: SolidId,
     b: SolidId,
     pipeline: &mut BooleanPipeline,
-    _tol: &Tolerance,
+    tol: &Tolerance,
 ) -> Result<(), OperationsError> {
     let faces_a = collect_solid_faces(topo, a)?;
     let faces_b = collect_solid_faces(topo, b)?;
 
+    // Pre-compute face AABBs for fast rejection.
+    let aabb_cache: HashMap<FaceId, Aabb3> = faces_a
+        .iter()
+        .chain(faces_b.iter())
+        .filter_map(|&fid| {
+            let poly = collect_face_polygon(topo, fid).ok()?;
+            let aabb = Aabb3::try_from_points(poly.into_iter())?;
+            Some((fid, aabb))
+        })
+        .collect();
+
     for &fa in &faces_a {
+        let Some(aabb_a) = aabb_cache.get(&fa) else {
+            continue;
+        };
         for &fb in &faces_b {
-            let sections = intersect_two_plane_faces(topo, fa, fb, &pipeline.plane_frames)?;
+            let Some(aabb_b) = aabb_cache.get(&fb) else {
+                continue;
+            };
+            // AABB pre-filter: skip disjoint face pairs.
+            if !aabb_a.intersects(*aabb_b) {
+                continue;
+            }
+
+            let sections = intersect_face_pair(topo, fa, fb, pipeline, tol)?;
             if !sections.is_empty() {
                 pipeline.intersections.insert((fa, fb), sections);
             }
         }
     }
     Ok(())
+}
+
+/// Dispatch intersection by surface-type pair.
+fn intersect_face_pair(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    pipeline: &BooleanPipeline,
+    tol: &Tolerance,
+) -> Result<Vec<SectionEdge>, OperationsError> {
+    let face_a = topo.face(fa)?;
+    let face_b = topo.face(fb)?;
+    let surf_a = face_a.surface();
+    let surf_b = face_b.surface();
+
+    match (surf_a, surf_b) {
+        (FaceSurface::Plane { .. }, FaceSurface::Plane { .. }) => {
+            // Plane-plane: existing intersection.
+            intersect_two_plane_faces(topo, fa, fb, &pipeline.plane_frames)
+        }
+        (FaceSurface::Plane { normal, d }, _) if surf_b.is_analytic() => {
+            // Plane-analytic: plane is face A.
+            intersect_plane_analytic_faces(topo, fa, fb, *normal, *d, surf_b, pipeline, tol)
+        }
+        (_, FaceSurface::Plane { normal, d }) if surf_a.is_analytic() => {
+            // Analytic-plane: plane is face B — swap order, then swap pcurves.
+            let mut sections =
+                intersect_plane_analytic_faces(topo, fb, fa, *normal, *d, surf_a, pipeline, tol)?;
+            for s in &mut sections {
+                std::mem::swap(&mut s.pcurve_a, &mut s.pcurve_b);
+            }
+            Ok(sections)
+        }
+        _ if surf_a.is_analytic() && surf_b.is_analytic() => {
+            // Analytic-analytic: use marching fallback.
+            intersect_analytic_analytic_faces(topo, fa, fb, pipeline, tol)
+        }
+        _ => {
+            // NURBS or unsupported pair — skip.
+            Ok(Vec::new())
+        }
+    }
+}
+
+/// Intersect a plane face with an analytic (non-plane) face.
+///
+/// Uses `exact_plane_analytic()` to get the intersection curve (Circle, Ellipse,
+/// or sampled Points), then trims to both face boundaries and computes pcurves.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn intersect_plane_analytic_faces(
+    topo: &Topology,
+    plane_face_id: FaceId,
+    analytic_face_id: FaceId,
+    plane_normal: Vec3,
+    plane_d: f64,
+    analytic_surface: &FaceSurface,
+    pipeline: &BooleanPipeline,
+    tol: &Tolerance,
+) -> Result<Vec<SectionEdge>, OperationsError> {
+    let Some(analytic) = analytic_surface.as_analytic() else {
+        return Ok(Vec::new());
+    };
+
+    // Get exact intersection curves.
+    let curves = analytic_intersection::exact_plane_analytic(analytic, plane_normal, plane_d)
+        .map_err(OperationsError::Math)?;
+
+    if curves.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Collect boundary polygons for both faces.
+    let poly_plane = collect_face_polygon(topo, plane_face_id)?;
+    let _poly_analytic = collect_face_polygon(topo, analytic_face_id)?;
+
+    // Get plane frame for the plane face.
+    let owned_frame;
+    let frame_plane = if let Some(f) = pipeline.plane_frames.get(&plane_face_id) {
+        f
+    } else {
+        owned_frame = plane_frame_for_polygon(plane_normal, &poly_plane);
+        &owned_frame
+    };
+
+    // For the analytic face, compute a UV polygon for containment testing.
+    let analytic_uv_poly = face_uv_polygon(topo, analytic_face_id, analytic_surface);
+
+    let mut result = Vec::new();
+
+    for curve in curves {
+        // Sample 3D points along the intersection curve.
+        let samples = sample_intersection_curve(&curve, 32);
+        if samples.len() < 2 {
+            continue;
+        }
+
+        // Trim: find consecutive runs where points are inside both faces.
+        let inside_both: Vec<bool> = samples
+            .iter()
+            .map(|&p| {
+                let in_plane = point_in_face_polygon_3d(p, &poly_plane, &plane_normal);
+                let in_analytic = point_in_analytic_face_uv(p, analytic_surface, &analytic_uv_poly);
+                in_plane && in_analytic
+            })
+            .collect();
+
+        // Extract contiguous segments of `true`.
+        let segments = extract_contiguous_segments(&inside_both);
+
+        for (seg_start, seg_end) in segments {
+            if seg_end <= seg_start {
+                continue;
+            }
+            let start_3d = samples[seg_start];
+            let end_3d = samples[seg_end];
+            if (end_3d - start_3d).length() < tol.linear {
+                continue;
+            }
+
+            // Determine 3D edge curve type.
+            let curve_3d = intersection_curve_to_edge_curve(&curve);
+
+            // Compute pcurves.
+            let pcurve_plane = compute_line_pcurve(frame_plane, start_3d, end_3d);
+            let pcurve_analytic =
+                compute_pcurve_on_surface(&curve_3d, start_3d, end_3d, analytic_surface, &[], None);
+
+            result.push(SectionEdge {
+                curve_3d,
+                pcurve_a: pcurve_plane,
+                pcurve_b: pcurve_analytic,
+                start: start_3d,
+                end: end_3d,
+            });
+        }
+    }
+
+    Ok(result)
+}
+
+/// Intersect two analytic (non-plane) faces using the marching algorithm.
+#[allow(clippy::too_many_lines)]
+fn intersect_analytic_analytic_faces(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    _pipeline: &BooleanPipeline,
+    tol: &Tolerance,
+) -> Result<Vec<SectionEdge>, OperationsError> {
+    let face_a = topo.face(fa)?;
+    let face_b = topo.face(fb)?;
+    let surf_a = face_a.surface();
+    let surf_b = face_b.surface();
+
+    let Some(analytic_a) = surf_a.as_analytic() else {
+        return Ok(Vec::new());
+    };
+    let Some(analytic_b) = surf_b.as_analytic() else {
+        return Ok(Vec::new());
+    };
+
+    // Estimate v-range hints from face boundary vertices.
+    let v_range_a = estimate_v_range(topo, fa, surf_a);
+    let v_range_b = estimate_v_range(topo, fb, surf_b);
+
+    let curves = analytic_intersection::intersect_analytic_analytic_bounded(
+        analytic_a, analytic_b, 32, v_range_a, v_range_b,
+    )
+    .map_err(OperationsError::Math)?;
+
+    if curves.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // UV polygons for containment testing.
+    let uv_poly_a = face_uv_polygon(topo, fa, surf_a);
+    let uv_poly_b = face_uv_polygon(topo, fb, surf_b);
+
+    let mut result = Vec::new();
+
+    for curve in &curves {
+        let samples: Vec<Point3> = curve.points.iter().map(|ip| ip.point).collect();
+        if samples.len() < 2 {
+            continue;
+        }
+
+        // Trim to both face boundaries.
+        let inside_both: Vec<bool> = samples
+            .iter()
+            .map(|&p| {
+                let in_a = point_in_analytic_face_uv(p, surf_a, &uv_poly_a);
+                let in_b = point_in_analytic_face_uv(p, surf_b, &uv_poly_b);
+                in_a && in_b
+            })
+            .collect();
+
+        let segments = extract_contiguous_segments(&inside_both);
+
+        for (seg_start, seg_end) in segments {
+            if seg_end <= seg_start {
+                continue;
+            }
+            let start_3d = samples[seg_start];
+            let end_3d = samples[seg_end];
+            if (end_3d - start_3d).length() < tol.linear {
+                continue;
+            }
+
+            // Analytic-analytic always produces NURBS section edges.
+            let sub_samples: Vec<Point3> = samples[seg_start..=seg_end].to_vec();
+            let curve_3d = if sub_samples.len() >= 4 {
+                match brepkit_math::nurbs::fitting::interpolate(&sub_samples, 3) {
+                    Ok(nc) => EdgeCurve::NurbsCurve(nc),
+                    Err(_) => EdgeCurve::Line,
+                }
+            } else {
+                EdgeCurve::Line
+            };
+
+            // Compute pcurves on both surfaces.
+            let pcurve_a =
+                compute_pcurve_on_surface(&curve_3d, start_3d, end_3d, surf_a, &[], None);
+            let pcurve_b =
+                compute_pcurve_on_surface(&curve_3d, start_3d, end_3d, surf_b, &[], None);
+
+            result.push(SectionEdge {
+                curve_3d,
+                pcurve_a,
+                pcurve_b,
+                start: start_3d,
+                end: end_3d,
+            });
+        }
+    }
+
+    Ok(result)
 }
 
 /// Compute the intersection of two plane faces.
@@ -280,7 +553,8 @@ fn split_all_faces(
             .get(&fid)
             .map_or(&[][..], |v| v.as_slice());
         let frame = pipeline.plane_frames.get(&fid);
-        let sub = split_face_2d(topo, fid, sections, Source::A, tol, frame);
+        let info = pipeline.surface_info.get(&fid);
+        let sub = split_face_2d(topo, fid, sections, Source::A, tol, frame, info);
         pipeline.sub_faces.extend(sub);
     }
 
@@ -290,7 +564,8 @@ fn split_all_faces(
             .get(&fid)
             .map_or(&[][..], |v| v.as_slice());
         let frame = pipeline.plane_frames.get(&fid);
-        let sub = split_face_2d(topo, fid, sections, Source::B, tol, frame);
+        let info = pipeline.surface_info.get(&fid);
+        let sub = split_face_2d(topo, fid, sections, Source::B, tol, frame, info);
         pipeline.sub_faces.extend(sub);
     }
 
@@ -328,7 +603,10 @@ fn classify_sub_faces(
     let mut selected = Vec::new();
     for sub_face in &pipeline.sub_faces {
         // Get test point inside this sub-face.
-        let frame = pipeline.plane_frames.get(&sub_face.parent);
+        let frame = pipeline
+            .surface_info
+            .get(&sub_face.parent)
+            .and_then(SurfaceInfo::as_plane_frame);
         let test_pt = interior_point_3d(sub_face, frame);
 
         // Classify against opposing solid: try analytic first, fall back to ray-cast.
@@ -569,10 +847,12 @@ fn create_wire_from_edges_dedup(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn all_faces_plane(topo: &Topology, solid: SolidId) -> Result<bool, OperationsError> {
+fn all_faces_analytic(topo: &Topology, solid: SolidId) -> Result<bool, OperationsError> {
     let faces = collect_solid_faces(topo, solid)?;
     for fid in faces {
-        if !matches!(topo.face(fid)?.surface(), FaceSurface::Plane { .. }) {
+        // is_analytic() returns true for Plane, Cylinder, Cone, Sphere, Torus.
+        // Only Nurbs is rejected.
+        if !topo.face(fid)?.surface().is_analytic() {
             return Ok(false);
         }
     }
@@ -609,14 +889,23 @@ fn collect_solid_face_polygons(
     let mut result = Vec::new();
     for fid in faces {
         let face = topo.face(fid)?;
+        let poly = collect_face_polygon(topo, fid)?;
+        if poly.len() < 3 {
+            continue;
+        }
         if let FaceSurface::Plane { normal, d } = face.surface() {
-            let poly = collect_face_polygon(topo, fid)?;
             let effective_normal = if face.is_reversed() {
                 -*normal
             } else {
                 *normal
             };
             let effective_d = if face.is_reversed() { -*d } else { *d };
+            result.push((poly, effective_normal, effective_d));
+        } else {
+            // Approximate normal/d from polygon for ray-cast fallback.
+            let (normal, d) = approximate_polygon_plane(&poly);
+            let effective_normal = if face.is_reversed() { -normal } else { normal };
+            let effective_d = if face.is_reversed() { -d } else { d };
             result.push((poly, effective_normal, effective_d));
         }
     }
@@ -851,6 +1140,150 @@ fn sample_solid_vertex(topo: &Topology, solid: SolidId) -> Result<Point3, Operat
     Ok(v.point())
 }
 
+// ---------------------------------------------------------------------------
+// Analytic intersection helpers
+// ---------------------------------------------------------------------------
+
+/// Sample 3D points along an `ExactIntersectionCurve`.
+#[allow(clippy::cast_precision_loss)]
+fn sample_intersection_curve(curve: &ExactIntersectionCurve, n: usize) -> Vec<Point3> {
+    match curve {
+        ExactIntersectionCurve::Circle(c) => {
+            use brepkit_math::traits::ParametricCurve;
+            let (t0, t1) = c.domain();
+            (0..=n)
+                .map(|i| {
+                    let t = t0 + (t1 - t0) * (i as f64) / (n as f64);
+                    c.evaluate(t)
+                })
+                .collect()
+        }
+        ExactIntersectionCurve::Ellipse(e) => {
+            use brepkit_math::traits::ParametricCurve;
+            let (t0, t1) = e.domain();
+            (0..=n)
+                .map(|i| {
+                    let t = t0 + (t1 - t0) * (i as f64) / (n as f64);
+                    e.evaluate(t)
+                })
+                .collect()
+        }
+        ExactIntersectionCurve::Points(pts) => pts.clone(),
+    }
+}
+
+/// Convert an `ExactIntersectionCurve` to an `EdgeCurve`.
+fn intersection_curve_to_edge_curve(curve: &ExactIntersectionCurve) -> EdgeCurve {
+    match curve {
+        ExactIntersectionCurve::Circle(c) => EdgeCurve::Circle(c.clone()),
+        ExactIntersectionCurve::Ellipse(e) => EdgeCurve::Ellipse(e.clone()),
+        ExactIntersectionCurve::Points(pts) => {
+            // Fit a NURBS curve through the points.
+            if pts.len() >= 4 {
+                match brepkit_math::nurbs::fitting::interpolate(pts, 3) {
+                    Ok(nc) => EdgeCurve::NurbsCurve(nc),
+                    Err(_) => EdgeCurve::Line,
+                }
+            } else {
+                EdgeCurve::Line
+            }
+        }
+    }
+}
+
+/// Extract contiguous segments of `true` from a boolean array.
+///
+/// Returns `(start_index, end_index)` pairs where both endpoints are `true`.
+fn extract_contiguous_segments(flags: &[bool]) -> Vec<(usize, usize)> {
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < flags.len() {
+        if flags[i] {
+            let start = i;
+            while i < flags.len() && flags[i] {
+                i += 1;
+            }
+            let end = i - 1;
+            if end > start {
+                result.push((start, end));
+            }
+        } else {
+            i += 1;
+        }
+    }
+    result
+}
+
+/// Build a UV polygon for an analytic face (for containment testing).
+fn face_uv_polygon(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Vec<Point2> {
+    let poly = collect_face_polygon(topo, face_id).unwrap_or_default();
+    poly.iter()
+        .map(|&p| {
+            let (u, v) = surface.project_point(p).unwrap_or((0.0, 0.0));
+            Point2::new(u, v)
+        })
+        .collect()
+}
+
+/// Test if a 3D point is inside an analytic face using UV polygon containment.
+fn point_in_analytic_face_uv(point: Point3, surface: &FaceSurface, uv_poly: &[Point2]) -> bool {
+    if uv_poly.len() < 3 {
+        return true; // Degenerate face — accept.
+    }
+    let (u, v) = surface.project_point(point).unwrap_or((0.0, 0.0));
+    point_in_polygon_2d(Point2::new(u, v), uv_poly)
+}
+
+/// Estimate the v-parameter range for an analytic face from its boundary vertices.
+fn estimate_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Option<(f64, f64)> {
+    let poly = collect_face_polygon(topo, face_id).ok()?;
+    if poly.is_empty() {
+        return None;
+    }
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+    for &p in &poly {
+        let (_, v) = surface.project_point(p)?;
+        v_min = v_min.min(v);
+        v_max = v_max.max(v);
+    }
+    if v_min < v_max {
+        // Extend slightly for robustness.
+        let margin = (v_max - v_min) * 0.1;
+        Some((v_min - margin, v_max + margin))
+    } else {
+        None
+    }
+}
+
+/// Approximate a best-fit plane from a polygon using Newell's method.
+fn approximate_polygon_plane(poly: &[Point3]) -> (Vec3, f64) {
+    let n = poly.len();
+    let mut nx = 0.0;
+    let mut ny = 0.0;
+    let mut nz = 0.0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let pi = poly[i];
+        let pj = poly[j];
+        nx += (pi.y() - pj.y()) * (pi.z() + pj.z());
+        ny += (pi.z() - pj.z()) * (pi.x() + pj.x());
+        nz += (pi.x() - pj.x()) * (pi.y() + pj.y());
+    }
+    let len = (nx * nx + ny * ny + nz * nz).sqrt();
+    let normal = if len > 1e-15 {
+        Vec3::new(nx / len, ny / len, nz / len)
+    } else {
+        Vec3::new(0.0, 0.0, 1.0)
+    };
+    // d = normal · centroid
+    let cx = poly.iter().map(|p| p.x()).sum::<f64>() / n as f64;
+    let cy = poly.iter().map(|p| p.y()).sum::<f64>() / n as f64;
+    let cz = poly.iter().map(|p| p.z()).sum::<f64>() / n as f64;
+    let d = normal.dot(Vec3::new(cx, cy, cz));
+    (normal, d)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -1015,7 +1448,7 @@ mod tests {
             solid_b: Some(b),
             ..BooleanPipeline::default()
         };
-        intersect_plane_faces(&topo, a, b, &mut pipeline, &tol).unwrap();
+        intersect_all_faces(&topo, a, b, &mut pipeline, &tol).unwrap();
         // Two boxes with 6 faces each = 36 face pairs.
         // Many are parallel (no intersection). Non-parallel pairs produce
         // trimmed section edges where the faces actually overlap.
@@ -1037,7 +1470,7 @@ mod tests {
             solid_b: Some(b),
             ..BooleanPipeline::default()
         };
-        intersect_plane_faces(&topo, a, b, &mut pipeline, &tol).unwrap();
+        intersect_all_faces(&topo, a, b, &mut pipeline, &tol).unwrap();
         let faces_a = collect_solid_faces(&topo, a).unwrap();
         let faces_b = collect_solid_faces(&topo, b).unwrap();
 
@@ -1071,8 +1504,8 @@ mod tests {
             solid_b: Some(b),
             ..BooleanPipeline::default()
         };
-        init_plane_frames(&topo, a, b, &mut pipeline).unwrap();
-        intersect_plane_faces(&topo, a, b, &mut pipeline, &tol).unwrap();
+        init_surface_info(&topo, a, b, &mut pipeline).unwrap();
+        intersect_all_faces(&topo, a, b, &mut pipeline, &tol).unwrap();
         split_all_faces(&topo, a, b, &mut pipeline, &tol).unwrap();
         eprintln!(
             "Stage 3: {} sub-faces total (A: {}, B: {})",
@@ -1271,6 +1704,161 @@ mod tests {
         assert!(
             (vol - 964.0).abs() < 100.0,
             "Asymmetric cut volume {vol} should be ~964"
+        );
+    }
+
+    // --- Mixed-surface integration tests (Step 2) ---
+
+    use crate::primitives::{make_cone, make_cylinder, make_sphere};
+
+    /// Helper: create a cylinder centered at (cx, cy) with base at z=0.
+    fn make_centered_cylinder(topo: &mut Topology, r: f64, h: f64, cx: f64, cy: f64) -> SolidId {
+        let cyl = make_cylinder(topo, r, h).unwrap();
+        let mat = Mat4::translation(cx, cy, 0.0);
+        crate::transform::transform_solid(topo, cyl, &mat).unwrap();
+        cyl
+    }
+
+    /// Helper: create a sphere centered at (cx, cy, cz).
+    fn make_centered_sphere(topo: &mut Topology, r: f64, cx: f64, cy: f64, cz: f64) -> SolidId {
+        let sph = make_sphere(topo, r, 8).unwrap();
+        let mat = Mat4::translation(cx, cy, cz);
+        crate::transform::transform_solid(topo, sph, &mat).unwrap();
+        sph
+    }
+
+    #[test]
+    fn boolean_v2_box_intersect_cylinder_inside() {
+        // Cylinder entirely inside box → intersect = cylinder.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let r = 2.0;
+        let h = 8.0;
+        let b = make_centered_cylinder(&mut topo, r, h, 5.0, 5.0);
+        // Move cylinder up by 1.0 so it's within [0,10]³.
+        let mat = Mat4::translation(0.0, 0.0, 1.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let expected = std::f64::consts::PI * r * r * h;
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - expected).abs() / expected < 0.05,
+            "box∩cyl volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_box_fuse_cylinder_inside() {
+        // Cylinder entirely inside box → fuse = box.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = make_centered_cylinder(&mut topo, 2.0, 8.0, 5.0, 5.0);
+        let mat = Mat4::translation(0.0, 0.0, 1.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let result = boolean_v2(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - 1000.0).abs() / 1000.0 < 0.05,
+            "box∪cyl_inside volume {vol} should be ~1000"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_box_intersect_sphere_inside() {
+        // Small sphere entirely inside box → intersect = sphere.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let r = 2.0;
+        let b = make_centered_sphere(&mut topo, r, 5.0, 5.0, 5.0);
+
+        let expected = 4.0 / 3.0 * std::f64::consts::PI * r.powi(3);
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - expected).abs() / expected < 0.05,
+            "box∩sphere volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_box_fuse_sphere_inside() {
+        // Small sphere entirely inside box → fuse = box.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = make_centered_sphere(&mut topo, 2.0, 5.0, 5.0, 5.0);
+
+        let result = boolean_v2(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - 1000.0).abs() / 1000.0 < 0.05,
+            "box∪sphere_inside volume {vol} should be ~1000"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_box_intersect_cone_inside() {
+        // Cone (frustum) entirely inside box → intersect = cone.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let r1 = 2.0;
+        let r2 = 1.0;
+        let h = 6.0;
+        let b = make_cone(&mut topo, r1, r2, h).unwrap();
+        let mat = Mat4::translation(5.0, 5.0, 2.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let expected = std::f64::consts::PI * h / 3.0 * (r1 * r1 + r2 * r2 + r1 * r2);
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - expected).abs() / expected < 0.05,
+            "box∩cone volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_cylinder_inside_box_cut_is_void() {
+        // Cylinder entirely inside box → cut would create a void (inner shell),
+        // which the pipeline doesn't support yet. Should return an appropriate error.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = make_centered_cylinder(&mut topo, 2.0, 10.0, 5.0, 5.0);
+
+        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b);
+        assert!(
+            result.is_err(),
+            "B-inside-A cut should return Err (void not supported)"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_disjoint_box_cylinder() {
+        // Box and cylinder are disjoint → intersect returns error.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
+        let b = make_centered_cylinder(&mut topo, 1.0, 3.0, 20.0, 20.0);
+
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b);
+        assert!(
+            result.is_err(),
+            "disjoint box-cylinder intersect should return Err"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_disjoint_box_sphere() {
+        // Box and sphere are disjoint → cut = box.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
+        let b = make_centered_sphere(&mut topo, 1.0, 20.0, 20.0, 20.0);
+
+        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
+        assert!(
+            (vol - 125.0).abs() < 10.0,
+            "disjoint box-sphere cut volume {vol} should be ~125"
         );
     }
 }
