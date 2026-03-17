@@ -12,6 +12,7 @@ use crate::frame::Frame3;
 use crate::nurbs::fitting::interpolate;
 use crate::nurbs::intersection::{IntersectionCurve, IntersectionPoint};
 use crate::surfaces::{ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface};
+use crate::tolerance::Tolerance;
 use crate::vec::{Point3, Vec3};
 
 /// Exact curve type resulting from plane-analytic surface intersection.
@@ -1113,7 +1114,7 @@ fn algebraic_cylinder_cylinder(
     let cross_len = cross.length();
     if cross_len > 1e-12 {
         let axis_dist = delta.dot(cross).abs() / cross_len;
-        if axis_dist > r1 + r2 + 1e-8 {
+        if axis_dist > r1 + r2 + Tolerance::new().linear {
             return Ok(Some(vec![])); // No intersection
         }
     }
@@ -1148,12 +1149,13 @@ fn algebraic_cylinder_cylinder(
         let c_coeff = q_sq - q_dot_a2 * q_dot_a2 - r2 * r2;
 
         let disc = b_coeff * b_coeff - 4.0 * a_coeff * c_coeff;
-        if disc < 0.0 {
-            // No real solutions at this u — curves are partial.
+        // Clamp tiny negative discriminant (floating-point noise near tangent
+        // crossing points where disc → 0) to avoid gaps in the sample set.
+        if disc < -Tolerance::new().linear {
             continue;
         }
 
-        let sqrt_disc = disc.sqrt();
+        let sqrt_disc = disc.max(0.0).sqrt();
         let v_plus = (-b_coeff + sqrt_disc) / (2.0 * a_coeff);
         let v_minus = (-b_coeff - sqrt_disc) / (2.0 * a_coeff);
 
@@ -1177,13 +1179,16 @@ fn algebraic_cylinder_cylinder(
             continue;
         }
 
-        // Build intersection points (params filled later by the caller).
         let ipts: Vec<IntersectionPoint> = pts
             .iter()
-            .map(|&p| IntersectionPoint {
-                point: p,
-                param1: (0.0, 0.0),
-                param2: (0.0, 0.0),
+            .map(|&p| {
+                let (u1, v1) = c1.project_point(p);
+                let (u2, v2) = c2.project_point(p);
+                IntersectionPoint {
+                    point: p,
+                    param1: (u1, v1),
+                    param2: (u2, v2),
+                }
             })
             .collect();
 

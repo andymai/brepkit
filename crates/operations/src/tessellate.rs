@@ -139,10 +139,11 @@ pub(crate) fn segments_for_chord_deviation(radius: f64, arc_range: f64, deflecti
 /// `segments_for_chord_deviation`). Special handling is applied at poles
 /// (sphere) and apexes (cone) to avoid degenerate triangles by using
 /// triangle fans instead of quads.
-/// Tessellate a cylindrical face using its actual boundary polygon.
+/// Tessellate a cylindrical face using its actual boundary polygon (CDT-based).
 ///
 /// Used for faces with non-rectangular boundaries (e.g., boolean sub-faces
-/// bounded by intersection curves). Fan-triangulates from the UV centroid.
+/// bounded by intersection curves). Projects boundary to UV, CDT-triangulates,
+/// then evaluates each vertex on the cylinder surface.
 // TODO: Handle inner wires (holes) — currently only tessellates the outer wire.
 // The "outside" sub-face from `split_face_with_internal_loops` has holes that
 // are ignored here. This is OK for now because the outside sub-face is discarded
@@ -154,7 +155,8 @@ fn tessellate_analytic_with_boundary(
     cyl: &brepkit_math::surfaces::CylindricalSurface,
     _deflection: f64,
 ) -> Result<TriangleMeshUV, crate::OperationsError> {
-    let is_reversed = face_data.is_reversed();
+    // NOTE: Do NOT handle is_reversed here — `tessellate_with_uvs` applies
+    // a common reversal pass for all face types after this function returns.
     let wire = topo.wire(face_data.outer_wire())?;
 
     // Collect boundary vertices in order, projecting to UV with seam unwrapping.
@@ -224,14 +226,14 @@ fn tessellate_analytic_with_boundary(
         Err(_) => return Ok(TriangleMeshUV::default()),
     };
 
-    // Insert boundary constraints.
+    // Insert boundary constraints — only record successfully inserted ones
+    // so remove_exterior doesn't rely on non-existent barriers.
     let mut boundary_segs = Vec::with_capacity(n_verts);
     for i in 0..n_verts {
         let j = (i + 1) % n_verts;
-        if cdt.insert_constraint(cdt_ids[i], cdt_ids[j]).is_err() {
-            // Skip degenerate constraint.
+        if cdt.insert_constraint(cdt_ids[i], cdt_ids[j]).is_ok() {
+            boundary_segs.push((cdt_ids[i], cdt_ids[j]));
         }
-        boundary_segs.push((cdt_ids[i], cdt_ids[j]));
     }
 
     // Remove exterior triangles.
@@ -249,7 +251,7 @@ fn tessellate_analytic_with_boundary(
         let v = pt.y();
         positions.push(cyl.evaluate(u, v));
         let nm = cyl.normal(u, 0.0);
-        normals_out.push(if is_reversed { nm * (-1.0) } else { nm });
+        normals_out.push(nm);
         uvs.push([u, v]);
     }
 
@@ -260,19 +262,13 @@ fn tessellate_analytic_with_boundary(
         }
     }
 
-    // Build index buffer with correct winding.
+    // Build index buffer (standard CCW winding — reversal handled by caller).
     let mut indices = Vec::with_capacity(tris.len() * 3);
     #[allow(clippy::cast_possible_truncation)]
     for &(a, b, c) in &tris {
-        if is_reversed {
-            indices.push(a as u32);
-            indices.push(c as u32);
-            indices.push(b as u32);
-        } else {
-            indices.push(a as u32);
-            indices.push(b as u32);
-            indices.push(c as u32);
-        }
+        indices.push(a as u32);
+        indices.push(b as u32);
+        indices.push(c as u32);
     }
 
     Ok(TriangleMeshUV {

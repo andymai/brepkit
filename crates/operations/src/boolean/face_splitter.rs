@@ -1235,7 +1235,9 @@ fn split_face_with_internal_loops(
 
         let mut uv_samples: Vec<(f64, f64)> = Vec::with_capacity(sample_pts.len());
         for &pt in &sample_pts {
-            let (mut u, v) = surface.project_point(pt).unwrap_or((0.0, 0.0));
+            let Some((mut u, v)) = surface.project_point(pt) else {
+                continue; // Skip — corrupted UV would break the chain.
+            };
             // Unwrap u to be continuous with the previous sample.
             if let (Some(period), Some(&(prev_u, _))) = (u_period, uv_samples.last()) {
                 let diff = u - prev_u;
@@ -1331,11 +1333,8 @@ fn split_face_with_internal_loops(
         }
         // If signed area is positive (CW in standard UV), the loop encloses
         // the "right" region. If negative (CCW), it encloses the complement.
-        // For interior loops on analytic faces, the Steinmetz lobe is the
-        // SMALLER region. Check by comparing signed area magnitude to the
-        // face's total UV area estimate. If > half, reverse.
-        // Heuristic: use signed_area sign directly. The section edges are
-        // ordered so that CCW in UV = exterior. Reverse to get interior.
+        // Heuristic: use signed_area sign directly — negative means CCW in
+        // UV which corresponds to the exterior. Reverse to get interior.
         if signed_area < 0.0 {
             // CCW → enclosing exterior. Reverse to CW → interior.
             loop_edges.reverse();
