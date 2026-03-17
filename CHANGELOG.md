@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.12.0](https://github.com/andymai/brepkit/compare/v2.11.0...v2.12.0) (2026-03-17)
+
+
+### Features
+
+* **boolean_v2:** fix Steinmetz volume — step 3e complete ([#292](https://github.com/andymai/brepkit/issues/292)) ([c2df151](https://github.com/andymai/brepkit/commit/c2df1510fb3f063e7d8dae8a7e5f17275d08f143))
+* **boolean_v2:** NURBS surface support — step 4 ([#293](https://github.com/andymai/brepkit/issues/293)) ([8e61b9b](https://github.com/andymai/brepkit/commit/8e61b9bf6f18dc91ff0715bcc6d4f23769b6a0a9))
+
 ## [2.11.0](https://github.com/andymai/brepkit/compare/v2.10.0...v2.11.0) (2026-03-17)
 
 
