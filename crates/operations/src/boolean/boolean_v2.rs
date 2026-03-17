@@ -320,67 +320,20 @@ fn intersect_plane_analytic_faces(
             let is_closed = (end_3d - start_3d).length() < tol.linear && (seg_end - seg_start) >= 4;
 
             if is_closed {
-                // Closed intersection curve (full circle). Create two
-                // half-arc section edges for face A (plane), plus one
-                // full-circle edge for face B (analytic/periodic).
-                let mid = seg_start + (seg_end - seg_start) / 2;
-                let mid_3d = samples[mid];
-
-                // Half-arc 1: start → mid
-                let pcurve_a1 = fit_pcurve_from_3d_samples(&samples[seg_start..=mid], frame_plane);
-                let pcurve_b1 = compute_pcurve_on_surface(
+                // Closed intersection curve (full circle). Split into two
+                // arcs at the surface's u=0 seam and the u=π antipodal point.
+                //
+                // Strategy: project ALL samples to the analytic surface's UV,
+                // find the seam (u≈0) and antipodal (u≈π) samples, then build
+                // arcs by collecting samples sorted by INCREASING u. This
+                // avoids depending on the circle's traversal direction.
+                let closed_sections = build_seam_split_sections(
+                    &samples[seg_start..=seg_end],
                     &curve_3d,
-                    start_3d,
-                    mid_3d,
                     analytic_surface,
-                    &[],
-                    None,
+                    frame_plane,
                 );
-                result.push(SectionEdge {
-                    curve_3d: curve_3d.clone(),
-                    pcurve_a: pcurve_a1,
-                    pcurve_b: pcurve_b1,
-                    start: start_3d,
-                    end: mid_3d,
-                });
-
-                // Half-arc 2: mid → end (≈ start)
-                let pcurve_a2 = fit_pcurve_from_3d_samples(&samples[mid..=seg_end], frame_plane);
-                let pcurve_b2 = compute_pcurve_on_surface(
-                    &curve_3d,
-                    mid_3d,
-                    end_3d,
-                    analytic_surface,
-                    &[],
-                    None,
-                );
-                result.push(SectionEdge {
-                    curve_3d: curve_3d.clone(),
-                    pcurve_a: pcurve_a2,
-                    pcurve_b: pcurve_b2,
-                    start: mid_3d,
-                    end: end_3d,
-                });
-
-                // Full circle for face B: spans the full curve, with pcurve_b
-                // mapping to the full UV period. pcurve_a is unused by face B.
-                let pcurve_b_full = compute_pcurve_on_surface(
-                    &curve_3d,
-                    start_3d,
-                    end_3d,
-                    analytic_surface,
-                    &[],
-                    None,
-                );
-                let pcurve_a_full =
-                    fit_pcurve_from_3d_samples(&samples[seg_start..=seg_end], frame_plane);
-                result.push(SectionEdge {
-                    curve_3d: curve_3d.clone(),
-                    pcurve_a: pcurve_a_full,
-                    pcurve_b: pcurve_b_full,
-                    start: start_3d,
-                    end: end_3d,
-                });
+                result.extend(closed_sections);
             } else if (end_3d - start_3d).length() >= tol.linear {
                 // Non-closed segment with distinct endpoints.
                 let sub_samples = &samples[seg_start..=seg_end];
@@ -399,6 +352,10 @@ fn intersect_plane_analytic_faces(
                     pcurve_b: pcurve_analytic,
                     start: start_3d,
                     end: end_3d,
+                    start_uv_a: None,
+                    end_uv_a: None,
+                    start_uv_b: None,
+                    end_uv_b: None,
                 });
             }
         }
@@ -498,6 +455,10 @@ fn intersect_analytic_analytic_faces(
                     pcurve_b,
                     start: start_3d,
                     end: end_3d,
+                    start_uv_a: None,
+                    end_uv_a: None,
+                    start_uv_b: None,
+                    end_uv_b: None,
                 });
             }
         }
@@ -595,6 +556,10 @@ fn intersect_two_plane_faces(
                 pcurve_b,
                 start,
                 end,
+                start_uv_a: None,
+                end_uv_a: None,
+                start_uv_b: None,
+                end_uv_b: None,
             });
         }
     }
@@ -1359,6 +1324,138 @@ fn fit_pcurve_from_3d_samples(
     }
 }
 
+/// Build two seam-split section edges from a closed intersection curve.
+///
+/// Projects all 3D samples to the analytic surface's UV, finds the seam (u≈0)
+/// and antipodal (u≈π) points, then constructs two arcs sorted by increasing u:
+/// - Arc 1: (0, v) → (π, v) — the first half of the cylinder
+/// - Arc 2: (π, v) → (2π, v) — the second half
+///
+/// Each arc gets a NURBS pcurve on the plane face and a fitted pcurve on the
+/// analytic face with correct unwrapped UV endpoints.
+#[allow(clippy::too_many_lines)]
+fn build_seam_split_sections(
+    samples: &[Point3],
+    curve_3d: &EdgeCurve,
+    analytic_surface: &FaceSurface,
+    frame_plane: &PlaneFrame,
+) -> Vec<SectionEdge> {
+    use super::pcurve_compute::surface_periods;
+    use std::f64::consts::TAU;
+
+    if samples.len() < 4 {
+        return Vec::new();
+    }
+
+    // Project all samples to the analytic surface's UV (raw, not unwrapped).
+    let raw_uv: Vec<Point2> = samples
+        .iter()
+        .map(|&p| {
+            let (u, v) = analytic_surface.project_point(p).unwrap_or((0.0, 0.0));
+            Point2::new(u, v)
+        })
+        .collect();
+
+    let (u_period, _v_period) = surface_periods(analytic_surface);
+    let period = u_period.unwrap_or(TAU);
+
+    // Find the seam sample: the one with raw u closest to 0 (or period).
+    let seam_idx = raw_uv
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            let da = a
+                .x()
+                .rem_euclid(period)
+                .min(period - a.x().rem_euclid(period));
+            let db = b
+                .x()
+                .rem_euclid(period)
+                .min(period - b.x().rem_euclid(period));
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+
+    // Find the antipodal sample: raw u closest to π.
+    let target_u = std::f64::consts::PI;
+    let anti_idx = raw_uv
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            let da = (a.x().rem_euclid(period) - target_u).abs();
+            let db = (b.x().rem_euclid(period) - target_u).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| i)
+        .unwrap_or(samples.len() / 2);
+
+    let seam_3d = samples[seam_idx];
+    let anti_3d = samples[anti_idx];
+    let seam_v = raw_uv[seam_idx].y();
+    let anti_v = raw_uv[anti_idx].y();
+
+    // Classify each sample into arc 1 (u ∈ [0, π]) or arc 2 (u ∈ [π, 2π])
+    // using the RAW u coordinate (in [0, 2π)).
+    let mut arc1_indexed: Vec<(usize, f64)> = Vec::new(); // (idx, raw_u)
+    let mut arc2_indexed: Vec<(usize, f64)> = Vec::new();
+    for (i, uv) in raw_uv.iter().enumerate() {
+        let u = uv.x().rem_euclid(period);
+        if u <= target_u + 0.05 {
+            arc1_indexed.push((i, u));
+        }
+        if u >= target_u - 0.05 {
+            arc2_indexed.push((i, u));
+        }
+    }
+
+    // Sort by raw u.
+    arc1_indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    arc2_indexed.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut result = Vec::new();
+
+    // Arc 1: seam → antipodal (u: 0 → π)
+    let arc1_3d: Vec<Point3> = arc1_indexed.iter().map(|&(i, _)| samples[i]).collect();
+    if arc1_3d.len() >= 2 {
+        let pcurve_a1 = fit_pcurve_from_3d_samples(&arc1_3d, frame_plane);
+        let pcurve_b1 = fit_pcurve_from_3d_samples_on_surface(&arc1_3d, analytic_surface);
+        result.push(SectionEdge {
+            curve_3d: curve_3d.clone(),
+            pcurve_a: pcurve_a1,
+            pcurve_b: pcurve_b1,
+            start: seam_3d,
+            end: anti_3d,
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: Some(Point2::new(0.0, seam_v)),
+            end_uv_b: Some(Point2::new(std::f64::consts::PI, anti_v)),
+        });
+    }
+
+    // Arc 2: antipodal → seam+2π (u: π → 2π)
+    let mut arc2_3d: Vec<Point3> = arc2_indexed.iter().map(|&(i, _)| samples[i]).collect();
+    // Add the seam point at the end (same 3D, UV at u=2π).
+    arc2_3d.push(seam_3d);
+    if arc2_3d.len() >= 2 {
+        let pcurve_a2 = fit_pcurve_from_3d_samples(&arc2_3d, frame_plane);
+        let pcurve_b2 = fit_pcurve_from_3d_samples_on_surface(&arc2_3d, analytic_surface);
+        result.push(SectionEdge {
+            curve_3d: curve_3d.clone(),
+            pcurve_a: pcurve_a2,
+            pcurve_b: pcurve_b2,
+            start: anti_3d,
+            end: seam_3d,
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: Some(Point2::new(std::f64::consts::PI, anti_v)),
+            end_uv_b: Some(Point2::new(period, seam_v)),
+        });
+    }
+
+    result
+}
+
 /// Handle closed-curve segments where start ≈ end in 3D.
 ///
 /// When a full circle or closed curve has all samples inside both faces,
@@ -1384,6 +1481,85 @@ fn split_closed_segment(
         Vec::new()
     } else {
         vec![(seg_start, seg_end)]
+    }
+}
+
+/// Find the 3D point where a circle crosses a periodic surface's u=0 seam.
+/// Fit a 2D pcurve from 3D sample points projected onto a surface's UV space.
+///
+/// Like [`fit_pcurve_from_3d_samples`] but projects via `surface.project_point()`
+/// with periodic unwrapping, instead of using a `PlaneFrame`.
+fn fit_pcurve_from_3d_samples_on_surface(
+    samples_3d: &[Point3],
+    surface: &FaceSurface,
+) -> brepkit_math::curves2d::Curve2D {
+    use super::pcurve_compute::{make_line2d_safe, surface_periods, unwrap_periodic_params_pub};
+
+    let mut uv_pts: Vec<Point2> = samples_3d
+        .iter()
+        .map(|&p| {
+            let (u, v) = surface.project_point(p).unwrap_or((0.0, 0.0));
+            Point2::new(u, v)
+        })
+        .collect();
+
+    if uv_pts.len() < 2 {
+        let p0 = uv_pts.first().copied().unwrap_or(Point2::new(0.0, 0.0));
+        return brepkit_math::curves2d::Curve2D::Line(make_line2d_safe(p0, Vec2::new(1.0, 0.0)));
+    }
+
+    // Unwrap periodicity.
+    let (u_period, v_period) = surface_periods(surface);
+    unwrap_periodic_params_pub(&mut uv_pts, u_period, v_period);
+
+    // Check collinearity.
+    let p0 = uv_pts[0];
+    let pn = uv_pts[uv_pts.len() - 1];
+    let dx = pn.x() - p0.x();
+    let dy = pn.y() - p0.y();
+    let len_sq = dx * dx + dy * dy;
+    let mut is_line = len_sq < 1e-12;
+    if !is_line {
+        let inv_len = 1.0 / len_sq.sqrt();
+        is_line = uv_pts[1..uv_pts.len() - 1].iter().all(|p| {
+            let ex = p.x() - p0.x();
+            let ey = p.y() - p0.y();
+            (ex * dy - ey * dx).abs() * inv_len < 1e-6
+        });
+    }
+
+    if is_line {
+        let dir = Vec2::new(dx, dy);
+        return brepkit_math::curves2d::Curve2D::Line(make_line2d_safe(p0, dir));
+    }
+
+    // Fit NURBS through UV points.
+    let pts_3d: Vec<Point3> = uv_pts
+        .iter()
+        .map(|p| Point3::new(p.x(), p.y(), 0.0))
+        .collect();
+    let degree = 3.min(pts_3d.len() - 1);
+    match brepkit_math::nurbs::fitting::interpolate(&pts_3d, degree) {
+        Ok(nurbs_3d) => {
+            let cp_2d: Vec<Point2> = nurbs_3d
+                .control_points()
+                .iter()
+                .map(|p| Point2::new(p.x(), p.y()))
+                .collect();
+            let weights = nurbs_3d.weights().to_vec();
+            let knots = nurbs_3d.knots().to_vec();
+            brepkit_math::curves2d::NurbsCurve2D::new(nurbs_3d.degree(), knots, cp_2d, weights)
+                .map_or_else(
+                    |_| {
+                        brepkit_math::curves2d::Curve2D::Line(make_line2d_safe(
+                            p0,
+                            Vec2::new(dx, dy),
+                        ))
+                    },
+                    brepkit_math::curves2d::Curve2D::Nurbs,
+                )
+        }
+        Err(_) => brepkit_math::curves2d::Curve2D::Line(make_line2d_safe(p0, Vec2::new(dx, dy))),
     }
 }
 

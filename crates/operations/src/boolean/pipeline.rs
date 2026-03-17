@@ -59,6 +59,15 @@ pub struct SectionEdge {
     pub start: Point3,
     /// 3D end point (trimmed to face boundaries).
     pub end: Point3,
+    /// Optional pre-computed UV endpoints on face A (avoids re-projection).
+    /// When `Some`, `split_face_2d` uses these instead of projecting `start`/`end`.
+    pub start_uv_a: Option<Point2>,
+    /// Optional pre-computed UV endpoint on face A.
+    pub end_uv_a: Option<Point2>,
+    /// Optional pre-computed UV endpoints on face B.
+    pub start_uv_b: Option<Point2>,
+    /// Optional pre-computed UV endpoint on face B.
+    pub end_uv_b: Option<Point2>,
 }
 
 // ---------------------------------------------------------------------------
