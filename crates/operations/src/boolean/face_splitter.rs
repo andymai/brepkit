@@ -6,14 +6,14 @@
 
 #![allow(dead_code)] // Used by later boolean_v2 pipeline stages.
 
-use brepkit_math::curves2d::Curve2D;
-use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
+use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::FaceId;
 
 use super::classify_2d::{sample_interior_point, signed_area_2d};
 use super::pcurve_compute::{
-    compute_pcurve_on_surface, make_line2d_safe, project_point_on_surface,
+    compute_pcurve_on_surface, evaluate_edge_at_t, project_point_on_surface, sample_edge_to_uv,
 };
 use super::pipeline::{OrientedPCurveEdge, SectionEdge, SubFace, SurfaceInfo};
 use super::plane_frame::PlaneFrame;
@@ -107,8 +107,23 @@ pub fn split_face_2d(
             Source::B => &section.pcurve_b,
         };
 
+        // Skip full-circle section edges on plane faces — they have
+        // start ≈ end in 3D and would produce degenerate UV edges.
+        // The half-arc section edges handle the plane face correctly.
+        let is_closed_edge = (section.start - section.end).length() < 1e-10;
+        if is_closed_edge && is_plane {
+            continue;
+        }
+
         // Project section endpoints to UV using the appropriate method.
-        let (start_uv, end_uv) = if is_plane {
+        // For closed curves on periodic surfaces, span the full u period.
+        let (start_uv, end_uv) = if is_closed_edge && !is_plane && u_periodic {
+            // Closed curve on a u-periodic surface (e.g. full circle on cylinder).
+            // The 3D start ≈ end, but in UV the curve spans the full u period.
+            let su = project_point_on_surface(section.start, &surface, &wire_pts, None);
+            let eu = Point2::new(su.x() + std::f64::consts::TAU, su.y());
+            (su, eu)
+        } else if is_plane {
             (frame.project(section.start), frame.project(section.end))
         } else {
             let su = project_point_on_surface(section.start, &surface, &wire_pts, None);
@@ -142,11 +157,14 @@ pub fn split_face_2d(
     let loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
 
     // Classify each loop as outer (positive area) or hole (negative).
+    // For loops with curved edges, sample intermediate UV points to get
+    // an accurate area — using only start_uv gives degenerate polygons
+    // for 2-edge circles.
     let mut outers: Vec<(Vec<OrientedPCurveEdge>, f64)> = Vec::new();
     let mut holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
 
     for wire_loop in loops {
-        let pts: Vec<Point2> = wire_loop.iter().map(|e| e.start_uv).collect();
+        let pts = sample_wire_loop_uv(&wire_loop);
         let area = signed_area_2d(&pts);
         if area > 0.0 {
             outers.push((wire_loop, area));
@@ -184,12 +202,13 @@ pub fn split_face_2d(
     }
 
     // Simple hole matching: each hole goes to the outer that contains its
-    // first vertex (via 2D point-in-polygon).
+    // first vertex (via 2D point-in-polygon). Uses sampled UV points for
+    // accurate containment with curved outer wires.
     for hole in holes {
         if let Some(first_pt) = hole.first().map(|e| e.start_uv) {
             let mut assigned = false;
             for sf in &mut sub_faces {
-                let outer_pts: Vec<Point2> = sf.outer_wire.iter().map(|e| e.start_uv).collect();
+                let outer_pts = sample_wire_loop_uv(&sf.outer_wire);
                 if super::classify_2d::point_in_polygon_2d(first_pt, &outer_pts) {
                     sf.inner_wires.push(hole.clone());
                     assigned = true;
@@ -208,10 +227,16 @@ pub fn split_face_2d(
 }
 
 /// Get a point guaranteed inside a sub-face's outer wire (in UV space),
-/// then evaluate it to 3D via the surface.
+/// not inside any inner wire (hole), then evaluate it to 3D via the surface.
 pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Point3 {
-    let pts_2d: Vec<Point2> = sub_face.outer_wire.iter().map(|e| e.start_uv).collect();
-    let interior_uv = sample_interior_point(&pts_2d);
+    let pts_2d = sample_wire_loop_uv(&sub_face.outer_wire);
+    let mut interior_uv = sample_interior_point(&pts_2d);
+
+    // If the point falls inside a hole, find a point between the outer wire
+    // and the nearest hole boundary.
+    if is_inside_any_hole(&interior_uv, &sub_face.inner_wires) {
+        interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
+    }
 
     // Evaluate back to 3D.
     if let Some(p) = sub_face.surface.evaluate(interior_uv.x(), interior_uv.y()) {
@@ -239,16 +264,131 @@ pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Poin
     Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
 }
 
+/// Sample UV points along a wire loop, interpolating along curved edges.
+///
+/// For line edges, uses only the start point. For curved edges (Circle,
+/// Ellipse, NurbsCurve), samples N intermediate points to approximate the
+/// true curve shape in UV. This is critical for signed area computation
+/// and point-in-polygon tests on loops with curved edges.
+fn sample_wire_loop_uv(wire: &[OrientedPCurveEdge]) -> Vec<Point2> {
+    use brepkit_math::curves2d::Curve2D;
+    const CURVE_SAMPLES: usize = 8;
+
+    let mut pts = Vec::new();
+    for edge in wire {
+        match &edge.pcurve {
+            Curve2D::Line(_) => {
+                pts.push(edge.start_uv);
+            }
+            Curve2D::Nurbs(nurbs) => {
+                let knots = nurbs.knots();
+                if knots.len() >= 2 {
+                    let t0 = knots[0];
+                    let tn = knots[knots.len() - 1];
+                    // For reverse edges, the pcurve was computed for the forward
+                    // direction. Evaluate from tn→t0 to trace the reverse path.
+                    #[allow(clippy::cast_precision_loss)]
+                    for i in 0..CURVE_SAMPLES {
+                        let frac = i as f64 / CURVE_SAMPLES as f64;
+                        let t = if edge.forward {
+                            t0 + (tn - t0) * frac
+                        } else {
+                            tn - (tn - t0) * frac
+                        };
+                        pts.push(nurbs.evaluate(t));
+                    }
+                } else {
+                    pts.push(edge.start_uv);
+                }
+            }
+            Curve2D::Circle(_) | Curve2D::Ellipse(_) => {
+                // Circle2D/Ellipse2D pcurves: interpolate between start_uv
+                // and end_uv. This is approximate (chord, not arc) but these
+                // pcurve types are rare in the boolean_v2 pipeline — section
+                // edges use NURBS and boundary edges use Line2D.
+                #[allow(clippy::cast_precision_loss)]
+                for i in 0..CURVE_SAMPLES {
+                    let t = i as f64 / CURVE_SAMPLES as f64;
+                    pts.push(Point2::new(
+                        edge.start_uv.x() + (edge.end_uv.x() - edge.start_uv.x()) * t,
+                        edge.start_uv.y() + (edge.end_uv.y() - edge.start_uv.y()) * t,
+                    ));
+                }
+            }
+        }
+    }
+    pts
+}
+
+/// Check if a UV point is inside any of the inner wire (hole) polygons.
+fn is_inside_any_hole(pt: &Point2, inner_wires: &[Vec<OrientedPCurveEdge>]) -> bool {
+    for hole in inner_wires {
+        let hole_pts = sample_wire_loop_uv(hole);
+        if hole_pts.len() >= 3 && super::classify_2d::point_in_polygon_2d(*pt, &hole_pts) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Find a UV point inside the outer wire but outside all holes.
+///
+/// Tries midpoints between outer wire vertices and the centroid of the first
+/// hole. Falls back to midpoints of outer wire edges nudged outward from holes.
+fn find_point_outside_holes(
+    outer_pts: &[Point2],
+    inner_wires: &[Vec<OrientedPCurveEdge>],
+) -> Point2 {
+    // Strategy: take midpoints between outer wire edge midpoints and the outer
+    // boundary — these are likely in the ring region between outer and inner.
+    let centroid_x = outer_pts.iter().map(|p| p.x()).sum::<f64>() / outer_pts.len() as f64;
+    let centroid_y = outer_pts.iter().map(|p| p.y()).sum::<f64>() / outer_pts.len() as f64;
+    for i in 0..outer_pts.len() {
+        let j = (i + 1) % outer_pts.len();
+        let edge_mid = Point2::new(
+            (outer_pts[i].x() + outer_pts[j].x()) * 0.5,
+            (outer_pts[i].y() + outer_pts[j].y()) * 0.5,
+        );
+        // Nudge the edge midpoint slightly toward the centroid.
+        let candidate = Point2::new(
+            edge_mid.x() * 0.9 + centroid_x * 0.1,
+            edge_mid.y() * 0.9 + centroid_y * 0.1,
+        );
+        if super::classify_2d::point_in_polygon_2d(candidate, outer_pts)
+            && !is_inside_any_hole(&candidate, inner_wires)
+        {
+            return candidate;
+        }
+    }
+
+    // Fallback: try vertex midpoints between consecutive outer wire vertices.
+    if outer_pts.len() >= 2 {
+        let mid = Point2::new(
+            (outer_pts[0].x() + outer_pts[1].x()) * 0.5,
+            (outer_pts[0].y() + outer_pts[1].y()) * 0.5,
+        );
+        return mid;
+    }
+
+    // Ultimate fallback: centroid (even though it may be in a hole).
+    let n = outer_pts.len() as f64;
+    Point2::new(
+        outer_pts.iter().map(|p| p.x()).sum::<f64>() / n,
+        outer_pts.iter().map(|p| p.y()).sum::<f64>() / n,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 /// Split boundary edges at 3D points where section edges start/end.
 ///
-/// For each split point, projects onto the edge's 3D line segment
-/// (`start_3d→end_3d`) and checks distance. Currently handles line
-/// edges only — curved boundary edges (Circle/Ellipse) fall through
-/// unsplit when the linear projection doesn't match.
+/// Handles Line, Circle, and Ellipse edges. For curved edges, projects
+/// split points onto the curve via `Circle3D::project` / `Ellipse3D::project`
+/// and checks distance from the curve. Creates sub-arc edges with pcurves
+/// computed via sampling.
+#[allow(clippy::too_many_lines)]
 fn split_boundary_edges_at_3d_points(
     edges: Vec<OrientedPCurveEdge>,
     split_pts_3d: &[Point3],
@@ -258,52 +398,31 @@ fn split_boundary_edges_at_3d_points(
 ) -> Vec<OrientedPCurveEdge> {
     let mut result = Vec::new();
     for edge in edges {
-        let edge_dir = edge.end_3d - edge.start_3d;
-        let edge_len_sq = edge_dir.dot(edge_dir);
-        if edge_len_sq < tol * tol {
-            result.push(edge);
-            continue;
-        }
-
-        // Find all split points that lie on this edge in 3D.
-        let mut splits: Vec<(f64, Point3)> = Vec::new();
-        for &sp in split_pts_3d {
-            let to_pt = sp - edge.start_3d;
-            let t = to_pt.dot(edge_dir) / edge_len_sq;
-            if t <= tol || t >= 1.0 - tol {
-                continue;
+        let splits = match &edge.curve_3d {
+            EdgeCurve::Circle(circle) => find_splits_on_circle(circle, &edge, split_pts_3d, tol),
+            EdgeCurve::Ellipse(ellipse) => {
+                find_splits_on_ellipse(ellipse, &edge, split_pts_3d, tol)
             }
-            let closest = edge.start_3d + edge_dir * t;
-            let dist = (sp - closest).length();
-            if dist < tol {
-                splits.push((t, sp));
-            }
-        }
+            _ => find_splits_on_line(&edge, split_pts_3d, tol),
+        };
 
         if splits.is_empty() {
             result.push(edge);
             continue;
         }
 
-        splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
-
         // Split edge into segments.
         let mut prev_uv = edge.start_uv;
         let mut prev_3d = edge.start_3d;
         for &(t, _) in &splits {
-            let split_3d = Point3::new(
-                edge.start_3d.x() + (edge.end_3d.x() - edge.start_3d.x()) * t,
-                edge.start_3d.y() + (edge.end_3d.y() - edge.start_3d.y()) * t,
-                edge.start_3d.z() + (edge.end_3d.z() - edge.start_3d.z()) * t,
-            );
+            let split_3d = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
             let split_uv = if let Some(f) = frame {
                 f.project(split_3d)
             } else {
                 project_point_on_surface(split_3d, surface, &[], None)
             };
-            let dir_uv = Vec2::new(split_uv.x() - prev_uv.x(), split_uv.y() - prev_uv.y());
-            let pcurve = Curve2D::Line(make_line2d_safe(prev_uv, dir_uv));
+            let pcurve =
+                compute_pcurve_on_surface(&edge.curve_3d, prev_3d, split_3d, surface, &[], frame);
             result.push(OrientedPCurveEdge {
                 curve_3d: edge.curve_3d.clone(),
                 pcurve,
@@ -317,8 +436,8 @@ fn split_boundary_edges_at_3d_points(
             prev_3d = split_3d;
         }
         // Final segment.
-        let dir_uv = Vec2::new(edge.end_uv.x() - prev_uv.x(), edge.end_uv.y() - prev_uv.y());
-        let pcurve = Curve2D::Line(make_line2d_safe(prev_uv, dir_uv));
+        let pcurve =
+            compute_pcurve_on_surface(&edge.curve_3d, prev_3d, edge.end_3d, surface, &[], frame);
         result.push(OrientedPCurveEdge {
             curve_3d: edge.curve_3d.clone(),
             pcurve,
@@ -330,6 +449,144 @@ fn split_boundary_edges_at_3d_points(
         });
     }
     result
+}
+
+/// Find split parameters on a line edge. Returns `(t, split_3d)` sorted by `t`.
+fn find_splits_on_line(
+    edge: &OrientedPCurveEdge,
+    split_pts_3d: &[Point3],
+    tol: f64,
+) -> Vec<(f64, Point3)> {
+    let edge_dir = edge.end_3d - edge.start_3d;
+    let edge_len_sq = edge_dir.dot(edge_dir);
+    if edge_len_sq < tol * tol {
+        return Vec::new();
+    }
+    let mut splits = Vec::new();
+    for &sp in split_pts_3d {
+        let to_pt = sp - edge.start_3d;
+        let t = to_pt.dot(edge_dir) / edge_len_sq;
+        if t <= tol || t >= 1.0 - tol {
+            continue;
+        }
+        let closest = edge.start_3d + edge_dir * t;
+        let dist = (sp - closest).length();
+        if dist < tol {
+            splits.push((t, sp));
+        }
+    }
+    splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
+    splits
+}
+
+/// Find split parameters on a circle edge. Uses `Circle3D::project` for angular
+/// projection, then normalizes into the edge's `[0, 1]` parameter range.
+///
+/// Note: `domain_with_endpoints` for full circles (start ≈ end) returns the
+/// full `(-π, π]` domain. For true arcs, it uses endpoint projection — this
+/// is correct for the boundary edges produced by `make_cylinder`/`make_cone`.
+fn find_splits_on_circle(
+    circle: &brepkit_math::curves::Circle3D,
+    edge: &OrientedPCurveEdge,
+    split_pts_3d: &[Point3],
+    tol: f64,
+) -> Vec<(f64, Point3)> {
+    let (t0, t1) = edge
+        .curve_3d
+        .domain_with_endpoints(edge.start_3d, edge.end_3d);
+    let span = t1 - t0;
+    if span.abs() < 1e-14 {
+        return Vec::new();
+    }
+    let mut splits = Vec::new();
+    for &sp in split_pts_3d {
+        let angle = circle.project(sp);
+        let closest = circle.evaluate(angle);
+        if (sp - closest).length() > tol {
+            continue;
+        }
+        let t_norm = normalize_angle_in_span(angle, t0, span);
+        if t_norm <= tol || t_norm >= 1.0 - tol {
+            continue;
+        }
+        splits.push((t_norm, sp));
+    }
+    splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
+    splits
+}
+
+/// Find split parameters on an ellipse edge.
+fn find_splits_on_ellipse(
+    ellipse: &brepkit_math::curves::Ellipse3D,
+    edge: &OrientedPCurveEdge,
+    split_pts_3d: &[Point3],
+    tol: f64,
+) -> Vec<(f64, Point3)> {
+    let (t0, t1) = edge
+        .curve_3d
+        .domain_with_endpoints(edge.start_3d, edge.end_3d);
+    let span = t1 - t0;
+    if span.abs() < 1e-14 {
+        return Vec::new();
+    }
+    let mut splits = Vec::new();
+    for &sp in split_pts_3d {
+        let angle = ellipse.project(sp);
+        let closest = ellipse.evaluate(angle);
+        if (sp - closest).length() > tol {
+            continue;
+        }
+        let t_norm = normalize_angle_in_span(angle, t0, span);
+        if t_norm <= tol || t_norm >= 1.0 - tol {
+            continue;
+        }
+        splits.push((t_norm, sp));
+    }
+    splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
+    splits
+}
+
+/// Normalize an angle into the `[0, 1]` parameter range of an edge span.
+///
+/// `t0` is the start angle, `span = t1 - t0` is the signed angular range.
+/// Returns `(angle - t0) / span`, wrapping by 2π to stay within the arc.
+fn normalize_angle_in_span(angle: f64, t0: f64, span: f64) -> f64 {
+    use std::f64::consts::TAU;
+    let mut delta = angle - t0;
+    if span > 0.0 {
+        // CCW arc: delta should be in [0, span].
+        // At most 2 wraps needed (angle is in (-π, π]).
+        for _ in 0..3 {
+            if delta >= -1e-10 {
+                break;
+            }
+            delta += TAU;
+        }
+        for _ in 0..3 {
+            if delta <= span + 1e-10 {
+                break;
+            }
+            delta -= TAU;
+        }
+    } else {
+        // CW arc: delta should be in [span, 0].
+        for _ in 0..3 {
+            if delta <= 1e-10 {
+                break;
+            }
+            delta -= TAU;
+        }
+        for _ in 0..3 {
+            if delta >= span - 1e-10 {
+                break;
+            }
+            delta += TAU;
+        }
+    }
+    delta / span
 }
 
 fn collect_wire_points(topo: &Topology, wire_id: brepkit_topology::wire::WireId) -> Vec<Point3> {
@@ -395,8 +652,28 @@ fn boundary_edges_to_pcurve(
 
         let pcurve =
             compute_pcurve_on_surface(edge.curve(), start_3d, end_3d, surface, wire_pts, frame);
-        let start_uv = project_point_on_surface(start_3d, surface, wire_pts, frame);
-        let end_uv = project_point_on_surface(end_3d, surface, wire_pts, frame);
+
+        // For closed edges (start_3d ≈ end_3d, e.g. full circle), projecting
+        // start and end to UV gives the same point. Use pcurve sampling to
+        // get distinct UV endpoints spanning the full curve.
+        let is_closed = (start_3d - end_3d).length() < 1e-10;
+        let (start_uv, end_uv) =
+            if is_closed && !matches!(surface, brepkit_topology::face::FaceSurface::Plane { .. }) {
+                let uv_samples = sample_edge_to_uv(edge.curve(), start_3d, end_3d, surface);
+                let su = uv_samples.first().copied().unwrap_or_else(|| {
+                    project_point_on_surface(start_3d, surface, wire_pts, frame)
+                });
+                let eu = uv_samples
+                    .last()
+                    .copied()
+                    .unwrap_or_else(|| project_point_on_surface(end_3d, surface, wire_pts, frame));
+                (su, eu)
+            } else {
+                (
+                    project_point_on_surface(start_3d, surface, wire_pts, frame),
+                    project_point_on_surface(end_3d, surface, wire_pts, frame),
+                )
+            };
 
         result.push(OrientedPCurveEdge {
             curve_3d: edge.curve().clone(),

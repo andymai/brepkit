@@ -43,24 +43,29 @@ struct VertexEntry {
 /// 4. Returns a list of closed loops, each a `Vec<OrientedPCurveEdge>`.
 ///
 /// `tol` is the UV-space tolerance for vertex deduplication.
-/// `_u_periodic` and `_v_periodic` are reserved for future periodic surfaces.
+/// `u_periodic` and `v_periodic` indicate whether the surface parameter wraps
+/// (e.g. cylinder u ∈ \[0, 2π)). When `true`, UV coordinates are normalized
+/// into \[0, period) before quantizing, and edge angles correct for seam-crossing.
 pub fn build_wire_loops(
     edges: &[OrientedPCurveEdge],
     tol: f64,
-    _u_periodic: bool,
-    _v_periodic: bool,
+    u_periodic: bool,
+    v_periodic: bool,
 ) -> Vec<Vec<OrientedPCurveEdge>> {
     if edges.is_empty() {
         return Vec::new();
     }
 
+    let u_period = if u_periodic { Some(TAU) } else { None };
+    let v_period = if v_periodic { Some(TAU) } else { None };
+
     // 1. Build vertex adjacency map.
     let mut adj: HashMap<(i64, i64), Vec<VertexEntry>> = HashMap::new();
     for (idx, edge) in edges.iter().enumerate() {
-        let start_key = quantize_uv(edge.start_uv, tol);
-        let end_key = quantize_uv(edge.end_uv, tol);
-        let angle_out = edge_angle_at_vertex(edge, true);
-        let angle_in = edge_angle_at_vertex(edge, false);
+        let start_key = quantize_uv_periodic(edge.start_uv, tol, u_period, v_period);
+        let end_key = quantize_uv_periodic(edge.end_uv, tol, u_period, v_period);
+        let angle_out = edge_angle_at_vertex_periodic(edge, true, u_period, v_period);
+        let angle_in = edge_angle_at_vertex_periodic(edge, false, u_period, v_period);
         adj.entry(start_key).or_default().push(VertexEntry {
             edge_idx: idx,
             outgoing: true,
@@ -84,14 +89,14 @@ pub fn build_wire_loops(
         };
         used[start_idx] = true;
 
-        let start_vertex = quantize_uv(edges[start_idx].start_uv, tol);
+        let start_vertex = quantize_uv_periodic(edges[start_idx].start_uv, tol, u_period, v_period);
         let mut current_loop = vec![edges[start_idx].clone()];
         let mut current_idx = start_idx;
 
         // Walk edges until we close the loop.
         loop {
             let current_edge = &edges[current_idx];
-            let end_vertex = quantize_uv(current_edge.end_uv, tol);
+            let end_vertex = quantize_uv_periodic(current_edge.end_uv, tol, u_period, v_period);
 
             // Check for loop closure.
             if end_vertex == start_vertex {
@@ -100,8 +105,10 @@ pub fn build_wire_loops(
             }
 
             // Incoming angle at the end vertex.
-            let incoming_angle = edge_angle_at_vertex(current_edge, false);
-            let arriving_start = quantize_uv(current_edge.start_uv, tol);
+            let incoming_angle =
+                edge_angle_at_vertex_periodic(current_edge, false, u_period, v_period);
+            let arriving_start =
+                quantize_uv_periodic(current_edge.start_uv, tol, u_period, v_period);
 
             // Find best outgoing edge at end_vertex.
             let Some(entries) = adj.get(&end_vertex) else {
@@ -118,7 +125,8 @@ pub fn build_wire_loops(
                 // Skip the reverse of the arriving edge (prevents U-turns
                 // along section edges that appear as forward+backward pairs).
                 let candidate = &edges[entry.edge_idx];
-                if quantize_uv(candidate.end_uv, tol) == arriving_start {
+                if quantize_uv_periodic(candidate.end_uv, tol, u_period, v_period) == arriving_start
+                {
                     // Check if this is truly the reverse edge (same line, opposite direction).
                     let angle_diff = (entry.angle - incoming_angle).abs();
                     let is_reverse = angle_diff < 0.1 || (angle_diff - TAU).abs() < 0.1;
@@ -170,6 +178,20 @@ pub fn build_wire_loops(
 
 /// Quantize a 2D point to an integer key for vertex deduplication.
 fn quantize_uv(p: Point2, tol: f64) -> (i64, i64) {
+    quantize_uv_periodic(p, tol, None, None)
+}
+
+/// Quantize a 2D point with periodic normalization.
+///
+/// When `u_period`/`v_period` is `Some`, the coordinate is normalized into
+/// `[0, period)` via `rem_euclid` before quantizing. This ensures vertices
+/// near the seam (e.g. u=6.28 and u=0.001 on a cylinder) hash to the same key.
+fn quantize_uv_periodic(
+    p: Point2,
+    tol: f64,
+    u_period: Option<f64>,
+    v_period: Option<f64>,
+) -> (i64, i64) {
     // Guard against non-positive or non-finite tolerance.
     let safe_tol = if tol <= 0.0 || !tol.is_finite() {
         1e-7
@@ -178,9 +200,22 @@ fn quantize_uv(p: Point2, tol: f64) -> (i64, i64) {
     };
     let resolution = 1.0 / safe_tol;
     (
-        (p.x() * resolution).round() as i64,
-        (p.y() * resolution).round() as i64,
+        quantize_coord(p.x(), resolution, u_period),
+        quantize_coord(p.y(), resolution, v_period),
     )
+}
+
+/// Quantize a single coordinate, wrapping at the period boundary so that
+/// values near `0` and near `period` hash to the same key.
+fn quantize_coord(val: f64, resolution: f64, period: Option<f64>) -> i64 {
+    if let Some(p) = period {
+        let normalized = val.rem_euclid(p);
+        let q = (normalized * resolution).round() as i64;
+        let period_q = (p * resolution).round() as i64;
+        if q >= period_q { 0 } else { q }
+    } else {
+        (val * resolution).round() as i64
+    }
 }
 
 /// Compute the outgoing angle of an edge at a vertex in UV space.
@@ -190,7 +225,80 @@ fn quantize_uv(p: Point2, tol: f64) -> (i64, i64) {
 /// - `at_start = true`: outgoing direction (start → end).
 /// - `at_start = false`: incoming direction (end → start, pointing back along the edge).
 fn edge_angle_at_vertex(edge: &OrientedPCurveEdge, at_start: bool) -> f64 {
-    let (dx, dy) = if at_start {
+    edge_angle_at_vertex_periodic(edge, at_start, None, None)
+}
+
+/// Compute the outgoing angle of an edge at a vertex, with periodic wrapping.
+///
+/// For curved edges (NURBS pcurve), evaluates the pcurve near the endpoint
+/// to get the true tangent direction. For straight edges, uses the chord.
+///
+/// When a period is set and the raw `dx` exceeds half the period, the
+/// difference is wrapped so seam-crossing edges get correct tangent angles.
+fn edge_angle_at_vertex_periodic(
+    edge: &OrientedPCurveEdge,
+    at_start: bool,
+    u_period: Option<f64>,
+    v_period: Option<f64>,
+) -> f64 {
+    let (mut dx, mut dy) = pcurve_tangent_at_endpoint(edge, at_start);
+    if let Some(period) = u_period {
+        let half = period * 0.5;
+        if dx.abs() > half {
+            dx -= dx.signum() * period;
+        }
+    }
+    if let Some(period) = v_period {
+        let half = period * 0.5;
+        if dy.abs() > half {
+            dy -= dy.signum() * period;
+        }
+    }
+    let angle = dy.atan2(dx);
+    if angle < 0.0 { angle + TAU } else { angle }
+}
+
+/// Compute the tangent direction at an edge endpoint in UV space.
+///
+/// For `Line2D` pcurves, returns the chord direction (exact).
+/// For `NurbsCurve2D` pcurves, evaluates the pcurve near the endpoint
+/// to approximate the true tangent — important for half-circle arcs where
+/// the chord direction can be perpendicular to the actual tangent.
+fn pcurve_tangent_at_endpoint(edge: &OrientedPCurveEdge, at_start: bool) -> (f64, f64) {
+    use brepkit_math::curves2d::Curve2D;
+
+    // For NURBS pcurves, sample near the endpoint for tangent direction.
+    // Reverse edges reuse the same pcurve — swap t0/tn to match the
+    // oriented edge direction.
+    if let Curve2D::Nurbs(ref nurbs) = edge.pcurve {
+        let knots = nurbs.knots();
+        if knots.len() >= 2 {
+            let t0_raw = knots[0];
+            let tn_raw = knots[knots.len() - 1];
+            // For reverse edges, the pcurve's t0 corresponds to the edge's
+            // end and tn corresponds to the edge's start.
+            let (t_start, t_end) = if edge.forward {
+                (t0_raw, tn_raw)
+            } else {
+                (tn_raw, t0_raw)
+            };
+            let span = (t_end - t_start).abs();
+            let delta = span * 0.01;
+
+            if at_start {
+                let p0 = nurbs.evaluate(t_start);
+                let p1 = nurbs.evaluate(t_start + (t_end - t_start).signum() * delta);
+                return (p1.x() - p0.x(), p1.y() - p0.y());
+            }
+            // at_end: incoming direction (from end back toward start).
+            let p0 = nurbs.evaluate(t_end);
+            let p1 = nurbs.evaluate(t_end - (t_end - t_start).signum() * delta);
+            return (p1.x() - p0.x(), p1.y() - p0.y());
+        }
+    }
+
+    // For Line2D and fallback: use chord direction.
+    if at_start {
         (
             edge.end_uv.x() - edge.start_uv.x(),
             edge.end_uv.y() - edge.start_uv.y(),
@@ -200,9 +308,7 @@ fn edge_angle_at_vertex(edge: &OrientedPCurveEdge, at_start: bool) -> f64 {
             edge.start_uv.x() - edge.end_uv.x(),
             edge.start_uv.y() - edge.end_uv.y(),
         )
-    };
-    let angle = dy.atan2(dx);
-    if angle < 0.0 { angle + TAU } else { angle }
+    }
 }
 
 /// Compute the clockwise sweep angle from `angle_in` to `angle_out`.
@@ -322,5 +428,74 @@ mod tests {
         let loops = build_wire_loops(&edges, 1e-7, false, false);
         assert_eq!(loops.len(), 1);
         assert_eq!(loops[0].len(), 3);
+    }
+
+    #[test]
+    fn quantize_uv_periodic_wraps_near_seam() {
+        // u = TAU + 0.001 (just past the seam) and u = 0.001 should hash to the
+        // same key when u is periodic — both normalize to ~0.001.
+        let p1 = Point2::new(TAU + 0.001, 1.0);
+        let p2 = Point2::new(0.001, 1.0);
+        let tol = 1e-7;
+        let k1 = quantize_uv_periodic(p1, tol, Some(TAU), None);
+        let k2 = quantize_uv_periodic(p2, tol, Some(TAU), None);
+        assert_eq!(
+            k1, k2,
+            "points near seam should hash equal: {k1:?} vs {k2:?}"
+        );
+
+        // Also verify: u ≈ TAU (== period) wraps to 0.
+        let p3 = Point2::new(TAU, 1.0);
+        let p4 = Point2::new(0.0, 1.0);
+        let k3 = quantize_uv_periodic(p3, tol, Some(TAU), None);
+        let k4 = quantize_uv_periodic(p4, tol, Some(TAU), None);
+        assert_eq!(k3, k4, "u=TAU should wrap to u=0: {k3:?} vs {k4:?}");
+
+        // Without periodic, TAU+0.001 and 0.001 should differ.
+        let k5 = quantize_uv_periodic(p1, tol, None, None);
+        let k6 = quantize_uv_periodic(p2, tol, None, None);
+        assert_ne!(k5, k6, "non-periodic should keep them distinct");
+    }
+
+    #[test]
+    fn edge_angle_periodic_wraps_large_du() {
+        // Edge from u=6.0 to u=0.3 with u_periodic=true crosses the seam.
+        // The "short" direction is +0.58 (via 2π), not -5.7.
+        let edge = make_line_edge(Point2::new(6.0, 0.0), Point2::new(0.3, 0.0));
+        let angle = edge_angle_at_vertex_periodic(&edge, true, Some(TAU), None);
+        // Short path: dx ≈ +0.58 (wraps around), dy = 0 → angle ≈ 0.
+        assert!(
+            !(0.5..=TAU - 0.5).contains(&angle),
+            "angle should be near 0 (rightward), got {angle}"
+        );
+
+        // Without periodic, the raw dx = -5.7 → angle ≈ π.
+        let angle_raw = edge_angle_at_vertex(&edge, true);
+        assert!(
+            (angle_raw - std::f64::consts::PI).abs() < 0.5,
+            "non-periodic angle should be near π, got {angle_raw}"
+        );
+    }
+
+    #[test]
+    fn wire_loop_crossing_seam() {
+        // Rectangle in cylinder UV crossing the seam at u=2π:
+        // Bottom: (5.5, 0) → (TAU+0.5, 0)  (wraps past 2π)
+        // Right:  (TAU+0.5, 0) → (TAU+0.5, 5)
+        // Top:    (TAU+0.5, 5) → (5.5, 5)
+        // Left:   (5.5, 5) → (5.5, 0)
+        //
+        // With periodic u, the quantized endpoint of bottom edge at u=TAU+0.5
+        // should equal the start of the right edge.
+        let tau_05 = TAU + 0.5;
+        let edges = vec![
+            make_line_edge(Point2::new(5.5, 0.0), Point2::new(tau_05, 0.0)),
+            make_line_edge(Point2::new(tau_05, 0.0), Point2::new(tau_05, 5.0)),
+            make_line_edge(Point2::new(tau_05, 5.0), Point2::new(5.5, 5.0)),
+            make_line_edge(Point2::new(5.5, 5.0), Point2::new(5.5, 0.0)),
+        ];
+        let loops = build_wire_loops(&edges, 1e-7, true, false);
+        assert_eq!(loops.len(), 1, "expected 1 loop, got {}", loops.len());
+        assert_eq!(loops[0].len(), 4);
     }
 }
