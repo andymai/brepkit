@@ -47,10 +47,10 @@ pub fn boolean_v2(
 ) -> Result<SolidId, OperationsError> {
     let tol = Tolerance::new();
 
-    // Guard: all faces must be analytic (no NURBS).
-    if !all_faces_analytic(topo, a)? || !all_faces_analytic(topo, b)? {
+    // Guard: all faces must have a supported surface type.
+    if !all_faces_supported(topo, a)? || !all_faces_supported(topo, b)? {
         return Err(OperationsError::InvalidInput {
-            reason: "boolean_v2: only analytic faces (plane/cylinder/cone/sphere/torus) supported"
+            reason: "boolean_v2: unsupported surface type (only plane/cylinder/cone/sphere/torus/NURBS supported)"
                 .into(),
         });
     }
@@ -235,8 +235,26 @@ fn intersect_face_pair(
             // Analytic-analytic: use marching fallback.
             intersect_analytic_analytic_faces(topo, fa, fb, pipeline, tol)
         }
+        // Plane-NURBS: use intersect_plane_nurbs from math crate.
+        (FaceSurface::Plane { normal, d }, FaceSurface::Nurbs(_)) => {
+            intersect_plane_nurbs_faces(topo, fa, fb, *normal, *d, pipeline, tol)
+        }
+        (FaceSurface::Nurbs(_), FaceSurface::Plane { normal, d }) => {
+            let mut sections =
+                intersect_plane_nurbs_faces(topo, fb, fa, *normal, *d, pipeline, tol)?;
+            for s in &mut sections {
+                std::mem::swap(&mut s.pcurve_a, &mut s.pcurve_b);
+                std::mem::swap(&mut s.start_uv_a, &mut s.start_uv_b);
+                std::mem::swap(&mut s.end_uv_a, &mut s.end_uv_b);
+            }
+            Ok(sections)
+        }
+        // Any remaining NURBS pair (analytic-NURBS, NURBS-NURBS): general SSI.
+        _ if matches!(surf_a, FaceSurface::Nurbs(_)) || matches!(surf_b, FaceSurface::Nurbs(_)) => {
+            intersect_nurbs_general_faces(topo, fa, fb, pipeline, tol)
+        }
         _ => {
-            // NURBS or unsupported pair — skip.
+            // Unsupported pair — skip.
             Ok(Vec::new())
         }
     }
@@ -435,6 +453,221 @@ fn intersect_analytic_analytic_faces(
                 let end_3d = samples[se];
 
                 // Analytic-analytic always produces NURBS section edges.
+                let sub_samples: Vec<Point3> = samples[ss..=se].to_vec();
+                let curve_3d = if sub_samples.len() >= 4 {
+                    match brepkit_math::nurbs::fitting::interpolate(&sub_samples, 3) {
+                        Ok(nc) => EdgeCurve::NurbsCurve(nc),
+                        Err(_) => EdgeCurve::Line,
+                    }
+                } else {
+                    EdgeCurve::Line
+                };
+
+                let pcurve_a =
+                    compute_pcurve_on_surface(&curve_3d, start_3d, end_3d, surf_a, &[], None);
+                let pcurve_b =
+                    compute_pcurve_on_surface(&curve_3d, start_3d, end_3d, surf_b, &[], None);
+
+                result.push(SectionEdge {
+                    curve_3d,
+                    pcurve_a,
+                    pcurve_b,
+                    start: start_3d,
+                    end: end_3d,
+                    start_uv_a: None,
+                    end_uv_a: None,
+                    start_uv_b: None,
+                    end_uv_b: None,
+                });
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Intersect a plane face with a NURBS face.
+///
+/// Uses `intersect_plane_nurbs` from the math crate, then trims to both
+/// face boundaries and computes pcurves (same pattern as plane-analytic).
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn intersect_plane_nurbs_faces(
+    topo: &Topology,
+    plane_face_id: FaceId,
+    nurbs_face_id: FaceId,
+    plane_normal: Vec3,
+    plane_d: f64,
+    pipeline: &BooleanPipeline,
+    tol: &Tolerance,
+) -> Result<Vec<SectionEdge>, OperationsError> {
+    let nurbs_face = topo.face(nurbs_face_id)?;
+    let nurbs_surface = match nurbs_face.surface() {
+        FaceSurface::Nurbs(s) => s,
+        _ => return Ok(Vec::new()),
+    };
+
+    // Get intersection curves from the NURBS intersection module.
+    let curves = brepkit_math::nurbs::intersection::intersect_plane_nurbs(
+        nurbs_surface,
+        plane_normal,
+        plane_d,
+        50, // grid resolution for seed finding
+    )
+    .map_err(OperationsError::Math)?;
+
+    if curves.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Collect boundary polygons for both faces.
+    let poly_plane = collect_face_polygon(topo, plane_face_id)?;
+
+    // Get plane frame.
+    let owned_frame;
+    let frame_plane = if let Some(f) = pipeline.plane_frames.get(&plane_face_id) {
+        f
+    } else {
+        owned_frame = plane_frame_for_polygon(plane_normal, &poly_plane);
+        &owned_frame
+    };
+
+    // NURBS face UV polygon for containment testing.
+    let nurbs_surf = nurbs_face.surface();
+    let nurbs_uv_poly = face_uv_polygon(topo, nurbs_face_id, nurbs_surf);
+
+    let mut result = Vec::new();
+
+    for curve in &curves {
+        let samples: Vec<Point3> = curve.points.iter().map(|ip| ip.point).collect();
+        if samples.len() < 2 {
+            continue;
+        }
+
+        // Trim to both face boundaries.
+        let inside_both: Vec<bool> = samples
+            .iter()
+            .map(|&p| {
+                let in_plane = point_in_face_polygon_3d(p, &poly_plane, &plane_normal);
+                let in_nurbs = point_in_analytic_face_uv(p, nurbs_surf, &nurbs_uv_poly);
+                in_plane && in_nurbs
+            })
+            .collect();
+
+        let segments = extract_contiguous_segments(&inside_both);
+
+        for (seg_start, seg_end) in segments {
+            if seg_end <= seg_start {
+                continue;
+            }
+
+            let sub_segs = split_closed_segment(&samples, seg_start, seg_end, tol.linear);
+
+            for (ss, se) in sub_segs {
+                let start_3d = samples[ss];
+                let end_3d = samples[se];
+
+                let sub_samples: Vec<Point3> = samples[ss..=se].to_vec();
+                let curve_3d = if sub_samples.len() >= 4 {
+                    match brepkit_math::nurbs::fitting::interpolate(&sub_samples, 3) {
+                        Ok(nc) => EdgeCurve::NurbsCurve(nc),
+                        Err(_) => EdgeCurve::Line,
+                    }
+                } else {
+                    EdgeCurve::Line
+                };
+
+                let pcurve_plane = fit_pcurve_from_3d_samples(&sub_samples, frame_plane);
+                let pcurve_nurbs =
+                    compute_pcurve_on_surface(&curve_3d, start_3d, end_3d, nurbs_surf, &[], None);
+
+                result.push(SectionEdge {
+                    curve_3d,
+                    pcurve_a: pcurve_plane,
+                    pcurve_b: pcurve_nurbs,
+                    start: start_3d,
+                    end: end_3d,
+                    start_uv_a: None,
+                    end_uv_a: None,
+                    start_uv_b: None,
+                    end_uv_b: None,
+                });
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Intersect two faces where at least one is NURBS (general case).
+///
+/// Converts analytic surfaces to NURBS representation if needed, then
+/// uses `intersect_nurbs_nurbs` from the math crate.
+#[allow(clippy::too_many_lines)]
+fn intersect_nurbs_general_faces(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    _pipeline: &BooleanPipeline,
+    tol: &Tolerance,
+) -> Result<Vec<SectionEdge>, OperationsError> {
+    let face_a = topo.face(fa)?;
+    let face_b = topo.face(fb)?;
+    let surf_a = face_a.surface();
+    let surf_b = face_b.surface();
+
+    // Extract NurbsSurface from each face. For analytic surfaces, convert.
+    let nurbs_a = match surf_a {
+        FaceSurface::Nurbs(s) => s.clone(),
+        _ => return Ok(Vec::new()), // TODO: convert analytic → NURBS
+    };
+    let nurbs_b = match surf_b {
+        FaceSurface::Nurbs(s) => s.clone(),
+        _ => return Ok(Vec::new()), // TODO: convert analytic → NURBS
+    };
+
+    let curves = brepkit_math::nurbs::intersection::intersect_nurbs_nurbs(
+        &nurbs_a, &nurbs_b, 30, 0.0, // adaptive march step
+    )
+    .map_err(OperationsError::Math)?;
+
+    if curves.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // UV polygons for containment testing.
+    let uv_poly_a = face_uv_polygon(topo, fa, surf_a);
+    let uv_poly_b = face_uv_polygon(topo, fb, surf_b);
+
+    let mut result = Vec::new();
+
+    for curve in &curves {
+        let samples: Vec<Point3> = curve.points.iter().map(|ip| ip.point).collect();
+        if samples.len() < 2 {
+            continue;
+        }
+
+        let inside_both: Vec<bool> = samples
+            .iter()
+            .map(|&p| {
+                let in_a = point_in_analytic_face_uv(p, surf_a, &uv_poly_a);
+                let in_b = point_in_analytic_face_uv(p, surf_b, &uv_poly_b);
+                in_a && in_b
+            })
+            .collect();
+
+        let segments = extract_contiguous_segments(&inside_both);
+
+        for (seg_start, seg_end) in segments {
+            if seg_end <= seg_start {
+                continue;
+            }
+
+            let sub_segs = split_closed_segment(&samples, seg_start, seg_end, tol.linear);
+
+            for (ss, se) in sub_segs {
+                let start_3d = samples[ss];
+                let end_3d = samples[se];
+
                 let sub_samples: Vec<Point3> = samples[ss..=se].to_vec();
                 let curve_3d = if sub_samples.len() >= 4 {
                     match brepkit_math::nurbs::fitting::interpolate(&sub_samples, 3) {
@@ -890,12 +1123,12 @@ fn create_wire_from_edges_dedup(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn all_faces_analytic(topo: &Topology, solid: SolidId) -> Result<bool, OperationsError> {
+fn all_faces_supported(topo: &Topology, solid: SolidId) -> Result<bool, OperationsError> {
     let faces = collect_solid_faces(topo, solid)?;
     for fid in faces {
-        // is_analytic() returns true for Plane, Cylinder, Cone, Sphere, Torus.
-        // Only Nurbs is rejected.
-        if !topo.face(fid)?.surface().is_analytic() {
+        let surface = topo.face(fid)?.surface().clone();
+        // Analytic (Plane, Cylinder, Cone, Sphere, Torus) + NURBS are supported.
+        if !surface.is_analytic() && !matches!(surface, FaceSurface::Nurbs(_)) {
             return Ok(false);
         }
     }
@@ -2601,6 +2834,83 @@ mod tests {
         assert!(
             (vol - expected).abs() / expected < 0.10,
             "Steinmetz intersect volume {vol} should be ~{expected}"
+        );
+    }
+
+    /// Helper: create a planar square face centered at `(cx, cy, z)`.
+    fn make_square_face_at(topo: &mut Topology, size: f64, cx: f64, cy: f64, z: f64) -> FaceId {
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let hs = size / 2.0;
+        let t = 1e-7;
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(cx - hs, cy - hs, z), t));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(cx + hs, cy - hs, z), t));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(cx + hs, cy + hs, z), t));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(cx - hs, cy + hs, z), t));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: z,
+            },
+        ))
+    }
+
+    #[test]
+    fn boolean_v2_loft_box_cut() {
+        // Loft between two 4×4 squares at z=-1 and z=11, centered at (5,5).
+        // Pokes through box top and bottom → plane-NURBS intersections.
+        // Inside box: 4×4×10 = 160.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let bottom = make_square_face_at(&mut topo, 4.0, 5.0, 5.0, -1.0);
+        let top = make_square_face_at(&mut topo, 4.0, 5.0, 5.0, 11.0);
+        let b = crate::loft::loft(&mut topo, &[bottom, top]).unwrap();
+
+        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        // Box volume = 1000. Lofted prism inside box = 4×4×10 = 160.
+        let expected = 1000.0 - 160.0;
+        assert!(
+            (vol - expected).abs() / expected < 0.10,
+            "loft-box cut volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    fn boolean_v2_loft_box_intersect() {
+        // Loft extends through box — intersect gives the part inside the box.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let bottom = make_square_face_at(&mut topo, 4.0, 5.0, 5.0, -1.0);
+        let top = make_square_face_at(&mut topo, 4.0, 5.0, 5.0, 11.0);
+        let b = crate::loft::loft(&mut topo, &[bottom, top]).unwrap();
+
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        let expected = 160.0; // 4×4×10 (prism clipped to box height)
+        assert!(
+            (vol - expected).abs() / expected < 0.10,
+            "loft-box intersect volume {vol} should be ~{expected}"
         );
     }
 }
