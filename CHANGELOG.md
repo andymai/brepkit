@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.13.0](https://github.com/andymai/brepkit/compare/v2.12.0...v2.13.0) (2026-03-17)
+
+
+### Features
+
+* **boolean_v2:** spec compliance — analytic-to-NURBS, preserve edges, generalize bypasses ([#296](https://github.com/andymai/brepkit/issues/296)) ([7f7e3ed](https://github.com/andymai/brepkit/commit/7f7e3ede486408a08bfa45403dc83c397f504525))
+* **wasm:** add booleanV2 binding — switchover step 5 ([#295](https://github.com/andymai/brepkit/issues/295)) ([d964495](https://github.com/andymai/brepkit/commit/d964495d13eb4835406cd86f2d97f5be3f800c91))
+
 ## [2.12.0](https://github.com/andymai/brepkit/compare/v2.11.0...v2.12.0) (2026-03-17)
 
 
