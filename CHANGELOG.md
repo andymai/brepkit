@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.11.0](https://github.com/andymai/brepkit/compare/v2.10.0...v2.11.0) (2026-03-17)
+
+
+### Features
+
+* **boolean_v2:** algebraic cylinder-cylinder intersection — step 3e ([#290](https://github.com/andymai/brepkit/issues/290)) ([c1a98a9](https://github.com/andymai/brepkit/commit/c1a98a94e3827d37a8789c9a9cf51e577af578ca))
+* **boolean_v2:** fix sphere-cap and cone face-crossing tests — step 3d ([#289](https://github.com/andymai/brepkit/issues/289)) ([b8eac95](https://github.com/andymai/brepkit/commit/b8eac959375c03dc58c6fa856487e6c463b3eb2b))
+
 ## [2.10.0](https://github.com/andymai/brepkit/compare/v2.9.0...v2.10.0) (2026-03-17)
 
 
