@@ -268,22 +268,31 @@ fn pcurve_tangent_at_endpoint(edge: &OrientedPCurveEdge, at_start: bool) -> (f64
     use brepkit_math::curves2d::Curve2D;
 
     // For NURBS pcurves, sample near the endpoint for tangent direction.
+    // Reverse edges reuse the same pcurve — swap t0/tn to match the
+    // oriented edge direction.
     if let Curve2D::Nurbs(ref nurbs) = edge.pcurve {
         let knots = nurbs.knots();
         if knots.len() >= 2 {
-            let t0 = knots[0];
-            let tn = knots[knots.len() - 1];
-            let span = tn - t0;
-            let delta = span * 0.01; // 1% from endpoint
+            let t0_raw = knots[0];
+            let tn_raw = knots[knots.len() - 1];
+            // For reverse edges, the pcurve's t0 corresponds to the edge's
+            // end and tn corresponds to the edge's start.
+            let (t_start, t_end) = if edge.forward {
+                (t0_raw, tn_raw)
+            } else {
+                (tn_raw, t0_raw)
+            };
+            let span = (t_end - t_start).abs();
+            let delta = span * 0.01;
 
             if at_start {
-                let p0 = nurbs.evaluate(t0);
-                let p1 = nurbs.evaluate(t0 + delta);
+                let p0 = nurbs.evaluate(t_start);
+                let p1 = nurbs.evaluate(t_start + (t_end - t_start).signum() * delta);
                 return (p1.x() - p0.x(), p1.y() - p0.y());
             }
             // at_end: incoming direction (from end back toward start).
-            let p0 = nurbs.evaluate(tn);
-            let p1 = nurbs.evaluate(tn - delta);
+            let p0 = nurbs.evaluate(t_end);
+            let p1 = nurbs.evaluate(t_end - (t_end - t_start).signum() * delta);
             return (p1.x() - p0.x(), p1.y() - p0.y());
         }
     }

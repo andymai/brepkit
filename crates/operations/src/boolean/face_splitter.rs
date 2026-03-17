@@ -107,10 +107,16 @@ pub fn split_face_2d(
             Source::B => &section.pcurve_b,
         };
 
-        // Project section endpoints to UV using the appropriate method.
-        // For closed curves (start ≈ end in 3D), use pcurve endpoint
-        // sampling to get distinct UV values on periodic surfaces.
+        // Skip full-circle section edges on plane faces — they have
+        // start ≈ end in 3D and would produce degenerate UV edges.
+        // The half-arc section edges handle the plane face correctly.
         let is_closed_edge = (section.start - section.end).length() < 1e-10;
+        if is_closed_edge && is_plane {
+            continue;
+        }
+
+        // Project section endpoints to UV using the appropriate method.
+        // For closed curves on periodic surfaces, span the full u period.
         let (start_uv, end_uv) = if is_closed_edge && !is_plane && u_periodic {
             // Closed curve on a u-periodic surface (e.g. full circle on cylinder).
             // The 3D start ≈ end, but in UV the curve spans the full u period.
@@ -295,10 +301,19 @@ fn sample_wire_loop_uv(wire: &[OrientedPCurveEdge]) -> Vec<Point2> {
                     pts.push(edge.start_uv);
                 }
             }
-            _ => {
-                // For Circle2D, Ellipse2D: fall back to linear interpolation
-                // between start_uv and end_uv.
-                pts.push(edge.start_uv);
+            Curve2D::Circle(_) | Curve2D::Ellipse(_) => {
+                // Circle2D/Ellipse2D pcurves: interpolate between start_uv
+                // and end_uv. This is approximate (chord, not arc) but these
+                // pcurve types are rare in the boolean_v2 pipeline — section
+                // edges use NURBS and boundary edges use Line2D.
+                #[allow(clippy::cast_precision_loss)]
+                for i in 0..CURVE_SAMPLES {
+                    let t = i as f64 / CURVE_SAMPLES as f64;
+                    pts.push(Point2::new(
+                        edge.start_uv.x() + (edge.end_uv.x() - edge.start_uv.x()) * t,
+                        edge.start_uv.y() + (edge.end_uv.y() - edge.start_uv.y()) * t,
+                    ));
+                }
             }
         }
     }
@@ -326,17 +341,15 @@ fn find_point_outside_holes(
 ) -> Point2 {
     // Strategy: take midpoints between outer wire edge midpoints and the outer
     // boundary — these are likely in the ring region between outer and inner.
+    let centroid_x = outer_pts.iter().map(|p| p.x()).sum::<f64>() / outer_pts.len() as f64;
+    let centroid_y = outer_pts.iter().map(|p| p.y()).sum::<f64>() / outer_pts.len() as f64;
     for i in 0..outer_pts.len() {
         let j = (i + 1) % outer_pts.len();
         let edge_mid = Point2::new(
             (outer_pts[i].x() + outer_pts[j].x()) * 0.5,
             (outer_pts[i].y() + outer_pts[j].y()) * 0.5,
         );
-        // Use the edge midpoint directly — it's on the outer boundary edge,
-        // which should be far from interior holes in typical cases.
-        // Nudge slightly inward from the edge.
-        let centroid_x = outer_pts.iter().map(|p| p.x()).sum::<f64>() / outer_pts.len() as f64;
-        let centroid_y = outer_pts.iter().map(|p| p.y()).sum::<f64>() / outer_pts.len() as f64;
+        // Nudge the edge midpoint slightly toward the centroid.
         let candidate = Point2::new(
             edge_mid.x() * 0.9 + centroid_x * 0.1,
             edge_mid.y() * 0.9 + centroid_y * 0.1,
@@ -469,6 +482,10 @@ fn find_splits_on_line(
 
 /// Find split parameters on a circle edge. Uses `Circle3D::project` for angular
 /// projection, then normalizes into the edge's `[0, 1]` parameter range.
+///
+/// Note: `domain_with_endpoints` for full circles (start ≈ end) returns the
+/// full `(-π, π]` domain. For true arcs, it uses endpoint projection — this
+/// is correct for the boundary edges produced by `make_cylinder`/`make_cone`.
 fn find_splits_on_circle(
     circle: &brepkit_math::curves::Circle3D,
     edge: &OrientedPCurveEdge,
