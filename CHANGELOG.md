@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.8.0](https://github.com/andymai/brepkit/compare/v2.7.0...v2.8.0) (2026-03-17)
+
+
+### Features
+
+* **boolean_v2:** all analytic surfaces — step 2 ([#282](https://github.com/andymai/brepkit/issues/282)) ([7e8edc7](https://github.com/andymai/brepkit/commit/7e8edc78f23aa46f6e116cd742c184bb10ebd75e))
+
+
+### Bug Fixes
+
+* **boolean_v2:** complete plane-only pipeline — 5 bugs, 8 new tests ([#281](https://github.com/andymai/brepkit/issues/281)) ([2a1a1d5](https://github.com/andymai/brepkit/commit/2a1a1d5f4a09d005fad6a20cf9ed6de9611f862e))
+
 ## [2.7.0](https://github.com/andymai/brepkit/compare/v2.6.3...v2.7.0) (2026-03-16)
 
 
