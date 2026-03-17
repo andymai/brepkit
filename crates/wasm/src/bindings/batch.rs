@@ -263,6 +263,25 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
+            "booleanV2" => {
+                let op_str = args["op"]
+                    .as_str()
+                    .ok_or("missing or invalid 'op' string")?;
+                let bool_op = crate::helpers::parse_boolean_op(op_str)
+                    .map_err(|_| format!("invalid boolean op: {op_str}"))?;
+                let a = get_u32(args, "solidA")?;
+                let b = get_u32(args, "solidB")?;
+                let a_id = self.resolve_solid(a).map_err(|e| e.to_string())?;
+                let b_id = self.resolve_solid(b).map_err(|e| e.to_string())?;
+                let result = brepkit_operations::boolean::boolean_v2::boolean_v2(
+                    self.topo_mut(),
+                    bool_op,
+                    a_id,
+                    b_id,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
             "compoundCut" => {
                 let target = get_u32(args, "target")?;
                 let target_id = self.resolve_solid(target).map_err(|e| e.to_string())?;
