@@ -1652,24 +1652,30 @@ fn face_uv_polygon(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> V
         // For closed circle edges (start ≈ end), evaluate starting from the
         // vertex angle instead of the Circle3D's parametric origin. This keeps
         // the UV samples aligned with seam edge endpoints.
-        let is_closed_circle = matches!(edge.curve(), EdgeCurve::Circle(_))
-            && (start_v - end_v).length() < Tolerance::new().linear;
+        // For closed circle edges (start ≈ end), pre-compute the vertex angle
+        // so we evaluate starting from the boundary vertex, not the Circle3D's
+        // parametric origin. Hoisted outside the sample loop.
+        let closed_circle_angle = if matches!(edge.curve(), EdgeCurve::Circle(_))
+            && (start_v - end_v).length() < Tolerance::new().linear
+        {
+            if let EdgeCurve::Circle(circle) = edge.curve() {
+                Some((circle, circle.project(start_v)))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         #[allow(clippy::cast_precision_loss)]
         for i in 0..SAMPLES_PER_EDGE {
             let t = i as f64 / SAMPLES_PER_EDGE as f64;
-            let p3d = if is_closed_circle {
-                if let EdgeCurve::Circle(circle) = edge.curve() {
-                    // Find the angle of the vertex on the circle.
-                    let vertex_angle = circle.project(start_v);
-                    let angle = if oe.is_forward() {
-                        vertex_angle + std::f64::consts::TAU * t
-                    } else {
-                        vertex_angle - std::f64::consts::TAU * t
-                    };
-                    circle.evaluate(angle)
+            let p3d = if let Some((circle, vertex_angle)) = closed_circle_angle {
+                let angle = if oe.is_forward() {
+                    vertex_angle + std::f64::consts::TAU * t
                 } else {
-                    evaluate_edge_at_t(edge.curve(), start_v, end_v, t)
-                }
+                    vertex_angle - std::f64::consts::TAU * t
+                };
+                circle.evaluate(angle)
             } else {
                 evaluate_edge_at_t(edge.curve(), start_v, end_v, t)
             };

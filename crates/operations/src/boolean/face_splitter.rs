@@ -470,7 +470,12 @@ pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Poin
                         })
                         .map(|e| e.start_uv);
                     if let Some(uv) = best {
-                        interior_uv = uv;
+                        // Nudge slightly toward the centroid so the point
+                        // is strictly interior, not on the boundary vertex.
+                        interior_uv = Point2::new(
+                            uv.x() * 0.95 + interior_uv.x() * 0.05,
+                            uv.y() * 0.95 + interior_uv.y() * 0.05,
+                        );
                     }
                     break;
                 }
@@ -1102,6 +1107,26 @@ fn split_sphere_face_direct(
 
     if cap_edges.is_empty() {
         // No valid section edges — return the face unsplit.
+        return vec![SubFace {
+            surface: surface.clone(),
+            outer_wire: boundary_edges.to_vec(),
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            source,
+        }];
+    }
+
+    // Validate: cap edges must form a single closed loop (last end ≈ first start).
+    // If the topology is unexpected (multiple loops, open chain), fall back to unsplit.
+    let loop_gap = (cap_edges
+        .last()
+        .map_or(Point3::new(0.0, 0.0, 0.0), |e| e.end_3d)
+        - cap_edges
+            .first()
+            .map_or(Point3::new(0.0, 0.0, 0.0), |e| e.start_3d))
+    .length();
+    if loop_gap > brepkit_math::tolerance::Tolerance::new().linear * 100.0 {
         return vec![SubFace {
             surface: surface.clone(),
             outer_wire: boundary_edges.to_vec(),
