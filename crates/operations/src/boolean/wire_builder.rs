@@ -230,6 +230,9 @@ fn edge_angle_at_vertex(edge: &OrientedPCurveEdge, at_start: bool) -> f64 {
 
 /// Compute the outgoing angle of an edge at a vertex, with periodic wrapping.
 ///
+/// For curved edges (NURBS pcurve), evaluates the pcurve near the endpoint
+/// to get the true tangent direction. For straight edges, uses the chord.
+///
 /// When a period is set and the raw `dx` exceeds half the period, the
 /// difference is wrapped so seam-crossing edges get correct tangent angles.
 fn edge_angle_at_vertex_periodic(
@@ -238,17 +241,7 @@ fn edge_angle_at_vertex_periodic(
     u_period: Option<f64>,
     v_period: Option<f64>,
 ) -> f64 {
-    let (mut dx, mut dy) = if at_start {
-        (
-            edge.end_uv.x() - edge.start_uv.x(),
-            edge.end_uv.y() - edge.start_uv.y(),
-        )
-    } else {
-        (
-            edge.start_uv.x() - edge.end_uv.x(),
-            edge.start_uv.y() - edge.end_uv.y(),
-        )
-    };
+    let (mut dx, mut dy) = pcurve_tangent_at_endpoint(edge, at_start);
     if let Some(period) = u_period {
         let half = period * 0.5;
         if dx.abs() > half {
@@ -263,6 +256,50 @@ fn edge_angle_at_vertex_periodic(
     }
     let angle = dy.atan2(dx);
     if angle < 0.0 { angle + TAU } else { angle }
+}
+
+/// Compute the tangent direction at an edge endpoint in UV space.
+///
+/// For `Line2D` pcurves, returns the chord direction (exact).
+/// For `NurbsCurve2D` pcurves, evaluates the pcurve near the endpoint
+/// to approximate the true tangent — important for half-circle arcs where
+/// the chord direction can be perpendicular to the actual tangent.
+fn pcurve_tangent_at_endpoint(edge: &OrientedPCurveEdge, at_start: bool) -> (f64, f64) {
+    use brepkit_math::curves2d::Curve2D;
+
+    // For NURBS pcurves, sample near the endpoint for tangent direction.
+    if let Curve2D::Nurbs(ref nurbs) = edge.pcurve {
+        let knots = nurbs.knots();
+        if knots.len() >= 2 {
+            let t0 = knots[0];
+            let tn = knots[knots.len() - 1];
+            let span = tn - t0;
+            let delta = span * 0.01; // 1% from endpoint
+
+            if at_start {
+                let p0 = nurbs.evaluate(t0);
+                let p1 = nurbs.evaluate(t0 + delta);
+                return (p1.x() - p0.x(), p1.y() - p0.y());
+            }
+            // at_end: incoming direction (from end back toward start).
+            let p0 = nurbs.evaluate(tn);
+            let p1 = nurbs.evaluate(tn - delta);
+            return (p1.x() - p0.x(), p1.y() - p0.y());
+        }
+    }
+
+    // For Line2D and fallback: use chord direction.
+    if at_start {
+        (
+            edge.end_uv.x() - edge.start_uv.x(),
+            edge.end_uv.y() - edge.start_uv.y(),
+        )
+    } else {
+        (
+            edge.start_uv.x() - edge.end_uv.x(),
+            edge.start_uv.y() - edge.end_uv.y(),
+        )
+    }
 }
 
 /// Compute the clockwise sweep angle from `angle_in` to `angle_out`.

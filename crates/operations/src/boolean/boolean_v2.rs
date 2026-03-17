@@ -307,31 +307,100 @@ fn intersect_plane_analytic_faces(
         // Extract contiguous segments of `true`.
         let segments = extract_contiguous_segments(&inside_both);
 
+        // Determine 3D edge curve type for this intersection.
+        let curve_3d = intersection_curve_to_edge_curve(&curve);
+
         for (seg_start, seg_end) in segments {
             if seg_end <= seg_start {
                 continue;
             }
+
             let start_3d = samples[seg_start];
             let end_3d = samples[seg_end];
-            if (end_3d - start_3d).length() < tol.linear {
-                continue;
+            let is_closed = (end_3d - start_3d).length() < tol.linear && (seg_end - seg_start) >= 4;
+
+            if is_closed {
+                // Closed intersection curve (full circle). Create two
+                // half-arc section edges for face A (plane), plus one
+                // full-circle edge for face B (analytic/periodic).
+                let mid = seg_start + (seg_end - seg_start) / 2;
+                let mid_3d = samples[mid];
+
+                // Half-arc 1: start → mid
+                let pcurve_a1 = fit_pcurve_from_3d_samples(&samples[seg_start..=mid], frame_plane);
+                let pcurve_b1 = compute_pcurve_on_surface(
+                    &curve_3d,
+                    start_3d,
+                    mid_3d,
+                    analytic_surface,
+                    &[],
+                    None,
+                );
+                result.push(SectionEdge {
+                    curve_3d: curve_3d.clone(),
+                    pcurve_a: pcurve_a1,
+                    pcurve_b: pcurve_b1,
+                    start: start_3d,
+                    end: mid_3d,
+                });
+
+                // Half-arc 2: mid → end (≈ start)
+                let pcurve_a2 = fit_pcurve_from_3d_samples(&samples[mid..=seg_end], frame_plane);
+                let pcurve_b2 = compute_pcurve_on_surface(
+                    &curve_3d,
+                    mid_3d,
+                    end_3d,
+                    analytic_surface,
+                    &[],
+                    None,
+                );
+                result.push(SectionEdge {
+                    curve_3d: curve_3d.clone(),
+                    pcurve_a: pcurve_a2,
+                    pcurve_b: pcurve_b2,
+                    start: mid_3d,
+                    end: end_3d,
+                });
+
+                // Full circle for face B: spans the full curve, with pcurve_b
+                // mapping to the full UV period. pcurve_a is unused by face B.
+                let pcurve_b_full = compute_pcurve_on_surface(
+                    &curve_3d,
+                    start_3d,
+                    end_3d,
+                    analytic_surface,
+                    &[],
+                    None,
+                );
+                let pcurve_a_full =
+                    fit_pcurve_from_3d_samples(&samples[seg_start..=seg_end], frame_plane);
+                result.push(SectionEdge {
+                    curve_3d: curve_3d.clone(),
+                    pcurve_a: pcurve_a_full,
+                    pcurve_b: pcurve_b_full,
+                    start: start_3d,
+                    end: end_3d,
+                });
+            } else if (end_3d - start_3d).length() >= tol.linear {
+                // Non-closed segment with distinct endpoints.
+                let sub_samples = &samples[seg_start..=seg_end];
+                let pcurve_plane = fit_pcurve_from_3d_samples(sub_samples, frame_plane);
+                let pcurve_analytic = compute_pcurve_on_surface(
+                    &curve_3d,
+                    start_3d,
+                    end_3d,
+                    analytic_surface,
+                    &[],
+                    None,
+                );
+                result.push(SectionEdge {
+                    curve_3d: curve_3d.clone(),
+                    pcurve_a: pcurve_plane,
+                    pcurve_b: pcurve_analytic,
+                    start: start_3d,
+                    end: end_3d,
+                });
             }
-
-            // Determine 3D edge curve type.
-            let curve_3d = intersection_curve_to_edge_curve(&curve);
-
-            // Compute pcurves.
-            let pcurve_plane = compute_line_pcurve(frame_plane, start_3d, end_3d);
-            let pcurve_analytic =
-                compute_pcurve_on_surface(&curve_3d, start_3d, end_3d, analytic_surface, &[], None);
-
-            result.push(SectionEdge {
-                curve_3d,
-                pcurve_a: pcurve_plane,
-                pcurve_b: pcurve_analytic,
-                start: start_3d,
-                end: end_3d,
-            });
         }
     }
 
@@ -400,36 +469,37 @@ fn intersect_analytic_analytic_faces(
             if seg_end <= seg_start {
                 continue;
             }
-            let start_3d = samples[seg_start];
-            let end_3d = samples[seg_end];
-            if (end_3d - start_3d).length() < tol.linear {
-                continue;
+
+            let sub_segs = split_closed_segment(&samples, seg_start, seg_end, tol.linear);
+
+            for (ss, se) in sub_segs {
+                let start_3d = samples[ss];
+                let end_3d = samples[se];
+
+                // Analytic-analytic always produces NURBS section edges.
+                let sub_samples: Vec<Point3> = samples[ss..=se].to_vec();
+                let curve_3d = if sub_samples.len() >= 4 {
+                    match brepkit_math::nurbs::fitting::interpolate(&sub_samples, 3) {
+                        Ok(nc) => EdgeCurve::NurbsCurve(nc),
+                        Err(_) => EdgeCurve::Line,
+                    }
+                } else {
+                    EdgeCurve::Line
+                };
+
+                let pcurve_a =
+                    compute_pcurve_on_surface(&curve_3d, start_3d, end_3d, surf_a, &[], None);
+                let pcurve_b =
+                    compute_pcurve_on_surface(&curve_3d, start_3d, end_3d, surf_b, &[], None);
+
+                result.push(SectionEdge {
+                    curve_3d,
+                    pcurve_a,
+                    pcurve_b,
+                    start: start_3d,
+                    end: end_3d,
+                });
             }
-
-            // Analytic-analytic always produces NURBS section edges.
-            let sub_samples: Vec<Point3> = samples[seg_start..=seg_end].to_vec();
-            let curve_3d = if sub_samples.len() >= 4 {
-                match brepkit_math::nurbs::fitting::interpolate(&sub_samples, 3) {
-                    Ok(nc) => EdgeCurve::NurbsCurve(nc),
-                    Err(_) => EdgeCurve::Line,
-                }
-            } else {
-                EdgeCurve::Line
-            };
-
-            // Compute pcurves on both surfaces.
-            let pcurve_a =
-                compute_pcurve_on_surface(&curve_3d, start_3d, end_3d, surf_a, &[], None);
-            let pcurve_b =
-                compute_pcurve_on_surface(&curve_3d, start_3d, end_3d, surf_b, &[], None);
-
-            result.push(SectionEdge {
-                curve_3d,
-                pcurve_a,
-                pcurve_b,
-                start: start_3d,
-                end: end_3d,
-            });
         }
     }
 
@@ -1221,6 +1291,102 @@ fn extract_contiguous_segments(flags: &[bool]) -> Vec<(usize, usize)> {
     result
 }
 
+/// Fit a 2D pcurve from 3D sample points projected via a `PlaneFrame`.
+///
+/// Projects each 3D point to UV, checks collinearity, and fits a NURBS curve
+/// if the points are not on a line. Used for section edges on plane faces
+/// where the 3D curve is curved (half-circle arcs).
+fn fit_pcurve_from_3d_samples(
+    samples_3d: &[Point3],
+    frame: &PlaneFrame,
+) -> brepkit_math::curves2d::Curve2D {
+    use super::pcurve_compute::make_line2d_safe;
+
+    let uv_pts: Vec<Point2> = samples_3d.iter().map(|&p| frame.project(p)).collect();
+    if uv_pts.len() < 2 {
+        let p0 = uv_pts.first().copied().unwrap_or(Point2::new(0.0, 0.0));
+        return brepkit_math::curves2d::Curve2D::Line(make_line2d_safe(p0, Vec2::new(1.0, 0.0)));
+    }
+
+    // Check collinearity.
+    let p0 = uv_pts[0];
+    let pn = uv_pts[uv_pts.len() - 1];
+    let dx = pn.x() - p0.x();
+    let dy = pn.y() - p0.y();
+    let len_sq = dx * dx + dy * dy;
+    let mut is_line = len_sq < 1e-12;
+    if !is_line {
+        let inv_len = 1.0 / len_sq.sqrt();
+        is_line = uv_pts[1..uv_pts.len() - 1].iter().all(|p| {
+            let ex = p.x() - p0.x();
+            let ey = p.y() - p0.y();
+            (ex * dy - ey * dx).abs() * inv_len < 1e-6
+        });
+    }
+
+    if is_line {
+        let dir = Vec2::new(dx, dy);
+        return brepkit_math::curves2d::Curve2D::Line(make_line2d_safe(p0, dir));
+    }
+
+    // Fit NURBS through UV points.
+    let pts_3d: Vec<Point3> = uv_pts
+        .iter()
+        .map(|p| Point3::new(p.x(), p.y(), 0.0))
+        .collect();
+    let degree = 3.min(pts_3d.len() - 1);
+    match brepkit_math::nurbs::fitting::interpolate(&pts_3d, degree) {
+        Ok(nurbs_3d) => {
+            let cp_2d: Vec<Point2> = nurbs_3d
+                .control_points()
+                .iter()
+                .map(|p| Point2::new(p.x(), p.y()))
+                .collect();
+            let weights = nurbs_3d.weights().to_vec();
+            let knots = nurbs_3d.knots().to_vec();
+            brepkit_math::curves2d::NurbsCurve2D::new(nurbs_3d.degree(), knots, cp_2d, weights)
+                .map_or_else(
+                    |_| {
+                        brepkit_math::curves2d::Curve2D::Line(make_line2d_safe(
+                            p0,
+                            Vec2::new(dx, dy),
+                        ))
+                    },
+                    brepkit_math::curves2d::Curve2D::Nurbs,
+                )
+        }
+        Err(_) => brepkit_math::curves2d::Curve2D::Line(make_line2d_safe(p0, Vec2::new(dx, dy))),
+    }
+}
+
+/// Handle closed-curve segments where start ≈ end in 3D.
+///
+/// When a full circle or closed curve has all samples inside both faces,
+/// the segment spans from index 0 to N with near-identical 3D endpoints.
+/// Splits such segments at the midpoint to produce two arcs with distinct
+/// endpoints. Non-closed segments are returned as-is.
+fn split_closed_segment(
+    samples: &[Point3],
+    seg_start: usize,
+    seg_end: usize,
+    tol: f64,
+) -> Vec<(usize, usize)> {
+    let start_3d = samples[seg_start];
+    let end_3d = samples[seg_end];
+    let span = seg_end - seg_start;
+
+    if (end_3d - start_3d).length() < tol && span >= 4 {
+        // Closed curve — split at midpoint.
+        let mid = seg_start + span / 2;
+        vec![(seg_start, mid), (mid, seg_end)]
+    } else if (end_3d - start_3d).length() < tol {
+        // Too few samples for a meaningful split — skip.
+        Vec::new()
+    } else {
+        vec![(seg_start, seg_end)]
+    }
+}
+
 /// Build a UV polygon for an analytic face (for containment testing).
 ///
 /// Samples points along each boundary edge (not just vertices) so that
@@ -1949,6 +2115,214 @@ mod tests {
         assert!(
             (vol - 125.0).abs() < 10.0,
             "disjoint box-sphere cut volume {vol} should be ~125"
+        );
+    }
+
+    // --- Face-crossing integration tests (Step 3) ---
+
+    /// Helper: create a cone (frustum) centered at (cx, cy) with base at z=0.
+    fn make_centered_cone(
+        topo: &mut Topology,
+        r1: f64,
+        r2: f64,
+        h: f64,
+        cx: f64,
+        cy: f64,
+    ) -> SolidId {
+        let cone = make_cone(topo, r1, r2, h).unwrap();
+        let mat = Mat4::translation(cx, cy, 0.0);
+        crate::transform::transform_solid(topo, cone, &mat).unwrap();
+        cone
+    }
+
+    #[test]
+    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
+    fn boolean_v2_cylinder_through_box_cut() {
+        // Cylinder r=2, h=20 centered at (5,5) goes through box [0,10]³.
+        // Cut = box minus cylinder slice within box.
+        // Overlap volume = π·r²·h_box = π·4·10 ≈ 125.66
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let r = 2.0;
+        let b = make_centered_cylinder(&mut topo, r, 20.0, 5.0, 5.0);
+        // Shift cylinder down so it extends from z=-5 to z=15, through box.
+        let mat = Mat4::translation(0.0, 0.0, -5.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let expected = 1000.0 - std::f64::consts::PI * r * r * 10.0;
+        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        assert!(
+            (vol - expected).abs() / expected < 0.05,
+            "cylinder-through-box cut volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
+    fn boolean_v2_cylinder_through_box_intersect() {
+        // Same geometry: intersect = cylinder slice within box.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let r = 2.0;
+        let b = make_centered_cylinder(&mut topo, r, 20.0, 5.0, 5.0);
+        let mat = Mat4::translation(0.0, 0.0, -5.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let expected = std::f64::consts::PI * r * r * 10.0;
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        assert!(
+            (vol - expected).abs() / expected < 0.05,
+            "cylinder-through-box intersect volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
+    fn boolean_v2_cylinder_through_box_fuse() {
+        // Fuse = box + cylinder - overlap.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let r = 2.0;
+        let b = make_centered_cylinder(&mut topo, r, 20.0, 5.0, 5.0);
+        let mat = Mat4::translation(0.0, 0.0, -5.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let cyl_vol = std::f64::consts::PI * r * r * 20.0;
+        let overlap = std::f64::consts::PI * r * r * 10.0;
+        let expected = 1000.0 + cyl_vol - overlap;
+        let result = boolean_v2(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        assert!(
+            (vol - expected).abs() / expected < 0.05,
+            "cylinder-through-box fuse volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
+    fn boolean_v2_cylinder_partially_through_box_cut() {
+        // Cylinder r=2, base at z=2, top at z=17 — exits top face only.
+        // Overlap: z ∈ [2, 10], h_overlap = 8, vol_overlap = π·4·8 ≈ 100.53.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let r = 2.0;
+        let b = make_centered_cylinder(&mut topo, r, 15.0, 5.0, 5.0);
+        let mat = Mat4::translation(0.0, 0.0, 2.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let overlap_h = 8.0; // min(10, 17) - 2
+        let expected = 1000.0 - std::f64::consts::PI * r * r * overlap_h;
+        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        assert!(
+            (vol - expected).abs() / expected < 0.05,
+            "partially-through cut volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
+    fn boolean_v2_sphere_cap_cut() {
+        // Sphere r=5 centered at (5, 5, 10) — top face of box.
+        // Spherical cap height h = 5 (sphere center at box top).
+        // Cap volume = πh²(3r-h)/3 = π·25·10/3 ≈ 261.80.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let r = 5.0;
+        let b = make_centered_sphere(&mut topo, r, 5.0, 5.0, 10.0);
+
+        let h = 5.0; // sphere dips 5 units into box
+        let cap_vol = std::f64::consts::PI * h * h * (3.0 * r - h) / 3.0;
+        let expected = 1000.0 - cap_vol;
+        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        assert!(
+            (vol - expected).abs() / expected < 0.10,
+            "sphere-cap cut volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
+    fn boolean_v2_cone_through_box_intersect() {
+        // Frustum r₁=3, r₂=1, h=20 through box [0,10]³.
+        // Frustum slice z∈[0,10]: r varies linearly from r₁ to midpoint.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let r1 = 3.0;
+        let r2 = 1.0;
+        let h = 20.0;
+        let b = make_centered_cone(&mut topo, r1, r2, h, 5.0, 5.0);
+        // Shift down by 5 so cone goes from z=-5 to z=15.
+        let mat = Mat4::translation(0.0, 0.0, -5.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        // After shift: frustum from z=-5 to z=15, r(z) = r1 + (r2-r1)*(z+5)/20
+        // At z=0: r(0) = 3 + (-2)*5/20 = 2.5
+        // At z=10: r(10) = 3 + (-2)*15/20 = 1.5
+        // Volume of truncated cone [0, 10]: π·h/3·(r_bot² + r_top² + r_bot·r_top)
+        let r_bot = 2.5;
+        let r_top = 1.5;
+        let expected =
+            std::f64::consts::PI * 10.0 / 3.0 * (r_bot * r_bot + r_top * r_top + r_bot * r_top);
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        assert!(
+            (vol - expected).abs() / expected < 0.10,
+            "cone-through-box intersect volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
+    fn boolean_v2_offset_cylinder_through_box_cut() {
+        // Cylinder off-center at (3, 7) to avoid seam alignment with box faces.
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let r = 2.0;
+        let b = make_centered_cylinder(&mut topo, r, 20.0, 3.0, 7.0);
+        let mat = Mat4::translation(0.0, 0.0, -5.0);
+        crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
+
+        let expected = 1000.0 - std::f64::consts::PI * r * r * 10.0;
+        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        assert!(
+            (vol - expected).abs() / expected < 0.05,
+            "offset cylinder cut volume {vol} should be ~{expected}"
+        );
+    }
+
+    #[test]
+    #[ignore = "Requires periodic UV seam splitting for cylinder lateral face (step 4)"]
+    fn boolean_v2_two_cylinders_intersect() {
+        // Two perpendicular cylinders (Steinmetz-like).
+        // Cylinder A along z-axis, Cylinder B along x-axis, both r=3.
+        // Intersection volume = 16r³/3 = 16·27/3 = 144.
+        let mut topo = Topology::new();
+        let r = 3.0;
+        let h = 10.0;
+        let a = make_cylinder(&mut topo, r, h).unwrap();
+        // Center A at origin: shift z by -h/2.
+        let mat_a = Mat4::translation(0.0, 0.0, -h / 2.0);
+        crate::transform::transform_solid(&mut topo, a, &mat_a).unwrap();
+
+        let b = make_cylinder(&mut topo, r, h).unwrap();
+        // Rotate B by 90° around y-axis (z→x), then center.
+        let rot = Mat4::rotation_y(std::f64::consts::FRAC_PI_2);
+        let shift = Mat4::translation(0.0, 0.0, -h / 2.0);
+        // Apply shift first (center), then rotate.
+        let mat_b = rot * shift;
+        crate::transform::transform_solid(&mut topo, b, &mat_b).unwrap();
+
+        let expected = 16.0 * r * r * r / 3.0;
+        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+        assert!(
+            (vol - expected).abs() / expected < 0.10,
+            "Steinmetz intersect volume {vol} should be ~{expected}"
         );
     }
 }

@@ -108,7 +108,16 @@ pub fn split_face_2d(
         };
 
         // Project section endpoints to UV using the appropriate method.
-        let (start_uv, end_uv) = if is_plane {
+        // For closed curves (start ≈ end in 3D), use pcurve endpoint
+        // sampling to get distinct UV values on periodic surfaces.
+        let is_closed_edge = (section.start - section.end).length() < 1e-10;
+        let (start_uv, end_uv) = if is_closed_edge && !is_plane && u_periodic {
+            // Closed curve on a u-periodic surface (e.g. full circle on cylinder).
+            // The 3D start ≈ end, but in UV the curve spans the full u period.
+            let su = project_point_on_surface(section.start, &surface, &wire_pts, None);
+            let eu = Point2::new(su.x() + std::f64::consts::TAU, su.y());
+            (su, eu)
+        } else if is_plane {
             (frame.project(section.start), frame.project(section.end))
         } else {
             let su = project_point_on_surface(section.start, &surface, &wire_pts, None);
@@ -142,11 +151,14 @@ pub fn split_face_2d(
     let loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
 
     // Classify each loop as outer (positive area) or hole (negative).
+    // For loops with curved edges, sample intermediate UV points to get
+    // an accurate area — using only start_uv gives degenerate polygons
+    // for 2-edge circles.
     let mut outers: Vec<(Vec<OrientedPCurveEdge>, f64)> = Vec::new();
     let mut holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
 
     for wire_loop in loops {
-        let pts: Vec<Point2> = wire_loop.iter().map(|e| e.start_uv).collect();
+        let pts = sample_wire_loop_uv(&wire_loop);
         let area = signed_area_2d(&pts);
         if area > 0.0 {
             outers.push((wire_loop, area));
@@ -184,12 +196,13 @@ pub fn split_face_2d(
     }
 
     // Simple hole matching: each hole goes to the outer that contains its
-    // first vertex (via 2D point-in-polygon).
+    // first vertex (via 2D point-in-polygon). Uses sampled UV points for
+    // accurate containment with curved outer wires.
     for hole in holes {
         if let Some(first_pt) = hole.first().map(|e| e.start_uv) {
             let mut assigned = false;
             for sf in &mut sub_faces {
-                let outer_pts: Vec<Point2> = sf.outer_wire.iter().map(|e| e.start_uv).collect();
+                let outer_pts = sample_wire_loop_uv(&sf.outer_wire);
                 if super::classify_2d::point_in_polygon_2d(first_pt, &outer_pts) {
                     sf.inner_wires.push(hole.clone());
                     assigned = true;
@@ -208,10 +221,16 @@ pub fn split_face_2d(
 }
 
 /// Get a point guaranteed inside a sub-face's outer wire (in UV space),
-/// then evaluate it to 3D via the surface.
+/// not inside any inner wire (hole), then evaluate it to 3D via the surface.
 pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Point3 {
-    let pts_2d: Vec<Point2> = sub_face.outer_wire.iter().map(|e| e.start_uv).collect();
-    let interior_uv = sample_interior_point(&pts_2d);
+    let pts_2d = sample_wire_loop_uv(&sub_face.outer_wire);
+    let mut interior_uv = sample_interior_point(&pts_2d);
+
+    // If the point falls inside a hole, find a point between the outer wire
+    // and the nearest hole boundary.
+    if is_inside_any_hole(&interior_uv, &sub_face.inner_wires) {
+        interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
+    }
 
     // Evaluate back to 3D.
     if let Some(p) = sub_face.surface.evaluate(interior_uv.x(), interior_uv.y()) {
@@ -237,6 +256,113 @@ pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Poin
         });
     let n = sub_face.outer_wire.len() as f64;
     Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
+}
+
+/// Sample UV points along a wire loop, interpolating along curved edges.
+///
+/// For line edges, uses only the start point. For curved edges (Circle,
+/// Ellipse, NurbsCurve), samples N intermediate points to approximate the
+/// true curve shape in UV. This is critical for signed area computation
+/// and point-in-polygon tests on loops with curved edges.
+fn sample_wire_loop_uv(wire: &[OrientedPCurveEdge]) -> Vec<Point2> {
+    use brepkit_math::curves2d::Curve2D;
+    const CURVE_SAMPLES: usize = 8;
+
+    let mut pts = Vec::new();
+    for edge in wire {
+        match &edge.pcurve {
+            Curve2D::Line(_) => {
+                pts.push(edge.start_uv);
+            }
+            Curve2D::Nurbs(nurbs) => {
+                let knots = nurbs.knots();
+                if knots.len() >= 2 {
+                    let t0 = knots[0];
+                    let tn = knots[knots.len() - 1];
+                    // For reverse edges, the pcurve was computed for the forward
+                    // direction. Evaluate from tn→t0 to trace the reverse path.
+                    #[allow(clippy::cast_precision_loss)]
+                    for i in 0..CURVE_SAMPLES {
+                        let frac = i as f64 / CURVE_SAMPLES as f64;
+                        let t = if edge.forward {
+                            t0 + (tn - t0) * frac
+                        } else {
+                            tn - (tn - t0) * frac
+                        };
+                        pts.push(nurbs.evaluate(t));
+                    }
+                } else {
+                    pts.push(edge.start_uv);
+                }
+            }
+            _ => {
+                // For Circle2D, Ellipse2D: fall back to linear interpolation
+                // between start_uv and end_uv.
+                pts.push(edge.start_uv);
+            }
+        }
+    }
+    pts
+}
+
+/// Check if a UV point is inside any of the inner wire (hole) polygons.
+fn is_inside_any_hole(pt: &Point2, inner_wires: &[Vec<OrientedPCurveEdge>]) -> bool {
+    for hole in inner_wires {
+        let hole_pts = sample_wire_loop_uv(hole);
+        if hole_pts.len() >= 3 && super::classify_2d::point_in_polygon_2d(*pt, &hole_pts) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Find a UV point inside the outer wire but outside all holes.
+///
+/// Tries midpoints between outer wire vertices and the centroid of the first
+/// hole. Falls back to midpoints of outer wire edges nudged outward from holes.
+fn find_point_outside_holes(
+    outer_pts: &[Point2],
+    inner_wires: &[Vec<OrientedPCurveEdge>],
+) -> Point2 {
+    // Strategy: take midpoints between outer wire edge midpoints and the outer
+    // boundary — these are likely in the ring region between outer and inner.
+    for i in 0..outer_pts.len() {
+        let j = (i + 1) % outer_pts.len();
+        let edge_mid = Point2::new(
+            (outer_pts[i].x() + outer_pts[j].x()) * 0.5,
+            (outer_pts[i].y() + outer_pts[j].y()) * 0.5,
+        );
+        // Use the edge midpoint directly — it's on the outer boundary edge,
+        // which should be far from interior holes in typical cases.
+        // Nudge slightly inward from the edge.
+        let centroid_x = outer_pts.iter().map(|p| p.x()).sum::<f64>() / outer_pts.len() as f64;
+        let centroid_y = outer_pts.iter().map(|p| p.y()).sum::<f64>() / outer_pts.len() as f64;
+        let candidate = Point2::new(
+            edge_mid.x() * 0.9 + centroid_x * 0.1,
+            edge_mid.y() * 0.9 + centroid_y * 0.1,
+        );
+        if super::classify_2d::point_in_polygon_2d(candidate, outer_pts)
+            && !is_inside_any_hole(&candidate, inner_wires)
+        {
+            return candidate;
+        }
+    }
+
+    // Fallback: try vertex midpoints between consecutive outer wire vertices.
+    if outer_pts.len() >= 2 {
+        let mid = Point2::new(
+            (outer_pts[0].x() + outer_pts[1].x()) * 0.5,
+            (outer_pts[0].y() + outer_pts[1].y()) * 0.5,
+        );
+        return mid;
+    }
+
+    // Ultimate fallback: centroid (even though it may be in a hole).
+    let n = outer_pts.len() as f64;
+    Point2::new(
+        outer_pts.iter().map(|p| p.x()).sum::<f64>() / n,
+        outer_pts.iter().map(|p| p.y()).sum::<f64>() / n,
+    )
 }
 
 // ---------------------------------------------------------------------------

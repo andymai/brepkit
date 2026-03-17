@@ -38,22 +38,39 @@ pub fn compute_pcurve_on_surface(
     frame: Option<&PlaneFrame>,
 ) -> Curve2D {
     if let FaceSurface::Plane { normal, .. } = surface {
-        // Plane path: project endpoints via PlaneFrame → Line2D.
+        // For straight edges on planes, the pcurve is a Line2D.
+        // For curved edges (Circle, Ellipse, NurbsCurve), fall through to the
+        // sampling-based path to produce a proper curved pcurve.
+        if matches!(curve_3d, EdgeCurve::Line) {
+            let owned;
+            let frame = if let Some(f) = frame {
+                f
+            } else {
+                owned = PlaneFrame::from_plane_face(*normal, wire_pts);
+                &owned
+            };
+            let p0 = frame.project(start);
+            let p1 = frame.project(end);
+            let dir = Vec2::new(p1.x() - p0.x(), p1.y() - p0.y());
+            return Curve2D::Line(make_line2d_safe(p0, dir));
+        }
+        // Curved edge on plane: sample and project via PlaneFrame below.
+    }
+
+    // Sample along the 3D curve and project to UV.
+    // For plane surfaces with curved edges, use PlaneFrame for projection.
+    let uv_pts = if let FaceSurface::Plane { normal, .. } = surface {
         let owned;
-        let frame = if let Some(f) = frame {
-            f
+        let f = if let Some(fr) = frame {
+            fr
         } else {
             owned = PlaneFrame::from_plane_face(*normal, wire_pts);
             &owned
         };
-        let p0 = frame.project(start);
-        let p1 = frame.project(end);
-        let dir = Vec2::new(p1.x() - p0.x(), p1.y() - p0.y());
-        return Curve2D::Line(make_line2d_safe(p0, dir));
-    }
-
-    // Non-plane surface: sample along the 3D curve and project to UV.
-    let uv_pts = sample_edge_to_uv(curve_3d, start, end, surface);
+        sample_edge_to_uv_via_frame(curve_3d, start, end, f)
+    } else {
+        sample_edge_to_uv(curve_3d, start, end, surface)
+    };
     if uv_pts.len() < 2 {
         // Degenerate: just project endpoints.
         let (u0, v0) = surface.project_point(start).unwrap_or((0.0, 0.0));
@@ -190,6 +207,27 @@ pub(super) fn evaluate_edge_at_t(curve: &EdgeCurve, start: Point3, end: Point3, 
         let param = t0 + (t1 - t0) * t;
         curve.evaluate_with_endpoints(param, start, end)
     }
+}
+
+/// Sample points along a 3D edge curve and project each to UV via `PlaneFrame`.
+///
+/// Used for curved edges (Circle, Ellipse) on plane surfaces where
+/// `surface.project_point()` returns `None`.
+fn sample_edge_to_uv_via_frame(
+    curve_3d: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+    frame: &PlaneFrame,
+) -> Vec<Point2> {
+    let n = PCURVE_SAMPLES;
+    let mut uv_pts = Vec::with_capacity(n + 1);
+    for i in 0..=n {
+        #[allow(clippy::cast_precision_loss)]
+        let t = i as f64 / n as f64;
+        let p = evaluate_edge_at_t(curve_3d, start, end, t);
+        uv_pts.push(frame.project(p));
+    }
+    uv_pts
 }
 
 /// Unwrap periodic UV parameters to remove seam jumps.
