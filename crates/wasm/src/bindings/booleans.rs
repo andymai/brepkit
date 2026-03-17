@@ -1,9 +1,10 @@
 //! Boolean operation bindings.
 
-#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::missing_errors_doc, unused_variables)]
 
 use wasm_bindgen::prelude::*;
 
+use brepkit_operations::boolean::boolean_v2;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 
 use crate::handles::solid_id_to_u32;
@@ -152,6 +153,29 @@ impl BrepKernel {
         clippy::too_many_arguments,
         clippy::unused_self
     )]
+    /// Boolean operation using the OCCT-style parameter-space pipeline (v2).
+    ///
+    /// Supports all surface types (plane, cylinder, cone, sphere, torus, NURBS).
+    /// Preserves analytic surface types on output faces. Use this instead of
+    /// `fuse`/`cut`/`intersect` for higher-quality results.
+    ///
+    /// `op` must be one of `"fuse"`, `"cut"`, `"intersect"`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either handle is invalid, `op` is unrecognized,
+    /// or the operation fails.
+    #[wasm_bindgen(js_name = "booleanV2")]
+    pub fn boolean_v2(&mut self, op: &str, a: u32, b: u32) -> Result<u32, JsError> {
+        let bool_op = parse_boolean_op(op)?;
+        let a_id = self.resolve_solid(a)?;
+        let b_id = self.resolve_solid(b)?;
+        let result = boolean_v2::boolean_v2(self.topo_mut(), bool_op, a_id, b_id)?;
+        Ok(solid_id_to_u32(result))
+    }
+
+    /// Perform a boolean operation on two triangle meshes.
+    #[allow(clippy::unused_self)]
     pub fn mesh_boolean(
         &self,
         positions_a: Vec<f64>,
