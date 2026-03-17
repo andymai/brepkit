@@ -1997,7 +1997,6 @@ fn periodic_candidates(val: f64, period: Option<f64>) -> Vec<f64> {
     }
 }
 
-/// Estimate the v-parameter range for an analytic face from its boundary vertices.
 /// Convert a `FaceSurface` to a `NurbsSurface` for intersection.
 ///
 /// For NURBS faces, clones the surface directly.
@@ -2028,6 +2027,7 @@ fn face_surface_to_nurbs(
     }
 }
 
+/// Estimate the v-parameter range for an analytic face from its boundary vertices.
 fn estimate_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Option<(f64, f64)> {
     let poly = collect_face_polygon(topo, face_id).ok()?;
     if poly.is_empty() {

@@ -1048,9 +1048,9 @@ fn boundary_edges_to_pcurve(
 
 /// Check if a 3D point lies on any boundary edge in UV space.
 ///
-/// Projects the point to UV, then checks if the projected UV is within
-/// `tol` of any boundary edge's UV segment (linear interpolation between
-/// the edge's start_uv and end_uv).
+/// Projects the point to UV (trying periodic shifts for seam-adjacent
+/// points), then checks if the projected UV is within tolerance of any
+/// boundary edge's UV segment.
 fn is_point_on_boundary_uv(
     point: Point3,
     surface: &FaceSurface,
@@ -1060,33 +1060,44 @@ fn is_point_on_boundary_uv(
     let Some((pu, pv)) = surface.project_point(point) else {
         return false;
     };
-    let pt_uv = Point2::new(pu, pv);
 
-    for edge in boundary {
-        // For each boundary edge, check distance from pt_uv to the UV
-        // line segment (start_uv → end_uv). For closed edges (start ≈ end
-        // in UV), also check v-distance only (the edge spans all u at
-        // constant v, like a circle at a fixed height on a cylinder).
-        let su = edge.start_uv;
-        let eu = edge.end_uv;
-        let dx = eu.x() - su.x();
-        let dy = eu.y() - su.y();
-        let seg_len_sq = dx * dx + dy * dy;
+    // For periodic surfaces, try the original u and u ± 2π.
+    let u_period = match surface {
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => Some(std::f64::consts::TAU),
+        _ => None,
+    };
+    let u_candidates: Vec<f64> = if let Some(period) = u_period {
+        vec![pu, pu - period, pu + period]
+    } else {
+        vec![pu]
+    };
 
-        if seg_len_sq < 1e-20 {
-            // Closed edge (circle) — check v-distance only.
-            if (pv - su.y()).abs() < tol {
-                return true;
-            }
-        } else {
-            // Open edge — project onto segment.
-            let t = ((pt_uv.x() - su.x()) * dx + (pt_uv.y() - su.y()) * dy) / seg_len_sq;
-            let t = t.clamp(0.0, 1.0);
-            let closest = Point2::new(su.x() + t * dx, su.y() + t * dy);
-            let dist =
-                ((pt_uv.x() - closest.x()).powi(2) + (pt_uv.y() - closest.y()).powi(2)).sqrt();
-            if dist < tol {
-                return true;
+    for &u in &u_candidates {
+        let pt_uv = Point2::new(u, pv);
+        for edge in boundary {
+            let su = edge.start_uv;
+            let eu = edge.end_uv;
+            let dx = eu.x() - su.x();
+            let dy = eu.y() - su.y();
+            let seg_len_sq = dx * dx + dy * dy;
+
+            if seg_len_sq < 1e-20 {
+                // Closed edge (circle) — check v-distance only.
+                if (pv - su.y()).abs() < tol {
+                    return true;
+                }
+            } else {
+                let t = ((pt_uv.x() - su.x()) * dx + (pt_uv.y() - su.y()) * dy) / seg_len_sq;
+                let t = t.clamp(0.0, 1.0);
+                let cx = su.x() + t * dx;
+                let cy = su.y() + t * dy;
+                let dist = ((pt_uv.x() - cx).powi(2) + (pt_uv.y() - cy).powi(2)).sqrt();
+                if dist < tol {
+                    return true;
+                }
             }
         }
     }

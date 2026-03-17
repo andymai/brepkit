@@ -873,8 +873,11 @@ fn analytic_to_nurbs_sampled(
     u_range: (f64, f64),
     v_range: (f64, f64),
 ) -> Result<NurbsSurface, MathError> {
-    let nu = 17; // 16 spans in u (enough for circular geometry)
-    let nv = 5; // 4 spans in v
+    // Dense sampling reduces chord-height error. For angular coordinates
+    // (u on cylinder/sphere), 32 spans → max error R*(1-cos(π/32)) ≈ 0.005*R.
+    // For v (latitude/height), 8 spans keeps error under 0.02*R.
+    let nu = 33;
+    let nv = 9;
 
     let mut cps = Vec::with_capacity(nu);
     let mut weights = Vec::with_capacity(nu);
@@ -895,30 +898,24 @@ fn analytic_to_nurbs_sampled(
 
     // Uniform clamped knot vectors for degree 1 (bilinear interpolation
     // through the sample grid — control points ARE surface points).
-    let degree_u = 1;
-    let degree_v = 1;
-    let knots_u = {
-        let n = nu;
-        let mut k = vec![0.0; degree_u + 1];
-        #[allow(clippy::cast_precision_loss)]
-        for i in 1..n - degree_u {
-            k.push(i as f64 / (n - degree_u) as f64);
-        }
-        k.extend(vec![1.0; degree_u + 1]);
-        k
-    };
-    let knots_v = {
-        let n = nv;
-        let mut k = vec![0.0; degree_v + 1];
-        #[allow(clippy::cast_precision_loss)]
-        for i in 1..n - degree_v {
-            k.push(i as f64 / (n - degree_v) as f64);
-        }
-        k.extend(vec![1.0; degree_v + 1]);
-        k
-    };
+    let knots_u = uniform_clamped_knots(nu, 1);
+    let knots_v = uniform_clamped_knots(nv, 1);
 
-    NurbsSurface::new(degree_u, degree_v, knots_u, knots_v, cps, weights)
+    NurbsSurface::new(1, 1, knots_u, knots_v, cps, weights)
+}
+
+/// Build a uniform clamped knot vector for `n` control points at the given degree.
+///
+/// Produces `degree+1` zeros, then evenly spaced interior knots, then `degree+1` ones.
+/// For degree-1 NURBS this gives bilinear interpolation through all control points.
+#[allow(clippy::cast_precision_loss)]
+fn uniform_clamped_knots(n: usize, degree: usize) -> Vec<f64> {
+    let mut k = vec![0.0; degree + 1];
+    for i in 1..n - degree {
+        k.push(i as f64 / (n - degree) as f64);
+    }
+    k.extend(vec![1.0; degree + 1]);
+    k
 }
 
 #[cfg(test)]
