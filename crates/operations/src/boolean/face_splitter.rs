@@ -73,7 +73,7 @@ pub fn split_face_2d(
     let (u_periodic, v_periodic) = info.map_or((false, false), SurfaceInfo::periodicity);
 
     // Convert boundary edges to OrientedPCurveEdge.
-    let boundary_edges = if is_plane {
+    let mut boundary_edges = if is_plane {
         boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, Some(frame))
     } else {
         boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, None)
@@ -94,16 +94,64 @@ pub fn split_face_2d(
     // Stage 2: Split boundary edges at section edge endpoints (3D matching).
     let mut split_pts_3d: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
 
-    // For periodic faces with seam-split section edges, also split closed
-    // boundary edges (full circles) at the ANTIPODAL point (u=π). Without
-    // this, closed circles form 1-edge self-loops after periodic quantization,
-    // preventing the wire builder from forming proper bands.
+    // For periodic faces, align closed boundary edge UV with seam edge UV.
+    // The same 3D vertex projects to u=0 (from circle unwrapping) and u=seam
+    // (from Line edge projection). Shift the circle UV so it starts at seam_u.
+    if u_periodic {
+        let seam_u_opt = boundary_edges.iter().find_map(|e| {
+            if matches!(e.curve_3d, EdgeCurve::Line) {
+                surface.project_point(e.start_3d).map(|(u, _)| u)
+            } else {
+                None
+            }
+        });
+        if let Some(seam_u) = seam_u_opt {
+            for edge in &mut boundary_edges {
+                if (edge.start_3d - edge.end_3d).length() < 1e-10 {
+                    // Closed edge: shift UV so start_uv.x() == seam_u.
+                    let shift = seam_u - edge.start_uv.x();
+                    if shift.abs() > 0.01 {
+                        edge.start_uv = Point2::new(edge.start_uv.x() + shift, edge.start_uv.y());
+                        edge.end_uv = Point2::new(edge.end_uv.x() + shift, edge.end_uv.y());
+                    }
+                }
+            }
+        }
+    }
+
+    // For periodic faces with section edges, split closed boundary edges
+    // (full circles) at the point diametrically opposite the seam vertex
+    // in the surface's UV parameterization (u = seam_u + π).
+    //
+    // The seam vertex (where the boundary circle starts/ends) is shared
+    // with the seam Line edge. Splitting the circle at the UV-antipodal
+    // point creates half-arcs whose endpoints match the seam edge vertices,
+    // enabling the wire builder to form proper rectangular bands.
     if u_periodic && !sections.is_empty() {
+        // Find the seam Line edge's vertex UV to determine seam_u.
+        let seam_u = {
+            let mut su = 0.0_f64;
+            for edge in &boundary_edges {
+                if matches!(edge.curve_3d, EdgeCurve::Line) {
+                    if let Some((u, _)) = surface.project_point(edge.start_3d) {
+                        su = u;
+                        break;
+                    }
+                }
+            }
+            su
+        };
+        let anti_u = (seam_u + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU);
+
         for edge in &boundary_edges {
             if (edge.start_3d - edge.end_3d).length() < 1e-10 {
-                // Closed edge: find the antipodal point at u=π via sampling.
-                let mid_3d = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, 0.5);
-                split_pts_3d.push(mid_3d);
+                // Closed edge: find the 3D point at u = seam_u + π on the surface.
+                // Project the boundary vertex to get v, then evaluate surface at (anti_u, v).
+                if let Some((_, v)) = surface.project_point(edge.start_3d) {
+                    if let Some(anti_pt) = surface.evaluate(anti_u, v) {
+                        split_pts_3d.push(anti_pt);
+                    }
+                }
             }
         }
     }
@@ -115,6 +163,19 @@ pub fn split_face_2d(
         &surface,
         tol.linear,
     );
+
+    // Reorder boundary edges: Line (seam) edges first, then curved (circle)
+    // edges. This ensures the wire builder starts loops from seam edges,
+    // forming rectangular bands before circle arcs can self-close.
+    let boundary_edges = if u_periodic && !sections.is_empty() {
+        let (mut lines, curves): (Vec<_>, Vec<_>) = boundary_edges
+            .into_iter()
+            .partition(|e| matches!(e.curve_3d, EdgeCurve::Line));
+        lines.extend(curves);
+        lines
+    } else {
+        boundary_edges
+    };
 
     // Convert section edges to OrientedPCurveEdge (both orientations).
     let mut all_edges = boundary_edges;
@@ -204,18 +265,51 @@ pub fn split_face_2d(
     let mut outers: Vec<(Vec<OrientedPCurveEdge>, f64)> = Vec::new();
     let mut holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
 
+    let u_per_opt = if u_periodic {
+        Some(std::f64::consts::TAU)
+    } else {
+        None
+    };
+    let v_per_opt = if v_periodic {
+        Some(std::f64::consts::TAU)
+    } else {
+        None
+    };
+
+    // For periodic faces with section edges, use structural classification
+    // instead of signed area. Band loops (containing seam + section edges)
+    // are outer wires. Circle-only self-loops are holes. Signed area on
+    // periodic surfaces is unreliable because UV wraps around the period.
+    let use_structural_classification = u_periodic && !sections.is_empty();
+
     for wire_loop in loops {
-        let pts = sample_wire_loop_uv(&wire_loop);
-        let area = signed_area_2d(&pts);
-        if area > 0.0 {
-            outers.push((wire_loop, area));
+        if use_structural_classification {
+            // Structural: a loop containing both Line edges (seam) and
+            // non-Line edges (section arcs / circles) is a band = outer.
+            let has_line = wire_loop
+                .iter()
+                .any(|e| matches!(e.curve_3d, EdgeCurve::Line));
+            let has_nonline = wire_loop
+                .iter()
+                .any(|e| !matches!(e.curve_3d, EdgeCurve::Line));
+            if has_line && has_nonline {
+                outers.push((wire_loop, 1.0)); // area placeholder
+            } else {
+                holes.push(wire_loop);
+            }
         } else {
-            holes.push(wire_loop);
+            let pts = sample_wire_loop_uv_periodic(&wire_loop, u_per_opt, v_per_opt);
+            let area = signed_area_2d(&pts);
+            if area > 0.0 {
+                outers.push((wire_loop, area));
+            } else {
+                holes.push(wire_loop);
+            }
         }
     }
 
     // If all loops are CW (negative area), the winding is reversed.
-    if outers.is_empty() && !holes.is_empty() {
+    if !use_structural_classification && outers.is_empty() && !holes.is_empty() {
         for hole in &mut holes {
             hole.reverse();
             for edge in hole.iter_mut() {
@@ -312,14 +406,33 @@ pub fn interior_point_3d(sub_face: &SubFace, frame: Option<&PlaneFrame>) -> Poin
 /// true curve shape in UV. This is critical for signed area computation
 /// and point-in-polygon tests on loops with curved edges.
 fn sample_wire_loop_uv(wire: &[OrientedPCurveEdge]) -> Vec<Point2> {
+    sample_wire_loop_uv_periodic(wire, None, None)
+}
+
+/// Sample UV points along a wire loop with optional periodic unwrapping.
+///
+/// When `u_period`/`v_period` is set, unwraps consecutive points so the
+/// UV path is continuous (no jumps of ~2π between edges connected via
+/// periodic quantization).
+fn sample_wire_loop_uv_periodic(
+    wire: &[OrientedPCurveEdge],
+    u_period: Option<f64>,
+    v_period: Option<f64>,
+) -> Vec<Point2> {
     use brepkit_math::curves2d::Curve2D;
     const CURVE_SAMPLES: usize = 8;
 
     let mut pts = Vec::new();
+    let has_period = u_period.is_some() || v_period.is_some();
     for edge in wire {
         match &edge.pcurve {
             Curve2D::Line(_) => {
+                // For periodic surfaces, push both start and end to enable
+                // proper unwrapping across periodic jumps at seam vertices.
                 pts.push(edge.start_uv);
+                if has_period {
+                    pts.push(edge.end_uv);
+                }
             }
             Curve2D::Nurbs(nurbs) => {
                 let knots = nurbs.knots();
@@ -358,6 +471,12 @@ fn sample_wire_loop_uv(wire: &[OrientedPCurveEdge]) -> Vec<Point2> {
             }
         }
     }
+
+    // Unwrap periodic UV jumps between consecutive points.
+    if pts.len() >= 2 {
+        super::pcurve_compute::unwrap_periodic_params_pub(&mut pts, u_period, v_period);
+    }
+
     pts
 }
 
