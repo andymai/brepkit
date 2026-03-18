@@ -106,37 +106,52 @@ pub fn boolean_with_options(
         let no_torus = !has_torus(topo, a)? && !has_torus(topo, b)?;
         both_analytic && no_torus
     };
+    // Detect shelled solids by looking for the shell RIM face: a planar face
+    // with a polygonal inner wire (Line edges only). Boolean holes (cylinder
+    // cuts) have circular inner wires — these should NOT trigger the shelled
+    // detection. For shelled solids, skip the analytic path to avoid
+    // non-manifold assembly at the rim boundary.
+    let is_shelled = {
+        let has_polygonal_hole = |solid: SolidId| -> Result<bool, crate::OperationsError> {
+            let s = topo.solid(solid)?;
+            let sh = topo.shell(s.outer_shell())?;
+            for &fid in sh.faces() {
+                let face = topo.face(fid)?;
+                // Only flag reversed PLANAR faces as shelled indicators.
+                // Reversed non-planar faces come from boolean cuts (not shell).
+                if face.is_reversed()
+                    && matches!(
+                        face.surface(),
+                        brepkit_topology::face::FaceSurface::Plane { .. }
+                    )
+                {
+                    return Ok(true);
+                }
+                for &iw_id in face.inner_wires() {
+                    let iw = topo.wire(iw_id)?;
+                    let all_lines = iw.edges().iter().all(|oe| {
+                        topo.edge(oe.edge()).is_ok_and(|e| {
+                            matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                        })
+                    });
+                    if all_lines && iw.edges().len() >= 3 {
+                        return Ok(true); // Polygonal hole = rim face from shell
+                    }
+                }
+            }
+            Ok(false)
+        };
+        has_polygonal_hole(a)? || has_polygonal_hole(b)?
+    };
+
     let mut analytic_fallback: Option<SolidId> = None;
-    if try_analytic {
+    if try_analytic && !is_shelled {
         if let Ok(solid) = analytic_boolean(topo, op, a, b, tol, opts.deflection) {
             let _ = crate::heal::remove_degenerate_edges(topo, solid, tol.linear)?;
             if opts.unify_faces {
                 let _ = crate::heal::unify_faces(topo, solid)?;
             }
-            // Check for non-manifold edges (3+ faces sharing an edge).
-            // Reject when either input is a shelled solid (has faces with inner
-            // wires = holes from the shell rim, or reversed faces). For shelled
-            // solids, the pipeline can produce a better result.
-            let is_shelled = {
-                let shell_a = topo.shell(topo.solid(a)?.outer_shell())?;
-                let shell_b = topo.shell(topo.solid(b)?.outer_shell())?;
-                shell_a
-                    .faces()
-                    .iter()
-                    .chain(shell_b.faces().iter())
-                    .any(|&fid| {
-                        topo.face(fid)
-                            .is_ok_and(|f| f.is_reversed() || !f.inner_wires().is_empty())
-                    })
-            };
-            let is_manifold = !is_shelled
-                || brepkit_topology::validation::validate_shell_manifold(
-                    topo.shell(topo.solid(solid)?.outer_shell())?,
-                    topo.faces(),
-                    topo.wires(),
-                )
-                .is_ok();
-            if is_manifold && validate_boolean_result(topo, solid).is_ok() {
+            if validate_boolean_result(topo, solid).is_ok() {
                 return Ok(solid);
             }
             analytic_fallback = Some(solid);
