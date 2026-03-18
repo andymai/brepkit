@@ -264,6 +264,18 @@ pub(super) enum AnalyticClassifier {
         /// Outward-pointing normals and signed distances: `normal * p > d` means outside.
         planes: Vec<(Vec3, f64)>,
     },
+    /// General convex analytic solid: intersection of half-planes, cylinders,
+    /// and cone frustums. Point is inside iff it passes ALL constraints.
+    /// Handles mixed plane+cone solids (like lip frustums from ruled lofts).
+    ConvexAnalytic {
+        /// Half-plane constraints: `normal · p < d` means inside.
+        planes: Vec<(Vec3, f64)>,
+        /// Cylinder constraints: radial distance from axis <= radius AND
+        /// axial position within [z_min, z_max].
+        cylinders: Vec<(Point3, Vec3, f64, f64, f64)>, // (origin, axis, radius, z_min, z_max)
+        /// Cone frustum constraints: radial distance <= interpolated radius.
+        cones: Vec<(Point3, Vec3, f64, f64, f64, f64)>, // (origin, axis, z_min, z_max, r_min, r_max)
+    },
     /// Composite classifier for shelled/hollow solids: point is inside iff
     /// it's inside the outer boundary AND outside the inner cavity.
     Composite {

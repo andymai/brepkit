@@ -1468,8 +1468,46 @@ fn classify_point_analytic_raycast(
                         }
                     }
                 }
+                FaceSurface::Cone(con) => {
+                    // Analytic ray-cone intersection with UV containment.
+                    let hits = ray_cone_intersect(point, *ray_dir, con);
+                    let uv_poly = face_uv_polygon(topo, fid, face.surface());
+                    for t in hits {
+                        if t < 1e-10 {
+                            continue;
+                        }
+                        let hit = point + *ray_dir * t;
+                        if point_in_analytic_face_uv(hit, face.surface(), &uv_poly) {
+                            if fi < face_polys.len() {
+                                let (_, holes, pn, _) = &face_polys[fi];
+                                let in_hole = holes
+                                    .iter()
+                                    .any(|hole| point_in_face_polygon_3d(hit, hole, pn));
+                                if !in_hole {
+                                    crossings += 1;
+                                }
+                            } else {
+                                crossings += 1;
+                            }
+                        }
+                    }
+                }
+                FaceSurface::Sphere(sph) => {
+                    // Analytic ray-sphere intersection.
+                    let hits = ray_sphere_intersect(point, *ray_dir, sph);
+                    let uv_poly = face_uv_polygon(topo, fid, face.surface());
+                    for t in hits {
+                        if t < 1e-10 {
+                            continue;
+                        }
+                        let hit = point + *ray_dir * t;
+                        if point_in_analytic_face_uv(hit, face.surface(), &uv_poly) {
+                            crossings += 1;
+                        }
+                    }
+                }
                 _ => {
-                    // Fall back to polygon approximation for other surface types.
+                    // Fall back to polygon approximation for remaining surface types.
                     if fi < face_polys.len() {
                         let (verts, holes, normal, d) = &face_polys[fi];
                         let denom = normal.dot(*ray_dir);
@@ -1540,6 +1578,75 @@ fn ray_cylinder_intersect(
     let a = d_perp.x() * d_perp.x() + d_perp.y() * d_perp.y() + d_perp.z() * d_perp.z();
     let b = 2.0 * (d_perp.x() * o_perp.x() + d_perp.y() * o_perp.y() + d_perp.z() * o_perp.z());
     let c = o_perp.x() * o_perp.x() + o_perp.y() * o_perp.y() + o_perp.z() * o_perp.z() - r * r;
+
+    let disc = b * b - 4.0 * a * c;
+    if disc < 0.0 || a.abs() < 1e-30 {
+        return Vec::new();
+    }
+
+    let sqrt_disc = disc.sqrt();
+    let t1 = (-b - sqrt_disc) / (2.0 * a);
+    let t2 = (-b + sqrt_disc) / (2.0 * a);
+    vec![t1, t2]
+}
+
+/// Ray-cone intersection: solve the quadratic for a ray hitting an infinite cone.
+///
+/// A cone surface: `|p_perp|^2 = (k * (p · axis - z_apex))^2` where k = tan(half_angle).
+/// Returns 0, 1, or 2 t-values.
+fn ray_cone_intersect(
+    origin: Point3,
+    dir: Vec3,
+    con: &brepkit_math::surfaces::ConicalSurface,
+) -> Vec<f64> {
+    let apex = con.apex();
+    let axis = con.axis();
+    let ha = con.half_angle();
+    // half_angle is angle from radial plane to surface.
+    // tan(half_angle) gives the ratio of axial to radial distance.
+    let cos_a = ha.cos();
+    let sin_a = ha.sin();
+    // For the quadratic: (d·a)^2·cos²a - |d_perp|^2·sin²a = 0
+    // where d_perp = d - (d·a)a, similarly for origin offset.
+    let o = origin - apex;
+    let o_v = Vec3::new(o.x(), o.y(), o.z());
+    let d_dot_a = dir.dot(axis);
+    let o_dot_a = o_v.dot(axis);
+
+    let d_perp = dir - axis * d_dot_a;
+    let o_perp = o_v - axis * o_dot_a;
+
+    let cos2 = cos_a * cos_a;
+    let sin2 = sin_a * sin_a;
+
+    let a = d_perp.dot(d_perp) * cos2 - d_dot_a * d_dot_a * sin2;
+    let b = 2.0 * (d_perp.dot(o_perp) * cos2 - d_dot_a * o_dot_a * sin2);
+    let c = o_perp.dot(o_perp) * cos2 - o_dot_a * o_dot_a * sin2;
+
+    let disc = b * b - 4.0 * a * c;
+    if disc < 0.0 || a.abs() < 1e-30 {
+        return Vec::new();
+    }
+
+    let sqrt_disc = disc.sqrt();
+    let t1 = (-b - sqrt_disc) / (2.0 * a);
+    let t2 = (-b + sqrt_disc) / (2.0 * a);
+    vec![t1, t2]
+}
+
+/// Ray-sphere intersection: solve `|o + t*d - center|^2 = r^2`.
+fn ray_sphere_intersect(
+    origin: Point3,
+    dir: Vec3,
+    sph: &brepkit_math::surfaces::SphericalSurface,
+) -> Vec<f64> {
+    let oc = origin - sph.center();
+    let oc_v = Vec3::new(oc.x(), oc.y(), oc.z());
+    let r = sph.radius();
+
+    let a = dir.dot(dir);
+    let b = 2.0 * dir.dot(oc_v);
+    let c = oc_v.dot(oc_v) - r * r;
 
     let disc = b * b - 4.0 * a * c;
     if disc < 0.0 || a.abs() < 1e-30 {
