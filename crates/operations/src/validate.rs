@@ -554,7 +554,7 @@ pub fn validate_solid_relaxed_with_options(
 
     let faces = explorer::solid_faces(topo, solid)?;
 
-    // Degenerate faces (planar + straight edges only).
+    // Degenerate faces (planar + straight edges only) — Warning in relaxed.
     for fid in &faces {
         let face_data = topo.face(*fid)?;
         let is_planar = matches!(
@@ -566,7 +566,7 @@ pub fn validate_solid_relaxed_with_options(
             let face_verts = explorer::face_vertices(topo, *fid)?;
             if face_verts.len() < 3 {
                 issues.push(ValidationIssue {
-                    severity: Severity::Error,
+                    severity: Severity::Warning,
                     description: format!(
                         "face {} has only {} vertices (need at least 3)",
                         fid.index(),
@@ -662,7 +662,8 @@ pub fn validate_solid_relaxed_with_options(
         }
     }
 
-    // Zero-length edges.
+    // Zero-length edges — demoted to Warning in relaxed validation.
+    // Boolean edge splitting can create tiny edges below tolerance.
     let all_edges = explorer::solid_edges(topo, solid)?;
     for eid in &all_edges {
         let edge = topo.edge(*eid)?;
@@ -675,7 +676,7 @@ pub fn validate_solid_relaxed_with_options(
             let dist = (dx * dx + dy * dy + dz * dz).sqrt();
             if dist < tol.linear {
                 issues.push(ValidationIssue {
-                    severity: Severity::Error,
+                    severity: Severity::Warning,
                     description: format!(
                         "edge {} has near-zero length ({dist:.2e} < {:.2e})",
                         eid.index(),
