@@ -775,10 +775,23 @@ pub(super) fn refine_boundary_edges(
                         let (s, e) = if fwd { (va, vb) } else { (vb, va) };
                         topo.add_edge(Edge::new(s, e, original_curve.clone()))
                     });
-                    new_oriented_edges.push(OrientedEdge::new(sub_eid, fwd));
+                    // Skip if edge already in wire (prevents duplicates from
+                    // vertex merging creating overlapping segments).
+                    if !new_oriented_edges
+                        .iter()
+                        .any(|e: &OrientedEdge| e.edge() == sub_eid)
+                    {
+                        new_oriented_edges.push(OrientedEdge::new(sub_eid, fwd));
+                    }
                 }
             } else {
-                new_oriented_edges.push(*oe);
+                // Skip if unsplit edge already added by a prior split expansion.
+                if !new_oriented_edges
+                    .iter()
+                    .any(|e: &OrientedEdge| e.edge() == oe.edge())
+                {
+                    new_oriented_edges.push(*oe);
+                }
             }
         }
 
