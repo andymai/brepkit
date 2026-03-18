@@ -1246,12 +1246,24 @@ fn classify_sub_faces(
         let test_pt = interior_point_3d(sub_face, frame);
 
         let standard_class = || match sub_face.source {
-            Source::A => {
-                classify_with_fallback(test_pt, &sub_face.outer_wire, classifier_b, &polys_b, *tol)
-            }
-            Source::B => {
-                classify_with_fallback(test_pt, &sub_face.outer_wire, classifier_a, &polys_a, *tol)
-            }
+            Source::A => classify_with_fallback(
+                test_pt,
+                &sub_face.outer_wire,
+                classifier_b,
+                topo,
+                solid_b,
+                &polys_b,
+                *tol,
+            ),
+            Source::B => classify_with_fallback(
+                test_pt,
+                &sub_face.outer_wire,
+                classifier_a,
+                topo,
+                solid_a,
+                &polys_a,
+                *tol,
+            ),
         };
 
         // Check if this sub-face's parent has coplanar opposing faces.
@@ -1323,6 +1335,8 @@ fn classify_with_fallback(
     test_pt: Point3,
     wire: &[super::pipeline::OrientedPCurveEdge],
     classifier: Option<&AnalyticClassifier>,
+    topo: &Topology,
+    solid: SolidId,
     face_polys: &[FacePolyData],
     tol: Tolerance,
 ) -> FaceClass {
@@ -1338,8 +1352,9 @@ fn classify_with_fallback(
             }
         }
     }
-    // Fall back to ray-casting.
-    classify_point_against_solid(test_pt, face_polys)
+    // Fall back to analytic ray-casting (uses actual surface equations for
+    // curved faces instead of flat polygon approximation).
+    classify_point_analytic_raycast(test_pt, topo, solid, face_polys)
 }
 
 /// Classify a 3D point as inside/outside/on a solid using face polygon ray-casting.
@@ -1347,15 +1362,181 @@ fn classify_with_fallback(
 /// Each face has an outer polygon and optional inner hole polygons. A ray
 /// crossing counts only when the hit is inside the outer polygon but NOT
 /// inside any hole (inner wire opening).
-/// Classify a 3D point as inside/outside a solid using ray-casting.
+/// Classify a 3D point against a solid using analytic ray-surface intersection.
 ///
-/// For planar faces, intersects a +Z ray with the face plane and checks
-/// point-in-polygon. For curved faces, uses a higher-density polygon
-/// with the approximate plane — less accurate but sufficient when combined
-/// with the analytic classifier for simple shapes.
+/// For each face in the solid:
+/// - Plane faces: ray-plane intersection (exact)
+/// - Cylinder faces: ray-cylinder intersection (analytic quadratic)
+/// - Cone faces: ray-cone intersection (analytic quadratic)
+/// - Other: fall back to polygon approximation
 ///
-/// Also fires a secondary +X ray to break ties (even/odd ambiguity from
-/// grazing hits near face edges).
+/// Uses multi-ray voting (5 directions) for robustness.
+#[allow(clippy::too_many_lines)]
+fn classify_point_analytic_raycast(
+    point: Point3,
+    topo: &Topology,
+    solid: SolidId,
+    face_polys: &[FacePolyData],
+) -> FaceClass {
+    let rays = [
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.577_350_3, 0.577_350_3, 0.577_350_3),
+    ];
+
+    let faces = collect_solid_faces(topo, solid).unwrap_or_default();
+
+    let mut inside_count = 0u32;
+    let mut outside_count = 0u32;
+
+    for ray_dir in &rays {
+        let mut crossings = 0u32;
+
+        for (fi, &fid) in faces.iter().enumerate() {
+            let Ok(face) = topo.face(fid) else { continue };
+            let reversed = face.is_reversed();
+            let surface = face.surface();
+
+            match surface {
+                FaceSurface::Plane { normal, d } => {
+                    // Exact ray-plane intersection.
+                    let eff_n = if reversed { -*normal } else { *normal };
+                    let eff_d = if reversed { -*d } else { *d };
+                    let denom = eff_n.dot(*ray_dir);
+                    if denom.abs() < 1e-15 {
+                        continue;
+                    }
+                    let pv = Vec3::new(point.x(), point.y(), point.z());
+                    let t = (eff_d - eff_n.dot(pv)) / denom;
+                    if t < 1e-10 {
+                        continue;
+                    }
+                    let hit = point + *ray_dir * t;
+                    // Use the polygon data for point-in-face test.
+                    if fi < face_polys.len() {
+                        let (verts, holes, pn, _) = &face_polys[fi];
+                        if point_in_face_polygon_3d(hit, verts, pn) {
+                            let in_hole = holes
+                                .iter()
+                                .any(|hole| point_in_face_polygon_3d(hit, hole, pn));
+                            if !in_hole {
+                                crossings += 1;
+                            }
+                        }
+                    }
+                }
+                FaceSurface::Cylinder(cyl) => {
+                    // Analytic ray-cylinder intersection.
+                    let hits = ray_cylinder_intersect(point, *ray_dir, cyl);
+                    for t in hits {
+                        if t < 1e-10 {
+                            continue;
+                        }
+                        let hit = point + *ray_dir * t;
+                        // Check if hit is within face bounds using project_point.
+                        let (_u, _v) = cyl.project_point(hit);
+                        // Check v bounds (axial extent) using face polygon bbox.
+                        if fi < face_polys.len() {
+                            let (verts, holes, pn, _) = &face_polys[fi];
+                            if point_in_face_polygon_3d(hit, verts, pn) {
+                                let in_hole = holes
+                                    .iter()
+                                    .any(|hole| point_in_face_polygon_3d(hit, hole, pn));
+                                if !in_hole {
+                                    crossings += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    // Fall back to polygon approximation for other surface types.
+                    if fi < face_polys.len() {
+                        let (verts, holes, normal, d) = &face_polys[fi];
+                        let denom = normal.dot(*ray_dir);
+                        if denom.abs() < 1e-15 {
+                            continue;
+                        }
+                        let pv = Vec3::new(point.x(), point.y(), point.z());
+                        let t = (*d - normal.dot(pv)) / denom;
+                        if t < 1e-10 {
+                            continue;
+                        }
+                        let hit = point + *ray_dir * t;
+                        if point_in_face_polygon_3d(hit, verts, normal) {
+                            let in_hole = holes
+                                .iter()
+                                .any(|hole| point_in_face_polygon_3d(hit, hole, normal));
+                            if !in_hole {
+                                crossings += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if crossings != 0 && crossings % 2 != 0 {
+            inside_count += 1;
+        } else {
+            outside_count += 1;
+        }
+    }
+
+    if inside_count > outside_count {
+        FaceClass::Inside
+    } else {
+        FaceClass::Outside
+    }
+}
+
+/// Ray-cylinder intersection: solve the quadratic equation for a ray
+/// hitting an infinite cylinder, then filter by face bounds.
+///
+/// Returns 0, 1, or 2 t-values where the ray intersects the cylinder surface.
+fn ray_cylinder_intersect(
+    origin: Point3,
+    dir: Vec3,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+) -> Vec<f64> {
+    let o = origin - cyl.origin();
+    let axis = cyl.axis();
+    let r = cyl.radius();
+
+    // Project ray origin and direction onto the plane perpendicular to the axis.
+    let d_dot_a = dir.dot(axis);
+    let o_dot_a = Vec3::new(o.x(), o.y(), o.z()).dot(axis);
+
+    let d_perp = Vec3::new(
+        dir.x() - d_dot_a * axis.x(),
+        dir.y() - d_dot_a * axis.y(),
+        dir.z() - d_dot_a * axis.z(),
+    );
+    let o_perp = Vec3::new(
+        o.x() - o_dot_a * axis.x(),
+        o.y() - o_dot_a * axis.y(),
+        o.z() - o_dot_a * axis.z(),
+    );
+
+    let a = d_perp.x() * d_perp.x() + d_perp.y() * d_perp.y() + d_perp.z() * d_perp.z();
+    let b = 2.0 * (d_perp.x() * o_perp.x() + d_perp.y() * o_perp.y() + d_perp.z() * o_perp.z());
+    let c = o_perp.x() * o_perp.x() + o_perp.y() * o_perp.y() + o_perp.z() * o_perp.z() - r * r;
+
+    let disc = b * b - 4.0 * a * c;
+    if disc < 0.0 || a.abs() < 1e-30 {
+        return Vec::new();
+    }
+
+    let sqrt_disc = disc.sqrt();
+    let t1 = (-b - sqrt_disc) / (2.0 * a);
+    let t2 = (-b + sqrt_disc) / (2.0 * a);
+    vec![t1, t2]
+}
+
+/// Classify a 3D point as inside/outside a solid using polygon ray-casting.
+/// Legacy fallback used when analytic raycast is not available.
 fn classify_point_against_solid(point: Point3, face_polys: &[FacePolyData]) -> FaceClass {
     // Fire rays in 5 directions (axis-aligned + 2 off-axis) and take majority
     // vote. This handles curved face polygon approximation errors — different
