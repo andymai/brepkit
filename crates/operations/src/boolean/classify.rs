@@ -268,6 +268,10 @@ pub(super) fn try_build_analytic_classifier(
 
     // Shelled/hollow solids have reversed inner faces. Try to build a
     // composite classifier (outer + inner) for accurate classification.
+    // Detect shelled/hollow solids by either:
+    // 1. Reversed faces (face normal opposite to surface normal)
+    // 2. Non-convex all-planar topology (inner walls with inward-pointing
+    //    normals that fail the convexity check)
     let has_reversed = shell
         .faces()
         .iter()
@@ -438,6 +442,11 @@ pub(super) fn try_build_analytic_classifier(
                 .all(|&(n, d)| all_verts.iter().all(|&v| n.dot(v) <= d + convex_tol));
             if is_convex {
                 return Some(AnalyticClassifier::ConvexPolyhedron { planes });
+            }
+            // Non-convex all-planar solid — likely a shelled/hollow box.
+            // Try the composite classifier (outer + inner boundary).
+            if let Some(composite) = try_build_composite_classifier(topo, solid) {
+                return Some(composite);
             }
         }
     }
@@ -770,10 +779,32 @@ fn wire_cone_extent(
 fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<AnalyticClassifier> {
     let s = topo.solid(solid).ok()?;
     let shell = topo.shell(s.outer_shell()).ok()?;
-    let _tol = Tolerance::new();
 
-    // Separate faces into outer (non-reversed) and inner (reversed).
-    // Collect BOTH planes and cylinders for ConvexAnalytic classifiers.
+    // Separate faces into outer and inner by checking if the face normal
+    // points OUTWARD from the solid centroid (outer) or INWARD (inner).
+    // This handles both is_reversed faces and shelled solids where inner
+    // faces have inward-pointing normals without the reversed flag.
+    let centroid = {
+        let mut c = Vec3::new(0.0, 0.0, 0.0);
+        let mut count = 0u32;
+        for &fid in shell.faces() {
+            let face = topo.face(fid).ok()?;
+            let wire = topo.wire(face.outer_wire()).ok()?;
+            for oe in wire.edges() {
+                let e = topo.edge(oe.edge()).ok()?;
+                let p = topo.vertex(e.start()).ok()?.point();
+                c += Vec3::new(p.x(), p.y(), p.z());
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let inv = 1.0 / count as f64;
+        Point3::new(c.x() * inv, c.y() * inv, c.z() * inv)
+    };
+
     let mut outer_planes: Vec<(Vec3, f64)> = Vec::new();
     let mut inner_planes: Vec<(Vec3, f64)> = Vec::new();
     let mut outer_cylinders: Vec<(Point3, Vec3, f64, f64, f64)> = Vec::new();
@@ -788,10 +819,19 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
                 } else {
                     (*normal, *d)
                 };
-                if face.is_reversed() {
-                    inner_planes.push((n, dv));
-                } else {
+                // Classify as outer or inner by checking if the face normal
+                // points away from the centroid. For a plane with normal n and
+                // distance d: signed_dist = n·centroid - d. If positive, centroid
+                // is on the outside → this face faces outward (outer). If negative,
+                // centroid is on the inside → face faces inward (inner).
+                let cv = Vec3::new(centroid.x(), centroid.y(), centroid.z());
+                let signed_dist = n.dot(cv) - dv;
+                if signed_dist < 0.0 {
+                    // Centroid is INSIDE this face's half-space → outer face.
                     outer_planes.push((n, dv));
+                } else {
+                    // Centroid is OUTSIDE this face's half-space → inner face.
+                    inner_planes.push((n, dv));
                 }
             }
             FaceSurface::Cylinder(cyl) => {
@@ -801,10 +841,17 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
                 let origin_v = Vec3::new(origin.x(), origin.y(), origin.z());
                 let wire = topo.wire(face.outer_wire()).ok()?;
                 let (z_min, z_max) = wire_axial_extent(topo, wire, origin_v, axis)?;
-                if face.is_reversed() {
-                    inner_cylinders.push((origin, axis, r, z_min, z_max));
-                } else {
+                // Classify by centroid distance from axis vs radius.
+                let diff = centroid - origin;
+                let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+                let projected = axis * diff_v.dot(axis);
+                let radial_dist = (diff_v - projected).length();
+                if radial_dist < r {
+                    // Centroid inside cylinder → outer face (boundary surrounds centroid).
                     outer_cylinders.push((origin, axis, r, z_min, z_max));
+                } else {
+                    // Centroid outside cylinder → inner face.
+                    inner_cylinders.push((origin, axis, r, z_min, z_max));
                 }
             }
             FaceSurface::Cone(con) => {
