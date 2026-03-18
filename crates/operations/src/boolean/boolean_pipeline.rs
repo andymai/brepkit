@@ -1183,6 +1183,104 @@ fn split_all_faces(
         }
     }
 
+    // Pre-classification: filter section edges where both sides classify the
+    // same way (both Inside or both Outside). These edges don't create
+    // meaningful face splits. Uses analytic ray-surface intersection for
+    // exact classification at offset test points.
+    {
+        let polys_a = collect_solid_face_polygons(topo, a)?;
+        let polys_b = collect_solid_face_polygons(topo, b)?;
+        let cls_a = try_build_analytic_classifier(topo, a);
+        let cls_b = try_build_analytic_classifier(topo, b);
+
+        for (fid, sections) in &mut sections_for_face {
+            let Ok(face) = topo.face(*fid) else { continue };
+            // Only filter plane face sections (offset direction is well-defined).
+            let FaceSurface::Plane { normal, .. } = face.surface() else {
+                continue;
+            };
+            let face_normal = if face.is_reversed() {
+                -*normal
+            } else {
+                *normal
+            };
+            let source = if faces_a.contains(fid) {
+                Source::A
+            } else {
+                Source::B
+            };
+            let (opp_cls, polys, opp_solid) = match source {
+                Source::A => (&cls_b, &polys_b, b),
+                Source::B => (&cls_a, &polys_a, a),
+            };
+
+            sections.retain(|s| {
+                // Use the geometric midpoint of the section edge (on the curve),
+                // not the chord midpoint. For circle arcs, the chord midpoint
+                // is inside the circle and both offset points would be Inside.
+                let mid = match &s.curve_3d {
+                    EdgeCurve::Circle(c) => {
+                        let t0 = c.project(s.start);
+                        let t1 = c.project(s.end);
+                        let dt = (t1 - t0).rem_euclid(std::f64::consts::TAU);
+                        c.evaluate(t0 + dt * 0.5)
+                    }
+                    EdgeCurve::Ellipse(e) => {
+                        let t0 = e.project(s.start);
+                        let t1 = e.project(s.end);
+                        let dt = (t1 - t0).rem_euclid(std::f64::consts::TAU);
+                        e.evaluate(t0 + dt * 0.5)
+                    }
+                    _ => Point3::new(
+                        (s.start.x() + s.end.x()) * 0.5,
+                        (s.start.y() + s.end.y()) * 0.5,
+                        (s.start.z() + s.end.z()) * 0.5,
+                    ),
+                };
+                // Only filter Circle/Ellipse sections where the arc midpoint
+                // is on the opposing surface. Line sections (from plane-plane
+                // intersections or chord approximations) always create meaningful
+                // splits.
+                if matches!(s.curve_3d, EdgeCurve::Line) {
+                    return true;
+                }
+                let edge_dir = Vec3::new(
+                    s.end.x() - s.start.x(),
+                    s.end.y() - s.start.y(),
+                    s.end.z() - s.start.z(),
+                );
+                let edge_len = edge_dir.length();
+                if edge_len < 0.5 {
+                    return true; // Keep short sections.
+                }
+                let edge_n = edge_dir * (1.0 / edge_len);
+                let offset_dir = face_normal.cross(edge_n);
+                let offset_len = offset_dir.length();
+                if offset_len < 1e-10 {
+                    return true;
+                }
+                // 0.2mm offset — needs to be large enough to clear the
+                // cylinder/cone surface tolerance.
+                let offset = offset_dir * (0.2 / offset_len);
+                let pt_a = mid + offset;
+                let pt_b = mid - offset;
+                // Use the analytic classifier (exact) if available.
+                // Fall back to analytic raycast only if no classifier.
+                let classify = |pt: Point3| -> FaceClass {
+                    if let Some(c) = opp_cls.as_ref() {
+                        if let Some(class) = c.classify(pt, *tol) {
+                            return class;
+                        }
+                    }
+                    classify_point_analytic_raycast(pt, topo, opp_solid, polys)
+                };
+                let class_a = classify(pt_a);
+                let class_b = classify(pt_b);
+                class_a != class_b
+            });
+        }
+    }
+
     // Split faces from solid A.
     for &fid in &faces_a {
         let sections = sections_for_face
