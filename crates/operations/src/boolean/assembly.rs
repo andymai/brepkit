@@ -488,11 +488,12 @@ fn build_manifold_shell(
         return Ok(face_ids.to_vec());
     }
 
-    // For each non-manifold edge, find the best manifold pair (opposite
-    // traversal directions) and give unpaired faces their own edge copies.
-    let mut replacements: HashMap<(usize, EdgeId), EdgeId> = HashMap::new();
+    // For each non-manifold edge at a rim junction, REMOVE the face that
+    // opposes the majority — matching OCCT's IN-face removal approach.
+    let mut faces_to_remove: HashSet<usize> = HashSet::new();
+    let replacements: HashMap<(usize, EdgeId), EdgeId> = HashMap::new();
 
-    for (eid, face_refs) in &nonmanifold {
+    for (_eid, face_refs) in &nonmanifold {
         // Check if this is a SPURIOUS non-manifold (rim junction with opposing
         // normals) vs LEGITIMATE (vertex blend at a corner). Only split spurious.
         // Criterion: if any pair of faces has opposing normals (dot < -0.5),
@@ -530,38 +531,43 @@ fn build_manifold_shell(
             continue;
         }
 
-        // Spurious rim junction: split into forward/reversed groups and pair.
-        let mut fwd_faces: Vec<usize> = Vec::new();
-        let mut rev_faces: Vec<usize> = Vec::new();
-        for &(fi, is_fwd) in face_refs {
-            if is_fwd {
-                fwd_faces.push(fi);
-            } else {
-                rev_faces.push(fi);
+        // Spurious rim junction with opposing normals: REMOVE the faces
+        // that cause the 3-face edge instead of creating edge copies.
+        // This matches OCCT's approach (discard IN faces before shell build).
+        //
+        // The face to remove is the one whose normal opposes the majority.
+        // For a rim junction: 2 faces have similar normals (outer + rim),
+        // 1 face has opposing normal (inner) → remove the inner face.
+        for i in 0..face_normals.len() {
+            let mut opposing_count = 0;
+            for j in 0..face_normals.len() {
+                if i != j && face_normals[i].1.dot(face_normals[j].1) < -0.5 {
+                    opposing_count += 1;
+                }
+            }
+            // If this face opposes the majority, mark for removal.
+            if opposing_count > face_normals.len() / 2 {
+                faces_to_remove.insert(face_normals[i].0);
             }
         }
+    }
 
-        let edge = topo.edge(*eid)?;
-        let start = edge.start();
-        let end = edge.end();
-        let curve = edge.curve().clone();
-
-        // Keep original edge for the first pair. Copy for unpaired.
-        for &fi in &fwd_faces[1..] {
-            let new_eid = topo.add_edge(Edge::new(start, end, curve.clone()));
-            replacements.insert((fi, *eid), new_eid);
-        }
-        for &fi in &rev_faces[1..] {
-            let new_eid = topo.add_edge(Edge::new(start, end, curve.clone()));
-            replacements.insert((fi, *eid), new_eid);
-        }
+    // Return faces with removed faces excluded.
+    if !faces_to_remove.is_empty() {
+        let result: Vec<FaceId> = face_ids
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !faces_to_remove.contains(i))
+            .map(|(_, &fid)| fid)
+            .collect();
+        return Ok(result);
     }
 
     if replacements.is_empty() {
         return Ok(face_ids.to_vec());
     }
 
-    // Rebuild affected faces with replaced edges.
+    // Rebuild affected faces with replaced edges (for angular split cases).
     let mut result = face_ids.to_vec();
     let affected: HashSet<usize> = replacements.keys().map(|(fi, _)| *fi).collect();
 
