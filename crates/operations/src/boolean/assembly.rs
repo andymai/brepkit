@@ -226,6 +226,9 @@ pub(crate) fn assemble_solid_mixed(
                     let j = (i + 1) % n;
                     let vi = vert_ids[i].index();
                     let vj = vert_ids[j].index();
+                    if vi == vj {
+                        continue; // Skip degenerate zero-length edges.
+                    }
                     let (key_min, key_max) = if vi <= vj { (vi, vj) } else { (vj, vi) };
                     let is_forward = vi <= vj;
 
@@ -266,6 +269,12 @@ pub(crate) fn assemble_solid_mixed(
                         }
                     });
 
+                    if oriented_edges
+                        .last()
+                        .is_some_and(|last: &OrientedEdge| last.edge() == edge_id)
+                    {
+                        continue;
+                    }
                     oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
                 }
 
@@ -336,6 +345,10 @@ pub(crate) fn assemble_solid_mixed(
                     let j = (i + 1) % n;
                     let vi = vert_ids[i].index();
                     let vj = vert_ids[j].index();
+                    // Skip degenerate zero-length edges (collapsed vertices).
+                    if vi == vj {
+                        continue;
+                    }
                     let (key_min, key_max) = if vi <= vj { (vi, vj) } else { (vj, vi) };
                     let is_forward = vi <= vj;
 
@@ -348,6 +361,15 @@ pub(crate) fn assemble_solid_mixed(
                         topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
                     });
 
+                    // Skip duplicate edges anywhere in the wire (not just consecutive).
+                    // Duplicates arise when the polygon revisits a vertex pair due to
+                    // degenerate splits or vertex merging.
+                    if oriented_edges
+                        .iter()
+                        .any(|oe: &OrientedEdge| oe.edge() == edge_id)
+                    {
+                        continue;
+                    }
                     oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
                 }
 
