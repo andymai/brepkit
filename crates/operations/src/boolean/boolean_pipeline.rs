@@ -279,7 +279,8 @@ fn intersect_face_pair(
             intersect_nurbs_general_faces(topo, fa, fb, pipeline, tol)
         }
         _ => {
-            // Unsupported pair — skip.
+            // Unsupported surface pair — log and skip.
+            log::debug!("intersect_face_pair: unsupported surface pair, skipping");
             Ok(Vec::new())
         }
     }

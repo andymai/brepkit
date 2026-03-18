@@ -93,11 +93,10 @@ impl AnalyticClassifier {
                     + radial_vec.z() * radial_vec.z();
                 // Linearly interpolate expected radius between z_min and z_max.
                 let dz = z_max - z_min;
-                // Numerical-zero guard: if the cone's axial height is < 1e-12,
-                // the radius interpolation parameter is undefined — fall back to
-                // midpoint (t = 0.5). 1e-12 is ~1 picometer, well below any
-                // meaningful cone frustum height.
-                let t = if dz.abs() > 1e-12 {
+                // Numerical-zero guard: if the cone's axial height is below the
+                // linear tolerance, the radius interpolation is undefined —
+                // fall back to midpoint (t = 0.5).
+                let t = if dz.abs() > tol.linear {
                     (axial - z_min) / dz
                 } else {
                     0.5
@@ -196,7 +195,7 @@ impl AnalyticClassifier {
                         return Some(FaceClass::Outside);
                     }
                     let dz = z_max - z_min;
-                    let t = if dz.abs() > 1e-12 {
+                    let t = if dz.abs() > tol.linear {
                         (axial - z_min) / dz
                     } else {
                         0.5
@@ -683,7 +682,7 @@ fn try_build_convex_analytic(topo: &Topology, solid: SolidId) -> Option<Analytic
             return None;
         }
         let dz = z_max - z_min;
-        let t = if dz.abs() > 1e-12 {
+        let t = if dz.abs() > tol.linear {
             (axial - z_min) / dz
         } else {
             0.5
@@ -779,6 +778,7 @@ fn wire_cone_extent(
 fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<AnalyticClassifier> {
     let s = topo.solid(solid).ok()?;
     let shell = topo.shell(s.outer_shell()).ok()?;
+    let tol = Tolerance::new();
 
     // Separate faces into outer and inner by checking if the face normal
     // points OUTWARD from the solid centroid (outer) or INWARD (inner).
@@ -869,7 +869,7 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
                 let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
                 let axial = diff_v.dot(axis);
                 let dz = z_max - z_min;
-                let t = if dz.abs() > 1e-12 {
+                let t = if dz.abs() > tol.linear {
                     ((axial - z_min) / dz).clamp(0.0, 1.0)
                 } else {
                     0.5

@@ -916,7 +916,8 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
                             q(e.semi_major()),
                         ))
                     }
-                    _ => None,
+                    brepkit_topology::edge::EdgeCurve::Line
+                    | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => None,
                 };
                 if let Some(k) = key {
                     geom_edge_faces.entry(k).or_default().push(fid);
