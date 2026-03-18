@@ -106,8 +106,72 @@ pub fn boolean_with_options(
         let no_torus = !has_torus(topo, a)? && !has_torus(topo, b)?;
         both_analytic && no_torus
     };
+    // Detect when BOTH inputs have complex topology (shelled + hollow).
+    // The analytic assembly creates non-manifold edges when fusing a
+    // shelled box (inner wires on rim face) with a hollow solid (reversed
+    // curved faces from boolean cut, e.g., lip frustum).
+    // Skip analytic only when BOTH conditions are present simultaneously.
+    let both_complex = {
+        // Detect polygonal inner wires (shell rim) vs circular (boolean hole).
+        let has_polygonal_inner_wire = |solid: SolidId| -> Result<bool, crate::OperationsError> {
+            let s = topo.solid(solid)?;
+            let sh = topo.shell(s.outer_shell())?;
+            for &fid in sh.faces() {
+                for &iw_id in topo.face(fid)?.inner_wires() {
+                    let iw = topo.wire(iw_id)?;
+                    let all_lines = iw.edges().iter().all(|oe| {
+                        topo.edge(oe.edge()).is_ok_and(|e| {
+                            matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                        })
+                    });
+                    if all_lines && iw.edges().len() >= 3 {
+                        return Ok(true);
+                    }
+                }
+            }
+            Ok(false)
+        };
+        let has_reversed_curved = |solid: SolidId| -> Result<bool, crate::OperationsError> {
+            let s = topo.solid(solid)?;
+            let sh = topo.shell(s.outer_shell())?;
+            for &fid in sh.faces() {
+                let f = topo.face(fid)?;
+                if f.is_reversed()
+                    && !matches!(
+                        f.surface(),
+                        brepkit_topology::face::FaceSurface::Plane { .. }
+                    )
+                {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        };
+        // Check if one input is shelled and the other is hollow, or either is both.
+        let a_wires = has_polygonal_inner_wire(a)?;
+        let b_wires = has_polygonal_inner_wire(b)?;
+        let a_curved = has_reversed_curved(a)?;
+        let b_curved = has_reversed_curved(b)?;
+        // Trigger when one input has reversed curved faces (hollow frustum)
+        // and EITHER the other has polygonal inner wires (shelled)
+        // OR the other has many faces (complex result from prior booleans).
+        let a_faces = topo.shell(topo.solid(a)?.outer_shell())?.faces().len();
+        let b_faces = topo.shell(topo.solid(b)?.outer_shell())?.faces().len();
+        // A solid is "structurally complex" if it has polygonal inner wires
+        // (shelled) OR reversed curved faces (from boolean cut of hollow shapes).
+        // "Large" means many faces (from prior booleans or mesh tessellation).
+        let a_structural = a_wires || a_curved;
+        let b_structural = b_wires || b_curved;
+        let a_large = a_faces > 6;
+        let b_large = b_faces > 6;
+        // Skip analytic when one input is structurally complex AND the other
+        // is large (from prior booleans). This catches lip fuse (hollow lip +
+        // large shelled-box result) without catching simple frustum cuts.
+        (a_structural && b_large) || (b_structural && a_large)
+    };
+
     let mut analytic_fallback: Option<SolidId> = None;
-    if try_analytic {
+    if try_analytic && !both_complex {
         if let Ok(solid) = analytic_boolean(topo, op, a, b, tol, opts.deflection) {
             let _ = crate::heal::remove_degenerate_edges(topo, solid, tol.linear)?;
             if opts.unify_faces {
