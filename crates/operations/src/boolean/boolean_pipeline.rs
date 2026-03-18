@@ -1474,92 +1474,10 @@ fn assemble_pipeline(
         });
     }
 
-    // Post-assembly manifold enforcement: remove faces that create 3+ face
-    // edges. Per OCCT's architecture, these are IN faces that should have been
-    // removed during classification but slipped through due to edge dedup
-    // creating shared edges between sub-faces that shouldn't share.
-    let face_ids = enforce_manifold_edges(topo, face_ids)?;
-
     let shell = Shell::new(face_ids).map_err(OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
     let solid = Solid::new(shell_id, Vec::new());
     Ok(topo.add_solid(solid))
-}
-
-/// Remove faces that create non-manifold edges (3+ faces per edge).
-///
-/// Uses OCCT's approach: faces that create 3-face junctions are IN faces
-/// that should have been removed during classification. For each non-manifold
-/// edge, identify the face that's the "odd one out" (doesn't pair properly
-/// with the other two) and remove it.
-fn enforce_manifold_edges(
-    topo: &Topology,
-    face_ids: Vec<FaceId>,
-) -> Result<Vec<FaceId>, OperationsError> {
-    use std::collections::HashMap;
-
-    // Build edge → face list.
-    let mut edge_faces: HashMap<brepkit_topology::edge::EdgeId, Vec<(usize, bool)>> =
-        HashMap::new();
-    for (fi, &fid) in face_ids.iter().enumerate() {
-        let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        for oe in wire.edges() {
-            edge_faces
-                .entry(oe.edge())
-                .or_default()
-                .push((fi, oe.is_forward()));
-        }
-        for &iw_id in face.inner_wires() {
-            let iw = topo.wire(iw_id)?;
-            for oe in iw.edges() {
-                edge_faces
-                    .entry(oe.edge())
-                    .or_default()
-                    .push((fi, oe.is_forward()));
-            }
-        }
-    }
-
-    // Find faces to remove: for each non-manifold edge (3+ faces),
-    // keep the manifold pair (one forward + one reversed) and mark
-    // the rest for removal.
-    let mut remove_set: std::collections::HashSet<usize> = std::collections::HashSet::new();
-
-    for refs in edge_faces.values() {
-        if refs.len() <= 2 {
-            continue;
-        }
-
-        // Find the manifold pair: one forward + one reversed.
-        let mut fwd: Option<usize> = None;
-        let mut rev: Option<usize> = None;
-        for &(fi, is_fwd) in refs {
-            if is_fwd && fwd.is_none() {
-                fwd = Some(fi);
-            } else if !is_fwd && rev.is_none() {
-                rev = Some(fi);
-            }
-        }
-
-        // Remove all faces except the manifold pair.
-        for &(fi, _) in refs {
-            if Some(fi) != fwd && Some(fi) != rev {
-                remove_set.insert(fi);
-            }
-        }
-    }
-
-    if remove_set.is_empty() {
-        return Ok(face_ids);
-    }
-
-    Ok(face_ids
-        .into_iter()
-        .enumerate()
-        .filter(|(i, _)| !remove_set.contains(i))
-        .map(|(_, fid)| fid)
-        .collect())
 }
 
 fn create_wire_from_edges_dedup(
