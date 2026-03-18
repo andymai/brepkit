@@ -747,7 +747,10 @@ pub fn solid_volume(
     // chamfered boxes), use the divergence-theorem polygon volume. This is
     // exact for planar faces and avoids tessellate_solid winding issues
     // with non-triangular faces assembled by the v2 boolean pipeline.
-    // Skipped for faces with holes since the function only reads outer wires.
+    // Note: volume_from_planar_polygons now handles inner wires (hole area
+    // subtraction), but we still skip for solids with inner wires because
+    // the direct face tessellation path handles reversed curved faces better.
+    // TODO: re-evaluate after boolean pipeline improvements stabilize.
     {
         let s = topo.solid(solid)?;
         let sh = topo.shell(s.outer_shell())?;

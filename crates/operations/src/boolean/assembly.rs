@@ -456,7 +456,7 @@ pub(crate) fn assemble_solid_mixed(
 /// (unreliable at degenerate rim junctions), this uses traversal direction
 /// (forward/reversed) which is structurally correct for manifold pairing.
 fn build_manifold_shell(
-    topo: &mut Topology,
+    topo: &Topology,
     face_ids: &[FaceId],
 ) -> Result<Vec<FaceId>, crate::OperationsError> {
     if face_ids.is_empty() {
@@ -491,7 +491,8 @@ fn build_manifold_shell(
     // For each non-manifold edge at a rim junction, REMOVE the face that
     // opposes the majority — matching OCCT's IN-face removal approach.
     let mut faces_to_remove: HashSet<usize> = HashSet::new();
-    let replacements: HashMap<(usize, EdgeId), EdgeId> = HashMap::new();
+    // Note: edge replacements for angular split cases are not currently used.
+    // The opposing-normal face removal above handles all known non-manifold cases.
 
     for (_eid, face_refs) in &nonmanifold {
         // Check if this is a SPURIOUS non-manifold (rim junction with opposing
@@ -563,45 +564,7 @@ fn build_manifold_shell(
         return Ok(result);
     }
 
-    if replacements.is_empty() {
-        return Ok(face_ids.to_vec());
-    }
-
-    // Rebuild affected faces with replaced edges (for angular split cases).
-    let mut result = face_ids.to_vec();
-    let affected: HashSet<usize> = replacements.keys().map(|(fi, _)| *fi).collect();
-
-    for fi in affected {
-        let fid = result[fi];
-        let face = topo.face(fid)?;
-        let surface = face.surface().clone();
-        let is_reversed = face.is_reversed();
-        let inner_wires = face.inner_wires().to_vec();
-        let wire = topo.wire(face.outer_wire())?;
-        let old_edges: Vec<OrientedEdge> = wire.edges().to_vec();
-
-        let new_edges: Vec<OrientedEdge> = old_edges
-            .iter()
-            .map(|oe| {
-                if let Some(&new_eid) = replacements.get(&(fi, oe.edge())) {
-                    OrientedEdge::new(new_eid, oe.is_forward())
-                } else {
-                    *oe
-                }
-            })
-            .collect();
-
-        let new_wire = Wire::new(new_edges, true).map_err(crate::OperationsError::Topology)?;
-        let new_wire_id = topo.add_wire(new_wire);
-        let new_face = if is_reversed {
-            Face::new_reversed(new_wire_id, inner_wires, surface)
-        } else {
-            Face::new(new_wire_id, inner_wires, surface)
-        };
-        result[fi] = topo.add_face(new_face);
-    }
-
-    Ok(result)
+    Ok(face_ids.to_vec())
 }
 
 // ---------------------------------------------------------------------------

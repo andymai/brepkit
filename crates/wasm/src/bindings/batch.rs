@@ -263,7 +263,7 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
-            "booleanPipeline" => {
+            "booleanV2" => {
                 let op_str = args["op"]
                     .as_str()
                     .ok_or("missing or invalid 'op' string")?;

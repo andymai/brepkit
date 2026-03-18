@@ -1606,13 +1606,32 @@ fn classify_point_analytic_raycast(
 
     let faces = collect_solid_faces(topo, solid).unwrap_or_default();
 
+    // Build face-index → poly-index map to handle degenerate face skipping.
+    // collect_solid_face_polygons may skip faces with < 3 polygon vertices,
+    // causing face_polys indices to diverge from the faces vector.
+    let poly_index: HashMap<usize, usize> = {
+        let mut map = HashMap::new();
+        let mut pi = 0;
+        for &fid in &faces {
+            if let Ok(face) = topo.face(fid) {
+                let wire = topo.wire(face.outer_wire()).ok();
+                let vert_count = wire.map_or(0, |w| w.edges().len());
+                if vert_count >= 3 {
+                    map.insert(fid.index(), pi);
+                    pi += 1;
+                }
+            }
+        }
+        map
+    };
+
     let mut inside_count = 0u32;
     let mut outside_count = 0u32;
 
     for ray_dir in &rays {
         let mut crossings = 0u32;
 
-        for (fi, &fid) in faces.iter().enumerate() {
+        for &fid in &faces {
             let Ok(face) = topo.face(fid) else { continue };
             let reversed = face.is_reversed();
             let surface = face.surface();
@@ -1633,8 +1652,8 @@ fn classify_point_analytic_raycast(
                     }
                     let hit = point + *ray_dir * t;
                     // Use the polygon data for point-in-face test.
-                    if fi < face_polys.len() {
-                        let (verts, holes, pn, _) = &face_polys[fi];
+                    if let Some(&pi) = poly_index.get(&fid.index()) {
+                        let (verts, holes, pn, _) = &face_polys[pi];
                         if point_in_face_polygon_3d(hit, verts, pn) {
                             let in_hole = holes
                                 .iter()
@@ -1657,8 +1676,8 @@ fn classify_point_analytic_raycast(
                         // Check if hit is inside the face boundary using UV polygon.
                         if point_in_analytic_face_uv(hit, face.surface(), &uv_poly) {
                             // Check inner wire holes using 3D polygon fallback.
-                            if fi < face_polys.len() {
-                                let (_, holes, pn, _) = &face_polys[fi];
+                            if let Some(&pi) = poly_index.get(&fid.index()) {
+                                let (_, holes, pn, _) = &face_polys[pi];
                                 let in_hole = holes
                                     .iter()
                                     .any(|hole| point_in_face_polygon_3d(hit, hole, pn));
@@ -1681,8 +1700,8 @@ fn classify_point_analytic_raycast(
                         }
                         let hit = point + *ray_dir * t;
                         if point_in_analytic_face_uv(hit, face.surface(), &uv_poly) {
-                            if fi < face_polys.len() {
-                                let (_, holes, pn, _) = &face_polys[fi];
+                            if let Some(&pi) = poly_index.get(&fid.index()) {
+                                let (_, holes, pn, _) = &face_polys[pi];
                                 let in_hole = holes
                                     .iter()
                                     .any(|hole| point_in_face_polygon_3d(hit, hole, pn));
@@ -1711,8 +1730,8 @@ fn classify_point_analytic_raycast(
                 }
                 _ => {
                     // Fall back to polygon approximation for remaining surface types.
-                    if fi < face_polys.len() {
-                        let (verts, holes, normal, d) = &face_polys[fi];
+                    if let Some(&pi) = poly_index.get(&fid.index()) {
+                        let (verts, holes, normal, d) = &face_polys[pi];
                         let denom = normal.dot(*ray_dir);
                         if denom.abs() < 1e-15 {
                             continue;

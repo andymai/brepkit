@@ -437,12 +437,20 @@ pub fn split_face_2d(
     if !original_inner_wires.is_empty() {
         for hole in &original_inner_wires {
             if let Some(first_pt) = hole.first().map(|e| e.start_uv) {
+                let mut assigned = false;
                 for sf in &mut sub_faces {
                     let outer_pts = sample_wire_loop_uv(&sf.outer_wire);
                     if super::classify_2d::point_in_polygon_2d(first_pt, &outer_pts) {
                         sf.inner_wires.push(hole.clone());
+                        assigned = true;
                         break;
                     }
+                }
+                if !assigned {
+                    log::warn!(
+                        "face_splitter: hole with {} edges could not be assigned to any sub-face",
+                        hole.len()
+                    );
                 }
             }
         }

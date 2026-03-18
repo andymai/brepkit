@@ -263,7 +263,9 @@ pub fn boolean_with_options(
                 }),
                 (BooleanOp::Intersect, true, _) => Ok(crate::copy::copy_solid(topo, b)?),
                 (BooleanOp::Intersect, _, true) => Ok(crate::copy::copy_solid(topo, a)?),
-                _ => unreachable!(),
+                _ => Err(crate::OperationsError::InvalidInput {
+                    reason: "containment shortcut: unexpected state".into(),
+                }),
             };
         }
     }

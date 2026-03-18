@@ -156,7 +156,7 @@ impl BrepKernel {
     ///
     /// Returns an error if either handle is invalid, `op` is unrecognized,
     /// or the operation fails.
-    #[wasm_bindgen(js_name = "booleanPipeline")]
+    #[wasm_bindgen(js_name = "booleanV2")]
     pub fn boolean_pipeline(&mut self, op: &str, a: u32, b: u32) -> Result<u32, JsError> {
         let bool_op = parse_boolean_op(op)?;
         let a_id = self.resolve_solid(a)?;
