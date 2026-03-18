@@ -743,6 +743,28 @@ pub fn solid_volume(
         return Ok(v);
     }
 
+    // For all-planar solids WITHOUT inner wires (e.g. v2 boolean results,
+    // chamfered boxes), use the divergence-theorem polygon volume. This is
+    // exact for planar faces and avoids tessellate_solid winding issues
+    // with non-triangular faces assembled by the v2 boolean pipeline.
+    // Note: volume_from_planar_polygons now handles inner wires (hole area
+    // subtraction), but we still skip for solids with inner wires because
+    // the direct face tessellation path handles reversed curved faces better.
+    // TODO: re-evaluate after boolean pipeline improvements stabilize.
+    {
+        let s = topo.solid(solid)?;
+        let sh = topo.shell(s.outer_shell())?;
+        let no_inner_wires = sh
+            .faces()
+            .iter()
+            .all(|&fid| topo.face(fid).is_ok_and(|f| f.inner_wires().is_empty()));
+        if no_inner_wires {
+            if let Ok(v) = volume_from_planar_polygons(topo, solid, deflection) {
+                return Ok(v);
+            }
+        }
+    }
+
     // For solids with faces that have inner wires (holes from boolean ops)
     // or reversed non-planar faces (inner walls from shell/boolean operations),
     // use direct per-face tessellation with signed-volume summation.
@@ -762,23 +784,14 @@ pub fn solid_volume(
         return volume_from_direct_face_tessellation(topo, solid, deflection);
     }
 
-    // Try watertight tessellation first — this gives correct volume
-    // via signed tetrahedra since the mesh is closed.
+    // Try watertight tessellation — gives correct volume via signed tetrahedra
+    // since the mesh is closed.
     let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
     if !mesh.indices.is_empty() {
         let vol = signed_volume_from_mesh(&mesh);
-        // If watertight mesh volume is non-trivial, use it.
-        // Near-zero result indicates inconsistent winding (e.g. shelled solids
-        // where inner face normals cancel outer face contributions).
         if vol > 1e-12 {
             return Ok(vol);
         }
-    }
-
-    // For all-planar solids (e.g. chamfered boxes with non-manifold topology
-    // where tessellate_solid gives wrong winding), use polygon-based volume.
-    if let Ok(v) = volume_from_planar_polygons(topo, solid, deflection) {
-        return Ok(v);
     }
 
     // Fallback: per-face tessellation with centroid-based winding correction.
@@ -1447,7 +1460,13 @@ fn volume_from_planar_polygons(
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
         let face_normal = match face.surface() {
-            FaceSurface::Plane { normal, .. } => *normal,
+            FaceSurface::Plane { normal, .. } => {
+                if face.is_reversed() {
+                    -*normal
+                } else {
+                    *normal
+                }
+            }
             _ => {
                 return Err(crate::OperationsError::InvalidInput {
                     reason: "planar polygon volume requires all-planar faces".into(),
@@ -1489,7 +1508,43 @@ fn volume_from_planar_polygons(
             cz += vi.x() * vj.y() - vi.y() * vj.x();
         }
         let area_vec = Vec3::new(cx, cy, cz);
-        let area = area_vec.length() / 2.0;
+        let mut area = area_vec.length() / 2.0;
+
+        // Subtract inner wire (hole) areas.
+        for &iw_id in face.inner_wires() {
+            let iw = topo.wire(iw_id)?;
+            // Only handle Line-edge holes; curved holes can't be computed
+            // from vertices alone — bail to tessellation fallback.
+            let all_lines = iw.edges().iter().all(|oe| {
+                topo.edge(oe.edge())
+                    .is_ok_and(|e| matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line))
+            });
+            if !all_lines {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "planar polygon volume: inner wire has non-Line edges".into(),
+                });
+            }
+            let mut hole_verts = Vec::with_capacity(iw.edges().len());
+            for oe in iw.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let vid = if oe.is_forward() {
+                    edge.start()
+                } else {
+                    edge.end()
+                };
+                hole_verts.push(topo.vertex(vid)?.point());
+            }
+            let hn = hole_verts.len();
+            let (mut hx, mut hy, mut hz) = (0.0_f64, 0.0_f64, 0.0_f64);
+            for i in 0..hn {
+                let j = (i + 1) % hn;
+                hx += hole_verts[i].y() * hole_verts[j].z() - hole_verts[i].z() * hole_verts[j].y();
+                hy += hole_verts[i].z() * hole_verts[j].x() - hole_verts[i].x() * hole_verts[j].z();
+                hz += hole_verts[i].x() * hole_verts[j].y() - hole_verts[i].y() * hole_verts[j].x();
+            }
+            let hole_area = Vec3::new(hx, hy, hz).length() / 2.0;
+            area -= hole_area;
+        }
 
         total += d * area;
     }

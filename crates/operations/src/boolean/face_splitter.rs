@@ -4,7 +4,7 @@
 //! them to [`OrientedPCurveEdge`]s in the face's parameter space, calls
 //! the wire builder, and produces [`SubFace`]s.
 
-#![allow(dead_code)] // Used by later boolean_v2 pipeline stages.
+#![allow(dead_code)] // Used by later boolean_pipeline pipeline stages.
 
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
@@ -79,12 +79,30 @@ pub fn split_face_2d(
         boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, None)
     };
 
-    // If no section edges, the face is unsplit — return as-is.
+    // Convert original inner wires (holes) to OrientedPCurveEdge.
+    let original_inner_wires: Vec<Vec<OrientedPCurveEdge>> = face
+        .inner_wires()
+        .iter()
+        .filter_map(|&iw_id| {
+            let iw_pts = collect_wire_points(topo, iw_id);
+            if iw_pts.len() < 3 {
+                return None;
+            }
+            let edges = if is_plane {
+                boundary_edges_to_pcurve(topo, iw_id, &surface, &iw_pts, Some(frame))
+            } else {
+                boundary_edges_to_pcurve(topo, iw_id, &surface, &iw_pts, None)
+            };
+            if edges.is_empty() { None } else { Some(edges) }
+        })
+        .collect();
+
+    // If no section edges, the face is unsplit — return as-is with original holes.
     if sections.is_empty() {
         return vec![SubFace {
             surface,
             outer_wire: boundary_edges,
-            inner_wires: Vec::new(),
+            inner_wires: original_inner_wires,
             reversed,
             parent: face_id,
             source,
@@ -414,6 +432,30 @@ pub fn split_face_2d(
         }
     }
 
+    // Distribute original inner wires (holes from the source face) to sub-faces.
+    // Each hole is assigned to the sub-face whose outer wire contains it.
+    if !original_inner_wires.is_empty() {
+        for hole in &original_inner_wires {
+            if let Some(first_pt) = hole.first().map(|e| e.start_uv) {
+                let mut assigned = false;
+                for sf in &mut sub_faces {
+                    let outer_pts = sample_wire_loop_uv(&sf.outer_wire);
+                    if super::classify_2d::point_in_polygon_2d(first_pt, &outer_pts) {
+                        sf.inner_wires.push(hole.clone());
+                        assigned = true;
+                        break;
+                    }
+                }
+                if !assigned {
+                    log::warn!(
+                        "face_splitter: hole with {} edges could not be assigned to any sub-face",
+                        hole.len()
+                    );
+                }
+            }
+        }
+    }
+
     sub_faces
 }
 
@@ -605,7 +647,7 @@ fn sample_wire_loop_uv_periodic(
             Curve2D::Circle(_) | Curve2D::Ellipse(_) => {
                 // Circle2D/Ellipse2D pcurves: interpolate between start_uv
                 // and end_uv. This is approximate (chord, not arc) but these
-                // pcurve types are rare in the boolean_v2 pipeline — section
+                // pcurve types are rare in the boolean_pipeline pipeline — section
                 // edges use NURBS and boundary edges use Line2D.
                 #[allow(clippy::cast_precision_loss)]
                 for i in 0..CURVE_SAMPLES {
@@ -950,7 +992,10 @@ fn normalize_angle_in_span(angle: f64, t0: f64, span: f64) -> f64 {
     delta / span
 }
 
-fn collect_wire_points(topo: &Topology, wire_id: brepkit_topology::wire::WireId) -> Vec<Point3> {
+pub(super) fn collect_wire_points(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+) -> Vec<Point3> {
     let wire = match topo.wire(wire_id) {
         Ok(w) => w,
         Err(_) => return Vec::new(),
@@ -966,7 +1011,7 @@ fn collect_wire_points(topo: &Topology, wire_id: brepkit_topology::wire::WireId)
     pts
 }
 
-fn extract_plane_normal(surface: &brepkit_topology::face::FaceSurface) -> Vec3 {
+pub(super) fn extract_plane_normal(surface: &brepkit_topology::face::FaceSurface) -> Vec3 {
     if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = surface {
         *normal
     } else {
@@ -974,7 +1019,7 @@ fn extract_plane_normal(surface: &brepkit_topology::face::FaceSurface) -> Vec3 {
     }
 }
 
-fn boundary_edges_to_pcurve(
+pub(super) fn boundary_edges_to_pcurve(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
     surface: &brepkit_topology::face::FaceSurface,

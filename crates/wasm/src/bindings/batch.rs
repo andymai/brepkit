@@ -273,7 +273,7 @@ impl BrepKernel {
                 let b = get_u32(args, "solidB")?;
                 let a_id = self.resolve_solid(a).map_err(|e| e.to_string())?;
                 let b_id = self.resolve_solid(b).map_err(|e| e.to_string())?;
-                let result = brepkit_operations::boolean::boolean_v2::boolean_v2(
+                let result = brepkit_operations::boolean::boolean_pipeline::boolean_pipeline(
                     self.topo_mut(),
                     bool_op,
                     a_id,

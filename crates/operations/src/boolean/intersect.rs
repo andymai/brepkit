@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Phase 1-2: Intersection computation for the boolean pipeline.
 //!
 //! Computes intersection curves between face pairs of two solids, producing

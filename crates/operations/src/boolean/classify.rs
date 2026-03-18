@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Phase 4: Classification — point-in-solid tests for boolean fragment labeling.
 //!
 //! Determines whether each face fragment lies inside, outside, or on the
@@ -14,7 +15,7 @@ use brepkit_math::predicates::point_in_polygon;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::face::FaceSurface;
+use brepkit_topology::face::{Face, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 use crate::dot_normal_point;
@@ -92,11 +93,10 @@ impl AnalyticClassifier {
                     + radial_vec.z() * radial_vec.z();
                 // Linearly interpolate expected radius between z_min and z_max.
                 let dz = z_max - z_min;
-                // Numerical-zero guard: if the cone's axial height is < 1e-12,
-                // the radius interpolation parameter is undefined — fall back to
-                // midpoint (t = 0.5). 1e-12 is ~1 picometer, well below any
-                // meaningful cone frustum height.
-                let t = if dz.abs() > 1e-12 {
+                // Numerical-zero guard: if the cone's axial height is below the
+                // linear tolerance, the radius interpolation is undefined —
+                // fall back to midpoint (t = 0.5).
+                let t = if dz.abs() > tol.linear {
                     (axial - z_min) / dz
                 } else {
                     0.5
@@ -155,6 +155,87 @@ impl AnalyticClassifier {
                     None // On boundary
                 }
             }
+            Self::ConvexAnalytic {
+                planes,
+                cylinders,
+                cones,
+            } => {
+                let tl = tol.linear;
+                let cv = Vec3::new(centroid.x(), centroid.y(), centroid.z());
+
+                // Check all plane constraints.
+                let mut max_plane_dist = f64::NEG_INFINITY;
+                for &(normal, d) in planes {
+                    let signed_dist = normal.dot(cv) - d;
+                    max_plane_dist = max_plane_dist.max(signed_dist);
+                }
+
+                // Check all cylinder constraints.
+                let mut max_cyl_excess = f64::NEG_INFINITY;
+                for &(origin, axis, radius, z_min, z_max) in cylinders {
+                    let diff = centroid - origin;
+                    let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+                    let axial = diff_v.dot(axis);
+                    if axial < z_min - tl || axial > z_max + tl {
+                        return Some(FaceClass::Outside);
+                    }
+                    let projected = axis * axial;
+                    let radial_vec = diff_v - projected;
+                    let radial_dist = radial_vec.length();
+                    max_cyl_excess = max_cyl_excess.max(radial_dist - radius);
+                }
+
+                // Check all cone constraints.
+                let mut max_cone_excess = f64::NEG_INFINITY;
+                for &(origin, axis, z_min, z_max, r_min, r_max) in cones {
+                    let diff = centroid - origin;
+                    let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+                    let axial = diff_v.dot(axis);
+                    if axial < z_min - tl || axial > z_max + tl {
+                        return Some(FaceClass::Outside);
+                    }
+                    let dz = z_max - z_min;
+                    let t = if dz.abs() > tol.linear {
+                        (axial - z_min) / dz
+                    } else {
+                        0.5
+                    };
+                    let expected_r = r_min + t * (r_max - r_min);
+                    let projected = axis * axial;
+                    let radial_vec = diff_v - projected;
+                    let radial_dist = radial_vec.length();
+                    max_cone_excess = max_cone_excess.max(radial_dist - expected_r);
+                }
+
+                // Point is inside iff ALL constraints are satisfied.
+                let max_excess = max_plane_dist.max(max_cyl_excess).max(max_cone_excess);
+                if max_excess < -tl {
+                    Some(FaceClass::Inside)
+                } else if max_excess > tl {
+                    Some(FaceClass::Outside)
+                } else {
+                    None // On boundary
+                }
+            }
+            Self::Composite { outer, inner } => {
+                // Point is inside the solid iff:
+                // 1. Inside the outer boundary
+                // 2. Outside the inner cavity
+                let outer_class = outer.classify(centroid, tol);
+                match outer_class {
+                    Some(FaceClass::Outside) => Some(FaceClass::Outside),
+                    Some(FaceClass::Inside) => {
+                        // Inside outer — check inner cavity.
+                        let inner_class = inner.classify(centroid, tol);
+                        match inner_class {
+                            Some(FaceClass::Inside) => Some(FaceClass::Outside), // In cavity = outside solid
+                            Some(FaceClass::Outside) => Some(FaceClass::Inside), // Between walls = inside solid
+                            _ => None, // On inner boundary
+                        }
+                    }
+                    _ => None, // On outer boundary
+                }
+            }
         }
     }
 }
@@ -180,8 +261,22 @@ pub(super) fn try_build_analytic_classifier(
     // Complex solids (>20 faces) can't be simple analytic shapes (box,
     // cylinder+caps, sphere). Skip the face-by-face scan to avoid O(F)
     // overhead on large fused/boolean intermediate results.
-    if shell.faces().len() > 20 {
+    if shell.faces().len() > 50 {
         return None;
+    }
+
+    // Shelled/hollow solids have reversed inner faces. Try to build a
+    // composite classifier (outer + inner) for accurate classification.
+    // Detect shelled/hollow solids by either:
+    // 1. Reversed faces (face normal opposite to surface normal)
+    // 2. Non-convex all-planar topology (inner walls with inward-pointing
+    //    normals that fail the convexity check)
+    let has_reversed = shell
+        .faces()
+        .iter()
+        .any(|&fid| topo.face(fid).ok().is_some_and(Face::is_reversed));
+    if has_reversed {
+        return try_build_composite_classifier(topo, solid);
     }
 
     let mut sphere_info: Option<(Point3, f64)> = None;
@@ -347,6 +442,11 @@ pub(super) fn try_build_analytic_classifier(
             if is_convex {
                 return Some(AnalyticClassifier::ConvexPolyhedron { planes });
             }
+            // Non-convex all-planar solid — likely a shelled/hollow box.
+            // Try the composite classifier (outer + inner boundary).
+            if let Some(composite) = try_build_composite_classifier(topo, solid) {
+                return Some(composite);
+            }
         }
     }
 
@@ -467,7 +567,404 @@ pub(super) fn try_build_analytic_classifier(
         }
     }
 
+    // Final fallback: try ConvexAnalytic for mixed plane+cone/cylinder solids.
+    // This handles lip frustums (plane caps + conical sides), chamfered boxes
+    // (plane + cylinder fillets), and other convex analytic solids.
+    if has_planar && (has_cone || has_cylinder) && !has_sphere {
+        return try_build_convex_analytic(topo, solid);
+    }
+
     None
+}
+
+/// Build a ConvexAnalytic classifier from a convex solid with mixed surface types.
+///
+/// Collects half-plane, cylinder, and cone constraints from all faces.
+/// Verifies convexity by checking that the solid's vertex centroid is inside
+/// all constraints.
+fn try_build_convex_analytic(topo: &Topology, solid: SolidId) -> Option<AnalyticClassifier> {
+    let s = topo.solid(solid).ok()?;
+    let shell = topo.shell(s.outer_shell()).ok()?;
+    let tol = Tolerance::new();
+
+    let mut planes: Vec<(Vec3, f64)> = Vec::new();
+    let mut cylinders: Vec<(Point3, Vec3, f64, f64, f64)> = Vec::new();
+    let mut cones: Vec<(Point3, Vec3, f64, f64, f64, f64)> = Vec::new();
+
+    for &fid in shell.faces() {
+        let face = topo.face(fid).ok()?;
+        match face.surface() {
+            FaceSurface::Plane { normal, d } => {
+                let (n, dv) = if face.is_reversed() {
+                    (-*normal, -*d)
+                } else {
+                    (*normal, *d)
+                };
+                planes.push((n, dv));
+            }
+            FaceSurface::Cylinder(cyl) => {
+                // Cylinder face: collect axis, radius, and axial extent.
+                let origin = cyl.origin();
+                let axis = cyl.axis();
+                let r = cyl.radius();
+                let origin_v = Vec3::new(origin.x(), origin.y(), origin.z());
+                // Compute z_min/z_max from face vertices.
+                let wire = topo.wire(face.outer_wire()).ok()?;
+                let (z_min, z_max) = wire_axial_extent(topo, wire, origin_v, axis)?;
+                cylinders.push((origin, axis, r, z_min, z_max));
+            }
+            FaceSurface::Cone(con) => {
+                let apex = con.apex();
+                let axis = con.axis();
+                let apex_v = Vec3::new(apex.x(), apex.y(), apex.z());
+                let wire = topo.wire(face.outer_wire()).ok()?;
+                let (z_min, z_max, r_min, r_max) = wire_cone_extent(topo, wire, apex_v, axis, con)?;
+                cones.push((apex, axis, z_min, z_max, r_min, r_max));
+            }
+            _ => return None, // Unsupported surface type.
+        }
+    }
+
+    if planes.is_empty() {
+        return None;
+    }
+
+    // Convexity check: compute vertex centroid and verify it's inside all constraints.
+    let mut centroid = Vec3::new(0.0, 0.0, 0.0);
+    let mut vert_count = 0u32;
+    for &fid in shell.faces() {
+        let face = topo.face(fid).ok()?;
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let v = topo.vertex(edge.start()).ok()?;
+            let p = v.point();
+            centroid += Vec3::new(p.x(), p.y(), p.z());
+            vert_count += 1;
+        }
+    }
+    if vert_count == 0 {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let centroid = centroid * (1.0 / vert_count as f64);
+    let centroid_pt = Point3::new(centroid.x(), centroid.y(), centroid.z());
+
+    // Check centroid against all planes.
+    for &(normal, d) in &planes {
+        let signed_dist = normal.dot(centroid) - d;
+        if signed_dist > tol.linear {
+            return None; // Centroid outside a plane → not convex or wrong normals.
+        }
+    }
+
+    // Check centroid against all cylinders.
+    for &(origin, axis, radius, z_min, z_max) in &cylinders {
+        let diff = centroid_pt - origin;
+        let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+        let axial = diff_v.dot(axis);
+        if axial < z_min - tol.linear || axial > z_max + tol.linear {
+            return None;
+        }
+        let projected = axis * axial;
+        let radial_vec = diff_v - projected;
+        if radial_vec.length() > radius + tol.linear {
+            return None;
+        }
+    }
+
+    // Check centroid against all cones.
+    for &(origin, axis, z_min, z_max, r_min, r_max) in &cones {
+        let diff = centroid_pt - origin;
+        let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+        let axial = diff_v.dot(axis);
+        if axial < z_min - tol.linear || axial > z_max + tol.linear {
+            return None;
+        }
+        let dz = z_max - z_min;
+        let t = if dz.abs() > tol.linear {
+            (axial - z_min) / dz
+        } else {
+            0.5
+        };
+        let expected_r = r_min + t * (r_max - r_min);
+        let projected = axis * axial;
+        let radial_vec = diff_v - projected;
+        if radial_vec.length() > expected_r + tol.linear {
+            return None;
+        }
+    }
+
+    Some(AnalyticClassifier::ConvexAnalytic {
+        planes,
+        cylinders,
+        cones,
+    })
+}
+
+/// Compute axial extent (z_min, z_max) of a wire's vertices along an axis.
+fn wire_axial_extent(
+    topo: &Topology,
+    wire: &brepkit_topology::wire::Wire,
+    origin: Vec3,
+    axis: Vec3,
+) -> Option<(f64, f64)> {
+    let mut z_min = f64::INFINITY;
+    let mut z_max = f64::NEG_INFINITY;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        for vid in [edge.start(), edge.end()] {
+            let v = topo.vertex(vid).ok()?;
+            let diff = v.point() - Point3::new(origin.x(), origin.y(), origin.z());
+            let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+            let z = diff_v.dot(axis);
+            z_min = z_min.min(z);
+            z_max = z_max.max(z);
+        }
+    }
+    if z_min.is_finite() && z_max.is_finite() {
+        Some((z_min, z_max))
+    } else {
+        None
+    }
+}
+
+/// Compute axial extent + radius range for a cone face's wire.
+fn wire_cone_extent(
+    topo: &Topology,
+    wire: &brepkit_topology::wire::Wire,
+    apex: Vec3,
+    axis: Vec3,
+    _con: &brepkit_math::surfaces::ConicalSurface,
+) -> Option<(f64, f64, f64, f64)> {
+    let mut z_min = f64::INFINITY;
+    let mut z_max = f64::NEG_INFINITY;
+    let mut r_at_zmin = 0.0_f64;
+    let mut r_at_zmax = 0.0_f64;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        for vid in [edge.start(), edge.end()] {
+            let v = topo.vertex(vid).ok()?;
+            let diff = v.point() - Point3::new(apex.x(), apex.y(), apex.z());
+            let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+            let z = diff_v.dot(axis);
+            let projected = axis * z;
+            let radial = diff_v - projected;
+            let r = radial.length();
+            if z < z_min {
+                z_min = z;
+                r_at_zmin = r;
+            }
+            if z > z_max {
+                z_max = z;
+                r_at_zmax = r;
+            }
+        }
+    }
+    if z_min.is_finite() && z_max.is_finite() {
+        Some((z_min, z_max, r_at_zmin, r_at_zmax))
+    } else {
+        None
+    }
+}
+
+/// Try to build a composite classifier for a shelled/hollow solid.
+///
+/// Splits faces into outer (non-reversed) and inner (reversed) groups.
+/// For each group, tries to build an axis-aligned box classifier from the
+/// planar faces. If both succeed, returns a `Composite` classifier where
+/// a point is inside the solid iff it's inside the outer boundary AND
+/// outside the inner cavity.
+fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<AnalyticClassifier> {
+    let s = topo.solid(solid).ok()?;
+    let shell = topo.shell(s.outer_shell()).ok()?;
+    let tol = Tolerance::new();
+
+    // Separate faces into outer and inner by checking if the face normal
+    // points OUTWARD from the solid centroid (outer) or INWARD (inner).
+    // This handles both is_reversed faces and shelled solids where inner
+    // faces have inward-pointing normals without the reversed flag.
+    let centroid = {
+        let mut c = Vec3::new(0.0, 0.0, 0.0);
+        let mut count = 0u32;
+        for &fid in shell.faces() {
+            let face = topo.face(fid).ok()?;
+            let wire = topo.wire(face.outer_wire()).ok()?;
+            for oe in wire.edges() {
+                let e = topo.edge(oe.edge()).ok()?;
+                let p = topo.vertex(e.start()).ok()?.point();
+                c += Vec3::new(p.x(), p.y(), p.z());
+                count += 1;
+            }
+        }
+        if count == 0 {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let inv = 1.0 / count as f64;
+        Point3::new(c.x() * inv, c.y() * inv, c.z() * inv)
+    };
+
+    let mut outer_planes: Vec<(Vec3, f64)> = Vec::new();
+    let mut inner_planes: Vec<(Vec3, f64)> = Vec::new();
+    let mut outer_cylinders: Vec<(Point3, Vec3, f64, f64, f64)> = Vec::new();
+    let mut inner_cylinders: Vec<(Point3, Vec3, f64, f64, f64)> = Vec::new();
+    let mut outer_cones: Vec<(Point3, Vec3, f64, f64, f64, f64)> = Vec::new();
+    let mut inner_cones: Vec<(Point3, Vec3, f64, f64, f64, f64)> = Vec::new();
+
+    for &fid in shell.faces() {
+        let face = topo.face(fid).ok()?;
+        match face.surface() {
+            FaceSurface::Plane { normal, d } => {
+                let (n, dv) = if face.is_reversed() {
+                    (-*normal, -*d)
+                } else {
+                    (*normal, *d)
+                };
+                // Classify as outer or inner by checking if the face normal
+                // points away from the centroid. For a plane with normal n and
+                // distance d: signed_dist = n·centroid - d. If positive, centroid
+                // is on the outside → this face faces outward (outer). If negative,
+                // centroid is on the inside → face faces inward (inner).
+                let cv = Vec3::new(centroid.x(), centroid.y(), centroid.z());
+                let signed_dist = n.dot(cv) - dv;
+                if signed_dist < 0.0 {
+                    // Centroid is INSIDE this face's half-space → outer face.
+                    outer_planes.push((n, dv));
+                } else {
+                    // Centroid is OUTSIDE this face's half-space → inner face.
+                    inner_planes.push((n, dv));
+                }
+            }
+            FaceSurface::Cylinder(cyl) => {
+                let origin = cyl.origin();
+                let axis = cyl.axis();
+                let r = cyl.radius();
+                let origin_v = Vec3::new(origin.x(), origin.y(), origin.z());
+                let wire = topo.wire(face.outer_wire()).ok()?;
+                let (z_min, z_max) = wire_axial_extent(topo, wire, origin_v, axis)?;
+                // Classify by centroid distance from axis vs radius.
+                let diff = centroid - origin;
+                let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+                let projected = axis * diff_v.dot(axis);
+                let radial_dist = (diff_v - projected).length();
+                if radial_dist < r {
+                    // Centroid inside cylinder → outer face (boundary surrounds centroid).
+                    outer_cylinders.push((origin, axis, r, z_min, z_max));
+                } else {
+                    // Centroid outside cylinder → inner face.
+                    inner_cylinders.push((origin, axis, r, z_min, z_max));
+                }
+            }
+            FaceSurface::Cone(con) => {
+                let apex = con.apex();
+                let axis = con.axis();
+                let apex_v = Vec3::new(apex.x(), apex.y(), apex.z());
+                let wire = topo.wire(face.outer_wire()).ok()?;
+                let (z_min, z_max, r_min, r_max) = wire_cone_extent(topo, wire, apex_v, axis, con)?;
+                // Classify by centroid: if the centroid's radial distance at
+                // its axial position is less than the cone's interpolated radius,
+                // the centroid is inside the cone → outer face.
+                let diff = centroid - apex;
+                let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+                let axial = diff_v.dot(axis);
+                let dz = z_max - z_min;
+                let t = if dz.abs() > tol.linear {
+                    ((axial - z_min) / dz).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                let expected_r = r_min + t * (r_max - r_min);
+                let projected = axis * axial;
+                let radial_dist = (diff_v - projected).length();
+                if radial_dist < expected_r {
+                    outer_cones.push((apex, axis, z_min, z_max, r_min, r_max));
+                } else {
+                    inner_cones.push((apex, axis, z_min, z_max, r_min, r_max));
+                }
+            }
+            // Skip sphere, torus, NURBS.
+            _ => {}
+        }
+    }
+
+    // Try to build a box classifier from each set.
+    // Supports open-top/bottom boxes (5 planes): missing axis gets ±1e6 bound.
+    let build_box = |planes: &[(Vec3, f64)]| -> Option<AnalyticClassifier> {
+        if planes.len() < 4 {
+            return None;
+        }
+        let mut x_vals = Vec::new();
+        let mut y_vals = Vec::new();
+        let mut z_vals = Vec::new();
+        for &(normal, d) in planes {
+            if normal.x().abs() > 0.5 {
+                x_vals.push(d / normal.x());
+            } else if normal.y().abs() > 0.5 {
+                y_vals.push(d / normal.y());
+            } else if normal.z().abs() > 0.5 {
+                z_vals.push(d / normal.z());
+            }
+        }
+        // Each axis needs at least 1 plane. Missing second plane = open side.
+        if x_vals.is_empty() || y_vals.is_empty() || z_vals.is_empty() {
+            return None;
+        }
+        let sort = |v: &mut Vec<f64>| {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        };
+        sort(&mut x_vals);
+        sort(&mut y_vals);
+        sort(&mut z_vals);
+        // Use large bounds for open sides (1e6 mm = 1 km).
+        let x_min = *x_vals.first()?;
+        let x_max = if x_vals.len() >= 2 {
+            *x_vals.last()?
+        } else {
+            x_min + 1e6
+        };
+        let y_min = *y_vals.first()?;
+        let y_max = if y_vals.len() >= 2 {
+            *y_vals.last()?
+        } else {
+            y_min + 1e6
+        };
+        let z_min = *z_vals.first()?;
+        let z_max = if z_vals.len() >= 2 {
+            *z_vals.last()?
+        } else {
+            z_min + 1e6
+        };
+        Some(AnalyticClassifier::Box {
+            min: Point3::new(x_min, y_min, z_min),
+            max: Point3::new(x_max, y_max, z_max),
+        })
+    };
+
+    // Build classifier for each face set. Use ConvexAnalytic when cylinders
+    // or cones are present. Fall back to Box for plane-only.
+    let build_classifier = |planes: &[(Vec3, f64)],
+                            cylinders: &[(Point3, Vec3, f64, f64, f64)],
+                            cones: &[(Point3, Vec3, f64, f64, f64, f64)]|
+     -> Option<AnalyticClassifier> {
+        if (!cylinders.is_empty() || !cones.is_empty()) && planes.len() >= 2 {
+            Some(AnalyticClassifier::ConvexAnalytic {
+                planes: planes.to_vec(),
+                cylinders: cylinders.to_vec(),
+                cones: cones.to_vec(),
+            })
+        } else {
+            build_box(planes)
+        }
+    };
+
+    let outer = build_classifier(&outer_planes, &outer_cylinders, &outer_cones)?;
+    let inner = build_classifier(&inner_planes, &inner_cylinders, &inner_cones)?;
+
+    Some(AnalyticClassifier::Composite {
+        outer: std::boxed::Box::new(outer),
+        inner: std::boxed::Box::new(inner),
+    })
 }
 
 // ---------------------------------------------------------------------------

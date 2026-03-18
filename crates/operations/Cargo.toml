@@ -36,5 +36,9 @@ harness = false
 name = "fuse_perf"
 harness = false
 
+[[bench]]
+name = "boolean_pipeline"
+harness = false
+
 [lints]
 workspace = true
