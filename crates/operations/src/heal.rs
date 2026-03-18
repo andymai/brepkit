@@ -877,26 +877,30 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
     let n = all_face_ids.len();
     let mut parent: Vec<usize> = (0..n).collect();
 
-    // For each edge shared by exactly 2 faces, check if they're on the same surface.
+    // For each edge shared by 2+ faces, check if adjacent faces are on the same surface.
+    // Includes non-manifold edges (3+ faces) to enable merging across boolean assembly
+    // imperfections where faces should be unified despite non-manifold edges.
     for faces in edge_face_map.values() {
-        if faces.len() != 2 {
+        if faces.len() < 2 {
             continue;
         }
-        let fa_idx = match face_index_map.get(&faces[0].index()) {
-            Some(&i) => i,
-            None => continue,
-        };
-        let fb_idx = match face_index_map.get(&faces[1].index()) {
-            Some(&i) => i,
-            None => continue,
-        };
-
-        // Snapshot surface data to avoid borrow issues.
-        let surface_a = topo.face(faces[0])?.surface().clone();
-        let surface_b = topo.face(faces[1])?.surface().clone();
-
-        if surfaces_equivalent(&surface_a, &surface_b) {
-            uf_union(&mut parent, fa_idx, fb_idx);
+        // Check all pairs of faces sharing this edge.
+        for i in 0..faces.len() {
+            for j in (i + 1)..faces.len() {
+                let fa_idx = match face_index_map.get(&faces[i].index()) {
+                    Some(&idx) => idx,
+                    None => continue,
+                };
+                let fb_idx = match face_index_map.get(&faces[j].index()) {
+                    Some(&idx) => idx,
+                    None => continue,
+                };
+                let surface_a = topo.face(faces[i])?.surface().clone();
+                let surface_b = topo.face(faces[j])?.surface().clone();
+                if surfaces_equivalent(&surface_a, &surface_b) {
+                    uf_union(&mut parent, fa_idx, fb_idx);
+                }
+            }
         }
     }
 
