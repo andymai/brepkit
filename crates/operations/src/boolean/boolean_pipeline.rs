@@ -2002,7 +2002,7 @@ fn collect_face_polygon(topo: &Topology, face_id: FaceId) -> Result<Vec<Point3>,
                 } else if t1 >= t0 {
                     t1 -= std::f64::consts::TAU;
                 }
-                let n_samples = 8;
+                let n_samples = 16;
                 for i in 1..n_samples {
                     let frac = i as f64 / n_samples as f64;
                     let t = t0 + (t1 - t0) * frac;
@@ -2020,7 +2020,7 @@ fn collect_face_polygon(topo: &Topology, face_id: FaceId) -> Result<Vec<Point3>,
                 } else if t1 >= t0 {
                     t1 -= std::f64::consts::TAU;
                 }
-                let n_samples = 8;
+                let n_samples = 16;
                 for i in 1..n_samples {
                     let frac = i as f64 / n_samples as f64;
                     let t = t0 + (t1 - t0) * frac;
@@ -2031,7 +2031,7 @@ fn collect_face_polygon(topo: &Topology, face_id: FaceId) -> Result<Vec<Point3>,
                 // Sample 8 intermediate points.
                 let (t0, t1) = (nurbs.knots().first(), nurbs.knots().last());
                 if let (Some(&t0), Some(&t1)) = (t0, t1) {
-                    let n_samples = 8;
+                    let n_samples = 16;
                     for i in 1..n_samples {
                         let frac = i as f64 / n_samples as f64;
                         let t = t0 + (t1 - t0) * frac;
@@ -2114,7 +2114,7 @@ fn sample_wire_polygon(topo: &Topology, wire: &Wire) -> Result<Vec<Point3>, Oper
                 } else if t1 >= t0 {
                     t1 -= std::f64::consts::TAU;
                 }
-                let n_samples = 8;
+                let n_samples = 16;
                 for i in 1..n_samples {
                     let frac = i as f64 / n_samples as f64;
                     let t = t0 + (t1 - t0) * frac;
@@ -2132,7 +2132,7 @@ fn sample_wire_polygon(topo: &Topology, wire: &Wire) -> Result<Vec<Point3>, Oper
                 } else if t1 >= t0 {
                     t1 -= std::f64::consts::TAU;
                 }
-                let n_samples = 8;
+                let n_samples = 16;
                 for i in 1..n_samples {
                     let frac = i as f64 / n_samples as f64;
                     let t = t0 + (t1 - t0) * frac;
@@ -2141,7 +2141,7 @@ fn sample_wire_polygon(topo: &Topology, wire: &Wire) -> Result<Vec<Point3>, Oper
             }
             EdgeCurve::NurbsCurve(nurbs) => {
                 if let (Some(&t0), Some(&t1)) = (nurbs.knots().first(), nurbs.knots().last()) {
-                    let n_samples = 8;
+                    let n_samples = 16;
                     for i in 1..n_samples {
                         let frac = i as f64 / n_samples as f64;
                         let t = t0 + (t1 - t0) * frac;
