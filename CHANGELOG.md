@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.14.0](https://github.com/andymai/brepkit/compare/v2.13.0...v2.14.0) (2026-03-18)
+
+
+### Features
+
+* **boolean_v2:** coplanar face handling — overlapping box support ([#298](https://github.com/andymai/brepkit/issues/298)) ([6c9f313](https://github.com/andymai/brepkit/commit/6c9f3135010958b2ab183444bba8b2f8bc1f7520))
+* **boolean:** OCCT-style shell builder + analytic classification ([#299](https://github.com/andymai/brepkit/issues/299)) ([4680446](https://github.com/andymai/brepkit/commit/46804468f135e35e70e3024a0774c65c75828502))
+
 ## [2.13.0](https://github.com/andymai/brepkit/compare/v2.12.0...v2.13.0) (2026-03-17)
 
 
