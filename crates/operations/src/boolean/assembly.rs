@@ -1095,13 +1095,7 @@ pub(super) fn stitch_boundary_edges(
                 // otherwise traverse reversed.
                 let is_forward =
                     keeper_start == resolved_expected || keeper_end != resolved_expected;
-                // Skip if this replacement edge is already in the wire.
-                if !new_oriented_edges
-                    .iter()
-                    .any(|e: &OrientedEdge| e.edge() == replacement_eid)
-                {
-                    new_oriented_edges.push(OrientedEdge::new(replacement_eid, is_forward));
-                }
+                new_oriented_edges.push(OrientedEdge::new(replacement_eid, is_forward));
             } else {
                 // Keep the original edge, but remap its vertices if needed.
                 let edge = topo.edge(oe.edge())?;
@@ -1115,16 +1109,8 @@ pub(super) fn stitch_boundary_edges(
                     let s = new_start.unwrap_or(old_start);
                     let e = new_end.unwrap_or(old_end);
                     let new_eid = topo.add_edge(Edge::new(s, e, curve));
-                    if !new_oriented_edges
-                        .iter()
-                        .any(|e: &OrientedEdge| e.edge() == new_eid)
-                    {
-                        new_oriented_edges.push(OrientedEdge::new(new_eid, oe.is_forward()));
-                    }
-                } else if !new_oriented_edges
-                    .iter()
-                    .any(|e: &OrientedEdge| e.edge() == oe.edge())
-                {
+                    new_oriented_edges.push(OrientedEdge::new(new_eid, oe.is_forward()));
+                } else {
                     new_oriented_edges.push(*oe);
                 }
             }
