@@ -809,6 +809,8 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
     let mut inner_planes: Vec<(Vec3, f64)> = Vec::new();
     let mut outer_cylinders: Vec<(Point3, Vec3, f64, f64, f64)> = Vec::new();
     let mut inner_cylinders: Vec<(Point3, Vec3, f64, f64, f64)> = Vec::new();
+    let mut outer_cones: Vec<(Point3, Vec3, f64, f64, f64, f64)> = Vec::new();
+    let mut inner_cones: Vec<(Point3, Vec3, f64, f64, f64, f64)> = Vec::new();
 
     for &fid in shell.faces() {
         let face = topo.face(fid).ok()?;
@@ -860,10 +862,26 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
                 let apex_v = Vec3::new(apex.x(), apex.y(), apex.z());
                 let wire = topo.wire(face.outer_wire()).ok()?;
                 let (z_min, z_max, r_min, r_max) = wire_cone_extent(topo, wire, apex_v, axis, con)?;
-                // Cones are not used in composite classifier yet — skip.
-                // (ConvexAnalytic supports cones but the composite classifier
-                // needs more work to handle cone reversal correctly.)
-                let _ = (z_min, z_max, r_min, r_max);
+                // Classify by centroid: if the centroid's radial distance at
+                // its axial position is less than the cone's interpolated radius,
+                // the centroid is inside the cone → outer face.
+                let diff = centroid - apex;
+                let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
+                let axial = diff_v.dot(axis);
+                let dz = z_max - z_min;
+                let t = if dz.abs() > 1e-12 {
+                    ((axial - z_min) / dz).clamp(0.0, 1.0)
+                } else {
+                    0.5
+                };
+                let expected_r = r_min + t * (r_max - r_min);
+                let projected = axis * axial;
+                let radial_dist = (diff_v - projected).length();
+                if radial_dist < expected_r {
+                    outer_cones.push((apex, axis, z_min, z_max, r_min, r_max));
+                } else {
+                    inner_cones.push((apex, axis, z_min, z_max, r_min, r_max));
+                }
             }
             // Skip sphere, torus, NURBS.
             _ => {}
@@ -924,23 +942,24 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
     };
 
     // Build classifier for each face set. Use ConvexAnalytic when cylinders
-    // are present (handles rounded corners). Fall back to Box for plane-only.
+    // or cones are present. Fall back to Box for plane-only.
     let build_classifier = |planes: &[(Vec3, f64)],
-                            cylinders: &[(Point3, Vec3, f64, f64, f64)]|
+                            cylinders: &[(Point3, Vec3, f64, f64, f64)],
+                            cones: &[(Point3, Vec3, f64, f64, f64, f64)]|
      -> Option<AnalyticClassifier> {
-        if !cylinders.is_empty() && planes.len() >= 3 {
+        if (!cylinders.is_empty() || !cones.is_empty()) && planes.len() >= 2 {
             Some(AnalyticClassifier::ConvexAnalytic {
                 planes: planes.to_vec(),
                 cylinders: cylinders.to_vec(),
-                cones: Vec::new(),
+                cones: cones.to_vec(),
             })
         } else {
             build_box(planes)
         }
     };
 
-    let outer = build_classifier(&outer_planes, &outer_cylinders)?;
-    let inner = build_classifier(&inner_planes, &inner_cylinders)?;
+    let outer = build_classifier(&outer_planes, &outer_cylinders, &outer_cones)?;
+    let inner = build_classifier(&inner_planes, &inner_cylinders, &inner_cones)?;
 
     Some(AnalyticClassifier::Composite {
         outer: std::boxed::Box::new(outer),
