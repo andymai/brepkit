@@ -31,6 +31,9 @@ use super::plane_frame::PlaneFrame;
 use super::types::{AnalyticClassifier, BooleanOp, FaceClass, Source, select_fragment};
 use crate::OperationsError;
 
+/// Face polygon data for ray-cast classification: (outer_verts, inner_hole_verts, normal, d).
+type FacePolyData = (Vec<Point3>, Vec<Vec<Point3>>, Vec3, f64);
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -1320,7 +1323,7 @@ fn classify_with_fallback(
     test_pt: Point3,
     wire: &[super::pipeline::OrientedPCurveEdge],
     classifier: Option<&AnalyticClassifier>,
-    face_polys: &[(Vec<Point3>, Vec3, f64)],
+    face_polys: &[FacePolyData],
     tol: Tolerance,
 ) -> FaceClass {
     if let Some(c) = classifier {
@@ -1340,30 +1343,32 @@ fn classify_with_fallback(
 }
 
 /// Classify a 3D point as inside/outside/on a solid using face polygon ray-casting.
-fn classify_point_against_solid(
-    point: Point3,
-    face_polys: &[(Vec<Point3>, Vec3, f64)],
-) -> FaceClass {
-    // Cast a ray along +Z and count crossings using even-odd parity.
-    // Odd crossing count = inside, even = outside.
+///
+/// Each face has an outer polygon and optional inner hole polygons. A ray
+/// crossing counts only when the hit is inside the outer polygon but NOT
+/// inside any hole (inner wire opening).
+fn classify_point_against_solid(point: Point3, face_polys: &[FacePolyData]) -> FaceClass {
     let ray_dir = Vec3::new(0.0, 0.0, 1.0);
     let mut crossings = 0u32;
 
-    for (verts, normal, d) in face_polys {
-        // Check if the ray from `point` in `ray_dir` crosses this face polygon.
+    for (verts, holes, normal, d) in face_polys {
         let denom = normal.dot(ray_dir);
         if denom.abs() < 1e-15 {
-            continue; // Ray parallel to face.
+            continue;
         }
         let t = (*d - normal.dot(Vec3::new(point.x(), point.y(), point.z()))) / denom;
         if t < 1e-10 {
-            continue; // Intersection behind ray origin.
+            continue;
         }
         let hit = point + ray_dir * t;
-        // Check if hit point is inside the face polygon using 2D projection.
-        // Project onto the face's dominant plane.
         if point_in_face_polygon_3d(hit, verts, normal) {
-            crossings += 1;
+            // Check if hit passes through a hole opening.
+            let in_hole = holes
+                .iter()
+                .any(|hole| point_in_face_polygon_3d(hit, hole, normal));
+            if !in_hole {
+                crossings += 1;
+            }
         }
     }
 
@@ -1575,7 +1580,7 @@ fn collect_face_polygon(topo: &Topology, face_id: FaceId) -> Result<Vec<Point3>,
 fn collect_solid_face_polygons(
     topo: &Topology,
     solid: SolidId,
-) -> Result<Vec<(Vec<Point3>, Vec3, f64)>, OperationsError> {
+) -> Result<Vec<FacePolyData>, OperationsError> {
     let faces = collect_solid_faces(topo, solid)?;
     let mut result = Vec::new();
     for fid in faces {
@@ -1584,6 +1589,24 @@ fn collect_solid_face_polygons(
         if poly.len() < 3 {
             continue;
         }
+        // Collect inner wire (hole) polygons for ray-cast hole detection.
+        let mut holes = Vec::new();
+        for &iw_id in face.inner_wires() {
+            let iw = topo.wire(iw_id)?;
+            let mut hole_pts = Vec::new();
+            for oe in iw.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let vid = if oe.is_forward() {
+                    edge.start()
+                } else {
+                    edge.end()
+                };
+                hole_pts.push(topo.vertex(vid)?.point());
+            }
+            if hole_pts.len() >= 3 {
+                holes.push(hole_pts);
+            }
+        }
         if let FaceSurface::Plane { normal, d } = face.surface() {
             let effective_normal = if face.is_reversed() {
                 -*normal
@@ -1591,13 +1614,12 @@ fn collect_solid_face_polygons(
                 *normal
             };
             let effective_d = if face.is_reversed() { -*d } else { *d };
-            result.push((poly, effective_normal, effective_d));
+            result.push((poly, holes, effective_normal, effective_d));
         } else {
-            // Approximate normal/d from polygon for ray-cast fallback.
             let (normal, d) = approximate_polygon_plane(&poly);
             let effective_normal = if face.is_reversed() { -normal } else { normal };
             let effective_d = if face.is_reversed() { -d } else { d };
-            result.push((poly, effective_normal, effective_d));
+            result.push((poly, holes, effective_normal, effective_d));
         }
     }
     Ok(result)
