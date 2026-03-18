@@ -1294,11 +1294,12 @@ pub(super) fn split_nonmanifold_edges(
             edge_replacements.insert((face_angles[i].0, *edge_idx), new_edge_id);
             edge_replacements.insert((face_angles[j].0, *edge_idx), new_edge_id);
         }
-        // Handle odd face (keeps the original edge — still non-manifold but
-        // the iterative loop will process it on the next pass).
+        // Handle odd face: give it its own edge copy to prevent
+        // 3-face sharing.
         if n % 2 == 1 {
             let last = &face_angles[n - 1];
-            edge_replacements.insert((last.0, *edge_idx), edge_id);
+            let orphan_edge = topo.add_edge(Edge::new(edge_start, edge_end, edge_curve.clone()));
+            edge_replacements.insert((last.0, *edge_idx), orphan_edge);
         }
     }
 
