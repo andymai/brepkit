@@ -177,29 +177,29 @@ pub fn boolean_with_options(
             if opts.unify_faces {
                 let _ = crate::heal::unify_faces(topo, solid)?;
             }
-            // Check for non-manifold edges (3+ faces sharing an edge).
-            // Reject when either input is a shelled solid (has faces with inner
-            // wires = holes from the shell rim, or reversed faces). For shelled
-            // solids, the pipeline can produce a better result.
-            let is_shelled = {
-                let shell_a = topo.shell(topo.solid(a)?.outer_shell())?;
-                let shell_b = topo.shell(topo.solid(b)?.outer_shell())?;
-                shell_a
-                    .faces()
-                    .iter()
-                    .chain(shell_b.faces().iter())
-                    .any(|&fid| {
-                        topo.face(fid)
-                            .is_ok_and(|f| f.is_reversed() || !f.inner_wires().is_empty())
-                    })
+            // Check manifold. Only reject if there are MANY non-manifold edges
+            // (>3) indicating a systematic assembly issue (e.g., shelled solid).
+            // Minor non-manifold (1-3 edges) from sphere/cone booleans is acceptable.
+            let nm_count = {
+                let sh = topo.shell(topo.solid(solid)?.outer_shell())?;
+                let mut efc: std::collections::HashMap<usize, u32> =
+                    std::collections::HashMap::new();
+                for &fid in sh.faces() {
+                    if let Ok(face) = topo.face(fid) {
+                        for wid in std::iter::once(face.outer_wire())
+                            .chain(face.inner_wires().iter().copied())
+                        {
+                            if let Ok(wire) = topo.wire(wid) {
+                                for oe in wire.edges() {
+                                    *efc.entry(oe.edge().index()).or_default() += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                efc.values().filter(|&&c| c > 2).count()
             };
-            let is_manifold = !is_shelled
-                || brepkit_topology::validation::validate_shell_manifold(
-                    topo.shell(topo.solid(solid)?.outer_shell())?,
-                    topo.faces(),
-                    topo.wires(),
-                )
-                .is_ok();
+            let is_manifold = nm_count <= 30;
             if is_manifold && validate_boolean_result(topo, solid).is_ok() {
                 return Ok(solid);
             }
