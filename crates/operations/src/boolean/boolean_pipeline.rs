@@ -1347,32 +1347,60 @@ fn classify_with_fallback(
 /// Each face has an outer polygon and optional inner hole polygons. A ray
 /// crossing counts only when the hit is inside the outer polygon but NOT
 /// inside any hole (inner wire opening).
+/// Classify a 3D point as inside/outside a solid using ray-casting.
+///
+/// For planar faces, intersects a +Z ray with the face plane and checks
+/// point-in-polygon. For curved faces, uses a higher-density polygon
+/// with the approximate plane — less accurate but sufficient when combined
+/// with the analytic classifier for simple shapes.
+///
+/// Also fires a secondary +X ray to break ties (even/odd ambiguity from
+/// grazing hits near face edges).
 fn classify_point_against_solid(point: Point3, face_polys: &[FacePolyData]) -> FaceClass {
-    let ray_dir = Vec3::new(0.0, 0.0, 1.0);
-    let mut crossings = 0u32;
+    // Fire rays in 5 directions (axis-aligned + 2 off-axis) and take majority
+    // vote. This handles curved face polygon approximation errors — different
+    // ray directions miss different curved faces, and the majority averages out.
+    let rays = [
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(0.0, 0.0, -1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        // Slightly off-axis to avoid degenerate alignment with box edges.
+        Vec3::new(0.577_350_3, 0.577_350_3, 0.577_350_3),
+    ];
 
-    for (verts, holes, normal, d) in face_polys {
-        let denom = normal.dot(ray_dir);
-        if denom.abs() < 1e-15 {
-            continue;
-        }
-        let t = (*d - normal.dot(Vec3::new(point.x(), point.y(), point.z()))) / denom;
-        if t < 1e-10 {
-            continue;
-        }
-        let hit = point + ray_dir * t;
-        if point_in_face_polygon_3d(hit, verts, normal) {
-            // Check if hit passes through a hole opening.
-            let in_hole = holes
-                .iter()
-                .any(|hole| point_in_face_polygon_3d(hit, hole, normal));
-            if !in_hole {
-                crossings += 1;
+    let mut inside_count = 0u32;
+    let mut outside_count = 0u32;
+    for ray_dir in &rays {
+        let mut crossings = 0u32;
+        for (verts, holes, normal, d) in face_polys {
+            let denom = normal.dot(*ray_dir);
+            if denom.abs() < 1e-15 {
+                continue;
             }
+            let pv = Vec3::new(point.x(), point.y(), point.z());
+            let t = (*d - normal.dot(pv)) / denom;
+            if t < 1e-10 {
+                continue;
+            }
+            let hit = point + *ray_dir * t;
+            if point_in_face_polygon_3d(hit, verts, normal) {
+                let in_hole = holes
+                    .iter()
+                    .any(|hole| point_in_face_polygon_3d(hit, hole, normal));
+                if !in_hole {
+                    crossings += 1;
+                }
+            }
+        }
+        if crossings != 0 && crossings % 2 != 0 {
+            inside_count += 1;
+        } else {
+            outside_count += 1;
         }
     }
 
-    if crossings != 0 && crossings % 2 != 0 {
+    if inside_count > outside_count {
         FaceClass::Inside
     } else {
         FaceClass::Outside

@@ -15,7 +15,7 @@ use brepkit_math::predicates::point_in_polygon;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::face::FaceSurface;
+use brepkit_topology::face::{Face, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 use crate::dot_normal_point;
@@ -156,6 +156,25 @@ impl AnalyticClassifier {
                     None // On boundary
                 }
             }
+            Self::Composite { outer, inner } => {
+                // Point is inside the solid iff:
+                // 1. Inside the outer boundary
+                // 2. Outside the inner cavity
+                let outer_class = outer.classify(centroid, tol);
+                match outer_class {
+                    Some(FaceClass::Outside) => Some(FaceClass::Outside),
+                    Some(FaceClass::Inside) => {
+                        // Inside outer — check inner cavity.
+                        let inner_class = inner.classify(centroid, tol);
+                        match inner_class {
+                            Some(FaceClass::Inside) => Some(FaceClass::Outside), // In cavity = outside solid
+                            Some(FaceClass::Outside) => Some(FaceClass::Inside), // Between walls = inside solid
+                            _ => None, // On inner boundary
+                        }
+                    }
+                    _ => None, // On outer boundary
+                }
+            }
         }
     }
 }
@@ -185,14 +204,14 @@ pub(super) fn try_build_analytic_classifier(
         return None;
     }
 
-    // Shelled/hollow solids have reversed inner faces. The simple analytic
-    // classifier (Box, Cylinder, Sphere) doesn't account for cavities —
-    // it would classify points inside the hollow as "inside". Bail so the
-    // ray-cast fallback handles these correctly.
-    for &fid in shell.faces() {
-        if topo.face(fid).ok()?.is_reversed() {
-            return None;
-        }
+    // Shelled/hollow solids have reversed inner faces. Try to build a
+    // composite classifier (outer + inner) for accurate classification.
+    let has_reversed = shell
+        .faces()
+        .iter()
+        .any(|&fid| topo.face(fid).ok().is_some_and(Face::is_reversed));
+    if has_reversed {
+        return try_build_composite_classifier(topo, solid);
     }
 
     let mut sphere_info: Option<(Point3, f64)> = None;
@@ -479,6 +498,83 @@ pub(super) fn try_build_analytic_classifier(
     }
 
     None
+}
+
+/// Try to build a composite classifier for a shelled/hollow solid.
+///
+/// Splits faces into outer (non-reversed) and inner (reversed) groups.
+/// For each group, tries to build an axis-aligned box classifier from the
+/// planar faces. If both succeed, returns a `Composite` classifier where
+/// a point is inside the solid iff it's inside the outer boundary AND
+/// outside the inner cavity.
+fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<AnalyticClassifier> {
+    let s = topo.solid(solid).ok()?;
+    let shell = topo.shell(s.outer_shell()).ok()?;
+    let tol = Tolerance::new();
+
+    // Separate faces into outer (non-reversed) and inner (reversed).
+    let mut outer_planes: Vec<(Vec3, f64)> = Vec::new();
+    let mut inner_planes: Vec<(Vec3, f64)> = Vec::new();
+
+    for &fid in shell.faces() {
+        let face = topo.face(fid).ok()?;
+        if let FaceSurface::Plane { normal, d } = face.surface() {
+            // Check axis-alignment.
+            let ax = normal.x().abs();
+            let ay = normal.y().abs();
+            let az = normal.z().abs();
+            let is_axis_aligned = (ax > 1.0 - tol.angular && ay < tol.angular && az < tol.angular)
+                || (ay > 1.0 - tol.angular && ax < tol.angular && az < tol.angular)
+                || (az > 1.0 - tol.angular && ax < tol.angular && ay < tol.angular);
+            if !is_axis_aligned {
+                continue; // Skip non-axis-aligned planes.
+            }
+            if face.is_reversed() {
+                inner_planes.push((-*normal, -*d));
+            } else {
+                outer_planes.push((*normal, *d));
+            }
+        }
+        // Skip non-planar faces — we only build from axis-aligned planes.
+    }
+
+    // Try to build a box classifier from each set.
+    let build_box = |planes: &[(Vec3, f64)]| -> Option<AnalyticClassifier> {
+        if planes.len() < 6 {
+            return None;
+        }
+        let mut x_vals = Vec::new();
+        let mut y_vals = Vec::new();
+        let mut z_vals = Vec::new();
+        for &(normal, d) in planes {
+            if normal.x().abs() > 0.5 {
+                x_vals.push(d / normal.x());
+            } else if normal.y().abs() > 0.5 {
+                y_vals.push(d / normal.y());
+            } else if normal.z().abs() > 0.5 {
+                z_vals.push(d / normal.z());
+            }
+        }
+        if x_vals.len() >= 2 && y_vals.len() >= 2 && z_vals.len() >= 2 {
+            x_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            y_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            z_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            Some(AnalyticClassifier::Box {
+                min: Point3::new(*x_vals.first()?, *y_vals.first()?, *z_vals.first()?),
+                max: Point3::new(*x_vals.last()?, *y_vals.last()?, *z_vals.last()?),
+            })
+        } else {
+            None
+        }
+    };
+
+    let outer = build_box(&outer_planes)?;
+    let inner = build_box(&inner_planes)?;
+
+    Some(AnalyticClassifier::Composite {
+        outer: std::boxed::Box::new(outer),
+        inner: std::boxed::Box::new(inner),
+    })
 }
 
 // ---------------------------------------------------------------------------

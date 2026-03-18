@@ -264,6 +264,15 @@ pub(super) enum AnalyticClassifier {
         /// Outward-pointing normals and signed distances: `normal * p > d` means outside.
         planes: Vec<(Vec3, f64)>,
     },
+    /// Composite classifier for shelled/hollow solids: point is inside iff
+    /// it's inside the outer boundary AND outside the inner cavity.
+    Composite {
+        /// Outer boundary classifier (non-reversed faces).
+        outer: std::boxed::Box<Self>,
+        /// Inner cavity classifier (from reversed faces, but stored as
+        /// non-reversed). A point inside the cavity is OUTSIDE the solid.
+        inner: std::boxed::Box<Self>,
+    },
 }
 
 /// Result of classifying an intersection curve against a face boundary.
