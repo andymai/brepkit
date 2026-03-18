@@ -1433,6 +1433,10 @@ fn assemble_pipeline(
     let mut vertex_map: HashMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
         HashMap::new();
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
+    // Track how many faces use each shared edge. An edge shared by 2 faces
+    // is a proper manifold pair. A 3rd face requesting the same edge must
+    // get its own copy to prevent non-manifold 3-face junctions.
+    let mut edge_use_count: HashMap<(usize, usize), u32> = HashMap::new();
 
     let mut face_ids = Vec::new();
 
@@ -1442,6 +1446,7 @@ fn assemble_pipeline(
             &sub_face.outer_wire,
             &mut vertex_map,
             &mut edge_map,
+            &mut edge_use_count,
             resolution,
         )?;
         let inner_wires: Vec<_> = sub_face
@@ -1453,6 +1458,7 @@ fn assemble_pipeline(
                     inner,
                     &mut vertex_map,
                     &mut edge_map,
+                    &mut edge_use_count,
                     resolution,
                 )
                 .ok()
@@ -1485,6 +1491,7 @@ fn create_wire_from_edges_dedup(
     edges: &[super::pipeline::OrientedPCurveEdge],
     vertex_map: &mut HashMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     edge_map: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
+    edge_use_count: &mut HashMap<(usize, usize), u32>,
     resolution: f64,
 ) -> Result<brepkit_topology::wire::WireId, OperationsError> {
     let mut oriented_edges = Vec::new();
@@ -1511,9 +1518,22 @@ fn create_wire_from_edges_dedup(
         let is_line = matches!(pe.curve_3d, EdgeCurve::Line);
 
         let (eid, wire_forward) = if is_line {
-            let eid = *edge_map
-                .entry((key_min, key_max))
-                .or_insert_with(|| topo.add_edge(Edge::new(v_s, v_e, EdgeCurve::Line)));
+            // Check if this edge is already shared by 2 faces (manifold limit).
+            // A 3rd face must get its own copy to prevent non-manifold.
+            let count = edge_use_count
+                .get(&(key_min, key_max))
+                .copied()
+                .unwrap_or(0);
+            let eid = if count < 2 {
+                let eid = *edge_map
+                    .entry((key_min, key_max))
+                    .or_insert_with(|| topo.add_edge(Edge::new(v_s, v_e, EdgeCurve::Line)));
+                *edge_use_count.entry((key_min, key_max)).or_default() += 1;
+                eid
+            } else {
+                // Already at manifold limit — create new edge.
+                topo.add_edge(Edge::new(v_s, v_e, EdgeCurve::Line))
+            };
             let edge_start = topo.edge(eid).map_err(OperationsError::Topology)?.start();
             (eid, edge_start == v_s)
         } else {
