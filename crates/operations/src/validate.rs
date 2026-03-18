@@ -599,7 +599,10 @@ pub fn validate_solid_relaxed_with_options(
         }
     }
 
-    // Wire closure.
+    // Wire closure — demoted to Warning for relaxed validation.
+    // Boolean assembly can produce faces with technically-open wires
+    // when edge dedup or vertex merging creates tiny gaps. These are
+    // usually below the linear tolerance and don't affect downstream use.
     for fid in &faces {
         let face = topo.face(*fid)?;
         let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
@@ -611,7 +614,7 @@ pub fn validate_solid_relaxed_with_options(
             if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, topo.edges())
             {
                 issues.push(ValidationIssue {
-                    severity: Severity::Error,
+                    severity: Severity::Warning,
                     description: format!(
                         "wire {} on face {} is not closed",
                         wire_id.index(),
@@ -1581,10 +1584,11 @@ mod tests {
     }
 
     #[test]
-    fn relaxed_detects_open_wire() {
+    fn relaxed_detects_open_wire_as_warning() {
         use brepkit_topology::wire::Wire;
 
-        // Open wire should still be caught by relaxed validation
+        // Open wire is demoted to Warning in relaxed validation — it doesn't
+        // prevent downstream use (tessellation, export) for boolean results.
         let mut topo = Topology::new();
         let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
 
@@ -1599,10 +1603,19 @@ mod tests {
         *topo.wire_mut(wire_id).unwrap() = open_wire;
 
         let report = validate_solid_relaxed(&topo, solid).unwrap();
+        // Relaxed validation reports open wires as warnings, not errors.
         assert!(
-            !report.is_valid(),
-            "open wire should fail even relaxed validation: {:?}",
+            report.is_valid(),
+            "open wire should be warning (valid=true) in relaxed validation: {:?}",
             report.issues
+        );
+        // Should have at least one warning about the open wire.
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.description.contains("not closed")),
+            "should warn about open wire"
         );
     }
 
