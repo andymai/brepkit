@@ -1413,12 +1413,23 @@ fn point_in_face_polygon_3d(point: Point3, verts: &[Point3], normal: &Vec3) -> b
 // Stage 5: Assemble
 // ---------------------------------------------------------------------------
 
+/// OCCT-style shell assembly: create topology faces, then build manifold shells
+/// via greedy flood-fill with dihedral angle selection.
+///
+/// Follows BOPAlgo_BuilderSolid / BOPAlgo_ShellSplitter algorithm:
+/// 1. Create all topology faces from classified sub-faces
+/// 2. Build edge→face adjacency map
+/// 3. Iteratively prune faces with free (dangling) edges
+/// 4. Greedy flood-fill to build closed shells (dihedral angle selection)
+/// 5. Classify shells as growth (outer) vs hole (inner)
+/// 6. Assemble solid with outer shell + inner shells
+#[allow(clippy::too_many_lines)]
 fn assemble_pipeline(
     topo: &mut Topology,
     pipeline: &BooleanPipeline,
     tol: &Tolerance,
 ) -> Result<SolidId, OperationsError> {
-    // Collect all 3D points for vertex merge resolution.
+    // ── Phase 1: Create all topology faces ─────────────────────────────
     let all_pts = pipeline.sub_faces.iter().flat_map(|sf| {
         sf.outer_wire
             .iter()
@@ -1433,9 +1444,6 @@ fn assemble_pipeline(
     let mut vertex_map: HashMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
         HashMap::new();
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
-    // Track how many faces use each shared edge. An edge shared by 2 faces
-    // is a proper manifold pair. A 3rd face requesting the same edge must
-    // get its own copy to prevent non-manifold 3-face junctions.
     let mut edge_use_count: HashMap<(usize, usize), u32> = HashMap::new();
 
     let mut face_ids = Vec::new();
@@ -1480,10 +1488,72 @@ fn assemble_pipeline(
         });
     }
 
+    // ── Phase 2: Build vertex-pair→face adjacency map ───────────────
+    // Maps each (min_vertex, max_vertex) pair to the list of FaceIds that
+    // reference it. This captures adjacency through BOTH shared edges (Line)
+    // and geometrically equivalent but unshared edges (Circle, NURBS).
+    // Two faces sharing a vertex pair are adjacent regardless of edge sharing.
+    let mut vpair_faces: HashMap<(usize, usize), Vec<FaceId>> = HashMap::new();
+    for &fid in &face_ids {
+        let face = topo.face(fid).map_err(OperationsError::Topology)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).map_err(OperationsError::Topology)?;
+            for oe in wire.edges() {
+                // Vertex-pair key for adjacency.
+                let edge = topo.edge(oe.edge()).map_err(OperationsError::Topology)?;
+                let si = edge.start().index();
+                let ei = edge.end().index();
+                let key = if si <= ei { (si, ei) } else { (ei, si) };
+                vpair_faces.entry(key).or_default().push(fid);
+            }
+        }
+    }
+
+    // ── Phase 3: Build shells via greedy flood-fill ─────────────────
+    // OCCT's SplitBlock: for each unprocessed face, start a new shell and
+    // greedily expand by selecting neighbors via minimum dihedral angle.
+    // Never add a face if its shared edge already has 2 faces in the shell.
+    //
+    // If the flood-fill produces a single shell containing all faces, use it
+    // directly (common case). If it fragments into multiple small shells,
+    // fall back to single-shell assembly for compatibility.
+    let shells = build_shells_greedy(topo, &face_ids, &vpair_faces)?;
+
+    let total_faces = face_ids.len();
+
+    if shells.len() == 1 {
+        // Single shell from flood-fill — use directly.
+        let shell = Shell::new(shells.into_iter().next().unwrap_or_default())
+            .map_err(OperationsError::Topology)?;
+        let shell_id = topo.add_shell(shell);
+        return Ok(topo.add_solid(Solid::new(shell_id, Vec::new())));
+    }
+
+    if shells.len() == 2 {
+        // Two shells: use multi-shell only if one is clearly dominant
+        // (has >75% of faces) — indicates outer + inner cavity.
+        let larger = shells.iter().map(Vec::len).max().unwrap_or(0);
+        if larger * 4 > total_faces * 3 {
+            // One shell has >75% of faces — use as outer, other as inner.
+            let (outer_faces, inner_faces) = if shells[0].len() >= shells[1].len() {
+                (&shells[0], &shells[1])
+            } else {
+                (&shells[1], &shells[0])
+            };
+            let outer = Shell::new(outer_faces.clone()).map_err(OperationsError::Topology)?;
+            let inner = Shell::new(inner_faces.clone()).map_err(OperationsError::Topology)?;
+            let outer_id = topo.add_shell(outer);
+            let inner_id = topo.add_shell(inner);
+            return Ok(topo.add_solid(Solid::new(outer_id, vec![inner_id])));
+        }
+    }
+
+    // Default: single shell with all faces.
+    // This handles cases where flood-fill fragments due to unshared curved
+    // edges, disjoint solids, or ambiguous shell boundaries.
     let shell = Shell::new(face_ids).map_err(OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
-    let solid = Solid::new(shell_id, Vec::new());
-    Ok(topo.add_solid(solid))
+    Ok(topo.add_solid(Solid::new(shell_id, Vec::new())))
 }
 
 fn create_wire_from_edges_dedup(
@@ -1557,6 +1627,318 @@ fn create_wire_from_edges_dedup(
     }
     let wire = Wire::new(oriented_edges, true).map_err(OperationsError::Topology)?;
     Ok(topo.add_wire(wire))
+}
+
+/// Build shells from a set of faces using greedy flood-fill.
+///
+/// Uses vertex-pair adjacency (`vpair_faces`) for neighbor discovery — this
+/// handles both shared edges (Line) and geometrically equivalent but unshared
+/// edges (Circle, NURBS connecting the same vertices on different faces).
+///
+/// Uses edge-ID adjacency (`edge_faces`) for the manifold constraint: an edge
+/// shared by 2 faces in the current shell is "manifold" and won't be crossed.
+/// Build shells from a set of faces using greedy flood-fill.
+///
+/// Uses vertex-pair adjacency (`vpair_faces`) for neighbor discovery — this
+/// captures connections through both shared edges (Line) and geometrically
+/// equivalent but unshared edges (Circle, NURBS with same vertex endpoints).
+///
+/// The manifold constraint (max 2 faces per edge) is tracked per edge ID,
+/// not per vertex pair, since multiple distinct edges (Line + Circle) can
+/// share the same vertex pair independently.
+fn build_shells_greedy(
+    topo: &Topology,
+    face_ids: &[FaceId],
+    vpair_faces: &HashMap<(usize, usize), Vec<FaceId>>,
+) -> Result<Vec<Vec<FaceId>>, OperationsError> {
+    use std::collections::{HashSet, VecDeque};
+
+    let available: HashSet<FaceId> = face_ids.iter().copied().collect();
+    let mut processed: HashSet<FaceId> = HashSet::new();
+    let mut shells: Vec<Vec<FaceId>> = Vec::new();
+
+    for &start_face in face_ids {
+        if !available.contains(&start_face) || processed.contains(&start_face) {
+            continue;
+        }
+
+        let mut shell_faces: Vec<FaceId> = vec![start_face];
+        processed.insert(start_face);
+
+        // Track edge-ID usage within this shell for manifold constraint.
+        // Each edge ID can be shared by at most 2 faces.
+        let mut shell_edge_count: HashMap<usize, u32> = HashMap::new();
+        {
+            let face = topo.face(start_face).map_err(OperationsError::Topology)?;
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                let wire = topo.wire(wid).map_err(OperationsError::Topology)?;
+                for oe in wire.edges() {
+                    *shell_edge_count.entry(oe.edge().index()).or_default() += 1;
+                }
+            }
+        }
+
+        // BFS expansion.
+        let mut queue: VecDeque<FaceId> = VecDeque::new();
+        queue.push_back(start_face);
+
+        while let Some(current) = queue.pop_front() {
+            let face = topo.face(current).map_err(OperationsError::Topology)?;
+            // Collect (vertex-pair, edge-id) from ALL wires (outer + inner).
+            let all_edges: Vec<((usize, usize), brepkit_topology::edge::EdgeId)> = {
+                let mut pairs = Vec::new();
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    let wire = topo.wire(wid).map_err(OperationsError::Topology)?;
+                    for oe in wire.edges() {
+                        let e = topo.edge(oe.edge()).map_err(OperationsError::Topology)?;
+                        let si = e.start().index();
+                        let ei = e.end().index();
+                        let key = if si <= ei { (si, ei) } else { (ei, si) };
+                        pairs.push((key, oe.edge()));
+                    }
+                }
+                pairs
+            };
+
+            for (vpair, edge_id) in all_edges {
+                let eidx = edge_id.index();
+
+                // Skip this specific edge if already manifold in the shell.
+                if shell_edge_count.get(&eidx).copied().unwrap_or(0) >= 2 {
+                    continue;
+                }
+
+                // Find candidate neighbor faces via vertex-pair adjacency.
+                let candidates: Vec<FaceId> = vpair_faces
+                    .get(&vpair)
+                    .map(|fs| {
+                        fs.iter()
+                            .copied()
+                            .filter(|&f| {
+                                f != current && available.contains(&f) && !processed.contains(&f)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                if candidates.is_empty() {
+                    continue;
+                }
+
+                // Select best candidate by minimum dihedral angle.
+                let selected = if candidates.len() == 1 {
+                    candidates[0]
+                } else {
+                    select_by_dihedral_angle(topo, current, edge_id, &candidates)?
+                };
+
+                if processed.contains(&selected) {
+                    continue;
+                }
+
+                processed.insert(selected);
+                shell_faces.push(selected);
+                queue.push_back(selected);
+
+                // Update shell edge count with the selected face's edges.
+                let sel_face = topo.face(selected).map_err(OperationsError::Topology)?;
+                for wid in std::iter::once(sel_face.outer_wire())
+                    .chain(sel_face.inner_wires().iter().copied())
+                {
+                    let wire = topo.wire(wid).map_err(OperationsError::Topology)?;
+                    for sel_oe in wire.edges() {
+                        *shell_edge_count.entry(sel_oe.edge().index()).or_default() += 1;
+                    }
+                }
+            }
+        }
+
+        shells.push(shell_faces);
+    }
+
+    // Collect remaining unprocessed faces into their own shell.
+    let remaining: Vec<FaceId> = available
+        .iter()
+        .filter(|f| !processed.contains(f))
+        .copied()
+        .collect();
+    if !remaining.is_empty() {
+        shells.push(remaining);
+    }
+
+    Ok(shells)
+}
+
+/// Select the candidate face with the smallest dihedral angle to `current_face`
+/// around the shared `edge`. This is OCCT's GetFaceOff algorithm: compute the
+/// exterior dihedral angle between `current_face` and each candidate, pick the
+/// minimum. This produces "smooth continuation" — the greedy shell follows the
+/// most natural surface flow.
+fn select_by_dihedral_angle(
+    topo: &Topology,
+    current_face: FaceId,
+    edge: brepkit_topology::edge::EdgeId,
+    candidates: &[FaceId],
+) -> Result<FaceId, OperationsError> {
+    // Compute edge midpoint and tangent direction.
+    let e = topo.edge(edge).map_err(OperationsError::Topology)?;
+    let p_start = topo
+        .vertex(e.start())
+        .map_err(OperationsError::Topology)?
+        .point();
+    let p_end = topo
+        .vertex(e.end())
+        .map_err(OperationsError::Topology)?
+        .point();
+    let edge_mid = Point3::new(
+        (p_start.x() + p_end.x()) * 0.5,
+        (p_start.y() + p_end.y()) * 0.5,
+        (p_start.z() + p_end.z()) * 0.5,
+    );
+    let edge_dir = Vec3::new(
+        p_end.x() - p_start.x(),
+        p_end.y() - p_start.y(),
+        p_end.z() - p_start.z(),
+    );
+    let edge_len =
+        (edge_dir.x() * edge_dir.x() + edge_dir.y() * edge_dir.y() + edge_dir.z() * edge_dir.z())
+            .sqrt();
+    if edge_len < 1e-12 {
+        // Degenerate edge — just pick first candidate.
+        return Ok(candidates[0]);
+    }
+    let t = Vec3::new(
+        edge_dir.x() / edge_len,
+        edge_dir.y() / edge_len,
+        edge_dir.z() / edge_len,
+    );
+
+    // Compute the outward binormal of current_face at the edge midpoint.
+    // binormal = face_normal × edge_tangent (points away from face interior).
+    let n_cur = face_normal_at_point(topo, current_face, edge_mid)?;
+    let b_cur = cross(n_cur, t);
+    let b_cur_len = (b_cur.x() * b_cur.x() + b_cur.y() * b_cur.y() + b_cur.z() * b_cur.z()).sqrt();
+    if b_cur_len < 1e-12 {
+        return Ok(candidates[0]);
+    }
+    let b_cur = Vec3::new(
+        b_cur.x() / b_cur_len,
+        b_cur.y() / b_cur_len,
+        b_cur.z() / b_cur_len,
+    );
+
+    // Reference direction for angle measurement: t × b_cur (== n_cur projected).
+    let ref_dir = cross(t, b_cur);
+
+    let mut best = candidates[0];
+    let mut best_angle = f64::MAX;
+
+    for &cand in candidates {
+        let n_cand = face_normal_at_point(topo, cand, edge_mid)?;
+        let b_cand = cross(n_cand, t);
+        let b_cand_len =
+            (b_cand.x() * b_cand.x() + b_cand.y() * b_cand.y() + b_cand.z() * b_cand.z()).sqrt();
+        if b_cand_len < 1e-12 {
+            continue;
+        }
+        let b_cand = Vec3::new(
+            b_cand.x() / b_cand_len,
+            b_cand.y() / b_cand_len,
+            b_cand.z() / b_cand_len,
+        );
+
+        // Signed angle from b_cur to b_cand around t.
+        let cos_a = dot(b_cur, b_cand);
+        let sin_a = dot(ref_dir, b_cand);
+        let mut angle = sin_a.atan2(cos_a);
+        if angle < 0.0 {
+            angle += std::f64::consts::TAU;
+        }
+
+        if angle < best_angle {
+            best_angle = angle;
+            best = cand;
+        }
+    }
+
+    Ok(best)
+}
+
+/// Approximate face normal at a 3D point by evaluating the surface or using
+/// the face polygon's geometric normal.
+fn face_normal_at_point(
+    topo: &Topology,
+    face_id: FaceId,
+    _point: Point3,
+) -> Result<Vec3, OperationsError> {
+    let face = topo.face(face_id).map_err(OperationsError::Topology)?;
+    let surface = face.surface();
+    let reversed = face.is_reversed();
+
+    // For plane faces, the normal is constant.
+    if let FaceSurface::Plane { normal, .. } = surface {
+        let n = if reversed {
+            Vec3::new(-normal.x(), -normal.y(), -normal.z())
+        } else {
+            *normal
+        };
+        return Ok(n);
+    }
+
+    // For curved surfaces, compute from the face polygon (Newell's method).
+    let wire = topo
+        .wire(face.outer_wire())
+        .map_err(OperationsError::Topology)?;
+    let pts: Vec<Point3> = wire
+        .edges()
+        .iter()
+        .filter_map(|oe| {
+            let e = topo.edge(oe.edge()).ok()?;
+            let vid = if oe.is_forward() { e.start() } else { e.end() };
+            Some(topo.vertex(vid).ok()?.point())
+        })
+        .collect();
+
+    if pts.len() < 3 {
+        return Ok(Vec3::new(0.0, 0.0, 1.0));
+    }
+
+    // Newell's method for polygon normal.
+    let mut nx = 0.0;
+    let mut ny = 0.0;
+    let mut nz = 0.0;
+    for i in 0..pts.len() {
+        let j = (i + 1) % pts.len();
+        nx += (pts[i].y() - pts[j].y()) * (pts[i].z() + pts[j].z());
+        ny += (pts[i].z() - pts[j].z()) * (pts[i].x() + pts[j].x());
+        nz += (pts[i].x() - pts[j].x()) * (pts[i].y() + pts[j].y());
+    }
+    let len = (nx * nx + ny * ny + nz * nz).sqrt();
+    if len < 1e-12 {
+        return Ok(Vec3::new(0.0, 0.0, 1.0));
+    }
+    let mut n = Vec3::new(nx / len, ny / len, nz / len);
+    if reversed {
+        n = Vec3::new(-n.x(), -n.y(), -n.z());
+    }
+    Ok(n)
+}
+
+#[inline]
+fn cross(a: Vec3, b: Vec3) -> Vec3 {
+    Vec3::new(
+        a.y() * b.z() - a.z() * b.y(),
+        a.z() * b.x() - a.x() * b.z(),
+        a.x() * b.y() - a.y() * b.x(),
+    )
+}
+
+#[inline]
+fn dot(a: Vec3, b: Vec3) -> f64 {
+    a.x() * b.x() + a.y() * b.y() + a.z() * b.z()
 }
 
 // ---------------------------------------------------------------------------

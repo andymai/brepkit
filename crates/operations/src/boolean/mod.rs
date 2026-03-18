@@ -171,6 +171,7 @@ pub fn boolean_with_options(
     };
 
     let mut analytic_fallback: Option<SolidId> = None;
+
     if try_analytic && !both_complex {
         if let Ok(solid) = analytic_boolean(topo, op, a, b, tol, opts.deflection) {
             let _ = crate::heal::remove_degenerate_edges(topo, solid, tol.linear)?;
@@ -200,7 +201,9 @@ pub fn boolean_with_options(
                 efc.values().filter(|&&c| c > 2).count()
             };
             let is_manifold = nm_count <= 30;
+
             if is_manifold && validate_boolean_result(topo, solid).is_ok() {
+                let solid = enforce_manifold_shell(topo, solid).unwrap_or(solid);
                 return Ok(solid);
             }
             analytic_fallback = Some(solid);
@@ -270,10 +273,7 @@ pub fn boolean_with_options(
     // Preserves all surface types through the boolean.
     match boolean_pipeline::boolean_pipeline(topo, op, a, b) {
         Ok(solid) if validate_boolean_result(topo, solid).is_ok() => {
-            log::info!(
-                "boolean {op:?}: pipeline succeeded → solid {}",
-                solid.index()
-            );
+            let solid = enforce_manifold_shell(topo, solid).unwrap_or(solid);
             return Ok(solid);
         }
         Ok(_) => {
@@ -288,16 +288,20 @@ pub fn boolean_with_options(
     // When both analytic and pipeline fail, fall back to mesh co-refinement.
     // All surface types are lost — output is planar triangles only.
     match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
-        Ok(result) => return Ok(result),
+        Ok(result) => {
+            let result = enforce_manifold_shell(topo, result).unwrap_or(result);
+            return Ok(result);
+        }
         Err(e) => {
             log::debug!("boolean {op:?}: mesh boolean also failed ({e})");
         }
     }
 
     // If the analytic path produced a result (even with non-manifold edges),
-    // return it as a last resort. Imperfect topology is better than no result.
+    // try to fix it with greedy flood-fill shell splitting before returning.
     if let Some(solid) = analytic_fallback {
-        return Ok(solid);
+        let fixed = enforce_manifold_shell(topo, solid).unwrap_or(solid);
+        return Ok(fixed);
     }
 
     Err(crate::OperationsError::InvalidInput {
@@ -491,6 +495,224 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
         });
     }
     specs
+}
+
+/// Post-process a solid to enforce manifold topology via greedy flood-fill.
+///
+/// Detects non-manifold edges (shared by 3+ faces) and uses OCCT-style
+/// greedy shell building to split the non-manifold shell into manifold
+/// sub-shells. The largest sub-shell becomes the outer shell; smaller ones
+/// become inner shells (cavities).
+///
+/// If the solid is already manifold, returns it unchanged.
+#[allow(clippy::too_many_lines)]
+fn enforce_manifold_shell(
+    topo: &mut Topology,
+    solid: SolidId,
+) -> Result<SolidId, crate::OperationsError> {
+    use std::collections::{HashMap, HashSet, VecDeque};
+
+    let shell_id = topo.solid(solid)?.outer_shell();
+    let face_ids = topo.shell(shell_id)?.faces().to_vec();
+
+    // Count edges per face.
+    let mut edge_face_count: HashMap<usize, u32> = HashMap::new();
+    for &fid in &face_ids {
+        if let Ok(face) = topo.face(fid) {
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                if let Ok(wire) = topo.wire(wid) {
+                    for oe in wire.edges() {
+                        *edge_face_count.entry(oe.edge().index()).or_default() += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Only apply for significant non-manifold. Minor non-manifold (1-2 edges)
+    // from sphere/cone intersections is tolerable and splitting the shell could
+    // break downstream operations (section, volume).
+    let nm_count = edge_face_count.values().filter(|&&c| c > 2).count();
+    if nm_count <= 2 {
+        return Ok(solid);
+    }
+
+    log::debug!(
+        "enforce_manifold_shell: {} non-manifold edges in {} faces",
+        nm_count,
+        face_ids.len()
+    );
+
+    // Build vertex-pair → face adjacency for neighbor discovery.
+    let mut vpair_faces: HashMap<(usize, usize), Vec<brepkit_topology::face::FaceId>> =
+        HashMap::new();
+    for &fid in &face_ids {
+        if let Ok(face) = topo.face(fid) {
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                if let Ok(wire) = topo.wire(wid) {
+                    for oe in wire.edges() {
+                        if let Ok(e) = topo.edge(oe.edge()) {
+                            let si = e.start().index();
+                            let ei = e.end().index();
+                            let key = if si <= ei { (si, ei) } else { (ei, si) };
+                            vpair_faces.entry(key).or_default().push(fid);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Greedy flood-fill shell construction.
+    let available: HashSet<brepkit_topology::face::FaceId> = face_ids.iter().copied().collect();
+    let mut processed: HashSet<brepkit_topology::face::FaceId> = HashSet::new();
+    let mut shells: Vec<Vec<brepkit_topology::face::FaceId>> = Vec::new();
+
+    for &start_face in &face_ids {
+        if processed.contains(&start_face) {
+            continue;
+        }
+
+        let mut shell_faces = vec![start_face];
+        processed.insert(start_face);
+
+        // Track edge-ID usage within this shell.
+        let mut shell_edge_count: HashMap<usize, u32> = HashMap::new();
+        if let Ok(face) = topo.face(start_face) {
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                if let Ok(wire) = topo.wire(wid) {
+                    for oe in wire.edges() {
+                        *shell_edge_count.entry(oe.edge().index()).or_default() += 1;
+                    }
+                }
+            }
+        }
+
+        let mut queue = VecDeque::new();
+        queue.push_back(start_face);
+
+        while let Some(current) = queue.pop_front() {
+            let Ok(face) = topo.face(current) else {
+                continue;
+            };
+            // Collect (vpair, edge_id) from all wires.
+            let mut all_edges = Vec::new();
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                if let Ok(wire) = topo.wire(wid) {
+                    for oe in wire.edges() {
+                        if let Ok(e) = topo.edge(oe.edge()) {
+                            let si = e.start().index();
+                            let ei = e.end().index();
+                            let key = if si <= ei { (si, ei) } else { (ei, si) };
+                            all_edges.push((key, oe.edge()));
+                        }
+                    }
+                }
+            }
+
+            for (vpair, edge_id) in all_edges {
+                let eidx = edge_id.index();
+
+                // Skip edges already manifold in this shell.
+                if shell_edge_count.get(&eidx).copied().unwrap_or(0) >= 2 {
+                    continue;
+                }
+
+                // Find candidate neighbor faces via vertex-pair.
+                let candidates: Vec<brepkit_topology::face::FaceId> = vpair_faces
+                    .get(&vpair)
+                    .map(|fs| {
+                        fs.iter()
+                            .copied()
+                            .filter(|&f| {
+                                f != current && available.contains(&f) && !processed.contains(&f)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                if candidates.is_empty() {
+                    continue;
+                }
+
+                // Pick first candidate (simple heuristic — dihedral selection
+                // would be better but requires surface normal evaluation).
+                let selected = candidates[0];
+
+                if processed.contains(&selected) {
+                    continue;
+                }
+
+                processed.insert(selected);
+                shell_faces.push(selected);
+                queue.push_back(selected);
+
+                // Update edge count.
+                if let Ok(sel_face) = topo.face(selected) {
+                    for wid in std::iter::once(sel_face.outer_wire())
+                        .chain(sel_face.inner_wires().iter().copied())
+                    {
+                        if let Ok(wire) = topo.wire(wid) {
+                            for sel_oe in wire.edges() {
+                                *shell_edge_count.entry(sel_oe.edge().index()).or_default() += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        shells.push(shell_faces);
+    }
+
+    // Add any unprocessed faces to a final shell.
+    let remaining: Vec<brepkit_topology::face::FaceId> = available
+        .iter()
+        .filter(|f| !processed.contains(f))
+        .copied()
+        .collect();
+    if !remaining.is_empty() {
+        shells.push(remaining);
+    }
+
+    if shells.len() <= 1 {
+        // Single shell — nothing to split.
+        return Ok(solid);
+    }
+
+    log::debug!(
+        "enforce_manifold_shell: split into {} shells (sizes: {:?})",
+        shells.len(),
+        shells.iter().map(Vec::len).collect::<Vec<_>>(),
+    );
+
+    // Build the solid: largest shell is outer, rest are inner.
+    let mut best_idx = 0;
+    let mut best_count = 0;
+    for (i, faces) in shells.iter().enumerate() {
+        if faces.len() > best_count {
+            best_count = faces.len();
+            best_idx = i;
+        }
+    }
+
+    let outer = brepkit_topology::shell::Shell::new(shells[best_idx].clone())
+        .map_err(crate::OperationsError::Topology)?;
+    let outer_id = topo.add_shell(outer);
+    let mut inner_ids = Vec::new();
+    for (i, faces) in shells.iter().enumerate() {
+        if i != best_idx && !faces.is_empty() {
+            if let Ok(inner) = brepkit_topology::shell::Shell::new(faces.clone()) {
+                inner_ids.push(topo.add_shell(inner));
+            }
+        }
+    }
+
+    Ok(topo.add_solid(brepkit_topology::solid::Solid::new(outer_id, inner_ids)))
 }
 
 #[cfg(test)]
