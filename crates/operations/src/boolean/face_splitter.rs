@@ -984,7 +984,10 @@ fn normalize_angle_in_span(angle: f64, t0: f64, span: f64) -> f64 {
     delta / span
 }
 
-fn collect_wire_points(topo: &Topology, wire_id: brepkit_topology::wire::WireId) -> Vec<Point3> {
+pub(super) fn collect_wire_points(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+) -> Vec<Point3> {
     let wire = match topo.wire(wire_id) {
         Ok(w) => w,
         Err(_) => return Vec::new(),
@@ -1000,7 +1003,7 @@ fn collect_wire_points(topo: &Topology, wire_id: brepkit_topology::wire::WireId)
     pts
 }
 
-fn extract_plane_normal(surface: &brepkit_topology::face::FaceSurface) -> Vec3 {
+pub(super) fn extract_plane_normal(surface: &brepkit_topology::face::FaceSurface) -> Vec3 {
     if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = surface {
         *normal
     } else {
@@ -1008,7 +1011,7 @@ fn extract_plane_normal(surface: &brepkit_topology::face::FaceSurface) -> Vec3 {
     }
 }
 
-fn boundary_edges_to_pcurve(
+pub(super) fn boundary_edges_to_pcurve(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
     surface: &brepkit_topology::face::FaceSurface,
