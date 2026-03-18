@@ -2083,11 +2083,11 @@ fn fuse_ring_inside_shelled_box() {
     let fused_vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
 
     let rel_err = (fused_vol - expected).abs() / expected;
-    // TODO: re-tighten once boolean engine volume accuracy is fixed.
-    // Known issue: fuse on shelled solids produces volume error because
-    // non-manifold edge splitting creates orphan boundary faces.
+    // TODO: re-tighten to 0.05 once boolean engine volume accuracy is fixed.
+    // Known boolean engine issue: fuse on shelled solids produces ~20%
+    // volume error due to topology explosion in the boolean operation.
     assert!(
-        rel_err < 0.50,
+        rel_err < 0.25,
         "fuse ring inside shelled box: vol={fused_vol:.1} expected={expected:.1} \
          (shell={shell_vol:.1}, ring={ring_vol:.1}, rel_err={rel_err:.3})"
     );
