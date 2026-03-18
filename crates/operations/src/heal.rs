@@ -760,10 +760,8 @@ fn surfaces_equivalent(a: &FaceSurface, b: &FaceSurface) -> bool {
             // varying amounts from floating-point cross-product computation.
             // 1e-4 radians (~0.006°) and 1e-3 mm are tight enough to avoid
             // false merges while allowing mesh-derived coplanar faces to unify.
-            // Moderate tolerance: boolean assembly creates coplanar fragments
-            // with normals that differ slightly from vertex merging.
-            let plane_ang = 1e-3_f64;
-            let plane_lin = 1e-2_f64;
+            let plane_ang = 1e-4_f64;
+            let plane_lin = 1e-3_f64;
             let dot = na.dot(*nb);
             (dot.abs() - 1.0).abs() < plane_ang && (da - db * dot.signum()).abs() < plane_lin
         }
