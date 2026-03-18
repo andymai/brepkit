@@ -1443,25 +1443,27 @@ fn classify_point_analytic_raycast(
                     }
                 }
                 FaceSurface::Cylinder(cyl) => {
-                    // Analytic ray-cylinder intersection.
+                    // Analytic ray-cylinder intersection with UV containment.
                     let hits = ray_cylinder_intersect(point, *ray_dir, cyl);
+                    let uv_poly = face_uv_polygon(topo, fid, face.surface());
                     for t in hits {
                         if t < 1e-10 {
                             continue;
                         }
                         let hit = point + *ray_dir * t;
-                        // Check if hit is within face bounds using project_point.
-                        let (_u, _v) = cyl.project_point(hit);
-                        // Check v bounds (axial extent) using face polygon bbox.
-                        if fi < face_polys.len() {
-                            let (verts, holes, pn, _) = &face_polys[fi];
-                            if point_in_face_polygon_3d(hit, verts, pn) {
+                        // Check if hit is inside the face boundary using UV polygon.
+                        if point_in_analytic_face_uv(hit, face.surface(), &uv_poly) {
+                            // Check inner wire holes using 3D polygon fallback.
+                            if fi < face_polys.len() {
+                                let (_, holes, pn, _) = &face_polys[fi];
                                 let in_hole = holes
                                     .iter()
                                     .any(|hole| point_in_face_polygon_3d(hit, hole, pn));
                                 if !in_hole {
                                     crossings += 1;
                                 }
+                            } else {
+                                crossings += 1;
                             }
                         }
                     }
