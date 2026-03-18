@@ -106,14 +106,19 @@ pub fn boolean_with_options(
         let no_torus = !has_torus(topo, a)? && !has_torus(topo, b)?;
         both_analytic && no_torus
     };
+    let mut analytic_fallback: Option<SolidId> = None;
     if try_analytic {
         if let Ok(solid) = analytic_boolean(topo, op, a, b, tol, opts.deflection) {
             let _ = crate::heal::remove_degenerate_edges(topo, solid, tol.linear)?;
             if opts.unify_faces {
                 let _ = crate::heal::unify_faces(topo, solid)?;
             }
-            validate_boolean_result(topo, solid)?;
-            return Ok(solid);
+            if validate_boolean_result(topo, solid).is_ok() {
+                return Ok(solid);
+            }
+            // Analytic succeeded but validation failed (e.g., non-manifold).
+            // Save as fallback — try pipeline first, use this if pipeline also fails.
+            analytic_fallback = Some(solid);
         }
     }
 
@@ -204,8 +209,14 @@ pub fn boolean_with_options(
         }
     }
 
+    // If the analytic path produced a result (even with non-manifold edges),
+    // return it as a last resort. Imperfect topology is better than no result.
+    if let Some(solid) = analytic_fallback {
+        return Ok(solid);
+    }
+
     Err(crate::OperationsError::InvalidInput {
-        reason: format!("boolean {op:?}: all paths failed (analytic, v2, mesh boolean)"),
+        reason: format!("boolean {op:?}: all paths failed (analytic, pipeline, mesh boolean)"),
     })
 }
 

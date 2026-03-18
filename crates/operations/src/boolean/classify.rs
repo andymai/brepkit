@@ -185,6 +185,16 @@ pub(super) fn try_build_analytic_classifier(
         return None;
     }
 
+    // Shelled/hollow solids have reversed inner faces. The simple analytic
+    // classifier (Box, Cylinder, Sphere) doesn't account for cavities —
+    // it would classify points inside the hollow as "inside". Bail so the
+    // ray-cast fallback handles these correctly.
+    for &fid in shell.faces() {
+        if topo.face(fid).ok()?.is_reversed() {
+            return None;
+        }
+    }
+
     let mut sphere_info: Option<(Point3, f64)> = None;
     let mut cylinder_info: Option<(Point3, Vec3, f64)> = None;
     let mut cone_info: Option<(Point3, Vec3, f64)> = None;
