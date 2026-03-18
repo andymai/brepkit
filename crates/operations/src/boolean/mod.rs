@@ -1,13 +1,13 @@
 //! Boolean operations on solids: fuse, cut, and intersect.
 //!
-//! The primary pipeline (`boolean_v2`) operates in 2D parameter space,
+//! The primary pipeline (`boolean_pipeline`) operates in 2D parameter space,
 //! preserving all surface types (plane, cylinder, cone, sphere, torus,
-//! NURBS) through the boolean. Falls back to the v1 analytic path for
-//! cases v2 can't handle, then to mesh boolean as a last resort.
+//! NURBS) through the boolean. Falls back to the analytic path for
+//! cases pipeline can't handle, then to mesh boolean as a last resort.
 
 mod analytic;
 mod assembly;
-pub mod boolean_v2;
+pub mod boolean_pipeline;
 mod classify;
 pub(crate) mod classify_2d;
 mod compound;
@@ -98,7 +98,7 @@ pub fn boolean_with_options(
         opts.deflection,
     );
 
-    // ── Try v1 analytic fast path ──────────────────────────────────────
+    // ── Try analytic fast path ──────────────────────────────────────
     // Optimized for non-coplanar all-analytic solids (box-cylinder, etc.).
     // This is the most validated and fastest path for the common case.
     let try_analytic = {
@@ -119,7 +119,7 @@ pub fn boolean_with_options(
 
     // ── Containment shortcut ─────────────────────────────────────────
     // Detect A⊂B or B⊂A (including A=B) and handle directly.
-    // This catches identical solids that neither v1 analytic nor v2 handle
+    // This catches identical solids that neither analytic nor pipeline handle
     // correctly (boundary-coincident intersections produce degenerate splits).
     {
         use classify::try_build_analytic_classifier;
@@ -175,27 +175,27 @@ pub fn boolean_with_options(
         }
     }
 
-    // ── Try v2 parameter-space pipeline ────────────────────────────────
-    // v2 handles coplanar faces, NURBS, and other cases v1 analytic can't.
+    // ── Try pipeline parameter-space pipeline ────────────────────────────────
+    // pipeline handles coplanar faces, NURBS, and other cases analytic can't.
     // Preserves all surface types through the boolean.
-    match boolean_v2::boolean_v2(topo, op, a, b) {
+    match boolean_pipeline::boolean_pipeline(topo, op, a, b) {
         Ok(solid) if validate_boolean_result(topo, solid).is_ok() => {
             log::info!(
-                "boolean {op:?}: v2 pipeline succeeded → solid {}",
+                "boolean {op:?}: pipeline succeeded → solid {}",
                 solid.index()
             );
             return Ok(solid);
         }
         Ok(_) => {
-            log::debug!("boolean {op:?}: v2 result failed validation, falling back");
+            log::debug!("boolean {op:?}: pipeline result failed validation, falling back");
         }
         Err(e) => {
-            log::debug!("boolean {op:?}: v2 pipeline failed ({e}), falling back");
+            log::debug!("boolean {op:?}: pipeline failed ({e}), falling back");
         }
     }
 
     // ── Mesh boolean (last resort) ───────────────────────────────────
-    // When both v1 analytic and v2 fail, fall back to mesh co-refinement.
+    // When both analytic and pipeline fail, fall back to mesh co-refinement.
     // All surface types are lost — output is planar triangles only.
     match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
         Ok(result) => return Ok(result),
@@ -205,7 +205,7 @@ pub fn boolean_with_options(
     }
 
     Err(crate::OperationsError::InvalidInput {
-        reason: format!("boolean {op:?}: all paths failed (v1 analytic, v2, mesh boolean)"),
+        reason: format!("boolean {op:?}: all paths failed (analytic, v2, mesh boolean)"),
     })
 }
 

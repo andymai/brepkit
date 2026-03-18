@@ -5,9 +5,9 @@
 //! clockwise angle rule at each vertex.
 //!
 //! Port of OCCT's `BOPAlgo_WireSplitter_1.cxx` algorithm, simplified
-//! for the boolean_v2 pipeline.
+//! for the boolean_pipeline pipeline.
 
-#![allow(dead_code)] // Used by later boolean_v2 pipeline stages.
+#![allow(dead_code)] // Used by later boolean_pipeline pipeline stages.
 
 use std::collections::HashMap;
 use std::f64::consts::TAU;

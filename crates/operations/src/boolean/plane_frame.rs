@@ -4,7 +4,7 @@
 //! `PlaneFrame` computes a local orthonormal frame so plane faces can
 //! participate in the 2D parameter-space boolean pipeline.
 
-#![allow(dead_code)] // Used by later boolean_v2 pipeline stages.
+#![allow(dead_code)] // Used by later boolean_pipeline pipeline stages.
 
 use brepkit_math::vec::{Point2, Point3, Vec3};
 

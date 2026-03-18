@@ -210,7 +210,7 @@ pub fn cone_v_extent(
 /// Compute the v-extent (latitude range) of points projected onto a sphere.
 ///
 /// Returns `None` if the extent is degenerate (< 1e-10).
-#[allow(dead_code)] // used by boolean_v2 (upcoming)
+#[allow(dead_code)] // used by boolean_pipeline (upcoming)
 pub fn sphere_v_extent(
     sph: &brepkit_math::surfaces::SphericalSurface,
     points: &[Point3],
@@ -229,7 +229,7 @@ pub fn sphere_v_extent(
     }
 }
 
-#[allow(dead_code)] // used by boolean_v2 (upcoming)
+#[allow(dead_code)] // used by boolean_pipeline (upcoming)
 /// Compute the v-extent (minor angle range) of points projected onto a torus.
 ///
 /// Returns `None` if the extent is degenerate (< 1e-10).

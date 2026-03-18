@@ -1,4 +1,4 @@
-//! Boolean v2: OCCT-style parameter-space pipeline.
+//! Boolean pipeline: OCCT-style parameter-space pipeline.
 //!
 //! Operates entirely in 2D parameter space (pcurves on surfaces) for face
 //! splitting. Surface-type agnostic — same code for plane, cylinder, sphere,
@@ -35,11 +35,11 @@ use crate::OperationsError;
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Perform a boolean operation using the v2 parameter-space pipeline.
+/// Perform a boolean operation using the pipeline parameter-space pipeline.
 ///
 /// Supports solids composed entirely of analytic faces: `Plane`, `Cylinder`,
 /// `Cone`, `Sphere`, `Torus`. Returns `Err` for solids containing NURBS faces.
-pub fn boolean_v2(
+pub fn boolean_pipeline(
     topo: &mut Topology,
     op: BooleanOp,
     a: SolidId,
@@ -50,7 +50,7 @@ pub fn boolean_v2(
     // Guard: all faces must have a supported surface type.
     if !all_faces_supported(topo, a)? || !all_faces_supported(topo, b)? {
         return Err(OperationsError::InvalidInput {
-            reason: "boolean_v2: unsupported surface type (only plane/cylinder/cone/sphere/torus/NURBS supported)"
+            reason: "boolean_pipeline: unsupported surface type (only plane/cylinder/cone/sphere/torus/NURBS supported)"
                 .into(),
         });
     }
@@ -73,7 +73,7 @@ pub fn boolean_v2(
 
     // Disjoint shortcut (with containment detection).
     if pipeline.intersections.is_empty() {
-        return handle_disjoint_v2(
+        return handle_disjoint_pipeline(
             topo,
             op,
             a,
@@ -102,7 +102,7 @@ pub fn boolean_v2(
     )?;
 
     // Stage 5: Assemble result.
-    let result = assemble_v2(topo, &pipeline, &tol)?;
+    let result = assemble_pipeline(topo, &pipeline, &tol)?;
 
     // Post-processing: healing.
     crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
@@ -725,7 +725,7 @@ fn intersect_two_plane_faces(
     let face_a = topo.face(fa)?;
     let face_b = topo.face(fb)?;
 
-    // Guarded by `all_faces_plane()` at the entry point of `boolean_v2()`.
+    // Guarded by `all_faces_plane()` at the entry point of `boolean_pipeline()`.
     let Some((na, da)) = (match face_a.surface() {
         FaceSurface::Plane { normal, d } => Some((*normal, *d)),
         _ => None,
@@ -1408,7 +1408,7 @@ fn point_in_face_polygon_3d(point: Point3, verts: &[Point3], normal: &Vec3) -> b
 // Stage 5: Assemble
 // ---------------------------------------------------------------------------
 
-fn assemble_v2(
+fn assemble_pipeline(
     topo: &mut Topology,
     pipeline: &BooleanPipeline,
     tol: &Tolerance,
@@ -1453,7 +1453,7 @@ fn assemble_v2(
 
     if face_ids.is_empty() {
         return Err(OperationsError::InvalidInput {
-            reason: "boolean_v2: no faces in result".into(),
+            reason: "boolean_pipeline: no faces in result".into(),
         });
     }
 
@@ -1694,7 +1694,7 @@ fn trim_line_to_polygon_2d(origin: Point2, dir: Vec2, polygon: &[Point2]) -> Vec
 // Disjoint handling (with containment detection)
 // ---------------------------------------------------------------------------
 
-fn handle_disjoint_v2(
+fn handle_disjoint_pipeline(
     topo: &mut Topology,
     op: BooleanOp,
     a: SolidId,
@@ -1731,7 +1731,7 @@ fn handle_disjoint_v2(
             BooleanOp::Fuse => Ok(crate::copy::copy_solid(topo, a)?),
             BooleanOp::Cut => Err(OperationsError::InvalidInput {
                 reason:
-                    "boolean_v2: B is inside A — cut would create void (not supported in step 1)"
+                    "boolean_pipeline: B is inside A — cut would create void (not supported in pipeline)"
                         .into(),
             }),
             BooleanOp::Intersect => Ok(crate::copy::copy_solid(topo, b)?),
@@ -1743,7 +1743,7 @@ fn handle_disjoint_v2(
         return match op {
             BooleanOp::Fuse => Ok(crate::copy::copy_solid(topo, b)?),
             BooleanOp::Cut => Err(OperationsError::InvalidInput {
-                reason: "boolean_v2: A is inside B — cut result is empty".into(),
+                reason: "boolean_pipeline: A is inside B — cut result is empty".into(),
             }),
             BooleanOp::Intersect => Ok(crate::copy::copy_solid(topo, a)?),
         };
@@ -1774,7 +1774,7 @@ fn handle_disjoint_v2(
         BooleanOp::Intersect => {
             // A ∩ B where they don't touch → empty.
             Err(OperationsError::InvalidInput {
-                reason: "boolean_v2: intersection of disjoint solids is empty".into(),
+                reason: "boolean_pipeline: intersection of disjoint solids is empty".into(),
             })
         }
     }
@@ -2714,13 +2714,13 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_box_cut_box() {
+    fn pipeline_box_cut_box() {
         let mut topo = Topology::new();
         let (a, b) = make_overlapping_boxes(&mut topo);
         // a: [0,10]³ = 1000. b: [3,8]×[2,12]×[1,11].
         // Overlap: [3,8]×[2,10]×[1,10] = 5×8×9 = 360.
         // Cut = a - overlap = 1000 - 360 = 640.
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Cut, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 640.0).abs() < 70.0,
@@ -2729,11 +2729,11 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_box_fuse_box() {
+    fn pipeline_box_fuse_box() {
         let mut topo = Topology::new();
         let (a, b) = make_overlapping_boxes(&mut topo);
         // Fuse = a + b - overlap = 1000 + 500 - 360 = 1140.
-        let result = boolean_v2(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Fuse, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 1140.0).abs() < 120.0,
@@ -2742,11 +2742,11 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_box_intersect_box() {
+    fn pipeline_box_intersect_box() {
         let mut topo = Topology::new();
         let (a, b) = make_overlapping_boxes(&mut topo);
         // Intersect = overlap = [3,8]×[2,10]×[1,10] = 5×8×9 = 360.
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 360.0).abs() < 40.0,
@@ -2757,7 +2757,7 @@ mod tests {
     // --- Edge-case tests ---
 
     #[test]
-    fn boolean_v2_3d_offset_overlap() {
+    fn pipeline_3d_offset_overlap() {
         // Boxes offset on all 3 axes (no shared plane).
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -2766,7 +2766,7 @@ mod tests {
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
         // a=[0,10]³, b=[5,15]³. Overlap: [5,10]³ = 125.
         // Intersect is simpler to verify: overlap = 125.
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 125.0).abs() < 20.0,
@@ -2775,14 +2775,14 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_3d_offset_fuse() {
+    fn pipeline_3d_offset_fuse() {
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let mat = Mat4::translation(5.0, 5.0, 5.0);
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
         // a=[0,10]³, b=[5,15]³. Fuse = 1000 + 1000 - 125 = 1875.
-        let result = boolean_v2(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Fuse, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 1875.0).abs() < 200.0,
@@ -2791,7 +2791,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_b_inside_a_fuse() {
+    fn pipeline_b_inside_a_fuse() {
         // Small box entirely inside large box.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -2800,7 +2800,7 @@ mod tests {
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
         // B is at [3,7]×[3,7]×[3,7], entirely inside A=[0,10]³.
         // Fuse = A (since B adds no volume).
-        let result = boolean_v2(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Fuse, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 1000.0).abs() < 10.0,
@@ -2809,7 +2809,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_b_inside_a_intersect() {
+    fn pipeline_b_inside_a_intersect() {
         // Small box entirely inside large box.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -2817,7 +2817,7 @@ mod tests {
         let mat = Mat4::translation(3.0, 3.0, 3.0);
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
         // Intersect = B.
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 64.0).abs() < 10.0,
@@ -2826,7 +2826,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_a_inside_b_intersect() {
+    fn pipeline_a_inside_b_intersect() {
         // Large box inside even larger box (A inside B).
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
@@ -2835,7 +2835,7 @@ mod tests {
         let b = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         // A is at [3,7]³, B is at [0,10]³. A inside B.
         // Intersect = A.
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 64.0).abs() < 10.0,
@@ -2844,7 +2844,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_disjoint_cut() {
+    fn pipeline_disjoint_cut() {
         // Two completely separate boxes.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
@@ -2852,7 +2852,7 @@ mod tests {
         let mat = Mat4::translation(20.0, 0.0, 0.0);
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
         // Disjoint: Cut = A.
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Cut, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 125.0).abs() < 10.0,
@@ -2861,7 +2861,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_disjoint_intersect_is_error() {
+    fn pipeline_disjoint_intersect_is_error() {
         // Two completely separate boxes.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
@@ -2869,12 +2869,12 @@ mod tests {
         let mat = Mat4::translation(20.0, 0.0, 0.0);
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
         // Disjoint: Intersect = error.
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b);
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b);
         assert!(result.is_err(), "disjoint intersect should return Err");
     }
 
     #[test]
-    fn boolean_v2_asymmetric_cut() {
+    fn pipeline_asymmetric_cut() {
         // Non-symmetric overlap verifying correct face selection.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -2883,7 +2883,7 @@ mod tests {
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
         // b: [7,13]×[3,7]×[2,5]. Overlap with a: [7,10]×[3,7]×[2,5] = 3×4×3 = 36.
         // Cut = 1000 - 36 = 964.
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Cut, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 964.0).abs() < 100.0,
@@ -2912,7 +2912,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_box_intersect_cylinder_inside() {
+    fn pipeline_box_intersect_cylinder_inside() {
         // Cylinder entirely inside box → intersect = cylinder.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -2924,7 +2924,7 @@ mod tests {
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
 
         let expected = std::f64::consts::PI * r * r * h;
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - expected).abs() / expected < 0.05,
@@ -2933,7 +2933,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_box_fuse_cylinder_inside() {
+    fn pipeline_box_fuse_cylinder_inside() {
         // Cylinder entirely inside box → fuse = box.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -2941,7 +2941,7 @@ mod tests {
         let mat = Mat4::translation(0.0, 0.0, 1.0);
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
 
-        let result = boolean_v2(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Fuse, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 1000.0).abs() / 1000.0 < 0.05,
@@ -2950,7 +2950,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_box_intersect_sphere_inside() {
+    fn pipeline_box_intersect_sphere_inside() {
         // Small sphere entirely inside box → intersect = sphere.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -2958,7 +2958,7 @@ mod tests {
         let b = make_centered_sphere(&mut topo, r, 5.0, 5.0, 5.0);
 
         let expected = 4.0 / 3.0 * std::f64::consts::PI * r.powi(3);
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - expected).abs() / expected < 0.05,
@@ -2967,13 +2967,13 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_box_fuse_sphere_inside() {
+    fn pipeline_box_fuse_sphere_inside() {
         // Small sphere entirely inside box → fuse = box.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let b = make_centered_sphere(&mut topo, 2.0, 5.0, 5.0, 5.0);
 
-        let result = boolean_v2(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Fuse, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 1000.0).abs() / 1000.0 < 0.05,
@@ -2982,7 +2982,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_box_intersect_cone_inside() {
+    fn pipeline_box_intersect_cone_inside() {
         // Cone (frustum) entirely inside box → intersect = cone.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -2994,7 +2994,7 @@ mod tests {
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
 
         let expected = std::f64::consts::PI * h / 3.0 * (r1 * r1 + r2 * r2 + r1 * r2);
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - expected).abs() / expected < 0.05,
@@ -3003,7 +3003,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_cylinder_inside_box_cut_is_void() {
+    fn pipeline_cylinder_inside_box_cut_is_void() {
         // Cylinder entirely inside box → cut would create a void (inner shell).
         // The cylinder caps are coplanar with box z-faces, so the pipeline may
         // find boundary intersection curves and attempt assembly. Accept either
@@ -3012,7 +3012,7 @@ mod tests {
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let b = make_centered_cylinder(&mut topo, 2.0, 10.0, 5.0, 5.0);
 
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b);
+        let result = boolean_pipeline(&mut topo, BooleanOp::Cut, a, b);
         // Pipeline may succeed (producing the box with coplanar trim) or fail
         // (void detection). Either is acceptable for this degenerate case.
         if let Ok(solid) = result {
@@ -3027,13 +3027,13 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_disjoint_box_cylinder() {
+    fn pipeline_disjoint_box_cylinder() {
         // Box and cylinder are disjoint → intersect returns error.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
         let b = make_centered_cylinder(&mut topo, 1.0, 3.0, 20.0, 20.0);
 
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b);
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b);
         assert!(
             result.is_err(),
             "disjoint box-cylinder intersect should return Err"
@@ -3041,13 +3041,13 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_disjoint_box_sphere() {
+    fn pipeline_disjoint_box_sphere() {
         // Box and sphere are disjoint → cut = box.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
         let b = make_centered_sphere(&mut topo, 1.0, 20.0, 20.0, 20.0);
 
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Cut, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
         assert!(
             (vol - 125.0).abs() < 10.0,
@@ -3073,7 +3073,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_cylinder_through_box_cut() {
+    fn pipeline_cylinder_through_box_cut() {
         // Cylinder r=2, h=20 centered at (5,5) goes through box [0,10]³.
         // Cut = box minus cylinder slice within box.
         // Overlap volume = π·r²·h_box = π·4·10 ≈ 125.66
@@ -3086,7 +3086,7 @@ mod tests {
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
 
         let expected = 1000.0 - std::f64::consts::PI * r * r * 10.0;
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Cut, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
         assert!(
             (vol - expected).abs() / expected < 0.05,
@@ -3095,7 +3095,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_cylinder_through_box_intersect() {
+    fn pipeline_cylinder_through_box_intersect() {
         // Same geometry: intersect = cylinder slice within box.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -3105,7 +3105,7 @@ mod tests {
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
 
         let expected = std::f64::consts::PI * r * r * 10.0;
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
         assert!(
             (vol - expected).abs() / expected < 0.05,
@@ -3114,7 +3114,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_cylinder_through_box_fuse() {
+    fn pipeline_cylinder_through_box_fuse() {
         // Fuse = box + cylinder - overlap.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -3126,7 +3126,7 @@ mod tests {
         let cyl_vol = std::f64::consts::PI * r * r * 20.0;
         let overlap = std::f64::consts::PI * r * r * 10.0;
         let expected = 1000.0 + cyl_vol - overlap;
-        let result = boolean_v2(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Fuse, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
         assert!(
             (vol - expected).abs() / expected < 0.05,
@@ -3135,7 +3135,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_cylinder_partially_through_box_cut() {
+    fn pipeline_cylinder_partially_through_box_cut() {
         // Cylinder r=2, base at z=2, top at z=17 — exits top face only.
         // Overlap: z ∈ [2, 10], h_overlap = 8, vol_overlap = π·4·8 ≈ 100.53.
         let mut topo = Topology::new();
@@ -3147,7 +3147,7 @@ mod tests {
 
         let overlap_h = 8.0; // min(10, 17) - 2
         let expected = 1000.0 - std::f64::consts::PI * r * r * overlap_h;
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Cut, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
         assert!(
             (vol - expected).abs() / expected < 0.05,
@@ -3156,7 +3156,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_sphere_cap_cut() {
+    fn pipeline_sphere_cap_cut() {
         // Sphere r=5 centered at (5, 5, 12) — overlaps box top by 3 units.
         // Sphere bottom at z=7, box top at z=10. Cap from z=7..10 inside box.
         // Cap height h = 3, volume = πh²(3r−h)/3 = π·9·12/3 = 36π ≈ 113.10.
@@ -3170,7 +3170,7 @@ mod tests {
         let h = 3.0; // sphere dips 3 units into box (z=7..10)
         let cap_vol = std::f64::consts::PI * h * h * (3.0 * r - h) / 3.0;
         let expected = 1000.0 - cap_vol;
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Cut, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
         assert!(
             (vol - expected).abs() / expected < 0.10,
@@ -3179,7 +3179,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_cone_through_box_intersect() {
+    fn pipeline_cone_through_box_intersect() {
         // Frustum r₁=3, r₂=1, h=20 through box [0,10]³.
         // Frustum slice z∈[0,10]: r varies linearly from r₁ to midpoint.
         let mut topo = Topology::new();
@@ -3200,7 +3200,7 @@ mod tests {
         let r_top = 1.5;
         let expected =
             std::f64::consts::PI * 10.0 / 3.0 * (r_bot * r_bot + r_top * r_top + r_bot * r_top);
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
         assert!(
             (vol - expected).abs() / expected < 0.10,
@@ -3209,7 +3209,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_offset_cylinder_through_box_cut() {
+    fn pipeline_offset_cylinder_through_box_cut() {
         // Cylinder off-center at (3, 7) to avoid seam alignment with box faces.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -3219,7 +3219,7 @@ mod tests {
         crate::transform::transform_solid(&mut topo, b, &mat).unwrap();
 
         let expected = 1000.0 - std::f64::consts::PI * r * r * 10.0;
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Cut, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
         assert!(
             (vol - expected).abs() / expected < 0.05,
@@ -3228,7 +3228,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_two_cylinders_intersect() {
+    fn pipeline_two_cylinders_intersect() {
         // Two perpendicular cylinders (Steinmetz-like).
         // Cylinder A along z-axis, Cylinder B along x-axis, both r=3.
         // Intersection volume = 16r³/3 = 16·27/3 = 144.
@@ -3249,7 +3249,7 @@ mod tests {
         crate::transform::transform_solid(&mut topo, b, &mat_b).unwrap();
 
         let expected = 16.0 * r * r * r / 3.0;
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
         assert!(
             (vol - expected).abs() / expected < 0.10,
@@ -3296,7 +3296,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_loft_box_cut() {
+    fn pipeline_loft_box_cut() {
         // Loft between two 4×4 squares at z=-1 and z=11, centered at (5,5).
         // Pokes through box top and bottom → plane-NURBS intersections.
         // Inside box: 4×4×10 = 160.
@@ -3306,7 +3306,7 @@ mod tests {
         let top = make_square_face_at(&mut topo, 4.0, 5.0, 5.0, 11.0);
         let b = crate::loft::loft(&mut topo, &[bottom, top]).unwrap();
 
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Cut, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
         // Box volume = 1000. Lofted prism inside box = 4×4×10 = 160.
         let expected = 1000.0 - 160.0;
@@ -3317,7 +3317,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_loft_box_intersect() {
+    fn pipeline_loft_box_intersect() {
         // Loft extends through box — intersect gives the part inside the box.
         let mut topo = Topology::new();
         let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -3325,7 +3325,7 @@ mod tests {
         let top = make_square_face_at(&mut topo, 4.0, 5.0, 5.0, 11.0);
         let b = crate::loft::loft(&mut topo, &[bottom, top]).unwrap();
 
-        let result = boolean_v2(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Intersect, a, b).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
         let expected = 160.0; // 4×4×10 (prism clipped to box height)
         assert!(
@@ -3335,7 +3335,7 @@ mod tests {
     }
 
     #[test]
-    fn boolean_v2_cylinder_vs_loft_cut() {
+    fn pipeline_cylinder_vs_loft_cut() {
         // Cylinder (analytic) vs loft (NURBS) — tests analytic-NURBS intersection.
         // Cylinder r=3 along z, centered at (5,5), from z=-1 to z=11.
         // Loft 6×6 square prism centered at (5,5), z=0 to z=10.
@@ -3350,7 +3350,7 @@ mod tests {
         let loft = crate::loft::loft(&mut topo, &[bottom, top]).unwrap();
 
         // Must not return InvalidInput (analytic-NURBS conversion must work).
-        let result = boolean_v2(&mut topo, BooleanOp::Cut, loft, cyl).unwrap();
+        let result = boolean_pipeline(&mut topo, BooleanOp::Cut, loft, cyl).unwrap();
         let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
         // Loft volume = 6×6×10 = 360. Cylinder inside loft ≈ π×9×10 ≈ 283.
         // But cylinder extends beyond loft, so intersection is smaller.

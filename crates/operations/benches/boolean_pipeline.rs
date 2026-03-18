@@ -1,10 +1,10 @@
-//! Boolean v1 vs v2 pipeline comparison benchmarks.
+//! Boolean dispatch vs pipeline pipeline comparison benchmarks.
 //!
 //! For each workload, benchmarks both:
-//! - `boolean_v2()` — the v2-only parameter-space pipeline
+//! - `boolean_pipeline()` — the v2-only parameter-space pipeline
 //! - `boolean()` — the dispatch function (tries analytic → v2 → chord-based)
 //!
-//! When `boolean_v2()` returns `Err`, the v2 bench is skipped for that workload
+//! When `boolean_pipeline()` returns `Err`, the v2 bench is skipped for that workload
 //! (the dispatch result IS the v1 path).
 //!
 //! Run with: `cargo bench -p brepkit-operations --bench boolean_v1_v2`
@@ -22,7 +22,7 @@ use std::time::Duration;
 use criterion::{Criterion, criterion_group, criterion_main};
 
 use brepkit_math::mat::Mat4;
-use brepkit_operations::boolean::boolean_v2::boolean_v2;
+use brepkit_operations::boolean::boolean_pipeline::boolean_pipeline;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::measure;
 use brepkit_operations::primitives;
@@ -52,8 +52,8 @@ fn fast_config() -> Criterion {
 // ---------------------------------------------------------------------------
 
 /// Check whether v2 can handle a workload by doing a dry run.
-/// Returns true if `boolean_v2` succeeds.
-fn v2_supported(
+/// Returns true if `boolean_pipeline` succeeds.
+fn pipeline_supported(
     op: BooleanOp,
     setup: &dyn Fn() -> (
         Topology,
@@ -62,7 +62,7 @@ fn v2_supported(
     ),
 ) -> bool {
     let (mut topo, a, b) = setup();
-    boolean_v2(&mut topo, op, a, b).is_ok()
+    boolean_pipeline(&mut topo, op, a, b).is_ok()
 }
 
 /// Check whether dispatch can handle a workload by doing a dry run.
@@ -179,7 +179,7 @@ fn setup_sphere_inside_box() -> (
 /// `$name`: benchmark name prefix
 /// `$op`: BooleanOp variant
 /// `$setup`: function returning (Topology, SolidId, SolidId)
-macro_rules! bench_v1_v2 {
+macro_rules! bench_dispatch_vs_pipeline {
     ($group:expr, $name:expr, $op:expr, $setup:expr) => {
         // Bench dispatch path only if it can handle this workload.
         if dispatch_supported($op, &$setup) {
@@ -192,11 +192,11 @@ macro_rules! bench_v1_v2 {
         }
 
         // Bench v2-only if it can handle this workload.
-        if v2_supported($op, &$setup) {
-            $group.bench_function(concat!($name, "/v2_only"), |b| {
+        if pipeline_supported($op, &$setup) {
+            $group.bench_function(concat!($name, "/pipeline_only"), |b| {
                 b.iter(|| {
                     let (mut topo, a, b_solid) = $setup();
-                    black_box(boolean_v2(&mut topo, $op, a, b_solid).unwrap());
+                    black_box(boolean_pipeline(&mut topo, $op, a, b_solid).unwrap());
                 });
             });
         }
@@ -211,9 +211,9 @@ fn bench_box_box(c: &mut Criterion) {
     let mut group = c.benchmark_group("box_box");
 
     // overlapping_1axis — all 3 ops
-    bench_v1_v2!(group, "1axis/fuse", BooleanOp::Fuse, setup_box_box_1axis);
-    bench_v1_v2!(group, "1axis/cut", BooleanOp::Cut, setup_box_box_1axis);
-    bench_v1_v2!(
+    bench_dispatch_vs_pipeline!(group, "1axis/fuse", BooleanOp::Fuse, setup_box_box_1axis);
+    bench_dispatch_vs_pipeline!(group, "1axis/cut", BooleanOp::Cut, setup_box_box_1axis);
+    bench_dispatch_vs_pipeline!(
         group,
         "1axis/intersect",
         BooleanOp::Intersect,
@@ -221,9 +221,9 @@ fn bench_box_box(c: &mut Criterion) {
     );
 
     // overlapping_3axis — all 3 ops
-    bench_v1_v2!(group, "3axis/fuse", BooleanOp::Fuse, setup_box_box_3axis);
-    bench_v1_v2!(group, "3axis/cut", BooleanOp::Cut, setup_box_box_3axis);
-    bench_v1_v2!(
+    bench_dispatch_vs_pipeline!(group, "3axis/fuse", BooleanOp::Fuse, setup_box_box_3axis);
+    bench_dispatch_vs_pipeline!(group, "3axis/cut", BooleanOp::Cut, setup_box_box_3axis);
+    bench_dispatch_vs_pipeline!(
         group,
         "3axis/intersect",
         BooleanOp::Intersect,
@@ -231,7 +231,7 @@ fn bench_box_box(c: &mut Criterion) {
     );
 
     // disjoint — fuse only
-    bench_v1_v2!(
+    bench_dispatch_vs_pipeline!(
         group,
         "disjoint/fuse",
         BooleanOp::Fuse,
@@ -248,13 +248,13 @@ fn bench_box_box(c: &mut Criterion) {
 fn bench_box_cylinder(c: &mut Criterion) {
     let mut group = c.benchmark_group("box_cylinder");
 
-    bench_v1_v2!(
+    bench_dispatch_vs_pipeline!(
         group,
         "cyl_through_box/cut",
         BooleanOp::Cut,
         setup_cyl_through_box
     );
-    bench_v1_v2!(
+    bench_dispatch_vs_pipeline!(
         group,
         "sphere_inside_box/intersect",
         BooleanOp::Intersect,
@@ -269,7 +269,7 @@ fn bench_box_cylinder(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 /// Build a staircase: `n` sequential cuts of small boxes from a large box.
-fn staircase_v2(n: usize) -> brepkit_topology::solid::SolidId {
+fn staircase_pipeline(n: usize) -> brepkit_topology::solid::SolidId {
     let mut topo = Topology::new();
     let mut result = primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
     for i in 0..n {
@@ -278,7 +278,7 @@ fn staircase_v2(n: usize) -> brepkit_topology::solid::SolidId {
         let z = 20.0 - (i as f64 + 1.0) * (20.0 / n as f64);
         let mat = Mat4::translation(x, 0.0, z);
         transform_solid(&mut topo, step, &mat).unwrap();
-        result = boolean_v2(&mut topo, BooleanOp::Cut, result, step).unwrap();
+        result = boolean_pipeline(&mut topo, BooleanOp::Cut, result, step).unwrap();
     }
     result
 }
@@ -312,10 +312,10 @@ fn bench_sequential(c: &mut Criterion) {
     let test_b = primitives::make_box(&mut test_topo, 5.0, 20.0, 5.0).unwrap();
     let test_mat = Mat4::translation(0.0, 0.0, 15.0);
     transform_solid(&mut test_topo, test_b, &test_mat).unwrap();
-    if boolean_v2(&mut test_topo, BooleanOp::Cut, test_a, test_b).is_ok() {
-        group.bench_function("staircase_4/v2_only", |b| {
+    if boolean_pipeline(&mut test_topo, BooleanOp::Cut, test_a, test_b).is_ok() {
+        group.bench_function("staircase_4/pipeline_only", |b| {
             b.iter(|| {
-                black_box(staircase_v2(4));
+                black_box(staircase_pipeline(4));
             });
         });
     }
@@ -360,11 +360,11 @@ fn bench_correctness(c: &mut Criterion) {
         }
 
         // V2 path — compute metrics if supported.
-        if v2_supported(op, &setup) {
-            group.bench_function(format!("{name}/v2_metrics"), |b| {
+        if pipeline_supported(op, &setup) {
+            group.bench_function(format!("{name}/pipeline_metrics"), |b| {
                 b.iter(|| {
                     let (mut topo, a, b_solid) = setup();
-                    let result = boolean_v2(&mut topo, op, a, b_solid).unwrap();
+                    let result = boolean_pipeline(&mut topo, op, a, b_solid).unwrap();
                     let vol = measure::solid_volume(&topo, result, 0.1).unwrap();
                     let faces = face_count(&topo, result);
                     let analytic = all_faces_analytic(&topo, result);

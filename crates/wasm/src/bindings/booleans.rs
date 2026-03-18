@@ -4,7 +4,7 @@
 
 use wasm_bindgen::prelude::*;
 
-use brepkit_operations::boolean::boolean_v2;
+use brepkit_operations::boolean::boolean_pipeline;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 
 use crate::handles::solid_id_to_u32;
@@ -156,12 +156,12 @@ impl BrepKernel {
     ///
     /// Returns an error if either handle is invalid, `op` is unrecognized,
     /// or the operation fails.
-    #[wasm_bindgen(js_name = "booleanV2")]
-    pub fn boolean_v2(&mut self, op: &str, a: u32, b: u32) -> Result<u32, JsError> {
+    #[wasm_bindgen(js_name = "booleanPipeline")]
+    pub fn boolean_pipeline(&mut self, op: &str, a: u32, b: u32) -> Result<u32, JsError> {
         let bool_op = parse_boolean_op(op)?;
         let a_id = self.resolve_solid(a)?;
         let b_id = self.resolve_solid(b)?;
-        let result = boolean_v2::boolean_v2(self.topo_mut(), bool_op, a_id, b_id)?;
+        let result = boolean_pipeline::boolean_pipeline(self.topo_mut(), bool_op, a_id, b_id)?;
         Ok(solid_id_to_u32(result))
     }
 

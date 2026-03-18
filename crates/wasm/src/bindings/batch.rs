@@ -263,7 +263,7 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
-            "booleanV2" => {
+            "booleanPipeline" => {
                 let op_str = args["op"]
                     .as_str()
                     .ok_or("missing or invalid 'op' string")?;
@@ -273,7 +273,7 @@ impl BrepKernel {
                 let b = get_u32(args, "solidB")?;
                 let a_id = self.resolve_solid(a).map_err(|e| e.to_string())?;
                 let b_id = self.resolve_solid(b).map_err(|e| e.to_string())?;
-                let result = brepkit_operations::boolean::boolean_v2::boolean_v2(
+                let result = brepkit_operations::boolean::boolean_pipeline::boolean_pipeline(
                     self.topo_mut(),
                     bool_op,
                     a_id,

@@ -1,10 +1,10 @@
-//! Transient data structures for the boolean_v2 pipeline.
+//! Transient data structures for the boolean_pipeline pipeline.
 //!
 //! [`BooleanPipeline`] holds all intermediate state during a boolean operation.
 //! It is NOT persisted on [`Topology`] — only the final faces/edges/wires
 //! are committed at assembly time.
 
-#![allow(dead_code)] // Used by later boolean_v2 pipeline stages.
+#![allow(dead_code)] // Used by later boolean_pipeline pipeline stages.
 
 use std::collections::HashMap;
 
@@ -161,7 +161,7 @@ impl SurfaceInfo {
 // Pipeline state
 // ---------------------------------------------------------------------------
 
-/// Transient state for a `boolean_v2` operation.
+/// Transient state for a `boolean_pipeline` operation.
 ///
 /// Created at the start of a boolean, populated stage-by-stage, consumed
 /// during assembly, then dropped. Never stored on [`Topology`].

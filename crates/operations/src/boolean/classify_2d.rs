@@ -3,7 +3,7 @@
 //! Given a closed wire loop in (u,v) parameter space, find a point
 //! guaranteed to be inside the loop for solid classification.
 
-#![allow(dead_code)] // Used by later boolean_v2 pipeline stages.
+#![allow(dead_code)] // Used by later boolean_pipeline pipeline stages.
 
 use brepkit_math::vec::{Point2, Vec2};
 

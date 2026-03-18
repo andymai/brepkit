@@ -4,7 +4,7 @@
 //! them to [`OrientedPCurveEdge`]s in the face's parameter space, calls
 //! the wire builder, and produces [`SubFace`]s.
 
-#![allow(dead_code)] // Used by later boolean_v2 pipeline stages.
+#![allow(dead_code)] // Used by later boolean_pipeline pipeline stages.
 
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
@@ -639,7 +639,7 @@ fn sample_wire_loop_uv_periodic(
             Curve2D::Circle(_) | Curve2D::Ellipse(_) => {
                 // Circle2D/Ellipse2D pcurves: interpolate between start_uv
                 // and end_uv. This is approximate (chord, not arc) but these
-                // pcurve types are rare in the boolean_v2 pipeline — section
+                // pcurve types are rare in the boolean_pipeline pipeline — section
                 // edges use NURBS and boundary edges use Line2D.
                 #[allow(clippy::cast_precision_loss)]
                 for i in 0..CURVE_SAMPLES {
