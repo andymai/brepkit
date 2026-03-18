@@ -109,7 +109,12 @@ pub fn boolean_pipeline(
 
     // Post-processing: healing.
     crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-    crate::heal::unify_faces(topo, result)?;
+    let before = topo.shell(topo.solid(result)?.outer_shell())?.faces().len();
+    let merged = crate::heal::unify_faces(topo, result)?;
+    let after = topo.shell(topo.solid(result)?.outer_shell())?.faces().len();
+    if merged > 0 {
+        log::info!("pipeline: unify_faces merged {merged} groups ({before} → {after} faces)");
+    }
 
     Ok(result)
 }
@@ -345,6 +350,14 @@ fn intersect_plane_analytic_faces(
 
             let start_3d = samples[seg_start];
             let end_3d = samples[seg_end];
+
+            // OCCT-style minimum curve length filter: discard section edges
+            // that span fewer than 3 sample points (too short to be meaningful).
+            // This prevents micro-curves from creating unnecessary face splits.
+            if seg_end - seg_start < 3 {
+                continue;
+            }
+
             let is_closed = (end_3d - start_3d).length() < tol.linear && (seg_end - seg_start) >= 4;
 
             if is_closed {
@@ -363,7 +376,9 @@ fn intersect_plane_analytic_faces(
                     seam_u,
                 );
                 result.extend(closed_sections);
-            } else if (end_3d - start_3d).length() >= tol.linear {
+            } else if (end_3d - start_3d).length() >= 1e-4 {
+                // Minimum section edge length: 0.1mm. Shorter edges are degenerate
+                // (tangent touches, grazing contacts) and would create micro-faces.
                 // Non-closed segment with distinct endpoints.
                 let sub_samples = &samples[seg_start..=seg_end];
                 let pcurve_plane = fit_pcurve_from_3d_samples(sub_samples, frame_plane);
@@ -812,8 +827,8 @@ fn intersect_two_plane_faces(
         for &(b0, b1) in &segments_b {
             let t0 = a0.max(b0);
             let t1 = a1.min(b1);
-            if t1 - t0 < 1e-10 {
-                continue; // No overlap or degenerate.
+            if t1 - t0 < 1e-4 {
+                continue; // No overlap or micro-segment (< 0.1mm).
             }
             let start = line_origin + line_dir_n * t0;
             let end = line_origin + line_dir_n * t1;
