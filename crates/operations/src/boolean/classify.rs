@@ -262,7 +262,7 @@ pub(super) fn try_build_analytic_classifier(
     // Complex solids (>20 faces) can't be simple analytic shapes (box,
     // cylinder+caps, sphere). Skip the face-by-face scan to avoid O(F)
     // overhead on large fused/boolean intermediate results.
-    if shell.faces().len() > 20 {
+    if shell.faces().len() > 50 {
         return None;
     }
 
