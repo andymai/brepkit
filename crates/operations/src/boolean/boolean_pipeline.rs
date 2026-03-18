@@ -1240,8 +1240,6 @@ fn split_all_faces(
                 // For Line sections, only filter if the opposing solid has an
                 // analytic classifier. Without a classifier, the raycast is
                 // imprecise and could incorrectly remove needed edges.
-                // Also keep Line sections where the classifier says the midpoint
-                // is Inside or on-boundary (chord approximation of curved intersection).
                 if matches!(s.curve_3d, EdgeCurve::Line) {
                     if let Some(c) = opp_cls.as_ref() {
                         match c.classify(mid, *tol) {
