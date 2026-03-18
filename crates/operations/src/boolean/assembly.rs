@@ -423,18 +423,179 @@ pub(crate) fn assemble_solid_mixed(
     // different VertexIds by the spatial hash (cell-boundary straddling).
     stitch_boundary_edges(topo, &mut face_ids, tol)?;
 
-    // Split non-manifold edges (shared by > 2 faces) into separate copies,
-    // pairing faces by angular ordering around the edge.
-    // Run up to 3 iterations: edge replacement can sometimes create new
-    // non-manifold edges when the replacement edge shares vertices with
-    // other faces' edges.
+    // Split spurious non-manifold edges (rim junctions with opposing normals)
+    // using direction-based pairing. Legitimate 3-face junctions (vertex
+    // blends at corners) are left for angular-based split_nonmanifold_edges.
+    let mut shell_face_ids = build_manifold_shell(topo, &face_ids)?;
+
+    // Handle remaining non-manifold edges (legitimate vertex blend junctions)
+    // using the angular pairing approach.
     for _ in 0..3 {
-        split_nonmanifold_edges(topo, &mut face_ids)?;
+        split_nonmanifold_edges(topo, &mut shell_face_ids)?;
     }
 
-    let shell = Shell::new(face_ids).map_err(crate::OperationsError::Topology)?;
+    let shell = Shell::new(shell_face_ids).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
+}
+
+// ---------------------------------------------------------------------------
+// Degenerate result detection
+// ---------------------------------------------------------------------------
+// OCCT-style manifold shell building
+// ---------------------------------------------------------------------------
+
+/// Resolve non-manifold edges using OCCT-style manifold pairing.
+///
+/// For each edge shared by 3+ faces, select the best pair (faces with
+/// opposite traversal directions = proper manifold pair) and give each
+/// unpaired face its own edge copy. This is equivalent to OCCT's
+/// `BOPAlgo_ShellSplitter::RefineShell` branch-edge splitting.
+///
+/// Unlike the old `split_nonmanifold_edges` which used angular ordering
+/// (unreliable at degenerate rim junctions), this uses traversal direction
+/// (forward/reversed) which is structurally correct for manifold pairing.
+fn build_manifold_shell(
+    topo: &mut Topology,
+    face_ids: &[FaceId],
+) -> Result<Vec<FaceId>, crate::OperationsError> {
+    if face_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Build edge → [(face_index, is_forward_in_wire)] adjacency map.
+    let mut edge_faces: HashMap<EdgeId, Vec<(usize, bool)>> = HashMap::new();
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                edge_faces
+                    .entry(oe.edge())
+                    .or_default()
+                    .push((fi, oe.is_forward()));
+            }
+        }
+    }
+
+    // Find non-manifold edges (shared by 3+ faces).
+    let nonmanifold: Vec<(EdgeId, Vec<(usize, bool)>)> = edge_faces
+        .into_iter()
+        .filter(|(_, faces)| faces.len() > 2)
+        .collect();
+
+    if nonmanifold.is_empty() {
+        return Ok(face_ids.to_vec());
+    }
+
+    // For each non-manifold edge, find the best manifold pair (opposite
+    // traversal directions) and give unpaired faces their own edge copies.
+    let mut replacements: HashMap<(usize, EdgeId), EdgeId> = HashMap::new();
+
+    for (eid, face_refs) in &nonmanifold {
+        // Check if this is a SPURIOUS non-manifold (rim junction with opposing
+        // normals) vs LEGITIMATE (vertex blend at a corner). Only split spurious.
+        // Criterion: if any pair of faces has opposing normals (dot < -0.5),
+        // it's a rim junction that needs splitting.
+        let mut has_opposing = false;
+        let face_normals: Vec<(usize, Vec3)> = face_refs
+            .iter()
+            .filter_map(|&(fi, _)| {
+                let face = topo.face(face_ids[fi]).ok()?;
+                let n = match face.surface() {
+                    FaceSurface::Plane { normal, .. } => {
+                        if face.is_reversed() {
+                            -*normal
+                        } else {
+                            *normal
+                        }
+                    }
+                    _ => return None, // Skip non-planar faces.
+                };
+                Some((fi, n))
+            })
+            .collect();
+
+        for i in 0..face_normals.len() {
+            for j in (i + 1)..face_normals.len() {
+                if face_normals[i].1.dot(face_normals[j].1) < -0.5 {
+                    has_opposing = true;
+                }
+            }
+        }
+
+        if !has_opposing {
+            // Legitimate 3-face junction (e.g., vertex blend at corner).
+            // Fall back to old angular pairing via split_nonmanifold_edges.
+            continue;
+        }
+
+        // Spurious rim junction: split into forward/reversed groups and pair.
+        let mut fwd_faces: Vec<usize> = Vec::new();
+        let mut rev_faces: Vec<usize> = Vec::new();
+        for &(fi, is_fwd) in face_refs {
+            if is_fwd {
+                fwd_faces.push(fi);
+            } else {
+                rev_faces.push(fi);
+            }
+        }
+
+        let edge = topo.edge(*eid)?;
+        let start = edge.start();
+        let end = edge.end();
+        let curve = edge.curve().clone();
+
+        // Keep original edge for the first pair. Copy for unpaired.
+        for &fi in &fwd_faces[1..] {
+            let new_eid = topo.add_edge(Edge::new(start, end, curve.clone()));
+            replacements.insert((fi, *eid), new_eid);
+        }
+        for &fi in &rev_faces[1..] {
+            let new_eid = topo.add_edge(Edge::new(start, end, curve.clone()));
+            replacements.insert((fi, *eid), new_eid);
+        }
+    }
+
+    if replacements.is_empty() {
+        return Ok(face_ids.to_vec());
+    }
+
+    // Rebuild affected faces with replaced edges.
+    let mut result = face_ids.to_vec();
+    let affected: HashSet<usize> = replacements.keys().map(|(fi, _)| *fi).collect();
+
+    for fi in affected {
+        let fid = result[fi];
+        let face = topo.face(fid)?;
+        let surface = face.surface().clone();
+        let is_reversed = face.is_reversed();
+        let inner_wires = face.inner_wires().to_vec();
+        let wire = topo.wire(face.outer_wire())?;
+        let old_edges: Vec<OrientedEdge> = wire.edges().to_vec();
+
+        let new_edges: Vec<OrientedEdge> = old_edges
+            .iter()
+            .map(|oe| {
+                if let Some(&new_eid) = replacements.get(&(fi, oe.edge())) {
+                    OrientedEdge::new(new_eid, oe.is_forward())
+                } else {
+                    *oe
+                }
+            })
+            .collect();
+
+        let new_wire = Wire::new(new_edges, true).map_err(crate::OperationsError::Topology)?;
+        let new_wire_id = topo.add_wire(new_wire);
+        let new_face = if is_reversed {
+            Face::new_reversed(new_wire_id, inner_wires, surface)
+        } else {
+            Face::new(new_wire_id, inner_wires, surface)
+        };
+        result[fi] = topo.add_face(new_face);
+    }
+
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
