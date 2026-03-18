@@ -182,10 +182,6 @@ pub(crate) fn assemble_solid_mixed(
         HashMap::with_capacity(face_specs.len() * 4);
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> =
         HashMap::with_capacity(face_specs.len() * 4);
-    // Track the face normal sign for each edge. When a new face wants to share
-    // an edge but has an opposing normal (inner vs outer shell face), it gets
-    // its own edge to prevent non-manifold 3-face junctions.
-    let mut edge_normal_sign: HashMap<(usize, usize), i8> = HashMap::new();
 
     let mut face_ids = Vec::with_capacity(face_specs.len());
 
@@ -344,75 +340,26 @@ pub(crate) fn assemble_solid_mixed(
                     })
                     .collect();
 
-                // Compute normal sign for this face (used to prevent edge sharing
-                // between faces with opposing normals at shell boundaries).
-                let face_normal_sign: i8 = {
-                    let n_eff = match &surface {
-                        FaceSurface::Plane { normal, .. } => {
-                            if reversed {
-                                -*normal
-                            } else {
-                                *normal
-                            }
-                        }
-                        _ => Vec3::new(0.0, 0.0, 0.0), // non-planar: don't restrict
-                    };
-                    let ax = n_eff.x().abs();
-                    let ay = n_eff.y().abs();
-                    let az = n_eff.z().abs();
-                    if az >= ax && az >= ay {
-                        if n_eff.z() > 0.0 { 1 } else { -1 }
-                    } else if ay >= ax {
-                        if n_eff.y() > 0.0 { 2 } else { -2 }
-                    } else if n_eff.x() > 0.0 {
-                        3
-                    } else {
-                        -3
-                    }
-                };
-
                 let mut oriented_edges = Vec::with_capacity(n);
                 for i in 0..n {
                     let j = (i + 1) % n;
                     let vi = vert_ids[i].index();
                     let vj = vert_ids[j].index();
+                    // Skip degenerate zero-length edges (collapsed vertices).
                     if vi == vj {
                         continue;
                     }
                     let (key_min, key_max) = if vi <= vj { (vi, vj) } else { (vj, vi) };
                     let is_forward = vi <= vj;
 
-                    // Check if an existing edge has a compatible normal.
-                    // Opposing normals (e.g., +Z vs -Z for inner/outer shell faces)
-                    // must NOT share edges to prevent 3-face non-manifold junctions.
-                    let existing_sign = edge_normal_sign.get(&(key_min, key_max)).copied();
-                    let compatible = existing_sign.is_none_or(|s| {
-                        // Compatible if: same sign, or either is 0 (non-planar)
-                        face_normal_sign == 0 || s == 0 || s == face_normal_sign
-                    });
-
-                    let edge_id = if compatible {
-                        let eid = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
-                            let (start, end) = if vi <= vj {
-                                (vert_ids[i], vert_ids[j])
-                            } else {
-                                (vert_ids[j], vert_ids[i])
-                            };
-                            topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
-                        });
-                        edge_normal_sign
-                            .entry((key_min, key_max))
-                            .or_insert(face_normal_sign);
-                        eid
-                    } else {
-                        // Opposing normal — create a separate edge.
+                    let edge_id = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
                         let (start, end) = if vi <= vj {
                             (vert_ids[i], vert_ids[j])
                         } else {
                             (vert_ids[j], vert_ids[i])
                         };
                         topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
-                    };
+                    });
 
                     // Skip duplicate edges anywhere in the wire (not just consecutive).
                     // Duplicates arise when the polygon revisits a vertex pair due to
