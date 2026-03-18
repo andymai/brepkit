@@ -770,32 +770,57 @@ fn wire_cone_extent(
 fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<AnalyticClassifier> {
     let s = topo.solid(solid).ok()?;
     let shell = topo.shell(s.outer_shell()).ok()?;
-    let tol = Tolerance::new();
+    let _tol = Tolerance::new();
 
     // Separate faces into outer (non-reversed) and inner (reversed).
+    // Collect BOTH planes and cylinders for ConvexAnalytic classifiers.
     let mut outer_planes: Vec<(Vec3, f64)> = Vec::new();
     let mut inner_planes: Vec<(Vec3, f64)> = Vec::new();
+    let mut outer_cylinders: Vec<(Point3, Vec3, f64, f64, f64)> = Vec::new();
+    let mut inner_cylinders: Vec<(Point3, Vec3, f64, f64, f64)> = Vec::new();
 
     for &fid in shell.faces() {
         let face = topo.face(fid).ok()?;
-        if let FaceSurface::Plane { normal, d } = face.surface() {
-            // Check axis-alignment.
-            let ax = normal.x().abs();
-            let ay = normal.y().abs();
-            let az = normal.z().abs();
-            let is_axis_aligned = (ax > 1.0 - tol.angular && ay < tol.angular && az < tol.angular)
-                || (ay > 1.0 - tol.angular && ax < tol.angular && az < tol.angular)
-                || (az > 1.0 - tol.angular && ax < tol.angular && ay < tol.angular);
-            if !is_axis_aligned {
-                continue; // Skip non-axis-aligned planes.
+        match face.surface() {
+            FaceSurface::Plane { normal, d } => {
+                let (n, dv) = if face.is_reversed() {
+                    (-*normal, -*d)
+                } else {
+                    (*normal, *d)
+                };
+                if face.is_reversed() {
+                    inner_planes.push((n, dv));
+                } else {
+                    outer_planes.push((n, dv));
+                }
             }
-            if face.is_reversed() {
-                inner_planes.push((-*normal, -*d));
-            } else {
-                outer_planes.push((*normal, *d));
+            FaceSurface::Cylinder(cyl) => {
+                let origin = cyl.origin();
+                let axis = cyl.axis();
+                let r = cyl.radius();
+                let origin_v = Vec3::new(origin.x(), origin.y(), origin.z());
+                let wire = topo.wire(face.outer_wire()).ok()?;
+                let (z_min, z_max) = wire_axial_extent(topo, wire, origin_v, axis)?;
+                if face.is_reversed() {
+                    inner_cylinders.push((origin, axis, r, z_min, z_max));
+                } else {
+                    outer_cylinders.push((origin, axis, r, z_min, z_max));
+                }
             }
+            FaceSurface::Cone(con) => {
+                let apex = con.apex();
+                let axis = con.axis();
+                let apex_v = Vec3::new(apex.x(), apex.y(), apex.z());
+                let wire = topo.wire(face.outer_wire()).ok()?;
+                let (z_min, z_max, r_min, r_max) = wire_cone_extent(topo, wire, apex_v, axis, con)?;
+                // Cones are not used in composite classifier yet — skip.
+                // (ConvexAnalytic supports cones but the composite classifier
+                // needs more work to handle cone reversal correctly.)
+                let _ = (z_min, z_max, r_min, r_max);
+            }
+            // Skip sphere, torus, NURBS.
+            _ => {}
         }
-        // Skip non-planar faces — we only build from axis-aligned planes.
     }
 
     // Try to build a box classifier from each set.
@@ -851,8 +876,24 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
         })
     };
 
-    let outer = build_box(&outer_planes)?;
-    let inner = build_box(&inner_planes)?;
+    // Build classifier for each face set. Use ConvexAnalytic when cylinders
+    // are present (handles rounded corners). Fall back to Box for plane-only.
+    let build_classifier = |planes: &[(Vec3, f64)],
+                            cylinders: &[(Point3, Vec3, f64, f64, f64)]|
+     -> Option<AnalyticClassifier> {
+        if !cylinders.is_empty() && planes.len() >= 3 {
+            Some(AnalyticClassifier::ConvexAnalytic {
+                planes: planes.to_vec(),
+                cylinders: cylinders.to_vec(),
+                cones: Vec::new(),
+            })
+        } else {
+            build_box(planes)
+        }
+    };
+
+    let outer = build_classifier(&outer_planes, &outer_cylinders)?;
+    let inner = build_classifier(&inner_planes, &inner_cylinders)?;
 
     Some(AnalyticClassifier::Composite {
         outer: std::boxed::Box::new(outer),
