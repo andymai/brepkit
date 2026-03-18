@@ -1963,18 +1963,83 @@ fn collect_solid_faces(topo: &Topology, solid: SolidId) -> Result<Vec<FaceId>, O
     Ok(shell.faces().to_vec())
 }
 
+/// Collect face boundary as a polygon by sampling edges.
+///
+/// For Line edges, only the start vertex is sampled. For curved edges (Circle,
+/// Ellipse, NURBS), intermediate points are sampled to produce a polygon that
+/// accurately approximates the curved boundary for ray-cast classification.
 fn collect_face_polygon(topo: &Topology, face_id: FaceId) -> Result<Vec<Point3>, OperationsError> {
     let face = topo.face(face_id)?;
     let wire = topo.wire(face.outer_wire())?;
     let mut pts = Vec::new();
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
-        let vid = if oe.is_forward() {
+        let start_vid = if oe.is_forward() {
             edge.start()
         } else {
             edge.end()
         };
-        pts.push(topo.vertex(vid)?.point());
+        let end_vid = if oe.is_forward() {
+            edge.end()
+        } else {
+            edge.start()
+        };
+        let p_start = topo.vertex(start_vid)?.point();
+        pts.push(p_start);
+
+        // Sample curved edges at intermediate points.
+        match edge.curve() {
+            EdgeCurve::Line => {} // Start vertex is sufficient.
+            EdgeCurve::Circle(circle) => {
+                let p_end = topo.vertex(end_vid)?.point();
+                // Sample 8 intermediate points along the arc.
+                let t0 = circle.project(p_start);
+                let mut t1 = circle.project(p_end);
+                if oe.is_forward() {
+                    if t1 <= t0 {
+                        t1 += std::f64::consts::TAU;
+                    }
+                } else if t1 >= t0 {
+                    t1 -= std::f64::consts::TAU;
+                }
+                let n_samples = 8;
+                for i in 1..n_samples {
+                    let frac = i as f64 / n_samples as f64;
+                    let t = t0 + (t1 - t0) * frac;
+                    pts.push(circle.evaluate(t));
+                }
+            }
+            EdgeCurve::Ellipse(ellipse) => {
+                let p_end = topo.vertex(end_vid)?.point();
+                let t0 = ellipse.project(p_start);
+                let mut t1 = ellipse.project(p_end);
+                if oe.is_forward() {
+                    if t1 <= t0 {
+                        t1 += std::f64::consts::TAU;
+                    }
+                } else if t1 >= t0 {
+                    t1 -= std::f64::consts::TAU;
+                }
+                let n_samples = 8;
+                for i in 1..n_samples {
+                    let frac = i as f64 / n_samples as f64;
+                    let t = t0 + (t1 - t0) * frac;
+                    pts.push(ellipse.evaluate(t));
+                }
+            }
+            EdgeCurve::NurbsCurve(nurbs) => {
+                // Sample 8 intermediate points.
+                let (t0, t1) = (nurbs.knots().first(), nurbs.knots().last());
+                if let (Some(&t0), Some(&t1)) = (t0, t1) {
+                    let n_samples = 8;
+                    for i in 1..n_samples {
+                        let frac = i as f64 / n_samples as f64;
+                        let t = t0 + (t1 - t0) * frac;
+                        pts.push(nurbs.evaluate(t));
+                    }
+                }
+            }
+        }
     }
     Ok(pts)
 }
@@ -1991,20 +2056,11 @@ fn collect_solid_face_polygons(
         if poly.len() < 3 {
             continue;
         }
-        // Collect inner wire (hole) polygons for ray-cast hole detection.
+        // Collect inner wire (hole) polygons with curved edge sampling.
         let mut holes = Vec::new();
         for &iw_id in face.inner_wires() {
             let iw = topo.wire(iw_id)?;
-            let mut hole_pts = Vec::new();
-            for oe in iw.edges() {
-                let edge = topo.edge(oe.edge())?;
-                let vid = if oe.is_forward() {
-                    edge.start()
-                } else {
-                    edge.end()
-                };
-                hole_pts.push(topo.vertex(vid)?.point());
-            }
+            let hole_pts = sample_wire_polygon(topo, iw)?;
             if hole_pts.len() >= 3 {
                 holes.push(hole_pts);
             }
@@ -2025,6 +2081,77 @@ fn collect_solid_face_polygons(
         }
     }
     Ok(result)
+}
+
+/// Sample a wire's boundary as a polygon, with intermediate points on curved edges.
+fn sample_wire_polygon(topo: &Topology, wire: &Wire) -> Result<Vec<Point3>, OperationsError> {
+    let mut pts = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let start_vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        let end_vid = if oe.is_forward() {
+            edge.end()
+        } else {
+            edge.start()
+        };
+        let p_start = topo.vertex(start_vid)?.point();
+        pts.push(p_start);
+
+        match edge.curve() {
+            EdgeCurve::Line => {}
+            EdgeCurve::Circle(circle) => {
+                let p_end = topo.vertex(end_vid)?.point();
+                let t0 = circle.project(p_start);
+                let mut t1 = circle.project(p_end);
+                if oe.is_forward() {
+                    if t1 <= t0 {
+                        t1 += std::f64::consts::TAU;
+                    }
+                } else if t1 >= t0 {
+                    t1 -= std::f64::consts::TAU;
+                }
+                let n_samples = 8;
+                for i in 1..n_samples {
+                    let frac = i as f64 / n_samples as f64;
+                    let t = t0 + (t1 - t0) * frac;
+                    pts.push(circle.evaluate(t));
+                }
+            }
+            EdgeCurve::Ellipse(ellipse) => {
+                let p_end = topo.vertex(end_vid)?.point();
+                let t0 = ellipse.project(p_start);
+                let mut t1 = ellipse.project(p_end);
+                if oe.is_forward() {
+                    if t1 <= t0 {
+                        t1 += std::f64::consts::TAU;
+                    }
+                } else if t1 >= t0 {
+                    t1 -= std::f64::consts::TAU;
+                }
+                let n_samples = 8;
+                for i in 1..n_samples {
+                    let frac = i as f64 / n_samples as f64;
+                    let t = t0 + (t1 - t0) * frac;
+                    pts.push(ellipse.evaluate(t));
+                }
+            }
+            EdgeCurve::NurbsCurve(nurbs) => {
+                if let (Some(&t0), Some(&t1)) = (nurbs.knots().first(), nurbs.knots().last()) {
+                    let n_samples = 8;
+                    for i in 1..n_samples {
+                        let frac = i as f64 / n_samples as f64;
+                        let t = t0 + (t1 - t0) * frac;
+                        pts.push(nurbs.evaluate(t));
+                    }
+                }
+            }
+        }
+    }
+    Ok(pts)
 }
 
 fn plane_frame_for_polygon(normal: Vec3, poly: &[Point3]) -> PlaneFrame {
