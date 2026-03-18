@@ -530,11 +530,11 @@ fn enforce_manifold_shell(
         }
     }
 
-    // Only apply for significant non-manifold. Minor non-manifold (1-2 edges)
-    // from sphere/cone intersections is tolerable and splitting the shell could
-    // break downstream operations (section, volume).
+    // Only apply for significant non-manifold (>3 edges). Minor non-manifold
+    // (1-3 edges) from sphere/cone intersections is tolerable and splitting
+    // the shell at those edges breaks downstream operations (section, volume).
     let nm_count = edge_face_count.values().filter(|&&c| c > 2).count();
-    if nm_count <= 2 {
+    if nm_count <= 3 {
         return Ok(solid);
     }
 
