@@ -539,8 +539,9 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
     }
 
     // Try to build a box classifier from each set.
+    // Supports open-top/bottom boxes (5 planes): missing axis gets ±1e6 bound.
     let build_box = |planes: &[(Vec3, f64)]| -> Option<AnalyticClassifier> {
-        if planes.len() < 6 {
+        if planes.len() < 4 {
             return None;
         }
         let mut x_vals = Vec::new();
@@ -555,17 +556,39 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
                 z_vals.push(d / normal.z());
             }
         }
-        if x_vals.len() >= 2 && y_vals.len() >= 2 && z_vals.len() >= 2 {
-            x_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            y_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            z_vals.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            Some(AnalyticClassifier::Box {
-                min: Point3::new(*x_vals.first()?, *y_vals.first()?, *z_vals.first()?),
-                max: Point3::new(*x_vals.last()?, *y_vals.last()?, *z_vals.last()?),
-            })
-        } else {
-            None
+        // Each axis needs at least 1 plane. Missing second plane = open side.
+        if x_vals.is_empty() || y_vals.is_empty() || z_vals.is_empty() {
+            return None;
         }
+        let sort = |v: &mut Vec<f64>| {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        };
+        sort(&mut x_vals);
+        sort(&mut y_vals);
+        sort(&mut z_vals);
+        // Use large bounds for open sides (1e6 mm = 1 km).
+        let x_min = *x_vals.first()?;
+        let x_max = if x_vals.len() >= 2 {
+            *x_vals.last()?
+        } else {
+            x_min + 1e6
+        };
+        let y_min = *y_vals.first()?;
+        let y_max = if y_vals.len() >= 2 {
+            *y_vals.last()?
+        } else {
+            y_min + 1e6
+        };
+        let z_min = *z_vals.first()?;
+        let z_max = if z_vals.len() >= 2 {
+            *z_vals.last()?
+        } else {
+            z_min + 1e6
+        };
+        Some(AnalyticClassifier::Box {
+            min: Point3::new(x_min, y_min, z_min),
+            max: Point3::new(x_max, y_max, z_max),
+        })
     };
 
     let outer = build_box(&outer_planes)?;
