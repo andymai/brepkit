@@ -863,11 +863,63 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
         return Ok(0);
     }
 
-    // Step 1: Build edge→face map.
+    // Step 1: Build edge→face map (topology-shared edges).
     let edge_face_map = brepkit_topology::explorer::edge_to_face_map(topo, solid)?;
 
+    // Step 1b: Build geometric edge→face map for unshared curved edges.
+    // Groups edges by (vertex_pair, curve_geometry) so that Circle edges with
+    // the same center/radius/normal connecting the same vertices are treated
+    // as the same edge for face adjacency purposes.
+    #[allow(clippy::type_complexity)]
+    let mut geom_edge_faces: HashMap<(usize, usize, u8, i64, i64, i64, i64), Vec<FaceId>> =
+        HashMap::new();
+    let q = |v: f64| -> i64 { (v * 1e5).round() as i64 };
+    for &fid in &all_face_ids {
+        let face = topo.face(fid)?;
+        // Check outer wire + inner wires for geometric edge adjacency.
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let si = edge.start().index();
+                let ei = edge.end().index();
+                let (kmin, kmax) = if si <= ei { (si, ei) } else { (ei, si) };
+                #[allow(clippy::type_complexity)]
+                let key: Option<(usize, usize, u8, i64, i64, i64, i64)> = match edge.curve() {
+                    brepkit_topology::edge::EdgeCurve::Circle(c) => {
+                        let center = c.center();
+                        Some((
+                            kmin,
+                            kmax,
+                            1, // Circle type tag.
+                            q(center.x()),
+                            q(center.y()),
+                            q(center.z()),
+                            q(c.radius()),
+                        ))
+                    }
+                    brepkit_topology::edge::EdgeCurve::Ellipse(e) => {
+                        let center = e.center();
+                        Some((
+                            kmin,
+                            kmax,
+                            2, // Ellipse type tag.
+                            q(center.x()),
+                            q(center.y()),
+                            q(center.z()),
+                            q(e.semi_major()),
+                        ))
+                    }
+                    _ => None,
+                };
+                if let Some(k) = key {
+                    geom_edge_faces.entry(k).or_default().push(fid);
+                }
+            }
+        }
+    }
+
     // Step 2: Find connected components of faces sharing edges on the same surface.
-    // Union-Find structure.
     let face_index_map: HashMap<usize, usize> = all_face_ids
         .iter()
         .enumerate()
@@ -877,14 +929,36 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
     let n = all_face_ids.len();
     let mut parent: Vec<usize> = (0..n).collect();
 
-    // For each edge shared by 2+ faces, check if adjacent faces are on the same surface.
-    // Includes non-manifold edges (3+ faces) to enable merging across boolean assembly
-    // imperfections where faces should be unified despite non-manifold edges.
+    // Union faces sharing topology edges on the same surface.
     for faces in edge_face_map.values() {
         if faces.len() < 2 {
             continue;
         }
-        // Check all pairs of faces sharing this edge.
+        for i in 0..faces.len() {
+            for j in (i + 1)..faces.len() {
+                let fa_idx = match face_index_map.get(&faces[i].index()) {
+                    Some(&idx) => idx,
+                    None => continue,
+                };
+                let fb_idx = match face_index_map.get(&faces[j].index()) {
+                    Some(&idx) => idx,
+                    None => continue,
+                };
+                let surface_a = topo.face(faces[i])?.surface().clone();
+                let surface_b = topo.face(faces[j])?.surface().clone();
+                if surfaces_equivalent(&surface_a, &surface_b) {
+                    uf_union(&mut parent, fa_idx, fb_idx);
+                }
+            }
+        }
+    }
+
+    // Union faces sharing geometrically-equivalent curved edges on the same surface.
+    // This catches faces connected by unshared Circle edges (same geometry, different EdgeId).
+    for faces in geom_edge_faces.values() {
+        if faces.len() < 2 {
+            continue;
+        }
         for i in 0..faces.len() {
             for j in (i + 1)..faces.len() {
                 let fa_idx = match face_index_map.get(&faces[i].index()) {
