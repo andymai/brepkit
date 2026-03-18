@@ -425,7 +425,12 @@ pub(crate) fn assemble_solid_mixed(
 
     // Split non-manifold edges (shared by > 2 faces) into separate copies,
     // pairing faces by angular ordering around the edge.
-    split_nonmanifold_edges(topo, &mut face_ids)?;
+    // Run up to 3 iterations: edge replacement can sometimes create new
+    // non-manifold edges when the replacement edge shares vertices with
+    // other faces' edges.
+    for _ in 0..3 {
+        split_nonmanifold_edges(topo, &mut face_ids)?;
+    }
 
     let shell = Shell::new(face_ids).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
@@ -1274,8 +1279,6 @@ pub(super) fn split_nonmanifold_edges(
         face_angles.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
         // Pair consecutive faces (in angular order) and assign edge copies.
-        // For N faces around an edge, we need N/2 edge instances.
-        // Each pair of consecutive faces shares one edge instance.
         let n = face_angles.len();
         for pair_idx in 0..(n / 2) {
             let i = pair_idx * 2;
@@ -1283,19 +1286,16 @@ pub(super) fn split_nonmanifold_edges(
             if j >= n {
                 break;
             }
-
-            // Create a new edge copy (or reuse the original for the first pair).
             let new_edge_id = if pair_idx == 0 {
                 edge_id
             } else {
                 topo.add_edge(Edge::new(edge_start, edge_end, edge_curve.clone()))
             };
-
             edge_replacements.insert((face_angles[i].0, *edge_idx), new_edge_id);
             edge_replacements.insert((face_angles[j].0, *edge_idx), new_edge_id);
         }
-
-        // Handle odd face (if N is odd, the last face keeps the original edge).
+        // Handle odd face (keeps the original edge — still non-manifold but
+        // the iterative loop will process it on the next pass).
         if n % 2 == 1 {
             let last = &face_angles[n - 1];
             edge_replacements.insert((last.0, *edge_idx), edge_id);
