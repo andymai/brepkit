@@ -1237,12 +1237,20 @@ fn split_all_faces(
                         (s.start.z() + s.end.z()) * 0.5,
                     ),
                 };
-                // Only filter Circle/Ellipse sections where the arc midpoint
-                // is on the opposing surface. Line sections (from plane-plane
-                // intersections or chord approximations) always create meaningful
-                // splits.
+                // For Line sections, only filter if the opposing solid has an
+                // analytic classifier. Without a classifier, the raycast is
+                // imprecise and could incorrectly remove needed edges.
+                // Also keep Line sections where the classifier says the midpoint
+                // is Inside or on-boundary (chord approximation of curved intersection).
                 if matches!(s.curve_3d, EdgeCurve::Line) {
-                    return true;
+                    if let Some(c) = opp_cls.as_ref() {
+                        match c.classify(mid, *tol) {
+                            Some(FaceClass::Inside) | None => return true, // Chord or boundary.
+                            _ => {} // Outside → proceed to filter.
+                        }
+                    } else {
+                        return true; // No classifier → keep all Line edges.
+                    }
                 }
                 let edge_dir = Vec3::new(
                     s.end.x() - s.start.x(),
