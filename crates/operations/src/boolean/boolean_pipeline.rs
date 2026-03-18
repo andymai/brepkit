@@ -1427,18 +1427,30 @@ fn assemble_pipeline(
     let resolution = vertex_merge_resolution(all_pts, *tol);
     let mut vertex_map: HashMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
         HashMap::new();
+    let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
 
     let mut face_ids = Vec::new();
 
     for sub_face in &pipeline.sub_faces {
-        // Create vertices + edges + wire for the outer boundary.
-        let wire_id =
-            create_wire_from_edges_dedup(topo, &sub_face.outer_wire, &mut vertex_map, resolution)?;
+        let wire_id = create_wire_from_edges_dedup(
+            topo,
+            &sub_face.outer_wire,
+            &mut vertex_map,
+            &mut edge_map,
+            resolution,
+        )?;
         let inner_wires: Vec<_> = sub_face
             .inner_wires
             .iter()
             .filter_map(|inner| {
-                create_wire_from_edges_dedup(topo, inner, &mut vertex_map, resolution).ok()
+                create_wire_from_edges_dedup(
+                    topo,
+                    inner,
+                    &mut vertex_map,
+                    &mut edge_map,
+                    resolution,
+                )
+                .ok()
             })
             .collect();
 
@@ -1467,31 +1479,56 @@ fn create_wire_from_edges_dedup(
     topo: &mut Topology,
     edges: &[super::pipeline::OrientedPCurveEdge],
     vertex_map: &mut HashMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    edge_map: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
     resolution: f64,
 ) -> Result<brepkit_topology::wire::WireId, OperationsError> {
     let mut oriented_edges = Vec::new();
     for pe in edges {
-        // When pe.forward=false, the wire traverses the edge backward
-        // (edge.end → edge.start). To make the backward traversal go
-        // pe.start_3d → pe.end_3d, swap the vertex roles so
-        // edge.end = pe.start_3d (traversal start) and
-        // edge.start = pe.end_3d (traversal end).
-        let (natural_start, natural_end) = if pe.forward {
-            (pe.start_3d, pe.end_3d)
+        // Resolve the wire's traversal start/end to topology vertices.
+        // The wire always traverses pe.start_3d → pe.end_3d.
+        let key_s = quantize_point(pe.start_3d, resolution);
+        let v_s = *vertex_map
+            .entry(key_s)
+            .or_insert_with(|| topo.add_vertex(Vertex::new(pe.start_3d, 0.0)));
+        let key_e = quantize_point(pe.end_3d, resolution);
+        let v_e = *vertex_map
+            .entry(key_e)
+            .or_insert_with(|| topo.add_vertex(Vertex::new(pe.end_3d, 0.0)));
+
+        // Edge dedup key: (min_vertex_index, max_vertex_index).
+        let si = v_s.index();
+        let ei = v_e.index();
+        let (key_min, key_max) = if si <= ei { (si, ei) } else { (ei, si) };
+
+        // Only share Line edges between faces. Curved edges (Circle, Ellipse,
+        // NURBS) can connect the same vertex pair with different geometry
+        // (e.g., circles on different cylinders), so they must not be shared.
+        let is_line = matches!(pe.curve_3d, EdgeCurve::Line);
+
+        let (eid, wire_forward) = if is_line {
+            let eid = *edge_map
+                .entry((key_min, key_max))
+                .or_insert_with(|| topo.add_edge(Edge::new(v_s, v_e, EdgeCurve::Line)));
+            let edge_start = topo.edge(eid).map_err(OperationsError::Topology)?.start();
+            (eid, edge_start == v_s)
         } else {
-            (pe.end_3d, pe.start_3d)
+            // Curved edge: always create new, use pe.forward for direction.
+            let (natural_s, natural_e) = if pe.forward { (v_s, v_e) } else { (v_e, v_s) };
+            let eid = topo.add_edge(Edge::new(natural_s, natural_e, pe.curve_3d.clone()));
+            (eid, pe.forward)
         };
-        let key_start = quantize_point(natural_start, resolution);
-        let v_start = *vertex_map
-            .entry(key_start)
-            .or_insert_with(|| topo.add_vertex(Vertex::new(natural_start, 0.0)));
-        let key_end = quantize_point(natural_end, resolution);
-        let v_end = *vertex_map
-            .entry(key_end)
-            .or_insert_with(|| topo.add_vertex(Vertex::new(natural_end, 0.0)));
-        let edge = Edge::new(v_start, v_end, pe.curve_3d.clone());
-        let eid = topo.add_edge(edge);
-        oriented_edges.push(OrientedEdge::new(eid, pe.forward));
+
+        // Skip duplicate shared (Line) edges in the wire. Curved edges are
+        // never shared via edge_map so can't be duplicates here.
+        if is_line
+            && oriented_edges
+                .iter()
+                .any(|oe: &OrientedEdge| oe.edge() == eid)
+        {
+            continue;
+        }
+
+        oriented_edges.push(OrientedEdge::new(eid, wire_forward));
     }
     let wire = Wire::new(oriented_edges, true).map_err(OperationsError::Topology)?;
     Ok(topo.add_wire(wire))

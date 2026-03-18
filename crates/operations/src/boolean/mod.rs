@@ -113,11 +113,33 @@ pub fn boolean_with_options(
             if opts.unify_faces {
                 let _ = crate::heal::unify_faces(topo, solid)?;
             }
-            if validate_boolean_result(topo, solid).is_ok() {
+            // Check for non-manifold edges (3+ faces sharing an edge).
+            // Only reject when either input has reversed faces (shelled solid) —
+            // for those cases, the pipeline can produce a better result.
+            // For simple (non-shelled) solids, accept the analytic result even if
+            // slightly non-manifold (sphere booleans have known minor issues).
+            let has_reversed = {
+                let shell_a = topo.shell(topo.solid(a)?.outer_shell())?;
+                let shell_b = topo.shell(topo.solid(b)?.outer_shell())?;
+                shell_a
+                    .faces()
+                    .iter()
+                    .chain(shell_b.faces().iter())
+                    .any(|&fid| {
+                        topo.face(fid)
+                            .is_ok_and(brepkit_topology::face::Face::is_reversed)
+                    })
+            };
+            let is_manifold = !has_reversed
+                || brepkit_topology::validation::validate_shell_manifold(
+                    topo.shell(topo.solid(solid)?.outer_shell())?,
+                    topo.faces(),
+                    topo.wires(),
+                )
+                .is_ok();
+            if is_manifold && validate_boolean_result(topo, solid).is_ok() {
                 return Ok(solid);
             }
-            // Analytic succeeded but validation failed (e.g., non-manifold).
-            // Save as fallback — try pipeline first, use this if pipeline also fails.
             analytic_fallback = Some(solid);
         }
     }
