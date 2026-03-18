@@ -2516,6 +2516,24 @@ fn sample_wire_polygon(topo: &Topology, wire: &Wire) -> Result<Vec<Point3>, Oper
     Ok(pts)
 }
 
+/// Count vertices shared between two face polygons (within tolerance).
+fn count_shared_vertices(poly_a: &[Point3], poly_b: &[Point3], tol: f64) -> usize {
+    let tol_sq = tol * tol;
+    let mut count = 0;
+    for a in poly_a {
+        for b in poly_b {
+            let dx = a.x() - b.x();
+            let dy = a.y() - b.y();
+            let dz = a.z() - b.z();
+            if dx * dx + dy * dy + dz * dz < tol_sq {
+                count += 1;
+                break; // Count each vertex in A at most once.
+            }
+        }
+    }
+    count
+}
+
 fn plane_frame_for_polygon(normal: Vec3, poly: &[Point3]) -> PlaneFrame {
     PlaneFrame::from_plane_face(normal, poly)
 }

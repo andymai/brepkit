@@ -98,8 +98,21 @@ pub fn build_wire_loops(
             let current_edge = &edges[current_idx];
             let end_vertex = quantize_uv_periodic(current_edge.end_uv, tol, u_period, v_period);
 
-            // Check for loop closure.
-            if end_vertex == start_vertex {
+            // Check for loop closure: quantized keys must match AND the raw
+            // 2D distance must be small. On periodic surfaces, seam-opposite
+            // vertices quantize to the same key but have large UV distance
+            // (~2π). OCCT's equivalent check: |u_prev - u_curr| < tolerance.
+            let is_closed = if end_vertex == start_vertex {
+                let raw_du = (current_edge.end_uv.x() - edges[start_idx].start_uv.x()).abs();
+                let raw_dv = (current_edge.end_uv.y() - edges[start_idx].start_uv.y()).abs();
+                let seam_threshold = std::f64::consts::PI;
+                // Reject seam-boundary false closures: vertices on opposite sides
+                // of a periodic seam quantize to the same key but have large UV distance.
+                !(u_periodic && raw_du > seam_threshold || v_periodic && raw_dv > seam_threshold)
+            } else {
+                false
+            };
+            if is_closed {
                 loops.push(current_loop);
                 break;
             }
