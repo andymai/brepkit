@@ -109,11 +109,14 @@ pub fn boolean_pipeline(
 
     // Post-processing: healing.
     crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-    let before = topo.shell(topo.solid(result)?.outer_shell())?.faces().len();
-    let merged = crate::heal::unify_faces(topo, result)?;
-    let after = topo.shell(topo.solid(result)?.outer_shell())?.faces().len();
-    if merged > 0 {
-        log::info!("pipeline: unify_faces merged {merged} groups ({before} → {after} faces)");
+
+    // Run unify_faces iteratively — each pass may expose new merge
+    // opportunities after internal edges are removed.
+    for _ in 0..3 {
+        let merged = crate::heal::unify_faces(topo, result)?;
+        if merged == 0 {
+            break;
+        }
     }
 
     Ok(result)

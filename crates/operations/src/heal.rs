@@ -1051,7 +1051,6 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
         let mut loops = order_edges_into_loops(topo, &boundary_edges)?;
 
         if loops.is_empty() {
-            // Couldn't form any valid loop — skip this group, keep original faces.
             continue;
         }
 
