@@ -1505,7 +1505,43 @@ fn volume_from_planar_polygons(
             cz += vi.x() * vj.y() - vi.y() * vj.x();
         }
         let area_vec = Vec3::new(cx, cy, cz);
-        let area = area_vec.length() / 2.0;
+        let mut area = area_vec.length() / 2.0;
+
+        // Subtract inner wire (hole) areas.
+        for &iw_id in face.inner_wires() {
+            let iw = topo.wire(iw_id)?;
+            // Only handle Line-edge holes; curved holes can't be computed
+            // from vertices alone — bail to tessellation fallback.
+            let all_lines = iw.edges().iter().all(|oe| {
+                topo.edge(oe.edge())
+                    .is_ok_and(|e| matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line))
+            });
+            if !all_lines {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "planar polygon volume: inner wire has non-Line edges".into(),
+                });
+            }
+            let mut hole_verts = Vec::with_capacity(iw.edges().len());
+            for oe in iw.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let vid = if oe.is_forward() {
+                    edge.start()
+                } else {
+                    edge.end()
+                };
+                hole_verts.push(topo.vertex(vid)?.point());
+            }
+            let hn = hole_verts.len();
+            let (mut hx, mut hy, mut hz) = (0.0_f64, 0.0_f64, 0.0_f64);
+            for i in 0..hn {
+                let j = (i + 1) % hn;
+                hx += hole_verts[i].y() * hole_verts[j].z() - hole_verts[i].z() * hole_verts[j].y();
+                hy += hole_verts[i].z() * hole_verts[j].x() - hole_verts[i].x() * hole_verts[j].z();
+                hz += hole_verts[i].x() * hole_verts[j].y() - hole_verts[i].y() * hole_verts[j].x();
+            }
+            let hole_area = Vec3::new(hx, hy, hz).length() / 2.0;
+            area -= hole_area;
+        }
 
         total += d * area;
     }
