@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Phase 0 precompute and shared helpers for boolean operations.
 //!
 //! Functions in this module are used during the initial setup of a boolean

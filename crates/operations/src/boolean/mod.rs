@@ -1,8 +1,9 @@
 //! Boolean operations on solids: fuse, cut, and intersect.
 //!
-//! Supports both planar and NURBS faces. NURBS faces are tessellated
-//! into planar triangles before clipping, enabling approximate boolean
-//! operations on any solid geometry.
+//! The primary pipeline (`boolean_v2`) operates in 2D parameter space,
+//! preserving all surface types (plane, cylinder, cone, sphere, torus,
+//! NURBS) through the boolean. Falls back to the v1 analytic path for
+//! cases v2 can't handle, then to mesh boolean as a last resort.
 
 mod analytic;
 mod assembly;
@@ -23,20 +24,9 @@ pub(crate) mod wire_builder;
 use analytic::{analytic_boolean, collect_face_signatures, has_torus, is_all_analytic};
 use assembly::validate_boolean_result;
 pub(crate) use assembly::{assemble_solid, assemble_solid_mixed};
-use classify::{
-    build_face_bvh, classify_fragment, polygon_centroid, try_build_analytic_classifier,
-};
 pub use compound::compound_cut;
-use intersect::{compute_analytic_segments, compute_intersection_segments};
 pub use precompute::face_polygon;
-use precompute::{collect_face_data, handle_disjoint, solid_aabb, try_containment_shortcut};
-use split::split_face;
-#[cfg(not(target_arch = "wasm32"))]
-use types::PARALLEL_THRESHOLD;
-use types::{BooleanContext, FaceClass, FaceFragment, Source, select_fragment};
 pub use types::{BooleanOp, BooleanOptions, FaceSpec};
-
-use std::collections::{HashMap, HashSet};
 
 // WASM-compatible timer: `std::time::Instant` panics on wasm32 targets.
 #[cfg(not(target_arch = "wasm32"))]
@@ -56,7 +46,6 @@ pub(super) fn timer_elapsed_ms(_t: ()) -> f64 {
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
 // ---------------------------------------------------------------------------
@@ -101,27 +90,17 @@ pub fn boolean_with_options(
     opts: BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = opts.tolerance;
-    let ctx = BooleanContext::from_options(&opts);
 
     log::debug!(
-        "boolean {op:?}: solids ({}, {}), deflection={}, vertex_merge={}, classify_tol={}, degenerate_area={}",
+        "boolean {op:?}: solids ({}, {}), deflection={}",
         a.index(),
         b.index(),
         opts.deflection,
-        ctx.vertex_merge,
-        ctx.classify_tol,
-        ctx.degenerate_area,
     );
 
-    // ── Try analytic fast path ──────────────────────────────────────────
-    // Use when both solids are all-analytic (no NURBS) and neither contains
-    // torus faces. This covers cutting/drilling with cylinders/cones and
-    // sphere intersections. Sphere faces are handled by tessellating them
-    // into triangle fragments within the analytic boolean, with O(1)
-    // point-in-sphere classification for the opposite solid.
-    //
-    // Torus faces are excluded because their parametric decomposition
-    // (degree-4 intersection curves) is not yet implemented.
+    // ── Try v1 analytic fast path ──────────────────────────────────────
+    // Optimized for non-coplanar all-analytic solids (box-cylinder, etc.).
+    // This is the most validated and fastest path for the common case.
     let try_analytic = {
         let both_analytic = is_all_analytic(topo, a)? && is_all_analytic(topo, b)?;
         let no_torus = !has_torus(topo, a)? && !has_torus(topo, b)?;
@@ -136,417 +115,98 @@ pub fn boolean_with_options(
             validate_boolean_result(topo, solid)?;
             return Ok(solid);
         }
-        // Analytic path failed; try v2 pipeline before chord-based fallback.
-    }
-
-    // ── Try v2 parameter-space pipeline ──────────────────────────────────
-    // The v2 pipeline handles coplanar faces (overlapping boxes) that the
-    // v1 analytic path skips. Only invoked when v1 analytic fails AND the
-    // solids have coplanar face pairs (partially overlapping boxes).
-    //
-    // Identical solids (fully overlapping, all faces coplanar) are excluded
-    // since v2's non-coplanar intersection edges on shared cube edges produce
-    // degenerate splits. The chord-based v1 path handles that case correctly.
-    if try_analytic && has_partial_coplanar_faces(topo, a, b, tol) {
-        match boolean_v2::boolean_v2(topo, op, a, b) {
-            Ok(solid) if validate_boolean_result(topo, solid).is_ok() => {
-                log::info!(
-                    "boolean {op:?}: v2 pipeline succeeded → solid {}",
-                    solid.index()
-                );
-                return Ok(solid);
-            }
-            Ok(_) => {
-                log::debug!("boolean {op:?}: v2 result failed validation, falling back");
-            }
-            Err(e) => {
-                log::debug!("boolean {op:?}: v2 pipeline failed ({e}), falling back");
-            }
-        }
-    }
-
-    // ── Mesh boolean guard for high face counts ─────────────────────
-    // When either solid has many topology faces (e.g. from NURBS/torus
-    // tessellation in prior booleans or merged faces from unify_faces),
-    // the chord-based path is O(N²). Fall back to mesh boolean
-    // (co-refinement, O(N log N)).
-    //
-    // Two thresholds:
-    // - Per-solid: >100 faces (catches individual complex solids, e.g.
-    //   shelled+filleted geometry with merged faces)
-    // - Combined: >500 faces (catches pairs of moderate-complexity solids)
-    //
-    // This check is O(1) and avoids the expensive collect_face_data
-    // tessellation that would otherwise run first.
-    {
-        let count_a = topo.shell(topo.solid(a)?.outer_shell())?.faces().len();
-        let count_b = topo.shell(topo.solid(b)?.outer_shell())?.faces().len();
-        // Also force mesh boolean when either solid has torus faces and the
-        // analytic path was skipped. The chord-based path tessellates torus
-        // faces into hundreds of triangles, making O(N²) intersection
-        // prohibitively slow. Mesh boolean handles this in O(N log N).
-        let has_torus_faces = !try_analytic
-            && (has_torus(topo, a).unwrap_or(false) || has_torus(topo, b).unwrap_or(false));
-        if count_a > types::MESH_BOOLEAN_PER_SOLID_THRESHOLD
-            || count_b > types::MESH_BOOLEAN_PER_SOLID_THRESHOLD
-            || count_a + count_b > types::MESH_BOOLEAN_FACE_THRESHOLD
-            || has_torus_faces
-        {
-            log::debug!(
-                "boolean {op:?}: high face count ({count_a} + {count_b}) or torus, using mesh boolean"
-            );
-            match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    log::debug!(
-                        "boolean {op:?}: mesh boolean fallback failed ({e}), \
-                         falling through to chord-based path"
-                    );
-                }
-            }
-        }
-    }
-
-    // ── Phase 0: Guard + Precompute ──────────────────────────────────────
-
-    let faces_a = collect_face_data(topo, a, opts.deflection)?;
-    let faces_b = collect_face_data(topo, b, opts.deflection)?;
-
-    let aabb_a = solid_aabb(topo, &faces_a, tol)?;
-    let aabb_b = solid_aabb(topo, &faces_b, tol)?;
-
-    // Disjoint AABB shortcut.
-    if !aabb_a.intersects(aabb_b) {
-        log::debug!("boolean {op:?}: disjoint AABBs, shortcut");
-        return handle_disjoint(topo, op, &faces_a, &faces_b);
     }
 
     // ── Containment shortcut ─────────────────────────────────────────
-    // If one solid is entirely inside the other, skip expensive intersection
-    // computation and go directly to the appropriate result.
-    if let Some(result) = try_containment_shortcut(topo, op, a, b, &faces_a, &faces_b, tol)? {
-        return Ok(result);
-    }
-
-    // ── Phase 1a: Analytic fast path ───────────────────────────────────
-
-    let (analytic_segs, analytic_pairs) = compute_analytic_segments(topo, a, b, tol)?;
-
-    // ── Phase 1b: Tessellated intersection (skip analytic pairs) ────────
-
-    let tess_segs = compute_intersection_segments(&faces_a, &faces_b, tol, &analytic_pairs);
-
-    let mut segments = analytic_segs;
-    segments.extend(tess_segs);
-
-    // Build chord map: FaceId → Vec<(Point3, Point3)>
-    let mut chord_map: HashMap<usize, Vec<(Point3, Point3)>> = HashMap::new();
-    for seg in &segments {
-        chord_map
-            .entry(seg.face_a.index())
-            .or_default()
-            .push((seg.p0, seg.p1));
-        chord_map
-            .entry(seg.face_b.index())
-            .or_default()
-            .push((seg.p0, seg.p1));
-    }
-
-    // ── Surface preservation: unsplit faces keep their original surface ──
-    //
-    // The chord-based path tessellates non-planar faces (NURBS, cone, sphere)
-    // into planar triangles for intersection testing. Faces that don't
-    // intersect the other solid (no chords) are preserved with their original
-    // surface type, avoiding face-count explosion from unnecessary tessellation.
-
-    let split_fids: HashSet<usize> = chord_map.keys().copied().collect();
-
-    // Build surface + polygon map for original non-planar faces.
-    // Each entry: (FaceSurface, is_reversed, polygon_vertices).
-    let build_surface_map =
-        |topo: &Topology, solid: SolidId| -> HashMap<usize, (FaceSurface, bool, Vec<Point3>)> {
-            let mut map = HashMap::new();
-            let Ok(s) = topo.solid(solid) else { return map };
-            let Ok(shell) = topo.shell(s.outer_shell()) else {
-                return map;
-            };
-            for &fid in shell.faces() {
-                let Ok(face) = topo.face(fid) else { continue };
-                if matches!(face.surface(), FaceSurface::Plane { .. }) {
-                    continue; // Planar faces don't need surface preservation.
-                }
-                if let Ok(polygon) = face_polygon(topo, fid) {
-                    map.insert(
-                        fid.index(),
-                        (face.surface().clone(), face.is_reversed(), polygon),
-                    );
+    // Detect A⊂B or B⊂A (including A=B) and handle directly.
+    // This catches identical solids that neither v1 analytic nor v2 handle
+    // correctly (boundary-coincident intersections produce degenerate splits).
+    {
+        use classify::try_build_analytic_classifier;
+        let ca = try_build_analytic_classifier(topo, a);
+        let cb = try_build_analytic_classifier(topo, b);
+        // Sample the AABB centroid of the solid — guaranteed to be in the
+        // interior for convex solids (which all analytic primitives are).
+        let sample_aabb_center = |topo: &Topology, solid: SolidId| -> Option<Point3> {
+            let s = topo.solid(solid).ok()?;
+            let sh = topo.shell(s.outer_shell()).ok()?;
+            let mut min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
+            let mut max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
+            for &fid in sh.faces() {
+                let f = topo.face(fid).ok()?;
+                let w = topo.wire(f.outer_wire()).ok()?;
+                for oe in w.edges() {
+                    let e = topo.edge(oe.edge()).ok()?;
+                    let p = topo.vertex(e.start()).ok()?.point();
+                    min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
+                    max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
                 }
             }
-            map
+            Some(Point3::new(
+                (min.x() + max.x()) * 0.5,
+                (min.y() + max.y()) * 0.5,
+                (min.z() + max.z()) * 0.5,
+            ))
         };
-    let surface_map_a = build_surface_map(topo, a);
-    let surface_map_b = build_surface_map(topo, b);
-
-    // ── Phase 3: Face splitting ──────────────────────────────────────────
-    // Only split faces that actually have intersection chords. Unsplit faces
-    // are handled separately below.
-
-    let mut fragments: Vec<FaceFragment> = Vec::new();
-
-    for &(fid, ref verts, normal, d) in &faces_a {
-        if !split_fids.contains(&fid.index()) {
-            continue;
-        }
-        fragments.extend(split_face(
-            fid,
-            verts,
-            normal,
-            d,
-            Source::A,
-            &chord_map,
-            tol,
-        ));
-    }
-    for &(fid, ref verts, normal, d) in &faces_b {
-        if !split_fids.contains(&fid.index()) {
-            continue;
-        }
-        fragments.extend(split_face(
-            fid,
-            verts,
-            normal,
-            d,
-            Source::B,
-            &chord_map,
-            tol,
-        ));
-    }
-
-    // ── Phase 4: Classification ──────────────────────────────────────────
-
-    let analytic_a = try_build_analytic_classifier(topo, a);
-    let analytic_b = try_build_analytic_classifier(topo, b);
-
-    let bvh_a = build_face_bvh(&faces_a);
-    let bvh_b = build_face_bvh(&faces_b);
-
-    let padded_aabb_a = aabb_a.expanded(tol.linear);
-    let padded_aabb_b = aabb_b.expanded(tol.linear);
-
-    let classify_fn = |frag: &FaceFragment| -> FaceClass {
-        let centroid = polygon_centroid(&frag.vertices);
-        let opposing_aabb = match frag.source {
-            Source::A => padded_aabb_b,
-            Source::B => padded_aabb_a,
-        };
-        if !opposing_aabb.contains_point(centroid) {
-            return FaceClass::Outside;
-        }
-        let fast = match frag.source {
-            Source::A => analytic_b.as_ref().and_then(|c| c.classify(centroid, tol)),
-            Source::B => analytic_a.as_ref().and_then(|c| c.classify(centroid, tol)),
-        };
-        if let Some(class) = fast {
-            return class;
-        }
-        let (opposite, bvh) = match frag.source {
-            Source::A => (&faces_b, bvh_b.as_ref()),
-            Source::B => (&faces_a, bvh_a.as_ref()),
-        };
-        classify_fragment(frag, opposite, bvh, tol)
-    };
-
-    #[cfg(not(target_arch = "wasm32"))]
-    let classes: Vec<FaceClass> = if fragments.len() >= PARALLEL_THRESHOLD {
-        use rayon::prelude::*;
-        fragments.par_iter().map(classify_fn).collect()
-    } else {
-        fragments.iter().map(classify_fn).collect()
-    };
-    #[cfg(target_arch = "wasm32")]
-    let classes: Vec<FaceClass> = fragments.iter().map(classify_fn).collect();
-
-    // ── Phase 5: Selection ───────────────────────────────────────────────
-
-    let mut selected_specs: Vec<FaceSpec> = Vec::new();
-
-    // 5a: Select split face fragments (planar triangles from tessellation).
-    for (frag, &class) in fragments.iter().zip(classes.iter()) {
-        if let Some(flip) = select_fragment(frag.source, class, op) {
-            let (verts, normal, d) = if flip {
-                let rev: Vec<_> = frag.vertices.iter().copied().rev().collect();
-                (rev, -frag.normal, -frag.d)
-            } else {
-                (frag.vertices.clone(), frag.normal, frag.d)
+        let b_in_a = ca
+            .as_ref()
+            .zip(sample_aabb_center(topo, b))
+            .and_then(|(c, p)| c.classify(p, tol))
+            == Some(types::FaceClass::Inside);
+        let a_in_b = cb
+            .as_ref()
+            .zip(sample_aabb_center(topo, a))
+            .and_then(|(c, p)| c.classify(p, tol))
+            == Some(types::FaceClass::Inside);
+        if b_in_a || a_in_b {
+            return match (op, b_in_a, a_in_b) {
+                (BooleanOp::Fuse, true, _) => Ok(crate::copy::copy_solid(topo, a)?),
+                (BooleanOp::Fuse, _, true) => Ok(crate::copy::copy_solid(topo, b)?),
+                (BooleanOp::Cut, true, _) => Err(crate::OperationsError::InvalidInput {
+                    reason: "boolean Cut: B is inside A — result would have a void".into(),
+                }),
+                (BooleanOp::Cut, _, true) => Err(crate::OperationsError::InvalidInput {
+                    reason: "boolean Cut: A is inside B — result is empty".into(),
+                }),
+                (BooleanOp::Intersect, true, _) => Ok(crate::copy::copy_solid(topo, b)?),
+                (BooleanOp::Intersect, _, true) => Ok(crate::copy::copy_solid(topo, a)?),
+                _ => unreachable!(),
             };
-            selected_specs.push(FaceSpec::Planar {
-                vertices: verts,
-                normal,
-                d,
-                inner_wires: vec![],
-            });
         }
     }
 
-    // 5b: Select unsplit faces — classify once per face, preserve original surface.
-    // For tessellated non-planar faces, collect_face_data produces multiple entries
-    // per FaceId. We classify using the first entry's centroid and emit a single
-    // FaceSpec with the original surface (instead of N planar triangles).
-    let mut processed_unsplit: HashSet<(usize, u8)> = HashSet::new(); // (fid, source)
-
-    let classify_unsplit = |centroid: Point3, source: Source| -> FaceClass {
-        let opposing_aabb = match source {
-            Source::A => padded_aabb_b,
-            Source::B => padded_aabb_a,
-        };
-        if !opposing_aabb.contains_point(centroid) {
-            return FaceClass::Outside;
+    // ── Try v2 parameter-space pipeline ────────────────────────────────
+    // v2 handles coplanar faces, NURBS, and other cases v1 analytic can't.
+    // Preserves all surface types through the boolean.
+    match boolean_v2::boolean_v2(topo, op, a, b) {
+        Ok(solid) if validate_boolean_result(topo, solid).is_ok() => {
+            log::info!(
+                "boolean {op:?}: v2 pipeline succeeded → solid {}",
+                solid.index()
+            );
+            return Ok(solid);
         }
-        let fast = match source {
-            Source::A => analytic_b.as_ref().and_then(|c| c.classify(centroid, tol)),
-            Source::B => analytic_a.as_ref().and_then(|c| c.classify(centroid, tol)),
-        };
-        if let Some(class) = fast {
-            return class;
+        Ok(_) => {
+            log::debug!("boolean {op:?}: v2 result failed validation, falling back");
         }
-        // Build a temporary fragment for ray-cast classification.
-        let dummy = FaceFragment {
-            vertices: vec![centroid],
-            normal: Vec3::new(0.0, 0.0, 1.0),
-            d: 0.0,
-            source,
-        };
-        let (opposite, bvh) = match source {
-            Source::A => (&faces_b, bvh_b.as_ref()),
-            Source::B => (&faces_a, bvh_a.as_ref()),
-        };
-        classify_fragment(&dummy, opposite, bvh, tol)
-    };
-
-    // Process unsplit faces from solid A.
-    for &(fid, ref verts, normal, d) in &faces_a {
-        if split_fids.contains(&fid.index()) {
-            continue;
-        }
-        let key = (fid.index(), 0u8);
-        if !processed_unsplit.insert(key) {
-            continue;
-        } // Skip duplicate tessellation entries.
-
-        let centroid = polygon_centroid(verts);
-        let class = classify_unsplit(centroid, Source::A);
-        if let Some(flip) = select_fragment(Source::A, class, op) {
-            if let Some((surface, reversed, polygon)) = surface_map_a.get(&fid.index()) {
-                // Non-planar face: preserve original surface.
-                let r = if flip { !reversed } else { *reversed };
-                let face_verts = if flip {
-                    polygon.iter().copied().rev().collect()
-                } else {
-                    polygon.clone()
-                };
-                selected_specs.push(FaceSpec::Surface {
-                    vertices: face_verts,
-                    surface: surface.clone(),
-                    reversed: r,
-                    inner_wires: vec![],
-                });
-            } else {
-                // Planar face: emit as FaceSpec::Planar.
-                let (v, n, dd) = if flip {
-                    (verts.iter().copied().rev().collect(), -normal, -d)
-                } else {
-                    (verts.clone(), normal, d)
-                };
-                selected_specs.push(FaceSpec::Planar {
-                    vertices: v,
-                    normal: n,
-                    d: dd,
-                    inner_wires: vec![],
-                });
-            }
+        Err(e) => {
+            log::debug!("boolean {op:?}: v2 pipeline failed ({e}), falling back");
         }
     }
 
-    // Process unsplit faces from solid B.
-    for &(fid, ref verts, normal, d) in &faces_b {
-        if split_fids.contains(&fid.index()) {
-            continue;
-        }
-        let key = (fid.index(), 1u8);
-        if !processed_unsplit.insert(key) {
-            continue;
-        }
-
-        let centroid = polygon_centroid(verts);
-        let class = classify_unsplit(centroid, Source::B);
-        if let Some(flip) = select_fragment(Source::B, class, op) {
-            if let Some((surface, reversed, polygon)) = surface_map_b.get(&fid.index()) {
-                let r = if flip { !reversed } else { *reversed };
-                let face_verts = if flip {
-                    polygon.iter().copied().rev().collect()
-                } else {
-                    polygon.clone()
-                };
-                selected_specs.push(FaceSpec::Surface {
-                    vertices: face_verts,
-                    surface: surface.clone(),
-                    reversed: r,
-                    inner_wires: vec![],
-                });
-            } else {
-                let (v, n, dd) = if flip {
-                    (verts.iter().copied().rev().collect(), -normal, -d)
-                } else {
-                    (verts.clone(), normal, d)
-                };
-                selected_specs.push(FaceSpec::Planar {
-                    vertices: v,
-                    normal: n,
-                    d: dd,
-                    inner_wires: vec![],
-                });
-            }
+    // ── Mesh boolean (last resort) ───────────────────────────────────
+    // When both v1 analytic and v2 fail, fall back to mesh co-refinement.
+    // All surface types are lost — output is planar triangles only.
+    match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
+        Ok(result) => return Ok(result),
+        Err(e) => {
+            log::debug!("boolean {op:?}: mesh boolean also failed ({e})");
         }
     }
 
-    if selected_specs.is_empty() {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "boolean operation produced no faces (empty result)".into(),
-        });
-    }
-
-    // ── Phase 6: Assembly ────────────────────────────────────────────────
-
-    let result = assemble_solid_mixed(topo, &selected_specs, tol)?;
-
-    // ── Phase 6b: Post-boolean healing ─────────────────────────────────
-    // Light healing: remove degenerate (zero-length) edges and fix face
-    // orientations. We intentionally skip vertex merging and face removal
-    // since they can corrupt valid boolean output with small features.
-    let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-    // Merge co-surface faces that were split by the boolean pipeline.
-    // Without this, sequential booleans cause topology explosion (10-27× more
-    // faces than necessary) because each boolean creates fragments that
-    // accumulate.  This is analogous to OCCT's same-domain face merging.
-    if opts.unify_faces {
-        let _ = crate::heal::unify_faces(topo, result)?;
-    }
-    // Full shape healing: vertex merging, small face/edge removal, etc.
-    // Only enabled for final results — healing can corrupt intermediates
-    // fed into further booleans.
-    if opts.heal_after_boolean {
-        let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
-    }
-
-    // ── Phase 7: Degenerate result check ──────────────────────────────
-    validate_boolean_result(topo, result)?;
-
-    log::info!(
-        "boolean {op:?}: tessellated path succeeded → solid {} ({} faces)",
-        result.index(),
-        selected_specs.len()
-    );
-    Ok(result)
+    Err(crate::OperationsError::InvalidInput {
+        reason: format!("boolean {op:?}: all paths failed (v1 analytic, v2, mesh boolean)"),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -735,83 +395,6 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
         });
     }
     specs
-}
-
-/// Check if two solids have coplanar face pairs with partial (not full) overlap.
-///
-/// Returns `true` when some face pairs share the same plane with partially
-/// overlapping boundaries — the case where v2's coplanar handling is needed
-/// (e.g., two overlapping boxes offset on one axis).
-///
-/// Returns `false` for identical solids (coplanar face polygons are identical)
-/// or solids with no coplanar faces.
-fn has_partial_coplanar_faces(
-    topo: &Topology,
-    a: SolidId,
-    b: SolidId,
-    tol: brepkit_math::tolerance::Tolerance,
-) -> bool {
-    let Ok(sa) = topo.solid(a) else { return false };
-    let Ok(sb) = topo.solid(b) else { return false };
-    let Ok(shell_a) = topo.shell(sa.outer_shell()) else {
-        return false;
-    };
-    let Ok(shell_b) = topo.shell(sb.outer_shell()) else {
-        return false;
-    };
-
-    // Match the 1e-7 threshold used in intersect_two_plane_faces.
-    let coplanar_tol = tol.linear;
-
-    // Compute the centroid of a face's outer wire vertices.
-    let face_centroid = |fid| -> Option<Point3> {
-        let w = topo.wire(topo.face(fid).ok()?.outer_wire()).ok()?;
-        let mut sum = Point3::new(0.0, 0.0, 0.0);
-        let mut count = 0u32;
-        for oe in w.edges() {
-            let e = topo.edge(oe.edge()).ok()?;
-            let vid = if oe.is_forward() { e.start() } else { e.end() };
-            let p = topo.vertex(vid).ok()?.point();
-            sum = Point3::new(sum.x() + p.x(), sum.y() + p.y(), sum.z() + p.z());
-            count += 1;
-        }
-        (count > 0).then(|| {
-            #[allow(clippy::cast_precision_loss)]
-            let n = count as f64;
-            Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
-        })
-    };
-
-    for &fa in shell_a.faces() {
-        let Ok(face_a) = topo.face(fa) else { continue };
-        let FaceSurface::Plane { normal: na, d: da } = face_a.surface() else {
-            continue;
-        };
-        for &fb in shell_b.faces() {
-            let Ok(face_b) = topo.face(fb) else { continue };
-            let FaceSurface::Plane { normal: nb, d: db } = face_b.surface() else {
-                continue;
-            };
-            let cross_len = na.cross(*nb).length();
-            if cross_len >= 1e-10 {
-                continue; // Not parallel.
-            }
-            if (da - db).abs() >= coplanar_tol && (da + db).abs() >= coplanar_tol {
-                continue; // Parallel but not coincident.
-            }
-            // Coplanar pair found. Check for partial overlap: identical polygons
-            // have coincident centroids; partially overlapping polygons do not.
-            // Use a generous threshold (1e-3) since centroids of nearly-identical
-            // but offset polygons can still be close.
-            match (face_centroid(fa), face_centroid(fb)) {
-                (Some(ca), Some(cb)) if (ca - cb).length() <= 1e-3 => {
-                    // Coincident centroids → likely identical faces, skip.
-                }
-                _ => return true, // Partial overlap or unknown → try v2.
-            }
-        }
-    }
-    false
 }
 
 #[cfg(test)]

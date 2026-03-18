@@ -4,9 +4,9 @@
 use super::analytic::surface_aware_aabb;
 use super::fragments::tessellate_face_into_fragments;
 use super::intersect::polygon_clip_intervals;
-use super::precompute::face_wire_aabb;
+use super::precompute::{collect_face_data, face_wire_aabb};
 use super::split::{polygon_area_2x, split_face_cdt_inner, split_face_iterative};
-use super::types::DEFAULT_BOOLEAN_DEFLECTION;
+use super::types::{DEFAULT_BOOLEAN_DEFLECTION, Source};
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -1950,7 +1950,7 @@ fn cdt_vs_iterative_cross_chords() {
     let normal = Vec3::new(0.0, 0.0, 1.0);
     let d = 0.0;
     let tol = Tolerance::default();
-    let source = super::Source::A;
+    let source = Source::A;
 
     let chords = vec![
         (Point3::new(3.0, 0.0, 0.0), Point3::new(3.0, 10.0, 0.0)),

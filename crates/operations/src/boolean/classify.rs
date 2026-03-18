@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Phase 4: Classification — point-in-solid tests for boolean fragment labeling.
 //!
 //! Determines whether each face fragment lies inside, outside, or on the

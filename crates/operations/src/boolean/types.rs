@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared type definitions, constants, and the selection truth table for the
 //! boolean pipeline.
 

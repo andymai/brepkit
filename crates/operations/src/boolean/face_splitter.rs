@@ -79,12 +79,30 @@ pub fn split_face_2d(
         boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, None)
     };
 
-    // If no section edges, the face is unsplit — return as-is.
+    // Convert original inner wires (holes) to OrientedPCurveEdge.
+    let original_inner_wires: Vec<Vec<OrientedPCurveEdge>> = face
+        .inner_wires()
+        .iter()
+        .filter_map(|&iw_id| {
+            let iw_pts = collect_wire_points(topo, iw_id);
+            if iw_pts.len() < 3 {
+                return None;
+            }
+            let edges = if is_plane {
+                boundary_edges_to_pcurve(topo, iw_id, &surface, &iw_pts, Some(frame))
+            } else {
+                boundary_edges_to_pcurve(topo, iw_id, &surface, &iw_pts, None)
+            };
+            if edges.is_empty() { None } else { Some(edges) }
+        })
+        .collect();
+
+    // If no section edges, the face is unsplit — return as-is with original holes.
     if sections.is_empty() {
         return vec![SubFace {
             surface,
             outer_wire: boundary_edges,
-            inner_wires: Vec::new(),
+            inner_wires: original_inner_wires,
             reversed,
             parent: face_id,
             source,
@@ -409,6 +427,22 @@ pub fn split_face_2d(
             if !assigned {
                 if let Some(sf) = sub_faces.first_mut() {
                     sf.inner_wires.push(hole);
+                }
+            }
+        }
+    }
+
+    // Distribute original inner wires (holes from the source face) to sub-faces.
+    // Each hole is assigned to the sub-face whose outer wire contains it.
+    if !original_inner_wires.is_empty() {
+        for hole in &original_inner_wires {
+            if let Some(first_pt) = hole.first().map(|e| e.start_uv) {
+                for sf in &mut sub_faces {
+                    let outer_pts = sample_wire_loop_uv(&sf.outer_wire);
+                    if super::classify_2d::point_in_polygon_2d(first_pt, &outer_pts) {
+                        sf.inner_wires.push(hole.clone());
+                        break;
+                    }
                 }
             }
         }

@@ -743,6 +743,25 @@ pub fn solid_volume(
         return Ok(v);
     }
 
+    // For all-planar solids WITHOUT inner wires (e.g. v2 boolean results,
+    // chamfered boxes), use the divergence-theorem polygon volume. This is
+    // exact for planar faces and avoids tessellate_solid winding issues
+    // with non-triangular faces assembled by the v2 boolean pipeline.
+    // Skipped for faces with holes since the function only reads outer wires.
+    {
+        let s = topo.solid(solid)?;
+        let sh = topo.shell(s.outer_shell())?;
+        let no_inner_wires = sh
+            .faces()
+            .iter()
+            .all(|&fid| topo.face(fid).is_ok_and(|f| f.inner_wires().is_empty()));
+        if no_inner_wires {
+            if let Ok(v) = volume_from_planar_polygons(topo, solid, deflection) {
+                return Ok(v);
+            }
+        }
+    }
+
     // For solids with faces that have inner wires (holes from boolean ops)
     // or reversed non-planar faces (inner walls from shell/boolean operations),
     // use direct per-face tessellation with signed-volume summation.
@@ -762,23 +781,14 @@ pub fn solid_volume(
         return volume_from_direct_face_tessellation(topo, solid, deflection);
     }
 
-    // Try watertight tessellation first — this gives correct volume
-    // via signed tetrahedra since the mesh is closed.
+    // Try watertight tessellation — gives correct volume via signed tetrahedra
+    // since the mesh is closed.
     let mesh = tessellate::tessellate_solid(topo, solid, deflection)?;
     if !mesh.indices.is_empty() {
         let vol = signed_volume_from_mesh(&mesh);
-        // If watertight mesh volume is non-trivial, use it.
-        // Near-zero result indicates inconsistent winding (e.g. shelled solids
-        // where inner face normals cancel outer face contributions).
         if vol > 1e-12 {
             return Ok(vol);
         }
-    }
-
-    // For all-planar solids (e.g. chamfered boxes with non-manifold topology
-    // where tessellate_solid gives wrong winding), use polygon-based volume.
-    if let Ok(v) = volume_from_planar_polygons(topo, solid, deflection) {
-        return Ok(v);
     }
 
     // Fallback: per-face tessellation with centroid-based winding correction.
@@ -1447,7 +1457,13 @@ fn volume_from_planar_polygons(
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
         let face_normal = match face.surface() {
-            FaceSurface::Plane { normal, .. } => *normal,
+            FaceSurface::Plane { normal, .. } => {
+                if face.is_reversed() {
+                    -*normal
+                } else {
+                    *normal
+                }
+            }
             _ => {
                 return Err(crate::OperationsError::InvalidInput {
                     reason: "planar polygon volume requires all-planar faces".into(),
