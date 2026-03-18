@@ -104,6 +104,13 @@ pub fn boolean_pipeline(
         &tol,
     )?;
 
+    // Stage 4b: Same-domain face deduplication (OCCT's FillSameDomainFaces).
+    // After classification, sub-faces from different solids that end up on the
+    // same surface with the same boundary (same edge set) are duplicates.
+    // For Fuse, both the A and B versions of a coplanar face are kept by
+    // classification — we only need one.
+    dedup_same_domain_subfaces(&mut pipeline, &tol);
+
     // Stage 5: Assemble result.
     let result = assemble_pipeline(topo, &pipeline, &tol)?;
 
@@ -1343,6 +1350,94 @@ fn classify_sub_faces(
         .collect();
 
     Ok(())
+}
+
+/// OCCT-style Same-Domain face deduplication.
+///
+/// After classification, sub-faces from different parent faces (potentially
+/// different solids) that have the same surface AND the same boundary edge
+/// set are duplicates. This happens at coplanar face intersections where both
+/// the A and B versions of a face survive classification.
+///
+/// Detects duplicates by hashing the quantized 3D vertex sequence of each
+/// sub-face's outer wire. Sub-faces with matching hash AND equivalent surfaces
+/// are deduplicated (only one is kept).
+fn dedup_same_domain_subfaces(pipeline: &mut BooleanPipeline, tol: &Tolerance) {
+    use std::collections::HashMap;
+
+    if pipeline.sub_faces.len() < 2 {
+        return;
+    }
+
+    // Hash each sub-face by its quantized vertex sequence (sorted for
+    // orientation-independent comparison).
+    let resolution = tol.linear.max(1e-6);
+    let q = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() / resolution).round() as i64,
+            (p.y() / resolution).round() as i64,
+            (p.z() / resolution).round() as i64,
+        )
+    };
+
+    // For each sub-face, build a canonical vertex key (sorted set of quantized points).
+    let keys: Vec<Vec<(i64, i64, i64)>> = pipeline
+        .sub_faces
+        .iter()
+        .map(|sf| {
+            let mut pts: Vec<(i64, i64, i64)> =
+                sf.outer_wire.iter().map(|e| q(e.start_3d)).collect();
+            pts.sort_unstable();
+            pts.dedup();
+            pts
+        })
+        .collect();
+
+    // Group sub-faces by vertex key.
+    let mut groups: HashMap<Vec<(i64, i64, i64)>, Vec<usize>> = HashMap::new();
+    for (i, key) in keys.iter().enumerate() {
+        groups.entry(key.clone()).or_default().push(i);
+    }
+
+    // For each group with 2+ sub-faces, check surface equivalence and mark duplicates.
+    let mut to_remove: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for indices in groups.values() {
+        if indices.len() < 2 {
+            continue;
+        }
+        // Check all pairs for surface equivalence.
+        for i in 0..indices.len() {
+            if to_remove.contains(&indices[i]) {
+                continue;
+            }
+            for j in (i + 1)..indices.len() {
+                if to_remove.contains(&indices[j]) {
+                    continue;
+                }
+                let sf_i = &pipeline.sub_faces[indices[i]];
+                let sf_j = &pipeline.sub_faces[indices[j]];
+                // Same surface + same reversed flag = duplicate.
+                if sf_i.reversed == sf_j.reversed
+                    && crate::heal::surfaces_equivalent_pub(&sf_i.surface, &sf_j.surface)
+                {
+                    to_remove.insert(indices[j]);
+                }
+            }
+        }
+    }
+
+    if to_remove.is_empty() {
+        return;
+    }
+
+    // Remove duplicates (preserve order).
+    let mut new_sub_faces = Vec::with_capacity(pipeline.sub_faces.len() - to_remove.len());
+    for (i, sf) in pipeline.sub_faces.drain(..).enumerate() {
+        if !to_remove.contains(&i) {
+            new_sub_faces.push(sf);
+        }
+    }
+    pipeline.sub_faces = new_sub_faces;
 }
 
 /// Classify a sub-face against the opposing solid with robust boundary handling.

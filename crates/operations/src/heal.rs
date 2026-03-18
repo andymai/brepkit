@@ -748,6 +748,12 @@ pub fn remove_duplicate_faces(
 /// Two surfaces are equivalent if they represent the same infinite surface
 /// (e.g., same plane, same cylinder axis/radius). This is the same logic
 /// used by wireframe edge filtering in `tessellate.rs`.
+/// Check if two surfaces are geometrically equivalent.
+#[must_use]
+pub fn surfaces_equivalent_pub(a: &FaceSurface, b: &FaceSurface) -> bool {
+    surfaces_equivalent(a, b)
+}
+
 fn surfaces_equivalent(a: &FaceSurface, b: &FaceSurface) -> bool {
     let tol = Tolerance::new();
     let lin = tol.linear;
