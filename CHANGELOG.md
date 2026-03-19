@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.18.3](https://github.com/andymai/brepkit/compare/v2.18.2...v2.18.3) (2026-03-19)
+
+
+### Bug Fixes
+
+* **ops:** add normal pre-check to unify_faces ([#314](https://github.com/andymai/brepkit/issues/314)) ([0cc477c](https://github.com/andymai/brepkit/commit/0cc477c2dcecf402cc4e5ee21a135cc93594f87d))
+* **ops:** remove both_complex guard from boolean dispatch ([#315](https://github.com/andymai/brepkit/issues/315)) ([a9d821f](https://github.com/andymai/brepkit/commit/a9d821fc2e97897399c11e1eb372a79509b8dbb7))
+
 ## [2.18.2](https://github.com/andymai/brepkit/compare/v2.18.1...v2.18.2) (2026-03-19)
 
 
