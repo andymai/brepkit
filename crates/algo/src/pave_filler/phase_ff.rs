@@ -200,11 +200,17 @@ fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Opti
     let mut v_max = f64::MIN;
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
-        for vid in [edge.start(), edge.end()] {
-            let pt = topo.vertex(vid).ok()?.point();
-            let (_, v) = surface.project_point(pt)?;
-            v_min = v_min.min(v);
-            v_max = v_max.max(v);
+        let sp = topo.vertex(edge.start()).ok()?.point();
+        let ep = topo.vertex(edge.end()).ok()?.point();
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        // Sample 5 points to capture v-extremes on curved/closed edges
+        for frac in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let t = t0 + (t1 - t0) * frac;
+            let pt = edge.curve().evaluate_with_endpoints(t, sp, ep);
+            if let Some((_, v)) = surface.project_point(pt) {
+                v_min = v_min.min(v);
+                v_max = v_max.max(v);
+            }
         }
     }
     if v_min < v_max {

@@ -78,9 +78,15 @@ pub fn boolean_gfa(
                 );
                 return boolean(topo, op, a, b);
             }
-            // Post-process: remove degenerate edges and unify coplanar faces
+            // Post-process: remove degenerate edges and unify coplanar faces.
+            // Loop unify_faces — each pass may expose new merge opportunities.
             let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-            let _ = crate::heal::unify_faces(topo, result)?;
+            for _ in 0..3 {
+                let merged = crate::heal::unify_faces(topo, result)?;
+                if merged == 0 {
+                    break;
+                }
+            }
             log::info!(
                 "GFA boolean succeeded in {:.1}ms (faces: {faces_a}+{faces_b} → {result_faces})",
                 timer_elapsed_ms(gfa_start)

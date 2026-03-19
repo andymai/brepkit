@@ -112,7 +112,7 @@ fn check_edge_face_pairs(
 
             let crossings = match surface {
                 FaceSurface::Plane { normal, d } => {
-                    find_edge_plane_crossings(&curve, start_pos, end_pos, t0, t1, *normal, *d)
+                    find_edge_plane_crossings(&curve, start_pos, end_pos, t0, t1, *normal, *d, tol)
                 }
                 _ => find_edge_surface_crossings(&curve, start_pos, end_pos, t0, t1, surface, tol),
             };
@@ -151,6 +151,7 @@ fn check_edge_face_pairs(
 }
 
 /// Find edge-plane crossings using algebraic ray-plane intersection.
+#[allow(clippy::too_many_arguments)]
 fn find_edge_plane_crossings(
     curve: &EdgeCurve,
     start_pos: Point3,
@@ -159,6 +160,7 @@ fn find_edge_plane_crossings(
     t1: f64,
     normal: Vec3,
     d: f64,
+    tol: Tolerance,
 ) -> Vec<(f64, Point3)> {
     if matches!(curve, EdgeCurve::Line) {
         // Algebraic: line-plane intersection
@@ -194,7 +196,7 @@ fn find_edge_plane_crossings(
             t0,
             t1,
             &|pt: Point3| pt.x() * normal.x() + pt.y() * normal.y() + pt.z() * normal.z() - d,
-            1e-7,
+            tol.linear,
         )
     }
 }

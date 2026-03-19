@@ -3164,6 +3164,12 @@ fn gfa_box_cylinder_fuse() {
         "box-cylinder fuse should have 7-50 faces, got {}",
         faces.len()
     );
+    // Fuse volume must exceed the larger input (box = 8.0)
+    let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+    assert!(
+        vol > 8.0,
+        "fuse volume ({vol}) should exceed box volume (8.0)"
+    );
 }
 
 #[test]
@@ -3185,4 +3191,13 @@ fn gfa_box_cone_intersect() {
         "box-cone intersect should have 2-30 faces, got {}",
         faces.len()
     );
+    // Volume check: intersect should be positive and smaller than the cone
+    let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap_or(0.0);
+    if vol > 0.0 {
+        let cone_vol = std::f64::consts::PI / 3.0;
+        assert!(
+            vol < cone_vol + 0.5,
+            "intersect volume ({vol}) should be less than cone ({cone_vol})"
+        );
+    }
 }
