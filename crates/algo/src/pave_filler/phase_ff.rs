@@ -85,7 +85,7 @@ pub fn perform(
             let surf_b = &surfs_b[idx_b];
 
             // Compute raw intersection curves
-            let raw_curves = compute_raw_curves(surf_a, surf_b)?;
+            let raw_curves = compute_raw_curves(surf_a, surf_b, bbox_a, bbox_b)?;
 
             for raw in raw_curves {
                 // Create topology vertices at the curve endpoints.
@@ -198,11 +198,13 @@ struct RawCurve {
 fn compute_raw_curves(
     surf_a: &FaceSurface,
     surf_b: &FaceSurface,
+    bbox_a: &Aabb3,
+    bbox_b: &Aabb3,
 ) -> Result<Vec<RawCurve>, AlgoError> {
     match (surf_a, surf_b) {
         // Plane-Plane
         (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
-            plane_plane_intersection(*na, *da, *nb, *db)
+            plane_plane_intersection(*na, *da, *nb, *db, bbox_a, bbox_b)
         }
 
         // Plane-Analytic (plane is A)
@@ -264,6 +266,8 @@ fn plane_plane_intersection(
     da: f64,
     nb: Vec3,
     db: f64,
+    bbox_a: &Aabb3,
+    bbox_b: &Aabb3,
 ) -> Result<Vec<RawCurve>, AlgoError> {
     let dir = na.cross(nb);
     let dir_len = dir.length();
@@ -279,10 +283,8 @@ fn plane_plane_intersection(
     // Find a point on the intersection line.
     let point = find_plane_plane_point(na, da, nb, db, dir);
 
-    // Represent as a Line with a bounded parameter range.
-    // TODO: trim t_range to actual face boundaries using face AABBs
-    // passed in from the caller, rather than this fixed range.
-    let t_range = (-100.0, 100.0);
+    // Trim parameter range to the combined face AABBs.
+    let t_range = trim_t_range_to_aabb(point, dir, bbox_a, bbox_b);
     let p0 = point + dir * t_range.0;
     let p1 = point + dir * t_range.1;
 
@@ -298,6 +300,39 @@ fn plane_plane_intersection(
         p_start: p0,
         p_end: p1,
     }])
+}
+
+/// Trim a line's parameter range to the combined extent of two AABBs.
+///
+/// Projects the eight corners of the union of `bbox_a` and `bbox_b` onto
+/// the line `origin + t * dir` and returns the (min, max) parameter range.
+/// `dir` must be unit-length.
+fn trim_t_range_to_aabb(origin: Point3, dir: Vec3, bbox_a: &Aabb3, bbox_b: &Aabb3) -> (f64, f64) {
+    let cmin = Point3::new(
+        bbox_a.min.x().min(bbox_b.min.x()),
+        bbox_a.min.y().min(bbox_b.min.y()),
+        bbox_a.min.z().min(bbox_b.min.z()),
+    );
+    let cmax = Point3::new(
+        bbox_a.max.x().max(bbox_b.max.x()),
+        bbox_a.max.y().max(bbox_b.max.y()),
+        bbox_a.max.z().max(bbox_b.max.z()),
+    );
+
+    let mut t_min = f64::MAX;
+    let mut t_max = f64::MIN;
+    for &x in &[cmin.x(), cmax.x()] {
+        for &y in &[cmin.y(), cmax.y()] {
+            for &z in &[cmin.z(), cmax.z()] {
+                let corner = Point3::new(x, y, z);
+                let t = (corner - origin).dot(dir);
+                t_min = t_min.min(t);
+                t_max = t_max.max(t);
+            }
+        }
+    }
+
+    (t_min, t_max)
 }
 
 /// Find a point on the plane-plane intersection line.

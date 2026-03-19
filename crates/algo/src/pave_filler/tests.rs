@@ -268,6 +268,18 @@ fn gfa_cut_overlapping_boxes() {
     );
 }
 
+#[test]
+fn ff_plane_plane_t_range_is_bounded() {
+    let (_topo, arena) = two_overlapping_boxes();
+    for curve in &arena.curves {
+        let (t0, t1) = curve.t_range;
+        assert!(
+            (t1 - t0).abs() < 10.0,
+            "t_range should be bounded by face extents, got ({t0:.1}, {t1:.1})"
+        );
+    }
+}
+
 /// GFA intersect currently under-classifies sub-faces for overlapping boxes,
 /// producing fewer faces than expected. Tracked as a known limitation —
 /// the fallback pipeline handles this correctly at the `boolean_gfa` level.
