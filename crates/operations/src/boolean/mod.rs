@@ -19,6 +19,7 @@ pub(crate) mod pipeline;
 pub(crate) mod plane_frame;
 mod precompute;
 mod split;
+mod state;
 mod types;
 pub(crate) mod wire_builder;
 use analytic::{analytic_boolean, collect_face_signatures, has_torus, is_all_analytic};

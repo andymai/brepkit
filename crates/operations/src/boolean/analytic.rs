@@ -41,6 +41,7 @@ use super::precompute::{
     analytic_face_normal_d, collect_face_data, compute_v_range_hint, face_wire_aabb,
 };
 use super::split::split_face;
+use super::state::BooleanState;
 use super::types::{
     AnalyticClassifier, AnalyticFragment, BooleanOp, CLOSED_CURVE_SAMPLES, CurveClassification,
     FaceClass, FaceSnapshot, Source, select_fragment,
@@ -522,6 +523,9 @@ pub(super) fn analytic_boolean(
     let mut face_intersections_b: HashMap<usize, Vec<(Point3, Point3, Option<EdgeCurve>)>> =
         HashMap::new();
 
+    // Track coplanar (same-domain) face pairs for BooleanState.
+    let mut coplanar_face_pairs: Vec<(FaceId, FaceId)> = Vec::new();
+
     // Deferred coplanar edge injection: B's polygon edges to add as chords on
     // A's cap (and vice versa). Only applied AFTER the intersection loop, and
     // only when the cap face ALSO has chord entries from non-coplanar pairs.
@@ -592,6 +596,9 @@ pub(super) fn analytic_boolean(
                     let d_diff = (snap_a.d - snap_b.d).abs();
                     let dot = snap_a.normal.dot(snap_b.normal);
                     if d_diff < tol.linear && dot > 1.0 - tol.angular {
+                        // Record coplanar (same-domain) pair for BooleanState.
+                        coplanar_face_pairs.push((snap_a.id, snap_b.id));
+
                         let b_in_a = snap_b.vertices.iter().all(|v| {
                             classify::point_in_face_3d(*v, &snap_a.vertices, &snap_a.normal)
                         });
@@ -983,6 +990,7 @@ pub(super) fn analytic_boolean(
                     source: Source::A,
                     edge_curves,
                     source_reversed: snap.reversed,
+                    source_face_id: Some(snap.id),
                 });
             }
 
@@ -1004,6 +1012,7 @@ pub(super) fn analytic_boolean(
                             source: Source::A,
                             edge_curves: vec![Some(ec.clone())],
                             source_reversed: snap.reversed,
+                            source_face_id: Some(snap.id),
                         });
                     }
                 }
@@ -1020,6 +1029,7 @@ pub(super) fn analytic_boolean(
                 source: Source::A,
                 edge_curves: edge_curves_from_face(topo, snap.id, snap.vertices.len()),
                 source_reversed: snap.reversed,
+                source_face_id: Some(snap.id),
             });
             pre_classifications.insert(holed_idx, FaceClass::Outside);
             holed_face_inner_curves.insert(holed_idx, inner_curves.clone());
@@ -1043,6 +1053,7 @@ pub(super) fn analytic_boolean(
                         source: Source::A,
                         edge_curves: vec![Some(ec.clone())],
                         source_reversed: false, // new disc geometry
+                        source_face_id: Some(snap.id),
                     });
                     pre_classifications.insert(disc_idx, FaceClass::Inside);
                 }
@@ -1069,6 +1080,7 @@ pub(super) fn analytic_boolean(
                     band_curves,
                     topo,
                     tol,
+                    Some(snap.id),
                     &mut fragments,
                 );
             }
@@ -1083,6 +1095,7 @@ pub(super) fn analytic_boolean(
                 source: Source::A,
                 edge_curves: edge_curves_from_face(topo, snap.id, snap.vertices.len()),
                 source_reversed: snap.reversed,
+                source_face_id: Some(snap.id),
             });
             let source_face = topo.face(snap.id)?;
             if !source_face.inner_wires().is_empty() {
@@ -1177,6 +1190,7 @@ pub(super) fn analytic_boolean(
                     source: Source::B,
                     edge_curves,
                     source_reversed: snap.reversed,
+                    source_face_id: Some(snap.id),
                 });
             }
 
@@ -1192,6 +1206,7 @@ pub(super) fn analytic_boolean(
                             source: Source::B,
                             edge_curves: vec![Some(ec.clone())],
                             source_reversed: snap.reversed,
+                            source_face_id: Some(snap.id),
                         });
                     }
                 }
@@ -1207,6 +1222,7 @@ pub(super) fn analytic_boolean(
                 source: Source::B,
                 edge_curves: edge_curves_from_face(topo, snap.id, snap.vertices.len()),
                 source_reversed: snap.reversed,
+                source_face_id: Some(snap.id),
             });
             pre_classifications.insert(holed_idx, FaceClass::Outside);
             holed_face_inner_curves.insert(holed_idx, inner_curves.clone());
@@ -1229,6 +1245,7 @@ pub(super) fn analytic_boolean(
                         source: Source::B,
                         edge_curves: vec![Some(ec.clone())],
                         source_reversed: false, // new disc geometry
+                        source_face_id: Some(snap.id),
                     });
                     pre_classifications.insert(disc_idx, FaceClass::Inside);
                 }
@@ -1253,6 +1270,7 @@ pub(super) fn analytic_boolean(
                     band_curves,
                     topo,
                     tol,
+                    Some(snap.id),
                     &mut fragments,
                 );
             }
@@ -1267,6 +1285,7 @@ pub(super) fn analytic_boolean(
                 source: Source::B,
                 edge_curves: edge_curves_from_face(topo, snap.id, snap.vertices.len()),
                 source_reversed: snap.reversed,
+                source_face_id: Some(snap.id),
             });
             let source_face = topo.face(snap.id)?;
             if !source_face.inner_wires().is_empty() {
@@ -1299,6 +1318,7 @@ pub(super) fn analytic_boolean(
                 source: Source::A,
                 edge_curves: edge_curves_from_face(topo, fid, verts.len()),
                 source_reversed: reversed,
+                source_face_id: Some(fid),
             });
             pre_classifications.insert(pass_idx, FaceClass::Outside);
             let source_face = topo.face(fid)?;
@@ -1323,6 +1343,7 @@ pub(super) fn analytic_boolean(
                 source: Source::B,
                 edge_curves: edge_curves_from_face(topo, fid, verts.len()),
                 source_reversed: reversed,
+                source_face_id: Some(fid),
             });
             pre_classifications.insert(pass_idx, FaceClass::Outside);
             let source_face = topo.face(fid)?;
@@ -1462,6 +1483,14 @@ pub(super) fn analytic_boolean(
         timer_elapsed_ms(_t_class),
         classes.len()
     );
+
+    // ── Build BooleanState ────────────────────────────────────────────────
+    let mut state = BooleanState::new();
+
+    // Populate same_domain from coplanar pairs detected during intersection.
+    for &(fa, fb) in &coplanar_face_pairs {
+        state.set_same_domain(fa, fb);
+    }
 
     // ── Selection + Assembly ─────────────────────────────────────────────
     let _t_asm = timer_now();
@@ -1776,6 +1805,28 @@ pub(super) fn analytic_boolean(
         };
         let face = topo.add_face(new_face);
         face_ids_out.push(face);
+
+        // Track provenance: input face → output face.
+        if let Some(src_fid) = frag.source_face_id {
+            state.add_image(src_fid, face);
+        }
+
+        // Populate in_parts with output FaceIds (not fragment indices).
+        //   Source::A + Outside → in solid A
+        //   Source::B + Outside → in solid B
+        //   Source::A + Inside  → in solid B
+        //   Source::B + Inside  → in solid A
+        //   CoplanarSame/CoplanarOpposite → both
+        match (frag.source, class) {
+            (Source::A, FaceClass::Outside) => state.add_in_part(a, face),
+            (Source::B, FaceClass::Outside) => state.add_in_part(b, face),
+            (Source::A, FaceClass::Inside) => state.add_in_part(b, face),
+            (Source::B, FaceClass::Inside) => state.add_in_part(a, face),
+            (_, FaceClass::CoplanarSame | FaceClass::CoplanarOpposite) => {
+                state.add_in_part(a, face);
+                state.add_in_part(b, face);
+            }
+        }
     }
 
     log::debug!(
@@ -1832,8 +1883,7 @@ pub(super) fn analytic_boolean(
         face_ids_out.len()
     );
 
-    // Split non-manifold edges, then assemble. If the result has broken
-    // topology (euler < 2), try manifold shell reconstruction instead.
+    // Split non-manifold edges before shell/solid construction.
     let _t_nm = timer_now();
     split_nonmanifold_edges(topo, &mut face_ids_out)?;
     log::debug!(
@@ -1842,8 +1892,128 @@ pub(super) fn analytic_boolean(
         face_ids_out.len()
     );
 
-    let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
-    let shell_id = topo.add_shell(shell);
+    // Try in_parts-aware shell building: group faces by which solid
+    // they're classified IN, then use build_manifold_shells for
+    // robust shell construction. Fall back to single-shell if
+    // in_parts grouping doesn't produce valid topology.
+    let _t_shell = timer_now();
+    let solid = match build_solid_from_state(topo, &face_ids_out, &state, op, a, b) {
+        Ok(s) => s,
+        Err(e) => {
+            log::debug!("[boolean] build_solid_from_state failed: {e}, single-shell fallback");
+            let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
+            let shell_id = topo.add_shell(shell);
+            topo.add_solid(Solid::new(shell_id, vec![]))
+        }
+    };
+
+    log::debug!(
+        "[boolean] shell building: {:.3}ms",
+        timer_elapsed_ms(_t_shell)
+    );
     log::debug!("[boolean] total: {:.3}ms", timer_elapsed_ms(_t_total));
-    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
+    Ok(solid)
+}
+
+/// Build a solid using `BooleanState`'s `in_parts` to inform shell construction.
+///
+/// Uses `in_parts` membership to reorder faces so `build_manifold_shells`
+/// seeds its BFS from faces with consistent provenance. For all operations,
+/// faces exclusively from one operand are placed first (better BFS seeds
+/// than mixed-provenance faces at cut boundaries).
+///
+/// Validates the result topology and falls back to single-shell on failure.
+#[allow(clippy::too_many_lines)]
+fn build_solid_from_state(
+    topo: &mut Topology,
+    face_ids_out: &[FaceId],
+    state: &BooleanState,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+) -> Result<SolidId, crate::OperationsError> {
+    use std::collections::HashSet;
+
+    use super::assembly::build_manifold_shells;
+
+    let faces_in_a: HashSet<FaceId> = state
+        .faces_in_solid(a)
+        .map(|s| s.iter().copied().collect())
+        .unwrap_or_default();
+    let faces_in_b: HashSet<FaceId> = state
+        .faces_in_solid(b)
+        .map(|s| s.iter().copied().collect())
+        .unwrap_or_default();
+
+    // Partition output faces into: A-only, B-only, shared (coplanar).
+    let mut a_only = Vec::new();
+    let mut b_only = Vec::new();
+    let mut shared = Vec::new();
+    for &fid in face_ids_out {
+        let in_a = faces_in_a.contains(&fid);
+        let in_b = faces_in_b.contains(&fid);
+        match (in_a, in_b) {
+            (true, false) => a_only.push(fid),
+            (false, true) => b_only.push(fid),
+            (true, true) => shared.push(fid),
+            (false, false) => a_only.push(fid), // untracked → group with A
+        }
+    }
+
+    log::debug!(
+        "[boolean] in_parts: A-only={}, B-only={}, shared={} (op={op:?})",
+        a_only.len(),
+        b_only.len(),
+        shared.len()
+    );
+
+    // Reorder faces: A-only first, then B-only, then shared.
+    // This seeds build_manifold_shells' BFS from faces with clear
+    // provenance, improving shell separation for non-manifold cases.
+    let mut reordered = Vec::with_capacity(face_ids_out.len());
+    reordered.extend_from_slice(&a_only);
+    reordered.extend_from_slice(&b_only);
+    reordered.extend_from_slice(&shared);
+
+    // Use build_manifold_shells with the provenance-ordered faces.
+    let result = build_manifold_shells(topo, &reordered)?;
+    let adj_euler = adjusted_euler(topo, result)?;
+
+    if adj_euler == 2 {
+        log::debug!("[boolean] in_parts shell building: adj_euler=2 ✓");
+        return Ok(result);
+    }
+
+    // If provenance-ordered BFS didn't produce valid topology,
+    // try with the original face order as a fallback.
+    log::debug!(
+        "[boolean] in_parts shell building: adj_euler={adj_euler} ≠ 2, \
+         trying original order"
+    );
+    let fallback = build_manifold_shells(topo, face_ids_out)?;
+    let adj2 = adjusted_euler(topo, fallback)?;
+
+    // Return whichever has better topology.
+    if adj2 == 2 || (adj2 - 2).abs() < (adj_euler - 2).abs() {
+        log::debug!("[boolean] original order better: adj_euler={adj2} vs {adj_euler}");
+        Ok(fallback)
+    } else {
+        Ok(result)
+    }
+}
+
+/// Compute adjusted Euler characteristic (V - E + F - inner_loops) for a solid.
+#[allow(clippy::cast_possible_wrap)]
+fn adjusted_euler(topo: &Topology, solid: SolidId) -> Result<i64, crate::OperationsError> {
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, solid)?;
+    let euler = (v as i64) - (e as i64) + (f as i64);
+    let s = topo.solid(solid)?;
+    let sh = topo.shell(s.outer_shell())?;
+    let inner_loops: i64 = sh
+        .faces()
+        .iter()
+        .filter_map(|&fid| topo.face(fid).ok())
+        .map(|face| face.inner_wires().len() as i64)
+        .sum();
+    Ok(euler - inner_loops)
 }
