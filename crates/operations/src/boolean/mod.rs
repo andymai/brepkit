@@ -46,6 +46,7 @@ pub fn boolean_gfa(
     a: SolidId,
     b: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
+    let tol = brepkit_math::tolerance::Tolerance::new();
     let faces_a = brepkit_topology::explorer::solid_faces(topo, a)
         .map(|f| f.len())
         .unwrap_or(0);
@@ -77,6 +78,9 @@ pub fn boolean_gfa(
                 );
                 return boolean(topo, op, a, b);
             }
+            // Post-process: remove degenerate edges and unify coplanar faces
+            let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+            let _ = crate::heal::unify_faces(topo, result)?;
             log::info!(
                 "GFA boolean succeeded in {:.1}ms (faces: {faces_a}+{faces_b} → {result_faces})",
                 timer_elapsed_ms(gfa_start)
