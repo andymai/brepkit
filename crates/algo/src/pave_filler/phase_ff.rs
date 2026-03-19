@@ -89,8 +89,15 @@ pub fn perform(
 
             for raw in raw_curves {
                 // Create topology vertices at the curve endpoints.
+                // For closed curves (Circle/Ellipse), start and end are the same
+                // 3D point — reuse one vertex for correct seam topology.
+                let is_closed = (raw.p_start - raw.p_end).length() < tol.linear;
                 let start_vid = topo.add_vertex(Vertex::new(raw.p_start, tol.linear));
-                let end_vid = topo.add_vertex(Vertex::new(raw.p_end, tol.linear));
+                let end_vid = if is_closed {
+                    start_vid
+                } else {
+                    topo.add_vertex(Vertex::new(raw.p_end, tol.linear))
+                };
 
                 // Create a topology edge for this intersection curve.
                 let edge = Edge::new(start_vid, end_vid, raw.curve.clone());

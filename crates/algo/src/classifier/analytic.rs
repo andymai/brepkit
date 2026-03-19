@@ -612,11 +612,11 @@ fn try_build_cone_classifier(
         }
     }
 
-    if z_min == f64::INFINITY {
+    if !z_min.is_finite() {
         z_min = 0.0;
         r_at_z_min = 0.0;
     }
-    if z_max == f64::NEG_INFINITY {
+    if !z_max.is_finite() {
         z_max = 0.0;
         r_at_z_max = 0.0;
     }
@@ -674,7 +674,9 @@ fn try_build_convex_analytic(topo: &Topology, solid: SolidId) -> Option<Analytic
                 let (z_min, z_max, r_min, r_max) = wire_cone_extent(topo, wire, apex_v, axis)?;
                 cones.push((apex, axis, z_min, z_max, r_min, r_max));
             }
-            _ => return None,
+            // Sphere, Torus, and NURBS faces are not supported by the
+            // ConvexAnalytic classifier — bail out to ray-cast.
+            FaceSurface::Sphere(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => return None,
         }
     }
 
@@ -845,7 +847,8 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
                     inner_cones.push((apex, axis, z_min, z_max, r_min, r_max));
                 }
             }
-            _ => {}
+            // Sphere, Torus, NURBS — skip for composite classifier
+            FaceSurface::Sphere(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => {}
         }
     }
 
