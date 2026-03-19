@@ -1,4 +1,4 @@
-//! Boolean pipeline: OCCT-style parameter-space pipeline.
+//! Boolean pipeline: parameter-space pipeline.
 //!
 //! Operates entirely in 2D parameter space (pcurves on surfaces) for face
 //! splitting. Surface-type agnostic — same code for plane, cylinder, sphere,
@@ -104,7 +104,7 @@ pub fn boolean_pipeline(
         &tol,
     )?;
 
-    // Stage 4b: Same-domain face deduplication (OCCT's FillSameDomainFaces).
+    // Stage 4b: Same-domain face deduplication.
     // After classification, sub-faces from different solids that end up on the
     // same surface with the same boundary (same edge set) are duplicates.
     // For Fuse, both the A and B versions of a coplanar face are kept by
@@ -362,7 +362,7 @@ fn intersect_plane_analytic_faces(
             let start_3d = samples[seg_start];
             let end_3d = samples[seg_end];
 
-            // OCCT-style minimum curve length filter: discard section edges
+            // Minimum curve length filter: discard section edges
             // that span fewer than 3 sample points (too short to be meaningful).
             // This prevents micro-curves from creating unnecessary face splits.
             if seg_end - seg_start < 3 {
@@ -1457,7 +1457,7 @@ fn classify_sub_faces(
     Ok(())
 }
 
-/// OCCT-style Same-Domain face deduplication.
+/// Same-domain face deduplication.
 ///
 /// After classification, sub-faces from different parent faces (potentially
 /// different solids) that have the same surface AND the same boundary edge
@@ -1969,10 +1969,10 @@ fn point_in_face_polygon_3d(point: Point3, verts: &[Point3], normal: &Vec3) -> b
 // Stage 5: Assemble
 // ---------------------------------------------------------------------------
 
-/// OCCT-style shell assembly: create topology faces, then build manifold shells
+/// Shell assembly: create topology faces, then build manifold shells
 /// via greedy flood-fill with dihedral angle selection.
 ///
-/// Follows BOPAlgo_BuilderSolid / BOPAlgo_ShellSplitter algorithm:
+/// Algorithm:
 /// 1. Create all topology faces from classified sub-faces
 /// 2. Build edge→face adjacency map
 /// 3. Iteratively prune faces with free (dangling) edges
@@ -2066,8 +2066,8 @@ fn assemble_pipeline(
     }
 
     // ── Phase 3: Build shells via greedy flood-fill ─────────────────
-    // OCCT's SplitBlock: for each unprocessed face, start a new shell and
-    // greedily expand by selecting neighbors via minimum dihedral angle.
+    // For each unprocessed face, start a new shell and greedily expand by
+    // selecting neighbors via minimum dihedral angle.
     // Never add a face if its shared edge already has 2 faces in the shell.
     //
     // If the flood-fill produces a single shell containing all faces, use it
@@ -2115,7 +2115,7 @@ fn assemble_pipeline(
 /// Extended edge key: vertex pair + curve geometry discriminant.
 ///
 /// Two edges are "the same" (shareable) when they connect the same vertices
-/// AND have geometrically equivalent curves. This is OCCT's CommonBlock concept.
+/// AND have geometrically equivalent curves (common blocks).
 ///
 /// - Line: same vertex pair is sufficient (geometry is fully determined by endpoints)
 /// - Circle: same vertex pair + same center + same radius + same normal direction
@@ -2465,10 +2465,10 @@ fn build_shells_greedy(
 }
 
 /// Select the candidate face with the smallest dihedral angle to `current_face`
-/// around the shared `edge`. This is OCCT's GetFaceOff algorithm: compute the
-/// exterior dihedral angle between `current_face` and each candidate, pick the
-/// minimum. This produces "smooth continuation" — the greedy shell follows the
-/// most natural surface flow.
+/// around the shared `edge`. Computes the exterior dihedral angle between
+/// `current_face` and each candidate, picks the minimum. This produces
+/// "smooth continuation" — the greedy shell follows the most natural surface
+/// flow.
 fn select_by_dihedral_angle(
     topo: &Topology,
     current_face: FaceId,

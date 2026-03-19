@@ -1,7 +1,4 @@
 //! NURBS curve fitting: interpolation and approximation from data points.
-//!
-//! Equivalent to `GeomAPI_Interpolate` and `GeomAPI_PointsToBSpline`
-//! in `OpenCascade`.
 
 #![allow(
     clippy::many_single_char_names,

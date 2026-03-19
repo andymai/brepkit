@@ -603,8 +603,8 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
 
 /// Post-process a solid to enforce manifold topology via greedy flood-fill.
 ///
-/// Detects non-manifold edges (shared by 3+ faces) and uses OCCT-style
-/// greedy shell building to split the non-manifold shell into manifold
+/// Detects non-manifold edges (shared by 3+ faces) and uses greedy
+/// shell building to split the non-manifold shell into manifold
 /// sub-shells. The largest sub-shell becomes the outer shell; smaller ones
 /// become inner shells (cavities).
 ///

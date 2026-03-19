@@ -1,7 +1,6 @@
 //! Draft angle operation for injection molding applications.
 //!
-//! Equivalent to `BRepOffsetAPI_DraftAngle` in `OpenCascade`. Applies a
-//! taper to selected faces of a solid relative to a pull direction.
+//! Applies a taper to selected faces of a solid relative to a pull direction.
 
 use std::collections::HashSet;
 

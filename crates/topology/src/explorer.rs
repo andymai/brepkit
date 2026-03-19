@@ -1,6 +1,6 @@
 //! Topology exploration and query utilities.
 //!
-//! Equivalent to `TopExp_Explorer` in `OpenCascade`. Provides functions
+//! Provides functions
 //! for traversing the B-Rep topology graph and querying relationships
 //! between entities.
 

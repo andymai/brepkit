@@ -1,8 +1,7 @@
 //! Sectioning (slicing) solids with planes.
 //!
 //! Computes the cross-section of a solid at a given cutting plane,
-//! producing face(s) representing the intersection. This is the
-//! equivalent of `BRepAlgoAPI_Section` in `OpenCascade`.
+//! producing face(s) representing the intersection.
 
 #![allow(clippy::too_many_lines, clippy::doc_markdown)]
 

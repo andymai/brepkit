@@ -1,8 +1,7 @@
 //! Wire offset: produce a parallel wire at a given distance.
 //!
-//! Equivalent to `BRepOffsetAPI_MakeOffset` in `OpenCascade` for 2D
-//! wire offsetting. Creates a new wire that is parallel to the input
-//! wire, offset by a specified distance.
+//! Creates a new wire that is parallel to the input wire, offset by a
+//! specified distance.
 
 use brepkit_math::curves::Circle3D;
 use brepkit_math::tolerance::Tolerance;

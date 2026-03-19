@@ -969,7 +969,7 @@ fn cut_cylinder_by_cylinder() {
 }
 
 /// Staircase-like benchmark: fuse box steps with cylinder posts.
-/// Mimics the brepjs staircase benchmark (OCCT: 4s target).
+/// Mimics the brepjs staircase benchmark.
 #[test]
 fn staircase_fuse_with_cylinders() {
     use std::time::Instant;
@@ -3259,7 +3259,7 @@ fn d4_shelled_box_fuse_lip() {
     let inner = crate::primitives::make_box(&mut topo, 8.0, 8.0, 3.0).unwrap();
     translate(&mut topo, inner, 0.0, 0.0, 2.5).unwrap();
     // Use unify_faces=false — unify_faces corrupts complex solids
-    // (shelled box + lip fuse: 49→18 faces). OCCT never unifies inside boolean.
+    // (shelled box + lip fuse: 49→18 faces).
     let no_unify = BooleanOptions {
         unify_faces: false,
         ..BooleanOptions::default()

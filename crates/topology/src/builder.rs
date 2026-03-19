@@ -1,8 +1,6 @@
 //! Builder utilities for edges and wires.
 //!
-//! Provides ergonomic functions for creating topology from geometry,
-//! equivalent to `BRepBuilderAPI_MakeEdge` and `BRepBuilderAPI_MakeWire`
-//! in `OpenCascade`.
+//! Provides ergonomic functions for creating topology from geometry.
 
 use std::f64::consts::PI;
 

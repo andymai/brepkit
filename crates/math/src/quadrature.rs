@@ -4,9 +4,9 @@
 //! plus tensor-product surface integration functions for area and volume
 //! computation via the divergence theorem.
 //!
-//! This is the OCCT `BRepGProp_Gauss` approach: instead of tessellating
-//! a face and summing triangle contributions, we integrate the surface
-//! directly in parametric space using Gauss quadrature.
+//! Instead of tessellating a face and summing triangle contributions,
+//! we integrate the surface directly in parametric space using Gauss
+//! quadrature.
 
 use crate::vec::{Point3, Vec3};
 
@@ -1158,7 +1158,7 @@ mod tests {
         };
 
         // Integrate over [0, 2*pi] x [-pi/2, pi/2] with subdivisions
-        // matching OCCT: 3 u-spans, 2 v-spans, order 4 each
+        // 3 u-spans, 2 v-spans, order 4 each
         let u_knots = [0.0, 2.0 * PI / 3.0, 4.0 * PI / 3.0, 2.0 * PI];
         let v_knots = [-PI / 2.0, 0.0, PI / 2.0];
         let area = gauss_surface_area_spans(&eval, &u_knots, &v_knots, 4, 4);

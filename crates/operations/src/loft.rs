@@ -1,7 +1,6 @@
 //! Loft operation: create a solid by interpolating between profile faces.
 //!
-//! Equivalent to `BRepOffsetAPI_ThruSections` in `OpenCascade`. The loft
-//! connects two or more planar profiles by creating ruled (linear)
+//! The loft connects two or more planar profiles by creating ruled (linear)
 //! surfaces between corresponding profile edges.
 
 use brepkit_math::nurbs::surface_fitting::interpolate_surface;

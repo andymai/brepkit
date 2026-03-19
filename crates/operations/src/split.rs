@@ -1,7 +1,6 @@
 //! Split a solid into two halves along a cutting plane.
 //!
-//! Equivalent to `BRepAlgoAPI_Splitter` in `OpenCascade`. Divides a
-//! solid into two new solids along the specified cutting plane.
+//! Divides a solid into two new solids along the specified cutting plane.
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};

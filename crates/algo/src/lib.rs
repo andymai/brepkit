@@ -8,7 +8,7 @@
 //!
 //! # Architecture
 //!
-//! The GFA follows OCCT's proven approach:
+//! The GFA follows a proven two-phase approach:
 //!
 //! 1. **PaveFiller** — intersects all shape pairs, builds pave blocks
 //!    (edge segments at intersection points), and populates face info.

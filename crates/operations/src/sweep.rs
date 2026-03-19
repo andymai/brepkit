@@ -1000,7 +1000,6 @@ impl std::fmt::Debug for SweepOptions {
 /// Sweep a face along a path with advanced options.
 ///
 /// Supports scaling laws (tapered sweep) and multiple contact modes.
-/// This is equivalent to OCCT's `BRepOffsetAPI_MakePipeShell`.
 ///
 /// # Errors
 ///

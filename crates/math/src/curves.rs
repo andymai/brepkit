@@ -1,8 +1,7 @@
 //! Analytic 3D curve types: lines, circles, and ellipses.
 //!
 //! These provide exact evaluation (no NURBS approximation) for the
-//! most common curve types in CAD. Equivalent to `Geom_Line`,
-//! `Geom_Circle`, and `Geom_Ellipse` in `OpenCascade`.
+//! most common curve types in CAD.
 
 use std::f64::consts::PI;
 

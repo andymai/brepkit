@@ -175,7 +175,7 @@ pub struct BooleanOptions {
     /// Merge co-surface face fragments after assembly.
     ///
     /// When `true`, the pipeline calls `unify_faces` to merge adjacent faces
-    /// that share the same underlying surface (analogous to OCCT's same-domain
+    /// that share the same underlying surface (same-domain
     /// analysis). This dramatically reduces face count -- e.g. sequential
     /// booleans on curved surfaces drop from 2871 to ~106 faces.
     ///

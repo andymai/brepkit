@@ -1,8 +1,7 @@
 //! Face filling: create a smooth NURBS surface from boundary curves.
 //!
 //! Fills an N-sided boundary with a surface patch. For 4-sided boundaries,
-//! uses Coons patch interpolation. This is equivalent to `BRepFill_Filling`
-//! in `OpenCascade`.
+//! uses Coons patch interpolation.
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::Point3;

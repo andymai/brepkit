@@ -1,7 +1,7 @@
 //! Point-in-solid classification via ray casting and generalized winding numbers.
 //!
 //! Determines whether a 3D point is inside, outside, or on the boundary
-//! of a solid. This is equivalent to OCCT's `BRepClass3d_SolidClassifier`.
+//! of a solid.
 //!
 //! Three classifiers are provided:
 //! - [`classify_point`]: analytic ray casting (fast, no tessellation for analytic faces)

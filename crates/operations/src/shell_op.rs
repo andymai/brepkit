@@ -1,6 +1,5 @@
 //! Shell (hollow/offset) operation for creating thin-walled solids.
 //!
-//! Equivalent to `BRepOffsetAPI_MakeThickSolid` in `OpenCascade`.
 //! Offsets faces of a solid inward to create a hollow shell with
 //! uniform wall thickness. Optionally removes specified faces to
 //! create openings.
@@ -424,7 +423,7 @@ pub fn shell(
     // with the outer/inner faces), we first assemble the outer + inner faces
     // into a solid with open boundaries, then find the boundary edges and
     // create a single annular rim face per open face. This guarantees edge
-    // sharing and produces a manifold shell matching OCCT's topology.
+    // sharing and produces a manifold shell.
 
     if result_specs.is_empty() {
         return Err(crate::OperationsError::InvalidInput {

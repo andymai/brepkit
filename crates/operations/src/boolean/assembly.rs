@@ -442,15 +442,14 @@ pub(crate) fn assemble_solid_mixed(
 // ---------------------------------------------------------------------------
 // Degenerate result detection
 // ---------------------------------------------------------------------------
-// OCCT-style manifold shell building
+// Manifold shell building
 // ---------------------------------------------------------------------------
 
-/// Resolve non-manifold edges using OCCT-style manifold pairing.
+/// Resolve non-manifold edges using manifold pairing.
 ///
 /// For each edge shared by 3+ faces, select the best pair (faces with
 /// opposite traversal directions = proper manifold pair) and give each
-/// unpaired face its own edge copy. This is equivalent to OCCT's
-/// `BOPAlgo_ShellSplitter::RefineShell` branch-edge splitting.
+/// unpaired face its own edge copy (branch-edge splitting).
 ///
 /// Unlike the old `split_nonmanifold_edges` which used angular ordering
 /// (unreliable at degenerate rim junctions), this uses traversal direction
@@ -489,7 +488,7 @@ fn build_manifold_shell(
     }
 
     // For each non-manifold edge at a rim junction, REMOVE the face that
-    // opposes the majority — matching OCCT's IN-face removal approach.
+    // opposes the majority — removing the IN face.
     let mut faces_to_remove: HashSet<usize> = HashSet::new();
     // Note: edge replacements for angular split cases are not currently used.
     // The opposing-normal face removal above handles all known non-manifold cases.
@@ -534,7 +533,7 @@ fn build_manifold_shell(
 
         // Spurious rim junction with opposing normals: REMOVE the faces
         // that cause the 3-face edge instead of creating edge copies.
-        // This matches OCCT's approach (discard IN faces before shell build).
+        // Discard IN faces before shell build.
         //
         // The face to remove is the one whose normal opposes the majority.
         // For a rim junction: 2 faces have similar normals (outer + rim),

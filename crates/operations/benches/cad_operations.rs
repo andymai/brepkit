@@ -1,8 +1,8 @@
 //! Performance benchmarks for core CAD operations.
 //!
 //! These benchmarks mirror the operations and parameters in
-//! `brepjs/benchmarks/kernel-comparison.bench.test.ts` for 1:1 comparison
-//! against OCCT. Each benchmark name matches the JS counterpart.
+//! `brepjs/benchmarks/kernel-comparison.bench.test.ts`. Each benchmark
+//! name matches the JS counterpart.
 //!
 //! Run with:
 //!   `cargo bench-fast`               — this file only, 20 samples (~2 min)
@@ -235,7 +235,7 @@ fn bench_mesh_box_coarse(c: &mut Criterion) {
 }
 
 /// `mesh sphere (tol=0.01)` — fine tessellation of sphere(10).
-/// This is the key comparison: OCCT does 63.6 ms for this.
+/// Fine tessellation benchmark.
 fn bench_mesh_sphere_fine(c: &mut Criterion) {
     c.bench_function("mesh sphere (tol=0.01)", |b| {
         let mut topo = Topology::new();
