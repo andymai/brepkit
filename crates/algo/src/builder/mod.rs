@@ -194,7 +194,13 @@ impl Builder {
         log::debug!("Builder: {} sub-faces created", self.sub_faces.len());
 
         // Step 3: same-domain detection
-        same_domain::detect_same_domain(&self.topo, &self.arena, &self.sub_faces, &self.face_ranks);
+        same_domain::detect_same_domain(
+            &self.topo,
+            &self.arena,
+            &mut self.sub_faces,
+            &self.face_ranks,
+            self.tol,
+        );
     }
 
     /// Phase 2: classify each sub-face as inside/outside the opposing solid.
@@ -226,24 +232,30 @@ impl Builder {
                         classifier::classify_point(&self.topo, opposing_solid, point)?;
                 }
                 Err(e) => {
-                    log::warn!(
-                        "Builder: could not sample interior of face {:?}: {e}",
+                    return Err(AlgoError::ClassificationFailed(format!(
+                        "could not sample interior of face {:?}: {e}",
                         sf.face_id
-                    );
-                    // Leave as Unknown — the BOP will skip it
+                    )));
                 }
             }
         }
 
-        let classified = self
+        let unknown_count = self
             .sub_faces
             .iter()
-            .filter(|sf| sf.classification != FaceClass::Unknown)
+            .filter(|sf| sf.classification == FaceClass::Unknown)
             .count();
+        let total = self.sub_faces.len();
         log::debug!(
-            "Builder: {classified}/{} sub-faces classified",
-            self.sub_faces.len()
+            "Builder: {}/{total} sub-faces classified",
+            total - unknown_count
         );
+
+        if unknown_count > 0 {
+            return Err(AlgoError::ClassificationFailed(format!(
+                "{unknown_count} sub-faces could not be classified"
+            )));
+        }
 
         Ok(())
     }

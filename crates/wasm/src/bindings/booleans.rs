@@ -5,7 +5,7 @@
 use wasm_bindgen::prelude::*;
 
 use brepkit_operations::boolean::boolean_pipeline;
-use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_operations::boolean::{BooleanOp, boolean_gfa as boolean};
 
 use crate::handles::solid_id_to_u32;
 use crate::helpers::{build_triangle_mesh, panic_message, parse_boolean_op, triangle_mesh_to_js};

@@ -1,6 +1,6 @@
 //! Tests for PaveFiller phases.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -223,4 +223,68 @@ fn gfa_boolean_fuse_two_boxes() {
             // Don't assert — we want to see the error
         }
     }
+}
+
+#[test]
+fn gfa_fuse_adjacent_boxes_same_domain() {
+    // Two boxes sharing a face: A=[0,1]^3, B=[1,2]×[0,1]^2.
+    // They share the x=1 plane. Fuse should produce 10 faces (not 12).
+    let mut topo = Topology::default();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [1.0, 0.0, 0.0], [2.0, 1.0, 1.0]);
+
+    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Fuse, a, b);
+    match &result {
+        Ok(solid_id) => {
+            let faces = brepkit_topology::explorer::solid_faces(&topo, *solid_id).unwrap();
+            eprintln!("Adjacent fuse: {} faces", faces.len());
+            assert_eq!(
+                faces.len(),
+                10,
+                "fuse of adjacent unit cubes should have 10 faces, got {}",
+                faces.len()
+            );
+        }
+        Err(e) => {
+            panic!("GFA fuse of adjacent boxes failed: {e}");
+        }
+    }
+}
+
+#[test]
+fn gfa_cut_overlapping_boxes() {
+    let mut topo = Topology::default();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [2.0, 2.0, 2.0]);
+    let b = make_box(&mut topo, [0.5, 0.5, 0.5], [1.5, 1.5, 1.5]);
+
+    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, a, b);
+    let solid_id = result.expect("GFA cut of overlapping boxes should succeed");
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid_id).unwrap();
+    eprintln!("Cut: {} faces", faces.len());
+    assert!(
+        faces.len() >= 6,
+        "cut result should have at least 6 faces, got {}",
+        faces.len()
+    );
+}
+
+/// GFA intersect currently under-classifies sub-faces for overlapping boxes,
+/// producing fewer faces than expected. Tracked as a known limitation —
+/// the fallback pipeline handles this correctly at the `boolean_gfa` level.
+#[test]
+#[ignore = "GFA intersect under-classifies sub-faces for overlapping boxes"]
+fn gfa_intersect_overlapping_boxes() {
+    let mut topo = Topology::default();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [2.0, 2.0, 2.0]);
+    let b = make_box(&mut topo, [1.0, 1.0, 1.0], [3.0, 3.0, 3.0]);
+
+    let solid_id = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Intersect, a, b)
+        .expect("GFA intersect should succeed");
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid_id).unwrap();
+    assert_eq!(
+        faces.len(),
+        6,
+        "intersect of overlapping cubes should have 6 faces, got {}",
+        faces.len()
+    );
 }
