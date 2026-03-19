@@ -187,9 +187,15 @@ fn find_edge_plane_crossings(
         vec![(t, pt)]
     } else {
         // General case: sample and find sign changes
-        find_crossings_by_sampling(curve, start_pos, end_pos, t0, t1, &|pt: Point3| {
-            pt.x() * normal.x() + pt.y() * normal.y() + pt.z() * normal.z() - d
-        })
+        find_crossings_by_sampling(
+            curve,
+            start_pos,
+            end_pos,
+            t0,
+            t1,
+            &|pt: Point3| pt.x() * normal.x() + pt.y() * normal.y() + pt.z() * normal.z() - d,
+            1e-7,
+        )
     }
 }
 
@@ -237,6 +243,42 @@ fn find_edge_surface_crossings(
                     crossings.push(refined);
                 }
             }
+
+            // Tangent contact: near-surface sample triggers golden section minimum search
+            if prev_dist < 4.0 * tol.linear || dist < 4.0 * tol.linear {
+                let phi = 0.5 * (5.0_f64.sqrt() - 1.0);
+                let mut lo = prev_t;
+                let mut hi = t;
+                for _ in 0..30 {
+                    let m1 = hi - phi * (hi - lo);
+                    let m2 = lo + phi * (hi - lo);
+                    let d1 = distance_to_surface(
+                        curve.evaluate_with_endpoints(m1, start_pos, end_pos),
+                        surface,
+                    );
+                    let d2 = distance_to_surface(
+                        curve.evaluate_with_endpoints(m2, start_pos, end_pos),
+                        surface,
+                    );
+                    if d1 < d2 {
+                        hi = m2;
+                    } else {
+                        lo = m1;
+                    }
+                }
+                let t_min = f64::midpoint(lo, hi);
+                let pt_min = curve.evaluate_with_endpoints(t_min, start_pos, end_pos);
+                if distance_to_surface(pt_min, surface) < tol.linear {
+                    let is_dup = crossings.iter().any(|&(ct, _): &(f64, Point3)| {
+                        (t_min - ct).abs() < (t1 - t0) / (n as f64) * 2.0
+                    });
+                    if !is_dup {
+                        let refined =
+                            refine_crossing(curve, start_pos, end_pos, lo, hi, surface, tol);
+                        crossings.push(refined);
+                    }
+                }
+            }
         }
 
         prev_dist = dist;
@@ -254,6 +296,7 @@ fn find_crossings_by_sampling(
     t0: f64,
     t1: f64,
     signed_dist: &dyn Fn(Point3) -> f64,
+    tol_linear: f64,
 ) -> Vec<(f64, Point3)> {
     let n = N_SAMPLES;
     let mut crossings = Vec::new();
@@ -271,9 +314,6 @@ fn find_crossings_by_sampling(
         let (t_b, sd_b) = samples[i + 1];
 
         // Sign change indicates a crossing
-        // TODO: tangent contact detection — golden section search when
-        // sample distance < 4*tol to catch near-tangent edge-face touches
-        // that don't produce a sign change.
         if sd_a * sd_b < 0.0 {
             // Bisect to find exact crossing
             let mut lo = t_a;
@@ -296,6 +336,34 @@ fn find_crossings_by_sampling(
             let t = f64::midpoint(lo, hi);
             let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
             crossings.push((t, pt));
+        }
+        // Tangent contact: minimum approaches zero without sign change
+        else if sd_a.abs() < 4.0 * tol_linear || sd_b.abs() < 4.0 * tol_linear {
+            let phi = 0.5 * (5.0_f64.sqrt() - 1.0);
+            let mut lo = t_a;
+            let mut hi = t_b;
+            for _ in 0..30 {
+                let m1 = hi - phi * (hi - lo);
+                let m2 = lo + phi * (hi - lo);
+                let d1 = signed_dist(curve.evaluate_with_endpoints(m1, start_pos, end_pos)).abs();
+                let d2 = signed_dist(curve.evaluate_with_endpoints(m2, start_pos, end_pos)).abs();
+                if d1 < d2 {
+                    hi = m2;
+                } else {
+                    lo = m1;
+                }
+            }
+            let t_min = f64::midpoint(lo, hi);
+            let pt_min = curve.evaluate_with_endpoints(t_min, start_pos, end_pos);
+            let d_min = signed_dist(pt_min).abs();
+            if d_min < tol_linear {
+                let is_dup = crossings.iter().any(|&(ct, _): &(f64, Point3)| {
+                    (t_min - ct).abs() < (t1 - t0) / (n as f64) * 2.0
+                });
+                if !is_dup {
+                    crossings.push((t_min, pt_min));
+                }
+            }
         }
     }
 
@@ -351,4 +419,38 @@ fn refine_crossing(
     let t = f64::midpoint(lo, hi);
     let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
     (t, pt)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::edge::EdgeCurve;
+
+    #[test]
+    fn sampling_detects_tangent_touch() {
+        // Signed distance: parabola touching zero at t=0.5 (exact tangent)
+        let curve = EdgeCurve::Line;
+        let start = Point3::new(0.0, 0.0, 0.0);
+        let end = Point3::new(1.0, 0.0, 0.0);
+        let signed_dist = |pt: Point3| -> f64 {
+            let t = pt.x();
+            (t - 0.5) * (t - 0.5) // minimum = 0 at t=0.5
+        };
+
+        let crossings =
+            find_crossings_by_sampling(&curve, start, end, 0.0, 1.0, &signed_dist, 1e-7);
+
+        assert!(
+            !crossings.is_empty(),
+            "tangent touch (minimum=0) should be detected"
+        );
+        let (t, _) = crossings[0];
+        assert!(
+            (t - 0.5).abs() < 0.02,
+            "tangent point should be near t=0.5, got {t}"
+        );
+    }
 }
