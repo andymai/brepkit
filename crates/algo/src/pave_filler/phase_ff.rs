@@ -436,8 +436,25 @@ fn plane_analytic_intersection(
                     p_end,
                 });
             }
-            analytic_intersection::ExactIntersectionCurve::Points(_) => {
-                // Points can't be represented as edge curves -- skip
+            analytic_intersection::ExactIntersectionCurve::Points(pts) => {
+                if pts.len() < 2 {
+                    continue;
+                }
+                // Fit a degree-3 NURBS curve through the sampled points
+                let nurbs = brepkit_math::nurbs::fitting::interpolate(&pts, 3)
+                    .map_err(|e| AlgoError::IntersectionFailed(format!("NURBS fit failed: {e}")))?;
+                let t_range = nurbs.domain();
+                let bbox = Aabb3::try_from_points(pts.iter().copied()).ok_or_else(|| {
+                    AlgoError::IntersectionFailed("empty points for NURBS fit".into())
+                })?;
+                let end_pt = pts[pts.len() - 1];
+                results.push(RawCurve {
+                    curve: EdgeCurve::NurbsCurve(nurbs),
+                    bbox,
+                    t_range,
+                    p_start: pts[0],
+                    p_end: end_pt,
+                });
             }
         }
     }
