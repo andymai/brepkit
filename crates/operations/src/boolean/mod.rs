@@ -86,9 +86,13 @@ pub fn boolean_gfa(
                     break;
                 }
             }
-            // Validate: result must pass basic topology checks (manifold, Euler).
-            // If validation fails, fall back to the existing pipeline.
-            if validate_boolean_result(topo, result).is_err() {
+            // Validate: result must have correct Euler characteristic (V-E+F=2
+            // for a closed manifold solid). GFA can produce topologically broken
+            // results that pass face-count checks but have wrong Euler.
+            let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, result)?;
+            #[allow(clippy::cast_possible_wrap)]
+            let euler = (v as i64) - (e as i64) + (f as i64);
+            if euler != 2 || validate_boolean_result(topo, result).is_err() {
                 log::warn!(
                     "GFA result failed validation in {:.1}ms, falling back",
                     timer_elapsed_ms(gfa_start)
