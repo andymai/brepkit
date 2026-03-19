@@ -41,6 +41,10 @@ tarpaulin-report.html
 # Claude Code agent memory
 .claude/agent-memory-local/
 
+# Claude Code worktrees and research
+.claude/worktrees/
+.claude/research/
+
 # Git worktrees
 .worktrees/
 

@@ -45,6 +45,7 @@ pub struct PaveFiller<'a> {
 
 impl<'a> PaveFiller<'a> {
     /// Creates a new `PaveFiller` for two solids.
+    #[allow(dead_code)]
     pub fn new(topo: &'a mut Topology, solid_a: SolidId, solid_b: SolidId) -> Self {
         Self {
             topo,
@@ -97,7 +98,7 @@ impl<'a> PaveFiller<'a> {
         // Phase 5: Edge-face intersection
         phase_ef::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
 
-        // Phase 6: Face-face intersection
+        // Phase 6: Face-face intersection (creates vertices + edges for curves)
         phase_ff::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
 
         Ok(())

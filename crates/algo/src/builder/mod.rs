@@ -39,6 +39,8 @@ use crate::error::AlgoError;
 #[derive(Debug, Clone)]
 pub struct SubFace {
     /// The original face this sub-face was split from.
+    /// Used by future face-splitting passes to track provenance.
+    #[allow(dead_code)]
     pub parent_face: FaceId,
     /// The face entity in topology (same as parent if no split occurred).
     pub face_id: FaceId,
@@ -73,6 +75,7 @@ pub struct Builder {
 impl Builder {
     /// Create a new Builder from PaveFiller output.
     #[must_use]
+    #[allow(dead_code)]
     pub fn new(topo: Topology, arena: GfaArena, solid_a: SolidId, solid_b: SolidId) -> Self {
         Self {
             topo,
@@ -119,12 +122,14 @@ impl Builder {
 
     /// Returns the classified sub-faces.
     #[must_use]
+    #[allow(dead_code)]
     pub fn sub_faces(&self) -> &[SubFace] {
         &self.sub_faces
     }
 
     /// Consume the Builder, returning the topology, arena, and sub-faces.
     #[must_use]
+    #[allow(dead_code)]
     pub fn into_parts(self) -> (Topology, GfaArena, Vec<SubFace>) {
         (self.topo, self.arena, self.sub_faces)
     }

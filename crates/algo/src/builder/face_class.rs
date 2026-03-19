@@ -8,8 +8,12 @@ pub enum FaceClass {
     /// Outside the opposing solid.
     Outside,
     /// On the boundary — coplanar with an opposing face, same normal direction.
+    /// Assigned by future same-domain detection pass.
+    #[allow(dead_code)]
     CoplanarSame,
     /// On the boundary — coplanar with an opposing face, opposite normal direction.
+    /// Assigned by future same-domain detection pass.
+    #[allow(dead_code)]
     CoplanarOpposite,
     /// Classification not yet determined.
     Unknown,

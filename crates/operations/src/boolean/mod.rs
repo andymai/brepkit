@@ -28,6 +28,36 @@ pub use compound::compound_cut;
 pub use precompute::face_polygon;
 pub use types::{BooleanOp, BooleanOptions, FaceSpec};
 
+// ---------------------------------------------------------------------------
+// GFA pipeline entry point
+// ---------------------------------------------------------------------------
+
+/// Boolean via the GFA pipeline. Falls back to the existing pipeline on error.
+///
+/// # Errors
+///
+/// Returns an error only if both the GFA pipeline and the fallback fail.
+pub fn boolean_gfa(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+) -> Result<SolidId, crate::OperationsError> {
+    let algo_op = match op {
+        BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
+        BooleanOp::Cut => brepkit_algo::bop::BooleanOp::Cut,
+        BooleanOp::Intersect => brepkit_algo::bop::BooleanOp::Intersect,
+    };
+
+    match brepkit_algo::gfa::boolean(topo, algo_op, a, b) {
+        Ok(result) => Ok(result),
+        Err(e) => {
+            log::warn!("GFA boolean failed ({e}), falling back to existing pipeline");
+            boolean(topo, op, a, b)
+        }
+    }
+}
+
 // WASM-compatible timer: `std::time::Instant` panics on wasm32 targets.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn timer_now() -> std::time::Instant {

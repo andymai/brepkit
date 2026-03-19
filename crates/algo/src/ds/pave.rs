@@ -44,11 +44,14 @@ pub struct PaveBlock {
     /// The topology edge created from this block (populated in `MakeSplitEdges`).
     pub split_edge: Option<EdgeId>,
     /// If this block is part of a common block (geometrically coincident
-    /// with blocks from other edges).
+    /// with blocks from other edges). Populated by future EE overlap detection.
+    #[allow(dead_code)]
     pub common_block: Option<CommonBlockId>,
     /// Child pave blocks created by `update()`. Empty until split.
     pub children: Vec<PaveBlockId>,
     /// Pre-computed shrunk range (valid parameter interval for intersection).
+    /// Used by future EF/FF phases for containment checks.
+    #[allow(dead_code)]
     pub shrunk_range: Option<(f64, f64)>,
 }
 
@@ -74,7 +77,9 @@ impl PaveBlock {
     }
 
     /// Returns true if this block has been split into children.
+    /// Used by future Builder edge-image resolution.
     #[must_use]
+    #[allow(dead_code)]
     pub fn is_split(&self) -> bool {
         !self.children.is_empty()
     }
@@ -94,7 +99,10 @@ pub type CommonBlockId = Id<CommonBlock>;
 /// When edges from two different solids overlap, their pave blocks are
 /// grouped into a common block. The Builder uses this to create a single
 /// shared edge in the result, eliminating non-manifold topology.
+///
+/// Populated by future EE overlap detection in PaveFiller.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct CommonBlock {
     /// Pave blocks that share the same geometry (from different edges).
     pub pave_blocks: Vec<PaveBlockId>,
@@ -102,6 +110,7 @@ pub struct CommonBlock {
     pub faces: Vec<FaceId>,
 }
 
+#[allow(dead_code)]
 impl CommonBlock {
     /// Creates a new common block.
     #[must_use]

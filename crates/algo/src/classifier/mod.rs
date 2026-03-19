@@ -1,12 +1,9 @@
-//! Face classification — determines if a sub-face is inside/outside
+//! Face classification -- determines if a sub-face is inside/outside
 //! the opposing solid.
 //!
 //! Two strategies:
 //! - **Analytic**: O(1) point-in-solid for convex analytic solids.
-//! - **Ray cast**: Multi-ray BVH fallback for general solids.
-//!
-//! Phase 4 starts with a stub classifier that returns `Unknown`.
-//! The real classifiers will be ported from `operations/boolean/classify.rs`.
+//! - **Ray cast**: Multi-ray fallback for general solids.
 
 mod analytic;
 mod ray_cast;
@@ -21,11 +18,11 @@ use brepkit_topology::solid::SolidId;
 use crate::builder::FaceClass;
 use crate::error::AlgoError;
 
-/// Classify a point relative to a solid — dispatch to the best available
+/// Classify a point relative to a solid -- dispatch to the best available
 /// strategy.
 ///
-/// Currently delegates to ray casting. Analytic fast paths will be
-/// added as classifiers are ported.
+/// Tries the analytic classifier first (O(1) for convex analytic solids),
+/// then falls back to ray casting.
 ///
 /// # Errors
 ///
@@ -42,18 +39,5 @@ pub fn classify_point(
     }
 
     // Fall back to ray casting
-    let result = classify_ray_cast(topo, solid, point)?;
-
-    // If both analytic and ray cast return Unknown, default to Outside
-    // so the pipeline produces a result rather than empty assembly.
-    // TODO: replace with real classifiers ported from operations/boolean/classify.rs
-    if result == FaceClass::Unknown {
-        log::warn!(
-            "classify_point: both strategies returned Unknown for {point:?} vs {solid:?}, \
-             defaulting to Outside"
-        );
-        return Ok(FaceClass::Outside);
-    }
-
-    Ok(result)
+    classify_ray_cast(topo, solid, point)
 }

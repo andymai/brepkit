@@ -10,6 +10,7 @@ description = "CAD modeling operations (booleans, fillets, extrusions) for brepk
 [dependencies]
 brepkit-math.workspace = true
 brepkit-topology.workspace = true
+brepkit-algo.workspace = true
 thiserror.workspace = true
 rayon.workspace = true
 log.workspace = true

@@ -9,7 +9,7 @@ use std::hash::BuildHasher;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::FaceId;
 
-use crate::ds::{GfaArena, Rank};
+use crate::ds::{FaceInfo, GfaArena, Rank};
 
 use super::SubFace;
 use super::face_class::FaceClass;
@@ -49,5 +49,3 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
 
     sub_faces
 }
-
-use crate::ds::FaceInfo;
