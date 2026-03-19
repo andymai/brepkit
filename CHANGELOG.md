@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.18.2](https://github.com/andymai/brepkit/compare/v2.18.1...v2.18.2) (2026-03-19)
+
+
+### Bug Fixes
+
+* **algo:** GFA same-domain + crossing section edge bugs ([#311](https://github.com/andymai/brepkit/issues/311)) ([d62a310](https://github.com/andymai/brepkit/commit/d62a310e30761f5eac20f49ee1eff9863fca2e09))
+* **ops:** D4 fuse — relax both_complex, skip nm_count/enforce_manifold ([#312](https://github.com/andymai/brepkit/issues/312)) ([50fda22](https://github.com/andymai/brepkit/commit/50fda22d9dc0a05bea8fe784da8ee361e1b5fdd2))
+
 ## [2.18.1](https://github.com/andymai/brepkit/compare/v2.18.0...v2.18.1) (2026-03-19)
 
 
