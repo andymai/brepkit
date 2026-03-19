@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.20.0](https://github.com/andymai/brepkit/compare/v2.19.0...v2.20.0) (2026-03-19)
+
+
+### Features
+
+* **ops:** add BooleanState for deterministic face provenance ([#322](https://github.com/andymai/brepkit/issues/322)) ([3523312](https://github.com/andymai/brepkit/commit/35233125eec8f6ef15f7ae12975126e29d79c26b))
+
+
+### Bug Fixes
+
+* **ops:** outer-wire-only edges in BuilderSolid ([#320](https://github.com/andymai/brepkit/issues/320)) ([93e6188](https://github.com/andymai/brepkit/commit/93e618829886e88ab3f74d17128c221a3adce9d5))
+
 ## [2.19.0](https://github.com/andymai/brepkit/compare/v2.18.3...v2.19.0) (2026-03-19)
 
 
