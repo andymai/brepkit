@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.19.0](https://github.com/andymai/brepkit/compare/v2.18.3...v2.19.0) (2026-03-19)
+
+
+### Features
+
+* **ops:** pcurve registration + pcurve_binormal for BuilderSolid ([#318](https://github.com/andymai/brepkit/issues/318)) ([6a6ca15](https://github.com/andymai/brepkit/commit/6a6ca150bcc9ba636c097491e5390dc15512d891))
+
+
+### Bug Fixes
+
+* **ops:** add BuilderSolid scaffold + surface normal fix ([#317](https://github.com/andymai/brepkit/issues/317)) ([b862d9b](https://github.com/andymai/brepkit/commit/b862d9b897051d9f7fb69f563511e0df38134286))
+
 ## [2.18.3](https://github.com/andymai/brepkit/compare/v2.18.2...v2.18.3) (2026-03-19)
 
 
