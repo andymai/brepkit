@@ -388,6 +388,9 @@ pub(super) struct AnalyticFragment {
     pub(super) edge_curves: Vec<Option<EdgeCurve>>,
     /// Whether the source face was reversed (preserved for non-planar faces).
     pub(super) source_reversed: bool,
+    /// The original input `FaceId` this fragment was created from.
+    /// Used by `BooleanState` to track provenance (images/origins).
+    pub(super) source_face_id: Option<FaceId>,
 }
 
 // ---------------------------------------------------------------------------

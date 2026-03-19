@@ -244,6 +244,7 @@ pub(super) fn tessellate_face_into_fragments(
             source,
             edge_curves: vec![None; 3],
             source_reversed: false, // planar fragment, no reversal needed
+            source_face_id: Some(face_id),
         });
     }
     Ok(())
@@ -287,6 +288,7 @@ pub(super) fn split_cylinder_at_intersection(
             source,
             edge_curves: vec![None; face_verts.len()],
             source_reversed,
+            source_face_id: Some(face_id),
         });
         return Ok(());
     };
@@ -301,6 +303,7 @@ pub(super) fn split_cylinder_at_intersection(
             source,
             edge_curves: vec![None; face_verts.len()],
             source_reversed,
+            source_face_id: Some(face_id),
         });
         return Ok(());
     }
@@ -386,6 +389,7 @@ pub(super) fn split_cylinder_at_intersection(
             source,
             edge_curves: vec![None; n_verts],
             source_reversed,
+            source_face_id: Some(face_id),
         });
     };
 
@@ -438,6 +442,7 @@ pub(super) fn split_cone_at_intersection(
             source,
             edge_curves: vec![None; face_verts.len()],
             source_reversed,
+            source_face_id: Some(face_id),
         });
         return Ok(());
     };
@@ -451,6 +456,7 @@ pub(super) fn split_cone_at_intersection(
             source,
             edge_curves: vec![None; face_verts.len()],
             source_reversed,
+            source_face_id: Some(face_id),
         });
         return Ok(());
     }
@@ -524,6 +530,7 @@ pub(super) fn split_cone_at_intersection(
             source,
             edge_curves: vec![None; n_verts],
             source_reversed,
+            source_face_id: Some(face_id),
         });
     };
 
@@ -578,6 +585,7 @@ pub(super) fn split_sphere_at_intersection(
             source,
             edge_curves: vec![None; face_verts.len()],
             source_reversed,
+            source_face_id: Some(face_id),
         });
         return Ok(());
     }
@@ -647,6 +655,7 @@ pub(super) fn split_sphere_at_intersection(
             source,
             edge_curves: vec![None; n_verts],
             source_reversed,
+            source_face_id: Some(face_id),
         });
     };
 
@@ -756,6 +765,7 @@ pub(super) fn create_band_fragments(
                 source,
                 edge_curves: vec![None; face_verts.len()],
                 source_reversed,
+                source_face_id: None,
             });
             return;
         }
@@ -784,6 +794,7 @@ pub(super) fn create_band_fragments(
             source,
             edge_curves: vec![None; face_verts.len()],
             source_reversed,
+            source_face_id: None,
         });
         return;
     }
@@ -798,6 +809,7 @@ pub(super) fn create_band_fragments(
             source,
             edge_curves: vec![None; face_verts.len()],
             source_reversed,
+            source_face_id: None,
         });
         return;
     };
@@ -911,6 +923,7 @@ pub(super) fn create_band_fragments(
             source,
             edge_curves: vec![None; n_verts],
             source_reversed,
+            source_face_id: None,
         });
     }
 }
