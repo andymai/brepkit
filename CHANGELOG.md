@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.17.0](https://github.com/andymai/brepkit/compare/v2.16.0...v2.17.0) (2026-03-19)
+
+
+### Features
+
+* **algo:** topology reconstruction + face count guard ([209df12](https://github.com/andymai/brepkit/commit/209df1260a4964c271a1fac76958a3efaf82d188))
+* **algo:** topology reconstruction from SplitSubFace ([0db515d](https://github.com/andymai/brepkit/commit/0db515d2bbf1ef36d8b48f3bb6109ff22d9bb1be))
+* **algo:** topology reconstruction, face count guard, performance timing ([24d5270](https://github.com/andymai/brepkit/commit/24d527009b0fbf81c97f310ac9f55ddb57843649))
+
 ## [2.16.0](https://github.com/andymai/brepkit/compare/v2.15.0...v2.16.0) (2026-03-19)
 
 
