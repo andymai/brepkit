@@ -1822,7 +1822,8 @@ pub(super) fn analytic_boolean(
         face_ids_out.len()
     );
 
-    // Split non-manifold edges (shared by > 2 faces) into separate copies.
+    // Split non-manifold edges, then assemble. If the result has broken
+    // topology (euler < 2), try manifold shell reconstruction instead.
     let _t_nm = timer_now();
     split_nonmanifold_edges(topo, &mut face_ids_out)?;
     log::debug!(
