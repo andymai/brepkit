@@ -234,10 +234,20 @@ impl Face {
         self.outer_wire
     }
 
+    /// Sets the outer boundary wire.
+    pub fn set_outer_wire(&mut self, wire_id: WireId) {
+        self.outer_wire = wire_id;
+    }
+
     /// Returns the inner boundary wires (holes) of this face.
     #[must_use]
     pub fn inner_wires(&self) -> &[WireId] {
         &self.inner_wires
+    }
+
+    /// Returns a mutable reference to the inner wires list.
+    pub fn inner_wires_mut(&mut self) -> &mut Vec<WireId> {
+        &mut self.inner_wires
     }
 
     /// Returns a reference to the surface geometry of this face.

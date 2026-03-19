@@ -1,5 +1,5 @@
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_wrap)]
 
 use super::analytic::surface_aware_aabb;
 use super::fragments::tessellate_face_into_fragments;
@@ -1381,7 +1381,7 @@ fn fuse_adjacent_boxes_shared_face() {
         "shared-face fuse volume: {vol} (expected {expected})"
     );
 
-    // With unify_faces=true (default), coplanar faces merge → 2×1×1 box = 6 faces.
+    // With unify_faces=true, coplanar faces merge → 2×1×1 box = 6 faces.
     let shell_id = topo.solid(fused).unwrap().outer_shell();
     let face_count = topo.shell(shell_id).unwrap().faces().len();
     assert_eq!(
@@ -3199,5 +3199,167 @@ fn gfa_box_cone_intersect() {
             vol < cone_vol + 0.5,
             "intersect volume ({vol}) should be less than cone ({cone_vol})"
         );
+    }
+}
+
+// ── D4 gridfinity repro: shelled box + lip fuse ────────────────────
+
+/// Minimal repro of D4 gridfinity non-manifold fuse bug.
+///
+/// Root cause path: `boolean_with_options` → `both_complex=true` → skips analytic
+/// → `boolean_pipeline` → pipeline succeeds but produces non-manifold topology
+/// (adj_euler=4 instead of 2). `validate_boolean_result` doesn't reject it
+/// because topological validation is logged as warnings, not hard errors.
+///
+/// The pipeline's parameter-space splitting doesn't handle the combination of:
+/// - Shelled solid (inner wires on boundary faces)
+/// - Lip solid (from boolean cut of nested boxes)
+/// - Fuse operation (merging coplanar boundary at z≈5)
+#[test]
+fn d4_shelled_box_fuse_lip() {
+    // Simplified D4: shell a box, build a lip (outer-inner cut), fuse
+    let mut topo = Topology::default();
+
+    // Box 10x10x5, centered at origin base
+    let box_solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 5.0).unwrap();
+
+    // Find top face (z=5)
+    let faces = brepkit_topology::explorer::solid_faces(&topo, box_solid).unwrap();
+    let top_face = faces
+        .iter()
+        .find(|&&fid| {
+            let f = topo.face(fid).unwrap();
+            if let brepkit_topology::face::FaceSurface::Plane { normal, d } = f.surface() {
+                normal.z() > 0.9 && *d > 4.0
+            } else {
+                false
+            }
+        })
+        .copied()
+        .unwrap();
+
+    // Shell: remove top, 1mm walls
+    let shelled = crate::shell_op::shell(&mut topo, box_solid, 1.0, &[top_face]).unwrap();
+    let (sf, se, sv) = brepkit_topology::explorer::solid_entity_counts(&topo, shelled).unwrap();
+    let s_euler = sv as i64 - se as i64 + sf as i64;
+    eprintln!("shelled: F={sf} E={se} V={sv} euler={s_euler}");
+    // Euler=3 for shelled box: 11 faces (5 outer + 5 inner + 1 bottom with hole)
+    // Adjusted: 3 - 1 inner_loop = 2. ✓
+
+    // Lip: outer frame minus inner frame, overlapping the box top at z=2.5.
+    // make_box(w,h,d) creates centered at origin: x∈[-w/2,w/2], etc.
+    // Box is z∈[-2.5, 2.5]. Lip should start at z=1 (below box top) to z=4.
+    // Translate lip center from z=0 to z=2.5 so lip goes z=[1.0, 4.0].
+    let translate = |topo: &mut Topology, solid: SolidId, dx: f64, dy: f64, dz: f64| {
+        let mat = brepkit_math::mat::Mat4::translation(dx, dy, dz);
+        crate::transform::transform_solid(topo, solid, &mat)
+    };
+    let outer = crate::primitives::make_box(&mut topo, 12.0, 12.0, 3.0).unwrap();
+    translate(&mut topo, outer, 0.0, 0.0, 2.5).unwrap();
+    let inner = crate::primitives::make_box(&mut topo, 8.0, 8.0, 3.0).unwrap();
+    translate(&mut topo, inner, 0.0, 0.0, 2.5).unwrap();
+    // Use unify_faces=false — unify_faces corrupts complex solids
+    // (shelled box + lip fuse: 49→18 faces). OCCT never unifies inside boolean.
+    let no_unify = BooleanOptions {
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    let lip = boolean_with_options(&mut topo, BooleanOp::Cut, outer, inner, no_unify).unwrap();
+    let (lf, le, lv) = brepkit_topology::explorer::solid_entity_counts(&topo, lip).unwrap();
+    let l_euler = lv as i64 - le as i64 + lf as i64;
+    eprintln!("lip: F={lf} E={le} V={lv} euler={l_euler}");
+
+    // Fuse shelled box + lip without unify_faces
+    let result = boolean_with_options(&mut topo, BooleanOp::Fuse, shelled, lip, no_unify);
+    match result {
+        Ok(fused) => {
+            let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, fused).unwrap();
+            let euler = v as i64 - e as i64 + f as i64;
+            let inner_loops: i64 = {
+                let s = topo.solid(fused).unwrap();
+                let sh = topo.shell(s.outer_shell()).unwrap();
+                sh.faces()
+                    .iter()
+                    .map(|&fid| topo.face(fid).unwrap().inner_wires().len() as i64)
+                    .sum()
+            };
+            let adj = euler - inner_loops;
+            eprintln!(
+                "fused: F={f} E={e} V={v} euler={euler} inner_loops={inner_loops} adj_euler={adj}"
+            );
+
+            // Diagnose: find non-manifold and boundary edges
+            let sh = topo
+                .shell(topo.solid(fused).unwrap().outer_shell())
+                .unwrap();
+            let mut efc: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
+            for &fid in sh.faces() {
+                let face = topo.face(fid).unwrap();
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    for oe in topo.wire(wid).unwrap().edges() {
+                        *efc.entry(oe.edge().index()).or_default() += 1;
+                    }
+                }
+            }
+            let nm_count = efc.values().filter(|c| **c > 2).count();
+            let bd_count = efc.values().filter(|c| **c < 2).count();
+            eprintln!("non-manifold edges: {nm_count} boundary edges: {bd_count}");
+
+            // Check connected components via face adjacency flood-fill
+            let face_ids: Vec<_> = sh.faces().to_vec();
+            let mut face_adj: std::collections::HashMap<usize, Vec<usize>> =
+                std::collections::HashMap::new();
+            // Build edge→face map, then faces sharing an edge are adjacent
+            let mut edge_faces: std::collections::HashMap<usize, Vec<usize>> =
+                std::collections::HashMap::new();
+            for (fi, &fid) in face_ids.iter().enumerate() {
+                let face = topo.face(fid).unwrap();
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    for oe in topo.wire(wid).unwrap().edges() {
+                        edge_faces.entry(oe.edge().index()).or_default().push(fi);
+                    }
+                }
+            }
+            for faces_at_edge in edge_faces.values() {
+                for &fi in faces_at_edge {
+                    for &fj in faces_at_edge {
+                        if fi != fj {
+                            face_adj.entry(fi).or_default().push(fj);
+                        }
+                    }
+                }
+            }
+            // Flood fill to count components
+            let mut visited = vec![false; face_ids.len()];
+            let mut components = 0u32;
+            for start in 0..face_ids.len() {
+                if visited[start] {
+                    continue;
+                }
+                components += 1;
+                let mut stack = vec![start];
+                while let Some(fi) = stack.pop() {
+                    if visited[fi] {
+                        continue;
+                    }
+                    visited[fi] = true;
+                    if let Some(neighbors) = face_adj.get(&fi) {
+                        for &nfi in neighbors {
+                            if !visited[nfi] {
+                                stack.push(nfi);
+                            }
+                        }
+                    }
+                }
+            }
+            eprintln!("connected components: {components}");
+
+            assert_eq!(adj, 2, "adjusted Euler should be 2, got {adj}");
+        }
+        Err(e) => panic!("fuse failed: {e}"),
     }
 }

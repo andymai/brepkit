@@ -97,7 +97,19 @@ pub fn boolean_gfa(
                     "GFA result failed validation in {:.1}ms, falling back",
                     timer_elapsed_ms(gfa_start)
                 );
-                return boolean(topo, op, a, b);
+                // Fallback with unify_faces=false. The GFA path does its
+                // own unification; the fallback path's unify_faces can corrupt
+                // complex solids (shelled box + lip fuse).
+                return boolean_with_options(
+                    topo,
+                    op,
+                    a,
+                    b,
+                    BooleanOptions {
+                        unify_faces: false,
+                        ..BooleanOptions::default()
+                    },
+                );
             }
             log::info!(
                 "GFA boolean succeeded in {:.1}ms (faces: {faces_a}+{faces_b} → {result_faces})",
@@ -110,7 +122,16 @@ pub fn boolean_gfa(
                 "GFA boolean failed in {:.1}ms ({e}), falling back",
                 timer_elapsed_ms(gfa_start)
             );
-            boolean(topo, op, a, b)
+            boolean_with_options(
+                topo,
+                op,
+                a,
+                b,
+                BooleanOptions {
+                    unify_faces: false,
+                    ..BooleanOptions::default()
+                },
+            )
         }
     }
 }
@@ -247,14 +268,14 @@ pub fn boolean_with_options(
         // A solid is "structurally complex" if it has polygonal inner wires
         // (shelled) OR reversed curved faces (from boolean cut of hollow shapes).
         // "Large" means many faces (from prior booleans or mesh tessellation).
-        let a_structural = a_wires || a_curved;
-        let b_structural = b_wires || b_curved;
+        // Skip analytic only when one input has reversed CURVED faces (from
+        // boolean cut producing hollow frustums) AND the other is large.
+        // Inner wires alone (from shell) work correctly with the analytic path.
+        let _ = a_wires;
+        let _ = b_wires;
         let a_large = a_faces > 6;
         let b_large = b_faces > 6;
-        // Skip analytic when one input is structurally complex AND the other
-        // is large (from prior booleans). This catches lip fuse (hollow lip +
-        // large shelled-box result) without catching simple frustum cuts.
-        (a_structural && b_large) || (b_structural && a_large)
+        (a_curved && b_large) || (b_curved && a_large)
     };
 
     let mut analytic_fallback: Option<SolidId> = None;
@@ -265,32 +286,7 @@ pub fn boolean_with_options(
             if opts.unify_faces {
                 let _ = crate::heal::unify_faces(topo, solid)?;
             }
-            // Check manifold. Only reject if there are MANY non-manifold edges
-            // (>3) indicating a systematic assembly issue (e.g., shelled solid).
-            // Minor non-manifold (1-3 edges) from sphere/cone booleans is acceptable.
-            let nm_count = {
-                let sh = topo.shell(topo.solid(solid)?.outer_shell())?;
-                let mut efc: std::collections::HashMap<usize, u32> =
-                    std::collections::HashMap::new();
-                for &fid in sh.faces() {
-                    if let Ok(face) = topo.face(fid) {
-                        for wid in std::iter::once(face.outer_wire())
-                            .chain(face.inner_wires().iter().copied())
-                        {
-                            if let Ok(wire) = topo.wire(wid) {
-                                for oe in wire.edges() {
-                                    *efc.entry(oe.edge().index()).or_default() += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-                efc.values().filter(|&&c| c > 2).count()
-            };
-            let is_manifold = nm_count <= 30;
-
-            if is_manifold && validate_boolean_result(topo, solid).is_ok() {
-                let solid = enforce_manifold_shell(topo, solid).unwrap_or(solid);
+            if validate_boolean_result(topo, solid).is_ok() {
                 return Ok(solid);
             }
             analytic_fallback = Some(solid);
@@ -361,7 +357,17 @@ pub fn boolean_with_options(
     // pipeline handles coplanar faces, NURBS, and other cases analytic can't.
     // Preserves all surface types through the boolean.
     match boolean_pipeline::boolean_pipeline(topo, op, a, b) {
-        Ok(solid) if validate_boolean_result(topo, solid).is_ok() => {
+        Ok(raw) if validate_boolean_result(topo, raw).is_ok() => {
+            // Copy before healing to avoid corrupting shared arena entities.
+            let solid = crate::copy::copy_solid(topo, raw)?;
+            let _ = crate::heal::remove_degenerate_edges(topo, solid, tol.linear)?;
+            if opts.unify_faces {
+                for _ in 0..3 {
+                    if crate::heal::unify_faces(topo, solid)? == 0 {
+                        break;
+                    }
+                }
+            }
             let solid = enforce_manifold_shell(topo, solid).unwrap_or(solid);
             return Ok(solid);
         }
@@ -377,7 +383,16 @@ pub fn boolean_with_options(
     // When both analytic and pipeline fail, fall back to mesh co-refinement.
     // All surface types are lost — output is planar triangles only.
     match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
-        Ok(result) => {
+        Ok(raw) => {
+            let result = crate::copy::copy_solid(topo, raw)?;
+            let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+            if opts.unify_faces {
+                for _ in 0..3 {
+                    if crate::heal::unify_faces(topo, result)? == 0 {
+                        break;
+                    }
+                }
+            }
             let result = enforce_manifold_shell(topo, result).unwrap_or(result);
             return Ok(result);
         }
