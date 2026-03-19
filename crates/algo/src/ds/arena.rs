@@ -93,6 +93,22 @@ impl GfaArena {
         self.edge_pave_blocks.entry(edge).or_default().push(pb_id);
         pb_id
     }
+    /// Collect leaf pave blocks (blocks with no children).
+    ///
+    /// If a block has children, recursively returns their leaves instead.
+    pub fn collect_leaf_pave_blocks(&self, pb_ids: &[PaveBlockId]) -> Vec<PaveBlockId> {
+        let mut leaves = Vec::new();
+        for &pb_id in pb_ids {
+            if let Some(pb) = self.pave_blocks.get(pb_id) {
+                if pb.children.is_empty() {
+                    leaves.push(pb_id);
+                } else {
+                    leaves.extend(self.collect_leaf_pave_blocks(&pb.children));
+                }
+            }
+        }
+        leaves
+    }
 }
 
 impl Default for GfaArena {

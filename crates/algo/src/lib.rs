@@ -17,10 +17,19 @@
 //! 3. **BOP** — selects faces based on boolean operation type
 //!    (fuse/cut/intersect).
 
+#[allow(dead_code)]
 pub mod bop;
-pub mod builder;
-pub mod classifier;
-pub mod ds;
 pub mod error;
 pub mod gfa;
-pub mod pave_filler;
+
+// These modules are scaffolding — many items are not yet called from
+// the top-level `gfa` entry point. Allow dead code until the pipeline
+// is fully wired.
+#[allow(dead_code)]
+pub(crate) mod builder;
+#[allow(dead_code)]
+pub(crate) mod classifier;
+#[allow(dead_code)]
+pub(crate) mod ds;
+#[allow(dead_code)]
+pub(crate) mod pave_filler;

@@ -47,11 +47,7 @@ pub fn perform(arena: &mut GfaArena) -> Result<(), AlgoError> {
 
                 // Sort and deduplicate extra paves by parameter
                 let mut sorted_paves = extra_paves;
-                sorted_paves.sort_by(|a, b| {
-                    a.parameter
-                        .partial_cmp(&b.parameter)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                });
+                sorted_paves.sort_by(|a, b| a.parameter.total_cmp(&b.parameter));
                 sorted_paves.dedup_by(|a, b| (a.parameter - b.parameter).abs() < 1e-10);
 
                 // Create child pave blocks for each segment

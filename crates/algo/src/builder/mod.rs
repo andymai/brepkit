@@ -227,14 +227,17 @@ impl Builder {
 
 /// Sample a point in the interior of a face.
 ///
-/// Uses the face's surface parameterization: evaluates at the midpoint
-/// of the face's outer wire's first edge, then offsets slightly toward
-/// the face interior.
+/// Uses the midpoint of the first boundary edge, then offsets slightly
+/// inward along (edge_tangent x face_normal) to get a point that is
+/// reliably inside the face — unlike a vertex centroid, which can fall
+/// outside non-convex faces.
 fn sample_face_interior(
     topo: &Topology,
     face_id: FaceId,
     _tol: Tolerance,
 ) -> Result<Point3, AlgoError> {
+    use brepkit_math::vec::Vec3;
+
     let face = topo.face(face_id)?;
     let wire = topo.wire(face.outer_wire())?;
     let edges = wire.edges();
@@ -245,38 +248,56 @@ fn sample_face_interior(
         )));
     }
 
-    // Compute centroid of wire vertices as a robust interior sample
-    let mut sum = Point3::new(0.0, 0.0, 0.0);
-    let mut count = 0u32;
+    // Take the first boundary edge and evaluate at its midpoint
+    let first_oe = &edges[0];
+    let edge = topo.edge(first_oe.edge())?;
+    let start_pos = topo.vertex(edge.start())?.point();
+    let end_pos = topo.vertex(edge.end())?.point();
+    let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+    let t_mid = 0.5_f64.mul_add(t1 - t0, t0);
+    let mid_pt = edge
+        .curve()
+        .evaluate_with_endpoints(t_mid, start_pos, end_pos);
 
-    for oe in edges {
-        let v = topo.vertex(topo.edge(oe.edge())?.start())?;
-        let p = v.point();
-        sum = Point3::new(sum.x() + p.x(), sum.y() + p.y(), sum.z() + p.z());
-        count += 1;
-    }
-
-    if count == 0 {
-        return Err(AlgoError::FaceSplitFailed(format!(
-            "face {face_id:?} has no vertices"
-        )));
-    }
-
-    let centroid = Point3::new(
-        sum.x() / f64::from(count),
-        sum.y() / f64::from(count),
-        sum.z() / f64::from(count),
-    );
-
-    // Project the centroid onto the surface to get an on-surface point
+    // Get the edge tangent and face normal at the midpoint
+    let tangent = edge
+        .curve()
+        .tangent_with_endpoints(t_mid, start_pos, end_pos);
     let surface = face.surface();
-    let Some((u, v)) = surface.project_point(centroid) else {
-        // Plane faces don't support project_point — use centroid directly
-        return Ok(centroid);
-    };
-    let Some(on_surface) = surface.evaluate(u, v) else {
-        return Ok(centroid);
+
+    // Use the surface normal at the midpoint (project first to get UV)
+    let face_normal = if let Some((u, v)) = surface.project_point(mid_pt) {
+        surface.normal(u, v)
+    } else {
+        // Plane: normal is constant
+        match surface {
+            brepkit_topology::face::FaceSurface::Plane { normal, .. } => *normal,
+            _ => Vec3::new(0.0, 0.0, 1.0),
+        }
     };
 
-    Ok(on_surface)
+    // Inward direction: tangent x face_normal points into the face interior
+    // (assuming CCW winding when viewed from the face normal direction)
+    let inward = tangent.cross(face_normal);
+    let inward_len = inward.length();
+
+    let offset = if inward_len > 1e-12 {
+        inward * (1e-6 / inward_len)
+    } else {
+        // Degenerate — use a tiny offset along the face normal instead
+        face_normal * 1e-6
+    };
+
+    let interior_pt = mid_pt + offset;
+
+    // Project back onto the surface to ensure the point is on-surface
+    if let Some((u, v)) = surface.project_point(interior_pt) {
+        if let Some(on_surface) = surface.evaluate(u, v) {
+            return Ok(on_surface);
+        }
+    }
+
+    // Fallback: use the midpoint itself (it's on the boundary, not ideal
+    // but better than a centroid that may be outside the face)
+    Ok(mid_pt)
 }

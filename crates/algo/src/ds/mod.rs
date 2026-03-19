@@ -14,6 +14,14 @@ mod shape_index;
 pub use arena::GfaArena;
 pub use curve::IntersectionCurveDS;
 pub use face_info::FaceInfo;
-pub use interference::{Interference, InterferenceTable};
-pub use pave::{CommonBlock, CommonBlockId, Pave, PaveBlock, PaveBlockId};
-pub use shape_index::{Rank, ShapeRef};
+pub use interference::Interference;
+pub use pave::{Pave, PaveBlock, PaveBlockId};
+pub use shape_index::Rank;
+
+// Re-exported for future use when pipeline is fully wired
+#[allow(unused_imports)]
+pub use interference::InterferenceTable;
+#[allow(unused_imports)]
+pub use pave::{CommonBlock, CommonBlockId};
+#[allow(unused_imports)]
+pub use shape_index::ShapeRef;

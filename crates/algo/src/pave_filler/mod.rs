@@ -9,6 +9,7 @@
 //! `MakeBlocks`, `MakeSplitEdges`, `MakePCurves`, `FillFaceInfo`.
 
 pub mod fill_face_info;
+mod helpers;
 pub mod make_blocks;
 pub mod make_pcurves;
 pub mod make_split_edges;

@@ -6,16 +6,16 @@
 
 use std::collections::HashSet;
 
+use crate::ds::{GfaArena, Interference, Pave};
+use crate::error::AlgoError;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
-use brepkit_topology::vertex::VertexId;
 
-use crate::ds::{GfaArena, Interference, Pave};
-use crate::error::AlgoError;
+use super::helpers::{add_pave_to_edge, find_nearby_pave_vertex as find_nearby_vertex};
 
 /// Number of samples along each edge for sign-change detection.
 const N_SAMPLES: usize = 64;
@@ -266,6 +266,9 @@ fn find_crossings_by_sampling(
         let (t_b, sd_b) = samples[i + 1];
 
         // Sign change indicates a crossing
+        // TODO: tangent contact detection — golden section search when
+        // sample distance < 4*tol to catch near-tangent edge-face touches
+        // that don't produce a sign change.
         if sd_a * sd_b < 0.0 {
             // Bisect to find exact crossing
             let mut lo = t_a;
@@ -342,43 +345,4 @@ fn refine_crossing(
     let t = f64::midpoint(lo, hi);
     let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
     (t, pt)
-}
-
-/// Find a vertex near the given point among all pave block vertices.
-fn find_nearby_vertex(
-    topo: &Topology,
-    arena: &GfaArena,
-    point: Point3,
-    tol: Tolerance,
-) -> Option<VertexId> {
-    for pbs in arena.edge_pave_blocks.values() {
-        for &pb_id in pbs {
-            if let Some(pb) = arena.pave_blocks.get(pb_id) {
-                for vid in [pb.start.vertex, pb.end.vertex] {
-                    let resolved = arena.resolve_vertex(vid);
-                    if let Ok(v) = topo.vertex(resolved) {
-                        if (v.point() - point).length() <= tol.linear {
-                            return Some(resolved);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Add a pave to the appropriate pave block of an edge.
-fn add_pave_to_edge(arena: &mut GfaArena, edge_id: EdgeId, pave: Pave) {
-    if let Some(pb_ids) = arena.edge_pave_blocks.get(&edge_id) {
-        let pb_ids_copy: Vec<_> = pb_ids.clone();
-        for pb_id in pb_ids_copy {
-            if let Some(pb) = arena.pave_blocks.get_mut(pb_id) {
-                let (start, end) = pb.parameter_range();
-                if pave.parameter > start + 1e-10 && pave.parameter < end - 1e-10 {
-                    pb.add_extra_pave(pave);
-                }
-            }
-        }
-    }
 }

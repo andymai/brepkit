@@ -234,9 +234,10 @@ fn plane_plane_intersection(
     // Find a point on the intersection line.
     let point = find_plane_plane_point(na, da, nb, db, dir);
 
-    // Represent as a Line with generous parameter range.
-    // Later phases trim to face boundaries.
-    let t_range = (-1e6, 1e6);
+    // Represent as a Line with a bounded parameter range.
+    // TODO: trim t_range to actual face boundaries using face AABBs
+    // passed in from the caller, rather than this fixed range.
+    let t_range = (-100.0, 100.0);
     let p0 = point + dir * t_range.0;
     let p1 = point + dir * t_range.1;
 

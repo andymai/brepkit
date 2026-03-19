@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use brepkit_topology::edge::EdgeId;
 
-use crate::ds::{GfaArena, PaveBlockId};
+use crate::ds::GfaArena;
 
 /// For each original edge, collect its leaf pave block split-edge IDs.
 ///
@@ -20,7 +20,7 @@ pub fn fill_edge_images(arena: &GfaArena) -> HashMap<EdgeId, Vec<EdgeId>> {
     let mut images: HashMap<EdgeId, Vec<EdgeId>> = HashMap::new();
 
     for (&original_edge, pb_ids) in &arena.edge_pave_blocks {
-        let leaves = collect_leaves(arena, pb_ids);
+        let leaves = arena.collect_leaf_pave_blocks(pb_ids);
         let mut split_edges = Vec::new();
 
         for leaf_id in leaves {
@@ -41,19 +41,4 @@ pub fn fill_edge_images(arena: &GfaArena) -> HashMap<EdgeId, Vec<EdgeId>> {
     }
 
     images
-}
-
-/// Recursively collect leaf pave blocks (those with no children).
-fn collect_leaves(arena: &GfaArena, pb_ids: &[PaveBlockId]) -> Vec<PaveBlockId> {
-    let mut leaves = Vec::new();
-    for &pb_id in pb_ids {
-        if let Some(pb) = arena.pave_blocks.get(pb_id) {
-            if pb.children.is_empty() {
-                leaves.push(pb_id);
-            } else {
-                leaves.extend(collect_leaves(arena, &pb.children));
-            }
-        }
-    }
-    leaves
 }

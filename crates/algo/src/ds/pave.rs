@@ -1,6 +1,6 @@
 //! Pave, `PaveBlock`, and `CommonBlock` — the core GFA edge-splitting types.
 
-use brepkit_topology::arena::{Arena, Id};
+use brepkit_topology::arena::Id;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::FaceId;
 use brepkit_topology::vertex::VertexId;
@@ -83,54 +83,6 @@ impl PaveBlock {
     #[must_use]
     pub fn parameter_range(&self) -> (f64, f64) {
         (self.start.parameter, self.end.parameter)
-    }
-
-    /// Split this pave block at all extra paves, creating child blocks
-    /// in the arena. Returns the IDs of the created children.
-    ///
-    /// Extra paves are sorted by parameter, deduplicated, and used to
-    /// create contiguous child blocks covering the original range.
-    pub fn update(&mut self, arena: &mut Arena<Self>) -> Vec<PaveBlockId> {
-        if self.extra_paves.is_empty() {
-            return Vec::new();
-        }
-
-        // Sort extra paves by parameter
-        self.extra_paves.sort_by(|a, b| {
-            a.parameter
-                .partial_cmp(&b.parameter)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        // Deduplicate paves that are too close (within tolerance)
-        self.extra_paves
-            .dedup_by(|a, b| (a.parameter - b.parameter).abs() < 1e-10);
-
-        // Build child blocks: start -> p1 -> p2 -> ... -> end
-        let mut children = Vec::new();
-        let mut prev_pave = self.start;
-
-        for &pave in &self.extra_paves {
-            // Skip paves at the boundaries
-            if (pave.parameter - self.start.parameter).abs() < 1e-10
-                || (pave.parameter - self.end.parameter).abs() < 1e-10
-            {
-                continue;
-            }
-
-            let child = Self::new(self.original_edge, prev_pave, pave);
-            let child_id = arena.alloc(child);
-            children.push(child_id);
-            prev_pave = pave;
-        }
-
-        // Final segment: last pave -> end
-        let last_child = Self::new(self.original_edge, prev_pave, self.end);
-        let last_id = arena.alloc(last_child);
-        children.push(last_id);
-
-        self.children.clone_from(&children);
-        children
     }
 }
 

@@ -24,7 +24,7 @@ pub enum BooleanOp {
 /// - **Cut**: A-Outside + B-Inside (reversed normals) + CoplanarOpposite from B
 /// - **Intersect**: A-Inside + B-Inside + CoplanarSame from either
 #[must_use]
-pub fn select_faces(sub_faces: &[SubFace], op: BooleanOp) -> Vec<SelectedFace> {
+pub(crate) fn select_faces(sub_faces: &[SubFace], op: BooleanOp) -> Vec<SelectedFace> {
     sub_faces
         .iter()
         .filter_map(|sf| {
@@ -59,7 +59,7 @@ pub fn select_faces(sub_faces: &[SubFace], op: BooleanOp) -> Vec<SelectedFace> {
 
 /// A face selected for the boolean result.
 #[derive(Debug, Clone)]
-pub struct SelectedFace {
+pub(crate) struct SelectedFace {
     /// The topology face to include.
     pub face_id: brepkit_topology::face::FaceId,
     /// Which argument this face came from.

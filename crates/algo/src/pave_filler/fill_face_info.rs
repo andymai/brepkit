@@ -68,7 +68,7 @@ fn fill_boundary_on(topo: &Topology, arena: &mut GfaArena) -> Result<(), AlgoErr
         let mut on_entries: Vec<(PaveBlockId, VertexId, VertexId)> = Vec::new();
         for eid in boundary_edges {
             if let Some(pb_ids) = arena.edge_pave_blocks.get(&eid).cloned() {
-                let leaves = collect_leaves(arena, &pb_ids);
+                let leaves = arena.collect_leaf_pave_blocks(&pb_ids);
                 for leaf_id in leaves {
                     if let Some(pb) = arena.pave_blocks.get(leaf_id) {
                         let sv = arena.resolve_vertex(pb.start.vertex);
@@ -138,26 +138,11 @@ fn fill_ef_in(arena: &mut GfaArena) {
 
     for (edge_id, face_id) in ef_data {
         if let Some(pb_ids) = arena.edge_pave_blocks.get(&edge_id).cloned() {
-            let leaves = collect_leaves(arena, &pb_ids);
+            let leaves = arena.collect_leaf_pave_blocks(&pb_ids);
             let fi = arena.face_info_mut(face_id);
             for leaf_id in leaves {
                 fi.pave_blocks_in.insert(leaf_id);
             }
         }
     }
-}
-
-/// Recursively collect leaf pave blocks (those with no children).
-fn collect_leaves(arena: &GfaArena, pb_ids: &[PaveBlockId]) -> Vec<PaveBlockId> {
-    let mut leaves = Vec::new();
-    for &pb_id in pb_ids {
-        if let Some(pb) = arena.pave_blocks.get(pb_id) {
-            if pb.children.is_empty() {
-                leaves.push(pb_id);
-            } else {
-                leaves.extend(collect_leaves(arena, &pb.children));
-            }
-        }
-    }
-    leaves
 }

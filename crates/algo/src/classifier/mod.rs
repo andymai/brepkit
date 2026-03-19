@@ -42,5 +42,18 @@ pub fn classify_point(
     }
 
     // Fall back to ray casting
-    classify_ray_cast(topo, solid, point)
+    let result = classify_ray_cast(topo, solid, point)?;
+
+    // If both analytic and ray cast return Unknown, default to Outside
+    // so the pipeline produces a result rather than empty assembly.
+    // TODO: replace with real classifiers ported from operations/boolean/classify.rs
+    if result == FaceClass::Unknown {
+        log::warn!(
+            "classify_point: both strategies returned Unknown for {point:?} vs {solid:?}, \
+             defaulting to Outside"
+        );
+        return Ok(FaceClass::Outside);
+    }
+
+    Ok(result)
 }
