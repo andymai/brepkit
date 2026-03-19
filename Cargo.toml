@@ -48,6 +48,7 @@ quick-xml = "0.39"
 brepkit-math = { path = "crates/math" }
 brepkit-topology = { path = "crates/topology" }
 brepkit-operations = { path = "crates/operations" }
+brepkit-algo = { path = "crates/algo" }
 brepkit-io = { path = "crates/io" }
 
 [workspace.lints.rust]
