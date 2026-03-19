@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.16.0](https://github.com/andymai/brepkit/compare/v2.15.0...v2.16.0) (2026-03-19)
+
+
+### Features
+
+* **algo:** port full face splitting pipeline — wire builder, pcurve compute, face splitter ([df12aae](https://github.com/andymai/brepkit/commit/df12aae38d94ee87b99d2af12a851504d370ea54))
+* **algo:** wire face splitter into GFA pipeline — per-sub-face interior points ([76fe30d](https://github.com/andymai/brepkit/commit/76fe30dfbb818a861f49f2755c10492833999cff))
+
 ## [2.15.0](https://github.com/andymai/brepkit/compare/v2.14.0...v2.15.0) (2026-03-19)
 
 
