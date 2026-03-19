@@ -280,11 +280,13 @@ fn ff_plane_plane_t_range_is_bounded() {
     }
 }
 
-/// GFA intersect currently under-classifies sub-faces for overlapping boxes,
-/// producing fewer faces than expected. Tracked as a known limitation —
-/// the fallback pipeline handles this correctly at the `boolean_gfa` level.
+/// GFA intersect produces 2 faces instead of 6 for overlapping boxes.
+/// Root cause: the wire builder produces 1 sub-face per split face (not 4)
+/// when 2 section edges cross the face. The wire builder's angular traversal
+/// can't handle the 4-way junction where two crossing chords meet.
+/// The fallback pipeline handles this correctly at the `boolean_gfa` level.
 #[test]
-#[ignore = "GFA intersect under-classifies sub-faces for overlapping boxes"]
+#[ignore = "wire builder can't split faces with crossing section edges into 4 regions"]
 fn gfa_intersect_overlapping_boxes() {
     let mut topo = Topology::default();
     let a = make_box(&mut topo, [0.0, 0.0, 0.0], [2.0, 2.0, 2.0]);
@@ -297,6 +299,81 @@ fn gfa_intersect_overlapping_boxes() {
         faces.len(),
         6,
         "intersect of overlapping cubes should have 6 faces, got {}",
+        faces.len()
+    );
+}
+
+/// Touching-face cut: same-domain elimination is too aggressive,
+/// producing 2 faces instead of the correct 6 (A unchanged).
+#[test]
+#[ignore = "same-domain elimination too aggressive on touching cut faces"]
+fn gfa_cut_touching_boxes() {
+    let mut topo = Topology::default();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [1.0, 0.0, 0.0], [2.0, 1.0, 1.0]);
+
+    let solid = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, a, b)
+        .expect("cut of touching boxes");
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+    assert_eq!(
+        faces.len(),
+        6,
+        "touching cut should have 6 faces, got {}",
+        faces.len()
+    );
+}
+
+#[test]
+fn gfa_fuse_disjoint_boxes() {
+    let mut topo = Topology::default();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [5.0, 5.0, 5.0], [6.0, 6.0, 6.0]);
+
+    let solid =
+        crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Fuse, a, b).expect("disjoint fuse");
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+    assert_eq!(
+        faces.len(),
+        12,
+        "disjoint fuse should have 12 faces, got {}",
+        faces.len()
+    );
+}
+
+#[test]
+fn gfa_cut_nested_boxes() {
+    let mut topo = Topology::default();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [4.0, 4.0, 4.0]);
+    let b = make_box(&mut topo, [1.0, 1.0, 1.0], [3.0, 3.0, 3.0]);
+
+    // Nested cut: B fully inside A. The containment shortcut in boolean_gfa
+    // returns an error for this case ("B is inside A — result would have a void").
+    // The GFA itself may also produce a result. Either outcome is acceptable.
+    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, a, b);
+    if let Ok(solid) = result {
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        assert!(
+            faces.len() >= 6,
+            "nested cut should have at least 6 faces, got {}",
+            faces.len()
+        );
+    }
+    // Err is acceptable — containment shortcut fires before GFA
+}
+
+#[test]
+fn gfa_fuse_overlapping_boxes_face_count() {
+    let mut topo = Topology::default();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [0.5, 0.5, 0.5], [1.5, 1.5, 1.5]);
+
+    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Fuse, a, b)
+        .expect("fuse of overlapping boxes");
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    assert_eq!(
+        faces.len(),
+        10,
+        "overlapping fuse should have 10 faces, got {}",
         faces.len()
     );
 }

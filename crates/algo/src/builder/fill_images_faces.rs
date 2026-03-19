@@ -47,6 +47,8 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         let fi = arena.face_info(face_id);
         let has_sections = fi.is_some_and(|fi| !fi.pave_blocks_sc.is_empty());
 
+        log::debug!("fill_images_faces: face {face_id:?} has_sections={has_sections}");
+
         if !has_sections {
             // No sections: face passes through unchanged
             sub_faces.push(SubFace {
@@ -60,7 +62,12 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         }
 
         // Build SectionEdge entries from pave block data
-        let sections = build_section_edges(topo, arena, face_id, &section_map);
+        let sections = build_section_edges(topo, arena, face_id, &section_map, tol.linear);
+
+        log::debug!(
+            "fill_images_faces: face {face_id:?} got {} section edges",
+            sections.len()
+        );
 
         if sections.is_empty() {
             sub_faces.push(SubFace {
@@ -85,6 +92,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             &tol,
             None, // PlaneFrame built internally by face_splitter
             info.as_ref(),
+        );
+
+        log::debug!(
+            "fill_images_faces: face {face_id:?} split into {} sub-faces",
+            split_results.len()
         );
 
         if split_results.is_empty() {
@@ -138,6 +150,7 @@ fn build_section_edges(
     arena: &GfaArena,
     face_id: FaceId,
     section_map: &HashMap<FaceId, Vec<PaveBlockId>>,
+    tol: f64,
 ) -> Vec<SectionEdge> {
     use brepkit_math::curves2d::{Curve2D, Line2D};
     use brepkit_math::vec::{Point2, Vec2};
@@ -170,13 +183,25 @@ fn build_section_edges(
             Err(_) => continue,
         };
 
-        let start = match topo.vertex(edge.start()) {
+        let raw_start = match topo.vertex(edge.start()) {
             Ok(v) => v.point(),
             Err(_) => continue,
         };
-        let end = match topo.vertex(edge.end()) {
+        let raw_end = match topo.vertex(edge.end()) {
             Ok(v) => v.point(),
             Err(_) => continue,
+        };
+
+        // Clip straight section edges to the face boundary polygon.
+        // Non-line curves (Circle, Ellipse, NURBS) pass through unclipped —
+        // their endpoints are already bounded by the curve geometry.
+        let (start, end) = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            match clip_line_to_face_boundary(topo, face_id, raw_start, raw_end, tol) {
+                Some(pair) => pair,
+                None => continue,
+            }
+        } else {
+            (raw_start, raw_end)
         };
 
         // Project start/end to UV on this face
@@ -221,6 +246,117 @@ fn build_section_edges(
     }
 
     sections
+}
+
+/// Clip a 3D line segment to a face's boundary polygon.
+///
+/// Collects the outer wire vertices as line segments, then finds where
+/// the section line enters and exits the polygon. Returns the trimmed
+/// `(start, end)` or `None` if the line doesn't cross the face.
+#[allow(clippy::too_many_lines)]
+fn clip_line_to_face_boundary(
+    topo: &Topology,
+    face_id: FaceId,
+    line_start: Point3,
+    line_end: Point3,
+    tol: f64,
+) -> Option<(Point3, Point3)> {
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+
+    // Collect boundary edges as line segments (vertex positions in traversal order)
+    let edges = wire.edges();
+    let mut boundary_segments: Vec<(Point3, Point3)> = Vec::with_capacity(edges.len());
+    for oe in edges {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let sp = topo.vertex(oe.oriented_start(edge)).ok()?.point();
+        let ep = topo.vertex(oe.oriented_end(edge)).ok()?.point();
+        boundary_segments.push((sp, ep));
+    }
+
+    let line_dir = line_end - line_start;
+    let line_len = line_dir.length();
+    if line_len < tol {
+        return None;
+    }
+
+    // Find all intersection parameters (t) of the section line with boundary segments.
+    // The section line is: P(t) = line_start + t * line_dir, t in [0, 1].
+    let mut crossings: Vec<f64> = Vec::new();
+
+    for (seg_start, seg_end) in &boundary_segments {
+        let seg_dir = *seg_end - *seg_start;
+        let seg_len = seg_dir.length();
+
+        // Scaled tolerance for parallel/determinant checks — proportional to
+        // both vector magnitudes, consistent with the project tolerance framework.
+        let parallel_tol = line_len * seg_len * tol;
+
+        // For two coplanar 3D line segments, project to the dominant 2D plane.
+        let normal = line_dir.cross(seg_dir);
+        let ax = normal.x().abs();
+        let ay = normal.y().abs();
+        let az = normal.z().abs();
+
+        // If lines are parallel (cross product near zero), skip
+        if ax < parallel_tol && ay < parallel_tol && az < parallel_tol {
+            continue;
+        }
+
+        let d = *seg_start - line_start;
+
+        let (t, s) = if az >= ax && az >= ay {
+            let det = line_dir.x() * seg_dir.y() - line_dir.y() * seg_dir.x();
+            if det.abs() < parallel_tol {
+                continue;
+            }
+            let t = (d.x() * seg_dir.y() - d.y() * seg_dir.x()) / det;
+            let s = (d.x() * line_dir.y() - d.y() * line_dir.x()) / det;
+            (t, s)
+        } else if ay >= ax {
+            let det = line_dir.x() * seg_dir.z() - line_dir.z() * seg_dir.x();
+            if det.abs() < parallel_tol {
+                continue;
+            }
+            let t = (d.x() * seg_dir.z() - d.z() * seg_dir.x()) / det;
+            let s = (d.x() * line_dir.z() - d.z() * line_dir.x()) / det;
+            (t, s)
+        } else {
+            let det = line_dir.y() * seg_dir.z() - line_dir.z() * seg_dir.y();
+            if det.abs() < parallel_tol {
+                continue;
+            }
+            let t = (d.y() * seg_dir.z() - d.z() * seg_dir.y()) / det;
+            let s = (d.y() * line_dir.z() - d.z() * line_dir.y()) / det;
+            (t, s)
+        };
+
+        // Boundary segment parameter must be within [0, 1] (with tolerance)
+        let s_tol = tol / seg_dir.length().max(tol);
+        if s >= -s_tol && s <= 1.0 + s_tol {
+            crossings.push(t);
+        }
+    }
+
+    if crossings.len() < 2 {
+        return None;
+    }
+
+    crossings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Take the outermost pair of crossings as entry/exit
+    let t0 = crossings[0].clamp(0.0, 1.0);
+    let t1 = crossings[crossings.len() - 1].clamp(0.0, 1.0);
+
+    let t_tol = tol / line_len;
+    if (t1 - t0).abs() < t_tol {
+        return None;
+    }
+
+    let clipped_start = line_start + line_dir * t0;
+    let clipped_end = line_start + line_dir * t1;
+
+    Some((clipped_start, clipped_end))
 }
 
 /// Build `SurfaceInfo` for a face (periodicity flags).
