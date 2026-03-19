@@ -29,6 +29,17 @@ pub fn perform(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
+    // AABB pre-filter: skip if solids are disjoint
+    let bbox_a = crate::classifier::compute_solid_bbox(topo, solid_a)?;
+    let bbox_b = crate::classifier::compute_solid_bbox(topo, solid_b)?;
+    if !bbox_a
+        .expanded(tol.linear)
+        .intersects(bbox_b.expanded(tol.linear))
+    {
+        log::debug!("VE: solids are disjoint, skipping");
+        return Ok(());
+    }
+
     let verts_a = brepkit_topology::explorer::solid_vertices(topo, solid_a)?;
     let verts_b = brepkit_topology::explorer::solid_vertices(topo, solid_b)?;
     let edges_a = brepkit_topology::explorer::solid_edges(topo, solid_a)?;

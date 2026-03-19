@@ -32,20 +32,10 @@ pub use types::{BooleanOp, BooleanOptions, FaceSpec};
 // GFA pipeline entry point
 // ---------------------------------------------------------------------------
 
-/// Boolean via the GFA pipeline. Falls back to the existing pipeline on error.
-///
-/// # Errors
-///
-/// Returns an error only if both the GFA pipeline and the fallback fail.
-/// Maximum combined face count for GFA path. Above this, skip directly
-/// to the existing pipeline to avoid O(n²) pave filler phases.
-const GFA_MAX_FACES: usize = 200;
-
 /// Boolean via the GFA pipeline, with fallback to the existing pipeline.
 ///
-/// Skips the GFA for solids with more than [`GFA_MAX_FACES`] combined
-/// faces (sequential boolean results are too complex for the current
-/// O(n²) pave filler).
+/// Tries the GFA first; if it produces an empty result or fails,
+/// falls back to the existing pipeline.
 ///
 /// # Errors
 ///
@@ -56,16 +46,12 @@ pub fn boolean_gfa(
     a: SolidId,
     b: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
-    // Guard: skip GFA for complex solids (sequential boolean results)
     let faces_a = brepkit_topology::explorer::solid_faces(topo, a)
         .map(|f| f.len())
         .unwrap_or(0);
     let faces_b = brepkit_topology::explorer::solid_faces(topo, b)
         .map(|f| f.len())
         .unwrap_or(0);
-    if faces_a + faces_b > GFA_MAX_FACES {
-        return boolean(topo, op, a, b);
-    }
 
     let algo_op = match op {
         BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
@@ -76,8 +62,19 @@ pub fn boolean_gfa(
     let gfa_start = timer_now();
     match brepkit_algo::gfa::boolean(topo, algo_op, a, b) {
         Ok(result) => {
+            // Validate: result must have faces
+            let result_faces = brepkit_topology::explorer::solid_faces(topo, result)
+                .map(|f| f.len())
+                .unwrap_or(0);
+            if result_faces == 0 {
+                log::warn!(
+                    "GFA produced empty solid in {:.1}ms, falling back",
+                    timer_elapsed_ms(gfa_start)
+                );
+                return boolean(topo, op, a, b);
+            }
             log::info!(
-                "GFA boolean succeeded in {:.1}ms (faces: {faces_a}+{faces_b})",
+                "GFA boolean succeeded in {:.1}ms (faces: {faces_a}+{faces_b} → {result_faces})",
                 timer_elapsed_ms(gfa_start)
             );
             Ok(result)

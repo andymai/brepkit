@@ -10,6 +10,7 @@ mod ray_cast;
 
 pub use analytic::classify_analytic;
 pub use ray_cast::classify_ray_cast;
+pub use ray_cast::compute_solid_bbox;
 
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
