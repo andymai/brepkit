@@ -1490,25 +1490,6 @@ pub(super) fn analytic_boolean(
         state.set_same_domain(fa, fb);
     }
 
-    // Populate in_parts: classify which solid each fragment belongs IN.
-    //   Source::A + Outside → in solid A
-    //   Source::B + Outside → in solid B
-    //   Source::A + Inside  → in solid B
-    //   Source::B + Inside  → in solid A
-    //   CoplanarSame/CoplanarOpposite → both
-    for (idx, (frag, &class)) in fragments.iter().zip(classes.iter()).enumerate() {
-        match (frag.source, class) {
-            (Source::A, FaceClass::Outside) => state.add_in_part(a, idx),
-            (Source::B, FaceClass::Outside) => state.add_in_part(b, idx),
-            (Source::A, FaceClass::Inside) => state.add_in_part(b, idx),
-            (Source::B, FaceClass::Inside) => state.add_in_part(a, idx),
-            (_, FaceClass::CoplanarSame | FaceClass::CoplanarOpposite) => {
-                state.add_in_part(a, idx);
-                state.add_in_part(b, idx);
-            }
-        }
-    }
-
     // ── Selection + Assembly ─────────────────────────────────────────────
     let _t_asm = timer_now();
 
@@ -1827,6 +1808,23 @@ pub(super) fn analytic_boolean(
         if let Some(src_fid) = frag.source_face_id {
             state.add_image(src_fid, face);
         }
+
+        // Populate in_parts with output FaceIds (not fragment indices).
+        //   Source::A + Outside → in solid A
+        //   Source::B + Outside → in solid B
+        //   Source::A + Inside  → in solid B
+        //   Source::B + Inside  → in solid A
+        //   CoplanarSame/CoplanarOpposite → both
+        match (frag.source, class) {
+            (Source::A, FaceClass::Outside) => state.add_in_part(a, face),
+            (Source::B, FaceClass::Outside) => state.add_in_part(b, face),
+            (Source::A, FaceClass::Inside) => state.add_in_part(b, face),
+            (Source::B, FaceClass::Inside) => state.add_in_part(a, face),
+            (_, FaceClass::CoplanarSame | FaceClass::CoplanarOpposite) => {
+                state.add_in_part(a, face);
+                state.add_in_part(b, face);
+            }
+        }
     }
 
     log::debug!(
@@ -1923,7 +1921,6 @@ pub(super) fn analytic_boolean(
 ///
 /// Falls back to `build_manifold_shells` on all faces if grouping
 /// doesn't produce valid Euler topology.
-#[allow(clippy::too_many_lines)]
 fn build_solid_from_state(
     topo: &mut Topology,
     face_ids_out: &[FaceId],
@@ -1934,18 +1931,17 @@ fn build_solid_from_state(
 ) -> Result<SolidId, crate::OperationsError> {
     use super::assembly::build_manifold_shells;
 
-    // For Fuse, try grouping faces by in_parts membership.
-    // Outer shell: faces that are IN solid A (A-Outside + B-Inside)
-    //   combined with faces IN solid B (B-Outside + A-Inside).
-    // This is only beneficial when there are inner shells (shelled solids).
+    // TODO: use in_parts grouping to partition faces into separate shells
+    // for Fuse operations with inner cavities (e.g. shelled box + lip).
+    // Currently logs diagnostics only; the actual partitioning logic will
+    // be added once the D4 gridfinity end-to-end test validates the approach.
     if op == BooleanOp::Fuse {
-        let faces_in_a = state.fragments_in_solid(a);
-        let faces_in_b = state.fragments_in_solid(b);
+        let faces_in_a = state.faces_in_solid(a);
+        let faces_in_b = state.faces_in_solid(b);
 
-        // Only attempt grouping if we have faces in both solids.
         if let (Some(in_a), Some(in_b)) = (faces_in_a, faces_in_b) {
             log::debug!(
-                "[boolean] in_parts: {} fragments in A, {} in B",
+                "[boolean] in_parts: {} faces in A, {} in B",
                 in_a.len(),
                 in_b.len()
             );

@@ -17,18 +17,20 @@ use brepkit_topology::solid::SolidId;
 ///
 /// - `images`: input face → output face(s) it was split into
 /// - `origins`: output face → input face(s) it came from
-/// - `in_parts`: solid → indices of fragments classified as IN that solid
-/// - `same_domain`: face → its coplanar counterpart on the other operand
+/// - `in_parts`: solid → output `FaceId`s classified as IN that solid
+/// - `same_domain`: face → coplanar counterpart(s) on the other operand
 #[allow(dead_code)] // API methods used progressively as more pipeline stages consume state
 pub(super) struct BooleanState {
     /// Input face → output faces produced from it.
     images: HashMap<FaceId, Vec<FaceId>>,
     /// Output face → input faces it originated from.
     origins: HashMap<FaceId, Vec<FaceId>>,
-    /// Solid → fragment indices classified as being IN that solid.
-    in_parts: HashMap<SolidId, Vec<usize>>,
-    /// Face → same-domain (coplanar) counterpart on the other operand.
-    same_domain: HashMap<FaceId, FaceId>,
+    /// Solid → output `FaceId`s classified as being IN that solid.
+    in_parts: HashMap<SolidId, Vec<FaceId>>,
+    /// Face → same-domain (coplanar) counterparts on the other operand.
+    /// Uses `Vec` because one face can be coplanar with multiple faces
+    /// (e.g. a large planar cap overlapping two smaller faces).
+    same_domain: HashMap<FaceId, Vec<FaceId>>,
 }
 
 #[allow(dead_code)]
@@ -61,15 +63,15 @@ impl BooleanState {
         self.origins.get(&output).map(Vec::as_slice)
     }
 
-    // ── In-parts (solid → fragment indices) ──────────────────────────
+    // ── In-parts (solid → output face IDs) ───────────────────────────
 
-    /// Record that fragment at `index` is classified IN `solid`.
-    pub(super) fn add_in_part(&mut self, solid: SolidId, index: usize) {
-        self.in_parts.entry(solid).or_default().push(index);
+    /// Record that output `face` is classified IN `solid`.
+    pub(super) fn add_in_part(&mut self, solid: SolidId, face: FaceId) {
+        self.in_parts.entry(solid).or_default().push(face);
     }
 
-    /// Returns fragment indices classified as IN `solid`.
-    pub(super) fn fragments_in_solid(&self, solid: SolidId) -> Option<&[usize]> {
+    /// Returns output `FaceId`s classified as IN `solid`.
+    pub(super) fn faces_in_solid(&self, solid: SolidId) -> Option<&[FaceId]> {
         self.in_parts.get(&solid).map(Vec::as_slice)
     }
 
@@ -77,12 +79,12 @@ impl BooleanState {
 
     /// Record that `face_a` and `face_b` are coplanar counterparts.
     pub(super) fn set_same_domain(&mut self, face_a: FaceId, face_b: FaceId) {
-        self.same_domain.insert(face_a, face_b);
-        self.same_domain.insert(face_b, face_a);
+        self.same_domain.entry(face_a).or_default().push(face_b);
+        self.same_domain.entry(face_b).or_default().push(face_a);
     }
 
-    /// Returns the same-domain counterpart of `face`, if any.
-    pub(super) fn same_domain_of(&self, face: FaceId) -> Option<FaceId> {
-        self.same_domain.get(&face).copied()
+    /// Returns the same-domain counterparts of `face`, if any.
+    pub(super) fn same_domain_of(&self, face: FaceId) -> Option<&[FaceId]> {
+        self.same_domain.get(&face).map(Vec::as_slice)
     }
 }
