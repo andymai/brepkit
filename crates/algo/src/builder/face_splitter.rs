@@ -106,6 +106,7 @@ pub fn split_face_2d(
             reversed,
             parent: face_id,
             rank,
+            precomputed_interior: None,
         }];
     }
 
@@ -251,6 +252,12 @@ pub fn split_face_2d(
         boundary_edges
     };
 
+    let boundary_edges_backup = if is_plane && sections.len() >= 2 {
+        Some(boundary_edges.clone())
+    } else {
+        None
+    };
+
     // Convert section edges to OrientedPCurveEdge (both orientations).
     let mut all_edges = boundary_edges;
     for section in sections {
@@ -332,6 +339,20 @@ pub fn split_face_2d(
     // Build wire loops via angular-sorting traversal.
     let loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
 
+    // Fallback: wire builder produced only 1 loop despite having 2+ section
+    // edges that cross in the face interior. Use direct geometric quadrant
+    // construction. The wire builder struggles with 4-way junctions when
+    // boundary edges have inconsistent winding.
+    if loops.len() <= 1 && sections.len() >= 2 && is_plane {
+        if let Some(ref boundary) = boundary_edges_backup {
+            if let Some(result) = try_split_crossing_plane_face(
+                &surface, boundary, sections, rank, reversed, face_id, frame, tol,
+            ) {
+                return result;
+            }
+        }
+    }
+
     // Classify each loop as outer (positive area) or hole (negative).
     // For loops with curved edges, sample intermediate UV points to get
     // an accurate area -- using only start_uv gives degenerate polygons
@@ -407,6 +428,7 @@ pub fn split_face_2d(
             reversed,
             parent: face_id,
             rank,
+            precomputed_interior: None,
         });
     }
 
@@ -1187,6 +1209,7 @@ fn split_noseam_face_direct(
             reversed,
             parent: face_id,
             rank,
+            precomputed_interior: None,
         }]
     };
 
@@ -1273,6 +1296,7 @@ fn split_noseam_face_direct(
             reversed,
             parent: face_id,
             rank,
+            precomputed_interior: None,
         },
         SplitSubFace {
             surface: surface.clone(),
@@ -1281,6 +1305,7 @@ fn split_noseam_face_direct(
             reversed,
             parent: face_id,
             rank,
+            precomputed_interior: None,
         },
     ]
 }
@@ -1417,6 +1442,7 @@ fn split_face_with_internal_loops(
             reversed,
             parent: face_id,
             rank,
+            precomputed_interior: None,
         });
 
         // Build reversed loop for the outside sub-face's hole.
@@ -1449,7 +1475,274 @@ fn split_face_with_internal_loops(
         reversed,
         parent: face_id,
         rank,
+        precomputed_interior: None,
     });
 
     result
+}
+
+/// Reorder and reverse boundary edges to form a closed chain.
+#[allow(clippy::expect_used)]
+fn chain_boundary_edges(edges: Vec<OrientedPCurveEdge>, tol: f64) -> Vec<OrientedPCurveEdge> {
+    if edges.len() < 2 {
+        return edges;
+    }
+    let mut remaining: Vec<Option<OrientedPCurveEdge>> = edges.into_iter().map(Some).collect();
+    let mut chain = Vec::with_capacity(remaining.len());
+    chain.push(remaining[0].take().expect("first edge"));
+    for _ in 0..remaining.len() {
+        let tail = chain.last().expect("non-empty").end_3d;
+        let mut best_idx = None;
+        let mut best_reversed = false;
+        let mut best_dist = f64::MAX;
+        for (i, opt) in remaining.iter().enumerate() {
+            let Some(e) = opt else { continue };
+            let d_fwd = (tail - e.start_3d).length();
+            if d_fwd < best_dist {
+                best_dist = d_fwd;
+                best_idx = Some(i);
+                best_reversed = false;
+            }
+            let d_rev = (tail - e.end_3d).length();
+            if d_rev < best_dist {
+                best_dist = d_rev;
+                best_idx = Some(i);
+                best_reversed = true;
+            }
+        }
+        if best_dist > tol * 100.0 {
+            break;
+        }
+        if let Some(idx) = best_idx {
+            let mut e = remaining[idx].take().expect("edge");
+            if best_reversed {
+                std::mem::swap(&mut e.start_uv, &mut e.end_uv);
+                std::mem::swap(&mut e.start_3d, &mut e.end_3d);
+                e.forward = !e.forward;
+            }
+            chain.push(e);
+        }
+    }
+    for e in remaining.into_iter().flatten() {
+        chain.push(e);
+    }
+    chain
+}
+
+/// Split a plane face with crossing section edges into 4 quadrant sub-faces.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+fn try_split_crossing_plane_face(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    sections: &[SectionEdge],
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    frame: &PlaneFrame,
+    tol: &brepkit_math::tolerance::Tolerance,
+) -> Option<Vec<SplitSubFace>> {
+    let cross_3d;
+    let section_endpoints: Vec<Point3>;
+
+    if sections.len() == 2 {
+        let (s0, s1) = (&sections[0], &sections[1]);
+        let d0 = s0.end - s0.start;
+        let d1 = s1.end - s1.start;
+        if d0.length() < tol.linear || d1.length() < tol.linear {
+            return None;
+        }
+        let normal = d0.cross(d1);
+        let ptol = d0.length() * d1.length() * tol.linear;
+        if normal.x().abs() < ptol && normal.y().abs() < ptol && normal.z().abs() < ptol {
+            return None;
+        }
+        let d = s1.start - s0.start;
+        let ax = normal.x().abs();
+        let ay = normal.y().abs();
+        let az = normal.z().abs();
+        #[allow(clippy::similar_names)]
+        let t0 = if az >= ax && az >= ay {
+            let det = d0.x().mul_add(d1.y(), -(d0.y() * d1.x()));
+            if det.abs() < ptol {
+                return None;
+            }
+            d.x().mul_add(d1.y(), -(d.y() * d1.x())) / det
+        } else if ay >= ax {
+            let det = d0.x().mul_add(d1.z(), -(d0.z() * d1.x()));
+            if det.abs() < ptol {
+                return None;
+            }
+            d.x().mul_add(d1.z(), -(d.z() * d1.x())) / det
+        } else {
+            let det = d0.y().mul_add(d1.z(), -(d0.z() * d1.y()));
+            if det.abs() < ptol {
+                return None;
+            }
+            d.y().mul_add(d1.z(), -(d.z() * d1.y())) / det
+        };
+        if !(0.01..=0.99).contains(&t0) {
+            return None;
+        }
+        cross_3d = s0.start + d0 * t0;
+        section_endpoints = vec![s0.start, s0.end, s1.start, s1.end];
+    } else if sections.len() == 4 {
+        let all_pts: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
+        let mut common = None;
+        for &pt in &all_pts {
+            let count = all_pts
+                .iter()
+                .filter(|&&o| (o - pt).length() < tol.linear * 10.0)
+                .count();
+            if count >= 4 {
+                common = Some(pt);
+                break;
+            }
+        }
+        let cp = common?;
+        cross_3d = cp;
+        section_endpoints = all_pts
+            .into_iter()
+            .filter(|&pt| (pt - cp).length() > tol.linear * 10.0)
+            .collect();
+        if section_endpoints.len() != 4 {
+            return None;
+        }
+        let dirs: Vec<_> = sections
+            .iter()
+            .map(|s| {
+                let other = if (s.start - cp).length() < tol.linear * 10.0 {
+                    s.end
+                } else {
+                    s.start
+                };
+                let d = other - cp;
+                let l = d.length();
+                if l > 1e-12 { d * (1.0 / l) } else { d }
+            })
+            .collect();
+        let mut matched = [false; 4];
+        let mut groups = 0u32;
+        for i in 0..4 {
+            if matched[i] {
+                continue;
+            }
+            for j in (i + 1)..4 {
+                if !matched[j] && dirs[i].dot(dirs[j]) < -0.9 {
+                    matched[i] = true;
+                    matched[j] = true;
+                    groups += 1;
+                    break;
+                }
+            }
+        }
+        if groups != 2 {
+            return None;
+        }
+    } else {
+        return None;
+    }
+
+    // Verify the crossing point is in the face INTERIOR (not on a boundary edge).
+    // For fuse, sections meet at a boundary vertex — splitting would be wrong.
+    let on_boundary = boundary_edges.iter().any(|e| {
+        let to_pt = cross_3d - e.start_3d;
+        let edge_dir = e.end_3d - e.start_3d;
+        let edge_len = edge_dir.length();
+        if edge_len < tol.linear {
+            return (cross_3d - e.start_3d).length() < tol.linear;
+        }
+        let t = to_pt.dot(edge_dir) / (edge_len * edge_len);
+        if !(-0.01..=1.01).contains(&t) {
+            return false;
+        }
+        let closest = e.start_3d + edge_dir * t.clamp(0.0, 1.0);
+        (cross_3d - closest).length() < tol.linear * 10.0
+    });
+    if on_boundary {
+        return None;
+    }
+
+    let split_boundary = split_boundary_edges_at_3d_points(
+        boundary_edges.to_vec(),
+        &section_endpoints,
+        Some(frame),
+        surface,
+        tol.linear,
+    );
+    let split_boundary = chain_boundary_edges(split_boundary, tol.linear);
+    let find_idx = |pt: Point3| -> Option<usize> {
+        split_boundary
+            .iter()
+            .position(|e| (e.start_3d - pt).length() < tol.linear * 100.0)
+    };
+    let mut section_indices = Vec::with_capacity(4);
+    for &pt in &section_endpoints {
+        section_indices.push(find_idx(pt)?);
+    }
+    section_indices.sort_unstable();
+    section_indices.dedup();
+    if section_indices.len() != 4 {
+        return None;
+    }
+
+    let n = split_boundary.len();
+    let make_edge = |start: Point3, end: Point3| -> OrientedPCurveEdge {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::vec::Vec2;
+        let su = frame.project(start);
+        let eu = frame.project(end);
+        let dir = eu - su;
+        let len = dir.length();
+        let direction = if len > 1e-12 {
+            Vec2::new(dir.x() / len, dir.y() / len)
+        } else {
+            Vec2::new(1.0, 0.0)
+        };
+        #[allow(clippy::expect_used)]
+        let pcurve = Curve2D::Line(
+            Line2D::new(su, direction)
+                .or_else(|_| Line2D::new(su, Vec2::new(1.0, 0.0)))
+                .expect("unit direction"),
+        );
+        OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve,
+            start_uv: su,
+            end_uv: eu,
+            start_3d: start,
+            end_3d: end,
+            forward: true,
+        }
+    };
+
+    let mut result = Vec::new();
+    for qi in 0..4 {
+        let arc_start = section_indices[qi];
+        let arc_end = section_indices[(qi + 1) % 4];
+        let mut wire = Vec::new();
+        let mut idx = arc_start;
+        loop {
+            wire.push(split_boundary[idx].clone());
+            idx = (idx + 1) % n;
+            if idx == arc_end || wire.len() > n {
+                break;
+            }
+        }
+        wire.push(make_edge(split_boundary[arc_end].start_3d, cross_3d));
+        wire.push(make_edge(cross_3d, split_boundary[arc_start].start_3d));
+        let wn = wire.len() as f64;
+        let sum = wire.iter().fold(Point3::new(0.0, 0.0, 0.0), |acc, e| {
+            acc + (e.start_3d - Point3::new(0.0, 0.0, 0.0))
+        });
+        result.push(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: wire,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(Point3::new(sum.x() / wn, sum.y() / wn, sum.z() / wn)),
+        });
+    }
+    Some(result)
 }

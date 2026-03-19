@@ -106,6 +106,10 @@ pub struct SplitSubFace {
     pub parent: FaceId,
     /// Which solid this face came from.
     pub rank: Rank,
+    /// Pre-computed interior point (3D) for classification.
+    /// When set, `fill_images_faces` uses this instead of computing one
+    /// from the UV polygon centroid.
+    pub precomputed_interior: Option<Point3>,
 }
 
 // ---------------------------------------------------------------------------
