@@ -3247,22 +3247,28 @@ fn d4_shelled_box_fuse_lip() {
     // Euler=3 for shelled box: 11 faces (5 outer + 5 inner + 1 bottom with hole)
     // Adjusted: 3 - 1 inner_loop = 2. ✓
 
-    // Lip: outer box minus inner box at z=4..7 (overlaps top of shelled box)
-    // make_box creates centered at origin, so use transform to position.
+    // Lip: outer frame minus inner frame, overlapping the box top at z=2.5.
+    // make_box(w,h,d) creates centered at origin: x∈[-w/2,w/2], etc.
+    // Box is z∈[-2.5, 2.5]. Lip should start at z=1 (below box top) to z=4.
+    // Translate lip center from z=0 to z=2.5 so lip goes z=[1.0, 4.0].
     let translate = |topo: &mut Topology, solid: SolidId, dx: f64, dy: f64, dz: f64| {
         let mat = brepkit_math::mat::Mat4::translation(dx, dy, dz);
         crate::transform::transform_solid(topo, solid, &mat)
     };
-    let outer = crate::primitives::make_box(&mut topo, 11.0, 11.0, 3.0).unwrap();
-    translate(&mut topo, outer, 0.0, 0.0, 5.5).unwrap();
+    let outer = crate::primitives::make_box(&mut topo, 12.0, 12.0, 3.0).unwrap();
+    translate(&mut topo, outer, 0.0, 0.0, 2.5).unwrap();
     let inner = crate::primitives::make_box(&mut topo, 8.0, 8.0, 3.0).unwrap();
-    translate(&mut topo, inner, 0.0, 0.0, 5.5).unwrap();
+    translate(&mut topo, inner, 0.0, 0.0, 2.5).unwrap();
     let lip = boolean(&mut topo, BooleanOp::Cut, outer, inner).unwrap();
     let (lf, le, lv) = brepkit_topology::explorer::solid_entity_counts(&topo, lip).unwrap();
     let l_euler = lv as i64 - le as i64 + lf as i64;
     eprintln!("lip: F={lf} E={le} V={lv} euler={l_euler}");
 
-    // Fuse shelled box + lip
+    // Copy inputs before fuse — earlier boolean operations (lip CUT) modify
+    // wires in-place via remove_degenerate_edges, which can corrupt entities
+    // shared between the CUT result and its inputs.
+    let shelled = crate::copy::copy_solid(&mut topo, shelled).unwrap();
+    let lip = crate::copy::copy_solid(&mut topo, lip).unwrap();
     let result = boolean(&mut topo, BooleanOp::Fuse, shelled, lip);
     match result {
         Ok(fused) => {
