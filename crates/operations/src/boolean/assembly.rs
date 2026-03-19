@@ -1936,10 +1936,19 @@ fn select_angular_neighbor(
         (start_pos.z() + end_pos.z()) * 0.5,
     );
 
-    // Current face's binormal at the edge.
+    // Current face's binormal at the edge — use pcurve if available.
     let current_face = topo.face(face_ids[current_fi])?;
     let normal1 = face_normal_at_point(current_face, mid);
-    let binormal1 = normal1.cross(tangent);
+    let binormal1 = pcurve_binormal(
+        topo,
+        edge_id,
+        face_ids[current_fi],
+        current_face,
+        mid,
+        tangent,
+        normal1,
+        current_fwd,
+    );
     let ref_dir = normal1.cross(binormal1);
 
     // For each candidate, compute angle and select tightest.
@@ -1948,14 +1957,22 @@ fn select_angular_neighbor(
 
     for &(cand_fi, cand_fwd) in candidates {
         let cand_face = topo.face(face_ids[cand_fi])?;
-        // Candidate's tangent may be reversed.
         let tangent2 = if cand_fwd == current_fwd {
             tangent
         } else {
             -tangent
         };
         let normal2 = face_normal_at_point(cand_face, mid);
-        let binormal2 = normal2.cross(tangent2);
+        let binormal2 = pcurve_binormal(
+            topo,
+            edge_id,
+            face_ids[cand_fi],
+            cand_face,
+            mid,
+            tangent2,
+            normal2,
+            cand_fwd,
+        );
 
         // Signed angle from binormal1 to binormal2 around ref_dir.
         let cross = binormal1.cross(binormal2);
@@ -1998,4 +2015,159 @@ fn face_normal_at_point(face: &Face, point: Point3) -> Vec3 {
     } else {
         raw_normal
     }
+}
+
+/// Register pcurves for all edges on their faces.
+///
+/// For each face, iterates its outer and inner wires, and for each edge,
+/// computes the 2D pcurve (projection of the 3D edge curve into the face's
+/// surface parameter space) and stores it in the topology's pcurve registry.
+///
+/// This enables `build_manifold_shells` to look up pcurves for validated
+/// binormal computation on curved surfaces.
+pub(super) fn register_pcurves(
+    topo: &mut Topology,
+    face_ids: &[FaceId],
+) -> Result<(), crate::OperationsError> {
+    use super::pcurve_compute::compute_pcurve_on_surface;
+    use brepkit_topology::pcurve::PCurve;
+
+    for &fid in face_ids {
+        let face = topo.face(fid)?;
+        let surface = face.surface().clone();
+
+        // Collect wire points for PlaneFrame construction (plane faces only).
+        let wire_pts: Vec<Point3> = {
+            let wire = topo.wire(face.outer_wire())?;
+            wire.edges()
+                .iter()
+                .filter_map(|oe| {
+                    topo.edge(oe.edge()).ok().and_then(|e| {
+                        topo.vertex(e.start())
+                            .ok()
+                            .map(brepkit_topology::vertex::Vertex::point)
+                    })
+                })
+                .collect()
+        };
+
+        // Iterate all wires (outer + inner).
+        let wire_ids: Vec<_> = {
+            let f = topo.face(fid)?;
+            std::iter::once(f.outer_wire())
+                .chain(f.inner_wires().iter().copied())
+                .collect()
+        };
+
+        for wid in wire_ids {
+            let wire = topo.wire(wid)?;
+            let edges: Vec<_> = wire.edges().to_vec();
+            for oe in &edges {
+                let eid = oe.edge();
+                // Skip if already registered.
+                if topo.pcurves().contains(eid, fid) {
+                    continue;
+                }
+
+                let edge = topo.edge(eid)?;
+                let start = topo.vertex(edge.start())?.point();
+                let end = topo.vertex(edge.end())?.point();
+                let curve_3d = edge.curve();
+
+                let pcurve_2d =
+                    compute_pcurve_on_surface(curve_3d, start, end, &surface, &wire_pts, None);
+
+                // Parameter range: [0, 1] for the pcurve.
+                let pc = PCurve::new(pcurve_2d, 0.0, 1.0);
+                topo.pcurves_mut().set(eid, fid, pc);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Compute the binormal direction using a pcurve from the registry.
+///
+/// Looks up the pcurve for (edge, face), evaluates the 2D tangent at the
+/// midpoint, rotates 90° to get the inward direction, steps in UV space,
+/// evaluates the surface at the stepped UV, and uses the 3D direction
+/// from the edge point to the stepped point as the binormal.
+///
+/// Falls back to the simple `normal.cross(tangent)` if no pcurve is found.
+#[allow(clippy::too_many_arguments)]
+fn pcurve_binormal(
+    topo: &Topology,
+    edge_id: EdgeId,
+    face_id: FaceId,
+    face: &Face,
+    edge_point: Point3,
+    tangent_3d: Vec3,
+    normal: Vec3,
+    is_edge_forward: bool,
+) -> Vec3 {
+    let initial = normal.cross(tangent_3d);
+    let initial_len = initial.length();
+    if initial_len < 1e-12 {
+        return initial;
+    }
+    let initial_dir = initial * (1.0 / initial_len);
+
+    // For plane faces, the initial estimate is exact.
+    if matches!(face.surface(), FaceSurface::Plane { .. }) {
+        return initial_dir;
+    }
+
+    // Look up the pcurve for this (edge, face).
+    let Some(pcurve) = topo.pcurves().get(edge_id, face_id) else {
+        return initial_dir;
+    };
+
+    // Evaluate the pcurve at the midpoint to get the 2D tangent.
+    let t_mid = 0.5 * (pcurve.t_start() + pcurve.t_end());
+    let uv_mid = pcurve.evaluate(t_mid);
+
+    // Compute 2D tangent by finite difference.
+    let dt = 1e-5;
+    let t_near = t_mid + dt;
+    let uv_near = pcurve.evaluate(t_near);
+    let du = uv_near.x() - uv_mid.x();
+    let dv = uv_near.y() - uv_mid.y();
+    let uv_len = (du * du + dv * dv).sqrt();
+    if uv_len < 1e-15 {
+        return initial_dir;
+    }
+
+    // Inward 2D normal: rotate tangent 90° CCW → (-dv, du).
+    // Flip based on edge/face orientation (matching PointNearEdge).
+    let mut inward_u = -dv / uv_len;
+    let mut inward_v = du / uv_len;
+    if !is_edge_forward {
+        inward_u = -inward_u;
+        inward_v = -inward_v;
+    }
+    if face.is_reversed() {
+        inward_u = -inward_u;
+        inward_v = -inward_v;
+    }
+
+    // Step in UV space into the face interior.
+    let uv_step = 1e-4;
+    let u_inside = uv_mid.x() + inward_u * uv_step;
+    let v_inside = uv_mid.y() + inward_v * uv_step;
+
+    // Evaluate surface at the interior UV point.
+    let Some(pt_inside) = face.surface().evaluate(u_inside, v_inside) else {
+        return initial_dir;
+    };
+
+    // Binormal: direction from edge point to interior point,
+    // with tangent component removed.
+    let dir = pt_inside - edge_point;
+    let along = dir.dot(tangent_3d);
+    let perp = dir - tangent_3d * along;
+    let perp_len = perp.length();
+    if perp_len < 1e-15 {
+        return initial_dir;
+    }
+    perp * (1.0 / perp_len)
 }
