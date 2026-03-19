@@ -14,10 +14,16 @@
 //! [`GfaArena`]: crate::ds::GfaArena
 
 pub mod assemble;
+pub mod classify_2d;
 pub mod face_class;
+pub mod face_splitter;
 pub mod fill_images;
 pub mod fill_images_faces;
+pub mod pcurve_compute;
+pub mod plane_frame;
 pub mod same_domain;
+pub mod split_types;
+pub mod wire_builder;
 
 pub use face_class::FaceClass;
 
@@ -175,8 +181,13 @@ impl Builder {
         );
 
         // Step 2: face images (sub-faces)
-        self.sub_faces =
-            fill_images_faces::fill_images_faces(&self.arena, &edge_images, &self.face_ranks);
+        self.sub_faces = fill_images_faces::fill_images_faces(
+            &self.topo,
+            &self.arena,
+            &edge_images,
+            &self.face_ranks,
+            self.tol,
+        );
         log::debug!("Builder: {} sub-faces created", self.sub_faces.len());
 
         // Step 3: same-domain detection

@@ -36,6 +36,7 @@ impl FaceInfo {
 
     /// Returns true if this face has any intersection data.
     #[must_use]
+    #[allow(dead_code)]
     pub fn has_intersections(&self) -> bool {
         !self.pave_blocks_in.is_empty()
             || !self.pave_blocks_sc.is_empty()
