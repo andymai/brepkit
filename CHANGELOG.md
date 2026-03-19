@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.15.0](https://github.com/andymai/brepkit/compare/v2.14.0...v2.15.0) (2026-03-19)
+
+
+### Features
+
+* **algo:** GFA boolean engine skeleton — brepkit-algo crate ([#301](https://github.com/andymai/brepkit/issues/301)) ([ca54aeb](https://github.com/andymai/brepkit/commit/ca54aebc5d68ccf54f5f0ce8d4db954302b8fec3))
+* **algo:** phase 6+7 — classifiers, operations integration, cleanup ([#302](https://github.com/andymai/brepkit/issues/302)) ([38b8485](https://github.com/andymai/brepkit/commit/38b8485b826d28b8acb46b21f561814c6b2942c7))
+
 ## [2.14.0](https://github.com/andymai/brepkit/compare/v2.13.0...v2.14.0) (2026-03-18)
 
 
