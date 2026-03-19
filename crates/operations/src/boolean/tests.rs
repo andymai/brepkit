@@ -3118,3 +3118,71 @@ fn fuse_shelled_box_with_socket_loft() {
     );
     assert!(is_manifold, "fused solid should be manifold");
 }
+
+// ── GFA integration tests for analytic surfaces ────────────────────
+
+#[test]
+fn gfa_box_sphere_cut() {
+    let mut topo = Topology::default();
+    let box_solid = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    let sphere = crate::primitives::make_sphere(&mut topo, 0.5, 16).unwrap();
+
+    let result = boolean_gfa(&mut topo, BooleanOp::Cut, box_solid, sphere);
+    assert!(
+        result.is_ok(),
+        "GFA box-sphere cut should succeed: {result:?}"
+    );
+
+    let solid = result.unwrap();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+    // Sphere (r=0.5) is fully inside box (2x2x2), so cut produces a
+    // void — the result may be the original box (6 faces) or have
+    // additional interior faces depending on the pipeline path.
+    assert!(
+        (6..=50).contains(&faces.len()),
+        "box-sphere cut should have 6-50 faces, got {}",
+        faces.len()
+    );
+}
+
+#[test]
+fn gfa_box_cylinder_fuse() {
+    let mut topo = Topology::default();
+    let box_solid = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    let cyl = crate::primitives::make_cylinder(&mut topo, 0.5, 2.0).unwrap();
+
+    let result = boolean_gfa(&mut topo, BooleanOp::Fuse, box_solid, cyl);
+    assert!(
+        result.is_ok(),
+        "GFA box-cylinder fuse should succeed: {result:?}"
+    );
+
+    let solid = result.unwrap();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+    assert!(
+        (7..=50).contains(&faces.len()),
+        "box-cylinder fuse should have 7-50 faces, got {}",
+        faces.len()
+    );
+}
+
+#[test]
+fn gfa_box_cone_intersect() {
+    let mut topo = Topology::default();
+    let box_solid = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    let cone = crate::primitives::make_cone(&mut topo, 1.0, 0.0, 2.0).unwrap();
+
+    let result = boolean_gfa(&mut topo, BooleanOp::Intersect, box_solid, cone);
+    assert!(
+        result.is_ok(),
+        "GFA box-cone intersect should succeed: {result:?}"
+    );
+
+    let solid = result.unwrap();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+    assert!(
+        (2..=30).contains(&faces.len()),
+        "box-cone intersect should have 2-30 faces, got {}",
+        faces.len()
+    );
+}
