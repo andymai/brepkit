@@ -1427,35 +1427,45 @@ pub(super) fn split_nonmanifold_edges(
             let normal = if let FaceSurface::Plane { normal, .. } = face.surface() {
                 *normal
             } else {
-                // For non-planar faces, approximate normal from wire polygon centroid.
-                let wire = topo.wire(face.outer_wire())?;
-                let mut sum = Vec3::new(0.0, 0.0, 0.0);
-                let mut count = 0usize;
-                for oe in wire.edges() {
-                    if let Ok(e) = topo.edge(oe.edge()) {
-                        if let Ok(v) = topo.vertex(e.start()) {
-                            let p = v.point();
-                            sum = Vec3::new(sum.x() + p.x(), sum.y() + p.y(), sum.z() + p.z());
-                            count += 1;
-                        }
-                    }
-                }
-                if count == 0 {
-                    continue;
-                }
-                #[allow(clippy::cast_precision_loss)]
-                let inv = 1.0 / count as f64;
-                let centroid_dir = Vec3::new(sum.x() * inv, sum.y() * inv, sum.z() * inv);
+                // For non-planar faces, evaluate the actual surface normal at
+                // the edge midpoint by projecting to UV. This matches the
+                // standard approach of evaluating the surface at the edge
+                // point's parametric coordinates, rather than approximating
+                // from the wire polygon centroid (which is inaccurate for
+                // curved surfaces and produces wrong angular ordering).
                 let mid = Point3::new(
                     (start_pos.x() + end_pos.x()) * 0.5,
                     (start_pos.y() + end_pos.y()) * 0.5,
                     (start_pos.z() + end_pos.z()) * 0.5,
                 );
-                Vec3::new(
-                    centroid_dir.x() - mid.x(),
-                    centroid_dir.y() - mid.y(),
-                    centroid_dir.z() - mid.z(),
-                )
+                if let Some((u, v)) = face.surface().project_point(mid) {
+                    face.surface().normal(u, v)
+                } else {
+                    // Projection failed — fall back to centroid direction.
+                    let wire = topo.wire(face.outer_wire())?;
+                    let mut sum = Vec3::new(0.0, 0.0, 0.0);
+                    let mut count = 0usize;
+                    for oe in wire.edges() {
+                        if let Ok(e) = topo.edge(oe.edge()) {
+                            if let Ok(vx) = topo.vertex(e.start()) {
+                                let p = vx.point();
+                                sum = Vec3::new(sum.x() + p.x(), sum.y() + p.y(), sum.z() + p.z());
+                                count += 1;
+                            }
+                        }
+                    }
+                    if count == 0 {
+                        continue;
+                    }
+                    #[allow(clippy::cast_precision_loss)]
+                    let inv = 1.0 / count as f64;
+                    let centroid = Vec3::new(sum.x() * inv, sum.y() * inv, sum.z() * inv);
+                    Vec3::new(
+                        centroid.x() - mid.x(),
+                        centroid.y() - mid.y(),
+                        centroid.z() - mid.z(),
+                    )
+                }
             };
 
             // If face is reversed, flip the effective normal for sorting.
@@ -1707,4 +1717,285 @@ pub(super) fn polygon_area_3d(vertices: &[Point3], normal: Vec3) -> f64 {
         area += e1.cross(e2);
     }
     (area.dot(normal) * 0.5).abs()
+}
+
+// ---------------------------------------------------------------------------
+// Manifold shell reconstruction from face soup
+// ---------------------------------------------------------------------------
+
+/// Build manifold shells from an unordered list of faces.
+///
+/// Groups faces into connected manifold shells using angular face selection
+/// at non-manifold edges (edges shared by >2 faces). At each such edge, the
+/// algorithm selects the angular neighbor (tightest dihedral angle) to grow
+/// the shell, ensuring each edge is shared by exactly 2 faces.
+///
+/// Returns a solid with the largest shell as outer and smaller shells as
+/// inner (cavities). Falls back to a single shell if the algorithm can't
+/// produce manifold shells.
+///
+/// Not yet wired into the boolean pipeline — needs edge orientation
+/// compatibility checking (FORWARD in one face, REVERSED in the other)
+/// before it can replace `split_nonmanifold_edges`.
+#[allow(clippy::too_many_lines, dead_code)]
+pub(super) fn build_manifold_shells(
+    topo: &mut Topology,
+    face_ids: &[FaceId],
+) -> Result<SolidId, crate::OperationsError> {
+    if face_ids.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "build_manifold_shells: no faces".into(),
+        });
+    }
+
+    // Step 1: Build edge → [(face_index, is_forward)] adjacency map.
+    let mut edge_faces: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                edge_faces
+                    .entry(oe.edge().index())
+                    .or_default()
+                    .push((fi, oe.is_forward()));
+            }
+        }
+    }
+
+    // Check if already manifold (every edge shared by exactly 2 faces).
+    let is_manifold = edge_faces.values().all(|fs| fs.len() <= 2);
+    if is_manifold {
+        // All manifold — single shell.
+        let shell = Shell::new(face_ids.to_vec()).map_err(crate::OperationsError::Topology)?;
+        let shell_id = topo.add_shell(shell);
+        return Ok(topo.add_solid(Solid::new(shell_id, vec![])));
+    }
+
+    // Step 2: Build manifold shells via angular face-off selection.
+    let mut added: HashSet<usize> = HashSet::new();
+    let mut shells: Vec<Vec<FaceId>> = Vec::new();
+
+    for seed_fi in 0..face_ids.len() {
+        if added.contains(&seed_fi) {
+            continue;
+        }
+        added.insert(seed_fi);
+
+        let mut shell_faces: Vec<usize> = vec![seed_fi];
+        // Track edges within this shell: edge_idx → count of faces using it.
+        let mut shell_edge_count: HashMap<usize, u32> = HashMap::new();
+
+        // Initialize with seed face's edges.
+        count_face_edges(topo, face_ids[seed_fi], &mut shell_edge_count)?;
+
+        let mut queue_idx = 0;
+        while queue_idx < shell_faces.len() {
+            let current_fi = shell_faces[queue_idx];
+            queue_idx += 1;
+
+            let face = topo.face(face_ids[current_fi])?;
+            // Collect edges from all wires.
+            let mut face_edge_list: Vec<(usize, bool)> = Vec::new();
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                let wire = topo.wire(wid)?;
+                for oe in wire.edges() {
+                    face_edge_list.push((oe.edge().index(), oe.is_forward()));
+                }
+            }
+
+            for (edge_idx, edge_fwd) in face_edge_list {
+                // Skip if this edge already has 2 faces in the shell.
+                if shell_edge_count.get(&edge_idx).copied().unwrap_or(0) >= 2 {
+                    continue;
+                }
+
+                // Find candidate neighbors: faces sharing this edge, not yet added.
+                let Some(neighbors) = edge_faces.get(&edge_idx) else {
+                    continue;
+                };
+
+                // Manifold condition: at a shared edge, the edge must appear
+                // FORWARD in one face and REVERSED in the other. Filter
+                // candidates to only those with opposite edge orientation.
+                let candidates: Vec<(usize, bool)> = neighbors
+                    .iter()
+                    .filter(|(fi, fwd)| {
+                        *fi != current_fi && !added.contains(fi) && *fwd != edge_fwd
+                    })
+                    .copied()
+                    .collect();
+
+                if candidates.is_empty() {
+                    continue;
+                }
+
+                // Select neighbor: if only 1, take it. If >1, use angular selection.
+                let selected_fi = if candidates.len() == 1 {
+                    candidates[0].0
+                } else {
+                    // Angular face-off: select tightest dihedral angle.
+                    select_angular_neighbor(
+                        topo,
+                        face_ids,
+                        edge_idx,
+                        current_fi,
+                        edge_fwd,
+                        &candidates,
+                    )?
+                    .unwrap_or(candidates[0].0)
+                };
+
+                if added.insert(selected_fi) {
+                    shell_faces.push(selected_fi);
+                    count_face_edges(topo, face_ids[selected_fi], &mut shell_edge_count)?;
+                }
+            }
+        }
+
+        shells.push(shell_faces.into_iter().map(|fi| face_ids[fi]).collect());
+    }
+
+    // Step 3: Build solid — largest shell is outer, rest are inner.
+    if shells.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "build_manifold_shells: no shells produced".into(),
+        });
+    }
+
+    // Sort by face count descending — largest first (outer shell).
+    shells.sort_by_key(|s| std::cmp::Reverse(s.len()));
+
+    let outer_shell = Shell::new(shells[0].clone()).map_err(crate::OperationsError::Topology)?;
+    let outer_id = topo.add_shell(outer_shell);
+
+    let mut inner_ids = Vec::new();
+    for inner_faces in &shells[1..] {
+        if !inner_faces.is_empty() {
+            if let Ok(inner_shell) = Shell::new(inner_faces.clone()) {
+                inner_ids.push(topo.add_shell(inner_shell));
+            }
+        }
+    }
+
+    Ok(topo.add_solid(Solid::new(outer_id, inner_ids)))
+}
+
+/// Count edges in a face and add to the shell edge count map.
+fn count_face_edges(
+    topo: &Topology,
+    fid: FaceId,
+    edge_count: &mut HashMap<usize, u32>,
+) -> Result<(), crate::OperationsError> {
+    let face = topo.face(fid)?;
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let wire = topo.wire(wid)?;
+        for oe in wire.edges() {
+            *edge_count.entry(oe.edge().index()).or_default() += 1;
+        }
+    }
+    Ok(())
+}
+
+/// Select the angular neighbor at a non-manifold edge.
+///
+/// Evaluates surface normals at the edge midpoint on the current face
+/// and each candidate, computes binormal directions, and selects the
+/// candidate with the smallest positive dihedral angle (tightest CCW
+/// angular neighbor when viewed along the edge tangent).
+fn select_angular_neighbor(
+    topo: &Topology,
+    face_ids: &[FaceId],
+    edge_idx: usize,
+    current_fi: usize,
+    current_fwd: bool,
+    candidates: &[(usize, bool)],
+) -> Result<Option<usize>, crate::OperationsError> {
+    let edge_id =
+        topo.edge_id_from_index(edge_idx)
+            .ok_or_else(|| crate::OperationsError::InvalidInput {
+                reason: format!("edge index {edge_idx} not found"),
+            })?;
+
+    // Edge midpoint and tangent direction.
+    let edge = topo.edge(edge_id)?;
+    let start_pos = topo.vertex(edge.start())?.point();
+    let end_pos = topo.vertex(edge.end())?.point();
+    let edge_dir = end_pos - start_pos;
+    let edge_len = edge_dir.length();
+    if edge_len < 1e-12 {
+        return Ok(None);
+    }
+    let tangent = edge_dir * (1.0 / edge_len);
+    // Flip tangent if edge is reversed in the current face.
+    let tangent = if current_fwd { tangent } else { -tangent };
+    let mid = Point3::new(
+        (start_pos.x() + end_pos.x()) * 0.5,
+        (start_pos.y() + end_pos.y()) * 0.5,
+        (start_pos.z() + end_pos.z()) * 0.5,
+    );
+
+    // Current face's binormal at the edge.
+    let current_face = topo.face(face_ids[current_fi])?;
+    let normal1 = face_normal_at_point(current_face, mid);
+    let binormal1 = normal1.cross(tangent);
+    let ref_dir = normal1.cross(binormal1);
+
+    // For each candidate, compute angle and select tightest.
+    let mut best_angle = f64::MAX;
+    let mut best_fi = None;
+
+    for &(cand_fi, cand_fwd) in candidates {
+        let cand_face = topo.face(face_ids[cand_fi])?;
+        // Candidate's tangent may be reversed.
+        let tangent2 = if cand_fwd == current_fwd {
+            tangent
+        } else {
+            -tangent
+        };
+        let normal2 = face_normal_at_point(cand_face, mid);
+        let binormal2 = normal2.cross(tangent2);
+
+        // Signed angle from binormal1 to binormal2 around ref_dir.
+        let cross = binormal1.cross(binormal2);
+        let cos_val = binormal1.dot(binormal2);
+        let sin_sign = cross.dot(ref_dir);
+
+        // Angle in [0, 2*PI): cos → beta, sign from cross product.
+        let beta = std::f64::consts::FRAC_PI_2 * (1.0 - cos_val);
+        let mut angle = if sin_sign < 0.0 { -beta } else { beta };
+        if angle < 1e-10 {
+            angle += std::f64::consts::TAU;
+        }
+
+        if angle < best_angle {
+            best_angle = angle;
+            best_fi = Some(cand_fi);
+        }
+    }
+
+    Ok(best_fi)
+}
+
+/// Evaluate a face's effective normal at a 3D point.
+///
+/// For plane faces, returns the plane normal (flipped if reversed).
+/// For parametric surfaces, projects the point to UV and evaluates.
+fn face_normal_at_point(face: &Face, point: Point3) -> Vec3 {
+    let raw_normal = match face.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        surface => {
+            if let Some((u, v)) = surface.project_point(point) {
+                surface.normal(u, v)
+            } else {
+                Vec3::new(0.0, 0.0, 1.0) // fallback
+            }
+        }
+    };
+    if face.is_reversed() {
+        -raw_normal
+    } else {
+        raw_normal
+    }
 }
