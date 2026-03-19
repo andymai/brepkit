@@ -605,6 +605,7 @@ pub fn compound_cut(
                     source: Source::A,
                     edge_curves,
                     source_reversed: snap.reversed,
+                    source_face_id: Some(snap.id),
                 });
             }
             if !matches!(snap.surface, FaceSurface::Plane { .. }) {
@@ -619,6 +620,7 @@ pub fn compound_cut(
                             source: Source::A,
                             edge_curves: vec![Some(ec.clone())],
                             source_reversed: snap.reversed,
+                            source_face_id: Some(snap.id),
                         });
                     }
                 }
@@ -633,6 +635,7 @@ pub fn compound_cut(
                 source: Source::A,
                 edge_curves: edge_curves_from_face(topo, snap.id, snap.vertices.len()),
                 source_reversed: snap.reversed,
+                source_face_id: Some(snap.id),
             });
             pre_classifications.insert(holed_idx, FaceClass::Outside);
             holed_face_inner_curves.insert(holed_idx, inner_curves.clone());
@@ -652,6 +655,7 @@ pub fn compound_cut(
                         source: Source::A,
                         edge_curves: vec![Some(ec.clone())],
                         source_reversed: false,
+                        source_face_id: Some(snap.id),
                     });
                     pre_classifications.insert(disc_idx, FaceClass::Inside);
                 }
@@ -666,6 +670,7 @@ pub fn compound_cut(
                 source: Source::A,
                 edge_curves: edge_curves_from_face(topo, snap.id, snap.vertices.len()),
                 source_reversed: snap.reversed,
+                source_face_id: Some(snap.id),
             });
             let source_face = topo.face(snap.id)?;
             if !source_face.inner_wires().is_empty() {
@@ -764,6 +769,7 @@ pub fn compound_cut(
                         source: Source::B,
                         edge_curves,
                         source_reversed: snap.reversed,
+                        source_face_id: Some(snap.id),
                     });
                 }
                 if !matches!(snap.surface, FaceSurface::Plane { .. }) {
@@ -778,6 +784,7 @@ pub fn compound_cut(
                                 source: Source::B,
                                 edge_curves: vec![Some(ec.clone())],
                                 source_reversed: snap.reversed,
+                                source_face_id: Some(snap.id),
                             });
                         }
                     }
@@ -815,6 +822,7 @@ pub fn compound_cut(
                     source: Source::B,
                     edge_curves: edge_curves_from_face(topo, snap.id, snap.vertices.len()),
                     source_reversed: snap.reversed,
+                    source_face_id: Some(snap.id),
                 });
                 let source_face = topo.face(snap.id)?;
                 if !source_face.inner_wires().is_empty() {
@@ -845,6 +853,7 @@ pub fn compound_cut(
             source: Source::A,
             edge_curves: edge_curves_from_face(topo, fid, verts.len()),
             source_reversed: reversed,
+            source_face_id: Some(fid),
         });
         pre_classifications.insert(pass_idx, FaceClass::Outside);
         let source_face = topo.face(fid)?;
