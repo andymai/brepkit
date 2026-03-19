@@ -1913,14 +1913,15 @@ pub(super) fn analytic_boolean(
     Ok(solid)
 }
 
-/// Build a solid using `BooleanState`'s `in_parts` to group faces into shells.
+/// Build a solid using `BooleanState`'s `in_parts` to inform shell construction.
 ///
-/// For Fuse: outer shell = faces from A-Outside + B-Outside;
-///           inner shells = remaining face groups.
-/// For Cut/Intersect: uses `build_manifold_shells` for robust shell building.
+/// Uses `in_parts` membership to reorder faces so `build_manifold_shells`
+/// seeds its BFS from faces with consistent provenance. For all operations,
+/// faces exclusively from one operand are placed first (better BFS seeds
+/// than mixed-provenance faces at cut boundaries).
 ///
-/// Falls back to `build_manifold_shells` on all faces if grouping
-/// doesn't produce valid Euler topology.
+/// Validates the result topology and falls back to single-shell on failure.
+#[allow(clippy::too_many_lines)]
 fn build_solid_from_state(
     topo: &mut Topology,
     face_ids_out: &[FaceId],
@@ -1929,26 +1930,88 @@ fn build_solid_from_state(
     a: SolidId,
     b: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
+    use std::collections::HashSet;
+
     use super::assembly::build_manifold_shells;
 
-    // TODO: use in_parts grouping to partition faces into separate shells
-    // for Fuse operations with inner cavities (e.g. shelled box + lip).
-    // Currently logs diagnostics only; the actual partitioning logic will
-    // be added once the D4 gridfinity end-to-end test validates the approach.
-    if op == BooleanOp::Fuse {
-        let faces_in_a = state.faces_in_solid(a);
-        let faces_in_b = state.faces_in_solid(b);
+    let faces_in_a: HashSet<FaceId> = state
+        .faces_in_solid(a)
+        .map(|s| s.iter().copied().collect())
+        .unwrap_or_default();
+    let faces_in_b: HashSet<FaceId> = state
+        .faces_in_solid(b)
+        .map(|s| s.iter().copied().collect())
+        .unwrap_or_default();
 
-        if let (Some(in_a), Some(in_b)) = (faces_in_a, faces_in_b) {
-            log::debug!(
-                "[boolean] in_parts: {} faces in A, {} in B",
-                in_a.len(),
-                in_b.len()
-            );
+    // Partition output faces into: A-only, B-only, shared (coplanar).
+    let mut a_only = Vec::new();
+    let mut b_only = Vec::new();
+    let mut shared = Vec::new();
+    for &fid in face_ids_out {
+        let in_a = faces_in_a.contains(&fid);
+        let in_b = faces_in_b.contains(&fid);
+        match (in_a, in_b) {
+            (true, false) => a_only.push(fid),
+            (false, true) => b_only.push(fid),
+            (true, true) => shared.push(fid),
+            (false, false) => a_only.push(fid), // untracked → group with A
         }
     }
 
-    // Default: use build_manifold_shells which does angular face-off
-    // selection for robust shell building.
-    build_manifold_shells(topo, face_ids_out)
+    log::debug!(
+        "[boolean] in_parts: A-only={}, B-only={}, shared={} (op={op:?})",
+        a_only.len(),
+        b_only.len(),
+        shared.len()
+    );
+
+    // Reorder faces: A-only first, then B-only, then shared.
+    // This seeds build_manifold_shells' BFS from faces with clear
+    // provenance, improving shell separation for non-manifold cases.
+    let mut reordered = Vec::with_capacity(face_ids_out.len());
+    reordered.extend_from_slice(&a_only);
+    reordered.extend_from_slice(&b_only);
+    reordered.extend_from_slice(&shared);
+
+    // Use build_manifold_shells with the provenance-ordered faces.
+    let result = build_manifold_shells(topo, &reordered)?;
+    let adj_euler = adjusted_euler(topo, result)?;
+
+    if adj_euler == 2 {
+        log::debug!("[boolean] in_parts shell building: adj_euler=2 ✓");
+        return Ok(result);
+    }
+
+    // If provenance-ordered BFS didn't produce valid topology,
+    // try with the original face order as a fallback.
+    log::debug!(
+        "[boolean] in_parts shell building: adj_euler={adj_euler} ≠ 2, \
+         trying original order"
+    );
+    let fallback = build_manifold_shells(topo, face_ids_out)?;
+    let adj2 = adjusted_euler(topo, fallback)?;
+
+    // Return whichever has better topology.
+    if adj2 == 2 || (adj2 - 2).abs() < (adj_euler - 2).abs() {
+        log::debug!("[boolean] original order better: adj_euler={adj2} vs {adj_euler}");
+        Ok(fallback)
+    } else {
+        Ok(result)
+    }
+}
+
+/// Compute adjusted Euler characteristic (V - E + F - inner_loops) for a solid.
+#[allow(clippy::cast_possible_wrap)]
+fn adjusted_euler(topo: &Topology, solid: SolidId) -> Result<i64, crate::OperationsError> {
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, solid)?;
+    let euler = (v as i64) - (e as i64) + (f as i64);
+    let s = topo.solid(solid)?;
+    let sh = topo.shell(s.outer_shell())?;
+    let inner_loops: i64 = sh
+        .faces()
+        .iter()
+        .filter_map(|&fid| topo.face(fid).ok())
+        .map(|face| face.inner_wires().len() as i64)
+        .sum();
+    Ok(euler - inner_loops)
 }
