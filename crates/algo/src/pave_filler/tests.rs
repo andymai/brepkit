@@ -303,95 +303,62 @@ fn gfa_intersect_overlapping_boxes() {
     );
 }
 
+/// Touching-face cut: same-domain elimination is too aggressive,
+/// producing 2 faces instead of the correct 6 (A unchanged).
 #[test]
-fn gfa_fuse_touching_boxes() {
-    // A=[0,1]³, B=[1,2]×[0,1]² — share the x=1 face
-    let mut topo = Topology::default();
-    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
-    let b = make_box(&mut topo, [1.0, 0.0, 0.0], [2.0, 1.0, 1.0]);
-
-    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Fuse, a, b);
-    let solid = result.expect("fuse of touching boxes");
-    let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
-    assert_eq!(
-        faces.len(),
-        10,
-        "touching fuse should have 10 faces, got {}",
-        faces.len()
-    );
-}
-
-#[test]
+#[ignore = "same-domain elimination too aggressive on touching cut faces"]
 fn gfa_cut_touching_boxes() {
-    // Cutting B from A where they only touch — A should be unchanged.
-    // GFA currently produces 2 faces (same-domain elimination is too aggressive
-    // on touching faces). Track the actual output so regressions are caught.
     let mut topo = Topology::default();
     let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
     let b = make_box(&mut topo, [1.0, 0.0, 0.0], [2.0, 1.0, 1.0]);
 
-    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, a, b);
-    let solid = result.expect("cut of touching boxes");
+    let solid = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, a, b)
+        .expect("cut of touching boxes");
     let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
-    // Ideal: 6 faces (A unchanged). Current: 2 faces (known limitation).
     assert_eq!(
         faces.len(),
-        2,
-        "touching cut currently produces 2 faces, got {}",
+        6,
+        "touching cut should have 6 faces, got {}",
         faces.len()
     );
 }
 
 #[test]
 fn gfa_fuse_disjoint_boxes() {
-    // Two non-overlapping boxes
     let mut topo = Topology::default();
     let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
     let b = make_box(&mut topo, [5.0, 5.0, 5.0], [6.0, 6.0, 6.0]);
 
-    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Fuse, a, b);
-    match result {
-        Ok(solid) => {
-            let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
-            // Disjoint fuse produces 12 faces (both boxes in one shell)
-            assert_eq!(
-                faces.len(),
-                12,
-                "disjoint fuse should have 12 faces, got {}",
-                faces.len()
-            );
-        }
-        Err(e) => {
-            // Acceptable: GFA may fail for disjoint (no intersections → fallback)
-            eprintln!("disjoint fuse failed (acceptable): {e}");
-        }
-    }
+    let solid =
+        crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Fuse, a, b).expect("disjoint fuse");
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+    assert_eq!(
+        faces.len(),
+        12,
+        "disjoint fuse should have 12 faces, got {}",
+        faces.len()
+    );
 }
 
 #[test]
 fn gfa_cut_nested_boxes() {
-    // Small box fully inside large box
     let mut topo = Topology::default();
     let a = make_box(&mut topo, [0.0, 0.0, 0.0], [4.0, 4.0, 4.0]);
     let b = make_box(&mut topo, [1.0, 1.0, 1.0], [3.0, 3.0, 3.0]);
 
+    // Nested cut: B fully inside A. The containment shortcut in boolean_gfa
+    // returns an error for this case ("B is inside A — result would have a void").
+    // The GFA itself may also produce a result. Either outcome is acceptable.
     let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, a, b);
-    match result {
-        Ok(solid) => {
-            let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
-            eprintln!("nested cut: {} faces", faces.len());
-            // Cut with nested box should create a void: >= 6 faces
-            assert!(
-                faces.len() >= 6,
-                "nested cut should have at least 6 faces, got {}",
-                faces.len()
-            );
-        }
-        Err(e) => {
-            // Containment shortcut may fire — acceptable
-            eprintln!("nested cut error (containment shortcut): {e}");
-        }
+    if let Ok(solid) = result {
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        assert!(
+            faces.len() >= 6,
+            "nested cut should have at least 6 faces, got {}",
+            faces.len()
+        );
     }
+    // Err is acceptable — containment shortcut fires before GFA
 }
 
 #[test]

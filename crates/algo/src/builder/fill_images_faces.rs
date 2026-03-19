@@ -192,11 +192,16 @@ fn build_section_edges(
             Err(_) => continue,
         };
 
-        // Clip section edge to the face boundary polygon
-        let (start, end) = match clip_line_to_face_boundary(topo, face_id, raw_start, raw_end, tol)
-        {
-            Some(pair) => pair,
-            None => continue, // line doesn't cross this face
+        // Clip straight section edges to the face boundary polygon.
+        // Non-line curves (Circle, Ellipse, NURBS) pass through unclipped —
+        // their endpoints are already bounded by the curve geometry.
+        let (start, end) = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            match clip_line_to_face_boundary(topo, face_id, raw_start, raw_end, tol) {
+                Some(pair) => pair,
+                None => continue,
+            }
+        } else {
+            (raw_start, raw_end)
         };
 
         // Project start/end to UV on this face
@@ -281,43 +286,44 @@ fn clip_line_to_face_boundary(
 
     for (seg_start, seg_end) in &boundary_segments {
         let seg_dir = *seg_end - *seg_start;
+        let seg_len = seg_dir.length();
+
+        // Scaled tolerance for parallel/determinant checks — proportional to
+        // both vector magnitudes, consistent with the project tolerance framework.
+        let parallel_tol = line_len * seg_len * tol;
 
         // For two coplanar 3D line segments, project to the dominant 2D plane.
-        // The cross product gives a normal; we project along its largest component.
         let normal = line_dir.cross(seg_dir);
         let ax = normal.x().abs();
         let ay = normal.y().abs();
         let az = normal.z().abs();
 
         // If lines are parallel (cross product near zero), skip
-        if ax < 1e-15 && ay < 1e-15 && az < 1e-15 {
+        if ax < parallel_tol && ay < parallel_tol && az < parallel_tol {
             continue;
         }
 
         let d = *seg_start - line_start;
 
         let (t, s) = if az >= ax && az >= ay {
-            // Project to XY plane
             let det = line_dir.x() * seg_dir.y() - line_dir.y() * seg_dir.x();
-            if det.abs() < 1e-15 {
+            if det.abs() < parallel_tol {
                 continue;
             }
             let t = (d.x() * seg_dir.y() - d.y() * seg_dir.x()) / det;
             let s = (d.x() * line_dir.y() - d.y() * line_dir.x()) / det;
             (t, s)
         } else if ay >= ax {
-            // Project to XZ plane
             let det = line_dir.x() * seg_dir.z() - line_dir.z() * seg_dir.x();
-            if det.abs() < 1e-15 {
+            if det.abs() < parallel_tol {
                 continue;
             }
             let t = (d.x() * seg_dir.z() - d.z() * seg_dir.x()) / det;
             let s = (d.x() * line_dir.z() - d.z() * line_dir.x()) / det;
             (t, s)
         } else {
-            // Project to YZ plane
             let det = line_dir.y() * seg_dir.z() - line_dir.z() * seg_dir.y();
-            if det.abs() < 1e-15 {
+            if det.abs() < parallel_tol {
                 continue;
             }
             let t = (d.y() * seg_dir.z() - d.z() * seg_dir.y()) / det;
