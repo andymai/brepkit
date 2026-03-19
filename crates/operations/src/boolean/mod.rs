@@ -39,7 +39,7 @@ pub use types::{BooleanOp, BooleanOptions, FaceSpec};
 /// Returns an error only if both the GFA pipeline and the fallback fail.
 /// Maximum combined face count for GFA path. Above this, skip directly
 /// to the existing pipeline to avoid O(n²) pave filler phases.
-const GFA_MAX_FACES: usize = 50;
+const GFA_MAX_FACES: usize = 200;
 
 /// Boolean via the GFA pipeline, with fallback to the existing pipeline.
 ///
@@ -73,10 +73,20 @@ pub fn boolean_gfa(
         BooleanOp::Intersect => brepkit_algo::bop::BooleanOp::Intersect,
     };
 
+    let gfa_start = timer_now();
     match brepkit_algo::gfa::boolean(topo, algo_op, a, b) {
-        Ok(result) => Ok(result),
+        Ok(result) => {
+            log::info!(
+                "GFA boolean succeeded in {:.1}ms (faces: {faces_a}+{faces_b})",
+                timer_elapsed_ms(gfa_start)
+            );
+            Ok(result)
+        }
         Err(e) => {
-            log::warn!("GFA boolean failed ({e}), falling back to existing pipeline");
+            log::warn!(
+                "GFA boolean failed in {:.1}ms ({e}), falling back",
+                timer_elapsed_ms(gfa_start)
+            );
             boolean(topo, op, a, b)
         }
     }
