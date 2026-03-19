@@ -116,7 +116,9 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // and compute a distinct interior point for classification.
         for split in &split_results {
             let new_face_id = build_topology_face(topo, split, tol);
-            let pt = super::face_splitter::interior_point_3d(split, None);
+            let pt = split
+                .precomputed_interior
+                .unwrap_or_else(|| super::face_splitter::interior_point_3d(split, None));
 
             sub_faces.push(SubFace {
                 parent_face: face_id,
