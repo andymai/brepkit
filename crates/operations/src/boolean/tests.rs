@@ -3280,6 +3280,77 @@ fn d4_shelled_box_fuse_lip() {
             eprintln!(
                 "fused: F={f} E={e} V={v} euler={euler} inner_loops={inner_loops} adj_euler={adj}"
             );
+
+            // Diagnose: find non-manifold and boundary edges
+            let sh = topo
+                .shell(topo.solid(fused).unwrap().outer_shell())
+                .unwrap();
+            let mut efc: std::collections::HashMap<usize, u32> = std::collections::HashMap::new();
+            for &fid in sh.faces() {
+                let face = topo.face(fid).unwrap();
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    for oe in topo.wire(wid).unwrap().edges() {
+                        *efc.entry(oe.edge().index()).or_default() += 1;
+                    }
+                }
+            }
+            let nm_count = efc.values().filter(|c| **c > 2).count();
+            let bd_count = efc.values().filter(|c| **c < 2).count();
+            eprintln!("non-manifold edges: {nm_count} boundary edges: {bd_count}");
+
+            // Check connected components via face adjacency flood-fill
+            let face_ids: Vec<_> = sh.faces().to_vec();
+            let mut face_adj: std::collections::HashMap<usize, Vec<usize>> =
+                std::collections::HashMap::new();
+            // Build edge→face map, then faces sharing an edge are adjacent
+            let mut edge_faces: std::collections::HashMap<usize, Vec<usize>> =
+                std::collections::HashMap::new();
+            for (fi, &fid) in face_ids.iter().enumerate() {
+                let face = topo.face(fid).unwrap();
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    for oe in topo.wire(wid).unwrap().edges() {
+                        edge_faces.entry(oe.edge().index()).or_default().push(fi);
+                    }
+                }
+            }
+            for faces_at_edge in edge_faces.values() {
+                for &fi in faces_at_edge {
+                    for &fj in faces_at_edge {
+                        if fi != fj {
+                            face_adj.entry(fi).or_default().push(fj);
+                        }
+                    }
+                }
+            }
+            // Flood fill to count components
+            let mut visited = vec![false; face_ids.len()];
+            let mut components = 0u32;
+            for start in 0..face_ids.len() {
+                if visited[start] {
+                    continue;
+                }
+                components += 1;
+                let mut stack = vec![start];
+                while let Some(fi) = stack.pop() {
+                    if visited[fi] {
+                        continue;
+                    }
+                    visited[fi] = true;
+                    if let Some(neighbors) = face_adj.get(&fi) {
+                        for &nfi in neighbors {
+                            if !visited[nfi] {
+                                stack.push(nfi);
+                            }
+                        }
+                    }
+                }
+            }
+            eprintln!("connected components: {components}");
+
             assert_eq!(adj, 2, "adjusted Euler should be 2, got {adj}");
         }
         Err(e) => panic!("fuse failed: {e}"),

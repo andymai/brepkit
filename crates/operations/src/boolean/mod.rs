@@ -362,6 +362,15 @@ pub fn boolean_with_options(
     // Preserves all surface types through the boolean.
     match boolean_pipeline::boolean_pipeline(topo, op, a, b) {
         Ok(solid) if validate_boolean_result(topo, solid).is_ok() => {
+            // Post-process: remove degenerate edges + unify coplanar faces.
+            // Unification merges disconnected components that share coplanar
+            // boundaries (e.g., shelled box + lip fuse at the rim).
+            let _ = crate::heal::remove_degenerate_edges(topo, solid, tol.linear)?;
+            for _ in 0..3 {
+                if crate::heal::unify_faces(topo, solid)? == 0 {
+                    break;
+                }
+            }
             let solid = enforce_manifold_shell(topo, solid).unwrap_or(solid);
             return Ok(solid);
         }
@@ -378,6 +387,12 @@ pub fn boolean_with_options(
     // All surface types are lost — output is planar triangles only.
     match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
         Ok(result) => {
+            let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+            for _ in 0..3 {
+                if crate::heal::unify_faces(topo, result)? == 0 {
+                    break;
+                }
+            }
             let result = enforce_manifold_shell(topo, result).unwrap_or(result);
             return Ok(result);
         }

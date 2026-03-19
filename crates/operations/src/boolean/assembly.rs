@@ -631,6 +631,70 @@ pub(super) fn validate_boolean_result(
     Ok(())
 }
 
+/// Count connected components in a solid's outer shell via face adjacency.
+///
+/// Two faces are adjacent if they share an edge. Returns 1 for a topologically
+/// connected solid. Returns >1 if the boolean assembled disconnected groups.
+#[allow(dead_code)]
+pub(super) fn count_face_components(topo: &Topology, solid: SolidId) -> usize {
+    let shell = match topo.solid(solid).and_then(|s| topo.shell(s.outer_shell())) {
+        Ok(sh) => sh,
+        Err(_) => return 0,
+    };
+    let face_ids = shell.faces();
+    if face_ids.is_empty() {
+        return 0;
+    }
+    let n = face_ids.len();
+
+    // Build edge→face index map
+    let mut edge_faces: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        let Ok(face) = topo.face(fid) else { continue };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                edge_faces.entry(oe.edge().index()).or_default().push(fi);
+            }
+        }
+    }
+
+    // Build face adjacency
+    let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for faces_at_edge in edge_faces.values() {
+        for &fi in faces_at_edge {
+            for &fj in faces_at_edge {
+                if fi != fj {
+                    adj[fi].push(fj);
+                }
+            }
+        }
+    }
+
+    // Flood-fill to count components
+    let mut visited = vec![false; n];
+    let mut components = 0usize;
+    for start in 0..n {
+        if visited[start] {
+            continue;
+        }
+        components += 1;
+        let mut stack = vec![start];
+        while let Some(fi) = stack.pop() {
+            if visited[fi] {
+                continue;
+            }
+            visited[fi] = true;
+            for &nfi in &adj[fi] {
+                if !visited[nfi] {
+                    stack.push(nfi);
+                }
+            }
+        }
+    }
+    components
+}
+
 // ---------------------------------------------------------------------------
 // Post-assembly edge refinement
 // ---------------------------------------------------------------------------
