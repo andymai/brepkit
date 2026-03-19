@@ -37,12 +37,36 @@ pub use types::{BooleanOp, BooleanOptions, FaceSpec};
 /// # Errors
 ///
 /// Returns an error only if both the GFA pipeline and the fallback fail.
+/// Maximum combined face count for GFA path. Above this, skip directly
+/// to the existing pipeline to avoid O(n²) pave filler phases.
+const GFA_MAX_FACES: usize = 50;
+
+/// Boolean via the GFA pipeline, with fallback to the existing pipeline.
+///
+/// Skips the GFA for solids with more than [`GFA_MAX_FACES`] combined
+/// faces (sequential boolean results are too complex for the current
+/// O(n²) pave filler).
+///
+/// # Errors
+///
+/// Returns an error if both the GFA and fallback pipelines fail.
 pub fn boolean_gfa(
     topo: &mut Topology,
     op: BooleanOp,
     a: SolidId,
     b: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
+    // Guard: skip GFA for complex solids (sequential boolean results)
+    let faces_a = brepkit_topology::explorer::solid_faces(topo, a)
+        .map(|f| f.len())
+        .unwrap_or(0);
+    let faces_b = brepkit_topology::explorer::solid_faces(topo, b)
+        .map(|f| f.len())
+        .unwrap_or(0);
+    if faces_a + faces_b > GFA_MAX_FACES {
+        return boolean(topo, op, a, b);
+    }
+
     let algo_op = match op {
         BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
         BooleanOp::Cut => brepkit_algo::bop::BooleanOp::Cut,
