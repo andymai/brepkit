@@ -303,10 +303,9 @@ fn gfa_intersect_overlapping_boxes() {
     );
 }
 
-/// Touching-face cut: same-domain elimination is too aggressive,
-/// producing 2 faces instead of the correct 6 (A unchanged).
+/// Touching-face cut: faces share a plane but only touch at an edge.
+/// Same-domain detection must require interior overlap (not just edge contact).
 #[test]
-#[ignore = "same-domain elimination too aggressive on touching cut faces"]
 fn gfa_cut_touching_boxes() {
     let mut topo = Topology::default();
     let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
