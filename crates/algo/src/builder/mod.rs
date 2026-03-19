@@ -45,7 +45,6 @@ use crate::error::AlgoError;
 #[derive(Debug, Clone)]
 pub struct SubFace {
     /// The original face this sub-face was split from.
-    /// Used by future face-splitting passes to track provenance.
     #[allow(dead_code)]
     pub parent_face: FaceId,
     /// The face entity in topology (same as parent if no split occurred).
@@ -54,6 +53,10 @@ pub struct SubFace {
     pub classification: FaceClass,
     /// Which boolean argument this face came from.
     pub rank: Rank,
+    /// Pre-computed interior sample point for classification.
+    /// When `Some`, the classifier uses this instead of sampling from face geometry.
+    /// Set by the face splitter for split sub-faces.
+    pub interior_point: Option<Point3>,
 }
 
 /// Builder — orchestrates face splitting and classification.
@@ -209,8 +212,13 @@ impl Builder {
                 Rank::B => self.solid_a,
             };
 
-            // Sample a point inside the sub-face for classification
-            let sample = sample_face_interior(&self.topo, sf.face_id, self.tol);
+            // Use pre-computed interior point if available (from face splitter),
+            // otherwise sample from face geometry.
+            let sample = if let Some(pt) = sf.interior_point {
+                Ok(pt)
+            } else {
+                sample_face_interior(&self.topo, sf.face_id, self.tol)
+            };
 
             match sample {
                 Ok(point) => {

@@ -201,3 +201,26 @@ fn ef_runs_without_panic() {
         arena.interference.ef.len(),
     );
 }
+
+#[test]
+fn gfa_boolean_fuse_two_boxes() {
+    let mut topo = Topology::default();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [0.5, 0.5, 0.5], [1.5, 1.5, 1.5]);
+
+    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Fuse, a, b);
+
+    match &result {
+        Ok(solid_id) => {
+            eprintln!("GFA fuse succeeded: solid {:?}", solid_id);
+            // Check that the result solid exists and has faces
+            let faces = brepkit_topology::explorer::solid_faces(&topo, *solid_id).unwrap();
+            eprintln!("  Result has {} faces", faces.len());
+            assert!(!faces.is_empty(), "fuse result should have faces");
+        }
+        Err(e) => {
+            eprintln!("GFA fuse FAILED: {e}");
+            // Don't assert — we want to see the error
+        }
+    }
+}

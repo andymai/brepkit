@@ -49,6 +49,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 face_id,
                 classification: FaceClass::Unknown,
                 rank,
+                interior_point: None,
             });
             continue;
         }
@@ -62,6 +63,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 face_id,
                 classification: FaceClass::Unknown,
                 rank,
+                interior_point: None,
             });
             continue;
         }
@@ -87,26 +89,22 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 face_id,
                 classification: FaceClass::Unknown,
                 rank,
+                interior_point: None,
             });
             continue;
         }
 
-        // Each SplitSubFace represents a geometric region of the original face.
-        // We create a SubFace for each, using the ORIGINAL face_id.
-        // The classifier will use sample_face_interior to pick a point
-        // inside each region and classify it.
-        //
-        // TODO: once face topology reconstruction is complete (building
-        // new Wire/Face entities from SplitSubFace.outer_wire), use
-        // distinct face_ids per sub-face. For now, we produce one SubFace
-        // per split result, all referencing the parent face. The classifier
-        // picks a point for each and classifies it.
-        for _split in &split_results {
+        // Each SplitSubFace represents a geometric sub-region of the face.
+        // Compute a distinct interior point for each so the classifier
+        // can determine inside/outside independently per sub-region.
+        for split in &split_results {
+            let pt = super::face_splitter::interior_point_3d(split, None);
             sub_faces.push(SubFace {
                 parent_face: face_id,
-                face_id,
+                face_id, // same topology face — classification uses interior_point
                 classification: FaceClass::Unknown,
                 rank,
+                interior_point: Some(pt),
             });
         }
     }
