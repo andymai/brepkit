@@ -1381,7 +1381,7 @@ fn fuse_adjacent_boxes_shared_face() {
         "shared-face fuse volume: {vol} (expected {expected})"
     );
 
-    // With unify_faces=true (default), coplanar faces merge → 2×1×1 box = 6 faces.
+    // With unify_faces=true, coplanar faces merge → 2×1×1 box = 6 faces.
     let shell_id = topo.solid(fused).unwrap().outer_shell();
     let face_count = topo.shell(shell_id).unwrap().faces().len();
     assert_eq!(
@@ -3216,7 +3216,6 @@ fn gfa_box_cone_intersect() {
 /// - Lip solid (from boolean cut of nested boxes)
 /// - Fuse operation (merging coplanar boundary at z≈5)
 #[test]
-#[ignore = "pipeline fuse of shelled box + lip produces non-manifold topology (adj_euler=4)"]
 fn d4_shelled_box_fuse_lip() {
     // Simplified D4: shell a box, build a lip (outer-inner cut), fuse
     let mut topo = Topology::default();
@@ -3259,17 +3258,19 @@ fn d4_shelled_box_fuse_lip() {
     translate(&mut topo, outer, 0.0, 0.0, 2.5).unwrap();
     let inner = crate::primitives::make_box(&mut topo, 8.0, 8.0, 3.0).unwrap();
     translate(&mut topo, inner, 0.0, 0.0, 2.5).unwrap();
-    let lip = boolean(&mut topo, BooleanOp::Cut, outer, inner).unwrap();
+    // Use unify_faces=false — unify_faces corrupts complex solids
+    // (shelled box + lip fuse: 49→18 faces). OCCT never unifies inside boolean.
+    let no_unify = BooleanOptions {
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    let lip = boolean_with_options(&mut topo, BooleanOp::Cut, outer, inner, no_unify).unwrap();
     let (lf, le, lv) = brepkit_topology::explorer::solid_entity_counts(&topo, lip).unwrap();
     let l_euler = lv as i64 - le as i64 + lf as i64;
     eprintln!("lip: F={lf} E={le} V={lv} euler={l_euler}");
 
-    // Copy inputs before fuse — earlier boolean operations (lip CUT) modify
-    // wires in-place via remove_degenerate_edges, which can corrupt entities
-    // shared between the CUT result and its inputs.
-    let shelled = crate::copy::copy_solid(&mut topo, shelled).unwrap();
-    let lip = crate::copy::copy_solid(&mut topo, lip).unwrap();
-    let result = boolean(&mut topo, BooleanOp::Fuse, shelled, lip);
+    // Fuse shelled box + lip without unify_faces
+    let result = boolean_with_options(&mut topo, BooleanOp::Fuse, shelled, lip, no_unify);
     match result {
         Ok(fused) => {
             let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, fused).unwrap();

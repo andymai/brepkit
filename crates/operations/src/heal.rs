@@ -290,8 +290,24 @@ pub fn remove_degenerate_edges(
         }
 
         if any_removed && !new_edges.is_empty() {
+            // Create a NEW wire instead of modifying in-place. In-place
+            // modification via wire_mut corrupts other solids that share
+            // the same wire ID (analytic_boolean shares edges/wires across
+            // faces via edge_map dedup in a single topology arena).
             let new_wire = brepkit_topology::wire::Wire::new(new_edges, wire.is_closed())?;
-            *topo.wire_mut(wire_id)? = new_wire;
+            let new_wire_id = topo.add_wire(new_wire);
+            let face = topo.face_mut(fid)?;
+            if face.outer_wire() == wire_id {
+                face.set_outer_wire(new_wire_id);
+            } else {
+                // Check inner wires
+                let iw = face.inner_wires().to_vec();
+                for (i, &iw_id) in iw.iter().enumerate() {
+                    if iw_id == wire_id {
+                        face.inner_wires_mut()[i] = new_wire_id;
+                    }
+                }
+            }
         }
     }
 
