@@ -17,11 +17,3 @@ pub use face_info::FaceInfo;
 pub use interference::Interference;
 pub use pave::{Pave, PaveBlock, PaveBlockId};
 pub use shape_index::Rank;
-
-// Re-exported for future use when pipeline is fully wired
-#[allow(unused_imports)]
-pub use interference::InterferenceTable;
-#[allow(unused_imports)]
-pub use pave::{CommonBlock, CommonBlockId};
-#[allow(unused_imports)]
-pub use shape_index::ShapeRef;

@@ -7,7 +7,11 @@ use brepkit_topology::vertex::VertexId;
 use super::pave::PaveBlockId;
 
 /// A single interference record between two shapes.
+///
+/// Variant fields are populated by PaveFiller phases and will be read
+/// by future Builder passes (face splitting, edge coincidence detection).
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum Interference {
     /// Vertex-vertex coincidence.
     VV {

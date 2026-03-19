@@ -14,7 +14,10 @@ pub enum Rank {
 }
 
 /// Reference to a topological shape with its argument rank.
+///
+/// Used by future interference indexing to look up shapes by rank.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
 pub enum ShapeRef {
     /// A vertex from argument A or B.
     Vertex(VertexId, Rank),

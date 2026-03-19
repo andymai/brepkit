@@ -45,6 +45,7 @@ pub struct PaveFiller<'a> {
 
 impl<'a> PaveFiller<'a> {
     /// Creates a new `PaveFiller` for two solids.
+    #[allow(dead_code)]
     pub fn new(topo: &'a mut Topology, solid_a: SolidId, solid_b: SolidId) -> Self {
         Self {
             topo,

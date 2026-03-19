@@ -63,6 +63,8 @@ pub(crate) struct SelectedFace {
     /// The topology face to include.
     pub face_id: brepkit_topology::face::FaceId,
     /// Which argument this face came from.
+    /// Used by future assembly to track face provenance.
+    #[allow(dead_code)]
     pub rank: Rank,
     /// Whether to reverse this face's orientation in the result.
     pub reversed: bool,

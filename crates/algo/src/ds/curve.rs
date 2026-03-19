@@ -8,7 +8,11 @@ use super::pave::PaveBlockId;
 
 /// An intersection curve from face-face intersection, with its
 /// pave blocks and associated metadata.
+///
+/// Fields are populated by phase FF and read by future Builder
+/// face-splitting passes.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct IntersectionCurveDS {
     /// The 3D curve geometry.
     pub curve: EdgeCurve,

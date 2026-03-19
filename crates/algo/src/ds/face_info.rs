@@ -29,6 +29,7 @@ pub struct FaceInfo {
 impl FaceInfo {
     /// Creates empty face info.
     #[must_use]
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }

@@ -22,6 +22,8 @@ pub struct GfaArena {
     /// Arena for pave block allocation.
     pub pave_blocks: Arena<PaveBlock>,
     /// Common blocks (geometrically coincident pave blocks).
+    /// Populated by future EE overlap detection.
+    #[allow(dead_code)]
     pub common_blocks: Arena<CommonBlock>,
     /// Intersection curves from face-face intersection.
     pub curves: Vec<IntersectionCurveDS>,

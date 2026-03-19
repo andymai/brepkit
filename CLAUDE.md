@@ -12,6 +12,7 @@ Strict layered Cargo workspace. Each layer depends only on layers below it.
 L3: brepkit-wasm        → JS bindings (wasm-bindgen)
 L2: brepkit-io          → STEP, 3MF, STL, IGES, OBJ, PLY, glTF import/export
 L2: brepkit-operations  → Booleans, fillets, extrusions, tessellation
+L1.5: brepkit-algo      → GFA boolean engine, classification, intersection
 L1: brepkit-topology    → B-Rep data structures (arena-based)
 L0: brepkit-math        → Vectors, matrices, NURBS, predicates
 ```
@@ -24,7 +25,8 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 |-------|-------------|
 | `math` | *(none — no workspace deps)* |
 | `topology` | `math` |
-| `operations` | `math`, `topology` |
+| `algo` | `math`, `topology` |
+| `operations` | `math`, `topology`, `algo` |
 | `io` | `math`, `topology`, `operations` |
 | `wasm` | all crates |
 
@@ -33,7 +35,8 @@ The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the p
 **Allowed `use` paths per crate:**
 - `math/src/**` → only `std`, external crates
 - `topology/src/**` → `brepkit_math::*`
-- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`
+- `algo/src/**` → `brepkit_math::*`, `brepkit_topology::*`
+- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_algo::*`
 - `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`
 - `wasm/src/**` → all `brepkit_*`
 
@@ -84,6 +87,23 @@ Quick reference — find the right file for any task:
 | PCurve registry | `pcurve.rs` |
 | Topology validation | `validation.rs` |
 | Test utilities (`test-utils` feature) | `test_utils.rs` |
+
+### L1.5: algo (`crates/algo/src/`)
+| Task | File(s) |
+|------|---------|
+| GFA entry point | `gfa.rs` |
+| Boolean operation selection | `bop.rs` |
+| Error types | `error.rs` |
+| GFA data structures (Pave, PaveBlock, GfaArena) | `ds/pave.rs`, `ds/arena.rs` |
+| Intersection curve data | `ds/curve.rs` |
+| Face classification state | `ds/face_info.rs` |
+| PaveFiller orchestrator | `pave_filler/mod.rs` |
+| Phases VV/VE/EE/VF/EF/FF | `pave_filler/phase_*.rs` |
+| Pave block splitting + edge creation | `pave_filler/make_blocks.rs`, `make_split_edges.rs` |
+| FaceInfo population | `pave_filler/fill_face_info.rs` |
+| Builder (face splitting + assembly) | `builder/mod.rs`, `builder/assemble.rs` |
+| Analytic classifier (7 variants) | `classifier/analytic.rs` |
+| Ray-cast classifier | `classifier/ray_cast.rs` |
 
 ### L2: operations (`crates/operations/src/`)
 | Task | File(s) |
