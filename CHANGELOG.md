@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.18.1](https://github.com/andymai/brepkit/compare/v2.18.0...v2.18.1) (2026-03-19)
+
+
+### Bug Fixes
+
+* **algo:** address PR review — Line-only clipping, scaled tolerance, test fixes ([df23983](https://github.com/andymai/brepkit/commit/df23983e9d9febbd9e2fb70bba23fb411b707933))
+* **algo:** clip section edges to face boundary in GFA builder ([671d0ab](https://github.com/andymai/brepkit/commit/671d0ab6ee58a161fc9cb752890fc0d3add0aa34))
+* **algo:** clip section edges to face boundary in GFA builder ([e2adcb1](https://github.com/andymai/brepkit/commit/e2adcb1e876ad759dc9ae8ae0d7d36ec9d4d1ec7))
+* **algo:** validate GFA results before accepting — check manifold/Euler ([91e6cf4](https://github.com/andymai/brepkit/commit/91e6cf413d17656a2bf7ca85fbbed67dc6b61fb7))
+* **algo:** validate GFA results with Euler check before accepting ([676d2c2](https://github.com/andymai/brepkit/commit/676d2c2578817302e06bc81cd42356317188d4fd))
+
 ## [2.18.0](https://github.com/andymai/brepkit/compare/v2.17.0...v2.18.0) (2026-03-19)
 
 
