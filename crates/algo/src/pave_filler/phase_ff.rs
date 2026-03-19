@@ -67,6 +67,18 @@ pub fn perform(
         .map(|&fb| topo.face(fb).map(|f| f.surface().clone()))
         .collect::<Result<_, _>>()?;
 
+    // Pre-compute v-parameter ranges for analytic surfaces (used by AA intersection)
+    let v_ranges_a: Vec<Option<(f64, f64)>> = faces_a
+        .iter()
+        .zip(surfs_a.iter())
+        .map(|(&fid, surf)| face_v_range(topo, fid, surf))
+        .collect();
+    let v_ranges_b: Vec<Option<(f64, f64)>> = faces_b
+        .iter()
+        .zip(surfs_b.iter())
+        .map(|(&fid, surf)| face_v_range(topo, fid, surf))
+        .collect();
+
     for (idx_a, &fa) in faces_a.iter().enumerate() {
         let bbox_a = &bboxes_a[idx_a];
         let surf_a = &surfs_a[idx_a];
@@ -85,7 +97,10 @@ pub fn perform(
             let surf_b = &surfs_b[idx_b];
 
             // Compute raw intersection curves
-            let raw_curves = compute_raw_curves(surf_a, surf_b, bbox_a, bbox_b)?;
+            let v_range_a = v_ranges_a[idx_a];
+            let v_range_b = v_ranges_b[idx_b];
+            let raw_curves =
+                compute_raw_curves(surf_a, surf_b, bbox_a, bbox_b, v_range_a, v_range_b)?;
 
             for raw in raw_curves {
                 // Create topology vertices at the curve endpoints.
@@ -176,6 +191,29 @@ fn compute_face_bboxes(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Aabb3>, 
     Ok(bboxes)
 }
 
+/// Compute the v-parameter range of a face by projecting boundary vertices.
+/// Returns `None` for planes (which have no UV parameterization) or if projection fails.
+fn face_v_range(topo: &Topology, face_id: FaceId, surface: &FaceSurface) -> Option<(f64, f64)> {
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut v_min = f64::MAX;
+    let mut v_max = f64::MIN;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        for vid in [edge.start(), edge.end()] {
+            let pt = topo.vertex(vid).ok()?.point();
+            let (_, v) = surface.project_point(pt)?;
+            v_min = v_min.min(v);
+            v_max = v_max.max(v);
+        }
+    }
+    if v_min < v_max {
+        Some((v_min, v_max))
+    } else {
+        None
+    }
+}
+
 /// Intermediate intersection result before face IDs are assigned.
 struct RawCurve {
     /// The 3D curve geometry.
@@ -200,6 +238,8 @@ fn compute_raw_curves(
     surf_b: &FaceSurface,
     bbox_a: &Aabb3,
     bbox_b: &Aabb3,
+    v_range_a: Option<(f64, f64)>,
+    v_range_b: Option<(f64, f64)>,
 ) -> Result<Vec<RawCurve>, AlgoError> {
     match (surf_a, surf_b) {
         // Plane-Plane
@@ -228,7 +268,7 @@ fn compute_raw_curves(
         // Analytic-Analytic
         (a, b) if a.as_analytic().is_some() && b.as_analytic().is_some() => {
             if let (Some(aa), Some(ab)) = (a.as_analytic(), b.as_analytic()) {
-                analytic_analytic_intersection(&aa, &ab)
+                analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
             } else {
                 Ok(Vec::new())
             }
@@ -409,9 +449,12 @@ fn plane_analytic_intersection(
 fn analytic_analytic_intersection(
     a: &analytic_intersection::AnalyticSurface<'_>,
     b: &analytic_intersection::AnalyticSurface<'_>,
+    v_range_a: Option<(f64, f64)>,
+    v_range_b: Option<(f64, f64)>,
 ) -> Result<Vec<RawCurve>, AlgoError> {
-    let isect_curves =
-        analytic_intersection::intersect_analytic_analytic_bounded(*a, *b, 32, None, None)?;
+    let isect_curves = analytic_intersection::intersect_analytic_analytic_bounded(
+        *a, *b, 32, v_range_a, v_range_b,
+    )?;
 
     let mut results = Vec::new();
     for ic in isect_curves {
