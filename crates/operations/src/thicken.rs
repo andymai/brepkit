@@ -2,8 +2,6 @@
 //!
 //! A convenience operation that extrudes a face along its own normal
 //! direction. Supports planar, NURBS, and analytic surface faces.
-//! Equivalent to a specialized form of
-//! `BRepOffsetAPI_MakeOffsetShape` in `OpenCascade`.
 
 use brepkit_math::vec::Vec3;
 use brepkit_topology::Topology;

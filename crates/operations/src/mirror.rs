@@ -1,8 +1,6 @@
 //! Mirror operation: reflect a solid across a plane.
 //!
-//! Equivalent to `BRepBuilderAPI_Transform` with a reflection matrix
-//! in `OpenCascade`. Creates a new copy of the solid reflected across
-//! the specified plane.
+//! Creates a new copy of the solid reflected across the specified plane.
 
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};

@@ -1,7 +1,7 @@
 //! Defeaturing: remove small features from a solid for simulation simplification.
 //!
-//! Equivalent to `BRepAlgoAPI_Defeaturing` in `OpenCascade`. Removes selected
-//! faces and heals the resulting gaps by extending adjacent faces.
+//! Removes selected faces and heals the resulting gaps by extending
+//! adjacent faces.
 
 use std::collections::HashSet;
 

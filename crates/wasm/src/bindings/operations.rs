@@ -1163,7 +1163,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "getShapeOrientation")]
     pub fn get_shape_orientation(&self, _id: u32) -> String {
         // In brepkit, face normals are always canonical (outward-pointing).
-        // There is no separate orientation flag like OCCT's TopAbs_Orientation.
+        // There is no separate orientation flag.
         "forward".to_string()
     }
 

@@ -4,8 +4,8 @@
 //! minimal closed wire loops by traversing edges using the minimum
 //! clockwise angle rule at each vertex.
 //!
-//! Port of OCCT's `BOPAlgo_WireSplitter_1.cxx` algorithm, simplified
-//! for the boolean_pipeline pipeline.
+//! Uses minimum clockwise angle traversal to form closed wire loops
+//! from the boolean pipeline's edge soup.
 
 #![allow(dead_code)] // Used by later boolean_pipeline pipeline stages.
 
@@ -101,7 +101,7 @@ pub fn build_wire_loops(
             // Check for loop closure: quantized keys must match AND the raw
             // 2D distance must be small. On periodic surfaces, seam-opposite
             // vertices quantize to the same key but have large UV distance
-            // (~2π). OCCT's equivalent check: |u_prev - u_curr| < tolerance.
+            // (~2π). Check: |u_prev - u_curr| < tolerance.
             let is_closed = if end_vertex == start_vertex {
                 let raw_du = (current_edge.end_uv.x() - edges[start_idx].start_uv.x()).abs();
                 let raw_dv = (current_edge.end_uv.y() - edges[start_idx].start_uv.y()).abs();

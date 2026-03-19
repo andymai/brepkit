@@ -1,7 +1,6 @@
 //! Comprehensive solid validation.
 //!
-//! Equivalent to `BRepCheck_Analyzer` in `OpenCascade`. Performs
-//! structural and geometric validation on solids.
+//! Performs structural and geometric validation on solids.
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;

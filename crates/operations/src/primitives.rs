@@ -25,7 +25,7 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 /// Create a box solid with one corner at the origin.
 ///
 /// The box extends from `(0, 0, 0)` to `(dx, dy, dz)`.
-/// This matches OCCT's `BRepPrimAPI_MakeBox` convention.
+/// One corner sits at the origin; the opposite at `(dx, dy, dz)`.
 ///
 /// # Errors
 ///
@@ -138,7 +138,7 @@ pub fn make_box(
 
 /// Create a cylinder solid with its axis along +Z, base at the origin.
 ///
-/// The cylinder extends from `z = 0` to `z = height` (OCCT convention).
+/// The cylinder extends from `z = 0` to `z = height`.
 /// Built with one `CylindricalSurface` lateral face and two planar cap faces.
 ///
 /// # Errors
@@ -162,7 +162,7 @@ pub fn make_cylinder(
         });
     }
 
-    // Match OCCT convention: cylinder base at z=0, top at z=height.
+    // Cylinder base at z=0, top at z=height.
     // (brepjs drill and placement code assumes this convention.)
 
     // Analytic cylindrical surface
@@ -253,7 +253,7 @@ pub fn make_cylinder(
 /// The cone has `bottom_radius` at `z = 0` and `top_radius` at
 /// `z = height`. Setting `top_radius = 0` creates a pointed cone;
 /// setting it to a positive value creates a truncated cone (frustum).
-/// Matches OCCT convention where the base is at the origin.
+/// The base is at the origin.
 ///
 /// # Errors
 ///
@@ -287,7 +287,7 @@ pub fn make_cone(
     }
 
     // Determine which end is larger and compute virtual apex + half-angle
-    // Base at z=0, top at z=height (OCCT convention).
+    // Base at z=0, top at z=height.
     let (r_big, r_small, big_z, small_z, axis_sign) = if bottom_radius >= top_radius {
         (bottom_radius, top_radius, 0.0, height, -1.0_f64)
     } else {

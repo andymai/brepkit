@@ -1,6 +1,5 @@
 //! Distance measurement between shapes.
 //!
-//! Equivalent to `BRepExtrema_DistShapeShape` in `OpenCascade`.
 //! Computes minimum distance between solids and point-to-solid distance.
 //! Supports planar, NURBS, and analytic (cylinder, cone, sphere, torus) faces
 //! with BVH spatial acceleration.

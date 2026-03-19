@@ -1,8 +1,7 @@
 //! Topology sewing: merge loose faces into connected shells.
 //!
-//! Equivalent to `BRepBuilderAPI_Sewing` in `OpenCascade`. Takes a set
-//! of independent faces and merges coincident edges/vertices to create
-//! a topologically connected shell.
+//! Takes a set of independent faces and merges coincident edges/vertices
+//! to create a topologically connected shell.
 
 use std::collections::HashMap;
 

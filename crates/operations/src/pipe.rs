@@ -1,8 +1,7 @@
 //! Pipe sweep: sweep a profile along a path with optional scaling guide.
 //!
 //! Extends the basic sweep by allowing a guide curve that controls
-//! profile scaling along the path. Equivalent to
-//! `BRepOffsetAPI_MakePipeShell` in `OpenCascade`.
+//! profile scaling along the path.
 
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::tolerance::Tolerance;

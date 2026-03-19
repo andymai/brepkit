@@ -1,7 +1,7 @@
 //! Topology healing: repair common defects in B-Rep models.
 //!
-//! Equivalent to `ShapeFix` in `OpenCascade`. Provides repair
-//! operations for common geometry issues encountered in imported CAD files.
+//! Provides repair operations for common geometry issues encountered
+//! in imported CAD files and boolean results.
 
 use std::collections::{HashMap, HashSet};
 
@@ -88,8 +88,7 @@ pub struct HealingReport {
 
 /// Run all healing operations on a solid.
 ///
-/// This is the top-level repair function, equivalent to OCCT's
-/// `ShapeFix_Shape`. It runs:
+/// This is the top-level repair function. It runs:
 /// 1. Merge coincident vertices (close gaps)
 /// 2. Remove degenerate edges (shorter than tolerance)
 /// 3. Fix face orientations (ensure outward normals)
@@ -831,6 +830,109 @@ fn surfaces_equivalent(a: &FaceSurface, b: &FaceSurface) -> bool {
     }
 }
 
+/// Check that two faces' normals point in the same direction at their shared edge.
+///
+/// Evaluates the surface normal on both faces at a shared boundary vertex.
+/// Returns `false` if normals point in opposite directions (dot product < 0),
+/// preventing merging of faces on opposite sides of the same surface.
+/// Also returns `false` when the check cannot be evaluated (no shared vertex
+/// found, projection failure) — safe default that prevents silent bypass.
+fn normals_compatible_at_edge(
+    topo: &Topology,
+    face_a: FaceId,
+    face_b: FaceId,
+    surface: &FaceSurface,
+) -> bool {
+    // For plane faces, compare plane normals directly.
+    if let FaceSurface::Plane { normal: na, .. } = surface {
+        let Ok(fb) = topo.face(face_b) else {
+            return false;
+        };
+        let nb = match fb.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            _ => return false,
+        };
+        let Ok(fa) = topo.face(face_a) else {
+            return false;
+        };
+        let eff_na = if fa.is_reversed() { -*na } else { *na };
+        let eff_nb = if fb.is_reversed() { -nb } else { nb };
+        return eff_na.dot(eff_nb) > 0.0;
+    }
+
+    // For curved surfaces, sample the normal at a shared vertex.
+    let sample_pt = find_shared_vertex(topo, face_a, face_b);
+    let Some(pt) = sample_pt else {
+        return false; // Can't verify — skip merge to be safe
+    };
+    let Ok(fa) = topo.face(face_a) else {
+        return false;
+    };
+    let Ok(fb) = topo.face(face_b) else {
+        return false;
+    };
+    let uv_a = fa.surface().project_point(pt);
+    let uv_b = fb.surface().project_point(pt);
+    let (Some((ua, va)), Some((ub, vb))) = (uv_a, uv_b) else {
+        return false;
+    };
+    let mut na = fa.surface().normal(ua, va);
+    let mut nb = fb.surface().normal(ub, vb);
+    if fa.is_reversed() {
+        na = -na;
+    }
+    if fb.is_reversed() {
+        nb = -nb;
+    }
+    na.dot(nb) > 0.0
+}
+
+/// Find a vertex shared between two faces' outer and inner wires.
+fn find_shared_vertex(
+    topo: &Topology,
+    face_a: FaceId,
+    face_b: FaceId,
+) -> Option<brepkit_math::vec::Point3> {
+    let fa = topo.face(face_a).ok()?;
+    let fb = topo.face(face_b).ok()?;
+
+    // Collect vertex indices from ALL wires of face B (outer + inner).
+    let mut b_verts: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for wid in std::iter::once(fb.outer_wire()).chain(fb.inner_wires().iter().copied()) {
+        let Ok(wire) = topo.wire(wid) else { continue };
+        for oe in wire.edges() {
+            let Ok(e) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            b_verts.insert(e.start().index());
+            b_verts.insert(e.end().index());
+        }
+    }
+
+    // Find first matching vertex in ALL wires of face A.
+    for wid in std::iter::once(fa.outer_wire()).chain(fa.inner_wires().iter().copied()) {
+        let Ok(wire) = topo.wire(wid) else { continue };
+        for oe in wire.edges() {
+            let Ok(e) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            if b_verts.contains(&e.start().index()) {
+                return topo
+                    .vertex(e.start())
+                    .ok()
+                    .map(brepkit_topology::vertex::Vertex::point);
+            }
+            if b_verts.contains(&e.end().index()) {
+                return topo
+                    .vertex(e.end())
+                    .ok()
+                    .map(brepkit_topology::vertex::Vertex::point);
+            }
+        }
+    }
+    None
+}
+
 /// Union-Find: find root with path compression.
 fn uf_find(parent: &mut [usize], mut x: usize) -> usize {
     while parent[x] != x {
@@ -853,7 +955,7 @@ fn uf_union(parent: &mut [usize], a: usize, b: usize) {
 ///
 /// This merges co-surface face fragments produced by boolean operations
 /// back into single faces, reducing face count and improving topology
-/// quality. Equivalent to `ShapeUpgrade_UnifySameDomain` in OpenCASCADE.
+/// quality.
 ///
 /// The algorithm:
 /// 1. Build an edge→face adjacency map
@@ -953,6 +1055,10 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
     let mut parent: Vec<usize> = (0..n).collect();
 
     // Union faces sharing topology edges on the same surface.
+    // Before merging, check that face normals at a shared vertex point in
+    // the same direction. This prevents merging faces on opposite sides of
+    // the same surface (e.g., opposite cylinder walls, or coplanar faces
+    // with opposite normals from a shelled solid).
     for faces in edge_face_map.values() {
         if faces.len() < 2 {
             continue;
@@ -969,15 +1075,22 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
                 };
                 let surface_a = topo.face(faces[i])?.surface().clone();
                 let surface_b = topo.face(faces[j])?.surface().clone();
-                if surfaces_equivalent(&surface_a, &surface_b) {
-                    uf_union(&mut parent, fa_idx, fb_idx);
+                if !surfaces_equivalent(&surface_a, &surface_b) {
+                    continue;
                 }
+                // Normal direction pre-check: evaluate normals at a shared
+                // vertex on both faces. If normals point in opposite
+                // directions, the faces are on opposite sides of the surface
+                // and must NOT be merged.
+                if !normals_compatible_at_edge(topo, faces[i], faces[j], &surface_a) {
+                    continue;
+                }
+                uf_union(&mut parent, fa_idx, fb_idx);
             }
         }
     }
 
     // Union faces sharing geometrically-equivalent curved edges on the same surface.
-    // This catches faces connected by unshared Circle edges (same geometry, different EdgeId).
     for faces in geom_edge_faces.values() {
         if faces.len() < 2 {
             continue;
@@ -994,7 +1107,9 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
                 };
                 let surface_a = topo.face(faces[i])?.surface().clone();
                 let surface_b = topo.face(faces[j])?.surface().clone();
-                if surfaces_equivalent(&surface_a, &surface_b) {
+                if surfaces_equivalent(&surface_a, &surface_b)
+                    && normals_compatible_at_edge(topo, faces[i], faces[j], &surface_a)
+                {
                     uf_union(&mut parent, fa_idx, fb_idx);
                 }
             }
@@ -1808,6 +1923,43 @@ mod tests {
             rel_err < 0.01,
             "unify should preserve volume: before={vol_before:.2}, after={vol_after:.2}, err={:.2}%",
             rel_err * 100.0
+        );
+    }
+
+    /// Regression: unify_faces must NOT merge coplanar faces with opposite
+    /// effective normals. A shelled box has inner faces whose normals point
+    /// inward — these must not be merged with outer faces on the same plane.
+    #[test]
+    fn unify_faces_skips_opposite_normals() {
+        let mut topo = Topology::new();
+        let box_solid = crate::primitives::make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
+        let faces = brepkit_topology::explorer::solid_faces(&topo, box_solid).unwrap();
+        // Find top face (z=2)
+        let top = faces
+            .iter()
+            .find(|&&fid| {
+                let f = topo.face(fid).unwrap();
+                matches!(f.surface(), FaceSurface::Plane { normal, .. } if normal.z() > 0.9)
+            })
+            .copied()
+            .unwrap();
+        let shelled = crate::shell_op::shell(&mut topo, box_solid, 1.0, &[top]).unwrap();
+
+        let (f_before, _, _) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, shelled).unwrap();
+        let removed = unify_faces(&mut topo, shelled).unwrap();
+        let (f_after, _, _) =
+            brepkit_topology::explorer::solid_entity_counts(&topo, shelled).unwrap();
+
+        // unify_faces should NOT merge any faces — the shelled box has inner
+        // faces with opposite normals that share the same plane equation.
+        assert_eq!(
+            removed, 0,
+            "unify_faces should not merge opposite-normal faces, removed {removed}"
+        );
+        assert_eq!(
+            f_before, f_after,
+            "face count should be unchanged: {f_before} → {f_after}"
         );
     }
 

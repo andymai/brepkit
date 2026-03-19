@@ -2,7 +2,7 @@
 //!
 //! A `CompSolid` represents multiple solids that share boundary faces
 //! (e.g., two volumes separated by a common wall). This is the 8th
-//! topology type in OCCT, between Solid and Compound.
+//! topology type between Solid and Compound in the B-Rep hierarchy.
 
 use crate::arena;
 use crate::face::FaceId;

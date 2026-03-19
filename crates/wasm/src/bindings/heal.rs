@@ -35,7 +35,7 @@ impl BrepKernel {
     /// Create a solid from a set of faces by sewing them together.
     ///
     /// Alias for `sewFaces` with a default tolerance. This is the equivalent
-    /// of OCCT's `BRepBuilderAPI_MakeSolid`.
+    /// of sewing faces into a closed shell and building a solid.
     #[wasm_bindgen(js_name = "makeSolid")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn make_solid_from_faces(&mut self, face_handles: Vec<u32>) -> Result<u32, JsError> {

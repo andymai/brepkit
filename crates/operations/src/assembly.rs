@@ -4,7 +4,7 @@
 //! placed at a specific location via a transform matrix. Components can
 //! be instances of the same shape (instance sharing).
 //!
-//! Equivalent to OCCT's `XDE` (Extended Data Exchange) product structure.
+//! Provides a product structure for managing multi-component assemblies.
 
 use std::collections::HashMap;
 

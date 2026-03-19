@@ -144,7 +144,7 @@ impl BrepKernel {
         Ok(JsValue::from_str(&json))
     }
 
-    /// Boolean operation using the OCCT-style parameter-space pipeline (v2).
+    /// Boolean operation using the parameter-space pipeline (v2).
     ///
     /// Supports all surface types (plane, cylinder, cone, sphere, torus, NURBS).
     /// Preserves analytic surface types on output faces.

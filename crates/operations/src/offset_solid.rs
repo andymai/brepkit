@@ -1,7 +1,6 @@
 //! Full 3D solid offset (parallel shell).
 //!
 //! Offsets all faces of a solid by a uniform distance along their normals.
-//! Equivalent to `BRepOffsetAPI_MakeOffsetShape` in `OpenCascade`.
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};

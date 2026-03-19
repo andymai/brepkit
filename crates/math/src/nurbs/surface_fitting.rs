@@ -1,6 +1,5 @@
-//! NURBS surface fitting from a grid of data points.
-//!
-//! Equivalent to `GeomAPI_PointsToBSplineSurface` in `OpenCascade`.
+//! NURBS surface fitting from a grid of data points via least-squares
+//! progressive-iterative approximation (LSPIA).
 
 #![allow(
     clippy::many_single_char_names,
