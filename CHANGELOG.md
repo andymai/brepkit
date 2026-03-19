@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.18.0](https://github.com/andymai/brepkit/compare/v2.17.0...v2.18.0) (2026-03-19)
+
+
+### Features
+
+* **algo:** add post-processing to GFA results ([084a2d9](https://github.com/andymai/brepkit/commit/084a2d92d74e81c80583bbe794cc49de386265f6))
+* **algo:** fix classification bugs, same-domain detection, enable GFA ([ebb8676](https://github.com/andymai/brepkit/commit/ebb8676e3db4b3addbe7ca3c3c5a158de2f17361))
+* **algo:** handle ExactIntersectionCurve::Points via NURBS interpolation ([e20ce74](https://github.com/andymai/brepkit/commit/e20ce748530444169b6e03a162226471aafc5453))
+
+
+### Bug Fixes
+
+* **algo:** address PR review — AABB mid-samples, test strictness, early error ([2b2f0cf](https://github.com/andymai/brepkit/commit/2b2f0cf8fcc9ce45817c775f5cffb250f2a8b7cb))
+* **algo:** address PR review — v-range sampling, tol threading, unify loop ([96b4322](https://github.com/andymai/brepkit/commit/96b432289c26b1d133c2fbf8638123d7f27e7024))
+* **algo:** detect tangent edge-face contacts via golden section search ([290cdbc](https://github.com/andymai/brepkit/commit/290cdbc46351fa64654dfc5587e935dc7ab3c1d6))
+* **algo:** pass face v-range hints to analytic-analytic intersection ([933f4be](https://github.com/andymai/brepkit/commit/933f4be1d594bdbacd83d51dc3b6139ede61418e))
+* **algo:** trim FF plane-plane t_range to face AABB extents ([f8520e8](https://github.com/andymai/brepkit/commit/f8520e839500f58cb57c0ec99366174947ecd218))
+
 ## [2.17.0](https://github.com/andymai/brepkit/compare/v2.16.0...v2.17.0) (2026-03-19)
 
 
