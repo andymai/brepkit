@@ -1,5 +1,5 @@
-#![allow(clippy::unwrap_used)]
-#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_wrap)]
 
 use super::analytic::surface_aware_aabb;
 use super::fragments::tessellate_face_into_fragments;
@@ -3199,5 +3199,89 @@ fn gfa_box_cone_intersect() {
             vol < cone_vol + 0.5,
             "intersect volume ({vol}) should be less than cone ({cone_vol})"
         );
+    }
+}
+
+// ── D4 gridfinity repro: shelled box + lip fuse ────────────────────
+
+/// Minimal repro of D4 gridfinity non-manifold fuse bug.
+///
+/// Root cause path: `boolean_with_options` → `both_complex=true` → skips analytic
+/// → `boolean_pipeline` → pipeline succeeds but produces non-manifold topology
+/// (adj_euler=4 instead of 2). `validate_boolean_result` doesn't reject it
+/// because topological validation is logged as warnings, not hard errors.
+///
+/// The pipeline's parameter-space splitting doesn't handle the combination of:
+/// - Shelled solid (inner wires on boundary faces)
+/// - Lip solid (from boolean cut of nested boxes)
+/// - Fuse operation (merging coplanar boundary at z≈5)
+#[test]
+#[ignore = "pipeline fuse of shelled box + lip produces non-manifold topology (adj_euler=4)"]
+fn d4_shelled_box_fuse_lip() {
+    // Simplified D4: shell a box, build a lip (outer-inner cut), fuse
+    let mut topo = Topology::default();
+
+    // Box 10x10x5, centered at origin base
+    let box_solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 5.0).unwrap();
+
+    // Find top face (z=5)
+    let faces = brepkit_topology::explorer::solid_faces(&topo, box_solid).unwrap();
+    let top_face = faces
+        .iter()
+        .find(|&&fid| {
+            let f = topo.face(fid).unwrap();
+            if let brepkit_topology::face::FaceSurface::Plane { normal, d } = f.surface() {
+                normal.z() > 0.9 && *d > 4.0
+            } else {
+                false
+            }
+        })
+        .copied()
+        .unwrap();
+
+    // Shell: remove top, 1mm walls
+    let shelled = crate::shell_op::shell(&mut topo, box_solid, 1.0, &[top_face]).unwrap();
+    let (sf, se, sv) = brepkit_topology::explorer::solid_entity_counts(&topo, shelled).unwrap();
+    let s_euler = sv as i64 - se as i64 + sf as i64;
+    eprintln!("shelled: F={sf} E={se} V={sv} euler={s_euler}");
+    // Euler=3 for shelled box: 11 faces (5 outer + 5 inner + 1 bottom with hole)
+    // Adjusted: 3 - 1 inner_loop = 2. ✓
+
+    // Lip: outer box minus inner box at z=4..7 (overlaps top of shelled box)
+    // make_box creates centered at origin, so use transform to position.
+    let translate = |topo: &mut Topology, solid: SolidId, dx: f64, dy: f64, dz: f64| {
+        let mat = brepkit_math::mat::Mat4::translation(dx, dy, dz);
+        crate::transform::transform_solid(topo, solid, &mat)
+    };
+    let outer = crate::primitives::make_box(&mut topo, 11.0, 11.0, 3.0).unwrap();
+    translate(&mut topo, outer, 0.0, 0.0, 5.5).unwrap();
+    let inner = crate::primitives::make_box(&mut topo, 8.0, 8.0, 3.0).unwrap();
+    translate(&mut topo, inner, 0.0, 0.0, 5.5).unwrap();
+    let lip = boolean(&mut topo, BooleanOp::Cut, outer, inner).unwrap();
+    let (lf, le, lv) = brepkit_topology::explorer::solid_entity_counts(&topo, lip).unwrap();
+    let l_euler = lv as i64 - le as i64 + lf as i64;
+    eprintln!("lip: F={lf} E={le} V={lv} euler={l_euler}");
+
+    // Fuse shelled box + lip
+    let result = boolean(&mut topo, BooleanOp::Fuse, shelled, lip);
+    match result {
+        Ok(fused) => {
+            let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, fused).unwrap();
+            let euler = v as i64 - e as i64 + f as i64;
+            let inner_loops: i64 = {
+                let s = topo.solid(fused).unwrap();
+                let sh = topo.shell(s.outer_shell()).unwrap();
+                sh.faces()
+                    .iter()
+                    .map(|&fid| topo.face(fid).unwrap().inner_wires().len() as i64)
+                    .sum()
+            };
+            let adj = euler - inner_loops;
+            eprintln!(
+                "fused: F={f} E={e} V={v} euler={euler} inner_loops={inner_loops} adj_euler={adj}"
+            );
+            assert_eq!(adj, 2, "adjusted Euler should be 2, got {adj}");
+        }
+        Err(e) => panic!("fuse failed: {e}"),
     }
 }
