@@ -280,11 +280,13 @@ fn ff_plane_plane_t_range_is_bounded() {
     }
 }
 
-/// GFA intersect currently under-classifies sub-faces for overlapping boxes,
-/// producing fewer faces than expected. Tracked as a known limitation —
-/// the fallback pipeline handles this correctly at the `boolean_gfa` level.
+/// GFA intersect produces 2 faces instead of 6 for overlapping boxes.
+/// Root cause: the wire builder produces 1 sub-face per split face (not 4)
+/// when 2 section edges cross the face. The wire builder's angular traversal
+/// can't handle the 4-way junction where two crossing chords meet.
+/// The fallback pipeline handles this correctly at the `boolean_gfa` level.
 #[test]
-#[ignore = "GFA intersect under-classifies sub-faces for overlapping boxes"]
+#[ignore = "wire builder can't split faces with crossing section edges into 4 regions"]
 fn gfa_intersect_overlapping_boxes() {
     let mut topo = Topology::default();
     let a = make_box(&mut topo, [0.0, 0.0, 0.0], [2.0, 2.0, 2.0]);
