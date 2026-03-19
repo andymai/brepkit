@@ -809,6 +809,7 @@ pub fn compound_cut(
                         band_curves,
                         topo,
                         tol,
+                        Some(snap.id),
                         &mut fragments,
                     );
                 }

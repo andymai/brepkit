@@ -1080,6 +1080,7 @@ pub(super) fn analytic_boolean(
                     band_curves,
                     topo,
                     tol,
+                    Some(snap.id),
                     &mut fragments,
                 );
             }
@@ -1269,6 +1270,7 @@ pub(super) fn analytic_boolean(
                     band_curves,
                     topo,
                     tol,
+                    Some(snap.id),
                     &mut fragments,
                 );
             }
@@ -1881,7 +1883,7 @@ pub(super) fn analytic_boolean(
         face_ids_out.len()
     );
 
-    // Split non-manifold edges, then assemble.
+    // Split non-manifold edges before shell/solid construction.
     let _t_nm = timer_now();
     split_nonmanifold_edges(topo, &mut face_ids_out)?;
     log::debug!(
@@ -1897,8 +1899,8 @@ pub(super) fn analytic_boolean(
     let _t_shell = timer_now();
     let solid = match build_solid_from_state(topo, &face_ids_out, &state, op, a, b) {
         Ok(s) => s,
-        Err(_) => {
-            // Fallback: single shell with all faces.
+        Err(e) => {
+            log::debug!("[boolean] build_solid_from_state failed: {e}, single-shell fallback");
             let shell = Shell::new(face_ids_out).map_err(crate::OperationsError::Topology)?;
             let shell_id = topo.add_shell(shell);
             topo.add_solid(Solid::new(shell_id, vec![]))

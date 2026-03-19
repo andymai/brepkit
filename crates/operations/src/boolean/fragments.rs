@@ -749,6 +749,7 @@ pub(super) fn create_band_fragments(
     contained_curves: &[EdgeCurve],
     _topo: &Topology,
     tol: Tolerance,
+    face_id: Option<FaceId>,
     fragments: &mut Vec<AnalyticFragment>,
 ) {
     // Compute surface-specific v-extent. Bail out for unsupported surfaces.
@@ -765,7 +766,7 @@ pub(super) fn create_band_fragments(
                 source,
                 edge_curves: vec![None; face_verts.len()],
                 source_reversed,
-                source_face_id: None,
+                source_face_id: face_id,
             });
             return;
         }
@@ -794,7 +795,7 @@ pub(super) fn create_band_fragments(
             source,
             edge_curves: vec![None; face_verts.len()],
             source_reversed,
-            source_face_id: None,
+            source_face_id: face_id,
         });
         return;
     }
@@ -809,7 +810,7 @@ pub(super) fn create_band_fragments(
             source,
             edge_curves: vec![None; face_verts.len()],
             source_reversed,
-            source_face_id: None,
+            source_face_id: face_id,
         });
         return;
     };
@@ -923,7 +924,7 @@ pub(super) fn create_band_fragments(
             source,
             edge_curves: vec![None; n_verts],
             source_reversed,
-            source_face_id: None,
+            source_face_id: face_id,
         });
     }
 }
