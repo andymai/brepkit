@@ -8,10 +8,15 @@
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
+use std::collections::BTreeMap;
+
 use brepkit_math::tolerance::Tolerance;
+use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeId;
-use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::edge::{Edge, EdgeId};
+use brepkit_topology::face::{Face, FaceId, FaceSurface};
+use brepkit_topology::vertex::Vertex;
+use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::ds::{GfaArena, PaveBlockId, Rank};
 
@@ -27,7 +32,7 @@ use super::split_types::{SectionEdge, SurfaceInfo};
 /// without intersection data pass through as single sub-faces.
 #[allow(clippy::too_many_lines)]
 pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
-    topo: &Topology,
+    topo: &mut Topology,
     arena: &GfaArena,
     _edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
     face_ranks: &HashMap<FaceId, Rank, S2>,
@@ -94,14 +99,16 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             continue;
         }
 
-        // Each SplitSubFace represents a geometric sub-region of the face.
-        // Compute a distinct interior point for each so the classifier
-        // can determine inside/outside independently per sub-region.
+        // Each SplitSubFace represents a geometric sub-region.
+        // Build real topology entities (Vertex → Edge → Wire → Face) for each,
+        // and compute a distinct interior point for classification.
         for split in &split_results {
+            let new_face_id = build_topology_face(topo, split, tol);
             let pt = super::face_splitter::interior_point_3d(split, None);
+
             sub_faces.push(SubFace {
                 parent_face: face_id,
-                face_id, // same topology face — classification uses interior_point
+                face_id: new_face_id.unwrap_or(face_id),
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: Some(pt),
@@ -242,4 +249,89 @@ fn build_surface_info(topo: &Topology, face_id: FaceId) -> Option<SurfaceInfo> {
             v_periodic: false,
         }),
     }
+}
+
+/// Build a topology `Face` from a `SplitSubFace`.
+///
+/// Creates vertices at each 3D endpoint (deduplicating by position),
+/// edges between consecutive vertices, a wire from the edges, and
+/// a face with the split's surface.
+#[allow(clippy::too_many_lines)]
+fn build_topology_face(
+    topo: &mut Topology,
+    split: &super::split_types::SplitSubFace,
+    tol: Tolerance,
+) -> Option<FaceId> {
+    if split.outer_wire.is_empty() {
+        return None;
+    }
+
+    // Step 1: Create/find vertices for each unique 3D endpoint.
+    // Use a BTreeMap keyed by quantized position to deduplicate.
+    let mut vertex_cache: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
+        BTreeMap::new();
+
+    let quantize = |p: Point3| -> (i64, i64, i64) {
+        let scale = 1.0 / tol.linear;
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+
+    let get_or_create_vertex =
+        |topo: &mut Topology,
+         cache: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+         pt: Point3| {
+            let key = quantize(pt);
+            *cache
+                .entry(key)
+                .or_insert_with(|| topo.add_vertex(Vertex::new(pt, tol.linear)))
+        };
+
+    // Step 2: Create edges and oriented edges for the outer wire.
+    let mut oriented_edges = Vec::with_capacity(split.outer_wire.len());
+
+    for pcurve_edge in &split.outer_wire {
+        let start_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.start_3d);
+        let end_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.end_3d);
+
+        let edge = Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone());
+        let edge_id = topo.add_edge(edge);
+        oriented_edges.push(OrientedEdge::new(edge_id, pcurve_edge.forward));
+    }
+
+    if oriented_edges.is_empty() {
+        return None;
+    }
+
+    // Step 3: Build wire.
+    let wire = Wire::new(oriented_edges, true).ok()?;
+    let wire_id = topo.add_wire(wire);
+
+    // Step 4: Build inner wires (holes).
+    let mut inner_wire_ids = Vec::new();
+    for inner in &split.inner_wires {
+        let mut inner_oriented = Vec::with_capacity(inner.len());
+        for pcurve_edge in inner {
+            let start_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.start_3d);
+            let end_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.end_3d);
+            let edge = Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone());
+            let edge_id = topo.add_edge(edge);
+            inner_oriented.push(OrientedEdge::new(edge_id, pcurve_edge.forward));
+        }
+        if let Ok(inner_wire) = Wire::new(inner_oriented, true) {
+            inner_wire_ids.push(topo.add_wire(inner_wire));
+        }
+    }
+
+    // Step 5: Build face.
+    let mut face = Face::new(wire_id, inner_wire_ids, split.surface.clone());
+    if split.reversed {
+        face.set_reversed(true);
+    }
+    let face_id = topo.add_face(face);
+
+    Some(face_id)
 }

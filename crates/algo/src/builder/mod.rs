@@ -185,7 +185,7 @@ impl Builder {
 
         // Step 2: face images (sub-faces)
         self.sub_faces = fill_images_faces::fill_images_faces(
-            &self.topo,
+            &mut self.topo,
             &self.arena,
             &edge_images,
             &self.face_ranks,
