@@ -81,4 +81,8 @@ pub enum OperationsError {
     /// A math error occurred during the operation.
     #[error(transparent)]
     Math(#[from] brepkit_math::MathError),
+
+    /// A GFA algorithm error occurred.
+    #[error("algo: {0}")]
+    Algo(#[from] brepkit_algo::error::AlgoError),
 }

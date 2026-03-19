@@ -3,18 +3,23 @@
 //! For each (face_a, face_b) pair across solids, computes intersection
 //! curves. Results are stored as `IntersectionCurveDS` entries in the
 //! GFA arena, with FF interferences referencing them by index.
+//!
+//! Each raw curve also gets a pave block spanning its full parameter
+//! range, with topology vertices and an edge created at the endpoints.
 
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::analytic_intersection;
 use brepkit_math::nurbs::intersection as nurbs_isect;
 use brepkit_math::tolerance::Tolerance;
+use brepkit_math::traits::ParametricCurve;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeCurve;
+use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
+use brepkit_topology::vertex::Vertex;
 
-use crate::ds::{GfaArena, Interference, IntersectionCurveDS};
+use crate::ds::{GfaArena, Interference, IntersectionCurveDS, Pave, PaveBlock};
 use crate::error::AlgoError;
 
 /// Default number of samples for NURBS intersection.
@@ -30,12 +35,15 @@ const NURBS_MARCH_STEP: f64 = 0.01;
 /// curves are stored in the arena without trimming to face boundaries
 /// (boundary trimming is a later phase).
 ///
+/// Creates topology vertices and edges for each intersection curve
+/// endpoint, and a pave block spanning the full parameter range.
+///
 /// # Errors
 ///
 /// Returns [`AlgoError`] if any topology lookup or intersection computation fails.
 #[allow(clippy::too_many_lines)]
 pub fn perform(
-    topo: &Topology,
+    topo: &mut Topology,
     solid_a: SolidId,
     solid_b: SolidId,
     tol: Tolerance,
@@ -48,10 +56,20 @@ pub fn perform(
     let bboxes_a = compute_face_bboxes(topo, &faces_a)?;
     let bboxes_b = compute_face_bboxes(topo, &faces_b)?;
 
+    // Collect all surface data upfront so we don't borrow topo immutably
+    // while mutating it later.
+    let surfs_a: Vec<FaceSurface> = faces_a
+        .iter()
+        .map(|&fa| topo.face(fa).map(|f| f.surface().clone()))
+        .collect::<Result<_, _>>()?;
+    let surfs_b: Vec<FaceSurface> = faces_b
+        .iter()
+        .map(|&fb| topo.face(fb).map(|f| f.surface().clone()))
+        .collect::<Result<_, _>>()?;
+
     for (idx_a, &fa) in faces_a.iter().enumerate() {
         let bbox_a = &bboxes_a[idx_a];
-        let face_a = topo.face(fa)?;
-        let surf_a = face_a.surface();
+        let surf_a = &surfs_a[idx_a];
 
         for (idx_b, &fb) in faces_b.iter().enumerate() {
             let bbox_b = &bboxes_b[idx_b];
@@ -64,20 +82,33 @@ pub fn perform(
                 continue;
             }
 
-            let face_b = topo.face(fb)?;
-            let surf_b = face_b.surface();
+            let surf_b = &surfs_b[idx_b];
 
             // Compute raw intersection curves
             let raw_curves = compute_raw_curves(surf_a, surf_b)?;
 
             for raw in raw_curves {
+                // Create topology vertices at the curve endpoints.
+                let start_vid = topo.add_vertex(Vertex::new(raw.p_start, tol.linear));
+                let end_vid = topo.add_vertex(Vertex::new(raw.p_end, tol.linear));
+
+                // Create a topology edge for this intersection curve.
+                let edge = Edge::new(start_vid, end_vid, raw.curve.clone());
+                let edge_id = topo.add_edge(edge);
+
+                // Create a pave block spanning the full parameter range.
+                let start_pave = Pave::new(start_vid, raw.t_range.0);
+                let end_pave = Pave::new(end_vid, raw.t_range.1);
+                let pb = PaveBlock::new(edge_id, start_pave, end_pave);
+                let pb_id = arena.pave_blocks.alloc(pb);
+
                 let curve_index = arena.curves.len();
                 arena.curves.push(IntersectionCurveDS {
                     curve: raw.curve,
                     face_a: fa,
                     face_b: fb,
                     bbox: raw.bbox,
-                    pave_blocks: Vec::new(),
+                    pave_blocks: vec![pb_id],
                     t_range: raw.t_range,
                 });
 
@@ -87,7 +118,10 @@ pub fn perform(
                     curve_index,
                 });
 
-                log::debug!("FF: faces {fa:?} and {fb:?} intersect (curve_index={curve_index})",);
+                log::debug!(
+                    "FF: faces {fa:?} and {fb:?} intersect (curve_index={curve_index}, \
+                     edge={edge_id:?}, pb={pb_id:?})",
+                );
             }
         }
     }
@@ -116,7 +150,7 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
     }
 
     if points.is_empty() {
-        // Degenerate face with no edges — use a zero-volume box at origin
+        // Degenerate face with no edges -- use a zero-volume box at origin
         Ok(Aabb3 {
             min: Point3::new(0.0, 0.0, 0.0),
             max: Point3::new(0.0, 0.0, 0.0),
@@ -143,6 +177,10 @@ struct RawCurve {
     bbox: Aabb3,
     /// Parameter range on the curve.
     t_range: (f64, f64),
+    /// 3D position at the start of the parameter range.
+    p_start: Point3,
+    /// 3D position at the end of the parameter range.
+    p_end: Point3,
 }
 
 /// Compute raw intersection curves between two surfaces.
@@ -195,7 +233,7 @@ fn compute_raw_curves(
 
         // Analytic-NURBS or NURBS-Analytic
         (analytic_surf, FaceSurface::Nurbs(nurbs)) if analytic_surf.as_analytic().is_some() => {
-            // Deferred to later phases — analytic-NURBS is complex
+            // Deferred to later phases -- analytic-NURBS is complex
             let _ = nurbs;
             Ok(Vec::new())
         }
@@ -224,7 +262,7 @@ fn plane_plane_intersection(
     let dir_len = dir.length();
 
     if dir_len < 1e-12 {
-        // Planes are parallel or coplanar — no line intersection.
+        // Planes are parallel or coplanar -- no line intersection.
         // Coplanar case is handled separately by the builder.
         return Ok(Vec::new());
     }
@@ -250,6 +288,8 @@ fn plane_plane_intersection(
         curve: EdgeCurve::Line,
         bbox,
         t_range,
+        p_start: p0,
+        p_end: p1,
     }])
 }
 
@@ -263,7 +303,7 @@ fn find_plane_plane_point(na: Vec3, da: f64, nb: Vec3, db: f64, dir: Vec3) -> Po
     let denom = dir.dot(na_cross_nb);
 
     if denom.abs() < 1e-15 {
-        // Degenerate — return origin as fallback
+        // Degenerate -- return origin as fallback
         return Point3::new(0.0, 0.0, 0.0);
     }
 
@@ -291,23 +331,31 @@ fn plane_analytic_intersection(
             analytic_intersection::ExactIntersectionCurve::Circle(circle) => {
                 let bbox = circle_bbox(&circle);
                 let domain = (0.0, std::f64::consts::TAU);
+                let p_start = ParametricCurve::evaluate(&circle, domain.0);
+                let p_end = ParametricCurve::evaluate(&circle, domain.1);
                 results.push(RawCurve {
                     curve: EdgeCurve::Circle(circle),
                     bbox,
                     t_range: domain,
+                    p_start,
+                    p_end,
                 });
             }
             analytic_intersection::ExactIntersectionCurve::Ellipse(ellipse) => {
                 let bbox = ellipse_bbox(&ellipse);
                 let domain = (0.0, std::f64::consts::TAU);
+                let p_start = ParametricCurve::evaluate(&ellipse, domain.0);
+                let p_end = ParametricCurve::evaluate(&ellipse, domain.1);
                 results.push(RawCurve {
                     curve: EdgeCurve::Ellipse(ellipse),
                     bbox,
                     t_range: domain,
+                    p_start,
+                    p_end,
                 });
             }
             analytic_intersection::ExactIntersectionCurve::Points(_) => {
-                // Points can't be represented as edge curves — skip
+                // Points can't be represented as edge curves -- skip
             }
         }
     }
@@ -327,10 +375,14 @@ fn analytic_analytic_intersection(
     for ic in isect_curves {
         let domain = ic.curve.domain();
         let bbox = nurbs_curve_bbox(&ic.curve);
+        let p_start = ParametricCurve::evaluate(&ic.curve, domain.0);
+        let p_end = ParametricCurve::evaluate(&ic.curve, domain.1);
         results.push(RawCurve {
             curve: EdgeCurve::NurbsCurve(ic.curve),
             bbox,
             t_range: domain,
+            p_start,
+            p_end,
         });
     }
 
@@ -349,10 +401,14 @@ fn plane_nurbs_intersection(
     for ic in isect_curves {
         let domain = ic.curve.domain();
         let bbox = nurbs_curve_bbox(&ic.curve);
+        let p_start = ParametricCurve::evaluate(&ic.curve, domain.0);
+        let p_end = ParametricCurve::evaluate(&ic.curve, domain.1);
         results.push(RawCurve {
             curve: EdgeCurve::NurbsCurve(ic.curve),
             bbox,
             t_range: domain,
+            p_start,
+            p_end,
         });
     }
 
@@ -370,10 +426,14 @@ fn nurbs_nurbs_intersection(
     for ic in isect_curves {
         let domain = ic.curve.domain();
         let bbox = nurbs_curve_bbox(&ic.curve);
+        let p_start = ParametricCurve::evaluate(&ic.curve, domain.0);
+        let p_end = ParametricCurve::evaluate(&ic.curve, domain.1);
         results.push(RawCurve {
             curve: EdgeCurve::NurbsCurve(ic.curve),
             bbox,
             t_range: domain,
+            p_start,
+            p_end,
         });
     }
 
@@ -386,7 +446,7 @@ fn circle_bbox(circle: &brepkit_math::curves::Circle3D) -> Aabb3 {
     let points: Vec<Point3> = (0..=n)
         .map(|i| {
             let t = std::f64::consts::TAU * (i as f64 / n as f64);
-            brepkit_math::traits::ParametricCurve::evaluate(circle, t)
+            ParametricCurve::evaluate(circle, t)
         })
         .collect();
     Aabb3::from_points(points)
@@ -398,7 +458,7 @@ fn ellipse_bbox(ellipse: &brepkit_math::curves::Ellipse3D) -> Aabb3 {
     let points: Vec<Point3> = (0..=n)
         .map(|i| {
             let t = std::f64::consts::TAU * (i as f64 / n as f64);
-            brepkit_math::traits::ParametricCurve::evaluate(ellipse, t)
+            ParametricCurve::evaluate(ellipse, t)
         })
         .collect();
     Aabb3::from_points(points)
@@ -411,7 +471,7 @@ fn nurbs_curve_bbox(curve: &brepkit_math::nurbs::curve::NurbsCurve) -> Aabb3 {
     let points: Vec<Point3> = (0..=n)
         .map(|i| {
             let t = t0 + (t1 - t0) * (i as f64 / n as f64);
-            brepkit_math::traits::ParametricCurve::evaluate(curve, t)
+            ParametricCurve::evaluate(curve, t)
         })
         .collect();
     Aabb3::from_points(points)
