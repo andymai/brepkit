@@ -14,6 +14,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
+use brepkit_topology::vertex::Vertex;
 
 use super::helpers::{add_pave_to_edge, find_nearby_pave_vertex as find_nearby_vertex};
 
@@ -31,7 +32,7 @@ const N_SAMPLES: usize = 64;
 ///
 /// Returns [`AlgoError`] if any topology lookup fails.
 pub fn perform(
-    topo: &Topology,
+    topo: &mut Topology,
     solid_a: SolidId,
     solid_b: SolidId,
     tol: Tolerance,
@@ -72,7 +73,7 @@ fn collect_face_boundary_edges(
 /// Check each edge against each face.
 #[allow(clippy::too_many_lines)]
 fn check_edge_face_pairs(
-    topo: &Topology,
+    topo: &mut Topology,
     edges: &[EdgeId],
     faces: &[FaceId],
     face_boundary_edges: &[HashSet<EdgeId>],
@@ -80,10 +81,14 @@ fn check_edge_face_pairs(
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
     for &eid in edges {
-        let edge = topo.edge(eid)?;
-        let start_pos = topo.vertex(edge.start())?.point();
-        let end_pos = topo.vertex(edge.end())?.point();
-        let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+        // Snapshot edge data to avoid holding immutable borrow across add_vertex
+        let (curve, start_pos, end_pos, t0, t1) = {
+            let edge = topo.edge(eid)?;
+            let sp = topo.vertex(edge.start())?.point();
+            let ep = topo.vertex(edge.end())?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            (edge.curve().clone(), sp, ep, t0, t1)
+        };
 
         for (face_idx, &fid) in faces.iter().enumerate() {
             // Skip if edge is already a boundary edge of this face
@@ -96,48 +101,35 @@ fn check_edge_face_pairs(
 
             let crossings = match surface {
                 FaceSurface::Plane { normal, d } => {
-                    find_edge_plane_crossings(edge.curve(), start_pos, end_pos, t0, t1, *normal, *d)
+                    find_edge_plane_crossings(&curve, start_pos, end_pos, t0, t1, *normal, *d)
                 }
-                _ => find_edge_surface_crossings(
-                    edge.curve(),
-                    start_pos,
-                    end_pos,
-                    t0,
-                    t1,
-                    surface,
-                    tol,
-                ),
+                _ => find_edge_surface_crossings(&curve, start_pos, end_pos, t0, t1, surface, tol),
             };
 
             for (t, pt) in crossings {
                 // Check if an existing vertex is at this point
                 let existing = find_nearby_vertex(topo, arena, pt, tol);
 
-                if let Some(vertex_id) = existing {
-                    // Add extra pave to the edge
-                    let pave = Pave::new(vertex_id, t);
-                    add_pave_to_edge(arena, eid, pave);
-
-                    arena.interference.ef.push(Interference::EF {
-                        edge: eid,
-                        face: fid,
-                        new_vertex: Some(vertex_id),
-                        parameter: Some(t),
-                    });
+                let vertex_id = if let Some(vid) = existing {
+                    vid
                 } else {
-                    // No existing vertex — record for MakeSplitEdges phase
-                    arena.interference.ef.push(Interference::EF {
-                        edge: eid,
-                        face: fid,
-                        new_vertex: None,
-                        parameter: Some(t),
-                    });
-                }
+                    // No existing vertex near this point — create one.
+                    topo.add_vertex(Vertex::new(pt, tol.linear))
+                };
+
+                // Add extra pave to the edge
+                let pave = Pave::new(vertex_id, t);
+                add_pave_to_edge(arena, eid, pave);
+
+                arena.interference.ef.push(Interference::EF {
+                    edge: eid,
+                    face: fid,
+                    new_vertex: Some(vertex_id),
+                    parameter: Some(t),
+                });
 
                 // Add vertex to face info
-                if let Some(vid) = existing {
-                    arena.face_info_mut(fid).vertices_in.insert(vid);
-                }
+                arena.face_info_mut(fid).vertices_in.insert(vertex_id);
 
                 log::debug!("EF: edge {eid:?} crosses face {fid:?} at t={t:.6}",);
             }
@@ -162,6 +154,8 @@ fn find_edge_plane_crossings(
         let dir = end_pos - start_pos;
         let denom = dir.dot(normal);
 
+        // 1e-15 checks for mathematical degeneracy (line parallel to
+        // plane), not geometric tolerance.
         if denom.abs() < 1e-15 {
             // Line parallel to plane — no single crossing
             return Vec::new();
@@ -172,7 +166,7 @@ fn find_edge_plane_crossings(
         let s = (d - origin_dot) / denom;
 
         // s is in [0, 1] parameterization of start..end
-        if !(-1e-10..=1.0 + 1e-10).contains(&s) {
+        if !(-1e-7..=1.0 + 1e-7).contains(&s) {
             return Vec::new();
         }
 
@@ -301,12 +295,13 @@ fn find_crossings_by_sampling(
 fn distance_to_surface(pt: Point3, surface: &FaceSurface) -> f64 {
     if let FaceSurface::Plane { normal, d } = surface {
         (pt.x() * normal.x() + pt.y() * normal.y() + pt.z() * normal.z() - d).abs()
-    } else {
-        if let Some((u, v)) = surface.project_point(pt) {
-            if let Some(surf_pt) = surface.evaluate(u, v) {
-                return (pt - surf_pt).length();
-            }
+    } else if let Some((u, v)) = surface.project_point(pt) {
+        if let Some(surf_pt) = surface.evaluate(u, v) {
+            (pt - surf_pt).length()
+        } else {
+            f64::MAX
         }
+    } else {
         f64::MAX
     }
 }

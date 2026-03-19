@@ -34,7 +34,7 @@ use crate::error::AlgoError;
 /// building pave blocks and populating the GFA arena.
 pub struct PaveFiller<'a> {
     /// The topology containing both solids.
-    topo: &'a Topology,
+    topo: &'a mut Topology,
     /// Solid A (first boolean argument).
     solid_a: SolidId,
     /// Solid B (second boolean argument).
@@ -45,8 +45,7 @@ pub struct PaveFiller<'a> {
 
 impl<'a> PaveFiller<'a> {
     /// Creates a new `PaveFiller` for two solids.
-    #[must_use]
-    pub fn new(topo: &'a Topology, solid_a: SolidId, solid_b: SolidId) -> Self {
+    pub fn new(topo: &'a mut Topology, solid_a: SolidId, solid_b: SolidId) -> Self {
         Self {
             topo,
             solid_a,
@@ -56,9 +55,8 @@ impl<'a> PaveFiller<'a> {
     }
 
     /// Creates a `PaveFiller` with custom tolerance.
-    #[must_use]
     pub fn with_tolerance(
-        topo: &'a Topology,
+        topo: &'a mut Topology,
         solid_a: SolidId,
         solid_b: SolidId,
         tol: Tolerance,
@@ -73,13 +71,14 @@ impl<'a> PaveFiller<'a> {
 
     /// Run intersection phases (VV through FF), populating the GFA arena.
     ///
-    /// This is stage 1 of the pipeline and only reads `&Topology`.
+    /// Creates new vertices in `Topology` when intersection points have
+    /// no nearby existing vertex (EE, EF, FF phases).
     /// Call [`run_pave_filler`] instead to run both stages.
     ///
     /// # Errors
     ///
     /// Returns [`AlgoError`] if any topology lookup or intersection fails.
-    pub fn perform(&self, arena: &mut GfaArena) -> Result<(), AlgoError> {
+    pub fn perform(&mut self, arena: &mut GfaArena) -> Result<(), AlgoError> {
         // Phase 0: Initialize pave blocks for all edges
         self.init_pave_blocks(arena)?;
 
@@ -146,9 +145,9 @@ pub fn run_pave_filler(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
-    // Stage 1: Intersection (immutable Topology)
+    // Stage 1: Intersection (may create new vertices for EE/EF/FF crossings)
     {
-        let filler = PaveFiller::with_tolerance(topo, solid_a, solid_b, tol);
+        let mut filler = PaveFiller::with_tolerance(topo, solid_a, solid_b, tol);
         filler.perform(arena)?;
     }
 

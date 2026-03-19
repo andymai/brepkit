@@ -53,9 +53,16 @@ impl GfaArena {
 
     /// Resolves a vertex to its same-domain canonical vertex.
     /// Returns the input vertex if no SD mapping exists.
+    /// Follows chains transitively (e.g. vb→va→vc returns vc).
     #[must_use]
     pub fn resolve_vertex(&self, v: VertexId) -> VertexId {
-        self.same_domain_vertices.get(&v).copied().unwrap_or(v)
+        let mut current = v;
+        loop {
+            match self.same_domain_vertices.get(&current).copied() {
+                Some(parent) if parent != current => current = parent,
+                _ => return current,
+            }
+        }
     }
 
     /// Registers two vertices as same-domain (coincident).

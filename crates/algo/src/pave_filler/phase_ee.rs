@@ -10,6 +10,7 @@ use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::solid::SolidId;
+use brepkit_topology::vertex::Vertex;
 
 use super::helpers::{add_pave_to_edge, find_nearby_pave_vertex};
 use crate::error::AlgoError;
@@ -26,7 +27,7 @@ use crate::error::AlgoError;
 /// Returns [`AlgoError`] if any topology lookup fails.
 #[allow(clippy::too_many_lines)]
 pub fn perform(
-    topo: &Topology,
+    topo: &mut Topology,
     solid_a: SolidId,
     solid_b: SolidId,
     tol: Tolerance,
@@ -64,28 +65,23 @@ pub fn perform(
                 // Check if the intersection point is already a known vertex
                 let existing = find_nearby_pave_vertex(topo, arena, point, tol);
 
-                if let Some(vertex_id) = existing {
-                    // Add extra paves to both edges
-                    add_pave_to_edge(arena, ea_id, Pave::new(vertex_id, t_a));
-                    add_pave_to_edge(arena, eb_id, Pave::new(vertex_id, t_b));
-
-                    arena.interference.ee.push(Interference::EE {
-                        e1: ea_id,
-                        e2: eb_id,
-                        new_vertex: Some(vertex_id),
-                        common_pave_block: None,
-                    });
+                let vertex_id = if let Some(vid) = existing {
+                    vid
                 } else {
-                    // No existing vertex near this point. Record the
-                    // interference; new vertices are created in the later
-                    // MakeSplitEdges phase (which has `&mut Topology`).
-                    arena.interference.ee.push(Interference::EE {
-                        e1: ea_id,
-                        e2: eb_id,
-                        new_vertex: None,
-                        common_pave_block: None,
-                    });
-                }
+                    // No existing vertex near this point — create one.
+                    topo.add_vertex(Vertex::new(point, tol.linear))
+                };
+
+                // Add extra paves to both edges
+                add_pave_to_edge(arena, ea_id, Pave::new(vertex_id, t_a));
+                add_pave_to_edge(arena, eb_id, Pave::new(vertex_id, t_b));
+
+                arena.interference.ee.push(Interference::EE {
+                    e1: ea_id,
+                    e2: eb_id,
+                    new_vertex: Some(vertex_id),
+                    common_pave_block: None,
+                });
 
                 log::debug!(
                     "EE: edges {ea_id:?}[{idx_a}] and {eb_id:?}[{idx_b}] cross at \
@@ -212,8 +208,8 @@ fn find_edge_edge_crossings(
         .collect();
 
     // Find closest approach between segment pairs
-    let domain_a = (ea.t0 - 1e-10)..=(ea.t1 + 1e-10);
-    let domain_b = (eb.t0 - 1e-10)..=(eb.t1 + 1e-10);
+    let domain_a = (ea.t0 - tol.linear)..=(ea.t1 + tol.linear);
+    let domain_b = (eb.t0 - tol.linear)..=(eb.t1 + tol.linear);
 
     for i in 0..n {
         for j in 0..n {
@@ -274,7 +270,8 @@ fn line_line_intersection(ea: &EdgeData, eb: &EdgeData, tol: Tolerance) -> Vec<(
 
     let denom = a.mul_add(c, -(b * b));
 
-    // Parallel lines
+    // Parallel lines — 1e-20 checks for mathematical degeneracy
+    // (near-zero determinant), not geometric tolerance.
     if denom.abs() < 1e-20 {
         return Vec::new();
     }
@@ -283,7 +280,7 @@ fn line_line_intersection(ea: &EdgeData, eb: &EdgeData, tol: Tolerance) -> Vec<(
     let t = a.mul_add(e, -(b * d)) / denom;
 
     // Check if within edge domains [0, 1] for lines
-    let range = -1e-10..=1.0 + 1e-10;
+    let range = -tol.linear..=1.0 + tol.linear;
     if !range.contains(&s) || !range.contains(&t) {
         return Vec::new();
     }
@@ -336,6 +333,8 @@ fn closest_segment_pair(
 
     let denom = a.mul_add(c, -(b * b));
 
+    // 1e-20 checks for mathematical degeneracy (near-zero determinant),
+    // not geometric tolerance.
     let (s, t) = if denom.abs() < 1e-20 {
         // Parallel segments — use midpoints
         (0.5, 0.5)

@@ -125,7 +125,7 @@ fn two_overlapping_boxes() -> (Topology, GfaArena) {
     let b = make_box(&mut topo, [0.5, 0.5, 0.5], [1.5, 1.5, 1.5]);
 
     let mut arena = GfaArena::new();
-    let filler = PaveFiller::new(&topo, a, b);
+    let mut filler = PaveFiller::new(&mut topo, a, b);
     filler
         .perform(&mut arena)
         .expect("PaveFiller should succeed");
