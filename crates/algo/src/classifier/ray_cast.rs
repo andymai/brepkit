@@ -197,8 +197,18 @@ pub fn compute_solid_bbox(
         let wire = topo.wire(face.outer_wire())?;
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            for vid in [edge.start(), edge.end()] {
-                points.push(topo.vertex(vid)?.point());
+            let start_pos = topo.vertex(edge.start())?.point();
+            let end_pos = topo.vertex(edge.end())?.point();
+            points.push(start_pos);
+            points.push(end_pos);
+            // Curved edges can bulge beyond their endpoints
+            if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+                let t_mid = 0.5_f64.mul_add(t1 - t0, t0);
+                let mid = edge
+                    .curve()
+                    .evaluate_with_endpoints(t_mid, start_pos, end_pos);
+                points.push(mid);
             }
         }
     }

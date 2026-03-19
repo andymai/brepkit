@@ -59,6 +59,10 @@ pub fn boolean_gfa(
         BooleanOp::Intersect => brepkit_algo::bop::BooleanOp::Intersect,
     };
 
+    // Safety: GFA may allocate new entities in the topology arena, but
+    // arena allocation is append-only — the original solid IDs `a` and `b`
+    // remain valid. The fallback pipeline only reads original faces via
+    // `solid_faces(topo, a/b)`, which is unaffected by new allocations.
     let gfa_start = timer_now();
     match brepkit_algo::gfa::boolean(topo, algo_op, a, b) {
         Ok(result) => {

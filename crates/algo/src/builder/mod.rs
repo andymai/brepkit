@@ -232,11 +232,10 @@ impl Builder {
                         classifier::classify_point(&self.topo, opposing_solid, point)?;
                 }
                 Err(e) => {
-                    log::warn!(
-                        "Builder: could not sample interior of face {:?}: {e}",
+                    return Err(AlgoError::ClassificationFailed(format!(
+                        "could not sample interior of face {:?}: {e}",
                         sf.face_id
-                    );
-                    // Leave as Unknown — the BOP will skip it
+                    )));
                 }
             }
         }

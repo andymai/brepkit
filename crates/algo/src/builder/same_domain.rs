@@ -94,14 +94,20 @@ fn face_bboxes_overlap(topo: &Topology, a: FaceId, b: FaceId, tol: Tolerance) ->
     let bbox = |fid: FaceId| -> Option<brepkit_math::aabb::Aabb3> {
         let face = topo.face(fid).ok()?;
         let wire = topo.wire(face.outer_wire()).ok()?;
-        let points: Vec<_> = wire
-            .edges()
-            .iter()
-            .filter_map(|oe| {
-                let e = topo.edge(oe.edge()).ok()?;
-                Some(topo.vertex(e.start()).ok()?.point())
-            })
-            .collect();
+        let mut points = Vec::new();
+        for oe in wire.edges() {
+            let e = topo.edge(oe.edge()).ok()?;
+            let sp = topo.vertex(e.start()).ok()?.point();
+            let ep = topo.vertex(e.end()).ok()?.point();
+            points.push(sp);
+            points.push(ep);
+            // Curved edges can bulge beyond their endpoints
+            if !matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
+                let t_mid = 0.5_f64.mul_add(t1 - t0, t0);
+                points.push(e.curve().evaluate_with_endpoints(t_mid, sp, ep));
+            }
+        }
         brepkit_math::aabb::Aabb3::try_from_points(points)
     };
     let Some(ba) = bbox(a) else { return false };

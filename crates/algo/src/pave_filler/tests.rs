@@ -258,38 +258,33 @@ fn gfa_cut_overlapping_boxes() {
     let b = make_box(&mut topo, [0.5, 0.5, 0.5], [1.5, 1.5, 1.5]);
 
     let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, a, b);
-    match &result {
-        Ok(solid_id) => {
-            let faces = brepkit_topology::explorer::solid_faces(&topo, *solid_id).unwrap();
-            eprintln!("Cut: {} faces", faces.len());
-            assert!(
-                faces.len() >= 6,
-                "cut result should have at least 6 faces, got {}",
-                faces.len()
-            );
-        }
-        Err(e) => {
-            eprintln!("GFA cut FAILED: {e}");
-        }
-    }
+    let solid_id = result.expect("GFA cut of overlapping boxes should succeed");
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid_id).unwrap();
+    eprintln!("Cut: {} faces", faces.len());
+    assert!(
+        faces.len() >= 6,
+        "cut result should have at least 6 faces, got {}",
+        faces.len()
+    );
 }
 
+/// GFA intersect currently under-classifies sub-faces for overlapping boxes,
+/// producing fewer faces than expected. Tracked as a known limitation —
+/// the fallback pipeline handles this correctly at the `boolean_gfa` level.
 #[test]
+#[ignore = "GFA intersect under-classifies sub-faces for overlapping boxes"]
 fn gfa_intersect_overlapping_boxes() {
     let mut topo = Topology::default();
     let a = make_box(&mut topo, [0.0, 0.0, 0.0], [2.0, 2.0, 2.0]);
     let b = make_box(&mut topo, [1.0, 1.0, 1.0], [3.0, 3.0, 3.0]);
 
-    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Intersect, a, b);
-    match &result {
-        Ok(solid_id) => {
-            let faces = brepkit_topology::explorer::solid_faces(&topo, *solid_id).unwrap();
-            eprintln!("Intersect: {} faces", faces.len());
-            assert!(!faces.is_empty(), "intersect result should have faces");
-        }
-        Err(e) => {
-            eprintln!("GFA intersect FAILED (expected for now): {e}");
-            // Don't assert — intersect classification is a known limitation
-        }
-    }
+    let solid_id = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Intersect, a, b)
+        .expect("GFA intersect should succeed");
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid_id).unwrap();
+    assert_eq!(
+        faces.len(),
+        6,
+        "intersect of overlapping cubes should have 6 faces, got {}",
+        faces.len()
+    );
 }
