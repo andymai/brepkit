@@ -32,7 +32,7 @@ let step = write_step(&topo, &[drilled])?;
 
 I needed parametric CAD in the browser for [gridfinitylayouttool.com](https://gridfinitylayouttool.com). The existing options were proprietary or compiled from C++.
 
-brepkit is a from-scratch B-Rep kernel in Rust targeting WebAssembly. Zero `unsafe`, zero `unwrap`, zero `panic`. Every operation returns `Result`.
+brepkit is a from-scratch B-Rep kernel in Rust targeting WebAssembly. `unsafe` is forbidden, `unwrap` and `panic` are denied by default. Every public operation returns `Result`.
 
 ## Status
 
@@ -78,7 +78,7 @@ Broad directions, no dates.
 
 ## Architecture
 
-Layered Cargo workspace. Each layer depends only on layers below it. Boundaries are enforced by CI.
+Layered Cargo workspace. Crates depend only on the same or lower layers. Boundaries are enforced by CI.
 
 ```mermaid
 graph BT
@@ -100,8 +100,8 @@ graph BT
     heal --> math & topology & geometry
     check --> math & topology & geometry
     operations --> math & topology & geometry & algo & blend & heal & check
-    io --> math & topology & operations & heal
-    wasm --> operations & io
+    io --> math & topology & operations
+    wasm --> math & topology & operations & check & io
 ```
 
 | Layer | Crate | What it does |
