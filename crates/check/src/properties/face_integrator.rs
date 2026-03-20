@@ -158,6 +158,13 @@ type UvBounds = ((f64, f64), (f64, f64));
 ///
 /// When all projected vertices coincide (e.g. a full-revolution face),
 /// `full_domain` is returned instead.
+///
+/// **Limitation:** Only the outer wire is used for UV bounds. Inner wires
+/// (holes) are handled during Gauss integration by the UV containment check
+/// in `integrate_parametric_trimmed`, but the current containment only tests
+/// against the outer boundary. Faces with holes will over-integrate the hole
+/// region. A proper fix requires multi-polygon UV containment (outer minus
+/// holes).
 fn face_uv_bounds<S: ParametricSurface>(
     topo: &Topology,
     face_id: FaceId,

@@ -288,12 +288,16 @@ fn collect_solid_vertices(topo: &Topology, solid: SolidId) -> Result<Vec<Point3>
     let mut points = Vec::new();
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        for oe in wire.edges() {
-            let edge_data = topo.edge(oe.edge())?;
-            for vid in [edge_data.start(), edge_data.end()] {
-                if seen.insert(vid) {
-                    points.push(topo.vertex(vid)?.point());
+        let mut wire_ids = vec![face.outer_wire()];
+        wire_ids.extend(face.inner_wires().iter().copied());
+        for wid in wire_ids {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let edge_data = topo.edge(oe.edge())?;
+                for vid in [edge_data.start(), edge_data.end()] {
+                    if seen.insert(vid) {
+                        points.push(topo.vertex(vid)?.point());
+                    }
                 }
             }
         }
@@ -328,68 +332,73 @@ fn collect_solid_edge_segments(
 
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        for oe in wire.edges() {
-            let eid = oe.edge();
-            if !seen.insert(eid) {
-                continue;
-            }
-            let edge_data = topo.edge(eid)?;
-            let start_pt = topo.vertex(edge_data.start())?.point();
-            let end_pt = topo.vertex(edge_data.end())?.point();
+        // Iterate outer wire + inner wires (holes)
+        let mut wire_ids = vec![face.outer_wire()];
+        wire_ids.extend(face.inner_wires().iter().copied());
+        for wid in wire_ids {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let eid = oe.edge();
+                if !seen.insert(eid) {
+                    continue;
+                }
+                let edge_data = topo.edge(eid)?;
+                let start_pt = topo.vertex(edge_data.start())?.point();
+                let end_pt = topo.vertex(edge_data.end())?.point();
 
-            match edge_data.curve() {
-                EdgeCurve::Line => {
-                    segments.push((start_pt, end_pt));
-                }
-                EdgeCurve::Circle(c) => {
-                    let is_closed = edge_data.start() == edge_data.end();
-                    let (t0, t1) = if is_closed {
-                        (0.0, std::f64::consts::TAU)
-                    } else {
-                        let t0 = c.project(start_pt);
-                        let mut t1 = c.project(end_pt);
-                        if t1 <= t0 {
-                            t1 += std::f64::consts::TAU;
-                        }
-                        (t0, t1)
-                    };
-                    let mut prev = c.evaluate(t0);
-                    for i in 1..=n_samples {
-                        let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
-                        let curr = c.evaluate(t);
-                        segments.push((prev, curr));
-                        prev = curr;
+                match edge_data.curve() {
+                    EdgeCurve::Line => {
+                        segments.push((start_pt, end_pt));
                     }
-                }
-                EdgeCurve::Ellipse(e) => {
-                    let is_closed = edge_data.start() == edge_data.end();
-                    let (t0, t1) = if is_closed {
-                        (0.0, std::f64::consts::TAU)
-                    } else {
-                        let t0 = e.project(start_pt);
-                        let mut t1 = e.project(end_pt);
-                        if t1 <= t0 {
-                            t1 += std::f64::consts::TAU;
+                    EdgeCurve::Circle(c) => {
+                        let is_closed = edge_data.start() == edge_data.end();
+                        let (t0, t1) = if is_closed {
+                            (0.0, std::f64::consts::TAU)
+                        } else {
+                            let t0 = c.project(start_pt);
+                            let mut t1 = c.project(end_pt);
+                            if t1 <= t0 {
+                                t1 += std::f64::consts::TAU;
+                            }
+                            (t0, t1)
+                        };
+                        let mut prev = c.evaluate(t0);
+                        for i in 1..=n_samples {
+                            let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
+                            let curr = c.evaluate(t);
+                            segments.push((prev, curr));
+                            prev = curr;
                         }
-                        (t0, t1)
-                    };
-                    let mut prev = e.evaluate(t0);
-                    for i in 1..=n_samples {
-                        let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
-                        let curr = e.evaluate(t);
-                        segments.push((prev, curr));
-                        prev = curr;
                     }
-                }
-                EdgeCurve::NurbsCurve(nc) => {
-                    let (t0, t1) = nc.domain();
-                    let mut prev = nc.evaluate(t0);
-                    for i in 1..=n_samples {
-                        let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
-                        let curr = nc.evaluate(t);
-                        segments.push((prev, curr));
-                        prev = curr;
+                    EdgeCurve::Ellipse(e) => {
+                        let is_closed = edge_data.start() == edge_data.end();
+                        let (t0, t1) = if is_closed {
+                            (0.0, std::f64::consts::TAU)
+                        } else {
+                            let t0 = e.project(start_pt);
+                            let mut t1 = e.project(end_pt);
+                            if t1 <= t0 {
+                                t1 += std::f64::consts::TAU;
+                            }
+                            (t0, t1)
+                        };
+                        let mut prev = e.evaluate(t0);
+                        for i in 1..=n_samples {
+                            let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
+                            let curr = e.evaluate(t);
+                            segments.push((prev, curr));
+                            prev = curr;
+                        }
+                    }
+                    EdgeCurve::NurbsCurve(nc) => {
+                        let (t0, t1) = nc.domain();
+                        let mut prev = nc.evaluate(t0);
+                        for i in 1..=n_samples {
+                            let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
+                            let curr = nc.evaluate(t);
+                            segments.push((prev, curr));
+                            prev = curr;
+                        }
                     }
                 }
             }
@@ -414,23 +423,31 @@ fn is_point_in_face_boundary(
 }
 
 /// Find the closest point on the wire edges of a face to a given point.
+///
+/// Iterates both the outer wire and inner wires (holes).
 fn closest_point_on_wire_edges(
     topo: &Topology,
     face_id: FaceId,
     point: Point3,
 ) -> Result<Option<(f64, Point3)>, CheckError> {
     let face = topo.face(face_id)?;
-    let wire = topo.wire(face.outer_wire())?;
     let mut best_dist = f64::INFINITY;
     let mut best_pt = point;
-    for oe in wire.edges() {
-        let edge_data = topo.edge(oe.edge())?;
-        let p0 = topo.vertex(edge_data.start())?.point();
-        let p1 = topo.vertex(edge_data.end())?.point();
-        let (dist, closest) = point_to_segment(point, p0, p1);
-        if dist < best_dist {
-            best_dist = dist;
-            best_pt = closest;
+
+    let mut wire_ids = vec![face.outer_wire()];
+    wire_ids.extend(face.inner_wires().iter().copied());
+
+    for wid in wire_ids {
+        let wire = topo.wire(wid)?;
+        for oe in wire.edges() {
+            let edge_data = topo.edge(oe.edge())?;
+            let p0 = topo.vertex(edge_data.start())?.point();
+            let p1 = topo.vertex(edge_data.end())?.point();
+            let (dist, closest) = point_to_segment(point, p0, p1);
+            if dist < best_dist {
+                best_dist = dist;
+                best_pt = closest;
+            }
         }
     }
     if best_dist < f64::INFINITY {
