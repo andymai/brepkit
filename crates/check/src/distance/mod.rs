@@ -53,9 +53,7 @@ pub fn point_to_solid(
     point: Point3,
     solid: SolidId,
 ) -> Result<DistanceResult, CheckError> {
-    let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    let face_ids: Vec<FaceId> = shell.faces().to_vec();
+    let face_ids = collect_solid_faces(topo, solid)?;
 
     // Build AABBs and BVH.
     let mut face_aabbs: Vec<(usize, Aabb3)> = Vec::with_capacity(face_ids.len());
@@ -280,23 +278,28 @@ pub fn solid_to_solid(
     })
 }
 
-/// Collect all unique vertex positions from a solid.
+/// Collect all unique vertex positions from a solid (outer + inner shells).
 fn collect_solid_vertices(topo: &Topology, solid: SolidId) -> Result<Vec<Point3>, CheckError> {
     let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
     let mut seen = HashSet::new();
     let mut points = Vec::new();
-    for &fid in shell.faces() {
-        let face = topo.face(fid)?;
-        let mut wire_ids = vec![face.outer_wire()];
-        wire_ids.extend(face.inner_wires().iter().copied());
-        for wid in wire_ids {
-            let wire = topo.wire(wid)?;
-            for oe in wire.edges() {
-                let edge_data = topo.edge(oe.edge())?;
-                for vid in [edge_data.start(), edge_data.end()] {
-                    if seen.insert(vid) {
-                        points.push(topo.vertex(vid)?.point());
+    let shell_ids: Vec<_> = std::iter::once(solid_data.outer_shell())
+        .chain(solid_data.inner_shells().iter().copied())
+        .collect();
+    for sid in shell_ids {
+        let shell = topo.shell(sid)?;
+        for &fid in shell.faces() {
+            let face = topo.face(fid)?;
+            let mut wire_ids = vec![face.outer_wire()];
+            wire_ids.extend(face.inner_wires().iter().copied());
+            for wid in wire_ids {
+                let wire = topo.wire(wid)?;
+                for oe in wire.edges() {
+                    let edge_data = topo.edge(oe.edge())?;
+                    for vid in [edge_data.start(), edge_data.end()] {
+                        if seen.insert(vid) {
+                            points.push(topo.vertex(vid)?.point());
+                        }
                     }
                 }
             }
@@ -305,11 +308,18 @@ fn collect_solid_vertices(topo: &Topology, solid: SolidId) -> Result<Vec<Point3>
     Ok(points)
 }
 
-/// Collect all face IDs from a solid's outer shell.
+/// Collect all face IDs from a solid (outer + inner shells).
 fn collect_solid_faces(topo: &Topology, solid: SolidId) -> Result<Vec<FaceId>, CheckError> {
     let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    Ok(shell.faces().to_vec())
+    let mut faces = Vec::new();
+    let shell_ids: Vec<_> = std::iter::once(solid_data.outer_shell())
+        .chain(solid_data.inner_shells().iter().copied())
+        .collect();
+    for sid in shell_ids {
+        let shell = topo.shell(sid)?;
+        faces.extend(shell.faces().iter().copied());
+    }
+    Ok(faces)
 }
 
 /// Collect edge segments as polylines for edge-edge distance computation.
@@ -324,80 +334,85 @@ fn collect_solid_edge_segments(
     use brepkit_topology::edge::EdgeCurve;
 
     let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
     let mut seen = HashSet::new();
     let mut segments = Vec::new();
 
     let n_samples = 8usize;
 
-    for &fid in shell.faces() {
-        let face = topo.face(fid)?;
-        // Iterate outer wire + inner wires (holes)
-        let mut wire_ids = vec![face.outer_wire()];
-        wire_ids.extend(face.inner_wires().iter().copied());
-        for wid in wire_ids {
-            let wire = topo.wire(wid)?;
-            for oe in wire.edges() {
-                let eid = oe.edge();
-                if !seen.insert(eid) {
-                    continue;
-                }
-                let edge_data = topo.edge(eid)?;
-                let start_pt = topo.vertex(edge_data.start())?.point();
-                let end_pt = topo.vertex(edge_data.end())?.point();
+    let shell_ids: Vec<_> = std::iter::once(solid_data.outer_shell())
+        .chain(solid_data.inner_shells().iter().copied())
+        .collect();
+    for sid in shell_ids {
+        let shell = topo.shell(sid)?;
+        for &fid in shell.faces() {
+            let face = topo.face(fid)?;
+            // Iterate outer wire + inner wires (holes)
+            let mut wire_ids = vec![face.outer_wire()];
+            wire_ids.extend(face.inner_wires().iter().copied());
+            for wid in wire_ids {
+                let wire = topo.wire(wid)?;
+                for oe in wire.edges() {
+                    let eid = oe.edge();
+                    if !seen.insert(eid) {
+                        continue;
+                    }
+                    let edge_data = topo.edge(eid)?;
+                    let start_pt = topo.vertex(edge_data.start())?.point();
+                    let end_pt = topo.vertex(edge_data.end())?.point();
 
-                match edge_data.curve() {
-                    EdgeCurve::Line => {
-                        segments.push((start_pt, end_pt));
-                    }
-                    EdgeCurve::Circle(c) => {
-                        let is_closed = edge_data.start() == edge_data.end();
-                        let (t0, t1) = if is_closed {
-                            (0.0, std::f64::consts::TAU)
-                        } else {
-                            let t0 = c.project(start_pt);
-                            let mut t1 = c.project(end_pt);
-                            if t1 <= t0 {
-                                t1 += std::f64::consts::TAU;
-                            }
-                            (t0, t1)
-                        };
-                        let mut prev = c.evaluate(t0);
-                        for i in 1..=n_samples {
-                            let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
-                            let curr = c.evaluate(t);
-                            segments.push((prev, curr));
-                            prev = curr;
+                    match edge_data.curve() {
+                        EdgeCurve::Line => {
+                            segments.push((start_pt, end_pt));
                         }
-                    }
-                    EdgeCurve::Ellipse(e) => {
-                        let is_closed = edge_data.start() == edge_data.end();
-                        let (t0, t1) = if is_closed {
-                            (0.0, std::f64::consts::TAU)
-                        } else {
-                            let t0 = e.project(start_pt);
-                            let mut t1 = e.project(end_pt);
-                            if t1 <= t0 {
-                                t1 += std::f64::consts::TAU;
+                        EdgeCurve::Circle(c) => {
+                            let is_closed = edge_data.start() == edge_data.end();
+                            let (t0, t1) = if is_closed {
+                                (0.0, std::f64::consts::TAU)
+                            } else {
+                                let t0 = c.project(start_pt);
+                                let mut t1 = c.project(end_pt);
+                                if t1 <= t0 {
+                                    t1 += std::f64::consts::TAU;
+                                }
+                                (t0, t1)
+                            };
+                            let mut prev = c.evaluate(t0);
+                            for i in 1..=n_samples {
+                                let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
+                                let curr = c.evaluate(t);
+                                segments.push((prev, curr));
+                                prev = curr;
                             }
-                            (t0, t1)
-                        };
-                        let mut prev = e.evaluate(t0);
-                        for i in 1..=n_samples {
-                            let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
-                            let curr = e.evaluate(t);
-                            segments.push((prev, curr));
-                            prev = curr;
                         }
-                    }
-                    EdgeCurve::NurbsCurve(nc) => {
-                        let (t0, t1) = nc.domain();
-                        let mut prev = nc.evaluate(t0);
-                        for i in 1..=n_samples {
-                            let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
-                            let curr = nc.evaluate(t);
-                            segments.push((prev, curr));
-                            prev = curr;
+                        EdgeCurve::Ellipse(e) => {
+                            let is_closed = edge_data.start() == edge_data.end();
+                            let (t0, t1) = if is_closed {
+                                (0.0, std::f64::consts::TAU)
+                            } else {
+                                let t0 = e.project(start_pt);
+                                let mut t1 = e.project(end_pt);
+                                if t1 <= t0 {
+                                    t1 += std::f64::consts::TAU;
+                                }
+                                (t0, t1)
+                            };
+                            let mut prev = e.evaluate(t0);
+                            for i in 1..=n_samples {
+                                let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
+                                let curr = e.evaluate(t);
+                                segments.push((prev, curr));
+                                prev = curr;
+                            }
+                        }
+                        EdgeCurve::NurbsCurve(nc) => {
+                            let (t0, t1) = nc.domain();
+                            let mut prev = nc.evaluate(t0);
+                            for i in 1..=n_samples {
+                                let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
+                                let curr = nc.evaluate(t);
+                                segments.push((prev, curr));
+                                prev = curr;
+                            }
                         }
                     }
                 }
