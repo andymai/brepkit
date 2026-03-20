@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.21.0](https://github.com/andymai/brepkit/compare/v2.20.0...v2.21.0) (2026-03-20)
+
+
+### Features
+
+* **blend:** OCCT-style walking-based fillet/chamfer engine ([#324](https://github.com/andymai/brepkit/issues/324)) ([d0e3491](https://github.com/andymai/brepkit/commit/d0e3491e06207cc8d1c0fbe0353098b61370b4c0))
+
 ## [2.20.0](https://github.com/andymai/brepkit/compare/v2.19.0...v2.20.0) (2026-03-19)
 
 
