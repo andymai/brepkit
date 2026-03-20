@@ -4,7 +4,7 @@ Solid modeling kernel for Rust and WebAssembly.
 
 [![CI](https://github.com/andymai/brepkit/actions/workflows/ci.yml/badge.svg)](https://github.com/andymai/brepkit/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/brepkit-wasm)](https://www.npmjs.com/package/brepkit-wasm)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0--only-blue.svg)](LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![Rust 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
 **[Architecture](#architecture)** · **[Performance](#performance)** · **[Getting Started](#getting-started)** · **[Contributing](./CONTRIBUTING.md)**
@@ -167,4 +167,9 @@ cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release --no-defau
 
 ## License
 
-[AGPL-3.0-only](./LICENSE)
+Licensed under either of
+
+- [Apache License, Version 2.0](./LICENSE-APACHE)
+- [MIT License](./LICENSE-MIT)
+
+at your option.
