@@ -1,0 +1,22 @@
+[package]
+name = "brepkit-check"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Topology algorithms: classification, validation, properties, distance"
+
+[dependencies]
+brepkit-math.workspace = true
+brepkit-topology.workspace = true
+thiserror.workspace = true
+log.workspace = true
+smallvec.workspace = true
+
+[dev-dependencies]
+brepkit-topology = { workspace = true, features = ["test-utils"] }
+proptest.workspace = true
+
+[lints]
+workspace = true
