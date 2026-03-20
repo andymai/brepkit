@@ -17,6 +17,7 @@ L1.5: brepkit-blend     → Walking-based fillet and chamfer engine
 L1.5: brepkit-check     → Classification, validation, properties, distance
 L1.5: brepkit-heal      → Shape healing (analysis, fixing, upgrading)
 L1: brepkit-topology    → B-Rep data structures (arena-based)
+L0.5: brepkit-geometry  → Curve sampling, extrema, geometry conversion
 L0: brepkit-math        → Vectors, matrices, NURBS, predicates
 ```
 
@@ -27,12 +28,13 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 | Crate | Allowed deps |
 |-------|-------------|
 | `math` | *(none — no workspace deps)* |
+| `geometry` | `math` |
 | `topology` | `math` |
-| `algo` | `math`, `topology` |
-| `blend` | `math`, `topology` |
-| `heal` | `math`, `topology` |
-| `check` | `math`, `topology` |
-| `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check` |
+| `algo` | `math`, `topology`, `geometry` |
+| `blend` | `math`, `topology`, `geometry` |
+| `heal` | `math`, `topology`, `geometry` |
+| `check` | `math`, `topology`, `geometry` |
+| `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check`, `geometry` |
 | `io` | `math`, `topology`, `operations`, `heal` |
 | `wasm` | all crates (incl. `blend`, `check`, `heal`) |
 
@@ -40,12 +42,13 @@ The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the p
 
 **Allowed `use` paths per crate:**
 - `math/src/**` → only `std`, external crates
+- `geometry/src/**` → `brepkit_math::*`
 - `topology/src/**` → `brepkit_math::*`
-- `algo/src/**` → `brepkit_math::*`, `brepkit_topology::*`
-- `blend/src/**` → `brepkit_math::*`, `brepkit_topology::*`
-- `heal/src/**` → `brepkit_math::*`, `brepkit_topology::*`
-- `check/src/**` → `brepkit_math::*`, `brepkit_topology::*`
-- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`, `brepkit_check::*`
+- `algo/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
+- `blend/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
+- `heal/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
+- `check/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
+- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`, `brepkit_check::*`
 - `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`, `brepkit_heal::*`
 - `wasm/src/**` → all `brepkit_*`
 
@@ -82,6 +85,24 @@ Quick reference — find the right file for any task:
 | 2D polygon offset | `polygon_offset.rs` |
 | SIMD batch operations | `simd.rs` |
 | Parametric geometry traits | `traits.rs` |
+
+### L0.5: geometry (`crates/geometry/src/`)
+| Task | File(s) |
+|------|---------|
+| Uniform curve sampling | `sampling/uniform.rs` |
+| Deflection-adaptive sampling | `sampling/deflection.rs` |
+| Arc-length-uniform sampling | `sampling/arc_length.rs` |
+| Curvature-adaptive sampling (NURBS) | `sampling/curvature.rs` |
+| Surface grid sampling | `sampling/surface.rs` |
+| Point-to-curve projection | `extrema/point_curve.rs` |
+| Curve-to-curve distance | `extrema/curve_curve.rs` |
+| Point-to-surface distance (analytic) | `extrema/point_surface.rs` |
+| Segment-segment distance | `extrema/segment.rs` |
+| Lipschitz global optimizer | `extrema/lipschitz.rs` |
+| Circle/Ellipse/Line → NURBS | `convert/curve_to_nurbs.rs` |
+| Analytic surfaces → NURBS | `convert/surface_to_nurbs.rs` |
+| NURBS → analytic curve recognition | `convert/recognize_curve.rs` |
+| NURBS → analytic surface recognition | `convert/recognize_surface.rs` |
 
 ### L1: topology (`crates/topology/src/`)
 | Task | File(s) |
