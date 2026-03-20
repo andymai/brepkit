@@ -7,6 +7,9 @@
 )]
 
 pub(crate) mod analytic;
+pub(crate) mod edge;
+
+use std::collections::HashSet;
 
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
@@ -133,6 +136,161 @@ pub fn point_to_face(
     }
 }
 
+/// Compute the minimum distance between two solids.
+///
+/// Checks vertex-to-vertex, vertex-to-face, and edge-to-edge pairs
+/// with AABB pruning for acceleration.
+///
+/// # Errors
+///
+/// Returns an error if any topology entity is missing.
+#[allow(clippy::too_many_lines)]
+pub fn solid_to_solid(
+    topo: &Topology,
+    solid_a: SolidId,
+    solid_b: SolidId,
+) -> Result<DistanceResult, CheckError> {
+    // Collect vertex positions from each solid.
+    let verts_a = collect_solid_vertices(topo, solid_a)?;
+    let verts_b = collect_solid_vertices(topo, solid_b)?;
+
+    let mut best_dist = f64::INFINITY;
+    let mut best_a = Point3::new(0.0, 0.0, 0.0);
+    let mut best_b = Point3::new(0.0, 0.0, 0.0);
+
+    // Pass 1: Vertex-vertex (cheap upper bound).
+    for &pa in &verts_a {
+        for &pb in &verts_b {
+            let dist = (pa - pb).length();
+            if dist < best_dist {
+                best_dist = dist;
+                best_a = pa;
+                best_b = pb;
+            }
+        }
+    }
+
+    // Pass 2: Vertices of A against faces of B.
+    let faces_b = collect_solid_faces(topo, solid_b)?;
+    let aabbs_b: Vec<(usize, Aabb3)> = faces_b
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &fid)| crate::util::face_aabb(topo, fid).ok().map(|aabb| (i, aabb)))
+        .collect();
+
+    for &pa in &verts_a {
+        for &(idx, ref aabb) in &aabbs_b {
+            if aabb.distance_squared_to_point(pa) > best_dist * best_dist {
+                continue;
+            }
+            if let Ok(Some((dist, closest))) = point_to_face(topo, pa, faces_b[idx]) {
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_a = pa;
+                    best_b = closest;
+                }
+            }
+        }
+    }
+
+    // Pass 3: Vertices of B against faces of A.
+    let faces_a = collect_solid_faces(topo, solid_a)?;
+    let aabbs_a: Vec<(usize, Aabb3)> = faces_a
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &fid)| crate::util::face_aabb(topo, fid).ok().map(|aabb| (i, aabb)))
+        .collect();
+
+    for &pb in &verts_b {
+        for &(idx, ref aabb) in &aabbs_a {
+            if aabb.distance_squared_to_point(pb) > best_dist * best_dist {
+                continue;
+            }
+            if let Ok(Some((dist, closest))) = point_to_face(topo, pb, faces_a[idx]) {
+                if dist < best_dist {
+                    best_dist = dist;
+                    best_b = pb;
+                    best_a = closest;
+                }
+            }
+        }
+    }
+
+    // Pass 4: Edge-edge (using vertex positions as segment endpoints).
+    let edges_a = collect_solid_edge_segments(topo, solid_a)?;
+    let edges_b = collect_solid_edge_segments(topo, solid_b)?;
+
+    for &(p0a, p1a) in &edges_a {
+        for &(p0b, p1b) in &edges_b {
+            let (dist, ca, cb) = edge::segment_segment_distance(p0a, p1a, p0b, p1b);
+            if dist < best_dist {
+                best_dist = dist;
+                best_a = ca;
+                best_b = cb;
+            }
+        }
+    }
+
+    Ok(DistanceResult {
+        distance: best_dist,
+        point_a: best_a,
+        point_b: best_b,
+    })
+}
+
+/// Collect all unique vertex positions from a solid.
+fn collect_solid_vertices(topo: &Topology, solid: SolidId) -> Result<Vec<Point3>, CheckError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+    let mut seen = HashSet::new();
+    let mut points = Vec::new();
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        let wire = topo.wire(face.outer_wire())?;
+        for oe in wire.edges() {
+            let edge_data = topo.edge(oe.edge())?;
+            for vid in [edge_data.start(), edge_data.end()] {
+                if seen.insert(vid) {
+                    points.push(topo.vertex(vid)?.point());
+                }
+            }
+        }
+    }
+    Ok(points)
+}
+
+/// Collect all face IDs from a solid's outer shell.
+fn collect_solid_faces(topo: &Topology, solid: SolidId) -> Result<Vec<FaceId>, CheckError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+    Ok(shell.faces().to_vec())
+}
+
+/// Collect edge segments (start/end vertex positions) for edge-edge distance.
+fn collect_solid_edge_segments(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<Vec<(Point3, Point3)>, CheckError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+    let mut seen = HashSet::new();
+    let mut segments = Vec::new();
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        let wire = topo.wire(face.outer_wire())?;
+        for oe in wire.edges() {
+            let eid = oe.edge();
+            if seen.insert(eid) {
+                let edge_data = topo.edge(eid)?;
+                let p0 = topo.vertex(edge_data.start())?.point();
+                let p1 = topo.vertex(edge_data.end())?.point();
+                segments.push((p0, p1));
+            }
+        }
+    }
+    Ok(segments)
+}
+
 /// Point-to-polygon distance for planar faces.
 ///
 /// Projects the point onto the plane, checks if inside polygon, otherwise
@@ -246,6 +404,68 @@ mod tests {
         assert!(closest.x().abs() < 1e-10);
         assert!(closest.y().abs() < 1e-10);
         assert!(closest.z().abs() < 1e-10);
+    }
+
+    #[test]
+    fn segment_segment_parallel() {
+        // Two parallel segments along X, separated by 2.0 in Y.
+        let (dist, _, _) = edge::segment_segment_distance(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+            Point3::new(1.0, 2.0, 0.0),
+        );
+        assert!(
+            (dist - 2.0).abs() < 1e-10,
+            "parallel segment distance should be 2.0, got {dist}"
+        );
+    }
+
+    #[test]
+    fn segment_segment_crossing() {
+        // Two segments that cross: one along X, one along Y, both through origin.
+        let (dist, _, _) = edge::segment_segment_distance(
+            Point3::new(-1.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, -1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        );
+        assert!(
+            dist < 1e-10,
+            "crossing segment distance should be ~0, got {dist}"
+        );
+    }
+
+    #[test]
+    fn segment_segment_skew() {
+        // Two skew segments separated by 3.0 in Z.
+        let (dist, ca, cb) = edge::segment_segment_distance(
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 3.0),
+            Point3::new(0.0, 1.0, 3.0),
+        );
+        assert!(
+            (dist - 3.0).abs() < 1e-10,
+            "skew segment distance should be 3.0, got {dist}"
+        );
+        assert!(ca.z().abs() < 1e-10);
+        assert!((cb.z() - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn solid_to_solid_separated() {
+        use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+        let mut topo = Topology::new();
+        // Two unit cubes: one at origin, one at (3, 0, 0). Gap of 2.0 in X.
+        let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+        let b = make_unit_cube_manifold_at(&mut topo, 3.0, 0.0, 0.0);
+        let result = solid_to_solid(&topo, a, b).unwrap();
+        assert!(
+            (result.distance - 2.0).abs() < 1e-10,
+            "distance should be 2.0, got {}",
+            result.distance
+        );
     }
 
     #[test]
