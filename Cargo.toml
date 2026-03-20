@@ -55,6 +55,7 @@ brepkit-heal = { path = "crates/heal" }
 brepkit-check = { path = "crates/check" }
 brepkit-geometry = { path = "crates/geometry" }
 brepkit-io = { path = "crates/io" }
+brepkit-offset = { path = "crates/offset" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

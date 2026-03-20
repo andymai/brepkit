@@ -28,11 +28,12 @@ check_deps() {
     return
   fi
 
-  # Extract both [dependencies] and [dev-dependencies] sections
+  # Extract [dependencies] section only (dev-dependencies are allowed to
+  # reference higher-layer crates for integration tests)
   local deps_section
-  deps_section=$(sed -n '/^\[dependencies\]/,/^\[/p; /^\[dev-dependencies\]/,/^\[/p' "$cargo_toml" 2>/dev/null || true)
+  deps_section=$(sed -n '/^\[dependencies\]/,/^\[/p' "$cargo_toml" 2>/dev/null || true)
 
-  for dep in brepkit-math brepkit-topology brepkit-algo brepkit-blend brepkit-heal brepkit-check brepkit-geometry brepkit-operations brepkit-io; do
+  for dep in brepkit-math brepkit-topology brepkit-algo brepkit-blend brepkit-heal brepkit-check brepkit-geometry brepkit-offset brepkit-operations brepkit-io; do
     if echo "$deps_section" | grep -q "${dep}"; then
       local is_allowed=false
       for a in "${allowed[@]}"; do
@@ -58,7 +59,8 @@ check_deps "algo"       "brepkit-math" "brepkit-topology" "brepkit-geometry"
 check_deps "blend"      "brepkit-math" "brepkit-topology" "brepkit-geometry"
 check_deps "heal"       "brepkit-math" "brepkit-topology" "brepkit-geometry"
 check_deps "check"      "brepkit-math" "brepkit-topology" "brepkit-geometry"
-check_deps "operations" "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry"
+check_deps "offset"     "brepkit-math" "brepkit-topology" "brepkit-geometry" "brepkit-algo"
+check_deps "operations" "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry" "brepkit-offset"
 check_deps "io"         "brepkit-math" "brepkit-topology" "brepkit-operations" "brepkit-heal"
 check_deps "wasm"       "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry" "brepkit-operations" "brepkit-io"
 

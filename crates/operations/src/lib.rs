@@ -32,6 +32,7 @@ pub mod nurbs_boolean;
 pub mod offset_face;
 pub mod offset_solid;
 pub mod offset_trim;
+pub mod offset_v2;
 pub mod offset_wire;
 pub mod pattern;
 pub mod pipe;

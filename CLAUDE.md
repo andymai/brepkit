@@ -16,6 +16,7 @@ L1.5: brepkit-algo      → GFA boolean engine, classification, intersection
 L1.5: brepkit-blend     → Walking-based fillet and chamfer engine
 L1.5: brepkit-check     → Classification, validation, properties, distance
 L1.5: brepkit-heal      → Shape healing (analysis, fixing, upgrading)
+L1.5: brepkit-offset    → Solid offset engine (global face-face intersection)
 L1: brepkit-topology    → B-Rep data structures (arena-based)
 L0.5: brepkit-geometry  → Curve sampling, extrema, geometry conversion
 L0: brepkit-math        → Vectors, matrices, NURBS, predicates
@@ -34,7 +35,8 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 | `blend` | `math`, `topology`, `geometry` |
 | `heal` | `math`, `topology`, `geometry` |
 | `check` | `math`, `topology`, `geometry` |
-| `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check`, `geometry` |
+| `offset` | `math`, `topology`, `geometry`, `algo` |
+| `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check`, `geometry`, `offset` |
 | `io` | `math`, `topology`, `operations`, `heal` |
 | `wasm` | all crates (incl. `blend`, `check`, `heal`) |
 
@@ -48,7 +50,8 @@ The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the p
 - `blend/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
 - `heal/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
 - `check/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
-- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`, `brepkit_check::*`
+- `offset/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`, `brepkit_algo::*`
+- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`, `brepkit_check::*`, `brepkit_offset::*`
 - `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`, `brepkit_heal::*`
 - `wasm/src/**` → all `brepkit_*`
 
@@ -220,6 +223,21 @@ Quick reference — find the right file for any task:
 | Point-to-surface distance (all analytic types) | `distance/analytic.rs` |
 | Edge-to-edge distance | `distance/edge.rs` |
 | Point-to-solid, solid-to-solid distance | `distance/mod.rs` |
+
+### L1.5: offset (`crates/offset/src/`)
+| Task | File(s) |
+|------|---------|
+| Public API (offset_solid, thick_solid) | `lib.rs` |
+| Error types | `error.rs` |
+| Central data structures (OffsetData, EdgeClass, etc.) | `data.rs` |
+| Edge/vertex convexity classification | `analyse.rs` |
+| Per-face surface offset (analytic + NURBS) | `offset.rs` |
+| 3D face-face intersection | `inter3d.rs` |
+| 2D edge splitting from intersections | `inter2d.rs` |
+| Wire loop reconstruction | `loops.rs` |
+| Arc joints (pipe + sphere cap) | `arc_joint.rs` |
+| Shell assembly + solid creation | `assemble.rs` |
+| Self-intersection removal (BOP-based) | `self_int.rs` |
 
 ### L2: operations (`crates/operations/src/`)
 | Task | File(s) |
