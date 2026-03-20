@@ -21,7 +21,6 @@ brepkit-wasm-macros = { path = "../wasm-macros" }
 brepkit-math.workspace = true
 brepkit-topology.workspace = true
 brepkit-operations.workspace = true
-brepkit-blend.workspace = true
 brepkit-io = { workspace = true, optional = true }
 wasm-bindgen.workspace = true
 thiserror.workspace = true

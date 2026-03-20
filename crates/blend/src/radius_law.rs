@@ -1,7 +1,6 @@
 //! Radius law types for variable-radius fillets.
 
 /// Defines how the fillet radius varies along an edge.
-/// Defines how the fillet radius varies along an edge.
 pub enum RadiusLaw {
     /// Constant radius.
     Constant(f64),

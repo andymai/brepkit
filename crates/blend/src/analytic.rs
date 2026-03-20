@@ -261,7 +261,7 @@ fn plane_plane_fillet(
         radius,
         uv1: (1.0, 0.0),
         uv2: (1.0, 0.0),
-        t: spine.length(),
+        t: 1.0,
     };
 
     let stripe = Stripe {
@@ -377,7 +377,7 @@ fn plane_plane_chamfer(
         radius: chamfer_radius,
         uv1: (1.0, 0.0),
         uv2: (1.0, 0.0),
-        t: spine.length(),
+        t: 1.0,
     };
 
     let stripe = Stripe {

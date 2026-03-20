@@ -83,17 +83,13 @@ impl<'a> FilletBuilder<'a> {
         // ── Validate input ──────────────────────────────────────────────
         // Expand edge sets: keep actual RadiusLaw references via indices.
         let mut all_edges: Vec<(EdgeId, usize)> = Vec::new();
-        let laws: Vec<RadiusLaw> = self
-            .edge_sets
-            .into_iter()
-            .enumerate()
-            .flat_map(|(law_idx, (edges, law))| {
-                let pairs: Vec<(EdgeId, usize)> =
-                    edges.into_iter().map(|eid| (eid, law_idx)).collect();
-                all_edges.extend_from_slice(&pairs);
-                std::iter::once(law)
-            })
-            .collect();
+        let mut laws: Vec<RadiusLaw> = Vec::with_capacity(self.edge_sets.len());
+        for (law_idx, (edges, law)) in self.edge_sets.into_iter().enumerate() {
+            for eid in edges {
+                all_edges.push((eid, law_idx));
+            }
+            laws.push(law);
+        }
 
         if all_edges.is_empty() {
             return Err(BlendError::Topology(
@@ -146,8 +142,9 @@ impl<'a> FilletBuilder<'a> {
         }
 
         // ── Phase 2: Trim faces ─────────────────────────────────────────
-        // Map from original face ID to its trimmed replacement.
-        let mut face_replacements: Vec<(FaceId, FaceId)> = Vec::new();
+        // Map from original face ID to its latest trimmed replacement.
+        let mut face_replacements: std::collections::HashMap<FaceId, FaceId> =
+            std::collections::HashMap::new();
 
         for sr in &stripe_results {
             let stripe = &sr.stripe;
@@ -156,38 +153,79 @@ impl<'a> FilletBuilder<'a> {
             let contact1_pts = sample_nurbs_endpoints(&stripe.contact1);
             let contact2_pts = sample_nurbs_endpoints(&stripe.contact2);
 
-            // Trim face 1.
+            // Compute which side to keep: the side AWAY from the blend ball center.
+            // Use the first section's ball center to determine direction relative
+            // to each face normal. If center is on the normal side, keep Right
+            // (away from center); otherwise keep Left.
+            let keep_side1 =
+                if let (Some(sec), Ok(face)) = (stripe.sections.first(), topo.face(stripe.face1)) {
+                    let n = face.surface().normal(0.0, 0.0);
+                    if n.dot(sec.center - sec.p1) > 0.0 {
+                        TrimSide::Right
+                    } else {
+                        TrimSide::Left
+                    }
+                } else {
+                    TrimSide::Right
+                };
+            let keep_side2 =
+                if let (Some(sec), Ok(face)) = (stripe.sections.first(), topo.face(stripe.face2)) {
+                    let n = face.surface().normal(0.0, 0.0);
+                    if n.dot(sec.center - sec.p2) > 0.0 {
+                        TrimSide::Right
+                    } else {
+                        TrimSide::Left
+                    }
+                } else {
+                    TrimSide::Right
+                };
+
+            // Trim face 1 — use current replacement if face was already trimmed.
+            let current_face1 = face_replacements
+                .get(&stripe.face1)
+                .copied()
+                .unwrap_or(stripe.face1);
             let trim1 = trimmer::trim_face(
                 topo,
-                stripe.face1,
+                current_face1,
                 &contact1_pts,
                 &[(0.0, 0.0), (1.0, 0.0)], // placeholder UV
-                TrimSide::Right,           // keep side away from fillet
+                keep_side1,
             );
 
             match trim1 {
-                Ok(tr) if tr.trimmed_face != stripe.face1 => {
-                    face_replacements.push((stripe.face1, tr.trimmed_face));
+                Ok(tr) if tr.trimmed_face != current_face1 => {
+                    face_replacements.insert(stripe.face1, tr.trimmed_face);
                 }
-                Ok(_) => {}  // untrimmed (non-planar), keep original
-                Err(_) => {} // trimming failed, keep original
+                Ok(_) => {} // untrimmed (non-planar), keep original
+                Err(e) => {
+                    log::warn!("trimming failed on face {:?}: {e}", stripe.face1);
+                    // Trimming is best-effort in v1. Non-planar faces and complex
+                    // geometries may fail to trim. We continue with the original face.
+                }
             }
 
             // Trim face 2.
+            let current_face2 = face_replacements
+                .get(&stripe.face2)
+                .copied()
+                .unwrap_or(stripe.face2);
             let trim2 = trimmer::trim_face(
                 topo,
-                stripe.face2,
+                current_face2,
                 &contact2_pts,
                 &[(0.0, 0.0), (1.0, 0.0)], // placeholder UV
-                TrimSide::Right,
+                keep_side2,
             );
 
             match trim2 {
-                Ok(tr) if tr.trimmed_face != stripe.face2 => {
-                    face_replacements.push((stripe.face2, tr.trimmed_face));
+                Ok(tr) if tr.trimmed_face != current_face2 => {
+                    face_replacements.insert(stripe.face2, tr.trimmed_face);
                 }
                 Ok(_) => {}
-                Err(_) => {}
+                Err(e) => {
+                    log::warn!("trimming failed on face {:?}: {e}", stripe.face2);
+                }
             }
         }
 
@@ -215,10 +253,7 @@ impl<'a> FilletBuilder<'a> {
 
         // Add trimmed replacements (or originals if not replaced).
         for &fid in &touched_faces {
-            let replacement = face_replacements
-                .iter()
-                .find(|(orig, _)| *orig == fid)
-                .map(|(_, repl)| *repl);
+            let replacement = face_replacements.get(&fid).copied();
             result_faces.push(replacement.unwrap_or(fid));
         }
 
@@ -257,6 +292,11 @@ fn compute_stripe_for_edge(
     // Find the two adjacent faces.
     let adj_faces = adjacency.faces_for_edge(edge_id);
     if adj_faces.len() != 2 {
+        // Non-manifold (3+ faces) or boundary (0-1 faces) edge cannot be filleted.
+        log::warn!(
+            "edge {edge_id:?} has {} adjacent faces (expected 2) — cannot fillet non-manifold or boundary edges",
+            adj_faces.len()
+        );
         return Err(BlendError::StartSolutionFailure {
             edge: edge_id,
             t: 0.0,
@@ -265,9 +305,13 @@ fn compute_stripe_for_edge(
     let face1 = adj_faces[0];
     let face2 = adj_faces[1];
 
-    // Snapshot surface data.
-    let surf1 = topo.face(face1)?.surface().clone();
-    let surf2 = topo.face(face2)?.surface().clone();
+    // Snapshot surface data, respecting face orientation.
+    let face1_data = topo.face(face1)?;
+    let surf1 = face1_data.surface().clone();
+    let face1_reversed = face1_data.is_reversed();
+    let face2_data = topo.face(face2)?;
+    let surf2 = face2_data.surface().clone();
+    let face2_reversed = face2_data.is_reversed();
 
     // Build a single-edge spine.
     let spine = Spine::from_single_edge(topo, edge_id)?;
@@ -286,11 +330,25 @@ fn compute_stripe_for_edge(
 
     // ── Walking fallback for non-analytic surface pairs ─────────────
     // Build ParametricSurface references via PlaneAdapter for planes.
+    // When a face is reversed, the outward normal is flipped. For PlaneAdapter,
+    // we negate the normal. For analytic/NURBS surfaces the ParametricSurface
+    // impl already returns the geometric normal; the walker uses the sign
+    // convention from the face orientation.
+    let oriented_surf1 = if face1_reversed {
+        orient_plane_surface(&surf1)
+    } else {
+        surf1
+    };
+    let oriented_surf2 = if face2_reversed {
+        orient_plane_surface(&surf2)
+    } else {
+        surf2
+    };
     let mut adapter1 = None;
     let mut adapter2 = None;
 
-    let ps1 = surface_ref_or_adapter(&surf1, &mut adapter1);
-    let ps2 = surface_ref_or_adapter(&surf2, &mut adapter2);
+    let ps1 = surface_ref_or_adapter(&oriented_surf1, &mut adapter1);
+    let ps2 = surface_ref_or_adapter(&oriented_surf2, &mut adapter2);
 
     let config = WalkerConfig::default();
 
@@ -337,6 +395,24 @@ fn compute_stripe_for_edge(
         stripe,
         new_edges: Vec::new(),
     })
+}
+
+/// Flip the normal of a `Plane` surface to account for face reversal.
+///
+/// For non-plane surfaces, returns a clone unchanged — the walker already
+/// accounts for orientation through the `ParametricSurface` trait.
+fn orient_plane_surface(
+    surface: &brepkit_topology::face::FaceSurface,
+) -> brepkit_topology::face::FaceSurface {
+    match surface {
+        brepkit_topology::face::FaceSurface::Plane { normal, d } => {
+            brepkit_topology::face::FaceSurface::Plane {
+                normal: -*normal,
+                d: -*d,
+            }
+        }
+        other => other.clone(),
+    }
 }
 
 /// Mirror a `RadiusLaw` into a new instance with the same behavior.
