@@ -3,8 +3,7 @@
 //! Each function takes a ray (origin + direction) and a surface, returning
 //! the positive-t intersection parameters along the ray.
 
-// Functions used by ray_cast.rs (Task 3) — not yet wired up.
-#![allow(dead_code)]
+// Functions used by boundary.rs for ray-face crossing counts.
 
 use smallvec::SmallVec;
 
