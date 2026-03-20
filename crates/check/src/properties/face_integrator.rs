@@ -61,12 +61,18 @@ pub fn integrate_face(
             integrate_planar_face(topo, face_id, effective_normal)
         }
         FaceSurface::Cylinder(s) => {
-            let full = ((0.0, std::f64::consts::TAU), (f64::NEG_INFINITY, f64::INFINITY));
+            let full = (
+                (0.0, std::f64::consts::TAU),
+                (f64::NEG_INFINITY, f64::INFINITY),
+            );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
             Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
         }
         FaceSurface::Cone(s) => {
-            let full = ((0.0, std::f64::consts::TAU), (f64::NEG_INFINITY, f64::INFINITY));
+            let full = (
+                (0.0, std::f64::consts::TAU),
+                (f64::NEG_INFINITY, f64::INFINITY),
+            );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
             Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
         }
