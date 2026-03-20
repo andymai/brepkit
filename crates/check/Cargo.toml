@@ -10,6 +10,7 @@ description = "Topology algorithms: classification, validation, properties, dist
 [dependencies]
 brepkit-math.workspace = true
 brepkit-topology.workspace = true
+brepkit-geometry.workspace = true
 thiserror.workspace = true
 log.workspace = true
 smallvec.workspace = true

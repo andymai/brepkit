@@ -110,20 +110,12 @@ pub(super) fn curve_boundary_crossings(
 
     let n_samples = 64;
     let raw_points: Vec<Point3> = match curve {
-        ExactIntersectionCurve::Circle(c) => (0..=n_samples)
-            .map(|i| {
-                #[allow(clippy::cast_precision_loss)]
-                let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
-                c.evaluate(t)
-            })
-            .collect(),
-        ExactIntersectionCurve::Ellipse(e) => (0..=n_samples)
-            .map(|i| {
-                #[allow(clippy::cast_precision_loss)]
-                let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
-                e.evaluate(t)
-            })
-            .collect(),
+        ExactIntersectionCurve::Circle(c) => {
+            brepkit_geometry::sampling::sample_uniform(c, 0.0, std::f64::consts::TAU, n_samples + 1)
+        }
+        ExactIntersectionCurve::Ellipse(e) => {
+            brepkit_geometry::sampling::sample_uniform(e, 0.0, std::f64::consts::TAU, n_samples + 1)
+        }
         ExactIntersectionCurve::Points(pts) => pts.clone(),
     };
 

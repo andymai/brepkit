@@ -10,6 +10,7 @@ description = "Shape healing (analysis, fixing, upgrading) for brepkit B-Rep mod
 [dependencies]
 brepkit-math.workspace = true
 brepkit-topology.workspace = true
+brepkit-geometry.workspace = true
 thiserror.workspace = true
 log.workspace = true
 bitflags.workspace = true

@@ -196,89 +196,29 @@ impl LipschitzOptimizer {
 /// Estimate the Lipschitz bound for the squared-distance function between
 /// two NURBS curves: f(u, v) = ||C1(u) - C2(v)||^2.
 ///
-/// The gradient of f is:
-///   df/du = 2 * (C1(u) - C2(v)) . C1'(u)
-///   df/dv = -2 * (C1(u) - C2(v)) . C2'(v)
-///
-/// Upper bound: L <= 2 * max_separation * max(max_deriv_1, max_deriv_2)
-/// where `max_separation` is the maximum distance between any pair of points
-/// and `max_deriv` is the maximum derivative magnitude.
-#[allow(dead_code, clippy::cast_precision_loss)]
+/// Delegates to [`brepkit_geometry::extrema::estimate_curve_curve_lipschitz`].
+/// The `n_samples` parameter is accepted for API compatibility but not forwarded
+/// (the geometry implementation uses its own fixed sampling strategy).
+#[allow(dead_code)]
 pub fn estimate_curve_curve_lipschitz(
     curve1: &NurbsCurve,
     curve2: &NurbsCurve,
-    n_samples: usize,
+    _n_samples: usize,
 ) -> f64 {
-    let (u0, u1) = curve1.domain();
-    let (v0, v1) = curve2.domain();
-
-    let mut max_deriv1: f64 = 0.0;
-    let mut max_deriv2: f64 = 0.0;
-    let mut max_sep: f64 = 0.0;
-
-    for i in 0..=n_samples {
-        let t = i as f64 / n_samples as f64;
-        let u = u0 + (u1 - u0) * t;
-        let d1 = curve1.derivatives(u, 1);
-        max_deriv1 = max_deriv1.max(d1[1].length());
-
-        let v = v0 + (v1 - v0) * t;
-        let d2 = curve2.derivatives(v, 1);
-        max_deriv2 = max_deriv2.max(d2[1].length());
-
-        // d[0] is the point as Vec3; convert to Point3 for distance
-        let p1 = Point3::new(d1[0].x(), d1[0].y(), d1[0].z());
-        let p2 = Point3::new(d2[0].x(), d2[0].y(), d2[0].z());
-        let sep = (p1 - p2).length();
-        max_sep = max_sep.max(sep);
-    }
-
-    // L for ||C1(u) - C2(v)||^2
-    2.0 * max_sep * max_deriv1.max(max_deriv2)
+    brepkit_geometry::extrema::estimate_curve_curve_lipschitz(curve1, curve2)
 }
 
 /// Find the global minimum distance between two NURBS curves.
 ///
 /// Returns (distance, point on curve 1, point on curve 2).
+///
+/// Delegates to [`brepkit_geometry::extrema::nurbs_curve_curve_distance`].
 #[allow(dead_code)]
 pub fn nurbs_curve_curve_distance(
     curve1: &NurbsCurve,
     curve2: &NurbsCurve,
 ) -> (f64, Point3, Point3) {
-    let (u0, u1) = curve1.domain();
-    let (v0, v1) = curve2.domain();
-
-    // Estimate Lipschitz bound
-    let lip = estimate_curve_curve_lipschitz(curve1, curve2, 20);
-
-    // If Lipschitz bound is near zero, curves are likely coincident or constant
-    if lip < 1e-15 {
-        let p1 = curve1.evaluate((u0 + u1) * 0.5);
-        let p2 = curve2.evaluate((v0 + v1) * 0.5);
-        return ((p1 - p2).length(), p1, p2);
-    }
-
-    // Build distance-squared function
-    let f = |u: f64, v: f64| -> f64 {
-        let p1 = curve1.evaluate(u);
-        let p2 = curve2.evaluate(v);
-        (p1 - p2).length_squared()
-    };
-
-    let mut optimizer = LipschitzOptimizer::new(1e-4, 12);
-    optimizer.max_evals = 50_000;
-    let solutions = optimizer.minimize_2d(&f, (u0, u1), (v0, v1), lip);
-
-    if let Some(best) = solutions.first() {
-        let p1 = curve1.evaluate(best.params[0]);
-        let p2 = curve2.evaluate(best.params[1]);
-        ((p1 - p2).length(), p1, p2)
-    } else {
-        // Fallback: evaluate at midpoints
-        let p1 = curve1.evaluate((u0 + u1) * 0.5);
-        let p2 = curve2.evaluate((v0 + v1) * 0.5);
-        ((p1 - p2).length(), p1, p2)
-    }
+    brepkit_geometry::extrema::nurbs_curve_curve_distance(curve1, curve2)
 }
 
 #[cfg(test)]
