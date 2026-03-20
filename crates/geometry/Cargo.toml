@@ -1,0 +1,19 @@
+[package]
+name = "brepkit-geometry"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Geometry algorithms: sampling, extrema, conversion"
+
+[dependencies]
+brepkit-math.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
