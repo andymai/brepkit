@@ -61,8 +61,8 @@ pub fn find_continuity_breaks(curve: &NurbsCurve, min_continuity: usize) -> Vec<
 /// Split a NURBS curve at the given parameter values.
 ///
 /// Inserts knots at each split parameter until multiplicity reaches
-/// `degree + 1` (full break), then extracts the sub-curves between
-/// consecutive break points.
+/// `degree` (C0 break), then extracts the sub-curves between
+/// consecutive break points via fitting.
 ///
 /// # Errors
 ///

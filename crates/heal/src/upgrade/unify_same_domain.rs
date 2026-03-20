@@ -161,7 +161,7 @@ pub fn unify_same_domain(
     let tol = brepkit_math::tolerance::Tolerance {
         linear: options.linear_tolerance,
         angular: options.angular_tolerance,
-        relative: 0.0,
+        ..brepkit_math::tolerance::Tolerance::new()
     };
 
     for faces in edge_faces.values() {
@@ -200,6 +200,18 @@ pub fn unify_same_domain(
 
     for group in &merge_groups {
         let group_face_ids: Vec<FaceId> = group.iter().map(|&i| face_ids[i]).collect();
+
+        // Check if any face in the group has inner wires (holes).
+        let has_holes = group_face_ids
+            .iter()
+            .any(|&fid| topo.face(fid).is_ok_and(|f| !f.inner_wires().is_empty()));
+        if has_holes {
+            log::warn!(
+                "unify_same_domain: skipping group with {} faces (contains holes)",
+                group.len()
+            );
+            continue;
+        }
 
         // Count edge usage within this group.
         let mut edge_count: HashMap<usize, usize> = HashMap::new();
@@ -273,7 +285,7 @@ pub fn unify_same_domain(
     if options.unify_edges && total_merged > 0 {
         for &fid in &new_faces_to_add {
             let outer_wire = topo.face(fid)?.outer_wire();
-            let merged = merge_collinear_edges(topo, outer_wire, options.linear_tolerance)?;
+            let merged = merge_collinear_edges(topo, outer_wire, options)?;
             total_edges_merged += merged;
         }
     }
@@ -313,7 +325,7 @@ pub fn unify_same_domain(
 fn merge_collinear_edges(
     topo: &mut Topology,
     wire_id: WireId,
-    linear_tolerance: f64,
+    options: &UnifyOptions,
 ) -> Result<usize, HealError> {
     // Snapshot edge data for collinearity checks.
     struct EdgeData {
@@ -325,6 +337,7 @@ fn merge_collinear_edges(
         is_line: bool,
     }
 
+    let linear_tolerance = options.linear_tolerance;
     let wire = topo.wire(wire_id)?;
     let edges_list: Vec<OrientedEdge> = wire.edges().to_vec();
     let is_closed = wire.is_closed();
@@ -411,7 +424,7 @@ fn merge_collinear_edges(
             };
 
             let dot = run_dir_norm.dot(next_norm);
-            if dot < 1.0 - linear_tolerance {
+            if dot < 1.0 - options.angular_tolerance {
                 break;
             }
 

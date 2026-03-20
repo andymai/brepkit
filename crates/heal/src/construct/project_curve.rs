@@ -9,7 +9,7 @@ use std::f64::consts::TAU;
 
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::tolerance::Tolerance;
-use brepkit_math::vec::{Point2, Point3, Vec3};
+use brepkit_math::vec::{Point2, Point3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -42,30 +42,28 @@ pub fn project_points_to_surface(
         ));
     }
 
-    let mut uv_pts: Vec<Point2> = match surface {
-        FaceSurface::Plane { normal, .. } => {
-            // Plane has no intrinsic UV parameterization. Build a local frame
-            // using the first point as origin.
-            let origin = points[0];
-            let (u_axis, v_axis) = plane_frame_axes(*normal);
-            points
-                .iter()
-                .map(|&p| {
-                    let d = p - origin;
-                    Point2::new(d.dot(u_axis), d.dot(v_axis))
-                })
-                .collect()
+    let mut uv_pts: Vec<Point2> = if let FaceSurface::Plane { normal, d } = surface {
+        // Fixed UV origin: closest point on plane to global origin.
+        let origin = Point3::new(normal.x() * d, normal.y() * d, normal.z() * d);
+        let frame = brepkit_math::frame::Frame3::from_normal(origin, *normal)
+            .map_err(|e| HealError::AnalysisFailed(format!("plane frame: {e}")))?;
+        points
+            .iter()
+            .map(|&p| {
+                let delta = p - frame.origin;
+                Point2::new(delta.dot(frame.x), delta.dot(frame.y))
+            })
+            .collect()
+    } else {
+        // Analytic / NURBS: use surface.project_point().
+        let mut uv = Vec::with_capacity(points.len());
+        for &p in points {
+            let (u, v) = surface.project_point(p).ok_or_else(|| {
+                HealError::FixFailed(format!("surface failed to project 3D point {p:?}"))
+            })?;
+            uv.push(Point2::new(u, v));
         }
-        _ => {
-            // Analytic / NURBS: use surface.project_point().
-            points
-                .iter()
-                .map(|&p| {
-                    let (u, v) = surface.project_point(p).unwrap_or((0.0, 0.0));
-                    Point2::new(u, v)
-                })
-                .collect()
-        }
+        uv
     };
 
     // Unwrap periodicity to prevent seam jumps.
@@ -141,23 +139,6 @@ pub fn project_edge_to_pcurve(
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-/// Build orthonormal UV axes from a plane normal.
-///
-/// Returns `(u_axis, v_axis)` where both are unit vectors perpendicular
-/// to `normal` and to each other.
-fn plane_frame_axes(normal: Vec3) -> (Vec3, Vec3) {
-    // Choose a seed vector not parallel to the normal.
-    let seed = if normal.x().abs() < 0.9 {
-        Vec3::new(1.0, 0.0, 0.0)
-    } else {
-        Vec3::new(0.0, 1.0, 0.0)
-    };
-    let u_raw = normal.cross(seed);
-    let u_axis = u_raw.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-    let v_axis = normal.cross(u_axis);
-    (u_axis, v_axis)
-}
 
 /// Returns `(u_period, v_period)` for a surface -- `Some(TAU)` if periodic.
 fn surface_periods(surface: &FaceSurface) -> (Option<f64>, Option<f64>) {

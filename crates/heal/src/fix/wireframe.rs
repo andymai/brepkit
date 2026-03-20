@@ -92,14 +92,14 @@ pub fn fix_wireframe(
         ));
     }
 
-    Ok(FixResult {
-        status: if sewn > 0 {
-            Status::DONE4
-        } else {
-            Status::DONE4
-        },
-        actions_taken: sewn,
-    })
+    if sewn > 0 {
+        Ok(FixResult {
+            status: Status::DONE4,
+            actions_taken: sewn,
+        })
+    } else {
+        Ok(FixResult::ok())
+    }
 }
 
 /// Snapshot of a free edge's geometric data.

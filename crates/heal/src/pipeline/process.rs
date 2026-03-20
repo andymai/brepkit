@@ -65,6 +65,10 @@ impl HealProcess {
             log::info!("heal pipeline: running '{step_name}'");
             let new_solid = op.execute(topo, current, &mut ctx)?;
 
+            // TODO: Status is inferred from SolidId comparison, which is lossy —
+            // operators that modify topology in-place (without creating a new
+            // solid) will appear as no-ops. Ideally, HealOperator::execute
+            // would return (SolidId, FixResult) to report accurate status.
             let changed = new_solid != current;
             results.push(FixResult {
                 status: if changed { Status::DONE1 } else { Status::OK },

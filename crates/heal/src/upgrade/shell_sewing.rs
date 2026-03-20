@@ -30,21 +30,20 @@ pub fn sew_shell(
     let face_ids: Vec<_> = shell.faces().to_vec();
 
     let mut edge_usage: HashMap<usize, usize> = HashMap::new();
-    for &fid in &face_ids {
-        let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        for oe in wire.edges() {
-            *edge_usage.entry(oe.edge().index()).or_insert(0) += 1;
-        }
-    }
-
-    // Collect actual EdgeIds from wires (not just indices).
     let mut all_edge_ids: Vec<EdgeId> = Vec::new();
     for &fid in &face_ids {
         let face = topo.face(fid)?;
         let wire = topo.wire(face.outer_wire())?;
         for oe in wire.edges() {
+            *edge_usage.entry(oe.edge().index()).or_insert(0) += 1;
             all_edge_ids.push(oe.edge());
+        }
+        for &iw_id in face.inner_wires() {
+            let iw = topo.wire(iw_id)?;
+            for oe in iw.edges() {
+                *edge_usage.entry(oe.edge().index()).or_insert(0) += 1;
+                all_edge_ids.push(oe.edge());
+            }
         }
     }
 

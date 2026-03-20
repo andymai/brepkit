@@ -472,6 +472,8 @@ fn fix_gaps_3d(
     ctx: &mut HealContext,
     config: &FixConfig,
 ) -> Result<FixResult, HealError> {
+    // TODO: implement 3D-specific gap closing (e.g. tolerance widening,
+    // or bridging gaps that fix_connected cannot close at the nominal tol).
     fix_connected(topo, wire_id, ctx, config)
 }
 
@@ -778,9 +780,10 @@ fn fix_lacking(
     for snap in &snapshots {
         let start_dev = (snap.start_pos - snap.curve_start).length();
         if start_dev > tol {
-            // Adjust vertex to match curve.
-            let v = topo.vertex_mut(snap.start_vid)?;
-            v.set_point(snap.curve_start);
+            // Create a new vertex at the corrected position and replace via reshape.
+            let new_vid =
+                topo.add_vertex(brepkit_topology::vertex::Vertex::new(snap.curve_start, tol));
+            ctx.reshape.replace_vertex(snap.start_vid, new_vid);
             adjusted += 1;
             ctx.info(format!(
                 "Wire {wire_id:?}: adjusted start vertex {:?} by {start_dev:.2e}",
@@ -790,8 +793,9 @@ fn fix_lacking(
 
         let end_dev = (snap.end_pos - snap.curve_end).length();
         if end_dev > tol {
-            let v = topo.vertex_mut(snap.end_vid)?;
-            v.set_point(snap.curve_end);
+            let new_vid =
+                topo.add_vertex(brepkit_topology::vertex::Vertex::new(snap.curve_end, tol));
+            ctx.reshape.replace_vertex(snap.end_vid, new_vid);
             adjusted += 1;
             ctx.info(format!(
                 "Wire {wire_id:?}: adjusted end vertex {:?} by {end_dev:.2e}",
