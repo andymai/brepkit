@@ -822,6 +822,22 @@ impl BrepKernel {
         Ok(solid_id_to_u32(result))
     }
 
+    /// Offset all faces of a solid outward or inward (V2 pipeline).
+    ///
+    /// Uses the new `brepkit-offset` engine with intersection-based joints.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the distance is not finite or the solid is invalid.
+    #[wasm_bindgen(js_name = "offsetSolidV2")]
+    pub fn offset_solid_v2(&mut self, solid: u32, distance: f64) -> Result<u32, JsError> {
+        validate_finite(distance, "distance")?;
+        let sid = self.resolve_solid(solid)?;
+        let result =
+            brepkit_operations::offset_v2::offset_solid_v2(self.topo_mut(), sid, distance)?;
+        Ok(solid_id_to_u32(result))
+    }
+
     /// Thicken a face into a solid by offsetting it by the given distance.
     ///
     /// Creates a solid from a face by extruding it along its normal by
