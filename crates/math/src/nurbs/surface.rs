@@ -556,6 +556,72 @@ mod tests {
         }
     }
 
+    #[test]
+    fn nurbs_partial_matches_finite_difference() {
+        use crate::traits::ParametricSurface;
+
+        let s = bicubic_surface();
+        let u = 0.5;
+        let v = 0.5;
+        let h = 1e-6;
+
+        // Central finite difference for du
+        let p_plus = s.evaluate(u + h, v);
+        let p_minus = s.evaluate(u - h, v);
+        let fd_u = Vec3::new(
+            (p_plus.x() - p_minus.x()) / (2.0 * h),
+            (p_plus.y() - p_minus.y()) / (2.0 * h),
+            (p_plus.z() - p_minus.z()) / (2.0 * h),
+        );
+        let du = ParametricSurface::partial_u(&s, u, v);
+        assert!(
+            (du.x() - fd_u.x()).abs() < 1e-4,
+            "du.x: {} vs {}",
+            du.x(),
+            fd_u.x()
+        );
+        assert!(
+            (du.y() - fd_u.y()).abs() < 1e-4,
+            "du.y: {} vs {}",
+            du.y(),
+            fd_u.y()
+        );
+        assert!(
+            (du.z() - fd_u.z()).abs() < 1e-4,
+            "du.z: {} vs {}",
+            du.z(),
+            fd_u.z()
+        );
+
+        // Central finite difference for dv
+        let p_plus = s.evaluate(u, v + h);
+        let p_minus = s.evaluate(u, v - h);
+        let fd_v = Vec3::new(
+            (p_plus.x() - p_minus.x()) / (2.0 * h),
+            (p_plus.y() - p_minus.y()) / (2.0 * h),
+            (p_plus.z() - p_minus.z()) / (2.0 * h),
+        );
+        let dv = ParametricSurface::partial_v(&s, u, v);
+        assert!(
+            (dv.x() - fd_v.x()).abs() < 1e-4,
+            "dv.x: {} vs {}",
+            dv.x(),
+            fd_v.x()
+        );
+        assert!(
+            (dv.y() - fd_v.y()).abs() < 1e-4,
+            "dv.y: {} vs {}",
+            dv.y(),
+            fd_v.y()
+        );
+        assert!(
+            (dv.z() - fd_v.z()).abs() < 1e-4,
+            "dv.z: {} vs {}",
+            dv.z(),
+            fd_v.z()
+        );
+    }
+
     use proptest::prelude::*;
 
     proptest! {
