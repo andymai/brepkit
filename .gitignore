@@ -38,12 +38,12 @@ tarpaulin-report.html
 # mdBook
 /book/book/
 
-# Claude Code agent memory
+# Claude Code working files (memory, worktrees, research)
 .claude/agent-memory-local/
-
-# Claude Code worktrees and research
 .claude/worktrees/
 .claude/research/
+.claude/*.md
+!.claude/settings.json
 
 # Git worktrees
 .worktrees/
