@@ -906,6 +906,15 @@ impl BrepKernel {
                         .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
+            "offsetSolidV2" => {
+                let s = get_u32(args, "solid")?;
+                let dist = get_f64(args, "distance")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let result =
+                    brepkit_operations::offset_v2::offset_solid_v2(self.topo_mut(), solid_id, dist)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result)))
+            }
             "section" => {
                 let s = get_u32(args, "solid")?;
                 let px = get_f64(args, "px").unwrap_or(0.0);
