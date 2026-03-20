@@ -13,6 +13,16 @@ use brepkit_math::vec::{Point3, Vec3};
 
 use super::SurfaceProjection;
 
+/// Normalize an angle from `atan2` range `(−π, π]` to `[0, 2π)`.
+#[inline]
+fn normalize_angle(angle: f64) -> f64 {
+    if angle < 0.0 {
+        angle + std::f64::consts::TAU
+    } else {
+        angle
+    }
+}
+
 // ── Analytic fast paths ──────────────────────────────────────────────────────
 
 /// Project a point onto an infinite plane.
@@ -77,8 +87,8 @@ pub fn point_to_cylinder(point: Point3, cyl: &CylindricalSurface) -> SurfaceProj
             v: h,
         }
     } else {
-        // u = atan2(radial · y_axis, radial · x_axis)
-        let u = (radial.dot(cyl.y_axis())).atan2(radial.dot(cyl.x_axis()));
+        // u = atan2(radial · y_axis, radial · x_axis), normalized to [0, 2π).
+        let u = normalize_angle((radial.dot(cyl.y_axis())).atan2(radial.dot(cyl.x_axis())));
         let scale = cyl.radius() / r_len;
         let closest = Point3::new(
             cyl.origin().x() + radial.x() * scale + h * cyl.axis().x(),
@@ -160,9 +170,11 @@ pub fn point_to_cone(point: Point3, cone: &ConicalSurface) -> SurfaceProjection 
             cone.apex().z() + cone_h * cone.axis().z() + cone_r * radial_dir_z,
         );
         let radial_vec = Vec3::new(radial_dir_x, radial_dir_y, radial_dir_z);
-        let u = radial_vec
-            .dot(cone.y_axis())
-            .atan2(radial_vec.dot(cone.x_axis()));
+        let u = normalize_angle(
+            radial_vec
+                .dot(cone.y_axis())
+                .atan2(radial_vec.dot(cone.x_axis())),
+        );
         (closest, u)
     };
 
@@ -256,7 +268,7 @@ pub fn point_to_torus(point: Point3, torus: &ToroidalSurface) -> SurfaceProjecti
         )
     } else {
         let scale = major_r / r_len;
-        let u = radial.dot(torus.y_axis()).atan2(radial.dot(torus.x_axis()));
+        let u = normalize_angle(radial.dot(torus.y_axis()).atan2(radial.dot(torus.x_axis())));
         (
             torus.center().x() + radial.x() * scale,
             torus.center().y() + radial.y() * scale,
@@ -302,12 +314,12 @@ pub fn point_to_torus(point: Point3, torus: &ToroidalSurface) -> SurfaceProjecti
 
     // v = angle of tube vector relative to radial/z directions.
     // v = atan2(tube component along z_axis, tube component along radial dir)
-    let v = if r_len < 1e-15 {
+    let v = normalize_angle(if r_len < 1e-15 {
         tube_vec.dot(z_axis).atan2(tube_vec.dot(torus.x_axis()))
     } else {
         let radial_dir = Vec3::new(radial.x() / r_len, radial.y() / r_len, radial.z() / r_len);
         tube_vec.dot(z_axis).atan2(tube_vec.dot(radial_dir))
-    };
+    });
 
     SurfaceProjection {
         distance: (tube_dist - minor_r).abs(),

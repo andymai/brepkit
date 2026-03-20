@@ -124,7 +124,15 @@ pub fn point_to_curve<C: ParametricCurve>(
     t_start: f64,
     t_end: f64,
 ) -> CurveProjection {
-    debug_assert!(t_end > t_start, "t_end must be greater than t_start");
+    // Degenerate range: evaluate the single point.
+    if t_end <= t_start {
+        let p = curve.evaluate(t_start);
+        return CurveProjection {
+            distance: (p - point).length(),
+            point: p,
+            parameter: t_start,
+        };
+    }
 
     // ── Phase 1: global search ───────────────────────────────────────────────
     let step = (t_end - t_start) / (N_SAMPLES - 1) as f64;

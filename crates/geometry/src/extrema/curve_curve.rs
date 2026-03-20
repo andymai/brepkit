@@ -148,6 +148,19 @@ pub fn curve_to_curve<C1: ParametricCurve, C2: ParametricCurve>(
     let (t1_start, t1_end) = t1_range;
     let (t2_start, t2_end) = t2_range;
 
+    // Degenerate ranges: evaluate endpoints directly.
+    if t1_end <= t1_start || t2_end <= t2_start {
+        let p1 = c1.evaluate(t1_start);
+        let p2 = c2.evaluate(t2_start);
+        return ExtremaSolution {
+            distance: (p1 - p2).length(),
+            point_a: p1,
+            point_b: p2,
+            param_a: t1_start,
+            param_b: t2_start,
+        };
+    }
+
     // ── Phase 1: grid search ──────────────────────────────────────────────────
     let step1 = (t1_end - t1_start) / (N_SAMPLES - 1) as f64;
     let step2 = (t2_end - t2_start) / (N_SAMPLES - 1) as f64;

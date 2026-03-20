@@ -48,9 +48,9 @@ impl LipschitzOptimizer {
 
     /// Find the (approximate) global minimum of `f(u, v)` over the given domain.
     ///
-    /// - `lipschitz_bound` is an upper bound on the gradient magnitude.
-    /// - `tolerance` controls cell-radius convergence: a cell is terminal when
-    ///   its radius is below `tolerance`.
+    /// The Lipschitz bound is estimated internally from a finite-difference
+    /// grid. `tolerance` controls cell-radius convergence: a cell is terminal
+    /// when its radius is below `tolerance`.
     ///
     /// Returns `(u*, v*, f*)` — the minimizer and minimum value found.
     #[must_use]
@@ -69,7 +69,9 @@ impl LipschitzOptimizer {
         let (v0, v1) = v_range;
         let n = self.grid_size;
 
-        // ── Phase 1: grid search ──────────────────────────────────────────────
+        // ── Phase 1: grid search (cached for Lipschitz estimation) ────────────
+        let grid_len = (n + 1) * (n + 1);
+        let mut grid_vals = vec![0.0_f64; grid_len];
         let mut best = f64::INFINITY;
         let mut best_u = (u0 + u1) * 0.5;
         let mut best_v = (v0 + v1) * 0.5;
@@ -79,6 +81,7 @@ impl LipschitzOptimizer {
             for iv in 0..=n {
                 let v = v0 + (v1 - v0) * (iv as f64 / n as f64);
                 let val = f(u, v);
+                grid_vals[iu * (n + 1) + iv] = val;
                 if val < best {
                     best = val;
                     best_u = u;
@@ -126,24 +129,15 @@ impl LipschitzOptimizer {
             }
         }
 
-        // We need a Lipschitz bound to do the subdivision phase.
-        // If the caller didn't supply one (will be computed separately),
-        // we use a conservative estimate from the grid data.
-        // Here we derive it from the maximum gradient seen in the grid.
+        // Estimate Lipschitz bound from cached Phase 1 grid values.
         let du = (u1 - u0) / n as f64;
         let dv = (v1 - v0) / n as f64;
-        let _diag = (du * du + dv * dv).sqrt();
-        // Estimate L from finite differences on a coarse grid.
         let mut lip: f64 = 0.0;
         for iu in 0..n {
-            let u = u0 + (u1 - u0) * (iu as f64 / n as f64);
-            let u_next = u0 + (u1 - u0) * ((iu + 1) as f64 / n as f64);
             for iv in 0..n {
-                let v = v0 + (v1 - v0) * (iv as f64 / n as f64);
-                let v_next = v0 + (v1 - v0) * ((iv + 1) as f64 / n as f64);
-                let f00 = f(u, v);
-                let f10 = f(u_next, v);
-                let f01 = f(u, v_next);
+                let f00 = grid_vals[iu * (n + 1) + iv];
+                let f10 = grid_vals[(iu + 1) * (n + 1) + iv];
+                let f01 = grid_vals[iu * (n + 1) + (iv + 1)];
                 let dfu = (f10 - f00).abs() / du;
                 let dfv = (f01 - f00).abs() / dv;
                 let local_lip = dfu.hypot(dfv);

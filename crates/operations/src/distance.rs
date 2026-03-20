@@ -463,9 +463,6 @@ fn bvh_distance_candidates(bvh: &Bvh, aabbs: &[(usize, Aabb3)], point: Point3) -
 
 /// Compute the minimum distance between two 3D line segments.
 ///
-/// Returns `(distance, closest_on_a, closest_on_b)`.
-/// Compute the minimum distance between two line segments.
-///
 /// Delegates to [`brepkit_geometry::extrema::segment_segment_distance`].
 fn segment_to_segment_distance(
     a1: Point3,
