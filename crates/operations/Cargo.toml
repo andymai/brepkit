@@ -13,6 +13,7 @@ brepkit-topology.workspace = true
 brepkit-algo.workspace = true
 brepkit-blend.workspace = true
 brepkit-heal.workspace = true
+brepkit-check.workspace = true
 thiserror.workspace = true
 rayon.workspace = true
 log.workspace = true
