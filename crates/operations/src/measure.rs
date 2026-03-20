@@ -1916,9 +1916,9 @@ fn collect_wire_positions(
 
 /// Sample points along a parametric curve for area/distance calculations.
 ///
-/// Uses [`brepkit_geometry::sampling::sample_uniform_with_params`] for the
-/// uniform parameter grid, then applies direction reversal and proximity
-/// deduplication.
+/// Uses open-endpoint sampling (`i / n_samples`, NOT `i / (n-1)`) so that
+/// closed curves (full circles) do not duplicate the start/end point.
+#[allow(clippy::cast_precision_loss)]
 fn sample_edge_curve(
     evaluate: &dyn Fn(f64) -> Point3,
     t0: f64,
@@ -1928,36 +1928,14 @@ fn sample_edge_curve(
     tol: f64,
     positions: &mut Vec<Point3>,
 ) {
-    // Wrap the closure in a minimal ParametricCurve adapter so we can use
-    // the geometry crate's uniform sampler.
-    struct ClosureCurve<'a> {
-        f: &'a dyn Fn(f64) -> Point3,
-        t0: f64,
-        t1: f64,
-    }
-    impl brepkit_math::traits::ParametricCurve for ClosureCurve<'_> {
-        fn evaluate(&self, t: f64) -> Point3 {
-            (self.f)(t)
-        }
-        fn tangent(&self, _t: f64) -> brepkit_math::vec::Vec3 {
-            brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0) // unused by sample_uniform_with_params
-        }
-        fn domain(&self) -> (f64, f64) {
-            (self.t0, self.t1)
-        }
-    }
-
-    let curve = ClosureCurve {
-        f: evaluate,
-        t0,
-        t1,
+    let indices: Box<dyn Iterator<Item = usize>> = if forward {
+        Box::new(0..n_samples)
+    } else {
+        Box::new((0..n_samples).rev())
     };
-    let mut pairs =
-        brepkit_geometry::sampling::sample_uniform_with_params(&curve, t0, t1, n_samples);
-    if !forward {
-        pairs.reverse();
-    }
-    for (_, pt) in pairs {
+    for i in indices {
+        let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
+        let pt = evaluate(t);
         if positions
             .last()
             .is_none_or(|p: &Point3| (*p - pt).length() > tol)

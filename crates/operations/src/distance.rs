@@ -464,66 +464,16 @@ fn bvh_distance_candidates(bvh: &Bvh, aabbs: &[(usize, Aabb3)], point: Point3) -
 /// Compute the minimum distance between two 3D line segments.
 ///
 /// Returns `(distance, closest_on_a, closest_on_b)`.
+/// Compute the minimum distance between two line segments.
+///
+/// Delegates to [`brepkit_geometry::extrema::segment_segment_distance`].
 fn segment_to_segment_distance(
     a1: Point3,
     a2: Point3,
     b1: Point3,
     b2: Point3,
 ) -> (f64, Point3, Point3) {
-    let da = a2 - a1;
-    let db = b2 - b1;
-    let r = a1 - b1;
-
-    let a_sq = da.dot(da);
-    let e_sq = db.dot(db);
-    let f = db.dot(r);
-
-    if a_sq < 1e-30 && e_sq < 1e-30 {
-        return ((a1 - b1).length(), a1, b1);
-    }
-
-    let (s, t) = if a_sq < 1e-30 {
-        (0.0, (f / e_sq).clamp(0.0, 1.0))
-    } else {
-        let c = da.dot(r);
-        if e_sq < 1e-30 {
-            ((-c / a_sq).clamp(0.0, 1.0), 0.0)
-        } else {
-            let b_val = da.dot(db);
-            let denom = a_sq * e_sq - b_val * b_val;
-
-            let mut s = if denom.abs() > 1e-30 {
-                ((b_val * f - c * e_sq) / denom).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-
-            let mut t = (b_val * s + f) / e_sq;
-
-            if t < 0.0 {
-                t = 0.0;
-                s = (-c / a_sq).clamp(0.0, 1.0);
-            } else if t > 1.0 {
-                t = 1.0;
-                s = ((b_val - c) / a_sq).clamp(0.0, 1.0);
-            }
-
-            (s, t)
-        }
-    };
-
-    let closest_a = Point3::new(
-        da.x().mul_add(s, a1.x()),
-        da.y().mul_add(s, a1.y()),
-        da.z().mul_add(s, a1.z()),
-    );
-    let closest_b = Point3::new(
-        db.x().mul_add(t, b1.x()),
-        db.y().mul_add(t, b1.y()),
-        db.z().mul_add(t, b1.z()),
-    );
-
-    ((closest_a - closest_b).length(), closest_a, closest_b)
+    brepkit_geometry::extrema::segment_segment_distance(a1, a2, b1, b2)
 }
 
 /// Collect all edge segments from a solid.
