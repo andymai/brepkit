@@ -142,9 +142,23 @@ pub fn check_wire_self_intersection(
                 edge_segments.push(vec![p0, p1]);
             }
             brepkit_topology::edge::EdgeCurve::Circle(c) => {
+                let is_closed = edge.start() == edge.end();
+                let (t0, t1) = if is_closed {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    let mut ta = c.project(p0);
+                    let mut tb = c.project(p1);
+                    if !oe.is_forward() {
+                        std::mem::swap(&mut ta, &mut tb);
+                    }
+                    if tb <= ta {
+                        tb += std::f64::consts::TAU;
+                    }
+                    (ta, tb)
+                };
                 let mut pts = Vec::with_capacity(samples_per_edge + 1);
                 for k in 0..=samples_per_edge {
-                    let t = std::f64::consts::TAU * (k as f64) / (samples_per_edge as f64);
+                    let t = t0 + (t1 - t0) * (k as f64) / (samples_per_edge as f64);
                     pts.push(c.evaluate(t));
                 }
                 if !oe.is_forward() {
@@ -153,9 +167,23 @@ pub fn check_wire_self_intersection(
                 edge_segments.push(pts);
             }
             brepkit_topology::edge::EdgeCurve::Ellipse(e) => {
+                let is_closed = edge.start() == edge.end();
+                let (t0, t1) = if is_closed {
+                    (0.0, std::f64::consts::TAU)
+                } else {
+                    let mut ta = e.project(p0);
+                    let mut tb = e.project(p1);
+                    if !oe.is_forward() {
+                        std::mem::swap(&mut ta, &mut tb);
+                    }
+                    if tb <= ta {
+                        tb += std::f64::consts::TAU;
+                    }
+                    (ta, tb)
+                };
                 let mut pts = Vec::with_capacity(samples_per_edge + 1);
                 for k in 0..=samples_per_edge {
-                    let t = std::f64::consts::TAU * (k as f64) / (samples_per_edge as f64);
+                    let t = t0 + (t1 - t0) * (k as f64) / (samples_per_edge as f64);
                     pts.push(e.evaluate(t));
                 }
                 if !oe.is_forward() {

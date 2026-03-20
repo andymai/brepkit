@@ -121,12 +121,16 @@ pub fn check_edge_same_parameter(
     let n_samples = 10;
     let mut max_deviation = 0.0f64;
 
+    let start_pt = topo.vertex(edge.start())?.point();
+    let end_pt = topo.vertex(edge.end())?.point();
+    let (t_start, t_end) = edge.curve().domain_with_endpoints(start_pt, end_pt);
+
     for i in 0..=n_samples {
         let t_norm = i as f64 / n_samples as f64;
-        let t = pcurve.t_start() + (pcurve.t_end() - pcurve.t_start()) * t_norm;
+        let t_pcurve = pcurve.t_start() + (pcurve.t_end() - pcurve.t_start()) * t_norm;
 
         // Evaluate PCurve to get (u, v) on surface.
-        let uv = pcurve.evaluate(t);
+        let uv = pcurve.evaluate(t_pcurve);
 
         // Evaluate surface at (u, v) to get 3D point from PCurve path.
         let pcurve_3d = match face.surface().evaluate(uv.x(), uv.y()) {
@@ -134,12 +138,11 @@ pub fn check_edge_same_parameter(
             None => continue, // Should not happen for non-Plane surfaces
         };
 
-        // Evaluate 3D curve at same normalized parameter.
-        let curve_3d = edge.curve().evaluate_with_endpoints(
-            t_norm,
-            topo.vertex(edge.start())?.point(),
-            topo.vertex(edge.end())?.point(),
-        );
+        // Evaluate 3D curve at same parameter in native domain.
+        let t_curve = t_start + (t_end - t_start) * t_norm;
+        let curve_3d = edge
+            .curve()
+            .evaluate_with_endpoints(t_curve, start_pt, end_pt);
 
         let deviation = (pcurve_3d - curve_3d).length();
         max_deviation = max_deviation.max(deviation);

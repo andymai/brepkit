@@ -58,11 +58,11 @@ pub fn point_to_solid(
     let face_ids: Vec<FaceId> = shell.faces().to_vec();
 
     // Build AABBs and BVH.
-    let face_aabbs: Vec<(usize, Aabb3)> = face_ids
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &fid)| crate::util::face_aabb(topo, fid).ok().map(|aabb| (i, aabb)))
-        .collect();
+    let mut face_aabbs: Vec<(usize, Aabb3)> = Vec::with_capacity(face_ids.len());
+    for (i, &fid) in face_ids.iter().enumerate() {
+        let aabb = crate::util::face_aabb(topo, fid)?;
+        face_aabbs.push((i, aabb));
+    }
     let bvh = Bvh::build(&face_aabbs);
 
     let mut best_dist = f64::INFINITY;
@@ -158,7 +158,13 @@ pub fn point_to_face(
         }
         FaceSurface::Nurbs(nurbs) => {
             match brepkit_math::nurbs::projection::project_point_to_surface(nurbs, point, 1e-7) {
-                Ok(proj) => Ok(Some((proj.distance, proj.point))),
+                Ok(proj) => {
+                    if is_point_in_face_boundary(topo, face_id, proj.point)? {
+                        Ok(Some((proj.distance, proj.point)))
+                    } else {
+                        closest_point_on_wire_edges(topo, face_id, point)
+                    }
+                }
                 Err(_) => Ok(None),
             }
         }
@@ -201,11 +207,11 @@ pub fn solid_to_solid(
 
     // Pass 2: Vertices of A against faces of B.
     let faces_b = collect_solid_faces(topo, solid_b)?;
-    let aabbs_b: Vec<(usize, Aabb3)> = faces_b
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &fid)| crate::util::face_aabb(topo, fid).ok().map(|aabb| (i, aabb)))
-        .collect();
+    let mut aabbs_b: Vec<(usize, Aabb3)> = Vec::with_capacity(faces_b.len());
+    for (i, &fid) in faces_b.iter().enumerate() {
+        let aabb = crate::util::face_aabb(topo, fid)?;
+        aabbs_b.push((i, aabb));
+    }
 
     for &pa in &verts_a {
         for &(idx, ref aabb) in &aabbs_b {
@@ -224,11 +230,11 @@ pub fn solid_to_solid(
 
     // Pass 3: Vertices of B against faces of A.
     let faces_a = collect_solid_faces(topo, solid_a)?;
-    let aabbs_a: Vec<(usize, Aabb3)> = faces_a
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &fid)| crate::util::face_aabb(topo, fid).ok().map(|aabb| (i, aabb)))
-        .collect();
+    let mut aabbs_a: Vec<(usize, Aabb3)> = Vec::with_capacity(faces_a.len());
+    for (i, &fid) in faces_a.iter().enumerate() {
+        let aabb = crate::util::face_aabb(topo, fid)?;
+        aabbs_a.push((i, aabb));
+    }
 
     for &pb in &verts_b {
         for &(idx, ref aabb) in &aabbs_a {

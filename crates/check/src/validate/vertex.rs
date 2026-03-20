@@ -25,15 +25,12 @@ pub fn check_vertex_on_curve(
     let deviation = match edge.curve() {
         EdgeCurve::Line => return Ok(vec![]),
         EdgeCurve::Circle(c) => {
-            // Check if vertex is start or end, evaluate accordingly
-            let d_start = (pos - c.evaluate(0.0)).length();
-            let d_end = (pos - c.evaluate(std::f64::consts::TAU)).length();
-            d_start.min(d_end)
+            let t_closest = c.project(pos);
+            (pos - c.evaluate(t_closest)).length()
         }
         EdgeCurve::Ellipse(e) => {
-            let d_start = (pos - e.evaluate(0.0)).length();
-            let d_end = (pos - e.evaluate(std::f64::consts::TAU)).length();
-            d_start.min(d_end)
+            let t_closest = e.project(pos);
+            (pos - e.evaluate(t_closest)).length()
         }
         EdgeCurve::NurbsCurve(nc) => {
             let (t0, t1) = nc.domain();

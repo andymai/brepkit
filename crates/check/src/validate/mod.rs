@@ -124,33 +124,36 @@ fn validate_shell_checks(
         issues.extend(shell::check_shell_orientation(topo, shell_id)?);
     }
 
-    // Wire checks for each face's outer wire
+    // Wire checks for each face's outer + inner wires
     let shell = topo.shell(shell_id)?;
     let mut checked_wires = HashSet::new();
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
-        let wid = face.outer_wire();
-        if checked_wires.insert(wid) {
-            if !options.disabled_checks.contains(&CheckId::WireEmpty) {
-                issues.extend(wire::check_wire_empty(topo, wid)?);
-            }
-            if !options.disabled_checks.contains(&CheckId::WireNotConnected) {
-                issues.extend(wire::check_wire_connected(topo, wid)?);
-            }
-            if !options.disabled_checks.contains(&CheckId::WireClosure3D) {
-                issues.extend(wire::check_wire_closure(topo, wid)?);
-            }
-            if !options
-                .disabled_checks
-                .contains(&CheckId::WireRedundantEdge)
-            {
-                issues.extend(wire::check_wire_redundant(topo, wid)?);
-            }
-            if !options
-                .disabled_checks
-                .contains(&CheckId::WireSelfIntersection)
-            {
-                issues.extend(wire::check_wire_self_intersection(topo, wid)?);
+        let mut wire_ids = vec![face.outer_wire()];
+        wire_ids.extend(face.inner_wires().iter().copied());
+        for wid in wire_ids {
+            if checked_wires.insert(wid) {
+                if !options.disabled_checks.contains(&CheckId::WireEmpty) {
+                    issues.extend(wire::check_wire_empty(topo, wid)?);
+                }
+                if !options.disabled_checks.contains(&CheckId::WireNotConnected) {
+                    issues.extend(wire::check_wire_connected(topo, wid)?);
+                }
+                if !options.disabled_checks.contains(&CheckId::WireClosure3D) {
+                    issues.extend(wire::check_wire_closure(topo, wid)?);
+                }
+                if !options
+                    .disabled_checks
+                    .contains(&CheckId::WireRedundantEdge)
+                {
+                    issues.extend(wire::check_wire_redundant(topo, wid)?);
+                }
+                if !options
+                    .disabled_checks
+                    .contains(&CheckId::WireSelfIntersection)
+                {
+                    issues.extend(wire::check_wire_self_intersection(topo, wid)?);
+                }
             }
         }
     }
@@ -175,40 +178,44 @@ fn validate_shell_checks(
     let mut checked_edges = HashSet::new();
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
-        let outer_wire = topo.wire(face.outer_wire())?;
-        for oe in outer_wire.edges() {
-            let eid = oe.edge();
-            if checked_edges.insert(eid) {
-                if !options.disabled_checks.contains(&CheckId::EdgeRangeValid) {
-                    issues.extend(edge::check_edge_range(
-                        topo,
-                        eid,
-                        options.tolerance_scale * 1e-7,
-                    )?);
-                }
-                if !options.disabled_checks.contains(&CheckId::EdgeDegenerate) {
-                    issues.extend(edge::check_edge_degenerate(
-                        topo,
-                        eid,
-                        options.tolerance_scale * 1e-7,
-                    )?);
-                }
-                // Vertex-on-curve checks
-                if !options.disabled_checks.contains(&CheckId::VertexOnCurve) {
-                    let edge_data = topo.edge(eid)?;
-                    issues.extend(vertex::check_vertex_on_curve(
-                        topo,
-                        edge_data.start(),
-                        eid,
-                        options.tolerance_scale * 1e-4,
-                    )?);
-                    if edge_data.start() != edge_data.end() {
+        let mut wire_ids = vec![face.outer_wire()];
+        wire_ids.extend(face.inner_wires().iter().copied());
+        for wid in wire_ids {
+            let wire_data = topo.wire(wid)?;
+            for oe in wire_data.edges() {
+                let eid = oe.edge();
+                if checked_edges.insert(eid) {
+                    if !options.disabled_checks.contains(&CheckId::EdgeRangeValid) {
+                        issues.extend(edge::check_edge_range(
+                            topo,
+                            eid,
+                            options.tolerance_scale * 1e-7,
+                        )?);
+                    }
+                    if !options.disabled_checks.contains(&CheckId::EdgeDegenerate) {
+                        issues.extend(edge::check_edge_degenerate(
+                            topo,
+                            eid,
+                            options.tolerance_scale * 1e-7,
+                        )?);
+                    }
+                    // Vertex-on-curve checks
+                    if !options.disabled_checks.contains(&CheckId::VertexOnCurve) {
+                        let edge_data = topo.edge(eid)?;
                         issues.extend(vertex::check_vertex_on_curve(
                             topo,
-                            edge_data.end(),
+                            edge_data.start(),
                             eid,
                             options.tolerance_scale * 1e-4,
                         )?);
+                        if edge_data.start() != edge_data.end() {
+                            issues.extend(vertex::check_vertex_on_curve(
+                                topo,
+                                edge_data.end(),
+                                eid,
+                                options.tolerance_scale * 1e-4,
+                            )?);
+                        }
                     }
                 }
             }
@@ -223,16 +230,20 @@ fn validate_shell_checks(
         let mut sp_checked = HashSet::new();
         for &fid in shell.faces() {
             let face = topo.face(fid)?;
-            let outer_wire = topo.wire(face.outer_wire())?;
-            for oe in outer_wire.edges() {
-                let eid = oe.edge();
-                if sp_checked.insert((eid, fid)) {
-                    issues.extend(edge::check_edge_same_parameter(
-                        topo,
-                        eid,
-                        fid,
-                        options.tolerance_scale * 1e-4,
-                    )?);
+            let mut wire_ids = vec![face.outer_wire()];
+            wire_ids.extend(face.inner_wires().iter().copied());
+            for wid in wire_ids {
+                let wire_data = topo.wire(wid)?;
+                for oe in wire_data.edges() {
+                    let eid = oe.edge();
+                    if sp_checked.insert((eid, fid)) {
+                        issues.extend(edge::check_edge_same_parameter(
+                            topo,
+                            eid,
+                            fid,
+                            options.tolerance_scale * 1e-4,
+                        )?);
+                    }
                 }
             }
         }
