@@ -1206,4 +1206,101 @@ impl BrepKernel {
         }
         .into())
     }
+
+    // ── Blend V2 (walking engine) ────────────────────────────────
+
+    /// Fillet edges using the v2 walking-based blend engine.
+    ///
+    /// Returns a new solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid or edge handles are invalid, or the
+    /// blend computation fails.
+    #[wasm_bindgen(js_name = "filletV2")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn fillet_v2(
+        &mut self,
+        solid: u32,
+        edge_handles: Vec<u32>,
+        radius: f64,
+    ) -> Result<u32, JsError> {
+        validate_positive(radius, "radius")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let edge_ids: Vec<_> = edge_handles
+            .iter()
+            .map(|&h| self.resolve_edge(h))
+            .collect::<Result<_, _>>()?;
+        let result =
+            brepkit_operations::blend_ops::fillet_v2(self.topo_mut(), solid_id, &edge_ids, radius)?;
+        Ok(solid_id_to_u32(result.solid))
+    }
+
+    /// Chamfer edges with two distances using the v2 blend engine.
+    ///
+    /// Returns a new solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid or edge handles are invalid, or the
+    /// blend computation fails.
+    #[wasm_bindgen(js_name = "chamferV2")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn chamfer_v2(
+        &mut self,
+        solid: u32,
+        edge_handles: Vec<u32>,
+        d1: f64,
+        d2: f64,
+    ) -> Result<u32, JsError> {
+        validate_positive(d1, "d1")?;
+        validate_positive(d2, "d2")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let edge_ids: Vec<_> = edge_handles
+            .iter()
+            .map(|&h| self.resolve_edge(h))
+            .collect::<Result<_, _>>()?;
+        let result = brepkit_operations::blend_ops::chamfer_v2(
+            self.topo_mut(),
+            solid_id,
+            &edge_ids,
+            d1,
+            d2,
+        )?;
+        Ok(solid_id_to_u32(result.solid))
+    }
+
+    /// Chamfer edges with distance and angle using the v2 blend engine.
+    ///
+    /// Returns a new solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid or edge handles are invalid, or the
+    /// blend computation fails.
+    #[wasm_bindgen(js_name = "chamferDistanceAngle")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn chamfer_distance_angle(
+        &mut self,
+        solid: u32,
+        edge_handles: Vec<u32>,
+        distance: f64,
+        angle: f64,
+    ) -> Result<u32, JsError> {
+        validate_positive(distance, "distance")?;
+        validate_positive(angle, "angle")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let edge_ids: Vec<_> = edge_handles
+            .iter()
+            .map(|&h| self.resolve_edge(h))
+            .collect::<Result<_, _>>()?;
+        let result = brepkit_operations::blend_ops::chamfer_distance_angle(
+            self.topo_mut(),
+            solid_id,
+            &edge_ids,
+            distance,
+            angle,
+        )?;
+        Ok(solid_id_to_u32(result.solid))
+    }
 }
