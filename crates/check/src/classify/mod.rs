@@ -267,15 +267,32 @@ pub fn classify_point_robust(
 }
 
 /// Count total ray crossings across all faces of a shell.
+///
+/// Builds a BVH over face AABBs to skip faces whose bounding box
+/// the ray does not intersect.
 fn count_ray_crossings(
     topo: &Topology,
     faces: &[FaceId],
     origin: Point3,
     direction: Vec3,
 ) -> Result<u32, CheckError> {
+    use brepkit_math::bvh::Bvh;
+
+    // Build face AABBs and BVH for broad-phase filtering.
+    let face_aabbs: Vec<(usize, brepkit_math::aabb::Aabb3)> = faces
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &fid)| crate::util::face_aabb(topo, fid).ok().map(|aabb| (i, aabb)))
+        .collect();
+    let bvh = Bvh::build(&face_aabbs);
+
+    // query_ray returns the primitive IDs (the `i` values), which are
+    // indices into the original `faces` slice.
+    let candidates = bvh.query_ray(origin, direction);
+
     let mut crossings = 0u32;
-    for &fid in faces {
-        crossings += boundary::count_face_ray_crossings(topo, fid, origin, direction)?;
+    for face_idx in candidates {
+        crossings += boundary::count_face_ray_crossings(topo, faces[face_idx], origin, direction)?;
     }
     Ok(crossings)
 }

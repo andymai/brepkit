@@ -302,28 +302,72 @@ fn collect_solid_faces(topo: &Topology, solid: SolidId) -> Result<Vec<FaceId>, C
     Ok(shell.faces().to_vec())
 }
 
-/// Collect edge segments (start/end vertex positions) for edge-edge distance.
+/// Collect edge segments as polylines for edge-edge distance computation.
+///
+/// Line edges produce a single segment. Curved edges (circle, ellipse, NURBS)
+/// are sampled at multiple points to capture the curve geometry.
+#[allow(clippy::cast_precision_loss)]
 fn collect_solid_edge_segments(
     topo: &Topology,
     solid: SolidId,
 ) -> Result<Vec<(Point3, Point3)>, CheckError> {
+    use brepkit_topology::edge::EdgeCurve;
+
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
     let mut seen = HashSet::new();
     let mut segments = Vec::new();
+
+    let n_samples = 8usize;
+
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
         let wire = topo.wire(face.outer_wire())?;
         for oe in wire.edges() {
             let eid = oe.edge();
-            if seen.insert(eid) {
-                let edge_data = topo.edge(eid)?;
-                let p0 = topo.vertex(edge_data.start())?.point();
-                let p1 = topo.vertex(edge_data.end())?.point();
-                segments.push((p0, p1));
+            if !seen.insert(eid) {
+                continue;
+            }
+            let edge_data = topo.edge(eid)?;
+            let start_pt = topo.vertex(edge_data.start())?.point();
+            let end_pt = topo.vertex(edge_data.end())?.point();
+
+            match edge_data.curve() {
+                EdgeCurve::Line => {
+                    segments.push((start_pt, end_pt));
+                }
+                EdgeCurve::Circle(c) => {
+                    let mut prev = c.evaluate(0.0);
+                    for i in 1..=n_samples {
+                        let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                        let curr = c.evaluate(t);
+                        segments.push((prev, curr));
+                        prev = curr;
+                    }
+                }
+                EdgeCurve::Ellipse(e) => {
+                    let mut prev = e.evaluate(0.0);
+                    for i in 1..=n_samples {
+                        let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                        let curr = e.evaluate(t);
+                        segments.push((prev, curr));
+                        prev = curr;
+                    }
+                }
+                EdgeCurve::NurbsCurve(nc) => {
+                    let (t0, t1) = nc.domain();
+                    let mut prev = nc.evaluate(t0);
+                    for i in 1..=n_samples {
+                        let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
+                        let curr = nc.evaluate(t);
+                        segments.push((prev, curr));
+                        prev = curr;
+                    }
+                }
             }
         }
     }
+
     Ok(segments)
 }
 

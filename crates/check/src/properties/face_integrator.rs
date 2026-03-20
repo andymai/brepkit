@@ -66,7 +66,16 @@ pub fn integrate_face(
                 (f64::NEG_INFINITY, f64::INFINITY),
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
-            Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
+            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            Ok(integrate_with_trimming(
+                s,
+                u_range,
+                v_range,
+                gauss_order,
+                sign,
+                &uv_boundary,
+                true,
+            ))
         }
         FaceSurface::Cone(s) => {
             let full = (
@@ -74,7 +83,16 @@ pub fn integrate_face(
                 (f64::NEG_INFINITY, f64::INFINITY),
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
-            Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
+            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            Ok(integrate_with_trimming(
+                s,
+                u_range,
+                v_range,
+                gauss_order,
+                sign,
+                &uv_boundary,
+                true,
+            ))
         }
         FaceSurface::Sphere(s) => {
             let full = (
@@ -82,12 +100,30 @@ pub fn integrate_face(
                 (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
             );
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
-            Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
+            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            Ok(integrate_with_trimming(
+                s,
+                u_range,
+                v_range,
+                gauss_order,
+                sign,
+                &uv_boundary,
+                true,
+            ))
         }
         FaceSurface::Torus(s) => {
             let full = ((0.0, std::f64::consts::TAU), (0.0, std::f64::consts::TAU));
             let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, true, full)?;
-            Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
+            let uv_boundary = build_face_uv_boundary(topo, face_id, |p| s.project_point(p), true)?;
+            Ok(integrate_with_trimming(
+                s,
+                u_range,
+                v_range,
+                gauss_order,
+                sign,
+                &uv_boundary,
+                true,
+            ))
         }
         FaceSurface::Nurbs(s) => {
             let full = (s.domain_u(), s.domain_v());
@@ -95,7 +131,17 @@ pub fn integrate_face(
             let periodic_v = s.is_periodic_v();
             let (u_range, v_range) =
                 face_uv_bounds(topo, face_id, s, periodic_u, periodic_v, full)?;
-            Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
+            let uv_boundary =
+                build_face_uv_boundary(topo, face_id, |p| s.project_point(p), periodic_u)?;
+            Ok(integrate_with_trimming(
+                s,
+                u_range,
+                v_range,
+                gauss_order,
+                sign,
+                &uv_boundary,
+                periodic_u,
+            ))
         }
     }
 }
@@ -353,4 +399,169 @@ fn integrate_parametric<S: ParametricSurface>(
         centroid_y: cy,
         centroid_z: cz,
     }
+}
+
+/// Dispatch to trimmed or untrimmed parametric integration based on whether
+/// a UV boundary polygon is available.
+fn integrate_with_trimming<S: ParametricSurface>(
+    surface: &S,
+    u_range: (f64, f64),
+    v_range: (f64, f64),
+    gauss_order: usize,
+    sign: f64,
+    uv_boundary: &[(f64, f64)],
+    u_periodic: bool,
+) -> FaceContribution {
+    if uv_boundary.len() >= 3 {
+        integrate_parametric_trimmed(
+            surface,
+            u_range,
+            v_range,
+            gauss_order,
+            sign,
+            uv_boundary,
+            u_periodic,
+        )
+    } else {
+        integrate_parametric(surface, u_range, v_range, gauss_order, sign)
+    }
+}
+
+/// Integrate a parametric surface with UV boundary trimming.
+///
+/// At each Gauss point, checks if the (u,v) coordinate falls inside the
+/// face's UV boundary polygon. Points outside are skipped (zero contribution).
+#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
+fn integrate_parametric_trimmed<S: ParametricSurface>(
+    surface: &S,
+    u_range: (f64, f64),
+    v_range: (f64, f64),
+    gauss_order: usize,
+    sign: f64,
+    uv_boundary: &[(f64, f64)],
+    u_periodic: bool,
+) -> FaceContribution {
+    use brepkit_math::predicates::point_in_polygon;
+    use brepkit_math::vec::Point2;
+
+    let gauss_pts = gauss_legendre_points(gauss_order);
+    let u_scale = (u_range.1 - u_range.0) / 2.0;
+    let u_mid = f64::midpoint(u_range.0, u_range.1);
+    let v_scale = (v_range.1 - v_range.0) / 2.0;
+    let v_mid = f64::midpoint(v_range.0, v_range.1);
+
+    // Pre-build UV polygon for containment tests.
+    let uv_poly: Vec<Point2> = uv_boundary
+        .iter()
+        .map(|(u, v)| Point2::new(*u, *v))
+        .collect();
+
+    // Pre-compute boundary u-range for periodic shifting.
+    let u_bcenter = if u_periodic {
+        let bmin = uv_boundary
+            .iter()
+            .map(|(bu, _)| *bu)
+            .fold(f64::INFINITY, f64::min);
+        let bmax = uv_boundary
+            .iter()
+            .map(|(bu, _)| *bu)
+            .fold(f64::NEG_INFINITY, f64::max);
+        (bmin + bmax) * 0.5
+    } else {
+        0.0
+    };
+
+    let mut area = 0.0;
+    let mut vol = 0.0;
+    let mut mx = 0.0;
+    let mut my = 0.0;
+    let mut mz = 0.0;
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    let mut cz = 0.0;
+
+    for gpu in gauss_pts {
+        let u = u_scale.mul_add(gpu.x, u_mid);
+        for gpv in gauss_pts {
+            let v = v_scale.mul_add(gpv.x, v_mid);
+
+            // UV containment check for trimmed faces.
+            let test_u = if u_periodic {
+                let tau = std::f64::consts::TAU;
+                let diff = u - u_bcenter;
+                u_bcenter + diff - tau * ((diff + std::f64::consts::PI) / tau).floor()
+            } else {
+                u
+            };
+
+            if !point_in_polygon(Point2::new(test_u, v), &uv_poly) {
+                continue;
+            }
+
+            let w = gpu.w * gpv.w * u_scale * v_scale;
+            let p = surface.evaluate(u, v);
+            let du = surface.partial_u(u, v);
+            let dv = surface.partial_v(u, v);
+            let n = Vec3::new(
+                du.y() * dv.z() - du.z() * dv.y(),
+                du.z() * dv.x() - du.x() * dv.z(),
+                du.x() * dv.y() - du.y() * dv.x(),
+            );
+            let n_len = n.length();
+
+            area += w * n_len;
+
+            let pv = Vec3::new(p.x(), p.y(), p.z());
+            vol += w * pv.dot(n) / 3.0;
+
+            mx += w * 0.5 * p.x() * p.x() * n.x();
+            my += w * 0.5 * p.y() * p.y() * n.y();
+            mz += w * 0.5 * p.z() * p.z() * n.z();
+
+            cx += w * p.x() * n_len;
+            cy += w * p.y() * n_len;
+            cz += w * p.z() * n_len;
+        }
+    }
+
+    FaceContribution {
+        area,
+        volume: vol * sign,
+        volume_moment_x: mx * sign,
+        volume_moment_y: my * sign,
+        volume_moment_z: mz * sign,
+        centroid_x: cx,
+        centroid_y: cy,
+        centroid_z: cz,
+    }
+}
+
+/// Build a UV boundary polygon from a face's outer wire.
+///
+/// Projects each boundary vertex onto the surface to obtain (u, v) coordinates,
+/// then unwraps periodic u-coordinates to avoid seam discontinuities.
+fn build_face_uv_boundary<F>(
+    topo: &Topology,
+    face_id: FaceId,
+    project: F,
+    u_periodic: bool,
+) -> Result<Vec<(f64, f64)>, CheckError>
+where
+    F: Fn(Point3) -> (f64, f64),
+{
+    let polygon = crate::util::face_polygon(topo, face_id)?;
+    if polygon.len() < 3 {
+        return Ok(vec![]);
+    }
+
+    let mut uv: Vec<(f64, f64)> = polygon.iter().map(|&p| project(p)).collect();
+
+    // Unwrap periodic u-coordinates.
+    for i in 1..uv.len() {
+        if u_periodic {
+            uv[i].0 = unwrap_angle(uv[i - 1].0, uv[i].0);
+        }
+    }
+
+    Ok(uv)
 }

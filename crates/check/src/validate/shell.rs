@@ -103,6 +103,66 @@ pub fn check_shell_connected(
     Ok(vec![])
 }
 
+/// Check that shell face orientations are consistent: for each edge shared
+/// by two faces, it should be used once FORWARD and once REVERSED.
+pub fn check_shell_orientation(
+    topo: &Topology,
+    shell_id: ShellId,
+) -> Result<Vec<ValidationIssue>, CheckError> {
+    let shell = topo.shell(shell_id)?;
+
+    // Map each edge to its (face_index, effective_forward) pairs
+    let mut edge_uses: HashMap<EdgeId, Vec<(usize, bool)>> = HashMap::new();
+
+    for (fi, &fid) in shell.faces().iter().enumerate() {
+        let face = topo.face(fid)?;
+        // Account for face reversal
+        let face_reversed = face.is_reversed();
+        let wire = topo.wire(face.outer_wire())?;
+        for oe in wire.edges() {
+            let effective_forward = oe.is_forward() != face_reversed;
+            edge_uses
+                .entry(oe.edge())
+                .or_default()
+                .push((fi, effective_forward));
+        }
+        for &iw in face.inner_wires() {
+            if let Ok(inner_wire) = topo.wire(iw) {
+                for oe in inner_wire.edges() {
+                    let effective_forward = oe.is_forward() != face_reversed;
+                    edge_uses
+                        .entry(oe.edge())
+                        .or_default()
+                        .push((fi, effective_forward));
+                }
+            }
+        }
+    }
+
+    let mut misoriented = 0usize;
+
+    for uses in edge_uses.values() {
+        if uses.len() == 2 {
+            // Shared edge: should be used once forward and once reversed
+            if uses[0].1 == uses[1].1 {
+                misoriented += 1;
+            }
+        }
+    }
+
+    if misoriented > 0 {
+        return Ok(vec![ValidationIssue {
+            check: CheckId::ShellOrientationConsistent,
+            severity: Severity::Error,
+            entity: EntityRef::Shell(shell_id),
+            description: format!("{misoriented} shared edges have inconsistent face orientations"),
+            deviation: Some(misoriented as f64),
+        }]);
+    }
+
+    Ok(vec![])
+}
+
 /// Check shell closure: every edge shared by exactly 2 faces.
 pub fn check_shell_closed(
     topo: &Topology,

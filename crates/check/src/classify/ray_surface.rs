@@ -183,54 +183,49 @@ pub fn ray_nurbs(
 // Polynomial solvers
 // ===========================================================================
 
-/// Solve `a*t^2 + b*t + c = 0` returning positive roots.
+/// Solve `a*t^2 + b*t + c = 0` returning positive roots (t > `RAY_T_MIN`).
 pub fn solve_quadratic(a: f64, b: f64, c: f64) -> SmallVec<[f64; 4]> {
+    let all = solve_quadratic_all(a, b, c);
+    all.into_iter().filter(|&t| t > RAY_T_MIN).collect()
+}
+
+/// Solve `a*t^2 + b*t + c = 0` returning ALL real roots (no positive filter).
+///
+/// Used internally by `solve_quartic` where the quadratic variable `u` is not
+/// the ray parameter — the positive filter is applied later after the shift.
+fn solve_quadratic_all(a: f64, b: f64, c: f64) -> SmallVec<[f64; 4]> {
     let mut roots = SmallVec::new();
 
     if a.abs() < NEAR_ZERO {
-        // Linear: b*t + c = 0
         if b.abs() < NEAR_ZERO {
             return roots;
         }
-        let t = -c / b;
-        if t > RAY_T_MIN {
-            roots.push(t);
-        }
+        roots.push(-c / b);
         return roots;
     }
 
     let disc = b * b - 4.0 * a * c;
-    if disc < 0.0 {
+    if disc < -NEAR_ZERO {
         return roots;
     }
 
-    if disc < NEAR_ZERO {
-        let t = -b / (2.0 * a);
-        if t > RAY_T_MIN {
-            roots.push(t);
-        }
+    if disc.abs() < NEAR_ZERO {
+        roots.push(-b / (2.0 * a));
         return roots;
     }
 
-    // Numerically stable quadratic formula (avoid catastrophic cancellation).
-    let sqrt_disc = disc.sqrt();
+    let sqrt_disc = disc.max(0.0).sqrt();
     let q = if b < 0.0 {
         -0.5 * (b - sqrt_disc)
     } else {
         -0.5 * (b + sqrt_disc)
     };
 
-    let t1 = q / a;
-    let t2 = c / q;
-
-    if t1 > RAY_T_MIN {
-        roots.push(t1);
-    }
-    if t2 > RAY_T_MIN {
-        roots.push(t2);
+    roots.push(q / a);
+    if q.abs() > NEAR_ZERO {
+        roots.push(c / q);
     }
 
-    // Sort for deterministic ordering.
     if roots.len() == 2 && roots[0] > roots[1] {
         roots.swap(0, 1);
     }
@@ -306,9 +301,9 @@ pub fn solve_cubic(a: f64, b: f64, c: f64, d: f64) -> SmallVec<[f64; 4]> {
     roots
 }
 
-/// Solve `c4*t^4 + c3*t^3 + c2*t^2 + c1*t + c0 = 0` returning positive roots.
+/// Solve `c4*t^4 + c3*t^3 + c2*t^2 + c1*t + c0 = 0` returning positive real roots.
 ///
-/// Uses the Ferrari/companion cubic method.
+/// Uses depressed quartic reduction followed by Ferrari's method.
 #[allow(clippy::many_single_char_names)]
 pub fn solve_quartic(c4: f64, c3: f64, c2: f64, c1: f64, c0: f64) -> SmallVec<[f64; 4]> {
     if c4.abs() < NEAR_ZERO {
@@ -321,22 +316,24 @@ pub fn solve_quartic(c4: f64, c3: f64, c2: f64, c1: f64, c0: f64) -> SmallVec<[f
     let c = c1 / c4;
     let d = c0 / c4;
 
-    // Depress: substitute t = u - a/4
+    // Depressed quartic via substitution t = u - a/4:
+    // u^4 + p*u^2 + q*u + r = 0
     let a2 = a * a;
     let p = b - 3.0 * a2 / 8.0;
-    let q = a * a2 / 8.0 - a * b / 2.0 + c;
-    let r = -3.0 * a2 * a2 / 256.0 + a2 * b / 16.0 - a * c / 4.0 + d;
+    let q = c - a * b / 2.0 + a2 * a / 8.0;
+    let r = d - a * c / 4.0 + a2 * b / 16.0 - 3.0 * a2 * a2 / 256.0;
+    let shift = -a / 4.0;
 
     let mut roots = SmallVec::new();
 
     if q.abs() < NEAR_ZERO {
         // Biquadratic: u^4 + p*u^2 + r = 0
-        let quad_roots = solve_quadratic(1.0, p, r);
-        for &s in &quad_roots {
-            if s >= 0.0 {
-                let sq = s.sqrt();
-                let t1 = sq - a / 4.0;
-                let t2 = -sq - a / 4.0;
+        let inner_roots = solve_quadratic_all(1.0, p, r);
+        for ir in &inner_roots {
+            if *ir >= 0.0 {
+                let s = ir.sqrt();
+                let t1 = s + shift;
+                let t2 = -s + shift;
                 if t1 > RAY_T_MIN {
                     roots.push(t1);
                 }
@@ -346,29 +343,26 @@ pub fn solve_quartic(c4: f64, c3: f64, c2: f64, c1: f64, c0: f64) -> SmallVec<[f
             }
         }
     } else {
-        // Companion cubic: y^3 + (p/2)*y^2 + ((p^2-4r)/16)*y - q^2/64 = 0
-        let cubic_roots = solve_cubic(1.0, p / 2.0, (p * p - 4.0 * r) / 16.0, -(q * q) / 64.0);
+        // Ferrari's method: find y from the resolvent cubic
+        // y^3 - (p/2)*y^2 - r*y + (r*p/2 - q^2/8) = 0
+        let cubic_roots = solve_cubic(1.0, -p / 2.0, -r, r * p / 2.0 - q * q / 8.0);
 
-        // Pick the largest real root (most numerically stable).
-        let y = cubic_roots
-            .iter()
-            .copied()
-            .chain(std::iter::once(solve_cubic_one_real(
-                p / 2.0 - (p * p - 4.0 * r) / 48.0, // approximate for fallback
-                -(q * q) / 64.0,
-            )))
-            .reduce(f64::max)
-            .unwrap_or(0.0);
+        // Pick the largest real root for numerical stability
+        let y = cubic_roots.iter().copied().reduce(f64::max).unwrap_or(0.0);
 
-        let sq_2y = (2.0 * y).max(0.0).sqrt();
-        if sq_2y.abs() < NEAR_ZERO {
-            // Degenerate — fall back to biquadratic.
-            let quad_roots = solve_quadratic(1.0, p, r);
-            for &s in &quad_roots {
-                if s >= 0.0 {
-                    let sq = s.sqrt();
-                    let t1 = sq - a / 4.0;
-                    let t2 = -sq - a / 4.0;
+        // Factor: (u^2 + s*u + t1)(u^2 - s*u + t2) = 0
+        // where s = sqrt(2y - p), t1 = y + q/(2s), t2 = y - q/(2s)
+        let disc = (2.0 * y - p).max(0.0);
+        let s = disc.sqrt();
+
+        if s.abs() < NEAR_ZERO {
+            // Degenerate: try biquadratic with adjusted r
+            let inner_roots = solve_quadratic_all(1.0, p, r);
+            for ir in &inner_roots {
+                if *ir >= 0.0 {
+                    let sq = ir.sqrt();
+                    let t1 = sq + shift;
+                    let t2 = -sq + shift;
                     if t1 > RAY_T_MIN {
                         roots.push(t1);
                     }
@@ -378,14 +372,12 @@ pub fn solve_quartic(c4: f64, c3: f64, c2: f64, c1: f64, c0: f64) -> SmallVec<[f
                 }
             }
         } else {
-            // Two quadratics: u^2 ± sq_2y*u + (y ± q/(4*sq_2y)) = 0
-            let w = q / (4.0 * sq_2y);
+            let w = q / (2.0 * s);
+            let quad1 = solve_quadratic_all(1.0, s, y + w);
+            let quad2 = solve_quadratic_all(1.0, -s, y - w);
 
-            let quad1 = solve_quadratic(1.0, sq_2y, y + w);
-            let quad2 = solve_quadratic(1.0, -sq_2y, y - w);
-
-            for &t_raw in quad1.iter().chain(quad2.iter()) {
-                let t = t_raw - a / 4.0;
+            for &u in quad1.iter().chain(quad2.iter()) {
+                let t = u + shift;
                 if t > RAY_T_MIN {
                     roots.push(t);
                 }
@@ -393,8 +385,7 @@ pub fn solve_quartic(c4: f64, c3: f64, c2: f64, c1: f64, c0: f64) -> SmallVec<[f
         }
     }
 
-    roots.sort_by(|r1: &f64, r2: &f64| r1.partial_cmp(r2).unwrap_or(std::cmp::Ordering::Equal));
-    roots.dedup_by(|t1: &mut f64, t2: &mut f64| (*t1 - *t2).abs() < 1e-10);
+    roots.sort_by(|x: &f64, y_val: &f64| x.partial_cmp(y_val).unwrap_or(std::cmp::Ordering::Equal));
     roots
 }
 
@@ -512,5 +503,38 @@ mod tests {
         // t^2 + 1 = 0 => no real roots
         let roots = solve_quadratic(1.0, 0.0, 1.0);
         assert!(roots.is_empty(), "expected no roots, got {:?}", roots);
+    }
+
+    #[test]
+    fn ray_torus_off_axis() {
+        // Torus R=3, r=1 in XY plane. Vertical ray through tube center at (3,0,0).
+        // Tube cross-section at z=±1, so hits at t=4 and t=6 from origin z=5.
+        let tor = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 3.0, 1.0).unwrap();
+        let origin = Point3::new(3.0, 0.0, 5.0);
+        let dir = Vec3::new(0.0, 0.0, -1.0);
+
+        let hits = ray_torus(origin, dir, &tor);
+        assert_eq!(
+            hits.len(),
+            2,
+            "vertical ray through tube should hit twice, got {}: {:?}",
+            hits.len(),
+            hits
+        );
+        // t = 5 - z_hit. Tube at (3,0,0) has z = ±1, so hits at z=1 (t=4) and z=-1 (t=6).
+        assert!((hits[0] - 4.0).abs() < 0.1, "t0={}, expected ~4.0", hits[0]);
+        assert!((hits[1] - 6.0).abs() < 0.1, "t1={}, expected ~6.0", hits[1]);
+        // Verify hits are on the torus surface
+        for &t in &hits {
+            let p = origin + dir * t;
+            let pv = p - tor.center();
+            let z = pv.dot(tor.z_axis());
+            let r_major = (pv - tor.z_axis() * z).length();
+            let dist_to_tube = ((r_major - tor.major_radius()).powi(2) + z * z).sqrt();
+            assert!(
+                (dist_to_tube - tor.minor_radius()).abs() < 1e-6,
+                "hit not on torus surface"
+            );
+        }
     }
 }

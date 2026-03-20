@@ -117,6 +117,12 @@ fn validate_shell_checks(
     if !options.disabled_checks.contains(&CheckId::ShellClosed) {
         issues.extend(shell::check_shell_closed(topo, shell_id)?);
     }
+    if !options
+        .disabled_checks
+        .contains(&CheckId::ShellOrientationConsistent)
+    {
+        issues.extend(shell::check_shell_orientation(topo, shell_id)?);
+    }
 
     // Wire checks for each face's outer wire
     let shell = topo.shell(shell_id)?;
