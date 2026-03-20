@@ -49,6 +49,7 @@ brepkit-math = { path = "crates/math" }
 brepkit-topology = { path = "crates/topology" }
 brepkit-operations = { path = "crates/operations" }
 brepkit-algo = { path = "crates/algo" }
+brepkit-blend = { path = "crates/blend" }
 brepkit-io = { path = "crates/io" }
 
 [workspace.lints.rust]

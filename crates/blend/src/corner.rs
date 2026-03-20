@@ -1,0 +1,1 @@
+//! Vertex blend / corner solver.

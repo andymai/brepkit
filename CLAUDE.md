@@ -13,6 +13,7 @@ L3: brepkit-wasm        → JS bindings (wasm-bindgen)
 L2: brepkit-io          → STEP, 3MF, STL, IGES, OBJ, PLY, glTF import/export
 L2: brepkit-operations  → Booleans, fillets, extrusions, tessellation
 L1.5: brepkit-algo      → GFA boolean engine, classification, intersection
+L1.5: brepkit-blend     → Walking-based fillet and chamfer engine
 L1: brepkit-topology    → B-Rep data structures (arena-based)
 L0: brepkit-math        → Vectors, matrices, NURBS, predicates
 ```
@@ -26,9 +27,10 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 | `math` | *(none — no workspace deps)* |
 | `topology` | `math` |
 | `algo` | `math`, `topology` |
-| `operations` | `math`, `topology`, `algo` |
+| `blend` | `math`, `topology` |
+| `operations` | `math`, `topology`, `algo`, `blend` |
 | `io` | `math`, `topology`, `operations` |
-| `wasm` | all crates |
+| `wasm` | all crates (incl. `blend`) |
 
 The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the pre-push hook.
 
@@ -36,7 +38,8 @@ The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the p
 - `math/src/**` → only `std`, external crates
 - `topology/src/**` → `brepkit_math::*`
 - `algo/src/**` → `brepkit_math::*`, `brepkit_topology::*`
-- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_algo::*`
+- `blend/src/**` → `brepkit_math::*`, `brepkit_topology::*`
+- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_algo::*`, `brepkit_blend::*`
 - `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`
 - `wasm/src/**` → all `brepkit_*`
 
@@ -104,6 +107,22 @@ Quick reference — find the right file for any task:
 | Builder (face splitting + assembly) | `builder/mod.rs`, `builder/assemble.rs` |
 | Analytic classifier (7 variants) | `classifier/analytic.rs` |
 | Ray-cast classifier | `classifier/ray_cast.rs` |
+
+### L1.5: blend (`crates/blend/src/`)
+| Task | File(s) |
+|------|---------|
+| Public API, `BlendError`, `BlendResult` | `lib.rs` |
+| Radius law (constant, linear, S-curve, custom) | `radius_law.rs` |
+| Spine (edge chain, arc-length parameterization) | `spine.rs` |
+| Cross-section (contact points, center, radius) | `section.rs` |
+| Stripe (fillet band, contact curves, PCurves) | `stripe.rs` |
+| Blend constraint functions | `blend_func.rs` |
+| Newton-Raphson walking engine | `walker.rs` |
+| Analytic fast paths (plane-plane, plane-cyl, etc.) | `analytic.rs` |
+| Fillet builder (orchestration) | `fillet_builder.rs` |
+| Chamfer builder (orchestration) | `chamfer_builder.rs` |
+| Vertex blend / corner solver | `corner.rs` |
+| Face trimming along contact curves | `trimmer.rs` |
 
 ### L2: operations (`crates/operations/src/`)
 | Task | File(s) |
