@@ -61,7 +61,27 @@ pub fn try_analytic_fillet(
             let result = plane_plane_fillet(spine, topo, *n1, *n2, radius, face1, face2)?;
             Ok(Some(result))
         }
-        _ => Ok(None),
+        (
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+            FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+        )
+        | (
+            FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+            FaceSurface::Plane { .. },
+        ) => Ok(None),
     }
 }
 
@@ -97,7 +117,27 @@ pub fn try_analytic_chamfer(
             let result = plane_plane_chamfer(spine, topo, *n1, *n2, d1, d2, face1, face2)?;
             Ok(Some(result))
         }
-        _ => Ok(None),
+        (
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+            FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+        )
+        | (
+            FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+            FaceSurface::Plane { .. },
+        ) => Ok(None),
     }
 }
 

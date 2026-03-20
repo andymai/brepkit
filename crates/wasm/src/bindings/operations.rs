@@ -1289,6 +1289,9 @@ impl BrepKernel {
     ) -> Result<u32, JsError> {
         validate_positive(distance, "distance")?;
         validate_positive(angle, "angle")?;
+        if angle >= std::f64::consts::FRAC_PI_2 {
+            return Err(JsError::new("angle must be less than π/2"));
+        }
         let solid_id = self.resolve_solid(solid)?;
         let edge_ids: Vec<_> = edge_handles
             .iter()

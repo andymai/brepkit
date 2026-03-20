@@ -258,7 +258,11 @@ pub fn trim_face(
                 *normal
             }
         }
-        _ => return Err(BlendError::TrimmingFailure { face: face_id }),
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_)
+        | FaceSurface::Nurbs(_) => return Err(BlendError::TrimmingFailure { face: face_id }),
     };
 
     let contact_dir = hit_b.point_3d - hit_a.point_3d;
@@ -361,7 +365,11 @@ fn plane_local_frame(
 
     let normal = match surface {
         FaceSurface::Plane { normal, .. } => *normal,
-        _ => return Err(BlendError::TrimmingFailure { face: face_id }),
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_)
+        | FaceSurface::Nurbs(_) => return Err(BlendError::TrimmingFailure { face: face_id }),
     };
 
     let origin = edge_data
