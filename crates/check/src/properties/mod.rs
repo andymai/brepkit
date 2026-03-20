@@ -3,10 +3,12 @@
 pub mod accumulator;
 pub mod analytic;
 pub mod bbox;
+pub mod face_integrator;
 
 pub use accumulator::GProps;
 
 use brepkit_math::aabb::Aabb3;
+use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
 
@@ -40,6 +42,95 @@ impl Default for PropertiesOptions {
 /// Returns an error if any topology entity is missing or the solid has no vertices.
 pub fn bounding_box(topo: &Topology, solid: SolidId) -> Result<Aabb3, CheckError> {
     bbox::bounding_box(topo, solid)
+}
+
+/// Compute the volume of a solid via face integration.
+///
+/// Uses the divergence theorem: V = (1/3) sum of integral P dot N dA
+/// over all faces of the outer shell.
+///
+/// # Errors
+///
+/// Returns an error if any topology entity is missing or integration fails.
+pub fn solid_volume(
+    topo: &Topology,
+    solid: SolidId,
+    options: &PropertiesOptions,
+) -> Result<f64, CheckError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    let mut total_volume = 0.0;
+    for &fid in shell.faces() {
+        let contrib = face_integrator::integrate_face(topo, fid, options.gauss_order)?;
+        total_volume += contrib.volume;
+    }
+    Ok(total_volume)
+}
+
+/// Compute the total surface area of a solid.
+///
+/// Sums the area of each face in the solid's outer shell.
+///
+/// # Errors
+///
+/// Returns an error if any topology entity is missing or integration fails.
+pub fn solid_area(
+    topo: &Topology,
+    solid: SolidId,
+    options: &PropertiesOptions,
+) -> Result<f64, CheckError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    let mut total_area = 0.0;
+    for &fid in shell.faces() {
+        let contrib = face_integrator::integrate_face(topo, fid, options.gauss_order)?;
+        total_area += contrib.area;
+    }
+    Ok(total_area)
+}
+
+/// Compute the center of mass of a solid.
+///
+/// Uses area-weighted centroid contributions from each face.
+///
+/// # Errors
+///
+/// Returns an error if any topology entity is missing, integration fails,
+/// or the solid has zero surface area.
+pub fn center_of_mass(
+    topo: &Topology,
+    solid: SolidId,
+    options: &PropertiesOptions,
+) -> Result<Point3, CheckError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+
+    let mut total_area = 0.0;
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    let mut cz = 0.0;
+
+    for &fid in shell.faces() {
+        let contrib = face_integrator::integrate_face(topo, fid, options.gauss_order)?;
+        total_area += contrib.area;
+        cx += contrib.centroid_x;
+        cy += contrib.centroid_y;
+        cz += contrib.centroid_z;
+    }
+
+    if total_area < 1e-30 {
+        return Err(CheckError::IntegrationFailed(
+            "solid has zero surface area".into(),
+        ));
+    }
+
+    Ok(Point3::new(
+        cx / total_area,
+        cy / total_area,
+        cz / total_area,
+    ))
 }
 
 #[cfg(test)]
@@ -155,6 +246,38 @@ mod tests {
         assert!((aabb.max.x() - 1.0).abs() < 1e-12);
         assert!((aabb.max.y() - 1.0).abs() < 1e-12);
         assert!((aabb.max.z() - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn gauss_volume_matches_analytic() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let options = PropertiesOptions::default();
+        let vol = solid_volume(&topo, solid, &options).unwrap();
+        // Unit cube volume = 1.0
+        assert!((vol - 1.0).abs() < 1e-10, "expected volume 1.0, got {vol}");
+    }
+
+    #[test]
+    fn gauss_area_matches_analytic() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let options = PropertiesOptions::default();
+        let area = solid_area(&topo, solid, &options).unwrap();
+        // Unit cube surface area = 6.0
+        assert!((area - 6.0).abs() < 1e-10, "expected area 6.0, got {area}");
+    }
+
+    #[test]
+    fn gauss_com_matches_analytic() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let options = PropertiesOptions::default();
+        let com = center_of_mass(&topo, solid, &options).unwrap();
+        // Unit cube CoM at (0.5, 0.5, 0.5)
+        assert!((com.x() - 0.5).abs() < 1e-10, "com.x = {}", com.x());
+        assert!((com.y() - 0.5).abs() < 1e-10, "com.y = {}", com.y());
+        assert!((com.z() - 0.5).abs() < 1e-10, "com.z = {}", com.z());
     }
 
     #[test]
