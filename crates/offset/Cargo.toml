@@ -1,0 +1,22 @@
+[package]
+name = "brepkit-offset"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Solid offset engine for brepkit"
+
+[dependencies]
+brepkit-math.workspace = true
+brepkit-topology.workspace = true
+brepkit-geometry.workspace = true
+brepkit-algo.workspace = true
+thiserror.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+brepkit-topology = { workspace = true, features = ["test-utils"] }
+
+[lints]
+workspace = true
