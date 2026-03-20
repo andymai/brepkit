@@ -27,16 +27,16 @@
 //! 9. **Self-intersection removal** — detect and excise global
 //!    self-intersections if enabled.
 
-pub mod analyse;
-pub mod arc_joint;
-pub mod assemble;
+pub(crate) mod analyse;
+pub(crate) mod arc_joint;
+pub(crate) mod assemble;
 pub mod data;
 pub mod error;
-pub mod inter2d;
-pub mod inter3d;
-pub mod loops;
-pub mod offset;
-pub mod self_int;
+pub(crate) mod inter2d;
+pub(crate) mod inter3d;
+pub(crate) mod loops;
+pub(crate) mod offset;
+pub(crate) mod self_int;
 
 pub use data::{JointType, OffsetOptions};
 pub use error::OffsetError;

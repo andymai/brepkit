@@ -12,5 +12,8 @@ use crate::error::OffsetError;
 ///
 /// Returns [`OffsetError`] if an arc joint cannot be constructed.
 pub fn build_arc_joints(_topo: &mut Topology, _data: &mut OffsetData) -> Result<(), OffsetError> {
-    todo!("Phase 6: arc joint construction")
+    Err(OffsetError::InvalidInput {
+        reason: "arc joint construction is not yet implemented; use JointType::Intersection"
+            .to_string(),
+    })
 }

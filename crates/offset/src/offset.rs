@@ -82,13 +82,19 @@ pub fn build_offset_faces(
 
             FaceSurface::Cone(cone) => {
                 let half_angle = cone.half_angle();
-                let sin_ha = half_angle.sin();
-                if sin_ha.abs() < 1e-15 {
+                let cos_ha = half_angle.cos();
+                if cos_ha.abs() < 1e-15 {
                     return Err(OffsetError::InvalidInput {
-                        reason: "cone has degenerate half-angle (sin ≈ 0)".to_string(),
+                        reason: "cone has degenerate half-angle (cos ≈ 0)".to_string(),
                     });
                 }
-                let apex_shift = effective_distance / sin_ha;
+                // Offset cone: the apex shifts along the axis so that the
+                // surface at every v-parameter moves by `effective_distance`
+                // along its outward normal. The normal makes angle (π/2 - a)
+                // with the axis, so the axial component of the offset is
+                // d / cos(a). The sign is negative because offsetting outward
+                // moves the apex in the opposite direction of the axis.
+                let apex_shift = -effective_distance / cos_ha;
                 let new_apex = brepkit_math::vec::Point3::new(
                     cone.apex().x() + apex_shift * cone.axis().x(),
                     cone.apex().y() + apex_shift * cone.axis().y(),

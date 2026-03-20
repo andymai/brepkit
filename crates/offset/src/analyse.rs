@@ -123,12 +123,6 @@ fn classify_edge(
         });
     }
 
-    let _tangent = Vec3::new(
-        tangent_vec.x() / len,
-        tangent_vec.y() / len,
-        tangent_vec.z() / len,
-    );
-
     let n_a = face_outward_normal(topo, face_a, midpoint, edge_id)?;
     let n_b = face_outward_normal(topo, face_b, midpoint, edge_id)?;
 

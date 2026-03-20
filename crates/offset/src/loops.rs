@@ -7,15 +7,14 @@
 
 use std::collections::{HashMap, HashSet};
 
-use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::FaceId;
-use brepkit_topology::vertex::{Vertex, VertexId};
+use brepkit_topology::vertex::VertexId;
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
-use crate::data::{OffsetData, OffsetStatus};
+use crate::data::{OffsetData, OffsetStatus, find_or_create_vertex};
 use crate::error::OffsetError;
 
 /// Build closed wire loops for each offset face from the trimmed
@@ -274,25 +273,7 @@ fn dot3(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
     a.0 * b.0 + a.1 * b.1 + a.2 * b.2
 }
 
-/// Find an existing vertex within tolerance, or create a new one.
-fn find_or_create_vertex(
-    topo: &mut Topology,
-    cache: &mut Vec<(Point3, VertexId)>,
-    point: Point3,
-    tol: f64,
-) -> VertexId {
-    for &(cached_pt, vid) in cache.iter() {
-        let dx = point.x() - cached_pt.x();
-        let dy = point.y() - cached_pt.y();
-        let dz = point.z() - cached_pt.z();
-        if dx * dx + dy * dy + dz * dz <= tol * tol {
-            return vid;
-        }
-    }
-    let vid = topo.add_vertex(Vertex::new(point, Tolerance::default().linear));
-    cache.push((point, vid));
-    vid
-}
+// Uses crate::data::find_or_create_vertex (shared helper).
 
 #[cfg(test)]
 mod tests {

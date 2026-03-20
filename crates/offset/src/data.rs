@@ -4,9 +4,10 @@ use std::collections::{BTreeMap, HashMap};
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
+use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::{FaceId, FaceSurface};
-use brepkit_topology::vertex::VertexId;
+use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::WireId;
 
 /// Classification of an edge based on the dihedral angle between its
@@ -192,4 +193,29 @@ impl OffsetData {
             face_wires: HashMap::new(),
         }
     }
+}
+
+/// Find an existing vertex within `tol` of `point`, or create a new one.
+///
+/// Shared helper used by `inter2d` and `loops` to avoid duplicate vertices
+/// at the same 3D position. The `cache` accumulates all vertices created
+/// during the current phase.
+pub(crate) fn find_or_create_vertex(
+    topo: &mut Topology,
+    cache: &mut Vec<(Point3, VertexId)>,
+    point: Point3,
+    tol: f64,
+) -> VertexId {
+    for &(cached_pt, vid) in cache.iter() {
+        let dx = point.x() - cached_pt.x();
+        let dy = point.y() - cached_pt.y();
+        let dz = point.z() - cached_pt.z();
+        if dx * dx + dy * dy + dz * dz <= tol * tol {
+            return vid;
+        }
+    }
+
+    let vid = topo.add_vertex(Vertex::new(point, tol));
+    cache.push((point, vid));
+    vid
 }

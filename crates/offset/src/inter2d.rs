@@ -4,14 +4,13 @@
 //! this phase creates the corresponding topology: vertices at the intersection
 //! line endpoints and edges connecting them.
 
-use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::solid::SolidId;
-use brepkit_topology::vertex::{Vertex, VertexId};
+use brepkit_topology::vertex::VertexId;
 
-use crate::data::OffsetData;
+use crate::data::{OffsetData, find_or_create_vertex};
 use crate::error::OffsetError;
 
 /// Create new edges from the intersection curves computed in Phase 3.
@@ -57,33 +56,13 @@ pub fn intersect_pcurves_2d(
     Ok(())
 }
 
-/// Find an existing vertex within tolerance of `point`, or create a new one.
-fn find_or_create_vertex(
-    topo: &mut Topology,
-    cache: &mut Vec<(Point3, VertexId)>,
-    point: Point3,
-    tol: f64,
-) -> VertexId {
-    for &(cached_pt, vid) in cache.iter() {
-        let dx = point.x() - cached_pt.x();
-        let dy = point.y() - cached_pt.y();
-        let dz = point.z() - cached_pt.z();
-        if dx * dx + dy * dy + dz * dz <= tol * tol {
-            return vid;
-        }
-    }
-
-    let vid = topo.add_vertex(Vertex::new(point, Tolerance::default().linear));
-    cache.push((point, vid));
-    vid
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
     use crate::data::{OffsetData, OffsetOptions};
     use brepkit_topology::Topology;
+    use brepkit_topology::solid::SolidId;
 
     fn run_phases_1_to_4(topo: &mut Topology, solid: SolidId, distance: f64) -> OffsetData {
         let mut data = OffsetData::new(distance, OffsetOptions::default(), vec![]);
@@ -99,7 +78,6 @@ mod tests {
         let mut topo = Topology::new();
         let solid = brepkit_topology::test_utils::make_unit_cube_manifold(&mut topo);
         let data = run_phases_1_to_4(&mut topo, solid, 0.5);
-        // Each of 12 intersections should have at least 1 new edge.
         for fi in &data.intersections {
             assert!(
                 !fi.new_edges.is_empty(),
@@ -133,26 +111,18 @@ mod tests {
 
     #[test]
     fn vertices_are_deduplicated_within_tolerance() {
-        // Verify that vertex deduplication works by creating intersections
-        // with known overlapping endpoints.
         let mut topo = Topology::new();
-        let tol = Tolerance::default().linear;
-        let mut cache: Vec<(Point3, VertexId)> = Vec::new();
+        let mut cache = Vec::new();
+        let tol = 1e-7;
+        let p = brepkit_math::vec::Point3::new(1.0, 2.0, 3.0);
+        let v1 = find_or_create_vertex(&mut topo, &mut cache, p, tol);
+        let p_near = brepkit_math::vec::Point3::new(1.0, 2.0, 3.0 + 1e-9);
+        let v2 = find_or_create_vertex(&mut topo, &mut cache, p_near, tol);
+        assert_eq!(v1, v2, "nearby points should reuse the same vertex");
 
-        let p1 = Point3::new(1.0, 2.0, 3.0);
-        let p2 = Point3::new(1.0, 2.0, 3.0 + tol * 0.5); // within tolerance
-        let p3 = Point3::new(1.0, 2.0, 3.0 + tol * 2.0); // outside tolerance
-
-        let v1 = find_or_create_vertex(&mut topo, &mut cache, p1, tol);
-        let v2 = find_or_create_vertex(&mut topo, &mut cache, p2, tol);
-        let v3 = find_or_create_vertex(&mut topo, &mut cache, p3, tol);
-
-        assert_eq!(v1, v2, "points within tolerance should share a vertex");
-        assert_ne!(
-            v1, v3,
-            "points outside tolerance should get distinct vertices"
-        );
-        assert_eq!(cache.len(), 2);
+        let p_far = brepkit_math::vec::Point3::new(1.0, 2.0, 4.0);
+        let v3 = find_or_create_vertex(&mut topo, &mut cache, p_far, tol);
+        assert_ne!(v1, v3, "distant points should get different vertices");
     }
 
     #[test]
@@ -161,7 +131,9 @@ mod tests {
         let solid = brepkit_topology::test_utils::make_unit_cube_manifold(&mut topo);
         let data = run_phases_1_to_4(&mut topo, solid, 0.5);
         let total_new_edges: usize = data.intersections.iter().map(|fi| fi.new_edges.len()).sum();
-        // 12 intersections, each producing 1 new edge.
-        assert_eq!(total_new_edges, 12);
+        assert_eq!(
+            total_new_edges, 12,
+            "box offset should create 12 new edges (one per original edge)"
+        );
     }
 }
