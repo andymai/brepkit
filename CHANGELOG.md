@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.24.0](https://github.com/andymai/brepkit/compare/v2.23.0...v2.24.0) (2026-03-20)
+
+
+### Features
+
+* **offset:** add brepkit-offset crate — solid offset engine ([#333](https://github.com/andymai/brepkit/issues/333)) ([780435c](https://github.com/andymai/brepkit/commit/780435c2b84825909c4c16152855f5bde85d6bb9))
+
 ## [2.23.0](https://github.com/andymai/brepkit/compare/v2.22.0...v2.23.0) (2026-03-20)
 
 
