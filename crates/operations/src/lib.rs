@@ -90,4 +90,19 @@ pub enum OperationsError {
     /// A blend (fillet/chamfer v2) error occurred.
     #[error("blend: {0}")]
     Blend(#[from] brepkit_blend::BlendError),
+
+    /// A check (classification/validation/distance) error occurred.
+    #[error("check: {0}")]
+    Check(#[from] brepkit_check::CheckError),
+}
+
+/// Re-export brepkit-check types for convenience.
+pub mod check_types {
+    pub use brepkit_check::classify::{ClassifyOptions, PointClassification};
+    pub use brepkit_check::distance::DistanceResult as CheckDistanceResult;
+    pub use brepkit_check::properties::{GProps, PropertiesOptions};
+    pub use brepkit_check::validate::{
+        CheckId, EntityRef, Severity as CheckSeverity, ValidateOptions,
+        ValidationIssue as CheckValidationIssue, ValidationReport as CheckValidationReport,
+    };
 }
