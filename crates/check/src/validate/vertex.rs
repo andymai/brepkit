@@ -1,0 +1,1 @@
+//! Vertex geometric validation checks.

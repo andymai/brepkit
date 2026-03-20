@@ -1,0 +1,1 @@
+//! Edge geometric validation checks.
