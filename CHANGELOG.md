@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.23.0](https://github.com/andymai/brepkit/compare/v2.22.0...v2.23.0) (2026-03-20)
+
+
+### Features
+
+* **geometry:** add brepkit-geometry crate — sampling, extrema, conversion ([#329](https://github.com/andymai/brepkit/issues/329)) ([056ab0c](https://github.com/andymai/brepkit/commit/056ab0c44a2866807b8430390d2ab04860bafa58))
+
 ## [2.22.0](https://github.com/andymai/brepkit/compare/v2.21.0...v2.22.0) (2026-03-20)
 
 
