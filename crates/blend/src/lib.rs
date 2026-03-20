@@ -6,6 +6,7 @@
 
 pub mod analytic;
 pub mod blend_func;
+pub mod builder_utils;
 pub mod chamfer_builder;
 pub mod corner;
 pub mod fillet_builder;

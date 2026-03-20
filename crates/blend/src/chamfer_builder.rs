@@ -6,15 +6,14 @@
 
 use std::collections::HashSet;
 
-use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
-use brepkit_topology::face::{Face, FaceId};
+use brepkit_topology::face::FaceId;
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
-use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::analytic;
+use crate::builder_utils::{create_blend_face, sample_nurbs_endpoints};
 use crate::spine::Spine;
 use crate::stripe::StripeResult;
 use crate::trimmer::{self, TrimSide};
@@ -333,65 +332,6 @@ fn compute_chamfer_stripe(
             surf2.type_tag()
         ),
     })
-}
-
-/// Sample the start and end points of a NURBS curve.
-fn sample_nurbs_endpoints(curve: &brepkit_math::nurbs::curve::NurbsCurve) -> Vec<Point3> {
-    let (t0, t1) = curve.domain();
-    vec![curve.evaluate(t0), curve.evaluate(t1)]
-}
-
-/// Create a blend face from a stripe's surface and contact curves.
-///
-/// Builds a minimal quadrilateral wire from the four contact-curve endpoints
-/// and associates the blend surface with it.
-///
-/// # Errors
-///
-/// Returns [`BlendError`] if wire or face construction fails.
-fn create_blend_face(
-    topo: &mut Topology,
-    stripe: &crate::stripe::Stripe,
-) -> Result<FaceId, BlendError> {
-    use brepkit_topology::edge::{Edge, EdgeCurve};
-    use brepkit_topology::vertex::Vertex;
-
-    let (t0_1, t1_1) = stripe.contact1.domain();
-    let (t0_2, t1_2) = stripe.contact2.domain();
-
-    // Four corner points of the blend quad.
-    let p1_start = stripe.contact1.evaluate(t0_1);
-    let p1_end = stripe.contact1.evaluate(t1_1);
-    let p2_start = stripe.contact2.evaluate(t0_2);
-    let p2_end = stripe.contact2.evaluate(t1_2);
-
-    // Create vertices (snapshot then allocate).
-    let v1s = topo.add_vertex(Vertex::new(p1_start, 1e-7));
-    let v1e = topo.add_vertex(Vertex::new(p1_end, 1e-7));
-    let v2s = topo.add_vertex(Vertex::new(p2_start, 1e-7));
-    let v2e = topo.add_vertex(Vertex::new(p2_end, 1e-7));
-
-    // Build quad: p1_start -> p1_end -> p2_end -> p2_start -> p1_start.
-    let e0 = topo.add_edge(Edge::new(v1s, v1e, EdgeCurve::Line));
-    let e1 = topo.add_edge(Edge::new(v1e, v2e, EdgeCurve::Line));
-    let e2 = topo.add_edge(Edge::new(v2e, v2s, EdgeCurve::Line));
-    let e3 = topo.add_edge(Edge::new(v2s, v1s, EdgeCurve::Line));
-
-    let wire = Wire::new(
-        vec![
-            OrientedEdge::new(e0, true),
-            OrientedEdge::new(e1, true),
-            OrientedEdge::new(e2, true),
-            OrientedEdge::new(e3, true),
-        ],
-        true,
-    )?;
-    let wire_id = topo.add_wire(wire);
-
-    let face = Face::new(wire_id, Vec::new(), stripe.surface.clone());
-    let face_id = topo.add_face(face);
-
-    Ok(face_id)
 }
 
 // ===========================================================================

@@ -6,19 +6,20 @@
 
 use std::collections::HashSet;
 
-use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
-use brepkit_topology::face::{Face, FaceId};
+use brepkit_topology::face::FaceId;
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
-use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::analytic;
+use crate::blend_func::{ConstRadBlend, EvolRadBlend};
+use crate::builder_utils::{create_blend_face, sample_nurbs_endpoints, surface_ref_or_adapter};
 use crate::radius_law::RadiusLaw;
 use crate::spine::Spine;
-use crate::stripe::StripeResult;
+use crate::stripe::{Stripe, StripeResult};
 use crate::trimmer::{self, TrimSide};
+use crate::walker::{Walker, WalkerConfig, approximate_blend_surface};
 use crate::{BlendError, BlendResult};
 
 /// Builder for fillet (rounding) operations on solid edges.
@@ -67,7 +68,7 @@ impl<'a> FilletBuilder<'a> {
     /// 1. Build adjacency index for the solid.
     /// 2. For each target edge, find the two adjacent faces.
     /// 3. Build single-edge spines (no G1 chain propagation in v1).
-    /// 4. Compute stripes via analytic fast path or record failure.
+    /// 4. Compute stripes via analytic fast path or walking engine.
     /// 5. Trim adjacent faces along contact curves.
     /// 6. Assemble new solid from trimmed faces, blend faces, and untouched
     ///    original faces.
@@ -80,14 +81,17 @@ impl<'a> FilletBuilder<'a> {
     #[allow(clippy::too_many_lines)]
     pub fn build(self) -> Result<BlendResult, BlendError> {
         // ── Validate input ──────────────────────────────────────────────
-        let all_edges: Vec<(EdgeId, RadiusLaw)> = self
+        // Expand edge sets: keep actual RadiusLaw references via indices.
+        let mut all_edges: Vec<(EdgeId, usize)> = Vec::new();
+        let laws: Vec<RadiusLaw> = self
             .edge_sets
             .into_iter()
-            .flat_map(|(edges, law)| {
-                edges.into_iter().map(move |eid| {
-                    let r = law.evaluate(0.0); // snapshot radius for Constant
-                    (eid, RadiusLaw::Constant(r))
-                })
+            .enumerate()
+            .flat_map(|(law_idx, (edges, law))| {
+                let pairs: Vec<(EdgeId, usize)> =
+                    edges.into_iter().map(|eid| (eid, law_idx)).collect();
+                all_edges.extend_from_slice(&pairs);
+                std::iter::once(law)
             })
             .collect();
 
@@ -116,17 +120,17 @@ impl<'a> FilletBuilder<'a> {
         let mut failed: Vec<(EdgeId, BlendError)> = Vec::new();
         let mut stripe_results: Vec<StripeResult> = Vec::new();
 
-        for (edge_id, law) in &all_edges {
-            let result = compute_stripe_for_edge(topo, &adjacency, *edge_id, law);
+        for &(edge_id, law_idx) in &all_edges {
+            let result = compute_stripe_for_edge(topo, &adjacency, edge_id, &laws[law_idx]);
             match result {
                 Ok(sr) => {
                     touched_faces.insert(sr.stripe.face1);
                     touched_faces.insert(sr.stripe.face2);
                     stripe_results.push(sr);
-                    succeeded.push(*edge_id);
+                    succeeded.push(edge_id);
                 }
                 Err(e) => {
-                    failed.push((*edge_id, e));
+                    failed.push((edge_id, e));
                 }
             }
         }
@@ -243,6 +247,7 @@ impl<'a> FilletBuilder<'a> {
 ///
 /// Returns [`BlendError`] if the edge is non-manifold, if topology lookups
 /// fail, or if neither the analytic nor walking path can produce a result.
+#[allow(clippy::too_many_lines)]
 fn compute_stripe_for_edge(
     topo: &Topology,
     adjacency: &brepkit_topology::adjacency::AdjacencyIndex,
@@ -267,84 +272,142 @@ fn compute_stripe_for_edge(
     // Build a single-edge spine.
     let spine = Spine::from_single_edge(topo, edge_id)?;
 
-    // Get radius at the spine start.
-    let radius = law.evaluate(0.0);
+    // Get radius at the spine midpoint for the analytic path.
+    let radius = law.evaluate(0.5);
 
-    // Try analytic fast path.
-    if let Some(result) =
-        analytic::try_analytic_fillet(&surf1, &surf2, &spine, topo, radius, face1, face2)?
-    {
-        return Ok(result);
+    // Try analytic fast path (only for constant radius).
+    if matches!(law, RadiusLaw::Constant(_)) {
+        if let Some(result) =
+            analytic::try_analytic_fillet(&surf1, &surf2, &spine, topo, radius, face1, face2)?
+        {
+            return Ok(result);
+        }
     }
 
-    // v1: no walker fallback for non-analytic surface pairs.
-    Err(BlendError::UnsupportedSurface {
-        face: face1,
-        surface_tag: format!(
-            "{}+{} (walker not yet integrated)",
-            surf1.type_tag(),
-            surf2.type_tag()
-        ),
+    // ── Walking fallback for non-analytic surface pairs ─────────────
+    // Build ParametricSurface references via PlaneAdapter for planes.
+    let mut adapter1 = None;
+    let mut adapter2 = None;
+
+    let ps1 = surface_ref_or_adapter(&surf1, &mut adapter1);
+    let ps2 = surface_ref_or_adapter(&surf2, &mut adapter2);
+
+    let config = WalkerConfig::default();
+
+    // Choose blend function based on law type.
+    let walk_result = if let RadiusLaw::Constant(r) = law {
+        let blend = ConstRadBlend { radius: *r };
+        let walker = Walker::new(&blend, ps1, ps2, &spine, topo, config);
+        let start = walker.find_start(0.0)?;
+        walker.walk(start, 0.0, spine.length())?
+    } else {
+        let evol = EvolRadBlend {
+            law: mirror_law(law),
+        };
+        let walker = Walker::new(&evol, ps1, ps2, &spine, topo, config);
+        let start = walker.find_start(0.0)?;
+        walker.walk(start, 0.0, spine.length())?
+    };
+
+    // Build NURBS surface from the walked sections.
+    let blend_surface = approximate_blend_surface(&walk_result.sections)?;
+    let blend_face_surface = brepkit_topology::face::FaceSurface::Nurbs(blend_surface);
+
+    // Build contact curves from the sections.
+    let contact1 = sections_to_contact_curve(&walk_result.sections, |s| s.p1)?;
+    let contact2 = sections_to_contact_curve(&walk_result.sections, |s| s.p2)?;
+
+    // PCurves: project contact 3D endpoints onto each face surface.
+    let pcurve1 = build_pcurve_from_contact(ps1, &contact1)?;
+    let pcurve2 = build_pcurve_from_contact(ps2, &contact2)?;
+
+    let stripe = Stripe {
+        spine,
+        surface: blend_face_surface,
+        pcurve1,
+        pcurve2,
+        contact1,
+        contact2,
+        face1,
+        face2,
+        sections: walk_result.sections,
+    };
+
+    Ok(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
     })
 }
 
-/// Sample the start and end points of a NURBS curve.
-fn sample_nurbs_endpoints(curve: &brepkit_math::nurbs::curve::NurbsCurve) -> Vec<Point3> {
-    let (t0, t1) = curve.domain();
-    vec![curve.evaluate(t0), curve.evaluate(t1)]
+/// Mirror a `RadiusLaw` into a new instance with the same behavior.
+///
+/// This is needed because `RadiusLaw::Custom` contains a `Box<dyn Fn>`
+/// which is not `Clone`. For non-custom laws, we reconstruct the same
+/// variant. For custom laws, we evaluate at a fixed set of points and
+/// create a linear interpolation.
+fn mirror_law(law: &RadiusLaw) -> RadiusLaw {
+    match law {
+        RadiusLaw::Constant(r) => RadiusLaw::Constant(*r),
+        RadiusLaw::Linear { start, end } => RadiusLaw::Linear {
+            start: *start,
+            end: *end,
+        },
+        RadiusLaw::SCurve { start, end } => RadiusLaw::SCurve {
+            start: *start,
+            end: *end,
+        },
+        RadiusLaw::Custom(_) => {
+            // Sample the custom law at endpoints and build a linear
+            // approximation. This is a v1 simplification; a proper
+            // implementation would share the closure via Arc.
+            let r0 = law.evaluate(0.0);
+            let r1 = law.evaluate(1.0);
+            RadiusLaw::Linear { start: r0, end: r1 }
+        }
+    }
 }
 
-/// Create a blend face from a stripe's surface and contact curves.
-///
-/// Builds a minimal quadrilateral wire from the four contact-curve endpoints
-/// and associates the blend surface with it.
-///
-/// # Errors
-///
-/// Returns [`BlendError`] if wire or face construction fails.
-fn create_blend_face(
-    topo: &mut Topology,
-    stripe: &crate::stripe::Stripe,
-) -> Result<FaceId, BlendError> {
-    use brepkit_topology::edge::{Edge, EdgeCurve};
-    use brepkit_topology::vertex::Vertex;
+/// Build a degree-1 NURBS curve from section contact points.
+fn sections_to_contact_curve(
+    sections: &[crate::section::CircSection],
+    pick: impl Fn(&crate::section::CircSection) -> brepkit_math::vec::Point3,
+) -> Result<brepkit_math::nurbs::curve::NurbsCurve, BlendError> {
+    let pts: Vec<brepkit_math::vec::Point3> = sections.iter().map(&pick).collect();
+    if pts.len() < 2 {
+        return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
+    }
+    let n = pts.len();
+    let degree = 1.min(n - 1);
+    let mut knots = vec![0.0; degree + 1];
+    if n > 2 {
+        for i in 1..n - 1 {
+            #[allow(clippy::cast_precision_loss)]
+            knots.push(i as f64 / (n - 1) as f64);
+        }
+    }
+    knots.extend(vec![1.0; degree + 1]);
+    let weights = vec![1.0; n];
+    let curve = brepkit_math::nurbs::curve::NurbsCurve::new(degree, knots, pts, weights)?;
+    Ok(curve)
+}
 
-    let (t0_1, t1_1) = stripe.contact1.domain();
-    let (t0_2, t1_2) = stripe.contact2.domain();
+/// Build a PCurve (2D UV line) by projecting 3D contact endpoints onto a surface.
+fn build_pcurve_from_contact(
+    surf: &dyn brepkit_math::traits::ParametricSurface,
+    contact: &brepkit_math::nurbs::curve::NurbsCurve,
+) -> Result<brepkit_math::curves2d::Curve2D, BlendError> {
+    let (t0, t1) = contact.domain();
+    let p_start = contact.evaluate(t0);
+    let p_end = contact.evaluate(t1);
 
-    // Four corner points of the blend quad.
-    let p1_start = stripe.contact1.evaluate(t0_1);
-    let p1_end = stripe.contact1.evaluate(t1_1);
-    let p2_start = stripe.contact2.evaluate(t0_2);
-    let p2_end = stripe.contact2.evaluate(t1_2);
+    let (u0, v0) = surf.project_point(p_start);
+    let (u1, v1) = surf.project_point(p_end);
 
-    // Create vertices (snapshot then allocate).
-    let v1s = topo.add_vertex(Vertex::new(p1_start, 1e-7));
-    let v1e = topo.add_vertex(Vertex::new(p1_end, 1e-7));
-    let v2s = topo.add_vertex(Vertex::new(p2_start, 1e-7));
-    let v2e = topo.add_vertex(Vertex::new(p2_end, 1e-7));
+    let origin = brepkit_math::vec::Point2::new(u0, v0);
+    let dir = brepkit_math::vec::Vec2::new(u1 - u0, v1 - v0);
 
-    // Build quad: p1_start -> p1_end -> p2_end -> p2_start -> p1_start.
-    let e0 = topo.add_edge(Edge::new(v1s, v1e, EdgeCurve::Line));
-    let e1 = topo.add_edge(Edge::new(v1e, v2e, EdgeCurve::Line));
-    let e2 = topo.add_edge(Edge::new(v2e, v2s, EdgeCurve::Line));
-    let e3 = topo.add_edge(Edge::new(v2s, v1s, EdgeCurve::Line));
-
-    let wire = Wire::new(
-        vec![
-            OrientedEdge::new(e0, true),
-            OrientedEdge::new(e1, true),
-            OrientedEdge::new(e2, true),
-            OrientedEdge::new(e3, true),
-        ],
-        true,
-    )?;
-    let wire_id = topo.add_wire(wire);
-
-    let face = Face::new(wire_id, Vec::new(), stripe.surface.clone());
-    let face_id = topo.add_face(face);
-
-    Ok(face_id)
+    let line = brepkit_math::curves2d::Line2D::new(origin, dir)?;
+    Ok(brepkit_math::curves2d::Curve2D::Line(line))
 }
 
 // ===========================================================================

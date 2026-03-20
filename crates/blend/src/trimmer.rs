@@ -152,7 +152,7 @@ pub fn trim_face(
         let a1 = project(start_pt);
         let a2 = project(end_pt);
 
-        if let Some(t) = segment_intersect_2d(a1, a2, line_a, line_b) {
+        if let Some(t) = line_segment_intersect_2d(a1, a2, line_a, line_b) {
             let pt = Point3::new(
                 start_pt.x() + (end_pt.x() - start_pt.x()) * t,
                 start_pt.y() + (end_pt.y() - start_pt.y()) * t,
@@ -382,11 +382,10 @@ fn plane_local_frame(
     Ok((origin, u_axis, v_axis))
 }
 
-/// Test if two 2D line segments intersect.
+/// Test if two 2D line segments intersect (both constrained to `[0,1]`).
 ///
-/// Segments are `(a1→a2)` and `(b1→b2)`. Returns the parameter `t` on
-/// segment `a` (in `[0, 1]`) where the crossing occurs, or `None` if
-/// the segments do not cross.
+/// Used only in tests; production code uses [`line_segment_intersect_2d`].
+#[cfg(test)]
 fn segment_intersect_2d(
     a1: (f64, f64),
     a2: (f64, f64),
@@ -415,6 +414,46 @@ fn segment_intersect_2d(
     // Use a small tolerance to catch intersections at edge endpoints.
     let valid_range = -PARAM_TOL..=(1.0 + PARAM_TOL);
     if valid_range.contains(&t) && valid_range.contains(&u) {
+        Some(t.clamp(0.0, 1.0))
+    } else {
+        None
+    }
+}
+
+/// Intersect an infinite line through `(b1→b2)` with segment `(a1→a2)`.
+///
+/// The segment parameter `t` on `a` is constrained to `[0, 1]`, but the
+/// line parameter `u` on `b` is unconstrained. This is needed for contact
+/// line trimming where the contact line extends beyond the face boundary.
+///
+/// Returns `Some(t)` on segment `a` if the crossing exists.
+fn line_segment_intersect_2d(
+    a1: (f64, f64),
+    a2: (f64, f64),
+    b1: (f64, f64),
+    b2: (f64, f64),
+) -> Option<f64> {
+    let dx_a = a2.0 - a1.0;
+    let dy_a = a2.1 - a1.1;
+    let dx_b = b2.0 - b1.0;
+    let dy_b = b2.1 - b1.1;
+
+    let denom = dx_a * dy_b - dy_a * dx_b;
+
+    // Parallel or degenerate.
+    if denom.abs() < PARAM_TOL {
+        return None;
+    }
+
+    let dx_ab = b1.0 - a1.0;
+    let dy_ab = b1.1 - a1.1;
+
+    let t = (dx_ab * dy_b - dy_ab * dx_b) / denom;
+    // u is unconstrained — the contact line extends infinitely.
+
+    // Only constrain t (the segment parameter).
+    let valid_range = -PARAM_TOL..=(1.0 + PARAM_TOL);
+    if valid_range.contains(&t) {
         Some(t.clamp(0.0, 1.0))
     } else {
         None

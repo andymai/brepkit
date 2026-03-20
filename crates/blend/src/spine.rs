@@ -127,25 +127,39 @@ impl Spine {
 
     /// Evaluate the 3D point on the spine at global parameter `s`.
     ///
+    /// For `Line` edges this is linear interpolation. For `Circle`, `Ellipse`,
+    /// and `NurbsCurve` edges, the actual curve geometry is evaluated.
+    ///
     /// # Errors
     /// Returns `BlendError` if topology lookups fail.
     pub fn evaluate(&self, topo: &Topology, s: f64) -> Result<Point3, BlendError> {
         let (idx, t) = self.locate(s);
-        let (p0, p1) = edge_endpoints(topo, self.edges[idx])?;
-        // Linear interpolation for now; curved edges need curve evaluation
-        Ok(p0 + (p1 - p0) * t)
+        let edge = topo.edge(self.edges[idx])?;
+        let p_start = topo.vertex(edge.start())?.point();
+        let p_end = topo.vertex(edge.end())?.point();
+        let curve = edge.curve();
+        let (t0, t1) = curve.domain_with_endpoints(p_start, p_end);
+        let param = t0 + (t1 - t0) * t;
+        Ok(curve.evaluate_with_endpoints(param, p_start, p_end))
     }
 
     /// Evaluate the tangent direction on the spine at global parameter `s`.
     ///
     /// Returns the unit tangent, or a fallback Z-axis if the edge is degenerate.
+    /// For curved edges, evaluates the actual curve tangent.
     ///
     /// # Errors
     /// Returns `BlendError` if topology lookups fail.
     pub fn tangent(&self, topo: &Topology, s: f64) -> Result<Vec3, BlendError> {
-        let (idx, _t) = self.locate(s);
-        let (p0, p1) = edge_endpoints(topo, self.edges[idx])?;
-        Ok((p1 - p0).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0)))
+        let (idx, t) = self.locate(s);
+        let edge = topo.edge(self.edges[idx])?;
+        let p_start = topo.vertex(edge.start())?.point();
+        let p_end = topo.vertex(edge.end())?.point();
+        let curve = edge.curve();
+        let (t0, t1) = curve.domain_with_endpoints(p_start, p_end);
+        let param = t0 + (t1 - t0) * t;
+        let tan = curve.tangent_with_endpoints(param, p_start, p_end);
+        Ok(tan.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0)))
     }
 }
 

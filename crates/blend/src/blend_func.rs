@@ -251,7 +251,7 @@ impl ConstRadBlend {
     }
 
     /// Finite-difference approximation of ∂npn/∂u or ∂npn/∂v.
-    fn finite_diff_npn(
+    pub(crate) fn finite_diff_npn(
         surf: &dyn ParametricSurface,
         u: f64,
         v: f64,
@@ -450,6 +450,18 @@ impl BlendFunction for ChamferBlend {
         let du2 = surf2.partial_u(params.u2, params.v2);
         let dv2 = surf2.partial_v(params.u2, params.v2);
 
+        // Include finite-difference ∂npn/∂u terms for convergence on
+        // curved surfaces (same approach as ConstRadBlend).
+        let h = 1e-7;
+        let dnpn1_du1 =
+            ConstRadBlend::finite_diff_npn(surf1, params.u1, params.v1, h, 0.0, ctx.nplan);
+        let dnpn1_dv1 =
+            ConstRadBlend::finite_diff_npn(surf1, params.u1, params.v1, 0.0, h, ctx.nplan);
+        let dnpn2_du2 =
+            ConstRadBlend::finite_diff_npn(surf2, params.u2, params.v2, h, 0.0, ctx.nplan);
+        let dnpn2_dv2 =
+            ConstRadBlend::finite_diff_npn(surf2, params.u2, params.v2, 0.0, h, ctx.nplan);
+
         let nplan = ctx.nplan;
 
         let row0 = [
@@ -459,12 +471,34 @@ impl BlendFunction for ChamferBlend {
             0.5 * nplan.dot(dv2),
         ];
 
-        // First-order: ignore ∂npn/∂u terms for chamfer (flat faces typical)
+        // Rows 1-3: ∂(c1 - c2)/∂(u1,v1,u2,v2)
+        // c1 = P1 + d1*npn1, c2 = P2 + d2*npn2
+        let col0 = Vec3::new(
+            du1.x() + self.d1 * dnpn1_du1.x(),
+            du1.y() + self.d1 * dnpn1_du1.y(),
+            du1.z() + self.d1 * dnpn1_du1.z(),
+        );
+        let col1 = Vec3::new(
+            dv1.x() + self.d1 * dnpn1_dv1.x(),
+            dv1.y() + self.d1 * dnpn1_dv1.y(),
+            dv1.z() + self.d1 * dnpn1_dv1.z(),
+        );
+        let col2 = Vec3::new(
+            -(du2.x() + self.d2 * dnpn2_du2.x()),
+            -(du2.y() + self.d2 * dnpn2_du2.y()),
+            -(du2.z() + self.d2 * dnpn2_du2.z()),
+        );
+        let col3 = Vec3::new(
+            -(dv2.x() + self.d2 * dnpn2_dv2.x()),
+            -(dv2.y() + self.d2 * dnpn2_dv2.y()),
+            -(dv2.z() + self.d2 * dnpn2_dv2.z()),
+        );
+
         [
             row0,
-            [du1.x(), dv1.x(), -du2.x(), -dv2.x()],
-            [du1.y(), dv1.y(), -du2.y(), -dv2.y()],
-            [du1.z(), dv1.z(), -du2.z(), -dv2.z()],
+            [col0.x(), col1.x(), col2.x(), col3.x()],
+            [col0.y(), col1.y(), col2.y(), col3.y()],
+            [col0.z(), col1.z(), col2.z(), col3.z()],
         ]
     }
 

@@ -10,6 +10,7 @@
 use brepkit_math::curves2d::{Curve2D, Line2D};
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::surfaces::CylindricalSurface;
+use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -222,15 +223,25 @@ fn plane_plane_fillet(
     let contact1 = nurbs_line(c1_start, c1_end)?;
     let contact2 = nurbs_line(c2_start, c2_end)?;
 
-    // PCurves: straight lines in UV space (for planes, UV is just projection)
-    let pcurve1 = Curve2D::Line(Line2D::new(
-        brepkit_math::vec::Point2::new(0.0, 0.0),
-        brepkit_math::vec::Vec2::new(1.0, 0.0),
-    )?);
-    let pcurve2 = Curve2D::Line(Line2D::new(
-        brepkit_math::vec::Point2::new(0.0, 0.0),
-        brepkit_math::vec::Vec2::new(1.0, 0.0),
-    )?);
+    // PCurves: project 3D contact endpoints onto each face surface to get UV
+    let pcurve1 = {
+        let adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n1, 0.0);
+        let (u0, v0) = adapter.project_point(c1_start);
+        let (u1, v1) = adapter.project_point(c1_end);
+        Curve2D::Line(Line2D::new(
+            brepkit_math::vec::Point2::new(u0, v0),
+            brepkit_math::vec::Vec2::new(u1 - u0, v1 - v0),
+        )?)
+    };
+    let pcurve2 = {
+        let adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n2, 0.0);
+        let (u0, v0) = adapter.project_point(c2_start);
+        let (u1, v1) = adapter.project_point(c2_end);
+        Curve2D::Line(Line2D::new(
+            brepkit_math::vec::Point2::new(u0, v0),
+            brepkit_math::vec::Vec2::new(u1 - u0, v1 - v0),
+        )?)
+    };
 
     // Cross-sections at start and end
     let section_start = CircSection {
@@ -325,15 +336,25 @@ fn plane_plane_chamfer(
     // Signed distance from origin
     let chamfer_d = chamfer_normal.dot(Vec3::new(c1_start.x(), c1_start.y(), c1_start.z()));
 
-    // PCurves (placeholder — will be computed by fillet builder)
-    let pcurve1 = Curve2D::Line(Line2D::new(
-        brepkit_math::vec::Point2::new(0.0, 0.0),
-        brepkit_math::vec::Vec2::new(1.0, 0.0),
-    )?);
-    let pcurve2 = Curve2D::Line(Line2D::new(
-        brepkit_math::vec::Point2::new(0.0, 0.0),
-        brepkit_math::vec::Vec2::new(1.0, 0.0),
-    )?);
+    // PCurves: project 3D contact endpoints onto each face surface to get UV
+    let pcurve1 = {
+        let adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n1, 0.0);
+        let (u0, v0) = adapter.project_point(c1_start);
+        let (u1, v1) = adapter.project_point(c1_end);
+        Curve2D::Line(Line2D::new(
+            brepkit_math::vec::Point2::new(u0, v0),
+            brepkit_math::vec::Vec2::new(u1 - u0, v1 - v0),
+        )?)
+    };
+    let pcurve2 = {
+        let adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n2, 0.0);
+        let (u0, v0) = adapter.project_point(c2_start);
+        let (u1, v1) = adapter.project_point(c2_end);
+        Curve2D::Line(Line2D::new(
+            brepkit_math::vec::Point2::new(u0, v0),
+            brepkit_math::vec::Vec2::new(u1 - u0, v1 - v0),
+        )?)
+    };
 
     // Sections at start and end
     let midpoint_start = midpoint_3d(c1_start, c2_start);

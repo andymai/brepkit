@@ -337,14 +337,17 @@ pub fn build_sphere_cap(
         }
     }
 
-    // Sphere center = vertex + R * normalize(n1 + n2 + n3)
+    // Sphere center = vertex + R*n1 + R*n2 + R*n3
+    // Each face normal contributes an independent offset of R along its
+    // direction, giving the correct center for the osculating sphere at
+    // a box corner where 3 mutually-orthogonal faces meet.
     let vertex_pos = topo.vertex(vertex_id)?.point();
-    let normal_sum: Vec3 = face_normals
+    let offset: Vec3 = face_normals
         .iter()
         .copied()
-        .fold(Vec3::new(0.0, 0.0, 0.0), |acc, n| acc + n);
-    let offset_dir = normal_sum.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
-    let center = vertex_pos + offset_dir * radius;
+        .fold(Vec3::new(0.0, 0.0, 0.0), |acc, n| acc + n * radius);
+    let center = vertex_pos + offset;
+    let offset_dir = offset.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
 
     // Collect contact points — these form the boundary of the spherical cap.
     let contact_pts = collect_contact_points(vertex_id, stripes, &indices, topo);
@@ -418,34 +421,42 @@ pub fn build_coons_patch(
     }
 
     // Build a triangular or quad patch depending on point count.
-    let (surface, new_vertices, new_edges) = if contact_pts.len() == 3 {
-        build_triangular_patch(&contact_pts, topo)?
+    if contact_pts.len() == 3 {
+        let (surface, new_vertices, new_edges) = build_triangular_patch(&contact_pts, topo)?;
+        let oriented_edges: Vec<OrientedEdge> = new_edges
+            .iter()
+            .map(|&eid| OrientedEdge::new(eid, true))
+            .collect();
+        let wire = Wire::new(oriented_edges, true)?;
+        let wire_id = topo.add_wire(wire);
+        let face = Face::new(wire_id, Vec::new(), surface.clone());
+        let face_id = topo.add_face(face);
+        Ok(CornerResult {
+            face_id,
+            surface,
+            new_edges,
+            new_vertices,
+        })
     } else if contact_pts.len() == 4 {
-        build_quad_patch(&contact_pts, topo)?
+        let (surface, new_vertices, new_edges) = build_quad_patch(&contact_pts, topo)?;
+        let oriented_edges: Vec<OrientedEdge> = new_edges
+            .iter()
+            .map(|&eid| OrientedEdge::new(eid, true))
+            .collect();
+        let wire = Wire::new(oriented_edges, true)?;
+        let wire_id = topo.add_wire(wire);
+        let face = Face::new(wire_id, Vec::new(), surface.clone());
+        let face_id = topo.add_face(face);
+        Ok(CornerResult {
+            face_id,
+            surface,
+            new_edges,
+            new_vertices,
+        })
     } else {
-        // For N > 4 points, use a fan of triangular patches from the centroid.
-        // For v1 simplicity, just build one triangular patch from the first 3 points
-        // and ignore the rest.  A proper implementation would fan-triangulate.
-        build_triangular_patch(&contact_pts[..3], topo)?
-    };
-
-    // Build wire from edges
-    let oriented_edges: Vec<OrientedEdge> = new_edges
-        .iter()
-        .map(|&eid| OrientedEdge::new(eid, true))
-        .collect();
-    let wire = Wire::new(oriented_edges, true)?;
-    let wire_id = topo.add_wire(wire);
-
-    let face = Face::new(wire_id, Vec::new(), surface.clone());
-    let face_id = topo.add_face(face);
-
-    Ok(CornerResult {
-        face_id,
-        surface,
-        new_edges,
-        new_vertices,
-    })
+        // N > 4: centroid-fan triangulation.
+        build_centroid_fan(&contact_pts, topo, vertex_id)
+    }
 }
 
 /// Build a triangular NURBS patch from 3 contact points.
@@ -495,6 +506,136 @@ fn build_quad_patch(
     let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
 
     Ok((surface, vec![v0, v1, v2, v3], vec![e0, e1, e2, e3]))
+}
+
+/// Build a centroid-fan triangulation for N > 4 contact points.
+///
+/// Computes the centroid, sorts points by angle around it, then builds
+/// N triangular NURBS faces fanning from the centroid. Returns the first
+/// face and collects all vertices/edges.
+#[allow(clippy::too_many_lines)]
+fn build_centroid_fan(
+    pts: &[Point3],
+    topo: &mut Topology,
+    vertex_id: VertexId,
+) -> Result<CornerResult, BlendError> {
+    let n = pts.len();
+    if n < 3 {
+        return Err(BlendError::CornerFailure { vertex: vertex_id });
+    }
+
+    // Compute centroid.
+    #[allow(clippy::cast_precision_loss)]
+    let inv_n = 1.0 / n as f64;
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    let mut cz = 0.0;
+    for p in pts {
+        cx += p.x();
+        cy += p.y();
+        cz += p.z();
+    }
+    let centroid = Point3::new(cx * inv_n, cy * inv_n, cz * inv_n);
+
+    // Compute a local frame at the centroid for angle sorting.
+    // Normal: average cross products of consecutive edges.
+    let d0 = pts[0] - centroid;
+    let d1 = pts[1] - centroid;
+    let up = d0.cross(d1).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+    let u_axis = d0.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+    let v_axis = up
+        .cross(u_axis)
+        .normalize()
+        .unwrap_or(Vec3::new(0.0, 1.0, 0.0));
+
+    // Sort indices by angle.
+    let mut indices: Vec<usize> = (0..n).collect();
+    indices.sort_by(|&a, &b| {
+        let da = pts[a] - centroid;
+        let db = pts[b] - centroid;
+        let angle_a = da.dot(v_axis).atan2(da.dot(u_axis));
+        let angle_b = db.dot(v_axis).atan2(db.dot(u_axis));
+        angle_a
+            .partial_cmp(&angle_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Create centroid vertex.
+    let centroid_vid = topo.add_vertex(Vertex::new(centroid, TOL));
+
+    // Create vertices for each sorted contact point.
+    let mut vids: Vec<VertexId> = Vec::with_capacity(n);
+    for &idx in &indices {
+        vids.push(topo.add_vertex(Vertex::new(pts[idx], TOL)));
+    }
+
+    // Build N triangular faces: centroid → pts[i] → pts[i+1].
+    let mut all_new_vertices = vec![centroid_vid];
+    all_new_vertices.extend_from_slice(&vids);
+    let mut all_new_edges = Vec::new();
+
+    // Create radial edges (centroid → each vertex).
+    let mut radial_edges: Vec<EdgeId> = Vec::with_capacity(n);
+    for &vid in &vids {
+        let eid = topo.add_edge(Edge::new(centroid_vid, vid, EdgeCurve::Line));
+        radial_edges.push(eid);
+        all_new_edges.push(eid);
+    }
+
+    // Create rim edges (pts[i] → pts[i+1]).
+    let mut rim_edges: Vec<EdgeId> = Vec::with_capacity(n);
+    for i in 0..n {
+        let next = (i + 1) % n;
+        let eid = topo.add_edge(Edge::new(vids[i], vids[next], EdgeCurve::Line));
+        rim_edges.push(eid);
+        all_new_edges.push(eid);
+    }
+
+    // Build the first triangle as the "main" face — use the first triangle's
+    // surface for the CornerResult. Additional triangles get their own faces
+    // but we only return one CornerResult; the caller will get the first face
+    // and the topology will contain all faces.
+    let mut first_face_id = None;
+
+    for i in 0..n {
+        let next = (i + 1) % n;
+
+        let nurbs = make_triangular_nurbs_surface(centroid, pts[indices[i]], pts[indices[next]])?;
+        let surface = FaceSurface::Nurbs(nurbs);
+
+        // Wire: radial[i] → rim[i] → radial[next] reversed
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(radial_edges[i], true),
+                OrientedEdge::new(rim_edges[i], true),
+                OrientedEdge::new(radial_edges[next], false),
+            ],
+            true,
+        )?;
+        let wire_id = topo.add_wire(wire);
+        let face = Face::new(wire_id, Vec::new(), surface);
+        let fid = topo.add_face(face);
+
+        if first_face_id.is_none() {
+            first_face_id = Some(fid);
+        }
+    }
+
+    let face_id = first_face_id.ok_or(BlendError::CornerFailure { vertex: vertex_id })?;
+
+    // Return the first triangle's surface as representative.
+    let representative_surface = FaceSurface::Nurbs(make_triangular_nurbs_surface(
+        centroid,
+        pts[indices[0]],
+        pts[indices[1 % n]],
+    )?);
+
+    Ok(CornerResult {
+        face_id,
+        surface: representative_surface,
+        new_edges: all_new_edges,
+        new_vertices: all_new_vertices,
+    })
 }
 
 // ── Two-Edge Builder ───────────────────────────────────────────────
@@ -1006,12 +1147,11 @@ mod tests {
         let radius = 0.2;
         let result = build_sphere_cap(v000, &stripes, radius, &mut topo).unwrap();
 
-        // Sphere center should be at vertex + R * normalize(n1+n2+n3)
+        // Sphere center = vertex + R*n1 + R*n2 + R*n3
         // Face normals point inward: (0,0,-1), (0,-1,0), (-1,0,0)
-        // Sum = (-1,-1,-1), normalize = (-1,-1,-1)/sqrt(3)
-        // Center = (0,0,0) + 0.2 * (-1,-1,-1)/sqrt(3)
-        let expected_center =
-            Point3::new(0.0, 0.0, 0.0) + Vec3::new(-1.0, -1.0, -1.0) * (radius / 3.0_f64.sqrt());
+        // Center = (0,0,0) + 0.2*(0,0,-1) + 0.2*(0,-1,0) + 0.2*(-1,0,0)
+        //        = (-0.2, -0.2, -0.2)
+        let expected_center = Point3::new(-radius, -radius, -radius);
 
         match &result.surface {
             FaceSurface::Sphere(s) => {
