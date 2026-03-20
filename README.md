@@ -30,9 +30,9 @@ let step = write_step(&topo, &[drilled])?;
 
 ## Why build a CAD kernel?
 
-I needed parametric CAD in the browser for [gridfinitylayouttool.com](https://gridfinitylayouttool.com). The existing options were proprietary or compiled from C++.
-
 brepkit is a from-scratch B-Rep kernel in Rust targeting WebAssembly. `unsafe` is forbidden, `unwrap` and `panic` are denied by default. Every public operation returns `Result`.
+
+The project grew out of building [gridfinitylayouttool.com](https://gridfinitylayouttool.com), where the existing options for parametric CAD in the browser were proprietary or compiled from C++.
 
 ## Status
 
