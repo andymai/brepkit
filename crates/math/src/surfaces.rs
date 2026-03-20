@@ -1410,4 +1410,90 @@ mod tests {
             "above tube center v should be π/2, got {v}"
         );
     }
+
+    // ── Partial derivative tests ─────────────────────
+
+    use crate::traits::ParametricSurface;
+
+    #[test]
+    fn cylinder_partial_u_is_tangential() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 3.0)
+                .unwrap();
+        let u = 1.0;
+        let v = 2.0;
+        let du = ParametricSurface::partial_u(&cyl, u, v);
+        let n = cyl.normal(u, v);
+        // du should be perpendicular to outward normal
+        assert!(du.dot(n).abs() < TOL, "du·n = {} (expected ~0)", du.dot(n));
+        // |du| should equal radius
+        assert!(
+            approx_eq(du.length(), 3.0),
+            "|du| = {} (expected 3.0)",
+            du.length()
+        );
+    }
+
+    #[test]
+    fn cylinder_partial_v_is_axial() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+        let dv = ParametricSurface::partial_v(&cyl, 0.5, 1.0);
+        assert!(
+            approx_eq(dv.x(), 0.0) && approx_eq(dv.y(), 0.0) && approx_eq(dv.z(), 1.0),
+            "dv should equal axis (0,0,1), got ({}, {}, {})",
+            dv.x(),
+            dv.y(),
+            dv.z()
+        );
+    }
+
+    #[test]
+    fn sphere_partials_are_perpendicular() {
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0).unwrap();
+        let u = 1.2;
+        let v = 0.4;
+        let du = ParametricSurface::partial_u(&sphere, u, v);
+        let dv = ParametricSurface::partial_v(&sphere, u, v);
+        assert!(
+            du.dot(dv).abs() < TOL,
+            "du·dv = {} (expected ~0)",
+            du.dot(dv)
+        );
+    }
+
+    #[test]
+    fn torus_partial_u_magnitude() {
+        let big_r = 5.0;
+        let small_r = 2.0;
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r, small_r).unwrap();
+        let u = 0.7;
+        let v = 1.3;
+        let du = ParametricSurface::partial_u(&torus, u, v);
+        let expected_mag = big_r + small_r * v.cos();
+        assert!(
+            approx_eq(du.length(), expected_mag),
+            "|du| = {} (expected {})",
+            du.length(),
+            expected_mag
+        );
+    }
+
+    #[test]
+    fn cone_partial_v_is_unit_at_v1() {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            PI / 6.0,
+        )
+        .unwrap();
+        // dv is independent of v; it should be a unit vector (cos²a + sin²a = 1)
+        let dv = ParametricSurface::partial_v(&cone, 0.0, 1.0);
+        assert!(
+            approx_eq(dv.length(), 1.0),
+            "|dv| = {} (expected 1.0)",
+            dv.length()
+        );
+    }
 }

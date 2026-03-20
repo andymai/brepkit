@@ -2344,6 +2344,7 @@ fn expand_g1_chain(
 /// # Errors
 ///
 /// Returns the same errors as [`fillet_rolling_ball`].
+#[allow(deprecated)]
 pub fn fillet_rolling_ball_propagate_g1(
     topo: &mut Topology,
     solid: SolidId,

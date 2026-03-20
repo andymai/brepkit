@@ -7,7 +7,8 @@ set -euo pipefail
 #   L0   (math)       — no workspace deps
 #   L1   (topology)   — depends on math only
 #   L1.5 (algo)       — depends on math, topology
-#   L2   (operations) — depends on math, topology, algo
+#   L1.5 (blend)      — depends on math, topology
+#   L2   (operations) — depends on math, topology, algo, blend
 #   L2   (io)         — depends on math, topology, operations
 #   L3   (wasm)       — depends on all
 
@@ -28,7 +29,7 @@ check_deps() {
   local deps_section
   deps_section=$(sed -n '/^\[dependencies\]/,/^\[/p; /^\[dev-dependencies\]/,/^\[/p' "$cargo_toml" 2>/dev/null || true)
 
-  for dep in brepkit-math brepkit-topology brepkit-algo brepkit-operations brepkit-io; do
+  for dep in brepkit-math brepkit-topology brepkit-algo brepkit-blend brepkit-operations brepkit-io; do
     if echo "$deps_section" | grep -q "${dep}"; then
       local is_allowed=false
       for a in "${allowed[@]}"; do
@@ -50,9 +51,10 @@ echo "Checking crate boundary rules..."
 check_deps "math"
 check_deps "topology"   "brepkit-math"
 check_deps "algo"       "brepkit-math" "brepkit-topology"
-check_deps "operations" "brepkit-math" "brepkit-topology" "brepkit-algo"
+check_deps "blend"      "brepkit-math" "brepkit-topology"
+check_deps "operations" "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend"
 check_deps "io"         "brepkit-math" "brepkit-topology" "brepkit-operations"
-check_deps "wasm"       "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-operations" "brepkit-io"
+check_deps "wasm"       "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-operations" "brepkit-io"
 
 if [ $FAIL -ne 0 ]; then
   echo "❌ Boundary check failed."

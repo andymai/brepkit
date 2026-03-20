@@ -583,6 +583,88 @@ impl BrepKernel {
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
+            "filletV2" => {
+                let s = get_u32(args, "solid")?;
+                let radius = get_f64(args, "radius")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let edge_handles: Vec<u32> = args["edges"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let edge_ids: Vec<_> = edge_handles
+                    .iter()
+                    .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let result = brepkit_operations::blend_ops::fillet_v2(
+                    self.topo_mut(),
+                    solid_id,
+                    &edge_ids,
+                    radius,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result.solid)))
+            }
+            "chamferV2" => {
+                let s = get_u32(args, "solid")?;
+                let d1 = get_f64(args, "d1")?;
+                let d2 = get_f64(args, "d2")?;
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let edge_handles: Vec<u32> = args["edges"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let edge_ids: Vec<_> = edge_handles
+                    .iter()
+                    .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let result = brepkit_operations::blend_ops::chamfer_v2(
+                    self.topo_mut(),
+                    solid_id,
+                    &edge_ids,
+                    d1,
+                    d2,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result.solid)))
+            }
+            "chamferDistanceAngle" => {
+                let s = get_u32(args, "solid")?;
+                let distance = get_f64(args, "distance")?;
+                let angle = get_f64(args, "angle")?;
+                if angle >= std::f64::consts::FRAC_PI_2 {
+                    return Err("angle must be less than π/2".into());
+                }
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let edge_handles: Vec<u32> = args["edges"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let edge_ids: Vec<_> = edge_handles
+                    .iter()
+                    .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let result = brepkit_operations::blend_ops::chamfer_distance_angle(
+                    self.topo_mut(),
+                    solid_id,
+                    &edge_ids,
+                    distance,
+                    angle,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(result.solid)))
+            }
             "shell" => {
                 let s = get_u32(args, "solid")?;
                 let thickness = get_f64(args, "thickness")?;

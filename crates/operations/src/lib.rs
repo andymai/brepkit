@@ -8,6 +8,7 @@
 use brepkit_math::vec::{Point3, Vec3};
 
 pub mod assembly;
+pub mod blend_ops;
 pub mod boolean;
 pub mod chamfer;
 pub mod classify;
@@ -85,4 +86,8 @@ pub enum OperationsError {
     /// A GFA algorithm error occurred.
     #[error("algo: {0}")]
     Algo(#[from] brepkit_algo::error::AlgoError),
+
+    /// A blend (fillet/chamfer v2) error occurred.
+    #[error("blend: {0}")]
+    Blend(#[from] brepkit_blend::BlendError),
 }

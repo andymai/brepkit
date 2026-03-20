@@ -26,6 +26,12 @@ pub trait ParametricSurface {
 
     /// Project a 3D point onto the surface, returning `(u, v)` parameters.
     fn project_point(&self, point: Point3) -> (f64, f64);
+
+    /// Partial derivative ∂S/∂u at (u, v).
+    fn partial_u(&self, u: f64, v: f64) -> Vec3;
+
+    /// Partial derivative ∂S/∂v at (u, v).
+    fn partial_v(&self, u: f64, v: f64) -> Vec3;
 }
 
 /// Unified interface for parametric curve evaluation.
@@ -59,6 +65,17 @@ impl ParametricSurface for CylindricalSurface {
     fn project_point(&self, point: Point3) -> (f64, f64) {
         self.project_point(point)
     }
+
+    #[inline]
+    fn partial_u(&self, u: f64, _v: f64) -> Vec3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        self.x_axis() * (-self.radius() * sin_u) + self.y_axis() * (self.radius() * cos_u)
+    }
+
+    #[inline]
+    fn partial_v(&self, _u: f64, _v: f64) -> Vec3 {
+        self.axis()
+    }
 }
 
 impl ParametricSurface for ConicalSurface {
@@ -75,6 +92,20 @@ impl ParametricSurface for ConicalSurface {
     #[inline]
     fn project_point(&self, point: Point3) -> (f64, f64) {
         self.project_point(point)
+    }
+
+    #[inline]
+    fn partial_u(&self, u: f64, v: f64) -> Vec3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let cos_a = self.half_angle().cos();
+        self.x_axis() * (-v * cos_a * sin_u) + self.y_axis() * (v * cos_a * cos_u)
+    }
+
+    #[inline]
+    fn partial_v(&self, u: f64, _v: f64) -> Vec3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let (sin_a, cos_a) = self.half_angle().sin_cos();
+        (self.x_axis() * cos_u + self.y_axis() * sin_u) * cos_a + self.axis() * sin_a
     }
 }
 
@@ -93,6 +124,23 @@ impl ParametricSurface for SphericalSurface {
     fn project_point(&self, point: Point3) -> (f64, f64) {
         self.project_point(point)
     }
+
+    #[inline]
+    fn partial_u(&self, u: f64, v: f64) -> Vec3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let cos_v = v.cos();
+        self.x_axis() * (-self.radius() * cos_v * sin_u)
+            + self.y_axis() * (self.radius() * cos_v * cos_u)
+    }
+
+    #[inline]
+    fn partial_v(&self, u: f64, v: f64) -> Vec3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let (sin_v, cos_v) = v.sin_cos();
+        self.x_axis() * (-self.radius() * sin_v * cos_u)
+            + self.y_axis() * (-self.radius() * sin_v * sin_u)
+            + self.z_axis() * (self.radius() * cos_v)
+    }
 }
 
 impl ParametricSurface for ToroidalSurface {
@@ -109,6 +157,22 @@ impl ParametricSurface for ToroidalSurface {
     #[inline]
     fn project_point(&self, point: Point3) -> (f64, f64) {
         self.project_point(point)
+    }
+
+    #[inline]
+    fn partial_u(&self, u: f64, v: f64) -> Vec3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let cos_v = v.cos();
+        let tube_radius = self.major_radius() + self.minor_radius() * cos_v;
+        self.x_axis() * (-tube_radius * sin_u) + self.y_axis() * (tube_radius * cos_u)
+    }
+
+    #[inline]
+    fn partial_v(&self, u: f64, v: f64) -> Vec3 {
+        let (sin_u, cos_u) = u.sin_cos();
+        let (sin_v, cos_v) = v.sin_cos();
+        (self.x_axis() * cos_u + self.y_axis() * sin_u) * (-self.minor_radius() * sin_v)
+            + self.z_axis() * (self.minor_radius() * cos_v)
     }
 }
 
@@ -135,6 +199,18 @@ impl ParametricSurface for NurbsSurface {
             let (v0, v1) = self.domain_v();
             ((u0 + u1) * 0.5, (v0 + v1) * 0.5)
         }
+    }
+
+    #[inline]
+    fn partial_u(&self, u: f64, v: f64) -> Vec3 {
+        let d = self.derivatives(u, v, 1);
+        d[1][0]
+    }
+
+    #[inline]
+    fn partial_v(&self, u: f64, v: f64) -> Vec3 {
+        let d = self.derivatives(u, v, 1);
+        d[0][1]
     }
 }
 

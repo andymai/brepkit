@@ -98,6 +98,40 @@ impl FaceSurface {
         }
     }
 
+    /// Partial derivative ∂S/∂u at parameters `(u, v)`.
+    ///
+    /// Returns `None` for `Plane` since it has no true UV parameterization.
+    /// For analytic and NURBS surfaces, dispatches to the
+    /// [`ParametricSurface`] trait implementation.
+    #[must_use]
+    pub fn partial_u(&self, u: f64, v: f64) -> Option<Vec3> {
+        match self {
+            Self::Plane { .. } => None,
+            Self::Cylinder(c) => Some(ParametricSurface::partial_u(c, u, v)),
+            Self::Cone(c) => Some(ParametricSurface::partial_u(c, u, v)),
+            Self::Sphere(s) => Some(ParametricSurface::partial_u(s, u, v)),
+            Self::Torus(t) => Some(ParametricSurface::partial_u(t, u, v)),
+            Self::Nurbs(n) => Some(ParametricSurface::partial_u(n, u, v)),
+        }
+    }
+
+    /// Partial derivative ∂S/∂v at parameters `(u, v)`.
+    ///
+    /// Returns `None` for `Plane` since it has no true UV parameterization.
+    /// For analytic and NURBS surfaces, dispatches to the
+    /// [`ParametricSurface`] trait implementation.
+    #[must_use]
+    pub fn partial_v(&self, u: f64, v: f64) -> Option<Vec3> {
+        match self {
+            Self::Plane { .. } => None,
+            Self::Cylinder(c) => Some(ParametricSurface::partial_v(c, u, v)),
+            Self::Cone(c) => Some(ParametricSurface::partial_v(c, u, v)),
+            Self::Sphere(s) => Some(ParametricSurface::partial_v(s, u, v)),
+            Self::Torus(t) => Some(ParametricSurface::partial_v(t, u, v)),
+            Self::Nurbs(n) => Some(ParametricSurface::partial_v(n, u, v)),
+        }
+    }
+
     /// Estimate a characteristic radius for tessellation density.
     ///
     /// Returns the radius for cylinder/sphere, a mid-generator radius for

@@ -697,7 +697,7 @@ fn record_chamfer_point(
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
+#[allow(clippy::expect_used, clippy::unwrap_used, deprecated)]
 mod tests {
     use brepkit_topology::test_utils::make_unit_cube_manifold;
     use brepkit_topology::validation::validate_shell_manifold;
