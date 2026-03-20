@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.22.0](https://github.com/andymai/brepkit/compare/v2.21.0...v2.22.0) (2026-03-20)
+
+
+### Features
+
+* **check:** add brepkit-check crate — topology algorithms for classification, validation, properties, distance ([#327](https://github.com/andymai/brepkit/issues/327)) ([#327](https://github.com/andymai/brepkit/issues/327)) ([405c41b](https://github.com/andymai/brepkit/commit/405c41b93703b8c520304fcb51fc9447e62f2221))
+* **heal:** add brepkit-heal crate for comprehensive shape healing ([#326](https://github.com/andymai/brepkit/issues/326)) ([ab91cc7](https://github.com/andymai/brepkit/commit/ab91cc7e42c98211552dbbf08c17cdd0f2746a26))
+
 ## [2.21.0](https://github.com/andymai/brepkit/compare/v2.20.0...v2.21.0) (2026-03-20)
 
 
