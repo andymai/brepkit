@@ -146,6 +146,36 @@ fn offset_cylinder_volume_increases() {
     }
 }
 
+// ── Thick solid (shell) tests ─────────────────────────────────
+
+#[test]
+#[ignore = "wire loop builder needs excluded-face boundary edge support"]
+fn thick_solid_box_produces_hollow() {
+    let mut topo = Topology::new();
+    let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    let shell_id = topo.solid(solid).unwrap().outer_shell();
+    let faces: Vec<_> = topo.shell(shell_id).unwrap().faces().to_vec();
+    let exclude = vec![faces[0]];
+
+    let result =
+        brepkit_offset::thick_solid(&mut topo, solid, -0.2, &exclude, offset_opts()).unwrap();
+
+    let result_shell = topo
+        .shell(topo.solid(result).unwrap().outer_shell())
+        .unwrap();
+    assert!(
+        result_shell.faces().len() >= 9,
+        "thick solid should have >= 9 faces, got {}",
+        result_shell.faces().len()
+    );
+
+    let vol = solid_volume(&topo, result, 0.1).unwrap();
+    assert!(
+        vol > 0.0,
+        "thick solid should have positive volume, got {vol}"
+    );
+}
+
 // ── Sphere offset tests ────────────────────────────────────────
 
 #[test]
