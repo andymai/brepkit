@@ -143,7 +143,6 @@ fn offset_cylinder_volume_increases() {
 // ── Thick solid (shell) tests ─────────────────────────────────
 
 #[test]
-#[ignore = "wire loop builder needs excluded-face boundary edge support"]
 fn thick_solid_box_produces_hollow() {
     let mut topo = Topology::new();
     let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();

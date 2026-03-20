@@ -289,7 +289,6 @@ mod tests {
     /// excluded faces (their loop is incomplete because the shared edge
     /// has no intersection). This test documents the current limitation.
     #[test]
-    #[ignore = "wire loop builder needs excluded-face boundary edge support"]
     fn thick_solid_with_excluded_face() {
         let mut topo = Topology::new();
         let solid = brepkit_topology::test_utils::make_unit_cube_manifold(&mut topo);

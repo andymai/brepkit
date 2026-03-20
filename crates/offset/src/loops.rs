@@ -84,6 +84,24 @@ fn build_loops_for_face(
         }
     }
 
+    // Also include boundary edges (original edges shared with excluded faces).
+    // These edges need to be projected onto the offset face's surface. For a
+    // plane offset, this means translating the edge by the face's offset
+    // displacement vector.
+    if let Some(boundary) = data.boundary_edges.get(&face_id) {
+        if let Some(offset_face) = data.offset_faces.get(&face_id) {
+            for &eid in boundary {
+                let edge = topo.edge(eid)?;
+                let orig_p0 = topo.vertex(edge.start())?.point();
+                let orig_p1 = topo.vertex(edge.end())?.point();
+
+                // Project original edge endpoints onto the offset surface.
+                let (p0, p1) = project_boundary_edge(orig_p0, orig_p1, &offset_face.surface);
+                line_segs.push(LineSeg { p0, p1 });
+            }
+        }
+    }
+
     if line_segs.is_empty() {
         return Ok(Vec::new());
     }
@@ -272,6 +290,37 @@ fn pt_sub(a: Point3, b: Point3) -> (f64, f64, f64) {
 /// Dot product of two 3-tuples.
 fn dot3(a: (f64, f64, f64), b: (f64, f64, f64)) -> f64 {
     a.0 * b.0 + a.1 * b.1 + a.2 * b.2
+}
+
+/// Project a boundary edge's endpoints onto an offset surface.
+///
+/// For planar surfaces, this projects the point onto the plane (translates
+/// along the normal). For other surfaces, it returns the original points
+/// (approximation — proper projection requires parametric solvers).
+fn project_boundary_edge(
+    p0: Point3,
+    p1: Point3,
+    surface: &brepkit_topology::face::FaceSurface,
+) -> (Point3, Point3) {
+    match surface {
+        brepkit_topology::face::FaceSurface::Plane { normal, d } => {
+            // Project each point onto the plane: p' = p + (d - n·p) * n
+            let project = |p: Point3| -> Point3 {
+                let n_dot_p = normal.x() * p.x() + normal.y() * p.y() + normal.z() * p.z();
+                let dist = d - n_dot_p;
+                Point3::new(
+                    p.x() + dist * normal.x(),
+                    p.y() + dist * normal.y(),
+                    p.z() + dist * normal.z(),
+                )
+            };
+            (project(p0), project(p1))
+        }
+        _ => {
+            // Non-planar: return original positions as approximation.
+            (p0, p1)
+        }
+    }
 }
 
 // Uses crate::data::find_or_create_vertex (shared helper).

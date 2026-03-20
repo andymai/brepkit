@@ -168,6 +168,12 @@ pub struct OffsetData {
     /// Records of how original edges were split at intersection points.
     pub edge_splits: BTreeMap<usize, EdgeSplitRecord>,
 
+    /// Boundary edges: original edges shared between an excluded face and a
+    /// non-excluded face. Keyed by the non-excluded `FaceId`, value is the
+    /// list of original `EdgeId`s on that boundary. Used by the wire builder
+    /// to include these edges in the non-excluded face's loop.
+    pub boundary_edges: HashMap<FaceId, Vec<EdgeId>>,
+
     // --- Phase 6: arc joints ---
     /// Faces created as rolling-ball arc joints at convex edges.
     pub joint_faces: Vec<FaceId>,
@@ -191,6 +197,7 @@ impl OffsetData {
             offset_faces: HashMap::new(),
             intersections: Vec::new(),
             edge_splits: BTreeMap::new(),
+            boundary_edges: HashMap::new(),
             joint_faces: Vec::new(),
             face_wires: HashMap::new(),
         }

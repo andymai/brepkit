@@ -45,8 +45,26 @@ pub fn intersect_faces_3d(
             continue;
         };
 
-        // Skip excluded faces.
-        if data.excluded_faces.contains(&face_a) || data.excluded_faces.contains(&face_b) {
+        // For edges between excluded and non-excluded faces, record the
+        // boundary edge for the non-excluded face's wire builder.
+        let a_excluded = data.excluded_faces.contains(&face_a);
+        let b_excluded = data.excluded_faces.contains(&face_b);
+        if a_excluded || b_excluded {
+            if a_excluded && !b_excluded {
+                let edge_id =
+                    topo.edge_id_from_index(edge_idx)
+                        .ok_or_else(|| OffsetError::InvalidInput {
+                            reason: format!("edge index {edge_idx} not found"),
+                        })?;
+                data.boundary_edges.entry(face_b).or_default().push(edge_id);
+            } else if b_excluded && !a_excluded {
+                let edge_id =
+                    topo.edge_id_from_index(edge_idx)
+                        .ok_or_else(|| OffsetError::InvalidInput {
+                            reason: format!("edge index {edge_idx} not found"),
+                        })?;
+                data.boundary_edges.entry(face_a).or_default().push(edge_id);
+            }
             continue;
         }
 
