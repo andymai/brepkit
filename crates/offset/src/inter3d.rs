@@ -181,6 +181,7 @@ fn intersect_plane_plane(
     let dir_len = dir.length();
 
     // Parallel or near-parallel planes — no intersection.
+    // Parallel planes: cross product is near-zero.
     if dir_len < 1e-10 {
         return Ok(Vec::new());
     }

@@ -97,7 +97,7 @@ fn build_loops_for_face(
 
     for i in 0..line_segs.len() {
         for j in (i + 1)..line_segs.len() {
-            if let Some((pt, ti, tj)) = line_line_closest_point(&line_segs[i], &line_segs[j]) {
+            if let Some((pt, ti, tj)) = line_line_closest_point(&line_segs[i], &line_segs[j], tol) {
                 let vid = find_or_create_vertex(topo, &mut corner_cache, pt, tol);
                 corners_on_line[i].push((vid, ti));
                 corners_on_line[j].push((vid, tj));
@@ -211,7 +211,7 @@ fn build_loops_for_face(
 /// Returns `Some((point, t_a, t_b))` if the lines are not parallel and their
 /// closest-approach distance is below a threshold. `t_a` and `t_b` are
 /// parameters along each line (`0.0` = `p0`, `1.0` = `p1`).
-fn line_line_closest_point(a: &LineSeg, b: &LineSeg) -> Option<(Point3, f64, f64)> {
+fn line_line_closest_point(a: &LineSeg, b: &LineSeg, tol: f64) -> Option<(Point3, f64, f64)> {
     let da = pt_sub(a.p1, a.p0);
     let db = pt_sub(b.p1, b.p0);
     let w0 = pt_sub(a.p0, b.p0);
@@ -225,6 +225,7 @@ fn line_line_closest_point(a: &LineSeg, b: &LineSeg) -> Option<(Point3, f64, f64
     let denom = aa * bb - ab * ab;
 
     // Parallel lines — no unique intersection.
+    // Parallel lines — cross product denominator is near-zero.
     if denom.abs() < 1e-20 {
         return None;
     }
@@ -250,7 +251,7 @@ fn line_line_closest_point(a: &LineSeg, b: &LineSeg) -> Option<(Point3, f64, f64
     let dz = pa.z() - pb.z();
     let dist_sq = dx * dx + dy * dy + dz * dz;
 
-    if dist_sq > 1e-6 {
+    if dist_sq > tol * tol {
         return None;
     }
 

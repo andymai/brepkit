@@ -127,8 +127,12 @@ fn build_wall_faces(topo: &mut Topology, data: &OffsetData) -> Result<Vec<FaceId
                         *normal
                     }
                 }
-                _ => {
-                    // Non-planar excluded faces: skip wall for now.
+                FaceSurface::Cylinder(_)
+                | FaceSurface::Cone(_)
+                | FaceSurface::Sphere(_)
+                | FaceSurface::Torus(_)
+                | FaceSurface::Nurbs(_) => {
+                    // Non-planar excluded faces: wall generation not yet implemented.
                     continue;
                 }
             };
@@ -174,6 +178,7 @@ fn make_wall_quad(
     let edge_b = p3 - p0;
     let cross = edge_a.cross(edge_b);
     let len = cross.length();
+    // Degenerate quad (zero area cross product).
     if len < 1e-15 {
         return Ok(None);
     }

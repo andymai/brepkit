@@ -13,6 +13,13 @@ use brepkit_topology::solid::SolidId;
 use crate::data::{EdgeClass, OffsetData, VertexClass};
 use crate::error::OffsetError;
 
+/// Squared length below which a vector is considered degenerate (zero).
+const ZERO_LENGTH_SQ: f64 = 1e-30;
+
+/// Squared norm below which two anti-parallel normals are considered
+/// indistinguishable (their sum is zero).
+const ANTI_PARALLEL_SQ: f64 = 1e-20;
+
 /// Classify every edge of the solid as Convex, Concave, or Tangent,
 /// and derive vertex classifications from incident edges.
 ///
@@ -116,7 +123,7 @@ fn classify_edge(
         + tangent_vec.z() * tangent_vec.z())
     .sqrt();
 
-    if len < 1e-15 {
+    if len * len < ZERO_LENGTH_SQ {
         return Err(OffsetError::AnalysisFailed {
             edge: edge_id,
             reason: "degenerate edge (zero length)".to_string(),
@@ -150,7 +157,7 @@ fn classify_edge(
         return Ok(EdgeClass::Tangent);
     }
 
-    if n_avg_len_sq < 1e-20 {
+    if n_avg_len_sq < ANTI_PARALLEL_SQ {
         // Normals are anti-parallel — ambiguous, treat as tangent.
         return Ok(EdgeClass::Tangent);
     }
