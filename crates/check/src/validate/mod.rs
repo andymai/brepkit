@@ -140,6 +140,28 @@ fn validate_shell_checks(
             {
                 issues.extend(wire::check_wire_redundant(topo, wid)?);
             }
+            if !options
+                .disabled_checks
+                .contains(&CheckId::WireSelfIntersection)
+            {
+                issues.extend(wire::check_wire_self_intersection(topo, wid)?);
+            }
+        }
+    }
+
+    // Face checks
+    let mut checked_faces = HashSet::new();
+    for &fid in shell.faces() {
+        if checked_faces.insert(fid) {
+            if !options.disabled_checks.contains(&CheckId::FaceNoSurface) {
+                issues.extend(face::check_face_has_surface(topo, fid)?);
+            }
+            if !options
+                .disabled_checks
+                .contains(&CheckId::FaceOrientationConsistency)
+            {
+                issues.extend(face::check_face_orientation(topo, fid)?);
+            }
         }
     }
 
@@ -182,6 +204,29 @@ fn validate_shell_checks(
                             options.tolerance_scale * 1e-4,
                         )?);
                     }
+                }
+            }
+        }
+    }
+
+    // SameParameter: check edge's 3D curve vs PCurve on each adjacent face.
+    if !options
+        .disabled_checks
+        .contains(&CheckId::EdgeSameParameter)
+    {
+        let mut sp_checked = HashSet::new();
+        for &fid in shell.faces() {
+            let face = topo.face(fid)?;
+            let outer_wire = topo.wire(face.outer_wire())?;
+            for oe in outer_wire.edges() {
+                let eid = oe.edge();
+                if sp_checked.insert((eid, fid)) {
+                    issues.extend(edge::check_edge_same_parameter(
+                        topo,
+                        eid,
+                        fid,
+                        options.tolerance_scale * 1e-4,
+                    )?);
                 }
             }
         }

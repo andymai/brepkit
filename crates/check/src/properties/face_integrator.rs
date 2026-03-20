@@ -20,11 +20,17 @@ pub struct FaceContribution {
     pub area: f64,
     /// Volume contribution: (1/3) integral of P dot N dA.
     pub volume: f64,
-    /// Area-weighted centroid x-component.
+    /// Volume-weighted x-moment: (1/2) integral of x^2 * n_x dA (divergence theorem).
+    pub volume_moment_x: f64,
+    /// Volume-weighted y-moment: (1/2) integral of y^2 * n_y dA (divergence theorem).
+    pub volume_moment_y: f64,
+    /// Volume-weighted z-moment: (1/2) integral of z^2 * n_z dA (divergence theorem).
+    pub volume_moment_z: f64,
+    /// Area-weighted centroid x-component (for surface centroid, not solid CoM).
     pub centroid_x: f64,
-    /// Area-weighted centroid y-component.
+    /// Area-weighted centroid y-component (for surface centroid, not solid CoM).
     pub centroid_y: f64,
-    /// Area-weighted centroid z-component.
+    /// Area-weighted centroid z-component (for surface centroid, not solid CoM).
     pub centroid_z: f64,
 }
 
@@ -55,24 +61,34 @@ pub fn integrate_face(
             integrate_planar_face(topo, face_id, effective_normal)
         }
         FaceSurface::Cylinder(s) => {
-            let (u_range, v_range) = face_uv_bounds(topo, face_id, s)?;
+            let full = ((0.0, std::f64::consts::TAU), (f64::NEG_INFINITY, f64::INFINITY));
+            let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
             Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
         }
         FaceSurface::Cone(s) => {
-            let (u_range, v_range) = face_uv_bounds(topo, face_id, s)?;
+            let full = ((0.0, std::f64::consts::TAU), (f64::NEG_INFINITY, f64::INFINITY));
+            let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
             Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
         }
         FaceSurface::Sphere(s) => {
-            let (u_range, v_range) = face_uv_bounds(topo, face_id, s)?;
+            let full = (
+                (0.0, std::f64::consts::TAU),
+                (-std::f64::consts::FRAC_PI_2, std::f64::consts::FRAC_PI_2),
+            );
+            let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, false, full)?;
             Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
         }
         FaceSurface::Torus(s) => {
-            let (u_range, v_range) = face_uv_bounds(topo, face_id, s)?;
+            let full = ((0.0, std::f64::consts::TAU), (0.0, std::f64::consts::TAU));
+            let (u_range, v_range) = face_uv_bounds(topo, face_id, s, true, true, full)?;
             Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
         }
         FaceSurface::Nurbs(s) => {
-            let u_range = s.domain_u();
-            let v_range = s.domain_v();
+            let full = (s.domain_u(), s.domain_v());
+            let periodic_u = s.is_periodic_u();
+            let periodic_v = s.is_periodic_v();
+            let (u_range, v_range) =
+                face_uv_bounds(topo, face_id, s, periodic_u, periodic_v, full)?;
             Ok(integrate_parametric(s, u_range, v_range, gauss_order, sign))
         }
     }
@@ -83,30 +99,65 @@ type UvBounds = ((f64, f64), (f64, f64));
 
 /// Compute UV bounds for a parametric face by projecting boundary vertices
 /// onto the surface and taking the min/max of the resulting parameters.
+///
+/// For surfaces with periodic u or v coordinates (cylinders, cones, spheres,
+/// tori), sequentially unwraps the angular coordinates so that faces straddling
+/// the 0/2pi seam produce correct ranges.
+///
+/// When all projected vertices coincide (e.g. a full-revolution face),
+/// `full_domain` is returned instead.
 fn face_uv_bounds<S: ParametricSurface>(
     topo: &Topology,
     face_id: FaceId,
     surface: &S,
+    periodic_u: bool,
+    periodic_v: bool,
+    full_domain: UvBounds,
 ) -> Result<UvBounds, CheckError> {
     let face = topo.face(face_id)?;
     let wire = topo.wire(face.outer_wire())?;
 
-    let mut u_min = f64::INFINITY;
-    let mut u_max = f64::NEG_INFINITY;
-    let mut v_min = f64::INFINITY;
-    let mut v_max = f64::NEG_INFINITY;
-
+    // Collect projected UV values for each boundary vertex (in edge order).
+    let mut uvs = Vec::new();
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
-        for &vid in &[edge.start(), edge.end()] {
-            let pt = topo.vertex(vid)?.point();
-            let (u, v) = surface.project_point(pt);
-            u_min = u_min.min(u);
-            u_max = u_max.max(u);
-            v_min = v_min.min(v);
-            v_max = v_max.max(v);
+        let pt = topo.vertex(edge.start())?.point();
+        uvs.push(surface.project_point(pt));
+    }
+
+    if uvs.is_empty() {
+        return Err(CheckError::IntegrationFailed(
+            "face wire has no edges".into(),
+        ));
+    }
+
+    // Unwrap periodic coordinates sequentially so seam-straddling faces
+    // produce a contiguous range instead of the full [0, 2pi).
+    if periodic_u || periodic_v {
+        for i in 1..uvs.len() {
+            if periodic_u {
+                uvs[i].0 = unwrap_angle(uvs[i - 1].0, uvs[i].0);
+            }
+            if periodic_v {
+                uvs[i].1 = unwrap_angle(uvs[i - 1].1, uvs[i].1);
+            }
         }
     }
+
+    // Check for coincident vertices (all project to same point) — use full domain.
+    let coincident = uvs.len() < 3 || {
+        let ref_uv = uvs[0];
+        uvs.iter()
+            .all(|uv| (uv.0 - ref_uv.0).abs() < 1e-6 && (uv.1 - ref_uv.1).abs() < 1e-6)
+    };
+    if coincident {
+        return Ok(full_domain);
+    }
+
+    let u_min = uvs.iter().map(|uv| uv.0).fold(f64::INFINITY, f64::min);
+    let u_max = uvs.iter().map(|uv| uv.0).fold(f64::NEG_INFINITY, f64::max);
+    let v_min = uvs.iter().map(|uv| uv.1).fold(f64::INFINITY, f64::min);
+    let v_max = uvs.iter().map(|uv| uv.1).fold(f64::NEG_INFINITY, f64::max);
 
     if u_min >= u_max || v_min >= v_max {
         return Err(CheckError::IntegrationFailed(
@@ -115,6 +166,16 @@ fn face_uv_bounds<S: ParametricSurface>(
     }
 
     Ok(((u_min, u_max), (v_min, v_max)))
+}
+
+/// Unwrap a step in a periodic (angular) coordinate to avoid discontinuities.
+///
+/// Adjusts `next` so that `next - prev` lies in `(-pi, pi]`, keeping the
+/// sequence monotonic through the 0/2pi seam.
+fn unwrap_angle(prev: f64, next: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    let diff = next - prev;
+    prev + diff - tau * ((diff + std::f64::consts::PI) / tau).floor()
 }
 
 /// Integrate a planar face using polygon fan triangulation.
@@ -128,6 +189,9 @@ fn integrate_planar_face(
         return Ok(FaceContribution {
             area: 0.0,
             volume: 0.0,
+            volume_moment_x: 0.0,
+            volume_moment_y: 0.0,
+            volume_moment_z: 0.0,
             centroid_x: 0.0,
             centroid_y: 0.0,
             centroid_z: 0.0,
@@ -137,6 +201,9 @@ fn integrate_planar_face(
     // Fan triangulation from vertex 0
     let mut area = 0.0;
     let mut vol = 0.0;
+    let mut mx = 0.0;
+    let mut my = 0.0;
+    let mut mz = 0.0;
     let mut cx = 0.0;
     let mut cy = 0.0;
     let mut cz = 0.0;
@@ -162,6 +229,35 @@ fn integrate_planar_face(
         let pv = Vec3::new(centroid.x(), centroid.y(), centroid.z());
         vol += pv.dot(normal) * tri_area / 3.0;
 
+        // Volume moments via divergence theorem: (1/2) integral of x^2 * n_x dA
+        // For a planar triangle with constant normal, integral of x^2 over triangle
+        // = (area/3) * (x_a^2 + x_b^2 + x_c^2 + x_a*x_b + x_a*x_c + x_b*x_c) / 2
+        // Simplified: use (x_a^2 + x_b^2 + x_c^2 + x_a*x_b + x_a*x_c + x_b*x_c)/6
+        let avg_x2 = (a.x() * a.x()
+            + b.x() * b.x()
+            + c.x() * c.x()
+            + a.x() * b.x()
+            + a.x() * c.x()
+            + b.x() * c.x())
+            / 6.0;
+        let avg_y2 = (a.y() * a.y()
+            + b.y() * b.y()
+            + c.y() * c.y()
+            + a.y() * b.y()
+            + a.y() * c.y()
+            + b.y() * c.y())
+            / 6.0;
+        let avg_z2 = (a.z() * a.z()
+            + b.z() * b.z()
+            + c.z() * c.z()
+            + a.z() * b.z()
+            + a.z() * c.z()
+            + b.z() * c.z())
+            / 6.0;
+        mx += 0.5 * avg_x2 * normal.x() * tri_area;
+        my += 0.5 * avg_y2 * normal.y() * tri_area;
+        mz += 0.5 * avg_z2 * normal.z() * tri_area;
+
         cx += centroid.x() * tri_area;
         cy += centroid.y() * tri_area;
         cz += centroid.z() * tri_area;
@@ -170,6 +266,9 @@ fn integrate_planar_face(
     Ok(FaceContribution {
         area,
         volume: vol,
+        volume_moment_x: mx,
+        volume_moment_y: my,
+        volume_moment_z: mz,
         centroid_x: cx,
         centroid_y: cy,
         centroid_z: cz,
@@ -194,6 +293,9 @@ fn integrate_parametric<S: ParametricSurface>(
 
     let mut area = 0.0;
     let mut vol = 0.0;
+    let mut mx = 0.0;
+    let mut my = 0.0;
+    let mut mz = 0.0;
     let mut cx = 0.0;
     let mut cy = 0.0;
     let mut cz = 0.0;
@@ -222,6 +324,13 @@ fn integrate_parametric<S: ParametricSurface>(
             let pv = Vec3::new(p.x(), p.y(), p.z());
             vol += w * pv.dot(n) / 3.0;
 
+            // Volume moments via divergence theorem:
+            // CoM_x = (1/2V) surface_integral(x^2 * n_x dA)
+            // n already includes Jacobian, so n.x() = N_x * |J|
+            mx += w * 0.5 * p.x() * p.x() * n.x();
+            my += w * 0.5 * p.y() * p.y() * n.y();
+            mz += w * 0.5 * p.z() * p.z() * n.z();
+
             cx += w * p.x() * n_len;
             cy += w * p.y() * n_len;
             cz += w * p.z() * n_len;
@@ -231,6 +340,9 @@ fn integrate_parametric<S: ParametricSurface>(
     FaceContribution {
         area,
         volume: vol * sign,
+        volume_moment_x: mx * sign,
+        volume_moment_y: my * sign,
+        volume_moment_z: mz * sign,
         centroid_x: cx,
         centroid_y: cy,
         centroid_z: cz,

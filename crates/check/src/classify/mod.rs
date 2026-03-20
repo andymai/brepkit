@@ -49,12 +49,15 @@ impl Default for ClassifyOptions {
 
 /// Classify a point relative to a solid using analytic ray casting.
 ///
-/// Uses two perpendicular irrational ray directions for consensus.
-/// First checks if the point is on the boundary (within tolerance of any face).
+/// Uses three irrational ray directions for majority-vote consensus.
+/// If the first two agree, the third is skipped. If all three disagree
+/// (very rare — indicates grazing rays), perturbed recovery directions
+/// are tried.
 ///
 /// # Errors
 ///
 /// Returns an error if the solid or its faces contain invalid topology references.
+#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
 pub fn classify_point(
     topo: &Topology,
     solid: SolidId,
@@ -69,8 +72,9 @@ pub fn classify_point(
         return Ok(PointClassification::OnBoundary);
     }
 
-    // Two perpendicular irrational ray directions for dual-ray consensus.
-    let ray_dirs = [
+    // Three irrational ray directions for majority-vote consensus.
+    // If the first two agree, the third breaks no tie and we exit early.
+    let base_dirs = [
         Vec3::new(
             0.573_576_436_351_046,
             0.740_535_693_464_567_5,
@@ -81,17 +85,57 @@ pub fn classify_point(
             0.573_576_436_351_046,
             0.740_535_693_464_567_5,
         ),
+        Vec3::new(
+            0.740_535_693_464_567_5,
+            -0.350_889_803_483_932_2,
+            0.573_576_436_351_046,
+        ),
     ];
 
     let mut inside_votes = 0u32;
-    for &dir in &ray_dirs {
+    let mut outside_votes = 0u32;
+
+    for &dir in &base_dirs {
         let crossings = count_ray_crossings(topo, shell.faces(), point, dir)?;
         if crossings % 2 == 1 {
             inside_votes += 1;
+        } else {
+            outside_votes += 1;
+        }
+        // Early exit: if 2 rays agree, that's the answer.
+        if inside_votes >= 2 {
+            return Ok(PointClassification::Inside);
+        }
+        if outside_votes >= 2 {
+            return Ok(PointClassification::Outside);
         }
     }
 
-    if inside_votes >= 2 {
+    // All three disagreed (very rare). Try perturbed directions as recovery.
+    for attempt in 0..options.max_recovery_attempts {
+        // Generate a pseudo-random direction from attempt index using golden ratio.
+        let seed = (attempt as f64 + 1.0) * 0.618_033_988_749_895;
+        let theta = seed * std::f64::consts::TAU;
+        let phi = (seed * std::f64::consts::E).fract() * std::f64::consts::PI;
+        let dir = Vec3::new(phi.sin() * theta.cos(), phi.sin() * theta.sin(), phi.cos());
+
+        let crossings = count_ray_crossings(topo, shell.faces(), point, dir)?;
+        if crossings % 2 == 1 {
+            inside_votes += 1;
+        } else {
+            outside_votes += 1;
+        }
+        let remaining = options.max_recovery_attempts as u32 - attempt as u32;
+        if inside_votes > outside_votes + remaining {
+            return Ok(PointClassification::Inside);
+        }
+        if outside_votes > inside_votes + remaining {
+            return Ok(PointClassification::Outside);
+        }
+    }
+
+    // Majority vote from all attempts.
+    if inside_votes > outside_votes {
         Ok(PointClassification::Inside)
     } else {
         Ok(PointClassification::Outside)

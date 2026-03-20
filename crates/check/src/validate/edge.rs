@@ -2,6 +2,7 @@
 
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
+use brepkit_topology::face::FaceId;
 
 use super::checks::{CheckId, EntityRef, Severity, ValidationIssue};
 use crate::CheckError;
@@ -85,5 +86,76 @@ pub fn check_edge_degenerate(
             }
         }
     }
+    Ok(vec![])
+}
+
+/// Check that an edge's 3D curve matches its PCurve(surface) within tolerance.
+///
+/// Samples N points along the edge, evaluates both the 3D curve and the
+/// PCurve projected through the surface, and measures the maximum deviation.
+#[allow(clippy::cast_precision_loss)]
+pub fn check_edge_same_parameter(
+    topo: &Topology,
+    edge_id: EdgeId,
+    face_id: FaceId,
+    tolerance: f64,
+) -> Result<Vec<ValidationIssue>, CheckError> {
+    // Get the PCurve for this edge on this face.
+    let pcurve = match topo.pcurves().get(edge_id, face_id) {
+        Some(pc) => pc,
+        None => return Ok(vec![]), // No PCurve registered — can't check
+    };
+
+    let edge = topo.edge(edge_id)?;
+    let face = topo.face(face_id)?;
+
+    // Skip planes — they have no UV parameterization for evaluate().
+    if matches!(
+        face.surface(),
+        brepkit_topology::face::FaceSurface::Plane { .. }
+    ) {
+        return Ok(vec![]);
+    }
+
+    // Sample N points along the PCurve parameter range.
+    let n_samples = 10;
+    let mut max_deviation = 0.0f64;
+
+    for i in 0..=n_samples {
+        let t_norm = i as f64 / n_samples as f64;
+        let t = pcurve.t_start() + (pcurve.t_end() - pcurve.t_start()) * t_norm;
+
+        // Evaluate PCurve to get (u, v) on surface.
+        let uv = pcurve.evaluate(t);
+
+        // Evaluate surface at (u, v) to get 3D point from PCurve path.
+        let pcurve_3d = match face.surface().evaluate(uv.x(), uv.y()) {
+            Some(pt) => pt,
+            None => continue, // Should not happen for non-Plane surfaces
+        };
+
+        // Evaluate 3D curve at same normalized parameter.
+        let curve_3d = edge.curve().evaluate_with_endpoints(
+            t_norm,
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+
+        let deviation = (pcurve_3d - curve_3d).length();
+        max_deviation = max_deviation.max(deviation);
+    }
+
+    if max_deviation > tolerance {
+        return Ok(vec![ValidationIssue {
+            check: CheckId::EdgeSameParameter,
+            severity: Severity::Error,
+            entity: EntityRef::Edge(edge_id),
+            description: format!(
+                "3D curve deviates {max_deviation:.2e} from PCurve(surface) (tolerance {tolerance:.2e})"
+            ),
+            deviation: Some(max_deviation),
+        }]);
+    }
+
     Ok(vec![])
 }

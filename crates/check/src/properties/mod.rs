@@ -93,12 +93,14 @@ pub fn solid_area(
 
 /// Compute the center of mass of a solid.
 ///
-/// Uses area-weighted centroid contributions from each face.
+/// Uses the divergence theorem: for each coordinate axis, integrates
+/// `(1/2) x_i^2 * n_i` over the solid's boundary, then divides by total
+/// volume to obtain the volumetric centroid (solid CoM).
 ///
 /// # Errors
 ///
 /// Returns an error if any topology entity is missing, integration fails,
-/// or the solid has zero surface area.
+/// or the solid has zero volume.
 pub fn center_of_mass(
     topo: &Topology,
     solid: SolidId,
@@ -107,29 +109,29 @@ pub fn center_of_mass(
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
-    let mut total_area = 0.0;
-    let mut cx = 0.0;
-    let mut cy = 0.0;
-    let mut cz = 0.0;
+    let mut total_volume = 0.0;
+    let mut mx = 0.0;
+    let mut my = 0.0;
+    let mut mz = 0.0;
 
     for &fid in shell.faces() {
         let contrib = face_integrator::integrate_face(topo, fid, options.gauss_order)?;
-        total_area += contrib.area;
-        cx += contrib.centroid_x;
-        cy += contrib.centroid_y;
-        cz += contrib.centroid_z;
+        total_volume += contrib.volume;
+        mx += contrib.volume_moment_x;
+        my += contrib.volume_moment_y;
+        mz += contrib.volume_moment_z;
     }
 
-    if total_area < 1e-30 {
+    if total_volume.abs() < 1e-30 {
         return Err(CheckError::IntegrationFailed(
-            "solid has zero surface area".into(),
+            "solid has zero volume".into(),
         ));
     }
 
     Ok(Point3::new(
-        cx / total_area,
-        cy / total_area,
-        cz / total_area,
+        mx / total_volume,
+        my / total_volume,
+        mz / total_volume,
     ))
 }
 
