@@ -1,5 +1,4 @@
 //! Shared utility functions for the check crate.
-#![allow(dead_code)]
 
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::vec::{Point2, Point3, Vec3};

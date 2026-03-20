@@ -31,8 +31,6 @@ pub enum PointClassification {
 pub struct ClassifyOptions {
     /// Distance threshold for "on boundary" detection.
     pub tolerance: f64,
-    /// Minimum scalar product for ray quality (default 0.2).
-    pub ray_quality_threshold: f64,
     /// Maximum recovery attempts when ray hits face boundary.
     pub max_recovery_attempts: usize,
 }
@@ -41,7 +39,6 @@ impl Default for ClassifyOptions {
     fn default() -> Self {
         Self {
             tolerance: 1e-6,
-            ray_quality_threshold: 0.2,
             max_recovery_attempts: 10,
         }
     }

@@ -5,8 +5,6 @@
 //! for analytic surfaces and 3D polygon containment for surfaces with
 //! pole singularities (spheres).
 
-#![allow(dead_code)]
-
 use std::f64::consts::PI;
 
 use smallvec::SmallVec;
@@ -24,9 +22,6 @@ use crate::util::{face_polygon, point_in_polygon_3d};
 // ---------------------------------------------------------------------------
 // Tolerance constants
 // ---------------------------------------------------------------------------
-
-/// Near-zero threshold for floating-point denominators and discriminants.
-const NEAR_ZERO: f64 = 1e-15;
 
 /// Minimum positive ray parameter to count as a forward hit.
 const RAY_T_MIN: f64 = 1e-12;

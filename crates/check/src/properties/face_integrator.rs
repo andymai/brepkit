@@ -173,7 +173,8 @@ fn face_uv_bounds<S: ParametricSurface>(
     let mut uvs = Vec::new();
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
-        let pt = topo.vertex(edge.start())?.point();
+        let vid = oe.oriented_start(edge);
+        let pt = topo.vertex(vid)?.point();
         uvs.push(surface.project_point(pt));
     }
 

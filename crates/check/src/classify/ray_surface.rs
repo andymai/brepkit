@@ -301,6 +301,52 @@ pub fn solve_cubic(a: f64, b: f64, c: f64, d: f64) -> SmallVec<[f64; 4]> {
     roots
 }
 
+/// Solve `a*t^3 + b*t^2 + c*t + d = 0` returning ALL real roots (no positive filter).
+///
+/// Used internally by `solve_quartic` for the resolvent cubic, where the
+/// cubic variable is not the ray parameter and negative roots are valid.
+fn solve_cubic_all(a: f64, b: f64, c: f64, d: f64) -> SmallVec<[f64; 4]> {
+    if a.abs() < NEAR_ZERO {
+        return solve_quadratic_all(b, c, d);
+    }
+
+    // Normalize: t^3 + pt^2 + qt + r = 0
+    let p = b / a;
+    let q = c / a;
+    let r = d / a;
+
+    // Depress: substitute t = u - p/3
+    let p_shift = q - p * p / 3.0;
+    let q_shift = 2.0 * p * p * p / 27.0 - p * q / 3.0 + r;
+
+    let disc = q_shift * q_shift / 4.0 + p_shift * p_shift * p_shift / 27.0;
+
+    let mut roots = SmallVec::new();
+
+    if disc > NEAR_ZERO {
+        // One real root.
+        let u = solve_cubic_one_real(p_shift, q_shift);
+        roots.push(u - p / 3.0);
+    } else {
+        // Three real roots via trigonometric method.
+        let r_mag = (-p_shift * p_shift * p_shift / 27.0).sqrt();
+        if r_mag.abs() < NEAR_ZERO {
+            roots.push(-p / 3.0);
+            return roots;
+        }
+        let theta = (-q_shift / (2.0 * r_mag)).clamp(-1.0, 1.0).acos();
+        let cbrt_r = r_mag.cbrt();
+        for k in 0..3 {
+            #[allow(clippy::cast_precision_loss)]
+            let angle = (theta + 2.0 * std::f64::consts::PI * k as f64) / 3.0;
+            roots.push(2.0 * cbrt_r * angle.cos() - p / 3.0);
+        }
+    }
+
+    roots.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+    roots
+}
+
 /// Solve `c4*t^4 + c3*t^3 + c2*t^2 + c1*t + c0 = 0` returning positive real roots.
 ///
 /// Uses depressed quartic reduction followed by Ferrari's method.
@@ -345,7 +391,7 @@ pub fn solve_quartic(c4: f64, c3: f64, c2: f64, c1: f64, c0: f64) -> SmallVec<[f
     } else {
         // Ferrari's method: find y from the resolvent cubic
         // y^3 - (p/2)*y^2 - r*y + (r*p/2 - q^2/8) = 0
-        let cubic_roots = solve_cubic(1.0, -p / 2.0, -r, r * p / 2.0 - q * q / 8.0);
+        let cubic_roots = solve_cubic_all(1.0, -p / 2.0, -r, r * p / 2.0 - q * q / 8.0);
 
         // Pick the largest real root for numerical stability
         let y = cubic_roots.iter().copied().reduce(f64::max).unwrap_or(0.0);

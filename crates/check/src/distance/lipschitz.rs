@@ -6,13 +6,12 @@
 //! This guarantees finding the global minimum, unlike Newton-based methods
 //! which can get stuck in local minima.
 
-#![allow(dead_code)]
-
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::Point3;
 
 /// A solution found by the optimizer.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct OptSolution {
     /// Parameter values at the minimum.
     pub params: [f64; 2],
@@ -24,6 +23,7 @@ pub struct OptSolution {
 ///
 /// Finds the global minimum of a function f(u, v) over a rectangular domain,
 /// given a Lipschitz bound L such that |f(a) - f(b)| <= L * |a - b| for all a, b.
+#[allow(dead_code)]
 pub struct LipschitzOptimizer {
     /// Convergence tolerance (cell radius below this records a solution).
     eps: f64,
@@ -33,6 +33,7 @@ pub struct LipschitzOptimizer {
     max_evals: usize,
 }
 
+#[allow(dead_code)]
 impl LipschitzOptimizer {
     /// Create a new optimizer with given tolerance and max depth.
     #[must_use]
@@ -202,7 +203,7 @@ impl LipschitzOptimizer {
 /// Upper bound: L <= 2 * max_separation * max(max_deriv_1, max_deriv_2)
 /// where `max_separation` is the maximum distance between any pair of points
 /// and `max_deriv` is the maximum derivative magnitude.
-#[allow(clippy::cast_precision_loss)]
+#[allow(dead_code, clippy::cast_precision_loss)]
 pub fn estimate_curve_curve_lipschitz(
     curve1: &NurbsCurve,
     curve2: &NurbsCurve,
@@ -239,6 +240,7 @@ pub fn estimate_curve_curve_lipschitz(
 /// Find the global minimum distance between two NURBS curves.
 ///
 /// Returns (distance, point on curve 1, point on curve 2).
+#[allow(dead_code)]
 pub fn nurbs_curve_curve_distance(
     curve1: &NurbsCurve,
     curve2: &NurbsCurve,
