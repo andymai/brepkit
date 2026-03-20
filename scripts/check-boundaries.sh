@@ -52,9 +52,10 @@ check_deps "math"
 check_deps "topology"   "brepkit-math"
 check_deps "algo"       "brepkit-math" "brepkit-topology"
 check_deps "blend"      "brepkit-math" "brepkit-topology"
-check_deps "operations" "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend"
-check_deps "io"         "brepkit-math" "brepkit-topology" "brepkit-operations"
-check_deps "wasm"       "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-operations" "brepkit-io"
+check_deps "heal"       "brepkit-math" "brepkit-topology"
+check_deps "operations" "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal"
+check_deps "io"         "brepkit-math" "brepkit-topology" "brepkit-operations" "brepkit-heal"
+check_deps "wasm"       "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-operations" "brepkit-io"
 
 if [ $FAIL -ne 0 ]; then
   echo "❌ Boundary check failed."

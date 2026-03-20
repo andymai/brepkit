@@ -12,6 +12,7 @@ brepkit-math.workspace = true
 brepkit-topology.workspace = true
 brepkit-algo.workspace = true
 brepkit-blend.workspace = true
+brepkit-heal.workspace = true
 thiserror.workspace = true
 rayon.workspace = true
 log.workspace = true

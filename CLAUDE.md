@@ -14,6 +14,7 @@ L2: brepkit-io          → STEP, 3MF, STL, IGES, OBJ, PLY, glTF import/export
 L2: brepkit-operations  → Booleans, fillets, extrusions, tessellation
 L1.5: brepkit-algo      → GFA boolean engine, classification, intersection
 L1.5: brepkit-blend     → Walking-based fillet and chamfer engine
+L1.5: brepkit-heal      → Shape healing (analysis, fixing, upgrading)
 L1: brepkit-topology    → B-Rep data structures (arena-based)
 L0: brepkit-math        → Vectors, matrices, NURBS, predicates
 ```
@@ -28,9 +29,10 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 | `topology` | `math` |
 | `algo` | `math`, `topology` |
 | `blend` | `math`, `topology` |
-| `operations` | `math`, `topology`, `algo`, `blend` |
-| `io` | `math`, `topology`, `operations` |
-| `wasm` | all crates (incl. `blend`) |
+| `heal` | `math`, `topology` |
+| `operations` | `math`, `topology`, `algo`, `blend`, `heal` |
+| `io` | `math`, `topology`, `operations`, `heal` |
+| `wasm` | all crates (incl. `blend`, `heal`) |
 
 The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the pre-push hook.
 
@@ -39,8 +41,9 @@ The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the p
 - `topology/src/**` → `brepkit_math::*`
 - `algo/src/**` → `brepkit_math::*`, `brepkit_topology::*`
 - `blend/src/**` → `brepkit_math::*`, `brepkit_topology::*`
-- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_algo::*`, `brepkit_blend::*`
-- `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`
+- `heal/src/**` → `brepkit_math::*`, `brepkit_topology::*`
+- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`
+- `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`, `brepkit_heal::*`
 - `wasm/src/**` → all `brepkit_*`
 
 ## Module Map
@@ -123,6 +126,50 @@ Quick reference — find the right file for any task:
 | Chamfer builder (orchestration) | `chamfer_builder.rs` |
 | Vertex blend / corner solver | `corner.rs` |
 | Face trimming along contact curves | `trimmer.rs` |
+
+### L1.5: heal (`crates/heal/src/`)
+| Task | File(s) |
+|------|---------|
+| Public API, `HealError`, `Status` | `lib.rs`, `error.rs`, `status.rs` |
+| Healing context (tolerance, reshape, messages) | `context.rs` |
+| Entity replacement/removal tracking | `reshape.rs` |
+| Edge analysis (3D/PCurve deviation, degeneracy) | `analysis/edge.rs` |
+| Wire analysis (ordering, closure, gaps, small edges) | `analysis/wire.rs` |
+| Surface analysis (singularity, closure, equivalence) | `analysis/surface.rs` |
+| Face analysis (small face, degenerate face) | `analysis/face.rs` |
+| Shell analysis (manifold, free edges, orientation) | `analysis/shell.rs` |
+| Curve analysis (length, continuity) | `analysis/curve.rs` |
+| Free boundary detection | `analysis/free_bounds.rs` |
+| Wire edge ordering | `analysis/wire_order.rs` |
+| Tolerance statistics | `analysis/tolerance.rs` |
+| Entity counting | `analysis/contents.rs` |
+| NURBS → elementary surface recognition | `analysis/canonical.rs` |
+| Fix config (tri-state FixMode per fix type) | `fix/config.rs` |
+| Fix orchestrator (shape → solid → shell → face → wire → edge) | `fix/mod.rs` |
+| Edge fixing (SameParameter, vertex tolerance) | `fix/edge.rs` |
+| Wire fixing (30+ OCCT fixes: reorder, gaps, small, degenerate) | `fix/wire.rs` |
+| Face fixing (orientation, small area, seam insertion) | `fix/face.rs` |
+| Shell fixing (orientation consistency) | `fix/shell.rs` |
+| Solid fixing (top-level orchestrator) | `fix/solid.rs` |
+| Small face removal | `fix/small_face.rs` |
+| Wireframe repair | `fix/wireframe.rs` |
+| Split over-connected vertices | `fix/split_vertex.rs` |
+| Unify same-domain faces (merge coplanar/co-cylindrical) | `upgrade/unify_same_domain.rs` |
+| Curve splitting at continuity breaks | `upgrade/split_curve.rs` |
+| Surface splitting | `upgrade/split_surface.rs` |
+| NURBS → Bezier conversion | `upgrade/convert_to_bezier.rs` |
+| Remove internal wires | `upgrade/remove_internal_wires.rs` |
+| Shell sewing (stitch free edges) | `upgrade/shell_sewing.rs` |
+| 3D → 2D PCurve projection | `construct/project_curve.rs` |
+| Curve type conversions | `construct/convert_curve.rs` |
+| Surface type conversions | `construct/convert_surface.rs` |
+| Convert all to B-Spline | `custom/convert_to_bspline.rs` |
+| B-Spline degree/continuity restriction | `custom/bspline_restriction.rs` |
+| Recognize NURBS as elementary surfaces | `custom/convert_to_elementary.rs` |
+| HealOperator trait | `pipeline/operator.rs` |
+| Operator registry | `pipeline/registry.rs` |
+| Configurable pipeline executor | `pipeline/process.rs` |
+| 13 built-in operators | `pipeline/builtin.rs` |
 
 ### L2: operations (`crates/operations/src/`)
 | Task | File(s) |

@@ -28,6 +28,7 @@ rayon = "1.11"
 
 # Collections
 smallvec = "1"
+bitflags = "2"
 
 # WASM
 wasm-bindgen = "=0.2.114"  # Pinned: must match wasm-bindgen-cli in CI
@@ -50,6 +51,7 @@ brepkit-topology = { path = "crates/topology" }
 brepkit-operations = { path = "crates/operations" }
 brepkit-algo = { path = "crates/algo" }
 brepkit-blend = { path = "crates/blend" }
+brepkit-heal = { path = "crates/heal" }
 brepkit-io = { path = "crates/io" }
 
 [workspace.lints.rust]

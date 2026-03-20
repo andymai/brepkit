@@ -34,6 +34,11 @@ impl Solid {
         self.outer_shell
     }
 
+    /// Sets the outer bounding shell of this solid.
+    pub fn set_outer_shell(&mut self, shell_id: ShellId) {
+        self.outer_shell = shell_id;
+    }
+
     /// Returns the inner shells (voids) of this solid.
     #[must_use]
     pub fn inner_shells(&self) -> &[ShellId] {
