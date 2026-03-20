@@ -143,6 +143,50 @@ fn validate_shell_checks(
         }
     }
 
+    // Edge and vertex checks
+    let mut checked_edges = HashSet::new();
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        let outer_wire = topo.wire(face.outer_wire())?;
+        for oe in outer_wire.edges() {
+            let eid = oe.edge();
+            if checked_edges.insert(eid) {
+                if !options.disabled_checks.contains(&CheckId::EdgeRangeValid) {
+                    issues.extend(edge::check_edge_range(
+                        topo,
+                        eid,
+                        options.tolerance_scale * 1e-7,
+                    )?);
+                }
+                if !options.disabled_checks.contains(&CheckId::EdgeDegenerate) {
+                    issues.extend(edge::check_edge_degenerate(
+                        topo,
+                        eid,
+                        options.tolerance_scale * 1e-7,
+                    )?);
+                }
+                // Vertex-on-curve checks
+                if !options.disabled_checks.contains(&CheckId::VertexOnCurve) {
+                    let edge_data = topo.edge(eid)?;
+                    issues.extend(vertex::check_vertex_on_curve(
+                        topo,
+                        edge_data.start(),
+                        eid,
+                        options.tolerance_scale * 1e-4,
+                    )?);
+                    if edge_data.start() != edge_data.end() {
+                        issues.extend(vertex::check_vertex_on_curve(
+                            topo,
+                            edge_data.end(),
+                            eid,
+                            options.tolerance_scale * 1e-4,
+                        )?);
+                    }
+                }
+            }
+        }
+    }
+
     Ok(issues)
 }
 
@@ -167,6 +211,33 @@ mod tests {
             report.issues
         );
         assert_eq!(report.error_count(), 0);
+    }
+
+    #[test]
+    fn edge_range_valid_for_box() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let opts = ValidateOptions::default();
+        let report = validate_solid(&topo, cube, &opts).unwrap();
+        let range_issues: Vec<_> = report
+            .issues
+            .iter()
+            .filter(|i| i.check == CheckId::EdgeRangeValid)
+            .collect();
+        assert!(
+            range_issues.is_empty(),
+            "box edges should have valid ranges, got: {range_issues:?}"
+        );
+    }
+
+    #[test]
+    fn valid_box_detailed() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+        let opts = ValidateOptions::default();
+        let report = validate_solid(&topo, cube, &opts).unwrap();
+        assert_eq!(report.error_count(), 0, "errors: {:?}", report.issues);
+        assert_eq!(report.warning_count(), 0, "warnings: {:?}", report.issues);
     }
 
     #[test]
