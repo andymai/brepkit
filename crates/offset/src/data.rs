@@ -1,6 +1,6 @@
 //! Central data structures shared across all offset pipeline phases.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
@@ -149,12 +149,13 @@ pub struct OffsetData {
     /// Edge convexity classification. Keys are edge indices from
     /// `edge_to_face_map`.
     pub edge_class: BTreeMap<usize, EdgeClass>,
-    /// Vertex classification derived from incident edge classes.
-    pub vertex_class: BTreeMap<VertexId, VertexClass>,
+    /// Vertex classification derived from incident edge classes. Keys are
+    /// vertex arena indices.
+    pub vertex_class: BTreeMap<usize, VertexClass>,
 
     // --- Phase 2: offset surfaces ---
     /// Offset face for each original face.
-    pub offset_faces: BTreeMap<FaceId, OffsetFace>,
+    pub offset_faces: HashMap<FaceId, OffsetFace>,
 
     // --- Phase 3 & 4: intersections ---
     /// Intersection curves between adjacent offset faces.
@@ -171,7 +172,7 @@ pub struct OffsetData {
     // --- Phase 7: loops ---
     /// Wire loops built for each offset face from trimmed intersection
     /// curves.
-    pub face_wires: BTreeMap<FaceId, Vec<WireId>>,
+    pub face_wires: HashMap<FaceId, Vec<WireId>>,
 }
 
 impl OffsetData {
@@ -184,11 +185,11 @@ impl OffsetData {
             excluded_faces,
             edge_class: BTreeMap::new(),
             vertex_class: BTreeMap::new(),
-            offset_faces: BTreeMap::new(),
+            offset_faces: HashMap::new(),
             intersections: Vec::new(),
             edge_splits: BTreeMap::new(),
             joint_faces: Vec::new(),
-            face_wires: BTreeMap::new(),
+            face_wires: HashMap::new(),
         }
     }
 }
