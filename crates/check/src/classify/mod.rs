@@ -6,6 +6,7 @@
 
 pub(crate) mod boundary;
 pub(crate) mod ray_surface;
+pub(crate) mod winding;
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -160,6 +161,67 @@ fn is_on_boundary(
     Ok(false)
 }
 
+/// Classify a point relative to a solid using generalized winding numbers.
+///
+/// More robust than ray casting for imperfect geometry (small gaps,
+/// T-junctions). Sums the signed solid angles of triangulated faces and
+/// classifies based on the resulting winding number.
+///
+/// # Errors
+///
+/// Returns an error if the solid or its faces contain invalid topology references.
+pub fn classify_point_winding(
+    topo: &Topology,
+    solid: SolidId,
+    point: Point3,
+    options: &ClassifyOptions,
+) -> Result<PointClassification, CheckError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+    if is_on_boundary(topo, shell.faces(), point, options.tolerance)? {
+        return Ok(PointClassification::OnBoundary);
+    }
+
+    let w = winding::winding_number(topo, solid, point)?;
+    if w > 0.5 {
+        Ok(PointClassification::Inside)
+    } else {
+        Ok(PointClassification::Outside)
+    }
+}
+
+/// Robust classification combining winding numbers and ray casting.
+///
+/// Uses winding numbers first, falling back to ray casting when the
+/// winding number is ambiguous (between 0.4 and 0.6). This provides the
+/// best accuracy for both clean and imperfect geometry.
+///
+/// # Errors
+///
+/// Returns an error if the solid or its faces contain invalid topology references.
+pub fn classify_point_robust(
+    topo: &Topology,
+    solid: SolidId,
+    point: Point3,
+    options: &ClassifyOptions,
+) -> Result<PointClassification, CheckError> {
+    let solid_data = topo.solid(solid)?;
+    let shell = topo.shell(solid_data.outer_shell())?;
+    if is_on_boundary(topo, shell.faces(), point, options.tolerance)? {
+        return Ok(PointClassification::OnBoundary);
+    }
+
+    let w = winding::winding_number(topo, solid, point)?;
+    if w > 0.6 {
+        return Ok(PointClassification::Inside);
+    }
+    if w < 0.4 {
+        return Ok(PointClassification::Outside);
+    }
+    // Ambiguous — fall back to ray casting.
+    classify_point(topo, solid, point, options)
+}
+
 /// Count total ray crossings across all faces of a shell.
 fn count_ray_crossings(
     topo: &Topology,
@@ -181,6 +243,7 @@ fn count_ray_crossings(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use super::winding;
     use super::*;
     use brepkit_topology::test_utils::make_unit_cube_manifold;
 
@@ -240,6 +303,44 @@ mod tests {
 
         let result = classify_point(&topo, solid, near_corner, &opts).unwrap();
         assert_eq!(result, PointClassification::OnBoundary);
+    }
+
+    #[test]
+    fn winding_inside_box() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let center = Point3::new(0.5, 0.5, 0.5);
+
+        let w = winding::winding_number(&topo, solid, center).unwrap();
+        assert!(
+            w > 0.5,
+            "winding number for interior point should be > 0.5, got {w}"
+        );
+    }
+
+    #[test]
+    fn winding_outside_box() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let far = Point3::new(5.0, 5.0, 5.0);
+
+        let w = winding::winding_number(&topo, solid, far).unwrap();
+        assert!(
+            w < 0.5,
+            "winding number for exterior point should be < 0.5, got {w}"
+        );
+    }
+
+    #[test]
+    fn classify_winding_matches_ray() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+        let center = Point3::new(0.5, 0.5, 0.5);
+        let opts = ClassifyOptions::default();
+
+        let ray_result = classify_point(&topo, solid, center, &opts).unwrap();
+        let winding_result = classify_point_winding(&topo, solid, center, &opts).unwrap();
+        assert_eq!(ray_result, winding_result);
     }
 
     #[test]
