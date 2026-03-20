@@ -89,7 +89,7 @@ pub fn point_to_solid(
     for idx in candidates {
         let aabb_dist_sq = face_aabbs[idx].1.distance_squared_to_point(point);
         if aabb_dist_sq > best_dist * best_dist {
-            break; // sorted, so all remaining are farther
+            continue; // not break — BVH swap may have reordered candidates
         }
         let face_idx = face_aabbs[idx].0;
         let fid = face_ids[face_idx];
@@ -343,18 +343,40 @@ fn collect_solid_edge_segments(
                     segments.push((start_pt, end_pt));
                 }
                 EdgeCurve::Circle(c) => {
-                    let mut prev = c.evaluate(0.0);
+                    let is_closed = edge_data.start() == edge_data.end();
+                    let (t0, t1) = if is_closed {
+                        (0.0, std::f64::consts::TAU)
+                    } else {
+                        let t0 = c.project(start_pt);
+                        let mut t1 = c.project(end_pt);
+                        if t1 <= t0 {
+                            t1 += std::f64::consts::TAU;
+                        }
+                        (t0, t1)
+                    };
+                    let mut prev = c.evaluate(t0);
                     for i in 1..=n_samples {
-                        let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                        let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
                         let curr = c.evaluate(t);
                         segments.push((prev, curr));
                         prev = curr;
                     }
                 }
                 EdgeCurve::Ellipse(e) => {
-                    let mut prev = e.evaluate(0.0);
+                    let is_closed = edge_data.start() == edge_data.end();
+                    let (t0, t1) = if is_closed {
+                        (0.0, std::f64::consts::TAU)
+                    } else {
+                        let t0 = e.project(start_pt);
+                        let mut t1 = e.project(end_pt);
+                        if t1 <= t0 {
+                            t1 += std::f64::consts::TAU;
+                        }
+                        (t0, t1)
+                    };
+                    let mut prev = e.evaluate(t0);
                     for i in 1..=n_samples {
-                        let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                        let t = t0 + (t1 - t0) * (i as f64) / (n_samples as f64);
                         let curr = e.evaluate(t);
                         segments.push((prev, curr));
                         prev = curr;
@@ -387,30 +409,8 @@ fn is_point_in_face_boundary(
     if polygon.len() < 3 {
         return Ok(true); // Full-surface face
     }
-    let normal = polygon_normal(&polygon);
+    let normal = crate::util::polygon_normal(&polygon);
     Ok(crate::util::point_in_polygon_3d(&point, &polygon, &normal))
-}
-
-/// Compute the normal of a polygon using Newell's method.
-fn polygon_normal(verts: &[Point3]) -> Vec3 {
-    let mut nx = 0.0;
-    let mut ny = 0.0;
-    let mut nz = 0.0;
-    let n = verts.len();
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let vi = verts[i];
-        let vj = verts[j];
-        nx += (vi.y() - vj.y()) * (vi.z() + vj.z());
-        ny += (vi.z() - vj.z()) * (vi.x() + vj.x());
-        nz += (vi.x() - vj.x()) * (vi.y() + vj.y());
-    }
-    let len = (nx.mul_add(nx, ny.mul_add(ny, nz * nz))).sqrt();
-    if len < 1e-30 {
-        Vec3::new(0.0, 0.0, 1.0)
-    } else {
-        Vec3::new(nx / len, ny / len, nz / len)
-    }
 }
 
 /// Find the closest point on the wire edges of a face to a given point.

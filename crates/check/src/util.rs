@@ -8,6 +8,30 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 
 use crate::CheckError;
 
+/// Compute the normal of a polygon via Newell's method.
+///
+/// Returns a unit-length normal, or `(0,0,1)` for degenerate polygons.
+pub fn polygon_normal(verts: &[Point3]) -> Vec3 {
+    let mut nx = 0.0;
+    let mut ny = 0.0;
+    let mut nz = 0.0;
+    let n = verts.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let vi = verts[i];
+        let vj = verts[j];
+        nx += (vi.y() - vj.y()) * (vi.z() + vj.z());
+        ny += (vi.z() - vj.z()) * (vi.x() + vj.x());
+        nz += (vi.x() - vj.x()) * (vi.y() + vj.y());
+    }
+    let len = (nx.mul_add(nx, ny.mul_add(ny, nz * nz))).sqrt();
+    if len < 1e-30 {
+        Vec3::new(0.0, 0.0, 1.0)
+    } else {
+        Vec3::new(nx / len, ny / len, nz / len)
+    }
+}
+
 /// Number of sample points for closed-curve edges.
 pub const CLOSED_CURVE_SAMPLES: usize = 32;
 

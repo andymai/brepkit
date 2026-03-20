@@ -29,9 +29,6 @@ const RAY_T_MIN: f64 = 1e-12;
 /// Threshold for half-space sign test (negative side rejection).
 const HALF_SPACE_EPS: f64 = 1e-10;
 
-/// Near-zero threshold for degenerate vector length.
-const DEGENERATE_LEN: f64 = 1e-30;
-
 /// Threshold for coincident vertex detection (squared distance).
 const COINCIDENT_SQ: f64 = 1e-12;
 
@@ -132,31 +129,14 @@ fn point_in_uv_boundary(
 }
 
 // ---------------------------------------------------------------------------
-// Polygon normal (Newell's method)
+// Polygon normal (Newell's method) — delegated to util
 // ---------------------------------------------------------------------------
 
 /// Compute the normal of a polygon via Newell's method.
 ///
 /// Returns a unit-length normal, or `(0,0,1)` for degenerate polygons.
 pub fn polygon_normal(verts: &[Point3]) -> Vec3 {
-    let mut nx = 0.0;
-    let mut ny = 0.0;
-    let mut nz = 0.0;
-    let n = verts.len();
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let vi = verts[i];
-        let vj = verts[j];
-        nx += (vi.y() - vj.y()) * (vi.z() + vj.z());
-        ny += (vi.z() - vj.z()) * (vi.x() + vj.x());
-        nz += (vi.x() - vj.x()) * (vi.y() + vj.y());
-    }
-    let len = (nx * nx + ny * ny + nz * nz).sqrt();
-    if len < DEGENERATE_LEN {
-        Vec3::new(0.0, 0.0, 1.0)
-    } else {
-        Vec3::new(nx / len, ny / len, nz / len)
-    }
+    crate::util::polygon_normal(verts)
 }
 
 // ---------------------------------------------------------------------------

@@ -70,24 +70,7 @@ pub fn check_face_orientation(
 
 /// Compute polygon normal via Newell's method.
 fn newell_normal(verts: &[Point3]) -> Vec3 {
-    let mut nx = 0.0;
-    let mut ny = 0.0;
-    let mut nz = 0.0;
-    let n = verts.len();
-    for i in 0..n {
-        let j = (i + 1) % n;
-        let vi = verts[i];
-        let vj = verts[j];
-        nx += (vi.y() - vj.y()) * (vi.z() + vj.z());
-        ny += (vi.z() - vj.z()) * (vi.x() + vj.x());
-        nz += (vi.x() - vj.x()) * (vi.y() + vj.y());
-    }
-    let len = (nx * nx + ny * ny + nz * nz).sqrt();
-    if len < 1e-30 {
-        Vec3::new(0.0, 0.0, 1.0)
-    } else {
-        Vec3::new(nx / len, ny / len, nz / len)
-    }
+    crate::util::polygon_normal(verts)
 }
 
 /// Compute polygon centroid.

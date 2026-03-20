@@ -121,6 +121,7 @@ pub fn check_wire_redundant(
 pub fn check_wire_self_intersection(
     topo: &Topology,
     wire_id: WireId,
+    tolerance: f64,
 ) -> Result<Vec<ValidationIssue>, CheckError> {
     let wire = topo.wire(wire_id)?;
     let edges = wire.edges();
@@ -224,7 +225,7 @@ pub fn check_wire_self_intersection(
 
                     let (dist, _, _) =
                         crate::distance::edge::segment_segment_distance(a0, a1, b0, b1);
-                    if dist < 1e-6 {
+                    if dist < tolerance {
                         return Ok(vec![ValidationIssue {
                             check: CheckId::WireSelfIntersection,
                             severity: Severity::Error,

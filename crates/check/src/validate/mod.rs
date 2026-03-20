@@ -152,7 +152,11 @@ fn validate_shell_checks(
                     .disabled_checks
                     .contains(&CheckId::WireSelfIntersection)
                 {
-                    issues.extend(wire::check_wire_self_intersection(topo, wid)?);
+                    issues.extend(wire::check_wire_self_intersection(
+                        topo,
+                        wid,
+                        options.tolerance_scale * 1e-6,
+                    )?);
                 }
             }
         }
@@ -213,6 +217,24 @@ fn validate_shell_checks(
                                 topo,
                                 edge_data.end(),
                                 eid,
+                                options.tolerance_scale * 1e-4,
+                            )?);
+                        }
+                    }
+                    // Vertex-on-surface checks
+                    if !options.disabled_checks.contains(&CheckId::VertexOnSurface) {
+                        let edge_data = topo.edge(eid)?;
+                        issues.extend(vertex::check_vertex_on_surface(
+                            topo,
+                            edge_data.start(),
+                            fid,
+                            options.tolerance_scale * 1e-4,
+                        )?);
+                        if edge_data.start() != edge_data.end() {
+                            issues.extend(vertex::check_vertex_on_surface(
+                                topo,
+                                edge_data.end(),
+                                fid,
                                 options.tolerance_scale * 1e-4,
                             )?);
                         }

@@ -75,6 +75,15 @@ pub fn cone_props(r_bottom: f64, r_top: f64, height: f64) -> GProps {
     let rbrt = r_bottom * r_top;
     let r_sum2 = rb2 + rbrt + rt2;
 
+    // Degenerate: both radii zero — zero-volume line segment.
+    if r_sum2 < 1e-30 {
+        return GProps {
+            mass: 0.0,
+            center: Point3::new(0.0, 0.0, height / 2.0),
+            inertia: [0.0; 6],
+        };
+    }
+
     let v = PI * height / 3.0 * r_sum2;
     // CoM for frustum:
     // z_com = h * (rb^2 + 2*rb*rt + 3*rt^2) / (4*(rb^2 + rb*rt + rt^2))
