@@ -124,10 +124,38 @@ pub fn point_to_face(
             let polygon = crate::util::face_polygon(topo, face_id)?;
             Ok(point_to_polygon_distance(point, &polygon, *normal, *d))
         }
-        FaceSurface::Cylinder(cyl) => Ok(Some(analytic::point_to_cylinder(point, cyl))),
-        FaceSurface::Cone(cone) => Ok(Some(analytic::point_to_cone(point, cone))),
-        FaceSurface::Sphere(sph) => Ok(Some(analytic::point_to_sphere(point, sph))),
-        FaceSurface::Torus(tor) => Ok(Some(analytic::point_to_torus(point, tor))),
+        FaceSurface::Cylinder(cyl) => {
+            let (dist, closest) = analytic::point_to_cylinder(point, cyl);
+            if is_point_in_face_boundary(topo, face_id, closest)? {
+                Ok(Some((dist, closest)))
+            } else {
+                Ok(closest_point_on_wire_edges(topo, face_id, point)?)
+            }
+        }
+        FaceSurface::Cone(cone) => {
+            let (dist, closest) = analytic::point_to_cone(point, cone);
+            if is_point_in_face_boundary(topo, face_id, closest)? {
+                Ok(Some((dist, closest)))
+            } else {
+                Ok(closest_point_on_wire_edges(topo, face_id, point)?)
+            }
+        }
+        FaceSurface::Sphere(sph) => {
+            let (dist, closest) = analytic::point_to_sphere(point, sph);
+            if is_point_in_face_boundary(topo, face_id, closest)? {
+                Ok(Some((dist, closest)))
+            } else {
+                Ok(closest_point_on_wire_edges(topo, face_id, point)?)
+            }
+        }
+        FaceSurface::Torus(tor) => {
+            let (dist, closest) = analytic::point_to_torus(point, tor);
+            if is_point_in_face_boundary(topo, face_id, closest)? {
+                Ok(Some((dist, closest)))
+            } else {
+                Ok(closest_point_on_wire_edges(topo, face_id, point)?)
+            }
+        }
         FaceSurface::Nurbs(nurbs) => {
             match brepkit_math::nurbs::projection::project_point_to_surface(nurbs, point, 1e-7) {
                 Ok(proj) => Ok(Some((proj.distance, proj.point))),
@@ -217,12 +245,19 @@ pub fn solid_to_solid(
         }
     }
 
-    // Pass 4: Edge-edge (using vertex positions as segment endpoints).
+    // Pass 4: Edge-edge with AABB pruning.
     let edges_a = collect_solid_edge_segments(topo, solid_a)?;
     let edges_b = collect_solid_edge_segments(topo, solid_b)?;
 
     for &(p0a, p1a) in &edges_a {
+        let aabb_a = Aabb3::try_from_points([p0a, p1a].iter().copied())
+            .unwrap_or(Aabb3 { min: p0a, max: p0a });
         for &(p0b, p1b) in &edges_b {
+            let aabb_b = Aabb3::try_from_points([p0b, p1b].iter().copied())
+                .unwrap_or(Aabb3 { min: p0b, max: p0b });
+            if aabb_distance(&aabb_a, &aabb_b) > best_dist {
+                continue;
+            }
             let (dist, ca, cb) = edge::segment_segment_distance(p0a, p1a, p0b, p1b);
             if dist < best_dist {
                 best_dist = dist;
@@ -292,6 +327,69 @@ fn collect_solid_edge_segments(
     Ok(segments)
 }
 
+/// Check if a point lies within the face's boundary polygon.
+fn is_point_in_face_boundary(
+    topo: &Topology,
+    face_id: FaceId,
+    point: Point3,
+) -> Result<bool, CheckError> {
+    let polygon = crate::util::face_polygon(topo, face_id)?;
+    if polygon.len() < 3 {
+        return Ok(true); // Full-surface face
+    }
+    let normal = polygon_normal(&polygon);
+    Ok(crate::util::point_in_polygon_3d(&point, &polygon, &normal))
+}
+
+/// Compute the normal of a polygon using Newell's method.
+fn polygon_normal(verts: &[Point3]) -> Vec3 {
+    let mut nx = 0.0;
+    let mut ny = 0.0;
+    let mut nz = 0.0;
+    let n = verts.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let vi = verts[i];
+        let vj = verts[j];
+        nx += (vi.y() - vj.y()) * (vi.z() + vj.z());
+        ny += (vi.z() - vj.z()) * (vi.x() + vj.x());
+        nz += (vi.x() - vj.x()) * (vi.y() + vj.y());
+    }
+    let len = (nx.mul_add(nx, ny.mul_add(ny, nz * nz))).sqrt();
+    if len < 1e-30 {
+        Vec3::new(0.0, 0.0, 1.0)
+    } else {
+        Vec3::new(nx / len, ny / len, nz / len)
+    }
+}
+
+/// Find the closest point on the wire edges of a face to a given point.
+fn closest_point_on_wire_edges(
+    topo: &Topology,
+    face_id: FaceId,
+    point: Point3,
+) -> Result<Option<(f64, Point3)>, CheckError> {
+    let face = topo.face(face_id)?;
+    let wire = topo.wire(face.outer_wire())?;
+    let mut best_dist = f64::INFINITY;
+    let mut best_pt = point;
+    for oe in wire.edges() {
+        let edge_data = topo.edge(oe.edge())?;
+        let p0 = topo.vertex(edge_data.start())?.point();
+        let p1 = topo.vertex(edge_data.end())?.point();
+        let (dist, closest) = point_to_segment(point, p0, p1);
+        if dist < best_dist {
+            best_dist = dist;
+            best_pt = closest;
+        }
+    }
+    if best_dist < f64::INFINITY {
+        Ok(Some((best_dist, best_pt)))
+    } else {
+        Ok(None)
+    }
+}
+
 /// Point-to-polygon distance for planar faces.
 ///
 /// Projects the point onto the plane, checks if inside polygon, otherwise
@@ -345,6 +443,14 @@ fn point_to_segment(point: Point3, a: Point3, b: Point3) -> (f64, Point3) {
         ab.z().mul_add(t, a.z()),
     );
     ((point - closest).length(), closest)
+}
+
+/// Compute minimum distance between two AABBs.
+fn aabb_distance(a: &Aabb3, b: &Aabb3) -> f64 {
+    let dx = (a.min.x() - b.max.x()).max(b.min.x() - a.max.x()).max(0.0);
+    let dy = (a.min.y() - b.max.y()).max(b.min.y() - a.max.y()).max(0.0);
+    let dz = (a.min.z() - b.max.z()).max(b.min.z() - a.max.z()).max(0.0);
+    (dx.mul_add(dx, dy.mul_add(dy, dz * dz))).sqrt()
 }
 
 #[cfg(test)]
