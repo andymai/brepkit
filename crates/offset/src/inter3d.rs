@@ -1,5 +1,8 @@
 //! 3D intersection of adjacent offset faces.
 
+use brepkit_math::analytic_intersection::{
+    AnalyticSurface, intersect_analytic_analytic, intersect_plane_analytic,
+};
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -70,7 +73,11 @@ pub fn intersect_faces_3d(
     Ok(())
 }
 
+/// Grid resolution for analytic-analytic intersection marching.
+const ANALYTIC_GRID_RES: usize = 32;
+
 /// Dispatch intersection based on surface types.
+#[allow(clippy::too_many_lines)]
 fn intersect_surface_pair(
     topo: &Topology,
     face_a: FaceId,
@@ -78,18 +85,79 @@ fn intersect_surface_pair(
     surf_a: &FaceSurface,
     surf_b: &FaceSurface,
 ) -> Result<Vec<Point3>, OffsetError> {
+    // Plane-Plane: exact line intersection.
     if let (FaceSurface::Plane { normal: n1, d: d1 }, FaceSurface::Plane { normal: n2, d: d2 }) =
         (surf_a, surf_b)
     {
-        intersect_plane_plane(topo, face_a, face_b, *n1, *d1, *n2, *d2)
-    } else {
-        log::warn!(
-            "inter3d: unsupported surface pair for faces {:?}/{:?}, returning empty intersection",
-            face_a,
-            face_b
-        );
-        Ok(Vec::new())
+        return intersect_plane_plane(topo, face_a, face_b, *n1, *d1, *n2, *d2);
     }
+
+    // Plane-Analytic or Analytic-Plane.
+    if let Some(pts) = try_plane_analytic(surf_a, surf_b)? {
+        return Ok(pts);
+    }
+    if let Some(pts) = try_plane_analytic(surf_b, surf_a)? {
+        return Ok(pts);
+    }
+
+    // Analytic-Analytic.
+    if let (Some(a), Some(b)) = (to_analytic(surf_a), to_analytic(surf_b)) {
+        let curves = intersect_analytic_analytic(a, b, ANALYTIC_GRID_RES).map_err(|e| {
+            OffsetError::IntersectionFailed {
+                face_a,
+                face_b,
+                reason: format!("analytic-analytic intersection: {e}"),
+            }
+        })?;
+        return Ok(extract_points(&curves));
+    }
+
+    // NURBS fallback: convert both to NURBS and intersect.
+    // TODO: implement NURBS-NURBS intersection path.
+    log::warn!(
+        "inter3d: NURBS intersection not yet implemented for faces {:?}/{:?}",
+        face_a,
+        face_b
+    );
+    Ok(Vec::new())
+}
+
+/// Try Plane-Analytic intersection. Returns Some if surf_a is a Plane
+/// and surf_b is an analytic (non-plane, non-NURBS) surface.
+fn try_plane_analytic(
+    surf_a: &FaceSurface,
+    surf_b: &FaceSurface,
+) -> Result<Option<Vec<Point3>>, OffsetError> {
+    let FaceSurface::Plane { normal, d } = surf_a else {
+        return Ok(None);
+    };
+    let Some(analytic) = to_analytic(surf_b) else {
+        return Ok(None);
+    };
+    let curves =
+        intersect_plane_analytic(analytic, *normal, *d).map_err(|e| OffsetError::InvalidInput {
+            reason: format!("plane-analytic intersection: {e}"),
+        })?;
+    Ok(Some(extract_points(&curves)))
+}
+
+/// Convert a `FaceSurface` to an `AnalyticSurface` if applicable.
+fn to_analytic(surf: &FaceSurface) -> Option<AnalyticSurface<'_>> {
+    match surf {
+        FaceSurface::Cylinder(c) => Some(AnalyticSurface::Cylinder(c)),
+        FaceSurface::Cone(c) => Some(AnalyticSurface::Cone(c)),
+        FaceSurface::Sphere(s) => Some(AnalyticSurface::Sphere(s)),
+        FaceSurface::Torus(t) => Some(AnalyticSurface::Torus(t)),
+        _ => None,
+    }
+}
+
+/// Extract 3D points from intersection curve results.
+fn extract_points(curves: &[brepkit_math::nurbs::intersection::IntersectionCurve]) -> Vec<Point3> {
+    curves
+        .iter()
+        .flat_map(|c| c.points.iter().map(|p| p.point))
+        .collect()
 }
 
 /// Intersect two planes and sample the intersection line within the bounding
