@@ -14,6 +14,7 @@ L2: brepkit-io          → STEP, 3MF, STL, IGES, OBJ, PLY, glTF import/export
 L2: brepkit-operations  → Booleans, fillets, extrusions, tessellation
 L1.5: brepkit-algo      → GFA boolean engine, classification, intersection
 L1.5: brepkit-blend     → Walking-based fillet and chamfer engine
+L1.5: brepkit-check     → Classification, validation, properties, distance
 L1.5: brepkit-heal      → Shape healing (analysis, fixing, upgrading)
 L1: brepkit-topology    → B-Rep data structures (arena-based)
 L0: brepkit-math        → Vectors, matrices, NURBS, predicates
@@ -30,9 +31,10 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 | `algo` | `math`, `topology` |
 | `blend` | `math`, `topology` |
 | `heal` | `math`, `topology` |
-| `operations` | `math`, `topology`, `algo`, `blend`, `heal` |
+| `check` | `math`, `topology` |
+| `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check` |
 | `io` | `math`, `topology`, `operations`, `heal` |
-| `wasm` | all crates (incl. `blend`, `heal`) |
+| `wasm` | all crates (incl. `blend`, `check`, `heal`) |
 
 The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the pre-push hook.
 
@@ -42,7 +44,8 @@ The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the p
 - `algo/src/**` → `brepkit_math::*`, `brepkit_topology::*`
 - `blend/src/**` → `brepkit_math::*`, `brepkit_topology::*`
 - `heal/src/**` → `brepkit_math::*`, `brepkit_topology::*`
-- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`
+- `check/src/**` → `brepkit_math::*`, `brepkit_topology::*`
+- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`, `brepkit_check::*`
 - `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`, `brepkit_heal::*`
 - `wasm/src/**` → all `brepkit_*`
 
@@ -170,6 +173,32 @@ Quick reference — find the right file for any task:
 | Operator registry | `pipeline/registry.rs` |
 | Configurable pipeline executor | `pipeline/process.rs` |
 | 13 built-in operators | `pipeline/builtin.rs` |
+
+### L1.5: check (`crates/check/src/`)
+| Task | File(s) |
+|------|---------|
+| Public API, `CheckError` | `lib.rs`, `error.rs` |
+| Shared utilities (face polygon, AABB, edge sampling) | `util.rs` |
+| Ray-surface intersection (all types + solvers) | `classify/ray_surface.rs` |
+| UV boundary polygon, containment tests | `classify/boundary.rs` |
+| Point-in-solid classification (ray casting) | `classify/mod.rs` |
+| Winding number classifier | `classify/winding.rs` |
+| CheckId enum, ValidationReport, severity | `validate/checks.rs` |
+| Wire topological checks | `validate/wire.rs` |
+| Shell topological checks | `validate/shell.rs` |
+| Solid checks (Euler, duplicate faces) | `validate/solid.rs` |
+| Vertex geometric checks | `validate/vertex.rs` |
+| Edge geometric checks | `validate/edge.rs` |
+| Face geometric checks | `validate/face.rs` |
+| Validation orchestrator | `validate/mod.rs` |
+| GProps accumulator (Huygens' theorem) | `properties/accumulator.rs` |
+| Closed-form formulas (box, sphere, cylinder, etc.) | `properties/analytic.rs` |
+| AABB computation | `properties/bbox.rs` |
+| Face Gauss integration | `properties/face_integrator.rs` |
+| Properties orchestrator (volume, area, CoM) | `properties/mod.rs` |
+| Point-to-surface distance (all analytic types) | `distance/analytic.rs` |
+| Edge-to-edge distance | `distance/edge.rs` |
+| Point-to-solid, solid-to-solid distance | `distance/mod.rs` |
 
 ### L2: operations (`crates/operations/src/`)
 | Task | File(s) |
