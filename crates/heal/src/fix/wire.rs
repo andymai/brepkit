@@ -1,6 +1,6 @@
 //! Wire fixing — reorder, close gaps, remove degenerate/small edges.
 //!
-//! The fix sequence mirrors OCCT's `ShapeFix_Wire`:
+//! The fix sequence follows a standard wire-repair pipeline:
 //!
 //! 1. Reorder edges to form a connected chain
 //! 2. Close gaps between consecutive edges (merge near vertices)

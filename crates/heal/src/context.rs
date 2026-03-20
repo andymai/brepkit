@@ -34,8 +34,8 @@ pub struct HealMessage {
 
 /// Shared state for healing operations.
 ///
-/// Replaces OCCT's `ShapeFix_Root` inheritance — instead of a base
-/// class, every fixer receives this context by mutable reference.
+/// Instead of a base class with inherited state, every fixer receives
+/// this context by mutable reference.
 #[derive(Debug)]
 pub struct HealContext {
     /// Working tolerance for geometric comparisons.

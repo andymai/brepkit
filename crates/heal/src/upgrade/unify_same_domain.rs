@@ -1,7 +1,7 @@
 //! Unify same-domain faces — merge adjacent faces sharing the same
 //! underlying surface.
 //!
-//! This is the most-used OCCT healing operation in production.  After
+//! This is the most impactful healing operation in production.  After
 //! boolean operations, a box may have 72 faces instead of 6 because
 //! intersection curves split each original face.  `unify_same_domain`
 //! detects adjacent faces on the same plane/cylinder/cone/sphere/torus

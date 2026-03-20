@@ -1,6 +1,6 @@
 //! Shape healing for brepkit B-Rep models.
 //!
-//! This crate provides OCCT-parity shape healing with three layers:
+//! This crate provides comprehensive shape healing with three layers:
 //!
 //! - **Analysis** — pure diagnostic queries that detect problems without
 //!   modifying the model.

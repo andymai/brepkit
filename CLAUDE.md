@@ -147,7 +147,7 @@ Quick reference — find the right file for any task:
 | Fix config (tri-state FixMode per fix type) | `fix/config.rs` |
 | Fix orchestrator (shape → solid → shell → face → wire → edge) | `fix/mod.rs` |
 | Edge fixing (SameParameter, vertex tolerance) | `fix/edge.rs` |
-| Wire fixing (30+ OCCT fixes: reorder, gaps, small, degenerate) | `fix/wire.rs` |
+| Wire fixing (30+ fixes: reorder, gaps, small, degenerate) | `fix/wire.rs` |
 | Face fixing (orientation, small area, seam insertion) | `fix/face.rs` |
 | Shell fixing (orientation consistency) | `fix/shell.rs` |
 | Solid fixing (top-level orchestrator) | `fix/solid.rs` |

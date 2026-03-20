@@ -1,7 +1,7 @@
 //! Status bitflags for healing operations.
 //!
 //! Each analysis or fix operation returns a [`Status`] indicating what
-//! happened.  The flags mirror OCCT's `ShapeExtend_Status`: `OK` means
+//! happened.  The flags follow a three-tier convention: `OK` means
 //! nothing was needed, `DONEn` means specific fixes were applied, and
 //! `FAILn` means specific fixes could not be applied.
 

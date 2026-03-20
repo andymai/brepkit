@@ -5,7 +5,7 @@
 //! [`ReShape::apply`] to rebuild the solid with all substitutions
 //! applied atomically.
 //!
-//! This is the Rust equivalent of OCCT's `BRepTools_ReShape`.
+//! Modelled after industry-standard B-Rep reshape utilities.
 
 use std::collections::HashMap;
 
