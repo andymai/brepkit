@@ -1915,6 +1915,9 @@ fn collect_wire_positions(
 }
 
 /// Sample points along a parametric curve for area/distance calculations.
+///
+/// Uses open-endpoint sampling (`i / n_samples`, NOT `i / (n-1)`) so that
+/// closed curves (full circles) do not duplicate the start/end point.
 #[allow(clippy::cast_precision_loss)]
 fn sample_edge_curve(
     evaluate: &dyn Fn(f64) -> Point3,

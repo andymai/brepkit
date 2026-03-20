@@ -2671,23 +2671,21 @@ fn sample_edge(
     edge: &brepkit_topology::edge::Edge,
     deflection: f64,
 ) -> Result<Vec<Point3>, crate::OperationsError> {
+    use brepkit_geometry::sampling::sample_uniform;
     use brepkit_topology::edge::EdgeCurve;
 
     let n = edge_sample_count(topo, edge, deflection);
-    let mut points = Vec::with_capacity(n);
 
-    match edge.curve() {
+    let points = match edge.curve() {
         EdgeCurve::Line => {
-            points.push(topo.vertex(edge.start())?.point());
-            points.push(topo.vertex(edge.end())?.point());
+            vec![
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            ]
         }
         EdgeCurve::Circle(circle) => {
             let (t_start, t_end) = circle_param_range(topo, edge, circle)?;
-            #[allow(clippy::cast_precision_loss)]
-            for i in 0..n {
-                let t = t_start + (t_end - t_start) * (i as f64) / ((n - 1).max(1) as f64);
-                points.push(circle.evaluate(t));
-            }
+            sample_uniform(circle, t_start, t_end, n)
         }
         EdgeCurve::Ellipse(ellipse) => {
             let (t_start, t_end) = if edge.is_closed() {
@@ -2702,21 +2700,13 @@ fn sample_edge(
                 }
                 (ts, te)
             };
-            #[allow(clippy::cast_precision_loss)]
-            for i in 0..n {
-                let t = t_start + (t_end - t_start) * (i as f64) / ((n - 1).max(1) as f64);
-                points.push(ellipse.evaluate(t));
-            }
+            sample_uniform(ellipse, t_start, t_end, n)
         }
         EdgeCurve::NurbsCurve(nurbs) => {
             let (u0, u1) = nurbs.domain();
-            #[allow(clippy::cast_precision_loss)]
-            for i in 0..n {
-                let t = u0 + (u1 - u0) * (i as f64) / ((n - 1).max(1) as f64);
-                points.push(nurbs.evaluate(t));
-            }
+            sample_uniform(nurbs, u0, u1, n)
         }
-    }
+    };
 
     Ok(points)
 }
@@ -2858,14 +2848,12 @@ pub fn tessellate_solid(
                     if let Some(pts) = edge_points.get(&edge_idx) {
                         if pts.len() < expected_count {
                             let (t_start, t_end) = circle_param_range(topo, edge_data, circle)?;
-                            let mut new_pts = Vec::with_capacity(expected_count);
-                            #[allow(clippy::cast_precision_loss)]
-                            for i in 0..expected_count {
-                                let t = t_start
-                                    + (t_end - t_start) * (i as f64)
-                                        / ((expected_count - 1).max(1) as f64);
-                                new_pts.push(circle.evaluate(t));
-                            }
+                            let new_pts = brepkit_geometry::sampling::sample_uniform(
+                                circle,
+                                t_start,
+                                t_end,
+                                expected_count,
+                            );
                             edge_points.insert(edge_idx, new_pts);
                         }
                     }
