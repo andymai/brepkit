@@ -10,12 +10,28 @@
 //!
 //! - [`point_curve`] — point-to-curve projection (analytic fast paths + generic
 //!   Newton-Raphson fallback).
+//! - [`point_surface`] — point-to-surface projection (analytic fast paths + generic
+//!   Newton-Raphson fallback).
+//! - [`curve_curve`] — curve-to-curve minimum distance (analytic `line_to_line` +
+//!   generic sampler/Newton-Raphson).
+//! - [`lipschitz`] — Lipschitz global optimizer and NURBS curve-to-curve distance.
 //! - [`segment`] — segment-to-segment minimum distance.
 
+pub mod curve_curve;
+pub mod lipschitz;
 pub mod point_curve;
+pub mod point_surface;
 pub mod segment;
 
+pub use curve_curve::{curve_to_curve, line_to_line};
+pub use lipschitz::{
+    LipschitzOptimizer, estimate_curve_curve_lipschitz, nurbs_curve_curve_distance,
+};
 pub use point_curve::{point_to_circle, point_to_curve, point_to_line};
+pub use point_surface::{
+    point_to_cone, point_to_cylinder, point_to_plane, point_to_sphere, point_to_surface,
+    point_to_torus,
+};
 pub use segment::segment_segment_distance;
 
 use brepkit_math::vec::Point3;
