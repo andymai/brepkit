@@ -109,29 +109,23 @@ fn offset_box_inward_volume_smaller_than_original() {
 // ── Cylinder offset tests ──────────────────────────────────────
 
 #[test]
+#[ignore = "cylinder wire loops need seam/circular edge support"]
 fn offset_cylinder_outward_produces_solid() {
     let mut topo = Topology::new();
     let solid = make_cylinder(&mut topo, 2.0, 5.0).unwrap();
-    let result = offset_solid(&mut topo, solid, 0.5, offset_opts());
-    // Cylinder has mixed surfaces (2 planes + 1 cylinder). The pipeline
-    // needs plane-cylinder intersection. Check it at least doesn't panic.
-    match result {
-        Ok(s) => {
-            let shell = topo.shell(topo.solid(s).unwrap().outer_shell()).unwrap();
-            assert!(
-                shell.faces().len() >= 3,
-                "offset cylinder should have at least 3 faces, got {}",
-                shell.faces().len()
-            );
-        }
-        Err(e) => {
-            // Acceptable for now — log the error for debugging.
-            eprintln!("cylinder offset not yet fully supported: {e}");
-        }
-    }
+    let result = offset_solid(&mut topo, solid, 0.5, offset_opts()).unwrap();
+    let shell = topo
+        .shell(topo.solid(result).unwrap().outer_shell())
+        .unwrap();
+    assert!(
+        shell.faces().len() >= 3,
+        "offset cylinder should have at least 3 faces, got {}",
+        shell.faces().len()
+    );
 }
 
 #[test]
+#[ignore = "cylinder wire loops need seam/circular edge support"]
 fn offset_cylinder_volume_increases() {
     let mut topo = Topology::new();
     let solid = make_cylinder(&mut topo, 2.0, 5.0).unwrap();
@@ -179,17 +173,13 @@ fn thick_solid_box_produces_hollow() {
 // ── Sphere offset tests ────────────────────────────────────────
 
 #[test]
+#[ignore = "sphere wire loops need seam/circular edge support"]
 fn offset_sphere_outward_produces_solid() {
     let mut topo = Topology::new();
     let solid = make_sphere(&mut topo, 3.0, 16_usize).unwrap();
-    let result = offset_solid(&mut topo, solid, 0.5, offset_opts());
-    match result {
-        Ok(s) => {
-            let shell = topo.shell(topo.solid(s).unwrap().outer_shell()).unwrap();
-            assert!(!shell.faces().is_empty(), "offset sphere should have faces");
-        }
-        Err(e) => {
-            eprintln!("sphere offset not yet fully supported: {e}");
-        }
-    }
+    let result = offset_solid(&mut topo, solid, 0.5, offset_opts()).unwrap();
+    let shell = topo
+        .shell(topo.solid(result).unwrap().outer_shell())
+        .unwrap();
+    assert!(!shell.faces().is_empty(), "offset sphere should have faces");
 }

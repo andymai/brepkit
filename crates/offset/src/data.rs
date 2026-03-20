@@ -123,12 +123,14 @@ pub struct OffsetOptions {
     pub remove_self_intersections: bool,
 }
 
+#[allow(clippy::derivable_impls)] // Explicit: documents that SI removal defaults to off
 impl Default for OffsetOptions {
     fn default() -> Self {
         Self {
             joint: JointType::default(),
             tolerance: Tolerance::default(),
-            remove_self_intersections: true,
+            // Default to false until SI removal is fully implemented.
+            remove_self_intersections: false,
         }
     }
 }

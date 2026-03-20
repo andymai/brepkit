@@ -82,6 +82,12 @@ pub fn thick_solid(
     exclude: &[FaceId],
     options: OffsetOptions,
 ) -> Result<SolidId, OffsetError> {
+    if !distance.is_finite() || distance.abs() < options.tolerance.linear {
+        return Err(OffsetError::InvalidInput {
+            reason: "offset distance must be non-zero and finite".into(),
+        });
+    }
+
     let mut data = OffsetData::new(distance, options, exclude.to_vec());
 
     // Phase 1: edge and vertex classification

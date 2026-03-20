@@ -93,10 +93,10 @@ fn intersect_surface_pair(
     }
 
     // Plane-Analytic or Analytic-Plane.
-    if let Some(pts) = try_plane_analytic(surf_a, surf_b)? {
+    if let Some(pts) = try_plane_analytic(face_a, face_b, surf_a, surf_b)? {
         return Ok(pts);
     }
-    if let Some(pts) = try_plane_analytic(surf_b, surf_a)? {
+    if let Some(pts) = try_plane_analytic(face_b, face_a, surf_b, surf_a)? {
         return Ok(pts);
     }
 
@@ -112,19 +112,19 @@ fn intersect_surface_pair(
         return Ok(extract_points(&curves));
     }
 
-    // NURBS fallback: convert both to NURBS and intersect.
-    // TODO: implement NURBS-NURBS intersection path.
-    log::warn!(
-        "inter3d: NURBS intersection not yet implemented for faces {:?}/{:?}",
+    // NURBS fallback not yet implemented.
+    Err(OffsetError::IntersectionFailed {
         face_a,
-        face_b
-    );
-    Ok(Vec::new())
+        face_b,
+        reason: "NURBS surface intersection not yet implemented".to_string(),
+    })
 }
 
 /// Try Plane-Analytic intersection. Returns Some if surf_a is a Plane
 /// and surf_b is an analytic (non-plane, non-NURBS) surface.
 fn try_plane_analytic(
+    face_a: FaceId,
+    face_b: FaceId,
     surf_a: &FaceSurface,
     surf_b: &FaceSurface,
 ) -> Result<Option<Vec<Point3>>, OffsetError> {
@@ -134,10 +134,13 @@ fn try_plane_analytic(
     let Some(analytic) = to_analytic(surf_b) else {
         return Ok(None);
     };
-    let curves =
-        intersect_plane_analytic(analytic, *normal, *d).map_err(|e| OffsetError::InvalidInput {
+    let curves = intersect_plane_analytic(analytic, *normal, *d).map_err(|e| {
+        OffsetError::IntersectionFailed {
+            face_a,
+            face_b,
             reason: format!("plane-analytic intersection: {e}"),
-        })?;
+        }
+    })?;
     Ok(Some(extract_points(&curves)))
 }
 

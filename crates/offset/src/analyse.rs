@@ -124,10 +124,8 @@ fn classify_edge(
     .sqrt();
 
     if len * len < ZERO_LENGTH_SQ {
-        return Err(OffsetError::AnalysisFailed {
-            edge: edge_id,
-            reason: "degenerate edge (zero length)".to_string(),
-        });
+        // Degenerate (seam) edge — skip classification.
+        return Ok(EdgeClass::Tangent);
     }
 
     let n_a = face_outward_normal(topo, face_a, midpoint, edge_id)?;
