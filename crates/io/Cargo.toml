@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "STEP and 3MF data exchange for brepkit"
+description = "Multi-format B-Rep data exchange for brepkit (STEP, IGES, STL, 3MF, OBJ, PLY, glTF)"
 
 [dependencies]
 brepkit-math.workspace = true

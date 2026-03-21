@@ -3,7 +3,9 @@
 //! CAD modeling operations: booleans, fillets, chamfers, extrusions,
 //! sweeps, and tessellation.
 //!
-//! This is layer L2, depending on `brepkit-math` and `brepkit-topology`.
+//! This is layer L2, depending on `brepkit-math`, `brepkit-topology`,
+//! `brepkit-geometry`, `brepkit-algo`, `brepkit-blend`, `brepkit-heal`,
+//! `brepkit-check`, and `brepkit-offset`.
 
 use brepkit_math::vec::{Point3, Vec3};
 
