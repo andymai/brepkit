@@ -388,4 +388,21 @@ mod tests {
             assert!(pos.z() >= -0.01 && pos.z() <= 1.01);
         }
     }
+
+    // ── read_stl_solid smoke test ───────────────────────────────────
+
+    #[test]
+    fn read_stl_solid_returns_solid_id() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube(&mut topo);
+
+        let bytes = writer::write_stl(&topo, &[solid], 0.1, StlFormat::Binary).unwrap();
+
+        let mut import_topo = Topology::new();
+        let result = read_stl_solid(&mut import_topo, &bytes, 1e-6);
+        assert!(
+            result.is_ok(),
+            "read_stl_solid should return Ok: {result:?}"
+        );
+    }
 }

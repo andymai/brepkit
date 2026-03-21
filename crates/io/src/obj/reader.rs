@@ -274,4 +274,27 @@ f 1 2 3
             );
         }
     }
+
+    // ── read_obj_solid smoke test ───────────────────────────────────
+
+    #[test]
+    fn read_obj_solid_returns_solid_id() {
+        // Minimal closed tetrahedron.
+        let obj = "\
+v 0 0 0
+v 1 0 0
+v 0 1 0
+v 0 0 1
+f 1 2 3
+f 1 3 4
+f 1 4 2
+f 2 4 3
+";
+        let mut topo = brepkit_topology::Topology::new();
+        let result = read_obj_solid(&mut topo, obj, 1e-6);
+        assert!(
+            result.is_ok(),
+            "read_obj_solid should return Ok: {result:?}"
+        );
+    }
 }

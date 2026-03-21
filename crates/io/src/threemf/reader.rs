@@ -254,6 +254,10 @@ fn parse_u32_attr(val: &str, context: &str) -> Result<u32, IoError> {
 /// [`import_mesh`](crate::stl::import::import_mesh) on the first mesh.
 /// Vertices within `tolerance` of each other are merged.
 ///
+/// **Note:** Only the first object is imported; additional objects in the
+/// archive are silently ignored. Use [`read_threemf`] directly to access
+/// all objects.
+///
 /// # Errors
 ///
 /// Returns [`IoError`] if:
@@ -382,5 +386,22 @@ mod tests {
 
         let result = read_threemf(&cursor.into_inner());
         assert!(result.is_err());
+    }
+
+    // ── read_threemf_solid smoke test ───────────────────────────────
+
+    #[test]
+    fn read_threemf_solid_returns_solid_id() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube(&mut topo);
+
+        let bytes = writer::write_threemf(&topo, &[solid], 0.1).unwrap();
+
+        let mut import_topo = Topology::new();
+        let result = read_threemf_solid(&mut import_topo, &bytes, 1e-6);
+        assert!(
+            result.is_ok(),
+            "read_threemf_solid should return Ok: {result:?}"
+        );
     }
 }

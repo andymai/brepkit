@@ -12,8 +12,9 @@ use crate::GeomError;
 
 /// Convert a [`CylindricalSurface`] patch to a NURBS surface.
 ///
-/// The result always spans the full angular circle `[0, 2π)` in the
-/// u-direction. `v_range` sets the axial extent.
+/// Geometrically covers a full revolution around the cylinder axis in
+/// the u-direction. `v_range` sets the axial extent. The NURBS parameter
+/// domain is determined by the underlying `to_nurbs()` implementation.
 ///
 /// # Errors
 ///
@@ -27,7 +28,8 @@ pub fn cylinder_to_nurbs(
 
 /// Convert a [`SphericalSurface`] to a NURBS surface.
 ///
-/// The result spans the full sphere (`u ∈ [0, 2π)`, `v ∈ [-π/2, π/2]`).
+/// Geometrically covers the full sphere. The NURBS parameter domain is
+/// determined by the underlying `to_nurbs()` implementation.
 ///
 /// # Errors
 ///
@@ -53,7 +55,8 @@ pub fn cone_to_nurbs(
 
 /// Convert a [`ToroidalSurface`] to a NURBS surface.
 ///
-/// The result spans the full torus (`u ∈ [0, 2π)`, `v ∈ [0, 2π)`).
+/// Geometrically covers the full torus. The NURBS parameter domain is
+/// determined by the underlying `to_nurbs()` implementation.
 ///
 /// # Errors
 ///

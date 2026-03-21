@@ -57,7 +57,8 @@ pub fn point_to_plane(point: Point3, origin: Point3, normal: Vec3) -> SurfacePro
         };
     }
     let u_axis = u_raw * (1.0 / u_len);
-    let v_axis = normal.cross(u_axis);
+    let v_raw = normal.cross(u_axis);
+    let v_axis = v_raw * (1.0 / v_raw.length());
 
     let delta = closest - origin;
     SurfaceProjection {

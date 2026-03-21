@@ -733,4 +733,21 @@ mod tests {
         assert!(!mesh.indices.is_empty(), "should have indices");
         assert_eq!(mesh.indices.len() % 3, 0, "should be triangles");
     }
+
+    // ── read_glb_solid smoke test ───────────────────────────────────
+
+    #[test]
+    fn read_glb_solid_returns_solid_id() {
+        let mut topo = brepkit_topology::Topology::new();
+        let solid = brepkit_operations::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let glb = crate::gltf::write_glb(&topo, &[solid], 0.1).unwrap();
+
+        let mut import_topo = brepkit_topology::Topology::new();
+        let result = read_glb_solid(&mut import_topo, &glb, 1e-6);
+        assert!(
+            result.is_ok(),
+            "read_glb_solid should return Ok: {result:?}"
+        );
+    }
 }

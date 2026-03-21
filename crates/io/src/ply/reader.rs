@@ -387,4 +387,23 @@ mod tests {
         let data = b"not a ply file";
         assert!(read_ply(data).is_err());
     }
+
+    // ── read_ply_solid smoke test ───────────────────────────────────
+
+    #[test]
+    fn read_ply_solid_returns_solid_id() {
+        let mut topo = brepkit_topology::Topology::new();
+        let solid = brepkit_operations::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let ply_data =
+            crate::ply::write_ply(&topo, &[solid], 0.1, crate::ply::writer::PlyFormat::Ascii)
+                .unwrap();
+
+        let mut import_topo = brepkit_topology::Topology::new();
+        let result = read_ply_solid(&mut import_topo, &ply_data, 1e-6);
+        assert!(
+            result.is_ok(),
+            "read_ply_solid should return Ok: {result:?}"
+        );
+    }
 }
