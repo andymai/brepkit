@@ -14,10 +14,7 @@ use brepkit_operations::measure;
 use brepkit_operations::revolve::revolve;
 use brepkit_operations::sweep::sweep;
 use brepkit_operations::transform::transform_solid;
-use brepkit_topology::edge::{Edge, EdgeCurve};
-use brepkit_topology::face::{Face, FaceSurface};
-use brepkit_topology::vertex::Vertex;
-use brepkit_topology::wire::{OrientedEdge, Wire};
+use brepkit_topology::edge::EdgeCurve;
 
 use crate::error::WasmError;
 use crate::handles::{
@@ -105,10 +102,7 @@ impl BrepKernel {
     ) -> brepkit_topology::edge::EdgeId {
         let start = points[0];
         let end = points[points.len() - 1];
-        let v_start = self.topo_mut().add_vertex(Vertex::new(start, TOL));
-        let v_end = self.topo_mut().add_vertex(Vertex::new(end, TOL));
-        self.topo_mut()
-            .add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)))
+        brepkit_topology::builder::make_nurbs_edge(self.topo_mut(), start, end, curve, TOL)
     }
 
     /// Create an edge from a `NurbsCurve`, evaluating its endpoints.
@@ -116,15 +110,7 @@ impl BrepKernel {
         &mut self,
         curve: &NurbsCurve,
     ) -> brepkit_topology::edge::EdgeId {
-        let start = curve.evaluate(curve.knots()[0]);
-        let end = curve.evaluate(*curve.knots().last().unwrap_or(&1.0));
-        let v_start = self.topo_mut().add_vertex(Vertex::new(start, TOL));
-        let v_end = self.topo_mut().add_vertex(Vertex::new(end, TOL));
-        self.topo_mut().add_edge(Edge::new(
-            v_start,
-            v_end,
-            EdgeCurve::NurbsCurve(curve.clone()),
-        ))
+        brepkit_topology::builder::make_nurbs_edge_from_curve(self.topo_mut(), curve, TOL)
     }
 
     /// Create a face from a `NurbsSurface` with a rectangular domain wire.
@@ -132,36 +118,11 @@ impl BrepKernel {
         &mut self,
         surface: NurbsSurface,
     ) -> Result<brepkit_topology::face::FaceId, JsError> {
-        // Evaluate corner points from the surface domain
-        let (u_min, u_max) = surface.domain_u();
-        let (v_min, v_max) = surface.domain_v();
-        let corners = [
-            surface.evaluate(u_min, v_min),
-            surface.evaluate(u_max, v_min),
-            surface.evaluate(u_max, v_max),
-            surface.evaluate(u_min, v_max),
-        ];
-        let verts: Vec<_> = corners
-            .iter()
-            .map(|p| self.topo_mut().add_vertex(Vertex::new(*p, TOL)))
-            .collect();
-        let n = verts.len();
-        let edges: Vec<_> = (0..n)
-            .map(|i| {
-                self.topo_mut()
-                    .add_edge(Edge::new(verts[i], verts[(i + 1) % n], EdgeCurve::Line))
-            })
-            .collect();
-        let oriented: Vec<_> = edges
-            .iter()
-            .map(|&eid| OrientedEdge::new(eid, true))
-            .collect();
-        let wire = Wire::new(oriented, true)?;
-        let wid = self.topo_mut().add_wire(wire);
-        let face_id = self
-            .topo_mut()
-            .add_face(Face::new(wid, vec![], FaceSurface::Nurbs(surface)));
-        Ok(face_id)
+        Ok(brepkit_topology::builder::make_nurbs_face(
+            self.topo_mut(),
+            surface,
+            TOL,
+        )?)
     }
 
     /// Dispatch a single batch operation by name.

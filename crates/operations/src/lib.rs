@@ -41,6 +41,7 @@ pub mod offset_wire;
 pub mod pattern;
 pub mod pipe;
 pub mod primitives;
+pub mod query;
 pub mod revolve;
 pub mod section;
 pub mod sew;

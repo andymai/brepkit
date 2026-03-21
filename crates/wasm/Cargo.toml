@@ -19,6 +19,7 @@ io = ["dep:brepkit-io"]
 [dependencies]
 brepkit-wasm-macros = { path = "../wasm-macros" }
 brepkit-math.workspace = true
+brepkit-geometry.workspace = true
 brepkit-topology.workspace = true
 brepkit-operations.workspace = true
 brepkit-check.workspace = true

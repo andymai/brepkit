@@ -374,6 +374,156 @@ fn solve_3x3(a: [[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
     Some([x0, x1, x2])
 }
 
+// ── Lightweight detection ────────────────────────────────────────────────────
+
+/// Detected geometric kind of a NURBS surface (without recovering full analytic
+/// parameters). Cheaper than [`recognize_surface`] when you only need a type tag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectedSurfaceKind {
+    /// All sampled points lie on a plane.
+    Plane,
+    /// All sampled points are equidistant from a center (sphere).
+    Sphere,
+    /// All sampled points are equidistant from an axis (cylinder).
+    Cylinder,
+    /// Generic B-spline surface.
+    BSpline,
+}
+
+impl DetectedSurfaceKind {
+    /// Returns the lowercase string tag for this surface kind.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plane => "plane",
+            Self::Sphere => "sphere",
+            Self::Cylinder => "cylinder",
+            Self::BSpline => "bspline",
+        }
+    }
+}
+
+/// Detect the geometric kind of a NURBS surface by sampling.
+///
+/// Samples an 8x8 grid and checks for sphere (equidistant from centroid) or
+/// cylinder (equidistant from a PCA axis). Falls back to `BSpline`.
+///
+/// This is a lightweight heuristic — use [`recognize_surface`] for full analytic
+/// parameter recovery.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn detect_surface_kind(surface: &NurbsSurface) -> DetectedSurfaceKind {
+    let (u_min, u_max) = surface.domain_u();
+    let (v_min, v_max) = surface.domain_v();
+    let n = 8; // 8x8 grid = 64 sample points
+
+    let mut points = Vec::with_capacity(n * n);
+    for i in 0..n {
+        for j in 0..n {
+            let u = u_min + (u_max - u_min) * (i as f64) / ((n - 1) as f64);
+            let v = v_min + (v_max - v_min) * (j as f64) / ((n - 1) as f64);
+            points.push(surface.evaluate(u, v));
+        }
+    }
+
+    // Compute center as average.
+    let mut cx = 0.0_f64;
+    let mut cy = 0.0_f64;
+    let mut cz = 0.0_f64;
+    for p in &points {
+        cx += p.x();
+        cy += p.y();
+        cz += p.z();
+    }
+    let np = points.len() as f64;
+    let center = Point3::new(cx / np, cy / np, cz / np);
+
+    // Check if all points equidistant from center (sphere test).
+    let distances: Vec<f64> = points.iter().map(|p| (*p - center).length()).collect();
+    let avg_dist = distances.iter().sum::<f64>() / np;
+
+    if avg_dist < 1e-10 {
+        return DetectedSurfaceKind::BSpline;
+    }
+
+    let tol = avg_dist * 1e-3; // 0.1% relative tolerance
+    let is_sphere = distances.iter().all(|d| (d - avg_dist).abs() < tol);
+
+    if is_sphere {
+        return DetectedSurfaceKind::Sphere;
+    }
+
+    // Cylinder test: points should be equidistant from an axis line.
+    if let Some(axis_dir) = estimate_cylinder_axis(&points, center) {
+        let projected_distances: Vec<f64> = points
+            .iter()
+            .map(|p| {
+                let v = *p - center;
+                let along_axis = v.dot(axis_dir);
+                let radial = Vec3::new(
+                    v.x() - axis_dir.x() * along_axis,
+                    v.y() - axis_dir.y() * along_axis,
+                    v.z() - axis_dir.z() * along_axis,
+                );
+                radial.length()
+            })
+            .collect();
+
+        let avg_r = projected_distances.iter().sum::<f64>() / np;
+        if avg_r > 1e-10 {
+            let r_tol = avg_r * 1e-3;
+            let is_cylinder = projected_distances
+                .iter()
+                .all(|d| (d - avg_r).abs() < r_tol);
+            if is_cylinder {
+                return DetectedSurfaceKind::Cylinder;
+            }
+        }
+    }
+
+    DetectedSurfaceKind::BSpline
+}
+
+/// Estimate the cylinder axis direction from a set of surface sample points
+/// using a simple PCA-like approach (direction of maximum variance).
+fn estimate_cylinder_axis(points: &[Point3], center: Point3) -> Option<Vec3> {
+    // Build covariance matrix.
+    let mut cxx = 0.0_f64;
+    let mut cxy = 0.0_f64;
+    let mut cxz = 0.0_f64;
+    let mut cyy = 0.0_f64;
+    let mut cyz = 0.0_f64;
+    let mut czz = 0.0_f64;
+
+    for p in points {
+        let dx = p.x() - center.x();
+        let dy = p.y() - center.y();
+        let dz = p.z() - center.z();
+        cxx += dx * dx;
+        cxy += dx * dy;
+        cxz += dx * dz;
+        cyy += dy * dy;
+        cyz += dy * dz;
+        czz += dz * dz;
+    }
+
+    // Power iteration to find the principal eigenvector.
+    let mut v = Vec3::new(1.0, 0.0, 0.0);
+    for _ in 0..20 {
+        let new_v = Vec3::new(
+            v.x().mul_add(cxx, v.y().mul_add(cxy, v.z() * cxz)),
+            v.x().mul_add(cxy, v.y().mul_add(cyy, v.z() * cyz)),
+            v.x().mul_add(cxz, v.y().mul_add(cyz, v.z() * czz)),
+        );
+        let len = new_v.length();
+        if len < 1e-15 {
+            return None;
+        }
+        v = Vec3::new(new_v.x() / len, new_v.y() / len, new_v.z() / len);
+    }
+    Some(v)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

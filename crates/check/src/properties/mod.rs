@@ -8,8 +8,9 @@ pub mod face_integrator;
 pub use accumulator::GProps;
 
 use brepkit_math::aabb::Aabb3;
-use brepkit_math::vec::Point3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
 
 use crate::CheckError;
@@ -133,6 +134,51 @@ pub fn center_of_mass(
         my / total_volume,
         mz / total_volume,
     ))
+}
+
+/// Compute the v-range for an analytic surface by projecting face wire
+/// vertices onto the given axis.
+///
+/// Iterates over the outer wire of `face_id`, projects each vertex position
+/// onto `axis` relative to `origin`, and returns `(v_min, v_max)`.
+/// If the face has no distinguishable range (e.g. a single vertex),
+/// returns `(-1.0, 1.0)` as a fallback.
+///
+/// # Errors
+///
+/// Returns an error if any topology entity is missing.
+pub fn axial_v_range(
+    topo: &Topology,
+    face_id: FaceId,
+    origin: Point3,
+    axis: Vec3,
+) -> Result<(f64, f64), CheckError> {
+    let face_data = topo.face(face_id)?;
+    let wire = topo.wire(face_data.outer_wire())?;
+
+    let mut v_min = f64::MAX;
+    let mut v_max = f64::MIN;
+
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        for vid in [edge.start(), edge.end()] {
+            let pt = topo.vertex(vid)?.point();
+            let to_pt = Vec3::new(
+                pt.x() - origin.x(),
+                pt.y() - origin.y(),
+                pt.z() - origin.z(),
+            );
+            let v = axis.dot(to_pt);
+            v_min = v_min.min(v);
+            v_max = v_max.max(v);
+        }
+    }
+
+    if v_min < v_max {
+        Ok((v_min, v_max))
+    } else {
+        Ok((-1.0, 1.0))
+    }
 }
 
 #[cfg(test)]

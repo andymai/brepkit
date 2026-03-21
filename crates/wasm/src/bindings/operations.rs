@@ -15,9 +15,10 @@ use brepkit_topology::face::{Face, FaceSurface};
 
 use crate::error::{WasmError, validate_finite, validate_positive};
 use crate::handles::{edge_id_to_u32, face_id_to_u32, solid_id_to_u32, wire_id_to_u32};
+use brepkit_geometry::extrema::point_to_nurbs_surface;
+
 use crate::helpers::{
-    TOL, classify_to_string, create_apex_face, filter_planar_edges, panic_message, parse_points,
-    project_to_uv, try_fillet,
+    TOL, classify_to_string, create_apex_face, panic_message, parse_points, try_fillet,
 };
 use crate::kernel::BrepKernel;
 
@@ -278,7 +279,9 @@ impl BrepKernel {
                     s
                 } else {
                     // Filter to edges where both adjacent faces are planar.
-                    let planar_edges = filter_planar_edges(&self.topo, solid_id, &edge_ids)?;
+                    let planar_edges = brepkit_operations::query::filter_planar_edges(
+                        &self.topo, solid_id, &edge_ids,
+                    )?;
                     if planar_edges.is_empty() {
                         solid_id
                     } else {
@@ -1116,8 +1119,10 @@ impl BrepKernel {
             let v_start = self.topo.vertex(edge.start())?;
             let v_end = self.topo.vertex(edge.end())?;
             // Project endpoints to UV
-            let uv_start = project_to_uv(&surface, v_start.point());
-            let uv_end = project_to_uv(&surface, v_end.point());
+            let proj_start = point_to_nurbs_surface(v_start.point(), &surface);
+            let uv_start = brepkit_math::vec::Point2::new(proj_start.u, proj_start.v);
+            let proj_end = point_to_nurbs_surface(v_end.point(), &surface);
+            let uv_end = brepkit_math::vec::Point2::new(proj_end.u, proj_end.v);
             trim_curves.push(brepkit_operations::untrim::TrimCurve {
                 curve: vec![uv_start, uv_end],
             });

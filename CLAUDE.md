@@ -89,6 +89,7 @@ Quick reference — find the right file for any task:
 | Geometric predicates (orient2d/3d) | `predicates.rs` |
 | Ray-triangle intersection | `ray_triangle.rs` |
 | 2D polygon offset | `polygon_offset.rs` |
+| 2D polygon ops (clip, fillet, chamfer) | `polygon2d.rs` |
 | SIMD batch operations | `simd.rs` |
 | Parametric geometry traits | `traits.rs` |
 | NURBS basis function evaluation | `nurbs/basis.rs` |
@@ -293,6 +294,7 @@ Quick reference — find the right file for any task:
 | Defeaturing | `defeature.rs` |
 | Feature recognition | `feature_recognition.rs` |
 | Pattern (linear/circular) | `pattern.rs` |
+| Shape queries (edge filtering) | `query.rs` |
 | Sewing | `sew.rs` |
 | Thickening | `thicken.rs` |
 | Untrimming | `untrim.rs` |
