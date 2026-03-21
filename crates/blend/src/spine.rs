@@ -1,3 +1,5 @@
+// Walking engine infrastructure — used progressively as more blend paths are wired up.
+#![allow(dead_code)]
 //! Spine: ordered edge chain with arc-length parameterization.
 //!
 //! A spine represents the guideline along which a fillet or chamfer is

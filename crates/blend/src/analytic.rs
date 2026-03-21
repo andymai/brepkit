@@ -1,3 +1,5 @@
+// Walking engine infrastructure — used progressively as more blend paths are wired up.
+#![allow(dead_code)]
 //! Analytic fast paths for common surface pairs.
 //!
 //! Closed-form fillet and chamfer solutions for plane-plane and plane-cylinder

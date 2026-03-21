@@ -1,3 +1,5 @@
+// Walking engine infrastructure — used progressively as more blend paths are wired up.
+#![allow(dead_code)]
 //! Blend constraint functions for fillet and chamfer.
 //!
 //! Each blend type encodes a system of 4 equations in 4 unknowns `(u1, v1, u2, v2)`
