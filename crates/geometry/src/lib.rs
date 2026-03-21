@@ -2,7 +2,7 @@
 //!
 //! Geometry algorithms for brepkit B-Rep models.
 //!
-//! This is layer L0.5, depending only on `brepkit-math`.
+//! This is layer L1, depending only on `brepkit-math`.
 //!
 //! Three subsystems:
 //! - **sampling** — adaptive and uniform curve/surface sampling

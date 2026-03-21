@@ -2,7 +2,8 @@
 //!
 //! Topology algorithms for brepkit B-Rep models.
 //!
-//! This is layer L1.5, depending on `brepkit-math` and `brepkit-topology`.
+//! This is layer L2, depending on `brepkit-math`, `brepkit-topology`,
+//! and `brepkit-geometry`.
 //!
 //! Four subsystems:
 //! - **classify** — point-in-solid classification (ray casting + winding numbers)

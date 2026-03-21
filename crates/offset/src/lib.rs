@@ -2,7 +2,7 @@
 //!
 //! Solid offset engine for brepkit.
 //!
-//! This is layer L1.5, depending on `brepkit-math`, `brepkit-topology`,
+//! This is layer L2, depending on `brepkit-math`, `brepkit-topology`,
 //! and `brepkit-geometry`.
 //!
 //! # Pipeline
