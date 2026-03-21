@@ -673,7 +673,12 @@ fn sort_edges_into_loops(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::cast_possible_wrap)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::print_stderr,
+        clippy::cast_possible_wrap
+    )]
 
     use brepkit_math::tolerance::Tolerance;
     use brepkit_topology::Topology;

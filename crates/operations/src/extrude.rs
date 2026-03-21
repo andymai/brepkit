@@ -833,7 +833,7 @@ fn translate_edge_curve(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::print_stderr)]
 
     use std::collections::HashMap;
 

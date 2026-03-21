@@ -1,4 +1,9 @@
-#![allow(clippy::unwrap_used, missing_docs)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    missing_docs
+)]
 
 use brepkit_math::cdt::Cdt;
 use brepkit_math::vec::Point2;

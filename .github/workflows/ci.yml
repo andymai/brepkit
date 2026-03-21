@@ -92,6 +92,85 @@ jobs:
       - name: Build and validate WASM
         run: cargo xtask wasm-build --skip-opt
 
+  wasm-size:
+    name: WASM Size Report
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - name: Build WASM (PR)
+        run: |
+          cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release
+          PR_SIZE=$(stat --printf="%s" target/wasm32-unknown-unknown/release/brepkit_wasm.wasm)
+          echo "PR_SIZE=$PR_SIZE" >> "$GITHUB_ENV"
+          echo "PR_SIZE_MB=$(echo "scale=2; $PR_SIZE / 1048576" | bc)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.base_ref }}
+          clean: false
+          path: base
+      - name: Build WASM (base)
+        run: |
+          cd base
+          cargo build -p brepkit-wasm --target wasm32-unknown-unknown --release
+          BASE_SIZE=$(stat --printf="%s" target/wasm32-unknown-unknown/release/brepkit_wasm.wasm)
+          echo "BASE_SIZE=$BASE_SIZE" >> "$GITHUB_ENV"
+          echo "BASE_SIZE_MB=$(echo "scale=2; $BASE_SIZE / 1048576" | bc)" >> "$GITHUB_ENV"
+      - name: Compute delta
+        run: |
+          DELTA=$(( PR_SIZE - BASE_SIZE ))
+          if [ $BASE_SIZE -gt 0 ]; then
+            PCT=$(echo "scale=1; $DELTA * 100 / $BASE_SIZE" | bc)
+          else
+            PCT="N/A"
+          fi
+          DELTA_KB=$(echo "scale=1; $DELTA / 1024" | bc)
+          if [ $DELTA -gt 0 ]; then
+            EMOJI="⚠️"
+            SIGN="+"
+          elif [ $DELTA -lt 0 ]; then
+            EMOJI="✅"
+            SIGN=""
+          else
+            EMOJI="✅"
+            SIGN=""
+          fi
+
+          {
+            echo "COMMENT_BODY<<WASM_EOF"
+            echo "## WASM Binary Size"
+            echo ""
+            echo "| File | main | PR | Delta |"
+            echo "|------|------|----|-------|"
+            echo "| \`brepkit_wasm.wasm\` | ${BASE_SIZE_MB} MB | ${PR_SIZE_MB} MB | ${SIGN}${DELTA_KB} KB (${SIGN}${PCT}%) |"
+            echo ""
+            if [ $DELTA -gt 51200 ]; then
+              echo "${EMOJI} Size increased by >50 KB. Please verify this is expected."
+            elif [ $DELTA -gt 0 ]; then
+              echo "${EMOJI} Size increased slightly."
+            elif [ $DELTA -eq 0 ]; then
+              echo "${EMOJI} No size change."
+            else
+              echo "${EMOJI} Size decreased — nice!"
+            fi
+            echo "WASM_EOF"
+          } >> "$GITHUB_ENV"
+      - name: Find existing comment
+        uses: peter-evans/find-comment@v3
+        id: fc
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          comment-author: github-actions[bot]
+          body-includes: "## WASM Binary Size"
+      - name: Post or update comment
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          comment-id: ${{ steps.fc.outputs.comment-id }}
+          issue-number: ${{ github.event.pull_request.number }}
+          body: ${{ env.COMMENT_BODY }}
+          edit-mode: replace
+
   boundaries:
     name: Layer Boundaries
     runs-on: ubuntu-latest
@@ -117,10 +196,41 @@ jobs:
         with:
           token: ${{ github.token }}
 
+  docs:
+    name: Rustdoc
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+  machete:
+    name: Unused Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install cargo-machete
+        run: cargo install cargo-machete --locked
+      - run: cargo machete
+
+  taplo:
+    name: TOML Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install taplo
+        run: |
+          curl -fsSL https://github.com/tamasfe/taplo/releases/latest/download/taplo-full-linux-x86_64.gz \
+            | gunzip > /usr/local/bin/taplo
+          chmod +x /usr/local/bin/taplo
+      - run: taplo fmt --check
+
   ci-pass:
     name: CI Pass
     if: always()
-    needs: [fmt, clippy, test, coverage, msrv, wasm, boundaries, deny, audit]
+    needs: [fmt, clippy, test, coverage, msrv, wasm, boundaries, deny, audit, docs, machete, taplo]
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs

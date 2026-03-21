@@ -2782,7 +2782,12 @@ pub fn fillet_variable(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, deprecated)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::print_stderr,
+        deprecated
+    )]
 
     use std::collections::HashSet;
 

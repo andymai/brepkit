@@ -1,4 +1,9 @@
-#![allow(clippy::unwrap_used, missing_docs)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    missing_docs
+)]
 
 use brepkit_math::mat::Mat4;
 use brepkit_operations::boolean::{BooleanOp, boolean};

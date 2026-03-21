@@ -69,6 +69,10 @@ nursery = { level = "warn", priority = -1 }
 unwrap_used = "deny"
 expect_used = "warn"
 panic = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+todo = "warn"
 # Numeric/math code commonly needs these
 suboptimal_flops = "allow"
 cast_precision_loss = "allow"

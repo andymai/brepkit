@@ -196,7 +196,7 @@ fn topo_err(e: brepkit_topology::TopologyError) -> IoError {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
 
     use brepkit_topology::Topology;
     use brepkit_topology::test_utils::make_unit_cube_non_manifold;

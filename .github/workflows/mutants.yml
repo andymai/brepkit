@@ -1,0 +1,42 @@
+name: Mutation Testing
+
+on:
+  schedule:
+    # Every Sunday at 02:00 UTC
+    - cron: "0 2 * * 0"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mutants:
+    name: Cargo Mutants
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+      - name: Run mutation testing on critical modules
+        run: |
+          cargo mutants \
+            --test-tool=nextest \
+            --timeout=120 \
+            --package brepkit-math \
+            --package brepkit-algo \
+            -e 'tests/**' \
+            -e 'benches/**' \
+            -e 'examples/**' \
+            --output=mutants-output
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report
+          path: mutants-output/
+          retention-days: 30

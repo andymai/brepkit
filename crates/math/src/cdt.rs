@@ -1663,7 +1663,7 @@ fn hilbert_xy_to_d(n: u32, mut x: u32, mut y: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
 
     use super::*;
 

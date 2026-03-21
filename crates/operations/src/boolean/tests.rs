@@ -1,5 +1,11 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-#![allow(clippy::cast_precision_loss, clippy::cast_possible_wrap)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_wrap
+)]
 
 use super::analytic::surface_aware_aabb;
 use super::fragments::tessellate_face_into_fragments;

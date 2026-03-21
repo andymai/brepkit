@@ -30,7 +30,9 @@
     clippy::panic,
     clippy::cast_possible_wrap,
     clippy::manual_assert,
-    clippy::vec_init_then_push
+    clippy::vec_init_then_push,
+    clippy::print_stdout,
+    clippy::print_stderr
 )]
 
 use crate::kernel::BrepKernel;
