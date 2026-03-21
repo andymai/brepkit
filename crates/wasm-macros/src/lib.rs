@@ -55,6 +55,9 @@ impl Parse for WasmBindingArgs {
             }
             if !input.is_empty() {
                 let _: Token![,] = input.parse()?;
+                if input.is_empty() {
+                    break;
+                }
             }
         }
 
