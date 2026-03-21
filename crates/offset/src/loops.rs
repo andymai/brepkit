@@ -220,9 +220,11 @@ fn try_direct_chain(
         }
         let start_idx = edge_info
             .iter()
-            .position(|&(_, s, e)| s == start && e == end && !visited.contains(&0))
+            .enumerate()
+            .find(|(i, (_, s, e))| *s == start && *e == end && !visited.contains(i))
+            .map(|(i, _)| i)
             .unwrap_or(usize::MAX);
-        if start_idx == usize::MAX || visited.contains(&start_idx) {
+        if start_idx == usize::MAX {
             continue;
         }
 

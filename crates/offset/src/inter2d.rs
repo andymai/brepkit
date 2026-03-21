@@ -177,8 +177,8 @@ fn fit_circle_3d(points: &[Point3], tol: f64) -> Option<(brepkit_math::curves::C
         .iter()
         .map(|p| (dist_sq(*p, center).sqrt() - radius).abs())
         .fold(0.0_f64, f64::max);
-    if max_dev > radius * 0.01 {
-        return None; // More than 1% deviation → not a circle
+    if max_dev > tol.max(radius * 1e-4) {
+        return None; // Deviation exceeds tolerance → not a circle
     }
 
     let circle = brepkit_math::curves::Circle3D::new(center, normal, radius).ok()?;

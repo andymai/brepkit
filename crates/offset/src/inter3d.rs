@@ -83,7 +83,15 @@ pub fn intersect_faces_3d(
         let surf_a = &off_a.surface;
         let surf_b = &off_b.surface;
 
-        let curve_points = intersect_surface_pair(topo, edge_id, face_a, face_b, surf_a, surf_b)?;
+        let curve_points = intersect_surface_pair(
+            topo,
+            edge_id,
+            face_a,
+            face_b,
+            surf_a,
+            surf_b,
+            data.options.tolerance,
+        )?;
 
         data.intersections.push(FaceIntersection {
             original_edge: edge_id,
@@ -109,10 +117,11 @@ fn intersect_surface_pair(
     face_b: FaceId,
     surf_a: &FaceSurface,
     surf_b: &FaceSurface,
+    tol: brepkit_math::tolerance::Tolerance,
 ) -> Result<Vec<Point3>, OffsetError> {
     // Same-domain surfaces (e.g., sphere hemispheres with same center/radius):
     // project the specific edge's endpoints onto the offset surface.
-    if surfaces_same_domain(surf_a, surf_b) {
+    if surfaces_same_domain(surf_a, surf_b, tol) {
         return project_edge_onto_surface(topo, edge_id, surf_a);
     }
 
@@ -318,26 +327,30 @@ fn project_onto_line(origin: &Point3, dir: &Vec3, point: &Point3) -> f64 {
 }
 
 /// Check if two surfaces represent the same geometric domain.
-fn surfaces_same_domain(a: &FaceSurface, b: &FaceSurface) -> bool {
-    let tol = 1e-6;
+fn surfaces_same_domain(
+    a: &FaceSurface,
+    b: &FaceSurface,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
     match (a, b) {
         (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
             let dot = na.dot(*nb);
-            if dot > 1.0 - tol {
-                (da - db).abs() < tol
-            } else if dot < -1.0 + tol {
-                (da + db).abs() < tol
+            if dot > 1.0 - tol.angular {
+                (da - db).abs() < tol.linear
+            } else if dot < -1.0 + tol.angular {
+                (da + db).abs() < tol.linear
             } else {
                 false
             }
         }
         (FaceSurface::Cylinder(ca), FaceSurface::Cylinder(cb)) => {
-            (ca.radius() - cb.radius()).abs() < tol
-                && ca.axis().dot(cb.axis()).abs() > 1.0 - tol
-                && (ca.origin() - cb.origin()).length() < tol
+            (ca.radius() - cb.radius()).abs() < tol.linear
+                && ca.axis().dot(cb.axis()).abs() > 1.0 - tol.angular
+                && (ca.origin() - cb.origin()).length() < tol.linear
         }
         (FaceSurface::Sphere(sa), FaceSurface::Sphere(sb)) => {
-            (sa.radius() - sb.radius()).abs() < tol && (sa.center() - sb.center()).length() < tol
+            (sa.radius() - sb.radius()).abs() < tol.linear
+                && (sa.center() - sb.center()).length() < tol.linear
         }
         _ => false,
     }
