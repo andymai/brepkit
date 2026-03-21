@@ -19,7 +19,6 @@ use brepkit_topology::solid::SolidId;
 /// - `origins`: output face → input face(s) it came from
 /// - `in_parts`: solid → output `FaceId`s classified as IN that solid
 /// - `same_domain`: face → coplanar counterpart(s) on the other operand
-#[allow(dead_code)] // API methods used progressively as more pipeline stages consume state
 pub(super) struct BooleanState {
     /// Input face → output faces produced from it.
     images: HashMap<FaceId, Vec<FaceId>>,
@@ -33,7 +32,6 @@ pub(super) struct BooleanState {
     same_domain: HashMap<FaceId, Vec<FaceId>>,
 }
 
-#[allow(dead_code)]
 impl BooleanState {
     /// Creates an empty state.
     pub(super) fn new() -> Self {
@@ -54,11 +52,13 @@ impl BooleanState {
     }
 
     /// Returns the output faces produced from `source`, if any.
+    #[allow(dead_code)]
     pub(super) fn images_of(&self, source: FaceId) -> Option<&[FaceId]> {
         self.images.get(&source).map(Vec::as_slice)
     }
 
     /// Returns the input faces that produced `output`, if any.
+    #[allow(dead_code)]
     pub(super) fn origins_of(&self, output: FaceId) -> Option<&[FaceId]> {
         self.origins.get(&output).map(Vec::as_slice)
     }
@@ -84,6 +84,7 @@ impl BooleanState {
     }
 
     /// Returns the same-domain counterparts of `face`, if any.
+    #[allow(dead_code)]
     pub(super) fn same_domain_of(&self, face: FaceId) -> Option<&[FaceId]> {
         self.same_domain.get(&face).map(Vec::as_slice)
     }
