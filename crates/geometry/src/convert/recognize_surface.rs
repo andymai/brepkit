@@ -438,6 +438,32 @@ pub fn detect_surface_kind(surface: &NurbsSurface) -> DetectedSurfaceKind {
     let np = points.len() as f64;
     let center = Point3::new(cx / np, cy / np, cz / np);
 
+    // Plane test: check if all points are coplanar.
+    // Find a normal from the first non-degenerate cross product.
+    let mut plane_normal = None;
+    for i in 1..points.len() {
+        for j in (i + 1)..points.len() {
+            let v0 = points[i] - center;
+            let v1 = points[j] - center;
+            let n = v0.cross(v1);
+            if let Ok(normalized) = n.normalize() {
+                plane_normal = Some(normalized);
+                break;
+            }
+        }
+        if plane_normal.is_some() {
+            break;
+        }
+    }
+    if let Some(normal) = plane_normal {
+        let is_plane = points
+            .iter()
+            .all(|p| (*p - center).dot(normal).abs() < 1e-6);
+        if is_plane {
+            return DetectedSurfaceKind::Plane;
+        }
+    }
+
     // Check if all points equidistant from center (sphere test).
     let distances: Vec<f64> = points.iter().map(|p| (*p - center).length()).collect();
     let avg_dist = distances.iter().sum::<f64>() / np;

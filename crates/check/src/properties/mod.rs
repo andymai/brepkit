@@ -139,8 +139,8 @@ pub fn center_of_mass(
 /// Compute the v-range for an analytic surface by projecting face wire
 /// vertices onto the given axis.
 ///
-/// Iterates over the outer wire of `face_id`, projects each vertex position
-/// onto `axis` relative to `origin`, and returns `(v_min, v_max)`.
+/// Iterates over all wires (outer + inner) of `face_id`, projects each vertex
+/// position onto `axis` relative to `origin`, and returns `(v_min, v_max)`.
 /// If the face has no distinguishable range (e.g. a single vertex),
 /// returns `(-1.0, 1.0)` as a fallback.
 ///
@@ -154,23 +154,32 @@ pub fn axial_v_range(
     axis: Vec3,
 ) -> Result<(f64, f64), CheckError> {
     let face_data = topo.face(face_id)?;
-    let wire = topo.wire(face_data.outer_wire())?;
+    let outer = topo.wire(face_data.outer_wire())?;
 
     let mut v_min = f64::MAX;
     let mut v_max = f64::MIN;
 
-    for oe in wire.edges() {
-        let edge = topo.edge(oe.edge())?;
-        for vid in [edge.start(), edge.end()] {
-            let pt = topo.vertex(vid)?.point();
-            let to_pt = Vec3::new(
-                pt.x() - origin.x(),
-                pt.y() - origin.y(),
-                pt.z() - origin.z(),
-            );
-            let v = axis.dot(to_pt);
-            v_min = v_min.min(v);
-            v_max = v_max.max(v);
+    // Chain outer wire and inner wires.
+    let inner_wires: Vec<_> = face_data
+        .inner_wires()
+        .iter()
+        .filter_map(|&wid| topo.wire(wid).ok())
+        .collect();
+
+    for wire in std::iter::once(outer).chain(inner_wires.iter().copied()) {
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            for vid in [oe.oriented_start(edge), oe.oriented_end(edge)] {
+                let pt = topo.vertex(vid)?.point();
+                let to_pt = Vec3::new(
+                    pt.x() - origin.x(),
+                    pt.y() - origin.y(),
+                    pt.z() - origin.z(),
+                );
+                let v = axis.dot(to_pt);
+                v_min = v_min.min(v);
+                v_max = v_max.max(v);
+            }
         }
     }
 

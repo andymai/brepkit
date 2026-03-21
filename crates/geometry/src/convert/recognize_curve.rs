@@ -260,9 +260,13 @@ impl DetectedCurveKind {
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub fn detect_curve_kind(curve: &NurbsCurve) -> DetectedCurveKind {
-    // A rational degree-2+ NURBS with specific weight patterns can represent
-    // conic sections. Non-rational or degree-1 curves are always BSpline (or Line).
-    if curve.degree() < 2 || !curve.is_rational() {
+    // Degree-1 non-rational curves are lines by definition.
+    if curve.degree() < 2 && !curve.is_rational() {
+        return DetectedCurveKind::Line;
+    }
+
+    // Non-rational degree-2+ curves cannot represent conics.
+    if !curve.is_rational() {
         return DetectedCurveKind::BSpline;
     }
 
