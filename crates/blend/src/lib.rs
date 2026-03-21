@@ -1,6 +1,6 @@
 //! Walking-based fillet and chamfer engine.
 //!
-//! This crate implements OCCT-style blend surface computation using a
+//! This crate implements blend surface computation using a
 //! Newton-Raphson walking algorithm. It produces G1-continuous fillet
 //! and chamfer surfaces for all combinations of analytic and NURBS faces.
 
