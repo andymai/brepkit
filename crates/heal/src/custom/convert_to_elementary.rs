@@ -5,8 +5,9 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
+use brepkit_geometry::convert::{RecognizedSurface, recognize_surface};
+
 use crate::HealError;
-use crate::analysis::canonical::{RecognizedSurface, recognize_surface};
 
 /// Try to recognize and replace NURBS surfaces with analytic equivalents.
 ///
@@ -34,7 +35,7 @@ pub fn convert_to_elementary(
 
     for (fid, surface) in &surfaces {
         if let FaceSurface::Nurbs(nurbs) = surface {
-            match recognize_surface(nurbs, tolerance) {
+            match recognize_surface(nurbs, tolerance.linear) {
                 RecognizedSurface::Plane { normal, d } => {
                     let face = topo.face_mut(*fid)?;
                     face.set_surface(FaceSurface::Plane { normal, d });

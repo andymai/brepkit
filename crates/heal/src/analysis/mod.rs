@@ -3,7 +3,6 @@
 //! Each analyzer takes `&Topology` (immutable) and returns a result
 //! struct describing detected issues.  No modifications are made.
 
-pub mod canonical;
 pub mod contents;
 pub mod curve;
 pub mod edge;
