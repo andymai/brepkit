@@ -188,7 +188,6 @@ Quick reference — find the right file for any task:
 | Wire edge ordering | `analysis/wire_order.rs` |
 | Tolerance statistics | `analysis/tolerance.rs` |
 | Entity counting | `analysis/contents.rs` |
-
 | Fix config (tri-state FixMode per fix type) | `fix/config.rs` |
 | Fix orchestrator (shape → solid → shell → face → wire → edge) | `fix/mod.rs` |
 | Edge fixing (SameParameter, vertex tolerance) | `fix/edge.rs` |
