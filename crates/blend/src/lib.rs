@@ -10,7 +10,7 @@ pub(crate) mod builder_utils;
 pub mod chamfer_builder;
 pub(crate) mod corner;
 pub mod fillet_builder;
-pub(crate) mod radius_law;
+pub mod radius_law;
 pub(crate) mod section;
 pub(crate) mod spine;
 pub(crate) mod stripe;

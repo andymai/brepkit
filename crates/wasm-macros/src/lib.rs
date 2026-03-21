@@ -166,6 +166,7 @@ pub fn wasm_binding(attr: TokenStream, item: TokenStream) -> TokenStream {
                 let topo_snapshot = self.topo.clone();
                 let assemblies_snapshot = self.assemblies.clone();
                 let sketches_snapshot = self.sketches.clone();
+                let checkpoints_snapshot = self.checkpoints.clone();
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.#impl_name(#(#param_names),*)
                 })) {
@@ -174,6 +175,7 @@ pub fn wasm_binding(attr: TokenStream, item: TokenStream) -> TokenStream {
                         self.topo = topo_snapshot;
                         self.assemblies = assemblies_snapshot;
                         self.sketches = sketches_snapshot;
+                        self.checkpoints = checkpoints_snapshot;
                         Err(JsError::new(&crate::helpers::panic_message(&p, #op_name)))
                     }
                 }

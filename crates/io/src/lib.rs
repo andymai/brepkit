@@ -3,7 +3,7 @@
 //! Data exchange for brepkit: STEP (ISO 10303) and 3MF import/export.
 //!
 //! This is layer L2, depending on `brepkit-math`, `brepkit-topology`,
-//! `brepkit-operations`, and `brepkit-heal`.
+//! and `brepkit-operations`.
 
 pub mod gltf;
 pub mod iges;
