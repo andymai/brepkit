@@ -12,7 +12,13 @@
 //! For flamegraphs:
 //!   cargo flamegraph --profile profiling --example profile_boolean -o flame.svg -- honeycomb
 
-#![allow(clippy::unwrap_used, clippy::expect_used, missing_docs)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    missing_docs
+)]
 
 use std::time::Instant;
 

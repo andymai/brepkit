@@ -6,8 +6,8 @@
 //!   to exact or near-exact rational NURBS curves.
 //! - [`surface_to_nurbs`] — convert analytic surfaces (cylinder, sphere, cone,
 //!   torus) to NURBS surfaces.
-//! - [`recognize_curve`] — identify a NURBS curve as a line or circle arc.
-//! - [`recognize_surface`] — identify a NURBS surface as a plane, cylinder, or
+//! - [`recognize_curve()`] — identify a NURBS curve as a line or circle arc.
+//! - [`recognize_surface()`] — identify a NURBS surface as a plane, cylinder, or
 //!   sphere.
 //!
 //! [`Circle3D`]: brepkit_math::curves::Circle3D

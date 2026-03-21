@@ -1,0 +1,20 @@
+# Taplo — TOML formatter and linter
+# https://taplo.tamasfe.dev/configuration/
+
+[formatting]
+align_entries = false
+array_trailing_comma = true
+column_width = 100
+compact_arrays = true
+compact_inline_tables = true
+indent_tables = false
+reorder_keys = true
+trailing_newline = true
+
+[[rule]]
+# Sort keys in dependency tables
+include = ["**/Cargo.toml"]
+keys = ["dependencies", "dev-dependencies", "build-dependencies", "workspace.dependencies"]
+
+[rule.formatting]
+reorder_keys = true

@@ -3767,7 +3767,7 @@ fn approximate_polygon_plane(poly: &[Point3]) -> (Vec3, f64) {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
     use super::*;
     use crate::primitives::make_box;
     use brepkit_math::mat::Mat4;

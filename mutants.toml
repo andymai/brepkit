@@ -1,0 +1,21 @@
+# cargo-mutants configuration
+# https://mutants.rs/config.html
+#
+# Scoped to critical correctness modules: NURBS math, predicates, and
+# boolean algorithm. Run locally with: cargo mutants
+# CI runs weekly on Sunday (see .github/workflows/mutants.yml).
+
+timeout = 120
+
+# Only mutate the core math and algorithm crates
+examine_globs = [
+  "crates/math/src/nurbs/**",
+  "crates/math/src/predicates.rs",
+  "crates/math/src/filtered.rs",
+  "crates/math/src/cdt.rs",
+  "crates/math/src/convex_hull.rs",
+  "crates/algo/src/**",
+]
+
+# Exclude test and bench code from mutation
+exclude_globs = ["**/tests/**", "**/tests.rs", "**/benches/**", "**/examples/**"]

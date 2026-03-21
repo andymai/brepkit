@@ -115,7 +115,7 @@ impl Bvh {
     ///
     /// **Note**: This returns the primitive with the closest *AABB*, which is
     /// a lower bound on the actual distance. For exact closest-primitive
-    /// queries, use [`query_closest_with_distance`] with a callback that
+    /// queries, use [`Bvh::query_closest_with_distance`] with a callback that
     /// computes the true distance to each primitive.
     ///
     /// Returns `None` if the BVH is empty.
@@ -157,7 +157,7 @@ impl Bvh {
 
     /// Find the closest primitive to `point` using an exact distance callback.
     ///
-    /// Unlike [`query_closest`], this uses the provided `distance_sq` callback
+    /// Unlike [`Bvh::query_closest`], this uses the provided `distance_sq` callback
     /// to compute the actual squared distance from `point` to each candidate
     /// primitive, ensuring the true closest primitive is returned. The BVH
     /// AABB distances are used only for pruning, so distant subtrees are

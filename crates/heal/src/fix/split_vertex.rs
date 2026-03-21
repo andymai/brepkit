@@ -25,7 +25,7 @@ const MAX_VERTEX_EDGES: usize = 20;
 
 /// Split vertices that are shared by too many non-adjacent edges.
 ///
-/// For each over-connected vertex (more than [`MAX_VERTEX_EDGES`] edge
+/// For each over-connected vertex (more than `MAX_VERTEX_EDGES` edge
 /// connections), edges are grouped by face adjacency. If multiple
 /// disconnected groups exist, the vertex is duplicated and edges in
 /// each group (after the first) are reassigned to a fresh vertex at

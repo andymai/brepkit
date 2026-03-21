@@ -354,7 +354,7 @@ pub fn boolean_with_options(
 // Evolution-tracking wrapper
 // ---------------------------------------------------------------------------
 
-/// Perform a boolean operation and return an [`EvolutionMap`] tracking face
+/// Perform a boolean operation and return an [`crate::evolution::EvolutionMap`] tracking face
 /// provenance.
 ///
 /// This wraps [`boolean`] and uses a heuristic (normal + centroid similarity)

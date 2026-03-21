@@ -8,7 +8,7 @@
 //!
 //! For NURBS adjacent faces the outward normal is computed by projecting
 //! the edge sample point onto the surface, giving accurate cross-section
-//! geometry (see [`face_surface_normal_at`]).  Non-planar faces containing
+//! geometry (see `face_surface_normal_at`).  Non-planar faces containing
 //! target edges are trimmed by offsetting boundary vertices at fillet
 //! contact locations along face boundary directions.
 //!
@@ -2782,7 +2782,12 @@ pub fn fillet_variable(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used, deprecated)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::print_stderr,
+        deprecated
+    )]
 
     use std::collections::HashSet;
 

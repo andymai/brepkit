@@ -1,51 +1,50 @@
 [package]
-name = "brepkit-operations"
-version = "0.1.0"
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
 description = "CAD modeling operations (booleans, fillets, extrusions) for brepkit"
+edition.workspace = true
+license.workspace = true
+name = "brepkit-operations"
+repository.workspace = true
+rust-version.workspace = true
+version = "0.1.0"
 
 [dependencies]
-brepkit-math.workspace = true
-brepkit-topology.workspace = true
 brepkit-algo.workspace = true
 brepkit-blend.workspace = true
-brepkit-heal.workspace = true
 brepkit-check.workspace = true
 brepkit-geometry.workspace = true
+brepkit-math.workspace = true
 brepkit-offset.workspace = true
 brepkit-sketch.workspace = true
-thiserror.workspace = true
-rayon.workspace = true
+brepkit-topology.workspace = true
 log.workspace = true
+rayon.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
-brepkit-topology = { workspace = true, features = ["test-utils"] }
-proptest.workspace = true
+brepkit-topology = {workspace = true, features = ["test-utils"]}
 criterion.workspace = true
 env_logger.workspace = true
+proptest.workspace = true
 
 [[bench]]
+harness = false
 name = "cad_operations"
-harness = false
 
 [[bench]]
+harness = false
 name = "boolean_perf"
-harness = false
 
 [[bench]]
+harness = false
 name = "compound_cut_perf"
-harness = false
 
 [[bench]]
+harness = false
 name = "fuse_perf"
-harness = false
 
 [[bench]]
-name = "boolean_pipeline"
 harness = false
+name = "boolean_pipeline"
 
 [lints]
 workspace = true

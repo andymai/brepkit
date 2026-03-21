@@ -1,6 +1,11 @@
 //! Tests for PaveFiller phases.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stderr
+)]
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;

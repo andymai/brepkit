@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Pre-commit: fast checks only (fmt + clippy in parallel)
+# Pre-commit: fast checks only (fmt + clippy + taplo + machete in parallel)
 # Full test suite runs in pre-push and CI.
 echo "🔍 Running pre-commit checks..."
 
@@ -10,11 +10,31 @@ FMT_PID=$!
 cargo clippy --all-targets --all-features -- -D warnings &
 CLIPPY_PID=$!
 
+# taplo: TOML formatting (graceful skip if not installed)
+if command -v taplo &>/dev/null; then
+  taplo fmt --check &
+  TAPLO_PID=$!
+else
+  TAPLO_PID=""
+fi
+
+# cargo-machete: unused dependency detection (graceful skip if not installed)
+if command -v cargo-machete &>/dev/null; then
+  cargo machete &
+  MACHETE_PID=$!
+else
+  MACHETE_PID=""
+fi
+
 FMT_EXIT=0
 CLIPPY_EXIT=0
+TAPLO_EXIT=0
+MACHETE_EXIT=0
 
 wait $FMT_PID || FMT_EXIT=$?
 wait $CLIPPY_PID || CLIPPY_EXIT=$?
+[ -n "$TAPLO_PID" ] && { wait $TAPLO_PID || TAPLO_EXIT=$?; }
+[ -n "$MACHETE_PID" ] && { wait $MACHETE_PID || MACHETE_EXIT=$?; }
 
 if [ $FMT_EXIT -ne 0 ]; then
   echo "❌ cargo fmt failed. Run 'cargo fmt --all' to fix."
@@ -23,6 +43,16 @@ fi
 
 if [ $CLIPPY_EXIT -ne 0 ]; then
   echo "❌ clippy failed. Fix warnings before committing."
+  exit 1
+fi
+
+if [ $TAPLO_EXIT -ne 0 ]; then
+  echo "❌ taplo failed. Run 'taplo fmt' to fix TOML formatting."
+  exit 1
+fi
+
+if [ $MACHETE_EXIT -ne 0 ]; then
+  echo "❌ cargo-machete found unused dependencies. Remove them."
   exit 1
 fi
 

@@ -495,7 +495,7 @@ impl Cdt {
     /// Partition remaining (non-removed) interior triangles into connected
     /// regions separated by the given separator edges.
     ///
-    /// After calling [`remove_exterior`], this method groups interior
+    /// After calling [`Cdt::remove_exterior`], this method groups interior
     /// triangles into connected components. Two adjacent triangles belong
     /// to the same region unless the shared edge is in `separators`.
     ///
@@ -1663,7 +1663,7 @@ fn hilbert_xy_to_d(n: u32, mut x: u32, mut y: u32) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr)]
 
     use super::*;
 

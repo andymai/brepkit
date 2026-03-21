@@ -1561,7 +1561,7 @@ fn volume_from_planar_polygons(
 ///
 /// # Errors
 ///
-/// Returns [`OperationsError`] if topology lookups fail or if the
+/// Returns [`crate::OperationsError`] if topology lookups fail or if the
 /// solid contains non-planar/non-triangular faces.
 pub fn solid_volume_from_faces(
     topo: &Topology,

@@ -1,22 +1,22 @@
 [package]
-name = "brepkit-heal"
-version = "0.1.0"
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
 description = "Shape healing (analysis, fixing, upgrading) for brepkit B-Rep models"
+edition.workspace = true
+license.workspace = true
+name = "brepkit-heal"
+repository.workspace = true
+rust-version.workspace = true
+version = "0.1.0"
 
 [dependencies]
+bitflags.workspace = true
+brepkit-geometry.workspace = true
 brepkit-math.workspace = true
 brepkit-topology.workspace = true
-brepkit-geometry.workspace = true
-thiserror.workspace = true
 log.workspace = true
-bitflags.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
-brepkit-topology = { workspace = true, features = ["test-utils"] }
+brepkit-topology = {workspace = true, features = ["test-utils"]}
 proptest.workspace = true
 
 [lints]

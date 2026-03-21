@@ -1,11 +1,11 @@
 [package]
-name = "brepkit-sketch"
-version = "0.1.0"
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
 description = "2D parametric constraint solver (GCS) for brepkit sketch mode"
+edition.workspace = true
+license.workspace = true
+name = "brepkit-sketch"
+repository.workspace = true
+rust-version.workspace = true
+version = "0.1.0"
 
 [dependencies]
 thiserror.workspace = true

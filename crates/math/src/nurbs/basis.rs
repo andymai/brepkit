@@ -130,7 +130,7 @@ pub fn basis_funs_into(span: usize, u: f64, degree: usize, knots: &[f64], out: &
 /// through `N_{span,degree}(u)`.
 ///
 /// The `left` and `right` temporaries are stack-allocated for degrees up to
-/// [`MAX_STACK_DEGREE`] (covers all practical CAD usage), falling back to heap
+/// `MAX_STACK_DEGREE` (covers all practical CAD usage), falling back to heap
 /// allocation for higher degrees.
 #[must_use]
 pub fn basis_funs(span: usize, u: f64, degree: usize, knots: &[f64]) -> Vec<f64> {
@@ -283,7 +283,7 @@ pub fn ders_basis_funs_into(
 /// `k` ranges from `0` to `n_derivs`, `j` from `0` to `degree`.
 ///
 /// The `left` and `right` temporaries are stack-allocated for degrees up to
-/// [`MAX_STACK_DEGREE`].
+/// `MAX_STACK_DEGREE`.
 #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 #[must_use]
 pub fn ders_basis_funs(

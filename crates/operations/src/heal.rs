@@ -1372,7 +1372,7 @@ fn order_edges_into_loops(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::print_stderr)]
 
     use brepkit_topology::Topology;
 
