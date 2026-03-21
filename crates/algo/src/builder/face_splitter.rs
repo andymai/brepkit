@@ -4,8 +4,6 @@
 //! them to [`OrientedPCurveEdge`]s in the face's parameter space, calls
 //! the wire builder, and produces [`SplitSubFace`]s.
 
-#![allow(dead_code)] // Used by later pipeline stages.
-
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;

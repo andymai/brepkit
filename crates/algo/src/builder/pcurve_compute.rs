@@ -5,8 +5,6 @@
 //! the 3D curve, projects via `surface.project_point()`, unwraps periodicity,
 //! and fits a [`NurbsCurve2D`] (or a `Line2D` if collinear in UV).
 
-#![allow(dead_code)] // Used by later pipeline stages.
-
 use std::f64::consts::TAU;
 
 use brepkit_math::curves2d::{Curve2D, Line2D, NurbsCurve2D};
@@ -119,6 +117,7 @@ pub fn project_point_on_surface(
 }
 
 /// Build a `PlaneFrame` for a plane face.
+#[allow(dead_code)]
 pub fn plane_frame_for_face(normal: Vec3, wire_pts: &[Point3]) -> PlaneFrame {
     PlaneFrame::from_plane_face(normal, wire_pts)
 }
