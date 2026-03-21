@@ -163,13 +163,17 @@ pub fn wasm_binding(attr: TokenStream, item: TokenStream) -> TokenStream {
                 if self.poisoned {
                     return Err(JsError::new("Kernel poisoned after panic. Call reset()."));
                 }
-                let snapshot = self.topo.clone();
+                let topo_snapshot = self.topo.clone();
+                let assemblies_snapshot = self.assemblies.clone();
+                let sketches_snapshot = self.sketches.clone();
                 match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.#impl_name(#(#param_names),*)
                 })) {
                     Ok(inner) => inner.map_err(|e| JsError::new(&e.to_string())),
                     Err(p) => {
-                        self.topo = snapshot;
+                        self.topo = topo_snapshot;
+                        self.assemblies = assemblies_snapshot;
+                        self.sketches = sketches_snapshot;
                         Err(JsError::new(&crate::helpers::panic_message(&p, #op_name)))
                     }
                 }
