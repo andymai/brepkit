@@ -134,12 +134,6 @@ pub const fn wire_id_to_u32(id: brepkit_topology::wire::WireId) -> u32 {
     id.index() as u32
 }
 
-/// Convert a `ShellId` to a `u32` handle for JavaScript.
-#[allow(clippy::cast_possible_truncation, dead_code)]
-pub const fn shell_id_to_u32(id: brepkit_topology::shell::ShellId) -> u32 {
-    id.index() as u32
-}
-
 /// Convert a `CompoundId` to a `u32` handle for JavaScript.
 #[allow(clippy::cast_possible_truncation)]
 pub const fn compound_id_to_u32(id: brepkit_topology::compound::CompoundId) -> u32 {
