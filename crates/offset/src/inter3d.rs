@@ -109,6 +109,12 @@ fn intersect_surface_pair(
     surf_a: &FaceSurface,
     surf_b: &FaceSurface,
 ) -> Result<Vec<Point3>, OffsetError> {
+    // Same-domain surfaces (e.g., sphere hemispheres with same center/radius):
+    // project original shared-edge endpoints onto the surface.
+    if surfaces_same_domain(surf_a, surf_b) {
+        return project_shared_edge_onto_surface(topo, face_a, face_b, surf_a);
+    }
+
     // Plane-Plane: exact line intersection.
     if let (FaceSurface::Plane { normal: n1, d: d1 }, FaceSurface::Plane { normal: n2, d: d2 }) =
         (surf_a, surf_b)
@@ -310,6 +316,111 @@ fn project_onto_line(origin: &Point3, dir: &Vec3, point: &Point3) -> f64 {
     dx * dir.x() + dy * dir.y() + dz * dir.z()
 }
 
+/// Check if two surfaces represent the same geometric domain.
+fn surfaces_same_domain(a: &FaceSurface, b: &FaceSurface) -> bool {
+    let tol = 1e-6;
+    match (a, b) {
+        (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
+            let dot = na.dot(*nb);
+            if dot > 1.0 - tol {
+                (da - db).abs() < tol
+            } else if dot < -1.0 + tol {
+                (da + db).abs() < tol
+            } else {
+                false
+            }
+        }
+        (FaceSurface::Cylinder(ca), FaceSurface::Cylinder(cb)) => {
+            (ca.radius() - cb.radius()).abs() < tol
+                && ca.axis().dot(cb.axis()).abs() > 1.0 - tol
+                && (ca.origin() - cb.origin()).length() < tol
+        }
+        (FaceSurface::Sphere(sa), FaceSurface::Sphere(sb)) => {
+            (sa.radius() - sb.radius()).abs() < tol && (sa.center() - sb.center()).length() < tol
+        }
+        _ => false,
+    }
+}
+
+/// For same-domain face pairs, project shared edge endpoints onto the surface.
+fn project_shared_edge_onto_surface(
+    topo: &Topology,
+    face_a: FaceId,
+    face_b: FaceId,
+    surface: &FaceSurface,
+) -> Result<Vec<Point3>, OffsetError> {
+    let wire_a = topo.wire(topo.face(face_a)?.outer_wire())?;
+    let wire_b = topo.wire(topo.face(face_b)?.outer_wire())?;
+
+    let edges_b: std::collections::HashSet<_> = wire_b
+        .edges()
+        .iter()
+        .map(brepkit_topology::wire::OrientedEdge::edge)
+        .collect();
+
+    for oe in wire_a.edges() {
+        if edges_b.contains(&oe.edge()) {
+            let edge = topo.edge(oe.edge())?;
+            let p0 = topo.vertex(edge.start())?.point();
+            let p1 = topo.vertex(edge.end())?.point();
+            let proj0 = project_point_onto_surface(p0, surface);
+            let proj1 = project_point_onto_surface(p1, surface);
+            return Ok(vec![proj0, proj1]);
+        }
+    }
+
+    Ok(Vec::new())
+}
+
+/// Project a point onto a surface (radially for sphere/cylinder, normally for plane).
+fn project_point_onto_surface(p: Point3, surface: &FaceSurface) -> Point3 {
+    match surface {
+        FaceSurface::Sphere(sph) => {
+            let c = sph.center();
+            let dx = p.x() - c.x();
+            let dy = p.y() - c.y();
+            let dz = p.z() - c.z();
+            let dist = (dx.mul_add(dx, dy.mul_add(dy, dz * dz))).sqrt();
+            if dist < 1e-15 {
+                return p;
+            }
+            let scale = sph.radius() / dist;
+            Point3::new(c.x() + dx * scale, c.y() + dy * scale, c.z() + dz * scale)
+        }
+        FaceSurface::Cylinder(cyl) => {
+            let o = cyl.origin();
+            let ax = cyl.axis();
+            let dp = Vec3::new(p.x() - o.x(), p.y() - o.y(), p.z() - o.z());
+            let along = dp.dot(ax);
+            let radial = Vec3::new(
+                dp.x() - along * ax.x(),
+                dp.y() - along * ax.y(),
+                dp.z() - along * ax.z(),
+            );
+            let rad_len = radial.length();
+            if rad_len < 1e-15 {
+                return p;
+            }
+            let scale = cyl.radius() / rad_len;
+            Point3::new(
+                o.x() + along * ax.x() + scale * radial.x(),
+                o.y() + along * ax.y() + scale * radial.y(),
+                o.z() + along * ax.z() + scale * radial.z(),
+            )
+        }
+        FaceSurface::Plane { normal, d } => {
+            let n_dot_p = normal.x() * p.x() + normal.y() * p.y() + normal.z() * p.z();
+            let dist = d - n_dot_p;
+            Point3::new(
+                p.x() + dist * normal.x(),
+                p.y() + dist * normal.y(),
+                p.z() + dist * normal.z(),
+            )
+        }
+        _ => p,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -347,6 +458,25 @@ mod tests {
                 !fi.curve_points.is_empty(),
                 "intersection for edge {:?} should have points",
                 fi.original_edge
+            );
+        }
+    }
+
+    #[test]
+    fn sphere_same_surface_produces_projected_points() {
+        let mut topo = Topology::new();
+        let solid = brepkit_operations::primitives::make_sphere(&mut topo, 3.0, 16).unwrap();
+        let data = run_phases_1_2_3(&topo, solid, 0.5);
+        assert!(
+            !data.intersections.is_empty(),
+            "sphere offset should have intersections"
+        );
+        for fi in &data.intersections {
+            assert!(
+                fi.curve_points.len() >= 2,
+                "edge {:?} should have projected curve points, got {}",
+                fi.original_edge,
+                fi.curve_points.len()
             );
         }
     }
