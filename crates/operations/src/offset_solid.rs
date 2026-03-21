@@ -307,7 +307,7 @@ fn solve_3_plane_intersection(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, deprecated)]
 mod tests {
     use super::*;
     use crate::primitives::make_box;
