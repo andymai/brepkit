@@ -516,6 +516,7 @@ fn compute_lspia_step_size(basis_data: &[(usize, Vec<f64>)], degree: usize, m: u
 ///
 /// Computes `mu = 1 / lambda_max` for the weighted normal equations
 /// `N^T W N` where `W = diag(point_weights)`.
+#[allow(dead_code)]
 fn compute_lspia_step_size_weighted(
     basis_data: &[(usize, Vec<f64>)],
     point_weights: &[f64],
@@ -748,8 +749,8 @@ pub fn approximate_lspia(
 /// Returns [`MathError::EmptyInput`] if fewer than 2 points.
 /// Returns [`MathError::InvalidWeights`] if `point_weights.len()` does not match
 /// `points.len()`.
-#[allow(clippy::cast_precision_loss, clippy::too_many_arguments)]
-pub fn approximate_lspia_weighted(
+#[allow(clippy::cast_precision_loss, clippy::too_many_arguments, dead_code)]
+pub(crate) fn approximate_lspia_weighted(
     points: &[Point3],
     point_weights: &[f64],
     degree: usize,

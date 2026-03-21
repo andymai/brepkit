@@ -28,6 +28,6 @@ mod system;
 
 pub use constraint::{Constraint, ConstraintEntry, ConstraintId};
 pub use dof::DofAnalysis;
-pub use entity::{CircleData, CircleId, GenArena, Handle, LineData, LineId, PointData, PointId};
+pub use entity::{CircleData, CircleId, LineData, LineId, PointData, PointId};
 pub use solver::SolveResult;
 pub use system::GcsSystem;
