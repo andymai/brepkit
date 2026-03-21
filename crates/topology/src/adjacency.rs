@@ -155,12 +155,14 @@ impl AdjacencyIndex {
 
     /// Returns the full edge-to-faces map.
     ///
-    /// Provided as a compatibility shim for callers that need direct map access.
-    /// Values are `SmallVec<[FaceId; 2]>` (inline for manifold edges); access
-    /// through `Deref<Target=[FaceId]>` for forward-compatible code.
+    /// Each entry maps an edge to the faces that share it. Manifold edges
+    /// have exactly 2 faces; boundary edges have 1.
     #[must_use]
-    pub fn edge_faces_map(&self) -> &HashMap<EdgeId, SmallVec<[FaceId; 2]>> {
-        &self.edge_faces
+    pub fn edge_faces_map(&self) -> HashMap<EdgeId, Vec<FaceId>> {
+        self.edge_faces
+            .iter()
+            .map(|(k, v)| (*k, v.to_vec()))
+            .collect()
     }
 }
 

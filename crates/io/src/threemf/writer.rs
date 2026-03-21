@@ -209,7 +209,7 @@ mod tests {
     use brepkit_operations::extrude::extrude;
     use brepkit_operations::revolve::revolve;
     use brepkit_topology::Topology;
-    use brepkit_topology::test_utils::{make_unit_cube, make_unit_square_face};
+    use brepkit_topology::test_utils::{make_unit_cube_non_manifold, make_unit_square_face};
 
     use super::*;
 
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn export_unit_cube() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = write_threemf(&topo, &[solid], 0.1).unwrap();
 
@@ -278,7 +278,7 @@ mod tests {
     fn export_multiple_solids() {
         let mut topo = Topology::new();
         let s1 = make_extruded_box(&mut topo);
-        let s2 = make_unit_cube(&mut topo);
+        let s2 = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = write_threemf(&topo, &[s1, s2], 0.1).unwrap();
 
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn export_invalid_deflection_error() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         assert!(write_threemf(&topo, &[solid], 0.0).is_err());
         assert!(write_threemf(&topo, &[solid], -1.0).is_err());
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn unit_cube_vertex_and_triangle_counts() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = write_threemf(&topo, &[solid], 0.1).unwrap();
         let xml = extract_model_xml(&bytes);
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn xml_has_correct_namespace() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = write_threemf(&topo, &[solid], 0.5).unwrap();
         let xml = extract_model_xml(&bytes);
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn vertex_attributes_are_finite() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = write_threemf(&topo, &[solid], 0.5).unwrap();
         let xml = extract_model_xml(&bytes);
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn roundtrip_zip_contains_expected_entries() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = write_threemf(&topo, &[solid], 0.5).unwrap();
 

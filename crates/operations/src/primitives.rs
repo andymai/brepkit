@@ -894,7 +894,7 @@ mod tests {
         let s = topo.solid(solid).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
 
-        brepkit_topology::validation::validate_shell_manifold(sh, topo.faces(), topo.wires())
+        brepkit_topology::validation::validate_shell_manifold(sh, &topo)
             .expect("box should be manifold");
     }
 

@@ -654,14 +654,14 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use brepkit_topology::Topology;
-    use brepkit_topology::test_utils::make_unit_cube;
+    use brepkit_topology::test_utils::make_unit_cube_non_manifold;
 
     use super::*;
 
     #[test]
     fn write_step_unit_cube() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let step_str = write_step(&topo, &[solid]).unwrap();
 
@@ -674,7 +674,7 @@ mod tests {
     #[test]
     fn step_contains_required_entities() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let step_str = write_step(&topo, &[solid]).unwrap();
 
@@ -693,7 +693,7 @@ mod tests {
     #[test]
     fn step_contains_product_structure() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let step_str = write_step(&topo, &[solid]).unwrap();
 
@@ -706,7 +706,7 @@ mod tests {
     #[test]
     fn step_contains_geometric_context() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let step_str = write_step(&topo, &[solid]).unwrap();
 
@@ -719,7 +719,7 @@ mod tests {
     #[test]
     fn step_unit_cube_has_six_faces() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let step_str = write_step(&topo, &[solid]).unwrap();
 
@@ -733,7 +733,7 @@ mod tests {
     #[test]
     fn step_unit_cube_has_edges() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let step_str = write_step(&topo, &[solid]).unwrap();
 
@@ -746,7 +746,7 @@ mod tests {
     #[test]
     fn step_unit_cube_has_eight_vertices() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let step_str = write_step(&topo, &[solid]).unwrap();
 
@@ -773,7 +773,7 @@ mod tests {
     fn step_multiple_solids() {
         let mut topo = Topology::new();
         let s1 = brepkit_operations::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
-        let s2 = make_unit_cube(&mut topo);
+        let s2 = make_unit_cube_non_manifold(&mut topo);
 
         let step_str = write_step(&topo, &[s1, s2]).unwrap();
 
@@ -791,7 +791,7 @@ mod tests {
     #[test]
     fn step_entity_ids_are_sequential() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let step_str = write_step(&topo, &[solid]).unwrap();
         assert!(step_str.contains("#1 = "));

@@ -2048,7 +2048,7 @@ mod tests {
 
     use brepkit_math::tolerance::Tolerance;
     use brepkit_topology::Topology;
-    use brepkit_topology::test_utils::make_unit_cube;
+    use brepkit_topology::test_utils::make_unit_cube_non_manifold;
 
     use super::*;
 
@@ -2120,7 +2120,7 @@ mod tests {
     #[test]
     fn unit_cube_bounding_box() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let aabb = solid_bounding_box(&topo, solid).unwrap();
         let tol = Tolerance::new();
@@ -2186,7 +2186,7 @@ mod tests {
     #[test]
     fn unit_cube_volume() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         // Unit cube is all-planar — volume is computed via polygon method,
         // which should be exact to floating-point precision.
@@ -2397,7 +2397,7 @@ mod tests {
     #[test]
     fn unit_cube_surface_area() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let area = solid_surface_area(&topo, solid, 0.1).unwrap();
         // 6 faces × 1.0 each = 6.0 exactly for all-planar solid.
@@ -2407,7 +2407,7 @@ mod tests {
     #[test]
     fn unit_cube_face_area() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let solid_data = topo.solid(solid).unwrap();
         let shell = topo.shell(solid_data.outer_shell()).unwrap();
@@ -2462,7 +2462,7 @@ mod tests {
     #[test]
     fn unit_cube_center_of_mass() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let com = solid_center_of_mass(&topo, solid, 0.1).unwrap();
         // Symmetric solid centered at (0.5, 0.5, 0.5).
@@ -2517,7 +2517,7 @@ mod tests {
     #[test]
     fn edge_length_unit_cube() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let tol = Tolerance::new();
         let solid_data = topo.solid(solid).unwrap();
@@ -2571,7 +2571,7 @@ mod tests {
     #[test]
     fn face_perimeter_unit_cube() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let solid_data = topo.solid(solid).unwrap();
         let shell = topo.shell(solid_data.outer_shell()).unwrap();

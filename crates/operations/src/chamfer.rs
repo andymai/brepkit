@@ -797,8 +797,7 @@ mod tests {
 
         let result_solid = topo.solid(result).expect("result solid");
         let result_shell = topo.shell(result_solid.outer_shell()).expect("shell");
-        validate_shell_manifold(result_shell, topo.faces(), topo.wires())
-            .expect("result should be manifold");
+        validate_shell_manifold(result_shell, &topo).expect("result should be manifold");
     }
 
     #[test]
@@ -836,8 +835,7 @@ mod tests {
             "expected 8 faces after 2 non-adjacent chamfers"
         );
 
-        validate_shell_manifold(result_shell, topo.faces(), topo.wires())
-            .expect("result should be manifold");
+        validate_shell_manifold(result_shell, &topo).expect("result should be manifold");
     }
 
     /// Chamfer all 12 edges of a 10³ box with d=1.0.
@@ -923,8 +921,7 @@ mod tests {
             "expected 7 faces after single-edge chamfer"
         );
 
-        validate_shell_manifold(result_shell, topo.faces(), topo.wires())
-            .expect("result should be manifold");
+        validate_shell_manifold(result_shell, &topo).expect("result should be manifold");
     }
 
     /// Asymmetric single-edge chamfer volume on a unit cube.

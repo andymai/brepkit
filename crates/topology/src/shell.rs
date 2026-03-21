@@ -35,4 +35,9 @@ impl Shell {
     pub fn faces(&self) -> &[FaceId] {
         &self.faces
     }
+
+    /// Returns mutable access to the faces of this shell.
+    pub fn faces_mut(&mut self) -> &mut Vec<FaceId> {
+        &mut self.faces
+    }
 }

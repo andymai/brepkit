@@ -27,7 +27,7 @@ fn check_result(topo: &Topology, solid: SolidId) -> usize {
     let s = topo.solid(solid).unwrap();
     let sh = topo.shell(s.outer_shell()).unwrap();
     assert!(
-        validate_shell_manifold(sh, topo.faces(), topo.wires()).is_ok(),
+        validate_shell_manifold(sh, topo).is_ok(),
         "result should be manifold"
     );
     sh.faces().len()
@@ -3101,11 +3101,7 @@ fn fuse_shelled_box_with_socket_loft() {
     eprintln!("fused: F={f}, E={e}, V={v}, euler={euler}, vol={fused_vol:.1}");
 
     // The fused solid should be manifold.
-    let val_result = brepkit_topology::validation::validate_shell_manifold(
-        fused_shell,
-        topo.faces(),
-        topo.wires(),
-    );
+    let val_result = brepkit_topology::validation::validate_shell_manifold(fused_shell, &topo);
     let is_manifold = val_result.is_ok();
     if let Err(ref issues) = val_result {
         eprintln!("manifold issues: {issues:?}");

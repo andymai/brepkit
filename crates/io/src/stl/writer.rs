@@ -164,14 +164,14 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use brepkit_topology::Topology;
-    use brepkit_topology::test_utils::make_unit_cube;
+    use brepkit_topology::test_utils::make_unit_cube_non_manifold;
 
     use super::*;
 
     #[test]
     fn write_binary_stl_unit_cube() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = write_stl(&topo, &[solid], 0.1, StlFormat::Binary).unwrap();
 
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn write_ascii_stl_unit_cube() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = write_stl(&topo, &[solid], 0.1, StlFormat::Ascii).unwrap();
         let text = String::from_utf8(bytes).unwrap();

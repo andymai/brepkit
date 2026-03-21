@@ -310,14 +310,15 @@ fn make_quad_face(
 
 /// Creates a unit cube solid with vertices at (0,0,0) to (1,1,1).
 ///
-/// The cube has 8 vertices, 24 edges (4 per face, not shared — simplified
-/// construction for testing), 6 faces, 1 shell, and 1 solid.
+/// **Non-manifold**: The cube has 8 vertices, 24 edges (4 per face, not shared
+/// — simplified construction for testing), 6 faces, 1 shell, and 1 solid.
+/// For a manifold cube with shared edges, use [`make_unit_cube_manifold`].
 ///
 /// # Panics
 ///
 /// Panics if any topology construction fails.
 #[must_use]
-pub fn make_unit_cube(topo: &mut Topology) -> SolidId {
+pub fn make_unit_cube_non_manifold(topo: &mut Topology) -> SolidId {
     // 8 vertices of the unit cube.
     let v000 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
     let v100 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));

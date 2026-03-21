@@ -129,7 +129,7 @@ pub fn assert_euler_genus0(topo: &Topology, solid: SolidId) {
 pub fn assert_manifold(topo: &Topology, solid: SolidId) {
     let s = topo.solid(solid).unwrap();
     let sh = topo.shell(s.outer_shell()).unwrap();
-    brepkit_topology::validation::validate_shell_manifold(sh, topo.faces(), topo.wires())
+    brepkit_topology::validation::validate_shell_manifold(sh, topo)
         .expect("solid should be manifold");
 }
 
