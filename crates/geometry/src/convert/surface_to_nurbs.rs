@@ -27,7 +27,7 @@ pub fn cylinder_to_nurbs(
 
 /// Convert a [`SphericalSurface`] to a NURBS surface.
 ///
-/// The result spans the full sphere (`u in [0, 2pi)`, `v in [-pi/2, pi/2]`).
+/// The result spans the full sphere (`u ∈ [0, 2π)`, `v ∈ [-π/2, π/2]`).
 ///
 /// # Errors
 ///
@@ -53,7 +53,7 @@ pub fn cone_to_nurbs(
 
 /// Convert a [`ToroidalSurface`] to a NURBS surface.
 ///
-/// The result spans the full torus (`u in [0, 2pi)`, `v in [0, 2pi)`).
+/// The result spans the full torus (`u ∈ [0, 2π)`, `v ∈ [0, 2π)`).
 ///
 /// # Errors
 ///

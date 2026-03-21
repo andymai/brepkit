@@ -38,15 +38,25 @@ pub fn point_to_plane(point: Point3, origin: Point3, normal: Vec3) -> SurfacePro
     let d = (point - origin).dot(normal);
     let closest = point - normal * d;
 
-    // Derive stable orthonormal u/v axes from normal
+    // Derive stable orthonormal u/v axes from normal.
+    // Pick a candidate that is not parallel to `normal`, then normalize.
     let candidate = if normal.x().abs() < 0.9 {
         Vec3::new(1.0, 0.0, 0.0)
     } else {
         Vec3::new(0.0, 1.0, 0.0)
     };
-    let u_axis = normal.cross(candidate);
-    let u_len = u_axis.length();
-    let u_axis = u_axis * (1.0 / u_len);
+    let u_raw = normal.cross(candidate);
+    let u_len = u_raw.length();
+    if u_len < 1e-15 {
+        // Degenerate (zero or near-zero) normal — UV is meaningless.
+        return SurfaceProjection {
+            distance: d.abs(),
+            point: closest,
+            u: 0.0,
+            v: 0.0,
+        };
+    }
+    let u_axis = u_raw * (1.0 / u_len);
     let v_axis = normal.cross(u_axis);
 
     let delta = closest - origin;
@@ -491,6 +501,25 @@ mod tests {
         // closest=(5,2,7), delta=(4,0,4), u=delta·u_axis=-4, v=delta·v_axis=-4.
         assert!(approx(proj.u, -4.0, 1e-12), "u={}", proj.u);
         assert!(approx(proj.v, -4.0, 1e-12), "v={}", proj.v);
+    }
+
+    #[test]
+    fn plane_x_dominant_normal() {
+        // Exercises the `else` branch of the candidate selection (normal.x >= 0.9).
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let normal = Vec3::new(1.0, 0.0, 0.0);
+        let point = Point3::new(7.0, 3.0, 4.0);
+        let proj = point_to_plane(point, origin, normal);
+        assert!(approx(proj.distance, 7.0, 1e-12), "dist={}", proj.distance);
+        assert!(approx(proj.point.x(), 0.0, 1e-12));
+        assert!(approx(proj.point.y(), 3.0, 1e-12));
+        assert!(approx(proj.point.z(), 4.0, 1e-12));
+        // For normal=(1,0,0), candidate=(0,1,0):
+        // u_axis = normalize((1,0,0)×(0,1,0)) = (0,0,1)
+        // v_axis = (1,0,0)×(0,0,1) = (0,-1,0)
+        // delta=(0,3,4), u=4, v=-3
+        assert!(approx(proj.u, 4.0, 1e-12), "u={}", proj.u);
+        assert!(approx(proj.v, -3.0, 1e-12), "v={}", proj.v);
     }
 
     // ── point_to_sphere ──────────────────────────────────────────────────────
