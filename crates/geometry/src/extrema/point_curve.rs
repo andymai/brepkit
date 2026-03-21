@@ -92,7 +92,7 @@ pub fn point_to_circle(point: Point3, circle: &Circle3D) -> CurveProjection {
 /// Project a point onto a parametric curve over `[t_start, t_end]`.
 ///
 /// **Algorithm:**
-/// 1. Sample the curve at [`N_SAMPLES`] uniformly-spaced parameters to find the
+/// 1. Sample the curve at `N_SAMPLES` uniformly-spaced parameters to find the
 ///    global closest sample (avoids local-minimum traps on non-convex curves).
 /// 2. Refine the best sample using Newton-Raphson on the stationarity condition
 ///    `dot(C(t) - P, C'(t)) = 0`, clamping `t` to `[t_start, t_end]` after

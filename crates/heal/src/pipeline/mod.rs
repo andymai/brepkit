@@ -1,6 +1,6 @@
 //! Configurable healing pipeline.
 //!
-//! Define a sequence of [`HealOperator`] steps and execute them
+//! Define a sequence of [`operator::HealOperator`] steps and execute them
 //! in order on a solid.  Built-in operators cover the standard
 //! healing operations.
 

@@ -13,7 +13,6 @@ brepkit-topology.workspace = true
 brepkit-geometry.workspace = true
 
 thiserror.workspace = true
-log.workspace = true
 
 [dev-dependencies]
 brepkit-topology = { workspace = true, features = ["test-utils"] }

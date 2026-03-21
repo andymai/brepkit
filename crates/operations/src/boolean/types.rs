@@ -91,7 +91,7 @@ pub enum BooleanOp {
 
 /// A face specification for mixed-surface solid assembly.
 ///
-/// Used by [`super::assemble_solid_mixed`] to build solids with faces of any
+/// Used by `assemble_solid_mixed` to build solids with faces of any
 /// surface type -- not just planar.
 #[derive(Clone)]
 pub enum FaceSpec {
@@ -185,7 +185,7 @@ pub struct BooleanOptions {
     ///
     /// Default: `true`.
     pub unify_faces: bool,
-    /// Run full shape healing on the boolean result via [`heal_solid`].
+    /// Run full shape healing on the boolean result via [`crate::heal::heal_solid`].
     ///
     /// Use for final results only -- healing can corrupt intermediates fed into
     /// further booleans (non-convex merged faces confuse chord splitting).

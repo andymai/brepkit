@@ -138,7 +138,7 @@ impl PowerBasis1D {
     /// Evaluate all `(degree+1)` non-zero basis functions at `u` via Horner's method.
     ///
     /// Writes results into `out[0..=degree]`. The caller must provide the span
-    /// index (from [`find_span`]).
+    /// index (from `find_span`).
     pub fn horner(&self, span: usize, u: f64, out: &mut [f64]) {
         let p = self.degree;
         let span_idx = span - p;

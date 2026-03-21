@@ -116,7 +116,7 @@ pub fn line_to_line(
 /// Minimum distance between two parametric curves.
 ///
 /// **Algorithm:**
-/// 1. Sample both curves at [`N_SAMPLES`] points and find the closest pair.
+/// 1. Sample both curves at `N_SAMPLES` points and find the closest pair.
 /// 2. Refine with Newton-Raphson on the two-variable stationarity system:
 ///    - `∂f/∂t₁ = dot(C₁(t₁) − C₂(t₂), C₁'(t₁)) = 0`
 ///    - `∂f/∂t₂ = dot(C₁(t₁) − C₂(t₂), −C₂'(t₂)) = 0`

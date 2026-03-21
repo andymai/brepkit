@@ -70,7 +70,7 @@ pub fn fix_edge(
 ///
 /// 1. Check if the edge has a PCurve on the given face (via pcurve registry).
 /// 2. If a PCurve exists, sample both the 3D curve and the PCurve at
-///    [`SAME_PARAM_SAMPLES`] points and compute the maximum deviation
+///    `SAME_PARAM_SAMPLES` points and compute the maximum deviation
 ///    between the surface evaluation at the PCurve's UV coordinates and
 ///    the 3D curve position.
 /// 3. If deviation > tolerance (or no PCurve exists), rebuild the PCurve

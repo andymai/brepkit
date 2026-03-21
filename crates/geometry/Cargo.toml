@@ -10,7 +10,6 @@ description = "Geometry algorithms: sampling, extrema, conversion"
 [dependencies]
 brepkit-math.workspace = true
 thiserror.workspace = true
-log.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

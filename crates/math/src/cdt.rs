@@ -495,7 +495,7 @@ impl Cdt {
     /// Partition remaining (non-removed) interior triangles into connected
     /// regions separated by the given separator edges.
     ///
-    /// After calling [`remove_exterior`], this method groups interior
+    /// After calling [`Cdt::remove_exterior`], this method groups interior
     /// triangles into connected components. Two adjacent triangles belong
     /// to the same region unless the shared edge is in `separators`.
     ///

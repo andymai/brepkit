@@ -17,7 +17,6 @@ default = ["io"]
 io = ["dep:brepkit-io"]
 
 [dependencies]
-brepkit-wasm-macros = { path = "../wasm-macros" }
 brepkit-math.workspace = true
 brepkit-geometry.workspace = true
 brepkit-topology.workspace = true
@@ -30,7 +29,6 @@ log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tsify.workspace = true
-serde-wasm-bindgen.workspace = true
 
 [lints]
 workspace = true

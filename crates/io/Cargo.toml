@@ -12,8 +12,6 @@ brepkit-math.workspace = true
 brepkit-topology.workspace = true
 brepkit-operations.workspace = true
 thiserror.workspace = true
-serde.workspace = true
-serde_json.workspace = true
 zip.workspace = true
 quick-xml.workspace = true
 

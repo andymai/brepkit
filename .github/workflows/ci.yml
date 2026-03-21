@@ -96,6 +96,8 @@ jobs:
     name: WASM Size Report
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     steps:
       - uses: actions/checkout@v6
       - uses: Swatinem/rust-cache@v2
@@ -212,7 +214,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Install cargo-machete
-        run: cargo install cargo-machete --locked
+        run: cargo install cargo-machete --version 0.9.1 --locked
       - run: cargo machete
 
   taplo:
@@ -222,9 +224,11 @@ jobs:
       - uses: actions/checkout@v6
       - name: Install taplo
         run: |
-          curl -fsSL https://github.com/tamasfe/taplo/releases/latest/download/taplo-full-linux-x86_64.gz \
-            | gunzip > /usr/local/bin/taplo
-          chmod +x /usr/local/bin/taplo
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL https://github.com/tamasfe/taplo/releases/download/0.9.3/taplo-full-linux-x86_64.gz \
+            | gunzip > "$HOME/.local/bin/taplo"
+          chmod +x "$HOME/.local/bin/taplo"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: taplo fmt --check
 
   ci-pass:

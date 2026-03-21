@@ -404,7 +404,7 @@ const GRID_N: usize = 8;
 /// Project a point onto any [`ParametricSurface`] over `[u_range] × [v_range]`.
 ///
 /// **Algorithm:**
-/// 1. Sample the surface on an [`GRID_N`]×[`GRID_N`] grid to find the global
+/// 1. Sample the surface on a `GRID_N`×`GRID_N` grid to find the global
 ///    closest sample (avoids local-minimum traps on non-convex surfaces).
 /// 2. Refine the best sample using Newton-Raphson on the two-variable
 ///    stationarity conditions:

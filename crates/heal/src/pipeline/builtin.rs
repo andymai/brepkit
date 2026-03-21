@@ -1,7 +1,7 @@
 //! Built-in pipeline operators.
 //!
-//! These wrap the analysis/fix/upgrade functions as [`HealOperator`]
-//! implementations for use in [`HealProcess`] pipelines.
+//! These wrap the analysis/fix/upgrade functions as [`super::operator::HealOperator`]
+//! implementations for use in [`super::process::HealProcess`] pipelines.
 
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
