@@ -5,11 +5,11 @@
 use wasm_bindgen::prelude::*;
 
 use crate::error::{WasmError, validate_positive};
-use crate::helpers::{
-    chamfer_polygon_2d, fillet_polygon_2d, find_common_segments, parse_polygon_2d,
-    polygons_overlap_2d, sutherland_hodgman_clip,
-};
+use crate::helpers::{parse_polygon_2d, polygons_overlap_2d};
 use crate::kernel::BrepKernel;
+use brepkit_math::polygon2d::{
+    chamfer_polygon_2d, fillet_polygon_2d, find_common_segments, sutherland_hodgman_clip,
+};
 
 #[wasm_bindgen]
 impl BrepKernel {

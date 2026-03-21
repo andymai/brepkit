@@ -10,8 +10,7 @@
     clippy::redundant_closure,
     clippy::redundant_closure_for_method_calls,
     clippy::map_unwrap_or,
-    clippy::expect_used,
-    dead_code
+    clippy::expect_used
 )]
 
 use std::rc::Rc;
@@ -403,80 +402,11 @@ impl BrepKernel {
         &mut self,
         points: &[Point3],
     ) -> Result<brepkit_topology::face::FaceId, WasmError> {
-        let n = points.len();
-
-        let verts: Vec<_> = points
-            .iter()
-            .map(|p| self.topo_mut().add_vertex(Vertex::new(*p, TOL)))
-            .collect();
-
-        let edges: Vec<_> = (0..n)
-            .map(|i| {
-                let next = (i + 1) % n;
-                self.topo_mut()
-                    .add_edge(Edge::new(verts[i], verts[next], EdgeCurve::Line))
-            })
-            .collect();
-
-        let oriented: Vec<_> = edges
-            .iter()
-            .map(|&eid| OrientedEdge::new(eid, true))
-            .collect();
-        let wire = Wire::new(oriented, true)?;
-        let wid = self.topo_mut().add_wire(wire);
-
-        let a = points[1] - points[0];
-        let b = points[2] - points[0];
-        let normal = a.cross(b).normalize()?;
-
-        let d = normal.x().mul_add(
-            points[0].x(),
-            normal
-                .y()
-                .mul_add(points[0].y(), normal.z() * points[0].z()),
-        );
-
-        let face_id =
-            self.topo_mut()
-                .add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
-
-        Ok(face_id)
-    }
-
-    /// Compute the v-range for an analytic surface by projecting face wire
-    /// vertices onto the surface axis.
-    pub(crate) fn compute_axial_v_range(
-        &self,
-        face_id: brepkit_topology::face::FaceId,
-        origin: Point3,
-        axis: Vec3,
-    ) -> Result<(f64, f64), JsError> {
-        let face_data = self.topo.face(face_id)?;
-        let wire = self.topo.wire(face_data.outer_wire())?;
-
-        let mut v_min = f64::MAX;
-        let mut v_max = f64::MIN;
-
-        for oe in wire.edges() {
-            let edge = self.topo.edge(oe.edge())?;
-            for vid in [edge.start(), edge.end()] {
-                let pt = self.topo.vertex(vid)?.point();
-                let to_pt = Vec3::new(
-                    pt.x() - origin.x(),
-                    pt.y() - origin.y(),
-                    pt.z() - origin.z(),
-                );
-                let v = axis.dot(to_pt);
-                v_min = v_min.min(v);
-                v_max = v_max.max(v);
-            }
-        }
-
-        if v_min < v_max {
-            Ok((v_min, v_max))
-        } else {
-            Ok((-1.0, 1.0))
-        }
+        Ok(brepkit_topology::builder::make_planar_face(
+            self.topo_mut(),
+            points,
+            TOL,
+        )?)
     }
 
     /// Compute a plane surface from the vertices of a wire.
@@ -1136,7 +1066,7 @@ impl BrepKernel {
 
 #[cfg(test)]
 pub(crate) mod test_fixtures {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, dead_code)]
     use super::*;
 
     pub fn kernel_with_box() -> (BrepKernel, u32) {

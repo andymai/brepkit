@@ -4,6 +4,8 @@
 
 use std::f64::consts::PI;
 
+use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 
@@ -298,6 +300,102 @@ pub fn make_circle_face(
 ) -> Result<FaceId, crate::TopologyError> {
     let wid = make_regular_polygon_wire(topo, radius, segments, tolerance)?;
     make_face_from_wire(topo, wid)
+}
+
+/// Create a closed planar face from an ordered sequence of 3D points.
+///
+/// Each consecutive pair of points becomes a line edge, and the last point
+/// connects back to the first. The face normal is computed via Newell's
+/// method from the point polygon.
+///
+/// # Errors
+///
+/// Returns an error if fewer than 3 points are provided or the computed
+/// normal is degenerate.
+pub fn make_planar_face(
+    topo: &mut Topology,
+    points: &[Point3],
+    tolerance: f64,
+) -> Result<FaceId, crate::TopologyError> {
+    let wid = make_polygon_wire(topo, points, tolerance)?;
+    make_face_from_wire(topo, wid)
+}
+
+/// Create an edge from explicit start/end points and a NURBS curve.
+///
+/// Allocates vertices at `start` and `end` with the given `tolerance`,
+/// then creates an edge with the provided `NurbsCurve` geometry.
+pub fn make_nurbs_edge(
+    topo: &mut Topology,
+    start: Point3,
+    end: Point3,
+    curve: NurbsCurve,
+    tolerance: f64,
+) -> EdgeId {
+    let v_start = topo.add_vertex(Vertex::new(start, tolerance));
+    let v_end = topo.add_vertex(Vertex::new(end, tolerance));
+    topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)))
+}
+
+/// Create an edge from a NURBS curve, evaluating its endpoints.
+///
+/// The start and end points are obtained by evaluating the curve at its
+/// first and last knot values.
+pub fn make_nurbs_edge_from_curve(
+    topo: &mut Topology,
+    curve: &NurbsCurve,
+    tolerance: f64,
+) -> EdgeId {
+    let knots = curve.knots();
+    let start = curve.evaluate(knots[0]);
+    let end = curve.evaluate(knots[knots.len() - 1]);
+    let v_start = topo.add_vertex(Vertex::new(start, tolerance));
+    let v_end = topo.add_vertex(Vertex::new(end, tolerance));
+    topo.add_edge(Edge::new(
+        v_start,
+        v_end,
+        EdgeCurve::NurbsCurve(curve.clone()),
+    ))
+}
+
+/// Create a face from a NURBS surface with a rectangular domain wire.
+///
+/// Evaluates the four corner points of the surface domain, creates line
+/// edges between them forming a closed rectangular wire, and attaches
+/// the `NurbsSurface` as the face geometry.
+///
+/// # Errors
+///
+/// Returns an error if the wire construction fails.
+pub fn make_nurbs_face(
+    topo: &mut Topology,
+    surface: NurbsSurface,
+    tolerance: f64,
+) -> Result<FaceId, crate::TopologyError> {
+    let (u_min, u_max) = surface.domain_u();
+    let (v_min, v_max) = surface.domain_v();
+    let corners = [
+        surface.evaluate(u_min, v_min),
+        surface.evaluate(u_max, v_min),
+        surface.evaluate(u_max, v_max),
+        surface.evaluate(u_min, v_max),
+    ];
+    let verts: Vec<_> = corners
+        .iter()
+        .map(|p| topo.add_vertex(Vertex::new(*p, tolerance)))
+        .collect();
+    let n = verts.len();
+    let edges: Vec<_> = (0..n)
+        .map(|i| topo.add_edge(Edge::new(verts[i], verts[(i + 1) % n], EdgeCurve::Line)))
+        .collect();
+    let oriented: Vec<_> = edges
+        .iter()
+        .map(|&eid| OrientedEdge::new(eid, true))
+        .collect();
+    let wire = Wire::new(oriented, true)?;
+    let wid = topo.add_wire(wire);
+    let face_id = topo.add_face(Face::new(wid, vec![], FaceSurface::Nurbs(surface)));
+    Ok(face_id)
 }
 
 #[cfg(test)]

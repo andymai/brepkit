@@ -14,9 +14,9 @@ use crate::error::{WasmError, validate_finite};
 use crate::handles::{
     edge_id_to_u32, face_id_to_u32, solid_id_to_u32, vertex_id_to_u32, wire_id_to_u32,
 };
-use crate::helpers::{
-    detect_nurbs_curve_type, detect_nurbs_surface_type, sample_full_period_curve,
-};
+use brepkit_geometry::convert::{DetectedCurveKind, detect_curve_kind, detect_surface_kind};
+
+use crate::helpers::sample_full_period_curve;
 use crate::kernel::BrepKernel;
 
 #[wasm_bindgen]
@@ -425,7 +425,7 @@ impl BrepKernel {
         let face_data = self.topo.face(face_id)?;
         Ok(match face_data.surface() {
             FaceSurface::Plane { .. } => "plane",
-            FaceSurface::Nurbs(ns) => detect_nurbs_surface_type(ns),
+            FaceSurface::Nurbs(ns) => detect_surface_kind(ns).as_str(),
             FaceSurface::Cylinder(_) => "cylinder",
             FaceSurface::Cone(_) => "cone",
             FaceSurface::Sphere(_) => "sphere",
@@ -447,7 +447,11 @@ impl BrepKernel {
         let edge_data = self.topo.edge(edge_id)?;
         Ok(match edge_data.curve() {
             EdgeCurve::Line => "LINE",
-            EdgeCurve::NurbsCurve(nc) => detect_nurbs_curve_type(nc),
+            EdgeCurve::NurbsCurve(nc) => match detect_curve_kind(nc) {
+                DetectedCurveKind::Line => "LINE",
+                DetectedCurveKind::Circle => "CIRCLE",
+                DetectedCurveKind::BSpline => "BSPLINE_CURVE",
+            },
             EdgeCurve::Circle(_) => "CIRCLE",
             EdgeCurve::Ellipse(_) => "ELLIPSE",
         }
@@ -1056,11 +1060,21 @@ impl BrepKernel {
                 Ok(vec![u0, u1, v0, v1])
             }
             FaceSurface::Cylinder(cyl) => {
-                let v_range = self.compute_axial_v_range(face_id, cyl.origin(), cyl.axis())?;
+                let v_range = brepkit_check::properties::axial_v_range(
+                    &self.topo,
+                    face_id,
+                    cyl.origin(),
+                    cyl.axis(),
+                )?;
                 Ok(vec![0.0, 2.0 * PI, v_range.0, v_range.1])
             }
             FaceSurface::Cone(cone) => {
-                let v_range = self.compute_axial_v_range(face_id, cone.apex(), cone.axis())?;
+                let v_range = brepkit_check::properties::axial_v_range(
+                    &self.topo,
+                    face_id,
+                    cone.apex(),
+                    cone.axis(),
+                )?;
                 Ok(vec![0.0, 2.0 * PI, v_range.0, v_range.1])
             }
             FaceSurface::Sphere(_) => Ok(vec![0.0, 2.0 * PI, -PI / 2.0, PI / 2.0]),

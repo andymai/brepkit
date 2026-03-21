@@ -343,6 +343,53 @@ pub fn point_to_torus(point: Point3, torus: &ToroidalSurface) -> SurfaceProjecti
     }
 }
 
+// ── NURBS surface grid-search projection ────────────────────────────────────
+
+/// Project a point onto a NURBS surface using a grid search.
+///
+/// Samples an 11x11 grid in parameter space and returns the closest point.
+/// This is a lightweight alternative to the full Newton-Raphson
+/// [`point_to_surface`] solver — suitable when only approximate UV coordinates
+/// are needed (e.g. PCurve seeding).
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+pub fn point_to_nurbs_surface(
+    point: Point3,
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+) -> SurfaceProjection {
+    let (u_min, u_max) = surface.domain_u();
+    let (v_min, v_max) = surface.domain_v();
+    let n = 10;
+    let mut best_u = u_min;
+    let mut best_v = v_min;
+    let mut best_dist_sq = f64::MAX;
+
+    for i in 0..=n {
+        for j in 0..=n {
+            let u = u_min + (u_max - u_min) * (i as f64) / (n as f64);
+            let v = v_min + (v_max - v_min) * (j as f64) / (n as f64);
+            let pt = surface.evaluate(u, v);
+            let dx = pt.x() - point.x();
+            let dy = pt.y() - point.y();
+            let dz = pt.z() - point.z();
+            let dist_sq = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
+            if dist_sq < best_dist_sq {
+                best_dist_sq = dist_sq;
+                best_u = u;
+                best_v = v;
+            }
+        }
+    }
+
+    let closest = surface.evaluate(best_u, best_v);
+    SurfaceProjection {
+        distance: best_dist_sq.sqrt(),
+        point: closest,
+        u: best_u,
+        v: best_v,
+    }
+}
+
 // ── Generic Newton-Raphson solver ────────────────────────────────────────────
 
 /// Maximum Newton iterations.
