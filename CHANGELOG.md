@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.25.0](https://github.com/andymai/brepkit/compare/v2.24.0...v2.25.0) (2026-03-21)
+
+
+### Features
+
+* **offset:** cylinder and sphere offset support ([#379](https://github.com/andymai/brepkit/issues/379)) ([488eb80](https://github.com/andymai/brepkit/commit/488eb804bf58d29179b3188dfa8187d62952341f))
+
 ## [2.24.0](https://github.com/andymai/brepkit/compare/v2.23.0...v2.24.0) (2026-03-20)
 
 
