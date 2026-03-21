@@ -17,6 +17,7 @@ L2: brepkit-blend       → Walking-based fillet and chamfer engine
 L2: brepkit-check       → Classification, validation, properties, distance
 L2: brepkit-heal        → Shape healing (analysis, fixing, upgrading)
 L2: brepkit-offset      → Solid offset engine (global face-face intersection)
+L2: brepkit-sketch      → 2D parametric constraint solver (GCS)
 L1: brepkit-topology    → B-Rep data structures (arena-based)
 L1: brepkit-geometry    → Curve sampling, extrema, geometry conversion
 L0: brepkit-math        → Vectors, matrices, NURBS, predicates
@@ -36,7 +37,8 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 | `heal` | `math`, `topology`, `geometry` |
 | `check` | `math`, `topology`, `geometry` |
 | `offset` | `math`, `topology`, `geometry` |
-| `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check`, `geometry`, `offset` |
+| `sketch` | *(none — no workspace deps)* |
+| `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check`, `geometry`, `offset`, `sketch` |
 | `io` | `math`, `topology`, `operations` |
 | `wasm` | all crates (incl. `blend`, `check`, `heal`) |
 
@@ -51,7 +53,8 @@ The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the p
 - `heal/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
 - `check/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
 - `offset/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
-- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`, `brepkit_check::*`, `brepkit_offset::*`
+- `sketch/src/**` → only `std`, external crates
+- `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`, `brepkit_check::*`, `brepkit_offset::*`, `brepkit_sketch::*`
 - `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`
 - `wasm/src/**` → all `brepkit_*`
 
@@ -95,7 +98,6 @@ Quick reference — find the right file for any task:
 | Oriented bounding box (PCA + SAT) | `obb.rs` |
 | Chord deviation arc discretization | `chord.rs` |
 | Gauss-Legendre quadrature | `quadrature.rs` |
-| 2D sketch constraint solver (GCS) | `gcs/` |
 
 ### L1: geometry (`crates/geometry/src/`)
 | Task | File(s) |
@@ -255,6 +257,17 @@ Quick reference — find the right file for any task:
 | Arc joints (pipe + sphere cap) | `arc_joint.rs` |
 | Shell assembly + solid creation | `assemble.rs` |
 | Self-intersection removal (BOP-based) | `self_int.rs` |
+
+### L2: sketch (`crates/sketch/src/`)
+| Task | File(s) |
+|------|---------|
+| GCS system (CRUD, solve orchestration) | `gcs/system.rs` |
+| Constraint types (10 variants, Jacobians) | `gcs/constraint.rs` |
+| Entity arena (Points, Lines, Circles) | `gcs/entity.rs` |
+| DogLeg trust-region solver | `gcs/solver.rs` |
+| QR factorization (rank detection) | `gcs/qr.rs` |
+| DOF analysis | `gcs/dof.rs` |
+| Error types | `lib.rs` (`SketchError`) |
 
 ### L3: operations (`crates/operations/src/`)
 | Task | File(s) |

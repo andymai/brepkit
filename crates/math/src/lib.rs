@@ -66,17 +66,7 @@ pub enum MathError {
         /// Number of iterations attempted.
         iterations: usize,
     },
-
-    /// A GCS entity handle is invalid or stale (entity was removed).
-    #[error("invalid or stale GCS entity handle")]
-    InvalidGcsHandle,
-
-    /// Cannot remove a GCS entity that is still referenced by other entities or constraints.
-    #[error("GCS entity is still in use by other entities or constraints")]
-    GcsEntityInUse,
 }
-
-pub mod gcs;
 
 pub mod aabb;
 pub mod analytic_intersection;

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::MathError;
+use crate::SketchError;
 
 use super::constraint::{
     Constraint, ConstraintEntry, ConstraintId, EntitySnapshot, JacobianWriter, eval_jacobian,
@@ -89,40 +89,40 @@ impl GcsSystem {
     ///
     /// # Errors
     ///
-    /// Returns `MathError::GcsEntityInUse` if the point is referenced by a line,
-    /// circle, or constraint. Returns `MathError::InvalidGcsHandle` if the handle
+    /// Returns `SketchError::EntityInUse` if the point is referenced by a line,
+    /// circle, or constraint. Returns `SketchError::InvalidHandle` if the handle
     /// is stale or invalid.
-    pub fn remove_point(&mut self, id: PointId) -> Result<PointData, MathError> {
+    pub fn remove_point(&mut self, id: PointId) -> Result<PointData, SketchError> {
         // Check lines
         for (_, line) in self.lines.iter() {
             if line.p1 == id || line.p2 == id {
-                return Err(MathError::GcsEntityInUse);
+                return Err(SketchError::EntityInUse);
             }
         }
         // Check circles
         for (_, circle) in self.circles.iter() {
             if circle.center == id {
-                return Err(MathError::GcsEntityInUse);
+                return Err(SketchError::EntityInUse);
             }
         }
         // Check constraints
         for (_, entry) in self.constraints.iter() {
             if constraint_references_point(&entry.constraint, id) {
-                return Err(MathError::GcsEntityInUse);
+                return Err(SketchError::EntityInUse);
             }
         }
         self.dirty = true;
-        self.points.remove(id).ok_or(MathError::InvalidGcsHandle)
+        self.points.remove(id).ok_or(SketchError::InvalidHandle)
     }
 
     /// Add a line between two existing points.
     ///
     /// # Errors
     ///
-    /// Returns `MathError::InvalidGcsHandle` if either point handle is invalid.
-    pub fn add_line(&mut self, p1: PointId, p2: PointId) -> Result<LineId, MathError> {
+    /// Returns `SketchError::InvalidHandle` if either point handle is invalid.
+    pub fn add_line(&mut self, p1: PointId, p2: PointId) -> Result<LineId, SketchError> {
         if !self.points.contains(p1) || !self.points.contains(p2) {
-            return Err(MathError::InvalidGcsHandle);
+            return Err(SketchError::InvalidHandle);
         }
         Ok(self.lines.insert(LineData { p1, p2 }))
     }
@@ -137,25 +137,25 @@ impl GcsSystem {
     ///
     /// # Errors
     ///
-    /// Returns `MathError::GcsEntityInUse` if the line is referenced by a constraint.
-    /// Returns `MathError::InvalidGcsHandle` if the handle is stale or invalid.
-    pub fn remove_line(&mut self, id: LineId) -> Result<LineData, MathError> {
+    /// Returns `SketchError::EntityInUse` if the line is referenced by a constraint.
+    /// Returns `SketchError::InvalidHandle` if the handle is stale or invalid.
+    pub fn remove_line(&mut self, id: LineId) -> Result<LineData, SketchError> {
         for (_, entry) in self.constraints.iter() {
             if constraint_references_line(&entry.constraint, id) {
-                return Err(MathError::GcsEntityInUse);
+                return Err(SketchError::EntityInUse);
             }
         }
-        self.lines.remove(id).ok_or(MathError::InvalidGcsHandle)
+        self.lines.remove(id).ok_or(SketchError::InvalidHandle)
     }
 
     /// Add a circle with a center point and radius.
     ///
     /// # Errors
     ///
-    /// Returns `MathError::InvalidGcsHandle` if the center point handle is invalid.
-    pub fn add_circle(&mut self, center: PointId, radius: f64) -> Result<CircleId, MathError> {
+    /// Returns `SketchError::InvalidHandle` if the center point handle is invalid.
+    pub fn add_circle(&mut self, center: PointId, radius: f64) -> Result<CircleId, SketchError> {
         if !self.points.contains(center) {
-            return Err(MathError::InvalidGcsHandle);
+            return Err(SketchError::InvalidHandle);
         }
         self.dirty = true;
         Ok(self.circles.insert(CircleData { center, radius }))
@@ -171,16 +171,16 @@ impl GcsSystem {
     ///
     /// # Errors
     ///
-    /// Returns `MathError::GcsEntityInUse` if the circle is referenced by a constraint.
-    /// Returns `MathError::InvalidGcsHandle` if the handle is stale or invalid.
-    pub fn remove_circle(&mut self, id: CircleId) -> Result<CircleData, MathError> {
+    /// Returns `SketchError::EntityInUse` if the circle is referenced by a constraint.
+    /// Returns `SketchError::InvalidHandle` if the handle is stale or invalid.
+    pub fn remove_circle(&mut self, id: CircleId) -> Result<CircleData, SketchError> {
         for (_, entry) in self.constraints.iter() {
             if constraint_references_circle(&entry.constraint, id) {
-                return Err(MathError::GcsEntityInUse);
+                return Err(SketchError::EntityInUse);
             }
         }
         self.dirty = true;
-        self.circles.remove(id).ok_or(MathError::InvalidGcsHandle)
+        self.circles.remove(id).ok_or(SketchError::InvalidHandle)
     }
 
     // ── Constraint CRUD ─────────────────────────────────────────────
@@ -189,9 +189,9 @@ impl GcsSystem {
     ///
     /// # Errors
     ///
-    /// Returns `MathError::InvalidGcsHandle` if any entity referenced by the
+    /// Returns `SketchError::InvalidHandle` if any entity referenced by the
     /// constraint does not exist.
-    pub fn add_constraint(&mut self, constraint: Constraint) -> Result<ConstraintId, MathError> {
+    pub fn add_constraint(&mut self, constraint: Constraint) -> Result<ConstraintId, SketchError> {
         self.validate_constraint(&constraint)?;
         self.dirty = true;
         Ok(self.constraints.insert(ConstraintEntry { constraint }))
@@ -201,14 +201,14 @@ impl GcsSystem {
     ///
     /// # Errors
     ///
-    /// Returns `MathError::InvalidGcsHandle` if the handle is stale or invalid.
-    pub fn remove_constraint(&mut self, id: ConstraintId) -> Result<(), MathError> {
+    /// Returns `SketchError::InvalidHandle` if the handle is stale or invalid.
+    pub fn remove_constraint(&mut self, id: ConstraintId) -> Result<(), SketchError> {
         self.constraints
             .remove(id)
             .map(|_| {
                 self.dirty = true;
             })
-            .ok_or(MathError::InvalidGcsHandle)
+            .ok_or(SketchError::InvalidHandle)
     }
 
     /// Get a constraint by handle.
@@ -249,7 +249,7 @@ impl GcsSystem {
     ///
     /// # Errors
     ///
-    /// Returns `MathError` if the system parameters are in an invalid state.
+    /// Returns `SketchError` if the system parameters are in an invalid state.
     /// The `Result` wrapper is retained for future error paths (e.g. singular
     /// Jacobian detection).
     #[allow(clippy::unnecessary_wraps)]
@@ -257,7 +257,7 @@ impl GcsSystem {
         &mut self,
         max_iterations: usize,
         tolerance: f64,
-    ) -> Result<SolveResult, MathError> {
+    ) -> Result<SolveResult, SketchError> {
         self.rebuild_if_dirty();
 
         let n = self.param_map.len();
@@ -476,7 +476,7 @@ impl GcsSystem {
     }
 
     /// Validate all entity references in a constraint.
-    fn validate_constraint(&self, c: &Constraint) -> Result<(), MathError> {
+    fn validate_constraint(&self, c: &Constraint) -> Result<(), SketchError> {
         match c {
             Constraint::Coincident(p1, p2) | Constraint::Distance(p1, p2, _) => {
                 self.check_point(*p1)?;
@@ -502,19 +502,19 @@ impl GcsSystem {
         Ok(())
     }
 
-    fn check_point(&self, id: PointId) -> Result<(), MathError> {
+    fn check_point(&self, id: PointId) -> Result<(), SketchError> {
         if self.points.contains(id) {
             Ok(())
         } else {
-            Err(MathError::InvalidGcsHandle)
+            Err(SketchError::InvalidHandle)
         }
     }
 
-    fn check_line(&self, id: LineId) -> Result<(), MathError> {
+    fn check_line(&self, id: LineId) -> Result<(), SketchError> {
         if self.lines.contains(id) {
             Ok(())
         } else {
-            Err(MathError::InvalidGcsHandle)
+            Err(SketchError::InvalidHandle)
         }
     }
 }
