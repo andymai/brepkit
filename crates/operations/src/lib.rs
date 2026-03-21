@@ -28,7 +28,9 @@ pub mod loft;
 pub mod measure;
 pub mod mesh_boolean;
 pub mod mirror;
-pub mod nurbs_boolean;
+// nurbs_boolean: standalone NURBS boolean algorithm, not yet integrated into dispatch.
+#[allow(dead_code)]
+pub(crate) mod nurbs_boolean;
 pub mod offset_face;
 pub mod offset_solid;
 pub mod offset_trim;
@@ -95,15 +97,4 @@ pub enum OperationsError {
     /// A check (classification/validation/distance) error occurred.
     #[error("check: {0}")]
     Check(#[from] brepkit_check::CheckError),
-}
-
-/// Re-export brepkit-check types for convenience.
-pub mod check_types {
-    pub use brepkit_check::classify::{ClassifyOptions, PointClassification};
-    pub use brepkit_check::distance::DistanceResult as CheckDistanceResult;
-    pub use brepkit_check::properties::{GProps, PropertiesOptions};
-    pub use brepkit_check::validate::{
-        CheckId, EntityRef, Severity as CheckSeverity, ValidateOptions,
-        ValidationIssue as CheckValidationIssue, ValidationReport as CheckValidationReport,
-    };
 }
