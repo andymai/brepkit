@@ -8,9 +8,7 @@ repository.workspace = true
 description = "2D parametric constraint solver (GCS) for brepkit sketch mode"
 
 [dependencies]
-brepkit-math.workspace = true
 thiserror.workspace = true
-log.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

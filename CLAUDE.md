@@ -37,7 +37,7 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 | `heal` | `math`, `topology`, `geometry` |
 | `check` | `math`, `topology`, `geometry` |
 | `offset` | `math`, `topology`, `geometry` |
-| `sketch` | `math` |
+| `sketch` | *(none — no workspace deps)* |
 | `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check`, `geometry`, `offset`, `sketch` |
 | `io` | `math`, `topology`, `operations` |
 | `wasm` | all crates (incl. `blend`, `check`, `heal`) |
@@ -53,7 +53,7 @@ The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the p
 - `heal/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
 - `check/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
 - `offset/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
-- `sketch/src/**` → `brepkit_math::*`
+- `sketch/src/**` → only `std`, external crates
 - `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`, `brepkit_check::*`, `brepkit_offset::*`, `brepkit_sketch::*`
 - `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`
 - `wasm/src/**` → all `brepkit_*`

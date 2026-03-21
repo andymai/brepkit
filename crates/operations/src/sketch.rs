@@ -1,8 +1,7 @@
 //! 2D constraint solver for sketch-mode parametric design.
 //!
-//! Thin wrapper around the GCS module in `brepkit-math`. Provides the
-//! `Sketch` struct for backwards compatibility and re-exports the
-//! full GCS API for new code.
+//! Thin wrapper around `brepkit-sketch`. Provides the `Sketch` struct
+//! for backwards compatibility and re-exports the full GCS API for new code.
 //!
 //! # Migration Guide
 //! - **Old API**: `Sketch` with `SketchPoint` and `Constraint` (point-index based)
@@ -108,7 +107,7 @@ impl Sketch {
     /// Converts to a `GcsSystem`, solves, and writes positions back.
     ///
     /// # Errors
-    /// Returns `SketchError::ConvergenceFailure` if the solver doesn't converge.
+    /// Returns `SketchError` if an entity handle is invalid.
     pub fn solve(
         &mut self,
         max_iterations: usize,

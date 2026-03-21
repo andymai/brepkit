@@ -37,11 +37,4 @@ pub enum SketchError {
     /// Cannot remove a GCS entity that is still referenced by other entities or constraints.
     #[error("GCS entity is still in use by other entities or constraints")]
     EntityInUse,
-
-    /// Newton iteration did not converge within the allowed iterations.
-    #[error("solver did not converge after {iterations} iterations")]
-    ConvergenceFailure {
-        /// Number of iterations attempted.
-        iterations: usize,
-    },
 }
