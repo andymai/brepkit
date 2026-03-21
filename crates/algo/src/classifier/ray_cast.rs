@@ -1,8 +1,11 @@
-//! Ray-cast point-in-solid classification.
+//! Ray-cast point-in-solid classification (canonical implementation).
 //!
 //! Shoots rays from a sample point and counts boundary crossings
-//! to determine inside/outside status. Ported from
-//! `operations/boolean/classify.rs`.
+//! to determine inside/outside status.
+//!
+//! NOTE: `operations/boolean/classify.rs` contains a duplicate of this
+//! logic. Bug fixes should be applied here first; the operations copy
+//! will be deleted during the GFA step 5 switchover.
 
 use brepkit_math::predicates::point_in_polygon;
 use brepkit_math::tolerance::Tolerance;

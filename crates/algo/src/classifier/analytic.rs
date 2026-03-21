@@ -1,8 +1,8 @@
-//! Analytic O(1) point-in-solid classification.
+//! Analytic O(1) point-in-solid classification (canonical implementation).
 //!
 //! For convex solids composed entirely of analytic surfaces (plane,
 //! cylinder, cone, sphere), a point can be classified by testing
-//! the signed distance to each face constraint. Ported from
+//! the signed distance to each face constraint. Originally ported from
 //! `operations/boolean/classify.rs`.
 
 use brepkit_math::tolerance::Tolerance;
