@@ -1,3 +1,5 @@
+// Offset pipeline infrastructure — fields populated progressively across phases.
+#![allow(dead_code)]
 //! Central data structures shared across all offset pipeline phases.
 
 use std::collections::{BTreeMap, HashMap};
@@ -209,7 +211,7 @@ impl OffsetData {
 /// Shared helper used by `inter2d` and `loops` to avoid duplicate vertices
 /// at the same 3D position. The `cache` accumulates all vertices created
 /// during the current phase.
-pub(crate) fn find_or_create_vertex(
+pub fn find_or_create_vertex(
     topo: &mut Topology,
     cache: &mut Vec<(Point3, VertexId)>,
     point: Point3,
