@@ -37,6 +37,12 @@ pub fn intersect_faces_3d(
         let face_a = face_ids[0];
         let face_b = face_ids[1];
 
+        // Skip seam edges (same face on both sides). These are
+        // reconstructed by the loops phase from circle edge vertices.
+        if face_a == face_b {
+            continue;
+        }
+
         // Both faces must have offset surfaces.
         let (Some(off_a), Some(off_b)) = (
             data.offset_faces.get(&face_a),
@@ -77,7 +83,15 @@ pub fn intersect_faces_3d(
         let surf_a = &off_a.surface;
         let surf_b = &off_b.surface;
 
-        let curve_points = intersect_surface_pair(topo, face_a, face_b, surf_a, surf_b)?;
+        let curve_points = intersect_surface_pair(
+            topo,
+            edge_id,
+            face_a,
+            face_b,
+            surf_a,
+            surf_b,
+            data.options.tolerance,
+        )?;
 
         data.intersections.push(FaceIntersection {
             original_edge: edge_id,
@@ -98,11 +112,19 @@ const ANALYTIC_GRID_RES: usize = 32;
 #[allow(clippy::too_many_lines)]
 fn intersect_surface_pair(
     topo: &Topology,
+    edge_id: brepkit_topology::edge::EdgeId,
     face_a: FaceId,
     face_b: FaceId,
     surf_a: &FaceSurface,
     surf_b: &FaceSurface,
+    tol: brepkit_math::tolerance::Tolerance,
 ) -> Result<Vec<Point3>, OffsetError> {
+    // Same-domain surfaces (e.g., sphere hemispheres with same center/radius):
+    // project the specific edge's endpoints onto the offset surface.
+    if surfaces_same_domain(surf_a, surf_b, tol) {
+        return project_edge_onto_surface(topo, edge_id, surf_a);
+    }
+
     // Plane-Plane: exact line intersection.
     if let (FaceSurface::Plane { normal: n1, d: d1 }, FaceSurface::Plane { normal: n2, d: d2 }) =
         (surf_a, surf_b)
@@ -304,6 +326,99 @@ fn project_onto_line(origin: &Point3, dir: &Vec3, point: &Point3) -> f64 {
     dx * dir.x() + dy * dir.y() + dz * dir.z()
 }
 
+/// Check if two surfaces represent the same geometric domain.
+fn surfaces_same_domain(
+    a: &FaceSurface,
+    b: &FaceSurface,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    match (a, b) {
+        (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
+            let dot = na.dot(*nb);
+            if dot > 1.0 - tol.angular {
+                (da - db).abs() < tol.linear
+            } else if dot < -1.0 + tol.angular {
+                (da + db).abs() < tol.linear
+            } else {
+                false
+            }
+        }
+        (FaceSurface::Cylinder(ca), FaceSurface::Cylinder(cb)) => {
+            (ca.radius() - cb.radius()).abs() < tol.linear
+                && ca.axis().dot(cb.axis()).abs() > 1.0 - tol.angular
+                && (ca.origin() - cb.origin()).length() < tol.linear
+        }
+        (FaceSurface::Sphere(sa), FaceSurface::Sphere(sb)) => {
+            (sa.radius() - sb.radius()).abs() < tol.linear
+                && (sa.center() - sb.center()).length() < tol.linear
+        }
+        _ => false,
+    }
+}
+
+/// Project a specific edge's endpoints onto the offset surface.
+fn project_edge_onto_surface(
+    topo: &Topology,
+    edge_id: brepkit_topology::edge::EdgeId,
+    surface: &FaceSurface,
+) -> Result<Vec<Point3>, OffsetError> {
+    let edge = topo.edge(edge_id)?;
+    let p0 = topo.vertex(edge.start())?.point();
+    let p1 = topo.vertex(edge.end())?.point();
+    let proj0 = project_point_onto_surface(p0, surface);
+    let proj1 = project_point_onto_surface(p1, surface);
+    Ok(vec![proj0, proj1])
+}
+
+/// Project a point onto a surface (radially for sphere/cylinder, normally for plane).
+fn project_point_onto_surface(p: Point3, surface: &FaceSurface) -> Point3 {
+    match surface {
+        FaceSurface::Sphere(sph) => {
+            let c = sph.center();
+            let dx = p.x() - c.x();
+            let dy = p.y() - c.y();
+            let dz = p.z() - c.z();
+            let dist = (dx.mul_add(dx, dy.mul_add(dy, dz * dz))).sqrt();
+            if dist < 1e-15 {
+                return p;
+            }
+            let scale = sph.radius() / dist;
+            Point3::new(c.x() + dx * scale, c.y() + dy * scale, c.z() + dz * scale)
+        }
+        FaceSurface::Cylinder(cyl) => {
+            let o = cyl.origin();
+            let ax = cyl.axis();
+            let dp = Vec3::new(p.x() - o.x(), p.y() - o.y(), p.z() - o.z());
+            let along = dp.dot(ax);
+            let radial = Vec3::new(
+                dp.x() - along * ax.x(),
+                dp.y() - along * ax.y(),
+                dp.z() - along * ax.z(),
+            );
+            let rad_len = radial.length();
+            if rad_len < 1e-15 {
+                return p;
+            }
+            let scale = cyl.radius() / rad_len;
+            Point3::new(
+                o.x() + along * ax.x() + scale * radial.x(),
+                o.y() + along * ax.y() + scale * radial.y(),
+                o.z() + along * ax.z() + scale * radial.z(),
+            )
+        }
+        FaceSurface::Plane { normal, d } => {
+            let n_dot_p = normal.x() * p.x() + normal.y() * p.y() + normal.z() * p.z();
+            let dist = d - n_dot_p;
+            Point3::new(
+                p.x() + dist * normal.x(),
+                p.y() + dist * normal.y(),
+                p.z() + dist * normal.z(),
+            )
+        }
+        _ => p,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -341,6 +456,25 @@ mod tests {
                 !fi.curve_points.is_empty(),
                 "intersection for edge {:?} should have points",
                 fi.original_edge
+            );
+        }
+    }
+
+    #[test]
+    fn sphere_same_surface_produces_projected_points() {
+        let mut topo = Topology::new();
+        let solid = brepkit_operations::primitives::make_sphere(&mut topo, 3.0, 16).unwrap();
+        let data = run_phases_1_2_3(&topo, solid, 0.5);
+        assert!(
+            !data.intersections.is_empty(),
+            "sphere offset should have intersections"
+        );
+        for fi in &data.intersections {
+            assert!(
+                fi.curve_points.len() >= 2,
+                "edge {:?} should have projected curve points, got {}",
+                fi.original_edge,
+                fi.curve_points.len()
             );
         }
     }
