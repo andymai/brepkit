@@ -37,6 +37,12 @@ pub fn intersect_faces_3d(
         let face_a = face_ids[0];
         let face_b = face_ids[1];
 
+        // Skip seam edges (same face on both sides). These are
+        // reconstructed by the loops phase from circle edge vertices.
+        if face_a == face_b {
+            continue;
+        }
+
         // Both faces must have offset surfaces.
         let (Some(off_a), Some(off_b)) = (
             data.offset_faces.get(&face_a),

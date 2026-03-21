@@ -4,9 +4,9 @@
 //! this phase creates the corresponding topology: vertices at the intersection
 //! line endpoints and edges connecting them.
 
-use brepkit_math::vec::Point3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::{Edge, EdgeCurve};
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::VertexId;
 
@@ -38,22 +38,124 @@ pub fn intersect_pcurves_2d(
             continue;
         }
 
-        let p_start = intersection.curve_points[0];
-        let p_end = intersection.curve_points[intersection.curve_points.len() - 1];
-
-        let v_start = find_or_create_vertex(topo, &mut vertex_cache, p_start, tol);
-        let v_end = find_or_create_vertex(topo, &mut vertex_cache, p_end, tol);
-
-        // Skip degenerate edges where both endpoints coincide.
-        if v_start == v_end {
-            continue;
+        if let Some(edge_id) =
+            create_edge_from_curve_points(topo, &mut vertex_cache, &intersection.curve_points, tol)
+        {
+            intersection.new_edges.push(edge_id);
         }
-
-        let edge_id = topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::Line));
-        intersection.new_edges.push(edge_id);
     }
 
     Ok(())
+}
+
+/// Create a topological edge from sampled intersection curve points.
+///
+/// If the points form a closed circle (all equidistant from centroid),
+/// creates a `Circle` edge. Otherwise creates a `Line` edge between
+/// the first and last points.
+///
+/// Returns `None` if the edge would be degenerate.
+fn create_edge_from_curve_points(
+    topo: &mut Topology,
+    vertex_cache: &mut Vec<(Point3, VertexId)>,
+    points: &[Point3],
+    tol: f64,
+) -> Option<EdgeId> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    // Try to fit a circle if we have enough points.
+    if points.len() >= 8 {
+        if let Some((circle, seam_pt)) = fit_circle_3d(points, tol) {
+            let v = find_or_create_vertex(topo, vertex_cache, seam_pt, tol);
+            return Some(topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))));
+        }
+    }
+
+    // Fall back to line edge.
+    let p_start = points[0];
+    let p_end = points[points.len() - 1];
+    let v_start = find_or_create_vertex(topo, vertex_cache, p_start, tol);
+    let v_end = find_or_create_vertex(topo, vertex_cache, p_end, tol);
+    if v_start == v_end {
+        return None;
+    }
+    Some(topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::Line)))
+}
+
+/// Squared distance between two points.
+fn dist_sq(a: Point3, b: Point3) -> f64 {
+    let dx = a.x() - b.x();
+    let dy = a.y() - b.y();
+    let dz = a.z() - b.z();
+    dx.mul_add(dx, dy.mul_add(dy, dz * dz))
+}
+
+/// Fit a `Circle3D` to sampled points if they lie on a circle within tolerance.
+///
+/// Returns `(Circle3D, seam_point)` where `seam_point` is the first point
+/// projected exactly onto the fitted circle. Returns `None` if points
+/// don't form a circle.
+fn fit_circle_3d(points: &[Point3], tol: f64) -> Option<(brepkit_math::curves::Circle3D, Point3)> {
+    let n = points.len() as f64;
+    let cx: f64 = points.iter().map(|p| p.x()).sum::<f64>() / n;
+    let cy: f64 = points.iter().map(|p| p.y()).sum::<f64>() / n;
+    let cz: f64 = points.iter().map(|p| p.z()).sum::<f64>() / n;
+    let center = Point3::new(cx, cy, cz);
+
+    let radius = points
+        .iter()
+        .map(|p| dist_sq(*p, center).sqrt())
+        .sum::<f64>()
+        / n;
+
+    if radius < tol {
+        return None;
+    }
+
+    // Check all points are within tolerance of the circle radius.
+    let max_dev = points
+        .iter()
+        .map(|p| (dist_sq(*p, center).sqrt() - radius).abs())
+        .fold(0.0_f64, f64::max);
+    if max_dev > tol * 100.0 {
+        return None;
+    }
+
+    // Normal via Newell's method on centered points.
+    let mut nx = 0.0_f64;
+    let mut ny = 0.0_f64;
+    let mut nz = 0.0_f64;
+    for i in 0..points.len() {
+        let a = points[i];
+        let b = points[(i + 1) % points.len()];
+        nx += (a.y() - cy) * (b.z() - cz) - (a.z() - cz) * (b.y() - cy);
+        ny += (a.z() - cz) * (b.x() - cx) - (a.x() - cx) * (b.z() - cz);
+        nz += (a.x() - cx) * (b.y() - cy) - (a.y() - cy) * (b.x() - cx);
+    }
+    let nlen = (nx.mul_add(nx, ny.mul_add(ny, nz * nz))).sqrt();
+    if nlen < 1e-15 {
+        return None;
+    }
+    let normal = Vec3::new(nx / nlen, ny / nlen, nz / nlen);
+
+    let circle = brepkit_math::curves::Circle3D::new(center, normal, radius).ok()?;
+
+    // Seam point: project first point exactly onto the circle.
+    let dir = Vec3::new(points[0].x() - cx, points[0].y() - cy, points[0].z() - cz);
+    let dir_len = dir.length();
+    let seam_pt = if dir_len > 1e-15 {
+        Point3::new(
+            cx + radius * dir.x() / dir_len,
+            cy + radius * dir.y() / dir_len,
+            cz + radius * dir.z() / dir_len,
+        )
+    } else {
+        points[0]
+    };
+
+    Some((circle, seam_pt))
 }
 
 #[cfg(test)]
@@ -134,6 +236,39 @@ mod tests {
         assert_eq!(
             total_new_edges, 12,
             "box offset should create 12 new edges (one per original edge)"
+        );
+    }
+
+    #[test]
+    fn circle_points_produce_circle_edge() {
+        use std::f64::consts::TAU;
+        let mut topo = Topology::new();
+        let mut cache = Vec::new();
+        let tol = 1e-7;
+
+        // 32 points on a circle at z=5, radius=2.5
+        let n = 32;
+        let radius = 2.5;
+        let points: Vec<_> = (0..n)
+            .map(|i| {
+                let t = TAU * i as f64 / n as f64;
+                brepkit_math::vec::Point3::new(radius * t.cos(), radius * t.sin(), 5.0)
+            })
+            .collect();
+
+        let result = create_edge_from_curve_points(&mut topo, &mut cache, &points, tol);
+        assert!(result.is_some(), "should create an edge from circle points");
+        let eid = result.unwrap();
+        let edge = topo.edge(eid).unwrap();
+        assert_eq!(
+            edge.start(),
+            edge.end(),
+            "circle edge should be closed (start == end)"
+        );
+        assert!(
+            matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_)),
+            "edge should be a Circle, got {:?}",
+            edge.curve()
         );
     }
 }
