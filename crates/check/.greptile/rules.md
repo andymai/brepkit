@@ -4,7 +4,7 @@
 
 Flag any `use brepkit_algo::*`, `use brepkit_blend::*`, `use brepkit_heal::*`,
 `use brepkit_operations::*`, or `use brepkit_io::*` import. `brepkit-check` is
-L1.5 and may only depend on `brepkit-math` and `brepkit-topology`.
+L1.5 and may only depend on `brepkit-math`, `brepkit-topology`, and `brepkit-geometry`.
 
 ## Solver Positive Filtering
 
