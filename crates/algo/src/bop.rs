@@ -47,7 +47,6 @@ pub(crate) fn select_faces(sub_faces: &[SubFace], op: BooleanOp) -> Vec<Selected
             if keep {
                 Some(SelectedFace {
                     face_id: sf.face_id,
-                    rank: sf.rank,
                     reversed: op == BooleanOp::Cut && sf.rank == Rank::B,
                 })
             } else {
@@ -62,10 +61,6 @@ pub(crate) fn select_faces(sub_faces: &[SubFace], op: BooleanOp) -> Vec<Selected
 pub(crate) struct SelectedFace {
     /// The topology face to include.
     pub face_id: brepkit_topology::face::FaceId,
-    /// Which argument this face came from.
-    /// Used by future assembly to track face provenance.
-    #[allow(dead_code)]
-    pub rank: Rank,
     /// Whether to reverse this face's orientation in the result.
     pub reversed: bool,
 }

@@ -10,7 +10,7 @@ use brepkit_topology::vertex::VertexId;
 use super::curve::IntersectionCurveDS;
 use super::face_info::FaceInfo;
 use super::interference::InterferenceTable;
-use super::pave::{CommonBlock, Pave, PaveBlock, PaveBlockId};
+use super::pave::{Pave, PaveBlock, PaveBlockId};
 
 /// Owns all transient GFA state for a single boolean operation.
 ///
@@ -21,10 +21,6 @@ use super::pave::{CommonBlock, Pave, PaveBlock, PaveBlockId};
 pub struct GfaArena {
     /// Arena for pave block allocation.
     pub pave_blocks: Arena<PaveBlock>,
-    /// Common blocks (geometrically coincident pave blocks).
-    /// Populated by future EE overlap detection.
-    #[allow(dead_code)]
-    pub common_blocks: Arena<CommonBlock>,
     /// Intersection curves from face-face intersection.
     pub curves: Vec<IntersectionCurveDS>,
     /// Per-face intersection state.
@@ -44,7 +40,6 @@ impl GfaArena {
     pub fn new() -> Self {
         Self {
             pave_blocks: Arena::new(),
-            common_blocks: Arena::new(),
             curves: Vec::new(),
             face_info: HashMap::new(),
             interference: InterferenceTable::default(),
@@ -102,6 +97,7 @@ impl GfaArena {
         self.edge_pave_blocks.entry(edge).or_default().push(pb_id);
         pb_id
     }
+
     /// Collect leaf pave blocks (blocks with no children).
     ///
     /// If a block has children, recursively returns their leaves instead.

@@ -44,9 +44,6 @@ use crate::error::AlgoError;
 /// A sub-face produced by the Builder after splitting.
 #[derive(Debug, Clone)]
 pub struct SubFace {
-    /// The original face this sub-face was split from.
-    #[allow(dead_code)]
-    pub parent_face: FaceId,
     /// The face entity in topology (same as parent if no split occurred).
     pub face_id: FaceId,
     /// Classification relative to the opposing solid.
@@ -62,8 +59,7 @@ pub struct SubFace {
 /// Builder — orchestrates face splitting and classification.
 ///
 /// Owns both the `Topology` and `GfaArena`, mutating them as needed.
-/// After `perform()`, call `build_result()` or `into_parts()` to
-/// extract the results.
+/// After `perform()`, call `build_result()` to extract the results.
 pub struct Builder {
     /// The topology containing both solids (owned, mutable).
     topo: Topology,
@@ -82,21 +78,6 @@ pub struct Builder {
 }
 
 impl Builder {
-    /// Create a new Builder from PaveFiller output.
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn new(topo: Topology, arena: GfaArena, solid_a: SolidId, solid_b: SolidId) -> Self {
-        Self {
-            topo,
-            arena,
-            solid_a,
-            solid_b,
-            tol: Tolerance::default(),
-            sub_faces: Vec::new(),
-            face_ranks: HashMap::new(),
-        }
-    }
-
     /// Create a Builder with custom tolerance.
     #[must_use]
     pub fn with_tolerance(
@@ -127,20 +108,6 @@ impl Builder {
         self.fill_images();
         self.classify_sub_faces()?;
         Ok(())
-    }
-
-    /// Returns the classified sub-faces.
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn sub_faces(&self) -> &[SubFace] {
-        &self.sub_faces
-    }
-
-    /// Consume the Builder, returning the topology, arena, and sub-faces.
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn into_parts(self) -> (Topology, GfaArena, Vec<SubFace>) {
-        (self.topo, self.arena, self.sub_faces)
     }
 
     /// Select faces for the given boolean operation and assemble them

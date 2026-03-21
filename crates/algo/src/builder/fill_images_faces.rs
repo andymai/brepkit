@@ -52,7 +52,6 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         if !has_sections {
             // No sections: face passes through unchanged
             sub_faces.push(SubFace {
-                parent_face: face_id,
                 face_id,
                 classification: FaceClass::Unknown,
                 rank,
@@ -71,7 +70,6 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
 
         if sections.is_empty() {
             sub_faces.push(SubFace {
-                parent_face: face_id,
                 face_id,
                 classification: FaceClass::Unknown,
                 rank,
@@ -102,7 +100,6 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         if split_results.is_empty() {
             log::warn!("fill_images_faces: split_face_2d returned empty for face {face_id:?}");
             sub_faces.push(SubFace {
-                parent_face: face_id,
                 face_id,
                 classification: FaceClass::Unknown,
                 rank,
@@ -121,7 +118,6 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 .unwrap_or_else(|| super::face_splitter::interior_point_3d(split, None));
 
             sub_faces.push(SubFace {
-                parent_face: face_id,
                 face_id: new_face_id.unwrap_or(face_id),
                 classification: FaceClass::Unknown,
                 rank,

@@ -25,22 +25,3 @@ pub struct FaceInfo {
     /// Vertices from section curves.
     pub vertices_sc: HashSet<VertexId>,
 }
-
-impl FaceInfo {
-    /// Creates empty face info.
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Returns true if this face has any intersection data.
-    #[must_use]
-    #[allow(dead_code)]
-    pub fn has_intersections(&self) -> bool {
-        !self.pave_blocks_in.is_empty()
-            || !self.pave_blocks_sc.is_empty()
-            || !self.vertices_in.is_empty()
-            || !self.vertices_sc.is_empty()
-    }
-}
