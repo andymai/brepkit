@@ -109,7 +109,6 @@ fn offset_box_inward_volume_smaller_than_original() {
 // ── Cylinder offset tests ──────────────────────────────────────
 
 #[test]
-#[ignore = "cylinder wire loops need seam/circular edge support"]
 fn offset_cylinder_outward_produces_solid() {
     let mut topo = Topology::new();
     let solid = make_cylinder(&mut topo, 2.0, 5.0).unwrap();
@@ -125,7 +124,6 @@ fn offset_cylinder_outward_produces_solid() {
 }
 
 #[test]
-#[ignore = "cylinder wire loops need seam/circular edge support"]
 fn offset_cylinder_volume_increases() {
     let mut topo = Topology::new();
     let solid = make_cylinder(&mut topo, 2.0, 5.0).unwrap();
@@ -172,7 +170,6 @@ fn thick_solid_box_produces_hollow() {
 // ── Sphere offset tests ────────────────────────────────────────
 
 #[test]
-#[ignore = "sphere wire loops need seam/circular edge support"]
 fn offset_sphere_outward_produces_solid() {
     let mut topo = Topology::new();
     let solid = make_sphere(&mut topo, 3.0, 16_usize).unwrap();
