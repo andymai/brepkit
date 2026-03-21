@@ -2,7 +2,7 @@
 //!
 //! General Fuse Algorithm (GFA) engine for boolean operations.
 //!
-//! This is layer L1.5, depending on `brepkit-math` and `brepkit-topology`.
+//! This is layer L2, depending on `brepkit-math` and `brepkit-topology`.
 //! The `brepkit-operations` crate delegates boolean, section, and split
 //! operations to this crate.
 //!

@@ -1,8 +1,8 @@
 //! # brepkit-io
 //!
-//! Data exchange for brepkit: STEP (ISO 10303) and 3MF import/export.
+//! Data exchange for brepkit: STEP, IGES, 3MF, STL, OBJ, PLY, and glTF import/export.
 //!
-//! This is layer L2, depending on `brepkit-math`, `brepkit-topology`,
+//! This is layer L3, depending on `brepkit-math`, `brepkit-topology`,
 //! and `brepkit-operations`.
 
 pub mod gltf;

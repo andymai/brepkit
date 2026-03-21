@@ -9,16 +9,16 @@ developer-facing TypeScript API.
 Strict layered Cargo workspace. Each layer depends only on layers below it.
 
 ```
-L3: brepkit-wasm        → JS bindings (wasm-bindgen)
-L2: brepkit-io          → STEP, 3MF, STL, IGES, OBJ, PLY, glTF import/export
-L2: brepkit-operations  → Booleans, fillets, extrusions, tessellation
-L1.5: brepkit-algo      → GFA boolean engine, classification, intersection
-L1.5: brepkit-blend     → Walking-based fillet and chamfer engine
-L1.5: brepkit-check     → Classification, validation, properties, distance
-L1.5: brepkit-heal      → Shape healing (analysis, fixing, upgrading)
-L1.5: brepkit-offset    → Solid offset engine (global face-face intersection)
+L4: brepkit-wasm        → JS bindings (wasm-bindgen)
+L3: brepkit-io          → STEP, 3MF, STL, IGES, OBJ, PLY, glTF import/export
+L3: brepkit-operations  → Booleans, fillets, extrusions, tessellation
+L2: brepkit-algo        → GFA boolean engine, classification, intersection
+L2: brepkit-blend       → Walking-based fillet and chamfer engine
+L2: brepkit-check       → Classification, validation, properties, distance
+L2: brepkit-heal        → Shape healing (analysis, fixing, upgrading)
+L2: brepkit-offset      → Solid offset engine (global face-face intersection)
 L1: brepkit-topology    → B-Rep data structures (arena-based)
-L0.5: brepkit-geometry  → Curve sampling, extrema, geometry conversion
+L1: brepkit-geometry    → Curve sampling, extrema, geometry conversion
 L0: brepkit-math        → Vectors, matrices, NURBS, predicates
 ```
 
@@ -97,7 +97,7 @@ Quick reference — find the right file for any task:
 | Gauss-Legendre quadrature | `quadrature.rs` |
 | 2D sketch constraint solver (GCS) | `gcs/` |
 
-### L0.5: geometry (`crates/geometry/src/`)
+### L1: geometry (`crates/geometry/src/`)
 | Task | File(s) |
 |------|---------|
 | Uniform curve sampling | `sampling/uniform.rs` |
@@ -130,7 +130,7 @@ Quick reference — find the right file for any task:
 | Topology validation | `validation.rs` |
 | Test utilities (`test-utils` feature) | `test_utils.rs` |
 
-### L1.5: algo (`crates/algo/src/`)
+### L2: algo (`crates/algo/src/`)
 | Task | File(s) |
 |------|---------|
 | GFA entry point | `gfa.rs` |
@@ -155,7 +155,7 @@ Quick reference — find the right file for any task:
 | Analytic classifier (7 variants) | `classifier/analytic.rs` |
 | Ray-cast classifier | `classifier/ray_cast.rs` |
 
-### L1.5: blend (`crates/blend/src/`)
+### L2: blend (`crates/blend/src/`)
 | Task | File(s) |
 |------|---------|
 | Public API, `BlendError`, `BlendResult` | `lib.rs` |
@@ -172,7 +172,7 @@ Quick reference — find the right file for any task:
 | Face trimming along contact curves | `trimmer.rs` |
 | Shared builder utilities | `builder_utils.rs` |
 
-### L1.5: heal (`crates/heal/src/`)
+### L2: heal (`crates/heal/src/`)
 | Task | File(s) |
 |------|---------|
 | Public API, `HealError`, `Status` | `lib.rs`, `error.rs`, `status.rs` |
@@ -215,7 +215,7 @@ Quick reference — find the right file for any task:
 | Configurable pipeline executor | `pipeline/process.rs` |
 | 13 built-in operators | `pipeline/builtin.rs` |
 
-### L1.5: check (`crates/check/src/`)
+### L2: check (`crates/check/src/`)
 | Task | File(s) |
 |------|---------|
 | Public API, `CheckError` | `lib.rs`, `error.rs` |
@@ -241,7 +241,7 @@ Quick reference — find the right file for any task:
 | Edge-to-edge distance | `distance/edge.rs` |
 | Point-to-solid, solid-to-solid distance | `distance/mod.rs` |
 
-### L1.5: offset (`crates/offset/src/`)
+### L2: offset (`crates/offset/src/`)
 | Task | File(s) |
 |------|---------|
 | Public API (offset_solid, thick_solid) | `lib.rs` |
@@ -256,7 +256,7 @@ Quick reference — find the right file for any task:
 | Shell assembly + solid creation | `assemble.rs` |
 | Self-intersection removal (BOP-based) | `self_int.rs` |
 
-### L2: operations (`crates/operations/src/`)
+### L3: operations (`crates/operations/src/`)
 | Task | File(s) |
 |------|---------|
 | Primitives (box, cylinder, cone, sphere, torus) | `primitives.rs` |
@@ -292,7 +292,7 @@ Quick reference — find the right file for any task:
 | Offset v2 (delegates to brepkit-offset) | `offset_v2.rs` |
 | Shared winding utilities | `winding.rs` |
 
-### L2: io (`crates/io/src/`)
+### L3: io (`crates/io/src/`)
 | Task | File(s) |
 |------|---------|
 | STEP read/write | `step/reader.rs`, `step/writer.rs` |
@@ -303,7 +303,7 @@ Quick reference — find the right file for any task:
 | PLY read/write | `ply/reader.rs`, `ply/writer.rs` |
 | glTF read/write | `gltf/reader.rs`, `gltf/writer.rs` |
 
-### L3: wasm (`crates/wasm/src/`)
+### L4: wasm (`crates/wasm/src/`)
 | Task | File(s) |
 |------|---------|
 | `BrepKernel` struct, constructor, private helpers | `kernel.rs` |
