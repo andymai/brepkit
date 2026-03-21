@@ -21,7 +21,7 @@ use brepkit_math::vec::Point3;
 /// 2. **Coordinate descent** — refine from the best grid point.
 /// 3. **Lipschitz subdivision** — depth-first cell subdivision, pruning cells
 ///    whose Lipschitz lower bound exceeds the current best.
-pub struct LipschitzOptimizer {
+pub(crate) struct LipschitzOptimizer {
     grid_size: usize,
     max_subdivisions: usize,
     max_evals: usize,

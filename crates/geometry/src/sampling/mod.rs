@@ -32,13 +32,6 @@
 //! [`surface_grid`] evaluates a regular N×M grid of points over a parametric
 //! surface domain.
 //!
-//! # Utility
-//!
-//! [`segments_for_chord_deviation`] (re-exported from `brepkit_math::chord`)
-//! computes the number of segments needed to discretize a circular arc of
-//! known radius within a given chord-height tolerance. Useful for pre-sizing
-//! uniform samples on known-curvature geometry.
-
 pub mod arc_length;
 pub mod curvature;
 pub mod deflection;
@@ -46,7 +39,6 @@ pub mod surface;
 pub mod uniform;
 
 pub use arc_length::sample_arc_length;
-pub use brepkit_math::chord::segments_for_chord_deviation;
 pub use curvature::sample_curvature;
 pub use deflection::sample_deflection;
 pub use surface::surface_grid;

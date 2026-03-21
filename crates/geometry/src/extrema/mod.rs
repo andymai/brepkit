@@ -24,9 +24,7 @@ pub mod point_surface;
 pub mod segment;
 
 pub use curve_curve::{curve_to_curve, line_to_line};
-pub use lipschitz::{
-    LipschitzOptimizer, estimate_curve_curve_lipschitz, nurbs_curve_curve_distance,
-};
+pub use lipschitz::{estimate_curve_curve_lipschitz, nurbs_curve_curve_distance};
 pub use point_curve::{point_to_circle, point_to_curve, point_to_line};
 pub use point_surface::{
     point_to_cone, point_to_cylinder, point_to_plane, point_to_sphere, point_to_surface,
