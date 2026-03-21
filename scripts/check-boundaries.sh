@@ -5,15 +5,17 @@ set -euo pipefail
 #
 # Layer rules:
 #   L0   (math)       — no workspace deps
-#   L0.5 (geometry)   — depends on math only
+#   L1   (geometry)   — depends on math only
 #   L1   (topology)   — depends on math only
-#   L1.5 (algo)       — depends on math, topology, geometry
-#   L1.5 (blend)      — depends on math, topology, geometry
-#   L1.5 (heal)       — depends on math, topology, geometry
-#   L1.5 (check)      — depends on math, topology, geometry
-#   L2   (operations) — depends on math, topology, algo, blend, heal, check, geometry
-#   L2   (io)         — depends on math, topology, operations, heal
-#   L3   (wasm)       — depends on all
+#   L2   (algo)       — depends on math, topology, geometry
+#   L2   (blend)      — depends on math, topology, geometry
+#   L2   (heal)       — depends on math, topology, geometry
+#   L2   (check)      — depends on math, topology, geometry
+#   L2   (offset)     — depends on math, topology, geometry
+#   L2   (sketch)     — depends on math
+#   L3   (operations) — depends on math, topology, algo, blend, heal, check, geometry, offset, sketch
+#   L3   (io)         — depends on math, topology, operations, heal
+#   L4   (wasm)       — depends on all
 
 FAIL=0
 
@@ -33,7 +35,7 @@ check_deps() {
   local deps_section
   deps_section=$(sed -n '/^\[dependencies\]/,/^\[/p' "$cargo_toml" 2>/dev/null || true)
 
-  for dep in brepkit-math brepkit-topology brepkit-algo brepkit-blend brepkit-heal brepkit-check brepkit-geometry brepkit-offset brepkit-operations brepkit-io; do
+  for dep in brepkit-math brepkit-topology brepkit-algo brepkit-blend brepkit-heal brepkit-check brepkit-geometry brepkit-offset brepkit-sketch brepkit-operations brepkit-io; do
     if echo "$deps_section" | grep -q "${dep}"; then
       local is_allowed=false
       for a in "${allowed[@]}"; do
@@ -60,9 +62,10 @@ check_deps "blend"      "brepkit-math" "brepkit-topology" "brepkit-geometry"
 check_deps "heal"       "brepkit-math" "brepkit-topology" "brepkit-geometry"
 check_deps "check"      "brepkit-math" "brepkit-topology" "brepkit-geometry"
 check_deps "offset"     "brepkit-math" "brepkit-topology" "brepkit-geometry" "brepkit-algo"
-check_deps "operations" "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry" "brepkit-offset"
+check_deps "sketch"     "brepkit-math"
+check_deps "operations" "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry" "brepkit-offset" "brepkit-sketch"
 check_deps "io"         "brepkit-math" "brepkit-topology" "brepkit-operations" "brepkit-heal"
-check_deps "wasm"       "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry" "brepkit-operations" "brepkit-io"
+check_deps "wasm"       "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry" "brepkit-sketch" "brepkit-operations" "brepkit-io"
 
 if [ $FAIL -ne 0 ]; then
   echo "❌ Boundary check failed."

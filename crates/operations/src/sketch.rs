@@ -11,11 +11,10 @@
 //! The old `Sketch` API is preserved for backward compatibility. New code
 //! should use `GcsSystem` directly for full entity and constraint support.
 
-use brepkit_math::MathError;
-use brepkit_math::gcs;
+use brepkit_sketch::SketchError;
 
 // Re-export the full GCS API for new code.
-pub use gcs::{
+pub use brepkit_sketch::{
     CircleData, CircleId, Constraint as GcsConstraint, ConstraintId, DofAnalysis, GcsSystem,
     LineData, LineId, PointData, PointId, SolveResult,
 };
@@ -109,12 +108,12 @@ impl Sketch {
     /// Converts to a `GcsSystem`, solves, and writes positions back.
     ///
     /// # Errors
-    /// Returns `MathError::ConvergenceFailure` if the solver doesn't converge.
+    /// Returns `SketchError::ConvergenceFailure` if the solver doesn't converge.
     pub fn solve(
         &mut self,
         max_iterations: usize,
         tolerance: f64,
-    ) -> Result<SolveResult, MathError> {
+    ) -> Result<SolveResult, SketchError> {
         let mut sys = GcsSystem::new();
 
         // Add points
@@ -138,7 +137,7 @@ impl Sketch {
                                       ids: &[PointId],
                                       a: usize,
                                       b: usize|
-         -> Result<LineId, MathError> {
+         -> Result<LineId, SketchError> {
             let key = (a, b);
             if let Some(&lid) = line_cache.get(&key) {
                 return Ok(lid);

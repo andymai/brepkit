@@ -16,6 +16,7 @@ brepkit-heal.workspace = true
 brepkit-check.workspace = true
 brepkit-geometry.workspace = true
 brepkit-offset.workspace = true
+brepkit-sketch.workspace = true
 thiserror.workspace = true
 rayon.workspace = true
 log.workspace = true
