@@ -14,10 +14,6 @@ pub enum OffsetError {
     #[error("math error: {0}")]
     Math(#[from] brepkit_math::MathError),
 
-    /// An algo operation failed.
-    #[error("algo error: {0}")]
-    Algo(#[from] brepkit_algo::error::AlgoError),
-
     /// The input parameters are invalid.
     #[error("invalid input: {reason}")]
     InvalidInput {
