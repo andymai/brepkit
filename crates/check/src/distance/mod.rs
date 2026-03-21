@@ -8,7 +8,6 @@
 
 pub(crate) mod analytic;
 pub(crate) mod edge;
-pub(crate) mod lipschitz;
 
 use std::collections::HashSet;
 

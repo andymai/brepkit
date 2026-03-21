@@ -12,7 +12,7 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
-use brepkit_operations::boolean::{self, BooleanOp, boolean};
+use brepkit_operations::boolean::{self, BooleanOp, boolean_gfa as boolean};
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure;
 use brepkit_operations::revolve::revolve;

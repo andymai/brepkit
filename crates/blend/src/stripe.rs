@@ -1,3 +1,5 @@
+// Walking engine infrastructure — used progressively as more blend paths are wired up.
+#![allow(dead_code)]
 //! Stripe: a fillet band connecting two adjacent faces.
 
 use brepkit_math::curves2d::Curve2D;

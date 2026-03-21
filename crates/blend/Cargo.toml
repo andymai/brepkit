@@ -10,7 +10,7 @@ description = "Walking-based fillet and chamfer engine for brepkit"
 [dependencies]
 brepkit-math.workspace = true
 brepkit-topology.workspace = true
-brepkit-geometry.workspace = true
+
 thiserror.workspace = true
 log.workspace = true
 

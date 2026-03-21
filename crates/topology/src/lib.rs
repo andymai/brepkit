@@ -18,7 +18,7 @@ pub mod compsolid;
 pub mod edge;
 pub mod explorer;
 pub mod face;
-pub mod graph;
+
 pub mod pcurve;
 pub mod shell;
 pub mod solid;

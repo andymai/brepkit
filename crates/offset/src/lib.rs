@@ -3,7 +3,7 @@
 //! Solid offset engine for brepkit.
 //!
 //! This is layer L1.5, depending on `brepkit-math`, `brepkit-topology`,
-//! `brepkit-geometry`, and `brepkit-algo`.
+//! and `brepkit-geometry`.
 //!
 //! # Pipeline
 //!
@@ -30,7 +30,7 @@
 pub(crate) mod analyse;
 pub(crate) mod arc_joint;
 pub(crate) mod assemble;
-pub mod data;
+pub(crate) mod data;
 pub mod error;
 pub(crate) mod inter2d;
 pub(crate) mod inter3d;

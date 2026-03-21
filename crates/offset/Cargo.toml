@@ -11,7 +11,7 @@ description = "Solid offset engine for brepkit"
 brepkit-math.workspace = true
 brepkit-topology.workspace = true
 brepkit-geometry.workspace = true
-brepkit-algo.workspace = true
+
 thiserror.workspace = true
 log.workspace = true
 

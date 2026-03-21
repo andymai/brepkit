@@ -1,3 +1,5 @@
+// Walking engine infrastructure — used progressively as more blend paths are wired up.
+#![allow(dead_code)]
 //! Face trimming along contact curves.
 //!
 //! After computing a fillet or chamfer blend surface, the original adjacent

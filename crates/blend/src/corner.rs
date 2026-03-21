@@ -1,3 +1,5 @@
+// Walking engine infrastructure — used progressively as more blend paths are wired up.
+#![allow(dead_code)]
 //! Vertex blend / corner solver.
 //!
 //! At vertices where multiple fillet stripes meet, gaps appear that need

@@ -1,3 +1,5 @@
+// Walking engine infrastructure — used progressively as more blend paths are wired up.
+#![allow(dead_code)]
 //! Newton-Raphson walking engine.
 //!
 //! Traces the blend surface along a spine by solving a 4×4 constraint system

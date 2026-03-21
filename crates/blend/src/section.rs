@@ -1,3 +1,5 @@
+// Walking engine infrastructure — used progressively as more blend paths are wired up.
+#![allow(dead_code)]
 //! Cross-section of a blend surface at a spine parameter.
 
 use brepkit_math::vec::Point3;

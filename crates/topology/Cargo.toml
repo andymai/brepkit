@@ -11,14 +11,14 @@ description = "B-Rep topological data structures for brepkit"
 brepkit-math.workspace = true
 thiserror.workspace = true
 smallvec.workspace = true
-serde = { workspace = true, optional = true }
+
 
 [dev-dependencies]
 proptest.workspace = true
 
 [features]
 default = []
-serde = ["dep:serde", "brepkit-math/serde"]
+
 test-utils = []
 
 [lints]

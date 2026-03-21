@@ -215,16 +215,9 @@ pub fn boolean_with_options(
         let no_torus = !has_torus(topo, a)? && !has_torus(topo, b)?;
         both_analytic && no_torus
     };
-    // The analytic path handles all analytic surface combinations.
-    // Previously, a `both_complex` guard skipped the analytic path for
-    // solids with inner wires + reversed curved faces, but the root cause
-    // (unify_faces merging opposite-normal faces) is now fixed by the
-    // normal direction pre-check in unify_faces.
-    let both_complex = false;
-
     let mut analytic_fallback: Option<SolidId> = None;
 
-    if try_analytic && !both_complex {
+    if try_analytic {
         if let Ok(solid) = analytic_boolean(topo, op, a, b, tol, opts.deflection) {
             let _ = crate::heal::remove_degenerate_edges(topo, solid, tol.linear)?;
             if opts.unify_faces {
