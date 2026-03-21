@@ -4,9 +4,9 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "git+https://github.com/andymai/brepkit.git"
+rust-version = "1.85"
 
 [workspace.dependencies]
 # Math
@@ -16,101 +16,101 @@ robust = "1"
 thiserror = "2"
 
 # Logging
-log = "0.4"
 env_logger = "0.11"
+log = "0.4"
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
+serde = {version = "1", features = ["derive"]}
 serde_json = "1"
 
 # Parallelism
 rayon = "1.11"
 
 # Collections
-smallvec = "1"
 bitflags = "2"
+smallvec = "1"
 
 # WASM
-wasm-bindgen = "=0.2.114"  # Pinned: must match wasm-bindgen-cli in CI
-tsify = { version = "0.5", features = ["js"] }
 serde-wasm-bindgen = "0.6"
+tsify = {version = "0.5", features = ["js"]}
+wasm-bindgen = "=0.2.114"                    # Pinned: must match wasm-bindgen-cli in CI
 
 # Testing
 proptest = "1"
 
 # Benchmarking
-criterion = { version = "0.8", features = ["html_reports"] }
+criterion = {version = "0.8", features = ["html_reports"]}
 
 # IO formats
-zip = { version = "8", default-features = false, features = ["deflate"] }
 quick-xml = "0.39"
+zip = {version = "8", default-features = false, features = ["deflate"]}
 
 # Workspace crates
-brepkit-math = { path = "crates/math" }
-brepkit-topology = { path = "crates/topology" }
-brepkit-operations = { path = "crates/operations" }
-brepkit-algo = { path = "crates/algo" }
-brepkit-blend = { path = "crates/blend" }
-brepkit-heal = { path = "crates/heal" }
-brepkit-check = { path = "crates/check" }
-brepkit-geometry = { path = "crates/geometry" }
-brepkit-io = { path = "crates/io" }
-brepkit-offset = { path = "crates/offset" }
-brepkit-sketch = { path = "crates/sketch" }
+brepkit-algo = {path = "crates/algo"}
+brepkit-blend = {path = "crates/blend"}
+brepkit-check = {path = "crates/check"}
+brepkit-geometry = {path = "crates/geometry"}
+brepkit-heal = {path = "crates/heal"}
+brepkit-io = {path = "crates/io"}
+brepkit-math = {path = "crates/math"}
+brepkit-offset = {path = "crates/offset"}
+brepkit-operations = {path = "crates/operations"}
+brepkit-sketch = {path = "crates/sketch"}
+brepkit-topology = {path = "crates/topology"}
 
 [workspace.lints.rust]
-unsafe_code = "deny"
 missing_docs = "warn"
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
-all = { level = "deny", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-nursery = { level = "warn", priority = -1 }
-unwrap_used = "deny"
-expect_used = "warn"
-panic = "deny"
+all = {level = "deny", priority = -1}
 dbg_macro = "deny"
-print_stdout = "deny"
+expect_used = "warn"
+nursery = {level = "warn", priority = -1}
+panic = "deny"
+pedantic = {level = "warn", priority = -1}
 print_stderr = "deny"
+print_stdout = "deny"
 todo = "warn"
+unwrap_used = "deny"
 # Numeric/math code commonly needs these
-suboptimal_flops = "allow"
-cast_precision_loss = "allow"
-similar_names = "allow"
-many_single_char_names = "allow"
-too_many_lines = "allow"
-doc_markdown = "allow"
-module_name_repetitions = "allow"
-option_if_let_else = "allow"
 bool_to_int_with_if = "allow"
-suspicious_operation_groupings = "allow"
-iter_over_hash_type = "allow"
-cast_possible_truncation = "allow"
-cast_sign_loss = "allow"
-needless_pass_by_value = "allow"
-used_underscore_binding = "allow"
-imprecise_flops = "allow"
-map_unwrap_or = "allow"
-if_same_then_else = "allow"
-tuple_array_conversions = "allow"
-manual_let_else = "allow"
-missing_const_for_fn = "allow"
-manual_slice_fill = "allow"
-needless_range_loop = "allow"
 branches_sharing_code = "allow"
-derive_partial_eq_without_eq = "allow"
-match_same_arms = "allow"
-redundant_else = "allow"
-uninlined_format_args = "allow"
 cast_lossless = "allow"
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+derive_partial_eq_without_eq = "allow"
+doc_markdown = "allow"
+if_same_then_else = "allow"
+imprecise_flops = "allow"
+iter_over_hash_type = "allow"
+manual_let_else = "allow"
+manual_slice_fill = "allow"
+many_single_char_names = "allow"
+map_unwrap_or = "allow"
+match_same_arms = "allow"
+missing_const_for_fn = "allow"
+module_name_repetitions = "allow"
+needless_pass_by_value = "allow"
+needless_range_loop = "allow"
+option_if_let_else = "allow"
+redundant_else = "allow"
+similar_names = "allow"
+suboptimal_flops = "allow"
+suspicious_operation_groupings = "allow"
+too_many_lines = "allow"
+tuple_array_conversions = "allow"
+uninlined_format_args = "allow"
+used_underscore_binding = "allow"
 
 [profile.release]
-lto = true
 codegen-units = 1
+lto = true
 opt-level = 3
 
 [profile.profiling]
-inherits = "release"
 debug = true
-opt-level = 3
+inherits = "release"
 lto = false
+opt-level = 3

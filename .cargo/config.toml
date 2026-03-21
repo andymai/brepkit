@@ -1,7 +1,7 @@
 [alias]
-xtask = "run --manifest-path xtask/Cargo.toml --"
 bench-fast = "bench -p brepkit-operations --bench cad_operations"
 bench-full = "bench -p brepkit-operations"
+xtask = "run --manifest-path xtask/Cargo.toml --"
 
 # Note: WASM SIMD flags (-C target-feature=+simd128) are enabled by default
 # via xtask (disable with --no-simd). Not set here because rustflags in

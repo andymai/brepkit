@@ -1,16 +1,16 @@
 [package]
-name = "brepkit-topology"
-version = "0.1.0"
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
 description = "B-Rep topological data structures for brepkit"
+edition.workspace = true
+license.workspace = true
+name = "brepkit-topology"
+repository.workspace = true
+rust-version.workspace = true
+version = "0.1.0"
 
 [dependencies]
 brepkit-math.workspace = true
-thiserror.workspace = true
 smallvec.workspace = true
+thiserror.workspace = true
 
 
 [dev-dependencies]

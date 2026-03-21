@@ -1,13 +1,13 @@
 [package]
-name = "brepkit-wasm"
-version = "2.24.0"
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
-repository.workspace = true
-description = "WebAssembly bindings for brepkit — browser-native B-Rep solid modeling"
-keywords = ["cad", "brep", "wasm", "geometry", "solid-modeling"]
 categories = ["wasm", "mathematics", "science"]
+description = "WebAssembly bindings for brepkit — browser-native B-Rep solid modeling"
+edition.workspace = true
+keywords = ["cad", "brep", "wasm", "geometry", "solid-modeling"]
+license.workspace = true
+name = "brepkit-wasm"
+repository.workspace = true
+rust-version.workspace = true
+version = "2.24.0"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -17,18 +17,18 @@ default = ["io"]
 io = ["dep:brepkit-io"]
 
 [dependencies]
-brepkit-math.workspace = true
-brepkit-geometry.workspace = true
-brepkit-topology.workspace = true
-brepkit-operations.workspace = true
 brepkit-check.workspace = true
-brepkit-io = { workspace = true, optional = true }
-wasm-bindgen.workspace = true
-thiserror.workspace = true
+brepkit-geometry.workspace = true
+brepkit-io = {workspace = true, optional = true}
+brepkit-math.workspace = true
+brepkit-operations.workspace = true
+brepkit-topology.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
 tsify.workspace = true
+wasm-bindgen.workspace = true
 
 [lints]
 workspace = true
