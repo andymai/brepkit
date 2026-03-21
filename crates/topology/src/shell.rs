@@ -37,7 +37,10 @@ impl Shell {
     }
 
     /// Returns mutable access to the faces of this shell.
-    pub fn faces_mut(&mut self) -> &mut Vec<FaceId> {
+    ///
+    /// Allows in-place mutation (reorder, replace) but not removal.
+    /// The shell must always contain at least one face.
+    pub fn faces_mut(&mut self) -> &mut [FaceId] {
         &mut self.faces
     }
 }
