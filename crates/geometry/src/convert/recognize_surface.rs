@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn recognize_cylinder_round_trip() {
         let cyl = CylindricalSurface::new(origin(), z_axis(), 3.0).unwrap();
-        let nurbs = cylinder_to_nurbs(&cyl, (0.0, std::f64::consts::TAU), (0.0, 5.0)).unwrap();
+        let nurbs = cylinder_to_nurbs(&cyl, (0.0, 5.0)).unwrap();
 
         let result = recognize_surface(&nurbs, 1e-4);
         match result {
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn recognize_sphere_round_trip() {
         let sphere = SphericalSurface::new(origin(), 5.0).unwrap();
-        let nurbs = sphere_to_nurbs(&sphere, (0.0, std::f64::consts::TAU), (-1.5, 1.5)).unwrap();
+        let nurbs = sphere_to_nurbs(&sphere).unwrap();
 
         let result = recognize_surface(&nurbs, 0.1);
         match result {

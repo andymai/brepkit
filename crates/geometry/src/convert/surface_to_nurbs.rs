@@ -1,9 +1,7 @@
 //! Convert analytic surfaces to NURBS representation.
 //!
 //! These are thin wrappers around the `to_nurbs()` methods on each analytic
-//! surface type from `brepkit-math`. They translate the surface-specific
-//! parameter signatures into a uniform `(u_range, v_range)` interface and
-//! propagate errors as [`GeomError`].
+//! surface type from `brepkit-math`, propagating errors as [`GeomError`].
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::surfaces::{
@@ -14,16 +12,15 @@ use crate::GeomError;
 
 /// Convert a [`CylindricalSurface`] patch to a NURBS surface.
 ///
-/// `u_range` is ignored for the cylinder — the result always spans the full
-/// angular circle `[0, 2π)` in the u-direction, which is the domain of the
-/// underlying rational representation. `v_range` sets the axial extent.
+/// Geometrically covers a full revolution around the cylinder axis in
+/// the u-direction. `v_range` sets the axial extent. The NURBS parameter
+/// domain is determined by the underlying `to_nurbs()` implementation.
 ///
 /// # Errors
 ///
 /// Returns [`GeomError::Math`] if NURBS construction fails.
 pub fn cylinder_to_nurbs(
     cyl: &CylindricalSurface,
-    _u_range: (f64, f64),
     v_range: (f64, f64),
 ) -> Result<NurbsSurface, GeomError> {
     Ok(cyl.to_nurbs(v_range.0, v_range.1)?)
@@ -31,24 +28,19 @@ pub fn cylinder_to_nurbs(
 
 /// Convert a [`SphericalSurface`] to a NURBS surface.
 ///
-/// Both `u_range` and `v_range` are currently ignored; the result spans the
-/// full sphere (`u ∈ [0, 2π)`, `v ∈ [-π/2, π/2]`). The underlying sampled
-/// approximation does not support partial-sphere ranges.
+/// Geometrically covers the full sphere. The NURBS parameter domain is
+/// determined by the underlying `to_nurbs()` implementation.
 ///
 /// # Errors
 ///
 /// Returns [`GeomError::Math`] if NURBS construction fails.
-pub fn sphere_to_nurbs(
-    sphere: &SphericalSurface,
-    _u_range: (f64, f64),
-    _v_range: (f64, f64),
-) -> Result<NurbsSurface, GeomError> {
+pub fn sphere_to_nurbs(sphere: &SphericalSurface) -> Result<NurbsSurface, GeomError> {
     Ok(sphere.to_nurbs()?)
 }
 
 /// Convert a [`ConicalSurface`] patch to a NURBS surface.
 ///
-/// `u_range` is ignored — the result spans the full angular circle. `v_range`
+/// The result spans the full angular circle in the u-direction. `v_range`
 /// sets the extent along the cone's generator direction from the apex.
 ///
 /// # Errors
@@ -56,7 +48,6 @@ pub fn sphere_to_nurbs(
 /// Returns [`GeomError::Math`] if NURBS construction fails.
 pub fn cone_to_nurbs(
     cone: &ConicalSurface,
-    _u_range: (f64, f64),
     v_range: (f64, f64),
 ) -> Result<NurbsSurface, GeomError> {
     Ok(cone.to_nurbs(v_range.0, v_range.1)?)
@@ -64,17 +55,13 @@ pub fn cone_to_nurbs(
 
 /// Convert a [`ToroidalSurface`] to a NURBS surface.
 ///
-/// Both `u_range` and `v_range` are currently ignored; the result spans the
-/// full torus (`u ∈ [0, 2π)`, `v ∈ [0, 2π)`).
+/// Geometrically covers the full torus. The NURBS parameter domain is
+/// determined by the underlying `to_nurbs()` implementation.
 ///
 /// # Errors
 ///
 /// Returns [`GeomError::Math`] if NURBS construction fails.
-pub fn torus_to_nurbs(
-    torus: &ToroidalSurface,
-    _u_range: (f64, f64),
-    _v_range: (f64, f64),
-) -> Result<NurbsSurface, GeomError> {
+pub fn torus_to_nurbs(torus: &ToroidalSurface) -> Result<NurbsSurface, GeomError> {
     Ok(torus.to_nurbs()?)
 }
 
@@ -83,8 +70,6 @@ pub fn torus_to_nurbs(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
-
-    use std::f64::consts::TAU;
 
     use brepkit_math::surfaces::{
         ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
@@ -104,7 +89,7 @@ mod tests {
     #[test]
     fn cylinder_to_nurbs_evaluates() {
         let cyl = CylindricalSurface::new(origin(), z_axis(), 2.0).unwrap();
-        let nurbs = cylinder_to_nurbs(&cyl, (0.0, TAU), (0.0, 5.0)).unwrap();
+        let nurbs = cylinder_to_nurbs(&cyl, (0.0, 5.0)).unwrap();
         // The domain should be defined.
         let (u0, u1) = nurbs.domain_u();
         let (v0, v1) = nurbs.domain_v();
@@ -119,7 +104,7 @@ mod tests {
     #[test]
     fn sphere_to_nurbs_evaluates() {
         let sphere = SphericalSurface::new(origin(), 3.0).unwrap();
-        let nurbs = sphere_to_nurbs(&sphere, (0.0, TAU), (-TAU / 4.0, TAU / 4.0)).unwrap();
+        let nurbs = sphere_to_nurbs(&sphere).unwrap();
         let (u0, u1) = nurbs.domain_u();
         let (v0, v1) = nurbs.domain_v();
         assert!(u1 > u0);
@@ -133,7 +118,7 @@ mod tests {
     fn cone_to_nurbs_evaluates() {
         let half_angle = std::f64::consts::FRAC_PI_4;
         let cone = ConicalSurface::new(origin(), z_axis(), half_angle).unwrap();
-        let nurbs = cone_to_nurbs(&cone, (0.0, TAU), (0.0, 5.0)).unwrap();
+        let nurbs = cone_to_nurbs(&cone, (0.0, 5.0)).unwrap();
         let (u0, u1) = nurbs.domain_u();
         let (v0, v1) = nurbs.domain_v();
         assert!(u1 > u0);
@@ -145,7 +130,7 @@ mod tests {
     #[test]
     fn torus_to_nurbs_evaluates() {
         let torus = ToroidalSurface::new(origin(), 4.0, 1.0).unwrap();
-        let nurbs = torus_to_nurbs(&torus, (0.0, TAU), (0.0, TAU)).unwrap();
+        let nurbs = torus_to_nurbs(&torus).unwrap();
         let (u0, u1) = nurbs.domain_u();
         let (v0, v1) = nurbs.domain_v();
         assert!(u1 > u0);

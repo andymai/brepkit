@@ -6,5 +6,5 @@
 pub mod reader;
 pub mod writer;
 
-pub use reader::read_glb;
+pub use reader::{read_glb, read_glb_solid};
 pub use writer::write_glb;

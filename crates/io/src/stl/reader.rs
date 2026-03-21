@@ -5,6 +5,8 @@
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::tessellate::TriangleMesh;
+use brepkit_topology::Topology;
+use brepkit_topology::solid::SolidId;
 
 /// Read an STL file (binary or ASCII) from raw bytes.
 ///
@@ -199,6 +201,25 @@ fn parse_f64(s: &str) -> Result<f64, crate::IoError> {
     })
 }
 
+/// Read an STL file and import it as a solid with one planar face per triangle.
+///
+/// This is a convenience wrapper that calls [`read_stl`] followed by
+/// [`import_mesh`](crate::stl::import::import_mesh). Vertices within
+/// `tolerance` of each other are merged.
+///
+/// # Errors
+///
+/// Returns [`IoError`](crate::IoError) if the file is malformed or the mesh
+/// cannot be converted to a valid solid.
+pub fn read_stl_solid(
+    topo: &mut Topology,
+    data: &[u8],
+    tolerance: f64,
+) -> Result<SolidId, crate::IoError> {
+    let mesh = read_stl(data)?;
+    crate::stl::import::import_mesh(topo, &mesh, tolerance)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -366,5 +387,22 @@ mod tests {
             assert!(pos.y() >= -0.01 && pos.y() <= 1.01);
             assert!(pos.z() >= -0.01 && pos.z() <= 1.01);
         }
+    }
+
+    // ── read_stl_solid smoke test ───────────────────────────────────
+
+    #[test]
+    fn read_stl_solid_returns_solid_id() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube(&mut topo);
+
+        let bytes = writer::write_stl(&topo, &[solid], 0.1, StlFormat::Binary).unwrap();
+
+        let mut import_topo = Topology::new();
+        let result = read_stl_solid(&mut import_topo, &bytes, 1e-6);
+        assert!(
+            result.is_ok(),
+            "read_stl_solid should return Ok: {result:?}"
+        );
     }
 }

@@ -28,30 +28,44 @@ fn normalize_angle(angle: f64) -> f64 {
 /// Project a point onto an infinite plane.
 ///
 /// The plane is defined by an `origin` point and a unit `normal` vector.
-/// The u and v parameters returned are measured in the plane's local frame;
-/// since we don't track a basis here, they are set to 0.
+/// The u and v parameters are measured in the plane's local orthonormal frame
+/// derived from the normal via the stable cross-product method.
 ///
 /// Returns a [`SurfaceProjection`] with the perpendicular foot and the signed
 /// distance (`distance` is always non-negative).
 #[must_use]
 pub fn point_to_plane(point: Point3, origin: Point3, normal: Vec3) -> SurfaceProjection {
-    // Signed distance along the normal: d = normal · (point - origin)
-    let diff = Vec3::new(
-        point.x() - origin.x(),
-        point.y() - origin.y(),
-        point.z() - origin.z(),
-    );
-    let d = normal.dot(diff);
-    let closest = Point3::new(
-        point.x() - d * normal.x(),
-        point.y() - d * normal.y(),
-        point.z() - d * normal.z(),
-    );
+    let d = (point - origin).dot(normal);
+    let closest = point - normal * d;
+
+    // Derive stable orthonormal u/v axes from normal.
+    // Pick a candidate that is not parallel to `normal`, then normalize.
+    let candidate = if normal.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u_raw = normal.cross(candidate);
+    let u_len = u_raw.length();
+    if u_len < 1e-15 {
+        // Degenerate (zero or near-zero) normal — UV is meaningless.
+        return SurfaceProjection {
+            distance: d.abs(),
+            point: closest,
+            u: 0.0,
+            v: 0.0,
+        };
+    }
+    let u_axis = u_raw * (1.0 / u_len);
+    let v_raw = normal.cross(u_axis);
+    let v_axis = v_raw * (1.0 / v_raw.length());
+
+    let delta = closest - origin;
     SurfaceProjection {
         distance: d.abs(),
         point: closest,
-        u: 0.0,
-        v: 0.0,
+        u: delta.dot(u_axis),
+        v: delta.dot(v_axis),
     }
 }
 
@@ -470,6 +484,10 @@ mod tests {
         assert!(approx(proj.point.x(), 3.0, 1e-12));
         assert!(approx(proj.point.y(), 4.0, 1e-12));
         assert!(approx(proj.point.z(), 0.0, 1e-12));
+        // For normal=(0,0,1), u_axis=(0,1,0), v_axis=(-1,0,0) via cross-product method.
+        // closest=(3,4,0), delta=(3,4,0), u=delta·u_axis=4, v=delta·v_axis=-3.
+        assert!(approx(proj.u, 4.0, 1e-12), "u={}", proj.u);
+        assert!(approx(proj.v, -3.0, 1e-12), "v={}", proj.v);
     }
 
     #[test]
@@ -480,6 +498,29 @@ mod tests {
         let point = Point3::new(5.0, 2.0, 7.0);
         let proj = point_to_plane(point, origin, normal);
         assert!(proj.distance < 1e-12, "dist={}", proj.distance);
+        // For normal=(0,1,0), u_axis=(0,0,-1), v_axis=(-1,0,0) via cross-product method.
+        // closest=(5,2,7), delta=(4,0,4), u=delta·u_axis=-4, v=delta·v_axis=-4.
+        assert!(approx(proj.u, -4.0, 1e-12), "u={}", proj.u);
+        assert!(approx(proj.v, -4.0, 1e-12), "v={}", proj.v);
+    }
+
+    #[test]
+    fn plane_x_dominant_normal() {
+        // Exercises the `else` branch of the candidate selection (normal.x >= 0.9).
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let normal = Vec3::new(1.0, 0.0, 0.0);
+        let point = Point3::new(7.0, 3.0, 4.0);
+        let proj = point_to_plane(point, origin, normal);
+        assert!(approx(proj.distance, 7.0, 1e-12), "dist={}", proj.distance);
+        assert!(approx(proj.point.x(), 0.0, 1e-12));
+        assert!(approx(proj.point.y(), 3.0, 1e-12));
+        assert!(approx(proj.point.z(), 4.0, 1e-12));
+        // For normal=(1,0,0), candidate=(0,1,0):
+        // u_axis = normalize((1,0,0)×(0,1,0)) = (0,0,1)
+        // v_axis = (1,0,0)×(0,0,1) = (0,-1,0)
+        // delta=(0,3,4), u=4, v=-3
+        assert!(approx(proj.u, 4.0, 1e-12), "u={}", proj.u);
+        assert!(approx(proj.v, -3.0, 1e-12), "v={}", proj.v);
     }
 
     // ── point_to_sphere ──────────────────────────────────────────────────────

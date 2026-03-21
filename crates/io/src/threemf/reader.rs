@@ -8,6 +8,8 @@ use std::io::{Cursor, Read as _};
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::tessellate::TriangleMesh;
+use brepkit_topology::Topology;
+use brepkit_topology::solid::SolidId;
 
 use crate::IoError;
 
@@ -246,6 +248,37 @@ fn parse_u32_attr(val: &str, context: &str) -> Result<u32, IoError> {
     })
 }
 
+/// Read a 3MF file and import the first object as a solid.
+///
+/// This is a convenience wrapper that calls [`read_threemf`] followed by
+/// [`import_mesh`](crate::stl::import::import_mesh) on the first mesh.
+/// Vertices within `tolerance` of each other are merged.
+///
+/// **Note:** Only the first object is imported; additional objects in the
+/// archive are silently ignored. Use [`read_threemf`] directly to access
+/// all objects.
+///
+/// # Errors
+///
+/// Returns [`IoError`] if:
+/// - The file is malformed
+/// - The archive contains no objects
+/// - The mesh cannot be converted to a valid solid
+pub fn read_threemf_solid(
+    topo: &mut Topology,
+    data: &[u8],
+    tolerance: f64,
+) -> Result<SolidId, IoError> {
+    let meshes = read_threemf(data)?;
+    let mesh = meshes
+        .into_iter()
+        .next()
+        .ok_or_else(|| IoError::ParseError {
+            reason: "3MF file contains no objects".to_string(),
+        })?;
+    crate::stl::import::import_mesh(topo, &mesh, tolerance)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -353,5 +386,22 @@ mod tests {
 
         let result = read_threemf(&cursor.into_inner());
         assert!(result.is_err());
+    }
+
+    // ── read_threemf_solid smoke test ───────────────────────────────
+
+    #[test]
+    fn read_threemf_solid_returns_solid_id() {
+        let mut topo = Topology::new();
+        let solid = make_unit_cube(&mut topo);
+
+        let bytes = writer::write_threemf(&topo, &[solid], 0.1).unwrap();
+
+        let mut import_topo = Topology::new();
+        let result = read_threemf_solid(&mut import_topo, &bytes, 1e-6);
+        assert!(
+            result.is_ok(),
+            "read_threemf_solid should return Ok: {result:?}"
+        );
     }
 }

@@ -2,6 +2,8 @@
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::tessellate::TriangleMesh;
+use brepkit_topology::Topology;
+use brepkit_topology::solid::SolidId;
 
 /// Read a PLY file from bytes and return a triangle mesh.
 ///
@@ -314,6 +316,25 @@ fn compute_normals(positions: &[Point3], indices: &[u32]) -> Vec<Vec3> {
     normals
 }
 
+/// Read a PLY file and import it as a solid with one planar face per triangle.
+///
+/// This is a convenience wrapper that calls [`read_ply`] followed by
+/// [`import_mesh`](crate::stl::import::import_mesh). Vertices within
+/// `tolerance` of each other are merged.
+///
+/// # Errors
+///
+/// Returns [`IoError`](crate::IoError) if the file is malformed or the mesh
+/// cannot be converted to a valid solid.
+pub fn read_ply_solid(
+    topo: &mut Topology,
+    data: &[u8],
+    tolerance: f64,
+) -> Result<SolidId, crate::IoError> {
+    let mesh = read_ply(data)?;
+    crate::stl::import::import_mesh(topo, &mesh, tolerance)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -365,5 +386,24 @@ mod tests {
     fn missing_header_error() {
         let data = b"not a ply file";
         assert!(read_ply(data).is_err());
+    }
+
+    // ── read_ply_solid smoke test ───────────────────────────────────
+
+    #[test]
+    fn read_ply_solid_returns_solid_id() {
+        let mut topo = brepkit_topology::Topology::new();
+        let solid = brepkit_operations::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let ply_data =
+            crate::ply::write_ply(&topo, &[solid], 0.1, crate::ply::writer::PlyFormat::Ascii)
+                .unwrap();
+
+        let mut import_topo = brepkit_topology::Topology::new();
+        let result = read_ply_solid(&mut import_topo, &ply_data, 1e-6);
+        assert!(
+            result.is_ok(),
+            "read_ply_solid should return Ok: {result:?}"
+        );
     }
 }

@@ -6,6 +6,8 @@
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::tessellate::TriangleMesh;
+use brepkit_topology::Topology;
+use brepkit_topology::solid::SolidId;
 
 /// Read a GLB (glTF binary) file and return a triangle mesh.
 ///
@@ -434,6 +436,26 @@ fn extract_int(text: &str, key: &str) -> Option<usize> {
     digits.parse().ok()
 }
 
+/// Read a GLB (glTF binary) file and import it as a solid with one planar
+/// face per triangle.
+///
+/// This is a convenience wrapper that calls [`read_glb`] followed by
+/// [`import_mesh`](crate::stl::import::import_mesh). Vertices within
+/// `tolerance` of each other are merged.
+///
+/// # Errors
+///
+/// Returns [`IoError`](crate::IoError) if the file is malformed or the mesh
+/// cannot be converted to a valid solid.
+pub fn read_glb_solid(
+    topo: &mut Topology,
+    data: &[u8],
+    tolerance: f64,
+) -> Result<SolidId, crate::IoError> {
+    let mesh = read_glb(data)?;
+    crate::stl::import::import_mesh(topo, &mesh, tolerance)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -710,5 +732,22 @@ mod tests {
         assert!(!mesh.positions.is_empty(), "should have vertices");
         assert!(!mesh.indices.is_empty(), "should have indices");
         assert_eq!(mesh.indices.len() % 3, 0, "should be triangles");
+    }
+
+    // ── read_glb_solid smoke test ───────────────────────────────────
+
+    #[test]
+    fn read_glb_solid_returns_solid_id() {
+        let mut topo = brepkit_topology::Topology::new();
+        let solid = brepkit_operations::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+        let glb = crate::gltf::write_glb(&topo, &[solid], 0.1).unwrap();
+
+        let mut import_topo = brepkit_topology::Topology::new();
+        let result = read_glb_solid(&mut import_topo, &glb, 1e-6);
+        assert!(
+            result.is_ok(),
+            "read_glb_solid should return Ok: {result:?}"
+        );
     }
 }

@@ -2,6 +2,8 @@
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::tessellate::TriangleMesh;
+use brepkit_topology::Topology;
+use brepkit_topology::solid::SolidId;
 
 /// Read an OBJ file from a string and return a triangle mesh.
 ///
@@ -153,6 +155,25 @@ fn compute_vertex_normals(positions: &[Point3], indices: &[u32]) -> Vec<Vec3> {
     normals
 }
 
+/// Read an OBJ file and import it as a solid with one planar face per triangle.
+///
+/// This is a convenience wrapper that calls [`read_obj`] followed by
+/// [`import_mesh`](crate::stl::import::import_mesh). Vertices within
+/// `tolerance` of each other are merged.
+///
+/// # Errors
+///
+/// Returns [`IoError`](crate::IoError) if the file is malformed or the mesh
+/// cannot be converted to a valid solid.
+pub fn read_obj_solid(
+    topo: &mut Topology,
+    input: &str,
+    tolerance: f64,
+) -> Result<SolidId, crate::IoError> {
+    let mesh = read_obj(input)?;
+    crate::stl::import::import_mesh(topo, &mesh, tolerance)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -252,5 +273,28 @@ f 1 2 3
                 "normal should be unit length, got {len}"
             );
         }
+    }
+
+    // ── read_obj_solid smoke test ───────────────────────────────────
+
+    #[test]
+    fn read_obj_solid_returns_solid_id() {
+        // Minimal closed tetrahedron.
+        let obj = "\
+v 0 0 0
+v 1 0 0
+v 0 1 0
+v 0 0 1
+f 1 2 3
+f 1 3 4
+f 1 4 2
+f 2 4 3
+";
+        let mut topo = brepkit_topology::Topology::new();
+        let result = read_obj_solid(&mut topo, obj, 1e-6);
+        assert!(
+            result.is_ok(),
+            "read_obj_solid should return Ok: {result:?}"
+        );
     }
 }

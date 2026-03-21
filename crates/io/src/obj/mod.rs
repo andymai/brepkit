@@ -6,5 +6,5 @@
 pub mod reader;
 pub mod writer;
 
-pub use reader::read_obj;
+pub use reader::{read_obj, read_obj_solid};
 pub use writer::write_obj;
