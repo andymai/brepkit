@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 //! Phase 4: Classification — point-in-solid tests for boolean fragment labeling.
 //!
-//! **NOTE:** The canonical implementation lives in `brepkit_algo::classifier`.
-//! This copy will be deleted during the GFA step 5 switchover. Bug fixes
-//! should be applied to the algo crate first.
+//! **NOTE:** The canonical implementation lives in the algo crate
+//! (see `crates/algo/src/classifier/*`). This copy will be deleted during
+//! the GFA step 5 switchover. Bug fixes should be applied to the algo crate first.
 //!
 //! Determines whether each face fragment lies inside, outside, or on the
 //! boundary of the opposing solid. Supports analytic O(1) classifiers for

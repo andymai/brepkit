@@ -4,6 +4,10 @@
 //! cylinder, cone, sphere), a point can be classified by testing
 //! the signed distance to each face constraint. Originally ported from
 //! `operations/boolean/classify.rs`.
+//!
+//! NOTE: `operations/boolean/classify.rs` contains a duplicate of this
+//! logic. Bug fixes should be applied here first; the operations copy
+//! will be deleted during the GFA step 5 switchover.
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
