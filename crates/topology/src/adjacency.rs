@@ -153,14 +153,21 @@ impl AdjacencyIndex {
         &self.boundary_edges
     }
 
-    /// Returns the full edge-to-faces map.
-    ///
-    /// Provided as a compatibility shim for callers that need direct map access.
-    /// Values are `SmallVec<[FaceId; 2]>` (inline for manifold edges); access
-    /// through `Deref<Target=[FaceId]>` for forward-compatible code.
+    /// Returns the faces adjacent to the given edge, or `None` if not found.
     #[must_use]
-    pub fn edge_faces_map(&self) -> &HashMap<EdgeId, SmallVec<[FaceId; 2]>> {
-        &self.edge_faces
+    pub fn edge_faces(&self, edge: EdgeId) -> Option<&[FaceId]> {
+        self.edge_faces.get(&edge).map(smallvec::SmallVec::as_slice)
+    }
+
+    /// Returns the number of edges in the adjacency index.
+    #[must_use]
+    pub fn edge_count(&self) -> usize {
+        self.edge_faces.len()
+    }
+
+    /// Iterates over all (edge, faces) pairs.
+    pub fn edge_faces_iter(&self) -> impl Iterator<Item = (EdgeId, &[FaceId])> {
+        self.edge_faces.iter().map(|(k, v)| (*k, v.as_slice()))
     }
 }
 
@@ -182,8 +189,8 @@ mod tests {
         assert!(adj.boundary_edges().is_empty());
 
         // A cube has 12 edges, each shared by exactly 2 faces.
-        assert_eq!(adj.edge_faces_map().len(), 12);
-        for faces in adj.edge_faces_map().values() {
+        assert_eq!(adj.edge_count(), 12);
+        for (_, faces) in adj.edge_faces_iter() {
             assert_eq!(faces.len(), 2);
         }
 
@@ -310,7 +317,7 @@ mod tests {
         let topo = Topology::new();
         let adj = AdjacencyIndex::build_from_faces(&topo, &[]).unwrap();
         assert!(adj.is_manifold());
-        assert!(adj.edge_faces_map().is_empty());
+        assert_eq!(adj.edge_count(), 0);
     }
 
     #[test]

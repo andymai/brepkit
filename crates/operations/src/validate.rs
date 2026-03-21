@@ -305,8 +305,7 @@ pub fn validate_solid_with_options(
 
         for wire_id in wire_ids {
             let wire = topo.wire(wire_id)?;
-            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, topo.edges())
-            {
+            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, topo) {
                 issues.push(ValidationIssue {
                     severity: Severity::Error,
                     description: format!(
@@ -610,8 +609,7 @@ pub fn validate_solid_relaxed_with_options(
 
         for wire_id in wire_ids {
             let wire = topo.wire(wire_id)?;
-            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, topo.edges())
-            {
+            if let Err(_e) = brepkit_topology::validation::validate_wire_closed(wire, topo) {
                 // Demoted to Warning: boolean operations can produce
                 // micro-gaps in wires from edge splitting that don't affect
                 // downstream tessellation or volume. Strict checking would

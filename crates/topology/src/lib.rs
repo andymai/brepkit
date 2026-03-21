@@ -30,7 +30,15 @@ pub mod vertex;
 pub mod wire;
 
 pub use arena::Arena;
+pub use compound::CompoundId;
+pub use compsolid::CompSolidId;
+pub use edge::EdgeId;
+pub use face::FaceId;
+pub use shell::ShellId;
+pub use solid::SolidId;
 pub use topology::Topology;
+pub use vertex::VertexId;
+pub use wire::{OrientedEdge, WireId};
 
 /// Errors from topology operations.
 #[derive(Debug, thiserror::Error)]

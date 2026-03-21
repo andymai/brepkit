@@ -199,7 +199,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use brepkit_topology::Topology;
-    use brepkit_topology::test_utils::make_unit_cube;
+    use brepkit_topology::test_utils::make_unit_cube_non_manifold;
 
     use super::*;
     use crate::stl::reader::read_stl;
@@ -376,7 +376,7 @@ mod tests {
     fn import_stl_roundtrip_unit_cube() {
         // Write a unit cube to STL, read it back, import to topology.
         let mut write_topo = Topology::new();
-        let solid = make_unit_cube(&mut write_topo);
+        let solid = make_unit_cube_non_manifold(&mut write_topo);
 
         let stl_bytes = writer::write_stl(&write_topo, &[solid], 0.1, StlFormat::Binary).unwrap();
         let mesh = read_stl(&stl_bytes).unwrap();

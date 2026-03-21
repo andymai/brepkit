@@ -102,6 +102,14 @@ impl Wire {
         &self.edges
     }
 
+    /// Returns mutable access to the ordered edges of this wire.
+    ///
+    /// Allows in-place mutation (reorder, replace) but not removal.
+    /// The wire must always contain at least one edge.
+    pub fn edges_mut(&mut self) -> &mut [OrientedEdge] {
+        &mut self.edges
+    }
+
     /// Returns `true` if this wire forms a closed loop.
     #[must_use]
     pub const fn is_closed(&self) -> bool {

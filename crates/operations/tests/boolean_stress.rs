@@ -27,7 +27,7 @@ fn check_manifold(topo: &Topology, solid: SolidId) -> usize {
     let s = topo.solid(solid).unwrap();
     let sh = topo.shell(s.outer_shell()).unwrap();
     assert!(
-        validate_shell_manifold(sh, topo.faces(), topo.wires()).is_ok(),
+        validate_shell_manifold(sh, topo).is_ok(),
         "result should be manifold"
     );
     sh.faces().len()

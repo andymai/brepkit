@@ -1033,7 +1033,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use brepkit_topology::Topology;
-    use brepkit_topology::test_utils::make_unit_cube;
+    use brepkit_topology::test_utils::make_unit_cube_non_manifold;
 
     use super::*;
     use crate::step::writer;
@@ -1041,7 +1041,7 @@ mod tests {
     #[test]
     fn roundtrip_unit_cube() {
         let mut write_topo = Topology::new();
-        let solid = make_unit_cube(&mut write_topo);
+        let solid = make_unit_cube_non_manifold(&mut write_topo);
 
         let step_str = writer::write_step(&write_topo, &[solid]).unwrap();
 
@@ -1076,7 +1076,7 @@ mod tests {
     fn roundtrip_multiple_solids() {
         let mut write_topo = Topology::new();
         let s1 = brepkit_operations::primitives::make_box(&mut write_topo, 1.0, 1.0, 1.0).unwrap();
-        let s2 = make_unit_cube(&mut write_topo);
+        let s2 = make_unit_cube_non_manifold(&mut write_topo);
 
         let step_str = writer::write_step(&write_topo, &[s1, s2]).unwrap();
 
@@ -1089,7 +1089,7 @@ mod tests {
     #[test]
     fn roundtrip_faces_have_wires() {
         let mut write_topo = Topology::new();
-        let solid = make_unit_cube(&mut write_topo);
+        let solid = make_unit_cube_non_manifold(&mut write_topo);
 
         let step_str = writer::write_step(&write_topo, &[solid]).unwrap();
 
@@ -1109,7 +1109,7 @@ mod tests {
     #[test]
     fn roundtrip_faces_are_planar() {
         let mut write_topo = Topology::new();
-        let solid = make_unit_cube(&mut write_topo);
+        let solid = make_unit_cube_non_manifold(&mut write_topo);
 
         let step_str = writer::write_step(&write_topo, &[solid]).unwrap();
 

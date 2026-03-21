@@ -225,7 +225,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use brepkit_topology::Topology;
-    use brepkit_topology::test_utils::make_unit_cube;
+    use brepkit_topology::test_utils::make_unit_cube_non_manifold;
 
     use super::*;
     use crate::stl::writer::{self, StlFormat};
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn roundtrip_binary_stl_unit_cube() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         // Write → read round-trip.
         let bytes = writer::write_stl(&topo, &[solid], 0.1, StlFormat::Binary).unwrap();
@@ -250,7 +250,7 @@ mod tests {
     #[test]
     fn roundtrip_ascii_stl_unit_cube() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = writer::write_stl(&topo, &[solid], 0.1, StlFormat::Ascii).unwrap();
         let mesh = read_stl(&bytes).unwrap();
@@ -283,7 +283,7 @@ mod tests {
     #[test]
     fn detect_binary_format() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
         let bytes = writer::write_stl(&topo, &[solid], 0.1, StlFormat::Binary).unwrap();
         assert!(!is_ascii_stl(&bytes));
     }
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn binary_roundtrip_preserves_vertex_positions() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = writer::write_stl(&topo, &[solid], 0.1, StlFormat::Binary).unwrap();
         let mesh = read_stl(&bytes).unwrap();
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn read_stl_solid_returns_solid_id() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = writer::write_stl(&topo, &[solid], 0.1, StlFormat::Binary).unwrap();
 

@@ -414,14 +414,14 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use brepkit_topology::Topology;
-    use brepkit_topology::test_utils::make_unit_cube;
+    use brepkit_topology::test_utils::make_unit_cube_non_manifold;
 
     use super::*;
 
     #[test]
     fn write_iges_unit_cube() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let iges_str = write_iges(&topo, &[solid]).unwrap();
 
@@ -435,7 +435,7 @@ mod tests {
     #[test]
     fn iges_contains_plane_entities() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let iges_str = write_iges(&topo, &[solid]).unwrap();
 
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn iges_contains_line_entities() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let iges_str = write_iges(&topo, &[solid]).unwrap();
 
@@ -474,7 +474,7 @@ mod tests {
     fn iges_multiple_solids() {
         let mut topo = Topology::new();
         let s1 = brepkit_operations::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
-        let s2 = make_unit_cube(&mut topo);
+        let s2 = make_unit_cube_non_manifold(&mut topo);
 
         let iges_str = write_iges(&topo, &[s1, s2]).unwrap();
 
@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn iges_lines_are_80_chars_or_less() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let iges_str = write_iges(&topo, &[solid]).unwrap();
 

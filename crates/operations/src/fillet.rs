@@ -2852,8 +2852,7 @@ mod tests {
 
         let s = topo.solid(result).expect("result solid");
         let sh = topo.shell(s.outer_shell()).expect("shell");
-        validate_shell_manifold(sh, topo.faces(), topo.wires())
-            .expect("fillet result should be manifold");
+        validate_shell_manifold(sh, &topo).expect("fillet result should be manifold");
     }
 
     #[test]

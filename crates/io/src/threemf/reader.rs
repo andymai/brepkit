@@ -284,7 +284,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use brepkit_topology::Topology;
-    use brepkit_topology::test_utils::make_unit_cube;
+    use brepkit_topology::test_utils::make_unit_cube_non_manifold;
 
     use super::*;
     use crate::threemf::writer;
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn roundtrip_unit_cube() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = writer::write_threemf(&topo, &[solid], 0.1).unwrap();
         let meshes = read_threemf(&bytes).unwrap();
@@ -324,7 +324,7 @@ mod tests {
     fn roundtrip_multiple_solids() {
         let mut topo = Topology::new();
         let s1 = brepkit_operations::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
-        let s2 = make_unit_cube(&mut topo);
+        let s2 = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = writer::write_threemf(&topo, &[s1, s2], 0.1).unwrap();
         let meshes = read_threemf(&bytes).unwrap();
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn roundtrip_preserves_vertex_bounds() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = writer::write_threemf(&topo, &[solid], 0.1).unwrap();
         let meshes = read_threemf(&bytes).unwrap();
@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn normals_are_unit_length() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = writer::write_threemf(&topo, &[solid], 0.1).unwrap();
         let meshes = read_threemf(&bytes).unwrap();
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn read_threemf_solid_returns_solid_id() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let bytes = writer::write_threemf(&topo, &[solid], 0.1).unwrap();
 

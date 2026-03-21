@@ -549,14 +549,14 @@ mod tests {
     use brepkit_math::tolerance::Tolerance;
     use brepkit_topology::Topology;
     use brepkit_topology::face::FaceSurface;
-    use brepkit_topology::test_utils::make_unit_cube;
+    use brepkit_topology::test_utils::make_unit_cube_non_manifold;
 
     use super::*;
 
     #[test]
     fn translate_cube() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
         let matrix = Mat4::translation(1.0, 0.0, 0.0);
 
         transform_solid(&mut topo, solid, &matrix).unwrap();
@@ -575,7 +575,7 @@ mod tests {
     #[test]
     fn identity_transform_no_change() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         let before: Vec<_> = topo.vertices().iter().map(|(_, v)| v.point()).collect();
 
@@ -592,7 +592,7 @@ mod tests {
     #[test]
     fn degenerate_matrix_error() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
         let matrix = Mat4::scale(0.0, 1.0, 1.0);
 
         let result = transform_solid(&mut topo, solid, &matrix);
@@ -603,7 +603,7 @@ mod tests {
     #[test]
     fn rotation_updates_face_normals() {
         let mut topo = Topology::new();
-        let solid = make_unit_cube(&mut topo);
+        let solid = make_unit_cube_non_manifold(&mut topo);
 
         // 90-degree rotation around Z: +X face normal → +Y, -X → -Y, etc.
         let matrix = Mat4::rotation_z(std::f64::consts::FRAC_PI_2);

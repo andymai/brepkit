@@ -5,10 +5,8 @@
 
 use std::collections::HashMap;
 
+use crate::Topology;
 use crate::TopologyError;
-use crate::arena::Arena;
-use crate::edge::Edge;
-use crate::face::Face;
 use crate::shell::Shell;
 use crate::wire::{Wire, WireId};
 
@@ -22,7 +20,7 @@ use crate::wire::{Wire, WireId};
 ///
 /// Returns [`TopologyError::WireNotClosed`] if the wire is not closed.
 /// Returns [`TopologyError::EdgeNotFound`] if any edge id is invalid.
-pub fn validate_wire_closed(wire: &Wire, edges: &Arena<Edge>) -> Result<(), TopologyError> {
+pub fn validate_wire_closed(wire: &Wire, topo: &Topology) -> Result<(), TopologyError> {
     if !wire.is_closed() {
         return Err(TopologyError::WireNotClosed);
     }
@@ -32,12 +30,8 @@ pub fn validate_wire_closed(wire: &Wire, edges: &Arena<Edge>) -> Result<(), Topo
         let current = &window[0];
         let next = &window[1];
 
-        let current_edge = edges
-            .get(current.edge())
-            .ok_or_else(|| TopologyError::EdgeNotFound(current.edge()))?;
-        let next_edge = edges
-            .get(next.edge())
-            .ok_or_else(|| TopologyError::EdgeNotFound(next.edge()))?;
+        let current_edge = topo.edge(current.edge())?;
+        let next_edge = topo.edge(next.edge())?;
 
         if current.oriented_end(current_edge) != next.oriented_start(next_edge) {
             return Err(TopologyError::WireNotClosed);
@@ -46,12 +40,8 @@ pub fn validate_wire_closed(wire: &Wire, edges: &Arena<Edge>) -> Result<(), Topo
 
     // Check last -> first closure.
     if let (Some(last), Some(first)) = (oriented.last(), oriented.first()) {
-        let last_edge = edges
-            .get(last.edge())
-            .ok_or_else(|| TopologyError::EdgeNotFound(last.edge()))?;
-        let first_edge = edges
-            .get(first.edge())
-            .ok_or_else(|| TopologyError::EdgeNotFound(first.edge()))?;
+        let last_edge = topo.edge(last.edge())?;
+        let first_edge = topo.edge(first.edge())?;
 
         if last.oriented_end(last_edge) != first.oriented_start(first_edge) {
             return Err(TopologyError::WireNotClosed);
@@ -64,12 +54,10 @@ pub fn validate_wire_closed(wire: &Wire, edges: &Arena<Edge>) -> Result<(), Topo
 /// Collects all edge usage counts for a given wire.
 fn count_wire_edges(
     wire_id: WireId,
-    wires: &Arena<Wire>,
+    topo: &Topology,
     counts: &mut HashMap<usize, usize>,
 ) -> Result<(), TopologyError> {
-    let wire = wires
-        .get(wire_id)
-        .ok_or(TopologyError::WireNotFound(wire_id))?;
+    let wire = topo.wire(wire_id)?;
     for oe in wire.edges() {
         *counts.entry(oe.edge().index()).or_insert(0) += 1;
     }
@@ -79,32 +67,31 @@ fn count_wire_edges(
 /// Validates that a shell is manifold.
 ///
 /// A manifold shell requires that every edge is shared by at most two faces.
-/// This function walks shell → faces → wires → edges, counts each edge's
+/// This function walks shell -> faces -> wires -> edges, counts each edge's
 /// usage, and reports any edge shared by more than two faces.
+///
+/// Note: [`AdjacencyIndex::is_manifold()`](crate::adjacency::AdjacencyIndex::is_manifold)
+/// performs the same check but also detects boundary edges (shared by only 1 face).
+/// Use `AdjacencyIndex` when you need the full adjacency data; use this function
+/// for a lightweight pass/fail manifold check.
 ///
 /// # Errors
 ///
 /// Returns [`TopologyError::NonManifold`] if any edge is shared by more
 /// than two faces.
 /// Returns entity-not-found errors if any referenced ID is invalid.
-pub fn validate_shell_manifold(
-    shell: &Shell,
-    faces: &Arena<Face>,
-    wires: &Arena<Wire>,
-) -> Result<(), TopologyError> {
+pub fn validate_shell_manifold(shell: &Shell, topo: &Topology) -> Result<(), TopologyError> {
     let mut edge_counts: HashMap<usize, usize> = HashMap::new();
 
     for &face_id in shell.faces() {
-        let face = faces
-            .get(face_id)
-            .ok_or(TopologyError::FaceNotFound(face_id))?;
+        let face = topo.face(face_id)?;
 
         // Outer wire.
-        count_wire_edges(face.outer_wire(), wires, &mut edge_counts)?;
+        count_wire_edges(face.outer_wire(), topo, &mut edge_counts)?;
 
         // Inner wires (holes).
         for &inner_wire_id in face.inner_wires() {
-            count_wire_edges(inner_wire_id, wires, &mut edge_counts)?;
+            count_wire_edges(inner_wire_id, topo, &mut edge_counts)?;
         }
     }
 
@@ -129,25 +116,24 @@ mod tests {
 
     use crate::edge::{Edge, EdgeCurve};
     use crate::face::{Face, FaceSurface};
+    use crate::topology::Topology;
     use crate::wire::OrientedEdge;
 
     use super::*;
 
     /// Helper: builds a closed triangular wire from 3 vertices.
-    fn make_triangle(
-        vertices: &mut Arena<crate::vertex::Vertex>,
-        edges: &mut Arena<Edge>,
-        wires: &mut Arena<Wire>,
-    ) -> WireId {
-        let v0 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
-        let v1 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
-        let v2 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(0.0, 1.0, 0.0), 1e-7));
+    fn make_triangle(topo: &mut Topology) -> WireId {
+        use crate::vertex::Vertex;
 
-        let e0 = edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e1 = edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e2 = edges.alloc(Edge::new(v2, v0, EdgeCurve::Line));
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), 1e-7));
 
-        wires.alloc(
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
+
+        topo.add_wire(
             Wire::new(
                 vec![
                     OrientedEdge::new(e0, true),
@@ -162,35 +148,29 @@ mod tests {
 
     #[test]
     fn validate_wire_closed_triangle() {
-        let mut vertices = Arena::new();
-        let mut edges = Arena::new();
-        let mut wires = Arena::new();
-
-        let wid = make_triangle(&mut vertices, &mut edges, &mut wires);
-        let wire = wires.get(wid).unwrap();
-        assert!(validate_wire_closed(wire, &edges).is_ok());
+        let mut topo = Topology::new();
+        let wid = make_triangle(&mut topo);
+        let wire = topo.wire(wid).unwrap();
+        assert!(validate_wire_closed(wire, &topo).is_ok());
     }
 
     #[test]
     fn manifold_two_face_shell() {
         // Two triangular faces sharing one edge — each edge used at most 2 times.
-        let mut vertices = Arena::new();
-        let mut edges = Arena::new();
-        let mut wires = Arena::new();
-        let mut faces_arena = Arena::new();
+        let mut topo = Topology::new();
 
-        let v0 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
-        let v1 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
-        let v2 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(0.0, 1.0, 0.0), 1e-7));
-        let v3 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(1.0, 1.0, 0.0), 1e-7));
+        let v0 = topo.add_vertex(crate::vertex::Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let v1 = topo.add_vertex(crate::vertex::Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let v2 = topo.add_vertex(crate::vertex::Vertex::new(Point3::new(0.0, 1.0, 0.0), 1e-7));
+        let v3 = topo.add_vertex(crate::vertex::Vertex::new(Point3::new(1.0, 1.0, 0.0), 1e-7));
 
-        let shared = edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let ea0 = edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
-        let e_a1 = edges.alloc(Edge::new(v2, v0, EdgeCurve::Line));
-        let eb0 = edges.alloc(Edge::new(v2, v3, EdgeCurve::Line));
-        let eb1 = edges.alloc(Edge::new(v3, v1, EdgeCurve::Line));
+        let shared = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let ea0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e_a1 = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
+        let eb0 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let eb1 = topo.add_edge(Edge::new(v3, v1, EdgeCurve::Line));
 
-        let w0 = wires.alloc(
+        let w0 = topo.add_wire(
             Wire::new(
                 vec![
                     OrientedEdge::new(ea0, true),
@@ -201,7 +181,7 @@ mod tests {
             )
             .unwrap(),
         );
-        let w1 = wires.alloc(
+        let w1 = topo.add_wire(
             Wire::new(
                 vec![
                     OrientedEdge::new(shared, false),
@@ -214,34 +194,31 @@ mod tests {
         );
 
         let normal = Vec3::new(0.0, 0.0, 1.0);
-        let f0 = faces_arena.alloc(Face::new(w0, vec![], FaceSurface::Plane { normal, d: 0.0 }));
-        let f1 = faces_arena.alloc(Face::new(w1, vec![], FaceSurface::Plane { normal, d: 0.0 }));
+        let f0 = topo.add_face(Face::new(w0, vec![], FaceSurface::Plane { normal, d: 0.0 }));
+        let f1 = topo.add_face(Face::new(w1, vec![], FaceSurface::Plane { normal, d: 0.0 }));
 
         let shell = Shell::new(vec![f0, f1]).unwrap();
-        assert!(validate_shell_manifold(&shell, &faces_arena, &wires).is_ok());
+        assert!(validate_shell_manifold(&shell, &topo).is_ok());
     }
 
     #[test]
     fn non_manifold_three_face_shared_edge() {
-        // Three faces sharing a single edge → non-manifold.
-        let mut vertices = Arena::new();
-        let mut edges = Arena::new();
-        let mut wires = Arena::new();
-        let mut faces_arena = Arena::new();
+        // Three faces sharing a single edge -> non-manifold.
+        let mut topo = Topology::new();
 
-        let v0 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
-        let v1 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
-        let v2 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(0.0, 1.0, 0.0), 1e-7));
-        let v3 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(1.0, 1.0, 0.0), 1e-7));
-        let v4 = vertices.alloc(crate::vertex::Vertex::new(Point3::new(0.5, 0.5, 1.0), 1e-7));
+        let v0 = topo.add_vertex(crate::vertex::Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let v1 = topo.add_vertex(crate::vertex::Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let v2 = topo.add_vertex(crate::vertex::Vertex::new(Point3::new(0.0, 1.0, 0.0), 1e-7));
+        let v3 = topo.add_vertex(crate::vertex::Vertex::new(Point3::new(1.0, 1.0, 0.0), 1e-7));
+        let v4 = topo.add_vertex(crate::vertex::Vertex::new(Point3::new(0.5, 0.5, 1.0), 1e-7));
 
         // Shared edge between all three faces.
-        let shared = edges.alloc(Edge::new(v0, v1, EdgeCurve::Line));
+        let shared = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
 
         // Face 1: v0-v1-v2
-        let e_a = edges.alloc(Edge::new(v1, v2, EdgeCurve::Line));
-        let e_b = edges.alloc(Edge::new(v2, v0, EdgeCurve::Line));
-        let w0 = wires.alloc(
+        let e_a = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e_b = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
+        let w0 = topo.add_wire(
             Wire::new(
                 vec![
                     OrientedEdge::new(shared, true),
@@ -254,9 +231,9 @@ mod tests {
         );
 
         // Face 2: v0-v1-v3
-        let e_c = edges.alloc(Edge::new(v1, v3, EdgeCurve::Line));
-        let e_d = edges.alloc(Edge::new(v3, v0, EdgeCurve::Line));
-        let w1 = wires.alloc(
+        let e_c = topo.add_edge(Edge::new(v1, v3, EdgeCurve::Line));
+        let e_d = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+        let w1 = topo.add_wire(
             Wire::new(
                 vec![
                     OrientedEdge::new(shared, true),
@@ -269,9 +246,9 @@ mod tests {
         );
 
         // Face 3: v0-v1-v4 — third face sharing the same edge
-        let e_e = edges.alloc(Edge::new(v1, v4, EdgeCurve::Line));
-        let e_f = edges.alloc(Edge::new(v4, v0, EdgeCurve::Line));
-        let w2 = wires.alloc(
+        let e_e = topo.add_edge(Edge::new(v1, v4, EdgeCurve::Line));
+        let e_f = topo.add_edge(Edge::new(v4, v0, EdgeCurve::Line));
+        let w2 = topo.add_wire(
             Wire::new(
                 vec![
                     OrientedEdge::new(shared, true),
@@ -284,12 +261,12 @@ mod tests {
         );
 
         let normal = Vec3::new(0.0, 0.0, 1.0);
-        let f0 = faces_arena.alloc(Face::new(w0, vec![], FaceSurface::Plane { normal, d: 0.0 }));
-        let f1 = faces_arena.alloc(Face::new(w1, vec![], FaceSurface::Plane { normal, d: 0.0 }));
-        let f2 = faces_arena.alloc(Face::new(w2, vec![], FaceSurface::Plane { normal, d: 0.0 }));
+        let f0 = topo.add_face(Face::new(w0, vec![], FaceSurface::Plane { normal, d: 0.0 }));
+        let f1 = topo.add_face(Face::new(w1, vec![], FaceSurface::Plane { normal, d: 0.0 }));
+        let f2 = topo.add_face(Face::new(w2, vec![], FaceSurface::Plane { normal, d: 0.0 }));
 
         let shell = Shell::new(vec![f0, f1, f2]).unwrap();
-        let result = validate_shell_manifold(&shell, &faces_arena, &wires);
+        let result = validate_shell_manifold(&shell, &topo);
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(

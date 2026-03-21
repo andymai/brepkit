@@ -291,7 +291,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use brepkit_topology::Topology;
-    use brepkit_topology::test_utils::make_unit_cube;
+    use brepkit_topology::test_utils::make_unit_cube_non_manifold;
 
     use super::*;
     use crate::iges::writer;
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn roundtrip_unit_cube() {
         let mut write_topo = Topology::new();
-        let solid = make_unit_cube(&mut write_topo);
+        let solid = make_unit_cube_non_manifold(&mut write_topo);
 
         let iges_str = writer::write_iges(&write_topo, &[solid]).unwrap();
 
