@@ -28,30 +28,33 @@ fn normalize_angle(angle: f64) -> f64 {
 /// Project a point onto an infinite plane.
 ///
 /// The plane is defined by an `origin` point and a unit `normal` vector.
-/// The u and v parameters returned are measured in the plane's local frame;
-/// since we don't track a basis here, they are set to 0.
+/// The u and v parameters are measured in the plane's local orthonormal frame
+/// derived from the normal via the stable cross-product method.
 ///
 /// Returns a [`SurfaceProjection`] with the perpendicular foot and the signed
 /// distance (`distance` is always non-negative).
 #[must_use]
 pub fn point_to_plane(point: Point3, origin: Point3, normal: Vec3) -> SurfaceProjection {
-    // Signed distance along the normal: d = normal · (point - origin)
-    let diff = Vec3::new(
-        point.x() - origin.x(),
-        point.y() - origin.y(),
-        point.z() - origin.z(),
-    );
-    let d = normal.dot(diff);
-    let closest = Point3::new(
-        point.x() - d * normal.x(),
-        point.y() - d * normal.y(),
-        point.z() - d * normal.z(),
-    );
+    let d = (point - origin).dot(normal);
+    let closest = point - normal * d;
+
+    // Derive stable orthonormal u/v axes from normal
+    let candidate = if normal.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u_axis = normal.cross(candidate);
+    let u_len = u_axis.length();
+    let u_axis = u_axis * (1.0 / u_len);
+    let v_axis = normal.cross(u_axis);
+
+    let delta = closest - origin;
     SurfaceProjection {
         distance: d.abs(),
         point: closest,
-        u: 0.0,
-        v: 0.0,
+        u: delta.dot(u_axis),
+        v: delta.dot(v_axis),
     }
 }
 
@@ -470,6 +473,10 @@ mod tests {
         assert!(approx(proj.point.x(), 3.0, 1e-12));
         assert!(approx(proj.point.y(), 4.0, 1e-12));
         assert!(approx(proj.point.z(), 0.0, 1e-12));
+        // For normal=(0,0,1), u_axis=(0,1,0), v_axis=(-1,0,0) via cross-product method.
+        // closest=(3,4,0), delta=(3,4,0), u=delta·u_axis=4, v=delta·v_axis=-3.
+        assert!(approx(proj.u, 4.0, 1e-12), "u={}", proj.u);
+        assert!(approx(proj.v, -3.0, 1e-12), "v={}", proj.v);
     }
 
     #[test]
@@ -480,6 +487,10 @@ mod tests {
         let point = Point3::new(5.0, 2.0, 7.0);
         let proj = point_to_plane(point, origin, normal);
         assert!(proj.distance < 1e-12, "dist={}", proj.distance);
+        // For normal=(0,1,0), u_axis=(0,0,-1), v_axis=(-1,0,0) via cross-product method.
+        // closest=(5,2,7), delta=(4,0,4), u=delta·u_axis=-4, v=delta·v_axis=-4.
+        assert!(approx(proj.u, -4.0, 1e-12), "u={}", proj.u);
+        assert!(approx(proj.v, -4.0, 1e-12), "v={}", proj.v);
     }
 
     // ── point_to_sphere ──────────────────────────────────────────────────────
