@@ -4,8 +4,6 @@
 //! `PlaneFrame` computes a local orthonormal frame so plane faces can
 //! participate in the 2D parameter-space boolean pipeline.
 
-#![allow(dead_code)] // Used by later pipeline stages.
-
 use brepkit_math::vec::{Point2, Point3, Vec3};
 
 /// A local 2D coordinate frame on a plane.
@@ -70,18 +68,21 @@ impl PlaneFrame {
 
     /// The u-axis direction.
     #[must_use]
+    #[allow(dead_code)]
     pub fn u_axis(&self) -> Vec3 {
         self.u_axis
     }
 
     /// The v-axis direction.
     #[must_use]
+    #[allow(dead_code)]
     pub fn v_axis(&self) -> Vec3 {
         self.v_axis
     }
 
     /// The frame origin.
     #[must_use]
+    #[allow(dead_code)]
     pub fn origin(&self) -> Point3 {
         self.origin
     }

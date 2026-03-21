@@ -3,8 +3,6 @@
 //! These types carry edge and face data through the splitting stages:
 //! pcurve computation, wire building, and sub-face construction.
 
-#![allow(dead_code)] // Used by later pipeline stages.
-
 use brepkit_math::curves2d::Curve2D;
 use brepkit_math::vec::{Point2, Point3};
 use brepkit_topology::edge::EdgeCurve;
@@ -67,6 +65,7 @@ pub struct SectionEdge {
     /// `None` means the edge applies to both faces in the pair (normal case).
     /// `Some(id)` means only distribute to that face (coplanar case -- each
     /// face gets boundary edges clipped to the other's interior).
+    #[allow(dead_code)]
     pub target_face: Option<FaceId>,
 }
 
@@ -79,6 +78,7 @@ pub struct SectionEdge {
 /// Boundary edges come from the face's original wire(s). Section edges
 /// come from face-face intersections. Both must be expressed as pcurves
 /// in the face's parameter space before feeding to the wire builder.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct FaceEdgeSet {
     /// Original boundary edges (possibly split at intersection vertices).
@@ -103,8 +103,10 @@ pub struct SplitSubFace {
     /// Whether the face normal is reversed relative to the surface.
     pub reversed: bool,
     /// The original face this sub-face was split from.
+    #[allow(dead_code)]
     pub parent: FaceId,
     /// Which solid this face came from.
+    #[allow(dead_code)]
     pub rank: Rank,
     /// Pre-computed interior point (3D) for classification.
     /// When set, `fill_images_faces` uses this instead of computing one
@@ -124,6 +126,7 @@ pub struct SplitSubFace {
 #[derive(Debug, Clone)]
 pub enum SurfaceInfo {
     /// Plane face with a cached reference frame.
+    #[allow(dead_code)]
     Plane(PlaneFrame),
     /// Parametric surface with native UV. Periodicity flags indicate whether
     /// the u or v parameter wraps (e.g. cylinder u in [0, 2pi)).
@@ -138,6 +141,7 @@ pub enum SurfaceInfo {
 impl SurfaceInfo {
     /// Returns the `PlaneFrame` if this is a plane face, `None` otherwise.
     #[must_use]
+    #[allow(dead_code)]
     pub fn as_plane_frame(&self) -> Option<&PlaneFrame> {
         match self {
             Self::Plane(f) => Some(f),

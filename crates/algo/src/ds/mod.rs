@@ -13,7 +13,7 @@ mod shape_index;
 
 pub use arena::GfaArena;
 pub use curve::IntersectionCurveDS;
-#[allow(unused_imports)]
+#[allow(unused_imports)] // Re-exported for downstream access.
 pub use face_info::FaceInfo;
 pub use interference::Interference;
 pub use pave::{Pave, PaveBlock, PaveBlockId};

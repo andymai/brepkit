@@ -6,8 +6,6 @@
 //!
 //! Uses the minimum clockwise angle traversal algorithm for face splitting.
 
-#![allow(dead_code)] // Used by later pipeline stages.
-
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
@@ -189,6 +187,7 @@ pub fn build_wire_loops(
 // ---------------------------------------------------------------------------
 
 /// Quantize a 2D point to an integer key for vertex deduplication.
+#[allow(dead_code)]
 fn quantize_uv(p: Point2, tol: f64) -> (i64, i64) {
     quantize_uv_periodic(p, tol, None, None)
 }
@@ -236,6 +235,7 @@ fn quantize_coord(val: f64, resolution: f64, period: Option<f64>) -> i64 {
 ///
 /// - `at_start = true`: outgoing direction (start -> end).
 /// - `at_start = false`: incoming direction (end -> start, pointing back along the edge).
+#[allow(dead_code)]
 fn edge_angle_at_vertex(edge: &OrientedPCurveEdge, at_start: bool) -> f64 {
     edge_angle_at_vertex_periodic(edge, at_start, None, None)
 }
