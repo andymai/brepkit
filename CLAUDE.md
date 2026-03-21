@@ -31,13 +31,13 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 | `math` | *(none — no workspace deps)* |
 | `geometry` | `math` |
 | `topology` | `math` |
-| `algo` | `math`, `topology`, `geometry` |
-| `blend` | `math`, `topology`, `geometry` |
+| `algo` | `math`, `topology` |
+| `blend` | `math`, `topology` |
 | `heal` | `math`, `topology`, `geometry` |
 | `check` | `math`, `topology`, `geometry` |
-| `offset` | `math`, `topology`, `geometry`, `algo` |
+| `offset` | `math`, `topology`, `geometry` |
 | `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check`, `geometry`, `offset` |
-| `io` | `math`, `topology`, `operations`, `heal` |
+| `io` | `math`, `topology`, `operations` |
 | `wasm` | all crates (incl. `blend`, `check`, `heal`) |
 
 The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the pre-push hook.
@@ -46,13 +46,13 @@ The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the p
 - `math/src/**` → only `std`, external crates
 - `geometry/src/**` → `brepkit_math::*`
 - `topology/src/**` → `brepkit_math::*`
-- `algo/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
-- `blend/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
+- `algo/src/**` → `brepkit_math::*`, `brepkit_topology::*`
+- `blend/src/**` → `brepkit_math::*`, `brepkit_topology::*`
 - `heal/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
 - `check/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
-- `offset/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`, `brepkit_algo::*`
+- `offset/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`
 - `operations/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_geometry::*`, `brepkit_algo::*`, `brepkit_blend::*`, `brepkit_heal::*`, `brepkit_check::*`, `brepkit_offset::*`
-- `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`, `brepkit_heal::*`
+- `io/src/**` → `brepkit_math::*`, `brepkit_topology::*`, `brepkit_operations::*`
 - `wasm/src/**` → all `brepkit_*`
 
 ## Module Map
@@ -72,7 +72,7 @@ Quick reference — find the right file for any task:
 | Curve/surface fitting (LSPIA) | `nurbs/fitting.rs`, `nurbs/surface_fitting.rs` |
 | Point projection onto curves | `nurbs/projection.rs` |
 | Self-intersection detection | `nurbs/self_intersection.rs` |
-| 3D curves (Line, Circle, Parabola, Hyperbola) | `curves.rs` |
+| 3D curves (Line, Circle, Ellipse, Parabola, Hyperbola) | `curves.rs` |
 | 2D curves (Line2D, Circle2D, Ellipse2D) | `curves2d.rs` |
 | Analytic surfaces (Cylinder, Cone, Sphere, Torus) | `surfaces.rs` |
 | Surface-surface intersection | `nurbs/intersection.rs` |
@@ -88,6 +88,14 @@ Quick reference — find the right file for any task:
 | 2D polygon offset | `polygon_offset.rs` |
 | SIMD batch operations | `simd.rs` |
 | Parametric geometry traits | `traits.rs` |
+| NURBS basis function evaluation | `nurbs/basis.rs` |
+| Surface evaluator (power-basis cache) | `nurbs/evaluator.rs` |
+| Polynomial power-basis (Horner evaluation) | `nurbs/power_basis.rs` |
+| Orthonormal reference frame | `frame.rs` |
+| Oriented bounding box (PCA + SAT) | `obb.rs` |
+| Chord deviation arc discretization | `chord.rs` |
+| Gauss-Legendre quadrature | `quadrature.rs` |
+| 2D sketch constraint solver (GCS) | `gcs/` |
 
 ### L0.5: geometry (`crates/geometry/src/`)
 | Task | File(s) |
@@ -106,6 +114,7 @@ Quick reference — find the right file for any task:
 | Analytic surfaces → NURBS | `convert/surface_to_nurbs.rs` |
 | NURBS → analytic curve recognition | `convert/recognize_curve.rs` |
 | NURBS → analytic surface recognition | `convert/recognize_surface.rs` |
+| Error types | `error.rs` |
 
 ### L1: topology (`crates/topology/src/`)
 | Task | File(s) |
@@ -114,7 +123,7 @@ Quick reference — find the right file for any task:
 | `Topology` struct (the arena owner) | `topology.rs` |
 | Vertex, Edge, Wire, Face, Shell, Solid | `vertex.rs`, `edge.rs`, `wire.rs`, `face.rs`, `shell.rs`, `solid.rs` |
 | Compound, CompSolid | `compound.rs`, `compsolid.rs` |
-| Adjacency graph (half-edge) | `graph.rs` |
+| Adjacency index (edge-to-face, face neighbors) | `adjacency.rs` |
 | Builder helpers | `builder.rs` |
 | Shape explorer (iterate children) | `explorer.rs` |
 | PCurve registry | `pcurve.rs` |
@@ -135,6 +144,14 @@ Quick reference — find the right file for any task:
 | Pave block splitting + edge creation | `pave_filler/make_blocks.rs`, `make_split_edges.rs` |
 | FaceInfo population | `pave_filler/fill_face_info.rs` |
 | Builder (face splitting + assembly) | `builder/mod.rs`, `builder/assemble.rs` |
+| Face splitting (UV-space) | `builder/face_splitter.rs`, `builder/classify_2d.rs` |
+| PCurve computation | `builder/pcurve_compute.rs` |
+| Plane frame (3D↔UV projection) | `builder/plane_frame.rs` |
+| Wire loop reconstruction | `builder/wire_builder.rs` |
+| Split types + face class | `builder/split_types.rs`, `builder/face_class.rs` |
+| Face image population | `builder/fill_images.rs`, `builder/fill_images_faces.rs` |
+| Same-domain face merging | `builder/same_domain.rs` |
+| Interference indexing | `ds/interference.rs`, `ds/shape_index.rs` |
 | Analytic classifier (7 variants) | `classifier/analytic.rs` |
 | Ray-cast classifier | `classifier/ray_cast.rs` |
 
@@ -153,6 +170,7 @@ Quick reference — find the right file for any task:
 | Chamfer builder (orchestration) | `chamfer_builder.rs` |
 | Vertex blend / corner solver | `corner.rs` |
 | Face trimming along contact curves | `trimmer.rs` |
+| Shared builder utilities | `builder_utils.rs` |
 
 ### L1.5: heal (`crates/heal/src/`)
 | Task | File(s) |
@@ -170,7 +188,7 @@ Quick reference — find the right file for any task:
 | Wire edge ordering | `analysis/wire_order.rs` |
 | Tolerance statistics | `analysis/tolerance.rs` |
 | Entity counting | `analysis/contents.rs` |
-| NURBS → elementary surface recognition | `analysis/canonical.rs` |
+
 | Fix config (tri-state FixMode per fix type) | `fix/config.rs` |
 | Fix orchestrator (shape → solid → shell → face → wire → edge) | `fix/mod.rs` |
 | Edge fixing (SameParameter, vertex tolerance) | `fix/edge.rs` |
@@ -271,6 +289,9 @@ Quick reference — find the right file for any task:
 | 2D sketch constraint solver | `sketch.rs` |
 | Evolution tracking | `evolution.rs` |
 | Compound operations | `compound_ops.rs` |
+| Blend v2 wrappers (fillet/chamfer) | `blend_ops.rs` |
+| Offset v2 (delegates to brepkit-offset) | `offset_v2.rs` |
+| Shared winding utilities | `winding.rs` |
 
 ### L2: io (`crates/io/src/`)
 | Task | File(s) |
@@ -287,7 +308,7 @@ Quick reference — find the right file for any task:
 | Task | File(s) |
 |------|---------|
 | `BrepKernel` struct, constructor, private helpers | `kernel.rs` |
-| Error types, validation newtypes (`Positive`, `Finite`, `CoordArray3`) | `error.rs` |
+| Error types, validation helpers (`validate_positive`, `validate_finite`) | `error.rs` |
 | Shape type wrappers (`JsMesh`, `JsEdgeLines`, `JsPoint3`, `JsVec3`) | `shapes.rs` |
 | Entity handle resolution (`resolve_*`) & ID converters | `handles.rs` |
 | Shared free functions, constants (`TOL`), 2D polygon helpers | `helpers.rs` |
@@ -310,6 +331,7 @@ Quick reference — find the right file for any task:
 | 2D polygon operations | `bindings/polygon2d.rs` |
 | NURBS curve/surface manipulation | `bindings/nurbs.rs` |
 | Batch execution & dispatch | `bindings/batch.rs` |
+| Gridfinity integration tests | `bindings/gridfinity_tests.rs` |
 | **Proc macro crate** (`crates/wasm-macros/`) | |
 | `#[wasm_binding]` attribute (panic safety) | `wasm-macros/src/lib.rs` |
 
