@@ -32,6 +32,7 @@ use crate::dot_normal_point;
 /// - The solid contains non-planar faces
 /// - The offset distance is zero
 /// - The offset causes the solid to collapse (negative volume)
+#[deprecated(since = "2.24.0", note = "Use offset_v2::offset_solid_v2 instead")]
 #[allow(clippy::too_many_lines)]
 pub fn offset_solid(
     topo: &mut Topology,

@@ -34,6 +34,7 @@ pub mod mirror;
 #[allow(dead_code)]
 pub(crate) mod nurbs_boolean;
 pub mod offset_face;
+#[allow(deprecated)]
 pub mod offset_solid;
 pub mod offset_trim;
 pub mod offset_v2;

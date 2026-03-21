@@ -817,6 +817,7 @@ impl BrepKernel {
     pub fn offset_solid(&mut self, solid: u32, distance: f64) -> Result<u32, JsError> {
         validate_finite(distance, "distance")?;
         let solid_id = self.resolve_solid(solid)?;
+        #[allow(deprecated)]
         let result =
             brepkit_operations::offset_solid::offset_solid(self.topo_mut(), solid_id, distance)?;
         Ok(solid_id_to_u32(result))
