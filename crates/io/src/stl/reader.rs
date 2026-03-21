@@ -5,6 +5,8 @@
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::tessellate::TriangleMesh;
+use brepkit_topology::Topology;
+use brepkit_topology::solid::SolidId;
 
 /// Read an STL file (binary or ASCII) from raw bytes.
 ///
@@ -197,6 +199,25 @@ fn parse_f64(s: &str) -> Result<f64, crate::IoError> {
     s.parse::<f64>().map_err(|e| crate::IoError::ParseError {
         reason: format!("invalid float '{s}': {e}"),
     })
+}
+
+/// Read an STL file and import it as a solid with one planar face per triangle.
+///
+/// This is a convenience wrapper that calls [`read_stl`] followed by
+/// [`import_mesh`](crate::stl::import::import_mesh). Vertices within
+/// `tolerance` of each other are merged.
+///
+/// # Errors
+///
+/// Returns [`IoError`](crate::IoError) if the file is malformed or the mesh
+/// cannot be converted to a valid solid.
+pub fn read_stl_solid(
+    topo: &mut Topology,
+    data: &[u8],
+    tolerance: f64,
+) -> Result<SolidId, crate::IoError> {
+    let mesh = read_stl(data)?;
+    crate::stl::import::import_mesh(topo, &mesh, tolerance)
 }
 
 #[cfg(test)]

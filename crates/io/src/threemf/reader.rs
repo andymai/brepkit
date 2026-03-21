@@ -8,6 +8,8 @@ use std::io::{Cursor, Read as _};
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::tessellate::TriangleMesh;
+use brepkit_topology::Topology;
+use brepkit_topology::solid::SolidId;
 
 use crate::IoError;
 
@@ -244,6 +246,33 @@ fn parse_u32_attr(val: &str, context: &str) -> Result<u32, IoError> {
     val.parse::<u32>().map_err(|e| IoError::ParseError {
         reason: format!("invalid {context} value '{val}': {e}"),
     })
+}
+
+/// Read a 3MF file and import the first object as a solid.
+///
+/// This is a convenience wrapper that calls [`read_threemf`] followed by
+/// [`import_mesh`](crate::stl::import::import_mesh) on the first mesh.
+/// Vertices within `tolerance` of each other are merged.
+///
+/// # Errors
+///
+/// Returns [`IoError`] if:
+/// - The file is malformed
+/// - The archive contains no objects
+/// - The mesh cannot be converted to a valid solid
+pub fn read_threemf_solid(
+    topo: &mut Topology,
+    data: &[u8],
+    tolerance: f64,
+) -> Result<SolidId, IoError> {
+    let meshes = read_threemf(data)?;
+    let mesh = meshes
+        .into_iter()
+        .next()
+        .ok_or_else(|| IoError::ParseError {
+            reason: "3MF file contains no objects".to_string(),
+        })?;
+    crate::stl::import::import_mesh(topo, &mesh, tolerance)
 }
 
 #[cfg(test)]

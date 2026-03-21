@@ -2,6 +2,8 @@
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::tessellate::TriangleMesh;
+use brepkit_topology::Topology;
+use brepkit_topology::solid::SolidId;
 
 /// Read an OBJ file from a string and return a triangle mesh.
 ///
@@ -151,6 +153,25 @@ fn compute_vertex_normals(positions: &[Point3], indices: &[u32]) -> Vec<Vec3> {
     }
 
     normals
+}
+
+/// Read an OBJ file and import it as a solid with one planar face per triangle.
+///
+/// This is a convenience wrapper that calls [`read_obj`] followed by
+/// [`import_mesh`](crate::stl::import::import_mesh). Vertices within
+/// `tolerance` of each other are merged.
+///
+/// # Errors
+///
+/// Returns [`IoError`](crate::IoError) if the file is malformed or the mesh
+/// cannot be converted to a valid solid.
+pub fn read_obj_solid(
+    topo: &mut Topology,
+    input: &str,
+    tolerance: f64,
+) -> Result<SolidId, crate::IoError> {
+    let mesh = read_obj(input)?;
+    crate::stl::import::import_mesh(topo, &mesh, tolerance)
 }
 
 #[cfg(test)]
