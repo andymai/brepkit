@@ -43,7 +43,8 @@ pub fn gauss_legendre_points(order: usize) -> &'static [GaussPoint] {
 /// the normal is `∂S/∂u × ∂S/∂v` (its magnitude is the Jacobian `dA`).
 ///
 /// Returns the surface area of the patch `[u0,u1] × [v0,v1]`.
-pub fn gauss_surface_area(
+#[allow(dead_code)]
+pub(crate) fn gauss_surface_area(
     f: &impl Fn(f64, f64) -> (Point3, Vec3),
     u_range: (f64, f64),
     v_range: (f64, f64),
@@ -77,7 +78,8 @@ pub fn gauss_surface_area(
 /// The evaluator `f(u, v)` must return `(point, unnormalized_normal)`.
 /// The returned value is the *signed* volume contribution (positive when
 /// the normal points outward from the enclosed volume).
-pub fn gauss_surface_volume(
+#[allow(dead_code)]
+pub(crate) fn gauss_surface_volume(
     f: &impl Fn(f64, f64) -> (Point3, Vec3),
     u_range: (f64, f64),
     v_range: (f64, f64),
@@ -112,7 +114,8 @@ pub fn gauss_surface_volume(
 /// This is critical for NURBS where each knot span is a polynomial piece:
 /// integrating per-span avoids the accuracy loss of integrating across
 /// knot boundaries where derivatives are discontinuous.
-pub fn gauss_surface_area_spans(
+#[allow(dead_code)]
+pub(crate) fn gauss_surface_area_spans(
     f: &impl Fn(f64, f64) -> (Point3, Vec3),
     u_knots: &[f64],
     v_knots: &[f64],
@@ -139,7 +142,8 @@ pub fn gauss_surface_area_spans(
 /// Integrate volume contribution over multiple (u,v) sub-patches.
 ///
 /// See [`gauss_surface_area_spans`] for the per-knot-span rationale.
-pub fn gauss_surface_volume_spans(
+#[allow(dead_code)]
+pub(crate) fn gauss_surface_volume_spans(
     f: &impl Fn(f64, f64) -> (Point3, Vec3),
     u_knots: &[f64],
     v_knots: &[f64],

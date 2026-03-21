@@ -857,7 +857,7 @@ fn classify_triangles(split: &SplitMesh, other_mesh: &TriangleMesh, _tolerance: 
 ///
 /// This is a standalone helper that can be reused for other classification tasks.
 #[must_use]
-pub fn winding_number_at_point(point: Point3, mesh: &TriangleMesh) -> f64 {
+pub(crate) fn winding_number_at_point(point: Point3, mesh: &TriangleMesh) -> f64 {
     let tri_count = mesh.indices.len() / 3;
     let mut total_solid_angle = 0.0;
 

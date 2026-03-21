@@ -1,10 +1,6 @@
 //! Batch execution and dispatch bindings.
 
-#![allow(
-    clippy::missing_errors_doc,
-    clippy::too_many_lines,
-    clippy::expect_used
-)]
+#![allow(clippy::missing_errors_doc, clippy::too_many_lines)]
 
 use wasm_bindgen::prelude::*;
 

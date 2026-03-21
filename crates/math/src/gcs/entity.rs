@@ -134,6 +134,7 @@ impl<T> GenArena<T> {
 
     /// Whether the arena is empty.
     #[must_use]
+    #[allow(dead_code)]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
@@ -249,6 +250,7 @@ impl<T> GenArena<T> {
     }
 
     /// Iterate over all live `(Handle<T>, &mut T)` pairs.
+    #[allow(dead_code)]
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (Handle<T>, &mut T)> {
         self.entries
             .iter_mut()

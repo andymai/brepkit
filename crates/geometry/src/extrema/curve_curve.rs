@@ -51,7 +51,7 @@ pub fn line_to_line(
     let d2 = l2.direction();
 
     // Vector between origins.
-    let r = vec3_sub(l1.origin(), l2.origin());
+    let r = l1.origin() - l2.origin();
 
     let a = d1.dot(d1); // |d1|² (= 1 for unit directions)
     let e = d2.dot(d2); // |d2|²
@@ -286,14 +286,6 @@ pub fn curve_to_curve<C1: ParametricCurve, C2: ParametricCurve>(
         param_a: t1,
         param_b: t2,
     }
-}
-
-// ── Internal helper ───────────────────────────────────────────────────────────
-
-/// Subtract two `Point3` values as a vector.
-#[inline]
-fn vec3_sub(a: Point3, b: Point3) -> brepkit_math::vec::Vec3 {
-    brepkit_math::vec::Vec3::new(a.x() - b.x(), a.y() - b.y(), a.z() - b.z())
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
