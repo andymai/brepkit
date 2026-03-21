@@ -94,62 +94,107 @@ fn dist_sq(a: Point3, b: Point3) -> f64 {
 
 /// Fit a `Circle3D` to sampled points if they lie on a circle within tolerance.
 ///
+/// Uses a 3-point circumcircle from well-spaced samples (marching samples
+/// are non-uniform, so centroid ≠ center). Validates against all points.
+///
 /// Returns `(Circle3D, seam_point)` where `seam_point` is the first point
 /// projected exactly onto the fitted circle. Returns `None` if points
 /// don't form a circle.
+#[allow(clippy::too_many_lines)]
 fn fit_circle_3d(points: &[Point3], tol: f64) -> Option<(brepkit_math::curves::Circle3D, Point3)> {
-    let n = points.len() as f64;
-    let cx: f64 = points.iter().map(|p| p.x()).sum::<f64>() / n;
-    let cy: f64 = points.iter().map(|p| p.y()).sum::<f64>() / n;
-    let cz: f64 = points.iter().map(|p| p.z()).sum::<f64>() / n;
-    let center = Point3::new(cx, cy, cz);
+    let n = points.len();
+    if n < 8 {
+        return None;
+    }
 
-    let radius = points
-        .iter()
-        .map(|p| dist_sq(*p, center).sqrt())
-        .sum::<f64>()
-        / n;
+    // Pick 3 well-spaced points.
+    let p0 = points[0];
+    let p1 = points[n / 3];
+    let p2 = points[2 * n / 3];
 
+    // Compute circumcircle of p0, p1, p2 in 3D.
+    // 1. Plane normal from cross product.
+    let d1 = Vec3::new(p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z());
+    let d2 = Vec3::new(p2.x() - p0.x(), p2.y() - p0.y(), p2.z() - p0.z());
+    let normal = d1.cross(d2);
+    let normal_len = normal.length();
+    if normal_len < 1e-15 {
+        return None; // Collinear
+    }
+    let normal = Vec3::new(
+        normal.x() / normal_len,
+        normal.y() / normal_len,
+        normal.z() / normal_len,
+    );
+
+    // 2. Build local 2D frame in the plane.
+    let u_axis = {
+        let len = d1.length();
+        if len < 1e-15 {
+            return None;
+        }
+        Vec3::new(d1.x() / len, d1.y() / len, d1.z() / len)
+    };
+    let v_axis = normal.cross(u_axis);
+
+    // 3. Project 3 points to 2D.
+    let proj = |p: Point3| -> (f64, f64) {
+        let dx = p.x() - p0.x();
+        let dy = p.y() - p0.y();
+        let dz = p.z() - p0.z();
+        let v = Vec3::new(dx, dy, dz);
+        (v.dot(u_axis), v.dot(v_axis))
+    };
+    let (ax, ay) = (0.0, 0.0); // p0 in local coords
+    let (bx, by) = proj(p1);
+    let (cx_l, cy_l) = proj(p2);
+
+    // 4. Circumcenter in 2D: solve perpendicular bisector intersection.
+    let d_val = 2.0 * (ax * (by - cy_l) + bx * (cy_l - ay) + cx_l * (ay - by));
+    if d_val.abs() < 1e-15 {
+        return None;
+    }
+    let ax2 = ax.mul_add(ax, ay * ay);
+    let bx2 = bx.mul_add(bx, by * by);
+    let cx2 = cx_l.mul_add(cx_l, cy_l * cy_l);
+    let ux = (ax2 * (by - cy_l) + bx2 * (cy_l - ay) + cx2 * (ay - by)) / d_val;
+    let uy = (ax2 * (cx_l - bx) + bx2 * (ax - cx_l) + cx2 * (bx - ax)) / d_val;
+
+    let radius = ((ax - ux).powi(2) + (ay - uy).powi(2)).sqrt();
     if radius < tol {
         return None;
     }
 
-    // Check all points are within tolerance of the circle radius.
+    // 5. Lift circumcenter back to 3D.
+    let center = Point3::new(
+        p0.x() + ux * u_axis.x() + uy * v_axis.x(),
+        p0.y() + ux * u_axis.y() + uy * v_axis.y(),
+        p0.z() + ux * u_axis.z() + uy * v_axis.z(),
+    );
+
+    // 6. Validate: all points should be within tolerance of the circle.
     let max_dev = points
         .iter()
         .map(|p| (dist_sq(*p, center).sqrt() - radius).abs())
         .fold(0.0_f64, f64::max);
-    if max_dev > tol * 100.0 {
-        return None;
+    if max_dev > radius * 0.01 {
+        return None; // More than 1% deviation → not a circle
     }
-
-    // Normal via Newell's method on centered points.
-    let mut nx = 0.0_f64;
-    let mut ny = 0.0_f64;
-    let mut nz = 0.0_f64;
-    for i in 0..points.len() {
-        let a = points[i];
-        let b = points[(i + 1) % points.len()];
-        nx += (a.y() - cy) * (b.z() - cz) - (a.z() - cz) * (b.y() - cy);
-        ny += (a.z() - cz) * (b.x() - cx) - (a.x() - cx) * (b.z() - cz);
-        nz += (a.x() - cx) * (b.y() - cy) - (a.y() - cy) * (b.x() - cx);
-    }
-    let nlen = (nx.mul_add(nx, ny.mul_add(ny, nz * nz))).sqrt();
-    if nlen < 1e-15 {
-        return None;
-    }
-    let normal = Vec3::new(nx / nlen, ny / nlen, nz / nlen);
 
     let circle = brepkit_math::curves::Circle3D::new(center, normal, radius).ok()?;
 
     // Seam point: project first point exactly onto the circle.
-    let dir = Vec3::new(points[0].x() - cx, points[0].y() - cy, points[0].z() - cz);
+    let dir = Vec3::new(
+        points[0].x() - center.x(),
+        points[0].y() - center.y(),
+        points[0].z() - center.z(),
+    );
     let dir_len = dir.length();
     let seam_pt = if dir_len > 1e-15 {
         Point3::new(
-            cx + radius * dir.x() / dir_len,
-            cy + radius * dir.y() / dir_len,
-            cz + radius * dir.z() / dir_len,
+            center.x() + radius * dir.x() / dir_len,
+            center.y() + radius * dir.y() / dir_len,
+            center.z() + radius * dir.z() / dir_len,
         )
     } else {
         points[0]

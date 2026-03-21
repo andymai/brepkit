@@ -83,7 +83,7 @@ pub fn intersect_faces_3d(
         let surf_a = &off_a.surface;
         let surf_b = &off_b.surface;
 
-        let curve_points = intersect_surface_pair(topo, face_a, face_b, surf_a, surf_b)?;
+        let curve_points = intersect_surface_pair(topo, edge_id, face_a, face_b, surf_a, surf_b)?;
 
         data.intersections.push(FaceIntersection {
             original_edge: edge_id,
@@ -104,15 +104,16 @@ const ANALYTIC_GRID_RES: usize = 32;
 #[allow(clippy::too_many_lines)]
 fn intersect_surface_pair(
     topo: &Topology,
+    edge_id: brepkit_topology::edge::EdgeId,
     face_a: FaceId,
     face_b: FaceId,
     surf_a: &FaceSurface,
     surf_b: &FaceSurface,
 ) -> Result<Vec<Point3>, OffsetError> {
     // Same-domain surfaces (e.g., sphere hemispheres with same center/radius):
-    // project original shared-edge endpoints onto the surface.
+    // project the specific edge's endpoints onto the offset surface.
     if surfaces_same_domain(surf_a, surf_b) {
-        return project_shared_edge_onto_surface(topo, face_a, face_b, surf_a);
+        return project_edge_onto_surface(topo, edge_id, surf_a);
     }
 
     // Plane-Plane: exact line intersection.
@@ -342,34 +343,18 @@ fn surfaces_same_domain(a: &FaceSurface, b: &FaceSurface) -> bool {
     }
 }
 
-/// For same-domain face pairs, project shared edge endpoints onto the surface.
-fn project_shared_edge_onto_surface(
+/// Project a specific edge's endpoints onto the offset surface.
+fn project_edge_onto_surface(
     topo: &Topology,
-    face_a: FaceId,
-    face_b: FaceId,
+    edge_id: brepkit_topology::edge::EdgeId,
     surface: &FaceSurface,
 ) -> Result<Vec<Point3>, OffsetError> {
-    let wire_a = topo.wire(topo.face(face_a)?.outer_wire())?;
-    let wire_b = topo.wire(topo.face(face_b)?.outer_wire())?;
-
-    let edges_b: std::collections::HashSet<_> = wire_b
-        .edges()
-        .iter()
-        .map(brepkit_topology::wire::OrientedEdge::edge)
-        .collect();
-
-    for oe in wire_a.edges() {
-        if edges_b.contains(&oe.edge()) {
-            let edge = topo.edge(oe.edge())?;
-            let p0 = topo.vertex(edge.start())?.point();
-            let p1 = topo.vertex(edge.end())?.point();
-            let proj0 = project_point_onto_surface(p0, surface);
-            let proj1 = project_point_onto_surface(p1, surface);
-            return Ok(vec![proj0, proj1]);
-        }
-    }
-
-    Ok(Vec::new())
+    let edge = topo.edge(edge_id)?;
+    let p0 = topo.vertex(edge.start())?.point();
+    let p1 = topo.vertex(edge.end())?.point();
+    let proj0 = project_point_onto_surface(p0, surface);
+    let proj1 = project_point_onto_surface(p1, surface);
+    Ok(vec![proj0, proj1])
 }
 
 /// Project a point onto a surface (radially for sphere/cylinder, normally for plane).
