@@ -266,7 +266,10 @@ fn build_in_edge_sections(
     tol: f64,
 ) -> Vec<SectionEdge> {
     use brepkit_math::curves2d::{Curve2D, Line2D};
-    use brepkit_math::vec::{Point2, Vec2};
+    use brepkit_math::vec::{Point2, Vec2, Vec3};
+
+    use super::face_splitter::collect_wire_points;
+    use super::plane_frame::PlaneFrame;
 
     let fi = match arena.face_info(face_id) {
         Some(fi) => fi,
@@ -276,6 +279,19 @@ fn build_in_edge_sections(
     let face = match topo.face(face_id) {
         Ok(f) => f,
         Err(_) => return Vec::new(),
+    };
+
+    // Build PlaneFrame for plane faces (same as face_splitter does)
+    let is_plane = matches!(face.surface(), FaceSurface::Plane { .. });
+    let wire_pts = collect_wire_points(topo, face.outer_wire());
+    let frame = if is_plane {
+        let normal = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            _ => Vec3::new(0.0, 0.0, 1.0),
+        };
+        Some(PlaneFrame::from_plane_face(normal, &wire_pts))
+    } else {
+        None
     };
 
     let mut sections = Vec::new();
@@ -328,9 +344,23 @@ fn build_in_edge_sections(
             continue;
         }
 
-        // Project to UV
-        let start_uv = face.surface().project_point(start);
-        let end_uv = face.surface().project_point(end);
+        // Project to UV — use PlaneFrame for plane faces (same as boundary edges)
+        let start_uv = if let Some(ref f) = frame {
+            Some({
+                let p = f.project(start);
+                (p.x(), p.y())
+            })
+        } else {
+            face.surface().project_point(start)
+        };
+        let end_uv = if let Some(ref f) = frame {
+            Some({
+                let p = f.project(end);
+                (p.x(), p.y())
+            })
+        } else {
+            face.surface().project_point(end)
+        };
 
         let make_pcurve = |s: Option<(f64, f64)>, e: Option<(f64, f64)>| -> Curve2D {
             let s2 = s.map_or(Point2::new(0.0, 0.0), |(u, v)| Point2::new(u, v));
