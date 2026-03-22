@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.29.1](https://github.com/andymai/brepkit/compare/v2.29.0...v2.29.1) (2026-03-22)
+
+
+### Bug Fixes
+
+* **algo:** discard boundary-coincident section edges in face splitter ([#392](https://github.com/andymai/brepkit/issues/392)) ([a86ec22](https://github.com/andymai/brepkit/commit/a86ec2228ff2c2781fddc174082a8bfc2e305821))
+
 ## [2.29.0](https://github.com/andymai/brepkit/compare/v2.28.0...v2.29.0) (2026-03-22)
 
 
