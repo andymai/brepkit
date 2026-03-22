@@ -139,14 +139,17 @@ impl GfaArena {
     /// Create a new CommonBlock grouping the given PaveBlocks.
     pub fn create_common_block(&mut self, pbs: Vec<PaveBlockId>, tol: f64) -> CommonBlockId {
         let cb = CommonBlock {
-            pave_blocks: pbs.clone(),
+            pave_blocks: pbs,
             faces: Vec::new(),
             split_edge: None,
             tolerance: tol,
         };
         let cb_id = self.common_blocks.alloc(cb);
-        for &pb in &pbs {
-            self.pb_to_cb.insert(pb, cb_id);
+        // Register reverse mapping after alloc (pave_blocks moved into CB).
+        if let Some(cb) = self.common_blocks.get(cb_id) {
+            for &pb in &cb.pave_blocks {
+                self.pb_to_cb.insert(pb, cb_id);
+            }
         }
         cb_id
     }

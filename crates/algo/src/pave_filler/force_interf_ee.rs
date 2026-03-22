@@ -138,6 +138,8 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
 
 /// Check if two edge curves are geometrically compatible (same type + parameters).
 fn curves_compatible(a: &EdgeCurve, b: &EdgeCurve, tol: Tolerance) -> bool {
+    // Exhaustive match — no wildcards per CLAUDE.md convention.
+    // Adding a new EdgeCurve variant will require updating this match.
     match (a, b) {
         (EdgeCurve::Line, EdgeCurve::Line) => true,
         (EdgeCurve::Circle(ca), EdgeCurve::Circle(cb)) => {
@@ -151,6 +153,24 @@ fn curves_compatible(a: &EdgeCurve, b: &EdgeCurve, tol: Tolerance) -> bool {
                 && (ea.center() - eb.center()).length() < tol.linear
                 && ea.normal().dot(eb.normal()).abs() > 1.0 - tol.angular
         }
-        _ => false, // Different types or NURBS: no overlap detection yet
+        // NurbsCurve overlap detection deferred — needs parametric comparison.
+        (EdgeCurve::NurbsCurve(_), EdgeCurve::NurbsCurve(_)) => false,
+        // Different curve types cannot be geometrically coincident.
+        (
+            EdgeCurve::Line,
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_),
+        )
+        | (
+            EdgeCurve::Circle(_),
+            EdgeCurve::Line | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_),
+        )
+        | (
+            EdgeCurve::Ellipse(_),
+            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_),
+        )
+        | (
+            EdgeCurve::NurbsCurve(_),
+            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_),
+        ) => false,
     }
 }

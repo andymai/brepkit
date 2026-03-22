@@ -468,7 +468,10 @@ fn assemble(
         }
     }
 
-    // Additional growth shells (if any) also become inner shells
+    // Additional growth shells (disjoint outward-oriented regions) are added
+    // as extra shells. For boolean results this typically doesn't happen (single
+    // connected result), but disjoint fuse can produce multiple growth shells.
+    // TODO: use Compound for true multi-region results.
     for (i, gs) in growth_shells.iter().enumerate() {
         if i != outer_idx {
             if let Ok(extra_shell) = Shell::new(gs.clone()) {

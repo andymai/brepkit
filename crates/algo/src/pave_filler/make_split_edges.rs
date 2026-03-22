@@ -106,10 +106,11 @@ fn create_split_edge(
     pb_id: PaveBlockId,
 ) -> Result<EdgeId, AlgoError> {
     let (original_edge_id, start_vertex, end_vertex) = {
-        let pb = arena
-            .pave_blocks
-            .get(pb_id)
-            .ok_or_else(|| AlgoError::FaceSplitFailed("pave block not found".into()))?;
+        let pb = arena.pave_blocks.get(pb_id).ok_or_else(|| {
+            AlgoError::FaceSplitFailed(format!(
+                "MakeSplitEdges: pave block {pb_id:?} not found in arena"
+            ))
+        })?;
         let start_v = arena.resolve_vertex(pb.start.vertex);
         let end_v = arena.resolve_vertex(pb.end.vertex);
         (pb.original_edge, start_v, end_v)
