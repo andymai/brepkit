@@ -24,7 +24,9 @@ pub mod gfa;
 mod builder;
 pub mod classifier;
 
-// Re-export the face classification enum used by both algo and operations.
+// Re-export types used by both algo and operations.
 pub use builder::FaceClass;
+pub use builder::pcurve_compute::compute_pcurve_on_surface;
+pub use builder::plane_frame::PlaneFrame;
 pub(crate) mod ds;
 pub(crate) mod pave_filler;

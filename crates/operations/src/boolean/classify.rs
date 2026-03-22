@@ -7,7 +7,6 @@
 //! acceleration, and fragment-level classification as operations-specific
 //! wrappers over pre-extracted face data.
 
-use super::intersect::point_along_line;
 use super::types::{FaceData, FaceFragment};
 
 use brepkit_algo::FaceClass;
@@ -22,8 +21,6 @@ use crate::dot_normal_point;
 // ---------------------------------------------------------------------------
 // Re-exports from algo (canonical implementation)
 // ---------------------------------------------------------------------------
-
-pub(super) use brepkit_algo::classifier::try_build_analytic_classifier;
 
 // ---------------------------------------------------------------------------
 // BVH construction
@@ -186,6 +183,20 @@ pub(super) fn classify_point(
     }
 
     multiray_classify(centroid, normal, opposite, bvh, tol)
+}
+
+// ---------------------------------------------------------------------------
+// Geometry helpers (inlined)
+// ---------------------------------------------------------------------------
+
+/// Compute `point + dir * t` as a `Point3`.
+#[inline]
+fn point_along_line(pt: &Point3, dir: &Vec3, t: f64) -> Point3 {
+    Point3::new(
+        dir.x().mul_add(t, pt.x()),
+        dir.y().mul_add(t, pt.y()),
+        dir.z().mul_add(t, pt.z()),
+    )
 }
 
 // ---------------------------------------------------------------------------

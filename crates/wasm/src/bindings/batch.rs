@@ -8,7 +8,7 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
-use brepkit_operations::boolean::{self, BooleanOp, boolean_gfa as boolean};
+use brepkit_operations::boolean::{self, BooleanOp, boolean};
 use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure;
 use brepkit_operations::revolve::revolve;
@@ -218,25 +218,6 @@ impl BrepKernel {
                 let b_id = self.resolve_solid(b).map_err(|e| e.to_string())?;
                 let result = boolean(self.topo_mut(), BooleanOp::Intersect, a_id, b_id)
                     .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(result)))
-            }
-            "booleanV2" => {
-                let op_str = args["op"]
-                    .as_str()
-                    .ok_or("missing or invalid 'op' string")?;
-                let bool_op = crate::helpers::parse_boolean_op(op_str)
-                    .map_err(|_| format!("invalid boolean op: {op_str}"))?;
-                let a = get_u32(args, "solidA")?;
-                let b = get_u32(args, "solidB")?;
-                let a_id = self.resolve_solid(a).map_err(|e| e.to_string())?;
-                let b_id = self.resolve_solid(b).map_err(|e| e.to_string())?;
-                let result = brepkit_operations::boolean::boolean_pipeline::boolean_pipeline(
-                    self.topo_mut(),
-                    bool_op,
-                    a_id,
-                    b_id,
-                )
-                .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             "compoundCut" => {

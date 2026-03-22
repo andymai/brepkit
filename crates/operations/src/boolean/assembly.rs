@@ -19,7 +19,7 @@ use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use super::classify::polygon_centroid;
-use super::precompute::{analytic_face_normal_d, face_polygon};
+use super::face_polygon;
 use super::types::{FaceSpec, MIN_SOLID_FACES};
 
 // ---------------------------------------------------------------------------
@@ -1548,13 +1548,29 @@ pub(super) fn split_nonmanifold_edges(
 // Shared-boundary fuse fast path
 // ---------------------------------------------------------------------------
 
-/// Try to fuse two all-planar solids that share exactly one coplanar face.
-///
+/// Compute a representative normal and d-value for a face surface.
+#[allow(dead_code)]
+fn analytic_face_normal_d(surface: &FaceSurface, verts: &[Point3]) -> (Vec3, f64) {
+    match surface {
+        FaceSurface::Plane { normal, d } => (*normal, *d),
+        _ => {
+            if verts.len() >= 3 {
+                let e1 = verts[1] - verts[0];
+                let e2 = verts[2] - verts[0];
+                let n = e1.cross(e2).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                (n, crate::dot_normal_point(n, verts[0]))
+            } else {
+                (Vec3::new(0.0, 0.0, 1.0), 0.0)
+            }
+        }
+    }
+}
+
 /// If solids A and B share a face (opposite normals, coplanar, overlapping
 /// extent), merge them by removing the shared face pair and combining
 /// remaining faces into a new solid via `assemble_solid_mixed`. Returns
 /// `None` if the fast path doesn't apply.
-#[allow(clippy::too_many_lines)]
+#[allow(dead_code, clippy::too_many_lines)]
 pub(super) fn try_shared_boundary_fuse(
     topo: &mut Topology,
     _a: SolidId,
@@ -1705,6 +1721,7 @@ pub(super) fn try_shared_boundary_fuse(
 // ---------------------------------------------------------------------------
 
 /// Compute the area of a 3D polygon given its vertices and face normal.
+#[allow(dead_code)]
 pub(super) fn polygon_area_3d(vertices: &[Point3], normal: Vec3) -> f64 {
     if vertices.len() < 3 {
         return 0.0;
@@ -2029,11 +2046,12 @@ fn face_normal_at_point(face: &Face, point: Point3) -> Vec3 {
 ///
 /// This enables `build_manifold_shells` to look up pcurves for validated
 /// binormal computation on curved surfaces.
+#[allow(dead_code)]
 pub(super) fn register_pcurves(
     topo: &mut Topology,
     face_ids: &[FaceId],
 ) -> Result<(), crate::OperationsError> {
-    use super::pcurve_compute::compute_pcurve_on_surface;
+    use brepkit_algo::compute_pcurve_on_surface;
     use brepkit_topology::pcurve::PCurve;
 
     for &fid in face_ids {
