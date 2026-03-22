@@ -312,7 +312,10 @@ pub fn split_face_2d(
             }
         };
 
-        // Forward direction.
+        // Forward direction. Both forward and reverse share the same
+        // source_edge_idx so build_topology_face creates one shared edge.
+        let section_idx = all_edges.len();
+        let pb_id = section.pave_block_id;
         all_edges.push(OrientedPCurveEdge {
             curve_3d: section.curve_3d.clone(),
             pcurve: pcurve_on_this_face.clone(),
@@ -321,6 +324,8 @@ pub fn split_face_2d(
             start_3d: section.start,
             end_3d: section.end,
             forward: true,
+            source_edge_idx: Some(section_idx),
+            pave_block_id: pb_id,
         });
         // Reverse direction (for the adjacent sub-face).
         all_edges.push(OrientedPCurveEdge {
@@ -331,6 +336,8 @@ pub fn split_face_2d(
             start_3d: section.end,
             end_3d: section.start,
             forward: false,
+            source_edge_idx: Some(section_idx),
+            pave_block_id: pb_id,
         });
     }
 
@@ -800,6 +807,8 @@ fn split_boundary_edges_at_3d_points(
                 start_3d: prev_3d,
                 end_3d: split_3d,
                 forward: edge.forward,
+                source_edge_idx: None,
+                pave_block_id: None,
             });
             prev_uv = split_uv;
             prev_3d = split_3d;
@@ -815,6 +824,8 @@ fn split_boundary_edges_at_3d_points(
             start_3d: prev_3d,
             end_3d: edge.end_3d,
             forward: edge.forward,
+            source_edge_idx: None,
+            pave_block_id: None,
         });
     }
     result
@@ -1112,6 +1123,8 @@ pub fn boundary_edges_to_pcurve(
             start_3d,
             end_3d,
             forward: oe.is_forward(),
+            source_edge_idx: None,
+            pave_block_id: None,
         });
     }
     result
@@ -1251,6 +1264,8 @@ fn split_noseam_face_direct(
             start_3d: section.start,
             end_3d: section.end,
             forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
         });
 
         // Reverse: for the band's inner wire (hole).
@@ -1262,6 +1277,8 @@ fn split_noseam_face_direct(
             start_3d: section.end,
             end_3d: section.start,
             forward: false,
+            source_edge_idx: None,
+            pave_block_id: None,
         });
     }
 
@@ -1360,6 +1377,8 @@ fn split_face_with_internal_loops(
             start_3d: section.start,
             end_3d: section.end,
             forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
         });
     }
 
@@ -1455,6 +1474,8 @@ fn split_face_with_internal_loops(
                 start_3d: e.end_3d,
                 end_3d: e.start_3d,
                 forward: !e.forward,
+                source_edge_idx: None,
+                pave_block_id: None,
             })
             .collect();
         // Verify hole is closed.
@@ -1710,6 +1731,8 @@ fn try_split_crossing_plane_face(
             start_3d: start,
             end_3d: end,
             forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
         }
     };
 

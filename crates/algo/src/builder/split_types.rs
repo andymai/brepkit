@@ -35,6 +35,15 @@ pub struct OrientedPCurveEdge {
     pub end_3d: Point3,
     /// Whether this edge is traversed in its natural direction.
     pub forward: bool,
+    /// Index of the source edge in the face splitter's input edge list.
+    /// Used by `build_topology_face` to share edge entities between
+    /// adjacent sub-face loops from the SAME face split.
+    /// `None` for edges not tracked (e.g., from boundary splitting).
+    pub source_edge_idx: Option<usize>,
+    /// Pave block ID from GFA arena. Used for cross-face edge sharing:
+    /// section edges from the same FF intersection curve share this ID
+    /// across different faces, enabling manifold edge topology.
+    pub pave_block_id: Option<usize>,
 }
 
 /// An intersection curve between two faces, with pcurves on each.
@@ -67,6 +76,11 @@ pub struct SectionEdge {
     /// face gets boundary edges clipped to the other's interior).
     #[allow(dead_code)]
     pub target_face: Option<FaceId>,
+    /// Pave block ID from the GFA arena. When two faces share the same
+    /// FF section curve, their section edges have the same pave_block_id.
+    /// Used by `build_topology_face` to share the topology edge entity
+    /// across faces (OCCT TShape-sharing for cross-face edges).
+    pub pave_block_id: Option<usize>,
 }
 
 // ---------------------------------------------------------------------------
