@@ -276,8 +276,10 @@ pub fn get_face_off(
     }
     let b_current = b_current * (1.0 / b_current_len);
 
-    // Reference direction for signed angle measurement
-    let d_ref = n_current.cross(b_current);
+    // Reference direction: the edge tangent itself. The dihedral angle is
+    // measured around the edge, so the signed angle reference must be along t.
+    // (n × b ≈ t for planar faces, but diverges for curved surfaces.)
+    let d_ref = t;
 
     let mut best_face = None;
     let mut best_angle = f64::MAX;
