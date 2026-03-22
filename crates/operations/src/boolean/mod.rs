@@ -1,140 +1,19 @@
 //! Boolean operations on solids: fuse, cut, and intersect.
 //!
-//! The primary pipeline (`boolean_pipeline`) operates in 2D parameter space,
-//! preserving all surface types (plane, cylinder, cone, sphere, torus,
-//! NURBS) through the boolean. Falls back to the analytic path for
-//! cases pipeline can't handle, then to mesh boolean as a last resort.
+//! Uses the GFA pipeline (`brepkit_algo::gfa`) as the primary boolean engine,
+//! with mesh boolean (co-refinement) as a fallback when GFA fails or produces
+//! invalid results.
 
-mod analytic;
 mod assembly;
-pub mod boolean_pipeline;
 mod classify;
-pub(crate) mod classify_2d;
-mod compound;
-pub(crate) mod face_splitter;
-mod fragments;
-mod intersect;
-pub(crate) mod pcurve_compute;
-pub(crate) mod pipeline;
-pub(crate) mod plane_frame;
-mod precompute;
-mod split;
-mod state;
 mod types;
-pub(crate) mod wire_builder;
-use analytic::{analytic_boolean, has_torus, is_all_analytic};
 use assembly::validate_boolean_result;
 pub(crate) use assembly::{assemble_solid, assemble_solid_mixed};
-pub use compound::compound_cut;
 pub use types::{BooleanOp, BooleanOptions, FaceSpec};
 
 // ---------------------------------------------------------------------------
-// GFA pipeline entry point
+// Public API
 // ---------------------------------------------------------------------------
-
-/// Boolean via the GFA pipeline, with fallback to the existing pipeline.
-///
-/// Tries the GFA first; if it produces an empty result or fails,
-/// falls back to the existing pipeline.
-///
-/// # Errors
-///
-/// Returns an error if both the GFA and fallback pipelines fail.
-pub fn boolean_gfa(
-    topo: &mut Topology,
-    op: BooleanOp,
-    a: SolidId,
-    b: SolidId,
-) -> Result<SolidId, crate::OperationsError> {
-    let tol = brepkit_math::tolerance::Tolerance::new();
-    let faces_a = brepkit_topology::explorer::solid_faces(topo, a)
-        .map(|f| f.len())
-        .unwrap_or(0);
-    let faces_b = brepkit_topology::explorer::solid_faces(topo, b)
-        .map(|f| f.len())
-        .unwrap_or(0);
-
-    let algo_op = match op {
-        BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
-        BooleanOp::Cut => brepkit_algo::bop::BooleanOp::Cut,
-        BooleanOp::Intersect => brepkit_algo::bop::BooleanOp::Intersect,
-    };
-
-    // Safety: GFA may allocate new entities in the topology arena, but
-    // arena allocation is append-only — the original solid IDs `a` and `b`
-    // remain valid. The fallback pipeline only reads original faces via
-    // `solid_faces(topo, a/b)`, which is unaffected by new allocations.
-    let gfa_start = timer_now();
-    match brepkit_algo::gfa::boolean(topo, algo_op, a, b) {
-        Ok(result) => {
-            // Validate: result must have faces
-            let result_faces = brepkit_topology::explorer::solid_faces(topo, result)
-                .map(|f| f.len())
-                .unwrap_or(0);
-            if result_faces == 0 {
-                log::warn!(
-                    "GFA produced empty solid in {:.1}ms, falling back",
-                    timer_elapsed_ms(gfa_start)
-                );
-                return boolean(topo, op, a, b);
-            }
-            // Post-process: remove degenerate edges and unify coplanar faces.
-            let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-            for _ in 0..3 {
-                let merged = crate::heal::unify_faces(topo, result)?;
-                if merged == 0 {
-                    break;
-                }
-            }
-            // Validate: result must have correct Euler characteristic (V-E+F=2
-            // for a closed manifold solid). GFA can produce topologically broken
-            // results that pass face-count checks but have wrong Euler.
-            let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, result)?;
-            #[allow(clippy::cast_possible_wrap)]
-            let euler = (v as i64) - (e as i64) + (f as i64);
-            if euler != 2 || validate_boolean_result(topo, result).is_err() {
-                log::warn!(
-                    "GFA result failed validation in {:.1}ms, falling back",
-                    timer_elapsed_ms(gfa_start)
-                );
-                // Fallback with unify_faces=false. The GFA path does its
-                // own unification; the fallback path's unify_faces can corrupt
-                // complex solids (shelled box + lip fuse).
-                return boolean_with_options(
-                    topo,
-                    op,
-                    a,
-                    b,
-                    BooleanOptions {
-                        unify_faces: false,
-                        ..BooleanOptions::default()
-                    },
-                );
-            }
-            log::info!(
-                "GFA boolean succeeded in {:.1}ms (faces: {faces_a}+{faces_b} → {result_faces})",
-                timer_elapsed_ms(gfa_start)
-            );
-            Ok(result)
-        }
-        Err(e) => {
-            log::warn!(
-                "GFA boolean failed in {:.1}ms ({e}), falling back",
-                timer_elapsed_ms(gfa_start)
-            );
-            boolean_with_options(
-                topo,
-                op,
-                a,
-                b,
-                BooleanOptions {
-                    unify_faces: false,
-                    ..BooleanOptions::default()
-                },
-            )
-        }
-    }
-}
 
 // WASM-compatible timer: `std::time::Instant` panics on wasm32 targets.
 #[cfg(not(target_arch = "wasm32"))]
@@ -164,83 +43,29 @@ use brepkit_topology::solid::SolidId;
 
 /// Perform a boolean operation on two solids.
 ///
-/// When both solids are composed entirely of analytic faces (planes,
-/// cylinders, cones, spheres), uses an exact analytic path that preserves
-/// surface types through the boolean. Falls back to the tessellated path
-/// for NURBS faces or analytic-analytic face pairs.
-///
-/// # Errors
-///
-/// Returns an error if either solid contains NURBS faces, or if the operation
-/// produces an empty or non-manifold result.
-pub fn boolean(
-    topo: &mut Topology,
-    op: BooleanOp,
-    a: SolidId,
-    b: SolidId,
-) -> Result<SolidId, crate::OperationsError> {
-    boolean_with_options(topo, op, a, b, BooleanOptions::default())
-}
-
-/// Perform a boolean operation with custom options.
-///
-/// See [`boolean`] for details. The `opts` parameter allows configuring
-/// tessellation quality for non-planar faces.
+/// Uses the GFA pipeline as the primary engine, with mesh boolean
+/// (co-refinement) as a fallback when GFA fails or produces invalid results.
 ///
 /// # Errors
 ///
 /// Returns an error if either solid is invalid or the operation produces
 /// an empty or non-manifold result.
 #[allow(clippy::too_many_lines)]
-pub fn boolean_with_options(
+pub fn boolean(
     topo: &mut Topology,
     op: BooleanOp,
     a: SolidId,
     b: SolidId,
-    opts: BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
-    let tol = opts.tolerance;
-
-    log::debug!(
-        "boolean {op:?}: solids ({}, {}), deflection={}",
-        a.index(),
-        b.index(),
-        opts.deflection,
-    );
-
-    // ── Try analytic fast path ──────────────────────────────────────
-    // Optimized for non-coplanar all-analytic solids (box-cylinder, etc.).
-    // This is the most validated and fastest path for the common case.
-    let try_analytic = {
-        let both_analytic = is_all_analytic(topo, a)? && is_all_analytic(topo, b)?;
-        let no_torus = !has_torus(topo, a)? && !has_torus(topo, b)?;
-        both_analytic && no_torus
-    };
-    let mut analytic_fallback: Option<SolidId> = None;
-
-    if try_analytic {
-        if let Ok(solid) = analytic_boolean(topo, op, a, b, tol, opts.deflection) {
-            let _ = crate::heal::remove_degenerate_edges(topo, solid, tol.linear)?;
-            if opts.unify_faces {
-                let _ = crate::heal::unify_faces(topo, solid)?;
-            }
-            if validate_boolean_result(topo, solid).is_ok() {
-                return Ok(solid);
-            }
-            analytic_fallback = Some(solid);
-        }
-    }
+    let tol = brepkit_math::tolerance::Tolerance::new();
 
     // ── Containment shortcut ─────────────────────────────────────────
     // Detect A⊂B or B⊂A (including A=B) and handle directly.
-    // This catches identical solids that neither analytic nor pipeline handle
-    // correctly (boundary-coincident intersections produce degenerate splits).
+    // Only applies when BOTH solids have simple analytic classifiers.
     {
-        use classify::try_build_analytic_classifier;
+        use brepkit_algo::classifier::try_build_analytic_classifier;
         let ca = try_build_analytic_classifier(topo, a);
         let cb = try_build_analytic_classifier(topo, b);
-        // Sample the AABB centroid of the solid — guaranteed to be in the
-        // interior for convex solids (which all analytic primitives are).
         let sample_aabb_center = |topo: &Topology, solid: SolidId| -> Option<Point3> {
             let s = topo.solid(solid).ok()?;
             let sh = topo.shell(s.outer_shell()).ok()?;
@@ -262,16 +87,31 @@ pub fn boolean_with_options(
                 (min.z() + max.z()) * 0.5,
             ))
         };
-        let b_in_a = ca
+        // B⊂A requires: B's center is inside A AND A's center is outside B
+        // (if A's center is also inside B, the solids overlap rather than one
+        // containing the other).
+        let b_center_in_a = ca
             .as_ref()
             .zip(sample_aabb_center(topo, b))
             .and_then(|(c, p)| c.classify(p, tol))
-            == Some(types::FaceClass::Inside);
-        let a_in_b = cb
+            == Some(brepkit_algo::FaceClass::Inside);
+        let a_center_in_b = cb
             .as_ref()
             .zip(sample_aabb_center(topo, a))
             .and_then(|(c, p)| c.classify(p, tol))
-            == Some(types::FaceClass::Inside);
+            == Some(brepkit_algo::FaceClass::Inside);
+        let a_center_outside_b = cb
+            .as_ref()
+            .zip(sample_aabb_center(topo, a))
+            .and_then(|(c, p)| c.classify(p, tol))
+            == Some(brepkit_algo::FaceClass::Outside);
+        let b_center_outside_a = ca
+            .as_ref()
+            .zip(sample_aabb_center(topo, b))
+            .and_then(|(c, p)| c.classify(p, tol))
+            == Some(brepkit_algo::FaceClass::Outside);
+        let b_in_a = b_center_in_a && a_center_outside_b;
+        let a_in_b = a_center_in_b && b_center_outside_a;
         if b_in_a || a_in_b {
             return match (op, b_in_a, a_in_b) {
                 (BooleanOp::Fuse, true, _) => Ok(crate::copy::copy_solid(topo, a)?),
@@ -291,64 +131,98 @@ pub fn boolean_with_options(
         }
     }
 
-    // ── Try pipeline parameter-space pipeline ────────────────────────────────
-    // pipeline handles coplanar faces, NURBS, and other cases analytic can't.
-    // Preserves all surface types through the boolean.
-    match boolean_pipeline::boolean_pipeline(topo, op, a, b) {
-        Ok(raw) if validate_boolean_result(topo, raw).is_ok() => {
-            // Copy before healing to avoid corrupting shared arena entities.
-            let solid = crate::copy::copy_solid(topo, raw)?;
-            let _ = crate::heal::remove_degenerate_edges(topo, solid, tol.linear)?;
-            if opts.unify_faces {
-                for _ in 0..3 {
-                    if crate::heal::unify_faces(topo, solid)? == 0 {
-                        break;
-                    }
-                }
-            }
-            let solid = enforce_manifold_shell(topo, solid).unwrap_or(solid);
-            return Ok(solid);
-        }
-        Ok(_) => {
-            log::debug!("boolean {op:?}: pipeline result failed validation, falling back");
-        }
-        Err(e) => {
-            log::debug!("boolean {op:?}: pipeline failed ({e}), falling back");
-        }
-    }
-
-    // ── Mesh boolean (last resort) ───────────────────────────────────
-    // When both analytic and pipeline fail, fall back to mesh co-refinement.
-    // All surface types are lost — output is planar triangles only.
-    match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
-        Ok(raw) => {
-            let result = crate::copy::copy_solid(topo, raw)?;
-            let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-            if opts.unify_faces {
+    // ── GFA pipeline ─────────────────────────────────────────────────
+    let algo_op = match op {
+        BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
+        BooleanOp::Cut => brepkit_algo::bop::BooleanOp::Cut,
+        BooleanOp::Intersect => brepkit_algo::bop::BooleanOp::Intersect,
+    };
+    let gfa_start = timer_now();
+    match brepkit_algo::gfa::boolean(topo, algo_op, a, b) {
+        Ok(result) => {
+            let result_faces = brepkit_topology::explorer::solid_faces(topo, result)
+                .map(|f| f.len())
+                .unwrap_or(0);
+            if result_faces > 0 {
+                let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
                 for _ in 0..3 {
                     if crate::heal::unify_faces(topo, result)? == 0 {
                         break;
                     }
                 }
+                let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, result)?;
+                #[allow(clippy::cast_possible_wrap)]
+                let euler = (v as i64) - (e as i64) + (f as i64);
+                if euler == 2 && validate_boolean_result(topo, result).is_ok() {
+                    log::info!(
+                        "GFA boolean succeeded in {:.1}ms ({result_faces} faces)",
+                        timer_elapsed_ms(gfa_start)
+                    );
+                    return Ok(result);
+                }
             }
-            let result = enforce_manifold_shell(topo, result).unwrap_or(result);
-            return Ok(result);
+            log::warn!(
+                "GFA result failed validation in {:.1}ms, falling back to mesh boolean",
+                timer_elapsed_ms(gfa_start)
+            );
         }
         Err(e) => {
-            log::debug!("boolean {op:?}: mesh boolean also failed ({e})");
+            log::warn!(
+                "GFA boolean failed in {:.1}ms ({e}), falling back to mesh boolean",
+                timer_elapsed_ms(gfa_start)
+            );
         }
     }
 
-    // If the analytic path produced a result (even with non-manifold edges),
-    // try to fix it with greedy flood-fill shell splitting before returning.
-    if let Some(solid) = analytic_fallback {
-        let fixed = enforce_manifold_shell(topo, solid).unwrap_or(solid);
-        return Ok(fixed);
+    // ── Mesh boolean fallback (no recursion) ─────────────────────────
+    let raw = mesh_boolean_fallback(topo, op, a, b, 0.1, tol, &BooleanOptions::default())?;
+    let result = crate::copy::copy_solid(topo, raw)?;
+    let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+    for _ in 0..3 {
+        if crate::heal::unify_faces(topo, result)? == 0 {
+            break;
+        }
     }
+    Ok(enforce_manifold_shell(topo, result).unwrap_or(result))
+}
 
-    Err(crate::OperationsError::InvalidInput {
-        reason: format!("boolean {op:?}: all paths failed (analytic, pipeline, mesh boolean)"),
-    })
+/// Perform a boolean operation with custom options.
+///
+/// Backward-compatible wrapper — options are currently unused; all booleans
+/// route through the GFA pipeline with mesh boolean fallback.
+///
+/// # Errors
+///
+/// Returns the same errors as [`boolean`].
+pub fn boolean_with_options(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+    _opts: BooleanOptions,
+) -> Result<SolidId, crate::OperationsError> {
+    boolean(topo, op, a, b)
+}
+
+/// Sequential compound cut via GFA.
+///
+/// Cuts the `target` solid by each tool in order. More efficient than
+/// sequential `boolean(Cut)` calls when the tools are independent.
+///
+/// # Errors
+///
+/// Returns an error if any individual cut fails.
+pub fn compound_cut(
+    topo: &mut Topology,
+    target: SolidId,
+    tools: &[SolidId],
+    _opts: BooleanOptions,
+) -> Result<SolidId, crate::OperationsError> {
+    let mut result = target;
+    for &tool in tools {
+        result = boolean(topo, BooleanOp::Cut, result, tool)?;
+    }
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -848,66 +722,6 @@ pub fn face_polygon(
     }
 
     Ok(pts)
-}
-
-/// Compute a representative normal and d-value for a face from its surface type.
-///
-/// For planar faces, returns the plane normal/d directly. For analytic surfaces
-/// (cylinder, sphere, cone, torus), computes the normal from the surface
-/// definition and a sample vertex — avoiding expensive tessellation.
-pub(crate) fn analytic_face_normal_d(surface: &FaceSurface, verts: &[Point3]) -> (Vec3, f64) {
-    match surface {
-        FaceSurface::Plane { normal, d } => (*normal, *d),
-        FaceSurface::Cylinder(cyl) => {
-            // Cylinder axis direction as representative normal.
-            let n = cyl.axis();
-            let d = if verts.is_empty() {
-                0.0
-            } else {
-                crate::dot_normal_point(n, verts[0])
-            };
-            (n, d)
-        }
-        FaceSurface::Sphere(sph) => {
-            // Outward radial from center through first vertex.
-            if let Some(&v) = verts.first() {
-                let dir = v - sph.center();
-                let n = dir.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
-                (n, crate::dot_normal_point(n, v))
-            } else {
-                (Vec3::new(0.0, 0.0, 1.0), 0.0)
-            }
-        }
-        FaceSurface::Cone(cone) => {
-            let n = cone.axis();
-            let d = if verts.is_empty() {
-                0.0
-            } else {
-                crate::dot_normal_point(n, verts[0])
-            };
-            (n, d)
-        }
-        FaceSurface::Torus(tor) => {
-            let n = tor.z_axis();
-            let d = if verts.is_empty() {
-                0.0
-            } else {
-                crate::dot_normal_point(n, verts[0])
-            };
-            (n, d)
-        }
-        FaceSurface::Nurbs(_) => {
-            // For NURBS, use polygon normal from vertices.
-            if verts.len() >= 3 {
-                let e1 = verts[1] - verts[0];
-                let e2 = verts[2] - verts[0];
-                let n = e1.cross(e2).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
-                (n, crate::dot_normal_point(n, verts[0]))
-            } else {
-                (Vec3::new(0.0, 0.0, 1.0), 0.0)
-            }
-        }
-    }
 }
 
 /// Collect face signatures (index, normal, centroid) for evolution tracking.

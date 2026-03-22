@@ -27,6 +27,7 @@ const PCURVE_SAMPLES: usize = 16;
 /// `wire_pts` is needed for plane faces to establish the `PlaneFrame` origin.
 ///
 /// Returns a `Curve2D` parameterized on \[0, 1\] from start to end.
+#[must_use]
 pub fn compute_pcurve_on_surface(
     curve_3d: &EdgeCurve,
     start: Point3,

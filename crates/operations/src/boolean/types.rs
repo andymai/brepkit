@@ -218,7 +218,6 @@ pub enum Source {
 
 // Re-export canonical types from the algo crate.
 pub(super) use brepkit_algo::FaceClass;
-pub(super) use brepkit_algo::classifier::AnalyticClassifier;
 
 /// Result of classifying an intersection curve against a face boundary.
 pub(super) enum CurveClassification {

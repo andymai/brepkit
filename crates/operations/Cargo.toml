@@ -42,9 +42,5 @@ name = "compound_cut_perf"
 harness = false
 name = "fuse_perf"
 
-[[bench]]
-harness = false
-name = "boolean_pipeline"
-
 [lints]
 workspace = true
