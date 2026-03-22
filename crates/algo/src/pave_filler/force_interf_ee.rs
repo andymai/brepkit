@@ -143,11 +143,13 @@ fn curves_compatible(a: &EdgeCurve, b: &EdgeCurve, tol: Tolerance) -> bool {
         (EdgeCurve::Circle(ca), EdgeCurve::Circle(cb)) => {
             (ca.radius() - cb.radius()).abs() < tol.linear
                 && (ca.center() - cb.center()).length() < tol.linear
+                && ca.normal().dot(cb.normal()).abs() > 1.0 - tol.angular
         }
         (EdgeCurve::Ellipse(ea), EdgeCurve::Ellipse(eb)) => {
             (ea.semi_major() - eb.semi_major()).abs() < tol.linear
                 && (ea.semi_minor() - eb.semi_minor()).abs() < tol.linear
                 && (ea.center() - eb.center()).length() < tol.linear
+                && ea.normal().dot(eb.normal()).abs() > 1.0 - tol.angular
         }
         _ => false, // Different types or NURBS: no overlap detection yet
     }

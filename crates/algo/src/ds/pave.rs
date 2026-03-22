@@ -83,7 +83,7 @@ pub type CommonBlockId = Id<CommonBlock>;
 /// Used by `MakeSplitEdges` to ensure one edge entity per group, and by
 /// the Builder to share edges across faces from different input solids.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Fields used by ForceInterfEE + MakeSplitEdges (upcoming commits)
+#[allow(dead_code)] // Fields used by ForceInterfEE + MakeSplitEdges (used by ForceInterfEE + MakeSplitEdges)
 pub struct CommonBlock {
     /// PaveBlocks representing the same geometric edge segment.
     /// First entry is the "representative" (canonical).

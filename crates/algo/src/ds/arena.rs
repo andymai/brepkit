@@ -33,10 +33,12 @@ pub struct GfaArena {
     /// Per-edge pave blocks (original edge to its pave block IDs).
     pub edge_pave_blocks: HashMap<EdgeId, Vec<PaveBlockId>>,
     /// CommonBlocks grouping coincident pave blocks.
-    #[allow(dead_code)] // Used by ForceInterfEE + MakeSplitEdges (upcoming commits)
+    #[allow(dead_code)]
+    // Used by ForceInterfEE + MakeSplitEdges
     pub common_blocks: Arena<CommonBlock>,
     /// Reverse map: PaveBlock → its CommonBlock (if any).
-    #[allow(dead_code)] // Used by ForceInterfEE + MakeSplitEdges (upcoming commits)
+    #[allow(dead_code)]
+    // Used by ForceInterfEE + MakeSplitEdges
     pub pb_to_cb: HashMap<PaveBlockId, CommonBlockId>,
 }
 

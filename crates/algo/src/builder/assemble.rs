@@ -12,11 +12,15 @@ use crate::error::AlgoError;
 
 /// Assemble selected faces into a solid.
 ///
-/// Uses the 4-phase BuilderSolid algorithm:
-/// 1. Remove faces with free edges
-/// 2. Build shells via edge-connectivity flood-fill
-/// 3. Classify shells as Growth/Hole
-/// 4. Assemble into Solid with inner shells
+/// Delegates to [`builder_solid::build_solid`], which implements an
+/// OCCT-style BuilderSolid assembly:
+/// 1. Build shells via edge-connectivity flood-fill (with dihedral
+///    angle selection at non-manifold edges)
+/// 2. Classify shells as Growth/Hole via signed volume
+/// 3. Assemble into Solid with inner shells
+///
+/// Note: Phase 1 (free-edge removal) is currently disabled pending
+/// full edge-identity sharing via CommonBlocks.
 ///
 /// # Errors
 ///
