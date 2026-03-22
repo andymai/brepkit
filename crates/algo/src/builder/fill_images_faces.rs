@@ -321,6 +321,13 @@ fn build_in_edge_sections(
             (start, end)
         };
 
+        // Skip edges that lie ON a face boundary edge (collinear subsets
+        // of existing boundary). These come from coplanar faces sharing
+        // boundary segments and would create duplicate edges in the wire builder.
+        if edge_lies_on_face_boundary(topo, face_id, start, end, tol) {
+            continue;
+        }
+
         // Project to UV
         let start_uv = face.surface().project_point(start);
         let end_uv = face.surface().project_point(end);
@@ -365,6 +372,64 @@ fn build_in_edge_sections(
 ///
 /// Collects the outer wire vertices as line segments, then finds where
 /// the section line enters and exits the polygon. Returns the trimmed
+/// Check if a line segment lies on a face boundary edge (collinear subset).
+fn edge_lies_on_face_boundary(
+    topo: &Topology,
+    face_id: FaceId,
+    start: Point3,
+    end: Point3,
+    tol: f64,
+) -> bool {
+    let face = match topo.face(face_id) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let wire = match topo.wire(face.outer_wire()) {
+        Ok(w) => w,
+        Err(_) => return false,
+    };
+
+    let mid = Point3::new(
+        (start.x() + end.x()) * 0.5,
+        (start.y() + end.y()) * 0.5,
+        (start.z() + end.z()) * 0.5,
+    );
+
+    for oe in wire.edges() {
+        let e = match topo.edge(oe.edge()) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let sp = match topo.vertex(e.start()) {
+            Ok(v) => v.point(),
+            Err(_) => continue,
+        };
+        let ep = match topo.vertex(e.end()) {
+            Ok(v) => v.point(),
+            Err(_) => continue,
+        };
+
+        let edge_dir = ep - sp;
+        let edge_len = edge_dir.length();
+        if edge_len < tol {
+            continue;
+        }
+        let edge_unit = edge_dir * (1.0 / edge_len);
+
+        // Distance from midpoint to the boundary edge line
+        let to_mid = mid - sp;
+        let along = to_mid.dot(edge_unit);
+        let perp = to_mid - edge_unit * along;
+        let perp_dist = perp.length();
+
+        if perp_dist < tol * 100.0 && along > -tol && along < edge_len + tol {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// `(start, end)` or `None` if the line doesn't cross the face.
 #[allow(clippy::too_many_lines)]
 fn clip_line_to_face_boundary(

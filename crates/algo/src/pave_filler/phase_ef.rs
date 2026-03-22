@@ -128,11 +128,32 @@ fn check_edge_face_pairs(
                         if dist_start.abs() < tol.linear * 10.0
                             && dist_end.abs() < tol.linear * 10.0
                         {
-                            let bc = find_coplanar_edge_boundary_crossings(
-                                topo, fid, &curve, start_pos, end_pos, t0, t1, *normal, tol,
+                            // Edge lies ON the face. Check if it's inside the face
+                            // boundary (not just touching it from outside).
+                            // Test: is the midpoint inside the face polygon?
+                            let mid = Point3::new(
+                                (start_pos.x() + end_pos.x()) * 0.5,
+                                (start_pos.y() + end_pos.y()) * 0.5,
+                                (start_pos.z() + end_pos.z()) * 0.5,
                             );
-                            let coplanar = !bc.is_empty();
-                            (coplanar, bc)
+                            if point_inside_face_boundary(topo, fid, mid, *normal) {
+                                // The entire edge is a coplanar section edge.
+                                // Add paves at both endpoints (they're on the boundary).
+                                let mut results = Vec::new();
+                                // Only add pave at interior parameter values
+                                // (endpoints at t0/t1 are already boundary vertices).
+                                // Add a midpoint pave to register the edge in the arena.
+                                let t_mid = (t0 + t1) * 0.5;
+                                results.push((t_mid, mid));
+                                (true, results)
+                            } else {
+                                // Midpoint outside face → edge is external
+                                let bc = find_coplanar_edge_boundary_crossings(
+                                    topo, fid, &curve, start_pos, end_pos, t0, t1, *normal, tol,
+                                );
+                                let coplanar = !bc.is_empty();
+                                (coplanar, bc)
+                            }
                         } else {
                             (false, Vec::new())
                         }
@@ -451,6 +472,81 @@ fn refine_crossing(
     let t = f64::midpoint(lo, hi);
     let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
     (t, pt)
+}
+
+/// Check if a 3D point lies inside a face's boundary polygon (2D test).
+fn point_inside_face_boundary(
+    topo: &Topology,
+    face_id: FaceId,
+    point: Point3,
+    normal: Vec3,
+) -> bool {
+    use brepkit_math::vec::Point2;
+
+    let face = match topo.face(face_id) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let wire = match topo.wire(face.outer_wire()) {
+        Ok(w) => w,
+        Err(_) => return false,
+    };
+
+    // Build 2D frame
+    let ref_axis = if normal.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u_axis = ref_axis.cross(normal);
+    let u_len = u_axis.length();
+    if u_len < 1e-12 {
+        return false;
+    }
+    let u_axis = u_axis * (1.0 / u_len);
+    let v_axis = normal.cross(u_axis);
+
+    let project = |p: Point3| -> Point2 {
+        Point2::new(
+            p.x() * u_axis.x() + p.y() * u_axis.y() + p.z() * u_axis.z(),
+            p.x() * v_axis.x() + p.y() * v_axis.y() + p.z() * v_axis.z(),
+        )
+    };
+
+    let pt_2d = project(point);
+    let mut poly = Vec::new();
+    for oe in wire.edges() {
+        let e = match topo.edge(oe.edge()) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let p = match topo.vertex(oe.oriented_start(e)) {
+            Ok(v) => v.point(),
+            Err(_) => continue,
+        };
+        poly.push(project(p));
+    }
+    if poly.len() < 3 {
+        return false;
+    }
+
+    // Ray-casting point-in-polygon
+    let mut inside = false;
+    let px = pt_2d.x();
+    let py = pt_2d.y();
+    let n = poly.len();
+    let mut j = n - 1;
+    for i in 0..n {
+        let yi = poly[i].y();
+        let yj = poly[j].y();
+        let xi = poly[i].x();
+        let xj = poly[j].x();
+        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }
 
 /// Find where a coplanar edge crosses a face's boundary polygon.
