@@ -10,7 +10,7 @@ use brepkit_topology::vertex::VertexId;
 use super::curve::IntersectionCurveDS;
 use super::face_info::FaceInfo;
 use super::interference::InterferenceTable;
-use super::pave::{Pave, PaveBlock, PaveBlockId};
+use super::pave::{CommonBlock, CommonBlockId, Pave, PaveBlock, PaveBlockId};
 
 /// Owns all transient GFA state for a single boolean operation.
 ///
@@ -32,6 +32,12 @@ pub struct GfaArena {
     pub same_domain_vertices: HashMap<VertexId, VertexId>,
     /// Per-edge pave blocks (original edge to its pave block IDs).
     pub edge_pave_blocks: HashMap<EdgeId, Vec<PaveBlockId>>,
+    /// CommonBlocks grouping coincident pave blocks.
+    #[allow(dead_code)] // Used by ForceInterfEE + MakeSplitEdges (upcoming commits)
+    pub common_blocks: Arena<CommonBlock>,
+    /// Reverse map: PaveBlock → its CommonBlock (if any).
+    #[allow(dead_code)] // Used by ForceInterfEE + MakeSplitEdges (upcoming commits)
+    pub pb_to_cb: HashMap<PaveBlockId, CommonBlockId>,
 }
 
 impl GfaArena {
@@ -45,6 +51,8 @@ impl GfaArena {
             interference: InterferenceTable::default(),
             same_domain_vertices: HashMap::new(),
             edge_pave_blocks: HashMap::new(),
+            common_blocks: Arena::new(),
+            pb_to_cb: HashMap::new(),
         }
     }
 
@@ -113,6 +121,47 @@ impl GfaArena {
             }
         }
         leaves
+    }
+
+    /// Follow the CommonBlock chain to find the canonical PaveBlock.
+    /// If `pb` has no CB, returns `pb` itself.
+    #[must_use]
+    #[allow(dead_code)] // Used by upcoming ForceInterfEE + MakeSplitEdges
+    pub fn real_pave_block(&self, pb: PaveBlockId) -> PaveBlockId {
+        match self.pb_to_cb.get(&pb) {
+            Some(&cb_id) => self
+                .common_blocks
+                .get(cb_id)
+                .and_then(|cb| cb.pave_blocks.first().copied())
+                .unwrap_or(pb),
+            None => pb,
+        }
+    }
+
+    /// Create a new CommonBlock grouping the given PaveBlocks.
+    #[allow(dead_code)] // Used by upcoming ForceInterfEE
+    pub fn create_common_block(&mut self, pbs: Vec<PaveBlockId>, tol: f64) -> CommonBlockId {
+        let cb = CommonBlock {
+            pave_blocks: pbs.clone(),
+            faces: Vec::new(),
+            split_edge: None,
+            tolerance: tol,
+        };
+        let cb_id = self.common_blocks.alloc(cb);
+        for &pb in &pbs {
+            self.pb_to_cb.insert(pb, cb_id);
+        }
+        cb_id
+    }
+
+    /// Add a face reference to an existing CommonBlock.
+    #[allow(dead_code)] // Used by upcoming ForceInterfEE
+    pub fn add_face_to_cb(&mut self, cb: CommonBlockId, face: FaceId) {
+        if let Some(cb) = self.common_blocks.get_mut(cb) {
+            if !cb.faces.contains(&face) {
+                cb.faces.push(face);
+            }
+        }
     }
 }
 
