@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.27.0](https://github.com/andymai/brepkit/compare/v2.26.0...v2.27.0) (2026-03-22)
+
+
+### Features
+
+* **algo:** GFA hardening phase 2 — edge sharing + shell sewing ([#385](https://github.com/andymai/brepkit/issues/385)) ([a614c01](https://github.com/andymai/brepkit/commit/a614c016d2d20d33cbb858a23e3871a72772ef11))
+
+
+### Bug Fixes
+
+* **boolean:** handle identical-solid cut in containment shortcut ([40ce3a6](https://github.com/andymai/brepkit/commit/40ce3a6469771f68df36344037780b915d166636))
+
 ## [2.26.0](https://github.com/andymai/brepkit/compare/v2.25.0...v2.26.0) (2026-03-22)
 
 
