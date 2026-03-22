@@ -22,11 +22,10 @@ mod split;
 mod state;
 mod types;
 pub(crate) mod wire_builder;
-use analytic::{analytic_boolean, collect_face_signatures, has_torus, is_all_analytic};
+use analytic::{analytic_boolean, has_torus, is_all_analytic};
 use assembly::validate_boolean_result;
 pub(crate) use assembly::{assemble_solid, assemble_solid_mixed};
 pub use compound::compound_cut;
-pub use precompute::face_polygon;
 pub use types::{BooleanOp, BooleanOptions, FaceSpec};
 
 // ---------------------------------------------------------------------------
@@ -155,6 +154,8 @@ pub(super) fn timer_elapsed_ms(_t: ()) -> f64 {
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeCurve;
+use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
 // ---------------------------------------------------------------------------
@@ -754,6 +755,196 @@ fn enforce_manifold_shell(
     }
 
     Ok(topo.add_solid(brepkit_topology::solid::Solid::new(outer_id, inner_ids)))
+}
+
+// ---------------------------------------------------------------------------
+// Shared utility functions (relocated from deleted files)
+// ---------------------------------------------------------------------------
+
+/// Sample `n` evenly-spaced points along a closed edge curve.
+///
+/// For `Circle` and `Ellipse`, samples at `TAU * i / n`.
+/// For closed `NurbsCurve`, samples across the domain avoiding endpoint
+/// duplication. Returns an empty vec for `Line` (no sampling possible).
+pub(crate) fn sample_edge_curve(curve: &EdgeCurve, n: usize) -> Vec<Point3> {
+    match curve {
+        EdgeCurve::Circle(c) => (0..n)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let t = std::f64::consts::TAU * (i as f64) / (n as f64);
+                c.evaluate(t)
+            })
+            .collect(),
+        EdgeCurve::Ellipse(e) => (0..n)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let t = std::f64::consts::TAU * (i as f64) / (n as f64);
+                e.evaluate(t)
+            })
+            .collect(),
+        EdgeCurve::NurbsCurve(nc) => {
+            let (u0, u1) = nc.domain();
+            // For closed curves (start ~ end), use n as divisor to avoid
+            // duplicating the first point at t=u_max.
+            let start_pt = nc.evaluate(u0);
+            let end_pt = nc.evaluate(u1);
+            // 1e-6 m: closure detection threshold — if start and end points are
+            // within 1 micron, treat the NURBS curve as closed to avoid
+            // duplicating the first point at t=u_max.
+            let is_closed = (start_pt - end_pt).length() < 1e-6;
+            let divisor = if is_closed { n } else { n - 1 };
+            (0..n)
+                .map(|i| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = u0 + (u1 - u0) * (i as f64) / (divisor as f64);
+                    nc.evaluate(t)
+                })
+                .collect()
+        }
+        EdgeCurve::Line => vec![],
+    }
+}
+
+/// Get a polygon approximation of a face by sampling curved edges.
+///
+/// Samples circle/ellipse edges into 32 points so faces with a
+/// single closed-curve edge (e.g. cylinder caps) get a proper polygon.
+///
+/// # Errors
+///
+/// Returns an error if the face or its wire cannot be resolved.
+pub fn face_polygon(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<Vec<Point3>, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let wire = topo.wire(face.outer_wire())?;
+    let mut pts = Vec::new();
+
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let curve = edge.curve();
+        // Sample closed parametric edges (start == end vertex).
+        // Partial arcs fall through to the vertex-based path.
+        let start_vid = edge.start();
+        let end_vid = edge.end();
+        let is_closed_edge = start_vid == end_vid
+            && matches!(
+                curve,
+                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
+            );
+        if is_closed_edge {
+            // Must use CLOSED_CURVE_SAMPLES (not a larger value) — vertex count
+            // must match create_band_fragments and inner-wire dedup for sharing.
+            let mut sampled = sample_edge_curve(curve, types::CLOSED_CURVE_SAMPLES);
+            if !oe.is_forward() {
+                sampled.reverse();
+            }
+            pts.extend(sampled);
+        } else {
+            let vid = oe.oriented_start(edge);
+            pts.push(topo.vertex(vid)?.point());
+        }
+    }
+
+    Ok(pts)
+}
+
+/// Compute a representative normal and d-value for a face from its surface type.
+///
+/// For planar faces, returns the plane normal/d directly. For analytic surfaces
+/// (cylinder, sphere, cone, torus), computes the normal from the surface
+/// definition and a sample vertex — avoiding expensive tessellation.
+pub(crate) fn analytic_face_normal_d(surface: &FaceSurface, verts: &[Point3]) -> (Vec3, f64) {
+    match surface {
+        FaceSurface::Plane { normal, d } => (*normal, *d),
+        FaceSurface::Cylinder(cyl) => {
+            // Cylinder axis direction as representative normal.
+            let n = cyl.axis();
+            let d = if verts.is_empty() {
+                0.0
+            } else {
+                crate::dot_normal_point(n, verts[0])
+            };
+            (n, d)
+        }
+        FaceSurface::Sphere(sph) => {
+            // Outward radial from center through first vertex.
+            if let Some(&v) = verts.first() {
+                let dir = v - sph.center();
+                let n = dir.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                (n, crate::dot_normal_point(n, v))
+            } else {
+                (Vec3::new(0.0, 0.0, 1.0), 0.0)
+            }
+        }
+        FaceSurface::Cone(cone) => {
+            let n = cone.axis();
+            let d = if verts.is_empty() {
+                0.0
+            } else {
+                crate::dot_normal_point(n, verts[0])
+            };
+            (n, d)
+        }
+        FaceSurface::Torus(tor) => {
+            let n = tor.z_axis();
+            let d = if verts.is_empty() {
+                0.0
+            } else {
+                crate::dot_normal_point(n, verts[0])
+            };
+            (n, d)
+        }
+        FaceSurface::Nurbs(_) => {
+            // For NURBS, use polygon normal from vertices.
+            if verts.len() >= 3 {
+                let e1 = verts[1] - verts[0];
+                let e2 = verts[2] - verts[0];
+                let n = e1.cross(e2).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                (n, crate::dot_normal_point(n, verts[0]))
+            } else {
+                (Vec3::new(0.0, 0.0, 1.0), 0.0)
+            }
+        }
+    }
+}
+
+/// Collect face signatures (index, normal, centroid) for evolution tracking.
+///
+/// For each face of the solid, computes a representative normal and centroid
+/// from the face polygon. Used by [`boolean_with_evolution`] to match output
+/// faces back to input faces.
+///
+/// # Errors
+///
+/// Returns an error if any face or wire cannot be resolved.
+fn collect_face_signatures(
+    topo: &Topology,
+    solid_id: SolidId,
+) -> Result<Vec<(usize, Vec3, Point3)>, crate::OperationsError> {
+    let solid = topo.solid(solid_id)?;
+    let shell = topo.shell(solid.outer_shell())?;
+    let mut result = Vec::with_capacity(shell.faces().len());
+
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        let verts = face_polygon(topo, fid)?;
+        let normal = if let FaceSurface::Plane { normal, .. } = face.surface() {
+            *normal
+        } else if verts.len() >= 3 {
+            let e1 = verts[1] - verts[0];
+            let e2 = verts[2] - verts[0];
+            e1.cross(e2).normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0))
+        } else {
+            Vec3::new(0.0, 0.0, 1.0)
+        };
+
+        let centroid = classify::polygon_centroid(&verts);
+        result.push((fid.index(), normal, centroid));
+    }
+
+    Ok(result)
 }
 
 #[cfg(test)]

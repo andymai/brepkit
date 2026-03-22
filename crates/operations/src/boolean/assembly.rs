@@ -19,8 +19,8 @@ use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use super::classify::polygon_centroid;
-use super::precompute::{analytic_face_normal_d, face_polygon};
 use super::types::{FaceSpec, MIN_SOLID_FACES};
+use super::{analytic_face_normal_d, face_polygon};
 
 // ---------------------------------------------------------------------------
 // Spatial hashing helpers

@@ -55,6 +55,7 @@ use super::precompute::face_polygon;
 // ---------------------------------------------------------------------------
 
 /// Collect `(FaceId.index(), normal, centroid)` for each face in a solid.
+#[allow(dead_code)] // Relocated to mod.rs; this copy used by analytic.rs internals until file deletion.
 pub(super) fn collect_face_signatures(
     topo: &Topology,
     solid_id: SolidId,
