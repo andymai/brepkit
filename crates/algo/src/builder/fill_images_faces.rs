@@ -247,6 +247,7 @@ fn build_section_edges(
             start_uv_b: start_uv.map(|(u, v)| Point2::new(u, v)),
             end_uv_b: end_uv.map(|(u, v)| Point2::new(u, v)),
             target_face: None,
+            pave_block_id: Some(pb_id.index()),
         });
     }
 
@@ -440,12 +441,18 @@ fn build_topology_face(
         let start_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.start_3d);
         let end_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.end_3d);
 
-        // If this edge has a source_edge_idx, reuse the shared edge entity
-        // (OCCT TShape-sharing pattern). Keyed by (parent_face, idx) so
-        // section edges from the SAME face's split share one topology edge.
-        let cache_key = pcurve_edge
-            .source_edge_idx
-            .map(|idx| (parent_face_id.index(), idx));
+        // Edge sharing: prefer pave_block_id (cross-face, from FF intersection),
+        // fall back to source_edge_idx (within-face, from forward+reverse loops).
+        let cache_key = if let Some(pb_id) = pcurve_edge.pave_block_id {
+            // Cross-face key: all faces sharing this FF section curve
+            // get the same edge entity. Use a distinct namespace (usize::MAX)
+            // to avoid collision with within-face keys.
+            Some((usize::MAX, pb_id))
+        } else {
+            pcurve_edge
+                .source_edge_idx
+                .map(|idx| (parent_face_id.index(), idx))
+        };
         let edge_id = if let Some(key) = cache_key {
             *shared_edge_cache.entry(key).or_insert_with(|| {
                 topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))

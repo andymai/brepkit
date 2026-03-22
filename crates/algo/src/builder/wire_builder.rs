@@ -365,6 +365,7 @@ mod tests {
             end_3d: brepkit_math::vec::Point3::new(end.x(), end.y(), 0.0),
             forward: true,
             source_edge_idx: None,
+            pave_block_id: None,
         }
     }
 
