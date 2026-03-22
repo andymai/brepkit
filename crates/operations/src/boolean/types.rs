@@ -216,76 +216,9 @@ pub enum Source {
     B,
 }
 
-/// Classification of a face fragment relative to the opposite solid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum FaceClass {
-    Outside,
-    Inside,
-    CoplanarSame,
-    CoplanarOpposite,
-}
-
-/// Analytic classifier for simple convex solids.
-///
-/// Instead of ray-casting against hundreds of tessellated triangles, use
-/// exact geometric predicates to classify points inside/outside a solid.
-pub(super) enum AnalyticClassifier {
-    /// Point-in-sphere: `|p - center| <= radius`.
-    Sphere { center: Point3, radius: f64 },
-    /// Point-in-cylinder: radial distance from axis <= radius AND axial
-    /// position within [z_min, z_max].
-    Cylinder {
-        origin: Point3,
-        axis: Vec3,
-        radius: f64,
-        z_min: f64,
-        z_max: f64,
-    },
-    /// Point-in-cone-frustum: radial distance from axis <= interpolated radius
-    /// AND axial position within [z_min, z_max]. Uses linear interpolation
-    /// between r_min (at z_min) and r_max (at z_max) for the expected radius,
-    /// which is robust regardless of `ConicalSurface` apex/axis orientation.
-    Cone {
-        origin: Point3,
-        axis: Vec3,
-        z_min: f64,
-        z_max: f64,
-        r_at_z_min: f64,
-        r_at_z_max: f64,
-    },
-    /// Point-in-box: axis-aligned bounding box test.
-    /// O(1) with just 6 comparisons -- the fastest classifier.
-    Box { min: Point3, max: Point3 },
-    /// Point-in-convex-polyhedron: half-plane test against each face.
-    /// A point is inside iff `normal_i * p < d_i` for all face planes
-    /// (outward-pointing normals, so `normal * p > d` means outside).
-    /// O(F) where F is the number of faces -- fast for hex prisms (F=8).
-    ConvexPolyhedron {
-        /// Outward-pointing normals and signed distances: `normal * p > d` means outside.
-        planes: Vec<(Vec3, f64)>,
-    },
-    /// General convex analytic solid: intersection of half-planes, cylinders,
-    /// and cone frustums. Point is inside iff it passes ALL constraints.
-    /// Handles mixed plane+cone solids (like lip frustums from ruled lofts).
-    ConvexAnalytic {
-        /// Half-plane constraints: `normal · p < d` means inside.
-        planes: Vec<(Vec3, f64)>,
-        /// Cylinder constraints: radial distance from axis <= radius AND
-        /// axial position within [z_min, z_max].
-        cylinders: Vec<(Point3, Vec3, f64, f64, f64)>, // (origin, axis, radius, z_min, z_max)
-        /// Cone frustum constraints: radial distance <= interpolated radius.
-        cones: Vec<(Point3, Vec3, f64, f64, f64, f64)>, // (origin, axis, z_min, z_max, r_min, r_max)
-    },
-    /// Composite classifier for shelled/hollow solids: point is inside iff
-    /// it's inside the outer boundary AND outside the inner cavity.
-    Composite {
-        /// Outer boundary classifier (non-reversed faces).
-        outer: std::boxed::Box<Self>,
-        /// Inner cavity classifier (from reversed faces, but stored as
-        /// non-reversed). A point inside the cavity is OUTSIDE the solid.
-        inner: std::boxed::Box<Self>,
-    },
-}
+// Re-export canonical types from the algo crate.
+pub(super) use brepkit_algo::FaceClass;
+pub(super) use brepkit_algo::classifier::AnalyticClassifier;
 
 /// Result of classifying an intersection curve against a face boundary.
 pub(super) enum CurveClassification {
@@ -435,5 +368,14 @@ pub(super) const fn select_fragment(
         // (it forms the "skin" at the cut boundary). In all other cases, discard.
         (Source::A, FaceClass::CoplanarOpposite, BooleanOp::Cut) => Some(false),
         (_, FaceClass::CoplanarOpposite, _) => None,
+        // Unknown is only used by the algo crate's builder; never emitted by
+        // the operations pipeline classifier.
+        (_, FaceClass::Unknown, _) => {
+            debug_assert!(
+                false,
+                "FaceClass::Unknown must never reach fragment selection"
+            );
+            None
+        }
     }
 }

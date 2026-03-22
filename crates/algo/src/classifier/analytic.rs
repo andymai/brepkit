@@ -27,28 +27,49 @@ use crate::builder::FaceClass;
 /// geometric predicates to classify points inside/outside a solid.
 pub enum AnalyticClassifier {
     /// Point-in-sphere: `|p - center| <= radius`.
-    Sphere { center: Point3, radius: f64 },
+    Sphere {
+        /// Sphere center.
+        center: Point3,
+        /// Sphere radius.
+        radius: f64,
+    },
     /// Point-in-cylinder: radial distance from axis <= radius AND axial
     /// position within [z_min, z_max].
     Cylinder {
+        /// Cylinder axis origin.
         origin: Point3,
+        /// Cylinder axis direction (unit).
         axis: Vec3,
+        /// Cylinder radius.
         radius: f64,
+        /// Minimum axial position.
         z_min: f64,
+        /// Maximum axial position.
         z_max: f64,
     },
     /// Point-in-cone-frustum: radial distance from axis <= interpolated radius
     /// AND axial position within [z_min, z_max].
     Cone {
+        /// Cone apex (axis origin).
         origin: Point3,
+        /// Cone axis direction (unit).
         axis: Vec3,
+        /// Minimum axial position.
         z_min: f64,
+        /// Maximum axial position.
         z_max: f64,
+        /// Radius at `z_min`.
         r_at_z_min: f64,
+        /// Radius at `z_max`.
         r_at_z_max: f64,
     },
     /// Point-in-box: axis-aligned bounding box test.
-    Box { min: Point3, max: Point3 },
+    Box {
+        /// Box minimum corner.
+        min: Point3,
+        /// Box maximum corner.
+        max: Point3,
+    },
     /// Point-in-convex-polyhedron: half-plane test against each face.
     ConvexPolyhedron {
         /// Outward-pointing normals and signed distances.
@@ -75,7 +96,8 @@ pub enum AnalyticClassifier {
 
 impl AnalyticClassifier {
     /// Classify a point as Inside, Outside, or None (on boundary).
-    pub(crate) fn classify(&self, centroid: Point3, tol: Tolerance) -> Option<FaceClass> {
+    #[must_use]
+    pub fn classify(&self, centroid: Point3, tol: Tolerance) -> Option<FaceClass> {
         match self {
             Self::Sphere { center, radius } => {
                 let dx = centroid.x() - center.x();
@@ -303,6 +325,7 @@ pub fn classify_analytic(topo: &Topology, solid: SolidId, point: Point3) -> Opti
 /// Returns `Some` when the solid is a simple convex analytic shape
 /// that supports O(1) point-in-solid tests. Falls back to `None` for
 /// complex or non-analytic solids.
+#[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn try_build_analytic_classifier(
     topo: &Topology,
