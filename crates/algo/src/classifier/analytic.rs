@@ -95,7 +95,8 @@ pub enum AnalyticClassifier {
 }
 
 impl AnalyticClassifier {
-    /// Classify a point as Inside, Outside, or None (on boundary).
+    /// Classify a point as Inside, Outside, or On (within tolerance of the
+    /// boundary).
     #[must_use]
     pub fn classify(&self, centroid: Point3, tol: Tolerance) -> Option<FaceClass> {
         match self {
@@ -109,7 +110,7 @@ impl AnalyticClassifier {
                 } else if dist_sq > (radius + tol.linear) * (radius + tol.linear) {
                     Some(FaceClass::Outside)
                 } else {
-                    None
+                    Some(FaceClass::On)
                 }
             }
             Self::Cylinder {
@@ -137,7 +138,7 @@ impl AnalyticClassifier {
                 } else if radial_dist_sq > (radius + tol.linear) * (radius + tol.linear) {
                     Some(FaceClass::Outside)
                 } else {
-                    None
+                    Some(FaceClass::On)
                 }
             }
             Self::Cone {
@@ -173,7 +174,7 @@ impl AnalyticClassifier {
                 } else if radial_dist_sq > (expected_r + tol.linear) * (expected_r + tol.linear) {
                     Some(FaceClass::Outside)
                 } else {
-                    None
+                    Some(FaceClass::On)
                 }
             }
             Self::Box { min, max } => {
@@ -195,7 +196,7 @@ impl AnalyticClassifier {
                 {
                     Some(FaceClass::Outside)
                 } else {
-                    None
+                    Some(FaceClass::On)
                 }
             }
             Self::ConvexPolyhedron { planes } => {
@@ -211,14 +212,16 @@ impl AnalyticClassifier {
                 } else if max_signed_dist > tl {
                     Some(FaceClass::Outside)
                 } else {
-                    None
+                    Some(FaceClass::On)
                 }
             }
             Self::ConvexAnalytic {
                 planes,
                 cylinders,
                 cones,
-            } => classify_convex_analytic(centroid, tol, planes, cylinders, cones),
+            } => Some(classify_convex_analytic(
+                centroid, tol, planes, cylinders, cones,
+            )),
             Self::Composite { outer, inner } => {
                 let outer_class = outer.classify(centroid, tol);
                 match outer_class {
@@ -228,9 +231,13 @@ impl AnalyticClassifier {
                         match inner_class {
                             Some(FaceClass::Inside) => Some(FaceClass::Outside),
                             Some(FaceClass::Outside) => Some(FaceClass::Inside),
+                            // Inner boundary → on the boundary of the composite
+                            Some(FaceClass::On) => Some(FaceClass::On),
                             _ => None,
                         }
                     }
+                    // Outer boundary → on the boundary of the composite
+                    Some(FaceClass::On) => Some(FaceClass::On),
                     _ => None,
                 }
             }
@@ -245,7 +252,7 @@ fn classify_convex_analytic(
     planes: &[(Vec3, f64)],
     cylinders: &[(Point3, Vec3, f64, f64, f64)],
     cones: &[(Point3, Vec3, f64, f64, f64, f64)],
-) -> Option<FaceClass> {
+) -> FaceClass {
     let tl = tol.linear;
     let cv = Vec3::new(centroid.x(), centroid.y(), centroid.z());
 
@@ -261,7 +268,7 @@ fn classify_convex_analytic(
         let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
         let axial = diff_v.dot(axis);
         if axial < z_min - tl || axial > z_max + tl {
-            return Some(FaceClass::Outside);
+            return FaceClass::Outside;
         }
         let projected = axis * axial;
         let radial_vec = diff_v - projected;
@@ -275,7 +282,7 @@ fn classify_convex_analytic(
         let diff_v = Vec3::new(diff.x(), diff.y(), diff.z());
         let axial = diff_v.dot(axis);
         if axial < z_min - tl || axial > z_max + tl {
-            return Some(FaceClass::Outside);
+            return FaceClass::Outside;
         }
         let dz = z_max - z_min;
         let t = if dz.abs() > tol.linear {
@@ -292,11 +299,11 @@ fn classify_convex_analytic(
 
     let max_excess = max_plane_dist.max(max_cyl_excess).max(max_cone_excess);
     if max_excess < -tl {
-        Some(FaceClass::Inside)
+        FaceClass::Inside
     } else if max_excess > tl {
-        Some(FaceClass::Outside)
+        FaceClass::Outside
     } else {
-        None
+        FaceClass::On
     }
 }
 

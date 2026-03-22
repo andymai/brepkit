@@ -367,6 +367,11 @@ pub(super) const fn select_fragment(
         // (it forms the "skin" at the cut boundary). In all other cases, discard.
         (Source::A, FaceClass::CoplanarOpposite, BooleanOp::Cut) => Some(false),
         (_, FaceClass::CoplanarOpposite, _) => None,
+        // On boundary -- treat like CoplanarSame: keep from A only.
+        (Source::A, FaceClass::On, BooleanOp::Fuse | BooleanOp::Cut | BooleanOp::Intersect) => {
+            Some(false)
+        }
+        (_, FaceClass::On, _) => None,
         // Unknown is only used by the algo crate's builder; never emitted by
         // the operations pipeline classifier.
         (_, FaceClass::Unknown, _) => {
