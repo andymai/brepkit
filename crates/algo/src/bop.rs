@@ -20,9 +20,9 @@ pub enum BooleanOp {
 /// Select sub-faces to keep based on the boolean operation type.
 ///
 /// The truth table:
-/// - **Fuse**: A-Outside + B-Outside + CoplanarSame from either
-/// - **Cut**: A-Outside + B-Inside (reversed normals) + CoplanarOpposite from B
-/// - **Intersect**: A-Inside + B-Inside + CoplanarSame from either
+/// - **Fuse**: A-Outside + B-Outside + A-CoplanarSame + A-On
+/// - **Cut**: A-Outside + A-On + B-Inside + B-CoplanarOpposite
+/// - **Intersect**: A-Inside + B-Inside + A-CoplanarSame + A-On
 #[must_use]
 pub(crate) fn select_faces(sub_faces: &[SubFace], op: BooleanOp) -> Vec<SelectedFace> {
     sub_faces
@@ -31,16 +31,18 @@ pub(crate) fn select_faces(sub_faces: &[SubFace], op: BooleanOp) -> Vec<Selected
             let keep = match op {
                 BooleanOp::Fuse => matches!(
                     (&sf.rank, &sf.classification),
-                    (Rank::A | Rank::B, FaceClass::Outside) | (_, FaceClass::CoplanarSame)
+                    (Rank::A | Rank::B, FaceClass::Outside)
+                        | (Rank::A, FaceClass::CoplanarSame | FaceClass::On)
                 ),
                 BooleanOp::Cut => matches!(
                     (&sf.rank, &sf.classification),
-                    (Rank::A, FaceClass::Outside)
+                    (Rank::A, FaceClass::Outside | FaceClass::On)
                         | (Rank::B, FaceClass::Inside | FaceClass::CoplanarOpposite)
                 ),
                 BooleanOp::Intersect => matches!(
                     (&sf.rank, &sf.classification),
-                    (Rank::A | Rank::B, FaceClass::Inside) | (_, FaceClass::CoplanarSame)
+                    (Rank::A | Rank::B, FaceClass::Inside)
+                        | (Rank::A, FaceClass::CoplanarSame | FaceClass::On)
                 ),
             };
 

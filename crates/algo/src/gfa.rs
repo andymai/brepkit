@@ -26,6 +26,23 @@ pub fn boolean(
     solid_a: SolidId,
     solid_b: SolidId,
 ) -> Result<SolidId, AlgoError> {
+    // Identical-solid fast path: avoid the full GFA pipeline when both
+    // operands are the same topology entity.
+    if solid_a == solid_b {
+        return match op {
+            BooleanOp::Fuse | BooleanOp::Intersect => {
+                // A ∪ A = A, A ∩ A = A — return the original solid.
+                // The caller (operations crate) copies if needed.
+                Ok(solid_a)
+            }
+            BooleanOp::Cut => {
+                // A \ A = empty
+                Err(AlgoError::AssemblyFailed(
+                    "Cut of identical solids produces empty result".into(),
+                ))
+            }
+        };
+    }
     boolean_with_tolerance(topo, op, solid_a, solid_b, Tolerance::default())
 }
 

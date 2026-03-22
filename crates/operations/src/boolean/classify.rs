@@ -82,7 +82,10 @@ pub(super) fn guard_tangent_coplanar(
     bvh: Option<&Bvh>,
     tol: Tolerance,
 ) -> FaceClass {
-    if !matches!(class, FaceClass::CoplanarSame | FaceClass::CoplanarOpposite) || vertices.len() < 3
+    if !matches!(
+        class,
+        FaceClass::CoplanarSame | FaceClass::CoplanarOpposite | FaceClass::On
+    ) || vertices.len() < 3
     {
         return class;
     }
