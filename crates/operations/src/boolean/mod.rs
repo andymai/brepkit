@@ -139,7 +139,18 @@ pub fn boolean(
                 .map(|f| f.len())
                 .unwrap_or(0);
             if result_faces > 0 {
+                // Deep-copy the GFA result to isolate topology from inputs.
+                // GFA reuses input face/edge/vertex IDs, creating shared
+                // topology that causes non-manifold edges.
+                let result = crate::copy::copy_solid(topo, result)?;
                 let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+                // Fix non-manifold edges from shared topology.
+                {
+                    let shell_id = topo.solid(result)?.outer_shell();
+                    let mut face_ids: Vec<_> = topo.shell(shell_id)?.faces().to_vec();
+                    let _ = assembly::split_nonmanifold_edges(topo, &mut face_ids);
+                }
+                let result = enforce_manifold_shell(topo, result).unwrap_or(result);
                 for _ in 0..3 {
                     if crate::heal::unify_faces(topo, result)? == 0 {
                         break;
