@@ -8,9 +8,8 @@
 mod analytic;
 mod ray_cast;
 
-pub use analytic::classify_analytic;
-pub use ray_cast::classify_ray_cast;
-pub use ray_cast::compute_solid_bbox;
+pub use analytic::{AnalyticClassifier, classify_analytic, try_build_analytic_classifier};
+pub use ray_cast::{classify_ray_cast, compute_solid_bbox, point_in_face_3d};
 
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
