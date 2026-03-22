@@ -1,10 +1,11 @@
 #![allow(dead_code)]
 //! Phase 4: Classification — point-in-solid tests for boolean fragment labeling.
 //!
-//! Delegates analytic classifier construction and core point-in-solid logic to
-//! `brepkit_algo::classifier` (canonical implementation). This module provides
-//! operations-specific wrappers that work with pre-extracted face data, BVH
-//! acceleration, and fragment-level classification.
+//! Delegates analytic classifier construction to `brepkit_algo::classifier`
+//! (canonical implementation) via `try_build_analytic_classifier`. This module
+//! implements the ray-casting point-in-solid tests, coplanar guards, BVH
+//! acceleration, and fragment-level classification as operations-specific
+//! wrappers over pre-extracted face data.
 
 use super::intersect::point_along_line;
 use super::types::{FaceData, FaceFragment};

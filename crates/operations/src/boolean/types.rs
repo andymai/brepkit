@@ -370,6 +370,12 @@ pub(super) const fn select_fragment(
         (_, FaceClass::CoplanarOpposite, _) => None,
         // Unknown is only used by the algo crate's builder; never emitted by
         // the operations pipeline classifier.
-        (_, FaceClass::Unknown, _) => None,
+        (_, FaceClass::Unknown, _) => {
+            debug_assert!(
+                false,
+                "FaceClass::Unknown must never reach fragment selection"
+            );
+            None
+        }
     }
 }
