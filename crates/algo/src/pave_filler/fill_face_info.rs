@@ -120,28 +120,44 @@ fn fill_section_sc(arena: &mut GfaArena) {
     }
 }
 
-/// Edges from EF interference go into the face's `pave_blocks_in`.
+/// Edges from EF interference go into the face's classification sets.
+///
+/// For edges that CROSS the face (standard case): `pave_blocks_in`.
+/// For edges that LIE ON the face (coplanar): `pave_blocks_sc`, so the
+/// face splitter treats them as section edges and splits the face.
 fn fill_ef_in(arena: &mut GfaArena) {
-    // Snapshot EF data
+    // Snapshot EF data including coplanar flag
     let ef_data: Vec<_> = arena
         .interference
         .ef
         .iter()
         .filter_map(|interf| {
-            if let Interference::EF { edge, face, .. } = interf {
-                Some((*edge, *face))
+            if let Interference::EF {
+                edge,
+                face,
+                coplanar,
+                ..
+            } = interf
+            {
+                Some((*edge, *face, coplanar.unwrap_or(false)))
             } else {
                 None
             }
         })
         .collect();
 
-    for (edge_id, face_id) in ef_data {
+    for (edge_id, face_id, is_coplanar) in ef_data {
         if let Some(pb_ids) = arena.edge_pave_blocks.get(&edge_id).cloned() {
             let leaves = arena.collect_leaf_pave_blocks(&pb_ids);
             let fi = arena.face_info_mut(face_id);
             for leaf_id in leaves {
-                fi.pave_blocks_in.insert(leaf_id);
+                if is_coplanar {
+                    // Coplanar edge ON face → section edge (triggers face splitting)
+                    fi.pave_blocks_sc.insert(leaf_id);
+                } else {
+                    // Standard crossing → interior edge
+                    fi.pave_blocks_in.insert(leaf_id);
+                }
             }
         }
     }

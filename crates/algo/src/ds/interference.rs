@@ -59,6 +59,10 @@ pub enum Interference {
         new_vertex: Option<VertexId>,
         /// Parameter on edge at intersection.
         parameter: Option<f64>,
+        /// True if the edge lies ON the face surface (coplanar), rather
+        /// than crossing it. Coplanar edges become section edges for
+        /// face splitting.
+        coplanar: Option<bool>,
     },
     /// Face-face intersection.
     FF {

@@ -110,15 +110,13 @@ fn check_edge_face_pairs(
             let face = topo.face(fid)?;
             let surface = face.surface();
 
-            let crossings = match surface {
+            let (is_coplanar, crossings) = match surface {
                 FaceSurface::Plane { normal, d } => {
-                    let mut c = find_edge_plane_crossings(
+                    let c = find_edge_plane_crossings(
                         &curve, start_pos, end_pos, t0, t1, *normal, *d, tol,
                     );
-                    // If the edge lies ON the plane (coplanar), find where the
-                    // edge crosses the face's boundary polygon. These are the
-                    // points where the edge enters/exits the face interior.
                     if c.is_empty() {
+                        // Check if edge lies ON the plane (coplanar)
                         let dist_start = start_pos.x() * normal.x()
                             + start_pos.y() * normal.y()
                             + start_pos.z() * normal.z()
@@ -130,16 +128,22 @@ fn check_edge_face_pairs(
                         if dist_start.abs() < tol.linear * 10.0
                             && dist_end.abs() < tol.linear * 10.0
                         {
-                            // Edge is coplanar with the face. Find boundary
-                            // crossing points.
-                            c = find_coplanar_edge_boundary_crossings(
+                            let bc = find_coplanar_edge_boundary_crossings(
                                 topo, fid, &curve, start_pos, end_pos, t0, t1, *normal, tol,
                             );
+                            let coplanar = !bc.is_empty();
+                            (coplanar, bc)
+                        } else {
+                            (false, Vec::new())
                         }
+                    } else {
+                        (false, c)
                     }
-                    c
                 }
-                _ => find_edge_surface_crossings(&curve, start_pos, end_pos, t0, t1, surface, tol),
+                _ => (
+                    false,
+                    find_edge_surface_crossings(&curve, start_pos, end_pos, t0, t1, surface, tol),
+                ),
             };
 
             for (t, pt) in crossings {
@@ -162,6 +166,7 @@ fn check_edge_face_pairs(
                     face: fid,
                     new_vertex: Some(vertex_id),
                     parameter: Some(t),
+                    coplanar: Some(is_coplanar),
                 });
 
                 // Add vertex to face info
