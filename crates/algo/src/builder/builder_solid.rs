@@ -512,12 +512,6 @@ fn quantize_point(p: Point3, tol: f64) -> QPos {
     )
 }
 
-/// Merge duplicate edges across selected faces by quantized endpoint position.
-///
-/// For each group of edges with the same quantized start/end positions,
-/// picks one canonical edge and rebuilds the other faces' wires to reference it.
-/// Uses snapshot-then-allocate to satisfy the borrow checker.
-#[allow(clippy::too_many_lines)]
 /// Edge data for duplicate detection.
 struct EdgeEntry {
     edge_id: brepkit_topology::edge::EdgeId,
@@ -525,6 +519,14 @@ struct EdgeEntry {
     qpair: QPosEdge,
 }
 
+/// Merge duplicate edges across selected faces by quantized endpoint position.
+///
+/// For each group of edges with the same quantized start/end positions,
+/// picks one canonical edge and rebuilds the other faces' wires to reference it.
+/// Handles reversed edge direction: if the canonical edge's vertex order is
+/// opposite to the duplicate, flips the `is_forward` flag to preserve wire
+/// traversal direction.
+#[allow(clippy::too_many_lines)]
 fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result<(), AlgoError> {
     use brepkit_topology::edge::EdgeId;
 
@@ -559,22 +561,61 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
         groups.entry(entry.qpair).or_default().push(entry.edge_id);
     }
 
-    // Build edge replacement map: duplicate EdgeId → canonical EdgeId
-    let mut replacements: HashMap<EdgeId, EdgeId> = HashMap::new();
+    // Build edge replacement map: duplicate EdgeId → (canonical EdgeId, flip_forward).
+    // flip_forward is true when the duplicate's vertex order is reversed vs canonical,
+    // requiring the OrientedEdge's is_forward flag to be flipped.
+    let mut replacements: HashMap<EdgeId, (EdgeId, bool)> = HashMap::new();
     for edge_ids in groups.values() {
-        // Deduplicate edge IDs (same edge may appear multiple times from different faces)
         let mut unique: Vec<EdgeId> = edge_ids.clone();
         unique.sort_by_key(|e| e.index());
         unique.dedup();
 
         if unique.len() < 2 {
-            continue; // Only one unique edge — no merge needed
+            continue;
         }
 
-        // Pick the first (lowest index) as canonical
         let canonical = unique[0];
+        // Get canonical edge's vertex positions for direction comparison
+        let (canon_start, canon_end) = if let Ok(e) = topo.edge(canonical) {
+            let sp = topo
+                .vertex(e.start())
+                .map(brepkit_topology::vertex::Vertex::point)
+                .ok();
+            let ep = topo
+                .vertex(e.end())
+                .map(brepkit_topology::vertex::Vertex::point)
+                .ok();
+            (sp, ep)
+        } else {
+            (None, None)
+        };
+
         for &dup in &unique[1..] {
-            replacements.insert(dup, canonical);
+            // Check if duplicate has reversed vertex order
+            let flip = if let (Some(cs), Some(ce)) = (canon_start, canon_end) {
+                if let Ok(de) = topo.edge(dup) {
+                    let ds = topo
+                        .vertex(de.start())
+                        .map(brepkit_topology::vertex::Vertex::point)
+                        .ok();
+                    let de_end = topo
+                        .vertex(de.end())
+                        .map(brepkit_topology::vertex::Vertex::point)
+                        .ok();
+                    // Reversed if dup's start matches canonical's end (within tolerance)
+                    match (ds, de_end) {
+                        (Some(ds), Some(de)) => {
+                            (ds - ce).length() < tol && (de - cs).length() < tol
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            replacements.insert(dup, (canonical, flip));
         }
     }
 
@@ -623,12 +664,16 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             (surface, is_reversed, outer_oes, inner_oes_list)
         };
 
-        // Rebuild outer wire with replaced edges
+        // Rebuild outer wire with replaced edges (handling direction flips)
         let new_outer_oes: Vec<_> = outer_oes
             .iter()
             .map(|(eid, fwd)| {
-                let new_eid = replacements.get(eid).copied().unwrap_or(*eid);
-                brepkit_topology::wire::OrientedEdge::new(new_eid, *fwd)
+                if let Some(&(canonical, flip)) = replacements.get(eid) {
+                    let new_fwd = if flip { !*fwd } else { *fwd };
+                    brepkit_topology::wire::OrientedEdge::new(canonical, new_fwd)
+                } else {
+                    brepkit_topology::wire::OrientedEdge::new(*eid, *fwd)
+                }
             })
             .collect();
         let Ok(new_outer) = brepkit_topology::wire::Wire::new(new_outer_oes, true) else {
@@ -642,8 +687,12 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             let new_oes: Vec<_> = inner_oes
                 .iter()
                 .map(|(eid, fwd)| {
-                    let new_eid = replacements.get(eid).copied().unwrap_or(*eid);
-                    brepkit_topology::wire::OrientedEdge::new(new_eid, *fwd)
+                    if let Some(&(canonical, flip)) = replacements.get(eid) {
+                        let new_fwd = if flip { !*fwd } else { *fwd };
+                        brepkit_topology::wire::OrientedEdge::new(canonical, new_fwd)
+                    } else {
+                        brepkit_topology::wire::OrientedEdge::new(*eid, *fwd)
+                    }
                 })
                 .collect();
             if let Ok(w) = brepkit_topology::wire::Wire::new(new_oes, true) {
