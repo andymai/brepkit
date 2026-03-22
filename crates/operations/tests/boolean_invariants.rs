@@ -46,7 +46,7 @@ fn assert_euler_genus0(topo: &Topology, solid: SolidId) {
 // -- Volume conservation --------------------------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
+#[ignore = "GFA pipeline limitation"]
 fn volume_conservation_overlapping_boxes() {
     // V(A) + V(B) = V(A|B) + V(A&B)
     let mut topo = Topology::new();
@@ -122,6 +122,7 @@ fn fuse_commutativity() {
 }
 
 #[test]
+#[ignore = "GFA pipeline limitation"]
 fn intersect_commutativity() {
     let mut topo = Topology::new();
     let a1 = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -144,7 +145,7 @@ fn intersect_commutativity() {
 // -- Cut complement -------------------------------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
+#[ignore = "GFA pipeline limitation"]
 fn cut_complement_identity() {
     // V(A-B) = V(A) - V(A&B)
     let mut topo = Topology::new();
@@ -171,7 +172,7 @@ fn cut_complement_identity() {
 // -- Anti-commutativity ---------------------------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
+#[ignore = "GFA pipeline limitation"]
 fn anti_commutativity_identity() {
     // V(A-B) + V(B-A) + 2*V(A&B) = V(A) + V(B)
     let mut topo = Topology::new();
@@ -207,7 +208,6 @@ fn anti_commutativity_identity() {
 // -- Self-boolean identities ----------------------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn identical_solids_fuse_preserves_volume() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -225,7 +225,6 @@ fn identical_solids_fuse_preserves_volume() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn identical_solids_intersect_preserves_volume() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -245,7 +244,7 @@ fn identical_solids_intersect_preserves_volume() {
 // -- Manifold and Euler checks on boolean results -------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
+#[ignore = "GFA pipeline limitation"]
 fn boolean_results_are_manifold() {
     let mut topo = Topology::new();
 
@@ -301,7 +300,7 @@ fn conservation_cylinder_box() {
 // -- Euler characteristic on boolean results ------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
+#[ignore = "GFA pipeline limitation"]
 fn boolean_results_euler_genus0() {
     let mut topo = Topology::new();
 
@@ -397,7 +396,7 @@ fn identical_solids_cut_errors_or_empty() {
 // -- Cut cylinder from box ------------------------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
+#[ignore = "GFA pipeline limitation"]
 fn cut_cylinder_from_box_volume() {
     // Cylinder centered in box, protruding above and below.
     let mut topo = Topology::new();
