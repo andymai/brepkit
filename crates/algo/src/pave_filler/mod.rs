@@ -9,6 +9,7 @@
 //! `MakeBlocks`, `MakeSplitEdges`, `MakePCurves`, `FillFaceInfo`.
 
 pub mod fill_face_info;
+pub mod force_interf_ee;
 mod helpers;
 pub mod make_blocks;
 pub mod make_pcurves;
@@ -154,6 +155,7 @@ pub fn run_pave_filler(
 
     // Stage 2: Resolution (mutable Topology)
     make_blocks::perform(arena)?;
+    force_interf_ee::perform(topo, tol, arena)?;
     make_split_edges::perform(topo, arena)?;
     make_pcurves::perform(topo, arena)?;
     fill_face_info::perform(topo, arena)?;

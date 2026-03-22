@@ -307,6 +307,79 @@ fn gfa_intersect_overlapping_boxes() {
     );
 }
 
+/// ForceInterfEE creates CommonBlocks for overlapping boundary edges
+/// when two boxes share a face.
+#[test]
+fn force_interf_ee_adjacent_boxes_creates_common_blocks() {
+    use brepkit_math::tolerance::Tolerance;
+
+    let mut topo = Topology::default();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [1.0, 0.0, 0.0], [2.0, 1.0, 1.0]);
+
+    let tol = Tolerance::default();
+    let mut arena = GfaArena::new();
+
+    // Run PaveFiller intersection phases
+    {
+        let mut filler = PaveFiller::with_tolerance(&mut topo, a, b, tol);
+        filler.perform(&mut arena).unwrap();
+    }
+
+    // Run make_blocks (splits pave blocks at extra paves)
+    crate::pave_filler::make_blocks::perform(&mut arena).unwrap();
+
+    // Before ForceInterfEE: no CommonBlocks
+    assert!(
+        arena.common_blocks.iter().count() == 0,
+        "no CommonBlocks before ForceInterfEE"
+    );
+
+    // Run ForceInterfEE
+    crate::pave_filler::force_interf_ee::perform(&topo, tol, &mut arena).unwrap();
+
+    // After ForceInterfEE: should have CommonBlocks for the shared boundary edges.
+    // Two adjacent boxes sharing the x=1 face have 4 shared boundary edges:
+    // (1,0,0)→(1,1,0), (1,1,0)→(1,1,1), (1,1,1)→(1,0,1), (1,0,1)→(1,0,0)
+    let cb_count = arena.common_blocks.iter().count();
+    assert!(
+        cb_count >= 1,
+        "adjacent boxes should have CommonBlocks for shared edges, got {cb_count}"
+    );
+
+    // Each CommonBlock should have at least 2 PaveBlocks
+    for (_, cb) in arena.common_blocks.iter() {
+        assert!(
+            cb.pave_blocks.len() >= 2,
+            "CommonBlock should group at least 2 PaveBlocks, got {}",
+            cb.pave_blocks.len()
+        );
+    }
+}
+
+/// ForceInterfEE should NOT create CommonBlocks for disjoint boxes.
+#[test]
+fn force_interf_ee_disjoint_boxes_no_common_blocks() {
+    use brepkit_math::tolerance::Tolerance;
+
+    let mut topo = Topology::default();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [5.0, 5.0, 5.0], [6.0, 6.0, 6.0]);
+
+    let tol = Tolerance::default();
+    let mut arena = GfaArena::new();
+
+    {
+        let mut filler = PaveFiller::with_tolerance(&mut topo, a, b, tol);
+        filler.perform(&mut arena).unwrap();
+    }
+    crate::pave_filler::make_blocks::perform(&mut arena).unwrap();
+    crate::pave_filler::force_interf_ee::perform(&topo, tol, &mut arena).unwrap();
+
+    let cb_count = arena.common_blocks.iter().count();
+    assert_eq!(cb_count, 0, "disjoint boxes should have 0 CommonBlocks");
+}
+
 /// Touching-face cut: faces share a plane but only touch at an edge.
 /// Same-domain detection must require interior overlap (not just edge contact).
 #[test]
