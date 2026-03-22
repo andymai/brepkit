@@ -66,7 +66,7 @@ pub fn boolean(
         use brepkit_algo::classifier::try_build_analytic_classifier;
         let ca = try_build_analytic_classifier(topo, a);
         let cb = try_build_analytic_classifier(topo, b);
-        let sample_aabb_center = |topo: &Topology, solid: SolidId| -> Option<Point3> {
+        let sample_aabb = |topo: &Topology, solid: SolidId| -> Option<(Point3, Point3)> {
             let s = topo.solid(solid).ok()?;
             let sh = topo.shell(s.outer_shell()).ok()?;
             let mut min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
@@ -81,37 +81,66 @@ pub fn boolean(
                     max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
                 }
             }
-            Some(Point3::new(
+            Some((min, max))
+        };
+        let aabb_center = |min: &Point3, max: &Point3| -> Point3 {
+            Point3::new(
                 (min.x() + max.x()) * 0.5,
                 (min.y() + max.y()) * 0.5,
                 (min.z() + max.z()) * 0.5,
-            ))
+            )
         };
+        let aabb_a = sample_aabb(topo, a);
+        let aabb_b = sample_aabb(topo, b);
+        let center_a = aabb_a.map(|(min, max)| aabb_center(&min, &max));
+        let center_b = aabb_b.map(|(min, max)| aabb_center(&min, &max));
         // B⊂A requires: B's center is inside A AND A's center is outside B
         // (if A's center is also inside B, the solids overlap rather than one
         // containing the other).
         let b_center_in_a = ca
             .as_ref()
-            .zip(sample_aabb_center(topo, b))
+            .zip(center_b)
             .and_then(|(c, p)| c.classify(p, tol))
             == Some(brepkit_algo::FaceClass::Inside);
         let a_center_in_b = cb
             .as_ref()
-            .zip(sample_aabb_center(topo, a))
+            .zip(center_a)
             .and_then(|(c, p)| c.classify(p, tol))
             == Some(brepkit_algo::FaceClass::Inside);
         let a_center_outside_b = cb
             .as_ref()
-            .zip(sample_aabb_center(topo, a))
+            .zip(center_a)
             .and_then(|(c, p)| c.classify(p, tol))
             == Some(brepkit_algo::FaceClass::Outside);
         let b_center_outside_a = ca
             .as_ref()
-            .zip(sample_aabb_center(topo, b))
+            .zip(center_b)
             .and_then(|(c, p)| c.classify(p, tol))
             == Some(brepkit_algo::FaceClass::Outside);
         let b_in_a = b_center_in_a && a_center_outside_b;
         let a_in_b = a_center_in_b && b_center_outside_a;
+        // Identical-solid shortcut: both centers inside each other AND
+        // bounding boxes match ⇒ A ≡ B geometrically.
+        let aabbs_match = aabb_a
+            .zip(aabb_b)
+            .map(|((a_min, a_max), (b_min, b_max))| {
+                let eps = tol.linear;
+                (a_min.x() - b_min.x()).abs() < eps
+                    && (a_min.y() - b_min.y()).abs() < eps
+                    && (a_min.z() - b_min.z()).abs() < eps
+                    && (a_max.x() - b_max.x()).abs() < eps
+                    && (a_max.y() - b_max.y()).abs() < eps
+                    && (a_max.z() - b_max.z()).abs() < eps
+            })
+            .unwrap_or(false);
+        if b_center_in_a && a_center_in_b && aabbs_match {
+            return match op {
+                BooleanOp::Fuse | BooleanOp::Intersect => Ok(crate::copy::copy_solid(topo, a)?),
+                BooleanOp::Cut => Err(crate::OperationsError::InvalidInput {
+                    reason: "Cut of identical solids produces empty result".into(),
+                }),
+            };
+        }
         // For Cut with containment, defer to GFA (produces shelled solid).
         if (b_in_a || a_in_b) && op != BooleanOp::Cut {
             return match (op, b_in_a, a_in_b) {
