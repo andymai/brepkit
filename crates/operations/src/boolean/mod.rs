@@ -139,18 +139,7 @@ pub fn boolean(
                 .map(|f| f.len())
                 .unwrap_or(0);
             if result_faces > 0 {
-                // Deep-copy the GFA result to isolate from input topology.
-                let result = crate::copy::copy_solid(topo, result)?;
                 let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-                // Sew free boundary edges: the GFA's build_topology_face creates
-                // per-face edges for boundary edges. Sewing merges coincident
-                // free edges to make the shell manifold.
-                let shell_id = topo.solid(result)?.outer_shell();
-                let _ = brepkit_heal::upgrade::shell_sewing::sew_shell(
-                    topo,
-                    shell_id,
-                    tol.linear * 10_000.0, // 1e-3 tolerance for edge sewing
-                );
                 for _ in 0..3 {
                     if crate::heal::unify_faces(topo, result)? == 0 {
                         break;
