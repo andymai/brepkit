@@ -1826,6 +1826,13 @@ pub(super) fn analytic_boolean(
                 state.add_in_part(a, face);
                 state.add_in_part(b, face);
             }
+            // Unknown is only used by the algo crate's builder.
+            (_, FaceClass::Unknown) => {
+                debug_assert!(
+                    false,
+                    "FaceClass::Unknown must never reach boolean assembly"
+                );
+            }
         }
     }
 

@@ -21,7 +21,10 @@ pub mod bop;
 pub mod error;
 pub mod gfa;
 
-pub(crate) mod builder;
-pub(crate) mod classifier;
+mod builder;
+pub mod classifier;
+
+// Re-export the face classification enum used by both algo and operations.
+pub use builder::FaceClass;
 pub(crate) mod ds;
 pub(crate) mod pave_filler;

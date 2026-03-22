@@ -154,7 +154,8 @@ fn ray_face_crossing(
 }
 
 /// Test if a 3D point lies inside a planar face polygon by projecting to 2D.
-fn point_in_face_3d(point: Point3, polygon: &[Point3], normal: &Vec3) -> bool {
+#[must_use]
+pub fn point_in_face_3d(point: Point3, polygon: &[Point3], normal: &Vec3) -> bool {
     if polygon.len() < 3 {
         return false;
     }
@@ -189,6 +190,11 @@ fn dot_normal_point(n: Vec3, p: Point3) -> f64 {
 }
 
 /// Compute the solid-level AABB from boundary vertices.
+///
+/// # Errors
+///
+/// Returns [`AlgoError::ClassificationFailed`] if the solid has no boundary
+/// vertices.
 pub fn compute_solid_bbox(
     topo: &Topology,
     solid: SolidId,
