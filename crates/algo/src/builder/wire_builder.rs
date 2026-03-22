@@ -364,6 +364,7 @@ mod tests {
             start_3d: brepkit_math::vec::Point3::new(start.x(), start.y(), 0.0),
             end_3d: brepkit_math::vec::Point3::new(end.x(), end.y(), 0.0),
             forward: true,
+            source_edge_idx: None,
         }
     }
 

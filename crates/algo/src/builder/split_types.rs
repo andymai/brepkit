@@ -35,6 +35,11 @@ pub struct OrientedPCurveEdge {
     pub end_3d: Point3,
     /// Whether this edge is traversed in its natural direction.
     pub forward: bool,
+    /// Index of the source edge in the face splitter's input edge list.
+    /// Used by `build_topology_face` to share edge entities between
+    /// adjacent sub-face loops (OCCT's TShape-sharing pattern).
+    /// `None` for edges not tracked (e.g., from boundary splitting).
+    pub source_edge_idx: Option<usize>,
 }
 
 /// An intersection curve between two faces, with pcurves on each.
