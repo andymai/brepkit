@@ -141,7 +141,6 @@ fn cut_overlapping_3d() {
 // ── Flush face test ─────────────────────────────────────────────────
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_flush_face_cubes() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -1069,7 +1068,6 @@ fn fuse_adjacent_boxes_with_unify() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn test_boolean_heal_after_boolean_option() {
     // Test that heal_after_boolean option runs without error and produces
     // a valid solid.
@@ -1097,7 +1095,6 @@ fn test_boolean_heal_after_boolean_option() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_adjacent_boxes_3x1_grid() {
     // Three unit cubes in a row: fuse_all should produce a 3×1×1 box.
     let mut topo = Topology::new();
@@ -2257,7 +2254,6 @@ fn euler_characteristic_box_is_two() {
 /// Regression test for #270: with `unify_faces: true` (default), each
 /// boolean step merges coplanar fragments, keeping face count bounded.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn sequential_boolean_face_count_bounded() {
     let mut topo = Topology::new();
 
