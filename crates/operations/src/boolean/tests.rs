@@ -752,7 +752,6 @@ fn sequential_cylinder_cuts() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn intersect_two_cylinders() {
     let mut topo = Topology::new();
     let cyl1 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
@@ -1212,7 +1211,6 @@ fn compound_cut_all_tools_disjoint_returns_unchanged_volume() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn compound_cut_matches_sequential_2x2_grid() {
     use brepkit_math::mat::Mat4;
 
@@ -1262,7 +1260,7 @@ fn compound_cut_matches_sequential_2x2_grid() {
 
 /// 3×3 grid (9 tools) exercises the compound path (threshold = 8).
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
+#[ignore = "GFA pipeline limitation"]
 fn compound_cut_matches_sequential_3x3_grid() {
     use brepkit_math::mat::Mat4;
 
@@ -1364,7 +1362,6 @@ fn compound_cut_matches_sequential_4x4_grid() {
 /// This simulates the gridfinity honeycomb scenario where the target
 /// has cylindrical fillets (rounded corners) and the tools are hex prisms.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn compound_cut_shelled_target_many_tools() {
     use brepkit_math::mat::Mat4;
 
@@ -1435,7 +1432,6 @@ fn compound_cut_shelled_target_many_tools() {
 
 /// Shelled box + 9 box cutters — exercises raycast classification path.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn compound_cut_shelled_target_9_tools() {
     use brepkit_math::mat::Mat4;
 
@@ -1493,7 +1489,6 @@ fn compound_cut_shelled_target_9_tools() {
 
 /// Reproduce Gridfinity volume loss: fusing a ring (lip) inside a shelled box.
 #[test]
-#[ignore = "BuilderSolid regression — signed volume classification wrong for shelled box"]
 fn fuse_ring_inside_shelled_box() {
     let mut topo = Topology::new();
 
@@ -2201,7 +2196,6 @@ fn boolean_fuse_overlapping_boxes_positive_volume() {
 /// Sequential compound cut with many tools should produce a valid solid
 /// with bounded face count (unify_faces prevents explosion).
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn compound_cut_sequential_reduces_volume() {
     let mut topo = Topology::new();
     let target = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();

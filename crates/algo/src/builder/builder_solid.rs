@@ -51,13 +51,12 @@ pub fn build_solid(topo: &mut Topology, selected: &[SelectedFace]) -> Result<Sol
         }
     }
 
-    // Phase 1: Remove faces with free edges (iterative)
-    // DISABLED: with vertex-pair adjacency (not edge-identity), faces from
-    // different input solids that share vertex pairs will appear disconnected.
-    // The flood-fill in Phase 2 handles this correctly by grouping faces into
-    // connected shells. Re-enable when CommonBlocks ensure all shared edges
-    // use the same EdgeId.
-    // let _avoided = perform_shapes_to_avoid(topo, &mut face_ids)?;
+    // Step 0b: Merge duplicate edges across selected faces.
+    // Faces from different input solids may have separate edge entities for the
+    // same geometric boundary. Merge them by quantized endpoint position so that
+    // the BuilderSolid's connectivity flood-fill sees shared edges.
+    // This is operation-safe: only operates on BOP-selected faces.
+    merge_duplicate_edges(topo, &mut face_ids)?;
 
     if face_ids.is_empty() {
         return Err(AlgoError::AssemblyFailed(
@@ -493,6 +492,178 @@ fn assemble(
     );
 
     Ok(solid_id)
+}
+
+// ── Edge Merging ─────────────────────────────────────────────────────
+
+/// Quantized 3D position key for edge endpoint matching.
+type QPos = (i64, i64, i64);
+
+/// Quantized position pair (canonical order: min first).
+type QPosEdge = (QPos, QPos);
+
+/// Quantize a 3D point to integer coordinates at tolerance resolution.
+fn quantize_point(p: Point3, tol: f64) -> QPos {
+    let scale = 1.0 / tol;
+    (
+        (p.x() * scale).round() as i64,
+        (p.y() * scale).round() as i64,
+        (p.z() * scale).round() as i64,
+    )
+}
+
+/// Merge duplicate edges across selected faces by quantized endpoint position.
+///
+/// For each group of edges with the same quantized start/end positions,
+/// picks one canonical edge and rebuilds the other faces' wires to reference it.
+/// Uses snapshot-then-allocate to satisfy the borrow checker.
+#[allow(clippy::too_many_lines)]
+/// Edge data for duplicate detection.
+struct EdgeEntry {
+    edge_id: brepkit_topology::edge::EdgeId,
+    face_idx: usize,
+    qpair: QPosEdge,
+}
+
+fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result<(), AlgoError> {
+    use brepkit_topology::edge::EdgeId;
+
+    let tol = 1e-7; // linear tolerance
+
+    let mut entries: Vec<EdgeEntry> = Vec::new();
+
+    for (fi, &fid) in face_ids.iter().enumerate() {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let sp = topo.vertex(edge.start())?.point();
+                let ep = topo.vertex(edge.end())?.point();
+                let qs = quantize_point(sp, tol);
+                let qe = quantize_point(ep, tol);
+                let qpair = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                entries.push(EdgeEntry {
+                    edge_id: oe.edge(),
+                    face_idx: fi,
+                    qpair,
+                });
+            }
+        }
+    }
+
+    // Step 2: Group edges by quantized position pair.
+    // Find groups where multiple DIFFERENT EdgeIds share the same qpair.
+    let mut groups: HashMap<QPosEdge, Vec<EdgeId>> = HashMap::new();
+    for entry in &entries {
+        groups.entry(entry.qpair).or_default().push(entry.edge_id);
+    }
+
+    // Build edge replacement map: duplicate EdgeId → canonical EdgeId
+    let mut replacements: HashMap<EdgeId, EdgeId> = HashMap::new();
+    for edge_ids in groups.values() {
+        // Deduplicate edge IDs (same edge may appear multiple times from different faces)
+        let mut unique: Vec<EdgeId> = edge_ids.clone();
+        unique.sort_by_key(|e| e.index());
+        unique.dedup();
+
+        if unique.len() < 2 {
+            continue; // Only one unique edge — no merge needed
+        }
+
+        // Pick the first (lowest index) as canonical
+        let canonical = unique[0];
+        for &dup in &unique[1..] {
+            replacements.insert(dup, canonical);
+        }
+    }
+
+    if replacements.is_empty() {
+        return Ok(());
+    }
+
+    let merge_count = replacements.len();
+
+    // Step 3: Rebuild faces that have replaced edges.
+    // Snapshot face data, then create new faces.
+    let faces_to_rebuild: HashSet<usize> = entries
+        .iter()
+        .filter(|e| replacements.contains_key(&e.edge_id))
+        .map(|e| e.face_idx)
+        .collect();
+
+    for &fi in &faces_to_rebuild {
+        let fid = face_ids[fi];
+
+        // Snapshot
+        let (surface, is_reversed, outer_oes, inner_oes_list) = {
+            let face = topo.face(fid)?;
+            let surface = face.surface().clone();
+            let is_reversed = face.is_reversed();
+
+            let outer_wire = topo.wire(face.outer_wire())?;
+            let outer_oes: Vec<(EdgeId, bool)> = outer_wire
+                .edges()
+                .iter()
+                .map(|oe| (oe.edge(), oe.is_forward()))
+                .collect();
+
+            let inner_wids = face.inner_wires().to_vec();
+            let mut inner_oes_list = Vec::new();
+            for &iw in &inner_wids {
+                let w = topo.wire(iw)?;
+                inner_oes_list.push(
+                    w.edges()
+                        .iter()
+                        .map(|oe| (oe.edge(), oe.is_forward()))
+                        .collect::<Vec<_>>(),
+                );
+            }
+
+            (surface, is_reversed, outer_oes, inner_oes_list)
+        };
+
+        // Rebuild outer wire with replaced edges
+        let new_outer_oes: Vec<_> = outer_oes
+            .iter()
+            .map(|(eid, fwd)| {
+                let new_eid = replacements.get(eid).copied().unwrap_or(*eid);
+                brepkit_topology::wire::OrientedEdge::new(new_eid, *fwd)
+            })
+            .collect();
+        let Ok(new_outer) = brepkit_topology::wire::Wire::new(new_outer_oes, true) else {
+            continue;
+        };
+        let new_outer_id = topo.add_wire(new_outer);
+
+        // Rebuild inner wires
+        let mut new_inner_ids = Vec::new();
+        for inner_oes in &inner_oes_list {
+            let new_oes: Vec<_> = inner_oes
+                .iter()
+                .map(|(eid, fwd)| {
+                    let new_eid = replacements.get(eid).copied().unwrap_or(*eid);
+                    brepkit_topology::wire::OrientedEdge::new(new_eid, *fwd)
+                })
+                .collect();
+            if let Ok(w) = brepkit_topology::wire::Wire::new(new_oes, true) {
+                new_inner_ids.push(topo.add_wire(w));
+            }
+        }
+
+        let mut new_face = Face::new(new_outer_id, new_inner_ids, surface);
+        if is_reversed {
+            new_face.set_reversed(true);
+        }
+        face_ids[fi] = topo.add_face(new_face);
+    }
+
+    log::debug!(
+        "merge_duplicate_edges: merged {merge_count} duplicate edges across {} faces",
+        faces_to_rebuild.len()
+    );
+
+    Ok(())
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

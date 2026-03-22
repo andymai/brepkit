@@ -2574,7 +2574,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "miter joint geometry assembly needs debugging"]
     fn sweep_miter_u_shaped_path() {
         // U-shaped path: 3 segments with 2 kinks.
         let path = NurbsCurve::new(
