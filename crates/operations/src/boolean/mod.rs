@@ -112,16 +112,11 @@ pub fn boolean(
             == Some(brepkit_algo::FaceClass::Outside);
         let b_in_a = b_center_in_a && a_center_outside_b;
         let a_in_b = a_center_in_b && b_center_outside_a;
-        if b_in_a || a_in_b {
+        // For Cut with containment, defer to GFA (produces shelled solid).
+        if (b_in_a || a_in_b) && op != BooleanOp::Cut {
             return match (op, b_in_a, a_in_b) {
                 (BooleanOp::Fuse, true, _) => Ok(crate::copy::copy_solid(topo, a)?),
                 (BooleanOp::Fuse, _, true) => Ok(crate::copy::copy_solid(topo, b)?),
-                (BooleanOp::Cut, true, _) => Err(crate::OperationsError::InvalidInput {
-                    reason: "boolean Cut: B is inside A — result would have a void".into(),
-                }),
-                (BooleanOp::Cut, _, true) => Err(crate::OperationsError::InvalidInput {
-                    reason: "boolean Cut: A is inside B — result is empty".into(),
-                }),
                 (BooleanOp::Intersect, true, _) => Ok(crate::copy::copy_solid(topo, b)?),
                 (BooleanOp::Intersect, _, true) => Ok(crate::copy::copy_solid(topo, a)?),
                 _ => Err(crate::OperationsError::InvalidInput {
