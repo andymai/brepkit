@@ -146,18 +146,15 @@ fn fill_ef_in(arena: &mut GfaArena) {
         })
         .collect();
 
-    for (edge_id, face_id, is_coplanar) in ef_data {
+    for (edge_id, face_id, _is_coplanar) in ef_data {
         if let Some(pb_ids) = arena.edge_pave_blocks.get(&edge_id).cloned() {
             let leaves = arena.collect_leaf_pave_blocks(&pb_ids);
             let fi = arena.face_info_mut(face_id);
             for leaf_id in leaves {
-                if is_coplanar {
-                    // Coplanar edge ON face → section edge (triggers face splitting)
-                    fi.pave_blocks_sc.insert(leaf_id);
-                } else {
-                    // Standard crossing → interior edge
-                    fi.pave_blocks_in.insert(leaf_id);
-                }
+                // All EF edges go to pave_blocks_in. The face splitter
+                // now handles IN edges as section edges for splitting
+                // (following OCCT's pattern).
+                fi.pave_blocks_in.insert(leaf_id);
             }
         }
     }

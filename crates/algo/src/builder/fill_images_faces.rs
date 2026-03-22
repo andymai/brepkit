@@ -46,11 +46,14 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     for (&face_id, &rank) in face_ranks {
         let fi = arena.face_info(face_id);
         let has_sections = fi.is_some_and(|fi| !fi.pave_blocks_sc.is_empty());
+        let has_in_edges = fi.is_some_and(|fi| !fi.pave_blocks_in.is_empty());
 
-        log::debug!("fill_images_faces: face {face_id:?} has_sections={has_sections}");
+        log::debug!(
+            "fill_images_faces: face {face_id:?} has_sections={has_sections} has_in_edges={has_in_edges}"
+        );
 
-        if !has_sections {
-            // No sections: face passes through unchanged
+        if !has_sections && !has_in_edges {
+            // No sections or IN edges: face passes through unchanged
             sub_faces.push(SubFace {
                 face_id,
                 classification: FaceClass::Unknown,
@@ -60,8 +63,15 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             continue;
         }
 
-        // Build SectionEdge entries from pave block data
-        let sections = build_section_edges(topo, arena, face_id, &section_map, tol.linear);
+        // Build SectionEdge entries from pave block data.
+        // Include both SC (section curve) and IN (interior/coplanar) edges
+        // as section edges for the face splitter, following OCCT's pattern
+        // where IN edges from coplanar faces are used to split faces.
+        let mut sections = build_section_edges(topo, arena, face_id, &section_map, tol.linear);
+        if has_in_edges {
+            let in_sections = build_in_edge_sections(topo, arena, face_id, tol.linear);
+            sections.extend(in_sections);
+        }
 
         log::debug!(
             "fill_images_faces: face {face_id:?} got {} section edges",
@@ -220,6 +230,111 @@ fn build_section_edges(
             // Try the actual direction; fall back to unit X if degenerate.
             // Line2D::new can only fail if direction length < 1e-15,
             // which can't happen for Vec2::new(1.0, 0.0).
+            #[allow(clippy::expect_used)]
+            let line = Line2D::new(s2, direction)
+                .or_else(|_| Line2D::new(s2, Vec2::new(1.0, 0.0)))
+                .expect("unit direction (1,0) is always valid");
+            Curve2D::Line(line)
+        };
+
+        let pcurve = make_pcurve(start_uv, end_uv);
+
+        sections.push(SectionEdge {
+            curve_3d: edge.curve().clone(),
+            pcurve_a: pcurve.clone(),
+            pcurve_b: pcurve,
+            start,
+            end,
+            start_uv_a: start_uv.map(|(u, v)| Point2::new(u, v)),
+            end_uv_a: end_uv.map(|(u, v)| Point2::new(u, v)),
+            start_uv_b: start_uv.map(|(u, v)| Point2::new(u, v)),
+            end_uv_b: end_uv.map(|(u, v)| Point2::new(u, v)),
+            target_face: None,
+        });
+    }
+
+    sections
+}
+
+/// Build section edges from IN pave blocks (edges from opposing solid
+/// that lie on this face). Follows OCCT's pattern where coplanar edges
+/// are passed to the face splitter as internal edges.
+fn build_in_edge_sections(
+    topo: &Topology,
+    arena: &GfaArena,
+    face_id: FaceId,
+    tol: f64,
+) -> Vec<SectionEdge> {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2};
+
+    let fi = match arena.face_info(face_id) {
+        Some(fi) => fi,
+        None => return Vec::new(),
+    };
+
+    let face = match topo.face(face_id) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut sections = Vec::new();
+    log::debug!(
+        "build_in_edge_sections: face {face_id:?} has {} IN pave blocks",
+        fi.pave_blocks_in.len()
+    );
+
+    for &pb_id in &fi.pave_blocks_in {
+        let pb = match arena.pave_blocks.get(pb_id) {
+            Some(pb) => pb,
+            None => continue,
+        };
+
+        // Use the original edge (not split_edge, which may not exist for IN edges)
+        let edge_id = pb.split_edge.unwrap_or(pb.original_edge);
+        let edge = match topo.edge(edge_id) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let start = match topo.vertex(edge.start()) {
+            Ok(v) => v.point(),
+            Err(_) => continue,
+        };
+        let end = match topo.vertex(edge.end()) {
+            Ok(v) => v.point(),
+            Err(_) => continue,
+        };
+
+        // Skip degenerate edges
+        if (start - end).length() < tol {
+            continue;
+        }
+
+        // Clip to face boundary for Line edges
+        let (start, end) = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            match clip_line_to_face_boundary(topo, face_id, start, end, tol) {
+                Some(pair) => pair,
+                None => continue,
+            }
+        } else {
+            (start, end)
+        };
+
+        // Project to UV
+        let start_uv = face.surface().project_point(start);
+        let end_uv = face.surface().project_point(end);
+
+        let make_pcurve = |s: Option<(f64, f64)>, e: Option<(f64, f64)>| -> Curve2D {
+            let s2 = s.map_or(Point2::new(0.0, 0.0), |(u, v)| Point2::new(u, v));
+            let e2 = e.map_or(Point2::new(1.0, 0.0), |(u, v)| Point2::new(u, v));
+            let dir = e2 - s2;
+            let len = dir.length();
+            let direction = if len > 1e-12 {
+                Vec2::new(dir.x() / len, dir.y() / len)
+            } else {
+                Vec2::new(1.0, 0.0)
+            };
             #[allow(clippy::expect_used)]
             let line = Line2D::new(s2, direction)
                 .or_else(|_| Line2D::new(s2, Vec2::new(1.0, 0.0)))
