@@ -68,13 +68,17 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // as section edges for the face splitter, following OCCT's pattern
         // where IN edges from coplanar faces are used to split faces.
         let mut sections = build_section_edges(topo, arena, face_id, &section_map, tol.linear);
-        if has_in_edges {
+        // Only add IN section edges if there are NO FF section edges.
+        // When FF sections exist, they already contain the boundary intersection
+        // lines from the opposing solid's faces. Adding IN sections (which represent
+        // the same geometry from the coplanar edge perspective) creates duplicate
+        // edges that confuse the wire builder's angular traversal.
+        if sections.is_empty() && has_in_edges {
             let in_sections = build_in_edge_sections(topo, arena, face_id, tol.linear);
             sections.extend(in_sections);
         }
-
         log::debug!(
-            "fill_images_faces: face {face_id:?} got {} section edges",
+            "fill_images_faces: face {face_id:?} got {} sections",
             sections.len()
         );
 
@@ -108,7 +112,6 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         );
 
         if split_results.is_empty() {
-            log::warn!("fill_images_faces: split_face_2d returned empty for face {face_id:?}");
             sub_faces.push(SubFace {
                 face_id,
                 classification: FaceClass::Unknown,
@@ -211,6 +214,17 @@ fn build_section_edges(
         } else {
             (raw_start, raw_end)
         };
+
+        // Skip section edges that lie on the face boundary. These come from
+        // FF intersections between coplanar face pairs (e.g., A's z=0 face
+        // intersecting B's y=0 face produces a line at z=0 on y=0, which is
+        // A's boundary edge). Such edges confuse the wire builder by creating
+        // duplicates of boundary edges.
+        if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line)
+            && edge_lies_on_face_boundary(topo, face_id, start, end, tol)
+        {
+            continue;
+        }
 
         // Project start/end to UV on this face
         let start_uv = face.surface().project_point(start);
