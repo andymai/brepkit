@@ -207,7 +207,6 @@ fn anti_commutativity_identity() {
 // -- Self-boolean identities ----------------------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn identical_solids_fuse_preserves_volume() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -225,7 +224,6 @@ fn identical_solids_fuse_preserves_volume() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn identical_solids_intersect_preserves_volume() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);

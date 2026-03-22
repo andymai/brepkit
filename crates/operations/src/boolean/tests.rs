@@ -751,7 +751,6 @@ fn sequential_cylinder_cuts() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn intersect_two_cylinders() {
     let mut topo = Topology::new();
     let cyl1 = crate::primitives::make_cylinder(&mut topo, 5.0, 20.0).unwrap();
@@ -1309,7 +1308,6 @@ fn compound_cut_matches_sequential_3x3_grid() {
 
 /// 4×4 grid (16 tools) — larger compound cut test.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn compound_cut_matches_sequential_4x4_grid() {
     use brepkit_math::mat::Mat4;
 
@@ -2197,7 +2195,6 @@ fn boolean_fuse_overlapping_boxes_positive_volume() {
 /// Sequential compound cut with many tools should produce a valid solid
 /// with bounded face count (unify_faces prevents explosion).
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn compound_cut_sequential_reduces_volume() {
     let mut topo = Topology::new();
     let target = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();

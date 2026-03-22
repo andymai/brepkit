@@ -58,7 +58,6 @@ fn box_at(topo: &mut Topology, x: f64, y: f64, z: f64, sx: f64, sy: f64, sz: f64
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn coplanar_fuse_shared_face() {
     // Two unit cubes sharing a face: [0,1]^3 and [1,2]×[0,1]^2.
     let mut topo = Topology::new();
@@ -74,7 +73,6 @@ fn coplanar_fuse_shared_face() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn coplanar_cut_shared_face() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -96,7 +94,6 @@ fn coplanar_intersect_shared_face() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn coplanar_offset_shared_face_y() {
     // Cubes sharing a face in Y direction.
     let mut topo = Topology::new();
@@ -108,7 +105,6 @@ fn coplanar_offset_shared_face_y() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn coplanar_offset_shared_face_z() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -172,7 +168,6 @@ fn near_miss_disjoint_fuse() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn near_miss_barely_overlapping() {
     // Two cubes overlapping by a tiny amount (1e-5).
     let mut topo = Topology::new();
@@ -566,7 +561,6 @@ fn cut_asymmetric_boxes() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn self_fuse() {
     // Fusing a solid with a copy of itself.
     let mut topo = Topology::new();
@@ -579,7 +573,6 @@ fn self_fuse() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn self_intersect() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -629,7 +622,6 @@ fn options_coarse_deflection() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn edge_aligned_overlap_x() {
     // Two boxes sharing an edge along X.
     let mut topo = Topology::new();
@@ -832,7 +824,6 @@ fn fuse_two_cylinders() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn cut_cylinder_from_cylinder() {
     let mut topo = Topology::new();
     let a = make_cylinder(&mut topo, 2.0, 3.0).unwrap();
