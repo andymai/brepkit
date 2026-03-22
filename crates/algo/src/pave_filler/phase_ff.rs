@@ -319,8 +319,13 @@ fn plane_plane_intersection(
     let dir_len = dir.length();
 
     if dir_len < 1e-12 {
-        // Planes are parallel or coplanar -- no line intersection.
-        // Coplanar case is handled separately by the builder.
+        // Planes are parallel (no intersection) or coplanar.
+        // For coplanar planes, compute boundary intersection edges:
+        // edges of face A's boundary that cross face B's boundary.
+        // Coplanar detection: check if planes are coincident
+        let _dist = (da - db * na.dot(nb)).abs();
+        // Coplanar — no surface-surface intersection curve.
+        // Boundary crossings are handled by the EF phase.
         return Ok(Vec::new());
     }
 

@@ -112,7 +112,32 @@ fn check_edge_face_pairs(
 
             let crossings = match surface {
                 FaceSurface::Plane { normal, d } => {
-                    find_edge_plane_crossings(&curve, start_pos, end_pos, t0, t1, *normal, *d, tol)
+                    let mut c = find_edge_plane_crossings(
+                        &curve, start_pos, end_pos, t0, t1, *normal, *d, tol,
+                    );
+                    // If the edge lies ON the plane (coplanar), find where the
+                    // edge crosses the face's boundary polygon. These are the
+                    // points where the edge enters/exits the face interior.
+                    if c.is_empty() {
+                        let dist_start = start_pos.x() * normal.x()
+                            + start_pos.y() * normal.y()
+                            + start_pos.z() * normal.z()
+                            - d;
+                        let dist_end = end_pos.x() * normal.x()
+                            + end_pos.y() * normal.y()
+                            + end_pos.z() * normal.z()
+                            - d;
+                        if dist_start.abs() < tol.linear * 10.0
+                            && dist_end.abs() < tol.linear * 10.0
+                        {
+                            // Edge is coplanar with the face. Find boundary
+                            // crossing points.
+                            c = find_coplanar_edge_boundary_crossings(
+                                topo, fid, &curve, start_pos, end_pos, t0, t1, *normal, tol,
+                            );
+                        }
+                    }
+                    c
                 }
                 _ => find_edge_surface_crossings(&curve, start_pos, end_pos, t0, t1, surface, tol),
             };
@@ -421,6 +446,118 @@ fn refine_crossing(
     let t = f64::midpoint(lo, hi);
     let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
     (t, pt)
+}
+
+/// Find where a coplanar edge crosses a face's boundary polygon.
+///
+/// When an edge lies on a plane face's surface (distance ≈ 0), this
+/// function projects both to 2D and finds where the edge line intersects
+/// the face's boundary polygon edges. Returns the 3D crossing points
+/// with their parameters on the edge.
+#[allow(clippy::too_many_arguments)]
+fn find_coplanar_edge_boundary_crossings(
+    topo: &Topology,
+    face_id: FaceId,
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    t0: f64,
+    t1: f64,
+    normal: Vec3,
+    tol: Tolerance,
+) -> Vec<(f64, Point3)> {
+    use brepkit_math::vec::Point2;
+
+    // Build 2D frame from plane normal
+    let ref_axis = if normal.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u_axis = ref_axis.cross(normal);
+    let u_len = u_axis.length();
+    if u_len < 1e-12 {
+        return Vec::new();
+    }
+    let u_axis = u_axis * (1.0 / u_len);
+    let v_axis = normal.cross(u_axis);
+
+    let project = |p: Point3| -> Point2 {
+        Point2::new(
+            p.x() * u_axis.x() + p.y() * u_axis.y() + p.z() * u_axis.z(),
+            p.x() * v_axis.x() + p.y() * v_axis.y() + p.z() * v_axis.z(),
+        )
+    };
+
+    // Get face boundary polygon in 2D
+    let face = match topo.face(face_id) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+    let wire = match topo.wire(face.outer_wire()) {
+        Ok(w) => w,
+        Err(_) => return Vec::new(),
+    };
+    let mut boundary_2d = Vec::new();
+    for oe in wire.edges() {
+        let e = match topo.edge(oe.edge()) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let p = match topo.vertex(oe.oriented_start(e)) {
+            Ok(v) => v.point(),
+            Err(_) => continue,
+        };
+        boundary_2d.push(project(p));
+    }
+    if boundary_2d.len() < 3 {
+        return Vec::new();
+    }
+
+    // Project edge endpoints to 2D
+    let e0_2d = project(start_pos);
+    let e1_2d = project(end_pos);
+    let edge_dx = e1_2d.x() - e0_2d.x();
+    let edge_dy = e1_2d.y() - e0_2d.y();
+
+    let mut crossings = Vec::new();
+    let n = boundary_2d.len();
+
+    for i in 0..n {
+        let b0 = &boundary_2d[i];
+        let b1 = &boundary_2d[(i + 1) % n];
+
+        let bnd_dx = b1.x() - b0.x();
+        let bnd_dy = b1.y() - b0.y();
+
+        let det = edge_dx * bnd_dy - edge_dy * bnd_dx;
+        if det.abs() < 1e-15 {
+            continue; // Parallel
+        }
+
+        let dx = b0.x() - e0_2d.x();
+        let dy = b0.y() - e0_2d.y();
+        let s = (dx * bnd_dy - dy * bnd_dx) / det; // Parameter on edge [0,1]
+        let u = (dx * edge_dy - dy * edge_dx) / det; // Parameter on boundary edge [0,1]
+
+        // Strictly interior crossings (avoid endpoint coincidence)
+        let eps = tol.linear * 10.0;
+        if s > eps && s < 1.0 - eps && u > -eps && u < 1.0 + eps {
+            // Convert s from [0,1] parameterization to [t0,t1]
+            let t = s.mul_add(t1 - t0, t0);
+            let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+
+            // Dedup
+            let is_dup = crossings
+                .iter()
+                .any(|&(ct, _): &(f64, Point3)| (t - ct).abs() < tol.linear);
+            if !is_dup {
+                crossings.push((t, pt));
+            }
+        }
+    }
+
+    crossings
 }
 
 #[cfg(test)]
