@@ -26,7 +26,7 @@ use crate::ds::{GfaArena, Rank};
 pub fn detect_same_domain<S: BuildHasher>(
     topo: &Topology,
     _arena: &GfaArena,
-    sub_faces: &mut [SubFace],
+    sub_faces: &mut Vec<SubFace>,
     _face_ranks: &HashMap<FaceId, Rank, S>,
     tol: Tolerance,
 ) {
@@ -97,6 +97,25 @@ pub fn detect_same_domain<S: BuildHasher>(
     }
 
     log::debug!("detect_same_domain: {same_domain_count} same-domain pairs found");
+
+    // Deduplicate same-domain faces: for each coplanar pair, keep only the
+    // face from Rank::A and mark the Rank::B face for removal. This prevents
+    // non-manifold results from duplicate coplanar faces in the BOP output.
+    //
+    // This implements OCCT's "representative selection" pattern from
+    // BOPAlgo_Builder_2.cxx::FillSameDomainFaces — we pick A's face as
+    // representative and remove B's face entirely from the sub-face list.
+    if same_domain_count > 0 {
+        // Remove B's CoplanarSame faces — these are true duplicates of A's
+        // faces (same surface, same normal). B's CoplanarOpposite faces must
+        // be KEPT: the Cut operation needs them (reversed, they form the cut
+        // boundary).
+        let before = sub_faces.len();
+        sub_faces
+            .retain(|sf| !(sf.rank == Rank::B && sf.classification == FaceClass::CoplanarSame));
+        let removed = before - sub_faces.len();
+        log::debug!("detect_same_domain: removed {removed} duplicate B CoplanarSame faces");
+    }
 }
 
 /// Check if two face bounding boxes overlap (with tolerance expansion).

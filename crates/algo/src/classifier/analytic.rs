@@ -110,7 +110,7 @@ impl AnalyticClassifier {
                 } else if dist_sq > (radius + tol.linear) * (radius + tol.linear) {
                     Some(FaceClass::Outside)
                 } else {
-                    Some(FaceClass::On)
+                    None
                 }
             }
             Self::Cylinder {
@@ -138,7 +138,7 @@ impl AnalyticClassifier {
                 } else if radial_dist_sq > (radius + tol.linear) * (radius + tol.linear) {
                     Some(FaceClass::Outside)
                 } else {
-                    Some(FaceClass::On)
+                    None
                 }
             }
             Self::Cone {
@@ -174,7 +174,7 @@ impl AnalyticClassifier {
                 } else if radial_dist_sq > (expected_r + tol.linear) * (expected_r + tol.linear) {
                     Some(FaceClass::Outside)
                 } else {
-                    Some(FaceClass::On)
+                    None
                 }
             }
             Self::Box { min, max } => {
@@ -196,7 +196,7 @@ impl AnalyticClassifier {
                 {
                     Some(FaceClass::Outside)
                 } else {
-                    Some(FaceClass::On)
+                    None
                 }
             }
             Self::ConvexPolyhedron { planes } => {
@@ -212,7 +212,7 @@ impl AnalyticClassifier {
                 } else if max_signed_dist > tl {
                     Some(FaceClass::Outside)
                 } else {
-                    Some(FaceClass::On)
+                    None
                 }
             }
             Self::ConvexAnalytic {
@@ -232,12 +232,12 @@ impl AnalyticClassifier {
                             Some(FaceClass::Inside) => Some(FaceClass::Outside),
                             Some(FaceClass::Outside) => Some(FaceClass::Inside),
                             // Inner boundary → on the boundary of the composite
-                            Some(FaceClass::On) => Some(FaceClass::On),
+                            None => None,
                             _ => None,
                         }
                     }
                     // Outer boundary → on the boundary of the composite
-                    Some(FaceClass::On) => Some(FaceClass::On),
+                    None => None,
                     _ => None,
                 }
             }

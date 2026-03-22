@@ -157,7 +157,7 @@ pub fn boolean(
                 }
             }
             log::warn!(
-                "GFA result failed validation in {:.1}ms, falling back to mesh boolean",
+                "GFA result failed validation in {:.1}ms (faces={result_faces}), falling back to mesh boolean",
                 timer_elapsed_ms(gfa_start)
             );
         }
