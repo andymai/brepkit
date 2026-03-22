@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.29.0](https://github.com/andymai/brepkit/compare/v2.28.0...v2.29.0) (2026-03-22)
+
+
+### Features
+
+* **algo:** post-BOP edge merge + un-ignore 7 passing tests ([#389](https://github.com/andymai/brepkit/issues/389)) ([0716fac](https://github.com/andymai/brepkit/commit/0716facc843036a4ba9abfaebb845139237a814d))
+
 ## [2.28.0](https://github.com/andymai/brepkit/compare/v2.27.0...v2.28.0) (2026-03-22)
 
 
