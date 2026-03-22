@@ -17,4 +17,7 @@ pub use curve::IntersectionCurveDS;
 pub use face_info::FaceInfo;
 pub use interference::Interference;
 pub use pave::{Pave, PaveBlock, PaveBlockId};
+// CommonBlock infrastructure — used by ForceInterfEE + MakeSplitEdges (used by ForceInterfEE + MakeSplitEdges)
+#[allow(unused_imports)]
+pub use pave::{CommonBlock, CommonBlockId};
 pub use shape_index::Rank;

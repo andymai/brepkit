@@ -1,18 +1,26 @@
 //! Assemble selected faces into shells and solids.
+//!
+//! Delegates to [`builder_solid::build_solid`] for OCCT-style 4-phase
+//! shell assembly with edge connectivity, dihedral angle selection,
+//! and Growth/Hole classification.
 
 use brepkit_topology::Topology;
-use brepkit_topology::face::Face;
-use brepkit_topology::shell::Shell;
-use brepkit_topology::solid::{Solid, SolidId};
+use brepkit_topology::solid::SolidId;
 
 use crate::bop::SelectedFace;
 use crate::error::AlgoError;
 
 /// Assemble selected faces into a solid.
 ///
-/// Takes the faces selected by the BOP and builds shell -> solid.
-/// Faces from solid B in a Cut operation are reversed (normals flipped).
-/// For now, creates a single shell from all selected faces.
+/// Delegates to [`builder_solid::build_solid`], which implements an
+/// OCCT-style BuilderSolid assembly:
+/// 1. Build shells via edge-connectivity flood-fill (with dihedral
+///    angle selection at non-manifold edges)
+/// 2. Classify shells as Growth/Hole via signed volume
+/// 3. Assemble into Solid with inner shells
+///
+/// Note: Phase 1 (free-edge removal) is currently disabled pending
+/// full edge-identity sharing via CommonBlocks.
 ///
 /// # Errors
 ///
@@ -22,41 +30,5 @@ pub fn assemble_solid(
     topo: &mut Topology,
     selected: &[SelectedFace],
 ) -> Result<SolidId, AlgoError> {
-    if selected.is_empty() {
-        return Err(AlgoError::AssemblyFailed("no faces selected".into()));
-    }
-
-    let mut result_faces = Vec::with_capacity(selected.len());
-
-    for sf in selected {
-        if sf.reversed {
-            // Create a reversed copy of the face
-            let face = topo.face(sf.face_id)?;
-            let surface = face.surface().clone();
-            let outer_wire = face.outer_wire();
-            let inner_wires = face.inner_wires().to_vec();
-
-            let reversed_face = Face::new_reversed(outer_wire, inner_wires, surface);
-            let reversed_id = topo.add_face(reversed_face);
-            result_faces.push(reversed_id);
-        } else {
-            result_faces.push(sf.face_id);
-        }
-    }
-
-    // Build shell from all faces
-    let shell = Shell::new(result_faces)
-        .map_err(|e| AlgoError::AssemblyFailed(format!("shell creation failed: {e}")))?;
-    let shell_id = topo.add_shell(shell);
-
-    // Build solid with single outer shell, no inner shells (voids)
-    let solid = Solid::new(shell_id, vec![]);
-    let solid_id = topo.add_solid(solid);
-
-    log::debug!(
-        "assemble_solid: created solid {solid_id:?} with {} faces",
-        selected.len(),
-    );
-
-    Ok(solid_id)
+    super::builder_solid::build_solid(topo, selected)
 }

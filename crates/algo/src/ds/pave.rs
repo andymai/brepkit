@@ -1,7 +1,8 @@
-//! Pave and `PaveBlock` — the core GFA edge-splitting types.
+//! Pave, `PaveBlock`, and `CommonBlock` — the core GFA edge-splitting types.
 
 use brepkit_topology::arena::Id;
 use brepkit_topology::edge::EdgeId;
+use brepkit_topology::face::FaceId;
 use brepkit_topology::vertex::VertexId;
 
 /// A point on an edge, identified by its vertex and curve parameter.
@@ -70,4 +71,29 @@ impl PaveBlock {
     pub fn parameter_range(&self) -> (f64, f64) {
         (self.start.parameter, self.end.parameter)
     }
+}
+
+/// Typed handle for a [`CommonBlock`] in the GFA arena.
+pub type CommonBlockId = Id<CommonBlock>;
+
+/// A group of geometrically coincident [`PaveBlock`]s that must share
+/// a single split edge in the output topology.
+///
+/// Created by the post-split EE overlap detection phase (`ForceInterfEE`).
+/// Used by `MakeSplitEdges` to ensure one edge entity per group, and by
+/// the Builder to share edges across faces from different input solids.
+#[derive(Debug, Clone)]
+pub struct CommonBlock {
+    /// PaveBlocks representing the same geometric edge segment.
+    /// First entry is the "representative" (canonical).
+    pub pave_blocks: Vec<PaveBlockId>,
+    /// Faces this common block spans (for EF: edge lies on face boundary).
+    #[allow(dead_code)] // Populated by future Phase EF enhancement
+    pub faces: Vec<FaceId>,
+    /// The single split edge created for this group.
+    /// Set by `MakeSplitEdges`; `None` until then.
+    pub split_edge: Option<EdgeId>,
+    /// Tolerance covering deviation across all grouped pave blocks.
+    #[allow(dead_code)] // Stored for future tolerance-aware edge creation
+    pub tolerance: f64,
 }

@@ -14,6 +14,7 @@
 //! [`GfaArena`]: crate::ds::GfaArena
 
 pub mod assemble;
+pub mod builder_solid;
 pub mod classify_2d;
 pub mod face_class;
 pub mod face_splitter;
