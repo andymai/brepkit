@@ -73,8 +73,6 @@ pub fn detect_same_domain<S: BuildHasher>(
             }
 
             if let Some(same_dir) = surfaces_same_domain(surf_i, surf_j, tol) {
-                // Verify actual area overlap — faces that only share an edge
-                // (e.g., touching boxes) must NOT be classified as same-domain.
                 if !faces_have_interior_overlap(
                     topo,
                     sub_faces[i].face_id,
