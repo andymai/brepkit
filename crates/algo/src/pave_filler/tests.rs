@@ -380,6 +380,44 @@ fn force_interf_ee_disjoint_boxes_no_common_blocks() {
     assert_eq!(cb_count, 0, "disjoint boxes should have 0 CommonBlocks");
 }
 
+/// CB-aware MakeSplitEdges: all PaveBlocks in a CommonBlock share one edge.
+#[test]
+fn make_split_edges_common_block_shares_edge() {
+    use brepkit_math::tolerance::Tolerance;
+
+    let mut topo = Topology::default();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [1.0, 0.0, 0.0], [2.0, 1.0, 1.0]);
+
+    let tol = Tolerance::default();
+    let mut arena = GfaArena::new();
+
+    // Run full PaveFiller (includes ForceInterfEE + MakeSplitEdges)
+    crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
+
+    // Check that CommonBlock members share the same split_edge
+    for (_, cb) in arena.common_blocks.iter() {
+        if cb.pave_blocks.len() < 2 {
+            continue;
+        }
+        let edges: Vec<_> = cb
+            .pave_blocks
+            .iter()
+            .filter_map(|&pb_id| arena.pave_blocks.get(pb_id)?.split_edge)
+            .collect();
+
+        // All edges in the CB should be the same
+        if let Some(&first) = edges.first() {
+            for &edge in &edges[1..] {
+                assert_eq!(
+                    first, edge,
+                    "all PaveBlocks in a CommonBlock should share the same split edge"
+                );
+            }
+        }
+    }
+}
+
 /// Touching-face cut: faces share a plane but only touch at an edge.
 /// Same-domain detection must require interior overlap (not just edge contact).
 #[test]
