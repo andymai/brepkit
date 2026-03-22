@@ -362,7 +362,31 @@ fn clip_line_to_face_boundary(
     let clipped_start = line_start + line_dir * t0;
     let clipped_end = line_start + line_dir * t1;
 
+    // Discard section edges that lie entirely ON a single face boundary edge.
+    // This catches the case where the FF intersection of an adjacent coplanar
+    // face produces a section line that coincides with one boundary edge.
+    // Only discard if BOTH endpoints lie on the SAME boundary segment.
+    for (seg_start, seg_end) in &boundary_segments {
+        let start_dist = point_to_segment_dist_3d(clipped_start, *seg_start, *seg_end);
+        let end_dist = point_to_segment_dist_3d(clipped_end, *seg_start, *seg_end);
+        if start_dist < tol && end_dist < tol {
+            return None;
+        }
+    }
+
     Some((clipped_start, clipped_end))
+}
+
+/// Distance from a 3D point to a line segment.
+fn point_to_segment_dist_3d(pt: Point3, a: Point3, b: Point3) -> f64 {
+    let ab = b - a;
+    let len_sq = ab.dot(ab);
+    if len_sq < 1e-30 {
+        return (pt - a).length();
+    }
+    let t = ((pt - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    let proj = a + ab * t;
+    (pt - proj).length()
 }
 
 /// Build `SurfaceInfo` for a face (periodicity flags).

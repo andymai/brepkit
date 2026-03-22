@@ -477,6 +477,24 @@ fn builder_solid_angle_with_ref_basic() {
     let _ = get_face_off; // ensure public
 }
 
+/// GFA with manifold-input boxes should produce 10 faces for adjacent fuse.
+#[test]
+fn gfa_fuse_manifold_boxes_10_faces() {
+    let mut topo = Topology::default();
+    let a = brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = brepkit_topology::test_utils::make_unit_cube_manifold_at(&mut topo, 1.0, 0.0, 0.0);
+
+    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Fuse, a, b)
+        .expect("manifold box fuse");
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    assert_eq!(
+        faces.len(),
+        10,
+        "adjacent manifold box fuse: got {}",
+        faces.len()
+    );
+}
+
 /// Touching-face cut: faces share a plane but only touch at an edge.
 /// Same-domain detection must require interior overlap (not just edge contact).
 #[test]
