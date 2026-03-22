@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.28.0](https://github.com/andymai/brepkit/compare/v2.27.0...v2.28.0) (2026-03-22)
+
+
+### Features
+
+* **algo:** BuilderSolid + CommonBlock — OCCT-style shell assembly ([#387](https://github.com/andymai/brepkit/issues/387)) ([ef5c985](https://github.com/andymai/brepkit/commit/ef5c985ec526049175fd7ed1c757cdcea4050d59))
+
 ## [2.27.0](https://github.com/andymai/brepkit/compare/v2.26.0...v2.27.0) (2026-03-22)
 
 
