@@ -128,26 +128,31 @@ fn check_edge_face_pairs(
                         if dist_start.abs() < tol.linear * 10.0
                             && dist_end.abs() < tol.linear * 10.0
                         {
-                            // Edge lies ON the face. Check if it's inside the face
-                            // boundary (not just touching it from outside).
-                            // Test: is the midpoint inside the face polygon?
-                            let mid = Point3::new(
-                                (start_pos.x() + end_pos.x()) * 0.5,
-                                (start_pos.y() + end_pos.y()) * 0.5,
-                                (start_pos.z() + end_pos.z()) * 0.5,
-                            );
-                            if point_inside_face_boundary(topo, fid, mid, *normal) {
-                                // The entire edge is a coplanar section edge.
-                                // Add paves at both endpoints (they're on the boundary).
-                                let mut results = Vec::new();
-                                // Only add pave at interior parameter values
-                                // (endpoints at t0/t1 are already boundary vertices).
-                                // Add a midpoint pave to register the edge in the arena.
+                            // Edge lies ON the face. Check if ANY part is inside
+                            // the face boundary. Sample at 1/4, 1/2, 3/4 to catch
+                            // edges that only partially overlap the face.
+                            let sample_fracs = [0.25, 0.5, 0.75];
+                            let any_inside = sample_fracs.iter().any(|&frac| {
+                                let pt = Point3::new(
+                                    start_pos.x().mul_add(1.0 - frac, end_pos.x() * frac),
+                                    start_pos.y().mul_add(1.0 - frac, end_pos.y() * frac),
+                                    start_pos.z().mul_add(1.0 - frac, end_pos.z() * frac),
+                                );
+                                point_inside_face_boundary(topo, fid, pt, *normal)
+                            });
+                            if any_inside {
+                                // Edge has a portion inside the face. Add a midpoint
+                                // pave to register the edge as coplanar.
+                                let mid = Point3::new(
+                                    (start_pos.x() + end_pos.x()) * 0.5,
+                                    (start_pos.y() + end_pos.y()) * 0.5,
+                                    (start_pos.z() + end_pos.z()) * 0.5,
+                                );
                                 let t_mid = (t0 + t1) * 0.5;
-                                results.push((t_mid, mid));
-                                (true, results)
+                                (true, vec![(t_mid, mid)])
                             } else {
-                                // Midpoint outside face → edge is external
+                                // No sample inside face → edge is external or just
+                                // touching. Check for boundary crossings.
                                 let bc = find_coplanar_edge_boundary_crossings(
                                     topo, fid, &curve, start_pos, end_pos, t0, t1, *normal, tol,
                                 );
