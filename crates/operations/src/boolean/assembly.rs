@@ -1548,8 +1548,6 @@ pub(super) fn split_nonmanifold_edges(
 // Shared-boundary fuse fast path
 // ---------------------------------------------------------------------------
 
-/// Try to fuse two all-planar solids that share exactly one coplanar face.
-///
 /// Compute a representative normal and d-value for a face surface.
 #[allow(dead_code)]
 fn analytic_face_normal_d(surface: &FaceSurface, verts: &[Point3]) -> (Vec3, f64) {

@@ -175,7 +175,8 @@ pub fn boolean(
     }
 
     // ── Mesh boolean fallback (no recursion) ─────────────────────────
-    let raw = mesh_boolean_fallback(topo, op, a, b, 0.1, tol, &BooleanOptions::default())?;
+    let opts = BooleanOptions::default();
+    let raw = mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts)?;
     let result = crate::copy::copy_solid(topo, raw)?;
     let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
     for _ in 0..3 {
@@ -188,8 +189,9 @@ pub fn boolean(
 
 /// Perform a boolean operation with custom options.
 ///
-/// Backward-compatible wrapper — options are currently unused; all booleans
-/// route through the GFA pipeline with mesh boolean fallback.
+/// **Deprecated:** Options are currently ignored. All booleans route through
+/// the GFA pipeline with mesh boolean fallback. This wrapper exists for
+/// backward compatibility with callers that pass `BooleanOptions`.
 ///
 /// # Errors
 ///
@@ -206,8 +208,8 @@ pub fn boolean_with_options(
 
 /// Sequential compound cut via GFA.
 ///
-/// Cuts the `target` solid by each tool in order. More efficient than
-/// sequential `boolean(Cut)` calls when the tools are independent.
+/// Cuts the `target` solid by each tool in order using sequential
+/// `boolean(Cut)` calls.
 ///
 /// # Errors
 ///
