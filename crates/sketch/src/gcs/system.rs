@@ -10,7 +10,7 @@ use super::constraint::{
 };
 use super::dof::{self, DofAnalysis};
 use super::entity::{
-    CircleData, CircleId, GenArena, LineData, LineId, ParamRef, PointData, PointId,
+    ArcData, ArcId, CircleData, CircleId, GenArena, LineData, LineId, ParamRef, PointData, PointId,
 };
 use super::solver::{self, SolveResult};
 
@@ -22,7 +22,11 @@ pub struct GcsSystem {
     points: GenArena<PointData>,
     lines: GenArena<LineData>,
     circles: GenArena<CircleData>,
+    arcs: GenArena<ArcData>,
     constraints: GenArena<ConstraintEntry>,
+    /// Internal constraints auto-added by `add_arc` (center–end distance).
+    /// Keyed by `ArcId` so they can be removed with the arc.
+    arc_internal_constraints: HashMap<ArcId, ConstraintId>,
     /// Cached parameter map (rebuilt when dirty).
     param_map: Vec<ParamRef>,
     /// Map from `ParamRef` to index in param_map.
@@ -37,7 +41,9 @@ impl Clone for GcsSystem {
             points: self.points.clone(),
             lines: self.lines.clone(),
             circles: self.circles.clone(),
+            arcs: self.arcs.clone(),
             constraints: self.constraints.clone(),
+            arc_internal_constraints: self.arc_internal_constraints.clone(),
             param_map: self.param_map.clone(),
             param_index: self.param_index.clone(),
             dirty: self.dirty,
@@ -59,7 +65,9 @@ impl GcsSystem {
             points: GenArena::new(),
             lines: GenArena::new(),
             circles: GenArena::new(),
+            arcs: GenArena::new(),
             constraints: GenArena::new(),
+            arc_internal_constraints: HashMap::new(),
             param_map: Vec::new(),
             param_index: HashMap::new(),
             dirty: false,
@@ -102,6 +110,12 @@ impl GcsSystem {
         // Check circles
         for (_, circle) in self.circles.iter() {
             if circle.center == id {
+                return Err(SketchError::EntityInUse);
+            }
+        }
+        // Check arcs
+        for (_, arc) in self.arcs.iter() {
+            if arc.center == id || arc.start == id || arc.end == id {
                 return Err(SketchError::EntityInUse);
             }
         }
@@ -183,6 +197,90 @@ impl GcsSystem {
         self.circles.remove(id).ok_or(SketchError::InvalidHandle)
     }
 
+    /// Add an arc defined by center, start, and end points.
+    ///
+    /// Auto-adds an internal `PointOnArc(end, arc)` constraint so that
+    /// `dist(center, end) == dist(center, start)` is maintained dynamically
+    /// as the start point moves.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SketchError::InvalidHandle` if any point handle is invalid.
+    pub fn add_arc(
+        &mut self,
+        center: PointId,
+        start: PointId,
+        end: PointId,
+    ) -> Result<ArcId, SketchError> {
+        self.check_point(center)?;
+        self.check_point(start)?;
+        self.check_point(end)?;
+
+        let arc_id = self.arcs.insert(ArcData { center, start, end });
+
+        // Internal constraint: end point must lie on the arc's circle
+        // (dynamically tracks dist(center, start) rather than a frozen radius)
+        let cid = self.constraints.insert(ConstraintEntry {
+            constraint: Constraint::PointOnArc(end, arc_id),
+        });
+        self.arc_internal_constraints.insert(arc_id, cid);
+
+        self.dirty = true;
+        Ok(arc_id)
+    }
+
+    /// Get an arc by handle.
+    #[must_use]
+    pub fn arc(&self, id: ArcId) -> Option<&ArcData> {
+        self.arcs.get(id)
+    }
+
+    /// Get a mutable reference to an arc.
+    pub fn arc_mut(&mut self, id: ArcId) -> Option<&mut ArcData> {
+        self.arcs.get_mut(id)
+    }
+
+    /// Remove an arc. Fails if referenced by any user constraint.
+    ///
+    /// Also removes the internal distance constraint that was auto-added
+    /// by [`add_arc`](Self::add_arc).
+    ///
+    /// # Errors
+    ///
+    /// Returns `SketchError::EntityInUse` if the arc is referenced by a constraint.
+    /// Returns `SketchError::InvalidHandle` if the handle is stale or invalid.
+    pub fn remove_arc(&mut self, id: ArcId) -> Result<ArcData, SketchError> {
+        // Check no user constraints reference this arc
+        for (cid, entry) in self.constraints.iter() {
+            // Skip the arc's own internal constraint
+            if self.arc_internal_constraints.get(&id) == Some(&cid) {
+                continue;
+            }
+            if constraint_references_arc(&entry.constraint, id) {
+                return Err(SketchError::EntityInUse);
+            }
+        }
+
+        // Remove internal constraint
+        if let Some(cid) = self.arc_internal_constraints.remove(&id) {
+            self.constraints.remove(cid);
+        }
+
+        self.dirty = true;
+        self.arcs.remove(id).ok_or(SketchError::InvalidHandle)
+    }
+
+    /// Number of arcs.
+    #[must_use]
+    pub fn arc_count(&self) -> usize {
+        self.arcs.len()
+    }
+
+    /// Iterate over all arcs.
+    pub fn arcs(&self) -> impl Iterator<Item = (ArcId, &ArcData)> {
+        self.arcs.iter()
+    }
+
     // ── Constraint CRUD ─────────────────────────────────────────────
 
     /// Add a constraint. Validates that all referenced entities exist.
@@ -217,7 +315,7 @@ impl GcsSystem {
         self.constraints.get(id).map(|e| &e.constraint)
     }
 
-    /// Number of constraints.
+    /// Number of constraints (includes internal arc constraints).
     #[must_use]
     pub fn constraint_count(&self) -> usize {
         self.constraints.len()
@@ -472,6 +570,11 @@ impl GcsSystem {
                 .iter()
                 .map(|(id, d)| (id, (d.center, d.radius)))
                 .collect(),
+            arcs: self
+                .arcs
+                .iter()
+                .map(|(id, d)| (id, (d.center, d.start, d.end)))
+                .collect(),
         }
     }
 
@@ -498,6 +601,43 @@ impl GcsSystem {
                 self.check_line(*l1)?;
                 self.check_line(*l2)?;
             }
+            Constraint::PointOnCircle(pt, circ) => {
+                self.check_point(*pt)?;
+                self.check_circle(*circ)?;
+            }
+            Constraint::PointOnArc(pt, arc) => {
+                self.check_point(*pt)?;
+                self.check_arc(*arc)?;
+            }
+            Constraint::TangentLineArc(line, arc, shared) => {
+                self.check_line(*line)?;
+                self.check_arc(*arc)?;
+                self.check_point(*shared)?;
+            }
+            Constraint::TangentArcArc(arc1, arc2, shared) => {
+                self.check_arc(*arc1)?;
+                self.check_arc(*arc2)?;
+                self.check_point(*shared)?;
+            }
+            Constraint::EqualRadiusArcArc(arc1, arc2) => {
+                self.check_arc(*arc1)?;
+                self.check_arc(*arc2)?;
+            }
+            Constraint::EqualRadiusArcCircle(arc, circ) => {
+                self.check_arc(*arc)?;
+                self.check_circle(*circ)?;
+            }
+            Constraint::ArcLength(arc, _) => {
+                self.check_arc(*arc)?;
+            }
+            Constraint::ConcentricArcArc(arc1, arc2) => {
+                self.check_arc(*arc1)?;
+                self.check_arc(*arc2)?;
+            }
+            Constraint::ConcentricArcCircle(arc, circ) => {
+                self.check_arc(*arc)?;
+                self.check_circle(*circ)?;
+            }
         }
         Ok(())
     }
@@ -512,6 +652,22 @@ impl GcsSystem {
 
     fn check_line(&self, id: LineId) -> Result<(), SketchError> {
         if self.lines.contains(id) {
+            Ok(())
+        } else {
+            Err(SketchError::InvalidHandle)
+        }
+    }
+
+    fn check_circle(&self, id: CircleId) -> Result<(), SketchError> {
+        if self.circles.contains(id) {
+            Ok(())
+        } else {
+            Err(SketchError::InvalidHandle)
+        }
+    }
+
+    fn check_arc(&self, id: ArcId) -> Result<(), SketchError> {
+        if self.arcs.contains(id) {
             Ok(())
         } else {
             Err(SketchError::InvalidHandle)
@@ -553,10 +709,17 @@ fn build_snapshot_from_params(
         })
         .collect();
 
+    let arcs = sys
+        .arcs
+        .iter()
+        .map(|(id, d)| (id, (d.center, d.start, d.end)))
+        .collect();
+
     EntitySnapshot {
         points,
         lines,
         circles,
+        arcs,
     }
 }
 
@@ -564,13 +727,23 @@ fn build_snapshot_from_params(
 fn constraint_references_point(c: &Constraint, id: PointId) -> bool {
     match c {
         Constraint::Coincident(p1, p2) | Constraint::Distance(p1, p2, _) => *p1 == id || *p2 == id,
-        Constraint::PointLineDistance(pt, _, _) => *pt == id,
+        Constraint::PointLineDistance(pt, _, _)
+        | Constraint::PointOnCircle(pt, _)
+        | Constraint::PointOnArc(pt, _) => *pt == id,
         Constraint::FixX(p, _) | Constraint::FixY(p, _) => *p == id,
+        Constraint::TangentLineArc(_, _, shared) | Constraint::TangentArcArc(_, _, shared) => {
+            *shared == id
+        }
         Constraint::Horizontal(_)
         | Constraint::Vertical(_)
         | Constraint::Angle(_, _, _)
         | Constraint::Perpendicular(_, _)
-        | Constraint::Parallel(_, _) => false,
+        | Constraint::Parallel(_, _)
+        | Constraint::EqualRadiusArcArc(_, _)
+        | Constraint::EqualRadiusArcCircle(_, _)
+        | Constraint::ArcLength(_, _)
+        | Constraint::ConcentricArcArc(_, _)
+        | Constraint::ConcentricArcCircle(_, _) => false,
     }
 }
 
@@ -579,20 +752,32 @@ fn constraint_references_line(c: &Constraint, id: LineId) -> bool {
     match c {
         Constraint::Horizontal(l) | Constraint::Vertical(l) => *l == id,
         Constraint::PointLineDistance(_, l, _) => *l == id,
+        Constraint::TangentLineArc(l, _, _) => *l == id,
         Constraint::Angle(l1, l2, _)
         | Constraint::Perpendicular(l1, l2)
         | Constraint::Parallel(l1, l2) => *l1 == id || *l2 == id,
         Constraint::Coincident(_, _)
         | Constraint::Distance(_, _, _)
         | Constraint::FixX(_, _)
-        | Constraint::FixY(_, _) => false,
+        | Constraint::FixY(_, _)
+        | Constraint::PointOnCircle(_, _)
+        | Constraint::PointOnArc(_, _)
+        | Constraint::TangentArcArc(_, _, _)
+        | Constraint::EqualRadiusArcArc(_, _)
+        | Constraint::EqualRadiusArcCircle(_, _)
+        | Constraint::ArcLength(_, _)
+        | Constraint::ConcentricArcArc(_, _)
+        | Constraint::ConcentricArcCircle(_, _) => false,
     }
 }
 
 /// Check if a constraint references a specific circle.
-fn constraint_references_circle(c: &Constraint, _id: CircleId) -> bool {
-    // PR1 has no circle-specific constraints yet
+fn constraint_references_circle(c: &Constraint, id: CircleId) -> bool {
     match c {
+        Constraint::PointOnCircle(_, circ) => *circ == id,
+        Constraint::EqualRadiusArcCircle(_, circ) | Constraint::ConcentricArcCircle(_, circ) => {
+            *circ == id
+        }
         Constraint::Coincident(_, _)
         | Constraint::Distance(_, _, _)
         | Constraint::PointLineDistance(_, _, _)
@@ -602,7 +787,38 @@ fn constraint_references_circle(c: &Constraint, _id: CircleId) -> bool {
         | Constraint::Vertical(_)
         | Constraint::Angle(_, _, _)
         | Constraint::Perpendicular(_, _)
-        | Constraint::Parallel(_, _) => false,
+        | Constraint::Parallel(_, _)
+        | Constraint::PointOnArc(_, _)
+        | Constraint::TangentLineArc(_, _, _)
+        | Constraint::TangentArcArc(_, _, _)
+        | Constraint::EqualRadiusArcArc(_, _)
+        | Constraint::ArcLength(_, _)
+        | Constraint::ConcentricArcArc(_, _) => false,
+    }
+}
+
+/// Check if a constraint references a specific arc.
+fn constraint_references_arc(c: &Constraint, id: ArcId) -> bool {
+    match c {
+        Constraint::PointOnArc(_, arc) | Constraint::ArcLength(arc, _) => *arc == id,
+        Constraint::TangentLineArc(_, arc, _) => *arc == id,
+        Constraint::TangentArcArc(a1, a2, _)
+        | Constraint::EqualRadiusArcArc(a1, a2)
+        | Constraint::ConcentricArcArc(a1, a2) => *a1 == id || *a2 == id,
+        Constraint::EqualRadiusArcCircle(arc, _) | Constraint::ConcentricArcCircle(arc, _) => {
+            *arc == id
+        }
+        Constraint::Coincident(_, _)
+        | Constraint::Distance(_, _, _)
+        | Constraint::PointLineDistance(_, _, _)
+        | Constraint::FixX(_, _)
+        | Constraint::FixY(_, _)
+        | Constraint::Horizontal(_)
+        | Constraint::Vertical(_)
+        | Constraint::Angle(_, _, _)
+        | Constraint::Perpendicular(_, _)
+        | Constraint::Parallel(_, _)
+        | Constraint::PointOnCircle(_, _) => false,
     }
 }
 
@@ -1042,5 +1258,389 @@ mod tests {
         let result = sys.solve(100, TOL).unwrap();
         assert!(result.converged);
         assert_eq!(result.iterations, 0);
+    }
+
+    #[test]
+    fn add_arc_basic() {
+        let mut sys = GcsSystem::new();
+        let c = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s = sys.add_point(PointData {
+            x: 1.0,
+            y: 0.0,
+            fixed: false,
+        });
+        let e = sys.add_point(PointData {
+            x: 0.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let arc = sys.add_arc(c, s, e).unwrap();
+        assert_eq!(sys.arc_count(), 1);
+        let data = sys.arc(arc).unwrap();
+        assert_eq!(data.center, c);
+        assert_eq!(data.start, s);
+        assert_eq!(data.end, e);
+    }
+
+    #[test]
+    fn remove_arc_cleans_up() {
+        let mut sys = GcsSystem::new();
+        let c = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s = sys.add_point(PointData {
+            x: 1.0,
+            y: 0.0,
+            fixed: false,
+        });
+        let e = sys.add_point(PointData {
+            x: 0.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let arc = sys.add_arc(c, s, e).unwrap();
+        let count_before = sys.constraint_count();
+        assert!(count_before > 0, "internal constraint should exist");
+        sys.remove_arc(arc).unwrap();
+        assert_eq!(sys.arc_count(), 0);
+        assert!(
+            sys.constraint_count() < count_before,
+            "internal constraint should be removed"
+        );
+    }
+
+    #[test]
+    fn point_on_circle_converges() {
+        let mut sys = GcsSystem::new();
+        let center = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let circ = sys.add_circle(center, 2.0).unwrap();
+        let pt = sys.add_point(PointData {
+            x: 3.0,
+            y: 0.0,
+            fixed: false,
+        });
+        sys.add_constraint(Constraint::PointOnCircle(pt, circ))
+            .unwrap();
+        let result = sys.solve(100, 1e-10).unwrap();
+        assert!(result.converged);
+        let p = sys.point(pt).unwrap();
+        let dist = (p.x * p.x + p.y * p.y).sqrt();
+        assert!(
+            (dist - 2.0).abs() < 1e-6,
+            "point should be on circle, dist={dist}"
+        );
+    }
+
+    #[test]
+    fn point_on_arc_converges() {
+        let mut sys = GcsSystem::new();
+        let c = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s = sys.add_point(PointData {
+            x: 2.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let e = sys.add_point(PointData {
+            x: 0.0,
+            y: 2.0,
+            fixed: false,
+        });
+        let arc = sys.add_arc(c, s, e).unwrap();
+        let pt = sys.add_point(PointData {
+            x: 3.0,
+            y: 3.0,
+            fixed: false,
+        });
+        sys.add_constraint(Constraint::PointOnArc(pt, arc)).unwrap();
+        let result = sys.solve(100, 1e-10).unwrap();
+        assert!(result.converged);
+        let p = sys.point(pt).unwrap();
+        let dist = (p.x * p.x + p.y * p.y).sqrt();
+        assert!(
+            (dist - 2.0).abs() < 1e-6,
+            "point should be on arc circle, dist={dist}"
+        );
+    }
+
+    #[test]
+    fn tangent_line_arc_converges() {
+        let mut sys = GcsSystem::new();
+        let p0 = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let p1 = sys.add_point(PointData {
+            x: 2.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let line = sys.add_line(p0, p1).unwrap();
+        let c = sys.add_point(PointData {
+            x: 2.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let s = sys.add_point(PointData {
+            x: 2.0,
+            y: 0.0,
+            fixed: false,
+        });
+        let e = sys.add_point(PointData {
+            x: 3.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let arc = sys.add_arc(c, s, e).unwrap();
+        sys.add_constraint(Constraint::Coincident(p1, s)).unwrap();
+        sys.add_constraint(Constraint::TangentLineArc(line, arc, p1))
+            .unwrap();
+        let result = sys.solve(100, 1e-10).unwrap();
+        assert!(result.converged, "tangent line-arc should converge");
+        let sp = sys.point(s).unwrap();
+        let cp = sys.point(c).unwrap();
+        let radius_dir = (sp.x - cp.x, sp.y - cp.y);
+        let dot = 1.0 * radius_dir.0 + 0.0 * radius_dir.1;
+        assert!(dot.abs() < 1e-6, "line should be tangent to arc, dot={dot}");
+    }
+
+    #[test]
+    fn equal_radius_arc_arc_converges() {
+        let mut sys = GcsSystem::new();
+        let c1 = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s1 = sys.add_point(PointData {
+            x: 2.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let e1 = sys.add_point(PointData {
+            x: 0.0,
+            y: 2.0,
+            fixed: false,
+        });
+        let arc1 = sys.add_arc(c1, s1, e1).unwrap();
+        let c2 = sys.add_point(PointData {
+            x: 5.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s2 = sys.add_point(PointData {
+            x: 8.0,
+            y: 0.0,
+            fixed: false,
+        });
+        let e2 = sys.add_point(PointData {
+            x: 5.0,
+            y: 3.0,
+            fixed: false,
+        });
+        let arc2 = sys.add_arc(c2, s2, e2).unwrap();
+        sys.add_constraint(Constraint::EqualRadiusArcArc(arc1, arc2))
+            .unwrap();
+        let result = sys.solve(100, 1e-10).unwrap();
+        assert!(result.converged);
+        let r1 = {
+            let s = sys.point(s1).unwrap();
+            (s.x * s.x + s.y * s.y).sqrt()
+        };
+        let r2 = {
+            let cp = sys.point(c2).unwrap();
+            let sp = sys.point(s2).unwrap();
+            ((sp.x - cp.x).powi(2) + (sp.y - cp.y).powi(2)).sqrt()
+        };
+        assert!(
+            (r1 - r2).abs() < 1e-6,
+            "radii should be equal: r1={r1}, r2={r2}"
+        );
+    }
+
+    #[test]
+    fn concentric_arc_arc_converges() {
+        let mut sys = GcsSystem::new();
+        let c1 = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s1 = sys.add_point(PointData {
+            x: 1.0,
+            y: 0.0,
+            fixed: false,
+        });
+        let e1 = sys.add_point(PointData {
+            x: 0.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let arc1 = sys.add_arc(c1, s1, e1).unwrap();
+        let c2 = sys.add_point(PointData {
+            x: 0.5,
+            y: 0.5,
+            fixed: false,
+        });
+        let s2 = sys.add_point(PointData {
+            x: 2.5,
+            y: 0.5,
+            fixed: false,
+        });
+        let e2 = sys.add_point(PointData {
+            x: 0.5,
+            y: 2.5,
+            fixed: false,
+        });
+        let arc2 = sys.add_arc(c2, s2, e2).unwrap();
+        sys.add_constraint(Constraint::ConcentricArcArc(arc1, arc2))
+            .unwrap();
+        let result = sys.solve(100, 1e-10).unwrap();
+        assert!(result.converged);
+        let cp1 = sys.point(c1).unwrap();
+        let cp2 = sys.point(c2).unwrap();
+        assert!((cp1.x - cp2.x).abs() < 1e-6 && (cp1.y - cp2.y).abs() < 1e-6);
+    }
+
+    #[test]
+    fn slot_profile_line_arc_tangent() {
+        let mut sys = GcsSystem::new();
+        // 4 corner points for a 4-unit-long, 2-unit-wide slot
+        let p0 = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let p1 = sys.add_point(PointData {
+            x: 4.0,
+            y: 0.0,
+            fixed: false,
+        });
+        let p2 = sys.add_point(PointData {
+            x: 4.0,
+            y: 2.0,
+            fixed: false,
+        });
+        let p3 = sys.add_point(PointData {
+            x: 0.0,
+            y: 2.0,
+            fixed: false,
+        });
+        // Two horizontal lines
+        let bottom_line = sys.add_line(p0, p1).unwrap();
+        let top_line = sys.add_line(p3, p2).unwrap();
+        // Right semicircle: center at (4, 1), connecting p1 to p2
+        let rc = sys.add_point(PointData {
+            x: 4.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let right_arc = sys.add_arc(rc, p1, p2).unwrap();
+        // Left semicircle: center at (0, 1), connecting p3 to p0
+        let lc = sys.add_point(PointData {
+            x: 0.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let left_arc = sys.add_arc(lc, p3, p0).unwrap();
+        // Tangent constraints at all 4 junctions
+        sys.add_constraint(Constraint::TangentLineArc(bottom_line, right_arc, p1))
+            .unwrap();
+        sys.add_constraint(Constraint::TangentLineArc(top_line, right_arc, p2))
+            .unwrap();
+        sys.add_constraint(Constraint::TangentLineArc(top_line, left_arc, p3))
+            .unwrap();
+        sys.add_constraint(Constraint::TangentLineArc(bottom_line, left_arc, p0))
+            .unwrap();
+        // Dimension constraints
+        sys.add_constraint(Constraint::Distance(p0, p1, 4.0))
+            .unwrap();
+        sys.add_constraint(Constraint::Horizontal(bottom_line))
+            .unwrap();
+        sys.add_constraint(Constraint::Parallel(bottom_line, top_line))
+            .unwrap();
+        sys.add_constraint(Constraint::Distance(p0, p3, 2.0))
+            .unwrap();
+
+        let result = sys.solve(200, 1e-8).unwrap();
+        assert!(result.converged, "slot profile should converge: {result:?}");
+    }
+
+    #[test]
+    fn arc_endpoints_equidistant_from_center() {
+        let mut sys = GcsSystem::new();
+        let c = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s = sys.add_point(PointData {
+            x: 1.0,
+            y: 0.0,
+            fixed: true,
+        });
+        // End point starts off-circle — solver should move it onto the circle
+        // (start is fixed, so the dynamic radius is pinned at 1.0)
+        let e = sys.add_point(PointData {
+            x: 0.0,
+            y: 1.5,
+            fixed: false,
+        });
+        let _arc = sys.add_arc(c, s, e).unwrap();
+        let result = sys.solve(100, 1e-10).unwrap();
+        assert!(result.converged);
+        let ep = sys.point(e).unwrap();
+        let dist = (ep.x * ep.x + ep.y * ep.y).sqrt();
+        assert!(
+            (dist - 1.0).abs() < 1e-6,
+            "end should be on unit circle, dist={dist}"
+        );
+
+        // Also verify the dynamic behavior: when start moves, end tracks it.
+        // Create a new system where start is free and moved by a FixX constraint.
+        let mut sys2 = GcsSystem::new();
+        let c2 = sys2.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s2 = sys2.add_point(PointData {
+            x: 1.0,
+            y: 0.0,
+            fixed: false,
+        });
+        let e2 = sys2.add_point(PointData {
+            x: 0.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let _arc2 = sys2.add_arc(c2, s2, e2).unwrap();
+        // Push start out to radius 2
+        sys2.add_constraint(Constraint::Distance(c2, s2, 2.0))
+            .unwrap();
+        let result2 = sys2.solve(100, 1e-10).unwrap();
+        assert!(result2.converged, "dynamic radius test should converge");
+        let sp2 = sys2.point(s2).unwrap();
+        let ep2 = sys2.point(e2).unwrap();
+        let r_start = (sp2.x * sp2.x + sp2.y * sp2.y).sqrt();
+        let r_end = (ep2.x * ep2.x + ep2.y * ep2.y).sqrt();
+        assert!(
+            (r_end - r_start).abs() < 1e-6,
+            "end radius ({r_end}) should track start radius ({r_start})"
+        );
     }
 }

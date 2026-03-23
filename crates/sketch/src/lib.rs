@@ -23,8 +23,8 @@
 mod gcs;
 
 pub use gcs::{
-    CircleData, CircleId, Constraint, ConstraintEntry, ConstraintId, DofAnalysis, GcsSystem,
-    LineData, LineId, PointData, PointId, SolveResult,
+    ArcData, ArcId, CircleData, CircleId, Constraint, ConstraintEntry, ConstraintId, DofAnalysis,
+    GcsSystem, LineData, LineId, PointData, PointId, SolveResult,
 };
 
 /// Errors from the sketch constraint solver.
