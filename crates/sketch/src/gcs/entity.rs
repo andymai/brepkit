@@ -283,6 +283,8 @@ pub type PointId = Handle<PointData>;
 pub type LineId = Handle<LineData>;
 /// A handle to a circle in the GCS.
 pub type CircleId = Handle<CircleData>;
+/// A handle to an arc in the GCS.
+pub type ArcId = Handle<ArcData>;
 
 /// A 2D point in the constraint system.
 #[derive(Debug, Clone, Copy)]
@@ -311,6 +313,20 @@ pub struct CircleData {
     pub center: PointId,
     /// Radius (a solver parameter if not fixed).
     pub radius: f64,
+}
+
+/// An arc defined by a center point and two boundary points.
+///
+/// The radius is implicit: `dist(center, start)`. An internal
+/// constraint enforces `dist(center, start) == dist(center, end)`.
+#[derive(Debug, Clone, Copy)]
+pub struct ArcData {
+    /// Center point of the arc's underlying circle.
+    pub center: PointId,
+    /// Start endpoint on the arc.
+    pub start: PointId,
+    /// End endpoint on the arc.
+    pub end: PointId,
 }
 
 /// A reference to a solver parameter.
