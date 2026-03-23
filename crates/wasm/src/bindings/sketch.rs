@@ -183,6 +183,12 @@ fn resolve_deferred_constraint(
     >,
                               s: &mut brepkit_operations::sketch::GcsSystem|
      -> Result<brepkit_operations::sketch::LineId, JsError> {
+        if p1 >= point_ids.len() || p2 >= point_ids.len() {
+            return Err(WasmError::InvalidInput {
+                reason: "point index out of range in deferred constraint".to_string(),
+            }
+            .into());
+        }
         let key = (p1, p2);
         if let Some(&lid) = cache.get(&key) {
             return Ok(lid);
@@ -367,11 +373,33 @@ impl BrepKernel {
             })?;
 
         // Try legacy constraint first; fall back to deferred (arc-aware) storage
-        if let Ok(constraint) = parse_sketch_constraint(&val) {
-            sk.constraints.push(constraint);
-        } else {
-            // Store as deferred constraint (resolved at solve time when IDs exist)
-            sk.deferred_constraints.push(val);
+        match parse_sketch_constraint(&val) {
+            Ok(constraint) => {
+                sk.constraints.push(constraint);
+            }
+            Err(e) => {
+                // Only defer known arc constraint types — don't silently swallow parse errors
+                let ty = val.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let arc_types: &[&str] = &[
+                    "tangentLineArc",
+                    "tangentArcArc",
+                    "pointOnArc",
+                    "pointOnCircle",
+                    "equalRadiusArcArc",
+                    "equalRadiusArcCircle",
+                    "arcLength",
+                    "concentricArcArc",
+                    "concentricArcCircle",
+                ];
+                if arc_types.contains(&ty) {
+                    sk.deferred_constraints.push(val);
+                } else {
+                    return Err(WasmError::InvalidInput {
+                        reason: format!("failed to parse constraint: {e:?}"),
+                    }
+                    .into());
+                }
+            }
         }
         Ok(())
     }
@@ -418,6 +446,7 @@ impl BrepKernel {
                 "iterations": iterations,
                 "maxResidual": max_residual,
                 "points": pts,
+                "arcs": [],
             })
             .to_string());
         }

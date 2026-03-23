@@ -199,9 +199,9 @@ impl GcsSystem {
 
     /// Add an arc defined by center, start, and end points.
     ///
-    /// Computes the initial radius as the distance from center to start,
-    /// then auto-adds an internal `Distance(center, end, radius)` constraint
-    /// to keep the end point on the same circle.
+    /// Auto-adds an internal `PointOnArc(end, arc)` constraint so that
+    /// `dist(center, end) == dist(center, start)` is maintained dynamically
+    /// as the start point moves.
     ///
     /// # Errors
     ///
@@ -216,18 +216,12 @@ impl GcsSystem {
         self.check_point(start)?;
         self.check_point(end)?;
 
-        // Compute initial radius from center to start
-        let cp = self.points.get(center).ok_or(SketchError::InvalidHandle)?;
-        let sp = self.points.get(start).ok_or(SketchError::InvalidHandle)?;
-        let dx = sp.x - cp.x;
-        let dy = sp.y - cp.y;
-        let radius = (dx * dx + dy * dy).sqrt();
-
         let arc_id = self.arcs.insert(ArcData { center, start, end });
 
-        // Auto-add internal constraint: end point must be at `radius` from center
+        // Internal constraint: end point must lie on the arc's circle
+        // (dynamically tracks dist(center, start) rather than a frozen radius)
         let cid = self.constraints.insert(ConstraintEntry {
-            constraint: Constraint::Distance(center, end, radius),
+            constraint: Constraint::PointOnArc(end, arc_id),
         });
         self.arc_internal_constraints.insert(arc_id, cid);
 
@@ -1597,9 +1591,10 @@ mod tests {
         let s = sys.add_point(PointData {
             x: 1.0,
             y: 0.0,
-            fixed: false,
+            fixed: true,
         });
         // End point starts off-circle — solver should move it onto the circle
+        // (start is fixed, so the dynamic radius is pinned at 1.0)
         let e = sys.add_point(PointData {
             x: 0.0,
             y: 1.5,
@@ -1613,6 +1608,39 @@ mod tests {
         assert!(
             (dist - 1.0).abs() < 1e-6,
             "end should be on unit circle, dist={dist}"
+        );
+
+        // Also verify the dynamic behavior: when start moves, end tracks it.
+        // Create a new system where start is free and moved by a FixX constraint.
+        let mut sys2 = GcsSystem::new();
+        let c2 = sys2.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s2 = sys2.add_point(PointData {
+            x: 1.0,
+            y: 0.0,
+            fixed: false,
+        });
+        let e2 = sys2.add_point(PointData {
+            x: 0.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let _arc2 = sys2.add_arc(c2, s2, e2).unwrap();
+        // Push start out to radius 2
+        sys2.add_constraint(Constraint::Distance(c2, s2, 2.0))
+            .unwrap();
+        let result2 = sys2.solve(100, 1e-10).unwrap();
+        assert!(result2.converged, "dynamic radius test should converge");
+        let sp2 = sys2.point(s2).unwrap();
+        let ep2 = sys2.point(e2).unwrap();
+        let r_start = (sp2.x * sp2.x + sp2.y * sp2.y).sqrt();
+        let r_end = (ep2.x * ep2.x + ep2.y * ep2.y).sqrt();
+        assert!(
+            (r_end - r_start).abs() < 1e-6,
+            "end radius ({r_end}) should track start radius ({r_start})"
         );
     }
 }

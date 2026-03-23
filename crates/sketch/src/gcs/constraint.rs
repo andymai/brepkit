@@ -871,26 +871,16 @@ pub fn eval_jacobian(
             let dtheta_dey = sign_theta * (dot * dsx - cross * dsy) * inv_denom;
             jw.set(row_offset, ParamRef::PointY(end_id), r * dtheta_dey);
 
-            // cx partials: ∂dsx/∂cx = -1, ∂dex/∂cx = -1
-            //   ∂cross/∂cx = -dey - (-dsy) = -dey + dsy = -(dey - dsy)
-            //   Wait: ∂cross/∂cx = ∂/∂cx(dsx*dey - dsy*dex)
-            //     = (-1)*dey - (-1)*dex = -dey + dex ... no
-            //     = ∂dsx/∂cx * dey + dsx * ∂dey/∂cx - ∂dsy/∂cx * dex - dsy * ∂dex/∂cx
-            //     = (-1)*dey + dsx*0 - (-1)*dex - dsy*(-1)
-            //     = -dey + dsy (dex term cancels: ∂dsy/∂cx = 0, not -1)
-            //   ∂dot/∂cx = ∂dsx/∂cx * dex + dsx * ∂dex/∂cx + ∂dsy/∂cx * dey + dsy * ∂dey/∂cx
-            //     = (-1)*dex + dsx*(-1) + (-1)*dey + dsy*0 ... wait
-            //     ∂dsy/∂cy = -1 not ∂dsy/∂cx
-            //   Actually dsx = sx-cx → ∂dsx/∂cx = -1
-            //            dsy = sy-cy → ∂dsy/∂cx = 0
-            //            dex = ex-cx → ∂dex/∂cx = -1
-            //            dey = ey-cy → ∂dey/∂cx = 0
-            //   ∂cross/∂cx = (-1)*dey + dsx*0 - 0*dex - dsy*(-1) = -dey + dsy
-            let dcross_dcx_fixed = -dey + dsy;
-            //   ∂dot/∂cx = (-1)*dex + dsx*(-1) + 0*dey + dsy*0 = -dex - dsx
+            // cx partials:
+            //   Derivatives w.r.t. cx: ∂dsx/∂cx = -1, ∂dsy/∂cx = 0, ∂dex/∂cx = -1, ∂dey/∂cx = 0
+            //   ∂cross/∂cx = ∂dsx/∂cx·dey + dsx·∂dey/∂cx - ∂dsy/∂cx·dex - dsy·∂dex/∂cx
+            //              = (-1)·dey + 0 - 0 - dsy·(-1) = -dey + dsy
+            let dcross_dcx = -dey + dsy;
+            //   ∂dot/∂cx = ∂dsx/∂cx·dex + dsx·∂dex/∂cx + ∂dsy/∂cx·dey + dsy·∂dey/∂cx
+            //            = (-1)·dex + dsx·(-1) + 0 + 0 = -dex - dsx
             let ddot_dcx = -dex - dsx;
             let dr_dcx = -dsx * inv_r; // ∂r/∂cx = -dsx/r
-            let dtheta_dcx = sign_theta * (dot * dcross_dcx_fixed - cross * ddot_dcx) * inv_denom;
+            let dtheta_dcx = sign_theta * (dot * dcross_dcx - cross * ddot_dcx) * inv_denom;
             jw.add(
                 row_offset,
                 ParamRef::PointX(center_id),
@@ -898,15 +888,12 @@ pub fn eval_jacobian(
             );
 
             // cy partials:
-            //   dsx = sx-cx → ∂dsx/∂cy = 0
-            //   dsy = sy-cy → ∂dsy/∂cy = -1
-            //   dex = ex-cx → ∂dex/∂cy = 0
-            //   dey = ey-cy → ∂dey/∂cy = -1
-            //   ∂cross/∂cy = 0*dey + dsx*(-1) - (-1)*dex - dsy*0 = -dsx + dex
+            //   Derivatives w.r.t. cy: ∂dsx/∂cy = 0, ∂dsy/∂cy = -1, ∂dex/∂cy = 0, ∂dey/∂cy = -1
+            //   ∂cross/∂cy = ∂dsx/∂cy·dey + dsx·∂dey/∂cy - ∂dsy/∂cy·dex - dsy·∂dex/∂cy
+            //              = 0 + dsx·(-1) - (-1)·dex - 0 = -dsx + dex
             let dcross_dcy = -dsx + dex;
-            //   ∂dot/∂cy = 0*dex + dsx*0 + (-1)*dey + dsy*(-1) ... wait
-            //     ∂dot/∂cy = ∂dsx/∂cy*dex + dsx*∂dex/∂cy + ∂dsy/∂cy*dey + dsy*∂dey/∂cy
-            //              = 0 + 0 + (-1)*dey + dsy*(-1) = -dey - dsy
+            //   ∂dot/∂cy = ∂dsx/∂cy·dex + dsx·∂dex/∂cy + ∂dsy/∂cy·dey + dsy·∂dey/∂cy
+            //            = 0 + 0 + (-1)·dey + dsy·(-1) = -dey - dsy
             let ddot_dcy = -dey - dsy;
             let dr_dcy = -dsy * inv_r;
             let dtheta_dcy = sign_theta * (dot * dcross_dcy - cross * ddot_dcy) * inv_denom;
