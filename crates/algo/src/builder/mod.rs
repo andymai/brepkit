@@ -177,23 +177,7 @@ impl Builder {
     /// Phase 2: classify each sub-face as inside/outside the opposing solid.
     #[allow(clippy::too_many_lines)]
     fn classify_sub_faces(&mut self) -> Result<(), AlgoError> {
-        // SD faces are handled entirely by the BOP SD selector — skip ray-cast
-        // to avoid non-deterministic classification at coplanar boundaries.
-        let sd_indices: std::collections::HashSet<usize> = self
-            .sd_pairs
-            .iter()
-            .flat_map(|p| [p.idx_a, p.idx_b])
-            .collect();
-
-        for (idx, sf) in self.sub_faces.iter_mut().enumerate() {
-            if sd_indices.contains(&idx) {
-                // Mark as On — the SD selector will handle this face.
-                // On is a safe default: it means "on the boundary" which is
-                // geometrically accurate for coplanar same-domain faces.
-                sf.classification = FaceClass::On;
-                continue;
-            }
-
+        for sf in &mut self.sub_faces {
             // Determine the opposing solid
             let opposing_solid = match sf.rank {
                 Rank::A => self.solid_b,

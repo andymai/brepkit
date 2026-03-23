@@ -113,10 +113,8 @@ fn apply_sd_selection(
         let sf_b = &sub_faces[pair.idx_b];
 
         // Distinguish touching (face on boundary) from overlapping
-        // (face inside opposing solid). Uses the deterministic 2D polygon
-        // containment test from same_domain. The ray-cast classifier is
-        // NOT used here because it's non-deterministic at coplanar
-        // boundaries.
+        // (face inside opposing solid). Uses AABB containment check
+        // from same_domain (deterministic).
         let is_touching = !pair.b_contained_in_a;
 
         if same_ori_needed == pair.same_orientation {
