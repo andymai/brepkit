@@ -76,6 +76,8 @@ pub struct Builder {
     sub_faces: Vec<SubFace>,
     /// Map from face ID to its argument rank.
     face_ranks: HashMap<FaceId, Rank>,
+    /// Same-domain face pairs detected by `same_domain`.
+    sd_pairs: Vec<same_domain::SameDomainPair>,
 }
 
 impl Builder {
@@ -96,6 +98,7 @@ impl Builder {
             tol,
             sub_faces: Vec::new(),
             face_ranks: HashMap::new(),
+            sd_pairs: Vec::new(),
         }
     }
 
@@ -122,7 +125,7 @@ impl Builder {
     /// Returns [`AlgoError`] if face selection produces no faces or
     /// assembly fails.
     pub fn build_result(mut self, op: BooleanOp) -> Result<(Topology, SolidId), AlgoError> {
-        let selected = bop::select_faces(&self.sub_faces, op);
+        let selected = bop::select_faces(&self.sub_faces, op, &self.sd_pairs);
         let solid_id = assemble::assemble_solid(&mut self.topo, &selected)?;
         Ok((self.topo, solid_id))
     }
@@ -161,11 +164,11 @@ impl Builder {
         );
         log::debug!("Builder: {} sub-faces created", self.sub_faces.len());
 
-        // Step 3: same-domain detection
-        same_domain::detect_same_domain(
+        // Step 3: same-domain detection (records pairs, does NOT set FaceClass)
+        self.sd_pairs = same_domain::detect_same_domain(
             &self.topo,
             &self.arena,
-            &mut self.sub_faces,
+            &self.sub_faces,
             &self.face_ranks,
             self.tol,
         );
@@ -175,11 +178,6 @@ impl Builder {
     #[allow(clippy::too_many_lines)]
     fn classify_sub_faces(&mut self) -> Result<(), AlgoError> {
         for sf in &mut self.sub_faces {
-            // Skip already-classified faces (e.g. same-domain)
-            if sf.classification != FaceClass::Unknown {
-                continue;
-            }
-
             // Determine the opposing solid
             let opposing_solid = match sf.rank {
                 Rank::A => self.solid_b,
