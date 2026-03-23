@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.32.0](https://github.com/andymai/brepkit/compare/v2.31.0...v2.32.0) (2026-03-23)
+
+
+### Features
+
+* **sketch:** add arc entity, 9 constraints, tangent support, WASM bindings ([#403](https://github.com/andymai/brepkit/issues/403)) ([4bc2909](https://github.com/andymai/brepkit/commit/4bc2909e39506e1b7c5088dfbb93965607de428a))
+
 ## [2.31.0](https://github.com/andymai/brepkit/compare/v2.30.0...v2.31.0) (2026-03-23)
 
 
