@@ -76,6 +76,8 @@ pub struct Builder {
     sub_faces: Vec<SubFace>,
     /// Map from face ID to its argument rank.
     face_ranks: HashMap<FaceId, Rank>,
+    /// Same-domain face pairs detected by `same_domain`.
+    sd_pairs: Vec<same_domain::SameDomainPair>,
 }
 
 impl Builder {
@@ -96,6 +98,7 @@ impl Builder {
             tol,
             sub_faces: Vec::new(),
             face_ranks: HashMap::new(),
+            sd_pairs: Vec::new(),
         }
     }
 
@@ -122,7 +125,7 @@ impl Builder {
     /// Returns [`AlgoError`] if face selection produces no faces or
     /// assembly fails.
     pub fn build_result(mut self, op: BooleanOp) -> Result<(Topology, SolidId), AlgoError> {
-        let selected = bop::select_faces(&self.sub_faces, op);
+        let selected = bop::select_faces(&self.sub_faces, op, &self.sd_pairs);
         let solid_id = assemble::assemble_solid(&mut self.topo, &selected)?;
         Ok((self.topo, solid_id))
     }
@@ -161,22 +164,40 @@ impl Builder {
         );
         log::debug!("Builder: {} sub-faces created", self.sub_faces.len());
 
-        // Step 3: same-domain detection
-        same_domain::detect_same_domain(
+        // Step 3: same-domain detection (records pairs, does NOT set FaceClass)
+        self.sd_pairs = same_domain::detect_same_domain(
             &self.topo,
             &self.arena,
-            &mut self.sub_faces,
+            &self.sub_faces,
             &self.face_ranks,
             self.tol,
         );
+
+        // Note: SD representative replacement (replacing B's face_id with
+        // A's representative) is deferred to a follow-up. While it produces
+        // correct 2-shell topology for coplanar cuts (d1a2), the AABB
+        // containment check is insufficiently precise for near-tangent
+        // geometries, causing flaky test failures. A stricter SD detection
+        // (edge-set matching) is needed first.
     }
 
     /// Phase 2: classify each sub-face as inside/outside the opposing solid.
     #[allow(clippy::too_many_lines)]
     fn classify_sub_faces(&mut self) -> Result<(), AlgoError> {
-        for sf in &mut self.sub_faces {
-            // Skip already-classified faces (e.g. same-domain)
-            if sf.classification != FaceClass::Unknown {
+        // SD faces are excluded from non-SD BOP selection, so their
+        // classification doesn't affect the result. But the ray-cast
+        // classifier is non-deterministic at coplanar boundaries,
+        // which can produce non-manifold results for near-tangent
+        // geometries. Mark SD faces deterministically to skip ray-cast.
+        let sd_indices: std::collections::HashSet<usize> = self
+            .sd_pairs
+            .iter()
+            .flat_map(|p| [p.idx_a, p.idx_b])
+            .collect();
+
+        for (idx, sf) in self.sub_faces.iter_mut().enumerate() {
+            if sd_indices.contains(&idx) {
+                sf.classification = FaceClass::On;
                 continue;
             }
 

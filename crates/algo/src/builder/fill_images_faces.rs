@@ -201,6 +201,124 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
 }
 
 /// Map from face ID to section pave block IDs (from FF intersection curves).
+/// Rebuild a face expanding boundary edges that have been split into
+/// multiple children. Only expands edges with 2+ split images; single-edge
+/// replacements (1:1 CB mappings) are left for `merge_duplicate_edges`.
+#[allow(clippy::too_many_lines, dead_code)]
+fn rebuild_face_with_edge_images<S: BuildHasher>(
+    topo: &mut Topology,
+    face_id: FaceId,
+    edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
+) -> Option<FaceId> {
+    let (surface, is_reversed, outer_edges, inner_edges_list) = {
+        let face = topo.face(face_id).ok()?;
+        let surface = face.surface().clone();
+        let is_reversed = face.is_reversed();
+        let outer_wire = topo.wire(face.outer_wire()).ok()?;
+        let outer_edges: Vec<(EdgeId, bool)> = outer_wire
+            .edges()
+            .iter()
+            .map(|oe| (oe.edge(), oe.is_forward()))
+            .collect();
+        let inner_wids = face.inner_wires().to_vec();
+        let mut inner_edges_list = Vec::new();
+        for &iw in &inner_wids {
+            if let Ok(w) = topo.wire(iw) {
+                inner_edges_list.push(
+                    w.edges()
+                        .iter()
+                        .map(|oe| (oe.edge(), oe.is_forward()))
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        (surface, is_reversed, outer_edges, inner_edges_list)
+    };
+
+    // Only expand LINE edges with multi-split images. Curved edges
+    // (Circle, Ellipse, NURBS) need special angular-range handling
+    // that this simple expand_edge doesn't support.
+    let has_multi_split = outer_edges
+        .iter()
+        .chain(inner_edges_list.iter().flatten())
+        .any(|(eid, _)| {
+            edge_images.get(eid).is_some_and(|imgs| imgs.len() > 1)
+                && topo
+                    .edge(*eid)
+                    .is_ok_and(|e| matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line))
+        });
+
+    if !has_multi_split {
+        return None;
+    }
+
+    let new_outer_oes: Vec<OrientedEdge> = outer_edges
+        .iter()
+        .flat_map(|&(eid, fwd)| expand_edge(topo, eid, fwd, edge_images))
+        .collect();
+    let new_outer = Wire::new(new_outer_oes, true).ok()?;
+    let new_outer_id = topo.add_wire(new_outer);
+
+    let mut new_inner_ids = Vec::new();
+    for inner_edges in &inner_edges_list {
+        let oes: Vec<OrientedEdge> = inner_edges
+            .iter()
+            .flat_map(|&(eid, fwd)| expand_edge(topo, eid, fwd, edge_images))
+            .collect();
+        if let Ok(w) = Wire::new(oes, true) {
+            new_inner_ids.push(topo.add_wire(w));
+        } else {
+            // Inner wire reconstruction failed — fall back to the
+            // original face to avoid silently dropping holes.
+            log::warn!(
+                "rebuild_face_with_edge_images: inner wire failed for \
+                 face {face_id:?}, keeping original"
+            );
+            return None;
+        }
+    }
+
+    let mut new_face = Face::new(new_outer_id, new_inner_ids, surface);
+    if is_reversed {
+        new_face.set_reversed(true);
+    }
+    let new_fid = topo.add_face(new_face);
+    log::debug!("rebuild_face_with_edge_images: face {face_id:?} → {new_fid:?}");
+    Some(new_fid)
+}
+
+/// Expand a single edge into its multi-split image edges.
+/// Only expands Line edges with 2+ children; keeps everything else as-is.
+#[allow(dead_code)]
+fn expand_edge<S: BuildHasher>(
+    topo: &Topology,
+    eid: EdgeId,
+    fwd: bool,
+    edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
+) -> Vec<OrientedEdge> {
+    let imgs = match edge_images.get(&eid) {
+        Some(imgs) if imgs.len() > 1 => imgs,
+        _ => return vec![OrientedEdge::new(eid, fwd)],
+    };
+    // Only expand Line edges
+    if !topo
+        .edge(eid)
+        .is_ok_and(|e| matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line))
+    {
+        return vec![OrientedEdge::new(eid, fwd)];
+    }
+    if fwd {
+        imgs.iter()
+            .map(|&img| OrientedEdge::new(img, true))
+            .collect()
+    } else {
+        imgs.iter()
+            .rev()
+            .map(|&img| OrientedEdge::new(img, false))
+            .collect()
+    }
+}
+
 fn build_section_map(arena: &GfaArena) -> HashMap<FaceId, Vec<PaveBlockId>> {
     let mut map: HashMap<FaceId, Vec<PaveBlockId>> = HashMap::new();
     for curve in &arena.curves {
@@ -315,7 +433,79 @@ fn build_section_edges(
         });
     }
 
+    // Deduplicate: remove section edges that are subsets of longer
+    // collinear edges. This happens when both the FF phase and the
+    // coplanar phase create section edges on the same line — the FF
+    // edge spans the full face, the coplanar edge spans the inner
+    // region only. Keeping both creates degenerate face splits.
+    dedup_collinear_sections(&mut sections, tol);
+
     sections
+}
+
+/// Remove section edges that are subsets of longer collinear edges.
+fn dedup_collinear_sections(sections: &mut Vec<SectionEdge>, tol: f64) {
+    if sections.len() < 2 {
+        return;
+    }
+
+    let n = sections.len();
+    let mut to_remove = vec![false; n];
+
+    for i in 0..n {
+        if to_remove[i] {
+            continue;
+        }
+        for j in (i + 1)..n {
+            if to_remove[j] {
+                continue;
+            }
+
+            let si = &sections[i];
+            let sj = &sections[j];
+
+            // Check collinearity: direction vectors must be parallel
+            let di = sj.end - sj.start;
+            let dj = si.end - si.start;
+            let cross = di.cross(dj);
+            if cross.length() > tol * 10.0 {
+                continue;
+            }
+
+            // Check if on the same line: distance from si.start to line(sj)
+            let to_sj = si.start - sj.start;
+            let dj_len = dj.length();
+            if dj_len < tol {
+                continue;
+            }
+            let dj_unit = dj * (1.0 / dj_len);
+            let perp = to_sj - dj_unit * to_sj.dot(dj_unit);
+            if perp.length() > tol * 10.0 {
+                continue;
+            }
+
+            // Collinear and on the same line. Remove the shorter one.
+            let len_i = (si.end - si.start).length();
+            let len_j = (sj.end - sj.start).length();
+            if len_i < len_j - tol {
+                to_remove[i] = true;
+            } else if len_j < len_i - tol {
+                to_remove[j] = true;
+            }
+            // If equal length, keep both (they might be distinct edges)
+        }
+    }
+
+    let removed = to_remove.iter().filter(|&&r| r).count();
+    if removed > 0 {
+        let mut idx = 0;
+        sections.retain(|_| {
+            let keep = !to_remove[idx];
+            idx += 1;
+            keep
+        });
+        log::debug!("dedup_collinear_sections: removed {removed} subset edges");
+    }
 }
 
 /// Clip a 3D line segment to a face's boundary polygon.

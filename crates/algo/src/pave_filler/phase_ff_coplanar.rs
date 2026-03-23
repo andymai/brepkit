@@ -338,6 +338,16 @@ fn create_section_edge(
     let pb = PaveBlock::new(edge_id, start_pave, end_pave);
     let pb_id = arena.pave_blocks.alloc(pb);
 
+    // Register in edge_pave_blocks so ForceInterfEE can detect overlaps
+    // between this section PB and boundary-edge PBs with the same
+    // endpoints. This creates CommonBlocks → shared split edges →
+    // manifold shell connectivity between coplanar sub-faces.
+    arena
+        .edge_pave_blocks
+        .entry(edge_id)
+        .or_default()
+        .push(pb_id);
+
     // Create the intersection curve entry
     let bbox = Aabb3 {
         min: Point3::new(

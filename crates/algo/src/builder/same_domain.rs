@@ -1,11 +1,14 @@
-//! Same-domain face detection and merging.
+//! Same-domain face detection.
 //!
 //! When two faces from opposing solids share the same underlying surface
 //! (coplanar planes, coincident cylinders, etc.), they are "same-domain"
-//! faces. These need special handling:
+//! faces. This module detects SD pairs and records them for later use
+//! by the BOP selector.
 //!
-//! - **CoplanarSame**: normals point the same way — kept in fuse/intersect.
-//! - **CoplanarOpposite**: normals point opposite — kept in cut (for B faces).
+//! The SD pair list is used by [`crate::bop::select_faces`] to apply
+//! operation-specific deduplication (fuse keeps one representative,
+//! cut keeps B reversed, etc.) without encoding operation semantics
+//! into the classification pipeline.
 
 use std::collections::HashMap;
 use std::hash::BuildHasher;
@@ -14,24 +17,39 @@ use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
-use super::{FaceClass, SubFace};
+use super::SubFace;
 use crate::ds::{GfaArena, Rank};
 
-/// Detect same-domain face pairs and update their classification.
+/// A detected same-domain face pair.
+#[derive(Debug, Clone)]
+pub struct SameDomainPair {
+    /// Sub-face index from solid A.
+    pub idx_a: usize,
+    /// Sub-face index from solid B.
+    pub idx_b: usize,
+    /// `true` if normals point the same direction, `false` if opposite.
+    pub same_orientation: bool,
+    /// `true` if B's face is fully contained within A's boundary.
+    /// Used by the BOP selector to distinguish overlapping (B inside A)
+    /// from touching (B adjacent to A) configurations.
+    /// Computed via AABB containment (fast, deterministic).
+    pub b_contained_in_a: bool,
+}
+
+/// Detect same-domain face pairs between opposing solids.
 ///
-/// Scans all sub-faces looking for pairs where both faces lie on the
-/// same geometric surface. Updates classification to `CoplanarSame`
-/// or `CoplanarOpposite` based on normal alignment.
+/// Returns a list of SD pairs WITHOUT modifying sub-face classifications.
+/// The BOP selector uses these pairs for operation-specific handling.
 #[allow(clippy::too_many_lines)]
 pub fn detect_same_domain<S: BuildHasher>(
     topo: &Topology,
     _arena: &GfaArena,
-    sub_faces: &mut Vec<SubFace>,
+    sub_faces: &[SubFace],
     _face_ranks: &HashMap<FaceId, Rank, S>,
     tol: Tolerance,
-) {
+) -> Vec<SameDomainPair> {
     let n = sub_faces.len();
-    let mut same_domain_count = 0u32;
+    let mut pairs = Vec::new();
 
     // Collect face surfaces to avoid repeated lookups.
     let surfaces: Vec<Option<&FaceSurface>> = sub_faces
@@ -43,9 +61,12 @@ pub fn detect_same_domain<S: BuildHasher>(
         })
         .collect();
 
+    // Track which sub-faces have already been paired (one SD partner each).
+    let mut paired: Vec<bool> = vec![false; n];
+
     // Check every pair of sub-faces from opposing solids.
     for i in 0..n {
-        if sub_faces[i].classification != FaceClass::Unknown {
+        if paired[i] {
             continue;
         }
         let Some(surf_i) = surfaces[i] else {
@@ -54,7 +75,7 @@ pub fn detect_same_domain<S: BuildHasher>(
         let rank_i = sub_faces[i].rank;
 
         for j in (i + 1)..n {
-            if sub_faces[j].classification != FaceClass::Unknown {
+            if paired[j] {
                 continue;
             }
             // Only compare faces from opposing solids
@@ -73,6 +94,15 @@ pub fn detect_same_domain<S: BuildHasher>(
             }
 
             if let Some(same_dir) = surfaces_same_domain(surf_i, surf_j, tol) {
+                // Require significant AABB overlap to avoid pairing
+                // near-tangent faces with negligible shared area. This
+                // check runs BEFORE the more expensive polygon overlap
+                // test to filter early.
+                if !aabb_overlap_significant(topo, sub_faces[i].face_id, sub_faces[j].face_id, tol)
+                {
+                    continue;
+                }
+
                 if !faces_have_interior_overlap(
                     topo,
                     sub_faces[i].face_id,
@@ -81,120 +111,42 @@ pub fn detect_same_domain<S: BuildHasher>(
                 ) {
                     continue;
                 }
-                if same_dir {
-                    sub_faces[i].classification = FaceClass::CoplanarSame;
-                    sub_faces[j].classification = FaceClass::CoplanarSame;
+
+                // Determine A/B ordering — ensure idx_a is always from Rank::A
+                let (idx_a, idx_b) = if sub_faces[i].rank == Rank::A {
+                    (i, j)
                 } else {
-                    sub_faces[i].classification = FaceClass::CoplanarOpposite;
-                    sub_faces[j].classification = FaceClass::CoplanarOpposite;
-                }
-                same_domain_count += 1;
+                    (j, i)
+                };
+
+                // Deterministic containment check via AABB comparison.
+                // Avoids ray-cast sensitivity at coplanar boundaries.
+                let b_contained = aabb_contained(
+                    topo,
+                    sub_faces[idx_b].face_id,
+                    sub_faces[idx_a].face_id,
+                    tol,
+                );
+
+                pairs.push(SameDomainPair {
+                    idx_a,
+                    idx_b,
+                    same_orientation: same_dir,
+                    b_contained_in_a: b_contained,
+                });
+
+                paired[i] = true;
+                paired[j] = true;
                 break; // Each face can only be same-domain with one opposing face
             }
         }
     }
 
-    log::debug!("detect_same_domain: {same_domain_count} same-domain pairs found");
-
-    // Deduplicate same-domain faces: for each coplanar pair, remove B's
-    // face ONLY if it is fully contained within A's corresponding face.
-    // For partial overlaps (e.g., overlapping boxes offset by 0.5), both
-    // faces must be kept so the face splitter can handle the intersection.
-    //
-    // This is a refinement of OCCT's "representative selection" pattern:
-    // OCCT assumes same-domain faces have identical boundaries (true after
-    // proper face splitting), but our GFA may produce same-domain pairs
-    // with partial overlap when no FF intersection curves were generated
-    // for parallel/coplanar faces.
-    if same_domain_count > 0 {
-        // Build a map from B's CoplanarSame faces to their paired A face.
-        let mut b_to_a: HashMap<usize, FaceId> = HashMap::new();
-        for i in 0..sub_faces.len() {
-            if sub_faces[i].rank != Rank::A
-                || sub_faces[i].classification != FaceClass::CoplanarSame
-            {
-                continue;
-            }
-            let a_fid = sub_faces[i].face_id;
-            // Find the B face paired with this A face (same surface, overlap).
-            for j in 0..sub_faces.len() {
-                if sub_faces[j].rank != Rank::B
-                    || sub_faces[j].classification != FaceClass::CoplanarSame
-                {
-                    continue;
-                }
-                if b_to_a.contains_key(&sub_faces[j].face_id.index()) {
-                    continue;
-                }
-                // Check that these two faces share the same surface.
-                let s_a = topo.face(a_fid).ok().map(|f| f.surface().clone());
-                let s_b = topo
-                    .face(sub_faces[j].face_id)
-                    .ok()
-                    .map(|f| f.surface().clone());
-                if let (Some(sa), Some(sb)) = (s_a, s_b) {
-                    if surfaces_same_domain(&sa, &sb, tol).is_some() {
-                        b_to_a.insert(sub_faces[j].face_id.index(), a_fid);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Only remove B faces that are fully contained within their paired A face.
-        let before = sub_faces.len();
-        sub_faces.retain(|sf| {
-            if sf.rank != Rank::B || sf.classification != FaceClass::CoplanarSame {
-                return true; // Keep non-B and non-CoplanarSame faces
-            }
-            let Some(&a_fid) = b_to_a.get(&sf.face_id.index()) else {
-                return true; // No paired A face found — keep
-            };
-            // Check if B is fully contained within A.
-            if face_fully_contained(topo, sf.face_id, a_fid, tol) {
-                false // Remove — B is a true duplicate of A
-            } else {
-                // Partial overlap — revert classification so BOP treats
-                // this face normally (not as same-domain).
-                true // Keep — partial overlap needs face splitter
-            }
-        });
-        // Revert classification for B faces that were kept (partial overlap).
-        for sf in sub_faces.iter_mut() {
-            if sf.rank == Rank::B
-                && sf.classification == FaceClass::CoplanarSame
-                && b_to_a.contains_key(&sf.face_id.index())
-            {
-                // Check if this B face is still in the list (wasn't removed).
-                // If so, it's a partial overlap — revert to Unknown.
-                let a_fid = b_to_a[&sf.face_id.index()];
-                if !face_fully_contained(topo, sf.face_id, a_fid, tol) {
-                    sf.classification = FaceClass::Unknown;
-                }
-            }
-        }
-        // Also revert A faces whose B counterpart was NOT removed.
-        let removed_b: std::collections::HashSet<usize> = b_to_a
-            .keys()
-            .filter(|&&b_idx| !sub_faces.iter().any(|sf| sf.face_id.index() == b_idx))
-            .copied()
-            .collect();
-        for sf in sub_faces.iter_mut() {
-            if sf.rank == Rank::A && sf.classification == FaceClass::CoplanarSame {
-                // Check if any B face paired with this A was NOT removed.
-                let has_unremoved_b = b_to_a
-                    .iter()
-                    .any(|(b_idx, &a_fid)| a_fid == sf.face_id && !removed_b.contains(b_idx));
-                if has_unremoved_b {
-                    sf.classification = FaceClass::Unknown;
-                }
-            }
-        }
-        let removed = before - sub_faces.len();
-        log::debug!(
-            "detect_same_domain: removed {removed} duplicate B CoplanarSame faces (checked containment)"
-        );
-    }
+    log::debug!(
+        "detect_same_domain: {} same-domain pairs found",
+        pairs.len()
+    );
+    pairs
 }
 
 /// Check if two face bounding boxes overlap (with tolerance expansion).
@@ -223,7 +175,121 @@ fn face_bboxes_overlap(topo: &Topology, a: FaceId, b: FaceId, tol: Tolerance) ->
     ba.expanded(tol.linear).intersects(bb.expanded(tol.linear))
 }
 
+/// Check if two faces have significant AABB overlap area.
+///
+/// Returns `false` if the overlap area is less than 1% of the smaller
+/// face's area. This prevents near-tangent faces (tiny sliver overlap)
+/// from being paired as same-domain.
+fn aabb_overlap_significant(topo: &Topology, a: FaceId, b: FaceId, tol: Tolerance) -> bool {
+    let bbox = |fid: FaceId| -> Option<brepkit_math::aabb::Aabb3> {
+        let face = topo.face(fid).ok()?;
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        let mut points = Vec::new();
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            points.push(topo.vertex(edge.start()).ok()?.point());
+            points.push(topo.vertex(edge.end()).ok()?.point());
+        }
+        brepkit_math::aabb::Aabb3::try_from_points(points)
+    };
+
+    let Some(ba) = bbox(a) else { return true };
+    let Some(bb) = bbox(b) else { return true };
+
+    // Compute overlap extent in each dimension
+    let ox = (ba.max.x().min(bb.max.x()) - ba.min.x().max(bb.min.x())).max(0.0);
+    let oy = (ba.max.y().min(bb.max.y()) - ba.min.y().max(bb.min.y())).max(0.0);
+    let oz = (ba.max.z().min(bb.max.z()) - ba.min.z().max(bb.min.z())).max(0.0);
+
+    // For coplanar faces, one dimension is ~0 (the plane normal direction).
+    // Use the two largest overlap dimensions as the overlap "area".
+    let mut dims = [ox, oy, oz];
+    dims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let overlap_area = dims[0] * dims[1];
+
+    // Compute smaller face's projected area (two largest AABB dimensions)
+    let area_of = |b: &brepkit_math::aabb::Aabb3| {
+        let mut d = [
+            b.max.x() - b.min.x(),
+            b.max.y() - b.min.y(),
+            b.max.z() - b.min.z(),
+        ];
+        d.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        d[0] * d[1]
+    };
+    let smaller_area = area_of(&ba).min(area_of(&bb));
+
+    if smaller_area < tol.linear {
+        return true; // Degenerate face
+    }
+
+    // Require at least 5% overlap relative to the smaller face.
+    // Near-tangent faces (overlap < 0.1% of face area) should not be
+    // paired — their intersection is better handled by the face splitter.
+    overlap_area / smaller_area > 0.05
+}
+
+/// Check if face B's AABB is fully contained within face A's AABB.
+///
+/// This is a fast, deterministic check that avoids polygon sensitivity.
+/// For the touching-vs-overlapping distinction, AABB containment is
+/// sufficient: touching faces have identical AABBs (not contained),
+/// while a small B inside a large A has B's AABB inside A's.
+fn aabb_contained(topo: &Topology, b: FaceId, a: FaceId, tol: Tolerance) -> bool {
+    let bbox = |fid: FaceId| -> Option<brepkit_math::aabb::Aabb3> {
+        let face = topo.face(fid).ok()?;
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        let mut points = Vec::new();
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let sp = topo.vertex(edge.start()).ok()?.point();
+            let ep = topo.vertex(edge.end()).ok()?.point();
+            points.push(sp);
+            points.push(ep);
+            // Sample curved edges
+            if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                for k in 1..8 {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = t0 + (t1 - t0) * (k as f64 / 8.0);
+                    points.push(edge.curve().evaluate_with_endpoints(t, sp, ep));
+                }
+            }
+        }
+        brepkit_math::aabb::Aabb3::try_from_points(points)
+    };
+
+    let Some(bb_a) = bbox(a) else { return false };
+    let Some(bb_b) = bbox(b) else { return false };
+
+    // B is contained if A's AABB fully encloses B's AABB (with tolerance).
+    // For touching faces with identical footprints, A doesn't strictly
+    // contain B (margins are equal), so this returns false → is_touching.
+    let margin = tol.linear * 2.0;
+    let enclosed = bb_a.min.x() - margin <= bb_b.min.x()
+        && bb_a.min.y() - margin <= bb_b.min.y()
+        && bb_a.min.z() - margin <= bb_b.min.z()
+        && bb_a.max.x() + margin >= bb_b.max.x()
+        && bb_a.max.y() + margin >= bb_b.max.y()
+        && bb_a.max.z() + margin >= bb_b.max.z();
+
+    if !enclosed {
+        return false;
+    }
+
+    // B must be STRICTLY smaller than A in at least one dimension
+    let x_smaller = (bb_b.max.x() - bb_b.min.x()) < (bb_a.max.x() - bb_a.min.x()) - margin;
+    let y_smaller = (bb_b.max.y() - bb_b.min.y()) < (bb_a.max.y() - bb_a.min.y()) - margin;
+    let z_smaller = (bb_b.max.z() - bb_b.min.z()) < (bb_a.max.z() - bb_a.min.z()) - margin;
+
+    x_smaller || y_smaller || z_smaller
+}
+
 /// Check whether face B is fully contained within face A.
+///
+/// Currently unused after the SD refactor removed the dedup pass.
+/// Retained for future use by the SD-aware BOP selector.
+#[allow(dead_code)]
 ///
 /// Projects both boundaries to 2D in the shared plane, then checks if
 /// ALL vertices of B are inside (or on the boundary of) A's polygon.
@@ -269,8 +335,12 @@ fn face_fully_contained(topo: &Topology, b: FaceId, a: FaceId, tol: Tolerance) -
     }
 
     // Check that every vertex of B is inside or on the boundary of A.
+    // Use a generous tolerance (10× linear) to handle floating-point
+    // sensitivity at coplanar boundaries. The polygon vertices from
+    // sampled curves (Circle, Ellipse) may have minor deviations.
+    let generous_tol = tol.linear * 10.0;
     for pt in &poly_b {
-        if !point_inside_or_on_polygon(pt, &poly_a, tol.linear) {
+        if !point_inside_or_on_polygon(pt, &poly_a, generous_tol) {
             return false;
         }
     }
@@ -279,6 +349,7 @@ fn face_fully_contained(topo: &Topology, b: FaceId, a: FaceId, tol: Tolerance) -
 }
 
 /// Check if a point is inside or on the boundary of a polygon.
+#[allow(dead_code)]
 fn point_inside_or_on_polygon(
     pt: &brepkit_math::vec::Point2,
     poly: &[brepkit_math::vec::Point2],
@@ -433,11 +504,29 @@ fn face_boundary_projected(
             Ok(e) => e,
             Err(_) => continue,
         };
-        let p = match topo.vertex(oe.oriented_start(edge)) {
+        let sp = match topo.vertex(edge.start()) {
             Ok(v) => v.point(),
             Err(_) => continue,
         };
-        pts.push(project(p));
+        let ep = match topo.vertex(edge.end()) {
+            Ok(v) => v.point(),
+            Err(_) => continue,
+        };
+        pts.push(project(sp));
+
+        // Sample non-linear edges (Circle, Ellipse, NURBS) to get a proper
+        // polygon approximation. Without this, a circular face produces a
+        // single-point "polygon" that breaks containment tests.
+        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let n_samples = 8;
+            for k in 1..n_samples {
+                #[allow(clippy::cast_precision_loss)]
+                let t = t0 + (t1 - t0) * (k as f64 / n_samples as f64);
+                let pt = edge.curve().evaluate_with_endpoints(t, sp, ep);
+                pts.push(project(pt));
+            }
+        }
     }
     pts
 }
