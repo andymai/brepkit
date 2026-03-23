@@ -117,7 +117,6 @@ fn test_kissing_boxes_fuse() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn test_kissing_boxes_cut() {
     // Two unit boxes sharing a face at x=1. Cut A - B should leave A unchanged.
     let mut topo = Topology::new();

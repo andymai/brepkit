@@ -21,8 +21,12 @@ use brepkit_topology::solid::{Solid, SolidId};
 use crate::bop::SelectedFace;
 use crate::error::AlgoError;
 
-/// Edge key for adjacency: canonical `(min, max)` vertex-index pair.
-type VPair = (usize, usize);
+/// Edge key for adjacency: canonical `(min, max)` quantized 3D position pair.
+///
+/// Using quantized positions instead of vertex indices ensures that edges at
+/// the same geometric location are recognized as shared, even when faces from
+/// different input solids have separate vertex entities at the same position.
+type VPair = (QPos, QPos);
 
 /// Build a solid from BOP-selected faces using the 4-phase algorithm.
 ///
@@ -559,8 +563,10 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
         groups.entry(entry.qpair).or_default().push(entry.edge_id);
     }
 
-    // Build edge replacement map: duplicate EdgeId → canonical EdgeId
-    let mut replacements: HashMap<EdgeId, EdgeId> = HashMap::new();
+    // Build edge replacement map: duplicate EdgeId → (canonical EdgeId, needs_flip).
+    // needs_flip is true when the duplicate's vertex order is reversed vs canonical,
+    // requiring the OrientedEdge's forward flag to be flipped during wire rebuilding.
+    let mut replacements: HashMap<EdgeId, (EdgeId, bool)> = HashMap::new();
     for edge_ids in groups.values() {
         // Deduplicate edge IDs (same edge may appear multiple times from different faces)
         let mut unique: Vec<EdgeId> = edge_ids.clone();
@@ -573,8 +579,18 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
 
         // Pick the first (lowest index) as canonical
         let canonical = unique[0];
+        let canon_start = topo.edge(canonical)?.start();
+        let canon_end = topo.edge(canonical)?.end();
+        let canon_qs = quantize_point(topo.vertex(canon_start)?.point(), tol);
+        let canon_qe = quantize_point(topo.vertex(canon_end)?.point(), tol);
+
         for &dup in &unique[1..] {
-            replacements.insert(dup, canonical);
+            let dup_edge = topo.edge(dup)?;
+            let dup_qs = quantize_point(topo.vertex(dup_edge.start())?.point(), tol);
+            let dup_qe = quantize_point(topo.vertex(dup_edge.end())?.point(), tol);
+            // Detect reversed vertex order
+            let needs_flip = dup_qs == canon_qe && dup_qe == canon_qs;
+            replacements.insert(dup, (canonical, needs_flip));
         }
     }
 
@@ -623,12 +639,16 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             (surface, is_reversed, outer_oes, inner_oes_list)
         };
 
-        // Rebuild outer wire with replaced edges
+        // Rebuild outer wire with replaced edges + orientation correction
         let new_outer_oes: Vec<_> = outer_oes
             .iter()
             .map(|(eid, fwd)| {
-                let new_eid = replacements.get(eid).copied().unwrap_or(*eid);
-                brepkit_topology::wire::OrientedEdge::new(new_eid, *fwd)
+                if let Some(&(new_eid, flip)) = replacements.get(eid) {
+                    let new_fwd = if flip { !*fwd } else { *fwd };
+                    brepkit_topology::wire::OrientedEdge::new(new_eid, new_fwd)
+                } else {
+                    brepkit_topology::wire::OrientedEdge::new(*eid, *fwd)
+                }
             })
             .collect();
         let Ok(new_outer) = brepkit_topology::wire::Wire::new(new_outer_oes, true) else {
@@ -642,8 +662,12 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             let new_oes: Vec<_> = inner_oes
                 .iter()
                 .map(|(eid, fwd)| {
-                    let new_eid = replacements.get(eid).copied().unwrap_or(*eid);
-                    brepkit_topology::wire::OrientedEdge::new(new_eid, *fwd)
+                    if let Some(&(new_eid, flip)) = replacements.get(eid) {
+                        let new_fwd = if flip { !*fwd } else { *fwd };
+                        brepkit_topology::wire::OrientedEdge::new(new_eid, new_fwd)
+                    } else {
+                        brepkit_topology::wire::OrientedEdge::new(*eid, *fwd)
+                    }
                 })
                 .collect();
             if let Ok(w) = brepkit_topology::wire::Wire::new(new_oes, true) {
@@ -684,7 +708,10 @@ fn build_edge_face_map(
     Ok(map)
 }
 
-/// Get all edge keys (vertex-pair) for a face's wires.
+/// Tolerance for position quantization (matches system linear tolerance).
+const MERGE_TOL: f64 = 1e-7;
+
+/// Get all edge keys (quantized position-pair) for a face's wires.
 fn face_edge_keys(topo: &Topology, fid: FaceId) -> Result<Vec<VPair>, AlgoError> {
     let face = topo.face(fid)?;
     let mut keys = Vec::new();
@@ -692,15 +719,17 @@ fn face_edge_keys(topo: &Topology, fid: FaceId) -> Result<Vec<VPair>, AlgoError>
         let wire = topo.wire(wid)?;
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let s = edge.start().index();
-            let e = edge.end().index();
-            keys.push(if s <= e { (s, e) } else { (e, s) });
+            let sp = topo.vertex(edge.start())?.point();
+            let ep = topo.vertex(edge.end())?.point();
+            let qs = quantize_point(sp, MERGE_TOL);
+            let qe = quantize_point(ep, MERGE_TOL);
+            keys.push(if qs <= qe { (qs, qe) } else { (qe, qs) });
         }
     }
     Ok(keys)
 }
 
-/// Build vertex-pair → 3D positions map for `get_face_off`.
+/// Build edge position-pair → 3D positions map for `get_face_off`.
 fn build_edge_positions(
     topo: &Topology,
     faces: &[FaceId],
@@ -713,12 +742,12 @@ fn build_edge_positions(
             let wire = topo.wire(wid)?;
             for oe in wire.edges() {
                 let edge = topo.edge(oe.edge())?;
-                let s = edge.start().index();
-                let e = edge.end().index();
-                let key = if s <= e { (s, e) } else { (e, s) };
+                let sp = topo.vertex(edge.start())?.point();
+                let ep = topo.vertex(edge.end())?.point();
+                let qs = quantize_point(sp, MERGE_TOL);
+                let qe = quantize_point(ep, MERGE_TOL);
+                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
                 if let std::collections::hash_map::Entry::Vacant(entry) = map.entry(key) {
-                    let sp = topo.vertex(edge.start())?.point();
-                    let ep = topo.vertex(edge.end())?.point();
                     entry.insert((sp, ep));
                 }
             }
