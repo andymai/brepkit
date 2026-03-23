@@ -35,7 +35,7 @@ jobs:
             --output=mutants-output
       - name: Upload results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutants-report
           path: mutants-output/
