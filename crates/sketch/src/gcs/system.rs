@@ -1523,6 +1523,70 @@ mod tests {
     }
 
     #[test]
+    fn slot_profile_line_arc_tangent() {
+        let mut sys = GcsSystem::new();
+        // 4 corner points for a 4-unit-long, 2-unit-wide slot
+        let p0 = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let p1 = sys.add_point(PointData {
+            x: 4.0,
+            y: 0.0,
+            fixed: false,
+        });
+        let p2 = sys.add_point(PointData {
+            x: 4.0,
+            y: 2.0,
+            fixed: false,
+        });
+        let p3 = sys.add_point(PointData {
+            x: 0.0,
+            y: 2.0,
+            fixed: false,
+        });
+        // Two horizontal lines
+        let bottom_line = sys.add_line(p0, p1).unwrap();
+        let top_line = sys.add_line(p3, p2).unwrap();
+        // Right semicircle: center at (4, 1), connecting p1 to p2
+        let rc = sys.add_point(PointData {
+            x: 4.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let right_arc = sys.add_arc(rc, p1, p2).unwrap();
+        // Left semicircle: center at (0, 1), connecting p3 to p0
+        let lc = sys.add_point(PointData {
+            x: 0.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let left_arc = sys.add_arc(lc, p3, p0).unwrap();
+        // Tangent constraints at all 4 junctions
+        sys.add_constraint(Constraint::TangentLineArc(bottom_line, right_arc, p1))
+            .unwrap();
+        sys.add_constraint(Constraint::TangentLineArc(top_line, right_arc, p2))
+            .unwrap();
+        sys.add_constraint(Constraint::TangentLineArc(top_line, left_arc, p3))
+            .unwrap();
+        sys.add_constraint(Constraint::TangentLineArc(bottom_line, left_arc, p0))
+            .unwrap();
+        // Dimension constraints
+        sys.add_constraint(Constraint::Distance(p0, p1, 4.0))
+            .unwrap();
+        sys.add_constraint(Constraint::Horizontal(bottom_line))
+            .unwrap();
+        sys.add_constraint(Constraint::Parallel(bottom_line, top_line))
+            .unwrap();
+        sys.add_constraint(Constraint::Distance(p0, p3, 2.0))
+            .unwrap();
+
+        let result = sys.solve(200, 1e-8).unwrap();
+        assert!(result.converged, "slot profile should converge: {result:?}");
+    }
+
+    #[test]
     fn arc_endpoints_equidistant_from_center() {
         let mut sys = GcsSystem::new();
         let c = sys.add_point(PointData {

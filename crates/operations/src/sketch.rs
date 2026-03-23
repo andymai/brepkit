@@ -14,8 +14,8 @@ use brepkit_sketch::SketchError;
 
 // Re-export the full GCS API for new code.
 pub use brepkit_sketch::{
-    CircleData, CircleId, Constraint as GcsConstraint, ConstraintId, DofAnalysis, GcsSystem,
-    LineData, LineId, PointData, PointId, SolveResult,
+    ArcData, ArcId, CircleData, CircleId, Constraint as GcsConstraint, ConstraintId, DofAnalysis,
+    GcsSystem, LineData, LineId, PointData, PointId, SolveResult,
 };
 
 /// A 2D point variable in the constraint system (legacy API).
