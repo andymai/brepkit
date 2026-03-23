@@ -1310,7 +1310,6 @@ fn compound_cut_matches_sequential_3x3_grid() {
 
 /// 4×4 grid (16 tools) — larger compound cut test.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn compound_cut_matches_sequential_4x4_grid() {
     use brepkit_math::mat::Mat4;
 
@@ -1432,7 +1431,6 @@ fn compound_cut_shelled_target_many_tools() {
 
 /// Shelled box + 9 box cutters — exercises raycast classification path.
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn compound_cut_shelled_target_9_tools() {
     use brepkit_math::mat::Mat4;
 
