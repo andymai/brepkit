@@ -429,7 +429,79 @@ fn build_section_edges(
         });
     }
 
+    // Deduplicate: remove section edges that are subsets of longer
+    // collinear edges. This happens when both the FF phase and the
+    // coplanar phase create section edges on the same line — the FF
+    // edge spans the full face, the coplanar edge spans the inner
+    // region only. Keeping both creates degenerate face splits.
+    dedup_collinear_sections(&mut sections, tol);
+
     sections
+}
+
+/// Remove section edges that are subsets of longer collinear edges.
+fn dedup_collinear_sections(sections: &mut Vec<SectionEdge>, tol: f64) {
+    if sections.len() < 2 {
+        return;
+    }
+
+    let n = sections.len();
+    let mut to_remove = vec![false; n];
+
+    for i in 0..n {
+        if to_remove[i] {
+            continue;
+        }
+        for j in (i + 1)..n {
+            if to_remove[j] {
+                continue;
+            }
+
+            let si = &sections[i];
+            let sj = &sections[j];
+
+            // Check collinearity: direction vectors must be parallel
+            let di = sj.end - sj.start;
+            let dj = si.end - si.start;
+            let cross = di.cross(dj);
+            if cross.length() > tol * 10.0 {
+                continue;
+            }
+
+            // Check if on the same line: distance from si.start to line(sj)
+            let to_sj = si.start - sj.start;
+            let dj_len = dj.length();
+            if dj_len < tol {
+                continue;
+            }
+            let dj_unit = dj * (1.0 / dj_len);
+            let perp = to_sj - dj_unit * to_sj.dot(dj_unit);
+            if perp.length() > tol * 10.0 {
+                continue;
+            }
+
+            // Collinear and on the same line. Remove the shorter one.
+            let len_i = (si.end - si.start).length();
+            let len_j = (sj.end - sj.start).length();
+            if len_i < len_j - tol {
+                to_remove[i] = true;
+            } else if len_j < len_i - tol {
+                to_remove[j] = true;
+            }
+            // If equal length, keep both (they might be distinct edges)
+        }
+    }
+
+    let removed = to_remove.iter().filter(|&&r| r).count();
+    if removed > 0 {
+        let mut idx = 0;
+        sections.retain(|_| {
+            let keep = !to_remove[idx];
+            idx += 1;
+            keep
+        });
+        log::debug!("dedup_collinear_sections: removed {removed} subset edges");
+    }
 }
 
 /// Clip a 3D line segment to a face's boundary polygon.
