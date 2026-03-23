@@ -35,7 +35,7 @@ use super::split_types::{SectionEdge, SurfaceInfo};
 pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     topo: &mut Topology,
     arena: &GfaArena,
-    _edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
+    edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
     face_ranks: &HashMap<FaceId, Rank, S2>,
     tol: Tolerance,
 ) -> Vec<SubFace> {
@@ -132,8 +132,13 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         );
 
         if sections.is_empty() {
+            // Face has FaceInfo but 0 usable section edges.
+            // Rebuild with multi-split edge images only (edges split into
+            // 2+ children). Single-edge replacements are handled by
+            // merge_duplicate_edges in BuilderSolid.
+            let rebuilt = rebuild_face_with_edge_images(topo, face_id, edge_images);
             sub_faces.push(SubFace {
-                face_id,
+                face_id: rebuilt.unwrap_or(face_id),
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
@@ -201,6 +206,115 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
 }
 
 /// Map from face ID to section pave block IDs (from FF intersection curves).
+/// Rebuild a face expanding boundary edges that have been split into
+/// multiple children. Only expands edges with 2+ split images; single-edge
+/// replacements (1:1 CB mappings) are left for `merge_duplicate_edges`.
+#[allow(clippy::too_many_lines)]
+fn rebuild_face_with_edge_images<S: BuildHasher>(
+    topo: &mut Topology,
+    face_id: FaceId,
+    edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
+) -> Option<FaceId> {
+    let (surface, is_reversed, outer_edges, inner_edges_list) = {
+        let face = topo.face(face_id).ok()?;
+        let surface = face.surface().clone();
+        let is_reversed = face.is_reversed();
+        let outer_wire = topo.wire(face.outer_wire()).ok()?;
+        let outer_edges: Vec<(EdgeId, bool)> = outer_wire
+            .edges()
+            .iter()
+            .map(|oe| (oe.edge(), oe.is_forward()))
+            .collect();
+        let inner_wids = face.inner_wires().to_vec();
+        let mut inner_edges_list = Vec::new();
+        for &iw in &inner_wids {
+            if let Ok(w) = topo.wire(iw) {
+                inner_edges_list.push(
+                    w.edges()
+                        .iter()
+                        .map(|oe| (oe.edge(), oe.is_forward()))
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
+        (surface, is_reversed, outer_edges, inner_edges_list)
+    };
+
+    // Only expand LINE edges with multi-split images. Curved edges
+    // (Circle, Ellipse, NURBS) need special angular-range handling
+    // that this simple expand_edge doesn't support.
+    let has_multi_split = outer_edges
+        .iter()
+        .chain(inner_edges_list.iter().flatten())
+        .any(|(eid, _)| {
+            edge_images.get(eid).is_some_and(|imgs| imgs.len() > 1)
+                && topo
+                    .edge(*eid)
+                    .is_ok_and(|e| matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line))
+        });
+
+    if !has_multi_split {
+        return None;
+    }
+
+    let new_outer_oes: Vec<OrientedEdge> = outer_edges
+        .iter()
+        .flat_map(|&(eid, fwd)| expand_edge(topo, eid, fwd, edge_images))
+        .collect();
+    let new_outer = Wire::new(new_outer_oes, true).ok()?;
+    let new_outer_id = topo.add_wire(new_outer);
+
+    let mut new_inner_ids = Vec::new();
+    for inner_edges in &inner_edges_list {
+        let oes: Vec<OrientedEdge> = inner_edges
+            .iter()
+            .flat_map(|&(eid, fwd)| expand_edge(topo, eid, fwd, edge_images))
+            .collect();
+        if let Ok(w) = Wire::new(oes, true) {
+            new_inner_ids.push(topo.add_wire(w));
+        }
+    }
+
+    let mut new_face = Face::new(new_outer_id, new_inner_ids, surface);
+    if is_reversed {
+        new_face.set_reversed(true);
+    }
+    let new_fid = topo.add_face(new_face);
+    log::debug!("rebuild_face_with_edge_images: face {face_id:?} → {new_fid:?}");
+    Some(new_fid)
+}
+
+/// Expand a single edge into its multi-split image edges.
+/// Only expands Line edges with 2+ children; keeps everything else as-is.
+fn expand_edge<S: BuildHasher>(
+    topo: &Topology,
+    eid: EdgeId,
+    fwd: bool,
+    edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
+) -> Vec<OrientedEdge> {
+    let imgs = match edge_images.get(&eid) {
+        Some(imgs) if imgs.len() > 1 => imgs,
+        _ => return vec![OrientedEdge::new(eid, fwd)],
+    };
+    // Only expand Line edges
+    if !topo
+        .edge(eid)
+        .is_ok_and(|e| matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line))
+    {
+        return vec![OrientedEdge::new(eid, fwd)];
+    }
+    if fwd {
+        imgs.iter()
+            .map(|&img| OrientedEdge::new(img, true))
+            .collect()
+    } else {
+        imgs.iter()
+            .rev()
+            .map(|&img| OrientedEdge::new(img, false))
+            .collect()
+    }
+}
+
 fn build_section_map(arena: &GfaArena) -> HashMap<FaceId, Vec<PaveBlockId>> {
     let mut map: HashMap<FaceId, Vec<PaveBlockId>> = HashMap::new();
     for curve in &arena.curves {
