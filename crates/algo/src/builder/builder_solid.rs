@@ -532,7 +532,7 @@ struct EdgeEntry {
 fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result<(), AlgoError> {
     use brepkit_topology::edge::EdgeId;
 
-    let tol = 1e-7; // linear tolerance
+    let tol = MERGE_TOL;
 
     let mut entries: Vec<EdgeEntry> = Vec::new();
 
@@ -746,9 +746,15 @@ fn build_edge_positions(
                 let ep = topo.vertex(edge.end())?.point();
                 let qs = quantize_point(sp, MERGE_TOL);
                 let qe = quantize_point(ep, MERGE_TOL);
-                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                // Store points in the same canonical order as the key so
+                // get_face_off sees a consistent tangent direction.
+                let (key, ordered) = if qs <= qe {
+                    ((qs, qe), (sp, ep))
+                } else {
+                    ((qe, qs), (ep, sp))
+                };
                 if let std::collections::hash_map::Entry::Vacant(entry) = map.entry(key) {
-                    entry.insert((sp, ep));
+                    entry.insert(ordered);
                 }
             }
         }
