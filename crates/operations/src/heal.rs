@@ -1183,7 +1183,15 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
             }
         }
 
+        // Skip groups whose merged boundary would be too complex.
+        // A face with hundreds of boundary edges can cause O(N²) or worse
+        // performance in subsequent boolean intersection computations.
         if boundary_edges.len() > MAX_BOUNDARY_EDGES {
+            log::debug!(
+                "unify_faces: skipping merge group with {} boundary edges (limit {})",
+                boundary_edges.len(),
+                MAX_BOUNDARY_EDGES
+            );
             continue;
         }
 
@@ -1203,15 +1211,8 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
     // Build global canonical vertex map from ALL boundary edges across
     // ALL merge groups. First-seen VertexId at each quantized position
     // becomes canonical.
-    let vtx_scale = 1e7; // 1 / linear tolerance
-    let quantize_vtx = |p: Point3| -> (i64, i64, i64) {
-        (
-            (p.x() * vtx_scale).round() as i64,
-            (p.y() * vtx_scale).round() as i64,
-            (p.z() * vtx_scale).round() as i64,
-        )
-    };
-    let mut canonical_vtx: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
+    let quantize_vtx = quantize_vertex;
+    let mut canonical_vtx: HashMap<QVPos, VertexId> = HashMap::new();
     for gd in &group_data {
         for oe in &gd.boundary_edges {
             let edge = topo.edge(oe.edge())?;
@@ -1233,8 +1234,18 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
             let edge = topo.edge(eid)?;
             let sp = topo.vertex(edge.start())?.point();
             let ep = topo.vertex(edge.end())?.point();
-            let canon_start = canonical_vtx[&quantize_vtx(sp)];
-            let canon_end = canonical_vtx[&quantize_vtx(ep)];
+            let canon_start = canonical_vtx
+                .get(&quantize_vtx(sp))
+                .copied()
+                .ok_or_else(|| crate::OperationsError::InvalidInput {
+                    reason: "canonical vertex not found for edge start".to_string(),
+                })?;
+            let canon_end = canonical_vtx
+                .get(&quantize_vtx(ep))
+                .copied()
+                .ok_or_else(|| crate::OperationsError::InvalidInput {
+                    reason: "canonical vertex not found for edge end".to_string(),
+                })?;
             if canon_start != edge.start() || canon_end != edge.end() {
                 let new_edge = Edge::new(canon_start, canon_end, edge.curve().clone());
                 let new_eid = topo.add_edge(new_edge);
