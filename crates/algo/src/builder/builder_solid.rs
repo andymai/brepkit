@@ -503,8 +503,8 @@ fn assemble(
 /// Quantized 3D position key for edge endpoint matching.
 type QPos = (i64, i64, i64);
 
-/// Quantized position pair (canonical order: min first).
-type QPosEdge = (QPos, QPos);
+/// Quantized position pair (canonical order: min first). Alias for [`VPair`].
+type QPosEdge = VPair;
 
 /// Quantize a 3D point to integer coordinates at tolerance resolution.
 fn quantize_point(p: Point3, tol: f64) -> QPos {
@@ -516,12 +516,6 @@ fn quantize_point(p: Point3, tol: f64) -> QPos {
     )
 }
 
-/// Merge duplicate edges across selected faces by quantized endpoint position.
-///
-/// For each group of edges with the same quantized start/end positions,
-/// picks one canonical edge and rebuilds the other faces' wires to reference it.
-/// Uses snapshot-then-allocate to satisfy the borrow checker.
-#[allow(clippy::too_many_lines)]
 /// Edge data for duplicate detection.
 struct EdgeEntry {
     edge_id: brepkit_topology::edge::EdgeId,
@@ -529,6 +523,12 @@ struct EdgeEntry {
     qpair: QPosEdge,
 }
 
+/// Merge duplicate edges across selected faces by quantized endpoint position.
+///
+/// For each group of edges with the same quantized start/end positions,
+/// picks one canonical edge and rebuilds the other faces' wires to reference it.
+/// Uses snapshot-then-allocate to satisfy the borrow checker.
+#[allow(clippy::too_many_lines)]
 fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result<(), AlgoError> {
     use brepkit_topology::edge::EdgeId;
 
