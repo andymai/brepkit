@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.33.0](https://github.com/andymai/brepkit/compare/v2.32.0...v2.33.0) (2026-03-23)
+
+
+### Features
+
+* **algo:** add Phase FF-coplanar for coplanar face section edges ([#405](https://github.com/andymai/brepkit/issues/405)) ([4e2826b](https://github.com/andymai/brepkit/commit/4e2826bf3ccaf43ce4a14351ff10e1e63bc93d48))
+
 ## [2.32.0](https://github.com/andymai/brepkit/compare/v2.31.0...v2.32.0) (2026-03-23)
 
 
