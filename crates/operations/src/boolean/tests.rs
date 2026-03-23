@@ -141,7 +141,6 @@ fn cut_overlapping_3d() {
 // ── Flush face test ─────────────────────────────────────────────────
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_flush_face_cubes() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -1009,7 +1008,6 @@ fn fuse_overlapping_boxes_validates() {
 // ── Shared-boundary fuse ────────────────────────────────────
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_adjacent_boxes_shared_face() {
     // Two unit cubes sharing a face at x=1: result should be a 2×1×1 box.
     let mut topo = Topology::new();
@@ -1037,7 +1035,6 @@ fn fuse_adjacent_boxes_shared_face() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_adjacent_boxes_with_unify() {
     // Explicit unify_faces=true — same as default behavior now.
     // After merging coplanar faces, the 2×1×1 box should have exactly 6 faces.
@@ -1068,7 +1065,6 @@ fn fuse_adjacent_boxes_with_unify() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn test_boolean_heal_after_boolean_option() {
     // Test that heal_after_boolean option runs without error and produces
     // a valid solid.
@@ -1096,7 +1092,6 @@ fn test_boolean_heal_after_boolean_option() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_adjacent_boxes_3x1_grid() {
     // Three unit cubes in a row: fuse_all should produce a 3×1×1 box.
     let mut topo = Topology::new();

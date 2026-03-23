@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::{Edge, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::SolidId;
@@ -1130,14 +1131,25 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
         return Ok(0);
     }
 
-    // Step 4: For each merge group, merge the faces.
-    let mut merged_face_ids: Vec<FaceId> = Vec::new();
-    let mut consumed: HashSet<usize> = HashSet::new();
+    // Step 4: Pre-compute boundary edges for all merge groups and build
+    // a global edge replacement map. This ensures all merged faces share
+    // canonical vertices at junction points where edges from different
+    // input solids meet at the same position.
+
+    #[allow(clippy::items_after_statements)]
+    struct MergeGroupData {
+        face_ids: Vec<FaceId>,
+        boundary_edges: Vec<OrientedEdge>,
+        inner_wires: Vec<brepkit_topology::wire::WireId>,
+        surface: FaceSurface,
+        reversed: bool,
+    }
+
+    let mut group_data: Vec<MergeGroupData> = Vec::new();
 
     for group in &merge_groups {
         let group_face_ids: Vec<FaceId> = group.iter().map(|&i| all_face_ids[i]).collect();
 
-        // Find internal edges: edges shared by two faces BOTH in this group.
         let group_set: HashSet<usize> = group_face_ids.iter().map(|f| f.index()).collect();
         let mut internal_edges: HashSet<usize> = HashSet::new();
 
@@ -1150,8 +1162,6 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
             }
         }
 
-        // Collect all oriented edges from all faces in the group, excluding internal edges.
-        // Also collect inner wires from all faces.
         let mut boundary_edges: Vec<OrientedEdge> = Vec::new();
         let mut all_inner_wires: Vec<brepkit_topology::wire::WireId> = Vec::new();
         let mut representative_surface: Option<FaceSurface> = None;
@@ -1185,12 +1195,90 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
             continue;
         }
 
-        // Reorder boundary edges into closed loops.
-        let mut loops = order_edges_into_loops(topo, &boundary_edges)?;
+        let Some(surface) = representative_surface else {
+            continue;
+        };
+
+        group_data.push(MergeGroupData {
+            face_ids: group_face_ids,
+            boundary_edges,
+            inner_wires: all_inner_wires,
+            surface,
+            reversed: representative_reversed,
+        });
+    }
+
+    // Build global canonical vertex map from ALL boundary edges across
+    // ALL merge groups. First-seen VertexId at each quantized position
+    // becomes canonical.
+    let quantize_vtx = quantize_vertex;
+    let mut canonical_vtx: HashMap<QVPos, VertexId> = HashMap::new();
+    for gd in &group_data {
+        for oe in &gd.boundary_edges {
+            let edge = topo.edge(oe.edge())?;
+            for &vid in &[edge.start(), edge.end()] {
+                let pos = topo.vertex(vid)?.point();
+                canonical_vtx.entry(quantize_vtx(pos)).or_insert(vid);
+            }
+        }
+    }
+
+    // Build edge replacement map: old EdgeId → new EdgeId with canonical vertices.
+    let mut edge_replace: HashMap<usize, EdgeId> = HashMap::new();
+    for gd in &group_data {
+        for oe in &gd.boundary_edges {
+            let eid = oe.edge();
+            if edge_replace.contains_key(&eid.index()) {
+                continue;
+            }
+            let edge = topo.edge(eid)?;
+            let sp = topo.vertex(edge.start())?.point();
+            let ep = topo.vertex(edge.end())?.point();
+            let canon_start = canonical_vtx
+                .get(&quantize_vtx(sp))
+                .copied()
+                .ok_or_else(|| crate::OperationsError::InvalidInput {
+                    reason: "canonical vertex not found for edge start".to_string(),
+                })?;
+            let canon_end = canonical_vtx
+                .get(&quantize_vtx(ep))
+                .copied()
+                .ok_or_else(|| crate::OperationsError::InvalidInput {
+                    reason: "canonical vertex not found for edge end".to_string(),
+                })?;
+            if canon_start != edge.start() || canon_end != edge.end() {
+                let new_edge = Edge::new(canon_start, canon_end, edge.curve().clone());
+                let new_eid = topo.add_edge(new_edge);
+                edge_replace.insert(eid.index(), new_eid);
+            }
+        }
+    }
+
+    // Step 5: For each merge group, form loops and build merged faces.
+    let mut merged_face_ids: Vec<FaceId> = Vec::new();
+    let mut consumed: HashSet<usize> = HashSet::new();
+
+    for gd in group_data {
+        // Apply edge replacements to boundary edges.
+        let replaced_edges: Vec<OrientedEdge> = gd
+            .boundary_edges
+            .iter()
+            .map(|oe| {
+                if let Some(&new_eid) = edge_replace.get(&oe.edge().index()) {
+                    OrientedEdge::new(new_eid, oe.is_forward())
+                } else {
+                    *oe
+                }
+            })
+            .collect();
+
+        let mut loops = order_edges_into_loops(topo, &replaced_edges)?;
 
         if loops.is_empty() {
             continue;
         }
+
+        let mut all_inner_wires = gd.inner_wires;
 
         // Select the outer wire by enclosed 3D area (Newell normal magnitude).
         // Edge count is unreliable — a hole tessellated into many short edges
@@ -1222,20 +1310,15 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
             }
         }
 
-        let surface =
-            representative_surface.ok_or_else(|| crate::OperationsError::InvalidInput {
-                reason: "empty merge group".to_string(),
-            })?;
-
-        let new_face = if representative_reversed {
-            Face::new_reversed(new_wire_id, all_inner_wires, surface)
+        let new_face = if gd.reversed {
+            Face::new_reversed(new_wire_id, all_inner_wires, gd.surface)
         } else {
-            Face::new(new_wire_id, all_inner_wires, surface)
+            Face::new(new_wire_id, all_inner_wires, gd.surface)
         };
         let new_face_id = topo.add_face(new_face);
         merged_face_ids.push(new_face_id);
 
-        for &fid in &group_face_ids {
+        for &fid in &gd.face_ids {
             consumed.insert(fid.index());
         }
     }
@@ -1244,7 +1327,7 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
         return Ok(0);
     }
 
-    // Step 5: Rebuild the shell with unmerged faces + new merged faces.
+    // Step 6: Rebuild the shell with unmerged faces + new merged faces.
     let mut new_faces: Vec<FaceId> = all_face_ids
         .into_iter()
         .filter(|f| !consumed.contains(&f.index()))
@@ -1285,11 +1368,28 @@ fn loop_area_3d(topo: &Topology, loop_edges: &[OrientedEdge]) -> f64 {
     crate::winding::newell_normal(&positions).length() * 0.5
 }
 
-/// Edge info for wire ordering: oriented edge with resolved vertex indices.
+/// Quantized 3D position key for vertex matching in edge chaining.
+type QVPos = (i64, i64, i64);
+
+/// Quantize a vertex position for position-based edge chaining.
+fn quantize_vertex(p: Point3) -> QVPos {
+    let scale = 1e7; // 1 / linear tolerance (1e-7)
+    (
+        (p.x() * scale).round() as i64,
+        (p.y() * scale).round() as i64,
+        (p.z() * scale).round() as i64,
+    )
+}
+
+/// Edge info for wire ordering: oriented edge with quantized vertex positions.
+///
+/// Uses quantized 3D positions instead of vertex indices so that edges
+/// from different input solids at the same geometric location can chain
+/// correctly even when they reference different vertex entities.
 struct EdgeInfo {
     oe: OrientedEdge,
-    start_vid: usize,
-    end_vid: usize,
+    start_pos: QVPos,
+    end_pos: QVPos,
 }
 
 /// Order boundary edges into one or more closed loops.
@@ -1308,22 +1408,24 @@ fn order_edges_into_loops(
     let mut infos: Vec<EdgeInfo> = Vec::with_capacity(edges.len());
     for oe in edges {
         let edge = topo.edge(oe.edge())?;
-        let (sv, ev) = if oe.is_forward() {
-            (edge.start().index(), edge.end().index())
+        let sp = topo.vertex(edge.start())?.point();
+        let ep = topo.vertex(edge.end())?.point();
+        let (start_pos, end_pos) = if oe.is_forward() {
+            (quantize_vertex(sp), quantize_vertex(ep))
         } else {
-            (edge.end().index(), edge.start().index())
+            (quantize_vertex(ep), quantize_vertex(sp))
         };
         infos.push(EdgeInfo {
             oe: *oe,
-            start_vid: sv,
-            end_vid: ev,
+            start_pos,
+            end_pos,
         });
     }
 
-    // Build a map from start_vertex → edge index for quick lookup.
-    let mut start_map: HashMap<usize, Vec<usize>> = HashMap::new();
+    // Build a map from start_position → edge index for quick lookup.
+    let mut start_map: HashMap<QVPos, Vec<usize>> = HashMap::new();
     for (i, info) in infos.iter().enumerate() {
-        start_map.entry(info.start_vid).or_default().push(i);
+        start_map.entry(info.start_pos).or_default().push(i);
     }
 
     let mut used = vec![false; edges.len()];
@@ -1334,8 +1436,8 @@ fn order_edges_into_loops(
         let mut chain = Vec::new();
         chain.push(infos[start_idx].oe);
         used[start_idx] = true;
-        let chain_start = infos[start_idx].start_vid;
-        let mut current_end = infos[start_idx].end_vid;
+        let chain_start = infos[start_idx].start_pos;
+        let mut current_end = infos[start_idx].end_pos;
 
         let max_steps = edges.len();
         for _ in 1..=max_steps {
@@ -1351,7 +1453,7 @@ fn order_edges_into_loops(
                 if !used[idx] {
                     used[idx] = true;
                     chain.push(infos[idx].oe);
-                    current_end = infos[idx].end_vid;
+                    current_end = infos[idx].end_pos;
                     found = true;
                     break;
                 }

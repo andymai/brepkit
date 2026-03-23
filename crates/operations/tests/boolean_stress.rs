@@ -58,7 +58,6 @@ fn box_at(topo: &mut Topology, x: f64, y: f64, z: f64, sx: f64, sy: f64, sz: f64
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn coplanar_fuse_shared_face() {
     // Two unit cubes sharing a face: [0,1]^3 and [1,2]×[0,1]^2.
     let mut topo = Topology::new();
@@ -96,7 +95,6 @@ fn coplanar_intersect_shared_face() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn coplanar_offset_shared_face_y() {
     // Cubes sharing a face in Y direction.
     let mut topo = Topology::new();
@@ -108,7 +106,6 @@ fn coplanar_offset_shared_face_y() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn coplanar_offset_shared_face_z() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -629,7 +626,6 @@ fn options_coarse_deflection() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn edge_aligned_overlap_x() {
     // Two boxes sharing an edge along X.
     let mut topo = Topology::new();

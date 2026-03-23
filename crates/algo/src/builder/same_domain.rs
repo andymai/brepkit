@@ -96,23 +96,104 @@ pub fn detect_same_domain<S: BuildHasher>(
 
     log::debug!("detect_same_domain: {same_domain_count} same-domain pairs found");
 
-    // Deduplicate same-domain faces: for each coplanar pair, keep only the
-    // face from Rank::A and mark the Rank::B face for removal. This prevents
-    // non-manifold results from duplicate coplanar faces in the BOP output.
+    // Deduplicate same-domain faces: for each coplanar pair, remove B's
+    // face ONLY if it is fully contained within A's corresponding face.
+    // For partial overlaps (e.g., overlapping boxes offset by 0.5), both
+    // faces must be kept so the face splitter can handle the intersection.
     //
-    // This implements OCCT's "representative selection" pattern from
-    // BOPAlgo_Builder_2.cxx::FillSameDomainFaces — we pick A's face as
-    // representative and remove B's face entirely from the sub-face list.
+    // This is a refinement of OCCT's "representative selection" pattern:
+    // OCCT assumes same-domain faces have identical boundaries (true after
+    // proper face splitting), but our GFA may produce same-domain pairs
+    // with partial overlap when no FF intersection curves were generated
+    // for parallel/coplanar faces.
     if same_domain_count > 0 {
-        // Remove B's CoplanarSame faces — these are true duplicates of A's
-        // faces (same surface, same normal). B's CoplanarOpposite faces must
-        // be KEPT: the Cut operation needs them (reversed, they form the cut
-        // boundary).
+        // Build a map from B's CoplanarSame faces to their paired A face.
+        let mut b_to_a: HashMap<usize, FaceId> = HashMap::new();
+        for i in 0..sub_faces.len() {
+            if sub_faces[i].rank != Rank::A
+                || sub_faces[i].classification != FaceClass::CoplanarSame
+            {
+                continue;
+            }
+            let a_fid = sub_faces[i].face_id;
+            // Find the B face paired with this A face (same surface, overlap).
+            for j in 0..sub_faces.len() {
+                if sub_faces[j].rank != Rank::B
+                    || sub_faces[j].classification != FaceClass::CoplanarSame
+                {
+                    continue;
+                }
+                if b_to_a.contains_key(&sub_faces[j].face_id.index()) {
+                    continue;
+                }
+                // Check that these two faces share the same surface.
+                let s_a = topo.face(a_fid).ok().map(|f| f.surface().clone());
+                let s_b = topo
+                    .face(sub_faces[j].face_id)
+                    .ok()
+                    .map(|f| f.surface().clone());
+                if let (Some(sa), Some(sb)) = (s_a, s_b) {
+                    if surfaces_same_domain(&sa, &sb, tol).is_some() {
+                        b_to_a.insert(sub_faces[j].face_id.index(), a_fid);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Only remove B faces that are fully contained within their paired A face.
         let before = sub_faces.len();
-        sub_faces
-            .retain(|sf| !(sf.rank == Rank::B && sf.classification == FaceClass::CoplanarSame));
+        sub_faces.retain(|sf| {
+            if sf.rank != Rank::B || sf.classification != FaceClass::CoplanarSame {
+                return true; // Keep non-B and non-CoplanarSame faces
+            }
+            let Some(&a_fid) = b_to_a.get(&sf.face_id.index()) else {
+                return true; // No paired A face found — keep
+            };
+            // Check if B is fully contained within A.
+            if face_fully_contained(topo, sf.face_id, a_fid, tol) {
+                false // Remove — B is a true duplicate of A
+            } else {
+                // Partial overlap — revert classification so BOP treats
+                // this face normally (not as same-domain).
+                true // Keep — partial overlap needs face splitter
+            }
+        });
+        // Revert classification for B faces that were kept (partial overlap).
+        for sf in sub_faces.iter_mut() {
+            if sf.rank == Rank::B
+                && sf.classification == FaceClass::CoplanarSame
+                && b_to_a.contains_key(&sf.face_id.index())
+            {
+                // Check if this B face is still in the list (wasn't removed).
+                // If so, it's a partial overlap — revert to Unknown.
+                let a_fid = b_to_a[&sf.face_id.index()];
+                if !face_fully_contained(topo, sf.face_id, a_fid, tol) {
+                    sf.classification = FaceClass::Unknown;
+                }
+            }
+        }
+        // Also revert A faces whose B counterpart was NOT removed.
+        let removed_b: std::collections::HashSet<usize> = b_to_a
+            .keys()
+            .filter(|&&b_idx| !sub_faces.iter().any(|sf| sf.face_id.index() == b_idx))
+            .copied()
+            .collect();
+        for sf in sub_faces.iter_mut() {
+            if sf.rank == Rank::A && sf.classification == FaceClass::CoplanarSame {
+                // Check if any B face paired with this A was NOT removed.
+                let has_unremoved_b = b_to_a
+                    .iter()
+                    .any(|(b_idx, &a_fid)| a_fid == sf.face_id && !removed_b.contains(b_idx));
+                if has_unremoved_b {
+                    sf.classification = FaceClass::Unknown;
+                }
+            }
+        }
         let removed = before - sub_faces.len();
-        log::debug!("detect_same_domain: removed {removed} duplicate B CoplanarSame faces");
+        log::debug!(
+            "detect_same_domain: removed {removed} duplicate B CoplanarSame faces (checked containment)"
+        );
     }
 }
 
@@ -140,6 +221,96 @@ fn face_bboxes_overlap(topo: &Topology, a: FaceId, b: FaceId, tol: Tolerance) ->
     let Some(ba) = bbox(a) else { return false };
     let Some(bb) = bbox(b) else { return false };
     ba.expanded(tol.linear).intersects(bb.expanded(tol.linear))
+}
+
+/// Check whether face B is fully contained within face A.
+///
+/// Projects both boundaries to 2D in the shared plane, then checks if
+/// ALL vertices of B are inside (or on the boundary of) A's polygon.
+/// Returns false for partial overlaps.
+fn face_fully_contained(topo: &Topology, b: FaceId, a: FaceId, tol: Tolerance) -> bool {
+    use brepkit_math::vec::{Point2, Vec3};
+
+    let face_a = match topo.face(a) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+
+    let normal = match face_a.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        _ => return true, // Non-plane same-domain faces: assume containment
+    };
+
+    let ref_axis = if normal.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u_axis = ref_axis.cross(normal);
+    let u_len = u_axis.length();
+    if u_len < 1e-12 {
+        return true;
+    }
+    let u_axis = u_axis * (1.0 / u_len);
+    let v_axis = normal.cross(u_axis);
+
+    let project = |p: brepkit_math::vec::Point3| -> Point2 {
+        Point2::new(
+            p.x() * u_axis.x() + p.y() * u_axis.y() + p.z() * u_axis.z(),
+            p.x() * v_axis.x() + p.y() * v_axis.y() + p.z() * v_axis.z(),
+        )
+    };
+
+    let poly_a = face_boundary_projected(topo, a, &project);
+    let poly_b = face_boundary_projected(topo, b, &project);
+
+    if poly_a.len() < 3 || poly_b.len() < 3 {
+        return true; // Can't verify — assume contained
+    }
+
+    // Check that every vertex of B is inside or on the boundary of A.
+    for pt in &poly_b {
+        if !point_inside_or_on_polygon(pt, &poly_a, tol.linear) {
+            return false;
+        }
+    }
+
+    true
+}
+
+/// Check if a point is inside or on the boundary of a polygon.
+fn point_inside_or_on_polygon(
+    pt: &brepkit_math::vec::Point2,
+    poly: &[brepkit_math::vec::Point2],
+    tol: f64,
+) -> bool {
+    // Check if on any boundary edge first.
+    let n = poly.len();
+    for i in 0..n {
+        let a = &poly[i];
+        let b = &poly[(i + 1) % n];
+        let dist = point_to_segment_dist_2d(pt, a, b);
+        if dist < tol {
+            return true; // On boundary
+        }
+    }
+
+    // Ray-casting for interior test
+    let px = pt.x();
+    let py = pt.y();
+    let mut inside = false;
+    let mut j = n - 1;
+    for i in 0..n {
+        let yi = poly[i].y();
+        let yj = poly[j].y();
+        let xi = poly[i].x();
+        let xj = poly[j].x();
+        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }
 
 /// Check whether two coplanar faces overlap in interior area.
