@@ -172,6 +172,23 @@ impl Builder {
             &self.face_ranks,
             self.tol,
         );
+
+        // Step 4: SD representative replacement — replace B's face with A's
+        // representative, but ONLY when B is fully contained within A.
+        // Partial overlaps (near-tangent, offset boxes) keep B's original
+        // face to preserve geometry.
+        for pair in &self.sd_pairs {
+            if !pair.b_contained_in_a {
+                continue;
+            }
+            let representative = self.sub_faces[pair.idx_a].face_id;
+            self.sub_faces[pair.idx_b].face_id = representative;
+            log::debug!(
+                "SD representative: B sub-face {} → A face {:?}",
+                pair.idx_b,
+                representative,
+            );
+        }
     }
 
     /// Phase 2: classify each sub-face as inside/outside the opposing solid.

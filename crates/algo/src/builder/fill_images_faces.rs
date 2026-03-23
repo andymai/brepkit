@@ -113,9 +113,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         log::debug!("fill_images_faces: face {face_id:?} has_sections={has_sections}");
 
         if !has_sections {
-            // No sections: face passes through unchanged
+            // No section edges. Rebuild with multi-split edge images
+            // so faces share edges at EF crossing split points.
+            let rebuilt = rebuild_face_with_edge_images(topo, face_id, edge_images);
             sub_faces.push(SubFace {
-                face_id,
+                face_id: rebuilt.unwrap_or(face_id),
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
