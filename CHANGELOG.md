@@ -1,5 +1,35 @@
 # Changelog
 
+## [2.33.0](https://github.com/andymai/brepkit/compare/v2.32.0...v2.33.0) (2026-03-23)
+
+
+### Features
+
+* **algo:** add Phase FF-coplanar for coplanar face section edges ([#405](https://github.com/andymai/brepkit/issues/405)) ([4e2826b](https://github.com/andymai/brepkit/commit/4e2826bf3ccaf43ce4a14351ff10e1e63bc93d48))
+
+## [2.32.0](https://github.com/andymai/brepkit/compare/v2.31.0...v2.32.0) (2026-03-23)
+
+
+### Features
+
+* **sketch:** add arc entity, 9 constraints, tangent support, WASM bindings ([#403](https://github.com/andymai/brepkit/issues/403)) ([4bc2909](https://github.com/andymai/brepkit/commit/4bc2909e39506e1b7c5088dfbb93965607de428a))
+
+## [2.31.0](https://github.com/andymai/brepkit/compare/v2.30.0...v2.31.0) (2026-03-23)
+
+
+### Features
+
+* **algo:** position-based VPair connectivity + orientation-aware edge merge ([#400](https://github.com/andymai/brepkit/issues/400)) ([ff6f1b6](https://github.com/andymai/brepkit/commit/ff6f1b611d927bff81ece8af29f43c89b646cd01))
+* **algo:** seed face vertex cache from VV-merged vertices ([#397](https://github.com/andymai/brepkit/issues/397)) ([714bc3b](https://github.com/andymai/brepkit/commit/714bc3b338eef22408f1bab4b564c6b63437cdf4))
+* **operations:** fix unify_faces vertex identity mismatch + un-ignore 10 tests ([#401](https://github.com/andymai/brepkit/issues/401)) ([52c8b77](https://github.com/andymai/brepkit/commit/52c8b7708ae88ee66e5c38c0f12baa2e0a693fd7))
+
+## [2.30.0](https://github.com/andymai/brepkit/compare/v2.29.1...v2.30.0) (2026-03-23)
+
+
+### Features
+
+* **algo:** CB position-based edge sharing in face splitter ([#394](https://github.com/andymai/brepkit/issues/394)) ([107d891](https://github.com/andymai/brepkit/commit/107d8917afbaf06d52989c9d62c1ffe82e6c6dcd))
+
 ## [2.29.1](https://github.com/andymai/brepkit/compare/v2.29.0...v2.29.1) (2026-03-22)
 
 

@@ -76,6 +76,33 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         map
     };
 
+    // Build vertex seed from VV-phase merged vertices ONLY.
+    // The VV phase explicitly merges vertices from different solids that are at
+    // the same position. These canonical vertices are exactly the shared boundary
+    // vertices. By seeding build_topology_face with these, sub-face edges at
+    // shared boundary positions reuse the same VertexIds as MakeSplitEdges.
+    // This is more targeted than position-based global seeding — only EXPLICITLY
+    // merged vertices are included, not all PaveFiller vertices.
+    let vv_vertex_seed: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> = {
+        let scale = 1.0 / tol.linear;
+        let mut seed = BTreeMap::new();
+        // Collect all canonical vertices (targets of VV merges)
+        let canonical_vids: std::collections::HashSet<brepkit_topology::vertex::VertexId> =
+            arena.same_domain_vertices.values().copied().collect();
+        for &vid in &canonical_vids {
+            if let Ok(v) = topo.vertex(vid) {
+                let pt = v.point();
+                let key = (
+                    (pt.x() * scale).round() as i64,
+                    (pt.y() * scale).round() as i64,
+                    (pt.z() * scale).round() as i64,
+                );
+                seed.entry(key).or_insert(vid);
+            }
+        }
+        seed
+    };
+
     // Pre-compute which faces have section edges from which curves
     let section_map = build_section_map(arena);
 
@@ -155,6 +182,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 face_id,
                 &mut shared_edge_cache,
                 &cb_qpair_edges,
+                &vv_vertex_seed,
             );
             let pt = split
                 .precomputed_interior
@@ -466,15 +494,17 @@ fn build_topology_face(
     parent_face_id: FaceId,
     shared_edge_cache: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
     cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
+    vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
 ) -> Option<FaceId> {
     if split.outer_wire.is_empty() {
         return None;
     }
 
     // Step 1: Create/find vertices for each unique 3D endpoint.
-    // Use a BTreeMap keyed by quantized position to deduplicate.
+    // Seed from VV-merged vertices so boundary edges at shared positions
+    // use the same VertexIds as MakeSplitEdges' split edges.
     let mut vertex_cache: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
-        BTreeMap::new();
+        vv_vertex_seed.clone();
 
     let quantize = |p: Point3| -> (i64, i64, i64) {
         let scale = 1.0 / tol.linear;
