@@ -101,7 +101,6 @@ fn test_two_spheres_tangent() {
 // ── Kissing solids ──────────────────────────────────────────────────
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn test_kissing_boxes_fuse() {
     // Two unit boxes sharing a face at x=1.
     let mut topo = Topology::new();
