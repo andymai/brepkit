@@ -10,7 +10,7 @@ use super::constraint::{
 };
 use super::dof::{self, DofAnalysis};
 use super::entity::{
-    CircleData, CircleId, GenArena, LineData, LineId, ParamRef, PointData, PointId,
+    ArcData, ArcId, CircleData, CircleId, GenArena, LineData, LineId, ParamRef, PointData, PointId,
 };
 use super::solver::{self, SolveResult};
 
@@ -22,7 +22,11 @@ pub struct GcsSystem {
     points: GenArena<PointData>,
     lines: GenArena<LineData>,
     circles: GenArena<CircleData>,
+    arcs: GenArena<ArcData>,
     constraints: GenArena<ConstraintEntry>,
+    /// Internal constraints auto-added by `add_arc` (center–end distance).
+    /// Keyed by `ArcId` so they can be removed with the arc.
+    arc_internal_constraints: HashMap<ArcId, ConstraintId>,
     /// Cached parameter map (rebuilt when dirty).
     param_map: Vec<ParamRef>,
     /// Map from `ParamRef` to index in param_map.
@@ -37,7 +41,9 @@ impl Clone for GcsSystem {
             points: self.points.clone(),
             lines: self.lines.clone(),
             circles: self.circles.clone(),
+            arcs: self.arcs.clone(),
             constraints: self.constraints.clone(),
+            arc_internal_constraints: self.arc_internal_constraints.clone(),
             param_map: self.param_map.clone(),
             param_index: self.param_index.clone(),
             dirty: self.dirty,
@@ -59,7 +65,9 @@ impl GcsSystem {
             points: GenArena::new(),
             lines: GenArena::new(),
             circles: GenArena::new(),
+            arcs: GenArena::new(),
             constraints: GenArena::new(),
+            arc_internal_constraints: HashMap::new(),
             param_map: Vec::new(),
             param_index: HashMap::new(),
             dirty: false,
@@ -102,6 +110,12 @@ impl GcsSystem {
         // Check circles
         for (_, circle) in self.circles.iter() {
             if circle.center == id {
+                return Err(SketchError::EntityInUse);
+            }
+        }
+        // Check arcs
+        for (_, arc) in self.arcs.iter() {
+            if arc.center == id || arc.start == id || arc.end == id {
                 return Err(SketchError::EntityInUse);
             }
         }
@@ -183,6 +197,96 @@ impl GcsSystem {
         self.circles.remove(id).ok_or(SketchError::InvalidHandle)
     }
 
+    /// Add an arc defined by center, start, and end points.
+    ///
+    /// Computes the initial radius as the distance from center to start,
+    /// then auto-adds an internal `Distance(center, end, radius)` constraint
+    /// to keep the end point on the same circle.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SketchError::InvalidHandle` if any point handle is invalid.
+    pub fn add_arc(
+        &mut self,
+        center: PointId,
+        start: PointId,
+        end: PointId,
+    ) -> Result<ArcId, SketchError> {
+        self.check_point(center)?;
+        self.check_point(start)?;
+        self.check_point(end)?;
+
+        // Compute initial radius from center to start
+        let cp = self.points.get(center).ok_or(SketchError::InvalidHandle)?;
+        let sp = self.points.get(start).ok_or(SketchError::InvalidHandle)?;
+        let dx = sp.x - cp.x;
+        let dy = sp.y - cp.y;
+        let radius = (dx * dx + dy * dy).sqrt();
+
+        let arc_id = self.arcs.insert(ArcData { center, start, end });
+
+        // Auto-add internal constraint: end point must be at `radius` from center
+        let cid = self.constraints.insert(ConstraintEntry {
+            constraint: Constraint::Distance(center, end, radius),
+        });
+        self.arc_internal_constraints.insert(arc_id, cid);
+
+        self.dirty = true;
+        Ok(arc_id)
+    }
+
+    /// Get an arc by handle.
+    #[must_use]
+    pub fn arc(&self, id: ArcId) -> Option<&ArcData> {
+        self.arcs.get(id)
+    }
+
+    /// Get a mutable reference to an arc.
+    pub fn arc_mut(&mut self, id: ArcId) -> Option<&mut ArcData> {
+        self.arcs.get_mut(id)
+    }
+
+    /// Remove an arc. Fails if referenced by any user constraint.
+    ///
+    /// Also removes the internal distance constraint that was auto-added
+    /// by [`add_arc`](Self::add_arc).
+    ///
+    /// # Errors
+    ///
+    /// Returns `SketchError::EntityInUse` if the arc is referenced by a constraint.
+    /// Returns `SketchError::InvalidHandle` if the handle is stale or invalid.
+    pub fn remove_arc(&mut self, id: ArcId) -> Result<ArcData, SketchError> {
+        // Check no user constraints reference this arc
+        for (cid, entry) in self.constraints.iter() {
+            // Skip the arc's own internal constraint
+            if self.arc_internal_constraints.get(&id) == Some(&cid) {
+                continue;
+            }
+            if constraint_references_arc(&entry.constraint, id) {
+                return Err(SketchError::EntityInUse);
+            }
+        }
+
+        // Remove internal constraint
+        if let Some(cid) = self.arc_internal_constraints.remove(&id) {
+            self.constraints.remove(cid);
+        }
+
+        self.dirty = true;
+        self.arcs.remove(id).ok_or(SketchError::InvalidHandle)
+    }
+
+    /// Number of arcs.
+    #[must_use]
+    pub fn arc_count(&self) -> usize {
+        self.arcs.len()
+    }
+
+    /// Iterate over all arcs.
+    pub fn arcs(&self) -> impl Iterator<Item = (ArcId, &ArcData)> {
+        self.arcs.iter()
+    }
+
     // ── Constraint CRUD ─────────────────────────────────────────────
 
     /// Add a constraint. Validates that all referenced entities exist.
@@ -217,7 +321,7 @@ impl GcsSystem {
         self.constraints.get(id).map(|e| &e.constraint)
     }
 
-    /// Number of constraints.
+    /// Number of constraints (includes internal arc constraints).
     #[must_use]
     pub fn constraint_count(&self) -> usize {
         self.constraints.len()
@@ -472,6 +576,11 @@ impl GcsSystem {
                 .iter()
                 .map(|(id, d)| (id, (d.center, d.radius)))
                 .collect(),
+            arcs: self
+                .arcs
+                .iter()
+                .map(|(id, d)| (id, (d.center, d.start, d.end)))
+                .collect(),
         }
     }
 
@@ -553,10 +662,17 @@ fn build_snapshot_from_params(
         })
         .collect();
 
+    let arcs = sys
+        .arcs
+        .iter()
+        .map(|(id, d)| (id, (d.center, d.start, d.end)))
+        .collect();
+
     EntitySnapshot {
         points,
         lines,
         circles,
+        arcs,
     }
 }
 
@@ -592,6 +708,23 @@ fn constraint_references_line(c: &Constraint, id: LineId) -> bool {
 /// Check if a constraint references a specific circle.
 fn constraint_references_circle(c: &Constraint, _id: CircleId) -> bool {
     // PR1 has no circle-specific constraints yet
+    match c {
+        Constraint::Coincident(_, _)
+        | Constraint::Distance(_, _, _)
+        | Constraint::PointLineDistance(_, _, _)
+        | Constraint::FixX(_, _)
+        | Constraint::FixY(_, _)
+        | Constraint::Horizontal(_)
+        | Constraint::Vertical(_)
+        | Constraint::Angle(_, _, _)
+        | Constraint::Perpendicular(_, _)
+        | Constraint::Parallel(_, _) => false,
+    }
+}
+
+/// Check if a constraint references a specific arc.
+fn constraint_references_arc(c: &Constraint, _id: ArcId) -> bool {
+    // No arc-specific constraint variants yet
     match c {
         Constraint::Coincident(_, _)
         | Constraint::Distance(_, _, _)
@@ -1042,5 +1175,90 @@ mod tests {
         let result = sys.solve(100, TOL).unwrap();
         assert!(result.converged);
         assert_eq!(result.iterations, 0);
+    }
+
+    #[test]
+    fn add_arc_basic() {
+        let mut sys = GcsSystem::new();
+        let c = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s = sys.add_point(PointData {
+            x: 1.0,
+            y: 0.0,
+            fixed: false,
+        });
+        let e = sys.add_point(PointData {
+            x: 0.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let arc = sys.add_arc(c, s, e).unwrap();
+        assert_eq!(sys.arc_count(), 1);
+        let data = sys.arc(arc).unwrap();
+        assert_eq!(data.center, c);
+        assert_eq!(data.start, s);
+        assert_eq!(data.end, e);
+    }
+
+    #[test]
+    fn remove_arc_cleans_up() {
+        let mut sys = GcsSystem::new();
+        let c = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s = sys.add_point(PointData {
+            x: 1.0,
+            y: 0.0,
+            fixed: false,
+        });
+        let e = sys.add_point(PointData {
+            x: 0.0,
+            y: 1.0,
+            fixed: false,
+        });
+        let arc = sys.add_arc(c, s, e).unwrap();
+        let count_before = sys.constraint_count();
+        assert!(count_before > 0, "internal constraint should exist");
+        sys.remove_arc(arc).unwrap();
+        assert_eq!(sys.arc_count(), 0);
+        assert!(
+            sys.constraint_count() < count_before,
+            "internal constraint should be removed"
+        );
+    }
+
+    #[test]
+    fn arc_endpoints_equidistant_from_center() {
+        let mut sys = GcsSystem::new();
+        let c = sys.add_point(PointData {
+            x: 0.0,
+            y: 0.0,
+            fixed: true,
+        });
+        let s = sys.add_point(PointData {
+            x: 1.0,
+            y: 0.0,
+            fixed: false,
+        });
+        // End point starts off-circle — solver should move it onto the circle
+        let e = sys.add_point(PointData {
+            x: 0.0,
+            y: 1.5,
+            fixed: false,
+        });
+        let _arc = sys.add_arc(c, s, e).unwrap();
+        let result = sys.solve(100, 1e-10).unwrap();
+        assert!(result.converged);
+        let ep = sys.point(e).unwrap();
+        let dist = (ep.x * ep.x + ep.y * ep.y).sqrt();
+        assert!(
+            (dist - 1.0).abs() < 1e-6,
+            "end should be on unit circle, dist={dist}"
+        );
     }
 }

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use super::entity::{CircleId, Handle, LineId, ParamRef, PointData, PointId};
+use super::entity::{ArcId, CircleId, Handle, LineId, ParamRef, PointData, PointId};
 
 /// Internal storage for a constraint.
 #[derive(Debug, Clone)]
@@ -69,6 +69,9 @@ pub struct EntitySnapshot {
     /// Not yet used in PR1 constraints but needed for PR2.
     #[allow(dead_code)]
     pub circles: HashMap<CircleId, (PointId, f64)>,
+    /// Arc definitions keyed by handle: `(center, start, end)`.
+    #[allow(dead_code)]
+    pub arcs: HashMap<ArcId, (PointId, PointId, PointId)>,
 }
 
 impl EntitySnapshot {
@@ -474,6 +477,7 @@ mod tests {
             points: [(p1, (x1, y1)), (p2, (x2, y2))].into_iter().collect(),
             lines: HashMap::new(),
             circles: HashMap::new(),
+            arcs: HashMap::new(),
         };
         (p1, p2, snap)
     }
@@ -557,6 +561,7 @@ mod tests {
                 points: perturbed_points,
                 lines: snap.lines.clone(),
                 circles: snap.circles.clone(),
+                arcs: snap.arcs.clone(),
             };
             let mut r1 = Vec::new();
             eval_residuals(c, &perturbed_snap, &mut r1);
@@ -629,6 +634,7 @@ mod tests {
             points: [(p1, (1.0, 3.0)), (p2, (5.0, 7.0))].into_iter().collect(),
             lines: std::iter::once((l, (p1, p2))).collect(),
             circles: HashMap::new(),
+            arcs: HashMap::new(),
         };
         let params = vec![
             ParamRef::PointX(p1),
@@ -680,6 +686,7 @@ mod tests {
             .collect(),
             lines: [(l1, (p1, p2)), (l2, (p3, p4))].into_iter().collect(),
             circles: HashMap::new(),
+            arcs: HashMap::new(),
         };
         let params = vec![
             ParamRef::PointX(p1),
@@ -735,6 +742,7 @@ mod tests {
             .collect(),
             lines: [(l1, (p1, p2)), (l2, (p3, p4))].into_iter().collect(),
             circles: HashMap::new(),
+            arcs: HashMap::new(),
         };
         let params = vec![
             ParamRef::PointX(p1),
@@ -778,6 +786,7 @@ mod tests {
                 .collect(),
             lines: std::iter::once((l, (lp1, lp2))).collect(),
             circles: HashMap::new(),
+            arcs: HashMap::new(),
         };
         let params = vec![
             ParamRef::PointX(pt),
