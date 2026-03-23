@@ -224,8 +224,10 @@ fn face_boundary_polygon_2d(
 
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
-        let start_pos = topo.vertex(edge.start())?.point();
-        polygon.push(frame.project(start_pos));
+        // Use oriented start to respect wire traversal direction.
+        let vid = oe.oriented_start(edge);
+        let pos = topo.vertex(vid)?.point();
+        polygon.push(frame.project(pos));
     }
 
     Ok(polygon)
@@ -241,6 +243,8 @@ type BoundaryEdge = (
 );
 
 /// Collect boundary edges with 2D and 3D endpoint positions.
+///
+/// Respects oriented edge direction so start/end match wire traversal.
 fn face_boundary_edges_2d(
     topo: &Topology,
     face_id: FaceId,
@@ -252,8 +256,17 @@ fn face_boundary_edges_2d(
 
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
-        let p3_start = topo.vertex(edge.start())?.point();
-        let p3_end = topo.vertex(edge.end())?.point();
+        let (p3_start, p3_end) = if oe.is_forward() {
+            (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            )
+        } else {
+            (
+                topo.vertex(edge.end())?.point(),
+                topo.vertex(edge.start())?.point(),
+            )
+        };
         let p2_start = frame.project(p3_start);
         let p2_end = frame.project(p3_end);
         edges.push((oe.edge(), p2_start, p2_end, p3_start, p3_end));
@@ -319,9 +332,9 @@ fn create_section_edge(
     let edge = Edge::new(start_vid, end_vid, EdgeCurve::Line);
     let edge_id = topo.add_edge(edge);
 
-    // Create a pave block spanning the edge's parameter range (0 to length)
+    // EdgeCurve::Line uses normalized parameter space [0, 1].
     let start_pave = Pave::new(start_vid, 0.0);
-    let end_pave = Pave::new(end_vid, edge_length);
+    let end_pave = Pave::new(end_vid, 1.0);
     let pb = PaveBlock::new(edge_id, start_pave, end_pave);
     let pb_id = arena.pave_blocks.alloc(pb);
 
@@ -346,7 +359,7 @@ fn create_section_edge(
         face_b,
         bbox,
         pave_blocks: vec![pb_id],
-        t_range: (0.0, edge_length),
+        t_range: (0.0, 1.0),
     });
 
     arena.interference.ff.push(Interference::FF {
