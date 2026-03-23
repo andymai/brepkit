@@ -17,6 +17,7 @@ pub mod make_split_edges;
 pub mod phase_ee;
 pub mod phase_ef;
 pub mod phase_ff;
+pub mod phase_ff_coplanar;
 pub mod phase_ve;
 pub mod phase_vf;
 pub mod phase_vv;
@@ -101,6 +102,9 @@ impl<'a> PaveFiller<'a> {
 
         // Phase 6: Face-face intersection (creates vertices + edges for curves)
         phase_ff::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
+
+        // Phase 6b: Coplanar face splitting (parallel planes skipped by Phase FF)
+        phase_ff_coplanar::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
 
         Ok(())
     }

@@ -570,3 +570,48 @@ fn gfa_fuse_overlapping_boxes_face_count() {
         faces.len()
     );
 }
+
+#[test]
+fn coplanar_phase_creates_section_edges() {
+    // Two overlapping boxes: A=[0,1]³, B=[0.5,1.5]×[0,1]².
+    // The coplanar faces (y=0, y=1, z=0, z=1) share the same plane.
+    // Phase FF-coplanar should create section edges where one face's
+    // boundary edges lie inside the other face.
+    let mut topo = Topology::new();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [0.5, 0.0, 0.0], [1.5, 1.0, 1.0]);
+
+    let mut arena = GfaArena::default();
+    let tol = brepkit_math::tolerance::Tolerance::new();
+
+    // Run PaveFiller (includes Phase FF-coplanar)
+    crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
+
+    // Count FF interferences — should include both perpendicular and coplanar
+    let ff_count = arena.interference.ff.len();
+    // Without coplanar phase: only perpendicular face pairs produce FF curves.
+    // With coplanar phase: additional section edges from boundary projections.
+    // Perpendicular pairs: A has faces at x=0, x=1; B has faces at x=0.5, x=1.5.
+    // Each perpendicular face pair produces an intersection line.
+    // Coplanar pairs: y=0+y=0, y=1+y=1, z=0+z=0, z=1+z=1 — each produces
+    // section edges from boundary edge projections.
+    assert!(
+        ff_count > 4,
+        "should have more than 4 FF interferences (perpendicular + coplanar), got {ff_count}"
+    );
+
+    // Verify that section curves exist for the coplanar faces
+    let has_coplanar_curves = arena.curves.iter().any(|c| {
+        let face_a_surf = topo.face(c.face_a).ok().map(|f| f.surface().clone());
+        let face_b_surf = topo.face(c.face_b).ok().map(|f| f.surface().clone());
+        matches!(
+            (&face_a_surf, &face_b_surf),
+            (
+                Some(FaceSurface::Plane { normal: na, .. }),
+                Some(FaceSurface::Plane { normal: nb, .. })
+            ) if na.dot(*nb).abs() > 0.99
+        )
+    });
+
+    assert!(has_coplanar_curves, "should have coplanar section curves");
+}
