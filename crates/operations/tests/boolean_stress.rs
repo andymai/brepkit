@@ -698,7 +698,6 @@ fn corner_overlap_cut() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn corner_overlap_intersect() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
