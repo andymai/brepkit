@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.30.0](https://github.com/andymai/brepkit/compare/v2.29.1...v2.30.0) (2026-03-23)
+
+
+### Features
+
+* **algo:** CB position-based edge sharing in face splitter ([#394](https://github.com/andymai/brepkit/issues/394)) ([107d891](https://github.com/andymai/brepkit/commit/107d8917afbaf06d52989c9d62c1ffe82e6c6dcd))
+
 ## [2.29.1](https://github.com/andymai/brepkit/compare/v2.29.0...v2.29.1) (2026-03-22)
 
 
