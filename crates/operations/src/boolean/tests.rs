@@ -2843,3 +2843,38 @@ fn d4_shelled_box_fuse_lip() {
         Err(e) => panic!("fuse failed: {e}"),
     }
 }
+
+// ── Coplanar face tests ──────────────────────────────────────────────
+//
+// "d1a2" scenario: tool B shares an entire face pair with A (identical Z
+// extent [0,1]).  The top and bottom faces of B are coplanar with those
+// of A, so phase_ff_coplanar must produce section edges and the builder
+// must split faces correctly.
+
+#[test]
+#[ignore = "GFA coplanar face handling not yet complete"]
+fn coplanar_box_cut_d1a2() {
+    let _ = env_logger::try_init();
+    let mut topo = Topology::new();
+
+    // Box A: 1×1×1 at origin → occupies [0,1]³
+    let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+
+    // Box B: 0.5×0.5×1.0 → occupies [0,0.5]×[0,0.5]×[0,1]
+    let b = crate::primitives::make_box(&mut topo, 0.5, 0.5, 1.0).unwrap();
+
+    // Translate B to (0.25, 0.25, 0) → occupies [0.25,0.75]×[0.25,0.75]×[0,1]
+    let xlate = brepkit_math::mat::Mat4::translation(0.25, 0.25, 0.0);
+    crate::transform::transform_solid(&mut topo, b, &xlate).unwrap();
+
+    // Cut A - B → should produce a hollow square tube (frame cross-section)
+    // Expected volume: 1.0 - 0.5*0.5*1.0 = 0.75
+    let result = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
+
+    // Validate topology: manifold shell
+    let face_count = check_result(&topo, result);
+    eprintln!("face count: {face_count}");
+
+    // Volume check
+    assert_volume_near(&topo, result, 0.75, 0.01);
+}
