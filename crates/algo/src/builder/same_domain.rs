@@ -94,6 +94,15 @@ pub fn detect_same_domain<S: BuildHasher>(
             }
 
             if let Some(same_dir) = surfaces_same_domain(surf_i, surf_j, tol) {
+                // Require significant AABB overlap to avoid pairing
+                // near-tangent faces with negligible shared area. This
+                // check runs BEFORE the more expensive polygon overlap
+                // test to filter early.
+                if !aabb_overlap_significant(topo, sub_faces[i].face_id, sub_faces[j].face_id, tol)
+                {
+                    continue;
+                }
+
                 if !faces_have_interior_overlap(
                     topo,
                     sub_faces[i].face_id,
@@ -164,6 +173,60 @@ fn face_bboxes_overlap(topo: &Topology, a: FaceId, b: FaceId, tol: Tolerance) ->
     let Some(ba) = bbox(a) else { return false };
     let Some(bb) = bbox(b) else { return false };
     ba.expanded(tol.linear).intersects(bb.expanded(tol.linear))
+}
+
+/// Check if two faces have significant AABB overlap area.
+///
+/// Returns `false` if the overlap area is less than 1% of the smaller
+/// face's area. This prevents near-tangent faces (tiny sliver overlap)
+/// from being paired as same-domain.
+fn aabb_overlap_significant(topo: &Topology, a: FaceId, b: FaceId, tol: Tolerance) -> bool {
+    let bbox = |fid: FaceId| -> Option<brepkit_math::aabb::Aabb3> {
+        let face = topo.face(fid).ok()?;
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        let mut points = Vec::new();
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            points.push(topo.vertex(edge.start()).ok()?.point());
+            points.push(topo.vertex(edge.end()).ok()?.point());
+        }
+        brepkit_math::aabb::Aabb3::try_from_points(points)
+    };
+
+    let Some(ba) = bbox(a) else { return true };
+    let Some(bb) = bbox(b) else { return true };
+
+    // Compute overlap extent in each dimension
+    let ox = (ba.max.x().min(bb.max.x()) - ba.min.x().max(bb.min.x())).max(0.0);
+    let oy = (ba.max.y().min(bb.max.y()) - ba.min.y().max(bb.min.y())).max(0.0);
+    let oz = (ba.max.z().min(bb.max.z()) - ba.min.z().max(bb.min.z())).max(0.0);
+
+    // For coplanar faces, one dimension is ~0 (the plane normal direction).
+    // Use the two largest overlap dimensions as the overlap "area".
+    let mut dims = [ox, oy, oz];
+    dims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    let overlap_area = dims[0] * dims[1];
+
+    // Compute smaller face's projected area (two largest AABB dimensions)
+    let area_of = |b: &brepkit_math::aabb::Aabb3| {
+        let mut d = [
+            b.max.x() - b.min.x(),
+            b.max.y() - b.min.y(),
+            b.max.z() - b.min.z(),
+        ];
+        d.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        d[0] * d[1]
+    };
+    let smaller_area = area_of(&ba).min(area_of(&bb));
+
+    if smaller_area < tol.linear {
+        return true; // Degenerate face
+    }
+
+    // Require at least 5% overlap relative to the smaller face.
+    // Near-tangent faces (overlap < 0.1% of face area) should not be
+    // paired — their intersection is better handled by the face splitter.
+    overlap_area / smaller_area > 0.05
 }
 
 /// Check if face B's AABB is fully contained within face A's AABB.

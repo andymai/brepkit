@@ -35,7 +35,7 @@ use super::split_types::{SectionEdge, SurfaceInfo};
 pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     topo: &mut Topology,
     arena: &GfaArena,
-    edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
+    _edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
     face_ranks: &HashMap<FaceId, Rank, S2>,
     tol: Tolerance,
 ) -> Vec<SubFace> {
@@ -113,11 +113,9 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         log::debug!("fill_images_faces: face {face_id:?} has_sections={has_sections}");
 
         if !has_sections {
-            // No section edges. Rebuild with multi-split edge images
-            // so faces share edges at EF crossing split points.
-            let rebuilt = rebuild_face_with_edge_images(topo, face_id, edge_images);
+            // No sections: face passes through unchanged
             sub_faces.push(SubFace {
-                face_id: rebuilt.unwrap_or(face_id),
+                face_id,
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
@@ -134,13 +132,8 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         );
 
         if sections.is_empty() {
-            // Face has FaceInfo but 0 usable section edges.
-            // Rebuild with multi-split edge images only (edges split into
-            // 2+ children). Single-edge replacements are handled by
-            // merge_duplicate_edges in BuilderSolid.
-            let rebuilt = rebuild_face_with_edge_images(topo, face_id, edge_images);
             sub_faces.push(SubFace {
-                face_id: rebuilt.unwrap_or(face_id),
+                face_id,
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
@@ -211,7 +204,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
 /// Rebuild a face expanding boundary edges that have been split into
 /// multiple children. Only expands edges with 2+ split images; single-edge
 /// replacements (1:1 CB mappings) are left for `merge_duplicate_edges`.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, dead_code)]
 fn rebuild_face_with_edge_images<S: BuildHasher>(
     topo: &mut Topology,
     face_id: FaceId,
@@ -296,6 +289,7 @@ fn rebuild_face_with_edge_images<S: BuildHasher>(
 
 /// Expand a single edge into its multi-split image edges.
 /// Only expands Line edges with 2+ children; keeps everything else as-is.
+#[allow(dead_code)]
 fn expand_edge<S: BuildHasher>(
     topo: &Topology,
     eid: EdgeId,

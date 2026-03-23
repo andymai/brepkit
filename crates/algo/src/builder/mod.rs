@@ -173,28 +173,34 @@ impl Builder {
             self.tol,
         );
 
-        // Step 4: SD representative replacement — replace B's face with A's
-        // representative, but ONLY when B is fully contained within A.
-        // Partial overlaps (near-tangent, offset boxes) keep B's original
-        // face to preserve geometry.
-        for pair in &self.sd_pairs {
-            if !pair.b_contained_in_a {
-                continue;
-            }
-            let representative = self.sub_faces[pair.idx_a].face_id;
-            self.sub_faces[pair.idx_b].face_id = representative;
-            log::debug!(
-                "SD representative: B sub-face {} → A face {:?}",
-                pair.idx_b,
-                representative,
-            );
-        }
+        // Note: SD representative replacement (replacing B's face_id with
+        // A's representative) is deferred to a follow-up. While it produces
+        // correct 2-shell topology for coplanar cuts (d1a2), the AABB
+        // containment check is insufficiently precise for near-tangent
+        // geometries, causing flaky test failures. A stricter SD detection
+        // (edge-set matching) is needed first.
     }
 
     /// Phase 2: classify each sub-face as inside/outside the opposing solid.
     #[allow(clippy::too_many_lines)]
     fn classify_sub_faces(&mut self) -> Result<(), AlgoError> {
-        for sf in &mut self.sub_faces {
+        // SD faces are excluded from non-SD BOP selection, so their
+        // classification doesn't affect the result. But the ray-cast
+        // classifier is non-deterministic at coplanar boundaries,
+        // which can produce non-manifold results for near-tangent
+        // geometries. Mark SD faces deterministically to skip ray-cast.
+        let sd_indices: std::collections::HashSet<usize> = self
+            .sd_pairs
+            .iter()
+            .flat_map(|p| [p.idx_a, p.idx_b])
+            .collect();
+
+        for (idx, sf) in self.sub_faces.iter_mut().enumerate() {
+            if sd_indices.contains(&idx) {
+                sf.classification = FaceClass::On;
+                continue;
+            }
+
             // Determine the opposing solid
             let opposing_solid = match sf.rank {
                 Rank::A => self.solid_b,
