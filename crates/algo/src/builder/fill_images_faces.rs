@@ -272,6 +272,14 @@ fn rebuild_face_with_edge_images<S: BuildHasher>(
             .collect();
         if let Ok(w) = Wire::new(oes, true) {
             new_inner_ids.push(topo.add_wire(w));
+        } else {
+            // Inner wire reconstruction failed — fall back to the
+            // original face to avoid silently dropping holes.
+            log::warn!(
+                "rebuild_face_with_edge_images: inner wire failed for \
+                 face {face_id:?}, keeping original"
+            );
+            return None;
         }
     }
 

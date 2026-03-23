@@ -32,7 +32,7 @@ pub struct SameDomainPair {
     /// `true` if B's face is fully contained within A's boundary.
     /// Used by the BOP selector to distinguish overlapping (B inside A)
     /// from touching (B adjacent to A) configurations.
-    /// Computed via deterministic 2D polygon containment, not ray-cast.
+    /// Computed via AABB containment (fast, deterministic).
     pub b_contained_in_a: bool,
 }
 
@@ -110,10 +110,8 @@ pub fn detect_same_domain<S: BuildHasher>(
                     (j, i)
                 };
 
-                // Deterministic containment check via AABB + 2D polygon.
-                // Use AABB first (fast, deterministic), then polygon for
-                // confirmation. This avoids ray-cast sensitivity at
-                // coplanar boundaries.
+                // Deterministic containment check via AABB comparison.
+                // Avoids ray-cast sensitivity at coplanar boundaries.
                 let b_contained = aabb_contained(
                     topo,
                     sub_faces[idx_b].face_id,
@@ -198,22 +196,30 @@ fn aabb_contained(topo: &Topology, b: FaceId, a: FaceId, tol: Tolerance) -> bool
         brepkit_math::aabb::Aabb3::try_from_points(points)
     };
 
-    let Some(bb_a) = bbox(a) else { return true };
-    let Some(bb_b) = bbox(b) else { return true };
+    let Some(bb_a) = bbox(a) else { return false };
+    let Some(bb_b) = bbox(b) else { return false };
 
     // B is contained if A's AABB fully encloses B's AABB (with tolerance).
     // For touching faces with identical footprints, A doesn't strictly
     // contain B (margins are equal), so this returns false → is_touching.
     let margin = tol.linear * 2.0;
-    bb_a.min.x() - margin <= bb_b.min.x()
+    let enclosed = bb_a.min.x() - margin <= bb_b.min.x()
         && bb_a.min.y() - margin <= bb_b.min.y()
         && bb_a.min.z() - margin <= bb_b.min.z()
         && bb_a.max.x() + margin >= bb_b.max.x()
         && bb_a.max.y() + margin >= bb_b.max.y()
-        && bb_a.max.z() + margin >= bb_b.max.z()
-        // And B is STRICTLY smaller than A (not identical size)
-        && (bb_b.max.x() - bb_b.min.x()) < (bb_a.max.x() - bb_a.min.x()) - margin
-        || (bb_b.max.y() - bb_b.min.y()) < (bb_a.max.y() - bb_a.min.y()) - margin
+        && bb_a.max.z() + margin >= bb_b.max.z();
+
+    if !enclosed {
+        return false;
+    }
+
+    // B must be STRICTLY smaller than A in at least one dimension
+    let x_smaller = (bb_b.max.x() - bb_b.min.x()) < (bb_a.max.x() - bb_a.min.x()) - margin;
+    let y_smaller = (bb_b.max.y() - bb_b.min.y()) < (bb_a.max.y() - bb_a.min.y()) - margin;
+    let z_smaller = (bb_b.max.z() - bb_b.min.z()) < (bb_a.max.z() - bb_a.min.z()) - margin;
+
+    x_smaller || y_smaller || z_smaller
 }
 
 /// Check whether face B is fully contained within face A.
