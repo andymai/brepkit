@@ -5,10 +5,11 @@
 //! geometric sub-faces. Faces without intersection data pass through
 //! unchanged.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::hash::BuildHasher;
 
-use std::collections::BTreeMap;
+/// Quantized 3D position pair for CommonBlock edge matching.
+type CbEdgeKey = ((i64, i64, i64), (i64, i64, i64));
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
@@ -45,6 +46,35 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // the SAME face's split) reference the SAME topology edge entity.
     let mut shared_edge_cache: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> =
         HashMap::new();
+
+    // CommonBlock position-pair → shared EdgeId. When building sub-face edges,
+    // if the edge endpoints match a CB's split_edge endpoints (by quantized
+    // position), reuse the CB's edge entity. This ensures faces from different
+    // input solids share the same EdgeId at their common boundaries.
+    let cb_qpair_edges: HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId> = {
+        let scale = 1.0 / tol.linear;
+        let qpt = |p: brepkit_math::vec::Point3| -> (i64, i64, i64) {
+            (
+                (p.x() * scale).round() as i64,
+                (p.y() * scale).round() as i64,
+                (p.z() * scale).round() as i64,
+            )
+        };
+        let mut map = HashMap::new();
+        for (_, cb) in arena.common_blocks.iter() {
+            if let Some(edge_id) = cb.split_edge {
+                if let Ok(edge) = topo.edge(edge_id) {
+                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                        let qs = qpt(sv.point());
+                        let qe = qpt(ev.point());
+                        let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                        map.insert(key, edge_id);
+                    }
+                }
+            }
+        }
+        map
+    };
 
     // Pre-compute which faces have section edges from which curves
     let section_map = build_section_map(arena);
@@ -118,8 +148,14 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // Build real topology entities (Vertex → Edge → Wire → Face) for each,
         // and compute a distinct interior point for classification.
         for split in &split_results {
-            let new_face_id =
-                build_topology_face(topo, split, tol, face_id, &mut shared_edge_cache);
+            let new_face_id = build_topology_face(
+                topo,
+                split,
+                tol,
+                face_id,
+                &mut shared_edge_cache,
+                &cb_qpair_edges,
+            );
             let pt = split
                 .precomputed_interior
                 .unwrap_or_else(|| super::face_splitter::interior_point_3d(split, None));
@@ -422,13 +458,14 @@ fn build_surface_info(topo: &Topology, face_id: FaceId) -> Option<SurfaceInfo> {
 /// Creates vertices at each 3D endpoint (deduplicating by position),
 /// edges between consecutive vertices, a wire from the edges, and
 /// a face with the split's surface.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::type_complexity)]
 fn build_topology_face(
     topo: &mut Topology,
     split: &super::split_types::SplitSubFace,
     tol: Tolerance,
     parent_face_id: FaceId,
     shared_edge_cache: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
+    cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
 ) -> Option<FaceId> {
     if split.outer_wire.is_empty() {
         return None;
@@ -465,19 +502,24 @@ fn build_topology_face(
         let start_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.start_3d);
         let end_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.end_3d);
 
-        // Edge sharing: prefer pave_block_id (cross-face, from FF intersection),
-        // fall back to source_edge_idx (within-face, from forward+reverse loops).
-        let cache_key = if let Some(pb_id) = pcurve_edge.pave_block_id {
-            // Cross-face key: all faces sharing this FF section curve
-            // get the same edge entity. Use a distinct namespace (usize::MAX)
-            // to avoid collision with within-face keys.
-            Some((usize::MAX, pb_id))
-        } else {
-            pcurve_edge
-                .source_edge_idx
-                .map(|idx| (parent_face_id.index(), idx))
-        };
-        let edge_id = if let Some(key) = cache_key {
+        // Edge sharing priority:
+        // 0. CommonBlock position match (shared across input solids)
+        // 1. pave_block_id cache (cross-face, from FF intersection)
+        // 2. source_edge_idx cache (within-face, from forward+reverse loops)
+        // 3. New edge (no sharing)
+        let qs = quantize(pcurve_edge.start_3d);
+        let qe = quantize(pcurve_edge.end_3d);
+        let qpair = if qs <= qe { (qs, qe) } else { (qe, qs) };
+
+        let edge_id = if let Some(&cb_edge) = cb_qpair_edges.get(&qpair) {
+            cb_edge
+        } else if let Some(pb_id) = pcurve_edge.pave_block_id {
+            let key = (usize::MAX, pb_id);
+            *shared_edge_cache.entry(key).or_insert_with(|| {
+                topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
+            })
+        } else if let Some(idx) = pcurve_edge.source_edge_idx {
+            let key = (parent_face_id.index(), idx);
             *shared_edge_cache.entry(key).or_insert_with(|| {
                 topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
             })
