@@ -29,6 +29,11 @@ pub struct SameDomainPair {
     pub idx_b: usize,
     /// `true` if normals point the same direction, `false` if opposite.
     pub same_orientation: bool,
+    /// `true` if B's face is fully contained within A's boundary.
+    /// Used by the BOP selector to distinguish overlapping (B inside A)
+    /// from touching (B adjacent to A) configurations.
+    /// Computed via deterministic 2D polygon containment, not ray-cast.
+    pub b_contained_in_a: bool,
 }
 
 /// Detect same-domain face pairs between opposing solids.
@@ -105,10 +110,22 @@ pub fn detect_same_domain<S: BuildHasher>(
                     (j, i)
                 };
 
+                // Deterministic containment check via AABB + 2D polygon.
+                // Use AABB first (fast, deterministic), then polygon for
+                // confirmation. This avoids ray-cast sensitivity at
+                // coplanar boundaries.
+                let b_contained = aabb_contained(
+                    topo,
+                    sub_faces[idx_b].face_id,
+                    sub_faces[idx_a].face_id,
+                    tol,
+                );
+
                 pairs.push(SameDomainPair {
                     idx_a,
                     idx_b,
                     same_orientation: same_dir,
+                    b_contained_in_a: b_contained,
                 });
 
                 paired[i] = true;
@@ -149,6 +166,54 @@ fn face_bboxes_overlap(topo: &Topology, a: FaceId, b: FaceId, tol: Tolerance) ->
     let Some(ba) = bbox(a) else { return false };
     let Some(bb) = bbox(b) else { return false };
     ba.expanded(tol.linear).intersects(bb.expanded(tol.linear))
+}
+
+/// Check if face B's AABB is fully contained within face A's AABB.
+///
+/// This is a fast, deterministic check that avoids polygon sensitivity.
+/// For the touching-vs-overlapping distinction, AABB containment is
+/// sufficient: touching faces have identical AABBs (not contained),
+/// while a small B inside a large A has B's AABB inside A's.
+fn aabb_contained(topo: &Topology, b: FaceId, a: FaceId, tol: Tolerance) -> bool {
+    let bbox = |fid: FaceId| -> Option<brepkit_math::aabb::Aabb3> {
+        let face = topo.face(fid).ok()?;
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        let mut points = Vec::new();
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let sp = topo.vertex(edge.start()).ok()?.point();
+            let ep = topo.vertex(edge.end()).ok()?.point();
+            points.push(sp);
+            points.push(ep);
+            // Sample curved edges
+            if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                for k in 1..8 {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = t0 + (t1 - t0) * (k as f64 / 8.0);
+                    points.push(edge.curve().evaluate_with_endpoints(t, sp, ep));
+                }
+            }
+        }
+        brepkit_math::aabb::Aabb3::try_from_points(points)
+    };
+
+    let Some(bb_a) = bbox(a) else { return true };
+    let Some(bb_b) = bbox(b) else { return true };
+
+    // B is contained if A's AABB fully encloses B's AABB (with tolerance).
+    // For touching faces with identical footprints, A doesn't strictly
+    // contain B (margins are equal), so this returns false → is_touching.
+    let margin = tol.linear * 2.0;
+    bb_a.min.x() - margin <= bb_b.min.x()
+        && bb_a.min.y() - margin <= bb_b.min.y()
+        && bb_a.min.z() - margin <= bb_b.min.z()
+        && bb_a.max.x() + margin >= bb_b.max.x()
+        && bb_a.max.y() + margin >= bb_b.max.y()
+        && bb_a.max.z() + margin >= bb_b.max.z()
+        // And B is STRICTLY smaller than A (not identical size)
+        && (bb_b.max.x() - bb_b.min.x()) < (bb_a.max.x() - bb_a.min.x()) - margin
+        || (bb_b.max.y() - bb_b.min.y()) < (bb_a.max.y() - bb_a.min.y()) - margin
 }
 
 /// Check whether face B is fully contained within face A.
@@ -201,8 +266,12 @@ fn face_fully_contained(topo: &Topology, b: FaceId, a: FaceId, tol: Tolerance) -
     }
 
     // Check that every vertex of B is inside or on the boundary of A.
+    // Use a generous tolerance (10× linear) to handle floating-point
+    // sensitivity at coplanar boundaries. The polygon vertices from
+    // sampled curves (Circle, Ellipse) may have minor deviations.
+    let generous_tol = tol.linear * 10.0;
     for pt in &poly_b {
-        if !point_inside_or_on_polygon(pt, &poly_a, tol.linear) {
+        if !point_inside_or_on_polygon(pt, &poly_a, generous_tol) {
             return false;
         }
     }
@@ -366,11 +435,29 @@ fn face_boundary_projected(
             Ok(e) => e,
             Err(_) => continue,
         };
-        let p = match topo.vertex(oe.oriented_start(edge)) {
+        let sp = match topo.vertex(edge.start()) {
             Ok(v) => v.point(),
             Err(_) => continue,
         };
-        pts.push(project(p));
+        let ep = match topo.vertex(edge.end()) {
+            Ok(v) => v.point(),
+            Err(_) => continue,
+        };
+        pts.push(project(sp));
+
+        // Sample non-linear edges (Circle, Ellipse, NURBS) to get a proper
+        // polygon approximation. Without this, a circular face produces a
+        // single-point "polygon" that breaks containment tests.
+        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let n_samples = 8;
+            for k in 1..n_samples {
+                #[allow(clippy::cast_precision_loss)]
+                let t = t0 + (t1 - t0) * (k as f64 / n_samples as f64);
+                let pt = edge.curve().evaluate_with_endpoints(t, sp, ep);
+                pts.push(project(pt));
+            }
+        }
     }
     pts
 }
