@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.31.0](https://github.com/andymai/brepkit/compare/v2.30.0...v2.31.0) (2026-03-23)
+
+
+### Features
+
+* **algo:** position-based VPair connectivity + orientation-aware edge merge ([#400](https://github.com/andymai/brepkit/issues/400)) ([ff6f1b6](https://github.com/andymai/brepkit/commit/ff6f1b611d927bff81ece8af29f43c89b646cd01))
+* **algo:** seed face vertex cache from VV-merged vertices ([#397](https://github.com/andymai/brepkit/issues/397)) ([714bc3b](https://github.com/andymai/brepkit/commit/714bc3b338eef22408f1bab4b564c6b63437cdf4))
+* **operations:** fix unify_faces vertex identity mismatch + un-ignore 10 tests ([#401](https://github.com/andymai/brepkit/issues/401)) ([52c8b77](https://github.com/andymai/brepkit/commit/52c8b7708ae88ee66e5c38c0f12baa2e0a693fd7))
+
 ## [2.30.0](https://github.com/andymai/brepkit/compare/v2.29.1...v2.30.0) (2026-03-23)
 
 
