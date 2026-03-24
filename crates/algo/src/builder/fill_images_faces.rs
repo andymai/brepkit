@@ -11,6 +11,14 @@ use std::hash::BuildHasher;
 /// Quantized 3D position pair for CommonBlock edge matching.
 type CbEdgeKey = ((i64, i64, i64), (i64, i64, i64));
 
+/// Scale for vertex deduplication in the face splitter.
+///
+/// Uses 1e12 so only BIT-IDENTICAL positions share keys.
+/// GFA duplicate vertices are from the same computation path (d=0.0).
+/// Topologically-distinct vertices at the same modeling-tolerance
+/// position but different bit patterns remain separate.
+const VERTEX_DEDUP_SCALE: f64 = 1e12;
+
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
@@ -1017,11 +1025,10 @@ fn build_topology_face(
         vv_vertex_seed.clone();
 
     let quantize = |p: Point3| -> (i64, i64, i64) {
-        let scale = 1.0 / tol.linear;
         (
-            (p.x() * scale).round() as i64,
-            (p.y() * scale).round() as i64,
-            (p.z() * scale).round() as i64,
+            (p.x() * VERTEX_DEDUP_SCALE).round() as i64,
+            (p.y() * VERTEX_DEDUP_SCALE).round() as i64,
+            (p.z() * VERTEX_DEDUP_SCALE).round() as i64,
         )
     };
 
