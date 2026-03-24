@@ -117,8 +117,60 @@ pub fn boolean(
             .zip(center_b)
             .and_then(|(c, p)| c.classify(p, tol))
             == Some(brepkit_algo::FaceClass::Outside);
-        let b_in_a = b_center_in_a && a_center_outside_b;
-        let a_in_b = a_center_in_b && b_center_outside_a;
+        // AABB containment fallback: when a classifier is unavailable (e.g.,
+        // tessellated sphere), check if one AABB is strictly inside the other.
+        // A's AABB inside B's AABB means A ⊂ B if B's AABB is significantly
+        // larger (margin > 10% of A's diagonal to avoid false positives on
+        // overlapping same-size solids).
+        let aabb_a_in_b = aabb_a
+            .zip(aabb_b)
+            .map(|((a_min, a_max), (b_min, b_max))| {
+                let margin = tol.linear;
+                let a_inside_b = a_min.x() >= b_min.x() - margin
+                    && a_min.y() >= b_min.y() - margin
+                    && a_min.z() >= b_min.z() - margin
+                    && a_max.x() <= b_max.x() + margin
+                    && a_max.y() <= b_max.y() + margin
+                    && a_max.z() <= b_max.z() + margin;
+                // B must be strictly larger than A in at least 2 dimensions
+                let dx_a = a_max.x() - a_min.x();
+                let dy_a = a_max.y() - a_min.y();
+                let dz_a = a_max.z() - a_min.z();
+                let dx_b = b_max.x() - b_min.x();
+                let dy_b = b_max.y() - b_min.y();
+                let dz_b = b_max.z() - b_min.z();
+                let larger_dims = usize::from(dx_b > dx_a * 1.1)
+                    + usize::from(dy_b > dy_a * 1.1)
+                    + usize::from(dz_b > dz_a * 1.1);
+                a_inside_b && larger_dims >= 2
+            })
+            .unwrap_or(false);
+        let aabb_b_in_a = aabb_a
+            .zip(aabb_b)
+            .map(|((a_min, a_max), (b_min, b_max))| {
+                let margin = tol.linear;
+                let b_inside_a = b_min.x() >= a_min.x() - margin
+                    && b_min.y() >= a_min.y() - margin
+                    && b_min.z() >= a_min.z() - margin
+                    && b_max.x() <= a_max.x() + margin
+                    && b_max.y() <= a_max.y() + margin
+                    && b_max.z() <= a_max.z() + margin;
+                let dx_a = a_max.x() - a_min.x();
+                let dy_a = a_max.y() - a_min.y();
+                let dz_a = a_max.z() - a_min.z();
+                let dx_b = b_max.x() - b_min.x();
+                let dy_b = b_max.y() - b_min.y();
+                let dz_b = b_max.z() - b_min.z();
+                let larger_dims = usize::from(dx_a > dx_b * 1.1)
+                    + usize::from(dy_a > dy_b * 1.1)
+                    + usize::from(dz_a > dz_b * 1.1);
+                b_inside_a && larger_dims >= 2
+            })
+            .unwrap_or(false);
+
+        // Use classifier result when available, fall back to AABB
+        let b_in_a = (b_center_in_a && a_center_outside_b) || (cb.is_none() && aabb_b_in_a);
+        let a_in_b = (a_center_in_b && b_center_outside_a) || (ca.is_none() && aabb_a_in_b);
         // Identical-solid shortcut: both centers inside each other AND
         // bounding boxes match ⇒ A ≡ B geometrically.
         let aabbs_match = aabb_a
