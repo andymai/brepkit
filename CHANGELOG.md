@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.36.2](https://github.com/andymai/brepkit/compare/v2.36.1...v2.36.2) (2026-03-24)
+
+
+### Bug Fixes
+
+* **ops:** AABB containment fallback for tessellated solid booleans ([#421](https://github.com/andymai/brepkit/issues/421)) ([1cbca93](https://github.com/andymai/brepkit/commit/1cbca93785ee718a0269c2910df951786a55090d))
+
 ## [2.36.1](https://github.com/andymai/brepkit/compare/v2.36.0...v2.36.1) (2026-03-24)
 
 
