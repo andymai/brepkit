@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.34.0](https://github.com/andymai/brepkit/compare/v2.33.0...v2.34.0) (2026-03-24)
+
+
+### Features
+
+* **algo:** fix cylinder-box boolean — single-edge internal loops ([#409](https://github.com/andymai/brepkit/issues/409)) ([dec13a1](https://github.com/andymai/brepkit/commit/dec13a17b26114f71a8f131ccb10ed2509137047))
+* **algo:** SD face handling refactor — identity+orientation model ([#407](https://github.com/andymai/brepkit/issues/407)) ([dcf8d1f](https://github.com/andymai/brepkit/commit/dcf8d1fc4140ba5037c1220eefac12431e68eaa6))
+
 ## [2.33.0](https://github.com/andymai/brepkit/compare/v2.32.0...v2.33.0) (2026-03-23)
 
 
