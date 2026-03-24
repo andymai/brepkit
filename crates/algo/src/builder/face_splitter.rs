@@ -1469,8 +1469,11 @@ fn split_face_with_internal_loops(
                 let pt1 = edge
                     .curve_3d
                     .evaluate_with_endpoints(t_next, edge.start_3d, edge.end_3d);
-                let uv0 = surface.project_point(pt0).unwrap_or((0.0, 0.0));
-                let uv1 = surface.project_point(pt1).unwrap_or((0.0, 0.0));
+                let (Some(uv0), Some(uv1)) =
+                    (surface.project_point(pt0), surface.project_point(pt1))
+                else {
+                    continue; // skip sample if projection fails
+                };
                 area += (uv1.0 - uv0.0) * (uv1.1 + uv0.1);
             }
             area
