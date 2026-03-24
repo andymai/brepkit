@@ -122,7 +122,6 @@ fn fuse_commutativity() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn intersect_commutativity() {
     let mut topo = Topology::new();
     let a1 = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
