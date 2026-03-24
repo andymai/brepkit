@@ -117,7 +117,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             // Unsplit faces from different solids may have separate edge entities
             // for the same geometric boundary. Replacing them with the CB's
             // split_edge ensures the BuilderSolid sees shared edges.
-            let rebuilt = rebuild_face_with_cb_edges(topo, arena, face_id, &cb_qpair_edges);
+            let rebuilt = rebuild_face_with_cb_edges(topo, face_id, &cb_qpair_edges, tol);
             sub_faces.push(SubFace {
                 face_id: rebuilt.unwrap_or(face_id),
                 classification: FaceClass::Unknown,
@@ -325,18 +325,20 @@ fn expand_edge<S: BuildHasher>(
 
 /// Rebuild an unsplit face replacing boundary edges with CommonBlock shared edges.
 ///
-/// For each boundary edge of the face, checks if its PaveBlock belongs to a
-/// CommonBlock. If so, replaces the edge with the CB's `split_edge`. This
-/// ensures that unsplit faces from different solids share edge entities at
-/// their common boundaries.
+/// For each boundary edge, looks up its quantized endpoint position pair in
+/// `cb_qpair_edges`. If a matching CB edge is found (and it's a different
+/// EdgeId), replaces the edge in the face's wire with the CB's shared edge.
+/// This ensures that unsplit faces from different solids share edge entities
+/// at their common boundaries.
 ///
 /// Returns `Some(new_face_id)` if any edges were replaced, `None` if unchanged.
+/// Falls back to `None` (keeping the original face) if any wire rebuild fails.
 #[allow(clippy::too_many_lines)]
 fn rebuild_face_with_cb_edges(
     topo: &mut Topology,
-    _arena: &GfaArena,
     face_id: FaceId,
     cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
+    tol: Tolerance,
 ) -> Option<FaceId> {
     if cb_qpair_edges.is_empty() {
         return None;
@@ -348,7 +350,7 @@ fn rebuild_face_with_cb_edges(
     let outer_wid = face.outer_wire();
     let inner_wids: Vec<_> = face.inner_wires().to_vec();
 
-    let scale = 1.0 / brepkit_math::tolerance::Tolerance::new().linear;
+    let scale = 1.0 / tol.linear;
     let qpt = |p: brepkit_math::vec::Point3| -> (i64, i64, i64) {
         (
             (p.x() * scale).round() as i64,
@@ -398,7 +400,10 @@ fn rebuild_face_with_cb_edges(
         return None;
     }
 
-    // Rebuild wires with CB edge replacements
+    // Rebuild wires with CB edge replacements.
+    // Orientation: compare the original edge's oriented start/end (respecting
+    // oe.is_forward()) against the CB edge's intrinsic start/end to determine
+    // whether the new OrientedEdge should be forward or reversed.
     let remap_wire = |topo: &mut Topology,
                       wid: brepkit_topology::wire::WireId|
      -> Option<brepkit_topology::wire::WireId> {
@@ -421,17 +426,15 @@ fn rebuild_face_with_cb_edges(
                 let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
                 if let Some(&cb_edge) = cb_qpair_edges.get(&key) {
                     if cb_edge != oe.edge() {
-                        // Check if vertex order needs flipping
-                        let cb_e = topo.edge(cb_edge).ok();
-                        let needs_flip = cb_e.is_some_and(|ce| {
-                            let cs = topo.vertex(ce.start()).ok().map(|v| qpt(v.point()));
-                            cs.is_some_and(|cs| cs == qe) // CB start matches our end → flipped
-                        });
-                        let new_fwd = if needs_flip {
-                            !oe.is_forward()
-                        } else {
-                            oe.is_forward()
-                        };
+                        // Determine orientation: compare the original edge's
+                        // oriented start with the CB edge's intrinsic start.
+                        let oriented_start_q = if oe.is_forward() { qs } else { qe };
+                        let cb_start_q = topo
+                            .edge(cb_edge)
+                            .ok()
+                            .and_then(|ce| topo.vertex(ce.start()).ok())
+                            .map(|v| qpt(v.point()));
+                        let new_fwd = cb_start_q.is_some_and(|cs| cs == oriented_start_q);
                         return OrientedEdge::new(cb_edge, new_fwd);
                     }
                 }
@@ -442,11 +445,24 @@ fn rebuild_face_with_cb_edges(
         Some(topo.add_wire(new_wire))
     };
 
-    let new_outer = remap_wire(topo, outer_wid)?;
+    let Some(new_outer) = remap_wire(topo, outer_wid) else {
+        // Outer wire rebuild failed — keep original face
+        log::warn!(
+            "rebuild_face_with_cb_edges: outer wire rebuild failed for face {face_id:?}, keeping original"
+        );
+        return None;
+    };
     let mut new_inner_ids = Vec::new();
     for &iw in &inner_wids {
         if let Some(new_iw) = remap_wire(topo, iw) {
             new_inner_ids.push(new_iw);
+        } else {
+            // Inner wire rebuild failed — abort and keep original face
+            // to avoid silently dropping holes.
+            log::warn!(
+                "rebuild_face_with_cb_edges: inner wire rebuild failed for face {face_id:?}, keeping original"
+            );
+            return None;
         }
     }
 
