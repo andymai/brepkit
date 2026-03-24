@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.36.1](https://github.com/andymai/brepkit/compare/v2.36.0...v2.36.1) (2026-03-24)
+
+
+### Bug Fixes
+
+* **algo:** tighten vertex dedup scale to 1e12 in face splitter ([#419](https://github.com/andymai/brepkit/issues/419)) ([e134d77](https://github.com/andymai/brepkit/commit/e134d77f893d0d286f17850e8d59469479073639))
+
 ## [2.36.0](https://github.com/andymai/brepkit/compare/v2.35.0...v2.36.0) (2026-03-24)
 
 
