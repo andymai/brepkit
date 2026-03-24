@@ -1570,7 +1570,6 @@ fn fuse_ring_inside_shelled_box() {
 /// The Gridfinity bin has cylinder corners; this tests if curved shells
 /// fuse correctly with ring-like objects inside the cavity.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_ring_inside_shelled_cylinder() {
     let mut topo = Topology::new();
 
