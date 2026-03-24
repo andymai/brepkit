@@ -106,12 +106,25 @@ pub fn perform(
                 // Create topology vertices at the curve endpoints.
                 // For closed curves (Circle/Ellipse), start and end are the same
                 // 3D point — reuse one vertex for correct seam topology.
+                //
+                // Snap to existing vertices (from input face boundaries or
+                // earlier intersection curves) when within tolerance. This is
+                // the PutPavesOnCurve equivalent: it ensures intersection curve
+                // endpoints share vertices with face boundaries, so the face
+                // splitter produces sub-faces with consistent vertex identity.
                 let is_closed = (raw.p_start - raw.p_end).length() < tol.linear;
-                let start_vid = topo.add_vertex(Vertex::new(raw.p_start, tol.linear));
+                let start_vid =
+                    super::helpers::find_nearby_pave_vertex(topo, arena, raw.p_start, tol)
+                        .or_else(|| find_nearby_face_vertex(topo, fa, raw.p_start, tol))
+                        .or_else(|| find_nearby_face_vertex(topo, fb, raw.p_start, tol))
+                        .unwrap_or_else(|| topo.add_vertex(Vertex::new(raw.p_start, tol.linear)));
                 let end_vid = if is_closed {
                     start_vid
                 } else {
-                    topo.add_vertex(Vertex::new(raw.p_end, tol.linear))
+                    super::helpers::find_nearby_pave_vertex(topo, arena, raw.p_end, tol)
+                        .or_else(|| find_nearby_face_vertex(topo, fa, raw.p_end, tol))
+                        .or_else(|| find_nearby_face_vertex(topo, fb, raw.p_end, tol))
+                        .unwrap_or_else(|| topo.add_vertex(Vertex::new(raw.p_end, tol.linear)))
                 };
 
                 // Create a topology edge for this intersection curve.
@@ -570,6 +583,32 @@ fn ellipse_bbox(ellipse: &brepkit_math::curves::Ellipse3D) -> Aabb3 {
         })
         .collect();
     Aabb3::from_points(points)
+}
+
+/// Find an existing vertex on a face's boundary within tolerance of a point.
+///
+/// Iterates the face's outer wire vertices and returns the first one
+/// within `tol.linear` of `point`. This implements the "PutPavesOnCurve"
+/// vertex snapping: intersection curve endpoints at face boundaries reuse
+/// the face's existing boundary vertices instead of creating duplicates.
+fn find_nearby_face_vertex(
+    topo: &Topology,
+    face_id: FaceId,
+    point: Point3,
+    tol: Tolerance,
+) -> Option<brepkit_topology::vertex::VertexId> {
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        for &vid in &[edge.start(), edge.end()] {
+            let vpt = topo.vertex(vid).ok()?.point();
+            if (vpt - point).length() < tol.linear {
+                return Some(vid);
+            }
+        }
+    }
+    None
 }
 
 /// Compute AABB for a NURBS curve.
