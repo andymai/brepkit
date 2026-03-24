@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.36.3](https://github.com/andymai/brepkit/compare/v2.36.2...v2.36.3) (2026-03-24)
+
+
+### Bug Fixes
+
+* **ops:** address PR [#421](https://github.com/andymai/brepkit/issues/421) review — fix swapped AABB guards, deduplicate logic ([#423](https://github.com/andymai/brepkit/issues/423)) ([ef42dc0](https://github.com/andymai/brepkit/commit/ef42dc06ec77c4224d12451a5b278755fb7edf65))
+
 ## [2.36.2](https://github.com/andymai/brepkit/compare/v2.36.1...v2.36.2) (2026-03-24)
 
 
