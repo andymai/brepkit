@@ -188,6 +188,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 &mut shared_edge_cache,
                 &cb_qpair_edges,
                 &vv_vertex_seed,
+                arena,
             );
             let pt = split
                 .precomputed_interior
@@ -903,7 +904,98 @@ fn build_surface_info(topo: &Topology, face_id: FaceId) -> Option<SurfaceInfo> {
 /// Creates vertices at each 3D endpoint (deduplicating by position),
 /// edges between consecutive vertices, a wire from the edges, and
 /// a face with the split's surface.
-#[allow(clippy::too_many_lines, clippy::type_complexity)]
+/// Resolve vertices for a wire edge, using PaveBlock identity when available.
+///
+/// For section edges (with `pave_block_id`): looks up the PaveBlock's
+/// start/end vertices from the arena. These are the authoritative vertices
+/// created by the PaveFiller, ensuring consistent vertex identity across faces.
+///
+/// For boundary edges (without `pave_block_id`): falls back to position-based
+/// cache lookup, creating new vertices only when none exists at the position.
+fn resolve_edge_vertices(
+    topo: &mut Topology,
+    cache: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    edge: &super::split_types::OrientedPCurveEdge,
+    arena: &crate::ds::GfaArena,
+    quantize: &dyn Fn(Point3) -> (i64, i64, i64),
+    tol: Tolerance,
+) -> (
+    brepkit_topology::vertex::VertexId,
+    brepkit_topology::vertex::VertexId,
+) {
+    // Try PaveBlock-based vertex lookup for SHARED section edges only.
+    // Only use split-edge vertices when the PB belongs to a CommonBlock
+    // (shared across input solids). Non-CB section edges are local to
+    // one solid and don't need vertex identity sharing.
+    if let Some(pb_idx) = edge.pave_block_id {
+        let pb_id = arena.pave_blocks.id_from_index(pb_idx);
+        let is_cb = pb_id.is_some_and(|id| arena.pb_to_cb.contains_key(&id));
+        let pb = pb_id.and_then(|id| arena.pave_blocks.get(id));
+        if let Some(pb) = pb {
+            if let (true, Some(split_edge)) = (is_cb, pb.split_edge) {
+                // Use the split edge's actual vertices — these are the topology
+                // entities created by MakeSplitEdges and shared via CommonBlocks.
+                if let Ok(se) = topo.edge(split_edge) {
+                    let se_start = se.start();
+                    let se_end = se.end();
+
+                    // Verify position match (section edges can be forward or reversed)
+                    let start_pos = topo
+                        .vertex(se_start)
+                        .ok()
+                        .map(brepkit_topology::vertex::Vertex::point);
+                    let end_pos = topo
+                        .vertex(se_end)
+                        .ok()
+                        .map(brepkit_topology::vertex::Vertex::point);
+
+                    if let (Some(sp), Some(ep)) = (start_pos, end_pos) {
+                        let fwd_match = (sp - edge.start_3d).length() < tol.linear
+                            && (ep - edge.end_3d).length() < tol.linear;
+                        let rev_match = (sp - edge.end_3d).length() < tol.linear
+                            && (ep - edge.start_3d).length() < tol.linear;
+
+                        if fwd_match {
+                            let qs = quantize(edge.start_3d);
+                            let qe = quantize(edge.end_3d);
+                            cache.entry(qs).or_insert(se_start);
+                            cache.entry(qe).or_insert(se_end);
+                            return (se_start, se_end);
+                        }
+                        if rev_match {
+                            let qs = quantize(edge.start_3d);
+                            let qe = quantize(edge.end_3d);
+                            cache.entry(qs).or_insert(se_end);
+                            cache.entry(qe).or_insert(se_start);
+                            return (se_end, se_start);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: position-based cache lookup
+    let start_vid = {
+        let key = quantize(edge.start_3d);
+        *cache
+            .entry(key)
+            .or_insert_with(|| topo.add_vertex(Vertex::new(edge.start_3d, tol.linear)))
+    };
+    let end_vid = {
+        let key = quantize(edge.end_3d);
+        *cache
+            .entry(key)
+            .or_insert_with(|| topo.add_vertex(Vertex::new(edge.end_3d, tol.linear)))
+    };
+    (start_vid, end_vid)
+}
+
+#[allow(
+    clippy::too_many_lines,
+    clippy::type_complexity,
+    clippy::too_many_arguments
+)]
 fn build_topology_face(
     topo: &mut Topology,
     split: &super::split_types::SplitSubFace,
@@ -912,6 +1004,7 @@ fn build_topology_face(
     shared_edge_cache: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
     cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    arena: &crate::ds::GfaArena,
 ) -> Option<FaceId> {
     if split.outer_wire.is_empty() {
         return None;
@@ -932,22 +1025,15 @@ fn build_topology_face(
         )
     };
 
-    let get_or_create_vertex =
-        |topo: &mut Topology,
-         cache: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
-         pt: Point3| {
-            let key = quantize(pt);
-            *cache
-                .entry(key)
-                .or_insert_with(|| topo.add_vertex(Vertex::new(pt, tol.linear)))
-        };
-
     // Step 2: Create edges and oriented edges for the outer wire.
     let mut oriented_edges = Vec::with_capacity(split.outer_wire.len());
 
     for pcurve_edge in &split.outer_wire {
-        let start_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.start_3d);
-        let end_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.end_3d);
+        // Vertex resolution priority:
+        // 1. PaveBlock vertex identity (section edges from FF intersection)
+        // 2. Position-based cache (boundary edges, degenerate edges)
+        let (start_vid, end_vid) =
+            resolve_edge_vertices(topo, &mut vertex_cache, pcurve_edge, arena, &quantize, tol);
 
         // Edge sharing priority:
         // 0. CommonBlock position match (shared across input solids)
@@ -990,8 +1076,8 @@ fn build_topology_face(
     for inner in &split.inner_wires {
         let mut inner_oriented = Vec::with_capacity(inner.len());
         for pcurve_edge in inner {
-            let start_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.start_3d);
-            let end_vid = get_or_create_vertex(topo, &mut vertex_cache, pcurve_edge.end_3d);
+            let (start_vid, end_vid) =
+                resolve_edge_vertices(topo, &mut vertex_cache, pcurve_edge, arena, &quantize, tol);
             let edge = Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone());
             let edge_id = topo.add_edge(edge);
             inner_oriented.push(OrientedEdge::new(edge_id, pcurve_edge.forward));
