@@ -265,7 +265,6 @@ fn test_sequential_cuts_volume() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn test_sequential_boolean_vertex_drift() {
     // Perform 10 fuse+cut cycles. Volume should return to original each time.
     let mut topo = Topology::new();
