@@ -1639,7 +1639,6 @@ fn fuse_ring_inside_shelled_cylinder() {
 /// Test fuse with ring partially overlapping shell wall height
 /// (simulates lip extension below wall top).
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_ring_overlapping_shelled_box_height() {
     let mut topo = Topology::new();
 
