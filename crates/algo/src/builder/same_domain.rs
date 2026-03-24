@@ -3,15 +3,18 @@
 //! When two faces from opposing solids share the same underlying surface
 //! AND identical boundary edge sets (same vertex pairs), they are "same-domain"
 //! faces. This module detects SD groups using edge-set hashing and union-find,
-//! then performs representative replacement so the BOP sees a single face
-//! entity for each SD group.
+//! returning `SameDomainPair` records for downstream use.
 //!
 //! The SD pair list is used by [`crate::bop::select_faces`] to apply
 //! operation-specific deduplication (fuse keeps one representative,
 //! cut keeps B reversed, etc.) without encoding operation semantics
 //! into the classification pipeline.
+//!
+//! **Note:** Representative replacement (substituting all group members'
+//! images with a single representative face) is not yet implemented.
+//! Currently only pairwise SD records are emitted.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::BuildHasher;
 
 use super::SubFace;
@@ -35,11 +38,14 @@ pub struct SameDomainPair {
     pub b_contained_in_a: bool,
 }
 
-/// Canonical representation of a face's edge set for hashing.
+/// Quantized 3D grid position — collision-free vertex identity.
+type QVert = (i64, i64, i64);
+
+/// Canonical representation of a face's edge set for SD detection.
 ///
-/// Each edge is stored as a sorted vertex-index pair `(min, max)`.
+/// Each edge is stored as a sorted quantized vertex pair `(min, max)`.
 /// The set of pairs is sorted for deterministic comparison.
-type EdgeSet = Vec<(usize, usize)>;
+type EdgeSet = Vec<(QVert, QVert)>;
 
 /// Detect same-domain face pairs using edge-set hashing.
 ///
@@ -132,15 +138,18 @@ pub fn detect_same_domain<S: BuildHasher>(
     }
 
     // Step 4: Build SD pairs from union-find groups.
+    // Collect all roots that participate in pairs (O(m) not O(n*m)).
+    let mut active_roots: HashSet<usize> = HashSet::new();
+    for &(a, b) in pair_data.keys() {
+        active_roots.insert(uf.find(a));
+        active_roots.insert(uf.find(b));
+    }
+
     // Each group picks A's face with smallest index as representative.
     let mut sd_groups: HashMap<usize, Vec<usize>> = HashMap::new();
     for idx in 0..n {
         let root = uf.find(idx);
-        // Only include faces that were actually unioned (part of an SD pair)
-        if pair_data
-            .keys()
-            .any(|&(a, b)| uf.find(a) == root || uf.find(b) == root)
-        {
+        if active_roots.contains(&root) {
             sd_groups.entry(root).or_default().push(idx);
         }
     }
@@ -194,6 +203,10 @@ pub fn detect_same_domain<S: BuildHasher>(
 /// Using quantized positions instead of `VertexId` ensures that vertices
 /// from different solids that share the same position (merged by VV phase)
 /// produce matching edge sets.
+///
+/// Only the outer wire is considered. Inner wires (holes) are intentionally
+/// excluded: SD faces in boolean operations share the same outer boundary
+/// but may differ in holes (which are handled by the BOP selector).
 fn compute_edge_set_quantized(
     topo: &Topology,
     arena: &GfaArena,
@@ -203,7 +216,7 @@ fn compute_edge_set_quantized(
     let face = topo.face(face_id).ok()?;
     let wire = topo.wire(face.outer_wire()).ok()?;
 
-    let mut pairs: Vec<(usize, usize)> = Vec::with_capacity(wire.edges().len());
+    let mut pairs: Vec<(QVert, QVert)> = Vec::with_capacity(wire.edges().len());
 
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
@@ -230,18 +243,13 @@ fn compute_edge_set_quantized(
 
 /// Quantize a 3D point to integer grid coordinates.
 ///
-/// Uses a single `usize` hash of the (i64, i64, i64) triple for compact storage.
-fn quantize_point(p: brepkit_math::vec::Point3, scale: f64) -> usize {
-    let ix = (p.x() * scale).round() as i64;
-    let iy = (p.y() * scale).round() as i64;
-    let iz = (p.z() * scale).round() as i64;
-    // Combine into a single hash. Using a simple mixing function
-    // that preserves uniqueness for typical CAD coordinate ranges.
-    let mut h: u64 = 0;
-    h = h.wrapping_mul(31).wrapping_add(ix as u64);
-    h = h.wrapping_mul(31).wrapping_add(iy as u64);
-    h = h.wrapping_mul(31).wrapping_add(iz as u64);
-    h as usize
+/// Returns the collision-free `(i64, i64, i64)` triple directly.
+fn quantize_point(p: brepkit_math::vec::Point3, scale: f64) -> QVert {
+    (
+        (p.x() * scale).round() as i64,
+        (p.y() * scale).round() as i64,
+        (p.z() * scale).round() as i64,
+    )
 }
 
 /// Simple union-find (disjoint set) with path compression and union by rank.
