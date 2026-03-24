@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.35.0](https://github.com/andymai/brepkit/compare/v2.34.0...v2.35.0) (2026-03-24)
+
+
+### Features
+
+* **algo:** edge-set hashing for same-domain face detection ([#414](https://github.com/andymai/brepkit/issues/414)) ([548f366](https://github.com/andymai/brepkit/commit/548f366b3ee0c3b01484a0de6fc5c58ec1dc5e7b))
+* **algo:** rebuild unsplit faces with CommonBlock shared edges ([#412](https://github.com/andymai/brepkit/issues/412)) ([3afe48a](https://github.com/andymai/brepkit/commit/3afe48a89b960b20b7971547b38548d5e1562b81))
+
 ## [2.34.0](https://github.com/andymai/brepkit/compare/v2.33.0...v2.34.0) (2026-03-24)
 
 
