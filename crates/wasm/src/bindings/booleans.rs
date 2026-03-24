@@ -475,7 +475,6 @@ mod tests {
     // ── boolean volume check ─────────────────────────────────────────
 
     #[test]
-    #[ignore = "BuilderSolid regression — GFA shell assembly changes Euler check outcome"]
     fn cut_reduces_volume() {
         let mut k = BrepKernel::new();
         let r = k.execute_batch(
