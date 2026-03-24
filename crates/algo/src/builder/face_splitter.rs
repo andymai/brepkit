@@ -140,7 +140,19 @@ pub fn split_face_2d(
     // boundary in UV space. Project each section endpoint to UV and test
     // if it lies on any boundary edge's UV segment (within tolerance).
     // This is surface-type agnostic and handles curved boundary edges.
-    let all_sections_internal = if !is_plane && !sections.is_empty() {
+    let all_sections_internal = if sections.is_empty() {
+        false
+    } else if is_plane {
+        // Only for plane faces with exactly 1 closed section curve.
+        // Multiple circles on the same plane face need the wire builder
+        // for correct loop formation.
+        sections.len() == 1
+            && sections.iter().all(|s| {
+                (s.start - s.end).length() < 1e-10 // closed curve
+            })
+    } else {
+        // Non-plane faces: check if all section endpoints are off the
+        // boundary in UV space.
         let uv_tol = 0.01; // ~0.6 deg in angular coordinates
         sections.iter().all(|s| {
             let start_on_boundary =
@@ -148,8 +160,6 @@ pub fn split_face_2d(
             let end_on_boundary = is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol);
             !start_on_boundary && !end_on_boundary
         })
-    } else {
-        false
     };
 
     if all_sections_internal {
@@ -1398,8 +1408,9 @@ fn split_face_with_internal_loops(
         loop {
             let last_end = chain.last().map_or(loop_start_3d, |e| e.end_3d);
 
-            // Check if the loop is closed.
-            if chain.len() > 1 && (last_end - loop_start_3d).length() < tol_3d * 100.0 {
+            // Check if the loop is closed (includes single-edge circles
+            // where start ≈ end).
+            if (last_end - loop_start_3d).length() < tol_3d * 100.0 {
                 break;
             }
 
@@ -1417,7 +1428,9 @@ fn split_face_with_internal_loops(
             }
         }
 
-        if chain.len() >= 2 {
+        // Accept single-edge closed loops (e.g., Circle sections from
+        // cylinder-plane intersections).
+        if !chain.is_empty() {
             loops.push(chain);
         }
     }

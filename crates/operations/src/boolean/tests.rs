@@ -707,7 +707,6 @@ fn cut_box_by_translated_cylinder() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn sequential_cylinder_cuts() {
     let mut topo = Topology::new();
     let plate = crate::primitives::make_box(&mut topo, 50.0, 30.0, 10.0).unwrap();
