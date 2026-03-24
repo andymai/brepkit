@@ -140,7 +140,19 @@ pub fn split_face_2d(
     // boundary in UV space. Project each section endpoint to UV and test
     // if it lies on any boundary edge's UV segment (within tolerance).
     // This is surface-type agnostic and handles curved boundary edges.
-    let all_sections_internal = if !is_plane && !sections.is_empty() {
+    let all_sections_internal = if sections.is_empty() {
+        false
+    } else if is_plane {
+        // Only for plane faces with exactly 1 closed section curve.
+        // Multiple circles on the same plane face need the wire builder
+        // for correct loop formation.
+        sections.len() == 1
+            && sections.iter().all(|s| {
+                (s.start - s.end).length() < tol.linear // closed curve
+            })
+    } else {
+        // Non-plane faces: check if all section endpoints are off the
+        // boundary in UV space.
         let uv_tol = 0.01; // ~0.6 deg in angular coordinates
         sections.iter().all(|s| {
             let start_on_boundary =
@@ -148,8 +160,6 @@ pub fn split_face_2d(
             let end_on_boundary = is_point_on_boundary_uv(s.end, &surface, &boundary_edges, uv_tol);
             !start_on_boundary && !end_on_boundary
         })
-    } else {
-        false
     };
 
     if all_sections_internal {
@@ -1398,8 +1408,9 @@ fn split_face_with_internal_loops(
         loop {
             let last_end = chain.last().map_or(loop_start_3d, |e| e.end_3d);
 
-            // Check if the loop is closed.
-            if chain.len() > 1 && (last_end - loop_start_3d).length() < tol_3d * 100.0 {
+            // Check if the loop is closed (includes single-edge circles
+            // where start ≈ end).
+            if (last_end - loop_start_3d).length() < tol_3d * 100.0 {
                 break;
             }
 
@@ -1417,7 +1428,10 @@ fn split_face_with_internal_loops(
             }
         }
 
-        if chain.len() >= 2 {
+        // Accept only closed chains (single-edge circles or multi-edge
+        // closed loops). Reject open chains from orphaned arcs.
+        let chain_end = chain.last().map_or(loop_start_3d, |e| e.end_3d);
+        if !chain.is_empty() && (chain_end - loop_start_3d).length() < tol_3d * 100.0 {
             loops.push(chain);
         }
     }
@@ -1431,12 +1445,46 @@ fn split_face_with_internal_loops(
     // in UV and reverse if the loop encloses the larger region.
     let mut all_holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
     for loop_edges in &mut loops {
-        // Compute signed area in UV.
-        let mut signed_area = 0.0;
-        for edge in loop_edges.iter() {
-            signed_area +=
-                (edge.end_uv.x() - edge.start_uv.x()) * (edge.end_uv.y() + edge.start_uv.y());
-        }
+        // Compute signed area in UV. For single-edge closed curves
+        // (circles), sample points along the pcurve since start_uv ≈ end_uv
+        // gives zero area with just the endpoints.
+        let signed_area = if loop_edges.len() == 1 {
+            // For single-edge closed curves (circles), sample UV points
+            // by projecting 3D curve samples onto the surface. The pcurve
+            // has degenerate start_uv ≈ end_uv for closed curves.
+            let edge = &loop_edges[0];
+            let n = 32;
+            let mut area = 0.0;
+            let (t0, t1) = edge
+                .curve_3d
+                .domain_with_endpoints(edge.start_3d, edge.end_3d);
+            for k in 0..n {
+                #[allow(clippy::cast_precision_loss)]
+                let t_cur = t0 + (t1 - t0) * (k as f64 / n as f64);
+                #[allow(clippy::cast_precision_loss)]
+                let t_next = t0 + (t1 - t0) * ((k + 1) as f64 / n as f64);
+                let pt0 = edge
+                    .curve_3d
+                    .evaluate_with_endpoints(t_cur, edge.start_3d, edge.end_3d);
+                let pt1 = edge
+                    .curve_3d
+                    .evaluate_with_endpoints(t_next, edge.start_3d, edge.end_3d);
+                let (Some(uv0), Some(uv1)) =
+                    (surface.project_point(pt0), surface.project_point(pt1))
+                else {
+                    continue; // skip sample if projection fails
+                };
+                area += (uv1.0 - uv0.0) * (uv1.1 + uv0.1);
+            }
+            area
+        } else {
+            let mut area = 0.0;
+            for edge in loop_edges.iter() {
+                area +=
+                    (edge.end_uv.x() - edge.start_uv.x()) * (edge.end_uv.y() + edge.start_uv.y());
+            }
+            area
+        };
         // If signed area is positive (CW in standard UV), the loop encloses
         // the "right" region. If negative (CCW), it encloses the complement.
         // Heuristic: use signed_area sign directly -- negative means CCW in
