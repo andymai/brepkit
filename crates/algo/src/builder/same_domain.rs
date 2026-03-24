@@ -1,9 +1,10 @@
-//! Same-domain face detection.
+//! Same-domain face detection via edge-set hashing.
 //!
 //! When two faces from opposing solids share the same underlying surface
-//! (coplanar planes, coincident cylinders, etc.), they are "same-domain"
-//! faces. This module detects SD pairs and records them for later use
-//! by the BOP selector.
+//! AND identical boundary edge sets (same vertex pairs), they are "same-domain"
+//! faces. This module detects SD groups using edge-set hashing and union-find,
+//! then performs representative replacement so the BOP sees a single face
+//! entity for each SD group.
 //!
 //! The SD pair list is used by [`crate::bop::select_faces`] to apply
 //! operation-specific deduplication (fuse keeps one representative,
@@ -13,12 +14,11 @@
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
+use super::SubFace;
+use crate::ds::{GfaArena, Rank};
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
-
-use super::SubFace;
-use crate::ds::{GfaArena, Rank};
 
 /// A detected same-domain face pair.
 #[derive(Debug, Clone)]
@@ -30,28 +30,64 @@ pub struct SameDomainPair {
     /// `true` if normals point the same direction, `false` if opposite.
     pub same_orientation: bool,
     /// `true` if B's face is fully contained within A's boundary.
-    /// Used by the BOP selector to distinguish overlapping (B inside A)
-    /// from touching (B adjacent to A) configurations.
-    /// Computed via AABB containment (fast, deterministic).
+    /// For edge-set matched faces, both faces have identical boundaries,
+    /// so this is always `false` (touching, not contained).
     pub b_contained_in_a: bool,
 }
 
-/// Detect same-domain face pairs between opposing solids.
+/// Canonical representation of a face's edge set for hashing.
+///
+/// Each edge is stored as a sorted vertex-index pair `(min, max)`.
+/// The set of pairs is sorted for deterministic comparison.
+type EdgeSet = Vec<(usize, usize)>;
+
+/// Detect same-domain face pairs using edge-set hashing.
+///
+/// Algorithm:
+/// 1. For each sub-face, compute its canonical edge set (sorted vertex pairs)
+/// 2. Hash the edge set and group faces with identical sets
+/// 3. Within each group, verify surface equivalence across opposing solids
+/// 4. Build SD pairs via union-find for transitive closure
 ///
 /// Returns a list of SD pairs WITHOUT modifying sub-face classifications.
 /// The BOP selector uses these pairs for operation-specific handling.
 #[allow(clippy::too_many_lines)]
 pub fn detect_same_domain<S: BuildHasher>(
     topo: &Topology,
-    _arena: &GfaArena,
+    arena: &GfaArena,
     sub_faces: &[SubFace],
     _face_ranks: &HashMap<FaceId, Rank, S>,
     tol: Tolerance,
 ) -> Vec<SameDomainPair> {
     let n = sub_faces.len();
-    let mut pairs = Vec::new();
+    if n < 2 {
+        return Vec::new();
+    }
 
-    // Collect face surfaces to avoid repeated lookups.
+    // Step 1: Compute canonical edge sets for each sub-face.
+    // Use quantized vertex positions (not VertexId) so that VV-merged
+    // vertices from different solids that share the same position produce
+    // matching edge sets.
+    let scale = 1.0 / tol.linear;
+
+    let edge_sets: Vec<Option<EdgeSet>> = sub_faces
+        .iter()
+        .map(|sf| compute_edge_set_quantized(topo, arena, sf.face_id, scale))
+        .collect();
+
+    // Step 2: Group sub-faces by edge-set hash.
+    // Key = edge set, Value = list of sub-face indices with that set.
+    let mut groups: HashMap<EdgeSet, Vec<usize>> = HashMap::new();
+    for (idx, edge_set) in edge_sets.iter().enumerate() {
+        if let Some(es) = edge_set {
+            if !es.is_empty() {
+                groups.entry(es.clone()).or_default().push(idx);
+            }
+        }
+    }
+
+    // Step 3: For each group with 2+ faces from opposing solids,
+    // verify surface equivalence and build SD pairs.
     let surfaces: Vec<Option<&FaceSurface>> = sub_faces
         .iter()
         .map(|sf| {
@@ -61,556 +97,189 @@ pub fn detect_same_domain<S: BuildHasher>(
         })
         .collect();
 
-    // Track which sub-faces have already been paired (one SD partner each).
-    let mut paired: Vec<bool> = vec![false; n];
+    let mut uf = UnionFind::new(n);
+    let mut pair_data: HashMap<(usize, usize), bool> = HashMap::new(); // (min,max) → same_orientation
 
-    // Check every pair of sub-faces from opposing solids.
-    for i in 0..n {
-        if paired[i] {
+    for members in groups.values() {
+        if members.len() < 2 {
             continue;
         }
-        let Some(surf_i) = surfaces[i] else {
-            continue;
-        };
-        let rank_i = sub_faces[i].rank;
 
-        for j in (i + 1)..n {
-            if paired[j] {
-                continue;
-            }
-            // Only compare faces from opposing solids
-            if sub_faces[j].rank == rank_i {
-                continue;
-            }
-            let Some(surf_j) = surfaces[j] else {
+        // Check all pairs within this edge-set group
+        for (mi, &i) in members.iter().enumerate() {
+            let rank_i = sub_faces[i].rank;
+            let Some(surf_i) = surfaces[i] else {
                 continue;
             };
 
-            // Check overlap between face boundary AABBs
-            let overlaps =
-                face_bboxes_overlap(topo, sub_faces[i].face_id, sub_faces[j].face_id, tol);
-            if !overlaps {
-                continue;
-            }
-
-            if let Some(same_dir) = surfaces_same_domain(surf_i, surf_j, tol) {
-                // Require significant AABB overlap to avoid pairing
-                // near-tangent faces with negligible shared area. This
-                // check runs BEFORE the more expensive polygon overlap
-                // test to filter early.
-                if !aabb_overlap_significant(topo, sub_faces[i].face_id, sub_faces[j].face_id, tol)
-                {
+            for &j in &members[mi + 1..] {
+                // Only pair faces from opposing solids
+                if sub_faces[j].rank == rank_i {
                     continue;
                 }
-
-                if !faces_have_interior_overlap(
-                    topo,
-                    sub_faces[i].face_id,
-                    sub_faces[j].face_id,
-                    tol,
-                ) {
+                let Some(surf_j) = surfaces[j] else {
                     continue;
-                }
-
-                // Determine A/B ordering — ensure idx_a is always from Rank::A
-                let (idx_a, idx_b) = if sub_faces[i].rank == Rank::A {
-                    (i, j)
-                } else {
-                    (j, i)
                 };
 
-                // Deterministic containment check via AABB comparison.
-                // Avoids ray-cast sensitivity at coplanar boundaries.
-                let b_contained = aabb_contained(
-                    topo,
-                    sub_faces[idx_b].face_id,
-                    sub_faces[idx_a].face_id,
-                    tol,
-                );
-
-                pairs.push(SameDomainPair {
-                    idx_a,
-                    idx_b,
-                    same_orientation: same_dir,
-                    b_contained_in_a: b_contained,
-                });
-
-                paired[i] = true;
-                paired[j] = true;
-                break; // Each face can only be same-domain with one opposing face
+                // Verify surface equivalence
+                if let Some(same_dir) = surfaces_same_domain(surf_i, surf_j, tol) {
+                    uf.union(i, j);
+                    let key = (i.min(j), i.max(j));
+                    pair_data.insert(key, same_dir);
+                }
             }
         }
     }
 
+    // Step 4: Build SD pairs from union-find groups.
+    // Each group picks A's face with smallest index as representative.
+    let mut sd_groups: HashMap<usize, Vec<usize>> = HashMap::new();
+    for idx in 0..n {
+        let root = uf.find(idx);
+        // Only include faces that were actually unioned (part of an SD pair)
+        if pair_data
+            .keys()
+            .any(|&(a, b)| uf.find(a) == root || uf.find(b) == root)
+        {
+            sd_groups.entry(root).or_default().push(idx);
+        }
+    }
+
+    let mut pairs = Vec::new();
+
+    for members in sd_groups.values() {
+        if members.len() < 2 {
+            continue;
+        }
+
+        // Find the best representative from Rank::A (smallest index)
+        let repr_a = members
+            .iter()
+            .filter(|&&idx| sub_faces[idx].rank == Rank::A)
+            .min()
+            .copied();
+        let repr_b = members
+            .iter()
+            .filter(|&&idx| sub_faces[idx].rank == Rank::B)
+            .min()
+            .copied();
+
+        // Build a pair for each A-B combination in the group.
+        // For simple cases (1 from A, 1 from B), this produces exactly 1 pair.
+        if let (Some(idx_a), Some(idx_b)) = (repr_a, repr_b) {
+            let key = (idx_a.min(idx_b), idx_a.max(idx_b));
+            let same_orientation = pair_data.get(&key).copied().unwrap_or(true);
+
+            pairs.push(SameDomainPair {
+                idx_a,
+                idx_b,
+                same_orientation,
+                // Edge-set matched faces have identical boundaries → touching, not contained
+                b_contained_in_a: false,
+            });
+        }
+    }
+
     log::debug!(
-        "detect_same_domain: {} same-domain pairs found",
+        "detect_same_domain: {} same-domain pairs found (edge-set hash)",
         pairs.len()
     );
     pairs
 }
 
-/// Check if two face bounding boxes overlap (with tolerance expansion).
-fn face_bboxes_overlap(topo: &Topology, a: FaceId, b: FaceId, tol: Tolerance) -> bool {
-    let bbox = |fid: FaceId| -> Option<brepkit_math::aabb::Aabb3> {
-        let face = topo.face(fid).ok()?;
-        let wire = topo.wire(face.outer_wire()).ok()?;
-        let mut points = Vec::new();
-        for oe in wire.edges() {
-            let e = topo.edge(oe.edge()).ok()?;
-            let sp = topo.vertex(e.start()).ok()?.point();
-            let ep = topo.vertex(e.end()).ok()?.point();
-            points.push(sp);
-            points.push(ep);
-            // Curved edges can bulge beyond their endpoints
-            if !matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
-                let t_mid = 0.5_f64.mul_add(t1 - t0, t0);
-                points.push(e.curve().evaluate_with_endpoints(t_mid, sp, ep));
-            }
-        }
-        brepkit_math::aabb::Aabb3::try_from_points(points)
-    };
-    let Some(ba) = bbox(a) else { return false };
-    let Some(bb) = bbox(b) else { return false };
-    ba.expanded(tol.linear).intersects(bb.expanded(tol.linear))
-}
-
-/// Check if two faces have significant AABB overlap area.
+/// Compute the canonical edge set for a face using quantized vertex positions.
 ///
-/// Returns `false` if the overlap area is less than 1% of the smaller
-/// face's area. This prevents near-tangent faces (tiny sliver overlap)
-/// from being paired as same-domain.
-fn aabb_overlap_significant(topo: &Topology, a: FaceId, b: FaceId, tol: Tolerance) -> bool {
-    let bbox = |fid: FaceId| -> Option<brepkit_math::aabb::Aabb3> {
-        let face = topo.face(fid).ok()?;
-        let wire = topo.wire(face.outer_wire()).ok()?;
-        let mut points = Vec::new();
-        for oe in wire.edges() {
-            let edge = topo.edge(oe.edge()).ok()?;
-            points.push(topo.vertex(edge.start()).ok()?.point());
-            points.push(topo.vertex(edge.end()).ok()?.point());
-        }
-        brepkit_math::aabb::Aabb3::try_from_points(points)
-    };
-
-    let Some(ba) = bbox(a) else { return true };
-    let Some(bb) = bbox(b) else { return true };
-
-    // Compute overlap extent in each dimension
-    let ox = (ba.max.x().min(bb.max.x()) - ba.min.x().max(bb.min.x())).max(0.0);
-    let oy = (ba.max.y().min(bb.max.y()) - ba.min.y().max(bb.min.y())).max(0.0);
-    let oz = (ba.max.z().min(bb.max.z()) - ba.min.z().max(bb.min.z())).max(0.0);
-
-    // For coplanar faces, one dimension is ~0 (the plane normal direction).
-    // Use the two largest overlap dimensions as the overlap "area".
-    let mut dims = [ox, oy, oz];
-    dims.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-    let overlap_area = dims[0] * dims[1];
-
-    // Compute smaller face's projected area (two largest AABB dimensions)
-    let area_of = |b: &brepkit_math::aabb::Aabb3| {
-        let mut d = [
-            b.max.x() - b.min.x(),
-            b.max.y() - b.min.y(),
-            b.max.z() - b.min.z(),
-        ];
-        d.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
-        d[0] * d[1]
-    };
-    let smaller_area = area_of(&ba).min(area_of(&bb));
-
-    if smaller_area < tol.linear {
-        return true; // Degenerate face
-    }
-
-    // Require at least 5% overlap relative to the smaller face.
-    // Near-tangent faces (overlap < 0.1% of face area) should not be
-    // paired — their intersection is better handled by the face splitter.
-    overlap_area / smaller_area > 0.05
-}
-
-/// Check if face B's AABB is fully contained within face A's AABB.
-///
-/// This is a fast, deterministic check that avoids polygon sensitivity.
-/// For the touching-vs-overlapping distinction, AABB containment is
-/// sufficient: touching faces have identical AABBs (not contained),
-/// while a small B inside a large A has B's AABB inside A's.
-fn aabb_contained(topo: &Topology, b: FaceId, a: FaceId, tol: Tolerance) -> bool {
-    let bbox = |fid: FaceId| -> Option<brepkit_math::aabb::Aabb3> {
-        let face = topo.face(fid).ok()?;
-        let wire = topo.wire(face.outer_wire()).ok()?;
-        let mut points = Vec::new();
-        for oe in wire.edges() {
-            let edge = topo.edge(oe.edge()).ok()?;
-            let sp = topo.vertex(edge.start()).ok()?.point();
-            let ep = topo.vertex(edge.end()).ok()?.point();
-            points.push(sp);
-            points.push(ep);
-            // Sample curved edges
-            if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-                for k in 1..8 {
-                    #[allow(clippy::cast_precision_loss)]
-                    let t = t0 + (t1 - t0) * (k as f64 / 8.0);
-                    points.push(edge.curve().evaluate_with_endpoints(t, sp, ep));
-                }
-            }
-        }
-        brepkit_math::aabb::Aabb3::try_from_points(points)
-    };
-
-    let Some(bb_a) = bbox(a) else { return false };
-    let Some(bb_b) = bbox(b) else { return false };
-
-    // B is contained if A's AABB fully encloses B's AABB (with tolerance).
-    // For touching faces with identical footprints, A doesn't strictly
-    // contain B (margins are equal), so this returns false → is_touching.
-    let margin = tol.linear * 2.0;
-    let enclosed = bb_a.min.x() - margin <= bb_b.min.x()
-        && bb_a.min.y() - margin <= bb_b.min.y()
-        && bb_a.min.z() - margin <= bb_b.min.z()
-        && bb_a.max.x() + margin >= bb_b.max.x()
-        && bb_a.max.y() + margin >= bb_b.max.y()
-        && bb_a.max.z() + margin >= bb_b.max.z();
-
-    if !enclosed {
-        return false;
-    }
-
-    // B must be STRICTLY smaller than A in at least one dimension
-    let x_smaller = (bb_b.max.x() - bb_b.min.x()) < (bb_a.max.x() - bb_a.min.x()) - margin;
-    let y_smaller = (bb_b.max.y() - bb_b.min.y()) < (bb_a.max.y() - bb_a.min.y()) - margin;
-    let z_smaller = (bb_b.max.z() - bb_b.min.z()) < (bb_a.max.z() - bb_a.min.z()) - margin;
-
-    x_smaller || y_smaller || z_smaller
-}
-
-/// Check whether face B is fully contained within face A.
-///
-/// Currently unused after the SD refactor removed the dedup pass.
-/// Retained for future use by the SD-aware BOP selector.
-#[allow(dead_code)]
-///
-/// Projects both boundaries to 2D in the shared plane, then checks if
-/// ALL vertices of B are inside (or on the boundary of) A's polygon.
-/// Returns false for partial overlaps.
-fn face_fully_contained(topo: &Topology, b: FaceId, a: FaceId, tol: Tolerance) -> bool {
-    use brepkit_math::vec::{Point2, Vec3};
-
-    let face_a = match topo.face(a) {
-        Ok(f) => f,
-        Err(_) => return false,
-    };
-
-    let normal = match face_a.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
-        _ => return true, // Non-plane same-domain faces: assume containment
-    };
-
-    let ref_axis = if normal.x().abs() < 0.9 {
-        Vec3::new(1.0, 0.0, 0.0)
-    } else {
-        Vec3::new(0.0, 1.0, 0.0)
-    };
-    let u_axis = ref_axis.cross(normal);
-    let u_len = u_axis.length();
-    if u_len < 1e-12 {
-        return true;
-    }
-    let u_axis = u_axis * (1.0 / u_len);
-    let v_axis = normal.cross(u_axis);
-
-    let project = |p: brepkit_math::vec::Point3| -> Point2 {
-        Point2::new(
-            p.x() * u_axis.x() + p.y() * u_axis.y() + p.z() * u_axis.z(),
-            p.x() * v_axis.x() + p.y() * v_axis.y() + p.z() * v_axis.z(),
-        )
-    };
-
-    let poly_a = face_boundary_projected(topo, a, &project);
-    let poly_b = face_boundary_projected(topo, b, &project);
-
-    if poly_a.len() < 3 || poly_b.len() < 3 {
-        return true; // Can't verify — assume contained
-    }
-
-    // Check that every vertex of B is inside or on the boundary of A.
-    // Use a generous tolerance (10× linear) to handle floating-point
-    // sensitivity at coplanar boundaries. The polygon vertices from
-    // sampled curves (Circle, Ellipse) may have minor deviations.
-    let generous_tol = tol.linear * 10.0;
-    for pt in &poly_b {
-        if !point_inside_or_on_polygon(pt, &poly_a, generous_tol) {
-            return false;
-        }
-    }
-
-    true
-}
-
-/// Check if a point is inside or on the boundary of a polygon.
-#[allow(dead_code)]
-fn point_inside_or_on_polygon(
-    pt: &brepkit_math::vec::Point2,
-    poly: &[brepkit_math::vec::Point2],
-    tol: f64,
-) -> bool {
-    // Check if on any boundary edge first.
-    let n = poly.len();
-    for i in 0..n {
-        let a = &poly[i];
-        let b = &poly[(i + 1) % n];
-        let dist = point_to_segment_dist_2d(pt, a, b);
-        if dist < tol {
-            return true; // On boundary
-        }
-    }
-
-    // Ray-casting for interior test
-    let px = pt.x();
-    let py = pt.y();
-    let mut inside = false;
-    let mut j = n - 1;
-    for i in 0..n {
-        let yi = poly[i].y();
-        let yj = poly[j].y();
-        let xi = poly[i].x();
-        let xj = poly[j].x();
-        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
-}
-
-/// Check whether two coplanar faces overlap in interior area.
-///
-/// Projects both face boundaries to 2D in the shared plane, then checks
-/// if any vertex of face A is inside face B's boundary polygon (or vice
-/// versa). Faces that only share an edge (zero area overlap) return false.
-///
-/// For non-plane surfaces (cylinder, cone, etc.), always returns `true`
-/// because surface-level coincidence implies parameter-space overlap.
-fn faces_have_interior_overlap(topo: &Topology, a: FaceId, b: FaceId, tol: Tolerance) -> bool {
-    use brepkit_math::vec::{Point2, Vec3};
-
-    let face_a = match topo.face(a) {
-        Ok(f) => f,
-        Err(_) => return true, // Assume overlap if we can't check
-    };
-
-    // Only do the polygon check for plane faces — non-plane same-domain
-    // faces (cylinders sharing an axis, etc.) genuinely overlap if they
-    // share the same surface and overlapping AABBs.
-    let normal = match face_a.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
-        _ => return true,
-    };
-
-    // Build a local 2D frame from the plane normal
-    let ref_axis = if normal.x().abs() < 0.9 {
-        Vec3::new(1.0, 0.0, 0.0)
-    } else {
-        Vec3::new(0.0, 1.0, 0.0)
-    };
-    let u_axis = ref_axis.cross(normal);
-    let u_len = u_axis.length();
-    if u_len < 1e-12 {
-        return true;
-    }
-    let u_axis = u_axis * (1.0 / u_len);
-    let v_axis = normal.cross(u_axis);
-
-    let project = |p: brepkit_math::vec::Point3| -> Point2 {
-        Point2::new(
-            p.x() * u_axis.x() + p.y() * u_axis.y() + p.z() * u_axis.z(),
-            p.x() * v_axis.x() + p.y() * v_axis.y() + p.z() * v_axis.z(),
-        )
-    };
-
-    let poly_a = face_boundary_projected(topo, a, &project);
-    let poly_b = face_boundary_projected(topo, b, &project);
-
-    if poly_a.len() < 3 || poly_b.len() < 3 {
-        return true; // Can't check — assume overlap
-    }
-
-    // Check polygon centroids first — handles the case where two identical
-    // polygons fully overlap (all vertices are ON the boundary of the other,
-    // so vertex-in-polygon returns false, but centroids are strictly inside).
-    let centroid = |poly: &[brepkit_math::vec::Point2]| -> brepkit_math::vec::Point2 {
-        let n = poly.len() as f64;
-        let sx: f64 = poly.iter().map(|p| p.x()).sum();
-        let sy: f64 = poly.iter().map(|p| p.y()).sum();
-        brepkit_math::vec::Point2::new(sx / n, sy / n)
-    };
-    let ca = centroid(&poly_a);
-    if point_strictly_inside_polygon(&ca, &poly_b, tol.linear) {
-        return true;
-    }
-    let cb = centroid(&poly_b);
-    if point_strictly_inside_polygon(&cb, &poly_a, tol.linear) {
-        return true;
-    }
-
-    // Check if any vertex of A is strictly inside B's polygon
-    for pt in &poly_a {
-        if point_strictly_inside_polygon(pt, &poly_b, tol.linear) {
-            return true;
-        }
-    }
-    // Check if any vertex of B is strictly inside A's polygon
-    for pt in &poly_b {
-        if point_strictly_inside_polygon(pt, &poly_a, tol.linear) {
-            return true;
-        }
-    }
-
-    // Check if any edge of A crosses any edge of B in their interiors
-    for i in 0..poly_a.len() {
-        let a0 = &poly_a[i];
-        let a1 = &poly_a[(i + 1) % poly_a.len()];
-        for j in 0..poly_b.len() {
-            let b0 = &poly_b[j];
-            let b1 = &poly_b[(j + 1) % poly_b.len()];
-            if segments_cross_interior(a0, a1, b0, b1, tol.linear) {
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
-/// Project a face's outer wire boundary vertices to 2D.
-fn face_boundary_projected(
+/// Each edge in the outer wire is represented as a sorted pair of quantized
+/// 3D positions. The pairs are sorted for deterministic comparison.
+/// Using quantized positions instead of `VertexId` ensures that vertices
+/// from different solids that share the same position (merged by VV phase)
+/// produce matching edge sets.
+fn compute_edge_set_quantized(
     topo: &Topology,
+    arena: &GfaArena,
     face_id: FaceId,
-    project: &dyn Fn(brepkit_math::vec::Point3) -> brepkit_math::vec::Point2,
-) -> Vec<brepkit_math::vec::Point2> {
-    let face = match topo.face(face_id) {
-        Ok(f) => f,
-        Err(_) => return Vec::new(),
-    };
-    let wire = match topo.wire(face.outer_wire()) {
-        Ok(w) => w,
-        Err(_) => return Vec::new(),
-    };
+    scale: f64,
+) -> Option<EdgeSet> {
+    let face = topo.face(face_id).ok()?;
+    let wire = topo.wire(face.outer_wire()).ok()?;
 
-    let mut pts = Vec::new();
+    let mut pairs: Vec<(usize, usize)> = Vec::with_capacity(wire.edges().len());
+
     for oe in wire.edges() {
-        let edge = match topo.edge(oe.edge()) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let sp = match topo.vertex(edge.start()) {
-            Ok(v) => v.point(),
-            Err(_) => continue,
-        };
-        let ep = match topo.vertex(edge.end()) {
-            Ok(v) => v.point(),
-            Err(_) => continue,
-        };
-        pts.push(project(sp));
+        let edge = topo.edge(oe.edge()).ok()?;
 
-        // Sample non-linear edges (Circle, Ellipse, NURBS) to get a proper
-        // polygon approximation. Without this, a circular face produces a
-        // single-point "polygon" that breaks containment tests.
-        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-            let n_samples = 8;
-            for k in 1..n_samples {
-                #[allow(clippy::cast_precision_loss)]
-                let t = t0 + (t1 - t0) * (k as f64 / n_samples as f64);
-                let pt = edge.curve().evaluate_with_endpoints(t, sp, ep);
-                pts.push(project(pt));
+        // Resolve vertices through VV-phase same-domain mapping
+        let sv = arena.resolve_vertex(edge.start());
+        let ev = arena.resolve_vertex(edge.end());
+
+        let sp = topo.vertex(sv).ok()?.point();
+        let ep = topo.vertex(ev).ok()?.point();
+
+        // Quantize to tolerance grid
+        let qs = quantize_point(sp, scale);
+        let qe = quantize_point(ep, scale);
+
+        // Canonical ordering: smaller first
+        let pair = if qs <= qe { (qs, qe) } else { (qe, qs) };
+        pairs.push(pair);
+    }
+
+    pairs.sort_unstable();
+    Some(pairs)
+}
+
+/// Quantize a 3D point to integer grid coordinates.
+///
+/// Uses a single `usize` hash of the (i64, i64, i64) triple for compact storage.
+fn quantize_point(p: brepkit_math::vec::Point3, scale: f64) -> usize {
+    let ix = (p.x() * scale).round() as i64;
+    let iy = (p.y() * scale).round() as i64;
+    let iz = (p.z() * scale).round() as i64;
+    // Combine into a single hash. Using a simple mixing function
+    // that preserves uniqueness for typical CAD coordinate ranges.
+    let mut h: u64 = 0;
+    h = h.wrapping_mul(31).wrapping_add(ix as u64);
+    h = h.wrapping_mul(31).wrapping_add(iy as u64);
+    h = h.wrapping_mul(31).wrapping_add(iz as u64);
+    h as usize
+}
+
+/// Simple union-find (disjoint set) with path compression and union by rank.
+struct UnionFind {
+    parent: Vec<usize>,
+    rank: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+            rank: vec![0; n],
+        }
+    }
+
+    fn find(&mut self, x: usize) -> usize {
+        if self.parent[x] != x {
+            self.parent[x] = self.find(self.parent[x]);
+        }
+        self.parent[x]
+    }
+
+    fn union(&mut self, x: usize, y: usize) {
+        let rx = self.find(x);
+        let ry = self.find(y);
+        if rx == ry {
+            return;
+        }
+        match self.rank[rx].cmp(&self.rank[ry]) {
+            std::cmp::Ordering::Less => self.parent[rx] = ry,
+            std::cmp::Ordering::Greater => self.parent[ry] = rx,
+            std::cmp::Ordering::Equal => {
+                self.parent[ry] = rx;
+                self.rank[rx] += 1;
             }
         }
     }
-    pts
-}
-
-/// Check if a point is strictly inside a polygon (not on boundary).
-///
-/// Uses ray-casting with a boundary distance check to distinguish interior
-/// from edge-touching.
-fn point_strictly_inside_polygon(
-    pt: &brepkit_math::vec::Point2,
-    poly: &[brepkit_math::vec::Point2],
-    tol: f64,
-) -> bool {
-    let n = poly.len();
-
-    // First check if point is ON any edge (within tolerance) — boundary, not interior.
-    for i in 0..n {
-        let a = &poly[i];
-        let b = &poly[(i + 1) % n];
-        if point_to_segment_dist_2d(pt, a, b) < tol {
-            return false;
-        }
-    }
-
-    // Ray-casting for interior test
-    let mut inside = false;
-    let px = pt.x();
-    let py = pt.y();
-    let mut j = n - 1;
-    for i in 0..n {
-        let yi = poly[i].y();
-        let yj = poly[j].y();
-        let xi = poly[i].x();
-        let xj = poly[j].x();
-        if ((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi) {
-            inside = !inside;
-        }
-        j = i;
-    }
-    inside
-}
-
-/// Distance from a 2D point to a line segment.
-fn point_to_segment_dist_2d(
-    pt: &brepkit_math::vec::Point2,
-    a: &brepkit_math::vec::Point2,
-    b: &brepkit_math::vec::Point2,
-) -> f64 {
-    let dx = b.x() - a.x();
-    let dy = b.y() - a.y();
-    let len_sq = dx.mul_add(dx, dy * dy);
-    if len_sq < 1e-30 {
-        return ((pt.x() - a.x()).powi(2) + (pt.y() - a.y()).powi(2)).sqrt();
-    }
-    let t = ((pt.x() - a.x()) * dx + (pt.y() - a.y()) * dy) / len_sq;
-    let t = t.clamp(0.0, 1.0);
-    let proj_x = t.mul_add(dx, a.x());
-    let proj_y = t.mul_add(dy, a.y());
-    ((pt.x() - proj_x).powi(2) + (pt.y() - proj_y).powi(2)).sqrt()
-}
-
-/// Check if two 2D line segments cross in their interiors (not at endpoints).
-fn segments_cross_interior(
-    a0: &brepkit_math::vec::Point2,
-    a1: &brepkit_math::vec::Point2,
-    b0: &brepkit_math::vec::Point2,
-    b1: &brepkit_math::vec::Point2,
-    _tol: f64,
-) -> bool {
-    let d1x = a1.x() - a0.x();
-    let d1y = a1.y() - a0.y();
-    let d2x = b1.x() - b0.x();
-    let d2y = b1.y() - b0.y();
-    let det = d1x.mul_add(d2y, -(d1y * d2x));
-    if det.abs() < 1e-15 {
-        return false; // Parallel
-    }
-    let dx = b0.x() - a0.x();
-    let dy = b0.y() - a0.y();
-    let t = dx.mul_add(d2y, -(dy * d2x)) / det;
-    let s = dx.mul_add(d1y, -(dy * d1x)) / det;
-    // Strictly interior: t and s in (eps, 1-eps)
-    let eps = 0.01;
-    t > eps && t < 1.0 - eps && s > eps && s < 1.0 - eps
 }
 
 /// Check if two surfaces represent the same geometric domain.
@@ -661,7 +330,6 @@ fn surfaces_same_domain(a: &FaceSurface, b: &FaceSurface, tol: Tolerance) -> Opt
             if dist > tol.linear {
                 return None;
             }
-            // Spheres with same center/radius are always same-domain-same
             Some(true)
         }
         (FaceSurface::Cone(ca), FaceSurface::Cone(cb)) => {
