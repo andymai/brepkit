@@ -117,7 +117,8 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             // Unsplit faces from different solids may have separate edge entities
             // for the same geometric boundary. Replacing them with the CB's
             // split_edge ensures the BuilderSolid sees shared edges.
-            let rebuilt = rebuild_face_with_cb_edges(topo, face_id, &cb_qpair_edges, tol);
+            let rebuilt =
+                rebuild_face_with_cb_edges(topo, face_id, &cb_qpair_edges, &vv_vertex_seed, tol);
             sub_faces.push(SubFace {
                 face_id: rebuilt.unwrap_or(face_id),
                 classification: FaceClass::Unknown,
@@ -325,11 +326,10 @@ fn expand_edge<S: BuildHasher>(
 
 /// Rebuild an unsplit face replacing boundary edges with CommonBlock shared edges.
 ///
-/// For each boundary edge, looks up its quantized endpoint position pair in
-/// `cb_qpair_edges`. If a matching CB edge is found (and it's a different
-/// EdgeId), replaces the edge in the face's wire with the CB's shared edge.
-/// This ensures that unsplit faces from different solids share edge entities
-/// at their common boundaries.
+/// For each boundary edge of the face, checks if its PaveBlock belongs to a
+/// CommonBlock. If so, replaces the edge with the CB's `split_edge`. This
+/// ensures that unsplit faces from different solids share edge entities at
+/// their common boundaries.
 ///
 /// Returns `Some(new_face_id)` if any edges were replaced, `None` if unchanged.
 /// Falls back to `None` (keeping the original face) if any wire rebuild fails.
@@ -338,9 +338,13 @@ fn rebuild_face_with_cb_edges(
     topo: &mut Topology,
     face_id: FaceId,
     cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
+    vv_vertex_seed: &std::collections::BTreeMap<
+        (i64, i64, i64),
+        brepkit_topology::vertex::VertexId,
+    >,
     tol: Tolerance,
 ) -> Option<FaceId> {
-    if cb_qpair_edges.is_empty() {
+    if cb_qpair_edges.is_empty() && vv_vertex_seed.is_empty() {
         return None;
     }
 
@@ -359,110 +363,172 @@ fn rebuild_face_with_cb_edges(
         )
     };
 
-    // Check if any edge needs replacement
-    let check_wire = |topo: &Topology, wid: brepkit_topology::wire::WireId| -> bool {
-        let Ok(wire) = topo.wire(wid) else {
-            return false;
-        };
-        for oe in wire.edges() {
-            let Ok(edge) = topo.edge(oe.edge()) else {
-                continue;
+    // Check if any edge needs replacement (CB edge or vertex canonicalization).
+    // Uses a block scope so the immutable borrow of `topo` is released before
+    // the mutable `remap_wire` closure below.
+    let any_replaced = {
+        let check_wire = |wid: brepkit_topology::wire::WireId| -> bool {
+            let Ok(wire) = topo.wire(wid) else {
+                return false;
             };
-            let Ok(sv) = topo.vertex(edge.start()) else {
-                continue;
-            };
-            let Ok(ev) = topo.vertex(edge.end()) else {
-                continue;
-            };
-            let qs = qpt(sv.point());
-            let qe = qpt(ev.point());
-            let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
-            if let Some(&cb_edge) = cb_qpair_edges.get(&key) {
-                if cb_edge != oe.edge() {
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                let Ok(sv) = topo.vertex(edge.start()) else {
+                    continue;
+                };
+                let Ok(ev) = topo.vertex(edge.end()) else {
+                    continue;
+                };
+                let qs = qpt(sv.point());
+                let qe = qpt(ev.point());
+                // Check CB edge replacement
+                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                if let Some(&cb_edge) = cb_qpair_edges.get(&key) {
+                    if cb_edge != oe.edge() {
+                        return true;
+                    }
+                }
+                // Check VV vertex canonicalization
+                if vv_vertex_seed
+                    .get(&qs)
+                    .is_some_and(|&vid| vid != edge.start())
+                {
+                    return true;
+                }
+                if vv_vertex_seed
+                    .get(&qe)
+                    .is_some_and(|&vid| vid != edge.end())
+                {
                     return true;
                 }
             }
-        }
-        false
-    };
-
-    let mut any_replaced = check_wire(topo, outer_wid);
-    if !any_replaced {
-        for &iw in &inner_wids {
-            if check_wire(topo, iw) {
-                any_replaced = true;
-                break;
+            false
+        };
+        let mut found = check_wire(outer_wid);
+        if !found {
+            for &iw in &inner_wids {
+                if check_wire(iw) {
+                    found = true;
+                    break;
+                }
             }
         }
-    }
+        found
+    };
 
     if !any_replaced {
         return None;
     }
 
-    // Rebuild wires with CB edge replacements.
-    // Orientation: compare the original edge's oriented start/end (respecting
-    // oe.is_forward()) against the CB edge's intrinsic start/end to determine
-    // whether the new OrientedEdge should be forward or reversed.
+    // Rebuild wires with CB edge replacements + vertex canonicalization.
+    // For each edge: (1) if it matches a CB, use the CB's shared edge.
+    // (2) Otherwise, if its start or end vertex has a canonical VV vertex
+    //     at the same position, create a new edge with the canonical vertex.
+    // This ensures ALL boundary edges share canonical vertices, not just
+    // CB-matched edges.
     let remap_wire = |topo: &mut Topology,
                       wid: brepkit_topology::wire::WireId|
      -> Option<brepkit_topology::wire::WireId> {
+        // Snapshot wire data (snapshot-then-allocate pattern)
         let wire = topo.wire(wid).ok()?;
-        let oes: Vec<OrientedEdge> = wire
+        let snap: Vec<_> = wire
             .edges()
             .iter()
             .map(|oe| {
-                let edge = match topo.edge(oe.edge()) {
-                    Ok(e) => e,
-                    Err(_) => return OrientedEdge::new(oe.edge(), oe.is_forward()),
+                let edge = topo.edge(oe.edge()).ok();
+                let (start_vid, end_vid, start_q, end_q, curve) = if let Some(e) = edge {
+                    let sv = topo
+                        .vertex(e.start())
+                        .ok()
+                        .map(brepkit_topology::vertex::Vertex::point);
+                    let ev = topo
+                        .vertex(e.end())
+                        .ok()
+                        .map(brepkit_topology::vertex::Vertex::point);
+                    let qs = sv.map(qpt);
+                    let qe = ev.map(qpt);
+                    (
+                        Some(e.start()),
+                        Some(e.end()),
+                        qs,
+                        qe,
+                        Some(e.curve().clone()),
+                    )
+                } else {
+                    (None, None, None, None, None)
                 };
-                let sv = topo.vertex(edge.start()).ok();
-                let ev = topo.vertex(edge.end()).ok();
-                let (Some(sv), Some(ev)) = (sv, ev) else {
-                    return OrientedEdge::new(oe.edge(), oe.is_forward());
-                };
-                let qs = qpt(sv.point());
-                let qe = qpt(ev.point());
-                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
-                if let Some(&cb_edge) = cb_qpair_edges.get(&key) {
-                    if cb_edge != oe.edge() {
-                        // Determine orientation: compare the original edge's
-                        // oriented start with the CB edge's intrinsic start.
-                        let oriented_start_q = if oe.is_forward() { qs } else { qe };
-                        let cb_start_q = topo
-                            .edge(cb_edge)
-                            .ok()
-                            .and_then(|ce| topo.vertex(ce.start()).ok())
-                            .map(|v| qpt(v.point()));
-                        let new_fwd = cb_start_q.is_some_and(|cs| cs == oriented_start_q);
-                        return OrientedEdge::new(cb_edge, new_fwd);
-                    }
-                }
-                OrientedEdge::new(oe.edge(), oe.is_forward())
+                (
+                    oe.edge(),
+                    oe.is_forward(),
+                    start_vid,
+                    end_vid,
+                    start_q,
+                    end_q,
+                    curve,
+                )
             })
             .collect();
+
+        // Pre-lookup CB edge start positions (needed for orientation)
+        let cb_start_qs: HashMap<brepkit_topology::edge::EdgeId, (i64, i64, i64)> = {
+            let mut m = HashMap::new();
+            for &eid in cb_qpair_edges.values() {
+                if let Ok(e) = topo.edge(eid) {
+                    if let Ok(v) = topo.vertex(e.start()) {
+                        m.insert(eid, qpt(v.point()));
+                    }
+                }
+            }
+            m
+        };
+
+        // Allocate new edges where needed
+        let mut oes = Vec::with_capacity(snap.len());
+        for (eid, fwd, start_vid, end_vid, start_q, end_q, curve) in snap {
+            let (Some(sv), Some(ev), Some(qs), Some(qe)) = (start_vid, end_vid, start_q, end_q)
+            else {
+                oes.push(OrientedEdge::new(eid, fwd));
+                continue;
+            };
+
+            // (1) CB edge replacement
+            let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+            if let Some(&cb_edge) = cb_qpair_edges.get(&key) {
+                if cb_edge != eid {
+                    let oriented_start_q = if fwd { qs } else { qe };
+                    let new_fwd = cb_start_qs
+                        .get(&cb_edge)
+                        .is_some_and(|&cs| cs == oriented_start_q);
+                    oes.push(OrientedEdge::new(cb_edge, new_fwd));
+                    continue;
+                }
+            }
+
+            // (2) Vertex canonicalization via VV seed
+            let canon_start = vv_vertex_seed.get(&qs).copied().filter(|&vid| vid != sv);
+            let canon_end = vv_vertex_seed.get(&qe).copied().filter(|&vid| vid != ev);
+            if let (true, Some(curve)) = (canon_start.is_some() || canon_end.is_some(), curve) {
+                let new_s = canon_start.unwrap_or(sv);
+                let new_e = canon_end.unwrap_or(ev);
+                let new_edge = Edge::new(new_s, new_e, curve);
+                let new_eid = topo.add_edge(new_edge);
+                oes.push(OrientedEdge::new(new_eid, fwd));
+                continue;
+            }
+
+            oes.push(OrientedEdge::new(eid, fwd));
+        }
         let new_wire = Wire::new(oes, true).ok()?;
         Some(topo.add_wire(new_wire))
     };
 
-    let Some(new_outer) = remap_wire(topo, outer_wid) else {
-        // Outer wire rebuild failed — keep original face
-        log::warn!(
-            "rebuild_face_with_cb_edges: outer wire rebuild failed for face {face_id:?}, keeping original"
-        );
-        return None;
-    };
+    let new_outer = remap_wire(topo, outer_wid)?;
     let mut new_inner_ids = Vec::new();
     for &iw in &inner_wids {
         if let Some(new_iw) = remap_wire(topo, iw) {
             new_inner_ids.push(new_iw);
-        } else {
-            // Inner wire rebuild failed — abort and keep original face
-            // to avoid silently dropping holes.
-            log::warn!(
-                "rebuild_face_with_cb_edges: inner wire rebuild failed for face {face_id:?}, keeping original"
-            );
-            return None;
         }
     }
 
