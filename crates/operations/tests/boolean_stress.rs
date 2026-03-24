@@ -73,7 +73,6 @@ fn coplanar_fuse_shared_face() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn coplanar_cut_shared_face() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -563,7 +562,6 @@ fn cut_asymmetric_boxes() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn self_fuse() {
     // Fusing a solid with a copy of itself.
     let mut topo = Topology::new();
@@ -576,7 +574,6 @@ fn self_fuse() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn self_intersect() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -828,7 +825,6 @@ fn fuse_two_cylinders() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn cut_cylinder_from_cylinder() {
     let mut topo = Topology::new();
     let a = make_cylinder(&mut topo, 2.0, 3.0).unwrap();
@@ -844,7 +840,6 @@ fn cut_cylinder_from_cylinder() {
 // ===========================================================================
 
 #[test]
-#[ignore = "post-BOP edge merge regression — tiny overlap solid not found"]
 fn volume_tiny_overlap() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 5.0, 5.0, 5.0);
