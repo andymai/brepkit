@@ -498,9 +498,12 @@ fn rebuild_face_with_cb_edges(
             if let Some(&cb_edge) = cb_qpair_edges.get(&key) {
                 if cb_edge != eid {
                     let oriented_start_q = if fwd { qs } else { qe };
+                    // If we can't look up the CB edge's start position,
+                    // preserve the original orientation rather than
+                    // guessing `false`.
                     let new_fwd = cb_start_qs
                         .get(&cb_edge)
-                        .is_some_and(|&cs| cs == oriented_start_q);
+                        .map_or(fwd, |&cs| cs == oriented_start_q);
                     oes.push(OrientedEdge::new(cb_edge, new_fwd));
                     continue;
                 }
@@ -527,9 +530,9 @@ fn rebuild_face_with_cb_edges(
     let new_outer = remap_wire(topo, outer_wid)?;
     let mut new_inner_ids = Vec::new();
     for &iw in &inner_wids {
-        if let Some(new_iw) = remap_wire(topo, iw) {
-            new_inner_ids.push(new_iw);
-        }
+        // If remapping fails, keep the original inner wire rather than
+        // silently dropping it (which would remove a hole from the face).
+        new_inner_ids.push(remap_wire(topo, iw).unwrap_or(iw));
     }
 
     let mut new_face = Face::new(new_outer, new_inner_ids, surface);
