@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.36.0](https://github.com/andymai/brepkit/compare/v2.35.0...v2.36.0) (2026-03-24)
+
+
+### Features
+
+* **algo:** use split-edge vertices for CB section edges in face splitter ([#418](https://github.com/andymai/brepkit/issues/418)) ([0eb57ec](https://github.com/andymai/brepkit/commit/0eb57ec8929040a80cd0f90fcfa1e35499d9b0f1))
+* **algo:** VV vertex canonicalization in unsplit face rebuild ([#415](https://github.com/andymai/brepkit/issues/415)) ([cacd715](https://github.com/andymai/brepkit/commit/cacd715cac85cef2edac18605a62ee71654163d7))
+
 ## [2.35.0](https://github.com/andymai/brepkit/compare/v2.34.0...v2.35.0) (2026-03-24)
 
 
