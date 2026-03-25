@@ -179,19 +179,13 @@ impl Builder {
             self.tol,
         );
 
-        // SD representative replacement: for each SD pair, replace B's
-        // face_id with A's face_id. This ensures edge sharing because both
-        // sub-faces reference the same topology face entity, and the BOP
-        // selector's SD handling discards the duplicate.
-        for pair in &self.sd_pairs {
-            let a_face = self.sub_faces[pair.idx_a].face_id;
-            self.sub_faces[pair.idx_b].face_id = a_face;
-            log::debug!(
-                "Builder: SD replacement: sub_faces[{}].face_id = {:?} (was B's face)",
-                pair.idx_b,
-                a_face
-            );
-        }
+        // Note: SD representative replacement (replacing B's face_id with
+        // A's face_id) was attempted but produces degenerate 2-edge faces
+        // because both sub-face entries then point to the same face entity,
+        // and the BOP selector can't distinguish them. The correct approach
+        // is to let BOP keep A's face and discard B's (which it already does),
+        // then fix edge sharing at the BuilderSolid level via
+        // merge_duplicate_edges.
     }
 
     /// Phase 2: classify each sub-face as inside/outside the opposing solid.
