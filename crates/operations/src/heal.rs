@@ -1045,6 +1045,38 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
         }
     }
 
+    // Step 1c: Position-based edge adjacency for GFA results with duplicate vertices.
+    // GFA sub-faces from different original faces have different EdgeIds at the
+    // same position. Group faces by quantized vertex-pair position to catch
+    // adjacencies that the topology-based edge_face_map misses.
+    let pos_scale = 1e7_f64; // 1.0 / default linear tolerance
+    #[allow(clippy::type_complexity)]
+    let mut pos_edge_faces: HashMap<((i64, i64, i64), (i64, i64, i64)), Vec<FaceId>> =
+        HashMap::new();
+    for &fid in &all_face_ids {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let sp = topo.vertex(edge.start())?.point();
+                let ep = topo.vertex(edge.end())?.point();
+                let qs = (
+                    (sp.x() * pos_scale).round() as i64,
+                    (sp.y() * pos_scale).round() as i64,
+                    (sp.z() * pos_scale).round() as i64,
+                );
+                let qe = (
+                    (ep.x() * pos_scale).round() as i64,
+                    (ep.y() * pos_scale).round() as i64,
+                    (ep.z() * pos_scale).round() as i64,
+                );
+                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                pos_edge_faces.entry(key).or_default().push(fid);
+            }
+        }
+    }
+
     // Step 2: Find connected components of faces sharing edges on the same surface.
     let face_index_map: HashMap<usize, usize> = all_face_ids
         .iter()
@@ -1110,6 +1142,41 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
                 let surface_b = topo.face(faces[j])?.surface().clone();
                 if surfaces_equivalent(&surface_a, &surface_b)
                     && normals_compatible_at_edge(topo, faces[i], faces[j], &surface_a)
+                {
+                    uf_union(&mut parent, fa_idx, fb_idx);
+                }
+            }
+        }
+    }
+
+    // Union faces sharing edges at the same position (different EdgeIds).
+    // This catches GFA sub-faces from different original faces that have
+    // different EdgeIds at the same geometric position.
+    for faces in pos_edge_faces.values() {
+        if faces.len() < 2 {
+            continue;
+        }
+        // Deduplicate face IDs (same face can appear multiple times)
+        let mut unique: Vec<FaceId> = faces.clone();
+        unique.sort_by_key(|f| f.index());
+        unique.dedup();
+        if unique.len() < 2 {
+            continue;
+        }
+        for i in 0..unique.len() {
+            for j in (i + 1)..unique.len() {
+                let fa_idx = match face_index_map.get(&unique[i].index()) {
+                    Some(&idx) => idx,
+                    None => continue,
+                };
+                let fb_idx = match face_index_map.get(&unique[j].index()) {
+                    Some(&idx) => idx,
+                    None => continue,
+                };
+                let surface_a = topo.face(unique[i])?.surface().clone();
+                let surface_b = topo.face(unique[j])?.surface().clone();
+                if surfaces_equivalent(&surface_a, &surface_b)
+                    && normals_compatible_at_edge(topo, unique[i], unique[j], &surface_a)
                 {
                     uf_union(&mut parent, fa_idx, fb_idx);
                 }
