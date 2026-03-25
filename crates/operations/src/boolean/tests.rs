@@ -103,6 +103,57 @@ fn diagnose_fuse_overlapping_cubes_edges() {
     );
 }
 
+/// Direct GFA call from operations crate — bypasses the boolean() wrapper.
+/// Documents the current state: 14 faces produced but up to 6 overshared
+/// edges remain due to `cb_qpair_edges`/`rebuild_face_with_cb_edges`
+/// matching CB edges from unrelated face pairs. The algo-level test has
+/// 0 non-manifold edges; the operations-level oversharing comes from
+/// cross-plane CB edge reuse in unsplit face rebuilding.
+#[test]
+fn gfa_direct_fuse_overlapping_manifold() {
+    use std::collections::HashMap;
+
+    let mut topo = Topology::new();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+
+    let algo_op = brepkit_algo::bop::BooleanOp::Fuse;
+    let result = brepkit_algo::gfa::boolean(&mut topo, algo_op, a, b).unwrap();
+
+    let s = topo.solid(result).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
+
+    let mut edge_face_count: HashMap<EdgeId, usize> = HashMap::new();
+    for &fid in sh.faces() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).unwrap();
+            for oe in wire.edges() {
+                *edge_face_count.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+
+    let faces = sh.faces().len();
+    let non_manifold = edge_face_count.values().filter(|&&n| n != 2).count();
+
+    let boundary = edge_face_count.values().filter(|&&n| n == 1).count();
+    let overshared = edge_face_count.values().filter(|&&n| n > 2).count();
+    eprintln!(
+        "Direct GFA: F={faces} E={} NM={non_manifold} (boundary={boundary} over={overshared})",
+        edge_face_count.len()
+    );
+    assert_eq!(faces, 14, "GFA should produce 14 faces");
+    // Known issue: 4 overshared edges from rebuild_face_with_cb_edges matching
+    // CB edges from unrelated face pairs. The algo-level test has 0 non-manifold
+    // (no rebuild_face_with_cb_edges). The cb_qpair lookup in
+    // rebuild_face_with_cb_edges needs face-context filtering.
+    assert!(
+        non_manifold <= 6,
+        "expected <=6 non-manifold edges (known cb_qpair issue), got {non_manifold}"
+    );
+}
+
 // ── 1D overlapping tests (offset on one axis) ───────────────────────
 
 #[test]
