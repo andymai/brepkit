@@ -1571,6 +1571,8 @@ fn sweep_miter(
 
         // If we have a previous segment's end ring, replace this segment's
         // start ring with the miter ring (computed from bisector plane).
+        #[allow(clippy::useless_let_if_seq)]
+        let mut miter_ring_edges_for_reuse: Option<Vec<brepkit_topology::edge::EdgeId>> = None;
         if let Some(ref prev_ring) = prev_end_ring {
             // The kink point is where the previous segment ended / this one starts.
             let kink_idx = seg_idx - 1;
@@ -1688,19 +1690,36 @@ fn sweep_miter(
             // miter cap faces are needed — the transition quad faces already
             // connect prev_end_ring→miter_ring.
             ring_verts[0] = miter_ring;
+            miter_ring_edges_for_reuse = Some(miter_ring_edges);
         }
 
-        // Create ring edges.
+        // Create ring edges. If the start ring was replaced by a miter ring,
+        // reuse the miter_ring_edges so both the miter transition faces and
+        // this segment's side faces reference the same edge entities.
         let mut ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> =
             Vec::with_capacity(num_segments + 1);
-        for ring in &ring_verts {
-            let edges: Vec<_> = (0..n)
-                .map(|i| {
-                    let next = (i + 1) % n;
-                    topo.add_edge(Edge::new(ring[i], ring[next], EdgeCurve::Line))
-                })
-                .collect();
-            ring_edges.push(edges);
+        for (ring_idx, ring) in ring_verts.iter().enumerate() {
+            if ring_idx == 0 {
+                if let Some(ref reused) = miter_ring_edges_for_reuse {
+                    ring_edges.push(reused.clone());
+                } else {
+                    let edges: Vec<_> = (0..n)
+                        .map(|i| {
+                            let next = (i + 1) % n;
+                            topo.add_edge(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+                        })
+                        .collect();
+                    ring_edges.push(edges);
+                }
+            } else {
+                let edges: Vec<_> = (0..n)
+                    .map(|i| {
+                        let next = (i + 1) % n;
+                        topo.add_edge(Edge::new(ring[i], ring[next], EdgeCurve::Line))
+                    })
+                    .collect();
+                ring_edges.push(edges);
+            }
         }
 
         // Create path edges.
@@ -2451,15 +2470,17 @@ mod tests {
     /// Helper: create an L-shaped polyline path (two line segments with
     /// a 90-degree turn).
     fn l_shaped_path() -> NurbsCurve {
-        // Degree-1 NURBS with 3 control points: (0,0,0)→(5,0,0)→(5,5,0).
+        // Degree-1 NURBS: (0,0,0)→(0,0,5)→(5,0,5). Path goes along +Z
+        // then turns +X — perpendicular to the XY-plane unit square
+        // profile so the swept cross-section has nonzero area.
         // Internal knot at t=0.5 creates a C0 kink.
         NurbsCurve::new(
             1,
             vec![0.0, 0.0, 0.5, 1.0, 1.0],
             vec![
                 Point3::new(0.0, 0.0, 0.0),
-                Point3::new(5.0, 0.0, 0.0),
-                Point3::new(5.0, 5.0, 0.0),
+                Point3::new(0.0, 0.0, 5.0),
+                Point3::new(5.0, 0.0, 5.0),
             ],
             vec![1.0, 1.0, 1.0],
         )
@@ -2508,7 +2529,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "miter joint geometry assembly needs debugging"]
     fn sweep_miter_l_shaped_path() {
         let mut topo = Topology::new();
         let profile = make_unit_square_face(&mut topo);
@@ -2547,9 +2567,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "miter joint geometry assembly needs debugging"]
     fn sweep_miter_l_shaped_volume_correct() {
-        // L-shaped path: (0,0,0)→(5,0,0)→(5,5,0) with 1×1 square profile.
+        // L-shaped path: (0,0,0)→(0,0,5)→(5,0,5) with 1×1 square profile.
         // With miter, the volume is two rectangular prisms joined at a 45-degree
         // miter plane. Each leg has length ~5, profile area ~1, so total is
         // roughly 10 (minus/plus the miter overlap which approximately cancels).
@@ -2575,15 +2594,16 @@ mod tests {
 
     #[test]
     fn sweep_miter_u_shaped_path() {
-        // U-shaped path: 3 segments with 2 kinks.
+        // U-shaped path: 3 segments with 2 kinks, in ZX plane so
+        // the XY-plane profile has nonzero cross-section area.
         let path = NurbsCurve::new(
             1,
             vec![0.0, 0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0, 1.0],
             vec![
                 Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.0, 0.0, 5.0),
+                Point3::new(5.0, 0.0, 5.0),
                 Point3::new(5.0, 0.0, 0.0),
-                Point3::new(5.0, 5.0, 0.0),
-                Point3::new(0.0, 5.0, 0.0),
             ],
             vec![1.0, 1.0, 1.0, 1.0],
         )
