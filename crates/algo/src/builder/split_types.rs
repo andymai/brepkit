@@ -7,6 +7,7 @@ use brepkit_math::curves2d::Curve2D;
 use brepkit_math::vec::{Point2, Point3};
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::vertex::VertexId;
 
 use super::plane_frame::PlaneFrame;
 use crate::ds::Rank;
@@ -44,6 +45,15 @@ pub struct OrientedPCurveEdge {
     /// section edges from the same FF intersection curve share this ID
     /// across different faces, enabling manifold edge topology.
     pub pave_block_id: Option<usize>,
+    /// Original topology VertexId at the start position. Set when this
+    /// edge is a boundary segment whose start comes from an original
+    /// face wire vertex. Reserved for future use by `resolve_edge_vertices`
+    /// to reuse exact vertex identity instead of position-based lookup.
+    #[allow(dead_code)]
+    pub start_vid: Option<VertexId>,
+    /// Original topology VertexId at the end position.
+    #[allow(dead_code)]
+    pub end_vid: Option<VertexId>,
 }
 
 /// An intersection curve between two faces, with pcurves on each.

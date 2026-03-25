@@ -366,6 +366,8 @@ mod tests {
             forward: true,
             source_edge_idx: None,
             pave_block_id: None,
+            start_vid: None,
+            end_vid: None,
         }
     }
 
