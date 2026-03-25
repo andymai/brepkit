@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.37.4](https://github.com/andymai/brepkit/compare/v2.37.3...v2.37.4) (2026-03-25)
+
+
+### Bug Fixes
+
+* **ops:** position-based edge adjacency in unify_faces ([#437](https://github.com/andymai/brepkit/issues/437)) ([abc4e4c](https://github.com/andymai/brepkit/commit/abc4e4c6f4c669e2e9f2cccb160ed809faa3b3de))
+
 ## [2.37.3](https://github.com/andymai/brepkit/compare/v2.37.2...v2.37.3) (2026-03-25)
 
 
