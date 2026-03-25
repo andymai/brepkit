@@ -151,6 +151,72 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
     }
 }
 
+/// Check if a section curve already exists at this position for either face.
+///
+/// Searches `arena.curves` for any existing intersection curve involving
+/// `face_a` or `face_b` whose endpoints match `p_start`/`p_end` within
+/// tolerance. This prevents the coplanar phase from creating duplicate
+/// section edges that already exist from the regular FF phase.
+fn has_existing_section_at(
+    arena: &GfaArena,
+    face_a: FaceId,
+    face_b: FaceId,
+    p_start: Point3,
+    p_end: Point3,
+    tol: Tolerance,
+) -> bool {
+    for curve in &arena.curves {
+        // Must involve at least one of our faces
+        if curve.face_a != face_a
+            && curve.face_a != face_b
+            && curve.face_b != face_a
+            && curve.face_b != face_b
+        {
+            continue;
+        }
+
+        // Check AABB overlap
+        let edge_min = Point3::new(
+            p_start.x().min(p_end.x()),
+            p_start.y().min(p_end.y()),
+            p_start.z().min(p_end.z()),
+        );
+        let edge_max = Point3::new(
+            p_start.x().max(p_end.x()),
+            p_start.y().max(p_end.y()),
+            p_start.z().max(p_end.z()),
+        );
+        let expanded = curve.bbox.expanded(tol.linear);
+        if edge_min.x() > expanded.max.x()
+            || edge_max.x() < expanded.min.x()
+            || edge_min.y() > expanded.max.y()
+            || edge_max.y() < expanded.min.y()
+            || edge_min.z() > expanded.max.z()
+            || edge_max.z() < expanded.min.z()
+        {
+            continue;
+        }
+
+        // Check endpoint match: midpoint of proposed edge must be near the
+        // existing curve's midpoint. Use midpoint instead of endpoint to
+        // handle reversed-direction curves.
+        let mid = Point3::new(
+            (p_start.x() + p_end.x()) * 0.5,
+            (p_start.y() + p_end.y()) * 0.5,
+            (p_start.z() + p_end.z()) * 0.5,
+        );
+        let curve_mid = Point3::new(
+            (curve.bbox.min.x() + curve.bbox.max.x()) * 0.5,
+            (curve.bbox.min.y() + curve.bbox.max.y()) * 0.5,
+            (curve.bbox.min.z() + curve.bbox.max.z()) * 0.5,
+        );
+        if (mid - curve_mid).length() < tol.linear * 10.0 {
+            return true;
+        }
+    }
+    false
+}
+
 /// Check if an FF interference already exists for this face pair.
 fn has_existing_ff_interference(arena: &GfaArena, fa: FaceId, fb: FaceId) -> bool {
     arena.interference.ff.iter().any(|interf| {
@@ -183,16 +249,23 @@ fn process_coplanar_pair(
     let edges_a = face_boundary_edges_2d(topo, face_a, &frame)?;
     let edges_b = face_boundary_edges_2d(topo, face_b, &frame)?;
 
-    // For each boundary edge of face_b, check if it's inside face_a
+    // For each boundary edge of face_b, check if it's inside face_a.
+    // Skip edges that already have a section curve from the regular FF phase
+    // at the same position (prevents duplicate section edges that create
+    // spurious inner wires in the face splitter).
     for &(_, p2d_start, p2d_end, p3d_start, p3d_end) in &edges_b {
-        if should_create_section_edge(p2d_start, p2d_end, &poly_a, &edges_a, tol.linear) {
+        if should_create_section_edge(p2d_start, p2d_end, &poly_a, &edges_a, tol.linear)
+            && !has_existing_section_at(arena, face_a, face_b, p3d_start, p3d_end, tol)
+        {
             create_section_edge(topo, arena, face_a, face_b, p3d_start, p3d_end, tol)?;
         }
     }
 
     // For each boundary edge of face_a, check if it's inside face_b
     for &(_, p2d_start, p2d_end, p3d_start, p3d_end) in &edges_a {
-        if should_create_section_edge(p2d_start, p2d_end, &poly_b, &edges_b, tol.linear) {
+        if should_create_section_edge(p2d_start, p2d_end, &poly_b, &edges_b, tol.linear)
+            && !has_existing_section_at(arena, face_a, face_b, p3d_start, p3d_end, tol)
+        {
             create_section_edge(topo, arena, face_a, face_b, p3d_start, p3d_end, tol)?;
         }
     }
