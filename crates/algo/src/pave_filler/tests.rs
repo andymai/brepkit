@@ -796,8 +796,11 @@ fn trace_builder_overlapping_box_fuse() {
             .and_then(|f| topo.wire(f.outer_wire()).ok())
             .map(|w| w.edges().len())
             .unwrap_or(0);
+        let ipt = sf
+            .interior_point
+            .map(|p| format!("({:.3},{:.3},{:.3})", p.x(), p.y(), p.z()));
         eprintln!(
-            "  SF[{i}]: {:?} {:?} {surface_desc} edges={n_edges}",
+            "  SF[{i}]: {:?} {:?} {surface_desc} edges={n_edges} ipt={ipt:?}",
             sf.rank, sf.classification
         );
     }
