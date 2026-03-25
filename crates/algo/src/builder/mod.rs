@@ -130,6 +130,12 @@ impl Builder {
         Ok((self.topo, solid_id))
     }
 
+    /// Get the sub-faces, SD pairs, and topology for testing.
+    #[cfg(test)]
+    pub(crate) fn debug_info(&self) -> (&[SubFace], &[same_domain::SameDomainPair], &Topology) {
+        (&self.sub_faces, &self.sd_pairs, &self.topo)
+    }
+
     /// Build the face-to-rank mapping from both solids.
     fn build_face_ranks(&mut self) -> Result<(), AlgoError> {
         let faces_a = brepkit_topology::explorer::solid_faces(&self.topo, self.solid_a)?;

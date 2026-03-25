@@ -747,3 +747,91 @@ fn debug_overlapping_boxes_section_pbs() {
         "link_existing should link at least one section PB to a CommonBlock"
     );
 }
+
+/// Trace the full Builder pipeline for overlapping box fuse.
+/// Dumps sub-face count, SD pairs, classification, and BOP selection.
+#[test]
+fn trace_builder_overlapping_box_fuse() {
+    use brepkit_math::tolerance::Tolerance;
+    use brepkit_topology::face::FaceSurface;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+
+    let mut topo = Topology::default();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+
+    let tol = Tolerance::default();
+    let mut arena = crate::ds::GfaArena::new();
+    crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
+
+    let mut builder = crate::builder::Builder::with_tolerance(topo, arena, a, b, tol);
+    builder.perform().unwrap();
+
+    let (sub_faces, sd_pairs, topo) = builder.debug_info();
+
+    eprintln!("\n=== Builder debug for overlapping box fuse ===");
+    eprintln!("sub_faces: {}", sub_faces.len());
+    eprintln!("sd_pairs: {}", sd_pairs.len());
+
+    // Dump each sub-face: rank, classification, surface type
+    for (i, sf) in sub_faces.iter().enumerate() {
+        let surface_desc = match topo
+            .face(sf.face_id)
+            .ok()
+            .map(brepkit_topology::face::Face::surface)
+        {
+            Some(FaceSurface::Plane { normal, d }) => {
+                format!(
+                    "Plane(n=({:.1},{:.1},{:.1}), d={d:.2})",
+                    normal.x(),
+                    normal.y(),
+                    normal.z()
+                )
+            }
+            _ => "Other".to_string(),
+        };
+        let n_edges = topo
+            .face(sf.face_id)
+            .ok()
+            .and_then(|f| topo.wire(f.outer_wire()).ok())
+            .map(|w| w.edges().len())
+            .unwrap_or(0);
+        eprintln!(
+            "  SF[{i}]: {:?} {:?} {surface_desc} edges={n_edges}",
+            sf.rank, sf.classification
+        );
+    }
+
+    // Dump SD pairs
+    for (i, pair) in sd_pairs.iter().enumerate() {
+        eprintln!(
+            "  SD[{i}]: A={} B={} same_ori={} contained={}",
+            pair.idx_a, pair.idx_b, pair.same_orientation, pair.b_contained_in_a
+        );
+    }
+
+    // Simulate BOP selection
+    let selected = crate::bop::select_faces(sub_faces, crate::bop::BooleanOp::Fuse, sd_pairs);
+    eprintln!("BOP selected: {} faces", selected.len());
+    for (i, sf) in selected.iter().enumerate() {
+        let n_edges = topo
+            .face(sf.face_id)
+            .ok()
+            .and_then(|f| topo.wire(f.outer_wire()).ok())
+            .map(|w| w.edges().len())
+            .unwrap_or(0);
+        eprintln!(
+            "  SEL[{i}]: face={:?} reversed={} edges={n_edges}",
+            sf.face_id, sf.reversed
+        );
+    }
+
+    // For a proper fuse of [0,1]^3 and [0.5,1.5]x[0,1]^2:
+    // Should have 10 faces (6 outer + 4 SD representatives - 4 SD duplicates + 2 end faces)
+    // Actually: 2 end faces (x=0, x=1.5) + 4 planes * 3 sub-faces each - 4 SD removals = 10
+    assert!(
+        selected.len() >= 8 && selected.len() <= 14,
+        "expected 8-14 selected faces, got {}",
+        selected.len()
+    );
+}
