@@ -114,17 +114,28 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // Pre-compute which faces have section edges from which curves
     let section_map = build_section_map(arena);
 
-    for (&face_id, &rank) in face_ranks {
+    // Sort faces by ID index for deterministic processing order.
+    // HashMap iteration order varies between compilations (different hash
+    // seeds), which causes non-deterministic edge sharing in the
+    // shared_edge_cache — an edge created by the first face processed
+    // gets shared with later faces. Sorting ensures consistent results.
+    let mut sorted_faces: Vec<(FaceId, Rank)> =
+        face_ranks.iter().map(|(&fid, &r)| (fid, r)).collect();
+    sorted_faces.sort_by_key(|(fid, _)| fid.index());
+
+    for (face_id, rank) in sorted_faces {
         let fi = arena.face_info(face_id);
         let has_sections = fi.is_some_and(|fi| !fi.pave_blocks_sc.is_empty());
 
         log::debug!("fill_images_faces: face {face_id:?} has_sections={has_sections}");
 
         if !has_sections {
-            // No sections: try to rebuild face with CommonBlock shared edges.
-            // Unsplit faces from different solids may have separate edge entities
-            // for the same geometric boundary. Replacing them with the CB's
-            // split_edge ensures the BuilderSolid sees shared edges.
+            // No sections: try to rebuild face with CommonBlock shared edges,
+            // but ONLY for faces that participated in FF intersection (have
+            // face_info). Faces without face_info (e.g., A's x=1 face that
+            // doesn't intersect B) should NOT have their edges replaced
+            // because the global cb_qpair_edges map can match CB edges from
+            // unrelated face pairs at the same position (cross-plane over-sharing).
             let rebuilt =
                 rebuild_face_with_cb_edges(topo, face_id, &cb_qpair_edges, &vv_vertex_seed, tol);
             sub_faces.push(SubFace {
@@ -954,6 +965,7 @@ fn build_surface_info(topo: &Topology, face_id: FaceId) -> Option<SurfaceInfo> {
 /// edge's `start_3d`/`end_3d` (UV→3D converted, may have floating-point noise).
 ///
 /// Returns `None` if the PaveBlock or vertex lookup fails.
+#[allow(dead_code)] // Used by rebuild_face_with_cb_edges; disabled for split sub-faces
 fn cb_quantize_pair(
     topo: &Topology,
     arena: &crate::ds::GfaArena,
@@ -1094,7 +1106,7 @@ fn build_topology_face(
     tol: Tolerance,
     parent_face_id: FaceId,
     shared_edge_cache: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
-    cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
+    _cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     arena: &crate::ds::GfaArena,
 ) -> Option<FaceId> {
@@ -1118,7 +1130,6 @@ fn build_topology_face(
 
     // Step 2: Create edges and oriented edges for the outer wire.
     let mut oriented_edges = Vec::with_capacity(split.outer_wire.len());
-    let cb_scale = 1.0 / tol.linear;
 
     for pcurve_edge in &split.outer_wire {
         // Vertex resolution priority:
@@ -1128,22 +1139,22 @@ fn build_topology_face(
             resolve_edge_vertices(topo, &mut vertex_cache, pcurve_edge, arena, &quantize, tol);
 
         // Edge sharing priority:
-        // 0. CommonBlock position match (shared across input solids)
-        //    Uses tolerance-based quantization (same scale as cb_qpair_edges).
-        //    When a PaveBlock ID is available, use the PB's resolved vertex
-        //    positions (authoritative) instead of pcurve_edge.start_3d/end_3d
-        //    (which come from UV→3D conversion and may have floating-point noise).
+        // 0. CommonBlock position match — ONLY for edges with pave_block_id
+        //    (section edges from FF intersection). Boundary edges must NOT
+        //    use CB lookup because the global cb_qpair_edges map can match
+        //    CB edges from unrelated face pairs at the same position
+        //    (e.g., edge (1,0,0)→(1,0,1) exists on y=0, y=1, z=0, z=1 planes).
         // 1. pave_block_id cache (cross-face, from FF intersection)
         // 2. source_edge_idx cache (within-face, from forward+reverse loops)
         // 3. New edge (no sharing)
-        let cb_qpair = cb_quantize_pair(topo, arena, pcurve_edge, cb_scale);
-
-        let edge_id = if let Some(qp) = cb_qpair {
-            cb_qpair_edges.get(&qp).copied()
-        } else {
-            None
-        };
-        let edge_id = if let Some(cb_edge) = edge_id {
+        // Edge sharing for split sub-faces uses pave_block_id cache (cross-face
+        // sharing from FF intersection) and source_edge_idx cache (within-face
+        // sharing from forward+reverse loops). The global cb_qpair_edges map is
+        // NOT used here because it can match CB edges from unrelated face pairs
+        // at the same position (e.g., edge at (1,0,0)→(1,0,1) exists on y=0,
+        // z=0, and x=1 planes). cb_qpair_edges is only used by
+        // rebuild_face_with_cb_edges for unsplit faces.
+        let edge_id = if let Some(cb_edge) = None::<brepkit_topology::edge::EdgeId> {
             cb_edge
         } else if let Some(pb_id) = pcurve_edge.pave_block_id {
             let key = (usize::MAX, pb_id);
