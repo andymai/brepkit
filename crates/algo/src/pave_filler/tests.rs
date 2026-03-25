@@ -629,7 +629,7 @@ fn debug_overlapping_boxes_section_pbs() {
     let tol = Tolerance::default();
     let mut arena = GfaArena::new();
 
-    // Run full PaveFiller
+    // Run Stage 1: intersection phases (VV, VE, EE, VF, EF, FF, FF-coplanar)
     {
         let mut filler = PaveFiller::with_tolerance(&mut topo, a, b, tol);
         filler.perform(&mut arena).unwrap();
@@ -729,5 +729,21 @@ fn debug_overlapping_boxes_section_pbs() {
     assert!(
         section_pb_count > 0,
         "overlapping boxes should have FF section PBs"
+    );
+    assert!(
+        matched > 0,
+        "overlapping boxes should produce at least one section PB whose endpoints \
+         coincide with a boundary PB after linking existing geometry"
+    );
+    // Verify link_existing linked section PBs to CBs (either existing or new)
+    let section_pbs_in_cb: usize = arena
+        .curves
+        .iter()
+        .flat_map(|c| c.pave_blocks.iter())
+        .filter(|pb_id| arena.pb_to_cb.contains_key(pb_id))
+        .count();
+    assert!(
+        section_pbs_in_cb > 0,
+        "link_existing should link at least one section PB to a CommonBlock"
     );
 }

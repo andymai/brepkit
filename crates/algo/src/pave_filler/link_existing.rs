@@ -30,6 +30,7 @@ type QPair = ((i64, i64, i64), (i64, i64, i64));
 /// # Errors
 ///
 /// Returns [`AlgoError`] if topology lookups fail.
+#[allow(clippy::unnecessary_wraps)] // Signature matches other PaveFiller passes
 pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<(), AlgoError> {
     // Collect resolved endpoints for all boundary leaf PBs.
     // Key: (min_pos, max_pos) quantized at tolerance, Value: list of PB IDs.
@@ -110,10 +111,22 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
                 continue;
             };
 
-            // Check curve compatibility with each candidate
-            let section_curve = topo.edge(section_pb.original_edge)?.curve().clone();
+            // Check curve compatibility with each candidate.
+            // Use graceful skip (not `?`) for edge lookups — consistent with
+            // vertex lookups above. A stale original_edge should skip the PB,
+            // not abort the entire linking pass.
+            let Ok(section_edge) = topo.edge(section_pb.original_edge) else {
+                continue;
+            };
+            let section_curve = section_edge.curve().clone();
 
             for &boundary_pb_id in candidates {
+                // Self-match guard: coplanar FF section PBs can appear in both
+                // arena.curves and arena.edge_pave_blocks. Skip self-pairing.
+                if boundary_pb_id == section_pb_id {
+                    continue;
+                }
+
                 // Already in same CB
                 if arena.pb_to_cb.get(&boundary_pb_id) == arena.pb_to_cb.get(&section_pb_id)
                     && arena.pb_to_cb.contains_key(&section_pb_id)
@@ -124,7 +137,11 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
                 let Some(boundary_pb) = arena.pave_blocks.get(boundary_pb_id) else {
                     continue;
                 };
-                let boundary_curve = topo.edge(boundary_pb.original_edge)?.curve();
+
+                let Ok(boundary_edge) = topo.edge(boundary_pb.original_edge) else {
+                    continue;
+                };
+                let boundary_curve = boundary_edge.curve();
 
                 if !curves_compatible(&section_curve, boundary_curve, tol) {
                     continue;

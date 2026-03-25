@@ -1078,6 +1078,7 @@ fn build_topology_face(
 
     // Step 2: Create edges and oriented edges for the outer wire.
     let mut oriented_edges = Vec::with_capacity(split.outer_wire.len());
+    let cb_scale = 1.0 / tol.linear;
 
     for pcurve_edge in &split.outer_wire {
         // Vertex resolution priority:
@@ -1095,7 +1096,6 @@ fn build_topology_face(
         // 1. pave_block_id cache (cross-face, from FF intersection)
         // 2. source_edge_idx cache (within-face, from forward+reverse loops)
         // 3. New edge (no sharing)
-        let cb_scale = 1.0 / tol.linear;
         let cb_qpair = cb_quantize_pair(topo, arena, pcurve_edge, cb_scale);
 
         let edge_id = if let Some(qp) = cb_qpair {
