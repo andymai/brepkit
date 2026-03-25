@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.37.6](https://github.com/andymai/brepkit/compare/v2.37.5...v2.37.6) (2026-03-25)
+
+
+### Bug Fixes
+
+* **algo:** reduce VERTEX_DEDUP_SCALE from 1e12 to 1e10 ([#441](https://github.com/andymai/brepkit/issues/441)) ([cd57af8](https://github.com/andymai/brepkit/commit/cd57af846282f83bc815a7e787bd5a960e529212))
+
 ## [2.37.5](https://github.com/andymai/brepkit/compare/v2.37.4...v2.37.5) (2026-03-25)
 
 
