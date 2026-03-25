@@ -179,12 +179,19 @@ impl Builder {
             self.tol,
         );
 
-        // Note: SD representative replacement (replacing B's face_id with
-        // A's representative) is deferred to a follow-up. While it produces
-        // correct 2-shell topology for coplanar cuts (d1a2), the AABB
-        // containment check is insufficiently precise for near-tangent
-        // geometries, causing flaky test failures. A stricter SD detection
-        // (edge-set matching) is needed first.
+        // SD representative replacement: for each SD pair, replace B's
+        // face_id with A's face_id. This ensures edge sharing because both
+        // sub-faces reference the same topology face entity, and the BOP
+        // selector's SD handling discards the duplicate.
+        for pair in &self.sd_pairs {
+            let a_face = self.sub_faces[pair.idx_a].face_id;
+            self.sub_faces[pair.idx_b].face_id = a_face;
+            log::debug!(
+                "Builder: SD replacement: sub_faces[{}].face_id = {:?} (was B's face)",
+                pair.idx_b,
+                a_face
+            );
+        }
     }
 
     /// Phase 2: classify each sub-face as inside/outside the opposing solid.

@@ -184,6 +184,46 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             continue;
         }
 
+        // Build the parent face's PlaneFrame for consistent UV→3D conversion.
+        // interior_point_3d needs the SAME frame that the face splitter used
+        // for UV projection; creating a new frame from sub-face wire points
+        // uses a different origin and produces wrong 3D coordinates.
+        let parent_frame = {
+            let face = topo.face(face_id).ok();
+            let is_plane = face
+                .as_ref()
+                .is_some_and(|f| matches!(f.surface(), FaceSurface::Plane { .. }));
+            if is_plane {
+                let normal = face
+                    .as_ref()
+                    .and_then(|f| match f.surface() {
+                        FaceSurface::Plane { normal, .. } => Some(*normal),
+                        _ => None,
+                    })
+                    .unwrap_or(brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0));
+                let wire_pts: Vec<_> = face
+                    .as_ref()
+                    .and_then(|f| topo.wire(f.outer_wire()).ok())
+                    .map(|w| {
+                        w.edges()
+                            .iter()
+                            .filter_map(|oe| {
+                                topo.edge(oe.edge())
+                                    .ok()
+                                    .and_then(|e| topo.vertex(e.start()).ok())
+                                    .map(brepkit_topology::vertex::Vertex::point)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(super::plane_frame::PlaneFrame::from_plane_face(
+                    normal, &wire_pts,
+                ))
+            } else {
+                None
+            }
+        };
+
         // Each SplitSubFace represents a geometric sub-region.
         // Build real topology entities (Vertex → Edge → Wire → Face) for each,
         // and compute a distinct interior point for classification.
@@ -198,9 +238,9 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 &vv_vertex_seed,
                 arena,
             );
-            let pt = split
-                .precomputed_interior
-                .unwrap_or_else(|| super::face_splitter::interior_point_3d(split, None));
+            let pt = split.precomputed_interior.unwrap_or_else(|| {
+                super::face_splitter::interior_point_3d(split, parent_frame.as_ref())
+            });
 
             sub_faces.push(SubFace {
                 face_id: new_face_id.unwrap_or(face_id),
