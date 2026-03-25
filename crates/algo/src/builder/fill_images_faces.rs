@@ -60,7 +60,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // position), reuse the CB's edge entity. This ensures faces from different
     // input solids share the same EdgeId at their common boundaries.
     let cb_qpair_edges: HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId> = {
-        let scale = 1.0 / tol.linear;
+        let scale = VERTEX_DEDUP_SCALE;
         let qpt = |p: brepkit_math::vec::Point3| -> (i64, i64, i64) {
             (
                 (p.x() * scale).round() as i64,
@@ -92,7 +92,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // This is more targeted than position-based global seeding — only EXPLICITLY
     // merged vertices are included, not all PaveFiller vertices.
     let vv_vertex_seed: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> = {
-        let scale = 1.0 / tol.linear;
+        let scale = VERTEX_DEDUP_SCALE;
         let mut seed = BTreeMap::new();
         // Collect all canonical vertices (targets of VV merges)
         let canonical_vids: std::collections::HashSet<brepkit_topology::vertex::VertexId> =
@@ -402,7 +402,7 @@ fn rebuild_face_with_cb_edges(
         (i64, i64, i64),
         brepkit_topology::vertex::VertexId,
     >,
-    tol: Tolerance,
+    _tol: Tolerance,
 ) -> Option<FaceId> {
     if cb_qpair_edges.is_empty() && vv_vertex_seed.is_empty() {
         return None;
@@ -414,7 +414,9 @@ fn rebuild_face_with_cb_edges(
     let outer_wid = face.outer_wire();
     let inner_wids: Vec<_> = face.inner_wires().to_vec();
 
-    let scale = 1.0 / tol.linear;
+    // Use VERTEX_DEDUP_SCALE consistently for all position lookups —
+    // both VV vertex seed and CB edge matching.
+    let scale = VERTEX_DEDUP_SCALE;
     let qpt = |p: brepkit_math::vec::Point3| -> (i64, i64, i64) {
         (
             (p.x() * scale).round() as i64,
@@ -507,8 +509,8 @@ fn rebuild_face_with_cb_edges(
                         .vertex(e.end())
                         .ok()
                         .map(brepkit_topology::vertex::Vertex::point);
-                    let qs = sv.map(qpt);
-                    let qe = ev.map(qpt);
+                    let qs = sv.map(&qpt);
+                    let qe = ev.map(&qpt);
                     (
                         Some(e.start()),
                         Some(e.end()),
