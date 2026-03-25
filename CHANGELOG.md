@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.37.7](https://github.com/andymai/brepkit/compare/v2.37.6...v2.37.7) (2026-03-25)
+
+
+### Bug Fixes
+
+* **ops:** miter sweep edge sharing + test paths + quantization scale ([#444](https://github.com/andymai/brepkit/issues/444)) ([2b0d9a2](https://github.com/andymai/brepkit/commit/2b0d9a25b471cd52e7f06c26593d6b3142a6f4b2))
+
 ## [2.37.6](https://github.com/andymai/brepkit/compare/v2.37.5...v2.37.6) (2026-03-25)
 
 
