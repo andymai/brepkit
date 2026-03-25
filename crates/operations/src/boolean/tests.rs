@@ -104,7 +104,11 @@ fn diagnose_fuse_overlapping_cubes_edges() {
 }
 
 /// Direct GFA call from operations crate — bypasses the boolean() wrapper.
-/// The GFA produces a manifold result; this test verifies that.
+/// Documents the current state: 14 faces produced but up to 6 overshared
+/// edges remain due to `cb_qpair_edges`/`rebuild_face_with_cb_edges`
+/// matching CB edges from unrelated face pairs. The algo-level test has
+/// 0 non-manifold edges; the operations-level oversharing comes from
+/// cross-plane CB edge reuse in unsplit face rebuilding.
 #[test]
 fn gfa_direct_fuse_overlapping_manifold() {
     use std::collections::HashMap;
