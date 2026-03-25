@@ -897,37 +897,51 @@ fn find_shared_vertex(
     let fa = topo.face(face_a).ok()?;
     let fb = topo.face(face_b).ok()?;
 
-    // Collect vertex indices from ALL wires of face B (outer + inner).
+    // Collect vertex indices AND quantized positions from face B.
     let mut b_verts: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut b_positions: std::collections::HashSet<QVPos> = std::collections::HashSet::new();
     for wid in std::iter::once(fb.outer_wire()).chain(fb.inner_wires().iter().copied()) {
         let Ok(wire) = topo.wire(wid) else { continue };
         for oe in wire.edges() {
             let Ok(e) = topo.edge(oe.edge()) else {
                 continue;
             };
-            b_verts.insert(e.start().index());
-            b_verts.insert(e.end().index());
+            for &vid in &[e.start(), e.end()] {
+                b_verts.insert(vid.index());
+                if let Ok(v) = topo.vertex(vid) {
+                    b_positions.insert(quantize_vertex(v.point()));
+                }
+            }
         }
     }
 
-    // Find first matching vertex in ALL wires of face A.
+    // Find first matching vertex in face A.
+    // Try VertexId matching first, then fall back to position matching
+    // for GFA faces with different VertexIds at the same position.
+    // Position fallback uses quantize_vertex (1e7 scale = 1/tolerance).
+    // Only reliably matches vertices from the same computation path
+    // (bit-identical or within one grid cell). Vertices that straddle
+    // a grid-cell boundary may not match — this is a safe false negative
+    // (normals_compatible_at_edge returns false, preventing merge).
     for wid in std::iter::once(fa.outer_wire()).chain(fa.inner_wires().iter().copied()) {
         let Ok(wire) = topo.wire(wid) else { continue };
         for oe in wire.edges() {
             let Ok(e) = topo.edge(oe.edge()) else {
                 continue;
             };
-            if b_verts.contains(&e.start().index()) {
-                return topo
-                    .vertex(e.start())
-                    .ok()
-                    .map(brepkit_topology::vertex::Vertex::point);
-            }
-            if b_verts.contains(&e.end().index()) {
-                return topo
-                    .vertex(e.end())
-                    .ok()
-                    .map(brepkit_topology::vertex::Vertex::point);
+            for &vid in &[e.start(), e.end()] {
+                if b_verts.contains(&vid.index()) {
+                    return topo
+                        .vertex(vid)
+                        .ok()
+                        .map(brepkit_topology::vertex::Vertex::point);
+                }
+                if let Ok(v) = topo.vertex(vid) {
+                    let qp = quantize_vertex(v.point());
+                    if b_positions.contains(&qp) {
+                        return Some(v.point());
+                    }
+                }
             }
         }
     }
@@ -2145,6 +2159,102 @@ mod tests {
         assert!(
             (vol_before - vol_after).abs() < 0.1,
             "healing should preserve volume: before={vol_before}, after={vol_after}"
+        );
+    }
+
+    #[test]
+    fn find_shared_vertex_matches_by_position() {
+        // Two faces with different VertexIds at the same 3D position.
+        // find_shared_vertex should match via position fallback.
+        use brepkit_math::vec::Point3;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::face::FaceSurface;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let tol = 1e-7;
+
+        // Face A: square (0,0,0)→(1,0,0)→(1,1,0)→(0,1,0)
+        let va0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol));
+        let va1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol));
+        let va2 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), tol));
+        let va3 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), tol));
+        let ea0 = topo.add_edge(Edge::new(va0, va1, EdgeCurve::Line));
+        let ea1 = topo.add_edge(Edge::new(va1, va2, EdgeCurve::Line));
+        let ea2 = topo.add_edge(Edge::new(va2, va3, EdgeCurve::Line));
+        let ea3 = topo.add_edge(Edge::new(va3, va0, EdgeCurve::Line));
+        let wa = Wire::new(
+            vec![
+                OrientedEdge::new(ea0, true),
+                OrientedEdge::new(ea1, true),
+                OrientedEdge::new(ea2, true),
+                OrientedEdge::new(ea3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let waid = topo.add_wire(wa);
+        let fa = Face::new(
+            waid,
+            vec![],
+            FaceSurface::Plane {
+                normal: brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        );
+        let fa_id = topo.add_face(fa);
+
+        // Face B: square (1,0,0)→(2,0,0)→(2,1,0)→(1,1,0)
+        // Uses DIFFERENT VertexIds at (1,0,0) and (1,1,0)
+        let vb0 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol));
+        let vb1 = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), tol));
+        let vb2 = topo.add_vertex(Vertex::new(Point3::new(2.0, 1.0, 0.0), tol));
+        let vb3 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), tol));
+        let eb0 = topo.add_edge(Edge::new(vb0, vb1, EdgeCurve::Line));
+        let eb1 = topo.add_edge(Edge::new(vb1, vb2, EdgeCurve::Line));
+        let eb2 = topo.add_edge(Edge::new(vb2, vb3, EdgeCurve::Line));
+        let eb3 = topo.add_edge(Edge::new(vb3, vb0, EdgeCurve::Line));
+        let wb = Wire::new(
+            vec![
+                OrientedEdge::new(eb0, true),
+                OrientedEdge::new(eb1, true),
+                OrientedEdge::new(eb2, true),
+                OrientedEdge::new(eb3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wbid = topo.add_wire(wb);
+        let fb = Face::new(
+            wbid,
+            vec![],
+            FaceSurface::Plane {
+                normal: brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        );
+        let fb_id = topo.add_face(fb);
+
+        // va1 and vb0 are at the same position (1,0,0) but different IDs
+        assert_ne!(va1.index(), vb0.index());
+
+        let result = super::find_shared_vertex(&topo, fa_id, fb_id);
+        assert!(
+            result.is_some(),
+            "find_shared_vertex should match by position when VertexIds differ"
+        );
+        let pt = result.unwrap();
+        // Should find (1,0,0) or (1,1,0) — both are shared positions
+        let is_shared = ((pt.x() - 1.0).abs() < 1e-6 && (pt.y() - 0.0).abs() < 1e-6)
+            || ((pt.x() - 1.0).abs() < 1e-6 && (pt.y() - 1.0).abs() < 1e-6);
+        assert!(
+            is_shared,
+            "shared vertex should be at (1,0,0) or (1,1,0), got ({:.1},{:.1},{:.1})",
+            pt.x(),
+            pt.y(),
+            pt.z()
         );
     }
 }
