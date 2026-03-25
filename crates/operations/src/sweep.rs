@@ -2470,15 +2470,17 @@ mod tests {
     /// Helper: create an L-shaped polyline path (two line segments with
     /// a 90-degree turn).
     fn l_shaped_path() -> NurbsCurve {
-        // Degree-1 NURBS with 3 control points: (0,0,0)→(5,0,0)→(5,5,0).
+        // Degree-1 NURBS: (0,0,0)→(0,0,5)→(5,0,5). Path goes along +Z
+        // then turns +X — perpendicular to the XY-plane unit square
+        // profile so the swept cross-section has nonzero area.
         // Internal knot at t=0.5 creates a C0 kink.
         NurbsCurve::new(
             1,
             vec![0.0, 0.0, 0.5, 1.0, 1.0],
             vec![
                 Point3::new(0.0, 0.0, 0.0),
-                Point3::new(5.0, 0.0, 0.0),
-                Point3::new(5.0, 5.0, 0.0),
+                Point3::new(0.0, 0.0, 5.0),
+                Point3::new(5.0, 0.0, 5.0),
             ],
             vec![1.0, 1.0, 1.0],
         )
@@ -2565,9 +2567,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "miter sweep volume 1.67 vs expected ~10 — profile transform/scaling bug"]
     fn sweep_miter_l_shaped_volume_correct() {
-        // L-shaped path: (0,0,0)→(5,0,0)→(5,5,0) with 1×1 square profile.
+        // L-shaped path: (0,0,0)→(0,0,5)→(5,0,5) with 1×1 square profile.
         // With miter, the volume is two rectangular prisms joined at a 45-degree
         // miter plane. Each leg has length ~5, profile area ~1, so total is
         // roughly 10 (minus/plus the miter overlap which approximately cancels).
@@ -2593,15 +2594,16 @@ mod tests {
 
     #[test]
     fn sweep_miter_u_shaped_path() {
-        // U-shaped path: 3 segments with 2 kinks.
+        // U-shaped path: 3 segments with 2 kinks, in ZX plane so
+        // the XY-plane profile has nonzero cross-section area.
         let path = NurbsCurve::new(
             1,
             vec![0.0, 0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0, 1.0],
             vec![
                 Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.0, 0.0, 5.0),
+                Point3::new(5.0, 0.0, 5.0),
                 Point3::new(5.0, 0.0, 0.0),
-                Point3::new(5.0, 5.0, 0.0),
-                Point3::new(0.0, 5.0, 0.0),
             ],
             vec![1.0, 1.0, 1.0, 1.0],
         )
