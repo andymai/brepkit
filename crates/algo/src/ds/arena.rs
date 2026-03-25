@@ -1,6 +1,6 @@
 //! GFA arena — owns all transient state for a boolean operation.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use brepkit_topology::arena::Arena;
 use brepkit_topology::edge::EdgeId;
@@ -24,18 +24,18 @@ pub struct GfaArena {
     /// Intersection curves from face-face intersection.
     pub curves: Vec<IntersectionCurveDS>,
     /// Per-face intersection state.
-    pub face_info: HashMap<FaceId, FaceInfo>,
+    pub face_info: BTreeMap<FaceId, FaceInfo>,
     /// All interference records.
     pub interference: InterferenceTable,
     /// Same-domain vertex mapping (original to canonical).
     /// When two vertices are coincident, they map to the same canonical vertex.
-    pub same_domain_vertices: HashMap<VertexId, VertexId>,
+    pub same_domain_vertices: BTreeMap<VertexId, VertexId>,
     /// Per-edge pave blocks (original edge to its pave block IDs).
-    pub edge_pave_blocks: HashMap<EdgeId, Vec<PaveBlockId>>,
+    pub edge_pave_blocks: BTreeMap<EdgeId, Vec<PaveBlockId>>,
     /// CommonBlocks grouping coincident pave blocks.
     pub common_blocks: Arena<CommonBlock>,
     /// Reverse map: PaveBlock → its CommonBlock (if any).
-    pub pb_to_cb: HashMap<PaveBlockId, CommonBlockId>,
+    pub pb_to_cb: BTreeMap<PaveBlockId, CommonBlockId>,
 }
 
 impl GfaArena {
@@ -45,12 +45,12 @@ impl GfaArena {
         Self {
             pave_blocks: Arena::new(),
             curves: Vec::new(),
-            face_info: HashMap::new(),
+            face_info: BTreeMap::new(),
             interference: InterferenceTable::default(),
-            same_domain_vertices: HashMap::new(),
-            edge_pave_blocks: HashMap::new(),
+            same_domain_vertices: BTreeMap::new(),
+            edge_pave_blocks: BTreeMap::new(),
             common_blocks: Arena::new(),
-            pb_to_cb: HashMap::new(),
+            pb_to_cb: BTreeMap::new(),
         }
     }
 
