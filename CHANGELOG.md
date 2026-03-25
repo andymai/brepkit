@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.37.2](https://github.com/andymai/brepkit/compare/v2.37.1...v2.37.2) (2026-03-25)
+
+
+### Bug Fixes
+
+* **algo:** BTreeMap in GFA arena — deterministic boolean pipeline ([#433](https://github.com/andymai/brepkit/issues/433)) ([5c41f8a](https://github.com/andymai/brepkit/commit/5c41f8ae98e13353b59459570a96f354e25eae4d))
+
 ## [2.37.1](https://github.com/andymai/brepkit/compare/v2.37.0...v2.37.1) (2026-03-25)
 
 
