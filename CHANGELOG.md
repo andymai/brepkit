@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.37.1](https://github.com/andymai/brepkit/compare/v2.37.0...v2.37.1) (2026-03-25)
+
+
+### Bug Fixes
+
+* **algo:** deterministic face processing + GFA manifold verification ([#432](https://github.com/andymai/brepkit/issues/432)) ([de35405](https://github.com/andymai/brepkit/commit/de35405ceb7d40d4093bfd8b6e461501997fad50))
+* **algo:** revert SD replacement + verify GFA manifoldness ([#431](https://github.com/andymai/brepkit/issues/431)) ([92e862b](https://github.com/andymai/brepkit/commit/92e862b9f2bb3fb0bd8525afde74c2bed10c1230))
+* **algo:** SD face replacement + interior point PlaneFrame fix ([#429](https://github.com/andymai/brepkit/issues/429)) ([99d1080](https://github.com/andymai/brepkit/commit/99d10808783f742230fefe361a9f041e233d05cc))
+
 ## [2.37.0](https://github.com/andymai/brepkit/compare/v2.36.3...v2.37.0) (2026-03-25)
 
 
