@@ -10,7 +10,7 @@
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::{Edge, EdgeCurve};
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::test_utils::make_unit_cube_manifold_at;
 use brepkit_topology::validation::validate_shell_manifold;
@@ -63,6 +63,44 @@ fn intersect_disjoint_returns_error() {
     let b = make_unit_cube_manifold_at(&mut topo, 5.0, 0.0, 0.0);
 
     assert!(boolean(&mut topo, BooleanOp::Intersect, a, b).is_err());
+}
+
+// ── Diagnostic tests ─────────────────────────────────────────────────
+
+/// Diagnostic: dumps edge sharing state for overlapping box fuse.
+/// Expected to fail until SD face replacement + boundary edge sharing
+/// are complete. Findings: 27 boundary edges (no position duplicates),
+/// 2 overshared edges. Root cause is incomplete face coverage from
+/// missing SD representative replacement, not edge merging failure.
+#[test]
+#[ignore = "GFA pipeline limitation — SD face replacement not yet implemented"]
+fn diagnose_fuse_overlapping_cubes_edges() {
+    use std::collections::HashMap;
+
+    let mut topo = Topology::new();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+
+    let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+    let s = topo.solid(result).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
+
+    let mut edge_face_count: HashMap<EdgeId, usize> = HashMap::new();
+    for &fid in sh.faces() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).unwrap();
+            for oe in wire.edges() {
+                *edge_face_count.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+
+    let non_manifold_count = edge_face_count.values().filter(|&&n| n != 2).count();
+    assert_eq!(
+        non_manifold_count, 0,
+        "{non_manifold_count} non-manifold edges"
+    );
 }
 
 // ── 1D overlapping tests (offset on one axis) ───────────────────────
