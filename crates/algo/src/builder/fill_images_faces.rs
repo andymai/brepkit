@@ -13,11 +13,14 @@ type CbEdgeKey = ((i64, i64, i64), (i64, i64, i64));
 
 /// Scale for vertex deduplication in the face splitter.
 ///
-/// Uses 1e12 so only BIT-IDENTICAL positions share keys.
-/// GFA duplicate vertices are from the same computation path (d=0.0).
-/// Topologically-distinct vertices at the same modeling-tolerance
-/// position but different bit patterns remain separate.
-const VERTEX_DEDUP_SCALE: f64 = 1e12;
+/// Uses 1e10 to match vertices from the same computation path that
+/// may differ by floating-point noise (~1e-14). This is coarser than
+/// bit-identical (1e12) but much tighter than modeling tolerance (1e7).
+/// Vertices from the same plane-plane intersection that land on
+/// different face splits will share VertexIds, reducing the Euler
+/// vertex count. Geometrically distinct vertices (>1e-10 apart)
+/// remain separate.
+const VERTEX_DEDUP_SCALE: f64 = 1e10;
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
