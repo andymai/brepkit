@@ -813,6 +813,47 @@ fn trace_builder_overlapping_box_fuse() {
         );
     }
 
+    // Dump edges for sub-faces with out-of-bounds interior points
+    for (i, sf) in sub_faces.iter().enumerate() {
+        if let Some(pt) = sf.interior_point {
+            if pt.x() > 1.6 || pt.x() < -0.1 || pt.y() > 1.1 || pt.z() > 1.1 {
+                eprintln!(
+                    "  OUT-OF-BOUNDS SF[{i}]: ipt=({:.3},{:.3},{:.3})",
+                    pt.x(),
+                    pt.y(),
+                    pt.z()
+                );
+                if let Ok(face) = topo.face(sf.face_id) {
+                    if let Ok(wire) = topo.wire(face.outer_wire()) {
+                        for (ei, oe) in wire.edges().iter().enumerate() {
+                            if let Ok(edge) = topo.edge(oe.edge()) {
+                                let sp = topo
+                                    .vertex(edge.start())
+                                    .map(brepkit_topology::vertex::Vertex::point)
+                                    .ok();
+                                let ep = topo
+                                    .vertex(edge.end())
+                                    .map(brepkit_topology::vertex::Vertex::point)
+                                    .ok();
+                                if let (Some(s), Some(e)) = (sp, ep) {
+                                    eprintln!(
+                                        "    E[{ei}]: ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4})",
+                                        s.x(),
+                                        s.y(),
+                                        s.z(),
+                                        e.x(),
+                                        e.y(),
+                                        e.z()
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Simulate BOP selection
     let selected = crate::bop::select_faces(sub_faces, crate::bop::BooleanOp::Fuse, sd_pairs);
     eprintln!("BOP selected: {} faces", selected.len());
