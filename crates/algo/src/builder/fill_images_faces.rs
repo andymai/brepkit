@@ -907,6 +907,50 @@ fn build_surface_info(topo: &Topology, face_id: FaceId) -> Option<SurfaceInfo> {
     }
 }
 
+/// Compute quantized position pair for CommonBlock edge lookup.
+///
+/// When the edge has a `pave_block_id`, uses the PaveBlock's resolved vertex
+/// positions (authoritative, from PaveFiller). Otherwise falls back to the
+/// edge's `start_3d`/`end_3d` (UV→3D converted, may have floating-point noise).
+///
+/// Returns `None` if the PaveBlock or vertex lookup fails.
+fn cb_quantize_pair(
+    topo: &Topology,
+    arena: &crate::ds::GfaArena,
+    edge: &super::split_types::OrientedPCurveEdge,
+    scale: f64,
+) -> Option<CbEdgeKey> {
+    let qpt = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+
+    // Prefer PaveBlock vertex positions when available.
+    // pave_block_id is the raw arena index of the PaveBlock.
+    let (sp, ep) = if let Some(pb_idx) = edge.pave_block_id {
+        let pb_id = arena.pave_blocks.id_from_index(pb_idx);
+        let pb = pb_id.and_then(|id| arena.pave_blocks.get(id));
+        if let Some(pb) = pb {
+            let sv = arena.resolve_vertex(pb.start.vertex);
+            let ev = arena.resolve_vertex(pb.end.vertex);
+            let sp = topo.vertex(sv).ok()?.point();
+            let ep = topo.vertex(ev).ok()?.point();
+            (sp, ep)
+        } else {
+            (edge.start_3d, edge.end_3d)
+        }
+    } else {
+        (edge.start_3d, edge.end_3d)
+    };
+
+    let qs = qpt(sp);
+    let qe = qpt(ep);
+    Some(if qs <= qe { (qs, qe) } else { (qe, qs) })
+}
+
 /// Build a topology `Face` from a `SplitSubFace`.
 ///
 /// Creates vertices at each 3D endpoint (deduplicating by position),
@@ -1044,28 +1088,22 @@ fn build_topology_face(
 
         // Edge sharing priority:
         // 0. CommonBlock position match (shared across input solids)
-        //    Uses tolerance-based quantization (same scale as cb_qpair_edges)
+        //    Uses tolerance-based quantization (same scale as cb_qpair_edges).
+        //    When a PaveBlock ID is available, use the PB's resolved vertex
+        //    positions (authoritative) instead of pcurve_edge.start_3d/end_3d
+        //    (which come from UV→3D conversion and may have floating-point noise).
         // 1. pave_block_id cache (cross-face, from FF intersection)
         // 2. source_edge_idx cache (within-face, from forward+reverse loops)
         // 3. New edge (no sharing)
         let cb_scale = 1.0 / tol.linear;
-        let cb_qs = (
-            (pcurve_edge.start_3d.x() * cb_scale).round() as i64,
-            (pcurve_edge.start_3d.y() * cb_scale).round() as i64,
-            (pcurve_edge.start_3d.z() * cb_scale).round() as i64,
-        );
-        let cb_qe = (
-            (pcurve_edge.end_3d.x() * cb_scale).round() as i64,
-            (pcurve_edge.end_3d.y() * cb_scale).round() as i64,
-            (pcurve_edge.end_3d.z() * cb_scale).round() as i64,
-        );
-        let cb_qpair = if cb_qs <= cb_qe {
-            (cb_qs, cb_qe)
-        } else {
-            (cb_qe, cb_qs)
-        };
+        let cb_qpair = cb_quantize_pair(topo, arena, pcurve_edge, cb_scale);
 
-        let edge_id = if let Some(&cb_edge) = cb_qpair_edges.get(&cb_qpair) {
+        let edge_id = if let Some(qp) = cb_qpair {
+            cb_qpair_edges.get(&qp).copied()
+        } else {
+            None
+        };
+        let edge_id = if let Some(cb_edge) = edge_id {
             cb_edge
         } else if let Some(pb_id) = pcurve_edge.pave_block_id {
             let key = (usize::MAX, pb_id);
