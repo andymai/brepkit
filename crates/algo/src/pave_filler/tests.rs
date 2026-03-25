@@ -615,3 +615,135 @@ fn coplanar_phase_creates_section_edges() {
 
     assert!(has_coplanar_curves, "should have coplanar section curves");
 }
+
+/// Debug: check how many section PBs and boundary PBs exist for overlapping boxes.
+#[test]
+fn debug_overlapping_boxes_section_pbs() {
+    use brepkit_math::tolerance::Tolerance;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+
+    let mut topo = Topology::default();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+
+    let tol = Tolerance::default();
+    let mut arena = GfaArena::new();
+
+    // Run Stage 1: intersection phases (VV, VE, EE, VF, EF, FF, FF-coplanar)
+    {
+        let mut filler = PaveFiller::with_tolerance(&mut topo, a, b, tol);
+        filler.perform(&mut arena).unwrap();
+    }
+
+    crate::pave_filler::make_blocks::perform(&mut arena).unwrap();
+    crate::pave_filler::force_interf_ee::perform(&topo, tol, &mut arena).unwrap();
+
+    // Count section PBs
+    let section_pb_count: usize = arena.curves.iter().map(|c| c.pave_blocks.len()).sum();
+    let boundary_pb_count: usize = arena.edge_pave_blocks.values().map(Vec::len).sum();
+    let cb_count = arena.common_blocks.iter().count();
+
+    eprintln!(
+        "section PBs: {section_pb_count}, boundary PBs: {boundary_pb_count}, CBs: {cb_count}"
+    );
+    eprintln!("curves: {}", arena.curves.len());
+
+    // Run link_existing
+    crate::pave_filler::link_existing::perform(&topo, tol, &mut arena).unwrap();
+    let cb_count_after = arena.common_blocks.iter().count();
+    eprintln!("CBs after link_existing: {cb_count_after}");
+
+    // Run make_split_edges (populates split_edge on CBs)
+    crate::pave_filler::make_split_edges::perform(&mut topo, &mut arena).unwrap();
+    let cbs_with_split: usize = arena
+        .common_blocks
+        .iter()
+        .filter(|(_, cb)| cb.split_edge.is_some())
+        .count();
+    eprintln!("CBs with split_edge: {cbs_with_split}/{cb_count_after}");
+
+    // Dump VV merge map
+    eprintln!("VV merges: {}", arena.same_domain_vertices.len());
+
+    // Dump section PB endpoints and check if they match boundary PBs
+    let scale = 1.0 / tol.linear;
+    let qpt = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+
+    // Build boundary PB position index
+    #[allow(clippy::type_complexity)]
+    let mut boundary_positions: std::collections::HashSet<((i64, i64, i64), (i64, i64, i64))> =
+        std::collections::HashSet::new();
+    for pbs in arena.edge_pave_blocks.values() {
+        for &pb_id in pbs {
+            if let Some(pb) = arena.pave_blocks.get(pb_id) {
+                let sv = arena.resolve_vertex(pb.start.vertex);
+                let ev = arena.resolve_vertex(pb.end.vertex);
+                let sp = topo.vertex(sv).unwrap().point();
+                let ep = topo.vertex(ev).unwrap().point();
+                let qs = qpt(sp);
+                let qe = qpt(ep);
+                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                boundary_positions.insert(key);
+            }
+        }
+    }
+
+    // Check each section PB
+    let mut matched = 0;
+    let mut unmatched = 0;
+    for curve in &arena.curves {
+        for &pb_id in &curve.pave_blocks {
+            if let Some(pb) = arena.pave_blocks.get(pb_id) {
+                let sv = arena.resolve_vertex(pb.start.vertex);
+                let ev = arena.resolve_vertex(pb.end.vertex);
+                let sp = topo.vertex(sv).unwrap().point();
+                let ep = topo.vertex(ev).unwrap().point();
+                let qs = qpt(sp);
+                let qe = qpt(ep);
+                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                if boundary_positions.contains(&key) {
+                    matched += 1;
+                } else {
+                    unmatched += 1;
+                    eprintln!(
+                        "  UNMATCHED section PB: ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4})",
+                        sp.x(),
+                        sp.y(),
+                        sp.z(),
+                        ep.x(),
+                        ep.y(),
+                        ep.z()
+                    );
+                }
+            }
+        }
+    }
+    eprintln!("section PBs: {matched} matched, {unmatched} unmatched");
+
+    assert!(
+        section_pb_count > 0,
+        "overlapping boxes should have FF section PBs"
+    );
+    assert!(
+        matched > 0,
+        "overlapping boxes should produce at least one section PB whose endpoints \
+         coincide with a boundary PB after linking existing geometry"
+    );
+    // Verify link_existing linked section PBs to CBs (either existing or new)
+    let section_pbs_in_cb: usize = arena
+        .curves
+        .iter()
+        .flat_map(|c| c.pave_blocks.iter())
+        .filter(|pb_id| arena.pb_to_cb.contains_key(pb_id))
+        .count();
+    assert!(
+        section_pbs_in_cb > 0,
+        "link_existing should link at least one section PB to a CommonBlock"
+    );
+}
