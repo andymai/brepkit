@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.37.5](https://github.com/andymai/brepkit/compare/v2.37.4...v2.37.5) (2026-03-25)
+
+
+### Bug Fixes
+
+* **ops:** position-based vertex matching in find_shared_vertex ([#439](https://github.com/andymai/brepkit/issues/439)) ([c52bc7e](https://github.com/andymai/brepkit/commit/c52bc7e497d5ff4485f5f58f457fc2aa5d00efd7))
+
 ## [2.37.4](https://github.com/andymai/brepkit/compare/v2.37.3...v2.37.4) (2026-03-25)
 
 
