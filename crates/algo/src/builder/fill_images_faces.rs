@@ -87,17 +87,10 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         map
     };
 
-    // Build vertex seed from VV-phase merged vertices ONLY.
-    // The VV phase explicitly merges vertices from different solids that are at
-    // the same position. These canonical vertices are exactly the shared boundary
-    // vertices. By seeding build_topology_face with these, sub-face edges at
-    // shared boundary positions reuse the same VertexIds as MakeSplitEdges.
-    // This is more targeted than position-based global seeding — only EXPLICITLY
-    // merged vertices are included, not all PaveFiller vertices.
+    // Build vertex seed from VV-phase merged vertices.
     let vv_vertex_seed: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> = {
         let scale = VERTEX_DEDUP_SCALE;
         let mut seed = BTreeMap::new();
-        // Collect all canonical vertices (targets of VV merges)
         let canonical_vids: std::collections::HashSet<brepkit_topology::vertex::VertexId> =
             arena.same_domain_vertices.values().copied().collect();
         for &vid in &canonical_vids {
@@ -113,6 +106,57 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         }
         seed
     };
+
+    // Per-face original vertex map: face_id → quantized_pos → VertexId.
+    // Used to seed each face's vertex cache with its own wire vertices,
+    // ensuring boundary edges at original corners reuse existing vertices
+    // without cross-contamination between unrelated faces.
+    let face_vertex_seeds: HashMap<
+        FaceId,
+        BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    > = {
+        let scale = VERTEX_DEDUP_SCALE;
+        let mut map = HashMap::new();
+        for &face_id in face_ranks.keys() {
+            // Only seed unsplit faces — faces WITH section edges get split
+            // and their sub-face boundary positions may collide with nearby
+            // original vertex positions at 1e10 quantization.
+            let fi = arena.face_info(face_id);
+            let has_sections = fi.is_some_and(|fi| !fi.pave_blocks_sc.is_empty());
+            if has_sections {
+                continue;
+            }
+            let mut face_seed = BTreeMap::new();
+            if let Ok(face) = topo.face(face_id) {
+                if let Ok(wire) = topo.wire(face.outer_wire()) {
+                    for oe in wire.edges() {
+                        if let Ok(edge) = topo.edge(oe.edge()) {
+                            for &vid in &[edge.start(), edge.end()] {
+                                if let Ok(v) = topo.vertex(vid) {
+                                    let pt = v.point();
+                                    let key = (
+                                        (pt.x() * scale).round() as i64,
+                                        (pt.y() * scale).round() as i64,
+                                        (pt.z() * scale).round() as i64,
+                                    );
+                                    face_seed.entry(key).or_insert(vid);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            map.insert(face_id, face_seed);
+        }
+        map
+    };
+
+    // PB vertex registry: populated by PaveBlock (CommonBlock) vertex
+    // resolution, consulted by ALL faces' fallback vertex creation.
+    // Only authoritative shared vertices enter this registry — boundary
+    // edge vertices do NOT, preventing cross-face contamination.
+    let mut pb_vertex_registry: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
+        BTreeMap::new();
 
     // Pre-compute which faces have section edges from which curves
     let section_map = build_section_map(arena);
@@ -242,6 +286,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // Build real topology entities (Vertex → Edge → Wire → Face) for each,
         // and compute a distinct interior point for classification.
         for split in &split_results {
+            let face_seed = face_vertex_seeds.get(&face_id);
             let new_face_id = build_topology_face(
                 topo,
                 split,
@@ -250,6 +295,8 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 &mut shared_edge_cache,
                 &cb_qpair_edges,
                 &vv_vertex_seed,
+                face_seed,
+                &mut pb_vertex_registry,
                 arena,
             );
             let pt = split.precomputed_interior.unwrap_or_else(|| {
@@ -1024,6 +1071,7 @@ fn cb_quantize_pair(
 fn resolve_edge_vertices(
     topo: &mut Topology,
     cache: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    pb_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     edge: &super::split_types::OrientedPCurveEdge,
     arena: &crate::ds::GfaArena,
     quantize: &dyn Fn(Point3) -> (i64, i64, i64),
@@ -1069,6 +1117,11 @@ fn resolve_edge_vertices(
                             let qe = quantize(edge.end_3d);
                             cache.entry(qs).or_insert(se_start);
                             cache.entry(qe).or_insert(se_end);
+                            // Register in cross-face PB registry so other
+                            // faces' boundary edges at these positions
+                            // reuse the same vertices.
+                            pb_registry.entry(qs).or_insert(se_start);
+                            pb_registry.entry(qe).or_insert(se_end);
                             return (se_start, se_end);
                         }
                         if rev_match {
@@ -1076,6 +1129,8 @@ fn resolve_edge_vertices(
                             let qe = quantize(edge.end_3d);
                             cache.entry(qs).or_insert(se_end);
                             cache.entry(qe).or_insert(se_start);
+                            pb_registry.entry(qs).or_insert(se_end);
+                            pb_registry.entry(qe).or_insert(se_start);
                             return (se_end, se_start);
                         }
                     }
@@ -1084,18 +1139,27 @@ fn resolve_edge_vertices(
         }
     }
 
-    // Fallback: position-based cache lookup
+    // Fallback: position-based cache lookup.
+    // Consult the PB registry first — if another face's PaveBlock
+    // vertex was registered at this position, reuse it to ensure
+    // cross-face vertex sharing.
     let start_vid = {
         let key = quantize(edge.start_3d);
-        *cache
-            .entry(key)
-            .or_insert_with(|| topo.add_vertex(Vertex::new(edge.start_3d, tol.linear)))
+        *cache.entry(key).or_insert_with(|| {
+            pb_registry
+                .get(&key)
+                .copied()
+                .unwrap_or_else(|| topo.add_vertex(Vertex::new(edge.start_3d, tol.linear)))
+        })
     };
     let end_vid = {
         let key = quantize(edge.end_3d);
-        *cache
-            .entry(key)
-            .or_insert_with(|| topo.add_vertex(Vertex::new(edge.end_3d, tol.linear)))
+        *cache.entry(key).or_insert_with(|| {
+            pb_registry
+                .get(&key)
+                .copied()
+                .unwrap_or_else(|| topo.add_vertex(Vertex::new(edge.end_3d, tol.linear)))
+        })
     };
     (start_vid, end_vid)
 }
@@ -1113,6 +1177,8 @@ fn build_topology_face(
     shared_edge_cache: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
     _cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    face_vertex_seed: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
+    pb_vertex_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     arena: &crate::ds::GfaArena,
 ) -> Option<FaceId> {
     if split.outer_wire.is_empty() {
@@ -1120,10 +1186,17 @@ fn build_topology_face(
     }
 
     // Step 1: Create/find vertices for each unique 3D endpoint.
-    // Seed from VV-merged vertices so boundary edges at shared positions
-    // use the same VertexIds as MakeSplitEdges' split edges.
+    // Seed from VV-merged vertices, then from this face's own original
+    // wire vertices. Per-face seeding ensures boundary edges at original
+    // corners reuse existing vertices without cross-contamination between
+    // unrelated faces.
     let mut vertex_cache: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
         vv_vertex_seed.clone();
+    if let Some(fs) = face_vertex_seed {
+        for (&key, &vid) in fs {
+            vertex_cache.entry(key).or_insert(vid);
+        }
+    }
 
     let quantize = |p: Point3| -> (i64, i64, i64) {
         (
@@ -1140,8 +1213,15 @@ fn build_topology_face(
         // Vertex resolution priority:
         // 1. PaveBlock vertex identity (section edges from FF intersection)
         // 2. Position-based cache (boundary edges, degenerate edges)
-        let (start_vid, end_vid) =
-            resolve_edge_vertices(topo, &mut vertex_cache, pcurve_edge, arena, &quantize, tol);
+        let (start_vid, end_vid) = resolve_edge_vertices(
+            topo,
+            &mut vertex_cache,
+            pb_vertex_registry,
+            pcurve_edge,
+            arena,
+            &quantize,
+            tol,
+        );
 
         // Edge sharing priority:
         // 0. CommonBlock position match — ONLY for edges with pave_block_id
@@ -1191,8 +1271,15 @@ fn build_topology_face(
     for inner in &split.inner_wires {
         let mut inner_oriented = Vec::with_capacity(inner.len());
         for pcurve_edge in inner {
-            let (start_vid, end_vid) =
-                resolve_edge_vertices(topo, &mut vertex_cache, pcurve_edge, arena, &quantize, tol);
+            let (start_vid, end_vid) = resolve_edge_vertices(
+                topo,
+                &mut vertex_cache,
+                pb_vertex_registry,
+                pcurve_edge,
+                arena,
+                &quantize,
+                tol,
+            );
             let edge = Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone());
             let edge_id = topo.add_edge(edge);
             inner_oriented.push(OrientedEdge::new(edge_id, pcurve_edge.forward));
