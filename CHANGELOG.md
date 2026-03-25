@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.37.0](https://github.com/andymai/brepkit/compare/v2.36.3...v2.37.0) (2026-03-25)
+
+
+### Features
+
+* **algo:** GFA parity foundations — link_existing + CB edge fixes ([#426](https://github.com/andymai/brepkit/issues/426)) ([17a2d28](https://github.com/andymai/brepkit/commit/17a2d28707a2140e68f9300a46a0a4cfc67b5a05))
+
 ## [2.36.3](https://github.com/andymai/brepkit/compare/v2.36.2...v2.36.3) (2026-03-24)
 
 
