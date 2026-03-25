@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.38.0](https://github.com/andymai/brepkit/compare/v2.37.7...v2.38.0) (2026-03-25)
+
+
+### Features
+
+* **algo:** PB vertex registry + per-face vertex seeding ([#446](https://github.com/andymai/brepkit/issues/446)) ([e35fdb7](https://github.com/andymai/brepkit/commit/e35fdb7396932d64743487a780d3dffe29b5cca9))
+
 ## [2.37.7](https://github.com/andymai/brepkit/compare/v2.37.6...v2.37.7) (2026-03-25)
 
 
