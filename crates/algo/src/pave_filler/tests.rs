@@ -615,3 +615,47 @@ fn coplanar_phase_creates_section_edges() {
 
     assert!(has_coplanar_curves, "should have coplanar section curves");
 }
+
+/// Debug: check how many section PBs and boundary PBs exist for overlapping boxes.
+#[test]
+fn debug_overlapping_boxes_section_pbs() {
+    use brepkit_math::tolerance::Tolerance;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+
+    let mut topo = Topology::default();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+
+    let tol = Tolerance::default();
+    let mut arena = GfaArena::new();
+
+    // Run full PaveFiller
+    {
+        let mut filler = PaveFiller::with_tolerance(&mut topo, a, b, tol);
+        filler.perform(&mut arena).unwrap();
+    }
+
+    crate::pave_filler::make_blocks::perform(&mut arena).unwrap();
+    crate::pave_filler::force_interf_ee::perform(&topo, tol, &mut arena).unwrap();
+
+    // Count section PBs
+    let section_pb_count: usize = arena.curves.iter().map(|c| c.pave_blocks.len()).sum();
+    let boundary_pb_count: usize = arena.edge_pave_blocks.values().map(Vec::len).sum();
+    let cb_count = arena.common_blocks.iter().count();
+
+    eprintln!(
+        "section PBs: {section_pb_count}, boundary PBs: {boundary_pb_count}, CBs: {cb_count}"
+    );
+    eprintln!("curves: {}", arena.curves.len());
+
+    // Run link_existing
+    crate::pave_filler::link_existing::perform(&topo, tol, &mut arena).unwrap();
+    let cb_count_after = arena.common_blocks.iter().count();
+    eprintln!("CBs after link_existing: {cb_count_after}");
+
+    // Check: section PBs should exist (FF produces them)
+    assert!(
+        section_pb_count > 0,
+        "overlapping boxes should have FF section PBs"
+    );
+}
