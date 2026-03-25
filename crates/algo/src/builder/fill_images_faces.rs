@@ -1044,14 +1044,28 @@ fn build_topology_face(
 
         // Edge sharing priority:
         // 0. CommonBlock position match (shared across input solids)
+        //    Uses tolerance-based quantization (same scale as cb_qpair_edges)
         // 1. pave_block_id cache (cross-face, from FF intersection)
         // 2. source_edge_idx cache (within-face, from forward+reverse loops)
         // 3. New edge (no sharing)
-        let qs = quantize(pcurve_edge.start_3d);
-        let qe = quantize(pcurve_edge.end_3d);
-        let qpair = if qs <= qe { (qs, qe) } else { (qe, qs) };
+        let cb_scale = 1.0 / tol.linear;
+        let cb_qs = (
+            (pcurve_edge.start_3d.x() * cb_scale).round() as i64,
+            (pcurve_edge.start_3d.y() * cb_scale).round() as i64,
+            (pcurve_edge.start_3d.z() * cb_scale).round() as i64,
+        );
+        let cb_qe = (
+            (pcurve_edge.end_3d.x() * cb_scale).round() as i64,
+            (pcurve_edge.end_3d.y() * cb_scale).round() as i64,
+            (pcurve_edge.end_3d.z() * cb_scale).round() as i64,
+        );
+        let cb_qpair = if cb_qs <= cb_qe {
+            (cb_qs, cb_qe)
+        } else {
+            (cb_qe, cb_qs)
+        };
 
-        let edge_id = if let Some(&cb_edge) = cb_qpair_edges.get(&qpair) {
+        let edge_id = if let Some(&cb_edge) = cb_qpair_edges.get(&cb_qpair) {
             cb_edge
         } else if let Some(pb_id) = pcurve_edge.pave_block_id {
             let key = (usize::MAX, pb_id);

@@ -106,6 +106,7 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
             let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
 
             let Some(candidates) = boundary_index.get(&key) else {
+                log::trace!("link_existing: no boundary PB at position");
                 continue;
             };
 

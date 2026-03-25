@@ -653,7 +653,79 @@ fn debug_overlapping_boxes_section_pbs() {
     let cb_count_after = arena.common_blocks.iter().count();
     eprintln!("CBs after link_existing: {cb_count_after}");
 
-    // Check: section PBs should exist (FF produces them)
+    // Run make_split_edges (populates split_edge on CBs)
+    crate::pave_filler::make_split_edges::perform(&mut topo, &mut arena).unwrap();
+    let cbs_with_split: usize = arena
+        .common_blocks
+        .iter()
+        .filter(|(_, cb)| cb.split_edge.is_some())
+        .count();
+    eprintln!("CBs with split_edge: {cbs_with_split}/{cb_count_after}");
+
+    // Dump VV merge map
+    eprintln!("VV merges: {}", arena.same_domain_vertices.len());
+
+    // Dump section PB endpoints and check if they match boundary PBs
+    let scale = 1.0 / tol.linear;
+    let qpt = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+
+    // Build boundary PB position index
+    #[allow(clippy::type_complexity)]
+    let mut boundary_positions: std::collections::HashSet<((i64, i64, i64), (i64, i64, i64))> =
+        std::collections::HashSet::new();
+    for pbs in arena.edge_pave_blocks.values() {
+        for &pb_id in pbs {
+            if let Some(pb) = arena.pave_blocks.get(pb_id) {
+                let sv = arena.resolve_vertex(pb.start.vertex);
+                let ev = arena.resolve_vertex(pb.end.vertex);
+                let sp = topo.vertex(sv).unwrap().point();
+                let ep = topo.vertex(ev).unwrap().point();
+                let qs = qpt(sp);
+                let qe = qpt(ep);
+                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                boundary_positions.insert(key);
+            }
+        }
+    }
+
+    // Check each section PB
+    let mut matched = 0;
+    let mut unmatched = 0;
+    for curve in &arena.curves {
+        for &pb_id in &curve.pave_blocks {
+            if let Some(pb) = arena.pave_blocks.get(pb_id) {
+                let sv = arena.resolve_vertex(pb.start.vertex);
+                let ev = arena.resolve_vertex(pb.end.vertex);
+                let sp = topo.vertex(sv).unwrap().point();
+                let ep = topo.vertex(ev).unwrap().point();
+                let qs = qpt(sp);
+                let qe = qpt(ep);
+                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                if boundary_positions.contains(&key) {
+                    matched += 1;
+                } else {
+                    unmatched += 1;
+                    eprintln!(
+                        "  UNMATCHED section PB: ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4})",
+                        sp.x(),
+                        sp.y(),
+                        sp.z(),
+                        ep.x(),
+                        ep.y(),
+                        ep.z()
+                    );
+                }
+            }
+        }
+    }
+    eprintln!("section PBs: {matched} matched, {unmatched} unmatched");
+
     assert!(
         section_pb_count > 0,
         "overlapping boxes should have FF section PBs"
