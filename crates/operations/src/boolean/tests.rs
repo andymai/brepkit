@@ -1396,7 +1396,7 @@ fn compound_cut_all_tools_disjoint_returns_unchanged_volume() {
 }
 
 #[test]
-#[ignore = "flaky — SD refactor non-determinism causes ~25% failure rate"]
+#[ignore = "flaky ~25% — SD non-determinism at coplanar boundaries"]
 fn compound_cut_matches_sequential_2x2_grid() {
     use brepkit_math::mat::Mat4;
 

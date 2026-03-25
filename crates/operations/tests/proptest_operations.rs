@@ -71,7 +71,6 @@ proptest! {
 
     // 3. rotation + translation preserves volume
     #[test]
-    #[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
     fn prop_transform_preserves_volume(theta in 0.0f64..std::f64::consts::TAU, tx in -10.0f64..10.0) {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
@@ -87,7 +86,6 @@ proptest! {
 
     // 4. copy produces identical volume
     #[test]
-    #[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
     fn prop_copy_produces_equal_volume(dx in 0.5f64..5.0, dy in 0.5f64..5.0, dz in 0.5f64..5.0) {
         let mut topo = Topology::new();
         let original = make_box(&mut topo, dx, dy, dz).unwrap();
@@ -102,7 +100,6 @@ proptest! {
 
     // 5. all tessellation triangles have positive area
     #[test]
-    #[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
     fn prop_tessellate_positive_area(r in 0.5f64..5.0, h in 0.5f64..5.0) {
         let mut topo = Topology::new();
         let cyl = make_cylinder(&mut topo, r, h).unwrap();
@@ -126,7 +123,6 @@ proptest! {
 
     // 6. box volume matches dx*dy*dz exactly
     #[test]
-    #[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
     fn prop_box_volume_exact(dx in 0.1f64..100.0, dy in 0.1f64..100.0, dz in 0.1f64..100.0) {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, dx, dy, dz).unwrap();
@@ -139,7 +135,6 @@ proptest! {
 
     // 7. cylinder volume matches pi*r^2*h within 1%
     #[test]
-    #[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
     fn prop_cylinder_volume(r in 0.5f64..5.0, h in 0.5f64..5.0) {
         let mut topo = Topology::new();
         let cyl = make_cylinder(&mut topo, r, h).unwrap();
@@ -179,7 +174,6 @@ proptest! {
 
     // 9. tessellation produces watertight mesh (every edge has a matching reverse)
     #[test]
-    #[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
     fn prop_tessellate_watertight_box(dx in 0.5f64..10.0, dy in 0.5f64..10.0, dz in 0.5f64..10.0) {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, dx, dy, dz).unwrap();

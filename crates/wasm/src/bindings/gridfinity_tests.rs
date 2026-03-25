@@ -1075,7 +1075,6 @@ fn gridfinity_d1a1c_octagon_cut() {
 ///
 /// Tests coplanar face handling when inner box shares Z planes with outer.
 #[test]
-#[ignore = "Euler=0 — boolean coplanar face classification keeps both solid faces"]
 fn gridfinity_d1a2_concentric_box_coplanar() {
     let mut k = BrepKernel::new();
     // Outer box: 20×20×10, inner box: 14×14×10 centered (coplanar top & bottom)

@@ -358,7 +358,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "GFA pipeline limitation"]
     fn compound_cut_multiple_tools() {
         let mut k = BrepKernel::new();
         let r = k.execute_batch(

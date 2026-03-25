@@ -206,7 +206,6 @@ fn thin_wall_cut() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn thin_wall_intersect() {
     // Intersection producing a thin slab.
     let mut topo = Topology::new();
@@ -325,7 +324,6 @@ fn fuse_commutative() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn intersect_commutative() {
     let mut topo = Topology::new();
     let a1 = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
