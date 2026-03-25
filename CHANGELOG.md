@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.37.3](https://github.com/andymai/brepkit/compare/v2.37.2...v2.37.3) (2026-03-25)
+
+
+### Bug Fixes
+
+* **algo:** deduplicate coplanar FF section edges — 0 non-manifold ([#435](https://github.com/andymai/brepkit/issues/435)) ([cd5fc0a](https://github.com/andymai/brepkit/commit/cd5fc0a86e63db6d045397b7381789f603a4bb50))
+
 ## [2.37.2](https://github.com/andymai/brepkit/compare/v2.37.1...v2.37.2) (2026-03-25)
 
 
