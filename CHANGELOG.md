@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.2](https://github.com/andymai/brepkit/compare/v2.41.1...v2.41.2) (2026-03-26)
+
+
+### Bug Fixes
+
+* **algo:** SD selection for Cut + 7 tests un-ignored (62→55) ([#462](https://github.com/andymai/brepkit/issues/462)) ([e66a8f2](https://github.com/andymai/brepkit/commit/e66a8f21d6f0bbae0a5213b41b0ba95cbb446ecc))
+
 ## [2.41.1](https://github.com/andymai/brepkit/compare/v2.41.0...v2.41.1) (2026-03-26)
 
 
