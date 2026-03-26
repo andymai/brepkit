@@ -107,6 +107,15 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         seed
     };
 
+    // Shared quantization helper for vertex position dedup.
+    let qpos = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() * VERTEX_DEDUP_SCALE).round() as i64,
+            (p.y() * VERTEX_DEDUP_SCALE).round() as i64,
+            (p.z() * VERTEX_DEDUP_SCALE).round() as i64,
+        )
+    };
+
     // PB vertex registry: cross-face pool of FRESH vertices at CB positions.
     let mut pb_vertex_registry: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
         BTreeMap::new();
@@ -114,18 +123,10 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // ── CommonBlock vertex pre-pass ─────────────────────────────────
     // Create FRESH vertices at CommonBlock split edge positions.
     {
-        let q = |p: Point3| -> (i64, i64, i64) {
-            (
-                (p.x() * VERTEX_DEDUP_SCALE).round() as i64,
-                (p.y() * VERTEX_DEDUP_SCALE).round() as i64,
-                (p.z() * VERTEX_DEDUP_SCALE).round() as i64,
-            )
-        };
         let cb_positions: Vec<Point3> = arena
             .common_blocks
             .iter()
-            .map(|(_, cb)| cb)
-            .filter_map(|cb| {
+            .filter_map(|(_, cb)| {
                 let eid = cb.split_edge?;
                 let e = topo.edge(eid).ok()?;
                 let mut pts = Vec::new();
@@ -141,33 +142,25 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             .collect();
         for pt in cb_positions {
             pb_vertex_registry
-                .entry(q(pt))
+                .entry(qpos(pt))
                 .or_insert_with(|| topo.add_vertex(Vertex::new(pt, tol.linear)));
         }
     }
 
     // ── Per-rank fresh-vertex pools ─────────────────────────────────
-    // For each input solid (rank), create FRESH vertices at all leaf
-    // PaveBlock endpoint positions. Keyed by quantized position within
-    // each rank. Different solids at the same position get SEPARATE
-    // fresh vertices, preventing cross-solid topology contamination.
+    // For each input solid (rank), create FRESH vertices at positions
+    // of face vertices shared by 2+ unique faces within that rank.
+    // This covers box corners (3 faces) and shared edge endpoints
+    // (2 faces). Different solids get SEPARATE pools to prevent
+    // cross-solid contamination. Vertices in <2 faces (e.g.
+    // shelled-box internal edges) stay per-face.
     let rank_vertex_pools: HashMap<
         Rank,
         BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     > = {
-        let scale = VERTEX_DEDUP_SCALE;
-        let q = |p: Point3| -> (i64, i64, i64) {
-            (
-                (p.x() * scale).round() as i64,
-                (p.y() * scale).round() as i64,
-                (p.z() * scale).round() as i64,
-            )
-        };
-        // Count face references per (rank, resolved_vid). Only vertices
-        // referenced by 3+ faces within the same rank are true solid
-        // corners that benefit from sharing. Vertices in <3 faces
-        // (shelled box internal edges, etc.) stay per-face.
-        let mut rank_vid_count: HashMap<(Rank, usize), (Point3, usize)> = HashMap::new();
+        // Count UNIQUE faces per (rank, resolved_vid).
+        let mut rank_vid_faces: HashMap<(Rank, usize), (Point3, std::collections::HashSet<usize>)> =
+            HashMap::new();
         for (&face_id, &rank) in face_ranks {
             if let Ok(face) = topo.face(face_id) {
                 if let Ok(wire) = topo.wire(face.outer_wire()) {
@@ -176,11 +169,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                             for &vid in &[edge.start(), edge.end()] {
                                 let rv = arena.resolve_vertex(vid);
                                 if let Ok(v) = topo.vertex(rv) {
-                                    let pt = v.point();
-                                    let entry = rank_vid_count
-                                        .entry((rank, rv.index()))
-                                        .or_insert_with(|| (pt, 0));
-                                    entry.1 += 1;
+                                    let entry =
+                                        rank_vid_faces.entry((rank, rv.index())).or_insert_with(
+                                            || (v.point(), std::collections::HashSet::new()),
+                                        );
+                                    entry.1.insert(face_id.index());
                                 }
                             }
                         }
@@ -188,18 +181,13 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 }
             }
         }
-        // Create fresh vertices for vertices in 2+ faces per rank.
-        // Vertices in 2+ faces are shared between adjacent faces of the
-        // same solid — box corners (3+ faces) and edge midpoints (2 faces).
+        // Create fresh vertices for vertices in 2+ unique faces per rank.
+        // Reuse CB pre-pass vertex if available at this position.
         let mut pools: HashMap<Rank, BTreeMap<_, _>> = HashMap::new();
-        for ((rank, _), (pt, count)) in &rank_vid_count {
-            if *count >= 2 {
+        for ((rank, _), (pt, faces)) in &rank_vid_faces {
+            if faces.len() >= 2 {
                 let pool = pools.entry(*rank).or_default();
-                let key = q(*pt);
-                // Reuse CB pre-pass vertex if available at this position,
-                // otherwise create fresh. This prevents duplicate vertices
-                // at intersection positions (covered by both CB pre-pass
-                // and rank pool for the second solid's corners).
+                let key = qpos(*pt);
                 pool.entry(key).or_insert_with(|| {
                     pb_vertex_registry
                         .get(&key)
