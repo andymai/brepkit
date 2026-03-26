@@ -42,7 +42,7 @@ use super::split_types::{SectionEdge, SurfaceInfo};
 /// For faces with section edges (from FF intersection), calls the full
 /// face splitter to produce geometrically split sub-faces. Faces
 /// without intersection data pass through as single sub-faces.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::type_complexity)]
 pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     topo: &mut Topology,
     arena: &GfaArena,
@@ -204,6 +204,21 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // Pre-compute which faces have section edges from which curves
     let section_map = build_section_map(arena);
 
+    // Per-rank boundary edge caches: share boundary edges across faces
+    // of the same rank by quantized position pair. This implements the
+    // reference implementation's approach: edges are shared from creation
+    // rather than merged retroactively. Per-rank scoping prevents
+    // cross-solid vertex contamination (faces from different ranks use
+    // different vertex pools, so their edges can't be shared).
+    let mut boundary_edge_cache_a: HashMap<
+        ((i64, i64, i64), (i64, i64, i64)),
+        brepkit_topology::edge::EdgeId,
+    > = HashMap::new();
+    let mut boundary_edge_cache_b: HashMap<
+        ((i64, i64, i64), (i64, i64, i64)),
+        brepkit_topology::edge::EdgeId,
+    > = HashMap::new();
+
     // Sort faces by ID index for deterministic processing order.
     // HashMap iteration order varies between compilations (different hash
     // seeds), which causes non-deterministic edge sharing in the
@@ -336,6 +351,10 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // and compute a distinct interior point for classification.
         for split in &split_results {
             let rank_pool = rank_vertex_pools.get(&rank);
+            let bnd_cache = match rank {
+                Rank::A => &mut boundary_edge_cache_a,
+                Rank::B => &mut boundary_edge_cache_b,
+            };
             let new_face_id = build_topology_face(
                 topo,
                 split,
@@ -346,6 +365,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 &vv_vertex_seed,
                 rank_pool,
                 &mut pb_vertex_registry,
+                bnd_cache,
                 arena,
             );
             let pt = split.precomputed_interior.unwrap_or_else(|| {
@@ -1442,6 +1462,10 @@ fn build_topology_face(
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     rank_pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
     pb_vertex_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    boundary_edge_cache: &mut HashMap<
+        ((i64, i64, i64), (i64, i64, i64)),
+        brepkit_topology::edge::EdgeId,
+    >,
     arena: &crate::ds::GfaArena,
 ) -> Option<FaceId> {
     if split.outer_wire.is_empty() {
@@ -1514,9 +1538,27 @@ fn build_topology_face(
                 topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
             })
         } else {
-            topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
+            // Boundary edge: share across faces of the same rank by
+            // quantized position pair. Within a rank, the vertex pool
+            // guarantees same positions get same VertexIds.
+            let sp = quantize(topo.vertex(start_vid).ok()?.point());
+            let ep = quantize(topo.vertex(end_vid).ok()?.point());
+            let pos_key = if sp <= ep { (sp, ep) } else { (ep, sp) };
+            *boundary_edge_cache.entry(pos_key).or_insert_with(|| {
+                topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
+            })
         };
-        let forward = pcurve_edge.forward;
+        // Determine forward: when reusing a shared edge, its stored vertex
+        // order may be reversed vs this face's winding direction.
+        let forward = if let Ok(edge) = topo.edge(edge_id) {
+            if edge.start() == start_vid && edge.end() == end_vid {
+                pcurve_edge.forward
+            } else {
+                !pcurve_edge.forward
+            }
+        } else {
+            pcurve_edge.forward
+        };
         oriented_edges.push(OrientedEdge::new(edge_id, forward));
     }
 
