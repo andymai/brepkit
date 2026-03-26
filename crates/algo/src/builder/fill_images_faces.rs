@@ -107,6 +107,45 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         seed
     };
 
+    // PB vertex registry: cross-face pool of FRESH vertices at CB positions.
+    let mut pb_vertex_registry: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
+        BTreeMap::new();
+
+    // ── CommonBlock vertex pre-pass ─────────────────────────────────
+    // Create FRESH vertices at CommonBlock split edge positions.
+    {
+        let q = |p: Point3| -> (i64, i64, i64) {
+            (
+                (p.x() * VERTEX_DEDUP_SCALE).round() as i64,
+                (p.y() * VERTEX_DEDUP_SCALE).round() as i64,
+                (p.z() * VERTEX_DEDUP_SCALE).round() as i64,
+            )
+        };
+        let cb_positions: Vec<Point3> = arena
+            .common_blocks
+            .iter()
+            .map(|(_, cb)| cb)
+            .filter_map(|cb| {
+                let eid = cb.split_edge?;
+                let e = topo.edge(eid).ok()?;
+                let mut pts = Vec::new();
+                if let Ok(v) = topo.vertex(e.start()) {
+                    pts.push(v.point());
+                }
+                if let Ok(v) = topo.vertex(e.end()) {
+                    pts.push(v.point());
+                }
+                Some(pts)
+            })
+            .flatten()
+            .collect();
+        for pt in cb_positions {
+            pb_vertex_registry
+                .entry(q(pt))
+                .or_insert_with(|| topo.add_vertex(Vertex::new(pt, tol.linear)));
+        }
+    }
+
     // ── Per-rank fresh-vertex pools ─────────────────────────────────
     // For each input solid (rank), create FRESH vertices at all leaf
     // PaveBlock endpoint positions. Keyed by quantized position within
@@ -149,64 +188,30 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 }
             }
         }
-        // Create fresh vertices for vertices in 3+ faces per rank.
+        // Create fresh vertices for vertices in 2+ faces per rank.
+        // Vertices in 2+ faces are shared between adjacent faces of the
+        // same solid — box corners (3+ faces) and edge midpoints (2 faces).
         let mut pools: HashMap<Rank, BTreeMap<_, _>> = HashMap::new();
         for ((rank, _), (pt, count)) in &rank_vid_count {
-            if *count >= 3 {
+            if *count >= 2 {
                 let pool = pools.entry(*rank).or_default();
-                pool.entry(q(*pt))
-                    .or_insert_with(|| topo.add_vertex(Vertex::new(*pt, tol.linear)));
+                let key = q(*pt);
+                // Reuse CB pre-pass vertex if available at this position,
+                // otherwise create fresh. This prevents duplicate vertices
+                // at intersection positions (covered by both CB pre-pass
+                // and rank pool for the second solid's corners).
+                pool.entry(key).or_insert_with(|| {
+                    pb_vertex_registry
+                        .get(&key)
+                        .copied()
+                        .unwrap_or_else(|| topo.add_vertex(Vertex::new(*pt, tol.linear)))
+                });
             }
         }
         pools
     };
 
-    // PB vertex registry: populated by PaveBlock (CommonBlock) vertex
-    // resolution, consulted by ALL faces' fallback vertex creation.
-    // Only authoritative shared vertices enter this registry — boundary
-    // edge vertices do NOT, preventing cross-face contamination.
-    let mut pb_vertex_registry: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
-        BTreeMap::new();
-
-    // ── CommonBlock vertex pre-pass ─────────────────────────────────
-    // Create FRESH vertices at CommonBlock split edge positions and
-    // register them in the cross-face pool. These fresh vertices are
-    // shared across all faces' boundary edges at intersection positions
-    // WITHOUT creating topology connections to the CB split_edges
-    // (which would corrupt solid_entity_counts traversal).
-    {
-        let q = |p: Point3| -> (i64, i64, i64) {
-            (
-                (p.x() * VERTEX_DEDUP_SCALE).round() as i64,
-                (p.y() * VERTEX_DEDUP_SCALE).round() as i64,
-                (p.z() * VERTEX_DEDUP_SCALE).round() as i64,
-            )
-        };
-        // Snapshot positions first (can't borrow topo immutably and mutably).
-        let cb_positions: Vec<Point3> = arena
-            .common_blocks
-            .iter()
-            .map(|(_, cb)| cb)
-            .filter_map(|cb| {
-                let eid = cb.split_edge?;
-                let e = topo.edge(eid).ok()?;
-                let mut pts = Vec::new();
-                if let Ok(v) = topo.vertex(e.start()) {
-                    pts.push(v.point());
-                }
-                if let Ok(v) = topo.vertex(e.end()) {
-                    pts.push(v.point());
-                }
-                Some(pts)
-            })
-            .flatten()
-            .collect();
-        for pt in cb_positions {
-            pb_vertex_registry
-                .entry(q(pt))
-                .or_insert_with(|| topo.add_vertex(Vertex::new(pt, tol.linear)));
-        }
-    }
+    // (pb_vertex_registry and CB pre-pass moved above rank pool)
 
     // Pre-compute which faces have section edges from which curves
     let section_map = build_section_map(arena);
