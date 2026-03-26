@@ -107,48 +107,58 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         seed
     };
 
-    // Per-face original vertex map: face_id → quantized_pos → VertexId.
-    // Used to seed each face's vertex cache with its own wire vertices,
-    // ensuring boundary edges at original corners reuse existing vertices
-    // without cross-contamination between unrelated faces.
-    let face_vertex_seeds: HashMap<
-        FaceId,
+    // ── Per-rank fresh-vertex pools ─────────────────────────────────
+    // For each input solid (rank), create FRESH vertices at all leaf
+    // PaveBlock endpoint positions. Keyed by quantized position within
+    // each rank. Different solids at the same position get SEPARATE
+    // fresh vertices, preventing cross-solid topology contamination.
+    let rank_vertex_pools: HashMap<
+        Rank,
         BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     > = {
         let scale = VERTEX_DEDUP_SCALE;
-        let mut map = HashMap::new();
-        for &face_id in face_ranks.keys() {
-            // Only seed unsplit faces — faces WITH section edges get split
-            // and their sub-face boundary positions may collide with nearby
-            // original vertex positions at 1e10 quantization.
-            let fi = arena.face_info(face_id);
-            let has_sections = fi.is_some_and(|fi| !fi.pave_blocks_sc.is_empty());
-            if has_sections {
-                continue;
-            }
-            let mut face_seed = BTreeMap::new();
+        let q = |p: Point3| -> (i64, i64, i64) {
+            (
+                (p.x() * scale).round() as i64,
+                (p.y() * scale).round() as i64,
+                (p.z() * scale).round() as i64,
+            )
+        };
+        // Count face references per (rank, resolved_vid). Only vertices
+        // referenced by 3+ faces within the same rank are true solid
+        // corners that benefit from sharing. Vertices in <3 faces
+        // (shelled box internal edges, etc.) stay per-face.
+        let mut rank_vid_count: HashMap<(Rank, usize), (Point3, usize)> = HashMap::new();
+        for (&face_id, &rank) in face_ranks {
             if let Ok(face) = topo.face(face_id) {
                 if let Ok(wire) = topo.wire(face.outer_wire()) {
                     for oe in wire.edges() {
                         if let Ok(edge) = topo.edge(oe.edge()) {
                             for &vid in &[edge.start(), edge.end()] {
-                                if let Ok(v) = topo.vertex(vid) {
+                                let rv = arena.resolve_vertex(vid);
+                                if let Ok(v) = topo.vertex(rv) {
                                     let pt = v.point();
-                                    let key = (
-                                        (pt.x() * scale).round() as i64,
-                                        (pt.y() * scale).round() as i64,
-                                        (pt.z() * scale).round() as i64,
-                                    );
-                                    face_seed.entry(key).or_insert(vid);
+                                    let entry = rank_vid_count
+                                        .entry((rank, rv.index()))
+                                        .or_insert_with(|| (pt, 0));
+                                    entry.1 += 1;
                                 }
                             }
                         }
                     }
                 }
             }
-            map.insert(face_id, face_seed);
         }
-        map
+        // Create fresh vertices for vertices in 3+ faces per rank.
+        let mut pools: HashMap<Rank, BTreeMap<_, _>> = HashMap::new();
+        for ((rank, _), (pt, count)) in &rank_vid_count {
+            if *count >= 3 {
+                let pool = pools.entry(*rank).or_default();
+                pool.entry(q(*pt))
+                    .or_insert_with(|| topo.add_vertex(Vertex::new(*pt, tol.linear)));
+            }
+        }
+        pools
     };
 
     // PB vertex registry: populated by PaveBlock (CommonBlock) vertex
@@ -326,7 +336,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // Build real topology entities (Vertex → Edge → Wire → Face) for each,
         // and compute a distinct interior point for classification.
         for split in &split_results {
-            let face_seed = face_vertex_seeds.get(&face_id);
+            let rank_pool = rank_vertex_pools.get(&rank);
             let new_face_id = build_topology_face(
                 topo,
                 split,
@@ -335,7 +345,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 &mut shared_edge_cache,
                 &cb_qpair_edges,
                 &vv_vertex_seed,
-                face_seed,
+                rank_pool,
                 &mut pb_vertex_registry,
                 arena,
             );
@@ -1217,7 +1227,7 @@ fn build_topology_face(
     shared_edge_cache: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
     _cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
-    face_vertex_seed: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
+    rank_pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
     pb_vertex_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     arena: &crate::ds::GfaArena,
 ) -> Option<FaceId> {
@@ -1226,14 +1236,13 @@ fn build_topology_face(
     }
 
     // Step 1: Create/find vertices for each unique 3D endpoint.
-    // Seed from VV-merged vertices, then from this face's own original
-    // wire vertices. Per-face seeding ensures boundary edges at original
-    // corners reuse existing vertices without cross-contamination between
-    // unrelated faces.
+    // Seed from VV-merged vertices, then from this rank's fresh-vertex
+    // pool. The rank pool provides per-solid shared fresh vertices at
+    // PaveBlock endpoint positions, avoiding cross-solid contamination.
     let mut vertex_cache: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
         vv_vertex_seed.clone();
-    if let Some(fs) = face_vertex_seed {
-        for (&key, &vid) in fs {
+    if let Some(pool) = rank_pool {
+        for (&key, &vid) in pool {
             vertex_cache.entry(key).or_insert(vid);
         }
     }
