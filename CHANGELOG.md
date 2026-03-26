@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.0](https://github.com/andymai/brepkit/compare/v2.40.0...v2.41.0) (2026-03-26)
+
+
+### Features
+
+* **algo:** per-rank SubFace vertex merge — manifold topology achieved ([#456](https://github.com/andymai/brepkit/issues/456)) ([06ea83e](https://github.com/andymai/brepkit/commit/06ea83effe89a31f8e006671dc04b097bc1e1eac))
+
 ## [2.40.0](https://github.com/andymai/brepkit/compare/v2.39.1...v2.40.0) (2026-03-26)
 
 
