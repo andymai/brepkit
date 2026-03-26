@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.3](https://github.com/andymai/brepkit/compare/v2.41.2...v2.41.3) (2026-03-26)
+
+
+### Bug Fixes
+
+* **algo:** SD selection for Cut + boundary edge sharing ([#464](https://github.com/andymai/brepkit/issues/464)) ([e713885](https://github.com/andymai/brepkit/commit/e713885769368627791670acef6168cc2518300d))
+
 ## [2.41.2](https://github.com/andymai/brepkit/compare/v2.41.1...v2.41.2) (2026-03-26)
 
 
