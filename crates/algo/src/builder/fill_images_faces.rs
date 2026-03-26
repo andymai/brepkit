@@ -1170,23 +1170,30 @@ fn resolve_edge_vertices(
                         if fwd_match {
                             let qs = quantize(edge.start_3d);
                             let qe = quantize(edge.end_3d);
-                            cache.entry(qs).or_insert(se_start);
-                            cache.entry(qe).or_insert(se_end);
-                            // Register in cross-face PB registry so other
-                            // faces' boundary edges at these positions
-                            // reuse the same vertices.
-                            pb_registry.entry(qs).or_insert(se_start);
-                            pb_registry.entry(qe).or_insert(se_end);
-                            return (se_start, se_end);
+                            // Use fresh vertex from cache/registry if available
+                            // (from rank pool or CB pre-pass). Fall back to
+                            // the split_edge's actual vertex only if no fresh
+                            // vertex exists. This prevents topology connections
+                            // between the GFA result and the PaveFiller's
+                            // intermediate split edges.
+                            let vs = *cache
+                                .entry(qs)
+                                .or_insert_with(|| *pb_registry.entry(qs).or_insert(se_start));
+                            let ve = *cache
+                                .entry(qe)
+                                .or_insert_with(|| *pb_registry.entry(qe).or_insert(se_end));
+                            return (vs, ve);
                         }
                         if rev_match {
                             let qs = quantize(edge.start_3d);
                             let qe = quantize(edge.end_3d);
-                            cache.entry(qs).or_insert(se_end);
-                            cache.entry(qe).or_insert(se_start);
-                            pb_registry.entry(qs).or_insert(se_end);
-                            pb_registry.entry(qe).or_insert(se_start);
-                            return (se_end, se_start);
+                            let vs = *cache
+                                .entry(qs)
+                                .or_insert_with(|| *pb_registry.entry(qs).or_insert(se_end));
+                            let ve = *cache
+                                .entry(qe)
+                                .or_insert_with(|| *pb_registry.entry(qe).or_insert(se_start));
+                            return (vs, ve);
                         }
                     }
                 }
