@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.39.1](https://github.com/andymai/brepkit/compare/v2.39.0...v2.39.1) (2026-03-26)
+
+
+### Bug Fixes
+
+* **algo,ops:** restore PB cache fix + Euler gate (missed in [#450](https://github.com/andymai/brepkit/issues/450) squash) ([#451](https://github.com/andymai/brepkit/issues/451)) ([9af6524](https://github.com/andymai/brepkit/commit/9af6524c72ea27960db4bd56cf967861949aba85))
+
 ## [2.39.0](https://github.com/andymai/brepkit/compare/v2.38.0...v2.39.0) (2026-03-26)
 
 
