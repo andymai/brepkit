@@ -925,3 +925,222 @@ fn gfa_fuse_1d_overlapping_manifold_boxes() {
     // Target: 0 non-manifold edges.
     eprintln!("NON-MANIFOLD EDGES: {non_manifold}");
 }
+
+/// Trace the Builder pipeline for z-axis overlapping boxes.
+/// Z-axis offset creates 4 coplanar side face pairs (x=0, x=1, y=0, y=1).
+#[test]
+fn trace_builder_z_axis_overlap() {
+    use brepkit_math::tolerance::Tolerance;
+    use brepkit_topology::face::FaceSurface;
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+
+    let mut topo = Topology::default();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.5);
+
+    let tol = Tolerance::default();
+    let mut arena = crate::ds::GfaArena::new();
+    crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
+
+    // Dump FF interferences
+    eprintln!(
+        "\n=== Z-axis overlap: {} FF interferences ===",
+        arena.interference.ff.len()
+    );
+    for interf in &arena.interference.ff {
+        if let crate::ds::Interference::FF {
+            f1,
+            f2,
+            curve_index,
+        } = interf
+        {
+            let curve = &arena.curves[*curve_index];
+            let n_pbs = curve.pave_blocks.len();
+            let f1_desc = topo
+                .face(*f1)
+                .ok()
+                .map(|f| match f.surface() {
+                    FaceSurface::Plane { normal, d } => format!(
+                        "Plane(n=({:.1},{:.1},{:.1}),d={d:.2})",
+                        normal.x(),
+                        normal.y(),
+                        normal.z()
+                    ),
+                    _ => "Other".to_string(),
+                })
+                .unwrap_or_default();
+            let f2_desc = topo
+                .face(*f2)
+                .ok()
+                .map(|f| match f.surface() {
+                    FaceSurface::Plane { normal, d } => format!(
+                        "Plane(n=({:.1},{:.1},{:.1}),d={d:.2})",
+                        normal.x(),
+                        normal.y(),
+                        normal.z()
+                    ),
+                    _ => "Other".to_string(),
+                })
+                .unwrap_or_default();
+            // Dump PB endpoints
+            for &pb_id in &curve.pave_blocks {
+                if let Some(pb) = arena.pave_blocks.get(pb_id) {
+                    let sv = arena.resolve_vertex(pb.start.vertex);
+                    let ev = arena.resolve_vertex(pb.end.vertex);
+                    let sp = topo
+                        .vertex(sv)
+                        .map(brepkit_topology::vertex::Vertex::point)
+                        .ok();
+                    let ep = topo
+                        .vertex(ev)
+                        .map(brepkit_topology::vertex::Vertex::point)
+                        .ok();
+                    eprintln!(
+                        "  FF: {f1:?}({f1_desc}) x {f2:?}({f2_desc}) PBs={n_pbs} \
+                         start={sp:?} end={ep:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    let mut builder = crate::builder::Builder::with_tolerance(topo, arena, a, b, tol);
+    builder.perform().unwrap();
+
+    let (sub_faces, sd_pairs, topo) = builder.debug_info();
+
+    eprintln!(
+        "\nsub_faces: {}, sd_pairs: {}",
+        sub_faces.len(),
+        sd_pairs.len()
+    );
+
+    for (i, sf) in sub_faces.iter().enumerate() {
+        let surface_desc = match topo
+            .face(sf.face_id)
+            .ok()
+            .map(brepkit_topology::face::Face::surface)
+        {
+            Some(FaceSurface::Plane { normal, d }) => format!(
+                "Plane(n=({:.1},{:.1},{:.1}),d={d:.2})",
+                normal.x(),
+                normal.y(),
+                normal.z()
+            ),
+            _ => "Other".to_string(),
+        };
+        let n_edges = topo
+            .face(sf.face_id)
+            .ok()
+            .and_then(|f| topo.wire(f.outer_wire()).ok())
+            .map(|w| w.edges().len())
+            .unwrap_or(0);
+        let ipt = sf
+            .interior_point
+            .map(|p| format!("({:.3},{:.3},{:.3})", p.x(), p.y(), p.z()));
+        eprintln!(
+            "  SF[{i}]: {:?} {:?} {surface_desc} edges={n_edges} ipt={ipt:?}",
+            sf.rank, sf.classification
+        );
+
+        // Dump edges for faces with unexpected edge counts
+        if n_edges != 4 {
+            if let Ok(face) = topo.face(sf.face_id) {
+                if let Ok(wire) = topo.wire(face.outer_wire()) {
+                    for (ei, oe) in wire.edges().iter().enumerate() {
+                        if let Ok(edge) = topo.edge(oe.edge()) {
+                            let sp = topo
+                                .vertex(edge.start())
+                                .map(brepkit_topology::vertex::Vertex::point)
+                                .ok();
+                            let ep = topo
+                                .vertex(edge.end())
+                                .map(brepkit_topology::vertex::Vertex::point)
+                                .ok();
+                            eprintln!("    E[{ei}]: {sp:?} -> {ep:?} fwd={}", oe.is_forward());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for (i, pair) in sd_pairs.iter().enumerate() {
+        eprintln!(
+            "  SD[{i}]: A={} B={} same_ori={} contained={}",
+            pair.idx_a, pair.idx_b, pair.same_orientation, pair.b_contained_in_a
+        );
+    }
+
+    let selected = crate::bop::select_faces(sub_faces, crate::bop::BooleanOp::Fuse, sd_pairs);
+    eprintln!("BOP selected: {} faces", selected.len());
+}
+
+/// GFA fuse of z-axis-offset overlapping manifold boxes.
+#[test]
+fn gfa_fuse_z_axis_overlapping_manifold_boxes() {
+    use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+    use std::collections::HashMap;
+
+    let mut topo = Topology::default();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.5);
+
+    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Fuse, a, b).unwrap();
+    let solid = topo.solid(result).unwrap();
+    let shell = topo.shell(solid.outer_shell()).unwrap();
+
+    let face_count = shell.faces().len();
+    eprintln!("Z-axis fuse: {face_count} faces");
+
+    // Check edge manifoldness
+    let mut edge_face_count: HashMap<brepkit_topology::edge::EdgeId, usize> = HashMap::new();
+    for &fid in shell.faces() {
+        let face = topo.face(fid).unwrap();
+        let wire = topo.wire(face.outer_wire()).unwrap();
+        for oe in wire.edges() {
+            *edge_face_count.entry(oe.edge()).or_default() += 1;
+        }
+    }
+
+    let non_manifold = edge_face_count.values().filter(|&&n| n != 2).count();
+    // Count unique vertices
+    let mut verts: std::collections::HashSet<brepkit_topology::vertex::VertexId> =
+        std::collections::HashSet::new();
+    for &fid in shell.faces() {
+        let face = topo.face(fid).unwrap();
+        let wire = topo.wire(face.outer_wire()).unwrap();
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge()).unwrap();
+            verts.insert(edge.start());
+            verts.insert(edge.end());
+        }
+    }
+    let v = verts.len();
+    let e = edge_face_count.len();
+    #[allow(clippy::cast_possible_wrap)]
+    let euler = v as i64 - e as i64 + face_count as i64;
+    eprintln!("{e} edges, {v} verts, euler={euler}, {non_manifold} non-manifold");
+
+    // Dump non-manifold edge details
+    for (&eid, &count) in &edge_face_count {
+        if count != 2 {
+            if let Ok(e) = topo.edge(eid) {
+                let sp = topo
+                    .vertex(e.start())
+                    .map(brepkit_topology::vertex::Vertex::point)
+                    .ok();
+                let ep = topo
+                    .vertex(e.end())
+                    .map(brepkit_topology::vertex::Vertex::point)
+                    .ok();
+                eprintln!("  NM edge {eid:?}: count={count} {sp:?} -> {ep:?}");
+            }
+        }
+    }
+
+    assert_eq!(
+        non_manifold, 0,
+        "{non_manifold} non-manifold edges in z-axis fuse"
+    );
+}
