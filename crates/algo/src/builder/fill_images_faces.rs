@@ -361,6 +361,85 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         }
     }
 
+    // Merge duplicate vertices within each rank (in-place edge mutation).
+    let all_planar = sub_faces.iter().all(|sf| {
+        topo.face(sf.face_id)
+            .is_ok_and(|f| matches!(f.surface(), FaceSurface::Plane { .. }))
+    });
+    let ranks: std::collections::HashSet<_> = sub_faces.iter().map(|sf| sf.rank).collect();
+    let no_inner_wires = sub_faces.iter().all(|sf| {
+        topo.face(sf.face_id)
+            .is_ok_and(|f| f.inner_wires().is_empty())
+    });
+    if all_planar && ranks.len() == 2 && no_inner_wires {
+        let q12 = |p: Point3| -> (i64, i64, i64) {
+            (
+                (p.x() * 1e12).round() as i64,
+                (p.y() * 1e12).round() as i64,
+                (p.z() * 1e12).round() as i64,
+            )
+        };
+        // Group edges by rank
+        let mut rank_edges: HashMap<Rank, Vec<EdgeId>> = HashMap::new();
+        for sf in &sub_faces {
+            let edges = rank_edges.entry(sf.rank).or_default();
+            if let Ok(face) = topo.face(sf.face_id) {
+                let mut seen = std::collections::HashSet::new();
+                if let Ok(wire) = topo.wire(face.outer_wire()) {
+                    for oe in wire.edges() {
+                        if seen.insert(oe.edge().index()) {
+                            edges.push(oe.edge());
+                        }
+                    }
+                }
+            }
+        }
+        for edges in rank_edges.values() {
+            let mut canonical: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
+                BTreeMap::new();
+            let mut merge_map: HashMap<usize, brepkit_topology::vertex::VertexId> = HashMap::new();
+            for &eid in edges {
+                if let Ok(edge) = topo.edge(eid) {
+                    for &vid in &[edge.start(), edge.end()] {
+                        if let Ok(v) = topo.vertex(vid) {
+                            let key = q12(v.point());
+                            let canon = *canonical.entry(key).or_insert(vid);
+                            if canon != vid {
+                                merge_map.insert(vid.index(), canon);
+                            }
+                        }
+                    }
+                }
+            }
+            if merge_map.is_empty() {
+                continue;
+            }
+            let updates: Vec<_> = edges
+                .iter()
+                .filter_map(|&eid| {
+                    let edge = topo.edge(eid).ok()?;
+                    let s = edge.start();
+                    let e = edge.end();
+                    let ns = merge_map.get(&s.index()).copied().unwrap_or(s);
+                    let ne = merge_map.get(&e.index()).copied().unwrap_or(e);
+                    if ns == ne {
+                        return None;
+                    }
+                    if ns != s || ne != e {
+                        Some((eid, ns, ne, edge.curve().clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            for (eid, ns, ne, curve) in updates {
+                if let Ok(edge) = topo.edge_mut(eid) {
+                    *edge = Edge::new(ns, ne, curve);
+                }
+            }
+        }
+    }
+
     sub_faces
 }
 
