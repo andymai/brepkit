@@ -168,7 +168,6 @@ fn near_miss_disjoint_fuse() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn near_miss_barely_overlapping() {
     // Two cubes overlapping by a tiny amount (1e-5).
     let mut topo = Topology::new();
@@ -221,7 +220,6 @@ fn thin_wall_intersect() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn volume_fuse_overlapping_boxes() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -247,7 +245,6 @@ fn volume_cut_overlapping_boxes() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn volume_intersect_overlapping_boxes() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -264,7 +261,6 @@ fn volume_intersect_overlapping_boxes() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_overlap_y_axis() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -304,7 +300,6 @@ fn fuse_overlap_all_axes() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_commutative() {
     let mut topo = Topology::new();
     let a1 = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -324,7 +319,6 @@ fn fuse_commutative() {
 }
 
 #[test]
-#[ignore = "SubFace vertex merge changes volume for sequential intersects"]
 fn intersect_commutative() {
     let mut topo = Topology::new();
     let a1 = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -589,7 +583,6 @@ fn self_intersect() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn options_fine_deflection() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -604,7 +597,6 @@ fn options_fine_deflection() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn options_coarse_deflection() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -706,7 +698,6 @@ fn corner_overlap_intersect() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn half_overlap_fuse() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -730,7 +721,6 @@ fn half_overlap_cut() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn half_overlap_intersect() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -852,7 +842,6 @@ fn volume_tiny_overlap() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn volume_large_boxes() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 100.0, 100.0, 100.0);

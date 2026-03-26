@@ -40,7 +40,6 @@ fn fuse_overlapping_boxes(topo: &mut Topology, s: f64) -> (SolidId, f64) {
 // ── Millimeter scale ────────────────────────────────────────────────
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn test_boolean_at_mm_scale() {
     let mut topo = Topology::new();
     let s = 0.1; // 100 um boxes
@@ -58,7 +57,6 @@ fn test_boolean_at_mm_scale() {
 // ── Meter scale ─────────────────────────────────────────────────────
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn test_boolean_at_m_scale() {
     let mut topo = Topology::new();
     let s = 10.0;
@@ -76,7 +74,6 @@ fn test_boolean_at_m_scale() {
 // ── Kilometer scale ─────────────────────────────────────────────────
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn test_boolean_at_km_scale() {
     let mut topo = Topology::new();
     let s = 1000.0;
@@ -125,7 +122,6 @@ fn test_tessellation_at_micro_scale() {
 // ── Cross-scale tolerance consistency ───────────────────────────────
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn test_tolerance_scaling() {
     let scales = [0.01, 1.0, 1000.0];
 
