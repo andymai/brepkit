@@ -143,7 +143,6 @@ fn intersect_commutativity() {
 // -- Cut complement -------------------------------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn cut_complement_identity() {
     // V(A-B) = V(A) - V(A&B)
     let mut topo = Topology::new();
@@ -170,7 +169,6 @@ fn cut_complement_identity() {
 // -- Anti-commutativity ---------------------------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn anti_commutativity_identity() {
     // V(A-B) + V(B-A) + 2*V(A&B) = V(A) + V(B)
     let mut topo = Topology::new();

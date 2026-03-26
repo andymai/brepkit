@@ -232,7 +232,6 @@ fn volume_fuse_overlapping_boxes() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn volume_cut_overlapping_boxes() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -709,7 +708,6 @@ fn half_overlap_fuse() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn half_overlap_cut() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);

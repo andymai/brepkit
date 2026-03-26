@@ -280,7 +280,6 @@ fn intersect_overlapping_cubes() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn cut_overlapping_cubes() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -2325,7 +2324,6 @@ fn test_boolean_convex_face_chord_clip_regression() {
 /// Verify boolean works correctly at 100m scale with scale-relative
 /// vertex merge resolution. Documents expected behavior for large models.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn test_boolean_large_scale_vertex_merge() {
     let mut topo = Topology::new();
 
