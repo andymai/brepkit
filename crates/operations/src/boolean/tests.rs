@@ -73,7 +73,6 @@ fn intersect_disjoint_returns_error() {
 /// 2 overshared edges. Root cause is incomplete face coverage from
 /// missing SD representative replacement, not edge merging failure.
 #[test]
-#[ignore = "GFA pipeline limitation — SD face replacement not yet implemented"]
 fn diagnose_fuse_overlapping_cubes_edges() {
     use std::collections::HashMap;
 
@@ -259,7 +258,6 @@ fn gfa_direct_fuse_overlapping_manifold() {
 // ── 1D overlapping tests (offset on one axis) ───────────────────────
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_overlapping_cubes() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);

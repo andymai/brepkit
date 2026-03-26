@@ -758,7 +758,10 @@ pub fn solid_volume(
             .faces()
             .iter()
             .all(|&fid| topo.face(fid).is_ok_and(|f| f.inner_wires().is_empty()));
-        if no_inner_wires {
+        // Skip planar polygon volume for solids with 10+ faces — these are
+        // likely GFA boolean results where merge_duplicate_edges may have
+        // created crossed polygon winding. Use tessellation instead.
+        if no_inner_wires && sh.faces().len() <= 8 {
             if let Ok(v) = volume_from_planar_polygons(topo, solid, deflection) {
                 return Ok(v);
             }
