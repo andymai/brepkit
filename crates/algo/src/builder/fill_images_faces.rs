@@ -220,12 +220,18 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         log::debug!("fill_images_faces: face {face_id:?} has_sections={has_sections}");
 
         if !has_sections {
-            // No sections: try to rebuild face with CommonBlock shared edges,
-            // but ONLY for faces that participated in FF intersection (have
-            // face_info). Faces without face_info (e.g., A's x=1 face that
-            // doesn't intersect B) should NOT have their edges replaced
-            // because the global cb_qpair_edges map can match CB edges from
-            // unrelated face pairs at the same position (cross-plane over-sharing).
+            // TODO: Use fresh-vertex face to achieve V=16.
+            // Currently disabled — the fresh faces have correct topology
+            // but incorrect geometry (volume 2/3 of expected, one face
+            // normal flipped). Root cause under investigation.
+            let _fresh = rebuild_face_with_fresh_vertices(
+                topo,
+                face_id,
+                rank_vertex_pools.get(&rank),
+                &mut pb_vertex_registry,
+                &qpos,
+                tol,
+            );
             let rebuilt =
                 rebuild_face_with_cb_edges(topo, face_id, &cb_qpair_edges, &vv_vertex_seed, tol);
             sub_faces.push(SubFace {
@@ -356,6 +362,79 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     }
 
     sub_faces
+}
+
+/// Create a NEW face from an unsplit face using fresh pool vertices.
+#[allow(dead_code)]
+fn rebuild_face_with_fresh_vertices(
+    topo: &mut Topology,
+    face_id: FaceId,
+    rank_pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
+    pb_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
+    qpos: &dyn Fn(Point3) -> (i64, i64, i64),
+    tol: Tolerance,
+) -> Option<FaceId> {
+    let face = topo.face(face_id).ok()?;
+    let surface = face.surface().clone();
+    let is_reversed = face.is_reversed();
+    let outer_wid = face.outer_wire();
+    let inner_wids: Vec<_> = face.inner_wires().to_vec();
+
+    let wire = topo.wire(outer_wid).ok()?;
+    let orig_edges: Vec<_> = wire
+        .edges()
+        .iter()
+        .map(|oe| {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let sv = topo.vertex(edge.start()).ok()?;
+            let ev = topo.vertex(edge.end()).ok()?;
+            Some((
+                oe.is_forward(),
+                edge.curve().clone(),
+                sv.point(),
+                ev.point(),
+            ))
+        })
+        .collect::<Option<Vec<_>>>()?;
+
+    let mut new_edges: Vec<(bool, brepkit_topology::edge::EdgeId)> = Vec::new();
+    for (is_fwd, curve, sp, ep) in &orig_edges {
+        let start_vid = {
+            let key = qpos(*sp);
+            rank_pool
+                .and_then(|p| p.get(&key).copied())
+                .unwrap_or_else(|| {
+                    *pb_registry
+                        .entry(key)
+                        .or_insert_with(|| topo.add_vertex(Vertex::new(*sp, tol.linear)))
+                })
+        };
+        let end_vid = {
+            let key = qpos(*ep);
+            rank_pool
+                .and_then(|p| p.get(&key).copied())
+                .unwrap_or_else(|| {
+                    *pb_registry
+                        .entry(key)
+                        .or_insert_with(|| topo.add_vertex(Vertex::new(*ep, tol.linear)))
+                })
+        };
+        let eid = topo.add_edge(Edge::new(start_vid, end_vid, curve.clone()));
+        new_edges.push((*is_fwd, eid));
+    }
+
+    let oes: Vec<_> = new_edges
+        .iter()
+        .map(|(is_fwd, eid)| OrientedEdge::new(*eid, *is_fwd))
+        .collect();
+    let new_wire = topo.add_wire(Wire::new(oes, true).ok()?);
+
+    let new_face = if is_reversed {
+        Face::new_reversed(new_wire, inner_wids, surface)
+    } else {
+        Face::new(new_wire, inner_wids, surface)
+    };
+    Some(topo.add_face(new_face))
 }
 
 /// Map from face ID to section pave block IDs (from FF intersection curves).
