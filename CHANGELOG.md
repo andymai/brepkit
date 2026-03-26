@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.40.0](https://github.com/andymai/brepkit/compare/v2.39.1...v2.40.0) (2026-03-26)
+
+
+### Features
+
+* **algo:** rebuild_face_with_fresh_vertices (disabled, V=16 infrastructure) ([#453](https://github.com/andymai/brepkit/issues/453)) ([963e22d](https://github.com/andymai/brepkit/commit/963e22dd907a7927afa537a55ea8db3aff108518))
+
 ## [2.39.1](https://github.com/andymai/brepkit/compare/v2.39.0...v2.39.1) (2026-03-26)
 
 
