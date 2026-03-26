@@ -207,9 +207,17 @@ pub fn boolean(
                 .unwrap_or(0);
             if result_faces > 0 {
                 let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
-                for _ in 0..3 {
-                    if crate::heal::unify_faces(topo, result)? == 0 {
-                        break;
+                // Check Euler before unify_faces — if already valid, skip
+                // unify to avoid its face-merging bugs (non-manifold edges).
+                let (f_pre, e_pre, v_pre) =
+                    brepkit_topology::explorer::solid_entity_counts(topo, result)?;
+                #[allow(clippy::cast_possible_wrap)]
+                let euler_pre = (v_pre as i64) - (e_pre as i64) + (f_pre as i64);
+                if euler_pre != 2 {
+                    for _ in 0..3 {
+                        if crate::heal::unify_faces(topo, result)? == 0 {
+                            break;
+                        }
                     }
                 }
                 let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, result)?;
