@@ -154,7 +154,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // (2 faces). Different solids get SEPARATE pools to prevent
     // cross-solid contamination. Vertices in <2 faces (e.g.
     // shelled-box internal edges) stay per-face.
-    let rank_vertex_pools: HashMap<
+    let mut rank_vertex_pools: HashMap<
         Rank,
         BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     > = {
@@ -213,35 +213,60 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         face_ranks.iter().map(|(&fid, &r)| (fid, r)).collect();
     sorted_faces.sort_by_key(|(fid, _)| fid.index());
 
-    for (face_id, rank) in sorted_faces {
+    // Two-pass: unsplit faces first (to register their vertices in rank
+    // pools), then split faces (to use those vertices via the pools).
+    // Pass 1: unsplit faces.
+    for &(face_id, rank) in &sorted_faces {
         let fi = arena.face_info(face_id);
         let has_sections = fi.is_some_and(|fi| !fi.pave_blocks_sc.is_empty());
+        if has_sections {
+            continue;
+        }
 
-        log::debug!("fill_images_faces: face {face_id:?} has_sections={has_sections}");
+        log::debug!("fill_images_faces: face {face_id:?} (unsplit)");
 
         if !has_sections {
-            // TODO: Use fresh-vertex face to achieve V=16.
-            // Currently disabled — the fresh faces have correct topology
-            // but incorrect geometry (volume 2/3 of expected, one face
-            // normal flipped). Root cause under investigation.
-            let _fresh = rebuild_face_with_fresh_vertices(
-                topo,
-                face_id,
-                rank_vertex_pools.get(&rank),
-                &mut pb_vertex_registry,
-                &qpos,
-                tol,
-            );
             let rebuilt =
                 rebuild_face_with_cb_edges(topo, face_id, &cb_qpair_edges, &vv_vertex_seed, tol);
+            let result_face = rebuilt.unwrap_or(face_id);
+            // Register unsplit face's vertices in the rank pool so
+            // split faces at the same positions use the SAME vertices.
+            // This is safe: unsplit faces ARE in the GFA result, so
+            // their vertices are output vertices (not input-only).
+            {
+                let pool = rank_vertex_pools.entry(rank).or_default();
+                if let Ok(face) = topo.face(result_face) {
+                    if let Ok(wire) = topo.wire(face.outer_wire()) {
+                        for oe in wire.edges() {
+                            if let Ok(edge) = topo.edge(oe.edge()) {
+                                for &vid in &[edge.start(), edge.end()] {
+                                    if let Ok(v) = topo.vertex(vid) {
+                                        pool.entry(qpos(v.point())).or_insert(vid);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             sub_faces.push(SubFace {
-                face_id: rebuilt.unwrap_or(face_id),
+                face_id: result_face,
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
             });
+        }
+    }
+
+    // Pass 2: split faces.
+    for (face_id, rank) in sorted_faces {
+        let fi = arena.face_info(face_id);
+        let has_sections = fi.is_some_and(|fi| !fi.pave_blocks_sc.is_empty());
+        if !has_sections {
             continue;
         }
+
+        log::debug!("fill_images_faces: face {face_id:?} (split)");
 
         // Build SectionEdge entries from pave block data
         let sections = build_section_edges(topo, arena, face_id, &section_map, tol.linear);
