@@ -361,7 +361,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         }
     }
 
-    // Merge duplicate vertices within each rank (in-place edge mutation).
+    // ── Post-processing: merge duplicate vertices via wire rebuild ──
+    // The per-face vertex cache creates separate vertices at the same
+    // position. Instead of mutating shared edges in-place (which creates
+    // crossed polygons), rebuild each face's wire with NEW edges using
+    // canonical vertices. Each face gets its own edges — no sharing.
     let all_planar = sub_faces.iter().all(|sf| {
         topo.face(sf.face_id)
             .is_ok_and(|f| matches!(f.surface(), FaceSurface::Plane { .. }))
@@ -379,62 +383,113 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 (p.z() * 1e12).round() as i64,
             )
         };
-        // Group edges by rank
-        let mut rank_edges: HashMap<Rank, Vec<EdgeId>> = HashMap::new();
-        for sf in &sub_faces {
-            let edges = rank_edges.entry(sf.rank).or_default();
-            if let Ok(face) = topo.face(sf.face_id) {
-                let mut seen = std::collections::HashSet::new();
-                if let Ok(wire) = topo.wire(face.outer_wire()) {
-                    for oe in wire.edges() {
-                        if seen.insert(oe.edge().index()) {
-                            edges.push(oe.edge());
-                        }
-                    }
-                }
-            }
-        }
-        for edges in rank_edges.values() {
-            let mut canonical: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
-                BTreeMap::new();
-            let mut merge_map: HashMap<usize, brepkit_topology::vertex::VertexId> = HashMap::new();
-            for &eid in edges {
-                if let Ok(edge) = topo.edge(eid) {
-                    for &vid in &[edge.start(), edge.end()] {
-                        if let Ok(v) = topo.vertex(vid) {
-                            let key = q12(v.point());
-                            let canon = *canonical.entry(key).or_insert(vid);
-                            if canon != vid {
-                                merge_map.insert(vid.index(), canon);
+
+        // Build per-rank merge maps.
+        let mut rank_merge_maps: HashMap<Rank, HashMap<usize, brepkit_topology::vertex::VertexId>> =
+            HashMap::new();
+        {
+            let mut rank_edges: HashMap<Rank, Vec<EdgeId>> = HashMap::new();
+            for sf in &sub_faces {
+                let edges = rank_edges.entry(sf.rank).or_default();
+                if let Ok(face) = topo.face(sf.face_id) {
+                    let mut seen = std::collections::HashSet::new();
+                    if let Ok(wire) = topo.wire(face.outer_wire()) {
+                        for oe in wire.edges() {
+                            if seen.insert(oe.edge().index()) {
+                                edges.push(oe.edge());
                             }
                         }
                     }
                 }
             }
-            if merge_map.is_empty() {
-                continue;
+            for (&rank, edges) in &rank_edges {
+                let mut canonical: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
+                    BTreeMap::new();
+                let mut merge_map: HashMap<usize, brepkit_topology::vertex::VertexId> =
+                    HashMap::new();
+                for &eid in edges {
+                    if let Ok(edge) = topo.edge(eid) {
+                        for &vid in &[edge.start(), edge.end()] {
+                            if let Ok(v) = topo.vertex(vid) {
+                                let key = q12(v.point());
+                                let canon = *canonical.entry(key).or_insert(vid);
+                                if canon != vid {
+                                    merge_map.insert(vid.index(), canon);
+                                }
+                            }
+                        }
+                    }
+                }
+                if !merge_map.is_empty() {
+                    rank_merge_maps.insert(rank, merge_map);
+                }
             }
-            let updates: Vec<_> = edges
-                .iter()
-                .filter_map(|&eid| {
-                    let edge = topo.edge(eid).ok()?;
-                    let s = edge.start();
-                    let e = edge.end();
-                    let ns = merge_map.get(&s.index()).copied().unwrap_or(s);
-                    let ne = merge_map.get(&e.index()).copied().unwrap_or(e);
-                    if ns == ne {
-                        return None;
-                    }
-                    if ns != s || ne != e {
-                        Some((eid, ns, ne, edge.curve().clone()))
+        }
+
+        // Rebuild each SubFace's wire with NEW edges using merged vertices.
+        for sf in &sub_faces {
+            let merge_map = match rank_merge_maps.get(&sf.rank) {
+                Some(m) => m,
+                None => continue,
+            };
+            let (outer_oes, surface, is_reversed) = {
+                let Ok(face) = topo.face(sf.face_id) else {
+                    continue;
+                };
+                let Ok(wire) = topo.wire(face.outer_wire()) else {
+                    continue;
+                };
+                (
+                    wire.edges().to_vec(),
+                    face.surface().clone(),
+                    face.is_reversed(),
+                )
+            };
+            let mut any_changed = false;
+            let mut new_oes = Vec::with_capacity(outer_oes.len());
+            for oe in &outer_oes {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    new_oes.push(*oe);
+                    continue;
+                };
+                // Get the TRAVERSAL-ORDER vertices (what the wire sees).
+                let (trav_start, trav_end) = if oe.is_forward() {
+                    (edge.start(), edge.end())
+                } else {
+                    (edge.end(), edge.start())
+                };
+                let ns = merge_map
+                    .get(&trav_start.index())
+                    .copied()
+                    .unwrap_or(trav_start);
+                let ne = merge_map
+                    .get(&trav_end.index())
+                    .copied()
+                    .unwrap_or(trav_end);
+                if ns == ne {
+                    // Degenerate after merge — skip
+                    continue;
+                }
+                if ns != trav_start || ne != trav_end {
+                    // Create NEW edge in traversal order (start→end = forward).
+                    let new_eid = topo.add_edge(Edge::new(ns, ne, edge.curve().clone()));
+                    new_oes.push(OrientedEdge::new(new_eid, true));
+                    any_changed = true;
+                } else {
+                    new_oes.push(*oe);
+                }
+            }
+            if any_changed && new_oes.len() >= 3 {
+                if let Ok(new_wire) = Wire::new(new_oes, true) {
+                    let wid = topo.add_wire(new_wire);
+                    let new_face = if is_reversed {
+                        Face::new_reversed(wid, vec![], surface)
                     } else {
-                        None
+                        Face::new(wid, vec![], surface)
+                    };
+                    if let Ok(face) = topo.face_mut(sf.face_id) {
+                        *face = new_face;
                     }
-                })
-                .collect();
-            for (eid, ns, ne, curve) in updates {
-                if let Ok(edge) = topo.edge_mut(eid) {
-                    *edge = Edge::new(ns, ne, curve);
                 }
             }
         }
