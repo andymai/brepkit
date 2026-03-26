@@ -493,6 +493,31 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
 /// become inner shells (cavities).
 ///
 /// If the solid is already manifold, returns it unchanged.
+/// Check if a solid's shell has edge-manifold topology (every edge shared by exactly 2 faces).
+#[allow(dead_code)]
+fn is_edge_manifold(topo: &Topology, solid: SolidId) -> bool {
+    let shell = match topo.solid(solid).and_then(|s| topo.shell(s.outer_shell())) {
+        Ok(sh) => sh,
+        Err(_) => return false,
+    };
+    let mut edge_count: std::collections::HashMap<brepkit_topology::edge::EdgeId, usize> =
+        std::collections::HashMap::new();
+    for &fid in shell.faces() {
+        let Ok(face) = topo.face(fid) else {
+            return false;
+        };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else {
+                continue;
+            };
+            for oe in wire.edges() {
+                *edge_count.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+    edge_count.values().all(|&n| n == 2)
+}
+
 #[allow(clippy::too_many_lines)]
 fn enforce_manifold_shell(
     topo: &mut Topology,
