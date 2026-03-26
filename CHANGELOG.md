@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.1](https://github.com/andymai/brepkit/compare/v2.41.0...v2.41.1) (2026-03-26)
+
+
+### Bug Fixes
+
+* **ops:** correct volume for GFA boolean results — un-ignores fuse_overlapping_cubes ([#459](https://github.com/andymai/brepkit/issues/459)) ([d1544a5](https://github.com/andymai/brepkit/commit/d1544a561de8262bb000af2e4e34f95291c288b6))
+
 ## [2.41.0](https://github.com/andymai/brepkit/compare/v2.40.0...v2.41.0) (2026-03-26)
 
 
