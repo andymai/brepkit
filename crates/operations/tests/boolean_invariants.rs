@@ -46,7 +46,6 @@ fn assert_euler_genus0(topo: &Topology, solid: SolidId) {
 // -- Volume conservation --------------------------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn volume_conservation_overlapping_boxes() {
     // V(A) + V(B) = V(A|B) + V(A&B)
     let mut topo = Topology::new();
@@ -243,7 +242,6 @@ fn identical_solids_intersect_preserves_volume() {
 // -- Manifold and Euler checks on boolean results -------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn boolean_results_are_manifold() {
     let mut topo = Topology::new();
 
@@ -299,7 +297,6 @@ fn conservation_cylinder_box() {
 // -- Euler characteristic on boolean results ------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn boolean_results_euler_genus0() {
     let mut topo = Topology::new();
 

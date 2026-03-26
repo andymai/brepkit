@@ -497,7 +497,6 @@ mod tests {
     // ── compound_cut volume regression ───────────────────────────────
 
     #[test]
-    #[ignore = "GFA pipeline limitation"]
     fn compound_cut_volume_decreases() {
         let mut k = BrepKernel::new();
         // Target: 10x10x10 box at origin. Tool: 1x1x1 box at origin.

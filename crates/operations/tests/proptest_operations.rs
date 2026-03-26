@@ -23,7 +23,6 @@ proptest! {
 
     // 1. V(A) + V(B) = V(A|B) + V(A&B)
     #[test]
-    #[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
     fn prop_boolean_volume_conservation(offset in 0.1f64..0.9) {
         let mut topo = Topology::new();
         let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
@@ -51,7 +50,6 @@ proptest! {
 
     // 2. fuse(A,B) volume == fuse(B,A) volume
     #[test]
-    #[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
     fn prop_boolean_commutativity(offset in 0.1f64..0.9) {
         let mut topo = Topology::new();
 
@@ -225,7 +223,6 @@ proptest! {
 
     // 10. boolean fuse of two overlapping scaled cubes: volume = 1.5 * s^3
     #[test]
-    #[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
     fn prop_scale_invariant_boolean(s in 1.0f64..100.0) {
         let mut topo = Topology::new();
         let a = make_box(&mut topo, s, s, s).unwrap();

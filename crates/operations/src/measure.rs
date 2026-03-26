@@ -743,30 +743,10 @@ pub fn solid_volume(
         return Ok(v);
     }
 
-    // For all-planar solids WITHOUT inner wires (e.g. v2 boolean results,
-    // chamfered boxes), use the divergence-theorem polygon volume. This is
-    // exact for planar faces and avoids tessellate_solid winding issues
-    // with non-triangular faces assembled by the v2 boolean pipeline.
-    // Note: volume_from_planar_polygons now handles inner wires (hole area
-    // subtraction), but we still skip for solids with inner wires because
-    // the direct face tessellation path handles reversed curved faces better.
-    // TODO: re-evaluate after boolean pipeline improvements stabilize.
-    {
-        let s = topo.solid(solid)?;
-        let sh = topo.shell(s.outer_shell())?;
-        let no_inner_wires = sh
-            .faces()
-            .iter()
-            .all(|&fid| topo.face(fid).is_ok_and(|f| f.inner_wires().is_empty()));
-        // Skip planar polygon volume for solids with 10+ faces — these are
-        // likely GFA boolean results where merge_duplicate_edges may have
-        // created crossed polygon winding. Use tessellation instead.
-        if no_inner_wires && sh.faces().len() <= 8 {
-            if let Ok(v) = volume_from_planar_polygons(topo, solid, deflection) {
-                return Ok(v);
-            }
-        }
-    }
+    // Planar polygon volume (Newell area) is disabled: GFA boolean results
+    // go through merge_duplicate_edges which can create crossed polygon
+    // winding, making Newell area wrong. Always use tessellation-based
+    // volume which handles all cases correctly.
 
     // For solids with faces that have inner wires (holes from boolean ops)
     // or reversed non-planar faces (inner walls from shell/boolean operations),
@@ -1448,6 +1428,7 @@ pub(crate) fn volume_from_direct_face_tessellation(
 /// tetrahedra volumes, correcting winding so that the face normal points
 /// outward. This works even for non-manifold topology since it only needs
 /// each face's vertices and normal.
+#[allow(dead_code)] // Disabled: Newell area gives wrong results on GFA-merged faces
 fn volume_from_planar_polygons(
     topo: &Topology,
     solid: SolidId,
