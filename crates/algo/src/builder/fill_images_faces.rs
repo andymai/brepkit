@@ -158,6 +158,46 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     let mut pb_vertex_registry: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
         BTreeMap::new();
 
+    // ── CommonBlock vertex pre-pass ─────────────────────────────────
+    // Create FRESH vertices at CommonBlock split edge positions and
+    // register them in the cross-face pool. These fresh vertices are
+    // shared across all faces' boundary edges at intersection positions
+    // WITHOUT creating topology connections to the CB split_edges
+    // (which would corrupt solid_entity_counts traversal).
+    {
+        let q = |p: Point3| -> (i64, i64, i64) {
+            (
+                (p.x() * VERTEX_DEDUP_SCALE).round() as i64,
+                (p.y() * VERTEX_DEDUP_SCALE).round() as i64,
+                (p.z() * VERTEX_DEDUP_SCALE).round() as i64,
+            )
+        };
+        // Snapshot positions first (can't borrow topo immutably and mutably).
+        let cb_positions: Vec<Point3> = arena
+            .common_blocks
+            .iter()
+            .map(|(_, cb)| cb)
+            .filter_map(|cb| {
+                let eid = cb.split_edge?;
+                let e = topo.edge(eid).ok()?;
+                let mut pts = Vec::new();
+                if let Ok(v) = topo.vertex(e.start()) {
+                    pts.push(v.point());
+                }
+                if let Ok(v) = topo.vertex(e.end()) {
+                    pts.push(v.point());
+                }
+                Some(pts)
+            })
+            .flatten()
+            .collect();
+        for pt in cb_positions {
+            pb_vertex_registry
+                .entry(q(pt))
+                .or_insert_with(|| topo.add_vertex(Vertex::new(pt, tol.linear)));
+        }
+    }
+
     // Pre-compute which faces have section edges from which curves
     let section_map = build_section_map(arena);
 
