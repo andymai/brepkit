@@ -110,7 +110,6 @@ fn apply_sd_selection(
 
     for pair in sd_pairs {
         let sf_a = &sub_faces[pair.idx_a];
-        let sf_b = &sub_faces[pair.idx_b];
 
         // Distinguish touching (face on boundary) from overlapping
         // (face inside opposing solid). Uses AABB containment check
@@ -141,24 +140,10 @@ fn apply_sd_selection(
             // Orientations DON'T match what the operation needs:
             // - Fuse + opposite-ori: internal faces — discard both
             // - Intersect + opposite-ori: discard both
-            // - Cut + same-ori: A's sub-face is being cut away,
-            //   B's face becomes inner cap (reversed)
-            if op == BooleanOp::Cut {
-                if is_touching {
-                    // Touching with same-ori: A's face on exterior — keep A
-                    selected.push(SelectedFace {
-                        face_id: sf_a.face_id,
-                        reversed: false,
-                    });
-                } else {
-                    // Overlapping: B becomes inner void cap
-                    selected.push(SelectedFace {
-                        face_id: sf_b.face_id,
-                        reversed: true,
-                    });
-                }
-            }
-            // For Fuse/Intersect with mismatched orientation: discard both
+            // - Cut + same-ori: discard both — the overlap region is
+            //   cut away from A, and B's cap is provided by the
+            //   B-Inside non-SD face from the regular selection.
+            // For Fuse/Intersect/Cut with mismatched orientation: discard both
         }
     }
 

@@ -183,7 +183,8 @@ pub fn detect_same_domain<S: BuildHasher>(
                 idx_a,
                 idx_b,
                 same_orientation,
-                // Edge-set matched faces have identical boundaries → touching, not contained
+                // Edge-set matched faces have identical boundaries.
+                // b_contained_in_a=false → touching (default for same-boundary faces).
                 b_contained_in_a: false,
             });
         }

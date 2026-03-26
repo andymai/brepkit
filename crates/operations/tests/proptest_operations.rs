@@ -145,7 +145,6 @@ proptest! {
 
     // 8. V(A-B) = V(A) - V(A&B)
     #[test]
-    #[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
     fn prop_cut_complement(offset in 0.1f64..0.9) {
         let mut topo = Topology::new();
         let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
