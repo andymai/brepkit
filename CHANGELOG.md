@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.39.0](https://github.com/andymai/brepkit/compare/v2.38.0...v2.39.0) (2026-03-26)
+
+
+### Features
+
+* **algo:** fresh-vertex CB pre-pass for cross-face sharing ([#448](https://github.com/andymai/brepkit/issues/448)) ([c006c64](https://github.com/andymai/brepkit/commit/c006c64cc71a3529dd9931b77114f6082f546f93))
+* **algo:** per-rank fresh-vertex pools + CB pre-pass for vertex sharing ([#450](https://github.com/andymai/brepkit/issues/450)) ([f112638](https://github.com/andymai/brepkit/commit/f112638756e92ee71d86e18375f7ed6642642541))
+
 ## [2.38.0](https://github.com/andymai/brepkit/compare/v2.37.7...v2.38.0) (2026-03-25)
 
 
