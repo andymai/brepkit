@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.8](https://github.com/andymai/brepkit/compare/v2.41.7...v2.41.8) (2026-03-27)
+
+
+### Bug Fixes
+
+* **algo:** Line-only forward=true + un-ignore 9 tests (47→38) ([#475](https://github.com/andymai/brepkit/issues/475)) ([1baaccb](https://github.com/andymai/brepkit/commit/1baaccb79cf07467afaf49197195788e0afbcb48))
+
 ## [2.41.7](https://github.com/andymai/brepkit/compare/v2.41.6...v2.41.7) (2026-03-27)
 
 
