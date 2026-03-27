@@ -271,7 +271,6 @@ fn fuse_overlap_y_axis() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_overlap_z_axis() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
@@ -540,7 +539,6 @@ fn fuse_asymmetric_boxes() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn cut_asymmetric_boxes() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 5.0, 3.0, 2.0);
@@ -749,7 +747,6 @@ fn cut_no_overlap_preserves_volume() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn l_shape_fuse() {
     // Create L-shape by fusing two boxes.
     let mut topo = Topology::new();
@@ -767,7 +764,6 @@ fn l_shape_fuse() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn t_shape_fuse() {
     // Create T-shape by fusing horizontal and vertical boxes.
     let mut topo = Topology::new();
@@ -785,7 +781,6 @@ fn t_shape_fuse() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn cross_shape_fuse() {
     let mut topo = Topology::new();
     let h = box_at(&mut topo, 0.0, 1.0, 0.0, 4.0, 2.0, 1.0);
