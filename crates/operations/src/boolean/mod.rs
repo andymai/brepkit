@@ -216,7 +216,19 @@ pub fn boolean(
                     brepkit_topology::explorer::solid_entity_counts(topo, result)?;
                 #[allow(clippy::cast_possible_wrap)]
                 let euler_pre = (v_pre as i64) - (e_pre as i64) + (f_pre as i64);
-                if euler_pre != 2 {
+
+                // If Euler>2, try merging duplicate vertices before unify.
+                // This fixes the flush-face case where duplicate vertices at
+                // cross-rank positions inflate V.
+                if euler_pre > 2 {
+                    merge_result_vertices(topo, result, tol)?;
+                }
+
+                let (f2, e2, v2) = brepkit_topology::explorer::solid_entity_counts(topo, result)?;
+                #[allow(clippy::cast_possible_wrap)]
+                let euler_pre2 = (v2 as i64) - (e2 as i64) + (f2 as i64);
+
+                if euler_pre2 != 2 {
                     for _ in 0..3 {
                         if crate::heal::unify_faces(topo, result)? == 0 {
                             break;
@@ -486,6 +498,214 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
         });
     }
     specs
+}
+
+/// Merge duplicate vertices in a solid's shell by position.
+///
+/// For each vertex position (quantized at tolerance), picks one canonical
+/// vertex. Rebuilds all edges and wires to use canonical vertices.
+/// Creates new edges (doesn't mutate existing ones) to avoid corrupting
+/// input solids that may share edge topology.
+#[allow(clippy::items_after_statements, clippy::type_complexity)]
+fn merge_result_vertices(
+    topo: &mut Topology,
+    solid: SolidId,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<(), crate::OperationsError> {
+    use std::collections::{BTreeMap, HashMap};
+
+    let shell_id = topo.solid(solid)?.outer_shell();
+    let face_ids: Vec<_> = topo.shell(shell_id)?.faces().to_vec();
+
+    let scale = 1.0 / tol.linear;
+    let quantize = |p: brepkit_math::vec::Point3| -> (i64, i64, i64) {
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+
+    // Build vertex canonical map: position → first VertexId seen
+    let mut canonical: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> =
+        BTreeMap::new();
+    let mut replacements: HashMap<
+        brepkit_topology::vertex::VertexId,
+        brepkit_topology::vertex::VertexId,
+    > = HashMap::new();
+
+    for &fid in &face_ids {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                for vid in [edge.start(), edge.end()] {
+                    let pos = topo.vertex(vid)?.point();
+                    let key = quantize(pos);
+                    let canon = *canonical.entry(key).or_insert(vid);
+                    if canon != vid {
+                        replacements.insert(vid, canon);
+                    }
+                }
+            }
+        }
+    }
+
+    if replacements.is_empty() {
+        return Ok(());
+    }
+
+    // Rebuild faces with merged vertices
+    // Cache: (old_edge, new_start, new_end) → new_edge to share edges
+    let mut edge_cache: HashMap<
+        (
+            brepkit_topology::edge::EdgeId,
+            brepkit_topology::vertex::VertexId,
+            brepkit_topology::vertex::VertexId,
+        ),
+        brepkit_topology::edge::EdgeId,
+    > = HashMap::new();
+
+    // Snapshot face data, then rebuild with merged vertices
+    struct FaceSnap {
+        surface: brepkit_topology::face::FaceSurface,
+        reversed: bool,
+        outer_oes: Vec<(
+            brepkit_topology::edge::EdgeId,
+            bool,
+            brepkit_topology::edge::EdgeCurve,
+            brepkit_topology::vertex::VertexId,
+            brepkit_topology::vertex::VertexId,
+        )>,
+        inner_wires: Vec<
+            Vec<(
+                brepkit_topology::edge::EdgeId,
+                bool,
+                brepkit_topology::edge::EdgeCurve,
+                brepkit_topology::vertex::VertexId,
+                brepkit_topology::vertex::VertexId,
+            )>,
+        >,
+    }
+
+    let mut snaps = Vec::with_capacity(face_ids.len());
+    for &fid in &face_ids {
+        let face = topo.face(fid)?;
+        let surface = face.surface().clone();
+        let reversed = face.is_reversed();
+        let outer_wire = topo.wire(face.outer_wire())?;
+        let outer_oes: Vec<_> = outer_wire
+            .edges()
+            .iter()
+            .map(|oe| -> Result<_, crate::OperationsError> {
+                let e = topo.edge(oe.edge())?;
+                Ok((
+                    oe.edge(),
+                    oe.is_forward(),
+                    e.curve().clone(),
+                    e.start(),
+                    e.end(),
+                ))
+            })
+            .collect::<Result<_, _>>()?;
+        let inner_wids = face.inner_wires().to_vec();
+        let mut inner_wires = Vec::new();
+        for iw in inner_wids {
+            let w = topo.wire(iw)?;
+            inner_wires.push(
+                w.edges()
+                    .iter()
+                    .map(|oe| -> Result<_, crate::OperationsError> {
+                        let e = topo.edge(oe.edge())?;
+                        Ok((
+                            oe.edge(),
+                            oe.is_forward(),
+                            e.curve().clone(),
+                            e.start(),
+                            e.end(),
+                        ))
+                    })
+                    .collect::<Result<_, _>>()?,
+            );
+        }
+        snaps.push(FaceSnap {
+            surface,
+            reversed,
+            outer_oes,
+            inner_wires,
+        });
+    }
+
+    #[allow(clippy::type_complexity)]
+    let remap_oes = |oes: &[(
+        brepkit_topology::edge::EdgeId,
+        bool,
+        brepkit_topology::edge::EdgeCurve,
+        brepkit_topology::vertex::VertexId,
+        brepkit_topology::vertex::VertexId,
+    )],
+                     replacements: &HashMap<
+        brepkit_topology::vertex::VertexId,
+        brepkit_topology::vertex::VertexId,
+    >,
+                     edge_cache: &mut HashMap<
+        (
+            brepkit_topology::edge::EdgeId,
+            brepkit_topology::vertex::VertexId,
+            brepkit_topology::vertex::VertexId,
+        ),
+        brepkit_topology::edge::EdgeId,
+    >,
+                     topo: &mut Topology|
+     -> Vec<brepkit_topology::wire::OrientedEdge> {
+        oes.iter()
+            .map(|(eid, fwd, curve, start, end)| {
+                let ns = replacements.get(start).copied().unwrap_or(*start);
+                let ne = replacements.get(end).copied().unwrap_or(*end);
+                if ns == *start && ne == *end {
+                    return brepkit_topology::wire::OrientedEdge::new(*eid, *fwd);
+                }
+                let key = (*eid, ns, ne);
+                let new_eid = *edge_cache.entry(key).or_insert_with(|| {
+                    topo.add_edge(brepkit_topology::edge::Edge::new(ns, ne, curve.clone()))
+                });
+                brepkit_topology::wire::OrientedEdge::new(new_eid, *fwd)
+            })
+            .collect()
+    };
+
+    let mut new_face_ids = Vec::with_capacity(snaps.len());
+    for snap in &snaps {
+        let outer_oes = remap_oes(&snap.outer_oes, &replacements, &mut edge_cache, topo);
+        let Ok(outer_wire) = brepkit_topology::wire::Wire::new(outer_oes, false) else {
+            continue;
+        };
+        let outer_id = topo.add_wire(outer_wire);
+
+        let mut inner_ids = Vec::new();
+        for inner in &snap.inner_wires {
+            let oes = remap_oes(inner, &replacements, &mut edge_cache, topo);
+            if let Ok(w) = brepkit_topology::wire::Wire::new(oes, false) {
+                inner_ids.push(topo.add_wire(w));
+            }
+        }
+
+        let mut new_face =
+            brepkit_topology::face::Face::new(outer_id, inner_ids, snap.surface.clone());
+        if snap.reversed {
+            new_face.set_reversed(true);
+        }
+        new_face_ids.push(topo.add_face(new_face));
+    }
+
+    // Replace the shell's faces
+    let new_shell = brepkit_topology::shell::Shell::new(new_face_ids)?;
+    let new_shell_id = topo.add_shell(new_shell);
+    let solid_mut = topo.solid_mut(solid)?;
+    solid_mut.set_outer_shell(new_shell_id);
+
+    Ok(())
 }
 
 /// Post-process a solid to enforce manifold topology via greedy flood-fill.
