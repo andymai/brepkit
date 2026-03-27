@@ -251,7 +251,9 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         let sections = build_section_edges(topo, arena, face_id, &section_map, tol.linear);
 
         log::debug!(
-            "fill_images_faces: face {face_id:?} got {} section edges",
+            "fill_images_faces: face {:?} has_sections={} sections={}",
+            face_id,
+            has_sections,
             sections.len()
         );
 
@@ -918,41 +920,96 @@ fn rebuild_face_with_cb_edges(
     Some(new_fid)
 }
 
-fn build_section_map(arena: &GfaArena) -> HashMap<FaceId, Vec<PaveBlockId>> {
-    let mut map: HashMap<FaceId, Vec<PaveBlockId>> = HashMap::new();
-    // Section edges from FF intersection curves
-    for curve in &arena.curves {
-        for &pb_id in &curve.pave_blocks {
-            map.entry(curve.face_a).or_default().push(pb_id);
-            map.entry(curve.face_b).or_default().push(pb_id);
+/// Source of a section edge — either a complete intersection curve or
+/// an individual PaveBlock (for IN edges that don't belong to a curve).
+enum SectionSource {
+    /// Complete intersection curve — use the curve's geometry, not individual PBs.
+    Curve(usize),
+    /// Individual PaveBlock — for IN edges.
+    PaveBlock(PaveBlockId),
+}
+
+fn build_section_map(arena: &GfaArena) -> HashMap<FaceId, Vec<SectionSource>> {
+    let mut map: HashMap<FaceId, Vec<SectionSource>> = HashMap::new();
+    // Section edges from FF intersection curves.
+    // For non-Line curves (Circle, Ellipse, NURBS): use one Curve entry per curve
+    // so the face splitter gets the complete geometric loop instead of fragments.
+    // For Line curves: use individual PaveBlocks (the old approach) since
+    // line segments work correctly with the face splitter.
+    for (idx, curve) in arena.curves.iter().enumerate() {
+        if curve.pave_blocks.is_empty() {
+            continue;
+        }
+        let is_line = matches!(&curve.curve, brepkit_topology::edge::EdgeCurve::Line);
+        if is_line {
+            // Feed individual PaveBlocks — works correctly for Lines.
+            for &pb_id in &curve.pave_blocks {
+                map.entry(curve.face_a)
+                    .or_default()
+                    .push(SectionSource::PaveBlock(pb_id));
+                map.entry(curve.face_b)
+                    .or_default()
+                    .push(SectionSource::PaveBlock(pb_id));
+            }
+        } else {
+            // Feed the complete curve — critical for closed curves (circles).
+            map.entry(curve.face_a)
+                .or_default()
+                .push(SectionSource::Curve(idx));
+            map.entry(curve.face_b)
+                .or_default()
+                .push(SectionSource::Curve(idx));
         }
     }
-    // IN edges from EF interferences (edges from the opposing solid
-    // that lie inside this face). These are added as section edges
-    // for the face splitter — like the reference implementation's
-    // PaveBlocksIn → edge soup (FORWARD+REVERSED pairs).
+    // IN edges from EF interferences — individual PaveBlocks.
+    // Skip IN PBs whose original_edge is already represented by a non-Line FF curve
+    // (this happens when a boundary edge coincides with an intersection curve,
+    // e.g. cylinder circle cap on a plane face).
+    let mut curve_original_edges: std::collections::HashSet<usize> =
+        std::collections::HashSet::new();
+    for curve in &arena.curves {
+        if matches!(&curve.curve, brepkit_topology::edge::EdgeCurve::Line) {
+            continue; // Line curves don't create redundant IN edges.
+        }
+        for &pb_id in &curve.pave_blocks {
+            if let Some(pb) = arena.pave_blocks.get(pb_id) {
+                curve_original_edges.insert(pb.original_edge.index());
+            }
+        }
+    }
     for (&face_id, fi) in &arena.face_info {
         for &pb_id in &fi.pave_blocks_in {
-            map.entry(face_id).or_default().push(pb_id);
+            let dominated = arena
+                .pave_blocks
+                .get(pb_id)
+                .is_some_and(|pb| curve_original_edges.contains(&pb.original_edge.index()));
+            if dominated {
+                continue;
+            }
+            map.entry(face_id)
+                .or_default()
+                .push(SectionSource::PaveBlock(pb_id));
         }
     }
     map
 }
 
-/// Convert pave block section data to `SectionEdge` entries.
+/// Convert section sources to `SectionEdge` entries.
+///
+/// For intersection curves, uses the complete curve geometry (not individual
+/// PaveBlock fragments). For IN edges, uses the individual PaveBlock edge.
 #[allow(clippy::too_many_lines)]
 fn build_section_edges(
     topo: &Topology,
     arena: &GfaArena,
     face_id: FaceId,
-    section_map: &HashMap<FaceId, Vec<PaveBlockId>>,
+    section_map: &HashMap<FaceId, Vec<SectionSource>>,
     tol: f64,
 ) -> Vec<SectionEdge> {
-    use brepkit_math::curves2d::{Curve2D, Line2D};
-    use brepkit_math::vec::{Point2, Vec2};
+    use brepkit_math::vec::Point3;
 
-    let pb_ids = match section_map.get(&face_id) {
-        Some(ids) => ids,
+    let sources = match section_map.get(&face_id) {
+        Some(s) => s,
         None => return Vec::new(),
     };
 
@@ -961,85 +1018,152 @@ fn build_section_edges(
         Err(_) => return Vec::new(),
     };
 
+    // Pre-compute wire points for PCurve (needed for plane frame).
+    let wire_pts: Vec<Point3> = topo
+        .wire(face.outer_wire())
+        .ok()
+        .map(|w| {
+            w.edges()
+                .iter()
+                .filter_map(|oe| {
+                    topo.edge(oe.edge())
+                        .ok()
+                        .and_then(|e| topo.vertex(e.start()).ok())
+                        .map(brepkit_topology::vertex::Vertex::point)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     let mut sections = Vec::new();
 
-    for &pb_id in pb_ids {
-        let pb = match arena.pave_blocks.get(pb_id) {
-            Some(pb) => pb,
-            None => continue,
-        };
+    for source in sources {
+        match source {
+            SectionSource::Curve(curve_idx) => {
+                // Use the COMPLETE intersection curve, not individual PBs.
+                // The face splitter needs whole curves to form proper loops.
+                let curve_ds = &arena.curves[*curve_idx];
 
-        let edge_id = match pb.split_edge {
-            Some(eid) => eid,
-            None => continue,
-        };
+                // Find start/end 3D points from the curve's PaveBlocks
+                // (first PB's start vertex, last PB's end vertex).
+                // For a closed curve (circle), these will be the same point.
+                let (start, end) = curve_endpoints(topo, arena, curve_ds);
+                let (start, end) = match (start, end) {
+                    (Some(s), Some(e)) => (s, e),
+                    _ => continue,
+                };
 
-        let edge = match topo.edge(edge_id) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
+                // For Line curves on planar faces, clip to face boundary.
+                let (start, end) =
+                    if matches!(&curve_ds.curve, brepkit_topology::edge::EdgeCurve::Line) {
+                        match clip_line_to_face_boundary(topo, face_id, start, end, tol) {
+                            Some(pair) => pair,
+                            None => continue,
+                        }
+                    } else {
+                        (start, end)
+                    };
 
-        let raw_start = match topo.vertex(edge.start()) {
-            Ok(v) => v.point(),
-            Err(_) => continue,
-        };
-        let raw_end = match topo.vertex(edge.end()) {
-            Ok(v) => v.point(),
-            Err(_) => continue,
-        };
+                let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                    &curve_ds.curve,
+                    start,
+                    end,
+                    face.surface(),
+                    &wire_pts,
+                    None,
+                );
 
-        // Clip straight section edges to the face boundary polygon.
-        // Non-line curves (Circle, Ellipse, NURBS) pass through unclipped —
-        // their endpoints are already bounded by the curve geometry.
-        let (start, end) = if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-            match clip_line_to_face_boundary(topo, face_id, raw_start, raw_end, tol) {
-                Some(pair) => pair,
-                None => continue,
+                let start_uv_pt = Some(pcurve.evaluate(0.0));
+                let end_uv_pt = Some(pcurve.evaluate(1.0));
+
+                sections.push(SectionEdge {
+                    curve_3d: curve_ds.curve.clone(),
+                    pcurve_a: pcurve.clone(),
+                    pcurve_b: pcurve,
+                    start,
+                    end,
+                    start_uv_a: start_uv_pt,
+                    end_uv_a: end_uv_pt,
+                    start_uv_b: start_uv_pt,
+                    end_uv_b: end_uv_pt,
+                    target_face: None,
+                    pave_block_id: None,
+                });
             }
-        } else {
-            (raw_start, raw_end)
-        };
+            SectionSource::PaveBlock(pb_id) => {
+                // Individual PaveBlock edge — use the old Line2D pcurve approach.
+                // This preserves the existing behavior for Line section edges
+                // that the face splitter already handles correctly.
+                use brepkit_math::curves2d::{Curve2D, Line2D};
+                use brepkit_math::vec::{Point2, Vec2};
 
-        // Project start/end to UV on this face
-        let start_uv = face.surface().project_point(start);
-        let end_uv = face.surface().project_point(end);
+                let pb = match arena.pave_blocks.get(*pb_id) {
+                    Some(pb) => pb,
+                    None => continue,
+                };
+                let edge_id = match pb.split_edge {
+                    Some(eid) => eid,
+                    None => continue,
+                };
+                let edge = match topo.edge(edge_id) {
+                    Ok(e) => e,
+                    Err(_) => continue,
+                };
+                let raw_start = match topo.vertex(edge.start()) {
+                    Ok(v) => v.point(),
+                    Err(_) => continue,
+                };
+                let raw_end = match topo.vertex(edge.end()) {
+                    Ok(v) => v.point(),
+                    Err(_) => continue,
+                };
 
-        // Build a simple Line2D pcurve from UV endpoints
-        let make_pcurve = |s: Option<(f64, f64)>, e: Option<(f64, f64)>| -> Curve2D {
-            let s2 = s.map_or(Point2::new(0.0, 0.0), |(u, v)| Point2::new(u, v));
-            let e2 = e.map_or(Point2::new(1.0, 0.0), |(u, v)| Point2::new(u, v));
-            let dir = e2 - s2;
-            let len = dir.length();
-            let direction = if len > 1e-12 {
-                Vec2::new(dir.x() / len, dir.y() / len)
-            } else {
-                Vec2::new(1.0, 0.0)
-            };
-            // Try the actual direction; fall back to unit X if degenerate.
-            // Line2D::new can only fail if direction length < 1e-15,
-            // which can't happen for Vec2::new(1.0, 0.0).
-            #[allow(clippy::expect_used)]
-            let line = Line2D::new(s2, direction)
-                .or_else(|_| Line2D::new(s2, Vec2::new(1.0, 0.0)))
-                .expect("unit direction (1,0) is always valid");
-            Curve2D::Line(line)
-        };
+                let (start, end) =
+                    if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+                        match clip_line_to_face_boundary(topo, face_id, raw_start, raw_end, tol) {
+                            Some(pair) => pair,
+                            None => continue,
+                        }
+                    } else {
+                        (raw_start, raw_end)
+                    };
 
-        let pcurve = make_pcurve(start_uv, end_uv);
+                // Project start/end to UV using surface projection (original approach).
+                let start_uv = face.surface().project_point(start);
+                let end_uv = face.surface().project_point(end);
+                let make_pcurve = |s: Option<(f64, f64)>, e: Option<(f64, f64)>| -> Curve2D {
+                    let s2 = s.map_or(Point2::new(0.0, 0.0), |(u, v)| Point2::new(u, v));
+                    let e2 = e.map_or(Point2::new(1.0, 0.0), |(u, v)| Point2::new(u, v));
+                    let dir = e2 - s2;
+                    let len = dir.length();
+                    let direction = if len > 1e-12 {
+                        Vec2::new(dir.x() / len, dir.y() / len)
+                    } else {
+                        Vec2::new(1.0, 0.0)
+                    };
+                    #[allow(clippy::expect_used)]
+                    let line = Line2D::new(s2, direction)
+                        .or_else(|_| Line2D::new(s2, Vec2::new(1.0, 0.0)))
+                        .expect("unit direction (1,0) is always valid");
+                    Curve2D::Line(line)
+                };
+                let pcurve = make_pcurve(start_uv, end_uv);
 
-        sections.push(SectionEdge {
-            curve_3d: edge.curve().clone(),
-            pcurve_a: pcurve.clone(),
-            pcurve_b: pcurve,
-            start,
-            end,
-            start_uv_a: start_uv.map(|(u, v)| Point2::new(u, v)),
-            end_uv_a: end_uv.map(|(u, v)| Point2::new(u, v)),
-            start_uv_b: start_uv.map(|(u, v)| Point2::new(u, v)),
-            end_uv_b: end_uv.map(|(u, v)| Point2::new(u, v)),
-            target_face: None,
-            pave_block_id: Some(pb_id.index()),
-        });
+                sections.push(SectionEdge {
+                    curve_3d: edge.curve().clone(),
+                    pcurve_a: pcurve.clone(),
+                    pcurve_b: pcurve,
+                    start,
+                    end,
+                    start_uv_a: start_uv.map(|(u, v)| Point2::new(u, v)),
+                    end_uv_a: end_uv.map(|(u, v)| Point2::new(u, v)),
+                    start_uv_b: start_uv.map(|(u, v)| Point2::new(u, v)),
+                    end_uv_b: end_uv.map(|(u, v)| Point2::new(u, v)),
+                    target_face: None,
+                    pave_block_id: Some(pb_id.index()),
+                });
+            }
+        }
     }
 
     // Deduplicate: remove section edges that are subsets of longer
@@ -1050,6 +1174,60 @@ fn build_section_edges(
     dedup_collinear_sections(&mut sections, tol);
 
     sections
+}
+
+/// Find the overall 3D start/end points of an intersection curve
+/// by evaluating at the curve's parametric endpoints.
+fn curve_endpoints(
+    topo: &Topology,
+    arena: &GfaArena,
+    curve_ds: &crate::ds::IntersectionCurveDS,
+) -> (Option<Point3>, Option<Point3>) {
+    use brepkit_math::vec::Point3;
+
+    // First try: evaluate the curve directly at t_range endpoints.
+    // This works for all curve types and doesn't depend on PaveBlock split_edge.
+    let (t0, t1) = curve_ds.t_range;
+
+    // For Line curves: we need a reference start/end point for evaluate_with_endpoints.
+    // Find any PB with a split_edge to get reference points.
+    let mut ref_start: Option<Point3> = None;
+    let mut ref_end: Option<Point3> = None;
+    for &pb_id in &curve_ds.pave_blocks {
+        let pb = match arena.pave_blocks.get(pb_id) {
+            Some(pb) => pb,
+            None => continue,
+        };
+        // Try the PB's original edge first (always present).
+        if let Ok(edge) = topo.edge(pb.original_edge) {
+            if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                ref_start = Some(sv.point());
+                ref_end = Some(ev.point());
+                break;
+            }
+        }
+        // Fall back to split_edge.
+        if let Some(eid) = pb.split_edge {
+            if let Ok(edge) = topo.edge(eid) {
+                if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
+                    ref_start = Some(sv.point());
+                    ref_end = Some(ev.point());
+                    break;
+                }
+            }
+        }
+    }
+
+    let (rs, re) = match (ref_start, ref_end) {
+        (Some(s), Some(e)) => (s, e),
+        _ => return (None, None),
+    };
+
+    // Evaluate the curve at its parametric endpoints.
+    let start_3d = curve_ds.curve.evaluate_with_endpoints(t0, rs, re);
+    let end_3d = curve_ds.curve.evaluate_with_endpoints(t1, rs, re);
+
+    (Some(start_3d), Some(end_3d))
 }
 
 /// Remove section edges that are subsets of longer collinear edges.
