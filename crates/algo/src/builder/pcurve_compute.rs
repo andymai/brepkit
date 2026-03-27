@@ -82,11 +82,24 @@ pub fn compute_pcurve_on_surface(
 
     // Check collinearity -- if all points are (nearly) on a line in UV,
     // use a Line2D instead of a NURBS fit.
+    // EXCEPTION: Line2D uses arc-length parameterization (evaluate(t) =
+    // origin + unit_dir * t), not [0,1] mapping. For curves that need
+    // evaluate(0)→start and evaluate(1)→end, use NURBS interpolation
+    // instead, which naturally maps [0,1] to the full extent.
     if is_collinear_2d(&uv_pts, 1e-6) {
         let p0 = uv_pts[0];
-        let p1 = uv_pts[uv_pts.len() - 1];
-        let dir = Vec2::new(p1.x() - p0.x(), p1.y() - p0.y());
-        return Curve2D::Line(make_line2d_safe(p0, dir));
+        let pn = uv_pts[uv_pts.len() - 1];
+        let dx = pn.x() - p0.x();
+        let dy = pn.y() - p0.y();
+        let len_sq = dx * dx + dy * dy;
+        // For non-degenerate lines (p0 ≠ pn), use Line2D.
+        // For closed collinear curves (p0 ≈ pn), fall through to NURBS
+        // fit to preserve [0,1] parameterization.
+        if len_sq >= 1e-12 {
+            let dir = Vec2::new(dx, dy);
+            return Curve2D::Line(make_line2d_safe(p0, dir));
+        }
+        // p0 ≈ pn: fall through to NURBS interpolation.
     }
 
     // Fit a NURBS curve through the UV sample points.
@@ -273,16 +286,44 @@ fn is_collinear_2d(pts: &[Point2], tol: f64) -> bool {
     let len_sq = dx * dx + dy * dy;
     if len_sq < tol * tol {
         // p0 ≈ pn — either all points are clustered (degenerate) or this
-        // is a closed curve (circle). Check if intermediate points spread
-        // out from p0. If any point is far from p0, it's a closed loop.
-        for p in &pts[1..pts.len() - 1] {
+        // is a closed curve (circle). Check if intermediate points lie on
+        // a LINE (collinear in UV, e.g. circle on cylinder at constant v)
+        // or spread in 2D (actual closed loop, e.g. circle on plane).
+        //
+        // Use the line from p0 to the farthest intermediate point as the
+        // collinearity reference. If all points are near that line, collinear.
+        let mut farthest_idx = 1;
+        let mut farthest_dist_sq = 0.0_f64;
+        for (i, p) in pts[1..pts.len() - 1].iter().enumerate() {
             let ex = p.x() - p0.x();
             let ey = p.y() - p0.y();
-            if ex * ex + ey * ey > tol * tol {
-                return false; // Closed loop, not degenerate.
+            let d2 = ex * ex + ey * ey;
+            if d2 > farthest_dist_sq {
+                farthest_dist_sq = d2;
+                farthest_idx = i + 1;
             }
         }
-        return true;
+        if farthest_dist_sq < tol * tol {
+            return true; // All points clustered — degenerate.
+        }
+        // Check collinearity against line p0→farthest.
+        let pf = pts[farthest_idx];
+        let fdx = pf.x() - p0.x();
+        let fdy = pf.y() - p0.y();
+        let flen = farthest_dist_sq.sqrt();
+        let inv_flen = 1.0 / flen;
+        for (i, p) in pts.iter().enumerate() {
+            if i == 0 || i == farthest_idx {
+                continue;
+            }
+            let ex = p.x() - p0.x();
+            let ey = p.y() - p0.y();
+            let dist = (ex * fdy - ey * fdx).abs() * inv_flen;
+            if dist > tol {
+                return false; // 2D spread — closed loop.
+            }
+        }
+        return true; // All on a line — collinear (e.g. cylinder UV).
     }
     let inv_len = 1.0 / len_sq.sqrt();
     for p in &pts[1..pts.len() - 1] {
