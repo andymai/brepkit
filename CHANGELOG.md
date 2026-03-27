@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.5](https://github.com/andymai/brepkit/compare/v2.41.4...v2.41.5) (2026-03-27)
+
+
+### Bug Fixes
+
+* **algo:** remove boundary edge cache to prevent VertexId mismatches ([#469](https://github.com/andymai/brepkit/issues/469)) ([ae44244](https://github.com/andymai/brepkit/commit/ae4424492ca8ed325302c499729715398a48cf50))
+
 ## [2.41.4](https://github.com/andymai/brepkit/compare/v2.41.3...v2.41.4) (2026-03-27)
 
 
