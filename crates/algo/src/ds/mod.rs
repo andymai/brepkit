@@ -10,6 +10,7 @@ mod face_info;
 mod interference;
 mod pave;
 mod shape_index;
+pub mod shape_store;
 
 pub use arena::GfaArena;
 pub use curve::IntersectionCurveDS;
@@ -21,3 +22,4 @@ pub use pave::{Pave, PaveBlock, PaveBlockId};
 #[allow(unused_imports)]
 pub use pave::{CommonBlock, CommonBlockId};
 pub use shape_index::Rank;
+pub use shape_store::GfaShapeStore;
