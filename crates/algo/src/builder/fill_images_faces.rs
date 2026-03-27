@@ -200,17 +200,12 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // Pre-compute which faces have section edges from which curves
     let section_map = build_section_map(arena);
 
-    // Per-rank boundary edge caches: share boundary edges across faces
-    // of the same rank by quantized position pair. This implements the
-    // reference implementation's approach: edges are shared from creation
-    // rather than merged retroactively. Per-rank scoping prevents
-    // cross-solid vertex contamination (faces from different ranks use
-    // different vertex pools, so their edges can't be shared).
-    let mut boundary_edge_cache_a: HashMap<
-        ((i64, i64, i64), (i64, i64, i64)),
-        brepkit_topology::edge::EdgeId,
-    > = HashMap::new();
-    let mut boundary_edge_cache_b: HashMap<
+    // Cross-rank boundary edge cache: share boundary edges across ALL faces
+    // by quantized position pair. With the cross-rank shared vertex pool,
+    // faces from different ranks at the same position get the same VertexId,
+    // making a single cross-rank cache safe. This reduces duplicate edges
+    // that merge_duplicate_edges would otherwise need to handle.
+    let mut boundary_edge_cache: HashMap<
         ((i64, i64, i64), (i64, i64, i64)),
         brepkit_topology::edge::EdgeId,
     > = HashMap::new();
@@ -347,10 +342,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // and compute a distinct interior point for classification.
         for split in &split_results {
             let rank_pool = Some(&shared_vertex_pool);
-            let bnd_cache = match rank {
-                Rank::A => &mut boundary_edge_cache_a,
-                Rank::B => &mut boundary_edge_cache_b,
-            };
+            let bnd_cache = &mut boundary_edge_cache;
             let new_face_id = build_topology_face(
                 topo,
                 split,
