@@ -1520,8 +1520,12 @@ fn build_topology_face(
             // edges are shared across parent faces with different vertex caches.
             topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
         };
-        let forward = pcurve_edge.forward;
-        oriented_edges.push(OrientedEdge::new(edge_id, forward));
+        // The edge was created with start_vid at start_3d position and
+        // end_vid at end_3d position. These positions encode the wire's
+        // traversal direction (for reverse section edges, start_3d IS the
+        // reverse-direction start). So the edge is always in traversal
+        // order — use forward=true.
+        oriented_edges.push(OrientedEdge::new(edge_id, true));
     }
 
     if oriented_edges.is_empty() {
