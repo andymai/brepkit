@@ -218,7 +218,8 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
 
     for (face_id, rank) in sorted_faces {
         let fi = arena.face_info(face_id);
-        let has_sections = fi.is_some_and(|fi| !fi.pave_blocks_sc.is_empty());
+        let has_sections =
+            fi.is_some_and(|fi| !fi.pave_blocks_sc.is_empty() || !fi.pave_blocks_in.is_empty());
 
         log::debug!("fill_images_faces: face {face_id:?} has_sections={has_sections}");
 
@@ -919,10 +920,20 @@ fn rebuild_face_with_cb_edges(
 
 fn build_section_map(arena: &GfaArena) -> HashMap<FaceId, Vec<PaveBlockId>> {
     let mut map: HashMap<FaceId, Vec<PaveBlockId>> = HashMap::new();
+    // Section edges from FF intersection curves
     for curve in &arena.curves {
         for &pb_id in &curve.pave_blocks {
             map.entry(curve.face_a).or_default().push(pb_id);
             map.entry(curve.face_b).or_default().push(pb_id);
+        }
+    }
+    // IN edges from EF interferences (edges from the opposing solid
+    // that lie inside this face). These are added as section edges
+    // for the face splitter — like the reference implementation's
+    // PaveBlocksIn → edge soup (FORWARD+REVERSED pairs).
+    for (&face_id, fi) in &arena.face_info {
+        for &pb_id in &fi.pave_blocks_in {
+            map.entry(face_id).or_default().push(pb_id);
         }
     }
     map
