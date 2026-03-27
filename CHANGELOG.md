@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.9](https://github.com/andymai/brepkit/compare/v2.41.8...v2.41.9) (2026-03-27)
+
+
+### Bug Fixes
+
+* **algo:** add FF curve boundary filter via Cyrus-Beck clipping ([#477](https://github.com/andymai/brepkit/issues/477)) ([ffcdba4](https://github.com/andymai/brepkit/commit/ffcdba42cf890303e25b0ae28fc87203acac0fb6))
+
 ## [2.41.8](https://github.com/andymai/brepkit/compare/v2.41.7...v2.41.8) (2026-03-27)
 
 
