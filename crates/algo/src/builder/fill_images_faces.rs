@@ -163,17 +163,24 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             HashMap::new();
         for (&face_id, &rank) in face_ranks {
             if let Ok(face) = topo.face(face_id) {
-                if let Ok(wire) = topo.wire(face.outer_wire()) {
-                    for oe in wire.edges() {
-                        if let Ok(edge) = topo.edge(oe.edge()) {
-                            for &vid in &[edge.start(), edge.end()] {
-                                let rv = arena.resolve_vertex(vid);
-                                if let Ok(v) = topo.vertex(rv) {
-                                    let entry =
-                                        rank_vid_faces.entry((rank, rv.index())).or_insert_with(
-                                            || (v.point(), std::collections::HashSet::new()),
-                                        );
-                                    entry.1.insert(face_id.index());
+                // Collect vertices from all wires (outer + inner holes).
+                let all_wires: Vec<_> = std::iter::once(face.outer_wire())
+                    .chain(face.inner_wires().iter().copied())
+                    .collect();
+                for wid in all_wires {
+                    if let Ok(wire) = topo.wire(wid) {
+                        for oe in wire.edges() {
+                            if let Ok(edge) = topo.edge(oe.edge()) {
+                                for &vid in &[edge.start(), edge.end()] {
+                                    let rv = arena.resolve_vertex(vid);
+                                    if let Ok(v) = topo.vertex(rv) {
+                                        let entry = rank_vid_faces
+                                            .entry((rank, rv.index()))
+                                            .or_insert_with(|| {
+                                                (v.point(), std::collections::HashSet::new())
+                                            });
+                                        entry.1.insert(face_id.index());
+                                    }
                                 }
                             }
                         }
@@ -225,18 +232,32 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
 
         log::debug!("fill_images_faces: face {face_id:?} (unsplit)");
 
-        if !has_sections {
-            let rebuilt =
-                rebuild_face_with_cb_edges(topo, face_id, &cb_qpair_edges, &vv_vertex_seed, tol);
-            let result_face = rebuilt.unwrap_or(face_id);
-            // Register unsplit face's vertices in the rank pool so
-            // split faces at the same positions use the SAME vertices.
-            // This is safe: unsplit faces ARE in the GFA result, so
-            // their vertices are output vertices (not input-only).
-            {
-                let pool = rank_vertex_pools.entry(rank).or_default();
-                if let Ok(face) = topo.face(result_face) {
-                    if let Ok(wire) = topo.wire(face.outer_wire()) {
+        let rebuilt =
+            rebuild_face_with_cb_edges(topo, face_id, &cb_qpair_edges, &vv_vertex_seed, tol);
+        let result_face = rebuilt.unwrap_or(face_id);
+        // Register unsplit face's vertices in the rank pool so
+        // split faces at the same positions use the SAME vertices.
+        // This is safe: unsplit faces ARE in the GFA result, so
+        // their vertices are output vertices (not input-only).
+        {
+            let pool = rank_vertex_pools.entry(rank).or_default();
+            if let Ok(face) = topo.face(result_face) {
+                // Outer wire
+                if let Ok(wire) = topo.wire(face.outer_wire()) {
+                    for oe in wire.edges() {
+                        if let Ok(edge) = topo.edge(oe.edge()) {
+                            for &vid in &[edge.start(), edge.end()] {
+                                if let Ok(v) = topo.vertex(vid) {
+                                    pool.entry(qpos(v.point())).or_insert(vid);
+                                }
+                            }
+                        }
+                    }
+                }
+                // Inner wires (holes) — register their vertices too so
+                // split faces touching hole boundaries share vertices.
+                for &inner_wid in face.inner_wires() {
+                    if let Ok(wire) = topo.wire(inner_wid) {
                         for oe in wire.edges() {
                             if let Ok(edge) = topo.edge(oe.edge()) {
                                 for &vid in &[edge.start(), edge.end()] {
@@ -249,13 +270,13 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                     }
                 }
             }
-            sub_faces.push(SubFace {
-                face_id: result_face,
-                classification: FaceClass::Unknown,
-                rank,
-                interior_point: None,
-            });
         }
+        sub_faces.push(SubFace {
+            face_id: result_face,
+            classification: FaceClass::Unknown,
+            rank,
+            interior_point: None,
+        });
     }
 
     // Pass 2: split faces.
