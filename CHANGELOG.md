@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.6](https://github.com/andymai/brepkit/compare/v2.41.5...v2.41.6) (2026-03-27)
+
+
+### Bug Fixes
+
+* **algo:** remove section edge sharing between sub-faces ([#471](https://github.com/andymai/brepkit/issues/471)) ([63e8b8c](https://github.com/andymai/brepkit/commit/63e8b8c5d0d5979e2b9a36ba46e8681305e9686d))
+
 ## [2.41.5](https://github.com/andymai/brepkit/compare/v2.41.4...v2.41.5) (2026-03-27)
 
 
