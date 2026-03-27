@@ -221,7 +221,8 @@ pub fn boolean(
                 // This fixes the flush-face case where duplicate vertices at
                 // cross-rank positions inflate V.
                 if euler_pre > 2 {
-                    merge_result_vertices(topo, result, tol)?;
+                    // Best-effort: don't abort on merge failure
+                    let _ = merge_result_vertices(topo, result, tol);
                 }
 
                 let (f2, e2, v2) = brepkit_topology::explorer::solid_entity_counts(topo, result)?;
@@ -577,16 +578,20 @@ fn merge_result_vertices(
             brepkit_topology::edge::EdgeCurve,
             brepkit_topology::vertex::VertexId,
             brepkit_topology::vertex::VertexId,
+            Option<f64>, // edge tolerance
         )>,
-        inner_wires: Vec<
+        outer_closed: bool,
+        inner_wires: Vec<(
             Vec<(
                 brepkit_topology::edge::EdgeId,
                 bool,
                 brepkit_topology::edge::EdgeCurve,
                 brepkit_topology::vertex::VertexId,
                 brepkit_topology::vertex::VertexId,
+                Option<f64>,
             )>,
-        >,
+            bool, // wire closed flag
+        )>,
     }
 
     let mut snaps = Vec::with_capacity(face_ids.len());
@@ -595,6 +600,7 @@ fn merge_result_vertices(
         let surface = face.surface().clone();
         let reversed = face.is_reversed();
         let outer_wire = topo.wire(face.outer_wire())?;
+        let outer_closed = outer_wire.is_closed();
         let outer_oes: Vec<_> = outer_wire
             .edges()
             .iter()
@@ -606,6 +612,7 @@ fn merge_result_vertices(
                     e.curve().clone(),
                     e.start(),
                     e.end(),
+                    e.tolerance(),
                 ))
             })
             .collect::<Result<_, _>>()?;
@@ -613,26 +620,29 @@ fn merge_result_vertices(
         let mut inner_wires = Vec::new();
         for iw in inner_wids {
             let w = topo.wire(iw)?;
-            inner_wires.push(
-                w.edges()
-                    .iter()
-                    .map(|oe| -> Result<_, crate::OperationsError> {
-                        let e = topo.edge(oe.edge())?;
-                        Ok((
-                            oe.edge(),
-                            oe.is_forward(),
-                            e.curve().clone(),
-                            e.start(),
-                            e.end(),
-                        ))
-                    })
-                    .collect::<Result<_, _>>()?,
-            );
+            let closed = w.is_closed();
+            let oes: Vec<_> = w
+                .edges()
+                .iter()
+                .map(|oe| -> Result<_, crate::OperationsError> {
+                    let e = topo.edge(oe.edge())?;
+                    Ok((
+                        oe.edge(),
+                        oe.is_forward(),
+                        e.curve().clone(),
+                        e.start(),
+                        e.end(),
+                        e.tolerance(),
+                    ))
+                })
+                .collect::<Result<_, _>>()?;
+            inner_wires.push((oes, closed));
         }
         snaps.push(FaceSnap {
             surface,
             reversed,
             outer_oes,
+            outer_closed,
             inner_wires,
         });
     }
@@ -644,6 +654,7 @@ fn merge_result_vertices(
         brepkit_topology::edge::EdgeCurve,
         brepkit_topology::vertex::VertexId,
         brepkit_topology::vertex::VertexId,
+        Option<f64>,
     )],
                      replacements: &HashMap<
         brepkit_topology::vertex::VertexId,
@@ -660,7 +671,7 @@ fn merge_result_vertices(
                      topo: &mut Topology|
      -> Vec<brepkit_topology::wire::OrientedEdge> {
         oes.iter()
-            .map(|(eid, fwd, curve, start, end)| {
+            .map(|(eid, fwd, curve, start, end, edge_tol)| {
                 let ns = replacements.get(start).copied().unwrap_or(*start);
                 let ne = replacements.get(end).copied().unwrap_or(*end);
                 if ns == *start && ne == *end {
@@ -668,7 +679,12 @@ fn merge_result_vertices(
                 }
                 let key = (*eid, ns, ne);
                 let new_eid = *edge_cache.entry(key).or_insert_with(|| {
-                    topo.add_edge(brepkit_topology::edge::Edge::new(ns, ne, curve.clone()))
+                    topo.add_edge(brepkit_topology::edge::Edge::with_tolerance(
+                        ns,
+                        ne,
+                        curve.clone(),
+                        *edge_tol,
+                    ))
                 });
                 brepkit_topology::wire::OrientedEdge::new(new_eid, *fwd)
             })
@@ -678,15 +694,17 @@ fn merge_result_vertices(
     let mut new_face_ids = Vec::with_capacity(snaps.len());
     for snap in &snaps {
         let outer_oes = remap_oes(&snap.outer_oes, &replacements, &mut edge_cache, topo);
-        let Ok(outer_wire) = brepkit_topology::wire::Wire::new(outer_oes, false) else {
+        let Ok(outer_wire) = brepkit_topology::wire::Wire::new(outer_oes, snap.outer_closed) else {
+            // Wire rebuild failed — keep the original face unchanged
+            // rather than silently dropping it
             continue;
         };
         let outer_id = topo.add_wire(outer_wire);
 
         let mut inner_ids = Vec::new();
-        for inner in &snap.inner_wires {
-            let oes = remap_oes(inner, &replacements, &mut edge_cache, topo);
-            if let Ok(w) = brepkit_topology::wire::Wire::new(oes, false) {
+        for (inner_oes_snap, inner_closed) in &snap.inner_wires {
+            let oes = remap_oes(inner_oes_snap, &replacements, &mut edge_cache, topo);
+            if let Ok(w) = brepkit_topology::wire::Wire::new(oes, *inner_closed) {
                 inner_ids.push(topo.add_wire(w));
             }
         }

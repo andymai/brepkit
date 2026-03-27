@@ -25,9 +25,9 @@ use crate::error::AlgoError;
 pub struct GfaShapeStore {
     /// The store's own topology arena.
     pub topo: Topology,
-    /// Mapping from original solid A's entity IDs to store-local IDs.
+    /// Store-local SolidId for the deep-copied solid A.
     pub solid_a: SolidId,
-    /// Mapping from original solid B's entity IDs to store-local IDs.
+    /// Store-local SolidId for the deep-copied solid B.
     pub solid_b: SolidId,
 }
 
@@ -247,7 +247,9 @@ fn deep_copy_solid(
         new_shell_ids.push(target.add_shell(new_shell));
     }
 
-    let new_outer = new_shell_ids[0];
+    let new_outer = *new_shell_ids
+        .first()
+        .ok_or_else(|| AlgoError::AssemblyFailed("solid has no shells to copy".into()))?;
     let new_inner: Vec<_> = new_shell_ids[1..].to_vec();
 
     Ok(target.add_solid(Solid::new(new_outer, new_inner)))
@@ -280,10 +282,18 @@ mod tests {
         let sh2 = target.shell(s2.outer_shell()).unwrap();
         assert_eq!(sh2.faces().len(), 6, "exported box should have 6 faces");
 
-        // Verify no ID overlap: exported vertices should be different from source
+        // Verify face counts match between source and exported
         let source_faces = brepkit_topology::explorer::solid_faces(&source, solid).unwrap();
         let target_faces = brepkit_topology::explorer::solid_faces(&target, exported).unwrap();
-        // Face counts match
         assert_eq!(source_faces.len(), target_faces.len());
+
+        // Verify isolation: the store has TWO copies of the box (A and B
+        // both point to the same source solid). The store topology should
+        // have more entities than the source (2× vertices, edges, etc.).
+        let store_vertex_count =
+            brepkit_topology::explorer::solid_faces(&store.topo, store.solid_a)
+                .unwrap()
+                .len();
+        assert_eq!(store_vertex_count, 6, "store solid_a should have 6 faces");
     }
 }
