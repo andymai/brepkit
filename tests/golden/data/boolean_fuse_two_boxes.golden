@@ -1,6 +1,6 @@
 # fuse box [0,6]^3 with box [3,0,0]+[6,6,6]
-vertices: 24
-triangles: 44
+vertices: 16
+triangles: 28
 volume: 324.000000
 bbox_min: (0.000000, 0.000000, 0.000000)
 bbox_max: (9.000000, 6.000000, 6.000000)

@@ -25,7 +25,7 @@ const VERTEX_DEDUP_SCALE: f64 = 1e10;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
-use brepkit_topology::edge::{Edge, EdgeId};
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
@@ -1520,12 +1520,13 @@ fn build_topology_face(
             // edges are shared across parent faces with different vertex caches.
             topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
         };
-        // The edge was created with start_vid at start_3d position and
-        // end_vid at end_3d position. These positions encode the wire's
-        // traversal direction (for reverse section edges, start_3d IS the
-        // reverse-direction start). So the edge is always in traversal
-        // order — use forward=true.
-        oriented_edges.push(OrientedEdge::new(edge_id, true));
+        // For Line edges: start_vid at start_3d, end_vid at end_3d encode
+        // the traversal direction directly — always use forward=true.
+        // For curved edges (Circle, Ellipse, etc.): the curve has its own
+        // parameterization that may differ from start_3d→end_3d order.
+        // Use pcurve_edge.forward to preserve the intended traversal.
+        let forward = matches!(pcurve_edge.curve_3d, EdgeCurve::Line) || pcurve_edge.forward;
+        oriented_edges.push(OrientedEdge::new(edge_id, forward));
     }
 
     if oriented_edges.is_empty() {

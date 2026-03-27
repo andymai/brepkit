@@ -243,7 +243,6 @@ fn golden_tessellation_sphere() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn golden_boolean_fuse_two_boxes() {
     let mut topo = Topology::new();
     let a = make_box(&mut topo, 6.0, 6.0, 6.0).unwrap();
