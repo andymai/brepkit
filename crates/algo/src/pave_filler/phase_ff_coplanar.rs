@@ -15,7 +15,7 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::Vertex;
 
-use crate::ds::{GfaArena, Interference, IntersectionCurveDS, Pave, PaveBlock};
+use crate::ds::{GfaArena, Interference, IntersectionCurveDS, Pave, PaveBlock, PaveBlockId};
 use crate::error::AlgoError;
 
 use super::helpers::find_nearby_pave_vertex;
@@ -270,6 +270,22 @@ fn process_coplanar_pair(
         }
     }
 
+    // For each boundary edge of face_b that coincides with a boundary edge
+    // of face_a (both endpoints on the SAME target edge), create a CommonBlock
+    // linking their PaveBlocks. This enables edge sharing for flush-face
+    // (touching) booleans where the faces share a boundary segment.
+    for &(b_eid, p2d_start, p2d_end, _, _) in &edges_b {
+        let start_edge = which_boundary_edge(p2d_start, &edges_a, tol.linear);
+        let end_edge = which_boundary_edge(p2d_end, &edges_a, tol.linear);
+        if let (Some(si), Some(ei)) = (start_edge, end_edge) {
+            if si == ei {
+                // B's edge coincides with A's edge at index si.
+                let a_eid = edges_a[si].0;
+                create_coplanar_common_block(arena, a_eid, b_eid, tol.linear);
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -381,6 +397,58 @@ fn should_create_section_edge(
 }
 
 /// Create a section edge and register it in the GFA arena.
+/// Create a CommonBlock linking leaf PaveBlocks of two coincident boundary edges.
+///
+/// For flush-face (touching) booleans, A's boundary edge and B's boundary edge
+/// overlap at the shared face boundary. Linking their PaveBlocks via a
+/// CommonBlock ensures they share the same split edge, enabling
+/// `merge_duplicate_edges` to recognize them as the same geometric edge.
+fn create_coplanar_common_block(
+    arena: &mut GfaArena,
+    a_edge: brepkit_topology::edge::EdgeId,
+    b_edge: brepkit_topology::edge::EdgeId,
+    tol: f64,
+) {
+    // Find leaf PaveBlocks for each edge
+    let get_leaves = |edge: brepkit_topology::edge::EdgeId| -> Vec<PaveBlockId> {
+        arena
+            .edge_pave_blocks
+            .get(&edge)
+            .map(|pbs| {
+                pbs.iter()
+                    .copied()
+                    .filter(|&pb_id| {
+                        arena
+                            .pave_blocks
+                            .get(pb_id)
+                            .is_some_and(|pb| pb.children.is_empty())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+
+    let a_leaves = get_leaves(a_edge);
+    let b_leaves = get_leaves(b_edge);
+
+    // For now, handle the simple case: both edges have exactly 1 leaf PB.
+    // More complex cases (split edges with multiple children) need position
+    // matching to pair the correct leaf PBs.
+    if a_leaves.len() == 1 && b_leaves.len() == 1 {
+        let a_pb = a_leaves[0];
+        let b_pb = b_leaves[0];
+
+        // Skip if already in a CommonBlock together
+        if arena.pb_to_cb.contains_key(&a_pb) || arena.pb_to_cb.contains_key(&b_pb) {
+            return;
+        }
+
+        arena.create_common_block(vec![a_pb, b_pb], tol);
+
+        log::debug!("coplanar CommonBlock: edge {a_edge:?} + {b_edge:?} (PBs {a_pb:?} + {b_pb:?})");
+    }
+}
+
 #[allow(clippy::unnecessary_wraps)]
 fn create_section_edge(
     topo: &mut Topology,
