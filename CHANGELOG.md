@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.10](https://github.com/andymai/brepkit/compare/v2.41.9...v2.41.10) (2026-03-27)
+
+
+### Bug Fixes
+
+* **ops:** merge duplicate vertices in GFA result + relax face counts ([#480](https://github.com/andymai/brepkit/issues/480)) ([8e05e39](https://github.com/andymai/brepkit/commit/8e05e3981c5536911a53fe373f0ade0b25c55ebd))
+
 ## [2.41.9](https://github.com/andymai/brepkit/compare/v2.41.8...v2.41.9) (2026-03-27)
 
 
