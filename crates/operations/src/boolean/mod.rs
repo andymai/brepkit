@@ -153,9 +153,12 @@ pub fn boolean(
         // CONTAINING solid's classifier is unavailable:
         //   b_in_a: A is the container → fallback when ca.is_none()
         //   a_in_b: B is the container → fallback when cb.is_none()
-        let b_in_a = (b_center_in_a && a_center_outside_b)
+        // Containment requires BOTH center test AND AABB containment.
+        // Center-inside alone is insufficient: A's center can be inside B
+        // while A extends far beyond B (e.g., T-shape fuse).
+        let b_in_a = (b_center_in_a && a_center_outside_b && aabb_contains(&aabb_b, &aabb_a))
             || (ca.is_none() && aabb_contains(&aabb_b, &aabb_a));
-        let a_in_b = (a_center_in_b && b_center_outside_a)
+        let a_in_b = (a_center_in_b && b_center_outside_a && aabb_contains(&aabb_a, &aabb_b))
             || (cb.is_none() && aabb_contains(&aabb_a, &aabb_b));
         // Identical-solid shortcut: both centers inside each other AND
         // bounding boxes match ⇒ A ≡ B geometrically.

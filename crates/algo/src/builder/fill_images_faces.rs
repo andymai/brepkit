@@ -147,21 +147,19 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         }
     }
 
-    // ── Per-rank fresh-vertex pools ─────────────────────────────────
-    // For each input solid (rank), create FRESH vertices at positions
-    // of face vertices shared by 2+ unique faces within that rank.
-    // This covers box corners (3 faces) and shared edge endpoints
-    // (2 faces). Different solids get SEPARATE pools to prevent
-    // cross-solid contamination. Vertices in <2 faces (e.g.
-    // shelled-box internal edges) stay per-face.
-    let rank_vertex_pools: HashMap<
-        Rank,
-        BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
-    > = {
-        // Count UNIQUE faces per (rank, resolved_vid).
-        let mut rank_vid_faces: HashMap<(Rank, usize), (Point3, std::collections::HashSet<usize>)> =
+    // ── Cross-rank fresh-vertex pool ──────────────────────────────
+    // Create FRESH vertices at positions of face vertices shared by
+    // 2+ unique faces (any rank). This covers box corners (3 faces)
+    // and shared edge endpoints (2 faces). Using a single cross-rank
+    // pool ensures that faces from different solids sharing a vertex
+    // position get the SAME fresh VertexId, eliminating the Euler
+    // vertex excess from per-rank duplication. Fresh vertices don't
+    // connect to input solid topology (no contamination).
+    let shared_vertex_pool: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> = {
+        // Count UNIQUE faces per resolved vertex position (any rank).
+        let mut vid_faces: HashMap<usize, (Point3, std::collections::HashSet<usize>)> =
             HashMap::new();
-        for (&face_id, &rank) in face_ranks {
+        for (&face_id, &_rank) in face_ranks {
             if let Ok(face) = topo.face(face_id) {
                 if let Ok(wire) = topo.wire(face.outer_wire()) {
                     for oe in wire.edges() {
@@ -169,10 +167,9 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                             for &vid in &[edge.start(), edge.end()] {
                                 let rv = arena.resolve_vertex(vid);
                                 if let Ok(v) = topo.vertex(rv) {
-                                    let entry =
-                                        rank_vid_faces.entry((rank, rv.index())).or_insert_with(
-                                            || (v.point(), std::collections::HashSet::new()),
-                                        );
+                                    let entry = vid_faces.entry(rv.index()).or_insert_with(|| {
+                                        (v.point(), std::collections::HashSet::new())
+                                    });
                                     entry.1.insert(face_id.index());
                                 }
                             }
@@ -181,12 +178,11 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 }
             }
         }
-        // Create fresh vertices for vertices in 2+ unique faces per rank.
+        // Create fresh vertices for positions with 2+ unique faces.
         // Reuse CB pre-pass vertex if available at this position.
-        let mut pools: HashMap<Rank, BTreeMap<_, _>> = HashMap::new();
-        for ((rank, _), (pt, faces)) in &rank_vid_faces {
+        let mut pool = BTreeMap::new();
+        for (pt, faces) in vid_faces.values() {
             if faces.len() >= 2 {
-                let pool = pools.entry(*rank).or_default();
                 let key = qpos(*pt);
                 pool.entry(key).or_insert_with(|| {
                     pb_vertex_registry
@@ -196,7 +192,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 });
             }
         }
-        pools
+        pool
     };
 
     // (pb_vertex_registry and CB pre-pass moved above rank pool)
@@ -242,7 +238,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             let _fresh = rebuild_face_with_fresh_vertices(
                 topo,
                 face_id,
-                rank_vertex_pools.get(&rank),
+                Some(&shared_vertex_pool),
                 &mut pb_vertex_registry,
                 &qpos,
                 tol,
@@ -350,7 +346,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // Build real topology entities (Vertex → Edge → Wire → Face) for each,
         // and compute a distinct interior point for classification.
         for split in &split_results {
-            let rank_pool = rank_vertex_pools.get(&rank);
+            let rank_pool = Some(&shared_vertex_pool);
             let bnd_cache = match rank {
                 Rank::A => &mut boundary_edge_cache_a,
                 Rank::B => &mut boundary_edge_cache_b,
