@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.7](https://github.com/andymai/brepkit/compare/v2.41.6...v2.41.7) (2026-03-27)
+
+
+### Bug Fixes
+
+* **algo:** fix forward flag for new edges — un-ignore 5 tests (47→42) ([#473](https://github.com/andymai/brepkit/issues/473)) ([35e7aa0](https://github.com/andymai/brepkit/commit/35e7aa0db52f69a6db27aabcabf4e23a0ac9d979))
+
 ## [2.41.6](https://github.com/andymai/brepkit/compare/v2.41.5...v2.41.6) (2026-03-27)
 
 
