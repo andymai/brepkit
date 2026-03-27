@@ -438,8 +438,11 @@ fn create_coplanar_common_block(
         let a_pb = a_leaves[0];
         let b_pb = b_leaves[0];
 
-        // Skip if already in a CommonBlock together
-        if arena.pb_to_cb.contains_key(&a_pb) || arena.pb_to_cb.contains_key(&b_pb) {
+        // Skip if both PBs are already in the same CB, or either
+        // is in a different CB (merging CBs deferred to Phase 5).
+        let a_cb = arena.pb_to_cb.get(&a_pb).copied();
+        let b_cb = arena.pb_to_cb.get(&b_pb).copied();
+        if (a_cb.is_some() && a_cb == b_cb) || a_cb.is_some() || b_cb.is_some() {
             return;
         }
 

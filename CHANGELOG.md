@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.42.0](https://github.com/andymai/brepkit/compare/v2.41.10...v2.42.0) (2026-03-27)
+
+
+### Features
+
+* **algo:** add GfaShapeStore — isolated topology for GFA pipeline ([#482](https://github.com/andymai/brepkit/issues/482)) ([2cca40e](https://github.com/andymai/brepkit/commit/2cca40ef62e9440de28b17bb04ba57c1272228af))
+* **algo:** create CommonBlocks for coplanar touching boundary edges ([#484](https://github.com/andymai/brepkit/issues/484)) ([a289a11](https://github.com/andymai/brepkit/commit/a289a11f10c3f1fe08c1a052e52c76039a7a378e))
+
 ## [2.41.10](https://github.com/andymai/brepkit/compare/v2.41.9...v2.41.10) (2026-03-27)
 
 
