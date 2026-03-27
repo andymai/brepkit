@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.43.0](https://github.com/andymai/brepkit/compare/v2.42.0...v2.43.0) (2026-03-27)
+
+
+### Features
+
+* **algo:** curve-level section edges for non-Line FF intersections ([#487](https://github.com/andymai/brepkit/issues/487)) ([4476ccc](https://github.com/andymai/brepkit/commit/4476cccb9e35b3d5c0874c12b40ed8fd989dc53e))
+
+
+### Bug Fixes
+
+* **algo:** address PR [#484](https://github.com/andymai/brepkit/issues/484) review + add IN edge collection ([#485](https://github.com/andymai/brepkit/issues/485)) ([2cb0a9a](https://github.com/andymai/brepkit/commit/2cb0a9a58a7295a4a78c50993d7eec6e52c2a9fd))
+
 ## [2.42.0](https://github.com/andymai/brepkit/compare/v2.41.10...v2.42.0) (2026-03-27)
 
 
