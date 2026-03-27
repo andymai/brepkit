@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.41.4](https://github.com/andymai/brepkit/compare/v2.41.3...v2.41.4) (2026-03-27)
+
+
+### Bug Fixes
+
+* **algo:** cross-rank shared vertex pool for Euler correctness ([#466](https://github.com/andymai/brepkit/issues/466)) ([243e98e](https://github.com/andymai/brepkit/commit/243e98e3a4364760c795b36dfda8459c14a54025))
+
 ## [2.41.3](https://github.com/andymai/brepkit/compare/v2.41.2...v2.41.3) (2026-03-26)
 
 
