@@ -1439,8 +1439,8 @@ fn build_topology_face(
     topo: &mut Topology,
     split: &super::split_types::SplitSubFace,
     tol: Tolerance,
-    parent_face_id: FaceId,
-    shared_edge_cache: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
+    _parent_face_id: FaceId,
+    _shared_edge_cache: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
     _cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     rank_pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
@@ -1504,18 +1504,15 @@ fn build_topology_face(
         // at the same position (e.g., edge at (1,0,0)→(1,0,1) exists on y=0,
         // z=0, and x=1 planes). cb_qpair_edges is only used by
         // rebuild_face_with_cb_edges for unsplit faces.
-        let edge_id = if let Some(cb_edge) = None::<brepkit_topology::edge::EdgeId> {
-            cb_edge
-        } else if let Some(pb_id) = pcurve_edge.pave_block_id {
-            let key = (usize::MAX, pb_id);
-            *shared_edge_cache.entry(key).or_insert_with(|| {
-                topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
-            })
-        } else if let Some(idx) = pcurve_edge.source_edge_idx {
-            let key = (parent_face_id.index(), idx);
-            *shared_edge_cache.entry(key).or_insert_with(|| {
-                topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
-            })
+        // Each sub-face creates its OWN edges with its own per-call vertices.
+        // No edge sharing between sub-faces — different sub-faces have
+        // different per-call vertex caches, so shared edges would have wrong
+        // VertexId connections at wire junctions.
+        // merge_duplicate_edges in BuilderSolid handles cross-face sharing.
+        let edge_id = if let Some(_pb_id) = pcurve_edge.pave_block_id {
+            topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
+        } else if let Some(_idx) = pcurve_edge.source_edge_idx {
+            topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
         } else {
             // Each face creates its own boundary edges with its own vertices.
             // Cross-face sharing is handled by merge_duplicate_edges in
