@@ -63,19 +63,37 @@ pub fn boolean_with_tolerance(
     solid_b: SolidId,
     tol: Tolerance,
 ) -> Result<SolidId, AlgoError> {
+    // Create an isolated shape store with deep-copied input solids.
+    // The GFA pipeline operates entirely within the store, avoiding
+    // vertex/edge identity conflicts with the caller's topology.
+    let mut store = crate::ds::GfaShapeStore::new(topo, solid_a, solid_b)?;
+
     // Stage 1: PaveFiller — intersection + pave block construction
     let mut arena = GfaArena::new();
-    pave_filler::run_pave_filler(topo, solid_a, solid_b, tol, &mut arena)?;
+    pave_filler::run_pave_filler(
+        &mut store.topo,
+        store.solid_a,
+        store.solid_b,
+        tol,
+        &mut arena,
+    )?;
 
     // Stage 2: Builder — face splitting + classification
-    let mut builder = Builder::with_tolerance(std::mem::take(topo), arena, solid_a, solid_b, tol);
+    let mut builder = Builder::with_tolerance(
+        std::mem::take(&mut store.topo),
+        arena,
+        store.solid_a,
+        store.solid_b,
+        tol,
+    );
     builder.perform()?;
 
     // Stage 3: BOP selection + assembly
-    let (result_topo, result_solid) = builder.build_result(op)?;
+    let (store_topo, store_result) = builder.build_result(op)?;
+    store.topo = store_topo;
 
-    // Restore topology
-    *topo = result_topo;
+    // Export result solid back to the caller's topology
+    let result = store.export_solid(topo, store_result)?;
 
-    Ok(result_solid)
+    Ok(result)
 }
