@@ -1450,31 +1450,19 @@ fn split_face_with_internal_loops(
         // gives zero area with just the endpoints.
         let signed_area = if loop_edges.len() == 1 {
             // For single-edge closed curves (circles), sample UV points
-            // by projecting 3D curve samples onto the surface. The pcurve
-            // has degenerate start_uv ≈ end_uv for closed curves.
+            // along the 3D curve and project to UV. The pcurve evaluation
+            // gives proper UV coordinates for the full circle.
             let edge = &loop_edges[0];
             let n = 32;
             let mut area = 0.0;
-            let (t0, t1) = edge
-                .curve_3d
-                .domain_with_endpoints(edge.start_3d, edge.end_3d);
             for k in 0..n {
                 #[allow(clippy::cast_precision_loss)]
-                let t_cur = t0 + (t1 - t0) * (k as f64 / n as f64);
+                let t_cur = k as f64 / n as f64;
                 #[allow(clippy::cast_precision_loss)]
-                let t_next = t0 + (t1 - t0) * ((k + 1) as f64 / n as f64);
-                let pt0 = edge
-                    .curve_3d
-                    .evaluate_with_endpoints(t_cur, edge.start_3d, edge.end_3d);
-                let pt1 = edge
-                    .curve_3d
-                    .evaluate_with_endpoints(t_next, edge.start_3d, edge.end_3d);
-                let (Some(uv0), Some(uv1)) =
-                    (surface.project_point(pt0), surface.project_point(pt1))
-                else {
-                    continue; // skip sample if projection fails
-                };
-                area += (uv1.0 - uv0.0) * (uv1.1 + uv0.1);
+                let t_next = (k + 1) as f64 / n as f64;
+                let uv0 = edge.pcurve.evaluate(t_cur);
+                let uv1 = edge.pcurve.evaluate(t_next);
+                area += (uv1.x() - uv0.x()) * (uv1.y() + uv0.y());
             }
             area
         } else {

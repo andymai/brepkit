@@ -962,30 +962,24 @@ fn build_section_map(arena: &GfaArena) -> HashMap<FaceId, Vec<SectionSource>> {
         }
     }
     // IN edges from EF interferences — individual PaveBlocks.
-    // Skip IN PBs whose original_edge is already represented by a non-Line FF curve
-    // (this happens when a boundary edge coincides with an intersection curve,
-    // e.g. cylinder circle cap on a plane face).
-    let mut curve_original_edges: std::collections::HashSet<usize> =
-        std::collections::HashSet::new();
-    for curve in &arena.curves {
-        if matches!(&curve.curve, brepkit_topology::edge::EdgeCurve::Line) {
-            continue; // Line curves don't create redundant IN edges.
-        }
-        for &pb_id in &curve.pave_blocks {
-            if let Some(pb) = arena.pave_blocks.get(pb_id) {
-                curve_original_edges.insert(pb.original_edge.index());
-            }
-        }
-    }
+    // For faces that already have a curved (non-Line) FF curve, skip ALL
+    // IN PBs — the complete FF curve already captures the same geometry.
+    // This prevents 28 arc fragments from being added alongside the single
+    // complete circle intersection curve.
+    let faces_with_curved_ff: std::collections::HashSet<usize> = map
+        .iter()
+        .filter_map(|(fid, sources)| {
+            sources
+                .iter()
+                .any(|s| matches!(s, SectionSource::Curve(_)))
+                .then_some(fid.index())
+        })
+        .collect();
     for (&face_id, fi) in &arena.face_info {
+        if faces_with_curved_ff.contains(&face_id.index()) {
+            continue; // Face has curved FF curve — IN PBs are redundant.
+        }
         for &pb_id in &fi.pave_blocks_in {
-            let dominated = arena
-                .pave_blocks
-                .get(pb_id)
-                .is_some_and(|pb| curve_original_edges.contains(&pb.original_edge.index()));
-            if dominated {
-                continue;
-            }
             map.entry(face_id)
                 .or_default()
                 .push(SectionSource::PaveBlock(pb_id));

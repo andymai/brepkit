@@ -272,7 +272,16 @@ fn is_collinear_2d(pts: &[Point2], tol: f64) -> bool {
     let dy = pn.y() - p0.y();
     let len_sq = dx * dx + dy * dy;
     if len_sq < tol * tol {
-        // All points near the same location.
+        // p0 ≈ pn — either all points are clustered (degenerate) or this
+        // is a closed curve (circle). Check if intermediate points spread
+        // out from p0. If any point is far from p0, it's a closed loop.
+        for p in &pts[1..pts.len() - 1] {
+            let ex = p.x() - p0.x();
+            let ey = p.y() - p0.y();
+            if ex * ex + ey * ey > tol * tol {
+                return false; // Closed loop, not degenerate.
+            }
+        }
         return true;
     }
     let inv_len = 1.0 / len_sq.sqrt();
