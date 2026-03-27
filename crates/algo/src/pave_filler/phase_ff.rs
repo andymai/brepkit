@@ -102,6 +102,41 @@ pub fn perform(
             let raw_curves =
                 compute_raw_curves(surf_a, surf_b, bbox_a, bbox_b, v_range_a, v_range_b)?;
 
+            // For plane-plane Line curves with all-straight-edge faces, filter
+            // curves whose clipped ranges on each face have a LARGE gap (no
+            // overlap). A small gap or touching boundary is kept (the face
+            // splitter handles final trimming). Only curves with a significant
+            // separation (>10% of curve length) between the two ranges are
+            // rejected as truly spurious.
+            let raw_curves: Vec<RawCurve> = if matches!(surf_a, FaceSurface::Plane { .. })
+                && matches!(surf_b, FaceSurface::Plane { .. })
+            {
+                raw_curves
+                    .into_iter()
+                    .filter(|raw| {
+                        if !matches!(raw.curve, EdgeCurve::Line) {
+                            return true;
+                        }
+                        let range_a = clip_line_to_face(topo, fa, raw);
+                        let range_b = clip_line_to_face(topo, fb, raw);
+                        match (range_a, range_b) {
+                            (None, None) => false,                     // Outside both faces
+                            (Some(_), None) | (None, Some(_)) => true, // Inside one face
+                            (Some(a), Some(b)) => {
+                                // Check gap between ranges
+                                let t_min = a.0.max(b.0);
+                                let t_max = a.1.min(b.1);
+                                let gap = t_min - t_max;
+                                // Keep if gap < 10% of curve length (allows touching)
+                                gap < 0.1
+                            }
+                        }
+                    })
+                    .collect()
+            } else {
+                raw_curves
+            };
+
             for raw in raw_curves {
                 // Create topology vertices at the curve endpoints.
                 // For closed curves (Circle/Ellipse), start and end are the same
@@ -622,4 +657,134 @@ fn nurbs_curve_bbox(curve: &brepkit_math::nurbs::curve::NurbsCurve) -> Aabb3 {
         })
         .collect();
     Aabb3::from_points(points)
+}
+
+// ── FF curve boundary filtering ──────────────────────────────────────
+
+/// Clip a Line curve to a planar face's boundary polygon.
+fn clip_line_to_face(topo: &Topology, face_id: FaceId, raw: &RawCurve) -> Option<(f64, f64)> {
+    let face = topo.face(face_id).ok()?;
+    let FaceSurface::Plane { normal, .. } = face.surface() else {
+        return Some((0.0, 1.0));
+    };
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    if !wire.edges().iter().all(|oe| {
+        topo.edge(oe.edge())
+            .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
+    }) {
+        return Some((0.0, 1.0));
+    }
+
+    let mut verts = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        verts.push(topo.vertex(vid).ok()?.point());
+    }
+    if verts.len() < 3 {
+        return Some((0.0, 1.0));
+    }
+
+    let frame =
+        super::super::builder::plane_frame::PlaneFrame::from_normal_and_point(*normal, verts[0]);
+    let poly: Vec<(f64, f64)> = verts
+        .iter()
+        .map(|v| {
+            let uv = frame.project(*v);
+            (uv.x(), uv.y())
+        })
+        .collect();
+    let s = frame.project(raw.p_start);
+    let e = frame.project(raw.p_end);
+    clip_line_to_polygon((s.x(), s.y()), (e.x(), e.y()), &poly)
+}
+
+/// Cyrus-Beck line-polygon clipping. Handles CCW and CW winding.
+fn clip_line_to_polygon(
+    start: (f64, f64),
+    end: (f64, f64),
+    polygon: &[(f64, f64)],
+) -> Option<(f64, f64)> {
+    let n = polygon.len();
+    if n < 3 {
+        return None;
+    }
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    let area2: f64 = (0..n)
+        .map(|i| {
+            let j = (i + 1) % n;
+            polygon[i].0 * polygon[j].1 - polygon[j].0 * polygon[i].1
+        })
+        .sum();
+    let sign = if area2 >= 0.0 { 1.0 } else { -1.0 };
+    let mut t_min = 0.0_f64;
+    let mut t_max = 1.0_f64;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let ex = polygon[j].0 - polygon[i].0;
+        let ey = polygon[j].1 - polygon[i].1;
+        let nx = -ey * sign;
+        let ny = ex * sign;
+        let denom = nx * dx + ny * dy;
+        let num = nx * (start.0 - polygon[i].0) + ny * (start.1 - polygon[i].1);
+        if denom.abs() < 1e-15 {
+            if num < -1e-10 {
+                return None;
+            }
+            continue;
+        }
+        let t = -num / denom;
+        if denom > 0.0 {
+            t_min = t_min.max(t);
+        } else {
+            t_max = t_max.min(t);
+        }
+        if t_min > t_max + 1e-6 {
+            return None;
+        }
+    }
+    if t_max - t_min < 1e-6 {
+        return None;
+    }
+    Some((t_min.max(0.0), t_max.min(1.0)))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn clip_inside_square() {
+        let poly = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let r = clip_line_to_polygon((0.2, 0.5), (0.8, 0.5), &poly).unwrap();
+        assert!((r.0).abs() < 1e-6 && (r.1 - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn clip_crossing() {
+        let poly = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let r = clip_line_to_polygon((-1.0, 0.5), (2.0, 0.5), &poly).unwrap();
+        assert!((r.0 - 1.0 / 3.0).abs() < 1e-6);
+        assert!((r.1 - 2.0 / 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn clip_outside() {
+        let poly = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        assert!(clip_line_to_polygon((2.0, 0.5), (3.0, 0.5), &poly).is_none());
+    }
+
+    #[test]
+    fn clip_cw_polygon() {
+        let poly = vec![(0.0, 1.0), (1.0, 1.0), (1.0, 0.0), (0.0, 0.0)];
+        let r = clip_line_to_polygon((-1.0, 0.5), (2.0, 0.5), &poly).unwrap();
+        assert!((r.0 - 1.0 / 3.0).abs() < 1e-6);
+        assert!((r.1 - 2.0 / 3.0).abs() < 1e-6);
+    }
 }

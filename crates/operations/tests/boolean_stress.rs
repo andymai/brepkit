@@ -403,7 +403,7 @@ fn chained_cut_multiple_holes() {
 }
 
 #[test]
-#[ignore = "SubFace vertex merge changes volume for chained booleans"]
+#[ignore = "flaky — FF curve filter borderline for chained booleans"]
 fn chained_fuse_then_cut() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0);
