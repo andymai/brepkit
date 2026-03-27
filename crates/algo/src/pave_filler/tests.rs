@@ -343,7 +343,7 @@ fn force_interf_ee_adjacent_boxes_creates_common_blocks() {
     // ForceInterfEE should create additional CommonBlocks (or the coplanar
     // phase already created them). Total should be >= 4 for 4 shared edges.
     assert!(
-        cb_after >= 4,
+        (4..=8).contains(&cb_after),
         "adjacent boxes should have >= 4 CommonBlocks for shared boundary edges, got {cb_after} (coplanar: {cb_before})"
     );
 
