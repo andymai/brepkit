@@ -200,15 +200,12 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // Pre-compute which faces have section edges from which curves
     let section_map = build_section_map(arena);
 
-    // Cross-rank boundary edge cache: share boundary edges across ALL faces
-    // by quantized position pair. With the cross-rank shared vertex pool,
-    // faces from different ranks at the same position get the same VertexId,
-    // making a single cross-rank cache safe. This reduces duplicate edges
-    // that merge_duplicate_edges would otherwise need to handle.
-    let mut boundary_edge_cache: HashMap<
-        ((i64, i64, i64), (i64, i64, i64)),
-        brepkit_topology::edge::EdgeId,
-    > = HashMap::new();
+    // No boundary edge cache — each face creates its own edges with its own
+    // vertices. Cross-face edge sharing is handled by merge_duplicate_edges
+    // in builder_solid. Sharing edges across parent faces via a position-pair
+    // cache caused VertexId mismatches at wire junctions (different parent
+    // faces have different vertex caches producing different IDs at the same
+    // position).
 
     // Sort faces by ID index for deterministic processing order.
     // HashMap iteration order varies between compilations (different hash
@@ -342,7 +339,6 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // and compute a distinct interior point for classification.
         for split in &split_results {
             let rank_pool = Some(&shared_vertex_pool);
-            let bnd_cache = &mut boundary_edge_cache;
             let new_face_id = build_topology_face(
                 topo,
                 split,
@@ -353,7 +349,6 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 &vv_vertex_seed,
                 rank_pool,
                 &mut pb_vertex_registry,
-                bnd_cache,
                 arena,
             );
             let pt = split.precomputed_interior.unwrap_or_else(|| {
@@ -1450,10 +1445,6 @@ fn build_topology_face(
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     rank_pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
     pb_vertex_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
-    boundary_edge_cache: &mut HashMap<
-        ((i64, i64, i64), (i64, i64, i64)),
-        brepkit_topology::edge::EdgeId,
-    >,
     arena: &crate::ds::GfaArena,
 ) -> Option<FaceId> {
     if split.outer_wire.is_empty() {
@@ -1526,27 +1517,13 @@ fn build_topology_face(
                 topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
             })
         } else {
-            // Boundary edge: share across faces of the same rank by
-            // quantized position pair. Within a rank, the vertex pool
-            // guarantees same positions get same VertexIds.
-            let sp = quantize(topo.vertex(start_vid).ok()?.point());
-            let ep = quantize(topo.vertex(end_vid).ok()?.point());
-            let pos_key = if sp <= ep { (sp, ep) } else { (ep, sp) };
-            *boundary_edge_cache.entry(pos_key).or_insert_with(|| {
-                topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
-            })
+            // Each face creates its own boundary edges with its own vertices.
+            // Cross-face sharing is handled by merge_duplicate_edges in
+            // builder_solid. This avoids VertexId mismatches that occur when
+            // edges are shared across parent faces with different vertex caches.
+            topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
         };
-        // Determine forward: when reusing a shared edge, its stored vertex
-        // order may be reversed vs this face's winding direction.
-        let forward = if let Ok(edge) = topo.edge(edge_id) {
-            if edge.start() == start_vid && edge.end() == end_vid {
-                pcurve_edge.forward
-            } else {
-                !pcurve_edge.forward
-            }
-        } else {
-            pcurve_edge.forward
-        };
+        let forward = pcurve_edge.forward;
         oriented_edges.push(OrientedEdge::new(edge_id, forward));
     }
 
