@@ -769,18 +769,31 @@ impl BrepKernel {
                     }
                 }
                 EdgeCurve::Circle(circle) => {
+                    let t_start = circle.project(start);
+                    let end_pt = self.topo.vertex(edge_data.end())?.point();
+                    let mut t_end = circle.project(end_pt);
+                    // Ensure forward traversal (handle wrap-around)
+                    if t_end <= t_start {
+                        t_end += std::f64::consts::TAU;
+                    }
                     let n_samples = 8;
                     for i in 1..n_samples {
                         #[allow(clippy::cast_precision_loss)]
-                        let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                        let t = t_start + (t_end - t_start) * (i as f64) / (n_samples as f64);
                         points.push(circle.evaluate(t));
                     }
                 }
                 EdgeCurve::Ellipse(ellipse) => {
+                    let t_start = ellipse.project(start);
+                    let end_pt = self.topo.vertex(edge_data.end())?.point();
+                    let mut t_end = ellipse.project(end_pt);
+                    if t_end <= t_start {
+                        t_end += std::f64::consts::TAU;
+                    }
                     let n_samples = 8;
                     for i in 1..n_samples {
                         #[allow(clippy::cast_precision_loss)]
-                        let t = std::f64::consts::TAU * (i as f64) / (n_samples as f64);
+                        let t = t_start + (t_end - t_start) * (i as f64) / (n_samples as f64);
                         points.push(ellipse.evaluate(t));
                     }
                 }

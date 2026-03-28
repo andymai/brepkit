@@ -149,6 +149,42 @@ impl BrepKernel {
         Ok(())
     }
 
+    /// Apply a 4×4 affine transform to a face (in place).
+    ///
+    /// Transforms all vertices, edge curves, and the face surface geometry.
+    /// The `matrix` must contain exactly 16 values in row-major order.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid, the matrix doesn't
+    /// have 16 elements, or the matrix is singular.
+    #[wasm_bindgen(js_name = "transformFace")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn transform_face(&mut self, face: u32, matrix: Vec<f64>) -> Result<(), JsError> {
+        if matrix.len() != 16 {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "transform matrix must have 16 elements, got {}",
+                    matrix.len()
+                ),
+            }
+            .into());
+        }
+
+        if let Some(pos) = matrix.iter().position(|v| !v.is_finite()) {
+            return Err(WasmError::InvalidInput {
+                reason: format!("matrix element at index {pos} is not finite"),
+            }
+            .into());
+        }
+
+        let face_id = self.resolve_face(face)?;
+        let rows = std::array::from_fn(|i| std::array::from_fn(|j| matrix[i * 4 + j]));
+        let mat = Mat4(rows);
+        brepkit_operations::transform::transform_face(self.topo_mut(), face_id, &mat)?;
+        Ok(())
+    }
+
     /// Copy a solid and apply a 4×4 row-major affine transform in one pass.
     ///
     /// Equivalent to `copySolid` + `transformSolid` but performs both in a

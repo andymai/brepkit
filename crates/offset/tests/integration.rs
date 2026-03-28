@@ -46,35 +46,66 @@ fn offset_rectangular_box() {
     assert_eq!(shell.faces().len(), 6);
 }
 
-// Volume tests -- the offset pipeline produces correct topology but vertex
-// positions depend on intersection-line sampling range (which has a 1% margin
-// from Phase 3). For exact volume tests we would need the intersection edges
-// to be precisely clipped to face boundaries.
-//
-// For now, verify that the offset solid has positive volume and reasonable
-// face/edge topology.
+// Volume tests — for planar offsets, Phase 3 computes exact intersection
+// line endpoints using the offset distance as margin (no percentage-based
+// approximation), and the wire builder clips edges at exact line-line
+// intersection corners.  Corner vertices use the first line's point
+// directly (no midpoint averaging) since coplanar lines intersect exactly.
+// This gives exact volumes for box offsets.
 
 #[test]
-fn offset_box_outward_has_positive_volume() {
+fn offset_box_outward_exact_volume() {
     let mut topo = Topology::new();
     let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
     let result = offset_solid(&mut topo, solid, 0.5, offset_opts()).unwrap();
-    let vol = solid_volume(&topo, result, 0.1).unwrap();
+    let vol = solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 27.0_f64; // (2+1)^3
+    let error_pct = ((vol - expected) / expected * 100.0).abs();
     assert!(
-        vol > 0.0,
-        "offset solid should have positive volume, got {vol}"
+        error_pct < 0.01,
+        "outward offset volume {vol:.10} should be {expected}, error {error_pct:.6}%"
     );
 }
 
 #[test]
-fn offset_box_inward_has_positive_volume() {
+fn offset_box_inward_exact_volume() {
     let mut topo = Topology::new();
     let solid = make_box(&mut topo, 4.0, 4.0, 4.0).unwrap();
     let result = offset_solid(&mut topo, solid, -0.5, offset_opts()).unwrap();
-    let vol = solid_volume(&topo, result, 0.1).unwrap();
+    let vol = solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 27.0_f64; // (4-1)^3
+    let error_pct = ((vol - expected) / expected * 100.0).abs();
     assert!(
-        vol > 0.0,
-        "inward offset should have positive volume, got {vol}"
+        error_pct < 0.01,
+        "inward offset volume {vol:.10} should be {expected}, error {error_pct:.6}%"
+    );
+}
+
+#[test]
+fn offset_rectangular_box_exact_volume() {
+    let mut topo = Topology::new();
+    let solid = make_box(&mut topo, 3.0, 5.0, 7.0).unwrap();
+    let result = offset_solid(&mut topo, solid, 1.0, offset_opts()).unwrap();
+    let vol = solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 5.0 * 7.0 * 9.0; // 315
+    let error_pct = ((vol - expected) / expected * 100.0).abs();
+    assert!(
+        error_pct < 0.01,
+        "rectangular offset volume {vol:.10} should be {expected}, error {error_pct:.6}%"
+    );
+}
+
+#[test]
+fn offset_rectangular_box_inward_exact_volume() {
+    let mut topo = Topology::new();
+    let solid = make_box(&mut topo, 3.0, 5.0, 7.0).unwrap();
+    let result = offset_solid(&mut topo, solid, -0.5, offset_opts()).unwrap();
+    let vol = solid_volume(&topo, result, 0.01).unwrap();
+    let expected = 2.0 * 4.0 * 6.0; // 48
+    let error_pct = ((vol - expected) / expected * 100.0).abs();
+    assert!(
+        error_pct < 0.01,
+        "inward rectangular offset volume {vol:.10} should be {expected}, error {error_pct:.6}%"
     );
 }
 

@@ -821,6 +821,35 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(null))
             }
+            "transformFace" => {
+                let f = get_u32(args, "face")?;
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let matrix = args["matrix"]
+                    .as_array()
+                    .ok_or("missing or invalid 'matrix'")?;
+                if matrix.len() != 16 {
+                    return Err(format!(
+                        "matrix must have 16 elements, got {}",
+                        matrix.len()
+                    ));
+                }
+                let elems: Vec<f64> = matrix
+                    .iter()
+                    .enumerate()
+                    .map(|(i, v)| {
+                        v.as_f64()
+                            .ok_or_else(|| format!("matrix element {i} is not a number"))
+                    })
+                    .collect::<Result<_, _>>()?;
+                if let Some(pos) = elems.iter().position(|v| !v.is_finite()) {
+                    return Err(format!("matrix element at index {pos} is not finite"));
+                }
+                let rows = std::array::from_fn(|i| std::array::from_fn(|j| elems[i * 4 + j]));
+                let mat = Mat4(rows);
+                brepkit_operations::transform::transform_face(self.topo_mut(), face_id, &mat)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(null))
+            }
             "offsetFace" => {
                 let f = get_u32(args, "face")?;
                 let dist = get_f64(args, "distance")?;

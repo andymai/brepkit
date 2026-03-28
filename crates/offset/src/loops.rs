@@ -471,13 +471,13 @@ fn line_line_closest_point(a: &LineSeg, b: &LineSeg, tol: f64) -> Option<(Point3
         return None;
     }
 
-    let mid = Point3::new(
-        (pa.x() + pb.x()) * 0.5,
-        (pa.y() + pb.y()) * 0.5,
-        (pa.z() + pb.z()) * 0.5,
-    );
-
-    Some((mid, t, s))
+    // When lines truly intersect (coplanar), `pa` and `pb` are the same
+    // point up to floating-point rounding.  Use `pa` directly — computing
+    // the point on line `a` from its own origin avoids mixing two
+    // independent rounding chains (one per line).  This gives exact
+    // corners for planar offset faces where all intersection lines are
+    // coplanar by construction.
+    Some((pa, t, s))
 }
 
 /// Subtract two points, returning a direction tuple.

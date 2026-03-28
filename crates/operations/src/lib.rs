@@ -100,4 +100,8 @@ pub enum OperationsError {
     /// A check (classification/validation/distance) error occurred.
     #[error("check: {0}")]
     Check(#[from] brepkit_check::CheckError),
+
+    /// A geometry conversion error occurred.
+    #[error("geometry: {0}")]
+    Geometry(#[from] brepkit_geometry::error::GeomError),
 }

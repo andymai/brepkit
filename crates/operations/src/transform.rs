@@ -124,14 +124,23 @@ pub fn transform_solid(
                     .set_surface(FaceSurface::Cylinder(new_cyl));
             }
             FaceSurface::Cone(cone) => {
-                let new_apex = matrix.mul_point(cone.apex());
-                let new_axis = transform_direction(matrix, cone.axis())?;
-                let new_cone = brepkit_math::surfaces::ConicalSurface::new(
-                    new_apex,
-                    new_axis,
-                    cone.half_angle(),
-                )?;
-                topo.face_mut(fid)?.set_surface(FaceSurface::Cone(new_cone));
+                if is_uniform_scale(matrix) {
+                    let new_apex = matrix.mul_point(cone.apex());
+                    let new_axis = transform_direction(matrix, cone.axis())?;
+                    let new_cone = brepkit_math::surfaces::ConicalSurface::new(
+                        new_apex,
+                        new_axis,
+                        cone.half_angle(),
+                    )?;
+                    topo.face_mut(fid)?.set_surface(FaceSurface::Cone(new_cone));
+                } else {
+                    let v_range = analytic_face_v_range(topo, fid, |pt| cone.project_point(pt).1)?;
+                    let cone_clone = cone.clone();
+                    let nurbs = brepkit_geometry::convert::cone_to_nurbs(&cone_clone, v_range)?;
+                    let transformed = transform_nurbs_surface(&nurbs, matrix)?;
+                    topo.face_mut(fid)?
+                        .set_surface(FaceSurface::Nurbs(transformed));
+                }
             }
             FaceSurface::Sphere(sph) => {
                 if is_uniform_scale(matrix) {
@@ -155,15 +164,23 @@ pub fn transform_solid(
                 }
             }
             FaceSurface::Torus(tor) => {
-                let new_center = matrix.mul_point(tor.center());
-                let m = &matrix.0;
-                let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
-                let new_tor = brepkit_math::surfaces::ToroidalSurface::new(
-                    new_center,
-                    tor.major_radius() * sx,
-                    tor.minor_radius() * sx,
-                )?;
-                topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
+                if is_uniform_scale(matrix) {
+                    let new_center = matrix.mul_point(tor.center());
+                    let m = &matrix.0;
+                    let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
+                    let new_tor = brepkit_math::surfaces::ToroidalSurface::new(
+                        new_center,
+                        tor.major_radius() * sx,
+                        tor.minor_radius() * sx,
+                    )?;
+                    topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
+                } else {
+                    let tor_clone = tor.clone();
+                    let nurbs = brepkit_geometry::convert::torus_to_nurbs(&tor_clone)?;
+                    let transformed = transform_nurbs_surface(&nurbs, matrix)?;
+                    topo.face_mut(fid)?
+                        .set_surface(FaceSurface::Nurbs(transformed));
+                }
             }
         }
     }
@@ -297,6 +314,179 @@ fn scaled_radius(matrix: &Mat4, axis: Vec3, radius: f64) -> f64 {
     let t_end = matrix.mul_point(end);
     let diff = t_end - t_origin;
     diff.length()
+}
+
+/// Transform a single face's surface geometry.
+///
+/// The `normal_matrix` should be `matrix.inverse()?.transpose()`.
+#[allow(clippy::too_many_lines)]
+fn transform_face_surface(
+    topo: &mut Topology,
+    fid: FaceId,
+    matrix: &Mat4,
+    normal_matrix: &Mat4,
+) -> Result<(), crate::OperationsError> {
+    let face = topo.face(fid)?;
+    match face.surface() {
+        FaceSurface::Plane { normal, .. } => {
+            let n = *normal;
+            let transformed =
+                normal_matrix.mul_point(brepkit_math::vec::Point3::new(n.x(), n.y(), n.z()));
+            let origin = normal_matrix.mul_point(brepkit_math::vec::Point3::new(0.0, 0.0, 0.0));
+            let raw = Vec3::new(
+                transformed.x() - origin.x(),
+                transformed.y() - origin.y(),
+                transformed.z() - origin.z(),
+            );
+            let new_normal = raw.normalize()?;
+            let wire = topo.wire(face.outer_wire())?;
+            let first_oe =
+                wire.edges()
+                    .first()
+                    .ok_or_else(|| crate::OperationsError::InvalidInput {
+                        reason: "face has empty outer wire".into(),
+                    })?;
+            let edge = topo.edge(first_oe.edge())?;
+            let ref_vid = if first_oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            let ref_point = topo.vertex(ref_vid)?.point();
+            let new_d = new_normal.dot(Vec3::new(ref_point.x(), ref_point.y(), ref_point.z()));
+            topo.face_mut(fid)?.set_surface(FaceSurface::Plane {
+                normal: new_normal,
+                d: new_d,
+            });
+        }
+        FaceSurface::Nurbs(s) => {
+            let new_control_points: Vec<Vec<_>> = s
+                .control_points()
+                .iter()
+                .map(|row| row.iter().map(|pt| matrix.mul_point(*pt)).collect())
+                .collect();
+            let new_surface = NurbsSurface::new(
+                s.degree_u(),
+                s.degree_v(),
+                s.knots_u().to_vec(),
+                s.knots_v().to_vec(),
+                new_control_points,
+                s.weights().to_vec(),
+            );
+            topo.face_mut(fid)?
+                .set_surface(FaceSurface::Nurbs(new_surface?));
+        }
+        FaceSurface::Cylinder(cyl) => {
+            let new_origin = matrix.mul_point(cyl.origin());
+            let new_axis = transform_direction(matrix, cyl.axis())?;
+            let new_radius = scaled_radius(matrix, cyl.axis(), cyl.radius());
+            let new_cyl =
+                brepkit_math::surfaces::CylindricalSurface::new(new_origin, new_axis, new_radius)?;
+            topo.face_mut(fid)?
+                .set_surface(FaceSurface::Cylinder(new_cyl));
+        }
+        FaceSurface::Cone(cone) => {
+            if is_uniform_scale(matrix) {
+                let new_apex = matrix.mul_point(cone.apex());
+                let new_axis = transform_direction(matrix, cone.axis())?;
+                let new_cone = brepkit_math::surfaces::ConicalSurface::new(
+                    new_apex,
+                    new_axis,
+                    cone.half_angle(),
+                )?;
+                topo.face_mut(fid)?.set_surface(FaceSurface::Cone(new_cone));
+            } else {
+                let v_range = analytic_face_v_range(topo, fid, |pt| cone.project_point(pt).1)?;
+                let cone_clone = cone.clone();
+                let nurbs = brepkit_geometry::convert::cone_to_nurbs(&cone_clone, v_range)?;
+                let transformed = transform_nurbs_surface(&nurbs, matrix)?;
+                topo.face_mut(fid)?
+                    .set_surface(FaceSurface::Nurbs(transformed));
+            }
+        }
+        FaceSurface::Sphere(sph) => {
+            if is_uniform_scale(matrix) {
+                let new_center = matrix.mul_point(sph.center());
+                let m = &matrix.0;
+                let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
+                let new_sph =
+                    brepkit_math::surfaces::SphericalSurface::new(new_center, sph.radius() * sx)?;
+                topo.face_mut(fid)?
+                    .set_surface(FaceSurface::Sphere(new_sph));
+            } else {
+                let (v_min, v_max) = sphere_face_v_range(topo, fid, sph)?;
+                let sph_clone = sph.clone();
+                let nurbs = sphere_to_transformed_nurbs(&sph_clone, matrix, v_min, v_max)?;
+                topo.face_mut(fid)?.set_surface(FaceSurface::Nurbs(nurbs));
+            }
+        }
+        FaceSurface::Torus(tor) => {
+            if is_uniform_scale(matrix) {
+                let new_center = matrix.mul_point(tor.center());
+                let m = &matrix.0;
+                let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
+                let new_tor = brepkit_math::surfaces::ToroidalSurface::new(
+                    new_center,
+                    tor.major_radius() * sx,
+                    tor.minor_radius() * sx,
+                )?;
+                topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
+            } else {
+                let tor_clone = tor.clone();
+                let nurbs = brepkit_geometry::convert::torus_to_nurbs(&tor_clone)?;
+                let transformed = transform_nurbs_surface(&nurbs, matrix)?;
+                topo.face_mut(fid)?
+                    .set_surface(FaceSurface::Nurbs(transformed));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Compute the v-parameter range for an analytic surface face.
+///
+/// Projects boundary vertices using `project_v` and returns (v_min, v_max).
+fn analytic_face_v_range(
+    topo: &Topology,
+    face_id: FaceId,
+    project_v: impl Fn(brepkit_math::vec::Point3) -> f64,
+) -> Result<(f64, f64), crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let wire = topo.wire(face.outer_wire())?;
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let pt = topo.vertex(edge.start())?.point();
+        let v = project_v(pt);
+        v_min = v_min.min(v);
+        v_max = v_max.max(v);
+    }
+    if v_min >= v_max {
+        v_min = 0.0;
+        v_max = 1.0;
+    }
+    Ok((v_min, v_max))
+}
+
+/// Transform a NURBS surface's control points by a matrix.
+fn transform_nurbs_surface(
+    surface: &NurbsSurface,
+    matrix: &Mat4,
+) -> Result<NurbsSurface, crate::OperationsError> {
+    let new_cps: Vec<Vec<_>> = surface
+        .control_points()
+        .iter()
+        .map(|row| row.iter().map(|pt| matrix.mul_point(*pt)).collect())
+        .collect();
+    Ok(NurbsSurface::new(
+        surface.degree_u(),
+        surface.degree_v(),
+        surface.knots_u().to_vec(),
+        surface.knots_v().to_vec(),
+        new_cps,
+        surface.weights().to_vec(),
+    )?)
 }
 
 fn is_uniform_scale(matrix: &Mat4) -> bool {
@@ -479,6 +669,74 @@ pub fn transform_wire(
     transform_edges(topo, &edge_ids, matrix)?;
 
     Ok(())
+}
+
+/// Apply an affine transform to a face, modifying vertex positions, edge
+/// curve geometry, and the face surface in place.
+///
+/// Transforms all vertices/edges in the face's outer and inner wires, then
+/// updates the face surface geometry (plane normal, NURBS CPs, etc.).
+///
+/// # Errors
+///
+/// Returns an error if the matrix is degenerate or a referenced entity is missing.
+#[allow(clippy::too_many_lines)]
+pub fn transform_face(
+    topo: &mut Topology,
+    face_id: FaceId,
+    matrix: &Mat4,
+) -> Result<(), crate::OperationsError> {
+    let tol = Tolerance::new();
+    if tol.approx_eq(matrix.determinant(), 0.0) {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "transform matrix is degenerate (zero determinant)".into(),
+        });
+    }
+
+    // Collect all vertices and edges from the face's wires.
+    let (vertex_ids, edge_ids) = collect_face_entities(topo, face_id)?;
+
+    // Transform vertices.
+    for vid in vertex_ids {
+        let vertex = topo.vertex_mut(vid)?;
+        let new_point = matrix.mul_point(vertex.point());
+        vertex.set_point(new_point);
+    }
+
+    // Transform edge curves.
+    transform_edges(topo, &edge_ids, matrix)?;
+
+    // Transform face surface.
+    let normal_matrix = matrix.inverse()?.transpose();
+    transform_face_surface(topo, face_id, matrix, &normal_matrix)?;
+
+    Ok(())
+}
+
+/// Traverses face → wires → edges → vertices and returns deduplicated sets.
+fn collect_face_entities(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<(HashSet<VertexId>, HashSet<EdgeId>), crate::OperationsError> {
+    let mut vertex_ids = HashSet::new();
+    let mut edge_ids = HashSet::new();
+    let face = topo.face(face_id)?;
+    let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .collect();
+
+    for wid in wire_ids {
+        let wire = topo.wire(wid)?;
+        for oe in wire.edges() {
+            let eid = oe.edge();
+            edge_ids.insert(eid);
+            let edge = topo.edge(eid)?;
+            vertex_ids.insert(edge.start());
+            vertex_ids.insert(edge.end());
+        }
+    }
+
+    Ok((vertex_ids, edge_ids))
 }
 
 /// Traverses wire → edges → vertices and returns deduplicated sets.

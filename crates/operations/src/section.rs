@@ -71,10 +71,17 @@ pub fn section(
     let normal = plane_normal.normalize()?;
     let d = dot_normal_point(normal, plane_point);
 
-    // Collect all intersection segments from the solid's faces.
+    // Collect all intersection segments from all shells (outer + inner).
     let solid_data = topo.solid(solid)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    let face_ids: Vec<FaceId> = shell.faces().to_vec();
+    let all_shell_ids: Vec<_> = std::iter::once(solid_data.outer_shell())
+        .chain(solid_data.inner_shells().iter().copied())
+        .collect();
+
+    let mut face_ids: Vec<FaceId> = Vec::new();
+    for shell_id in &all_shell_ids {
+        let shell = topo.shell(*shell_id)?;
+        face_ids.extend_from_slice(shell.faces());
+    }
 
     let mut segments: Vec<(Point3, Point3)> = Vec::new();
 

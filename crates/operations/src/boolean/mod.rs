@@ -275,9 +275,9 @@ pub fn boolean(
 
 /// Perform a boolean operation with custom options.
 ///
-/// **Deprecated:** Options are currently ignored. All booleans route through
-/// the GFA pipeline with mesh boolean fallback. This wrapper exists for
-/// backward compatibility with callers that pass `BooleanOptions`.
+/// Runs the standard GFA boolean pipeline, then applies post-processing
+/// options. Currently supported: `unify_faces` (merges co-surface face
+/// fragments via `brepkit_heal::unify_same_domain`).
 ///
 /// # Errors
 ///
@@ -287,9 +287,19 @@ pub fn boolean_with_options(
     op: BooleanOp,
     a: SolidId,
     b: SolidId,
-    _opts: BooleanOptions,
+    opts: BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
-    boolean(topo, op, a, b)
+    let result = boolean(topo, op, a, b)?;
+    if opts.unify_faces {
+        // Merge co-surface face fragments left by the boolean.
+        let unify_opts = brepkit_heal::upgrade::unify_same_domain::UnifyOptions::default();
+        if let Err(e) =
+            brepkit_heal::upgrade::unify_same_domain::unify_same_domain(topo, result, &unify_opts)
+        {
+            log::debug!("boolean unify_faces post-processing failed: {e}");
+        }
+    }
+    Ok(result)
 }
 
 /// Sequential compound cut via GFA.
@@ -304,11 +314,19 @@ pub fn compound_cut(
     topo: &mut Topology,
     target: SolidId,
     tools: &[SolidId],
-    _opts: BooleanOptions,
+    opts: BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
     let mut result = target;
     for &tool in tools {
         result = boolean(topo, BooleanOp::Cut, result, tool)?;
+    }
+    if opts.unify_faces {
+        let unify_opts = brepkit_heal::upgrade::unify_same_domain::UnifyOptions::default();
+        if let Err(e) =
+            brepkit_heal::upgrade::unify_same_domain::unify_same_domain(topo, result, &unify_opts)
+        {
+            log::debug!("compound_cut unify_faces failed: {e}");
+        }
     }
     Ok(result)
 }
