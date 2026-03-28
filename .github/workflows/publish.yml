@@ -147,10 +147,17 @@ jobs:
         working-directory: crates/wasm/pkg
         run: |
           PKG_VERSION=$(jq -r .version package.json)
-          if npm view "brepkit-wasm@$PKG_VERSION" version >/dev/null 2>&1; then
+          if npm view "brepkit-wasm@$PKG_VERSION" version 2>/dev/null; then
             echo "brepkit-wasm@$PKG_VERSION already published — skipping"
-          else
-            npm publish --provenance --access public
+            exit 0
           fi
+          npm publish --provenance --access public 2>&1 || {
+            # Handle race condition: concurrent run published between our check and publish
+            if npm view "brepkit-wasm@$PKG_VERSION" version 2>/dev/null; then
+              echo "brepkit-wasm@$PKG_VERSION published by concurrent run — skipping"
+              exit 0
+            fi
+            exit 1
+          }
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
