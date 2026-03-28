@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.43.2](https://github.com/andymai/brepkit/compare/v2.43.1...v2.43.2) (2026-03-28)
+
+
+### Bug Fixes
+
+* address 7 open issues ([#491](https://github.com/andymai/brepkit/issues/491)-[#498](https://github.com/andymai/brepkit/issues/498)) ([#499](https://github.com/andymai/brepkit/issues/499)) ([e446ad7](https://github.com/andymai/brepkit/commit/e446ad787f29102ca61760f38aef4bdc928a5874))
+
 ## [2.43.1](https://github.com/andymai/brepkit/compare/v2.43.0...v2.43.1) (2026-03-28)
 
 
