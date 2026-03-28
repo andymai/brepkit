@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.43.1](https://github.com/andymai/brepkit/compare/v2.43.0...v2.43.1) (2026-03-28)
+
+
+### Bug Fixes
+
+* **algo:** closed-curve handling and disc classification ([#488](https://github.com/andymai/brepkit/issues/488)) ([3b3c1fd](https://github.com/andymai/brepkit/commit/3b3c1fdb857b75f5945d3ab4712d10358e44a982))
+
 ## [2.43.0](https://github.com/andymai/brepkit/compare/v2.42.0...v2.43.0) (2026-03-27)
 
 
