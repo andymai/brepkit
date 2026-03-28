@@ -91,6 +91,7 @@ pub fn intersect_faces_3d(
             surf_a,
             surf_b,
             data.options.tolerance,
+            data.distance,
         )?;
 
         data.intersections.push(FaceIntersection {
@@ -109,7 +110,7 @@ pub fn intersect_faces_3d(
 const ANALYTIC_GRID_RES: usize = 32;
 
 /// Dispatch intersection based on surface types.
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn intersect_surface_pair(
     topo: &Topology,
     edge_id: brepkit_topology::edge::EdgeId,
@@ -118,6 +119,7 @@ fn intersect_surface_pair(
     surf_a: &FaceSurface,
     surf_b: &FaceSurface,
     tol: brepkit_math::tolerance::Tolerance,
+    offset_distance: f64,
 ) -> Result<Vec<Point3>, OffsetError> {
     // Same-domain surfaces (e.g., sphere hemispheres with same center/radius):
     // project the specific edge's endpoints onto the offset surface.
@@ -129,7 +131,7 @@ fn intersect_surface_pair(
     if let (FaceSurface::Plane { normal: n1, d: d1 }, FaceSurface::Plane { normal: n2, d: d2 }) =
         (surf_a, surf_b)
     {
-        return intersect_plane_plane(topo, face_a, face_b, *n1, *d1, *n2, *d2);
+        return intersect_plane_plane(topo, face_a, face_b, *n1, *d1, *n2, *d2, offset_distance);
     }
 
     // Plane-Analytic or Analytic-Plane.
@@ -203,14 +205,19 @@ fn extract_points(curves: &[brepkit_math::nurbs::intersection::IntersectionCurve
         .collect()
 }
 
-/// Intersect two planes and sample the intersection line within the bounding
-/// region of the two faces.
+/// Intersect two planes and return exact endpoints of the intersection line
+/// within the bounding region of the two faces.
 ///
 /// Given planes `n1 · x = d1` and `n2 · x = d2`, the intersection line
 /// direction is `dir = n1 × n2`. A point on the line is found by solving the
 /// 2-equation system with one coordinate fixed to 0 (choosing the axis where
 /// `dir` has the largest component for numerical stability).
-#[allow(clippy::similar_names)]
+///
+/// For planar faces the intersection is an exact line, so we compute exact
+/// endpoints from the face vertex projections with an offset-distance margin
+/// (the offset shifts geometry by exactly this amount). This avoids the
+/// imprecise percentage-based margin used for non-planar surfaces.
+#[allow(clippy::similar_names, clippy::too_many_arguments)]
 fn intersect_plane_plane(
     topo: &Topology,
     face_a: FaceId,
@@ -219,12 +226,12 @@ fn intersect_plane_plane(
     d1: f64,
     n2: Vec3,
     d2: f64,
+    offset_distance: f64,
 ) -> Result<Vec<Point3>, OffsetError> {
     let dir = n1.cross(n2);
     let dir_len = dir.length();
 
     // Parallel or near-parallel planes — no intersection.
-    // Parallel planes: cross product is near-zero.
     if dir_len < 1e-10 {
         return Ok(Vec::new());
     }
@@ -236,24 +243,27 @@ fn intersect_plane_plane(
     // the remaining 2×2 system.
     let origin = find_point_on_line(n1, d1, n2, d2, &dir);
 
-    // Compute the bounding parameter range by projecting all face vertices
-    // onto the intersection line.
-    let (t_min, t_max) = face_vertex_range(topo, face_a, face_b, &origin, &dir_norm)?;
+    // Compute exact endpoints by projecting face vertices onto the line.
+    // For planar intersections the downstream wire builder clips edges at
+    // exact line-line intersection corners, so the endpoints just need to
+    // cover the full offset extent.  We use the offset-plane distance as
+    // margin — this is the exact geometric shift applied to each face.
+    let (t_min, t_max) =
+        face_vertex_range_exact(topo, face_a, face_b, &origin, &dir_norm, offset_distance)?;
 
-    // Sample the intersection line.
-    let num_samples: usize = 10;
-    let mut points = Vec::with_capacity(num_samples);
-    for i in 0..num_samples {
-        #[allow(clippy::cast_precision_loss)]
-        let t = t_min + (t_max - t_min) * (i as f64) / ((num_samples - 1) as f64);
-        points.push(Point3::new(
-            origin.x() + t * dir_norm.x(),
-            origin.y() + t * dir_norm.y(),
-            origin.z() + t * dir_norm.z(),
-        ));
-    }
+    // Two endpoints are sufficient for a line — no sampling needed.
+    let p_start = Point3::new(
+        origin.x() + t_min * dir_norm.x(),
+        origin.y() + t_min * dir_norm.y(),
+        origin.z() + t_min * dir_norm.z(),
+    );
+    let p_end = Point3::new(
+        origin.x() + t_max * dir_norm.x(),
+        origin.y() + t_max * dir_norm.y(),
+        origin.z() + t_max * dir_norm.z(),
+    );
 
-    Ok(points)
+    Ok(vec![p_start, p_end])
 }
 
 /// Find a point on the intersection of two planes by solving a 2×2 system.
@@ -285,14 +295,21 @@ fn find_point_on_line(n1: Vec3, d1: f64, n2: Vec3, d2: f64, dir: &Vec3) -> Point
     }
 }
 
-/// Compute the parameter range along the intersection line by projecting
-/// all vertices of both faces onto the line.
-fn face_vertex_range(
+/// Compute the exact parameter range along a plane-plane intersection line.
+///
+/// Projects all vertices of both faces onto the line to get the base range,
+/// then extends each end by `|offset_distance|`.  The offset shifts each
+/// face plane by exactly `offset_distance` along its normal, so the
+/// offset-solid corner at each edge endpoint moves by at most
+/// `|offset_distance|` along the intersection line direction.  This gives
+/// an exact geometric margin — no percentage-based approximation needed.
+fn face_vertex_range_exact(
     topo: &Topology,
     face_a: FaceId,
     face_b: FaceId,
     origin: &Point3,
     dir: &Vec3,
+    offset_distance: f64,
 ) -> Result<(f64, f64), OffsetError> {
     let mut t_min = f64::INFINITY;
     let mut t_max = f64::NEG_INFINITY;
@@ -313,8 +330,11 @@ fn face_vertex_range(
         }
     }
 
-    // Add a small margin to avoid missing endpoints.
-    let margin = (t_max - t_min) * 0.01;
+    // Each face is offset by `offset_distance` along its normal.  The
+    // bounding plane at each edge endpoint (a third face not involved in
+    // this intersection) shifts the corner by at most `|offset_distance|`
+    // along the intersection line.  Use this as the exact margin.
+    let margin = offset_distance.abs();
     Ok((t_min - margin, t_max + margin))
 }
 
