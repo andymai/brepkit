@@ -204,8 +204,26 @@ impl Builder {
 
         for (idx, sf) in self.sub_faces.iter_mut().enumerate() {
             if sd_indices.contains(&idx) {
-                sf.classification = FaceClass::On;
-                continue;
+                // Most SD faces stay "On" — ray-cast is unstable for
+                // coplanar boundary points. Exception: faces from internal
+                // circle loops (disc sub-faces from split_face_with_internal_loops)
+                // have offset interior points that classify reliably.
+                let is_disc_face = self
+                    .topo
+                    .face(sf.face_id)
+                    .ok()
+                    .and_then(|f| self.topo.wire(f.outer_wire()).ok())
+                    .is_some_and(|w| {
+                        w.edges().len() == 1
+                            && self.topo.edge(w.edges()[0].edge()).is_ok_and(|e| {
+                                !matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                            })
+                    });
+                if !is_disc_face {
+                    sf.classification = FaceClass::On;
+                    continue;
+                }
+                // Disc face — classify via ray-cast with offset interior point.
             }
 
             // Determine the opposing solid

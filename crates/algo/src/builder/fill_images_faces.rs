@@ -1034,29 +1034,21 @@ fn build_section_edges(
     for source in sources {
         match source {
             SectionSource::Curve(curve_idx) => {
+                use brepkit_math::vec::Point2;
                 // Use the COMPLETE intersection curve, not individual PBs.
                 // The face splitter needs whole curves to form proper loops.
-                let curve_ds = &arena.curves[*curve_idx];
+                let curve_ds = match arena.curves.get(*curve_idx) {
+                    Some(c) => c,
+                    None => continue,
+                };
 
-                // Find start/end 3D points from the curve's PaveBlocks
-                // (first PB's start vertex, last PB's end vertex).
-                // For a closed curve (circle), these will be the same point.
+                // Find start/end 3D points by evaluating the curve at its
+                // parametric endpoints. For closed curves (circles), start ≈ end.
                 let (start, end) = curve_endpoints(topo, arena, curve_ds);
                 let (start, end) = match (start, end) {
                     (Some(s), Some(e)) => (s, e),
                     _ => continue,
                 };
-
-                // For Line curves on planar faces, clip to face boundary.
-                let (start, end) =
-                    if matches!(&curve_ds.curve, brepkit_topology::edge::EdgeCurve::Line) {
-                        match clip_line_to_face_boundary(topo, face_id, start, end, tol) {
-                            Some(pair) => pair,
-                            None => continue,
-                        }
-                    } else {
-                        (start, end)
-                    };
 
                 let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
                     &curve_ds.curve,
@@ -1067,8 +1059,48 @@ fn build_section_edges(
                     None,
                 );
 
-                let start_uv_pt = Some(pcurve.evaluate(0.0));
-                let end_uv_pt = Some(pcurve.evaluate(1.0));
+                // For closed curves on periodic surfaces (e.g. circle on cylinder),
+                // the pcurve wraps around and evaluate(0) ≈ evaluate(1). We need
+                // UV endpoints that span the full period so the face splitter
+                // sees the section edge as a full-width cut.
+                let is_closed = (start - end).length() < tol * 100.0;
+                let (u_per, _v_per) = super::pcurve_compute::surface_periods(face.surface());
+                let (start_uv_pt, end_uv_pt) = if is_closed && u_per.is_some() {
+                    let period = u_per.unwrap_or(std::f64::consts::TAU);
+                    // Project the start 3D point to UV.
+                    let start_uv = face.surface().project_point(start);
+                    if let Some((su, sv)) = start_uv {
+                        // Sample the curve at t=0.25 to determine winding direction.
+                        let (t0, t1) = curve_ds.curve.domain_with_endpoints(start, end);
+                        let mid_3d = curve_ds.curve.evaluate_with_endpoints(
+                            t0 + (t1 - t0) * 0.25,
+                            start,
+                            end,
+                        );
+                        let mid_uv = face.surface().project_point(mid_3d);
+                        if let Some((mu, _mv)) = mid_uv {
+                            // Determine winding: does the curve go in +u or -u
+                            // direction from start?
+                            let du = mu - su;
+                            // Normalize du to [-period/2, period/2].
+                            let du_norm = du - (du / period).round() * period;
+                            let end_u = if du_norm < 0.0 {
+                                su - period
+                            } else {
+                                su + period
+                            };
+                            (Some(Point2::new(su, sv)), Some(Point2::new(end_u, sv)))
+                        } else {
+                            let s = pcurve.evaluate(0.0);
+                            (Some(s), Some(Point2::new(s.x() - period, s.y())))
+                        }
+                    } else {
+                        // Plane surface — project via pcurve.
+                        (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
+                    }
+                } else {
+                    (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
+                };
 
                 sections.push(SectionEdge {
                     curve_3d: curve_ds.curve.clone(),
@@ -1172,55 +1204,23 @@ fn build_section_edges(
 
 /// Find the overall 3D start/end points of an intersection curve
 /// by evaluating at the curve's parametric endpoints.
+///
+/// This function is only called for non-Line curves (Circle, Ellipse, NURBS).
+/// For these types, `evaluate_with_endpoints` ignores the start/end reference
+/// points entirely — they dispatch to `ParametricCurve::evaluate(t)`.
 fn curve_endpoints(
-    topo: &Topology,
-    arena: &GfaArena,
+    _topo: &Topology,
+    _arena: &GfaArena,
     curve_ds: &crate::ds::IntersectionCurveDS,
 ) -> (Option<Point3>, Option<Point3>) {
     use brepkit_math::vec::Point3;
 
-    // First try: evaluate the curve directly at t_range endpoints.
-    // This works for all curve types and doesn't depend on PaveBlock split_edge.
     let (t0, t1) = curve_ds.t_range;
-
-    // For Line curves: we need a reference start/end point for evaluate_with_endpoints.
-    // Find any PB with a split_edge to get reference points.
-    let mut ref_start: Option<Point3> = None;
-    let mut ref_end: Option<Point3> = None;
-    for &pb_id in &curve_ds.pave_blocks {
-        let pb = match arena.pave_blocks.get(pb_id) {
-            Some(pb) => pb,
-            None => continue,
-        };
-        // Try the PB's original edge first (always present).
-        if let Ok(edge) = topo.edge(pb.original_edge) {
-            if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
-                ref_start = Some(sv.point());
-                ref_end = Some(ev.point());
-                break;
-            }
-        }
-        // Fall back to split_edge.
-        if let Some(eid) = pb.split_edge {
-            if let Ok(edge) = topo.edge(eid) {
-                if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
-                    ref_start = Some(sv.point());
-                    ref_end = Some(ev.point());
-                    break;
-                }
-            }
-        }
-    }
-
-    let (rs, re) = match (ref_start, ref_end) {
-        (Some(s), Some(e)) => (s, e),
-        _ => return (None, None),
-    };
-
-    // Evaluate the curve at its parametric endpoints.
-    let start_3d = curve_ds.curve.evaluate_with_endpoints(t0, rs, re);
-    let end_3d = curve_ds.curve.evaluate_with_endpoints(t1, rs, re);
-
+    // Non-Line curves evaluate directly at their parametric endpoints.
+    // The dummy reference points are unused by Circle/Ellipse/NURBS evaluation.
+    let dummy = Point3::new(0.0, 0.0, 0.0);
+    let start_3d = curve_ds.curve.evaluate_with_endpoints(t0, dummy, dummy);
+    let end_3d = curve_ds.curve.evaluate_with_endpoints(t1, dummy, dummy);
     (Some(start_3d), Some(end_3d))
 }
 

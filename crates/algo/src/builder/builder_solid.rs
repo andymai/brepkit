@@ -588,8 +588,11 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             let dup_edge = topo.edge(dup)?;
             let dup_qs = quantize_point(topo.vertex(dup_edge.start())?.point(), tol);
             let dup_qe = quantize_point(topo.vertex(dup_edge.end())?.point(), tol);
-            // Detect reversed vertex order
-            let needs_flip = dup_qs == canon_qe && dup_qe == canon_qs;
+            // Detect reversed vertex order. For closed edges (start == end),
+            // qs == qe for both canonical and duplicate, so the flip condition
+            // would be trivially true. Never flip closed edges.
+            let is_closed = canon_qs == canon_qe;
+            let needs_flip = !is_closed && dup_qs == canon_qe && dup_qe == canon_qs;
             replacements.insert(dup, (canonical, needs_flip));
         }
     }

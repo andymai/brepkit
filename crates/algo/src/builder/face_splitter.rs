@@ -1487,6 +1487,51 @@ fn split_face_with_internal_loops(
             }
         }
 
+        // Compute the interior point for the disc sub-face.
+        // For closed section curves (circles) that form internal loops,
+        // the interior point on the plane can land ON the opposing solid's
+        // coplanar boundary face, causing ambiguous ray-cast classification.
+        // Offset the point slightly along the face normal to break the tie.
+        let disc_interior = {
+            // Sample 3D points along the circle to find its centroid.
+            let edge = &loop_edges[0];
+            let (t0, t1) = edge
+                .curve_3d
+                .domain_with_endpoints(edge.start_3d, edge.end_3d);
+            let n_samples = 16;
+            let mut sum = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
+            for k in 0..n_samples {
+                #[allow(clippy::cast_precision_loss)]
+                let t = t0 + (t1 - t0) * (k as f64 / n_samples as f64);
+                let pt = edge
+                    .curve_3d
+                    .evaluate_with_endpoints(t, edge.start_3d, edge.end_3d);
+                sum += brepkit_math::vec::Vec3::new(pt.x(), pt.y(), pt.z());
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let centroid = Point3::new(
+                sum.x() / n_samples as f64,
+                sum.y() / n_samples as f64,
+                sum.z() / n_samples as f64,
+            );
+            // Offset along the face normal by a small amount to ensure
+            // the point is clearly inside the opposing solid (not on the
+            // coplanar boundary). Use the surface normal direction.
+            let normal_offset = match &surface {
+                FaceSurface::Plane { normal, .. } => {
+                    let n = if reversed { -*normal } else { *normal };
+                    // Offset INTO the solid (opposite to the face normal).
+                    brepkit_math::vec::Vec3::new(-n.x(), -n.y(), -n.z()) * 1e-6
+                }
+                _ => brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0),
+            };
+            Point3::new(
+                centroid.x() + normal_offset.x(),
+                centroid.y() + normal_offset.y(),
+                centroid.z() + normal_offset.z(),
+            )
+        };
+
         // The loop as outer wire of the inside sub-face.
         result.push(SplitSubFace {
             surface: surface.clone(),
@@ -1495,7 +1540,7 @@ fn split_face_with_internal_loops(
             reversed,
             parent: face_id,
             rank,
-            precomputed_interior: None,
+            precomputed_interior: Some(disc_interior),
         });
 
         // Build reversed loop for the outside sub-face's hole.
