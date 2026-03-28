@@ -124,14 +124,23 @@ pub fn transform_solid(
                     .set_surface(FaceSurface::Cylinder(new_cyl));
             }
             FaceSurface::Cone(cone) => {
-                let new_apex = matrix.mul_point(cone.apex());
-                let new_axis = transform_direction(matrix, cone.axis())?;
-                let new_cone = brepkit_math::surfaces::ConicalSurface::new(
-                    new_apex,
-                    new_axis,
-                    cone.half_angle(),
-                )?;
-                topo.face_mut(fid)?.set_surface(FaceSurface::Cone(new_cone));
+                if is_uniform_scale(matrix) {
+                    let new_apex = matrix.mul_point(cone.apex());
+                    let new_axis = transform_direction(matrix, cone.axis())?;
+                    let new_cone = brepkit_math::surfaces::ConicalSurface::new(
+                        new_apex,
+                        new_axis,
+                        cone.half_angle(),
+                    )?;
+                    topo.face_mut(fid)?.set_surface(FaceSurface::Cone(new_cone));
+                } else {
+                    let v_range = analytic_face_v_range(topo, fid, |pt| cone.project_point(pt).1)?;
+                    let cone_clone = cone.clone();
+                    let nurbs = brepkit_geometry::convert::cone_to_nurbs(&cone_clone, v_range)?;
+                    let transformed = transform_nurbs_surface(&nurbs, matrix)?;
+                    topo.face_mut(fid)?
+                        .set_surface(FaceSurface::Nurbs(transformed));
+                }
             }
             FaceSurface::Sphere(sph) => {
                 if is_uniform_scale(matrix) {
@@ -155,15 +164,23 @@ pub fn transform_solid(
                 }
             }
             FaceSurface::Torus(tor) => {
-                let new_center = matrix.mul_point(tor.center());
-                let m = &matrix.0;
-                let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
-                let new_tor = brepkit_math::surfaces::ToroidalSurface::new(
-                    new_center,
-                    tor.major_radius() * sx,
-                    tor.minor_radius() * sx,
-                )?;
-                topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
+                if is_uniform_scale(matrix) {
+                    let new_center = matrix.mul_point(tor.center());
+                    let m = &matrix.0;
+                    let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
+                    let new_tor = brepkit_math::surfaces::ToroidalSurface::new(
+                        new_center,
+                        tor.major_radius() * sx,
+                        tor.minor_radius() * sx,
+                    )?;
+                    topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
+                } else {
+                    let tor_clone = tor.clone();
+                    let nurbs = brepkit_geometry::convert::torus_to_nurbs(&tor_clone)?;
+                    let transformed = transform_nurbs_surface(&nurbs, matrix)?;
+                    topo.face_mut(fid)?
+                        .set_surface(FaceSurface::Nurbs(transformed));
+                }
             }
         }
     }
@@ -369,11 +386,23 @@ fn transform_face_surface(
                 .set_surface(FaceSurface::Cylinder(new_cyl));
         }
         FaceSurface::Cone(cone) => {
-            let new_apex = matrix.mul_point(cone.apex());
-            let new_axis = transform_direction(matrix, cone.axis())?;
-            let new_cone =
-                brepkit_math::surfaces::ConicalSurface::new(new_apex, new_axis, cone.half_angle())?;
-            topo.face_mut(fid)?.set_surface(FaceSurface::Cone(new_cone));
+            if is_uniform_scale(matrix) {
+                let new_apex = matrix.mul_point(cone.apex());
+                let new_axis = transform_direction(matrix, cone.axis())?;
+                let new_cone = brepkit_math::surfaces::ConicalSurface::new(
+                    new_apex,
+                    new_axis,
+                    cone.half_angle(),
+                )?;
+                topo.face_mut(fid)?.set_surface(FaceSurface::Cone(new_cone));
+            } else {
+                let v_range = analytic_face_v_range(topo, fid, |pt| cone.project_point(pt).1)?;
+                let cone_clone = cone.clone();
+                let nurbs = brepkit_geometry::convert::cone_to_nurbs(&cone_clone, v_range)?;
+                let transformed = transform_nurbs_surface(&nurbs, matrix)?;
+                topo.face_mut(fid)?
+                    .set_surface(FaceSurface::Nurbs(transformed));
+            }
         }
         FaceSurface::Sphere(sph) => {
             if is_uniform_scale(matrix) {
@@ -392,18 +421,72 @@ fn transform_face_surface(
             }
         }
         FaceSurface::Torus(tor) => {
-            let new_center = matrix.mul_point(tor.center());
-            let m = &matrix.0;
-            let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
-            let new_tor = brepkit_math::surfaces::ToroidalSurface::new(
-                new_center,
-                tor.major_radius() * sx,
-                tor.minor_radius() * sx,
-            )?;
-            topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
+            if is_uniform_scale(matrix) {
+                let new_center = matrix.mul_point(tor.center());
+                let m = &matrix.0;
+                let sx = (m[0][0] * m[0][0] + m[1][0] * m[1][0] + m[2][0] * m[2][0]).sqrt();
+                let new_tor = brepkit_math::surfaces::ToroidalSurface::new(
+                    new_center,
+                    tor.major_radius() * sx,
+                    tor.minor_radius() * sx,
+                )?;
+                topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
+            } else {
+                let tor_clone = tor.clone();
+                let nurbs = brepkit_geometry::convert::torus_to_nurbs(&tor_clone)?;
+                let transformed = transform_nurbs_surface(&nurbs, matrix)?;
+                topo.face_mut(fid)?
+                    .set_surface(FaceSurface::Nurbs(transformed));
+            }
         }
     }
     Ok(())
+}
+
+/// Compute the v-parameter range for an analytic surface face.
+///
+/// Projects boundary vertices using `project_v` and returns (v_min, v_max).
+fn analytic_face_v_range(
+    topo: &Topology,
+    face_id: FaceId,
+    project_v: impl Fn(brepkit_math::vec::Point3) -> f64,
+) -> Result<(f64, f64), crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let wire = topo.wire(face.outer_wire())?;
+    let mut v_min = f64::INFINITY;
+    let mut v_max = f64::NEG_INFINITY;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let pt = topo.vertex(edge.start())?.point();
+        let v = project_v(pt);
+        v_min = v_min.min(v);
+        v_max = v_max.max(v);
+    }
+    if v_min >= v_max {
+        v_min = 0.0;
+        v_max = 1.0;
+    }
+    Ok((v_min, v_max))
+}
+
+/// Transform a NURBS surface's control points by a matrix.
+fn transform_nurbs_surface(
+    surface: &NurbsSurface,
+    matrix: &Mat4,
+) -> Result<NurbsSurface, crate::OperationsError> {
+    let new_cps: Vec<Vec<_>> = surface
+        .control_points()
+        .iter()
+        .map(|row| row.iter().map(|pt| matrix.mul_point(*pt)).collect())
+        .collect();
+    Ok(NurbsSurface::new(
+        surface.degree_u(),
+        surface.degree_v(),
+        surface.knots_u().to_vec(),
+        surface.knots_v().to_vec(),
+        new_cps,
+        surface.weights().to_vec(),
+    )?)
 }
 
 fn is_uniform_scale(matrix: &Mat4) -> bool {
