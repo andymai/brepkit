@@ -23,7 +23,7 @@ pub struct SketchState {
     pub constraints: Vec<brepkit_operations::sketch::Constraint>,
     /// Arc definitions: `(center_idx, start_idx, end_idx)` into points.
     pub arcs: Vec<(usize, usize, usize)>,
-    /// Circle definitions: `(center_idx, radius)` into points.
+    /// Circle definitions: `(center_idx, radius)`, where `center_idx` indexes into `points`.
     pub circles: Vec<(usize, f64)>,
     /// Deferred arc-referencing constraints stored as raw JSON.
     /// These are resolved into real `GcsConstraint` values at solve time

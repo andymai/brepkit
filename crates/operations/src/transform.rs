@@ -323,7 +323,12 @@ fn transform_face_surface(
             );
             let new_normal = raw.normalize()?;
             let wire = topo.wire(face.outer_wire())?;
-            let first_oe = &wire.edges()[0];
+            let first_oe =
+                wire.edges()
+                    .first()
+                    .ok_or_else(|| crate::OperationsError::InvalidInput {
+                        reason: "face has empty outer wire".into(),
+                    })?;
             let edge = topo.edge(first_oe.edge())?;
             let ref_vid = if first_oe.is_forward() {
                 edge.start()

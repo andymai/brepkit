@@ -495,8 +495,8 @@ impl BrepKernel {
                 index: sketch as usize,
             })?;
 
-        // If no arcs and no deferred constraints, use the fast legacy path
-        if sk.arcs.is_empty() && sk.deferred_constraints.is_empty() {
+        // If no arcs, circles, or deferred constraints, use the fast legacy path
+        if sk.arcs.is_empty() && sk.circles.is_empty() && sk.deferred_constraints.is_empty() {
             let mut sketch_obj = brepkit_operations::sketch::Sketch {
                 points: std::mem::take(&mut sk.points),
                 constraints: std::mem::take(&mut sk.constraints),

@@ -161,6 +161,12 @@ fn partition_overlapping(bboxes: &[Aabb3]) -> Vec<Vec<usize>> {
 }
 
 /// Merge disjoint solids into a single solid by combining all faces.
+///
+/// Note: the resulting outer shell contains disconnected face groups,
+/// which technically violates the connected-shell invariant. This is
+/// acceptable for volume measurement and tessellation (which iterate
+/// faces independently), but algorithms that assume shell connectivity
+/// should be aware. A future improvement would return a `Compound`.
 fn merge_disjoint_solids(
     topo: &mut Topology,
     solids: &[SolidId],

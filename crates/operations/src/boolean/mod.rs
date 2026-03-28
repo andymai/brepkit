@@ -275,9 +275,9 @@ pub fn boolean(
 
 /// Perform a boolean operation with custom options.
 ///
-/// **Deprecated:** Options are currently ignored. All booleans route through
-/// the GFA pipeline with mesh boolean fallback. This wrapper exists for
-/// backward compatibility with callers that pass `BooleanOptions`.
+/// Runs the standard GFA boolean pipeline, then applies post-processing
+/// options. Currently supported: `unify_faces` (merges co-surface face
+/// fragments via `brepkit_heal::unify_same_domain`).
 ///
 /// # Errors
 ///
