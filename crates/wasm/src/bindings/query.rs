@@ -131,9 +131,26 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the solid handle is invalid.
+    /// Export a solid as a BREP string (STEP format).
+    ///
+    /// Returns a STEP-formatted string containing the solid's B-Rep data.
+    /// Use `fromBREP` to reconstruct the solid from this string.
     #[wasm_bindgen(js_name = "toBREP")]
-    #[allow(clippy::too_many_lines)]
     pub fn to_brep(&self, solid: u32) -> Result<JsValue, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let step_str = brepkit_io::step::writer::write_step(&self.topo, &[solid_id])
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(step_str.into())
+    }
+
+    /// Export a solid as a JSON-encoded BREP representation.
+    ///
+    /// Returns a JSON string with vertices, edges (with curve parameters),
+    /// and faces (with surface parameters). This is a brepkit-specific format
+    /// that preserves all analytic geometry types.
+    #[wasm_bindgen(js_name = "toBrepJson")]
+    #[allow(clippy::too_many_lines)]
+    pub fn to_brep_json(&self, solid: u32) -> Result<JsValue, JsError> {
         let solid_id = self.resolve_solid(solid)?;
         let faces = brepkit_topology::explorer::solid_faces(&self.topo, solid_id)?;
         let edges = brepkit_topology::explorer::solid_edges(&self.topo, solid_id)?;
@@ -321,10 +338,28 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the JSON is invalid or reconstruction fails.
+    /// Reconstruct a solid from a BREP string.
+    ///
+    /// Accepts both STEP format (from `toBREP`) and JSON format (from
+    /// `toBrepJson`). Detects the format by checking if the string starts
+    /// with `{` (JSON) or contains STEP headers.
     #[wasm_bindgen(js_name = "fromBREP")]
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_brep(&mut self, json: &str) -> Result<u32, JsError> {
-        Ok(self.from_brep_impl(json)?)
+    pub fn from_brep(&mut self, data: &str) -> Result<u32, JsError> {
+        let trimmed = data.trim_start();
+        if trimmed.starts_with('{') {
+            // JSON BREP format
+            Ok(self.from_brep_impl(data)?)
+        } else {
+            // STEP format — delegate to STEP import
+            let solids = brepkit_io::step::reader::read_step(data, self.topo_mut())
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            let first = solids
+                .first()
+                .ok_or_else(|| JsError::new("fromBREP: STEP data produced no solids"))?;
+            #[allow(clippy::cast_possible_truncation)]
+            Ok(first.index() as u32)
+        }
     }
 
     /// Get the face normal of a planar face.
