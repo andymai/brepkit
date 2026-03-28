@@ -143,8 +143,14 @@ jobs:
         env:
           TAG_NAME: ${{ github.event.release.tag_name || needs.release-please.outputs.tag_name || format('v{0}', github.event.inputs.publish_version) }}
 
-      - name: Publish to npm
+      - name: Publish to npm (skip if already published)
         working-directory: crates/wasm/pkg
-        run: npm publish --provenance --access public
+        run: |
+          PKG_VERSION=$(jq -r .version package.json)
+          if npm view "brepkit-wasm@$PKG_VERSION" version >/dev/null 2>&1; then
+            echo "brepkit-wasm@$PKG_VERSION already published — skipping"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
