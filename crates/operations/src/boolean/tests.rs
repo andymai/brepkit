@@ -1053,6 +1053,7 @@ fn cut_cylinder_by_cylinder() {
 /// Staircase-like benchmark: fuse box steps with cylinder posts.
 /// Mimics the brepjs staircase benchmark.
 #[test]
+#[ignore = "slow (~2 min) — run manually with --ignored"]
 fn staircase_fuse_with_cylinders() {
     use std::time::Instant;
 
