@@ -13,16 +13,16 @@ use crate::state::SketchState;
 /// the `PointId` handles needed for result readback.
 ///
 /// Shared between `sketch_solve` (when arcs are present) and `sketch_dof`.
-#[allow(clippy::type_complexity)]
-fn build_gcs_from_state(
-    sk: &SketchState,
-) -> Result<
-    (
-        brepkit_operations::sketch::GcsSystem,
-        Vec<brepkit_operations::sketch::PointId>,
-    ),
-    JsError,
-> {
+/// Result of building a GCS from sketch state.
+#[allow(dead_code)]
+struct GcsBuildResult {
+    sys: brepkit_operations::sketch::GcsSystem,
+    point_ids: Vec<brepkit_operations::sketch::PointId>,
+    arc_ids: Vec<brepkit_operations::sketch::ArcId>,
+    circle_ids: Vec<brepkit_operations::sketch::CircleId>,
+}
+
+fn build_gcs_from_state(sk: &SketchState) -> Result<GcsBuildResult, JsError> {
     use brepkit_operations::sketch::GcsConstraint;
 
     let mut sys = brepkit_operations::sketch::GcsSystem::new();
@@ -49,6 +49,17 @@ fn build_gcs_from_state(
                 reason: format!("failed to add arc: {e}"),
             })?;
         arc_ids.push(aid);
+    }
+
+    // Add circles
+    let mut circle_ids = Vec::with_capacity(sk.circles.len());
+    for &(center, radius) in &sk.circles {
+        let cid =
+            sys.add_circle(point_ids[center], radius)
+                .map_err(|e| WasmError::InvalidInput {
+                    reason: format!("failed to add circle: {e}"),
+                })?;
+        circle_ids.push(cid);
     }
 
     // Implicit line cache for point-pair-based constraints
@@ -131,7 +142,14 @@ fn build_gcs_from_state(
 
     // Resolve deferred (arc-referencing) constraints now that we have real IDs
     for val in &sk.deferred_constraints {
-        let gc = resolve_deferred_constraint(val, &point_ids, &arc_ids, &mut line_cache, &mut sys)?;
+        let gc = resolve_deferred_constraint(
+            val,
+            &point_ids,
+            &arc_ids,
+            &circle_ids,
+            &mut line_cache,
+            &mut sys,
+        )?;
         let _ = sys
             .add_constraint(gc)
             .map_err(|e| WasmError::InvalidInput {
@@ -139,7 +157,12 @@ fn build_gcs_from_state(
             })?;
     }
 
-    Ok((sys, point_ids))
+    Ok(GcsBuildResult {
+        sys,
+        point_ids,
+        arc_ids,
+        circle_ids,
+    })
 }
 
 /// Resolve a deferred constraint JSON value into a real `GcsConstraint`
@@ -148,6 +171,7 @@ fn resolve_deferred_constraint(
     val: &serde_json::Value,
     point_ids: &[brepkit_operations::sketch::PointId],
     arc_ids: &[brepkit_operations::sketch::ArcId],
+    circle_ids: &[brepkit_operations::sketch::CircleId],
     line_cache: &mut std::collections::HashMap<(usize, usize), brepkit_operations::sketch::LineId>,
     sys: &mut brepkit_operations::sketch::GcsSystem,
 ) -> Result<brepkit_operations::sketch::GcsConstraint, JsError> {
@@ -170,6 +194,16 @@ fn resolve_deferred_constraint(
         arc_ids.get(idx).copied().ok_or_else(|| {
             WasmError::InvalidInput {
                 reason: format!("arc index {idx} out of range"),
+            }
+            .into()
+        })
+    };
+
+    let get_circle = |key: &str| -> Result<brepkit_operations::sketch::CircleId, JsError> {
+        let idx = json_usize(val, key)?;
+        circle_ids.get(idx).copied().ok_or_else(|| {
+            WasmError::InvalidInput {
+                reason: format!("circle index {idx} out of range"),
             }
             .into()
         })
@@ -249,13 +283,9 @@ fn resolve_deferred_constraint(
             Ok(GcsConstraint::EqualRadiusArcArc(arc1, arc2))
         }
         "equalRadiusArcCircle" => {
-            // Circle support would require a circle_ids array; for now return
-            // an error until circles are added to SketchState.
-            _ = get_arc("arc")?;
-            Err(WasmError::InvalidInput {
-                reason: "equalRadiusArcCircle not yet supported via WASM".into(),
-            }
-            .into())
+            let arc = get_arc("arc")?;
+            let circle = get_circle("circle")?;
+            Ok(GcsConstraint::EqualRadiusArcCircle(arc, circle))
         }
         "arcLength" => {
             let arc = get_arc("arc")?;
@@ -268,11 +298,14 @@ fn resolve_deferred_constraint(
             Ok(GcsConstraint::ConcentricArcArc(arc1, arc2))
         }
         "concentricArcCircle" => {
-            _ = get_arc("arc")?;
-            Err(WasmError::InvalidInput {
-                reason: "concentricArcCircle not yet supported via WASM".into(),
-            }
-            .into())
+            let arc = get_arc("arc")?;
+            let circle = get_circle("circle")?;
+            Ok(GcsConstraint::ConcentricArcCircle(arc, circle))
+        }
+        "pointOnCircle" => {
+            let pt = get_point("point")?;
+            let circle = get_circle("circle")?;
+            Ok(GcsConstraint::PointOnCircle(pt, circle))
         }
         _ => Err(WasmError::InvalidInput {
             reason: format!("unknown constraint type: {ty}"),
@@ -351,6 +384,45 @@ impl BrepKernel {
         sk.arcs.push((center, start, end));
         #[allow(clippy::cast_possible_truncation)]
         Ok((sk.arcs.len() - 1) as u32)
+    }
+
+    /// Add a circle to a sketch.
+    ///
+    /// `center_idx` must be a valid point index. Returns the circle index
+    /// (0-based) for use in circle-referencing constraints.
+    #[wasm_bindgen(js_name = "sketchAddCircle")]
+    pub fn sketch_add_circle(
+        &mut self,
+        sketch: u32,
+        center_idx: u32,
+        radius: f64,
+    ) -> Result<u32, JsError> {
+        let sk = self
+            .sketches
+            .get_mut(sketch as usize)
+            .ok_or(WasmError::InvalidHandle {
+                entity: "sketch",
+                index: sketch as usize,
+            })?;
+        let center = center_idx as usize;
+        if center >= sk.points.len() {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "circle center index out of range (center={center}, points={})",
+                    sk.points.len()
+                ),
+            }
+            .into());
+        }
+        if radius <= 0.0 || !radius.is_finite() {
+            return Err(WasmError::InvalidInput {
+                reason: format!("circle radius must be positive and finite, got {radius}"),
+            }
+            .into());
+        }
+        sk.circles.push((center, radius));
+        #[allow(clippy::cast_possible_truncation)]
+        Ok((sk.circles.len() - 1) as u32)
     }
 
     /// Add a constraint to a sketch from a JSON string.
@@ -452,7 +524,8 @@ impl BrepKernel {
         }
 
         // Full GcsSystem path (supports arcs + deferred constraints)
-        let (mut sys, point_ids) = build_gcs_from_state(sk)?;
+        let gcs = build_gcs_from_state(sk)?;
+        let mut sys = gcs.sys;
         let result = sys.solve(max_iterations as usize, tolerance);
         let (converged, iterations, max_residual) = match &result {
             Ok(r) => (r.converged, r.iterations, Some(r.max_residual)),
@@ -460,7 +533,7 @@ impl BrepKernel {
         };
 
         // Write solved positions back
-        for (i, pid) in point_ids.iter().enumerate() {
+        for (i, pid) in gcs.point_ids.iter().enumerate() {
             if let Some(data) = sys.point(*pid) {
                 sk.points[i].x = data.x;
                 sk.points[i].y = data.y;
@@ -477,12 +550,27 @@ impl BrepKernel {
             .iter()
             .map(|(c, s, e)| serde_json::json!({"center": c, "start": s, "end": e}))
             .collect();
+        let circles: Vec<serde_json::Value> = sk
+            .circles
+            .iter()
+            .enumerate()
+            .map(|(i, &(center, _))| {
+                // Read solved radius from GCS
+                let radius = gcs
+                    .circle_ids
+                    .get(i)
+                    .and_then(|cid| sys.circle(*cid))
+                    .map_or(0.0, |c| c.radius);
+                serde_json::json!({"center": center, "radius": radius})
+            })
+            .collect();
         Ok(serde_json::json!({
             "converged": converged,
             "iterations": iterations,
             "maxResidual": max_residual,
             "points": pts,
             "arcs": arcs,
+            "circles": circles,
         })
         .to_string())
     }
@@ -499,7 +587,7 @@ impl BrepKernel {
                 entity: "sketch",
                 index: sketch as usize,
             })?;
-        let (mut sys, _point_ids) = build_gcs_from_state(sk)?;
+        let GcsBuildResult { mut sys, .. } = build_gcs_from_state(sk)?;
         let dof = sys.dof();
         Ok(serde_json::json!({
             "dof": dof.dof,
