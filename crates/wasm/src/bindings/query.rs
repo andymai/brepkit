@@ -122,18 +122,30 @@ impl BrepKernel {
         Ok(vec![point.x(), point.y(), point.z()])
     }
 
-    /// Serialize a solid's B-Rep topology to JSON.
+    /// Export a solid as a BREP string (STEP format).
     ///
-    /// Returns a JSON string containing the solid's complete topology:
-    /// vertices, edges (with curve types), faces (with surface types), and
-    /// connectivity information.
+    /// Returns a STEP-formatted string containing the solid's B-Rep data.
+    /// Use `fromBREP` to reconstruct the solid from this string.
     ///
     /// # Errors
     ///
     /// Returns an error if the solid handle is invalid.
     #[wasm_bindgen(js_name = "toBREP")]
-    #[allow(clippy::too_many_lines)]
     pub fn to_brep(&self, solid: u32) -> Result<JsValue, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let step_str = brepkit_io::step::writer::write_step(&self.topo, &[solid_id])
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(step_str.into())
+    }
+
+    /// Export a solid as a JSON-encoded BREP representation.
+    ///
+    /// Returns a JSON string with vertices, edges (with curve parameters),
+    /// and faces (with surface parameters). This is a brepkit-specific format
+    /// that preserves all analytic geometry types.
+    #[wasm_bindgen(js_name = "toBrepJson")]
+    #[allow(clippy::too_many_lines)]
+    pub fn to_brep_json(&self, solid: u32) -> Result<JsValue, JsError> {
         let solid_id = self.resolve_solid(solid)?;
         let faces = brepkit_topology::explorer::solid_faces(&self.topo, solid_id)?;
         let edges = brepkit_topology::explorer::solid_edges(&self.topo, solid_id)?;
@@ -308,23 +320,35 @@ impl BrepKernel {
         .into())
     }
 
-    /// Reconstruct a solid from a `toBREP` JSON string.
+    /// Reconstruct a solid from a BREP string.
     ///
-    /// Supports all edge curve types (line, circle, ellipse, NURBS) and
-    /// all surface types (plane, cylinder, cone, sphere, torus, NURBS)
-    /// via `curveParams` and `surfaceParams` in the JSON. Unrecognized
-    /// edge types fall back to lines; unrecognized surface types fall back
-    /// to planes computed from wire vertices.
+    /// Accepts both STEP format (from `toBREP`) and JSON format (from
+    /// `toBrepJson`). Auto-detects the format: strings starting with `{`
+    /// are parsed as JSON, otherwise as STEP.
     ///
-    /// Returns a solid handle.
+    /// Only single-solid STEP files are supported. Multi-solid files will
+    /// return only the first solid.
     ///
     /// # Errors
     ///
-    /// Returns an error if the JSON is invalid or reconstruction fails.
+    /// Returns an error if the data is invalid or reconstruction fails.
     #[wasm_bindgen(js_name = "fromBREP")]
     #[allow(clippy::wrong_self_convention)]
-    pub fn from_brep(&mut self, json: &str) -> Result<u32, JsError> {
-        Ok(self.from_brep_impl(json)?)
+    pub fn from_brep(&mut self, data: &str) -> Result<u32, JsError> {
+        let trimmed = data.trim_start();
+        if trimmed.starts_with('{') {
+            // JSON BREP format
+            Ok(self.from_brep_impl(data)?)
+        } else {
+            // STEP format — delegate to STEP import
+            let solids = brepkit_io::step::reader::read_step(data, self.topo_mut())
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            let first = solids
+                .first()
+                .ok_or_else(|| JsError::new("fromBREP: STEP data produced no solids"))?;
+            #[allow(clippy::cast_possible_truncation)]
+            Ok(first.index() as u32)
+        }
     }
 
     /// Get the face normal of a planar face.
