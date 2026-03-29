@@ -1,56 +1,87 @@
 //! # brepkit-operations
 //!
-//! CAD modeling operations: booleans, fillets, chamfers, extrusions,
-//! sweeps, and tessellation.
+//! CAD modeling operations for B-Rep solids. Layer L3, depending on
+//! `brepkit-math`, `brepkit-topology`, `brepkit-geometry`, `brepkit-algo`,
+//! `brepkit-blend`, `brepkit-heal`, `brepkit-check`, and `brepkit-offset`.
 //!
-//! This is layer L3, depending on `brepkit-math`, `brepkit-topology`,
-//! `brepkit-geometry`, `brepkit-algo`, `brepkit-blend`, `brepkit-heal`,
-//! `brepkit-check`, and `brepkit-offset`.
+//! # Module families
+//!
+//! | Family | Modules | Purpose |
+//! |--------|---------|---------|
+//! | **Core** | [`primitives`], [`extrude`], [`revolve`], [`sweep`], [`loft`], [`pipe`], [`helix`] | Shape creation |
+//! | **Transform** | [`transform`], [`copy`], [`mirror`], [`pattern`] | Spatial operations |
+//! | **Boolean** | [`boolean`], [`mesh_boolean`] | Set operations |
+//! | **Blend** | [`fillet`], [`chamfer`], [`blend_ops`] | Edge smoothing |
+//! | **Offset** | [`offset_face`], [`offset_solid`], [`offset_trim`], [`offset_v2`], [`offset_wire`] | Wall thickness |
+//! | **Surface** | [`fill_face`], [`thicken`], [`shell_op`], [`draft`], [`section`], [`split`] | Surface/solid modification |
+//! | **Repair** | [`heal`], [`defeature`], [`sew`], [`untrim`] | Shape fixing |
+//! | **Analysis** | [`measure`], [`distance`], [`classify`], [`validate`], [`query`], [`feature_recognition`] | Interrogation |
+//! | **Tessellation** | [`tessellate`] | Mesh generation |
+//! | **Infrastructure** | [`assembly`], [`compound_ops`], [`evolution`], [`sketch`] | Utilities |
 
 use brepkit_math::vec::{Point3, Vec3};
 
-pub mod assembly;
-pub mod blend_ops;
-pub mod boolean;
-pub mod chamfer;
-pub mod classify;
-pub mod compound_ops;
-pub mod copy;
-pub mod defeature;
-pub mod distance;
-pub mod draft;
-pub mod evolution;
+// ── Core: shape creation ─────────────────────────────────────────
 pub mod extrude;
-pub mod feature_recognition;
-pub mod fill_face;
-pub mod fillet;
-pub mod heal;
 pub mod helix;
 pub mod loft;
-pub mod measure;
-pub mod mesh_boolean;
+pub mod pipe;
+pub mod primitives;
+pub mod revolve;
+pub mod sweep;
+
+// ── Transform: spatial operations ────────────────────────────────
+pub mod copy;
 pub mod mirror;
+pub mod pattern;
+pub mod transform;
+
+// ── Boolean: set operations ──────────────────────────────────────
+pub mod boolean;
+pub mod mesh_boolean;
+
+// ── Blend: edge smoothing ────────────────────────────────────────
+pub mod blend_ops;
+pub mod chamfer;
+pub mod fillet;
+
+// ── Offset: wall thickness ───────────────────────────────────────
 pub mod offset_face;
 pub mod offset_solid;
 pub mod offset_trim;
 pub mod offset_v2;
 pub mod offset_wire;
-pub mod pattern;
-pub mod pipe;
-pub mod primitives;
-pub mod query;
-pub mod revolve;
+
+// ── Surface & solid modification ─────────────────────────────────
+pub mod draft;
+pub mod fill_face;
 pub mod section;
-pub mod sew;
 pub mod shell_op;
-pub mod sketch;
 pub mod split;
-pub mod sweep;
-pub mod tessellate;
 pub mod thicken;
-pub mod transform;
+
+// ── Repair: shape fixing ─────────────────────────────────────────
+pub mod defeature;
+pub mod heal;
+pub mod sew;
 pub mod untrim;
+
+// ── Analysis: interrogation ──────────────────────────────────────
+pub mod classify;
+pub mod distance;
+pub mod feature_recognition;
+pub mod measure;
+pub mod query;
 pub mod validate;
+
+// ── Tessellation: mesh generation ────────────────────────────────
+pub mod tessellate;
+
+// ── Infrastructure ───────────────────────────────────────────────
+pub mod assembly;
+pub mod compound_ops;
+pub mod evolution;
+pub mod sketch;
 pub(crate) mod winding;
 
 #[cfg(test)]
