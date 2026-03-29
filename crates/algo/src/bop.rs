@@ -45,10 +45,33 @@ pub(crate) fn select_faces(
     op: BooleanOp,
     sd_pairs: &[SameDomainPair],
 ) -> Vec<SelectedFace> {
-    // Step 1: Identify which sub-face indices are part of SD pairs
-    let sd_indices: HashSet<usize> = sd_pairs.iter().flat_map(|p| [p.idx_a, p.idx_b]).collect();
+    // Step 1: Filter SD pairs to only those with valid (in-bounds) indices.
+    // Invalid pairs are logged and excluded so they don't cause valid faces
+    // to be incorrectly excluded from the normal truth-table selection.
+    let valid_sd_pairs: Vec<&SameDomainPair> = sd_pairs
+        .iter()
+        .filter(|p| {
+            let a_ok = p.idx_a < sub_faces.len();
+            let b_ok = p.idx_b < sub_faces.len();
+            if !a_ok || !b_ok {
+                log::warn!(
+                    "SD pair ({}, {}) has out-of-bounds index (len={}), skipping",
+                    p.idx_a,
+                    p.idx_b,
+                    sub_faces.len()
+                );
+            }
+            a_ok && b_ok
+        })
+        .collect();
 
-    // Step 2: Select non-SD faces via the standard truth table
+    // Step 2: Identify which sub-face indices are part of valid SD pairs
+    let sd_indices: HashSet<usize> = valid_sd_pairs
+        .iter()
+        .flat_map(|p| [p.idx_a, p.idx_b])
+        .collect();
+
+    // Step 3: Select non-SD faces via the standard truth table
     let mut selected: Vec<SelectedFace> = sub_faces
         .iter()
         .enumerate()
@@ -84,8 +107,8 @@ pub(crate) fn select_faces(
         })
         .collect();
 
-    // Step 3: Apply SD-specific selection
-    apply_sd_selection(sub_faces, op, sd_pairs, &mut selected);
+    // Step 4: Apply SD-specific selection on valid pairs only
+    apply_sd_selection(sub_faces, op, &valid_sd_pairs, &mut selected);
 
     selected
 }
@@ -95,10 +118,12 @@ pub(crate) fn select_faces(
 /// For each SD pair, decide which face(s) to include based on the operation
 /// and orientation. This mirrors the reference implementation's approach:
 /// `isSameOriNeeded = (objState == toolState)`.
+///
+/// Caller must ensure all pairs have valid (in-bounds) indices.
 fn apply_sd_selection(
     sub_faces: &[SubFace],
     op: BooleanOp,
-    sd_pairs: &[SameDomainPair],
+    sd_pairs: &[&SameDomainPair],
     selected: &mut Vec<SelectedFace>,
 ) {
     // For Fuse/Intersect, we want same-oriented faces.
@@ -171,4 +196,115 @@ pub(crate) struct SelectedFace {
     pub face_id: brepkit_topology::face::FaceId,
     /// Whether to reverse this face's orientation in the result.
     pub reversed: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::builder::same_domain::SameDomainPair;
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::Topology;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// Create a dummy face in the topology to get a valid FaceId.
+    fn dummy_face_id(topo: &mut Topology) -> brepkit_topology::face::FaceId {
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let eid = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let wire_id = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], false).unwrap());
+        topo.add_face(Face::new(
+            wire_id,
+            vec![],
+            FaceSurface::Plane {
+                normal: brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    /// Helper to create a SubFace for testing.
+    fn make_sub_face(topo: &mut Topology, rank: Rank, classification: FaceClass) -> SubFace {
+        SubFace {
+            face_id: dummy_face_id(topo),
+            classification,
+            rank,
+            interior_point: None,
+        }
+    }
+
+    #[test]
+    fn select_faces_no_sd_pairs() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
+        ];
+        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &[]);
+        assert_eq!(selected.len(), 2);
+    }
+
+    #[test]
+    fn sd_pair_out_of_bounds_skips_gracefully() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![make_sub_face(&mut topo, Rank::A, FaceClass::Outside)];
+        // SD pair references idx 5, which is out of bounds
+        let sd_pairs = vec![SameDomainPair {
+            idx_a: 5,
+            idx_b: 10,
+            same_orientation: true,
+            b_contained_in_a: false,
+        }];
+        // Should not panic — out-of-bounds pairs are skipped
+        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs);
+        // The non-SD face should still be selected
+        assert_eq!(selected.len(), 1);
+    }
+
+    #[test]
+    fn fuse_keeps_outside_faces() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::A, FaceClass::Inside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Inside),
+        ];
+        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &[]);
+        assert_eq!(selected.len(), 2, "Fuse keeps only Outside faces");
+    }
+
+    #[test]
+    fn cut_keeps_a_outside_and_b_inside() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::A, FaceClass::Inside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Inside),
+        ];
+        let selected = select_faces(&sub_faces, BooleanOp::Cut, &[]);
+        assert_eq!(selected.len(), 2, "Cut keeps A-Outside + B-Inside");
+        assert!(
+            selected.iter().any(|s| s.reversed),
+            "B-Inside should be reversed"
+        );
+    }
+
+    #[test]
+    fn intersect_keeps_inside_faces() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::A, FaceClass::Inside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Inside),
+        ];
+        let selected = select_faces(&sub_faces, BooleanOp::Intersect, &[]);
+        assert_eq!(selected.len(), 2, "Intersect keeps only Inside faces");
+    }
 }
