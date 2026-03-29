@@ -195,7 +195,7 @@ pub fn sample_solid_edges_filtered(
 /// Uses union-find over a spatial hash grid to merge boundary vertices that
 /// are within `weld_tol` of each other. Rewrites triangle indices and removes
 /// degenerate triangles (where merged indices create duplicate vertices).
-pub fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
+pub(super) fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
     use std::collections::{HashMap, HashSet};
 
     let n_verts = mesh.positions.len();

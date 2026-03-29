@@ -32,7 +32,7 @@ use crate::nurbs::curve::NurbsCurve;
 use crate::vec::Point3;
 
 // Re-export all public items.
-pub use chaining::{chain_intersection_points, estimate_chain_threshold};
+pub use chaining::chain_intersection_points;
 pub use curve_surface::{CurveSurfaceHit, intersect_curve_surface};
 pub use line::intersect_line_nurbs;
 pub use plane::intersect_plane_nurbs;

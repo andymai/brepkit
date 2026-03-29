@@ -116,7 +116,7 @@ pub(super) fn build_curves_from_points(
 /// Estimate a reasonable chaining threshold from point spacing.
 #[allow(clippy::cast_precision_loss)]
 #[must_use]
-pub fn estimate_chain_threshold(points: &[IntersectionPoint]) -> f64 {
+pub(super) fn estimate_chain_threshold(points: &[IntersectionPoint]) -> f64 {
     if points.len() < 2 {
         return 1.0;
     }

@@ -37,7 +37,6 @@ use brepkit_topology::face::FaceId;
 pub use face::tessellate_with_uvs;
 pub use mesh_ops::{
     EdgeLines, boundary_edge_count, is_watertight, sample_solid_edges, sample_solid_edges_filtered,
-    weld_boundary_vertices,
 };
 pub use solid::tessellate_solid;
 
