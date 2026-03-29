@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.43.4](https://github.com/andymai/brepkit/compare/v2.43.3...v2.43.4) (2026-03-29)
+
+
+### Bug Fixes
+
+* **algo:** correctness and robustness improvements from architecture review ([#503](https://github.com/andymai/brepkit/issues/503)) ([3017358](https://github.com/andymai/brepkit/commit/3017358b12db7789a51fecf55e9b749d85da1935))
+
 ## [2.43.3](https://github.com/andymai/brepkit/compare/v2.43.2...v2.43.3) (2026-03-29)
 
 
