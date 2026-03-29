@@ -45,10 +45,33 @@ pub(crate) fn select_faces(
     op: BooleanOp,
     sd_pairs: &[SameDomainPair],
 ) -> Vec<SelectedFace> {
-    // Step 1: Identify which sub-face indices are part of SD pairs
-    let sd_indices: HashSet<usize> = sd_pairs.iter().flat_map(|p| [p.idx_a, p.idx_b]).collect();
+    // Step 1: Filter SD pairs to only those with valid (in-bounds) indices.
+    // Invalid pairs are logged and excluded so they don't cause valid faces
+    // to be incorrectly excluded from the normal truth-table selection.
+    let valid_sd_pairs: Vec<&SameDomainPair> = sd_pairs
+        .iter()
+        .filter(|p| {
+            let a_ok = p.idx_a < sub_faces.len();
+            let b_ok = p.idx_b < sub_faces.len();
+            if !a_ok || !b_ok {
+                log::warn!(
+                    "SD pair ({}, {}) has out-of-bounds index (len={}), skipping",
+                    p.idx_a,
+                    p.idx_b,
+                    sub_faces.len()
+                );
+            }
+            a_ok && b_ok
+        })
+        .collect();
 
-    // Step 2: Select non-SD faces via the standard truth table
+    // Step 2: Identify which sub-face indices are part of valid SD pairs
+    let sd_indices: HashSet<usize> = valid_sd_pairs
+        .iter()
+        .flat_map(|p| [p.idx_a, p.idx_b])
+        .collect();
+
+    // Step 3: Select non-SD faces via the standard truth table
     let mut selected: Vec<SelectedFace> = sub_faces
         .iter()
         .enumerate()
@@ -84,8 +107,8 @@ pub(crate) fn select_faces(
         })
         .collect();
 
-    // Step 3: Apply SD-specific selection
-    apply_sd_selection(sub_faces, op, sd_pairs, &mut selected);
+    // Step 4: Apply SD-specific selection on valid pairs only
+    apply_sd_selection(sub_faces, op, &valid_sd_pairs, &mut selected);
 
     selected
 }
@@ -95,10 +118,12 @@ pub(crate) fn select_faces(
 /// For each SD pair, decide which face(s) to include based on the operation
 /// and orientation. This mirrors the reference implementation's approach:
 /// `isSameOriNeeded = (objState == toolState)`.
+///
+/// Caller must ensure all pairs have valid (in-bounds) indices.
 fn apply_sd_selection(
     sub_faces: &[SubFace],
     op: BooleanOp,
-    sd_pairs: &[SameDomainPair],
+    sd_pairs: &[&SameDomainPair],
     selected: &mut Vec<SelectedFace>,
 ) {
     // For Fuse/Intersect, we want same-oriented faces.
@@ -109,24 +134,7 @@ fn apply_sd_selection(
     };
 
     for pair in sd_pairs {
-        let Some(sf_a) = sub_faces.get(pair.idx_a) else {
-            log::warn!(
-                "SD pair idx_a={} out of bounds (len={}), skipping",
-                pair.idx_a,
-                sub_faces.len()
-            );
-            continue;
-        };
-
-        // Validate idx_b is also in bounds (used for exclusion from non-SD selection)
-        if pair.idx_b >= sub_faces.len() {
-            log::warn!(
-                "SD pair idx_b={} out of bounds (len={}), skipping",
-                pair.idx_b,
-                sub_faces.len()
-            );
-            continue;
-        }
+        let sf_a = &sub_faces[pair.idx_a];
 
         // Distinguish touching (face on boundary) from overlapping
         // (face inside opposing solid). Uses AABB containment check

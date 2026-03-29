@@ -308,26 +308,32 @@ fn sample_face_interior(
     }
 
     // Compute face bounding box diagonal for size-relative offset.
-    // Sample all edge endpoints + midpoints to estimate face extent.
+    // Sample all edge endpoints to estimate face extent.
     let mut min_pt = Point3::new(f64::MAX, f64::MAX, f64::MAX);
     let mut max_pt = Point3::new(f64::MIN, f64::MIN, f64::MIN);
+    let mut point_count = 0_usize;
     for oe in edges {
-        if let Ok(e) = topo.edge(oe.edge()) {
-            if let (Ok(sv), Ok(ev)) = (topo.vertex(e.start()), topo.vertex(e.end())) {
-                for p in [sv.point(), ev.point()] {
-                    min_pt = Point3::new(
-                        min_pt.x().min(p.x()),
-                        min_pt.y().min(p.y()),
-                        min_pt.z().min(p.z()),
-                    );
-                    max_pt = Point3::new(
-                        max_pt.x().max(p.x()),
-                        max_pt.y().max(p.y()),
-                        max_pt.z().max(p.z()),
-                    );
-                }
-            }
+        let e = topo.edge(oe.edge())?;
+        let sp = topo.vertex(e.start())?.point();
+        let ep = topo.vertex(e.end())?.point();
+        for p in [sp, ep] {
+            min_pt = Point3::new(
+                min_pt.x().min(p.x()),
+                min_pt.y().min(p.y()),
+                min_pt.z().min(p.z()),
+            );
+            max_pt = Point3::new(
+                max_pt.x().max(p.x()),
+                max_pt.y().max(p.y()),
+                max_pt.z().max(p.z()),
+            );
+            point_count += 1;
         }
+    }
+    if point_count == 0 {
+        return Err(AlgoError::FaceSplitFailed(format!(
+            "face {face_id:?}: could not compute bounding box (no valid edge vertices)"
+        )));
     }
     let diag = (max_pt - min_pt).length();
     // Use 1e-4 of the diagonal, but at least the linear tolerance
