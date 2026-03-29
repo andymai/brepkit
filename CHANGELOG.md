@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.43.3](https://github.com/andymai/brepkit/compare/v2.43.2...v2.43.3) (2026-03-29)
+
+
+### Bug Fixes
+
+* **wasm:** toBREP returns STEP format ([#497](https://github.com/andymai/brepkit/issues/497)) ([#501](https://github.com/andymai/brepkit/issues/501)) ([2f2f63d](https://github.com/andymai/brepkit/commit/2f2f63dee23b4fe2939ab27a090c5469953c17cf))
+
 ## [2.43.2](https://github.com/andymai/brepkit/compare/v2.43.1...v2.43.2) (2026-03-28)
 
 
