@@ -122,19 +122,14 @@ impl BrepKernel {
         Ok(vec![point.x(), point.y(), point.z()])
     }
 
-    /// Serialize a solid's B-Rep topology to JSON.
-    ///
-    /// Returns a JSON string containing the solid's complete topology:
-    /// vertices, edges (with curve types), faces (with surface types), and
-    /// connectivity information.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the solid handle is invalid.
     /// Export a solid as a BREP string (STEP format).
     ///
     /// Returns a STEP-formatted string containing the solid's B-Rep data.
     /// Use `fromBREP` to reconstruct the solid from this string.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
     #[wasm_bindgen(js_name = "toBREP")]
     pub fn to_brep(&self, solid: u32) -> Result<JsValue, JsError> {
         let solid_id = self.resolve_solid(solid)?;
@@ -325,24 +320,18 @@ impl BrepKernel {
         .into())
     }
 
-    /// Reconstruct a solid from a `toBREP` JSON string.
-    ///
-    /// Supports all edge curve types (line, circle, ellipse, NURBS) and
-    /// all surface types (plane, cylinder, cone, sphere, torus, NURBS)
-    /// via `curveParams` and `surfaceParams` in the JSON. Unrecognized
-    /// edge types fall back to lines; unrecognized surface types fall back
-    /// to planes computed from wire vertices.
-    ///
-    /// Returns a solid handle.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the JSON is invalid or reconstruction fails.
     /// Reconstruct a solid from a BREP string.
     ///
     /// Accepts both STEP format (from `toBREP`) and JSON format (from
-    /// `toBrepJson`). Detects the format by checking if the string starts
-    /// with `{` (JSON) or contains STEP headers.
+    /// `toBrepJson`). Auto-detects the format: strings starting with `{`
+    /// are parsed as JSON, otherwise as STEP.
+    ///
+    /// Only single-solid STEP files are supported. Multi-solid files will
+    /// return only the first solid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the data is invalid or reconstruction fails.
     #[wasm_bindgen(js_name = "fromBREP")]
     #[allow(clippy::wrong_self_convention)]
     pub fn from_brep(&mut self, data: &str) -> Result<u32, JsError> {
