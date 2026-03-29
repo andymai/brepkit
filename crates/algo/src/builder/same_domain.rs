@@ -214,24 +214,32 @@ fn compute_edge_set_quantized(
     face_id: FaceId,
     scale: f64,
 ) -> Option<EdgeSet> {
+    use brepkit_topology::vertex::VertexId;
+
     let face = topo.face(face_id).ok()?;
     let wire = topo.wire(face.outer_wire()).ok()?;
 
     let mut pairs: Vec<(QVert, QVert)> = Vec::with_capacity(wire.edges().len());
 
+    // Cache resolved vertex positions to avoid redundant resolve_vertex() calls
+    // when the same vertex appears in multiple edges.
+    let mut vertex_cache: HashMap<VertexId, QVert> = HashMap::new();
+    let mut resolve_and_quantize = |vid: VertexId| -> Option<QVert> {
+        if let Some(&cached) = vertex_cache.get(&vid) {
+            return Some(cached);
+        }
+        let resolved = arena.resolve_vertex(vid);
+        let pos = topo.vertex(resolved).ok()?.point();
+        let q = quantize_point(pos, scale);
+        vertex_cache.insert(vid, q);
+        Some(q)
+    };
+
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
 
-        // Resolve vertices through VV-phase same-domain mapping
-        let sv = arena.resolve_vertex(edge.start());
-        let ev = arena.resolve_vertex(edge.end());
-
-        let sp = topo.vertex(sv).ok()?.point();
-        let ep = topo.vertex(ev).ok()?.point();
-
-        // Quantize to tolerance grid
-        let qs = quantize_point(sp, scale);
-        let qe = quantize_point(ep, scale);
+        let qs = resolve_and_quantize(edge.start())?;
+        let qe = resolve_and_quantize(edge.end())?;
 
         // Canonical ordering: smaller first
         let pair = if qs <= qe { (qs, qe) } else { (qe, qs) };
@@ -356,5 +364,117 @@ fn surfaces_same_domain(a: &FaceSurface, b: &FaceSurface, tol: Tolerance) -> Opt
             Some(axis_dot > 0.0)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use brepkit_math::tolerance::Tolerance;
+    use brepkit_math::vec::{Point3, Vec3};
+
+    #[test]
+    fn planes_same_domain_same_direction() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 5.0,
+        };
+        let b = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 5.0,
+        };
+        assert_eq!(surfaces_same_domain(&a, &b, tol), Some(true));
+    }
+
+    #[test]
+    fn planes_same_domain_opposite_direction() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 5.0,
+        };
+        let b = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: -5.0,
+        };
+        assert_eq!(surfaces_same_domain(&a, &b, tol), Some(false));
+    }
+
+    #[test]
+    fn planes_different_distance_not_same_domain() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 5.0,
+        };
+        let b = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 10.0,
+        };
+        assert_eq!(surfaces_same_domain(&a, &b, tol), None);
+    }
+
+    #[test]
+    fn mixed_surface_types_not_same_domain() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let b = FaceSurface::Sphere(
+            brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0)
+                .expect("valid sphere"),
+        );
+        assert_eq!(surfaces_same_domain(&a, &b, tol), None);
+    }
+
+    #[test]
+    fn quantize_point_deterministic() {
+        let scale = 1.0 / 1e-7; // default tolerance
+        let p = Point3::new(1.0, 2.0, 3.0);
+        let q1 = quantize_point(p, scale);
+        let q2 = quantize_point(p, scale);
+        assert_eq!(q1, q2, "quantization should be deterministic");
+    }
+
+    #[test]
+    fn quantize_nearby_points_collapse() {
+        let tol = Tolerance::new();
+        let scale = 1.0 / tol.linear;
+        let p1 = Point3::new(1.0, 2.0, 3.0);
+        let p2 = Point3::new(1.0 + tol.linear * 0.4, 2.0, 3.0);
+        let q1 = quantize_point(p1, scale);
+        let q2 = quantize_point(p2, scale);
+        assert_eq!(q1, q2, "nearby points should collapse to same grid cell");
+    }
+
+    #[test]
+    fn quantize_distant_points_differ() {
+        let tol = Tolerance::new();
+        let scale = 1.0 / tol.linear;
+        let p1 = Point3::new(1.0, 2.0, 3.0);
+        let p2 = Point3::new(1.0 + tol.linear * 2.0, 2.0, 3.0);
+        let q1 = quantize_point(p1, scale);
+        let q2 = quantize_point(p2, scale);
+        assert_ne!(
+            q1, q2,
+            "points separated by 2x tolerance should be in different cells"
+        );
+    }
+
+    #[test]
+    fn union_find_basic_groups() {
+        let mut uf = UnionFind::new(5);
+        uf.union(0, 1);
+        uf.union(2, 3);
+        assert_eq!(uf.find(0), uf.find(1));
+        assert_eq!(uf.find(2), uf.find(3));
+        assert_ne!(uf.find(0), uf.find(2));
+        // Transitive closure
+        uf.union(1, 3);
+        assert_eq!(uf.find(0), uf.find(3));
     }
 }

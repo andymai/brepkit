@@ -26,4 +26,8 @@ pub enum AlgoError {
     /// Classification could not determine inside/outside state.
     #[error("classification failed: {0}")]
     ClassificationFailed(String),
+
+    /// Internal state is inconsistent (e.g., out-of-bounds index).
+    #[error("invalid state: {0}")]
+    InvalidState(String),
 }

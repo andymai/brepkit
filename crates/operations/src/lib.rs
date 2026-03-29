@@ -30,9 +30,6 @@ pub mod loft;
 pub mod measure;
 pub mod mesh_boolean;
 pub mod mirror;
-// nurbs_boolean: standalone NURBS boolean algorithm, not yet integrated into dispatch.
-#[allow(dead_code)]
-pub(crate) mod nurbs_boolean;
 pub mod offset_face;
 pub mod offset_solid;
 pub mod offset_trim;

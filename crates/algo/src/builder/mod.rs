@@ -196,14 +196,20 @@ impl Builder {
         // classifier is non-deterministic at coplanar boundaries,
         // which can produce non-manifold results for near-tangent
         // geometries. Mark SD faces deterministically to skip ray-cast.
-        let sd_indices: std::collections::HashSet<usize> = self
-            .sd_pairs
-            .iter()
-            .flat_map(|p| [p.idx_a, p.idx_b])
-            .collect();
+        //
+        // Skip SD index construction entirely when no SD pairs exist
+        // (common case for non-overlapping solids).
+        let sd_indices: std::collections::HashSet<usize> = if self.sd_pairs.is_empty() {
+            std::collections::HashSet::new()
+        } else {
+            self.sd_pairs
+                .iter()
+                .flat_map(|p| [p.idx_a, p.idx_b])
+                .collect()
+        };
 
         for (idx, sf) in self.sub_faces.iter_mut().enumerate() {
-            if sd_indices.contains(&idx) {
+            if !sd_indices.is_empty() && sd_indices.contains(&idx) {
                 // Most SD faces stay "On" — ray-cast is unstable for
                 // coplanar boundary points. Exception: faces from internal
                 // circle loops (disc sub-faces from split_face_with_internal_loops)
@@ -281,10 +287,13 @@ impl Builder {
 /// inward along (edge_tangent x face_normal) to get a point that is
 /// reliably inside the face — unlike a vertex centroid, which can fall
 /// outside non-convex faces.
+///
+/// The offset distance is scaled relative to the face's bounding box
+/// diagonal to handle both very small and very large faces correctly.
 fn sample_face_interior(
     topo: &Topology,
     face_id: FaceId,
-    _tol: Tolerance,
+    tol: Tolerance,
 ) -> Result<Point3, AlgoError> {
     use brepkit_math::vec::Vec3;
 
@@ -297,6 +306,32 @@ fn sample_face_interior(
             "face {face_id:?} has empty outer wire"
         )));
     }
+
+    // Compute face bounding box diagonal for size-relative offset.
+    // Sample all edge endpoints + midpoints to estimate face extent.
+    let mut min_pt = Point3::new(f64::MAX, f64::MAX, f64::MAX);
+    let mut max_pt = Point3::new(f64::MIN, f64::MIN, f64::MIN);
+    for oe in edges {
+        if let Ok(e) = topo.edge(oe.edge()) {
+            if let (Ok(sv), Ok(ev)) = (topo.vertex(e.start()), topo.vertex(e.end())) {
+                for p in [sv.point(), ev.point()] {
+                    min_pt = Point3::new(
+                        min_pt.x().min(p.x()),
+                        min_pt.y().min(p.y()),
+                        min_pt.z().min(p.z()),
+                    );
+                    max_pt = Point3::new(
+                        max_pt.x().max(p.x()),
+                        max_pt.y().max(p.y()),
+                        max_pt.z().max(p.z()),
+                    );
+                }
+            }
+        }
+    }
+    let diag = (max_pt - min_pt).length();
+    // Use 1e-4 of the diagonal, but at least the linear tolerance
+    let offset_scale = (diag * 1e-4).max(tol.linear);
 
     // Take the first boundary edge and evaluate at its midpoint
     let first_oe = &edges[0];
@@ -332,10 +367,10 @@ fn sample_face_interior(
     let inward_len = inward.length();
 
     let offset = if inward_len > 1e-12 {
-        inward * (1e-6 / inward_len)
+        inward * (offset_scale / inward_len)
     } else {
         // Degenerate — use a tiny offset along the face normal instead
-        face_normal * 1e-6
+        face_normal * offset_scale
     };
 
     let interior_pt = mid_pt + offset;

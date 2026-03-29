@@ -109,7 +109,24 @@ fn apply_sd_selection(
     };
 
     for pair in sd_pairs {
-        let sf_a = &sub_faces[pair.idx_a];
+        let Some(sf_a) = sub_faces.get(pair.idx_a) else {
+            log::warn!(
+                "SD pair idx_a={} out of bounds (len={}), skipping",
+                pair.idx_a,
+                sub_faces.len()
+            );
+            continue;
+        };
+
+        // Validate idx_b is also in bounds (used for exclusion from non-SD selection)
+        if pair.idx_b >= sub_faces.len() {
+            log::warn!(
+                "SD pair idx_b={} out of bounds (len={}), skipping",
+                pair.idx_b,
+                sub_faces.len()
+            );
+            continue;
+        }
 
         // Distinguish touching (face on boundary) from overlapping
         // (face inside opposing solid). Uses AABB containment check
@@ -171,4 +188,115 @@ pub(crate) struct SelectedFace {
     pub face_id: brepkit_topology::face::FaceId,
     /// Whether to reverse this face's orientation in the result.
     pub reversed: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::builder::same_domain::SameDomainPair;
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::Topology;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// Create a dummy face in the topology to get a valid FaceId.
+    fn dummy_face_id(topo: &mut Topology) -> brepkit_topology::face::FaceId {
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let eid = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let wire_id = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], false).unwrap());
+        topo.add_face(Face::new(
+            wire_id,
+            vec![],
+            FaceSurface::Plane {
+                normal: brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    /// Helper to create a SubFace for testing.
+    fn make_sub_face(topo: &mut Topology, rank: Rank, classification: FaceClass) -> SubFace {
+        SubFace {
+            face_id: dummy_face_id(topo),
+            classification,
+            rank,
+            interior_point: None,
+        }
+    }
+
+    #[test]
+    fn select_faces_no_sd_pairs() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
+        ];
+        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &[]);
+        assert_eq!(selected.len(), 2);
+    }
+
+    #[test]
+    fn sd_pair_out_of_bounds_skips_gracefully() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![make_sub_face(&mut topo, Rank::A, FaceClass::Outside)];
+        // SD pair references idx 5, which is out of bounds
+        let sd_pairs = vec![SameDomainPair {
+            idx_a: 5,
+            idx_b: 10,
+            same_orientation: true,
+            b_contained_in_a: false,
+        }];
+        // Should not panic — out-of-bounds pairs are skipped
+        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs);
+        // The non-SD face should still be selected
+        assert_eq!(selected.len(), 1);
+    }
+
+    #[test]
+    fn fuse_keeps_outside_faces() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::A, FaceClass::Inside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Inside),
+        ];
+        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &[]);
+        assert_eq!(selected.len(), 2, "Fuse keeps only Outside faces");
+    }
+
+    #[test]
+    fn cut_keeps_a_outside_and_b_inside() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::A, FaceClass::Inside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Inside),
+        ];
+        let selected = select_faces(&sub_faces, BooleanOp::Cut, &[]);
+        assert_eq!(selected.len(), 2, "Cut keeps A-Outside + B-Inside");
+        assert!(
+            selected.iter().any(|s| s.reversed),
+            "B-Inside should be reversed"
+        );
+    }
+
+    #[test]
+    fn intersect_keeps_inside_faces() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::A, FaceClass::Inside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Inside),
+        ];
+        let selected = select_faces(&sub_faces, BooleanOp::Intersect, &[]);
+        assert_eq!(selected.len(), 2, "Intersect keeps only Inside faces");
+    }
 }
