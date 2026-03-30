@@ -155,12 +155,12 @@ pub fn try_fillet(
     edge_ids: &[brepkit_topology::edge::EdgeId],
     radius: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
-    // Primary path: rolling-ball (well-tested for single-edge cases)
-    brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
-        // Fallback 1: blend crate FilletBuilder (correct corner patches)
+    // Primary path: blend crate FilletBuilder (correct corner geometry)
+    brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edge_ids, radius)
+        .map(|r| r.solid)
+        // Fallback 1: rolling-ball (legacy)
         .or_else(|_| {
-            brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edge_ids, radius)
-                .map(|r| r.solid)
+            brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
         })
         // Fallback 2: flat bevel (simplest)
         .or_else(|_| brepkit_operations::fillet::fillet(topo, solid_id, edge_ids, radius))
