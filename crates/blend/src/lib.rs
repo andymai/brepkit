@@ -12,6 +12,8 @@ pub(crate) mod builder_utils;
 pub mod chamfer_builder;
 pub(crate) mod corner;
 pub mod fillet_builder;
+#[allow(dead_code)]
+pub(crate) mod g1_chain;
 pub mod radius_law;
 pub(crate) mod section;
 pub(crate) mod spherical_triangle;
