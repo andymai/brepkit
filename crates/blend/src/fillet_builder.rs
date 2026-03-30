@@ -328,6 +328,9 @@ fn compute_stripe_for_edge(
     let radius = law.evaluate(0.5);
 
     // Try analytic fast path (only for constant radius).
+    // Use the original (non-oriented) surfaces — the analytic fillet uses
+    // geometric surface normals directly to compute the bisector and center
+    // position. Orientation flipping is only needed for the walking engine.
     if matches!(law, RadiusLaw::Constant(_)) {
         if let Some(result) =
             analytic::try_analytic_fillet(&surf1, &surf2, &spine, topo, radius, face1, face2)?
@@ -577,6 +580,70 @@ mod tests {
         assert!(
             found_cylinder,
             "fillet should produce a cylindrical blend surface"
+        );
+    }
+
+    #[test]
+    fn fillet_builder_large_box_radius_one() {
+        use brepkit_topology::test_utils::make_scaled_box_manifold;
+
+        let mut topo = Topology::new();
+        // Create a 10×10×10 box (the original failing case).
+        let solid = make_scaled_box_manifold(&mut topo, 10.0, 10.0, 10.0);
+
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+
+        // Collect edges from all faces in the shell.
+        let mut edges_to_fillet = Vec::new();
+        for &face_id in shell.faces() {
+            if let Ok(face) = topo.face(face_id) {
+                if let Ok(face_wire) = topo.wire(face.outer_wire()) {
+                    for oriented_edge in face_wire.edges() {
+                        edges_to_fillet.push(oriented_edge.edge());
+                    }
+                }
+            }
+        }
+        assert!(!edges_to_fillet.is_empty(), "solid should have edges");
+
+        // Apply fillet with radius 1.0 to all edges.
+        let mut blender = FilletBuilder::new(&mut topo, solid);
+        blender.add_edges(&edges_to_fillet, 1.0);
+        let blend_result = blender.build().unwrap();
+
+        // Extract the resulting solid from BlendResult.
+        let result_solid = blend_result.solid;
+
+        // Verify the result solid exists.
+        assert!(
+            topo.solid(result_solid).is_ok(),
+            "fillet should produce a valid solid"
+        );
+
+        // Verify at least one edge was successfully filleted.
+        let num_succeeded = blend_result.succeeded.len();
+        assert!(
+            num_succeeded > 0,
+            "at least one edge should be successfully filleted"
+        );
+
+        // Verify the result solid's shell has blend surfaces.
+        let result_shell = topo
+            .shell(topo.solid(result_solid).unwrap().outer_shell())
+            .unwrap();
+
+        // The blend surface should be a cylinder (plane-plane fillet).
+        let mut found_cylinder = false;
+        for &fid in result_shell.faces() {
+            let face = topo.face(fid).unwrap();
+            if matches!(face.surface(), FaceSurface::Cylinder(_)) {
+                found_cylinder = true;
+            }
+        }
+        assert!(
+            found_cylinder,
+            "fillet should produce a cylindrical blend surface (analytic path)"
         );
     }
 

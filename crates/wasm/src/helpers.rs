@@ -155,7 +155,9 @@ pub fn try_fillet(
     edge_ids: &[brepkit_topology::edge::EdgeId],
     radius: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
-    // Primary path: rolling-ball (well-tested for single-edge cases)
+    // Primary path: rolling-ball (well-tested, correct bbox for single-edge)
+    // TODO(#490): switch to fillet_v2 once cylinder AABB expansion respects
+    // face wire boundaries (currently over-expands by full radial extent)
     brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
         // Fallback 1: blend crate FilletBuilder (correct corner patches)
         .or_else(|_| {

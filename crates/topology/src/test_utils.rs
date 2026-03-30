@@ -278,6 +278,112 @@ pub fn make_unit_cube_manifold(topo: &mut Topology) -> SolidId {
     make_unit_cube_manifold_at(topo, 0.0, 0.0, 0.0)
 }
 
+/// Create a manifold box with dimensions `sx × sy × sz` at the origin.
+///
+/// # Panics
+///
+/// Panics if wire or shell construction fails (test utility only).
+pub fn make_scaled_box_manifold(topo: &mut Topology, sx: f64, sy: f64, sz: f64) -> SolidId {
+    const TOL: f64 = 1e-7;
+
+    // 8 vertices for a scaled box
+    let v: [VertexId; 8] = [
+        topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL)), // 0: 000
+        topo.add_vertex(Vertex::new(Point3::new(sx, 0.0, 0.0), TOL)),  // 1: x00
+        topo.add_vertex(Vertex::new(Point3::new(sx, sy, 0.0), TOL)),   // 2: xy0
+        topo.add_vertex(Vertex::new(Point3::new(0.0, sy, 0.0), TOL)),  // 3: 0y0
+        topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, sz), TOL)),  // 4: 00z
+        topo.add_vertex(Vertex::new(Point3::new(sx, 0.0, sz), TOL)),   // 5: x0z
+        topo.add_vertex(Vertex::new(Point3::new(sx, sy, sz), TOL)),    // 6: xyz
+        topo.add_vertex(Vertex::new(Point3::new(0.0, sy, sz), TOL)),   // 7: 0yz
+    ];
+
+    // 12 edges of the box
+    // Bottom ring (z=0)
+    let e_b0 = topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Line)); // 0→1
+    let e_b1 = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line)); // 1→2
+    let e_b2 = topo.add_edge(Edge::new(v[2], v[3], EdgeCurve::Line)); // 2→3
+    let e_b3 = topo.add_edge(Edge::new(v[3], v[0], EdgeCurve::Line)); // 3→0
+    // Top ring (z=sz)
+    let e_t0 = topo.add_edge(Edge::new(v[4], v[5], EdgeCurve::Line)); // 4→5
+    let e_t1 = topo.add_edge(Edge::new(v[5], v[6], EdgeCurve::Line)); // 5→6
+    let e_t2 = topo.add_edge(Edge::new(v[6], v[7], EdgeCurve::Line)); // 6→7
+    let e_t3 = topo.add_edge(Edge::new(v[7], v[4], EdgeCurve::Line)); // 7→4
+    // Verticals
+    let e_v0 = topo.add_edge(Edge::new(v[0], v[4], EdgeCurve::Line)); // 0→4
+    let e_v1 = topo.add_edge(Edge::new(v[1], v[5], EdgeCurve::Line)); // 1→5
+    let e_v2 = topo.add_edge(Edge::new(v[2], v[6], EdgeCurve::Line)); // 2→6
+    let e_v3 = topo.add_edge(Edge::new(v[3], v[7], EdgeCurve::Line)); // 3→7
+
+    // Helper to build a face from 4 oriented edges
+    let mk = |topo: &mut Topology, edges: [(EdgeId, bool); 4], normal: Vec3, d: f64| -> FaceId {
+        let wire = Wire::new(
+            edges
+                .iter()
+                .map(|&(eid, fwd)| OrientedEdge::new(eid, fwd))
+                .collect(),
+            true,
+        )
+        .expect("test wire");
+        let wire_id = topo.add_wire(wire);
+        let face = Face::new(wire_id, vec![], FaceSurface::Plane { normal, d });
+        topo.add_face(face)
+    };
+
+    // 6 faces of the box (all normals pointing outward)
+    // Bottom (z=0, normal pointing -z)
+    let f_bottom = mk(
+        topo,
+        [(e_b0, true), (e_b1, true), (e_b2, true), (e_b3, true)],
+        Vec3::new(0.0, 0.0, -1.0),
+        0.0,
+    );
+    // Top (z=sz, normal pointing +z)
+    let f_top = mk(
+        topo,
+        [(e_t0, false), (e_t1, false), (e_t2, false), (e_t3, false)],
+        Vec3::new(0.0, 0.0, 1.0),
+        -sz,
+    );
+    // Front (y=0, normal pointing -y)
+    let f_front = mk(
+        topo,
+        [(e_b0, false), (e_v1, true), (e_t0, true), (e_v0, false)],
+        Vec3::new(0.0, -1.0, 0.0),
+        0.0,
+    );
+    // Back (y=sy, normal pointing +y)
+    let f_back = mk(
+        topo,
+        [(e_b2, false), (e_v3, true), (e_t2, true), (e_v2, false)],
+        Vec3::new(0.0, 1.0, 0.0),
+        -sy,
+    );
+    // Left (x=0, normal pointing -x)
+    let f_left = mk(
+        topo,
+        [(e_b3, false), (e_v0, true), (e_t3, true), (e_v3, false)],
+        Vec3::new(-1.0, 0.0, 0.0),
+        0.0,
+    );
+    // Right (x=sx, normal pointing +x)
+    let f_right = mk(
+        topo,
+        [(e_b1, false), (e_v2, true), (e_t1, true), (e_v1, false)],
+        Vec3::new(1.0, 0.0, 0.0),
+        -sx,
+    );
+
+    // Build shell from 6 faces
+    let shell =
+        Shell::new(vec![f_bottom, f_top, f_front, f_back, f_left, f_right]).expect("test shell");
+    let shell_id = topo.add_shell(shell);
+
+    // Build solid from shell
+    let solid = Solid::new(shell_id, vec![]);
+    topo.add_solid(solid)
+}
+
 /// Helper: create a rectangular face from 4 vertex IDs on a given plane.
 fn make_quad_face(
     topo: &mut Topology,
