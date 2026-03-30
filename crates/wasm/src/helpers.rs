@@ -142,12 +142,12 @@ pub fn json_f64(val: &serde_json::Value, key: &str) -> Result<f64, JsError> {
 
 // ── Edge/face helpers ─────────────────────────────────────────────
 
-/// Attempt fillet with rolling-ball (primary), falling back to blend crate
-/// then flat bevel on failure.
+/// Attempt fillet using the blend crate's `FilletBuilder` (primary),
+/// falling back to rolling-ball then flat bevel on failure.
 ///
-/// The blend crate's `fillet_v2` has correct corner geometry for multi-edge
-/// fillets but is not yet fully validated for all single-edge cases.
-/// Once validated, it should become the primary path.
+/// The blend crate path has correct corner geometry (spherical triangle
+/// patches) for multi-edge fillets. Rolling-ball is kept as fallback
+/// for edge cases where `FilletBuilder` fails.
 #[allow(deprecated)]
 pub fn try_fillet(
     topo: &mut brepkit_topology::Topology,
@@ -155,13 +155,12 @@ pub fn try_fillet(
     edge_ids: &[brepkit_topology::edge::EdgeId],
     radius: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
-    // Primary path: rolling-ball (well-tested, correct bbox)
-    // TODO(#490): switch to fillet_v2 once its cylinder positioning is validated
-    brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
-        // Fallback 1: blend crate FilletBuilder (correct corner patches)
+    // Primary path: blend crate FilletBuilder (correct corner geometry)
+    brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edge_ids, radius)
+        .map(|r| r.solid)
+        // Fallback 1: rolling-ball (legacy, known corner overlap issues)
         .or_else(|_| {
-            brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edge_ids, radius)
-                .map(|r| r.solid)
+            brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
         })
         // Fallback 2: flat bevel (simplest)
         .or_else(|_| brepkit_operations::fillet::fillet(topo, solid_id, edge_ids, radius))
