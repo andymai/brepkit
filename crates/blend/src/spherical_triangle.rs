@@ -46,11 +46,17 @@ pub struct SphericalCornerResult {
 
 // ── Sphere center ──────────────────────────────────────────────────
 
-/// Compute the sphere center from vertex position and face normals.
+/// Compute the sphere center and actual sphere radius from vertex
+/// position, face normals, and the fillet radius.
 ///
-/// For a convex vertex the center is offset inward along the averaged
-/// normal direction; for concave vertices it is offset outward.
-fn compute_sphere_center(data: &VertexContactData) -> Result<Point3, BlendError> {
+/// The center is offset from the vertex by `R * sum(face_normals)` —
+/// each face contributes an independent offset of R along its inward
+/// normal.  The actual sphere radius (distance from center to contact
+/// points) may differ from the fillet radius when the faces are not
+/// mutually orthogonal.
+///
+/// Returns `(center, sphere_radius)`.
+fn compute_sphere_center(data: &VertexContactData) -> Result<(Point3, f64), BlendError> {
     let mut normal_sum = Vec3::new(0.0, 0.0, 0.0);
     for n in &data.face_normals {
         normal_sum += *n;
@@ -61,18 +67,33 @@ fn compute_sphere_center(data: &VertexContactData) -> Result<Point3, BlendError>
             vertex: data.vertex_id,
         });
     }
-    let normal_dir = normal_sum * (1.0 / len);
+
+    // Each face pushes the sphere center by R along its normal.
+    let offset = normal_sum * data.radius;
 
     let center = if data.is_convex {
-        data.vertex_pos + normal_dir * data.radius
+        data.vertex_pos + offset
     } else {
-        data.vertex_pos - normal_dir * data.radius
+        data.vertex_pos - offset
     };
 
-    // Validate: all contact points should be at distance R from center.
+    // Derive the actual sphere radius from the first contact point.
+    if data.contact_points.is_empty() {
+        return Err(BlendError::CornerFailure {
+            vertex: data.vertex_id,
+        });
+    }
+    let sphere_radius = (data.contact_points[0] - center).length();
+    if sphere_radius < TOL {
+        return Err(BlendError::CornerFailure {
+            vertex: data.vertex_id,
+        });
+    }
+
+    // Validate: all contact points should be at the same distance from center.
     for cp in &data.contact_points {
         let dist = (*cp - center).length();
-        let err = (dist - data.radius).abs();
+        let err = (dist - sphere_radius).abs();
         if err > TOL * 100.0 {
             return Err(BlendError::CornerFailure {
                 vertex: data.vertex_id,
@@ -80,7 +101,7 @@ fn compute_sphere_center(data: &VertexContactData) -> Result<Point3, BlendError>
         }
     }
 
-    Ok(center)
+    Ok((center, sphere_radius))
 }
 
 // ── Great-circle arc ───────────────────────────────────────────────
@@ -137,8 +158,7 @@ pub fn build_spherical_corner(
         });
     }
 
-    let center = compute_sphere_center(data)?;
-    let r = data.radius;
+    let (center, r) = compute_sphere_center(data)?;
     let vid = data.vertex_id;
 
     let q1 = data.contact_points[0];
@@ -225,8 +245,7 @@ pub fn build_n_edge_corner(
         });
     }
 
-    let center = compute_sphere_center(data)?;
-    let r = data.radius;
+    let (center, r) = compute_sphere_center(data)?;
 
     // Centroid of contact points, projected onto the sphere.
     let mut centroid_raw = Vec3::new(0.0, 0.0, 0.0);
@@ -402,19 +421,19 @@ mod tests {
     fn test_sphere_center_convex() {
         let (_topo, vid) = make_vertex_id();
         let data = unit_cube_corner_data(vid);
-        let center = compute_sphere_center(&data).expect("should compute center");
+        let (center, sphere_r) = compute_sphere_center(&data).expect("should compute center");
 
         let r = data.radius;
-        let expected_dir = Vec3::new(1.0, 1.0, 1.0) * (1.0 / 3.0_f64.sqrt());
-        let expected = data.vertex_pos + expected_dir * r;
+        // Center = vertex + R * sum(normals) = (0,0,0) + 0.2*(1,1,1) = (0.2,0.2,0.2)
+        let expected = data.vertex_pos + Vec3::new(1.0, 1.0, 1.0) * r;
 
         let err = (center - expected).length();
         assert!(err < 1e-10, "center offset: {err}");
 
-        // All contact points at distance R from center.
+        // All contact points at distance sphere_r from center.
         for (i, cp) in data.contact_points.iter().enumerate() {
             let dist = (*cp - center).length();
-            let diff = (dist - r).abs();
+            let diff = (dist - sphere_r).abs();
             assert!(diff < 1e-10, "contact point {i} distance error: {diff}");
         }
     }
@@ -423,8 +442,7 @@ mod tests {
     fn test_spherical_triangle_points_on_sphere() {
         let (_topo, vid) = make_vertex_id();
         let data = unit_cube_corner_data(vid);
-        let center = compute_sphere_center(&data).expect("should compute center");
-        let r = data.radius;
+        let (center, r) = compute_sphere_center(&data).expect("should compute center");
 
         let result = build_spherical_corner(&data).expect("should build corner");
 
@@ -458,8 +476,7 @@ mod tests {
     fn test_boundary_arc_is_circular() {
         let (_topo, vid) = make_vertex_id();
         let data = unit_cube_corner_data(vid);
-        let center = compute_sphere_center(&data).expect("should compute center");
-        let r = data.radius;
+        let (center, r) = compute_sphere_center(&data).expect("should compute center");
 
         let result = build_spherical_corner(&data).expect("should build corner");
 
