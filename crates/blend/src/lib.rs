@@ -14,6 +14,7 @@ pub(crate) mod corner;
 pub mod fillet_builder;
 pub mod radius_law;
 pub(crate) mod section;
+pub(crate) mod spherical_triangle;
 pub(crate) mod spine;
 pub(crate) mod stripe;
 pub(crate) mod trimmer;
