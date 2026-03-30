@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.43.6](https://github.com/andymai/brepkit/compare/v2.43.5...v2.43.6) (2026-03-30)
+
+
+### Bug Fixes
+
+* **blend:** use contact NURBS curves for blend face edges ([#509](https://github.com/andymai/brepkit/issues/509)) ([8d5238d](https://github.com/andymai/brepkit/commit/8d5238d02b75387eb99f427a47fca70d76e24e68))
+
 ## [2.43.5](https://github.com/andymai/brepkit/compare/v2.43.4...v2.43.5) (2026-03-30)
 
 
