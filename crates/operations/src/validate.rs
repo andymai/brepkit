@@ -1520,6 +1520,7 @@ mod tests {
             }
         }
 
+        #[allow(deprecated)]
         let result = crate::fillet::fillet_rolling_ball(&mut topo, cube, &[edges[0]], 2.0).unwrap();
 
         // Strict validation may pass or fail for oversized fillets (R=2 on unit cube).
@@ -1709,6 +1710,7 @@ mod tests {
             }
         }
 
+        #[allow(deprecated)]
         let result = crate::fillet::fillet_rolling_ball(&mut topo, cube, &[edges[0]], 2.0).unwrap();
 
         // With relaxed + scaled options, should pass clean

@@ -177,5 +177,6 @@ pub fn fillet_rolling_ball_propagate_g1(
 ) -> Result<SolidId, crate::OperationsError> {
     // fillet_rolling_ball now performs G1 chain expansion internally,
     // so we forward directly to avoid expanding twice.
+    #[allow(deprecated)]
     super::fillet_rolling_ball(topo, solid, seed_edges, radius)
 }

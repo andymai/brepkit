@@ -142,7 +142,8 @@ pub fn json_f64(val: &serde_json::Value, key: &str) -> Result<f64, JsError> {
 
 // ── Edge/face helpers ─────────────────────────────────────────────
 
-/// Attempt fillet with rolling-ball, falling back to flat bevel on failure.
+/// Attempt fillet using the blend crate's unified fillet builder (primary),
+/// falling back to rolling-ball then flat bevel on failure.
 #[allow(deprecated)]
 pub fn try_fillet(
     topo: &mut brepkit_topology::Topology,
@@ -150,7 +151,14 @@ pub fn try_fillet(
     edge_ids: &[brepkit_topology::edge::EdgeId],
     radius: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
-    brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
+    // Primary path: blend crate's FilletBuilder (correct corner geometry)
+    brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edge_ids, radius)
+        .map(|r| r.solid)
+        // Fallback 1: rolling-ball (legacy, has corner overlap issues)
+        .or_else(|_| {
+            brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
+        })
+        // Fallback 2: flat bevel (simplest)
         .or_else(|_| brepkit_operations::fillet::fillet(topo, solid_id, edge_ids, radius))
 }
 

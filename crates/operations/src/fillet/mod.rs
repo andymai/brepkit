@@ -38,6 +38,7 @@ mod tests;
 pub use g1_chain::fillet_rolling_ball_propagate_g1;
 pub(crate) use geometry::face_surface_normal_at;
 pub use radius_law::FilletRadiusLaw;
+#[allow(deprecated)]
 pub use rolling_ball::fillet_rolling_ball;
 
 use std::collections::{HashMap, HashSet};

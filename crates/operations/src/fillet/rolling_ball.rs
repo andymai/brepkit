@@ -47,6 +47,11 @@ use super::helpers::{FacePolygon, extract_inner_wire_positions};
 /// - Adjacent fillet strips overlap (on planar or curved faces)
 /// - Fillet radius exceeds surface curvature of an adjacent face
 #[allow(clippy::too_many_lines)]
+#[deprecated(
+    since = "2.44.0",
+    note = "Use brepkit_blend::fillet_builder::FilletBuilder (via blend_ops::fillet_v2) instead. \
+            This implementation has known corner overlap issues at multi-edge vertices."
+)]
 pub fn fillet_rolling_ball(
     topo: &mut Topology,
     solid: SolidId,

@@ -1,6 +1,6 @@
 //! Tests for tessellation.
 
-#![allow(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used, deprecated)]
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
