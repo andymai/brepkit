@@ -4,6 +4,8 @@
 //! Newton-Raphson walking algorithm. It produces G1-continuous fillet
 //! and chamfer surfaces for all combinations of analytic and NURBS faces.
 
+#[allow(dead_code)]
+pub(crate) mod adaptive_tolerance;
 pub(crate) mod analytic;
 pub(crate) mod blend_func;
 pub(crate) mod builder_utils;
