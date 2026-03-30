@@ -48,9 +48,20 @@ pub fn create_blend_face(topo: &mut Topology, stripe: &Stripe) -> Result<FaceId,
     let v2e = topo.add_vertex(Vertex::new(p2_end, 1e-7));
 
     // Build quad: p1_start -> p1_end -> p2_end -> p2_start -> p1_start.
-    let e0 = topo.add_edge(Edge::new(v1s, v1e, EdgeCurve::Line));
+    // Use actual contact curves for e0 and e2 (the longitudinal edges along
+    // the spine direction). Cross edges e1 and e3 are straight lines connecting
+    // the two contact curves at the spine endpoints.
+    let e0 = topo.add_edge(Edge::new(
+        v1s,
+        v1e,
+        EdgeCurve::NurbsCurve(stripe.contact1.clone()),
+    ));
     let e1 = topo.add_edge(Edge::new(v1e, v2e, EdgeCurve::Line));
-    let e2 = topo.add_edge(Edge::new(v2e, v2s, EdgeCurve::Line));
+    let e2 = topo.add_edge(Edge::new(
+        v2e,
+        v2s,
+        EdgeCurve::NurbsCurve(stripe.contact2.clone()),
+    ));
     let e3 = topo.add_edge(Edge::new(v2s, v1s, EdgeCurve::Line));
 
     let wire = Wire::new(
