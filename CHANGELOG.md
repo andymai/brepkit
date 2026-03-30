@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.43.5](https://github.com/andymai/brepkit/compare/v2.43.4...v2.43.5) (2026-03-30)
+
+
+### Bug Fixes
+
+* **blend:** rework vertex blend corner patches for correct multi-edge fillet volume ([#490](https://github.com/andymai/brepkit/issues/490)) ([#507](https://github.com/andymai/brepkit/issues/507)) ([e5979e6](https://github.com/andymai/brepkit/commit/e5979e67c2e5ffcf3afa6f10bb9b28559773a8a6))
+
 ## [2.43.4](https://github.com/andymai/brepkit/compare/v2.43.3...v2.43.4) (2026-03-29)
 
 
