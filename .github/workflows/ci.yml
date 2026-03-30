@@ -65,7 +65,7 @@ jobs:
             echo "::error::Coverage ${COVERAGE}% is below the 60% threshold"
             exit 1
           fi
-      - uses: codecov/codecov-action@v5
+      - uses: codecov/codecov-action@v6
         if: always()
         with:
           files: lcov.info
