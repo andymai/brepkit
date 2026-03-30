@@ -644,45 +644,32 @@ pub fn trim_face_general(
     let idx_a = hit_a.edge_idx;
     let idx_b = hit_b.edge_idx;
 
-    // Determine keep side: use the midpoint of the contact segment projected
-    // to UV and check against boundary winding
-    let mid_uv = ((uv_s.0 + uv_e.0) * 0.5, (uv_s.1 + uv_e.1) * 0.5);
-    let contact_dir_uv = (uv_e.0 - uv_s.0, uv_e.1 - uv_s.1);
-    let normal_left = (-contact_dir_uv.1, contact_dir_uv.0);
+    // Both hits on the same edge: degenerate case
+    if idx_a == idx_b {
+        return Err(BlendError::TrimmingFailure { face: face_id });
+    }
 
-    // Sample a point on the "left" side
-    let test_pt = (
-        mid_uv.0 + normal_left.0 * 1e-6,
-        mid_uv.1 + normal_left.1 * 1e-6,
-    );
-    let _ = test_pt; // Used for side determination
-
-    // Build "left" side wire: edges from idx_a..idx_b + contact edge
+    // Build "left" side wire: edges from idx_a..idx_b + contact edge.
+    // New split edges (ea_post, eb_pre, etc.) are created in traversal order,
+    // so they use forward=true. Only existing boundary edges keep their
+    // original orientation.
     let mut left_edges: Vec<OrientedEdge> = Vec::new();
-    // ea_post (va → ea) portion of split edge A
-    left_edges.push(OrientedEdge::new(ea_post, oe_a.is_forward()));
-    // Edges between A and B (exclusive)
+    left_edges.push(OrientedEdge::new(ea_post, true));
     for i in (idx_a + 1)..idx_b {
         left_edges.push(oriented_edges[i]);
     }
-    // eb_pre (sb → vb) portion of split edge B
-    left_edges.push(OrientedEdge::new(eb_pre, oe_b.is_forward()));
-    // Contact edge vb → va (reversed) to close the loop
+    left_edges.push(OrientedEdge::new(eb_pre, true));
     left_edges.push(OrientedEdge::new(contact_eid, false));
 
     // Build "right" side wire: remaining edges + contact edge
     let mut right_edges: Vec<OrientedEdge> = Vec::new();
-    // eb_post (vb → eb) portion of split edge B
-    right_edges.push(OrientedEdge::new(eb_post, oe_b.is_forward()));
-    // Edges after B, wrapping around to before A
+    right_edges.push(OrientedEdge::new(eb_post, true));
     let n = oriented_edges.len();
     for i in 1..(n - (idx_b - idx_a)) {
         let idx = (idx_b + i) % n;
         right_edges.push(oriented_edges[idx]);
     }
-    // ea_pre (sa → va) portion of split edge A
-    right_edges.push(OrientedEdge::new(ea_pre, oe_a.is_forward()));
-    // Contact edge va → vb (forward) to close
+    right_edges.push(OrientedEdge::new(ea_pre, true));
     right_edges.push(OrientedEdge::new(contact_eid, true));
 
     let (keep_edges, _contact_forward) = match keep_side {

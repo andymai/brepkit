@@ -126,6 +126,9 @@ fn build_great_circle_arc(
     let bisector = bisector_raw * (1.0 / bisector_len);
 
     let cos_half = dir_i.dot(bisector);
+    if cos_half.abs() < TOL {
+        return Err(BlendError::CornerFailure { vertex: vertex_id });
+    }
     // Tangent intersection point (the middle control point in 3D).
     let mid_cp = center + bisector * (radius / cos_half);
 

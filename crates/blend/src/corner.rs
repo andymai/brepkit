@@ -54,6 +54,9 @@ pub struct CornerResult {
 /// Tolerance for floating-point comparisons.
 const TOL: f64 = 1e-7;
 
+/// Tolerance for angular comparisons (cosine of angle threshold ~10°).
+const ORTHO_COS_TOL: f64 = 0.1;
+
 /// Return the indices (into `stripes`) of stripes whose spine touches `vertex_id`.
 fn stripes_at_vertex(vertex_id: VertexId, stripes: &[Stripe], topo: &Topology) -> Vec<usize> {
     let mut result = Vec::new();
@@ -277,7 +280,7 @@ fn build_multi_edge_corner(
             // Only add if not a near-duplicate.
             let is_dup = face_normals
                 .iter()
-                .any(|existing| existing.dot(n).abs() > 1.0 - 0.1);
+                .any(|existing| existing.dot(n).abs() > 1.0 - ORTHO_COS_TOL);
             if !is_dup {
                 face_normals.push(n);
             }

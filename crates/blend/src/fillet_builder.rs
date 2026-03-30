@@ -144,8 +144,13 @@ impl<'a> FilletBuilder<'a> {
 
         // ── Phase 2: Compute corner patches ────────────────────────────
         let stripes: Vec<Stripe> = stripe_results.iter().map(|sr| sr.stripe.clone()).collect();
-        let corner_results =
-            corner::compute_corners(topo, &stripes, self.solid).unwrap_or_default();
+        let corner_results = match corner::compute_corners(topo, &stripes, self.solid) {
+            Ok(results) => results,
+            Err(e) => {
+                log::warn!("corner computation failed: {e}, proceeding without corner patches");
+                Vec::new()
+            }
+        };
 
         // Add corner faces to the result and mark their adjacent faces as touched.
         let mut corner_face_ids: Vec<FaceId> = Vec::new();
