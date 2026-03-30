@@ -15,6 +15,7 @@ use brepkit_topology::solid::{Solid, SolidId};
 use crate::analytic;
 use crate::blend_func::{ConstRadBlend, EvolRadBlend};
 use crate::builder_utils::{create_blend_face, sample_nurbs_endpoints, surface_ref_or_adapter};
+use crate::corner;
 use crate::radius_law::RadiusLaw;
 use crate::spine::Spine;
 use crate::stripe::{Stripe, StripeResult};
@@ -141,7 +142,18 @@ impl<'a> FilletBuilder<'a> {
             });
         }
 
-        // ── Phase 2: Trim faces ─────────────────────────────────────────
+        // ── Phase 2: Compute corner patches ────────────────────────────
+        let stripes: Vec<Stripe> = stripe_results.iter().map(|sr| sr.stripe.clone()).collect();
+        let corner_results =
+            corner::compute_corners(topo, &stripes, self.solid).unwrap_or_default();
+
+        // Add corner faces to the result and mark their adjacent faces as touched.
+        let mut corner_face_ids: Vec<FaceId> = Vec::new();
+        for cr in &corner_results {
+            corner_face_ids.push(cr.face_id);
+        }
+
+        // ── Phase 3: Trim faces ─────────────────────────────────────────
         // Map from original face ID to its latest trimmed replacement.
         let mut face_replacements: std::collections::HashMap<FaceId, FaceId> =
             std::collections::HashMap::new();
@@ -185,13 +197,7 @@ impl<'a> FilletBuilder<'a> {
                 .get(&stripe.face1)
                 .copied()
                 .unwrap_or(stripe.face1);
-            let trim1 = trimmer::trim_face(
-                topo,
-                current_face1,
-                &contact1_pts,
-                &[(0.0, 0.0), (1.0, 0.0)], // placeholder UV
-                keep_side1,
-            );
+            let trim1 = trimmer::trim_face_general(topo, current_face1, &contact1_pts, keep_side1);
 
             match trim1 {
                 Ok(tr) if tr.trimmed_face != current_face1 => {
@@ -210,13 +216,7 @@ impl<'a> FilletBuilder<'a> {
                 .get(&stripe.face2)
                 .copied()
                 .unwrap_or(stripe.face2);
-            let trim2 = trimmer::trim_face(
-                topo,
-                current_face2,
-                &contact2_pts,
-                &[(0.0, 0.0), (1.0, 0.0)], // placeholder UV
-                keep_side2,
-            );
+            let trim2 = trimmer::trim_face_general(topo, current_face2, &contact2_pts, keep_side2);
 
             match trim2 {
                 Ok(tr) if tr.trimmed_face != current_face2 => {
@@ -259,6 +259,9 @@ impl<'a> FilletBuilder<'a> {
 
         // Add blend faces.
         result_faces.extend(&blend_face_ids);
+
+        // Add corner patch faces.
+        result_faces.extend(&corner_face_ids);
 
         // Build shell and solid.
         let new_shell = Shell::new(result_faces)?;
