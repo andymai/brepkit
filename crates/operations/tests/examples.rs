@@ -34,6 +34,7 @@ fn example_box_with_fillet() {
     let edges = brepkit_topology::explorer::solid_edges(&topo, solid).unwrap();
 
     // Fillet every edge with radius 1.0
+    #[allow(deprecated)]
     let filleted =
         brepkit_operations::fillet::fillet_rolling_ball(&mut topo, solid, &edges, 1.0).unwrap();
 

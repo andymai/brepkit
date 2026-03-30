@@ -1,34 +1,73 @@
 //! G1 continuity chain expansion for fillet edge propagation.
+//!
+//! Given a set of seed edges, iteratively expands along manifold edges
+//! that share the same face pair and are tangent-continuous at the
+//! shared vertex.
 
 use std::collections::{HashMap, HashSet};
 
 use brepkit_math::tolerance::Tolerance;
+use brepkit_math::traits::ParametricCurve;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeId;
+use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
 
-use super::geometry::sample_edge_tangent;
+/// Sample the tangent of an edge curve at normalized parameter `t` in `[0, 1]`.
+///
+/// Maps from the `[0, 1]` interval to the curve's native parameter range,
+/// accounting for circle/ellipse angle wrapping.
+fn sample_edge_tangent(curve: &EdgeCurve, p_start: Point3, p_end: Point3, t: f64) -> Vec3 {
+    match curve {
+        EdgeCurve::Line => p_end - p_start,
+        EdgeCurve::Circle(circle) => {
+            let ts = circle.project(p_start);
+            let mut te = circle.project(p_end);
+            if te <= ts {
+                te += std::f64::consts::TAU;
+            }
+            ParametricCurve::tangent(circle, ts + (te - ts) * t)
+        }
+        EdgeCurve::Ellipse(ellipse) => {
+            let ts = ellipse.project(p_start);
+            let mut te = ellipse.project(p_end);
+            if te <= ts {
+                te += std::f64::consts::TAU;
+            }
+            ParametricCurve::tangent(ellipse, ts + (te - ts) * t)
+        }
+        EdgeCurve::NurbsCurve(nurbs) => {
+            let (u0, u1) = nurbs.domain();
+            let u = u0 + (u1 - u0) * t;
+            let d = nurbs.derivatives(u, 1);
+            d[1]
+        }
+    }
+}
 
 /// Expand a seed edge set by G1 (tangent-continuity) chain propagation.
 ///
 /// Starting from `seed_edges`, iteratively adds any manifold edge that:
 /// 1. Shares a vertex with an edge already in the set.
 /// 2. Has the same pair of adjacent faces (same ridgeline).
-/// 3. Is tangent-continuous at the shared vertex (< 10° deviation).
+/// 3. Is tangent-continuous at the shared vertex (< 10 deg deviation).
 ///
-/// This is a private helper for [`super::fillet_rolling_ball_propagate_g1`].
-pub(super) fn expand_g1_chain(
+/// # Errors
+///
+/// Returns `BlendError::Topology` if any topology lookup fails.
+#[allow(clippy::too_many_lines)]
+pub fn expand_g1_chain(
     topo: &Topology,
     solid: SolidId,
     seed_edges: &[EdgeId],
     tol: Tolerance,
-) -> Result<Vec<EdgeId>, crate::OperationsError> {
+) -> Result<Vec<EdgeId>, crate::BlendError> {
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
     let shell_face_ids: Vec<FaceId> = shell.faces().to_vec();
 
-    // Build edge→faces and vertex→edges maps for the full shell.
+    // Build edge->faces and vertex->edges maps for the full shell.
     let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
     let mut vertex_to_edges: HashMap<usize, Vec<EdgeId>> = HashMap::new();
     let mut edge_ids: HashMap<usize, EdgeId> = HashMap::new();
@@ -87,7 +126,7 @@ pub(super) fn expand_g1_chain(
             // "Away from vertex" tangent for the current edge at this vertex.
             let t_cur = {
                 let t_raw = if shared_vid == cur_edge.start() {
-                    // Forward tangent at start points away from vertex — correct sign.
+                    // Forward tangent at start points away from vertex -- correct sign.
                     sample_edge_tangent(cur_edge.curve(), cur_start, cur_end, 0.0)
                 } else {
                     // Forward tangent at end points INTO vertex; negate for "away".
@@ -140,8 +179,8 @@ pub(super) fn expand_g1_chain(
                     t_raw * (1.0 / len)
                 };
 
-                // G1 continuity: "away" tangents must be anti-parallel (< ~10° deviation).
-                // cos(170°) ≈ -0.985.  This is strict: a true G1 joint has dot = -1.0.
+                // G1 continuity: "away" tangents must be anti-parallel (< ~10 deg deviation).
+                // cos(170 deg) ~ -0.985.  This is strict: a true G1 joint has dot = -1.0.
                 if t_cur.dot(t_nb) < -0.985 {
                     expanded.insert(nb.index());
                     queue.push(nb);
@@ -156,27 +195,4 @@ pub(super) fn expand_g1_chain(
         .collect();
     result.sort_unstable_by_key(|e| e.index());
     Ok(result)
-}
-
-/// Fillet `seed_edges` and all G1-continuous edges connected to them.
-///
-/// **Note:** As of the G1 chain propagation integration, [`super::fillet_rolling_ball`]
-/// now performs the same automatic expansion internally.  This wrapper is
-/// retained for backward compatibility but is equivalent to calling
-/// `fillet_rolling_ball` directly.
-///
-/// # Errors
-///
-/// Returns the same errors as [`super::fillet_rolling_ball`].
-#[allow(deprecated)]
-pub fn fillet_rolling_ball_propagate_g1(
-    topo: &mut Topology,
-    solid: SolidId,
-    seed_edges: &[EdgeId],
-    radius: f64,
-) -> Result<SolidId, crate::OperationsError> {
-    // fillet_rolling_ball now performs G1 chain expansion internally,
-    // so we forward directly to avoid expanding twice.
-    #[allow(deprecated)]
-    super::fillet_rolling_ball(topo, solid, seed_edges, radius)
 }

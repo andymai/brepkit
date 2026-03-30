@@ -357,6 +357,7 @@ mod tests {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
         let edges: Vec<_> = explorer::solid_edges(&topo, solid).unwrap();
+        #[allow(deprecated)]
         let filleted =
             crate::fillet::fillet_rolling_ball(&mut topo, solid, &[edges[0]], 2.0).unwrap();
         let vol = solid_volume(&topo, filleted, 0.01).unwrap();
