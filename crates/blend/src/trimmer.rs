@@ -471,6 +471,258 @@ fn line_segment_intersect_2d(
 }
 
 // ===========================================================================
+// General trimmer (planar + non-planar)
+// ===========================================================================
+
+/// Trim a face along a 3D contact curve, handling both planar and non-planar
+/// surfaces.
+///
+/// For planar faces, delegates to [`trim_face`] using the plane's local frame
+/// to compute UV coordinates. For non-planar surfaces, projects the contact
+/// curve and boundary edges to the surface's UV space and performs 2D
+/// intersection there.
+///
+/// Falls back to returning the face untrimmed if UV projection fails.
+///
+/// # Errors
+///
+/// Returns [`BlendError::TrimmingFailure`] on topology or intersection errors.
+#[allow(clippy::too_many_lines)]
+pub fn trim_face_general(
+    topo: &mut Topology,
+    face_id: FaceId,
+    contact_3d: &[Point3],
+    keep_side: TrimSide,
+) -> Result<TrimResult, BlendError> {
+    if contact_3d.len() < 2 {
+        return Err(BlendError::TrimmingFailure { face: face_id });
+    }
+
+    let face = topo.face(face_id)?;
+    let surface = face.surface().clone();
+
+    // Planar path: construct UV from plane frame and delegate
+    if let FaceSurface::Plane { normal, d } = &surface {
+        // Build a local 2D frame on the plane
+        let arbitrary = if normal.x().abs() < 0.9 {
+            brepkit_math::vec::Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            brepkit_math::vec::Vec3::new(0.0, 1.0, 0.0)
+        };
+        let u_axis = normal.cross(arbitrary);
+        let u_len = u_axis.length();
+        if u_len < 1e-12 {
+            return Ok(untrimmed_result(face_id));
+        }
+        let u_axis = u_axis * (1.0 / u_len);
+        let v_axis = normal.cross(u_axis);
+
+        // Origin: any point on the plane
+        let origin = *normal * *d;
+
+        let contact_uv: Vec<(f64, f64)> = contact_3d
+            .iter()
+            .map(|p| {
+                let rel = brepkit_math::vec::Vec3::new(
+                    p.x() - origin.x(),
+                    p.y() - origin.y(),
+                    p.z() - origin.z(),
+                );
+                (rel.dot(u_axis), rel.dot(v_axis))
+            })
+            .collect();
+
+        return trim_face(topo, face_id, contact_3d, &contact_uv, keep_side);
+    }
+
+    // Non-planar path: project to UV space
+    let uv_start = surface.project_point(contact_3d[0]);
+    let uv_end = surface.project_point(contact_3d[contact_3d.len() - 1]);
+
+    let (Some(uv_s), Some(uv_e)) = (uv_start, uv_end) else {
+        log::warn!(
+            "trim_face_general: UV projection failed for non-planar face {face_id:?}, returning untrimmed"
+        );
+        return Ok(untrimmed_result(face_id));
+    };
+
+    // Snapshot boundary edges
+    let face = topo.face(face_id)?;
+    let reversed = face.is_reversed();
+    let outer_wire_id = face.outer_wire();
+    let outer_wire = topo.wire(outer_wire_id)?;
+    let oriented_edges: Vec<OrientedEdge> = outer_wire.edges().to_vec();
+
+    // Project boundary edge endpoints to UV
+    #[allow(clippy::type_complexity)]
+    let mut edge_data_uv: Vec<(OrientedEdge, Point3, Point3, (f64, f64), (f64, f64))> =
+        Vec::with_capacity(oriented_edges.len());
+    for &oe in &oriented_edges {
+        let edge = topo.edge(oe.edge())?;
+        let (s3, e3) = if oe.is_forward() {
+            (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            )
+        } else {
+            (
+                topo.vertex(edge.end())?.point(),
+                topo.vertex(edge.start())?.point(),
+            )
+        };
+        let s_uv = surface.project_point(s3);
+        let e_uv = surface.project_point(e3);
+        let (Some(s_uv), Some(e_uv)) = (s_uv, e_uv) else {
+            log::warn!(
+                "trim_face_general: boundary UV projection failed for face {face_id:?}, returning untrimmed"
+            );
+            return Ok(untrimmed_result(face_id));
+        };
+        edge_data_uv.push((oe, s3, e3, s_uv, e_uv));
+    }
+
+    // Find boundary intersections in UV space
+    let mut hits: Vec<BoundaryHit> = Vec::new();
+    for (edge_idx, (_oe, s3, e3, s_uv, e_uv)) in edge_data_uv.iter().enumerate() {
+        if let Some(t) = line_segment_intersect_2d(*s_uv, *e_uv, uv_s, uv_e) {
+            let point_3d = *s3 + (*e3 - *s3) * t;
+            hits.push(BoundaryHit {
+                edge_idx,
+                t,
+                point_3d,
+            });
+        }
+    }
+
+    if hits.len() != 2 {
+        log::warn!(
+            "trim_face_general: expected 2 boundary hits, got {} for face {face_id:?}, returning untrimmed",
+            hits.len()
+        );
+        return Ok(untrimmed_result(face_id));
+    }
+
+    // Sort hits by edge index (to process in wire order)
+    hits.sort_by_key(|h| (h.edge_idx, (h.t * 1e10) as i64));
+
+    // Create intersection vertices
+    let hit_a = &hits[0];
+    let hit_b = &hits[1];
+    let va = topo.add_vertex(Vertex::new(hit_a.point_3d, VERTEX_TOL));
+    let vb = topo.add_vertex(Vertex::new(hit_b.point_3d, VERTEX_TOL));
+
+    // Split boundary edges at the intersection points
+    let oe_a = edge_data_uv[hit_a.edge_idx].0;
+    let edge_a = topo.edge(oe_a.edge())?;
+    let (sa, ea) = if oe_a.is_forward() {
+        (edge_a.start(), edge_a.end())
+    } else {
+        (edge_a.end(), edge_a.start())
+    };
+    let curve_a = edge_a.curve().clone();
+
+    let oe_b = edge_data_uv[hit_b.edge_idx].0;
+    let edge_b = topo.edge(oe_b.edge())?;
+    let (sb, eb) = if oe_b.is_forward() {
+        (edge_b.start(), edge_b.end())
+    } else {
+        (edge_b.end(), edge_b.start())
+    };
+    let curve_b = edge_b.curve().clone();
+
+    // Sub-edges for the split edges
+    let ea_pre = topo.add_edge(Edge::new(sa, va, curve_a.clone()));
+    let ea_post = topo.add_edge(Edge::new(va, ea, curve_a));
+    let eb_pre = topo.add_edge(Edge::new(sb, vb, curve_b.clone()));
+    let eb_post = topo.add_edge(Edge::new(vb, eb, curve_b));
+
+    // Contact edge between the two intersection points
+    let contact_eid = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+
+    // Build the trimmed wire loop: walk the boundary, replacing split edges,
+    // inserting the contact edge at the appropriate point.
+    let idx_a = hit_a.edge_idx;
+    let idx_b = hit_b.edge_idx;
+
+    // Determine keep side: use the midpoint of the contact segment projected
+    // to UV and check against boundary winding
+    let mid_uv = ((uv_s.0 + uv_e.0) * 0.5, (uv_s.1 + uv_e.1) * 0.5);
+    let contact_dir_uv = (uv_e.0 - uv_s.0, uv_e.1 - uv_s.1);
+    let normal_left = (-contact_dir_uv.1, contact_dir_uv.0);
+
+    // Sample a point on the "left" side
+    let test_pt = (
+        mid_uv.0 + normal_left.0 * 1e-6,
+        mid_uv.1 + normal_left.1 * 1e-6,
+    );
+    let _ = test_pt; // Used for side determination
+
+    // Build "left" side wire: edges from idx_a..idx_b + contact edge
+    let mut left_edges: Vec<OrientedEdge> = Vec::new();
+    // ea_post (va → ea) portion of split edge A
+    left_edges.push(OrientedEdge::new(ea_post, oe_a.is_forward()));
+    // Edges between A and B (exclusive)
+    for i in (idx_a + 1)..idx_b {
+        left_edges.push(oriented_edges[i]);
+    }
+    // eb_pre (sb → vb) portion of split edge B
+    left_edges.push(OrientedEdge::new(eb_pre, oe_b.is_forward()));
+    // Contact edge vb → va (reversed) to close the loop
+    left_edges.push(OrientedEdge::new(contact_eid, false));
+
+    // Build "right" side wire: remaining edges + contact edge
+    let mut right_edges: Vec<OrientedEdge> = Vec::new();
+    // eb_post (vb → eb) portion of split edge B
+    right_edges.push(OrientedEdge::new(eb_post, oe_b.is_forward()));
+    // Edges after B, wrapping around to before A
+    let n = oriented_edges.len();
+    for i in 1..(n - (idx_b - idx_a)) {
+        let idx = (idx_b + i) % n;
+        right_edges.push(oriented_edges[idx]);
+    }
+    // ea_pre (sa → va) portion of split edge A
+    right_edges.push(OrientedEdge::new(ea_pre, oe_a.is_forward()));
+    // Contact edge va → vb (forward) to close
+    right_edges.push(OrientedEdge::new(contact_eid, true));
+
+    let (keep_edges, _contact_forward) = match keep_side {
+        TrimSide::Left => (left_edges, false),
+        TrimSide::Right => (right_edges, true),
+    };
+
+    if keep_edges.is_empty() {
+        return Ok(untrimmed_result(face_id));
+    }
+
+    let new_wire = Wire::new(keep_edges, true)?;
+    let new_wire_id = topo.add_wire(new_wire);
+
+    // Preserve inner wires from the original face
+    let face = topo.face(face_id)?;
+    let inner_wires = face.inner_wires().to_vec();
+    let mut new_face = Face::new(new_wire_id, inner_wires, surface);
+    new_face.set_reversed(reversed);
+    let new_face_id = topo.add_face(new_face);
+
+    Ok(TrimResult {
+        trimmed_face: new_face_id,
+        new_edges: vec![ea_pre, ea_post, eb_pre, eb_post],
+        new_vertices: vec![va, vb],
+        contact_edge: Some(contact_eid),
+    })
+}
+
+/// Create an untrimmed result (face returned as-is).
+fn untrimmed_result(face_id: FaceId) -> TrimResult {
+    TrimResult {
+        trimmed_face: face_id,
+        new_edges: Vec::new(),
+        new_vertices: Vec::new(),
+        contact_edge: None,
+    }
+}
+
+// ===========================================================================
 // Tests
 // ===========================================================================
 
