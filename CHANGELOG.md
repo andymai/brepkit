@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.43.8](https://github.com/andymai/brepkit/compare/v2.43.7...v2.43.8) (2026-04-07)
+
+
+### Bug Fixes
+
+* **algo:** deterministic vertex creation in cross-rank shared pool ([#520](https://github.com/andymai/brepkit/issues/520)) ([ea22217](https://github.com/andymai/brepkit/commit/ea222175829f71f18be83adbd82088bfcfcc06d2))
+
 ## [2.43.7](https://github.com/andymai/brepkit/compare/v2.43.6...v2.43.7) (2026-04-07)
 
 
