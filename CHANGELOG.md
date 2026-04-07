@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.43.9](https://github.com/andymai/brepkit/compare/v2.43.8...v2.43.9) (2026-04-07)
+
+
+### Bug Fixes
+
+* **algo:** deterministic face rebuild order in merge_duplicate_edges ([#522](https://github.com/andymai/brepkit/issues/522)) ([7c46072](https://github.com/andymai/brepkit/commit/7c46072df546d62ad77de38e74ee7aa38b745d18))
+* **blend:** respect face reversal for analytic fillet normals ([#490](https://github.com/andymai/brepkit/issues/490)) ([#515](https://github.com/andymai/brepkit/issues/515)) ([454a361](https://github.com/andymai/brepkit/commit/454a361356fdedd84481f20edeed99f5a7a34b43))
+
 ## [2.43.8](https://github.com/andymai/brepkit/compare/v2.43.7...v2.43.8) (2026-04-07)
 
 
