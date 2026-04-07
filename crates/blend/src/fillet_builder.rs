@@ -328,10 +328,24 @@ fn compute_stripe_for_edge(
     let radius = law.evaluate(0.5);
 
     // Try analytic fast path (only for constant radius).
+    // The analytic fillet expects INWARD-pointing normals (toward material).
+    // Compute inward normals from the surface normals and face reversal:
+    // - Not reversed: outward = surface_normal → inward = -surface_normal
+    // - Reversed: outward = -surface_normal → inward = surface_normal
     if matches!(law, RadiusLaw::Constant(_)) {
-        if let Some(result) =
-            analytic::try_analytic_fillet(&surf1, &surf2, &spine, topo, radius, face1, face2)?
-        {
+        let flipped1 = orient_plane_surface(&surf1);
+        let flipped2 = orient_plane_surface(&surf2);
+        let inward_surf1 = if face1_reversed { &surf1 } else { &flipped1 };
+        let inward_surf2 = if face2_reversed { &surf2 } else { &flipped2 };
+        if let Some(result) = analytic::try_analytic_fillet(
+            inward_surf1,
+            inward_surf2,
+            &spine,
+            topo,
+            radius,
+            face1,
+            face2,
+        )? {
             return Ok(result);
         }
     }
