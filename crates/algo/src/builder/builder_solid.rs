@@ -605,13 +605,23 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
 
     // Step 3: Rebuild faces that have replaced edges.
     // Snapshot face data, then create new faces.
+    //
+    // Sort the face indices before iterating so that `topo.add_wire` and
+    // `topo.add_face` are called in a deterministic order. Iterating the
+    // HashSet directly picks up a random per-process iteration order,
+    // which assigns different underlying WireId/FaceId values to
+    // structurally identical wires across runs. Downstream flood-fill in
+    // `perform_loops` can be sensitive to those ID orderings at
+    // near-degenerate geometry, so fix the order here.
     let faces_to_rebuild: HashSet<usize> = entries
         .iter()
         .filter(|e| replacements.contains_key(&e.edge_id))
         .map(|e| e.face_idx)
         .collect();
+    let mut faces_to_rebuild_sorted: Vec<usize> = faces_to_rebuild.into_iter().collect();
+    faces_to_rebuild_sorted.sort_unstable();
 
-    for &fi in &faces_to_rebuild {
+    for &fi in &faces_to_rebuild_sorted {
         let fid = face_ids[fi];
 
         // Snapshot
@@ -687,7 +697,7 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
 
     log::debug!(
         "merge_duplicate_edges: merged {merge_count} duplicate edges across {} faces",
-        faces_to_rebuild.len()
+        faces_to_rebuild_sorted.len()
     );
 
     Ok(())
