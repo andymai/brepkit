@@ -180,8 +180,18 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         }
         // Create fresh vertices for positions with 2+ unique faces.
         // Reuse CB pre-pass vertex if available at this position.
+        //
+        // Sort by the resolved VertexId index so that `topo.add_vertex` is
+        // called in a deterministic order. Iterating `vid_faces` directly
+        // picks up HashMap iteration order, which uses a random per-process
+        // seed — different orderings assign different fresh VertexIds to
+        // the same quantized positions, producing nondeterministic topology
+        // downstream and intermittent compound-boolean failures.
         let mut pool = BTreeMap::new();
-        for (pt, faces) in vid_faces.values() {
+        let mut sorted_entries: Vec<(usize, &(Point3, std::collections::HashSet<usize>))> =
+            vid_faces.iter().map(|(&k, v)| (k, v)).collect();
+        sorted_entries.sort_by_key(|(k, _)| *k);
+        for (_, (pt, faces)) in sorted_entries {
             if faces.len() >= 2 {
                 let key = qpos(*pt);
                 pool.entry(key).or_insert_with(|| {
