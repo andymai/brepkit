@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.43.7](https://github.com/andymai/brepkit/compare/v2.43.6...v2.43.7) (2026-04-07)
+
+
+### Bug Fixes
+
+* **measure:** use face vertices for cylinder AABB expansion ([#490](https://github.com/andymai/brepkit/issues/490)) ([#512](https://github.com/andymai/brepkit/issues/512)) ([e16ec33](https://github.com/andymai/brepkit/commit/e16ec3304080d8757ab8b492319a51352bd3bc16))
+
 ## [2.43.6](https://github.com/andymai/brepkit/compare/v2.43.5...v2.43.6) (2026-03-30)
 
 
