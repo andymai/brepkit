@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.43.10](https://github.com/andymai/brepkit/compare/v2.43.9...v2.43.10) (2026-04-13)
+
+
+### Bug Fixes
+
+* **ci:** add timeout to Test job to prevent 6-hour hangs ([#524](https://github.com/andymai/brepkit/issues/524)) ([ab1d64b](https://github.com/andymai/brepkit/commit/ab1d64b16ed1b6be873fc437cdacab0ee8ce23fa))
+
 ## [2.43.9](https://github.com/andymai/brepkit/compare/v2.43.8...v2.43.9) (2026-04-07)
 
 
