@@ -31,7 +31,7 @@ jobs:
           app-id: ${{ secrets.BREPKIT_BOT_APP_ID }}
           private-key: ${{ secrets.BREPKIT_BOT_PRIVATE_KEY }}
 
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@v5
         id: release
         # release-please can fail with "duplicate tag" (release already exists)
         # or "issue is locked" (can't comment on auto-merged PR). Both are
