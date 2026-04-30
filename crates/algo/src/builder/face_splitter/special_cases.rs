@@ -192,7 +192,13 @@ pub(super) fn split_face_with_internal_loops(
             end_3d: section.end,
             forward: true,
             source_edge_idx: None,
-            pave_block_id: None,
+            // Preserve the section's pave_block_id so cross-face edge
+            // sharing (box face inner wire ↔ cylinder face outer wire)
+            // works through `resolve_edge_vertices`'s PaveBlock path.
+            // Previously dropped to None, which forced position-fallback
+            // lookup that created duplicate vertices on the cylinder
+            // side of cylinder-cut booleans.
+            pave_block_id: section.pave_block_id,
         });
     }
 

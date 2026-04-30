@@ -1279,15 +1279,11 @@ fn solid_topology_summary(
             interpretation to closed section circles, which is correct only \
             for plane faces. On a cylinder lateral, a single closed circle \
             doesn't bound a disc — two parallel circles split the cylinder \
-            into 3 bands. The disc path produces 1-edge wires that leave \
-            the cylinder lateral disconnected (edges=14 not 15, Euler=3 not 2), \
-            which then fails operations-layer validation and triggers a \
-            mesh-boolean fallback that polygonalises the cylinder into ~227 \
-            faces. Fix requires a dedicated `split_periodic_face_into_bands` \
-            that knows how to construct band sub-faces (bottom circle + seam \
-            + top circle reversed + seam reversed) for each [v_a, v_b] segment \
-            between cuts. Tracked: gridfinity-layout-tool #260 / #270 path. \
-            See PR #533 body for full diagnosis + this test for the contract."]
+            into 3 bands. Fixing this requires a `split_periodic_face_into_bands` \
+            that constructs band sub-faces (bottom circle + seam + top circle \
+            reversed + seam reversed) AND avoids regressing compound_cut grids \
+            (where multiple cylinders share section planes). Tracked: \
+            gridfinity-layout-tool #260 / #270."]
 fn gfa_cut_box_cylinder_through_produces_valid_topology() {
     // Box [0,10]^3 with a cylinder r=1 at (5,5) piercing fully through
     // (z=-2 to z=12). The result should be a closed manifold solid:
