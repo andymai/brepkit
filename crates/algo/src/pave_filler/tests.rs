@@ -1144,3 +1144,186 @@ fn gfa_fuse_z_axis_overlapping_manifold_boxes() {
         "{non_manifold} non-manifold edges in z-axis fuse"
     );
 }
+
+// ── Box-cylinder cut (periodic-surface wire reconstruction) ──────────
+//
+// These tests pin the contract for the simplest non-box analytic
+// boolean: cutting a cylinder out of a box. The GFA face_splitter
+// historically produced an INCOMPLETE outer wire on the cylinder
+// lateral face — the new bottom intersection circle was added but
+// the new top intersection circle was not, giving Euler = 3 instead
+// of 2 and triggering the operations-layer mesh-boolean fallback
+// (which polygonalised the cylinder into ~200 faces).
+//
+// Reference: PR #531 corpus + PR #533 diagnosis, gridfinity-layout-tool
+// issue #260 / #270.
+
+/// Build a single cylinder solid in the topology.
+///
+/// `(cx, cy, z0)` is the center of the bottom cap; the cylinder extends
+/// up by `height` along +Z. Lateral face is a single periodic surface
+/// with the standard 4-edge wire (bot circle + seam + top circle reversed
+/// + seam reversed).
+fn make_cylinder(
+    topo: &mut Topology,
+    cx: f64,
+    cy: f64,
+    z0: f64,
+    radius: f64,
+    height: f64,
+) -> brepkit_topology::solid::SolidId {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::CylindricalSurface;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let v_bot = topo.add_vertex(Vertex::new(Point3::new(cx + radius, cy, z0), 1e-7));
+    let v_top = topo.add_vertex(Vertex::new(Point3::new(cx + radius, cy, z0 + height), 1e-7));
+
+    let bot_circle =
+        Circle3D::new(Point3::new(cx, cy, z0), Vec3::new(0.0, 0.0, 1.0), radius).unwrap();
+    let top_circle = Circle3D::new(
+        Point3::new(cx, cy, z0 + height),
+        Vec3::new(0.0, 0.0, 1.0),
+        radius,
+    )
+    .unwrap();
+    let cyl_surface =
+        CylindricalSurface::new(Point3::new(cx, cy, z0), Vec3::new(0.0, 0.0, 1.0), radius).unwrap();
+
+    let e_bot = topo.add_edge(Edge::new(v_bot, v_bot, EdgeCurve::Circle(bot_circle)));
+    let e_top = topo.add_edge(Edge::new(v_top, v_top, EdgeCurve::Circle(top_circle)));
+    let e_seam = topo.add_edge(Edge::new(v_bot, v_top, EdgeCurve::Line));
+
+    let lateral_wire = Wire::new(
+        vec![
+            OrientedEdge::new(e_bot, true),
+            OrientedEdge::new(e_seam, true),
+            OrientedEdge::new(e_top, false),
+            OrientedEdge::new(e_seam, false),
+        ],
+        true,
+    )
+    .unwrap();
+    let lateral_wid = topo.add_wire(lateral_wire);
+    let lateral = topo.add_face(Face::new(
+        lateral_wid,
+        vec![],
+        FaceSurface::Cylinder(cyl_surface),
+    ));
+
+    let bot_cap_wire = Wire::new(vec![OrientedEdge::new(e_bot, false)], true).unwrap();
+    let bot_wid = topo.add_wire(bot_cap_wire);
+    let bot_cap = topo.add_face(Face::new(
+        bot_wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: -z0,
+        },
+    ));
+
+    let top_cap_wire = Wire::new(vec![OrientedEdge::new(e_top, true)], true).unwrap();
+    let top_wid = topo.add_wire(top_cap_wire);
+    let top_cap = topo.add_face(Face::new(
+        top_wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: z0 + height,
+        },
+    ));
+
+    let shell = topo.add_shell(Shell::new(vec![lateral, bot_cap, top_cap]).unwrap());
+    topo.add_solid(Solid::new(shell, vec![]))
+}
+
+/// Compute (face_count, edge_count, vertex_count, euler) for a solid.
+fn solid_topology_summary(
+    topo: &Topology,
+    solid: brepkit_topology::solid::SolidId,
+) -> (usize, usize, usize, i64) {
+    use std::collections::HashSet;
+    let s = topo.solid(solid).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
+    let mut edges = HashSet::new();
+    let mut verts = HashSet::new();
+    let face_count = sh.faces().len();
+    for &fid in sh.faces() {
+        let f = topo.face(fid).unwrap();
+        for wid in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+            let w = topo.wire(wid).unwrap();
+            for oe in w.edges() {
+                let eid = oe.edge();
+                edges.insert(eid);
+                let e = topo.edge(eid).unwrap();
+                verts.insert(e.start());
+                verts.insert(e.end());
+            }
+        }
+    }
+    let v = verts.len();
+    let e = edges.len();
+    #[allow(clippy::cast_possible_wrap)]
+    let euler = (v as i64) - (e as i64) + (face_count as i64);
+    (face_count, e, v, euler)
+}
+
+#[test]
+#[ignore = "Gap: GFA `split_face_with_internal_loops` applies a disc-loop \
+            interpretation to closed section circles, which is correct only \
+            for plane faces. On a cylinder lateral, a single closed circle \
+            doesn't bound a disc — two parallel circles split the cylinder \
+            into 3 bands. The disc path produces 1-edge wires that leave \
+            the cylinder lateral disconnected (edges=14 not 15, Euler=3 not 2), \
+            which then fails operations-layer validation and triggers a \
+            mesh-boolean fallback that polygonalises the cylinder into ~227 \
+            faces. Fix requires a dedicated `split_periodic_face_into_bands` \
+            that knows how to construct band sub-faces (bottom circle + seam \
+            + top circle reversed + seam reversed) for each [v_a, v_b] segment \
+            between cuts. Tracked: gridfinity-layout-tool #260 / #270 path. \
+            See PR #533 body for full diagnosis + this test for the contract."]
+fn gfa_cut_box_cylinder_through_produces_valid_topology() {
+    // Box [0,10]^3 with a cylinder r=1 at (5,5) piercing fully through
+    // (z=-2 to z=12). The result should be a closed manifold solid:
+    //   - 4 box side faces (unchanged)
+    //   - 1 box bottom face with a circular inner wire (the hole)
+    //   - 1 box top face with a circular inner wire (the hole)
+    //   - 1 cylinder lateral face with: bottom circle + seam + top circle
+    //     reversed + seam reversed (4 oriented edges, 3 unique edges)
+    //
+    // Total: 7 faces, V=10, E=15, Euler = V-E+F = 2 (closed manifold).
+    //
+    // Historically: the cylinder lateral wire was missing the top circle
+    // and seam, giving Euler = 3 and triggering mesh fallback.
+    // See PR #533 for the diagnosis.
+    let mut topo = Topology::default();
+    let box_id = make_box(&mut topo, [0.0, 0.0, 0.0], [10.0, 10.0, 10.0]);
+    let cyl = make_cylinder(&mut topo, 5.0, 5.0, -2.0, 1.0, 14.0);
+
+    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, box_id, cyl)
+        .expect("GFA cut of box with through-cylinder should succeed");
+
+    let (f, e, v, euler) = solid_topology_summary(&topo, result);
+    eprintln!("box-cyl cut: faces={f}, edges={e}, verts={v}, euler={euler}");
+
+    // Manifold check: every edge must be shared by exactly 2 faces.
+    let s = topo.solid(result).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
+    let manifold = brepkit_topology::validation::validate_shell_manifold(sh, &topo);
+    assert!(
+        manifold.is_ok(),
+        "result shell must be manifold, got {manifold:?}"
+    );
+
+    assert_eq!(f, 7, "box-cyl cut should produce 7 faces, got {f}");
+    assert_eq!(
+        euler, 2,
+        "Euler V-E+F should be 2 for closed manifold, got V={v} E={e} F={f} euler={euler}",
+    );
+}
