@@ -577,7 +577,6 @@ fn compound_cut_bbox_accurate() {
 ///
 /// Solids: 0=box, 1=filleted, 2=lip_box, 3=fused
 #[test]
-#[ignore = "fuse volume 8140 vs expected ~16000 — boolean coplanar face classification (#270)"]
 fn gridfinity_lip_fillet_fuse_volume() {
     let mut k = BrepKernel::new();
 
