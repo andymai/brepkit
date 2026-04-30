@@ -17,6 +17,7 @@ default = ["io"]
 io = ["dep:brepkit-io"]
 
 [dependencies]
+brepkit-algo.workspace = true
 brepkit-check.workspace = true
 brepkit-geometry.workspace = true
 brepkit-io = {workspace = true, optional = true}

@@ -220,6 +220,31 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
+            "detectCoincidentFaces" => {
+                let a = get_u32(args, "solidA")?;
+                let b = get_u32(args, "solidB")?;
+                let a_id = self.resolve_solid(a).map_err(|e| e.to_string())?;
+                let b_id = self.resolve_solid(b).map_err(|e| e.to_string())?;
+                let pairs = brepkit_algo::diagnostic::detect_coincident_faces(
+                    self.topo(),
+                    a_id,
+                    b_id,
+                    brepkit_math::tolerance::Tolerance::default(),
+                )
+                .map_err(|e| e.to_string())?;
+                let arr: Vec<serde_json::Value> = pairs
+                    .iter()
+                    .map(|p| {
+                        serde_json::json!({
+                            "faceA": crate::handles::face_id_to_u32(p.face_a),
+                            "faceB": crate::handles::face_id_to_u32(p.face_b),
+                            "sameOrientation": p.same_orientation,
+                            "aabbOverlap": p.aabb_overlap,
+                        })
+                    })
+                    .collect();
+                Ok(serde_json::Value::Array(arr))
+            }
             "compoundCut" => {
                 let target = get_u32(args, "target")?;
                 let target_id = self.resolve_solid(target).map_err(|e| e.to_string())?;

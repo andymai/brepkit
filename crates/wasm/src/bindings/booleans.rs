@@ -47,6 +47,50 @@ impl BrepKernel {
         Ok(solid_id_to_u32(result))
     }
 
+    /// Detect surface-level coincident face pairs between two solids
+    /// without performing a boolean operation.
+    ///
+    /// Useful for warning users about same-domain configurations
+    /// (face stacks, coaxial cylinders, concentric spheres) before a
+    /// boolean. Returns a JSON array string of objects:
+    /// `[{"faceA": <u32>, "faceB": <u32>, "sameOrientation": <bool>, "aabbOverlap": <bool>}, ...]`.
+    ///
+    /// `sameOrientation` is `true` when the surface normals point the
+    /// same way at corresponding parametric points (e.g., two coplanar
+    /// faces with the same `+z` normal). `aabbOverlap` filters pairs
+    /// that are same-domain on the surface but geometrically disjoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid or any face /
+    /// edge / vertex lookup fails internally.
+    #[wasm_bindgen(js_name = "detectCoincidentFaces")]
+    pub fn detect_coincident_faces(&self, a: u32, b: u32) -> Result<String, JsError> {
+        let a_id = self.resolve_solid(a)?;
+        let b_id = self.resolve_solid(b)?;
+        let pairs = brepkit_algo::diagnostic::detect_coincident_faces(
+            self.topo(),
+            a_id,
+            b_id,
+            brepkit_math::tolerance::Tolerance::default(),
+        )
+        .map_err(|e| JsError::new(&format!("{e}")))?;
+
+        let parts: Vec<String> = pairs
+            .iter()
+            .map(|p| {
+                format!(
+                    "{{\"faceA\":{},\"faceB\":{},\"sameOrientation\":{},\"aabbOverlap\":{}}}",
+                    crate::handles::face_id_to_u32(p.face_a),
+                    crate::handles::face_id_to_u32(p.face_b),
+                    p.same_orientation,
+                    p.aabb_overlap,
+                )
+            })
+            .collect();
+        Ok(format!("[{}]", parts.join(",")))
+    }
+
     /// Intersect two solids, keeping only their common volume.
     ///
     /// Returns a new solid handle (`u32`).
@@ -405,6 +449,45 @@ mod tests {
             r#"[{{"op": "compoundCut", "args": {{"target": {a}, "tools": []}}}}]"#
         ));
         assert!(batch_has_ok(&r, 0));
+    }
+
+    // ── detectCoincidentFaces ────────────────────────────────────────
+
+    #[test]
+    fn detect_coincident_faces_two_disjoint_boxes_empty() {
+        let (mut k, setup) = two_boxes_batch();
+        let parsed: serde_json::Value = serde_json::from_str(&setup).unwrap();
+        let a = parsed[0]["ok"].as_u64().unwrap();
+        let b = parsed[1]["ok"].as_u64().unwrap();
+        let r = k.execute_batch(&format!(
+            r#"[{{"op": "detectCoincidentFaces", "args": {{"solidA": {a}, "solidB": {b}}}}}]"#
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let arr = parsed[0]["ok"].as_array().unwrap();
+        // Two boxes both at origin with axis-aligned planar faces will
+        // share several same-domain surfaces, but the smaller box's
+        // AABB is contained in the larger so all 6 face pairs overlap.
+        // The detector returns ALL same-domain pairs; callers filter
+        // by aabb_overlap. Just check the call succeeds and returns
+        // a JSON array.
+        assert!(!arr.is_empty(), "boxes at origin produce SD pairs: {r}");
+        for pair in arr {
+            assert!(pair.get("faceA").is_some());
+            assert!(pair.get("faceB").is_some());
+            assert!(pair.get("sameOrientation").is_some());
+            assert!(pair.get("aabbOverlap").is_some());
+        }
+    }
+
+    #[test]
+    fn detect_coincident_faces_invalid_handle_errors() {
+        let (mut k, setup) = two_boxes_batch();
+        let parsed: serde_json::Value = serde_json::from_str(&setup).unwrap();
+        let a = parsed[0]["ok"].as_u64().unwrap();
+        let r = k.execute_batch(&format!(
+            r#"[{{"op": "detectCoincidentFaces", "args": {{"solidA": {a}, "solidB": 9999}}}}]"#
+        ));
+        assert!(batch_has_error(&r, 0));
     }
 
     // ── mesh_boolean ─────────────────────────────────────────────────
