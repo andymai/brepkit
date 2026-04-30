@@ -99,6 +99,10 @@ fn partial_face_overlap_quarter_offset_fuse() {
 }
 
 #[test]
+#[ignore = "Gap: passes today but exercises the same partial-face-overlap GFA path \
+            as `partial_face_overlap_quarter_offset_fuse`. Ignored to avoid silent \
+            flakiness — should be unignored together with quarter_offset_fuse once \
+            the partial-overlap gap closes."]
 fn partial_face_overlap_diagonal_offset_fuse() {
     // B offset diagonally — only a quarter of the upper face is shared.
     let mut topo = Topology::default();

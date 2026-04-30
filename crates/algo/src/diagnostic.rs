@@ -21,7 +21,7 @@ use crate::builder::same_domain::surfaces_same_domain;
 /// plane, or two cylinders with matching axis and radius). It does
 /// NOT guarantee that the faces overlap geometrically — see
 /// `aabb_overlap` for a coarse geometric filter.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CoincidentFacePair {
     /// Face from solid A.
     pub face_a: FaceId,
@@ -89,9 +89,18 @@ pub fn detect_coincident_faces(
 /// the face AABB. Endpoints are always included; this controls how
 /// many midpoints are sampled along curved edges (arcs, NURBS, etc.)
 /// to capture curve bulge that would otherwise be missed by a chord-only
-/// AABB. Five interior samples is sufficient for circles/ellipses up to
-/// a half-turn and conservative for typical NURBS edges.
-const EDGE_INTERIOR_SAMPLES: usize = 5;
+/// AABB.
+///
+/// **Why 11:** for a full-circle edge with domain `[0, 2π]`, 11 interior
+/// samples land at fractions `{1/12, 2/12, ..., 11/12}` — i.e. 30° steps.
+/// In the world frame, the worst-case angular offset from any cardinal
+/// extremum is half a step (15°), so each AABB axis recovers at least
+/// `cos(15°) ≈ 0.966` of the true extent — a ~3% per-axis underestimate
+/// in the worst case, vs. ~13% with 5 samples. For axis-aligned circles
+/// the cardinals are hit exactly. This is intentionally a coarse but
+/// O(1) approximation; callers needing exact bounds for large arcs
+/// should use a curve-specific extrema routine on `Circle3D` / `Arc3D`.
+const EDGE_INTERIOR_SAMPLES: usize = 11;
 
 /// Compute a curve-aware face AABB.
 ///
@@ -307,20 +316,20 @@ mod tests {
         ));
         let bbox = face_aabb(&topo, face).unwrap();
         // True AABB of the unit circle in z=0: x∈[-1,1], y∈[-1,1].
-        // The interior samples (5 per edge) won't hit ±1 exactly, but
-        // they're well inside the circle interior so we just require the
-        // AABB to cover a non-degenerate portion of the disc.
+        // With 11 interior samples at 30° steps the worst-case axis
+        // recovery is cos(15°) ≈ 0.966 — Circle3D's auto-generated
+        // local frame is not guaranteed to align with the world axes,
+        // so we assert ≥0.85 on each axis (well above 0 and well above
+        // the chord-only AABB which would collapse to a point).
+        let dx = bbox.max.x() - bbox.min.x();
+        let dy = bbox.max.y() - bbox.min.y();
         assert!(
-            bbox.max.x() - bbox.min.x() > 1.0,
-            "circle edge AABB should span >1 in x, got [{}, {}]",
-            bbox.min.x(),
-            bbox.max.x()
+            dx > 1.7,
+            "circle edge AABB x-span = {dx}, expected close to 2 (chord-only would be 0)",
         );
         assert!(
-            bbox.max.y() - bbox.min.y() > 1.0,
-            "circle edge AABB should span >1 in y, got [{}, {}]",
-            bbox.min.y(),
-            bbox.max.y()
+            dy > 1.7,
+            "circle edge AABB y-span = {dy}, expected close to 2 (chord-only would be 0)",
         );
     }
 
