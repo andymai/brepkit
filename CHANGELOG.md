@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.44.0](https://github.com/andymai/brepkit/compare/v2.43.10...v2.44.0) (2026-04-30)
+
+
+### Features
+
+* **algo:** coincident-face boolean corpus + Torus same-domain detection ([#531](https://github.com/andymai/brepkit/issues/531)) ([eeb275f](https://github.com/andymai/brepkit/commit/eeb275f4e92701afa3e6da52e0375b85396a9ef5))
+
 ## [2.43.10](https://github.com/andymai/brepkit/compare/v2.43.9...v2.43.10) (2026-04-13)
 
 
