@@ -304,7 +304,18 @@ impl UnionFind {
 /// Returns `Some(true)` for same-direction normals (CoplanarSame),
 /// `Some(false)` for opposite normals (CoplanarOpposite), or
 /// `None` if not the same domain.
-fn surfaces_same_domain(a: &FaceSurface, b: &FaceSurface, tol: Tolerance) -> Option<bool> {
+///
+/// Visible to `crate::diagnostic` (the boolean preflight API). The
+/// `redundant_pub_crate` allow is required because the enclosing
+/// `builder` module is private — clippy folds `pub(crate)` to `pub`
+/// in that scope, but we keep `pub(crate)` to make the intent
+/// explicit in the source.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn surfaces_same_domain(
+    a: &FaceSurface,
+    b: &FaceSurface,
+    tol: Tolerance,
+) -> Option<bool> {
     match (a, b) {
         (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
             let dot = na.dot(*nb);
@@ -358,6 +369,23 @@ fn surfaces_same_domain(a: &FaceSurface, b: &FaceSurface, tol: Tolerance) -> Opt
                 return None;
             }
             let dist = (ca.apex() - cb.apex()).length();
+            if dist > tol.linear {
+                return None;
+            }
+            Some(axis_dot > 0.0)
+        }
+        (FaceSurface::Torus(ta), FaceSurface::Torus(tb)) => {
+            if (ta.major_radius() - tb.major_radius()).abs() > tol.linear {
+                return None;
+            }
+            if (ta.minor_radius() - tb.minor_radius()).abs() > tol.linear {
+                return None;
+            }
+            let axis_dot = ta.z_axis().dot(tb.z_axis());
+            if axis_dot.abs() < 1.0 - tol.angular {
+                return None;
+            }
+            let dist = (ta.center() - tb.center()).length();
             if dist > tol.linear {
                 return None;
             }
@@ -427,6 +455,201 @@ mod tests {
         let b = FaceSurface::Sphere(
             brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0)
                 .expect("valid sphere"),
+        );
+        assert_eq!(surfaces_same_domain(&a, &b, tol), None);
+    }
+
+    #[test]
+    fn cones_same_domain_same_direction() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Cone(
+            brepkit_math::surfaces::ConicalSurface::with_ref_dir(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                std::f64::consts::FRAC_PI_6,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .expect("valid cone"),
+        );
+        let b = FaceSurface::Cone(
+            brepkit_math::surfaces::ConicalSurface::with_ref_dir(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                std::f64::consts::FRAC_PI_6,
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .expect("valid cone"),
+        );
+        assert_eq!(surfaces_same_domain(&a, &b, tol), Some(true));
+    }
+
+    #[test]
+    fn cones_different_half_angle_not_same_domain() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Cone(
+            brepkit_math::surfaces::ConicalSurface::with_ref_dir(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                std::f64::consts::FRAC_PI_6,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .expect("valid cone"),
+        );
+        let b = FaceSurface::Cone(
+            brepkit_math::surfaces::ConicalSurface::with_ref_dir(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                std::f64::consts::FRAC_PI_4,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .expect("valid cone"),
+        );
+        assert_eq!(surfaces_same_domain(&a, &b, tol), None);
+    }
+
+    #[test]
+    fn torus_same_domain_same_direction_ignores_ref_dir() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis(
+                Point3::new(0.0, 0.0, 0.0),
+                3.0,
+                1.0,
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .expect("valid torus"),
+        );
+        // Same surface, but constructed with a different ref direction —
+        // x_axis/y_axis differ but z_axis matches, so this is the same surface.
+        let b = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis_and_ref_dir(
+                Point3::new(0.0, 0.0, 0.0),
+                3.0,
+                1.0,
+                Vec3::new(0.0, 0.0, 1.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .expect("valid torus"),
+        );
+        assert_eq!(surfaces_same_domain(&a, &b, tol), Some(true));
+    }
+
+    #[test]
+    fn torus_same_domain_opposite_direction() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis(
+                Point3::new(1.0, 2.0, 3.0),
+                5.0,
+                1.0,
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .expect("valid torus"),
+        );
+        let b = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis(
+                Point3::new(1.0, 2.0, 3.0),
+                5.0,
+                1.0,
+                Vec3::new(0.0, 0.0, -1.0),
+            )
+            .expect("valid torus"),
+        );
+        assert_eq!(surfaces_same_domain(&a, &b, tol), Some(false));
+    }
+
+    #[test]
+    fn torus_different_major_radius_not_same_domain() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis(
+                Point3::new(0.0, 0.0, 0.0),
+                3.0,
+                1.0,
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .expect("valid torus"),
+        );
+        let b = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis(
+                Point3::new(0.0, 0.0, 0.0),
+                4.0,
+                1.0,
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .expect("valid torus"),
+        );
+        assert_eq!(surfaces_same_domain(&a, &b, tol), None);
+    }
+
+    #[test]
+    fn torus_different_minor_radius_not_same_domain() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis(
+                Point3::new(0.0, 0.0, 0.0),
+                3.0,
+                1.0,
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .expect("valid torus"),
+        );
+        let b = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis(
+                Point3::new(0.0, 0.0, 0.0),
+                3.0,
+                0.5,
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .expect("valid torus"),
+        );
+        assert_eq!(surfaces_same_domain(&a, &b, tol), None);
+    }
+
+    #[test]
+    fn torus_different_center_not_same_domain() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis(
+                Point3::new(0.0, 0.0, 0.0),
+                3.0,
+                1.0,
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .expect("valid torus"),
+        );
+        let b = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis(
+                Point3::new(1.0, 0.0, 0.0),
+                3.0,
+                1.0,
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .expect("valid torus"),
+        );
+        assert_eq!(surfaces_same_domain(&a, &b, tol), None);
+    }
+
+    #[test]
+    fn torus_skew_axes_not_same_domain() {
+        let tol = Tolerance::new();
+        let a = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis(
+                Point3::new(0.0, 0.0, 0.0),
+                3.0,
+                1.0,
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .expect("valid torus"),
+        );
+        let b = FaceSurface::Torus(
+            brepkit_math::surfaces::ToroidalSurface::with_axis(
+                Point3::new(0.0, 0.0, 0.0),
+                3.0,
+                1.0,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .expect("valid torus"),
         );
         assert_eq!(surfaces_same_domain(&a, &b, tol), None);
     }

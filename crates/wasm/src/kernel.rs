@@ -79,6 +79,11 @@ impl BrepKernel {
         Rc::make_mut(&mut self.topo)
     }
 
+    /// Returns an immutable reference to the topology.
+    pub(crate) fn topo(&self) -> &Topology {
+        &self.topo
+    }
+
     /// Inner implementation for `make_tangent_arc_3d`.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn make_tangent_arc_3d_impl(

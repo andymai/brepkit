@@ -11,6 +11,36 @@ use crate::helpers::{build_triangle_mesh, panic_message, parse_boolean_op, trian
 use crate::kernel::BrepKernel;
 use crate::shapes::JsMesh;
 
+/// Serialise a slice of `CoincidentFacePair` values to a JSON array.
+///
+/// Shared by both the direct WASM binding (`detectCoincidentFaces`)
+/// and the batch dispatcher (`executeBatch` "detectCoincidentFaces"
+/// arm) so the JSON shape is guaranteed identical across the two
+/// paths — a field-name typo or boolean formatting drift in only one
+/// copy would otherwise be silently shipped to JS callers.
+///
+/// Visibility note: `pub(crate)` triggers `clippy::redundant_pub_crate`
+/// because `bindings` is a private module — the lint folds it to `pub`
+/// in this scope. We keep `pub(crate)` to make the cross-module-but-
+/// crate-internal sharing explicit.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn coincident_face_pairs_to_json(
+    pairs: &[brepkit_algo::diagnostic::CoincidentFacePair],
+) -> serde_json::Value {
+    let arr: Vec<serde_json::Value> = pairs
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "faceA": crate::handles::face_id_to_u32(p.face_a),
+                "faceB": crate::handles::face_id_to_u32(p.face_b),
+                "sameOrientation": p.same_orientation,
+                "aabbOverlap": p.aabb_overlap,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(arr)
+}
+
 #[wasm_bindgen]
 impl BrepKernel {
     // ── Boolean operations ──────────────────────────────────────────
@@ -45,6 +75,37 @@ impl BrepKernel {
         let b_id = self.resolve_solid(b)?;
         let result = boolean(self.topo_mut(), BooleanOp::Cut, a_id, b_id)?;
         Ok(solid_id_to_u32(result))
+    }
+
+    /// Detect surface-level coincident face pairs between two solids
+    /// without performing a boolean operation.
+    ///
+    /// Useful for warning users about same-domain configurations
+    /// (face stacks, coaxial cylinders, concentric spheres) before a
+    /// boolean. Returns a JSON array string of objects:
+    /// `[{"faceA": <u32>, "faceB": <u32>, "sameOrientation": <bool>, "aabbOverlap": <bool>}, ...]`.
+    ///
+    /// `sameOrientation` is `true` when the surface normals point the
+    /// same way at corresponding parametric points (e.g., two coplanar
+    /// faces with the same `+z` normal). `aabbOverlap` filters pairs
+    /// that are same-domain on the surface but geometrically disjoint.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either solid handle is invalid or any face /
+    /// edge / vertex lookup fails internally.
+    #[wasm_bindgen(js_name = "detectCoincidentFaces")]
+    pub fn detect_coincident_faces(&self, a: u32, b: u32) -> Result<String, JsError> {
+        let a_id = self.resolve_solid(a)?;
+        let b_id = self.resolve_solid(b)?;
+        let pairs = brepkit_algo::diagnostic::detect_coincident_faces(
+            self.topo(),
+            a_id,
+            b_id,
+            brepkit_math::tolerance::Tolerance::default(),
+        )
+        .map_err(|e| JsError::new(&format!("{e}")))?;
+        Ok(coincident_face_pairs_to_json(&pairs).to_string())
     }
 
     /// Intersect two solids, keeping only their common volume.
@@ -405,6 +466,45 @@ mod tests {
             r#"[{{"op": "compoundCut", "args": {{"target": {a}, "tools": []}}}}]"#
         ));
         assert!(batch_has_ok(&r, 0));
+    }
+
+    // ── detectCoincidentFaces ────────────────────────────────────────
+
+    #[test]
+    fn detect_coincident_faces_overlapping_boxes_returns_sd_pairs() {
+        // `two_boxes_batch()` creates two axis-aligned boxes (2×2×2 and
+        // 1×1×1) both at the origin — the smaller is fully contained in
+        // the larger. Each pair of axis-aligned faces shares a parallel
+        // plane normal, so the SD detector reports several same-domain
+        // pairs. We verify (a) the JSON shape and (b) at least one pair
+        // is reported with a valid `aabbOverlap` flag.
+        let (mut k, setup) = two_boxes_batch();
+        let parsed: serde_json::Value = serde_json::from_str(&setup).unwrap();
+        let a = parsed[0]["ok"].as_u64().unwrap();
+        let b = parsed[1]["ok"].as_u64().unwrap();
+        let r = k.execute_batch(&format!(
+            r#"[{{"op": "detectCoincidentFaces", "args": {{"solidA": {a}, "solidB": {b}}}}}]"#
+        ));
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let arr = parsed[0]["ok"].as_array().unwrap();
+        assert!(!arr.is_empty(), "overlapping boxes produce SD pairs: {r}");
+        for pair in arr {
+            assert!(pair["faceA"].is_u64());
+            assert!(pair["faceB"].is_u64());
+            assert!(pair["sameOrientation"].is_boolean());
+            assert!(pair["aabbOverlap"].is_boolean());
+        }
+    }
+
+    #[test]
+    fn detect_coincident_faces_invalid_handle_errors() {
+        let (mut k, setup) = two_boxes_batch();
+        let parsed: serde_json::Value = serde_json::from_str(&setup).unwrap();
+        let a = parsed[0]["ok"].as_u64().unwrap();
+        let r = k.execute_batch(&format!(
+            r#"[{{"op": "detectCoincidentFaces", "args": {{"solidA": {a}, "solidB": 9999}}}}]"#
+        ));
+        assert!(batch_has_error(&r, 0));
     }
 
     // ── mesh_boolean ─────────────────────────────────────────────────
