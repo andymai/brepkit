@@ -11,6 +11,36 @@ use crate::helpers::{build_triangle_mesh, panic_message, parse_boolean_op, trian
 use crate::kernel::BrepKernel;
 use crate::shapes::JsMesh;
 
+/// Serialise a slice of `CoincidentFacePair` values to a JSON array.
+///
+/// Shared by both the direct WASM binding (`detectCoincidentFaces`)
+/// and the batch dispatcher (`executeBatch` "detectCoincidentFaces"
+/// arm) so the JSON shape is guaranteed identical across the two
+/// paths — a field-name typo or boolean formatting drift in only one
+/// copy would otherwise be silently shipped to JS callers.
+///
+/// Visibility note: `pub(crate)` triggers `clippy::redundant_pub_crate`
+/// because `bindings` is a private module — the lint folds it to `pub`
+/// in this scope. We keep `pub(crate)` to make the cross-module-but-
+/// crate-internal sharing explicit.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn coincident_face_pairs_to_json(
+    pairs: &[brepkit_algo::diagnostic::CoincidentFacePair],
+) -> serde_json::Value {
+    let arr: Vec<serde_json::Value> = pairs
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "faceA": crate::handles::face_id_to_u32(p.face_a),
+                "faceB": crate::handles::face_id_to_u32(p.face_b),
+                "sameOrientation": p.same_orientation,
+                "aabbOverlap": p.aabb_overlap,
+            })
+        })
+        .collect();
+    serde_json::Value::Array(arr)
+}
+
 #[wasm_bindgen]
 impl BrepKernel {
     // ── Boolean operations ──────────────────────────────────────────
@@ -75,20 +105,7 @@ impl BrepKernel {
             brepkit_math::tolerance::Tolerance::default(),
         )
         .map_err(|e| JsError::new(&format!("{e}")))?;
-
-        let parts: Vec<String> = pairs
-            .iter()
-            .map(|p| {
-                format!(
-                    "{{\"faceA\":{},\"faceB\":{},\"sameOrientation\":{},\"aabbOverlap\":{}}}",
-                    crate::handles::face_id_to_u32(p.face_a),
-                    crate::handles::face_id_to_u32(p.face_b),
-                    p.same_orientation,
-                    p.aabb_overlap,
-                )
-            })
-            .collect();
-        Ok(format!("[{}]", parts.join(",")))
+        Ok(coincident_face_pairs_to_json(&pairs).to_string())
     }
 
     /// Intersect two solids, keeping only their common volume.
@@ -454,7 +471,13 @@ mod tests {
     // ── detectCoincidentFaces ────────────────────────────────────────
 
     #[test]
-    fn detect_coincident_faces_two_disjoint_boxes_empty() {
+    fn detect_coincident_faces_overlapping_boxes_returns_sd_pairs() {
+        // `two_boxes_batch()` creates two axis-aligned boxes (2×2×2 and
+        // 1×1×1) both at the origin — the smaller is fully contained in
+        // the larger. Each pair of axis-aligned faces shares a parallel
+        // plane normal, so the SD detector reports several same-domain
+        // pairs. We verify (a) the JSON shape and (b) at least one pair
+        // is reported with a valid `aabbOverlap` flag.
         let (mut k, setup) = two_boxes_batch();
         let parsed: serde_json::Value = serde_json::from_str(&setup).unwrap();
         let a = parsed[0]["ok"].as_u64().unwrap();
@@ -464,18 +487,12 @@ mod tests {
         ));
         let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
         let arr = parsed[0]["ok"].as_array().unwrap();
-        // Two boxes both at origin with axis-aligned planar faces will
-        // share several same-domain surfaces, but the smaller box's
-        // AABB is contained in the larger so all 6 face pairs overlap.
-        // The detector returns ALL same-domain pairs; callers filter
-        // by aabb_overlap. Just check the call succeeds and returns
-        // a JSON array.
-        assert!(!arr.is_empty(), "boxes at origin produce SD pairs: {r}");
+        assert!(!arr.is_empty(), "overlapping boxes produce SD pairs: {r}");
         for pair in arr {
-            assert!(pair.get("faceA").is_some());
-            assert!(pair.get("faceB").is_some());
-            assert!(pair.get("sameOrientation").is_some());
-            assert!(pair.get("aabbOverlap").is_some());
+            assert!(pair["faceA"].is_u64());
+            assert!(pair["faceB"].is_u64());
+            assert!(pair["sameOrientation"].is_boolean());
+            assert!(pair["aabbOverlap"].is_boolean());
         }
     }
 

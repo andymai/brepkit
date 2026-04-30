@@ -232,18 +232,9 @@ impl BrepKernel {
                     brepkit_math::tolerance::Tolerance::default(),
                 )
                 .map_err(|e| e.to_string())?;
-                let arr: Vec<serde_json::Value> = pairs
-                    .iter()
-                    .map(|p| {
-                        serde_json::json!({
-                            "faceA": crate::handles::face_id_to_u32(p.face_a),
-                            "faceB": crate::handles::face_id_to_u32(p.face_b),
-                            "sameOrientation": p.same_orientation,
-                            "aabbOverlap": p.aabb_overlap,
-                        })
-                    })
-                    .collect();
-                Ok(serde_json::Value::Array(arr))
+                Ok(crate::bindings::booleans::coincident_face_pairs_to_json(
+                    &pairs,
+                ))
             }
             "compoundCut" => {
                 let target = get_u32(args, "target")?;

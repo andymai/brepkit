@@ -60,21 +60,15 @@ pub fn detect_coincident_faces(
 ) -> Result<Vec<CoincidentFacePair>, crate::error::AlgoError> {
     use brepkit_topology::explorer;
 
-    let faces_a = explorer::solid_faces(topo, solid_a)
-        .map_err(|_| crate::error::AlgoError::AssemblyFailed("solid_a not found".into()))?;
-    let faces_b = explorer::solid_faces(topo, solid_b)
-        .map_err(|_| crate::error::AlgoError::AssemblyFailed("solid_b not found".into()))?;
+    let faces_a = explorer::solid_faces(topo, solid_a)?;
+    let faces_b = explorer::solid_faces(topo, solid_b)?;
 
     let mut pairs = Vec::new();
     for &fa in &faces_a {
-        let face_a = topo
-            .face(fa)
-            .map_err(|_| crate::error::AlgoError::AssemblyFailed("face_a not found".into()))?;
+        let face_a = topo.face(fa)?;
         let aabb_a = face_aabb(topo, fa)?;
         for &fb in &faces_b {
-            let face_b = topo
-                .face(fb)
-                .map_err(|_| crate::error::AlgoError::AssemblyFailed("face_b not found".into()))?;
+            let face_b = topo.face(fb)?;
             if let Some(same_orientation) =
                 surfaces_same_domain(face_a.surface(), face_b.surface(), tol)
             {
@@ -91,38 +85,59 @@ pub fn detect_coincident_faces(
     Ok(pairs)
 }
 
-/// Compute a face AABB from its boundary vertex positions.
+/// Number of interior parametric samples used per edge when computing
+/// the face AABB. Endpoints are always included; this controls how
+/// many midpoints are sampled along curved edges (arcs, NURBS, etc.)
+/// to capture curve bulge that would otherwise be missed by a chord-only
+/// AABB. Five interior samples is sufficient for circles/ellipses up to
+/// a half-turn and conservative for typical NURBS edges.
+const EDGE_INTERIOR_SAMPLES: usize = 5;
+
+/// Compute a curve-aware face AABB.
+///
+/// For each boundary edge we include the two endpoint vertices AND
+/// `EDGE_INTERIOR_SAMPLES` interior samples along the edge curve, so
+/// that bulge from arcs, full circles, and NURBS curves contributes to
+/// the bounding box. A vertex-only AABB would underestimate non-planar
+/// face extents (a full-circle edge whose endpoints coincide collapses
+/// to a single point), causing `aabb_overlap` to silently miss real
+/// overlaps for curved coincident faces.
 fn face_aabb(topo: &Topology, fid: FaceId) -> Result<Aabb3, crate::error::AlgoError> {
     use brepkit_math::vec::Point3;
-    let face = topo
-        .face(fid)
-        .map_err(|_| crate::error::AlgoError::AssemblyFailed("face not found".into()))?;
-    let outer = topo
-        .wire(face.outer_wire())
-        .map_err(|_| crate::error::AlgoError::AssemblyFailed("wire not found".into()))?;
+    let face = topo.face(fid)?;
+    let outer = topo.wire(face.outer_wire())?;
 
     let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
     let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     let mut any = false;
 
+    let mut include = |p: Point3, any: &mut bool| {
+        min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
+        max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
+        *any = true;
+    };
+
     for oe in outer.edges() {
-        let edge = topo
-            .edge(oe.edge())
-            .map_err(|_| crate::error::AlgoError::AssemblyFailed("edge not found".into()))?;
-        for vid in [edge.start(), edge.end()] {
-            let v = topo
-                .vertex(vid)
-                .map_err(|_| crate::error::AlgoError::AssemblyFailed("vertex not found".into()))?;
-            let p = v.point();
-            min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
-            max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
-            any = true;
+        let edge = topo.edge(oe.edge())?;
+        let start = topo.vertex(edge.start())?.point();
+        let end = topo.vertex(edge.end())?.point();
+        include(start, &mut any);
+        include(end, &mut any);
+
+        let curve = edge.curve();
+        let (t0, t1) = curve.domain_with_endpoints(start, end);
+        for i in 1..=EDGE_INTERIOR_SAMPLES {
+            #[allow(clippy::cast_precision_loss)]
+            let frac = i as f64 / (EDGE_INTERIOR_SAMPLES as f64 + 1.0);
+            let t = t0 + (t1 - t0) * frac;
+            let p = curve.evaluate_with_endpoints(t, start, end);
+            include(p, &mut any);
         }
     }
     if !any {
-        // Empty wire — give a degenerate AABB at origin.
-        min = Point3::new(0.0, 0.0, 0.0);
-        max = Point3::new(0.0, 0.0, 0.0);
+        return Err(crate::error::AlgoError::AssemblyFailed(format!(
+            "face {fid:?} has no boundary vertices",
+        )));
     }
     Ok(Aabb3 { min, max })
 }
@@ -265,6 +280,47 @@ mod tests {
         assert_eq!(
             opposite_count, 1,
             "exactly the cap pair has opposite normals"
+        );
+    }
+
+    #[test]
+    fn curve_edge_face_aabb_includes_bulge() {
+        // Regression for the chord-only AABB bug: a face bounded by a
+        // single full-circle edge has start == end, so a vertex-only
+        // AABB collapses to a point. The curve-aware AABB must instead
+        // span the circle's diameter in x and y.
+        use brepkit_math::curves::Circle3D;
+        let mut topo = Topology::default();
+        // Single vertex serving as start/end of the full-circle edge.
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let edge = topo.add_edge(Edge::new(v0, v0, EdgeCurve::Circle(circle)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let bbox = face_aabb(&topo, face).unwrap();
+        // True AABB of the unit circle in z=0: x∈[-1,1], y∈[-1,1].
+        // The interior samples (5 per edge) won't hit ±1 exactly, but
+        // they're well inside the circle interior so we just require the
+        // AABB to cover a non-degenerate portion of the disc.
+        assert!(
+            bbox.max.x() - bbox.min.x() > 1.0,
+            "circle edge AABB should span >1 in x, got [{}, {}]",
+            bbox.min.x(),
+            bbox.max.x()
+        );
+        assert!(
+            bbox.max.y() - bbox.min.y() > 1.0,
+            "circle edge AABB should span >1 in y, got [{}, {}]",
+            bbox.min.y(),
+            bbox.max.y()
         );
     }
 

@@ -304,7 +304,18 @@ impl UnionFind {
 /// Returns `Some(true)` for same-direction normals (CoplanarSame),
 /// `Some(false)` for opposite normals (CoplanarOpposite), or
 /// `None` if not the same domain.
-pub fn surfaces_same_domain(a: &FaceSurface, b: &FaceSurface, tol: Tolerance) -> Option<bool> {
+///
+/// Visible to `crate::diagnostic` (the boolean preflight API). The
+/// `redundant_pub_crate` allow is required because the enclosing
+/// `builder` module is private — clippy folds `pub(crate)` to `pub`
+/// in that scope, but we keep `pub(crate)` to make the intent
+/// explicit in the source.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn surfaces_same_domain(
+    a: &FaceSurface,
+    b: &FaceSurface,
+    tol: Tolerance,
+) -> Option<bool> {
     match (a, b) {
         (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
             let dot = na.dot(*nb);
