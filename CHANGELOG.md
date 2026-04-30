@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.44.1](https://github.com/andymai/brepkit/compare/v2.44.0...v2.44.1) (2026-04-30)
+
+
+### Bug Fixes
+
+* **algo:** preserve pave_block_id through disc-loop path; refine pinning test diagnosis ([#535](https://github.com/andymai/brepkit/issues/535)) ([2f81629](https://github.com/andymai/brepkit/commit/2f816298cb9fa067885b57e5ae777b1affb30881))
+
 ## [2.44.0](https://github.com/andymai/brepkit/compare/v2.43.10...v2.44.0) (2026-04-30)
 
 
