@@ -1323,3 +1323,95 @@ fn gfa_cut_box_cylinder_through_produces_valid_topology() {
         "Euler V-E+F should be 2 for closed manifold, got V={v} E={e} F={f} euler={euler}",
     );
 }
+
+#[test]
+#[ignore = "Gap: GFA-direct sequential cuts on a 4×4 cylinder grid degrade \
+            after the first iteration. As of PR #535: all 16 boolean calls \
+            return Ok, but the final topology is F=8 E=17 V=12 (Euler=3, \
+            non-manifold — edge shared by 3 faces) instead of the \
+            expected F=22 Euler=2. Only the first cylinder's geometry \
+            survives in the result; subsequent cuts silently no-op or \
+            corrupt the prior topology. The operations-layer companion \
+            `compound_cut_matches_sequential_4x4_grid` masks this because \
+            both compound and sequential paths fall back to mesh-boolean \
+            (boolean/tests.rs:1542). This is the regression carrier PR #535 \
+            cited when reverting the band-merger attempt: any \
+            `merge_periodic_discs_into_bands` post-pass must repair the \
+            single-cyl case (see sibling test) WITHOUT activating in a way \
+            that lets BOP misclassify band interiors across grid cylinders \
+            sharing section planes. Tracked: gridfinity-layout-tool #260 / #270."]
+fn gfa_cut_box_cylinder_grid_through_sequential_produces_valid_topology() {
+    // Slab [0,20]×[0,20]×[0,2] cut by a 4×4 grid of cylinders r=0.5,
+    // z = -1 to +3 (piercing fully through), positions (2 + col*4, 2 + row*4)
+    // for row,col in 0..4.
+    //
+    // This mirrors `compound_cut_matches_sequential_4x4_grid` in
+    // `operations/src/boolean/tests.rs`, but calls `crate::gfa::boolean`
+    // directly — the operations-layer test passes only because both
+    // compound and sequential paths fall through to the mesh-boolean
+    // fallback (see comment at boolean/tests.rs:1542). This test bypasses
+    // the fallback so the GFA-direct failure surfaces.
+    //
+    // Expected result (closed manifold):
+    //   - 4 box side faces
+    //   - 1 box bottom face with 16 circular holes
+    //   - 1 box top face with 16 circular holes
+    //   - 16 cylinder lateral faces (each: bot circle + seam + top circle
+    //     reversed + seam reversed)
+    //
+    // Total: 22 faces. Euler V-E+F = 2 for a closed manifold of genus 0.
+    //
+    // Companion to PR #534 (single-cyl pinning). Resolution likely shares
+    // a `merge_periodic_discs_into_bands` post-pass with that test —
+    // see PR #535 follow-up notes for the architectural sketch and the
+    // gating problem (this grid case is the regression carrier).
+    let mut topo = Topology::default();
+    let mut target = make_box(&mut topo, [0.0, 0.0, 0.0], [20.0, 20.0, 2.0]);
+
+    let mut first_failure: Option<(usize, usize, String)> = None;
+    for row in 0..4_i32 {
+        for col in 0..4_i32 {
+            let cx = 2.0 + f64::from(col) * 4.0;
+            let cy = 2.0 + f64::from(row) * 4.0;
+            let cyl = make_cylinder(&mut topo, cx, cy, -1.0, 0.5, 4.0);
+            match crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, target, cyl) {
+                Ok(next) => target = next,
+                Err(err) => {
+                    first_failure = Some((
+                        usize::try_from(row).unwrap(),
+                        usize::try_from(col).unwrap(),
+                        format!("{err:?}"),
+                    ));
+                    break;
+                }
+            }
+        }
+        if first_failure.is_some() {
+            break;
+        }
+    }
+
+    if let Some((row, col, err)) = first_failure {
+        panic!("GFA cut failed at iteration row={row} col={col} of 4×4 grid: {err}");
+    }
+
+    let (f, e, v, euler) = solid_topology_summary(&topo, target);
+    eprintln!("box-cyl 4x4 grid cut: faces={f}, edges={e}, verts={v}, euler={euler}");
+
+    let s = topo.solid(target).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
+    let manifold = brepkit_topology::validation::validate_shell_manifold(sh, &topo);
+    assert!(
+        manifold.is_ok(),
+        "result shell must be manifold, got {manifold:?}"
+    );
+
+    assert_eq!(
+        f, 22,
+        "4×4 grid cut should produce 22 faces (4 sides + 2 caps + 16 laterals), got {f}"
+    );
+    assert_eq!(
+        euler, 2,
+        "Euler V-E+F should be 2 for closed manifold, got V={v} E={e} F={f} euler={euler}",
+    );
+}
