@@ -143,6 +143,67 @@ pub(super) fn split_noseam_face_direct(
     ]
 }
 
+// ---------------------------------------------------------------------------
+// Known gap: disc-loop interpretation is wrong for periodic surfaces.
+//
+// `split_face_with_internal_loops` below treats each closed section curve
+// as a planar disc (loop bounds a disc-shaped sub-face). This is correct
+// for plane faces, but on a u-periodic surface (cylinder/cone/sphere/torus
+// lateral) a single closed circle does NOT bound a disc — it splits the
+// periodic surface into bands. The disc-pair output produces invalid
+// topology (Euler=3, non-manifold) for box-cylinder cuts; see the pinning
+// tests:
+//   - `gfa_cut_box_cylinder_through_produces_valid_topology` (PR #534)
+//   - `gfa_cut_box_cylinder_grid_through_sequential_produces_valid_topology`
+//     (PR #537)
+//
+// The operations layer's mesh-boolean fallback rescues most callers, but
+// at the cost of falling out of GFA for any cylinder cut.
+//
+// The proper fix is a `split_periodic_face_at_circles` post-pass that
+// emits N+1 band sub-faces (each: bot_circle + seam + top_circle_rev +
+// seam_rev) for a u-periodic face cut by N closed section circles.
+//
+// Investigation notes (2026-04-30, ultimately reverted before merge):
+//
+//   1. **Topology piece works.** A band-builder gated on
+//      `cylinder_face_count == 1` (pre-registering closed-circle section
+//      endpoints in `pb_vertex_registry` so cross-face vertex sharing
+//      via `merge_duplicate_edges` fires) un-ignores the single-cyl pin:
+//      F=7 E=15 V=10 Euler=2 manifold.
+//
+//   2. **Geometry piece is the blocker.** The band-builder reused the
+//      existing section-circle endpoint chosen by `phase_ff` (some
+//      arbitrary u-angle, e.g. (5,4,0) rather than the seam (6,5,0)) as
+//      the band's wire endpoint. The seam-segment Line then connects
+//      two off-seam points, crossing the cylinder interior. This is
+//      topologically valid but geometrically inconsistent. Downstream
+//      ops that use face geometry (volume, intersection in subsequent
+//      compound_cut iterations, tessellation) hang or produce wrong
+//      results — `compound_cut_honeycomb` (9 cyls in a 3×3 grid) hangs
+//      indefinitely on iter 2 even with the band-builder gated off for
+//      that iter, because iter 1's corrupt geometry propagates.
+//
+//   3. **What the next attempt needs.** A pre-pass that, for each closed
+//      section circle on a u-periodic face: (a) creates a vertex at
+//      `surface.evaluate(seam_u, v_section)`, (b) re-parameterizes the
+//      section's pcurve to start at `u = seam_u`, (c) splits the existing
+//      seam Line edge at `v_section` so the band's seam-segment endpoints
+//      land on real topology vertices. Without (a)+(b)+(c) the band's
+//      seam doesn't lie on the cylinder surface and downstream ops break.
+//      `pb_vertex_registry` is the right place to wire the new vertices —
+//      `resolve_edge_vertices` already consults it.
+//
+//   4. **Multi-cylinder gating is a separate hard problem.** Even with
+//      correct seam geometry, multi-tool scenarios (compound_cut with
+//      tools sharing section planes — e.g. 4×4 grid) confuse BOP face-
+//      image classification. PR #535's body recommends gating on
+//      "BOP can reliably classify this band's interior" — easier to
+//      derive empirically than design a priori.
+//
+// See PRs #534, #535, #537 for the pinning test history.
+// ---------------------------------------------------------------------------
+
 /// Split a face when ALL section edges are interior (don't touch the boundary).
 ///
 /// Groups section edges into closed loops by chaining shared 3D endpoints.
@@ -152,6 +213,10 @@ pub(super) fn split_noseam_face_direct(
 ///
 /// The "outside" sub-face has the original boundary as outer wire with all
 /// loops as holes.
+///
+/// **Known limitation**: applies the planar disc-loop interpretation to
+/// periodic surfaces (cylinder/cone/sphere/torus laterals), which is
+/// wrong — see the module-level investigation notes above.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn split_face_with_internal_loops(
     surface: &FaceSurface,
