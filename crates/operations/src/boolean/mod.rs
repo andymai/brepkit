@@ -66,78 +66,42 @@ pub fn boolean(
         use brepkit_algo::classifier::try_build_analytic_classifier;
         let ca = try_build_analytic_classifier(topo, a);
         let cb = try_build_analytic_classifier(topo, b);
+        // Use measure::solid_bounding_box — it expands for surface curvature
+        // (cylinder vertex projection, sphere/torus analytic). The naive
+        // edge-vertex sampler missed cylinder lateral extents because cylinders
+        // only have seam vertices, leaving the AABB center on the lateral
+        // surface where the analytic classifier returns None.
         let sample_aabb = |topo: &Topology, solid: SolidId| -> Option<(Point3, Point3)> {
-            let s = topo.solid(solid).ok()?;
-            let sh = topo.shell(s.outer_shell()).ok()?;
-            let mut min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
-            let mut max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
-            for &fid in sh.faces() {
-                let f = topo.face(fid).ok()?;
-                let w = topo.wire(f.outer_wire()).ok()?;
-                for oe in w.edges() {
-                    let e = topo.edge(oe.edge()).ok()?;
-                    let p = topo.vertex(e.start()).ok()?.point();
-                    min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
-                    max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
-                }
-            }
-            Some((min, max))
-        };
-        let aabb_center = |min: &Point3, max: &Point3| -> Point3 {
-            Point3::new(
-                (min.x() + max.x()) * 0.5,
-                (min.y() + max.y()) * 0.5,
-                (min.z() + max.z()) * 0.5,
-            )
+            let bb = crate::measure::solid_bounding_box(topo, solid).ok()?;
+            Some((bb.min, bb.max))
         };
         let aabb_a = sample_aabb(topo, a);
         let aabb_b = sample_aabb(topo, b);
-        let center_a = aabb_a.map(|(min, max)| aabb_center(&min, &max));
-        let center_b = aabb_b.map(|(min, max)| aabb_center(&min, &max));
-        // B⊂A requires: B's center is inside A AND A's center is outside B
-        // (if A's center is also inside B, the solids overlap rather than one
-        // containing the other).
-        let b_center_in_a = ca
-            .as_ref()
-            .zip(center_b)
-            .and_then(|(c, p)| c.classify(p, tol))
-            == Some(brepkit_algo::FaceClass::Inside);
-        let a_center_in_b = cb
-            .as_ref()
-            .zip(center_a)
-            .and_then(|(c, p)| c.classify(p, tol))
-            == Some(brepkit_algo::FaceClass::Inside);
-        let a_center_outside_b = cb
-            .as_ref()
-            .zip(center_a)
-            .and_then(|(c, p)| c.classify(p, tol))
-            == Some(brepkit_algo::FaceClass::Outside);
-        let b_center_outside_a = ca
-            .as_ref()
-            .zip(center_b)
-            .and_then(|(c, p)| c.classify(p, tol))
-            == Some(brepkit_algo::FaceClass::Outside);
-        // AABB containment fallback: when a classifier is unavailable (e.g.,
-        // tessellated sphere), check if one AABB is strictly inside the other.
-        // The inner AABB must fit within the outer's bounds (within tol.linear
-        // margin), and the outer must be >10% larger in at least 2 dimensions
-        // to avoid false positives on overlapping same-size solids.
-        let aabb_contains =
+        // AABB-encloses check (lenient): does `inner` fit inside `outer`?
+        let aabb_encloses =
             |inner: &Option<(Point3, Point3)>, outer: &Option<(Point3, Point3)>| -> bool {
                 let Some(((i_min, i_max), (o_min, o_max))) = inner.zip(*outer) else {
                     return false;
                 };
                 let margin = tol.linear;
-                let inside = i_min.x() >= o_min.x() - margin
+                i_min.x() >= o_min.x() - margin
                     && i_min.y() >= o_min.y() - margin
                     && i_min.z() >= o_min.z() - margin
                     && i_max.x() <= o_max.x() + margin
                     && i_max.y() <= o_max.y() + margin
-                    && i_max.z() <= o_max.z() + margin;
-                if !inside {
+                    && i_max.z() <= o_max.z() + margin
+            };
+        // AABB-strictly-contains (strict): outer must also be ≥10% larger in
+        // ≥2 dims. Used as the no-classifier fallback to avoid false-positive
+        // containment when AABBs overlap but neither solid contains the other.
+        let aabb_strictly_contains =
+            |inner: &Option<(Point3, Point3)>, outer: &Option<(Point3, Point3)>| -> bool {
+                if !aabb_encloses(inner, outer) {
                     return false;
                 }
-                // Outer must be strictly larger in ≥2 dimensions
+                let Some(((i_min, i_max), (o_min, o_max))) = inner.zip(*outer) else {
+                    return false;
+                };
                 let dims = [
                     (o_max.x() - o_min.x(), i_max.x() - i_min.x()),
                     (o_max.y() - o_min.y(), i_max.y() - i_min.y()),
@@ -149,19 +113,16 @@ pub fn boolean(
                     >= 2
             };
 
-        // Use classifier when available. Fall back to AABB when the
-        // CONTAINING solid's classifier is unavailable:
-        //   b_in_a: A is the container → fallback when ca.is_none()
-        //   a_in_b: B is the container → fallback when cb.is_none()
-        // Containment requires BOTH center test AND AABB containment.
-        // Center-inside alone is insufficient: A's center can be inside B
-        // while A extends far beyond B (e.g., T-shape fuse).
-        let b_in_a = (b_center_in_a && a_center_outside_b && aabb_contains(&aabb_b, &aabb_a))
-            || (ca.is_none() && aabb_contains(&aabb_b, &aabb_a));
-        let a_in_b = (a_center_in_b && b_center_outside_a && aabb_contains(&aabb_a, &aabb_b))
-            || (cb.is_none() && aabb_contains(&aabb_a, &aabb_b));
-        // Identical-solid shortcut: both centers inside each other AND
-        // bounding boxes match ⇒ A ≡ B geometrically.
+        // Bidirectional vertex check via the analytic classifier — the
+        // primary signal for identical/containment classification. A vertex
+        // classifying as inside-or-on (None within tolerance band counts
+        // as on) means it sits within the solid's region.
+        let all_b_verts_in_a = ca
+            .as_ref()
+            .is_some_and(|c| all_vertices_inside_or_on(topo, b, c, tol));
+        let all_a_verts_in_b = cb
+            .as_ref()
+            .is_some_and(|c| all_vertices_inside_or_on(topo, a, c, tol));
         let aabbs_match = aabb_a
             .zip(aabb_b)
             .map(|((a_min, a_max), (b_min, b_max))| {
@@ -174,7 +135,24 @@ pub fn boolean(
                     && (a_max.z() - b_max.z()).abs() < eps
             })
             .unwrap_or(false);
-        if b_center_in_a && a_center_in_b && aabbs_match {
+
+        // Containment shortcut: A contains B when all B vertices are
+        // inside-or-on A AND A's AABB encloses B's. The vertex check
+        // handles cases where AABB centers coincide (e.g., concentric
+        // cylinders of same radius, different heights) where the prior
+        // center-based check failed. Falls back to AABB-only when the
+        // containing solid's classifier is unavailable.
+        let b_in_a = (all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
+            || (ca.is_none() && aabb_strictly_contains(&aabb_b, &aabb_a));
+        let a_in_b = (all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
+            || (cb.is_none() && aabb_strictly_contains(&aabb_a, &aabb_b));
+
+        // Identical-solid shortcut: matching AABBs AND every boundary
+        // vertex of each solid classifies as inside-or-on the other's
+        // analytic classifier. Stronger than a center test (a cube
+        // inscribed in a sphere has matching AABBs but cube corners fall
+        // outside the sphere) and works for non-convex solids like tori.
+        if aabbs_match && all_b_verts_in_a && all_a_verts_in_b {
             return match op {
                 BooleanOp::Fuse | BooleanOp::Intersect => Ok(crate::copy::copy_solid(topo, a)?),
                 BooleanOp::Cut => Err(crate::OperationsError::InvalidInput {
@@ -193,6 +171,136 @@ pub fn boolean(
                     reason: "containment shortcut: unexpected state".into(),
                 }),
             };
+        }
+
+        // Coaxial-cylinder merge shortcut: when both A and B are simple
+        // cylinder solids (cylinder + 2 planar caps) with the same axis,
+        // origin and radius, fuse/intersect collapse to a single cylinder
+        // spanning the combined / overlapping axial range. Bypasses GFA's
+        // cap-on-cap and lateral-SD coplanar handling, which currently
+        // falls through to a non-manifold mesh fallback.
+        if let (
+            Some(brepkit_algo::classifier::AnalyticClassifier::Cylinder {
+                origin: oa,
+                axis: aa,
+                radius: ra,
+                z_min: za_min,
+                z_max: za_max,
+            }),
+            Some(brepkit_algo::classifier::AnalyticClassifier::Cylinder {
+                origin: ob,
+                axis: ab,
+                radius: rb,
+                z_min: zb_min,
+                z_max: zb_max,
+            }),
+        ) = (ca.as_ref(), cb.as_ref())
+        {
+            // Axes coincide (same line) when directions are parallel AND
+            // the origin offset is parallel to the axis (no perpendicular
+            // component beyond linear tolerance).
+            let same_axis_dir = aa.dot(*ab) > 1.0 - tol.angular;
+            let origin_offset = *ob - *oa;
+            let along_axis = origin_offset.dot(*aa);
+            let perpendicular = origin_offset - *aa * along_axis;
+            let coaxial = same_axis_dir && perpendicular.length() < tol.linear;
+            let same_radius = (ra - rb).abs() < tol.linear;
+            if coaxial && same_radius {
+                // Translate B's z-range into A's axis frame.
+                let za = (*za_min, *za_max);
+                let zb = (*zb_min + along_axis, *zb_max + along_axis);
+                if let Some(result) =
+                    coaxial_cylinder_shortcut(topo, op, *oa, *aa, *ra, za, zb, tol)?
+                {
+                    return Ok(result);
+                }
+            }
+        }
+
+        // Coaxial-cone merge shortcut: two frustums on the same conical
+        // surface (shared apex, axis, and tan(half_angle) = r/z ratio)
+        // collapse to a single frustum spanning the combined axial range.
+        if let (
+            Some(brepkit_algo::classifier::AnalyticClassifier::Cone {
+                origin: oa,
+                axis: aa,
+                z_min: za_min,
+                z_max: za_max,
+                r_at_z_min: rmin_a,
+                r_at_z_max: rmax_a,
+            }),
+            Some(brepkit_algo::classifier::AnalyticClassifier::Cone {
+                origin: ob,
+                axis: ab,
+                z_min: zb_min,
+                z_max: zb_max,
+                r_at_z_min: rmin_b,
+                r_at_z_max: rmax_b,
+            }),
+        ) = (ca.as_ref(), cb.as_ref())
+        {
+            let same_axis_dir = aa.dot(*ab) > 1.0 - tol.angular;
+            let same_apex = (*oa - *ob).length() < tol.linear;
+            // Half-angle slope: dimensionless r/z. Use whichever endpoint has
+            // |z| above tol.linear (compared against tol.linear because slope
+            // is a length ratio, not an angle — `tol.angular` is a radian
+            // threshold, wrong unit). When both endpoints of a frustum are
+            // sub-tol (degenerate apex-pinned cone), skip the shortcut and
+            // let GFA handle it rather than dividing by near-zero.
+            let slope_a = if za_max.abs() > tol.linear {
+                Some(rmax_a / *za_max)
+            } else if za_min.abs() > tol.linear {
+                Some(rmin_a / *za_min)
+            } else {
+                None
+            };
+            let slope_b = if zb_max.abs() > tol.linear {
+                Some(rmax_b / *zb_max)
+            } else if zb_min.abs() > tol.linear {
+                Some(rmin_b / *zb_min)
+            } else {
+                None
+            };
+            let same_half_angle = match (slope_a, slope_b) {
+                (Some(sa), Some(sb)) => (sa - sb).abs() < tol.linear,
+                _ => false,
+            };
+            if let (true, Some(slope)) = (same_axis_dir && same_apex && same_half_angle, slope_a) {
+                if let Some(result) = coaxial_cone_shortcut(
+                    topo,
+                    op,
+                    *oa,
+                    *aa,
+                    slope,
+                    (*za_min, *za_max),
+                    (*zb_min, *zb_max),
+                    tol,
+                )? {
+                    return Ok(result);
+                }
+            }
+        }
+
+        // Axis-aligned box-pair shortcut: when both A and B classify as
+        // Box (analytic classifier infers axis-aligned bounds), Fuse and
+        // Intersect can be computed exactly via AABB algebra. Bypasses
+        // GFA so chained operations get clean fresh-primitive topology
+        // rather than residual GFA splits that confuse subsequent steps.
+        if let (
+            Some(brepkit_algo::classifier::AnalyticClassifier::Box {
+                min: a_min,
+                max: a_max,
+            }),
+            Some(brepkit_algo::classifier::AnalyticClassifier::Box {
+                min: b_min,
+                max: b_max,
+            }),
+        ) = (ca.as_ref(), cb.as_ref())
+        {
+            if let Some(result) = box_pair_shortcut(topo, op, *a_min, *a_max, *b_min, *b_max, tol)?
+            {
+                return Ok(result);
+            }
         }
     }
 
@@ -452,6 +560,311 @@ pub fn boolean_with_evolution(
 // ---------------------------------------------------------------------------
 // Mesh boolean helpers
 // ---------------------------------------------------------------------------
+
+/// Compute the boolean of two axis-aligned boxes via AABB algebra.
+///
+/// Returns `Ok(None)` when the result isn't a single box:
+/// - Fuse: requires two of three dims to match exactly AND the boxes to
+///   overlap or touch in the third dim. Otherwise the union is L-shaped.
+/// - Intersect: any non-empty AABB intersection is a box.
+/// - Cut: skipped — the general case is L-shaped, defer to GFA.
+fn box_pair_shortcut(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a_min: Point3,
+    a_max: Point3,
+    b_min: Point3,
+    b_max: Point3,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let eps = tol.linear;
+    let (min, max) = match op {
+        BooleanOp::Intersect => {
+            let lo = Point3::new(
+                a_min.x().max(b_min.x()),
+                a_min.y().max(b_min.y()),
+                a_min.z().max(b_min.z()),
+            );
+            let hi = Point3::new(
+                a_max.x().min(b_max.x()),
+                a_max.y().min(b_max.y()),
+                a_max.z().min(b_max.z()),
+            );
+            // Empty intersection — let general path return an error.
+            if hi.x() <= lo.x() + eps || hi.y() <= lo.y() + eps || hi.z() <= lo.z() + eps {
+                return Ok(None);
+            }
+            (lo, hi)
+        }
+        BooleanOp::Fuse => {
+            // The union of two axis-aligned boxes is itself a box only
+            // when two of three dimensions match exactly AND the boxes
+            // overlap or touch in the third dim.
+            let x_match =
+                (a_min.x() - b_min.x()).abs() < eps && (a_max.x() - b_max.x()).abs() < eps;
+            let y_match =
+                (a_min.y() - b_min.y()).abs() < eps && (a_max.y() - b_max.y()).abs() < eps;
+            let z_match =
+                (a_min.z() - b_min.z()).abs() < eps && (a_max.z() - b_max.z()).abs() < eps;
+            let matched = u8::from(x_match) + u8::from(y_match) + u8::from(z_match);
+            if matched < 2 {
+                return Ok(None);
+            }
+            // Verify overlap/touch in all three dims (the unmatched dim
+            // must overlap; matched dims trivially do).
+            if a_max.x() < b_min.x() - eps
+                || b_max.x() < a_min.x() - eps
+                || a_max.y() < b_min.y() - eps
+                || b_max.y() < a_min.y() - eps
+                || a_max.z() < b_min.z() - eps
+                || b_max.z() < a_min.z() - eps
+            {
+                return Ok(None);
+            }
+            (
+                Point3::new(
+                    a_min.x().min(b_min.x()),
+                    a_min.y().min(b_min.y()),
+                    a_min.z().min(b_min.z()),
+                ),
+                Point3::new(
+                    a_max.x().max(b_max.x()),
+                    a_max.y().max(b_max.y()),
+                    a_max.z().max(b_max.z()),
+                ),
+            )
+        }
+        BooleanOp::Cut => return Ok(None),
+    };
+    let dx = max.x() - min.x();
+    let dy = max.y() - min.y();
+    let dz = max.z() - min.z();
+    if dx <= eps || dy <= eps || dz <= eps {
+        return Ok(None);
+    }
+    let bx = crate::primitives::make_box(topo, dx, dy, dz)?;
+    if min.x().abs() > eps || min.y().abs() > eps || min.z().abs() > eps {
+        let xform = brepkit_math::mat::Mat4::translation(min.x(), min.y(), min.z());
+        crate::transform::transform_solid(topo, bx, &xform)?;
+    }
+    Ok(Some(bx))
+}
+
+/// Compute the coaxial-cylinder boolean for two cylinders sharing axis,
+/// origin, and radius. Returns `Ok(None)` when the shortcut doesn't apply
+/// (disjoint along axis for fuse/intersect; cut requires general handling).
+#[allow(clippy::too_many_arguments)]
+fn coaxial_cylinder_shortcut(
+    topo: &mut Topology,
+    op: BooleanOp,
+    origin: Point3,
+    axis: Vec3,
+    radius: f64,
+    a_range: (f64, f64),
+    b_range: (f64, f64),
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let (za_min, za_max) = a_range;
+    let (zb_min, zb_max) = b_range;
+    // For fuse: ranges must touch or overlap. Disjoint cylinders would
+    // produce a compound, which the boolean API doesn't return.
+    let touches_or_overlaps = zb_min <= za_max + tol.linear && za_min <= zb_max + tol.linear;
+    let (z_min, z_max) = match op {
+        BooleanOp::Fuse => {
+            if !touches_or_overlaps {
+                return Ok(None);
+            }
+            (za_min.min(zb_min), za_max.max(zb_max))
+        }
+        BooleanOp::Intersect => {
+            // Strict overlap (not just touching) for non-degenerate result.
+            let lo = za_min.max(zb_min);
+            let hi = za_max.min(zb_max);
+            if hi <= lo + tol.linear {
+                return Ok(None);
+            }
+            (lo, hi)
+        }
+        BooleanOp::Cut => return Ok(None), // Defer to GFA / general path.
+    };
+    let height = z_max - z_min;
+    if height <= tol.linear {
+        return Ok(None);
+    }
+    // Build a fresh cylinder at axis-origin + axis*z_min, oriented along
+    // axis. make_cylinder produces the canonical (0,0,0)→(0,0,h) cylinder;
+    // then transform to the world axis frame.
+    let cyl = crate::primitives::make_cylinder(topo, radius, height)?;
+    let world_origin = Point3::new(
+        origin.x() + axis.x() * z_min,
+        origin.y() + axis.y() * z_min,
+        origin.z() + axis.z() * z_min,
+    );
+    let xform = xform_from_canonical_z(world_origin, axis, tol);
+    crate::transform::transform_solid(topo, cyl, &xform)?;
+    Ok(Some(cyl))
+}
+
+/// Compute the coaxial-cone boolean for two frustums on the same conical
+/// surface (shared apex, axis, and half-angle). Returns `Ok(None)` when
+/// the shortcut doesn't apply.
+#[allow(clippy::too_many_arguments)]
+fn coaxial_cone_shortcut(
+    topo: &mut Topology,
+    op: BooleanOp,
+    apex: Point3,
+    axis: Vec3,
+    slope: f64,
+    a_range: (f64, f64),
+    b_range: (f64, f64),
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let (za_min, za_max) = a_range;
+    let (zb_min, zb_max) = b_range;
+    let touches_or_overlaps = zb_min <= za_max + tol.linear && za_min <= zb_max + tol.linear;
+    let (z_min, z_max) = match op {
+        BooleanOp::Fuse => {
+            if !touches_or_overlaps {
+                return Ok(None);
+            }
+            (za_min.min(zb_min), za_max.max(zb_max))
+        }
+        BooleanOp::Intersect => {
+            let lo = za_min.max(zb_min);
+            let hi = za_max.min(zb_max);
+            if hi <= lo + tol.linear {
+                return Ok(None);
+            }
+            (lo, hi)
+        }
+        BooleanOp::Cut => return Ok(None),
+    };
+    let height = z_max - z_min;
+    if height <= tol.linear {
+        return Ok(None);
+    }
+    // r at axial position z (apex-relative) = slope * z. For frustums on
+    // the +axis nappe, both z values are positive; if either becomes ≤ 0
+    // (apex inclusion), bail out so we don't construct a degenerate cone.
+    let r_at_z_min = slope * z_min;
+    let r_at_z_max = slope * z_max;
+    if r_at_z_min < -tol.linear || r_at_z_max < -tol.linear {
+        return Ok(None);
+    }
+    let r_bot = r_at_z_min.abs();
+    let r_top = r_at_z_max.abs();
+    if r_bot <= tol.linear && r_top <= tol.linear {
+        return Ok(None);
+    }
+    let cone = crate::primitives::make_cone(topo, r_bot, r_top, height)?;
+    let world_origin = Point3::new(
+        apex.x() + axis.x() * z_min,
+        apex.y() + axis.y() * z_min,
+        apex.z() + axis.z() * z_min,
+    );
+    // Cone shortcut keeps to axis-aligned cases for now (test corpus does
+    // not yet cover off-axis cones). Detect parallel/antiparallel via the
+    // dot product (the canonical-axis Z-component is the only term that
+    // survives `canonical · axis` since canonical = ẑ).
+    let dot = axis.z().clamp(-1.0, 1.0);
+    if 1.0 - dot.abs() > tol.angular {
+        return Ok(None);
+    }
+    let xform = xform_from_canonical_z(world_origin, axis, tol);
+    crate::transform::transform_solid(topo, cone, &xform)?;
+    Ok(Some(cone))
+}
+
+/// Build the world-frame transform that maps a primitive built in the
+/// canonical Z-up local frame (origin at world origin, axis = +Z) to a
+/// world frame at `world_origin` with up-axis `axis` (assumed
+/// unit-length). Uses Rodrigues' rotation formula for the general case.
+///
+/// Comparisons use `1.0 - axis.dot(canonical) < tol.angular` rather than
+/// vector-length deltas, because for unit vectors `|u−v| ≈ √2·θ`, so a
+/// length comparison against `tol.angular` would correspond to
+/// `θ ≈ 7×10⁻¹³` rad — effectively bit-identity.
+fn xform_from_canonical_z(
+    world_origin: Point3,
+    axis: Vec3,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> brepkit_math::mat::Mat4 {
+    let translate =
+        brepkit_math::mat::Mat4::translation(world_origin.x(), world_origin.y(), world_origin.z());
+    let canonical = Vec3::new(0.0, 0.0, 1.0);
+    let dot = canonical.dot(axis).clamp(-1.0, 1.0);
+    // Parallel to +Z: pure translation.
+    if 1.0 - dot < tol.angular {
+        return translate;
+    }
+    // Antiparallel: rotate canonical (+z) by π around X to flip to −z.
+    if 1.0 + dot < tol.angular {
+        return translate * brepkit_math::mat::Mat4::rotation_x(std::f64::consts::PI);
+    }
+    // Rotate canonical (0,0,1) → axis via Rodrigues' formula:
+    //   R = I + sin(θ) K + (1 - cos(θ)) K²,  K = [k]× for k = ẑ × axis / sin(θ).
+    // k.z = 0 by construction, so K's z-row/z-column have a known structure.
+    let sin_t = (1.0 - dot * dot).sqrt();
+    let kx = -axis.y() / sin_t;
+    let ky = axis.x() / sin_t;
+    let one_minus_cos = 1.0 - dot;
+    let r00 = one_minus_cos.mul_add(kx * kx, dot);
+    let r01 = one_minus_cos * kx * ky;
+    let r02 = sin_t * ky;
+    let r10 = one_minus_cos * kx * ky;
+    let r11 = one_minus_cos.mul_add(ky * ky, dot);
+    let r12 = -sin_t * kx;
+    let r20 = -sin_t * ky;
+    let r21 = sin_t * kx;
+    let r22 = dot;
+    let rot = brepkit_math::mat::Mat4([
+        [r00, r01, r02, 0.0],
+        [r10, r11, r12, 0.0],
+        [r20, r21, r22, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]);
+    translate * rot
+}
+
+/// Check whether every boundary vertex of `solid` is classified as
+/// `Inside` or `On` by `classifier`. Used by the identical-solid shortcut
+/// to distinguish truly-identical solids from co-located but differently
+/// shaped solids (e.g., a cone and a box that share an AABB).
+fn all_vertices_inside_or_on(
+    topo: &Topology,
+    solid: SolidId,
+    classifier: &brepkit_algo::classifier::AnalyticClassifier,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    let Ok(s) = topo.solid(solid) else {
+        return false;
+    };
+    let Ok(sh) = topo.shell(s.outer_shell()) else {
+        return false;
+    };
+    for &fid in sh.faces() {
+        let Ok(f) = topo.face(fid) else { return false };
+        let Ok(w) = topo.wire(f.outer_wire()) else {
+            return false;
+        };
+        for oe in w.edges() {
+            let Ok(e) = topo.edge(oe.edge()) else {
+                return false;
+            };
+            for vid in [e.start(), e.end()] {
+                let Ok(v) = topo.vertex(vid) else {
+                    return false;
+                };
+                // The analytic classifier returns `None` for points within
+                // tol.linear of the boundary — treat as "on" for this check.
+                if classifier.classify(v.point(), tol) == Some(brepkit_algo::FaceClass::Outside) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
 
 /// Best-effort mesh boolean fallback for high face-count solids.
 ///

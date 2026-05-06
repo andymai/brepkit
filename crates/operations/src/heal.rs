@@ -1730,16 +1730,14 @@ mod tests {
 
     #[test]
     fn unify_boolean_box_reduces_faces() {
-        // Two overlapping boxes: the boolean result has coplanar face fragments
-        // on the shared cutting plane. Use unify_faces=false so the fragments
-        // remain for this test to verify explicit unification.
+        // L-shape fuse: two boxes sharing a corner, only one of three
+        // dimensions matching (z). The box-pair shortcut bails (needs
+        // 2 of 3 dims to match) so GFA splits the z-faces into coplanar
+        // fragments that `unify_faces` should merge.
         let mut topo = Topology::new();
-        let box1 = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
-        let box2 = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
-
-        // Translate box2 by (1, 0, 0) so they overlap by 1 unit in X.
-        let translate = brepkit_math::mat::Mat4::translation(1.0, 0.0, 0.0);
-        crate::transform::transform_solid(&mut topo, box2, &translate).unwrap();
+        let box1 = crate::primitives::make_box(&mut topo, 3.0, 1.0, 1.0).unwrap();
+        let box2 = crate::primitives::make_box(&mut topo, 1.0, 3.0, 1.0).unwrap();
+        // Both boxes share the origin corner — no translation needed.
 
         let opts = crate::boolean::BooleanOptions {
             unify_faces: false,

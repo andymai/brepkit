@@ -63,8 +63,15 @@ fn expand_aabb_for_face(
     face_id: brepkit_topology::face::FaceId,
     surface: &FaceSurface,
 ) {
+    // Always sample wire midpoints — captures curvature of curved boundary
+    // edges (Circle, Ellipse, NurbsCurve) regardless of surface type.
+    // Critical for: cone base discs (Plane face with circle edge), partial
+    // arcs whose extremes lie between vertices, and any curved edge on a
+    // planar face.
+    sample_face_wire_midpoints(topo, aabb, face_id);
+
     match surface {
-        FaceSurface::Plane { .. } | FaceSurface::Cone(_) => {}
+        FaceSurface::Plane { .. } => {}
 
         // Sphere and torus: use analytic expansion (these are typically full
         // or near-full surfaces where the extremes can be far from vertices).
@@ -75,30 +82,22 @@ fn expand_aabb_for_face(
             aabb_include(aabb, Point3::new(c.x() + r, c.y() + r, c.z() + r));
         }
         FaceSurface::Torus(t) => {
+            // Per-dim half-extent of a torus = R * sqrt(1 - axis.d²) + r.
+            // The R*sqrt(1-axis.d²) term is the major-circle's extent in
+            // world dim d (zero for the dim aligned with the torus axis);
+            // the r term is the minor radius offset, which can extend
+            // freely in any direction. Replaces the previous formula that
+            // applied (R+r) to all dimensions and over-estimated the
+            // axis-aligned dim by `R`.
             let c = t.center();
-            let outer_r = t.major_radius() + t.minor_radius();
+            let r_major = t.major_radius();
+            let r_minor = t.minor_radius();
             let axis = t.z_axis();
-            let axial_offset = brepkit_math::vec::Vec3::new(
-                axis.x() * t.minor_radius(),
-                axis.y() * t.minor_radius(),
-                axis.z() * t.minor_radius(),
-            );
-            aabb_include(
-                aabb,
-                Point3::new(
-                    c.x() - outer_r + axial_offset.x().min(0.0),
-                    c.y() - outer_r + axial_offset.y().min(0.0),
-                    c.z() - outer_r + axial_offset.z().min(0.0),
-                ),
-            );
-            aabb_include(
-                aabb,
-                Point3::new(
-                    c.x() + outer_r + axial_offset.x().max(0.0),
-                    c.y() + outer_r + axial_offset.y().max(0.0),
-                    c.z() + outer_r + axial_offset.z().max(0.0),
-                ),
-            );
+            let hx = r_major * (1.0 - axis.x() * axis.x()).max(0.0).sqrt() + r_minor;
+            let hy = r_major * (1.0 - axis.y() * axis.y()).max(0.0).sqrt() + r_minor;
+            let hz = r_major * (1.0 - axis.z() * axis.z()).max(0.0).sqrt() + r_minor;
+            aabb_include(aabb, Point3::new(c.x() - hx, c.y() - hy, c.z() - hz));
+            aabb_include(aabb, Point3::new(c.x() + hx, c.y() + hy, c.z() + hz));
         }
 
         // Cylinder: expand radially at each face vertex's axis projection.
@@ -106,13 +105,18 @@ fn expand_aabb_for_face(
         // for fillet cylinders), this uses the face's own vertices to
         // constrain the expansion to the actual face extent.
         FaceSurface::Cylinder(c) => {
-            sample_face_wire_midpoints(topo, aabb, face_id);
             expand_cylinder_at_vertices(topo, aabb, face_id, c);
+        }
+
+        // Cone: expand radially at each face vertex (the radius varies per
+        // axial position). Uses the vertex's own distance-from-axis as the
+        // local radius, then projects to a full circle at that axial slice.
+        FaceSurface::Cone(c) => {
+            expand_cone_at_vertices(topo, aabb, face_id, c);
         }
 
         // NURBS: sample the surface at a sparse interior grid.
         FaceSurface::Nurbs(nurbs) => {
-            sample_face_wire_midpoints(topo, aabb, face_id);
             let (u_min, u_max) = nurbs.domain_u();
             let (v_min, v_max) = nurbs.domain_v();
             let n_samples = 4;
@@ -211,6 +215,66 @@ fn expand_cylinder_at_vertices(
             );
             aabb_include(aabb, Point3::new(coa.x() - rx, coa.y() - ry, coa.z() - rz));
             aabb_include(aabb, Point3::new(coa.x() + rx, coa.y() + ry, coa.z() + rz));
+        }
+    }
+}
+
+/// Expand AABB for a cone face by computing each face vertex's radial
+/// distance from the axis (the local cone radius at that axial slice),
+/// then including a full circle of that radius at that slice.
+fn expand_cone_at_vertices(
+    topo: &Topology,
+    aabb: &mut Aabb3,
+    face_id: brepkit_topology::face::FaceId,
+    cone: &brepkit_math::surfaces::ConicalSurface,
+) {
+    use brepkit_math::vec::Vec3;
+    let Ok(face) = topo.face(face_id) else {
+        return;
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return;
+    };
+    let axis = cone.axis();
+    let apex = cone.apex();
+    // Axis-perpendicular projection scales for a full ring at slice centre.
+    let sx = (1.0 - axis.x() * axis.x()).max(0.0).sqrt();
+    let sy = (1.0 - axis.y() * axis.y()).max(0.0).sqrt();
+    let sz = (1.0 - axis.z() * axis.z()).max(0.0).sqrt();
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        for vid in [edge.start(), edge.end()] {
+            let Ok(v) = topo.vertex(vid) else {
+                continue;
+            };
+            let rel = Vec3::new(
+                v.point().x() - apex.x(),
+                v.point().y() - apex.y(),
+                v.point().z() - apex.z(),
+            );
+            let t = axis.dot(rel);
+            let coa = Point3::new(
+                apex.x() + axis.x() * t,
+                apex.y() + axis.y() * t,
+                apex.z() + axis.z() * t,
+            );
+            // Local radius is the perpendicular distance from axis to vertex.
+            let perp = Vec3::new(
+                rel.x() - axis.x() * t,
+                rel.y() - axis.y() * t,
+                rel.z() - axis.z() * t,
+            );
+            let r = perp.length();
+            aabb_include(
+                aabb,
+                Point3::new(coa.x() - r * sx, coa.y() - r * sy, coa.z() - r * sz),
+            );
+            aabb_include(
+                aabb,
+                Point3::new(coa.x() + r * sx, coa.y() + r * sy, coa.z() + r * sz),
+            );
         }
     }
 }

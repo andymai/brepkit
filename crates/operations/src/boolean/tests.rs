@@ -955,11 +955,13 @@ fn intersect_two_cylinders() {
     let r = result.unwrap();
     let vol = crate::measure::solid_volume(&topo, r, 0.1).unwrap();
     assert!(vol > 0.0, "intersection volume should be positive: {vol}");
-    // Intersection must be smaller than either cylinder.
+    // Intersection must be at most as large as the smaller cylinder
+    // (cyl2 is inscribed in cyl1 with a single tangent point, so the
+    // intersection equals cyl2 to within float precision).
     let vol_cyl2 = std::f64::consts::PI * 3.0_f64.powi(2) * 20.0;
     assert!(
-        vol < vol_cyl2,
-        "intersection volume {vol} should be less than smaller cylinder {vol_cyl2}"
+        vol <= vol_cyl2 + 1e-6,
+        "intersection volume {vol} should be at most smaller cylinder {vol_cyl2}"
     );
 }
 

@@ -61,9 +61,6 @@ fn baseline_disjoint_spheres_intersect_empty() {
 // ── 1. Identical spheres (degenerate SD) ──────────────────────────────
 
 #[test]
-#[ignore = "Gap: identical-sphere SD — detector identifies the pair but GFA produces \
-            wrong topology. Sphere is a single periodic face with poles, which adds \
-            seam/pole handling complexity on top of the SD merge."]
 fn identical_spheres_fuse_preserves_volume() {
     let mut topo = Topology::default();
     let a = sphere_at(&mut topo, 0.0, 0.0, 0.0, 1.0);
@@ -75,7 +72,6 @@ fn identical_spheres_fuse_preserves_volume() {
 }
 
 #[test]
-#[ignore = "Gap: identical-sphere intersect — same root cause as fuse."]
 fn identical_spheres_intersect_preserves_volume() {
     let mut topo = Topology::default();
     let a = sphere_at(&mut topo, 0.0, 0.0, 0.0, 1.0);
@@ -89,9 +85,6 @@ fn identical_spheres_intersect_preserves_volume() {
 // ── 2. Concentric different radii (NOT same-domain — must NOT merge) ──
 
 #[test]
-#[ignore = "Gap: concentric spheres of different radii — ball-in-ball topology, \
-            SD detector correctly returns None (different radii); fuse should yield \
-            outer sphere unchanged. GFA does not yet collapse the inner sphere correctly."]
 fn concentric_spheres_different_radii_fuse() {
     let mut topo = Topology::default();
     let outer = sphere_at(&mut topo, 0.0, 0.0, 0.0, 2.0);
@@ -105,8 +98,6 @@ fn concentric_spheres_different_radii_fuse() {
 // ── 3. Sub-tolerance shifted center (should be SD) ────────────────────
 
 #[test]
-#[ignore = "Gap: sub-tolerance center shift — SD detector should treat as identical \
-            via tolerance comparison; GFA produces wrong topology."]
 fn spheres_sub_tolerance_shifted_fuse() {
     let mut topo = Topology::default();
     let a = sphere_at(&mut topo, 0.0, 0.0, 0.0, 1.0);

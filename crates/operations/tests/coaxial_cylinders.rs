@@ -71,8 +71,6 @@ fn baseline_cylinder_disjoint_intersect_empty_or_zero() {
 // ── 1. Identical cylinders (degenerate SD case) ───────────────────────
 
 #[test]
-#[ignore = "Gap: identical-cylinder fuse/intersect — SD detector identifies the pair \
-            but GFA pipeline integration produces wrong topology (volume off ~18%)."]
 fn identical_cylinders_fuse_preserves_volume() {
     let mut topo = Topology::default();
     let a = cylinder_at_z(&mut topo, 0.0, 1.0, 2.0);
@@ -88,8 +86,6 @@ fn identical_cylinders_fuse_preserves_volume() {
 }
 
 #[test]
-#[ignore = "Gap: identical-cylinder fuse/intersect — SD detector identifies the pair \
-            but GFA pipeline integration produces wrong topology (volume off ~15%)."]
 fn identical_cylinders_intersect_preserves_volume() {
     let mut topo = Topology::default();
     let a = cylinder_at_z(&mut topo, 0.0, 1.0, 2.0);
@@ -107,8 +103,6 @@ fn identical_cylinders_intersect_preserves_volume() {
 // ── 2. Cap-on-cap stack (coplanar cap faces + lateral SD) ─────────────
 
 #[test]
-#[ignore = "Gap: cylinder cap-on-cap stack — SD pair found on cap planes but lateral \
-            cylinder surfaces are also SD across the joint, and GFA fails to merge cleanly."]
 fn cylinder_cap_on_cap_stack_fuse() {
     let mut topo = Topology::default();
     let a = cylinder_at_z(&mut topo, 0.0, 1.0, 1.0);
@@ -121,7 +115,6 @@ fn cylinder_cap_on_cap_stack_fuse() {
 }
 
 #[test]
-#[ignore = "Gap: 3-cylinder cap-stack chain — same root cause as 2-cylinder cap-stack."]
 fn cylinder_cap_on_cap_three_stack_fuse() {
     let mut topo = Topology::default();
     let a = cylinder_at_z(&mut topo, 0.0, 1.0, 1.0);
@@ -138,8 +131,6 @@ fn cylinder_cap_on_cap_three_stack_fuse() {
 // ── 3. Coaxial overlap (lateral SD case) ──────────────────────────────
 
 #[test]
-#[ignore = "Gap: coaxial cylinder partial-Z overlap — lateral SD region is shared \
-            but GFA does not produce a clean merged solid."]
 fn cylinder_coaxial_partial_z_overlap_fuse() {
     let mut topo = Topology::default();
     let a = cylinder_at_z(&mut topo, 0.0, 1.0, 2.0);
@@ -152,8 +143,6 @@ fn cylinder_coaxial_partial_z_overlap_fuse() {
 }
 
 #[test]
-#[ignore = "Gap: coaxial containment fuse — inner cylinder SD with outer along its \
-            full Z range should collapse to outer, but GFA fails."]
 fn cylinder_coaxial_full_z_containment_fuse() {
     let mut topo = Topology::default();
     let a = cylinder_at_z(&mut topo, 0.0, 1.0, 4.0);
@@ -166,8 +155,6 @@ fn cylinder_coaxial_full_z_containment_fuse() {
 }
 
 #[test]
-#[ignore = "Gap: coaxial containment intersect — should yield inner cylinder, \
-            but GFA fails on this SD configuration."]
 fn cylinder_coaxial_full_z_containment_intersect() {
     let mut topo = Topology::default();
     let a = cylinder_at_z(&mut topo, 0.0, 1.0, 4.0);
@@ -182,8 +169,6 @@ fn cylinder_coaxial_full_z_containment_intersect() {
 // ── 4. Opposite-axis (rotated 180°) ───────────────────────────────────
 
 #[test]
-#[ignore = "Gap: opposite-axis cylinder fuse — SD detector reports `same_orientation=false`, \
-            but GFA pipeline does not yet honour the flag for cylinders."]
 fn cylinder_opposite_axis_fuse() {
     let mut topo = Topology::default();
     let a = cylinder_at_z(&mut topo, 0.0, 1.0, 2.0);

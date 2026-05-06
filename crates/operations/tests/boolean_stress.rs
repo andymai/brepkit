@@ -371,7 +371,6 @@ fn volume_identity_inclusion_exclusion() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn chained_fuse_three_boxes() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0);
