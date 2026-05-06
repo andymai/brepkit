@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.45.0](https://github.com/andymai/brepkit/compare/v2.44.1...v2.45.0) (2026-05-06)
+
+
+### Features
+
+* **operations:** analytic boolean prologue shortcuts for boxes / coaxial cylinders & cones ([#541](https://github.com/andymai/brepkit/issues/541)) ([2d8e08c](https://github.com/andymai/brepkit/commit/2d8e08ccb099a1566110bfef5c179e25ab68bd10))
+
 ## [2.44.1](https://github.com/andymai/brepkit/compare/v2.44.0...v2.44.1) (2026-04-30)
 
 
