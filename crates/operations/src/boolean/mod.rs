@@ -241,25 +241,37 @@ pub fn boolean(
         {
             let same_axis_dir = aa.dot(*ab) > 1.0 - tol.angular;
             let same_apex = (*oa - *ob).length() < tol.linear;
-            // Half-angle slope: r/z. Use whichever endpoint has |z| above tol.
+            // Half-angle slope: dimensionless r/z. Use whichever endpoint has
+            // |z| above tol.linear (compared against tol.linear because slope
+            // is a length ratio, not an angle — `tol.angular` is a radian
+            // threshold, wrong unit). When both endpoints of a frustum are
+            // sub-tol (degenerate apex-pinned cone), skip the shortcut and
+            // let GFA handle it rather than dividing by near-zero.
             let slope_a = if za_max.abs() > tol.linear {
-                rmax_a / *za_max
+                Some(rmax_a / *za_max)
+            } else if za_min.abs() > tol.linear {
+                Some(rmin_a / *za_min)
             } else {
-                rmin_a / *za_min
+                None
             };
             let slope_b = if zb_max.abs() > tol.linear {
-                rmax_b / *zb_max
+                Some(rmax_b / *zb_max)
+            } else if zb_min.abs() > tol.linear {
+                Some(rmin_b / *zb_min)
             } else {
-                rmin_b / *zb_min
+                None
             };
-            let same_half_angle = (slope_a - slope_b).abs() < tol.angular;
-            if same_axis_dir && same_apex && same_half_angle {
+            let same_half_angle = match (slope_a, slope_b) {
+                (Some(sa), Some(sb)) => (sa - sb).abs() < tol.linear,
+                _ => false,
+            };
+            if let (true, Some(slope)) = (same_axis_dir && same_apex && same_half_angle, slope_a) {
                 if let Some(result) = coaxial_cone_shortcut(
                     topo,
                     op,
                     *oa,
                     *aa,
-                    slope_a,
+                    slope,
                     (*za_min, *za_max),
                     (*zb_min, *zb_max),
                     tol,
@@ -688,52 +700,7 @@ fn coaxial_cylinder_shortcut(
         origin.y() + axis.y() * z_min,
         origin.z() + axis.z() * z_min,
     );
-    let canonical_axis = Vec3::new(0.0, 0.0, 1.0);
-    let xform = if (axis - canonical_axis).length() < tol.angular {
-        brepkit_math::mat::Mat4::translation(world_origin.x(), world_origin.y(), world_origin.z())
-    } else {
-        // Rotate canonical (0,0,1) → axis via Rodrigues' formula:
-        //   R = I + sin(θ) K + (1 - cos(θ)) K²,  where K = [k]× for k = ẑ × axis / sin(θ).
-        // For our specific case this simplifies because k.z = 0, so K's
-        // z-row and z-column have a known structure.
-        let dot = canonical_axis.dot(axis).clamp(-1.0, 1.0);
-        let sin_t = (1.0 - dot * dot).sqrt();
-        // antiparallel: rotate π about x-axis (any perpendicular works).
-        if (axis - Vec3::new(0.0, 0.0, -1.0)).length() < tol.angular {
-            brepkit_math::mat::Mat4::translation(
-                world_origin.x(),
-                world_origin.y(),
-                world_origin.z(),
-            ) * brepkit_math::mat::Mat4::rotation_x(std::f64::consts::PI)
-        } else {
-            // k = canonical × axis / sin(θ) = (-axis.y, axis.x, 0) / sin_t
-            let kx = -axis.y() / sin_t;
-            let ky = axis.x() / sin_t;
-            // K * k   (skew-symmetric matrix) — but we only need R applied
-            // per Rodrigues; build R column-by-column.
-            let one_minus_cos = 1.0 - dot;
-            let r00 = one_minus_cos.mul_add(kx * kx, dot);
-            let r01 = one_minus_cos * kx * ky;
-            let r02 = sin_t * ky;
-            let r10 = one_minus_cos * kx * ky;
-            let r11 = one_minus_cos.mul_add(ky * ky, dot);
-            let r12 = -sin_t * kx;
-            let r20 = -sin_t * ky;
-            let r21 = sin_t * kx;
-            let r22 = dot;
-            let rot = brepkit_math::mat::Mat4([
-                [r00, r01, r02, 0.0],
-                [r10, r11, r12, 0.0],
-                [r20, r21, r22, 0.0],
-                [0.0, 0.0, 0.0, 1.0],
-            ]);
-            brepkit_math::mat::Mat4::translation(
-                world_origin.x(),
-                world_origin.y(),
-                world_origin.z(),
-            ) * rot
-        }
-    };
+    let xform = xform_from_canonical_z(world_origin, axis, tol);
     crate::transform::transform_solid(topo, cyl, &xform)?;
     Ok(Some(cyl))
 }
@@ -795,22 +762,68 @@ fn coaxial_cone_shortcut(
         apex.y() + axis.y() * z_min,
         apex.z() + axis.z() * z_min,
     );
-    let canonical_axis = Vec3::new(0.0, 0.0, 1.0);
-    let xform = if (axis - canonical_axis).length() < tol.angular {
-        brepkit_math::mat::Mat4::translation(world_origin.x(), world_origin.y(), world_origin.z())
-    } else if (axis - Vec3::new(0.0, 0.0, -1.0)).length() < tol.angular {
-        // Antiparallel: rotate canonical (+z) by π around X to flip to -z,
-        // then translate. make_cone's bottom (z=0) stays at the origin, top
-        // (z=h) goes to z=-h; translation lifts both up to world frame.
-        brepkit_math::mat::Mat4::translation(world_origin.x(), world_origin.y(), world_origin.z())
-            * brepkit_math::mat::Mat4::rotation_x(std::f64::consts::PI)
-    } else {
-        // Generic axis: skip — current tests are axis-aligned. Generalize
-        // when off-axis cone test cases appear.
+    // Cone shortcut keeps to axis-aligned cases for now (test corpus does
+    // not yet cover off-axis cones). Detect parallel/antiparallel via the
+    // dot product (the canonical-axis Z-component is the only term that
+    // survives `canonical · axis` since canonical = ẑ).
+    let dot = axis.z().clamp(-1.0, 1.0);
+    if 1.0 - dot.abs() > tol.angular {
         return Ok(None);
-    };
+    }
+    let xform = xform_from_canonical_z(world_origin, axis, tol);
     crate::transform::transform_solid(topo, cone, &xform)?;
     Ok(Some(cone))
+}
+
+/// Build the world-frame transform that maps a primitive built in the
+/// canonical Z-up local frame (origin at world origin, axis = +Z) to a
+/// world frame at `world_origin` with up-axis `axis` (assumed
+/// unit-length). Uses Rodrigues' rotation formula for the general case.
+///
+/// Comparisons use `1.0 - axis.dot(canonical) < tol.angular` rather than
+/// vector-length deltas, because for unit vectors `|u−v| ≈ √2·θ`, so a
+/// length comparison against `tol.angular` would correspond to
+/// `θ ≈ 7×10⁻¹³` rad — effectively bit-identity.
+fn xform_from_canonical_z(
+    world_origin: Point3,
+    axis: Vec3,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> brepkit_math::mat::Mat4 {
+    let translate =
+        brepkit_math::mat::Mat4::translation(world_origin.x(), world_origin.y(), world_origin.z());
+    let canonical = Vec3::new(0.0, 0.0, 1.0);
+    let dot = canonical.dot(axis).clamp(-1.0, 1.0);
+    // Parallel to +Z: pure translation.
+    if 1.0 - dot < tol.angular {
+        return translate;
+    }
+    // Antiparallel: rotate canonical (+z) by π around X to flip to −z.
+    if 1.0 + dot < tol.angular {
+        return translate * brepkit_math::mat::Mat4::rotation_x(std::f64::consts::PI);
+    }
+    // Rotate canonical (0,0,1) → axis via Rodrigues' formula:
+    //   R = I + sin(θ) K + (1 - cos(θ)) K²,  K = [k]× for k = ẑ × axis / sin(θ).
+    // k.z = 0 by construction, so K's z-row/z-column have a known structure.
+    let sin_t = (1.0 - dot * dot).sqrt();
+    let kx = -axis.y() / sin_t;
+    let ky = axis.x() / sin_t;
+    let one_minus_cos = 1.0 - dot;
+    let r00 = one_minus_cos.mul_add(kx * kx, dot);
+    let r01 = one_minus_cos * kx * ky;
+    let r02 = sin_t * ky;
+    let r10 = one_minus_cos * kx * ky;
+    let r11 = one_minus_cos.mul_add(ky * ky, dot);
+    let r12 = -sin_t * kx;
+    let r20 = -sin_t * ky;
+    let r21 = sin_t * kx;
+    let r22 = dot;
+    let rot = brepkit_math::mat::Mat4([
+        [r00, r01, r02, 0.0],
+        [r10, r11, r12, 0.0],
+        [r20, r21, r22, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]);
+    translate * rot
 }
 
 /// Check whether every boundary vertex of `solid` is classified as
