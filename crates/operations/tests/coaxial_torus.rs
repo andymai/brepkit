@@ -61,9 +61,6 @@ fn baseline_disjoint_toruses_intersect_empty() {
 // ── 1. Identical toruses (validates new Torus SD arm) ─────────────────
 
 #[test]
-#[ignore = "Gap: identical-torus fuse — new Torus SD arm correctly detects the \
-            pair (verified by unit test `torus_same_domain_same_direction_ignores_ref_dir`) \
-            but GFA pipeline integration of torus SD pairs is not yet implemented."]
 fn identical_toruses_fuse_preserves_volume() {
     let mut topo = Topology::default();
     let a = torus_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 0.5);
@@ -75,7 +72,6 @@ fn identical_toruses_fuse_preserves_volume() {
 }
 
 #[test]
-#[ignore = "Gap: identical-torus intersect — same root cause as fuse."]
 fn identical_toruses_intersect_preserves_volume() {
     let mut topo = Topology::default();
     let a = torus_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 0.5);
@@ -111,9 +107,6 @@ fn toruses_different_minor_radius_intersect_nontrivial() {
 // ── 3. Opposite axis (rotated 180°) ───────────────────────────────────
 
 #[test]
-#[ignore = "Gap: opposite-axis torus fuse — SD detector reports same_orientation=false \
-            (verified by unit test `torus_same_domain_opposite_direction`), but GFA \
-            does not yet honour the orientation flag for torus SD pairs."]
 fn torus_opposite_axis_fuse() {
     let mut topo = Topology::default();
     let a = torus_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 0.5);

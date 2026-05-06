@@ -49,12 +49,18 @@ fn box_at(topo: &mut Topology, x: f64, y: f64, z: f64, sx: f64, sy: f64, sz: f64
 #[test]
 fn face_on_face_unit_stack_fuse() {
     // [0,1]^3 stacked under [0,1]^2 × [1,2] — full face coincidence.
+    // Two of three dims match (x and y); the box-pair shortcut collapses
+    // the union to a clean 6-face 1×1×2 box. (GFA without the shortcut
+    // produces a 10-face fragmented result that unify can later merge.)
     let mut topo = Topology::default();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
     let b = box_at(&mut topo, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0);
     let r = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
     let faces = check_manifold(&topo, r);
-    assert_eq!(faces, 10, "face-stack fuse should drop the shared face");
+    assert!(
+        faces <= 10,
+        "face-stack fuse should drop the shared face (got {faces}, expected ≤10)"
+    );
     assert_volume_close(&topo, r, 2.0);
 }
 
@@ -99,10 +105,6 @@ fn partial_face_overlap_quarter_offset_fuse() {
 }
 
 #[test]
-#[ignore = "Gap: passes today but exercises the same partial-face-overlap GFA path \
-            as `partial_face_overlap_quarter_offset_fuse`. Ignored to avoid silent \
-            flakiness — should be unignored together with quarter_offset_fuse once \
-            the partial-overlap gap closes."]
 fn partial_face_overlap_diagonal_offset_fuse() {
     // B offset diagonally — only a quarter of the upper face is shared.
     let mut topo = Topology::default();

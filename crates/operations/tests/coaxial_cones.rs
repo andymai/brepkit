@@ -60,8 +60,6 @@ fn baseline_disjoint_cones_intersect_empty() {
 // ── 1. Identical frustums ──────────────────────────────────────────────
 
 #[test]
-#[ignore = "Gap: identical-cone fuse — SD detector identifies the pair but GFA \
-            integration of cone same-domain is incomplete."]
 fn identical_cones_fuse_preserves_volume() {
     let mut topo = Topology::default();
     let a = cone_at_z(&mut topo, 0.0, 1.0, 0.5, 1.0);
@@ -92,8 +90,6 @@ fn cone_cap_on_cap_stack_fuse() {
 // ── 3. Coaxial overlap (lateral SD on cone surface) ───────────────────
 
 #[test]
-#[ignore = "Gap: coaxial cone partial-Z overlap — lateral SD region is shared, \
-            but GFA does not produce a clean merged solid."]
 fn cone_coaxial_partial_z_overlap_fuse() {
     let mut topo = Topology::default();
     let a = cone_at_z(&mut topo, 0.0, 1.0, 0.5, 2.0);
@@ -107,8 +103,6 @@ fn cone_coaxial_partial_z_overlap_fuse() {
 // ── 4. True cone (zero top radius) — apex-sharing scenarios ───────────
 
 #[test]
-#[ignore = "Gap: true-cone identical fuse — apex creates a degenerate edge that \
-            interacts poorly with SD merging."]
 fn identical_true_cones_fuse() {
     let mut topo = Topology::default();
     let a = cone_at_z(&mut topo, 0.0, 1.0, 0.0, 2.0);

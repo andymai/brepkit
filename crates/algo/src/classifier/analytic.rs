@@ -63,6 +63,18 @@ pub enum AnalyticClassifier {
         /// Radius at `z_max`.
         r_at_z_max: f64,
     },
+    /// Point-in-torus: distance from `center`'s major circle (radius
+    /// `major_radius` around `axis`) is less than `minor_radius`.
+    Torus {
+        /// Torus center.
+        center: Point3,
+        /// Torus axis direction (unit; perpendicular to the ring plane).
+        axis: Vec3,
+        /// Major radius (axis-to-tube-center distance).
+        major_radius: f64,
+        /// Minor radius (tube cross-section radius).
+        minor_radius: f64,
+    },
     /// Point-in-box: axis-aligned bounding box test.
     Box {
         /// Box minimum corner.
@@ -172,6 +184,28 @@ impl AnalyticClassifier {
                 {
                     Some(FaceClass::Inside)
                 } else if radial_dist_sq > (expected_r + tol.linear) * (expected_r + tol.linear) {
+                    Some(FaceClass::Outside)
+                } else {
+                    None
+                }
+            }
+            Self::Torus {
+                center,
+                axis,
+                major_radius,
+                minor_radius,
+            } => {
+                let diff = centroid - *center;
+                let axial = diff.dot(*axis);
+                let radial_vec = diff - *axis * axial;
+                let rho = radial_vec.length();
+                let dr = rho - *major_radius;
+                let tube_dist_sq = dr.mul_add(dr, axial * axial);
+                let r_in = *minor_radius - tol.linear;
+                let r_out = *minor_radius + tol.linear;
+                if tube_dist_sq < r_in.max(0.0) * r_in.max(0.0) {
+                    Some(FaceClass::Inside)
+                } else if tube_dist_sq > r_out * r_out {
                     Some(FaceClass::Outside)
                 } else {
                     None
@@ -358,10 +392,12 @@ pub fn try_build_analytic_classifier(
     let mut sphere_info: Option<(Point3, f64)> = None;
     let mut cylinder_info: Option<(Point3, Vec3, f64)> = None;
     let mut cone_info: Option<(Point3, Vec3, f64)> = None;
+    let mut torus_info: Option<(Point3, Vec3, f64, f64)> = None;
     let mut has_planar = false;
     let mut has_sphere = false;
     let mut has_cylinder = false;
     let mut has_cone = false;
+    let mut has_torus = false;
 
     for &fid in shell.faces() {
         let face = topo.face(fid).ok()?;
@@ -408,8 +444,39 @@ pub fn try_build_analytic_classifier(
             FaceSurface::Plane { .. } => {
                 has_planar = true;
             }
-            FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => return None,
+            FaceSurface::Torus(t) => {
+                has_torus = true;
+                if let Some((c, a, ma, mi)) = torus_info {
+                    let dc = (c - t.center()).length();
+                    let da = 1.0 - a.dot(t.z_axis()).abs();
+                    if dc > tol.linear
+                        || da > tol.angular
+                        || (ma - t.major_radius()).abs() > tol.linear
+                        || (mi - t.minor_radius()).abs() > tol.linear
+                    {
+                        return None;
+                    }
+                } else {
+                    torus_info = Some((t.center(), t.z_axis(), t.major_radius(), t.minor_radius()));
+                }
+            }
+            FaceSurface::Nurbs(_) => return None,
         }
+    }
+
+    // Pure torus (single-face full doughnut).
+    if has_torus && !has_planar && !has_sphere && !has_cylinder && !has_cone {
+        let (center, axis, major_radius, minor_radius) = torus_info?;
+        return Some(AnalyticClassifier::Torus {
+            center,
+            axis,
+            major_radius,
+            minor_radius,
+        });
+    }
+    if has_torus {
+        // Torus combined with other surfaces — not yet supported.
+        return None;
     }
 
     // Pure planar solid — try axis-aligned box or convex polyhedron.
