@@ -25,6 +25,7 @@ use brepkit_geometry::convert::surface_to_nurbs::{
     cone_to_nurbs, cylinder_to_nurbs, sphere_to_nurbs, torus_to_nurbs,
 };
 use brepkit_math::nurbs::surface::NurbsSurface;
+use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
@@ -105,11 +106,13 @@ fn convert_edge_curve(topo: &mut Topology, eid: EdgeId) -> Result<bool, HealErro
     let start_pt = topo.vertex(start_v)?.point();
     let end_pt = topo.vertex(end_v)?.point();
 
+    let tol = Tolerance::new();
     let nurbs = match curve {
         EdgeCurve::Line => {
-            // Skip degenerate edges (start == end position) — line_to_nurbs
-            // rejects them and we have no meaningful NURBS to substitute.
-            if (end_pt - start_pt).length() < 1e-15 {
+            // Skip near-degenerate edges. Use the topology linear tolerance so
+            // we don't propagate a `line_to_nurbs` rejection (which would abort
+            // the whole solid conversion) for edges that are noise-only-long.
+            if (end_pt - start_pt).length() < tol.linear {
                 return Ok(false);
             }
             line_to_nurbs(start_pt, end_pt)?
@@ -118,7 +121,11 @@ fn convert_edge_curve(topo: &mut Topology, eid: EdgeId) -> Result<bool, HealErro
             if start_v == end_v {
                 circle_to_nurbs(&c, 0.0, TAU)?
             } else {
-                let (t_start, t_end) = arc_param_range(c.project(start_pt), c.project(end_pt));
+                let Some((t_start, t_end)) =
+                    arc_param_range(c.project(start_pt), c.project(end_pt), tol.angular)
+                else {
+                    return Ok(false);
+                };
                 circle_to_nurbs(&c, t_start, t_end)?
             }
         }
@@ -126,7 +133,11 @@ fn convert_edge_curve(topo: &mut Topology, eid: EdgeId) -> Result<bool, HealErro
             if start_v == end_v {
                 ellipse_to_nurbs(&e, 0.0, TAU)?
             } else {
-                let (t_start, t_end) = arc_param_range(e.project(start_pt), e.project(end_pt));
+                let Some((t_start, t_end)) =
+                    arc_param_range(e.project(start_pt), e.project(end_pt), tol.angular)
+                else {
+                    return Ok(false);
+                };
                 ellipse_to_nurbs(&e, t_start, t_end)?
             }
         }
@@ -142,11 +153,20 @@ fn convert_edge_curve(topo: &mut Topology, eid: EdgeId) -> Result<bool, HealErro
 /// `Circle3D::project` and `Ellipse3D::project` return values in `[0, 2π)`. An
 /// arc from start to end that wraps past the seam ends up with `t_end < t_start`;
 /// shift `t_end` up by 2π so the resulting span is positive.
-fn arc_param_range(t_start: f64, t_end: f64) -> (f64, f64) {
-    if t_end > t_start {
-        (t_start, t_end)
+///
+/// Returns `None` when the start and end project to the same angle (within
+/// `tol_ang`). Two distinct vertices that share an angle imply a zero-span or
+/// full-loop arc that the closed-edge branch above should have caught — handing
+/// it back as `Some((t, t + 2π))` would silently turn a zero-length topological
+/// edge into a complete circle.
+fn arc_param_range(t_start: f64, t_end: f64, tol_ang: f64) -> Option<(f64, f64)> {
+    let delta = t_end - t_start;
+    if delta.abs() < tol_ang {
+        None
+    } else if delta > 0.0 {
+        Some((t_start, t_end))
     } else {
-        (t_start, t_end + TAU)
+        Some((t_start, t_end + TAU))
     }
 }
 
@@ -499,12 +519,65 @@ mod tests {
 
     #[test]
     fn arc_param_range_handles_wrap() {
+        let tol = 1e-12;
         // No wrap: t_end > t_start.
-        assert_eq!(arc_param_range(0.0, PI), (0.0, PI));
+        assert_eq!(arc_param_range(0.0, PI, tol), Some((0.0, PI)));
         // Wrap: t_end < t_start, shift by 2π.
-        let (a, b) = arc_param_range(1.5 * PI, 0.5 * PI);
+        let (a, b) = arc_param_range(1.5 * PI, 0.5 * PI, tol).unwrap();
         assert!((a - 1.5 * PI).abs() < 1e-12);
         assert!((b - 2.5 * PI).abs() < 1e-12);
+    }
+
+    #[test]
+    fn arc_param_range_rejects_zero_span() {
+        // Distinct vertices that project to the same angle ⇒ zero-span; must
+        // not silently inflate to a full circle.
+        assert_eq!(arc_param_range(1.0, 1.0, 1e-12), None);
+        // Within angular tolerance ⇒ also rejected.
+        assert_eq!(arc_param_range(1.0, 1.0 + 1e-15, 1e-12), None);
+        // Just outside tolerance ⇒ accepted.
+        assert!(arc_param_range(1.0, 1.0 + 1e-9, 1e-12).is_some());
+    }
+
+    #[test]
+    fn near_degenerate_line_edge_is_skipped_not_errored() {
+        // Edge with length below topology tolerance must skip cleanly, not
+        // bubble a GeomError that aborts the whole solid conversion.
+        let mut topo = Topology::default();
+        let p0 = Point3::new(0.0, 0.0, 0.0);
+        let p1 = Point3::new(1e-10, 0.0, 0.0);
+        let v0 = topo.add_vertex(Vertex::new(p0, 1e-7));
+        let v1 = topo.add_vertex(Vertex::new(p1, 1e-7));
+        let degenerate_eid = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+
+        // Embed in a face so solid_edges traversal sees it.
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(degenerate_eid, true),
+                    OrientedEdge::new(degenerate_eid, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: z_axis(),
+                d: 0.0,
+            },
+        ));
+        let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+        let solid = topo.add_solid(Solid::new(shell, vec![]));
+
+        // Should succeed without converting the degenerate edge.
+        convert_solid_to_bspline(&mut topo, solid).unwrap();
+        assert!(matches!(
+            topo.edge(degenerate_eid).unwrap().curve(),
+            EdgeCurve::Line
+        ));
     }
 
     #[test]
