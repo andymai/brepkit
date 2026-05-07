@@ -1553,6 +1553,33 @@ fn order_edges_into_loops(
     Ok(loops)
 }
 
+/// Convert all analytic geometry in a solid to NURBS (B-Spline) representation.
+///
+/// Replaces every analytic surface (Plane, Cylinder, Cone, Sphere, Torus) with
+/// its NURBS equivalent and every analytic curve (Line, Circle, Ellipse) with
+/// a NURBS curve. NURBS surfaces and curves already in the model are left
+/// untouched.
+///
+/// Returns the number of faces and edges that were converted.
+///
+/// Equivalent to OCCT's `BRepBuilderAPI_NurbsConvert`. Stored pcurves are
+/// dropped on conversion — see `brepkit_heal::custom::convert_to_bspline` for
+/// the full rationale.
+///
+/// # Errors
+///
+/// Returns an error if any topology lookup or NURBS construction fails.
+pub fn convert_to_bspline(
+    topo: &mut Topology,
+    solid: SolidId,
+) -> Result<usize, crate::OperationsError> {
+    brepkit_heal::custom::convert_to_bspline::convert_solid_to_bspline(topo, solid).map_err(|e| {
+        crate::OperationsError::InvalidInput {
+            reason: format!("convert_to_bspline failed: {e}"),
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::print_stderr)]
