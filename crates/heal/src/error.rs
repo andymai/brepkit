@@ -11,6 +11,10 @@ pub enum HealError {
     #[error(transparent)]
     Math(#[from] brepkit_math::MathError),
 
+    /// A geometry-layer operation failed.
+    #[error(transparent)]
+    Geometry(#[from] brepkit_geometry::GeomError),
+
     /// Analysis detected an unrecoverable problem.
     #[error("analysis failed: {0}")]
     AnalysisFailed(String),

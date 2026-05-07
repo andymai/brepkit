@@ -99,6 +99,28 @@ impl BrepKernel {
         Ok(removed as u32)
     }
 
+    /// Convert all analytic geometry in a solid to NURBS representation.
+    ///
+    /// Replaces planes, cylinders, cones, spheres, tori with NURBS surfaces and
+    /// lines, circles, ellipses with NURBS curves. NURBS surfaces and curves
+    /// already in the model are left untouched. Returns the number of entities
+    /// converted.
+    ///
+    /// Equivalent to OCCT's `BRepBuilderAPI_NurbsConvert`. Stored pcurves are
+    /// dropped during conversion — callers that depend on pcurves should
+    /// recompute them afterwards.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or conversion fails.
+    #[wasm_bindgen(js_name = "convertToBspline")]
+    pub fn convert_to_bspline(&mut self, solid: u32) -> Result<u32, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let count = brepkit_operations::heal::convert_to_bspline(self.topo_mut(), solid_id)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(count as u32)
+    }
+
     /// Heal a solid topology.
     ///
     /// Returns the number of issues fixed.
@@ -208,5 +230,58 @@ impl BrepKernel {
         let json_features: Vec<serde_json::Value> =
             features.iter().map(serialize_feature).collect();
         Ok(serde_json::Value::Array(json_features).to_string())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use crate::kernel::BrepKernel;
+
+    #[test]
+    fn convert_to_bspline_returns_count_and_solid() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[
+                {"op": "makeCylinder", "args": {"radius": 1, "height": 2}},
+                {"op": "convertToBspline", "args": {"solid": 0}}
+            ]"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let ok = parsed[1]["ok"].as_object().expect("expected ok object");
+        assert!(ok.get("solid").is_some(), "missing 'solid' field");
+        let converted = ok["converted"].as_u64().expect("expected 'converted' u64");
+        // Cylinder has 3 faces (lateral + 2 caps) and 3 edges (2 circles + 1 seam)
+        // → 6 conversions on first run.
+        assert!(converted >= 5, "expected >=5 conversions, got {converted}");
+    }
+
+    #[test]
+    fn convert_to_bspline_invalid_handle_errors() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(r#"[{"op": "convertToBspline", "args": {"solid": 999}}]"#);
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert!(
+            parsed[0]["error"].is_string(),
+            "expected error for invalid handle, got: {}",
+            parsed[0]
+        );
+    }
+
+    #[test]
+    fn convert_to_bspline_idempotent_second_call_is_zero() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[
+                {"op": "makeBox", "args": {"width": 1, "height": 1, "depth": 1}},
+                {"op": "convertToBspline", "args": {"solid": 0}},
+                {"op": "convertToBspline", "args": {"solid": 0}}
+            ]"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let first = parsed[1]["ok"]["converted"].as_u64().unwrap();
+        let second = parsed[2]["ok"]["converted"].as_u64().unwrap();
+        assert!(first > 0);
+        assert_eq!(second, 0, "second pass should convert nothing");
     }
 }
