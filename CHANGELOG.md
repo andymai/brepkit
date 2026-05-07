@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.46.0](https://github.com/andymai/brepkit/compare/v2.45.0...v2.46.0) (2026-05-07)
+
+
+### Features
+
+* **heal:** wire up convert_to_bspline analytic→NURBS conversion ([#543](https://github.com/andymai/brepkit/issues/543)) ([420cb46](https://github.com/andymai/brepkit/commit/420cb468569292c52a878288e7574d0d93160bc3))
+
 ## [2.45.0](https://github.com/andymai/brepkit/compare/v2.44.1...v2.45.0) (2026-05-06)
 
 
