@@ -731,16 +731,21 @@ fn cyl_v_at_point(cyl: &brepkit_math::surfaces::CylindricalSurface, p: Point3) -
 /// empty-wedge direction).
 ///
 /// The fillet surface is a torus:
-///   - axis = `-axis_c` (= `+n_p_inward`), so `v=π/2` lands on the plate;
+///   - axis = `-n_p_inward` (= `+axis_c` for the regular-frustum case
+///     where `axis_c · n_p_inward = -1`); with this convention `sin v`
+///     points away from the plate, so `sin v = -1` is what pulls the
+///     tube point back toward the plate. Plate contact lands at
+///     `v = 3π/2`; cone contact at `v = atan2(cos α, -sin α)`.
 ///   - center at the cone-axis projection onto the plate, offset by
 ///     `-r·n_p_inward`;
 ///   - major radius `r_p + r·cot(α/2)`,
 ///   - minor radius `r`;
-///   - active tube parameter `v ∈ [π/2, 3π/2 - α]`, width `π - α`.
+///   - active tube parameter `v ∈ [atan2(cos α, -sin α), 3π/2]`,
+///     width `π - α`.
 ///
 /// At α = π/2 (degenerate "cone" approaching a cylinder), `cot(π/4) = 1`
-/// so major reduces to `r_p + r` and the active range becomes `[π/2, π]` —
-/// exactly the plane-cylinder result.
+/// so major reduces to `r_p + r` and the active range becomes
+/// `[π, 3π/2]` — exactly the plane-cylinder result.
 ///
 /// Returns `None` when:
 ///   - the cone axis isn't parallel to the plane normal,
@@ -827,9 +832,11 @@ pub fn plane_cone_fillet(
     // Torus center sits one fillet radius below the plate (in the
     // -n_p_inward direction, where the empty wedge is).
     let torus_center = p_axis_on_plane - n_p_inward * radius;
-    // Torus axis points "out of the plate material" so v = π/2 is the
-    // plate-contact direction (top of small circle) and v = 3π/2 - α is
-    // the cone-contact direction.
+    // Torus axis = -n_p_inward (= +axis_c for the regular-frustum case
+    // where axis_c · n_p_inward = -1). With this convention sin(v) points
+    // away from the plate, so plate contact is at v = 3π/2 (sin v = -1
+    // pulls the tube point back toward +n_p_inward) and cone contact is
+    // at v = atan2(cos α, -sin α).
     let axis_dir = -n_p_inward;
 
     // 7) Spine: detect closed-circle case so we can spin a full 2π without
