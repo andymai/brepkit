@@ -3052,19 +3052,12 @@ pub fn sphere_cone_fillet(
     //
     // Equivalently, contact_cone is on the cone surface line
     //   r = (z + h_signed) · cot β
-    // closest to (R_t, z_b). For a line a·z + b·r + c = 0 with unit
-    // normal (a, b), foot of perpendicular from (R_t, z_b) is
-    //   (R_t − a·d, z_b − b·d) where d = a·R_t + b·z_b + c.
-    //
-    // Cone line in (axial, radial) form: (z + h_signed) cot β − r = 0,
-    // i.e. cos β · (z + h_signed) − sin β · r = 0 (multiplied by sin β).
-    // Unit normal: (cos β, −sin β) (axial, radial). Distance from
-    // (R_t, z_b): cos β · (z_b + h_signed) − sin β · R_t = ?
-    // We chose R_t such that R_t · sin β − (z_b + h_signed) · cos β = r,
-    // i.e. cos β · (z_b + h_signed) − sin β · R_t = −r.
-    // Foot of perpendicular = (z_b + r·cos β, R_t − r·sin β).
-    // Foot of perpendicular for the unified case (cone tangency
-    // gave R_t·sin β − (z_b + h_signed)·cos β = s_cone · r):
+    // closest to (R_t, z_b). Cone line in (axial, radial) form:
+    // cos β · (z + h_signed) − sin β · r = 0 with unit normal
+    // (cos β, −sin β). The cone tangency constraint chose R_t such
+    // that R_t · sin β − (z_b + h_signed) · cos β = s_cone · r,
+    // i.e. signed distance from (R_t, z_b) to the line = −s_cone · r.
+    // Foot of perpendicular = (R_t, z_b) − (cos β, −sin β) · (−s_cone · r):
     //   cone_contact_axial = z_b + s_cone · r · cos β
     //   cone_contact_radial = R_t − s_cone · r · sin β
     let cone_contact_axial = z_b + s_cone * radius * cos_b;
@@ -7066,6 +7059,146 @@ mod tests {
         assert!(
             (on_torus_cone - want_cone).length() < 1e-9,
             "cone contact must lie on torus: {on_torus_cone:?} vs {want_cone:?}"
+        );
+    }
+
+    /// Sphere-cone fillet with BOTH faces reversed (sphere cavity inside
+    /// a cone cavity). s_sph = s_cone = −1 so Q_s = R_s − r AND
+    /// A = −r + h·cos β; both flips are independent and the test below
+    /// pins down the (concave-sphere, concave-cone) branch that's
+    /// distinct from the previously-tested (convex, concave-cone) case.
+    ///
+    /// For R_s=3, h=2, β=π/3, both faces REVERSED, r=0.3:
+    ///   - Q_s = 2.7, A = 0.7
+    ///   - disc = Q_s² − A² = 6.80, sqrt ≈ 2.608
+    ///   - c_root closer to +z spine (z_spine ≈ 1.949) ≈ 1.908
+    ///   - R_t = (s_cone·r + (c+h)·cos β)/sin β ≈ 1.910
+    ///     (smaller than convex-convex 2.642 AND smaller than
+    ///     concave-cone-only 2.219 — confirms BOTH flips compose)
+    #[test]
+    fn sphere_cone_fillet_both_concave_emits_smaller_torus() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::{ConicalSurface, SphericalSurface};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r_s: f64 = 3.0;
+        let h_signed: f64 = 2.0;
+        let beta: f64 = std::f64::consts::PI / 3.0;
+        let r_fillet: f64 = 0.3;
+
+        let cot_b = beta.cos() / beta.sin();
+        let qa_q = 1.0 / (beta.sin() * beta.sin());
+        let qb_q = 2.0 * h_signed * cot_b * cot_b;
+        let qc_q = h_signed * h_signed * cot_b * cot_b - big_r_s * big_r_s;
+        let q_disc = qb_q * qb_q - 4.0 * qa_q * qc_q;
+        let z_spine = (-qb_q + q_disc.sqrt()) / (2.0 * qa_q);
+        let r_spine = (z_spine + h_signed) * cot_b;
+
+        let sph = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r_s).unwrap();
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, -h_signed),
+            Vec3::new(0.0, 0.0, 1.0),
+            beta,
+        )
+        .unwrap();
+
+        let spine_circle = Circle3D::new(
+            Point3::new(0.0, 0.0, z_spine),
+            Vec3::new(0.0, 0.0, 1.0),
+            r_spine,
+        )
+        .unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_spine, 0.0, z_spine), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Both faces REVERSED (sphere cavity meets cone cavity).
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_sphere = topo.add_face(Face::new_reversed(
+            w1,
+            vec![],
+            FaceSurface::Sphere(sph.clone()),
+        ));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_cone = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cone(cone.clone()),
+        ));
+
+        let result =
+            sphere_cone_fillet(&sph, &cone, &spine, &topo, r_fillet, face_sphere, face_cone)
+                .unwrap()
+                .expect("both-concave sphere-cone fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        // Predicted torus parameters with s_sph = s_cone = -1.
+        let q_s = big_r_s - r_fillet;
+        let big_a = -r_fillet + h_signed * beta.cos();
+        let disc = q_s * q_s - big_a * big_a;
+        let c_root_a = -big_a * beta.cos() + beta.sin() * disc.sqrt();
+        let c_root_b = -big_a * beta.cos() - beta.sin() * disc.sqrt();
+        let z_b = if (c_root_a - z_spine).abs() <= (c_root_b - z_spine).abs() {
+            c_root_a
+        } else {
+            c_root_b
+        };
+        let expected_major = (-r_fillet + (z_b + h_signed) * beta.cos()) / beta.sin();
+
+        assert!(
+            (torus.major_radius() - expected_major).abs() < 1e-9,
+            "both-concave major should be {expected_major}, got {}",
+            torus.major_radius()
+        );
+
+        // Sanity: both-concave major < convex-convex major < ALSO <
+        // concave-cone-only — i.e. the two flips compose to give the
+        // smallest torus.
+        let convex_a = r_fillet + h_signed * beta.cos();
+        let convex_disc = (big_r_s + r_fillet) * (big_r_s + r_fillet) - convex_a * convex_a;
+        let convex_c = -convex_a * beta.cos() + beta.sin() * convex_disc.sqrt();
+        let convex_major = (r_fillet + (convex_c + h_signed) * beta.cos()) / beta.sin();
+        let concave_cone_a = -r_fillet + h_signed * beta.cos();
+        let concave_cone_disc =
+            (big_r_s + r_fillet) * (big_r_s + r_fillet) - concave_cone_a * concave_cone_a;
+        let concave_cone_c = -concave_cone_a * beta.cos() + beta.sin() * concave_cone_disc.sqrt();
+        let concave_cone_major =
+            (-r_fillet + (concave_cone_c + h_signed) * beta.cos()) / beta.sin();
+        assert!(
+            torus.major_radius() < concave_cone_major,
+            "both-concave major ({}) should be smaller than concave-cone-only ({concave_cone_major})",
+            torus.major_radius()
+        );
+        assert!(
+            concave_cone_major < convex_major,
+            "concave-cone-only major ({concave_cone_major}) should be smaller than convex ({convex_major})"
+        );
+
+        // Sphere contact at distance R_s.
+        let sph_axial = big_r_s * z_b / q_s;
+        let sph_radial = big_r_s * expected_major / q_s;
+        let want_sph = Point3::new(sph_radial, 0.0, sph_axial);
+        let dist_sph = (want_sph - Point3::new(0.0, 0.0, 0.0)).length();
+        assert!(
+            (dist_sph - big_r_s).abs() < 1e-9,
+            "sphere contact must lie on sphere: {dist_sph} vs R_s={big_r_s}"
+        );
+
+        // Cone contact on cone surface.
+        let cone_axial = z_b - r_fillet * beta.cos();
+        let cone_radial = expected_major + r_fillet * beta.sin();
+        let predicted_cone_radial = (cone_axial + h_signed) * cot_b;
+        assert!(
+            (cone_radial - predicted_cone_radial).abs() < 1e-9,
+            "cone contact must lie on cone: predicted {predicted_cone_radial}, got {cone_radial}"
         );
     }
 
