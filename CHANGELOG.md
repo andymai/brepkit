@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.47.0](https://github.com/andymai/brepkit/compare/v2.46.0...v2.47.0) (2026-05-08)
+
+
+### Features
+
+* **heal:** merge co-circular and co-elliptical arcs in unify_same_domain ([#545](https://github.com/andymai/brepkit/issues/545)) ([d18ffbb](https://github.com/andymai/brepkit/commit/d18ffbbd6beb04361eae713e521597a48a74d2ff))
+
 ## [2.46.0](https://github.com/andymai/brepkit/compare/v2.45.0...v2.46.0) (2026-05-07)
 
 
