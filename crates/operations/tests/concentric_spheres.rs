@@ -95,6 +95,54 @@ fn concentric_spheres_different_radii_fuse() {
     assert!(approx_eq(got, expected, 0.03));
 }
 
+#[test]
+fn concentric_spheres_different_radii_intersect_collapses_to_inner() {
+    let mut topo = Topology::default();
+    let outer = sphere_at(&mut topo, 0.0, 0.0, 0.0, 3.0);
+    let inner = sphere_at(&mut topo, 0.0, 0.0, 0.0, 1.5);
+    let r = boolean(&mut topo, BooleanOp::Intersect, outer, inner).unwrap();
+    // Intersection of concentric spheres == smaller sphere.
+    let expected = sphere_volume(1.5);
+    let got = vol(&topo, r);
+    assert!(
+        approx_eq(got, expected, 0.05),
+        "concentric intersect should collapse to inner sphere: got {got:.3}, expected {expected:.3}"
+    );
+}
+
+#[test]
+fn concentric_spheres_at_offset_center_fuse() {
+    // Verify the shortcut handles a non-origin shared center: both spheres
+    // translated to (5, -2, 7) before the boolean.
+    let mut topo = Topology::default();
+    let outer = sphere_at(&mut topo, 5.0, -2.0, 7.0, 2.0);
+    let inner = sphere_at(&mut topo, 5.0, -2.0, 7.0, 1.0);
+    let r = boolean(&mut topo, BooleanOp::Fuse, outer, inner).unwrap();
+    let expected = sphere_volume(2.0);
+    let got = vol(&topo, r);
+    assert!(approx_eq(got, expected, 0.05));
+}
+
+#[test]
+fn non_concentric_spheres_fuse_does_not_use_shortcut() {
+    // When centers don't coincide, the shortcut must NOT fire — the result
+    // must include the union geometry (lens-shaped intersection lobe).
+    // Two unit spheres offset by 1 along x: the union has volume
+    //   2·V_sphere(1) - V_lens
+    // where V_lens is the small intersection. Roughly: 2·(4π/3) - small ≈ 8.38 - 0.1 ≈ 8.28.
+    let mut topo = Topology::default();
+    let a = sphere_at(&mut topo, 0.0, 0.0, 0.0, 1.0);
+    let b = sphere_at(&mut topo, 1.0, 0.0, 0.0, 1.0);
+    let r = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+    let got = vol(&topo, r);
+    let single = sphere_volume(1.0); // ≈ 4.189
+    // The union should be more than one sphere but less than two.
+    assert!(
+        got > single * 1.2 && got < single * 2.0,
+        "non-concentric union should be between 1.2× and 2× a single sphere: got {got:.3}"
+    );
+}
+
 // ── 3. Sub-tolerance shifted center (should be SD) ────────────────────
 
 #[test]

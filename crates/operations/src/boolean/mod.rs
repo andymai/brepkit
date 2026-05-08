@@ -302,6 +302,37 @@ pub fn boolean(
                 return Ok(result);
             }
         }
+
+        // Concentric-sphere merge shortcut: when both A and B classify as
+        // Sphere with coincident centers, Fuse and Intersect collapse to a
+        // single sphere by radius algebra. Bypasses GFA's coplanar-pole
+        // handling (which currently routes spheres through the same SD
+        // pipeline that flakes on coaxial cylinders pre-#541).
+        //
+        // Cut intentionally falls through to GFA: subtracting an inner
+        // sphere from an outer one yields a hollow ball, whose topology
+        // (outer shell + inner shell) requires builder support beyond the
+        // single-sphere primitive used here.
+        if let (
+            Some(brepkit_algo::classifier::AnalyticClassifier::Sphere {
+                center: ca_center,
+                radius: ra,
+            }),
+            Some(brepkit_algo::classifier::AnalyticClassifier::Sphere {
+                center: cb_center,
+                radius: rb,
+            }),
+        ) = (ca.as_ref(), cb.as_ref())
+        {
+            let coincident = (*ca_center - *cb_center).length() < tol.linear;
+            if coincident {
+                if let Some(result) =
+                    concentric_sphere_shortcut(topo, op, a, b, *ca_center, *ra, *rb, tol)?
+                {
+                    return Ok(result);
+                }
+            }
+        }
     }
 
     // ── GFA pipeline ─────────────────────────────────────────────────
@@ -773,6 +804,69 @@ fn coaxial_cone_shortcut(
     let xform = xform_from_canonical_z(world_origin, axis, tol);
     crate::transform::transform_solid(topo, cone, &xform)?;
     Ok(Some(cone))
+}
+
+/// Compute the concentric-sphere boolean for two spheres sharing a
+/// center. Returns `Ok(None)` when the shortcut doesn't apply (Cut, or
+/// degenerate radii).
+///
+/// Sphere-sphere is simpler than the cylinder/cone analogues because
+/// there's no axial range — the result radius is just `max(r_a, r_b)`
+/// for Fuse and `min(r_a, r_b)` for Intersect.
+///
+/// The new sphere's tessellation density (segment count) is inherited from
+/// whichever input has a higher equatorial vertex count, so a
+/// 64-segment input never silently downgrades to a coarse default. This
+/// relies on `make_sphere` allocating exactly `segments` equatorial
+/// vertices and no pole vertices — see `crates/operations/src/primitives.rs`.
+#[allow(clippy::too_many_arguments)]
+fn concentric_sphere_shortcut(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+    center: Point3,
+    r_a: f64,
+    r_b: f64,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    if r_a <= tol.linear || r_b <= tol.linear {
+        return Ok(None);
+    }
+    let r_result = match op {
+        BooleanOp::Fuse => r_a.max(r_b),
+        BooleanOp::Intersect => {
+            // Both r_a and r_b are guaranteed > tol.linear by the guard above,
+            // so `min(r_a, r_b)` is always positive here.
+            r_a.min(r_b)
+        }
+        // Cut(A, B) on concentric spheres yields a hollow ball when r_a > r_b;
+        // empty when r_a ≤ r_b. The hollow-ball case needs an outer + inner
+        // shell, which `make_sphere` doesn't produce — defer to GFA.
+        BooleanOp::Cut => return Ok(None),
+    };
+
+    // Inherit segment count from whichever input was tessellated more finely.
+    // `make_sphere(r, n)` allocates exactly `n` equatorial vertices; because
+    // sphere primitives are fully describe by (center, radius), all vertices
+    // belong to that ring. Floor at 4 to satisfy `make_sphere`'s lower bound.
+    let segments_a = brepkit_topology::explorer::solid_vertices(topo, a)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let segments_b = brepkit_topology::explorer::solid_vertices(topo, b)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let segments = segments_a.max(segments_b).max(4);
+
+    let sphere = crate::primitives::make_sphere(topo, r_result, segments)?;
+    if center.x().abs() > tol.linear
+        || center.y().abs() > tol.linear
+        || center.z().abs() > tol.linear
+    {
+        let xform = brepkit_math::mat::Mat4::translation(center.x(), center.y(), center.z());
+        crate::transform::transform_solid(topo, sphere, &xform)?;
+    }
+    Ok(Some(sphere))
 }
 
 /// Build the world-frame transform that maps a primitive built in the
