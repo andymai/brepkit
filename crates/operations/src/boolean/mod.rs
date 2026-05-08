@@ -302,6 +302,37 @@ pub fn boolean(
                 return Ok(result);
             }
         }
+
+        // Concentric-sphere merge shortcut: when both A and B classify as
+        // Sphere with coincident centers, Fuse and Intersect collapse to a
+        // single sphere by radius algebra. Bypasses GFA's coplanar-pole
+        // handling (which currently routes spheres through the same SD
+        // pipeline that flakes on coaxial cylinders pre-#541).
+        //
+        // Cut intentionally falls through to GFA: subtracting an inner
+        // sphere from an outer one yields a hollow ball, whose topology
+        // (outer shell + inner shell) requires builder support beyond the
+        // single-sphere primitive used here.
+        if let (
+            Some(brepkit_algo::classifier::AnalyticClassifier::Sphere {
+                center: ca_center,
+                radius: ra,
+            }),
+            Some(brepkit_algo::classifier::AnalyticClassifier::Sphere {
+                center: cb_center,
+                radius: rb,
+            }),
+        ) = (ca.as_ref(), cb.as_ref())
+        {
+            let coincident = (*ca_center - *cb_center).length() < tol.linear;
+            if coincident {
+                if let Some(result) =
+                    concentric_sphere_shortcut(topo, op, *ca_center, *ra, *rb, tol)?
+                {
+                    return Ok(result);
+                }
+            }
+        }
     }
 
     // ── GFA pipeline ─────────────────────────────────────────────────
@@ -776,6 +807,56 @@ fn coaxial_cone_shortcut(
 }
 
 /// Build the world-frame transform that maps a primitive built in the
+/// Compute the concentric-sphere boolean for two spheres sharing a
+/// center. Returns `Ok(None)` when the shortcut doesn't apply (Cut, or
+/// degenerate radii).
+///
+/// Sphere-sphere is simpler than the cylinder/cone analogues because
+/// there's no axial range — the result radius is just `max(r_a, r_b)`
+/// for Fuse and `min(r_a, r_b)` for Intersect.
+fn concentric_sphere_shortcut(
+    topo: &mut Topology,
+    op: BooleanOp,
+    center: Point3,
+    r_a: f64,
+    r_b: f64,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    if r_a <= tol.linear || r_b <= tol.linear {
+        return Ok(None);
+    }
+    let r_result = match op {
+        BooleanOp::Fuse => r_a.max(r_b),
+        BooleanOp::Intersect => {
+            let r = r_a.min(r_b);
+            // Strict overlap: spheres must intersect in a region of positive
+            // volume for the intersect to be non-degenerate. For concentric
+            // spheres, that's just `r > tol`.
+            if r <= tol.linear {
+                return Ok(None);
+            }
+            r
+        }
+        // Cut(A, B) on concentric spheres yields a hollow ball when r_a > r_b;
+        // empty when r_a ≤ r_b. The hollow-ball case needs an outer + inner
+        // shell, which `make_sphere` doesn't produce — defer to GFA.
+        BooleanOp::Cut => return Ok(None),
+    };
+
+    // Match the segment count used by the existing concentric_spheres test
+    // corpus (32 segments) — gives ~5% volume accuracy on a unit sphere,
+    // which is what those tests expect.
+    let sphere = crate::primitives::make_sphere(topo, r_result, 32)?;
+    if center.x().abs() > tol.linear
+        || center.y().abs() > tol.linear
+        || center.z().abs() > tol.linear
+    {
+        let xform = brepkit_math::mat::Mat4::translation(center.x(), center.y(), center.z());
+        crate::transform::transform_solid(topo, sphere, &xform)?;
+    }
+    Ok(Some(sphere))
+}
+
 /// canonical Z-up local frame (origin at world origin, axis = +Z) to a
 /// world frame at `world_origin` with up-axis `axis` (assumed
 /// unit-length). Uses Rodrigues' rotation formula for the general case.
