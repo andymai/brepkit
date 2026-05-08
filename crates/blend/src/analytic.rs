@@ -1344,26 +1344,29 @@ pub fn plane_cone_chamfer(
     let tol_ang = 1e-9;
     let tol_lin = 1e-9;
 
-    // 1) Cone axis must be parallel to the raw plate normal — for a
-    //    regular frustum bottom-rim the cone axis (= "direction the cone
-    //    opens", -z for `make_cone(big, small, h)`) is parallel to the
-    //    bottom cap's outward normal (also -z). Note: the chamfer
-    //    dispatcher does NOT apply `orient_plane_surface`, so `n_p_inward`
-    //    here is actually the face's raw geometric (outward) normal —
-    //    detection therefore tests for parallel rather than the
-    //    fillet-convention antiparallel.
+    // 1) Cone axis must be (anti)parallel to the raw plate normal. The
+    //    chamfer dispatcher does NOT apply `orient_plane_surface`, so
+    //    `n_p_inward` here is actually the face's raw geometric (outward)
+    //    normal. Two configurations are accepted:
+    //      • convex (frustum-as-post-on-plate): axis_c ∥ n_p_inward
+    //        (`axis_c · n_p_inward ≈ +1`); cone primitive's apex sits on
+    //        the +n_p_inward side of the plate.
+    //      • concave (frustum-as-hole-tool, top rim): axis_c ⫯ n_p_inward
+    //        (`axis_c · n_p_inward ≈ -1`); cone primitive's apex sits on
+    //        the -n_p_inward side of the plate.
+    //    The sign of `n_dot` distinguishes these and drives the
+    //    `signed_offset = ±1` factor that flips contact-radius and
+    //    apex-direction signs throughout.
     let axis_c = cone.axis();
     let n_dot = axis_c.dot(n_p_inward);
-    if n_dot < 1.0 - tol_ang {
+    if n_dot.abs() < 1.0 - tol_ang {
         return Ok(None);
     }
+    let signed_offset: f64 = if n_dot > 0.0 { 1.0 } else { -1.0 };
+    let concave = signed_offset < 0.0;
+    debug_assert_eq!(concave, topo.face(face_cone)?.is_reversed());
 
-    // 2) Concave (cone face reversed) needs a different formulation.
-    if topo.face(face_cone)?.is_reversed() {
-        return Ok(None);
-    }
-
-    // 3) Validate half-angle and chamfer distances.
+    // 2) Validate half-angle and chamfer distances.
     let alpha = cone.half_angle();
     if alpha <= 1e-3 || alpha >= std::f64::consts::FRAC_PI_2 - 1e-3 {
         return Ok(None);
@@ -1372,22 +1375,27 @@ pub fn plane_cone_chamfer(
         return Ok(None);
     }
 
-    // 4) Apex projection onto the plate. For frustum bottom-rim geometry
-    //    with the chamfer's raw-normal convention `step` is positive
-    //    (apex sits on the +n_p_inward side of the plate, since
-    //    `n_p_inward` here is the outward normal pointing away from the
-    //    cylinder material).
+    // 3) Apex projection onto the plate. With raw normals, `step` is
+    //    positive for convex (apex on +n_p_inward side) and negative for
+    //    concave; we require the magnitude exceed the linear tol and
+    //    cross-check that its sign agrees with `signed_offset`.
     let apex = cone.apex();
     let step = d_plane - n_p_inward.dot(Vec3::new(apex.x(), apex.y(), apex.z()));
-    if step <= tol_lin {
+    if step.abs() <= tol_lin {
         return Ok(None);
     }
-    let apex_height = step;
+    if step * signed_offset <= 0.0 {
+        return Ok(None);
+    }
+    let apex_height = step.abs();
     let p_axis_on_plane = apex + n_p_inward * step;
 
-    // 5) Spine radius from cone-plate intersection.
+    // 4) Spine radius from cone-plate intersection.
     let r_p = apex_height * (alpha.cos() / alpha.sin());
-    if d1 >= r_p {
+    // For convex: contact_plane sits at radius `r_p - d1` so we need
+    //   `d1 < r_p`. For concave: contact_plane is at `r_p + d1`, no upper
+    //   bound from cone geometry (plate extends radially).
+    if !concave && d1 >= r_p {
         return Ok(None);
     }
 
@@ -1418,12 +1426,32 @@ pub fn plane_cone_chamfer(
     }
 
     // 7) Apex of the chamfer cone — extrapolate the generator from the
-    //    plate-side contact backward to the axis.
-    let chamfer_apex_offset = (r_p - d1) * dz / dr;
-    let axis_toward_apex = n_p_inward;
-    let axis_toward_material = -n_p_inward;
+    //    plate-side contact backward (or forward, in the concave case) to
+    //    the axis.
+    //
+    //    Plate-contact radius = `r_p − signed_offset · d1`, generator slope
+    //    `dr/dz = (d1 − d2·cos α)/(d2·sin α)` (same magnitude in both
+    //    cases). The chamfer-cone apex lands on the same side of the plate
+    //    as the cone primitive's "open" side (i.e. on the +n_p_inward side
+    //    for convex and the −n_p_inward side for concave); both reduce to
+    //    `axis_toward_apex = n_p_inward · signed_offset`. Note that
+    //    `axis_toward_apex` and `axis_toward_material` only coincide in
+    //    sign for the convex case — for concave the chamfer apex sits on
+    //    the OPPOSITE side from the plate material it tucks into, so we
+    //    track them as independent directions:
+    //      • `axis_toward_apex` — apex placement (z = ∓mag below/above)
+    //      • `chamfer_axis` — direction the chamfer cone opens (always
+    //        −axis_toward_apex, so it grows from apex through the plate
+    //        into the empty wedge)
+    //      • `axis_into_material` — direction from spine into plate
+    //        material; always equal to `−n_p_inward` (NOT
+    //        `−axis_toward_apex`, which differs from this in concave).
+    let plate_contact_radius = r_p - signed_offset * d1;
+    let chamfer_apex_offset = plate_contact_radius * dz / dr;
+    let axis_toward_apex = n_p_inward * signed_offset;
     let chamfer_apex_pos = p_axis_on_plane + axis_toward_apex * chamfer_apex_offset;
-    let chamfer_axis = axis_toward_material;
+    let chamfer_axis = -axis_toward_apex;
+    let axis_into_material = -n_p_inward;
 
     // 8) Spine: detect closed-circle case so we can spin a full 2π without
     //    relying on `Spine::length()` (chord-based, zero for closed loops).
@@ -1446,10 +1474,15 @@ pub fn plane_cone_chamfer(
         ConicalSurface::with_ref_dir(chamfer_apex_pos, chamfer_axis, chamfer_half_angle, cone_x)?;
 
     // 10) 3D contact circles. Both lie around the cone axis.
-    let plate_contact_radius = r_p - d1;
-    let cone_contact_radius = r_p - d2 * cos_a;
+    //     Concave flips the cone-side contact circle's radius: instead of
+    //     `r_p − d2·cos α` (post case, contact moves inward toward axis)
+    //     it becomes `r_p + d2·cos α` (hole case, contact moves outward
+    //     into surrounding plate material). The axial offset direction
+    //     `axis_into_material` is always `−n_p_inward` regardless of
+    //     convex/concave.
+    let cone_contact_radius = r_p - signed_offset * d2 * cos_a;
     let cone_contact_axial_offset = d2 * sin_a;
-    let cone_contact_center = p_axis_on_plane + axis_toward_material * cone_contact_axial_offset;
+    let cone_contact_center = p_axis_on_plane + axis_into_material * cone_contact_axial_offset;
 
     let contact_plane_circle = brepkit_math::curves::Circle3D::with_axes(
         p_axis_on_plane,
@@ -2487,6 +2520,134 @@ mod tests {
         assert!(
             closest_cyl < 1e-3,
             "concave chamfer cone should pass near cyl contact at {want_cyl:?}; closest = {closest_cyl:.6}"
+        );
+    }
+
+    /// Concave plane-cone chamfer: chamfering the top rim of a tapered hole.
+    ///
+    /// Geometry: cone primitive (apex above plate at z=h, axis −z,
+    /// half-angle α) used as a hole tool through a plate at z=0. The
+    /// resulting solid has plate material at z<0 and the hole wall is the
+    /// (reversed) cone primitive's lateral face. We chamfer the spine where
+    /// hole wall meets plate top.
+    ///
+    /// Detection: `axis_c · n_p_inward = (−z)·(+z) = −1` (antiparallel),
+    /// so `signed_offset = −1`. The chamfer cone's apex sits BELOW the
+    /// plate (z<0), its axis is +z, opening upward through the plate into
+    /// the empty wedge above the chamfer.
+    ///
+    /// For α = π/4, h = 4 (so r_p = 4), and symmetric d1 = d2 = 1:
+    ///   chamfer half-angle β = π/2 − α/2 = 3π/8 (independent of concave/convex)
+    ///   plate-side contact at radius r_p + d1 = 5, z = 0
+    ///   cone-side contact at radius r_p + d2·cos α ≈ 4.707, z = −d2·sin α ≈ −0.707
+    #[test]
+    fn plane_cone_chamfer_concave_emits_chamfer_cone() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let alpha: f64 = std::f64::consts::FRAC_PI_4;
+        let h: f64 = 4.0;
+        let r_p: f64 = h * (alpha.cos() / alpha.sin());
+        let d: f64 = 1.0;
+
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_p, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_p).unwrap();
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_plate = topo.add_face(Face::new(
+            w1,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        // Cone primitive: apex at (0,0,h), axis = −z, half-angle α. Used
+        // here as the wall of a hole, so the FACE is reversed (topological
+        // outward points into the empty hole).
+        let cone_surf =
+            ConicalSurface::new(Point3::new(0.0, 0.0, h), Vec3::new(0.0, 0.0, -1.0), alpha)
+                .unwrap();
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_cone = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cone(cone_surf.clone()),
+        ));
+
+        let n_p_inward = Vec3::new(0.0, 0.0, 1.0);
+        let result = plane_cone_chamfer(
+            n_p_inward, 0.0, &cone_surf, &spine, &topo, d, d, face_plate, face_cone,
+        )
+        .unwrap()
+        .expect("concave plane-cone chamfer should produce a stripe");
+
+        let chamfer_cone = match result.stripe.surface {
+            FaceSurface::Cone(c) => c,
+            other => panic!("expected Cone, got {}", other.type_tag()),
+        };
+
+        // Symmetric chamfer half-angle: β = π/2 − α/2 = 3π/8.
+        let expected_beta = std::f64::consts::FRAC_PI_2 - alpha * 0.5;
+        assert!(
+            (chamfer_cone.half_angle() - expected_beta).abs() < 1e-12,
+            "chamfer cone half-angle should be 3π/8 for α=π/4, d1=d2; got {}",
+            chamfer_cone.half_angle()
+        );
+
+        // Apex BELOW the plate at z = −(r_p+d) · dz/dr where dz = sin α,
+        // dr = 1 − cos α (with d=1). For α=π/4: dz=√2/2, dr=1−√2/2,
+        // ratio ≈ 2.414, mag ≈ 5·2.414 ≈ 12.07.
+        let apex = chamfer_cone.apex();
+        let dz = alpha.sin();
+        let dr = 1.0 - alpha.cos();
+        let expected_apex_z = -(r_p + d) * dz / dr;
+        assert!(
+            (apex.x()).abs() < 1e-12 && (apex.y()).abs() < 1e-12,
+            "apex should lie on z-axis, got {apex:?}"
+        );
+        assert!(
+            (apex.z() - expected_apex_z).abs() < 1e-9,
+            "apex z = {}, expected {}",
+            apex.z(),
+            expected_apex_z
+        );
+
+        // Chamfer cone axis = +z (opens upward through the plate).
+        let axis = chamfer_cone.axis();
+        assert!(
+            axis.dot(Vec3::new(0.0, 0.0, 1.0)) > 1.0 - 1e-12,
+            "chamfer cone axis should be +z, got {axis:?}"
+        );
+
+        // Both contact points must lie on the chamfer cone surface. We
+        // project each onto the chamfer cone and verify the resulting
+        // surface point matches to high precision; this avoids depending
+        // on the exact frame orientation chosen by `Frame3::from_normal`.
+        let want_plate = Point3::new(r_p + d, 0.0, 0.0);
+        let cone_contact_axial = -d * alpha.sin();
+        let cone_contact_radial = r_p + d * alpha.cos();
+        let want_cone = Point3::new(cone_contact_radial, 0.0, cone_contact_axial);
+        let (u_p, v_p) = ParametricSurface::project_point(&chamfer_cone, want_plate);
+        let on_surf_plate = ParametricSurface::evaluate(&chamfer_cone, u_p, v_p);
+        let (u_c, v_c) = ParametricSurface::project_point(&chamfer_cone, want_cone);
+        let on_surf_cone = ParametricSurface::evaluate(&chamfer_cone, u_c, v_c);
+        assert!(
+            (on_surf_plate - want_plate).length() < 1e-9,
+            "plate contact must lie on chamfer cone: project→eval gave {on_surf_plate:?}, want {want_plate:?}"
+        );
+        assert!(
+            (on_surf_cone - want_cone).length() < 1e-9,
+            "cone-side contact must lie on chamfer cone: project→eval gave {on_surf_cone:?}, want {want_cone:?}"
         );
     }
 }
