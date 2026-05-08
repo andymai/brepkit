@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.75.0](https://github.com/andymai/brepkit/compare/v2.74.0...v2.75.0) (2026-05-08)
+
+
+### Features
+
+* **heal:** exact rational NURBS for sphere ([#620](https://github.com/andymai/brepkit/issues/620)) ([40bae59](https://github.com/andymai/brepkit/commit/40bae5942dca848048dd3a29db96a99d9149d6ef))
+* **heal:** exact rational NURBS for torus — surface→NURBS matrix complete ([#622](https://github.com/andymai/brepkit/issues/622)) ([83c0fb4](https://github.com/andymai/brepkit/commit/83c0fb45b1c6afb8f86f662b9d61500180b6e953))
+
 ## [2.74.0](https://github.com/andymai/brepkit/compare/v2.73.0...v2.74.0) (2026-05-08)
 
 
