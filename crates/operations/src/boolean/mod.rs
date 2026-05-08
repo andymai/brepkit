@@ -327,7 +327,7 @@ pub fn boolean(
             let coincident = (*ca_center - *cb_center).length() < tol.linear;
             if coincident {
                 if let Some(result) =
-                    concentric_sphere_shortcut(topo, op, *ca_center, *ra, *rb, tol)?
+                    concentric_sphere_shortcut(topo, op, a, b, *ca_center, *ra, *rb, tol)?
                 {
                     return Ok(result);
                 }
@@ -806,7 +806,6 @@ fn coaxial_cone_shortcut(
     Ok(Some(cone))
 }
 
-/// Build the world-frame transform that maps a primitive built in the
 /// Compute the concentric-sphere boolean for two spheres sharing a
 /// center. Returns `Ok(None)` when the shortcut doesn't apply (Cut, or
 /// degenerate radii).
@@ -814,9 +813,18 @@ fn coaxial_cone_shortcut(
 /// Sphere-sphere is simpler than the cylinder/cone analogues because
 /// there's no axial range — the result radius is just `max(r_a, r_b)`
 /// for Fuse and `min(r_a, r_b)` for Intersect.
+///
+/// The new sphere's tessellation density (segment count) is inherited from
+/// whichever input has a higher equatorial vertex count, so a
+/// 64-segment input never silently downgrades to a coarse default. This
+/// relies on `make_sphere` allocating exactly `segments` equatorial
+/// vertices and no pole vertices — see `crates/operations/src/primitives.rs`.
+#[allow(clippy::too_many_arguments)]
 fn concentric_sphere_shortcut(
     topo: &mut Topology,
     op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
     center: Point3,
     r_a: f64,
     r_b: f64,
@@ -828,14 +836,9 @@ fn concentric_sphere_shortcut(
     let r_result = match op {
         BooleanOp::Fuse => r_a.max(r_b),
         BooleanOp::Intersect => {
-            let r = r_a.min(r_b);
-            // Strict overlap: spheres must intersect in a region of positive
-            // volume for the intersect to be non-degenerate. For concentric
-            // spheres, that's just `r > tol`.
-            if r <= tol.linear {
-                return Ok(None);
-            }
-            r
+            // Both r_a and r_b are guaranteed > tol.linear by the guard above,
+            // so `min(r_a, r_b)` is always positive here.
+            r_a.min(r_b)
         }
         // Cut(A, B) on concentric spheres yields a hollow ball when r_a > r_b;
         // empty when r_a ≤ r_b. The hollow-ball case needs an outer + inner
@@ -843,10 +846,19 @@ fn concentric_sphere_shortcut(
         BooleanOp::Cut => return Ok(None),
     };
 
-    // Match the segment count used by the existing concentric_spheres test
-    // corpus (32 segments) — gives ~5% volume accuracy on a unit sphere,
-    // which is what those tests expect.
-    let sphere = crate::primitives::make_sphere(topo, r_result, 32)?;
+    // Inherit segment count from whichever input was tessellated more finely.
+    // `make_sphere(r, n)` allocates exactly `n` equatorial vertices; because
+    // sphere primitives are fully describe by (center, radius), all vertices
+    // belong to that ring. Floor at 4 to satisfy `make_sphere`'s lower bound.
+    let segments_a = brepkit_topology::explorer::solid_vertices(topo, a)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let segments_b = brepkit_topology::explorer::solid_vertices(topo, b)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let segments = segments_a.max(segments_b).max(4);
+
+    let sphere = crate::primitives::make_sphere(topo, r_result, segments)?;
     if center.x().abs() > tol.linear
         || center.y().abs() > tol.linear
         || center.z().abs() > tol.linear
@@ -857,6 +869,7 @@ fn concentric_sphere_shortcut(
     Ok(Some(sphere))
 }
 
+/// Build the world-frame transform that maps a primitive built in the
 /// canonical Z-up local frame (origin at world origin, axis = +Z) to a
 /// world frame at `world_origin` with up-axis `axis` (assumed
 /// unit-length). Uses Rodrigues' rotation formula for the general case.
