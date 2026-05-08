@@ -244,6 +244,16 @@ pub fn try_analytic_chamfer(
             }
             Ok(result)
         }
+        (FaceSurface::Sphere(sph), FaceSurface::Cone(cone)) => {
+            sphere_cone_chamfer(sph, cone, spine, topo, d1, d2, face1, face2)
+        }
+        (FaceSurface::Cone(cone), FaceSurface::Sphere(sph)) => {
+            let mut result = sphere_cone_chamfer(sph, cone, spine, topo, d2, d1, face2, face1)?;
+            if let Some(ref mut r) = result {
+                swap_stripe_sides(r);
+            }
+            Ok(result)
+        }
         (
             FaceSurface::Plane { .. }
             | FaceSurface::Cylinder(_)
@@ -257,8 +267,6 @@ pub fn try_analytic_chamfer(
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
         )
-        | (FaceSurface::Sphere(_), FaceSurface::Cone(_))
-        | (FaceSurface::Cone(_), FaceSurface::Sphere(_))
         | (
             FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
             FaceSurface::Plane { .. }
@@ -3634,6 +3642,299 @@ pub fn sphere_cylinder_chamfer(
     }))
 }
 
+/// Chamfer between a sphere and a cone whose axis passes through the
+/// sphere center — the chamfer surface is an axisymmetric cone
+/// connecting the sphere-side and cone-side contact circles.
+///
+/// `d1` is the geodesic distance on the sphere (arc length along the
+/// meridian from the spine, going INTO sphere face); `d2` is the
+/// linear distance along the cone's generator (going INTO cone
+/// material from the spine, toward the apex).
+///
+/// Convex-only for v1 (both faces NOT reversed). Concave / mixed cases
+/// follow up.
+///
+/// # Geometry
+///
+/// Place sphere center at origin, cone axis = +z, cone apex at
+/// (0, 0, −h_signed). Spine at sphere ∩ cone: `r_spine² + spine_z² = R_s²`
+/// AND `r_spine = (spine_z + h_signed) · cot β`.
+///
+/// Sphere-side contact along the meridian going INTO sphere face. With
+/// `δ1 = d1 / R_s` and `sphere_arm_sign = −sign(spine_z)`:
+///   r_sph = r_spine · cos δ1 + sphere_arm_sign · spine_z · sin δ1
+///   z_sph = spine_z · cos δ1 − sphere_arm_sign · r_spine · sin δ1
+///
+/// Cone-side contact along the generator TOWARD the apex (the
+/// "into cone material" direction for the convex case):
+///   r_cone = r_spine − d2 · cos β
+///   z_cone = spine_z − d2 · sin β
+///
+/// (Note: we require `spine_z + h_signed > 0` since the cone surface
+/// only exists at v > 0 from apex; this implies the generator unit
+/// `(cos β, sin β)` always points away from apex toward the spine,
+/// and `−d2 · (cos β, sin β)` always points toward apex.)
+///
+/// The chamfer surface is the cone obtained by rotating the line from
+/// (r_sph, z_sph) to (r_cone, z_cone) around the cone axis. Apex on
+/// axis at the line's r=0 intersection.
+///
+/// # Returns
+///
+/// `Ok(None)` (walker fallback) when:
+///   - either face is reversed (concave / mixed) — separate path,
+///   - sphere center isn't on the cone axis line,
+///   - sphere parametric z-axis isn't aligned with cone axis,
+///   - β is degenerate (≤ tol or ≥ π/2 − tol),
+///   - the spine isn't at a valid sphere ∩ cone intersection circle,
+///   - chamfer line is degenerate (Δr ≈ 0 or Δz ≈ 0), or
+///   - `d1` or `d2` non-positive.
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or NURBS construction fails.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn sphere_cone_chamfer(
+    sph: &brepkit_math::surfaces::SphericalSurface,
+    cone: &brepkit_math::surfaces::ConicalSurface,
+    spine: &Spine,
+    topo: &Topology,
+    d1: f64,
+    d2: f64,
+    face_sphere: FaceId,
+    face_cone: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    use brepkit_math::surfaces::ConicalSurface;
+    use std::f64::consts::PI;
+
+    let tol_lin = 1e-9;
+    let tol_ang = 1e-9;
+
+    if d1 <= tol_lin || d2 <= tol_lin {
+        return Ok(None);
+    }
+    // Convex-only for v1.
+    if topo.face(face_sphere)?.is_reversed() || topo.face(face_cone)?.is_reversed() {
+        return Ok(None);
+    }
+
+    let big_r_s = sph.radius();
+    let c_s = sph.center();
+    let cone_apex = cone.apex();
+    let cone_axis = cone.axis();
+    let beta = cone.half_angle();
+
+    // Sphere center on cone axis line.
+    let to_sphere = c_s - cone_apex;
+    let to_sphere_v = Vec3::new(to_sphere.x(), to_sphere.y(), to_sphere.z());
+    let along = to_sphere_v.dot(cone_axis);
+    let perp = to_sphere_v - cone_axis * along;
+    if perp.length() > tol_lin {
+        return Ok(None);
+    }
+
+    // Sphere z-axis aligned with cone axis.
+    if sph.z_axis().dot(cone_axis).abs() < 1.0 - tol_ang {
+        return Ok(None);
+    }
+
+    let (sin_b, cos_b) = beta.sin_cos();
+    if sin_b <= tol_lin || cos_b <= tol_lin {
+        return Ok(None);
+    }
+    let cot_b = cos_b / sin_b;
+
+    let h_signed = along; // axial offset of sphere center from apex along cone_axis
+
+    // Spine validation: solve sphere ∩ cone for the two candidate spine
+    // axials (in sphere-centered coords).
+    let qa = 1.0 / (sin_b * sin_b);
+    let qb = 2.0 * h_signed * cot_b * cot_b;
+    let qc = h_signed * h_signed * cot_b * cot_b - big_r_s * big_r_s;
+    let q_disc = qb * qb - 4.0 * qa * qc;
+    if q_disc <= tol_lin * tol_lin {
+        return Ok(None);
+    }
+    let q_disc_sqrt = q_disc.sqrt();
+    let z_spine_root_a = (-qb + q_disc_sqrt) / (2.0 * qa);
+    let z_spine_root_b = (-qb - q_disc_sqrt) / (2.0 * qa);
+
+    // Match the spine sample.
+    let edges = spine.edges();
+    let is_closed_spine = if edges.len() == 1 {
+        let e = topo.edge(edges[0])?;
+        e.start() == e.end()
+    } else {
+        false
+    };
+    let spine_len = spine.length();
+    if !is_closed_spine && spine_len < tol_lin {
+        return Ok(None);
+    }
+    let p_spine_sample = spine.evaluate(topo, 0.0)?;
+    let to_sample = p_spine_sample - c_s;
+    let to_sample_v = Vec3::new(to_sample.x(), to_sample.y(), to_sample.z());
+    let sample_axial = to_sample_v.dot(cone_axis);
+    let sample_radial_v = to_sample_v - cone_axis * sample_axial;
+    let sample_radial = sample_radial_v.length();
+    let spine_match_tol = tol_lin * 1e3;
+    let spine_z = if (sample_axial - z_spine_root_a).abs() < spine_match_tol {
+        z_spine_root_a
+    } else if (sample_axial - z_spine_root_b).abs() < spine_match_tol {
+        z_spine_root_b
+    } else {
+        return Ok(None);
+    };
+    let r_spine = (spine_z + h_signed) * cot_b;
+    if r_spine <= tol_lin || (sample_radial - r_spine).abs() > spine_match_tol {
+        return Ok(None);
+    }
+    // Spine must be above apex along cone_axis (spine_z + h_signed > 0
+    // for r_spine > 0 with cot β > 0).
+    if spine_z + h_signed <= tol_lin {
+        return Ok(None);
+    }
+
+    // Sphere-side contact (going INTO sphere face = AWAY from cone, on
+    // the cap opposite to the spine's z).
+    let spine_sign = if spine_z >= 0.0 { 1.0 } else { -1.0 };
+    let sphere_arm_sign = -spine_sign;
+    let delta1 = d1 / big_r_s;
+    let (sin_d1, cos_d1) = delta1.sin_cos();
+    let r_sph = r_spine * cos_d1 + sphere_arm_sign * spine_z * sin_d1;
+    let z_sph = spine_z * cos_d1 - sphere_arm_sign * r_spine * sin_d1;
+    if r_sph <= tol_lin {
+        return Ok(None);
+    }
+
+    // Cone-side contact going TOWARD apex (convex into-face direction).
+    let r_cone = r_spine - d2 * cos_b;
+    let z_cone = spine_z - d2 * sin_b;
+    if r_cone <= tol_lin {
+        // d2 too large — overshoots the apex.
+        return Ok(None);
+    }
+
+    // Chamfer line from sphere-contact to cone-contact in (r, z).
+    let dr = r_cone - r_sph;
+    let dz = z_cone - z_sph;
+    if dr.abs() <= tol_lin || dz.abs() <= tol_lin {
+        return Ok(None);
+    }
+
+    // Apex of chamfer cone on axis at line P_sph→P_cone extrapolated to r=0.
+    let z_apex_chamfer = z_sph - r_sph * dz / dr;
+    let mid_z = 0.5 * (z_sph + z_cone);
+    let chamfer_axis = if mid_z > z_apex_chamfer {
+        cone_axis
+    } else {
+        -cone_axis
+    };
+    let r_avg = 0.5 * (r_sph + r_cone);
+    let cone_half_angle = ((mid_z - z_apex_chamfer).abs() / r_avg).atan();
+    if cone_half_angle <= 1e-3 || cone_half_angle >= std::f64::consts::FRAC_PI_2 - 1e-3 {
+        return Ok(None);
+    }
+
+    let chamfer_apex_pos = c_s + cone_axis * z_apex_chamfer;
+
+    // Build chamfer cone using cone's frame as ref dir (cone.x_axis()
+    // is always perpendicular to cone_axis).
+    let ref_dir = cone.x_axis();
+    let chamfer_cone =
+        ConicalSurface::with_ref_dir(chamfer_apex_pos, chamfer_axis, cone_half_angle, ref_dir)?;
+
+    // Spine plane center.
+    let spine_plane_center = c_s + cone_axis * spine_z;
+    let perp_y = cone_axis.cross(ref_dir).normalize()?;
+    let u_at = |p: Point3| {
+        let v = p - spine_plane_center;
+        perp_y.dot(v).atan2(ref_dir.dot(v))
+    };
+    let u_start = u_at(p_spine_sample);
+    let u_end = if is_closed_spine {
+        u_start + 2.0 * PI
+    } else {
+        let p_spine_end = spine.evaluate(topo, spine_len)?;
+        let u_end_raw = u_at(p_spine_end);
+        if u_end_raw > u_start {
+            u_end_raw
+        } else {
+            u_end_raw + 2.0 * PI
+        }
+    };
+
+    // Contact circles.
+    let sph_contact_center = c_s + cone_axis * z_sph;
+    let contact_sph_circle = brepkit_math::curves::Circle3D::with_axes(
+        sph_contact_center,
+        cone_axis,
+        r_sph,
+        ref_dir,
+        perp_y,
+    )?;
+    let cone_contact_center = c_s + cone_axis * z_cone;
+    let contact_cone_circle = brepkit_math::curves::Circle3D::with_axes(
+        cone_contact_center,
+        cone_axis,
+        r_cone,
+        ref_dir,
+        perp_y,
+    )?;
+    let contact_sph = circle_arc_to_nurbs(&contact_sph_circle, u_start, u_end)?;
+    let contact_cone = circle_arc_to_nurbs(&contact_cone_circle, u_start, u_end)?;
+
+    // PCurves on each surface — derive u in surface's own frame.
+    let sample_sph = contact_sph_circle.evaluate(u_start);
+    let (u_sph_start, v_sph) = ParametricSurface::project_point(sph, sample_sph);
+    let pcurve_sph = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_sph_start, v_sph),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+    let sample_cone = contact_cone_circle.evaluate(u_start);
+    let (u_cone_start, v_cone) = ParametricSurface::project_point(cone, sample_cone);
+    let pcurve_cone = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_cone_start, v_cone),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+
+    // Cross-sections.
+    let p_sph_at = |u: f64| contact_sph_circle.evaluate(u);
+    let p_cone_at = |u: f64| contact_cone_circle.evaluate(u);
+    let section_at = |u: f64, t: f64| {
+        let p1 = p_sph_at(u);
+        let p2 = p_cone_at(u);
+        let mid = midpoint_3d(p1, p2);
+        CircSection {
+            p1,
+            p2,
+            center: mid,
+            radius: (p1 - p2).length() * 0.5,
+            uv1: (u_sph_start + (u - u_start), v_sph),
+            uv2: (u_cone_start + (u - u_start), v_cone),
+            t,
+        }
+    };
+    let section_start = section_at(u_start, 0.0);
+    let section_end = section_at(u_end, 1.0);
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Cone(chamfer_cone),
+        pcurve1: pcurve_sph,
+        pcurve2: pcurve_cone,
+        contact1: contact_sph,
+        contact2: contact_cone,
+        face1: face_sphere,
+        face2: face_cone,
+        sections: vec![section_start, section_end],
+    };
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
+}
+
 /// Fillet between two cylinders.
 ///
 /// Not yet implemented. Returns `None` so the caller falls back to the walking
@@ -6265,6 +6566,151 @@ mod tests {
         assert!(
             (cone_radial - predicted_cone_radial).abs() < 1e-9,
             "cone contact must lie on cone surface: predicted radial {predicted_cone_radial}, got {cone_radial}"
+        );
+    }
+
+    /// Sphere-cone convex chamfer: a sphere centered on the cone axis,
+    /// chamfer rounding the corner where they meet.
+    ///
+    /// For sphere at origin (R_s=3), cone apex at (0,0,−2) with axis +z
+    /// and half-angle π/3, both faces NOT reversed, symmetric d=0.3:
+    ///   - h_signed = +2, β = π/3, cot β = 1/√3
+    ///   - Spine z (from sphere center) ≈ +1.949 (the +z spine)
+    ///   - Spine radial r_spine = (z+h)·cot β ≈ 2.279
+    ///   - Sphere contact: δ=0.1, sphere_arm_sign=−1,
+    ///     r_sph = r_spine·cos δ − spine_z·sin δ ≈ 2.073,
+    ///     z_sph = spine_z·cos δ + r_spine·sin δ ≈ 2.167
+    ///   - Cone contact (toward apex): r=r_spine−d·cos β ≈ 2.129,
+    ///     z=spine_z−d·sin β ≈ 1.689
+    ///   - Δr ≈ +0.056, Δz ≈ −0.478 ⇒ apex z ≈ 19.86 (well above contacts)
+    #[test]
+    fn sphere_cone_chamfer_convex_emits_cone() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::{ConicalSurface, SphericalSurface};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r_s: f64 = 3.0;
+        let h_signed: f64 = 2.0;
+        let beta: f64 = std::f64::consts::PI / 3.0;
+        let d: f64 = 0.3;
+
+        // Solve for spine z (on +z side).
+        let cot_b = beta.cos() / beta.sin();
+        let qa = 1.0 / (beta.sin() * beta.sin());
+        let qb = 2.0 * h_signed * cot_b * cot_b;
+        let qc = h_signed * h_signed * cot_b * cot_b - big_r_s * big_r_s;
+        let q_disc = qb * qb - 4.0 * qa * qc;
+        let z_spine = (-qb + q_disc.sqrt()) / (2.0 * qa);
+        let r_spine = (z_spine + h_signed) * cot_b;
+
+        let sph = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r_s).unwrap();
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, -h_signed),
+            Vec3::new(0.0, 0.0, 1.0),
+            beta,
+        )
+        .unwrap();
+
+        let spine_circle = Circle3D::new(
+            Point3::new(0.0, 0.0, z_spine),
+            Vec3::new(0.0, 0.0, 1.0),
+            r_spine,
+        )
+        .unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_spine, 0.0, z_spine), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_sphere = topo.add_face(Face::new(w1, vec![], FaceSurface::Sphere(sph.clone())));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_cone = topo.add_face(Face::new(w2, vec![], FaceSurface::Cone(cone.clone())));
+
+        let result = sphere_cone_chamfer(&sph, &cone, &spine, &topo, d, d, face_sphere, face_cone)
+            .unwrap()
+            .expect("convex sphere-cone chamfer should produce a stripe");
+
+        let chamfer_cone = match result.stripe.surface {
+            FaceSurface::Cone(c) => c,
+            other => panic!("expected Cone, got {}", other.type_tag()),
+        };
+
+        // Predicted contacts.
+        let delta = d / big_r_s;
+        let (sin_d, cos_d) = delta.sin_cos();
+        let sphere_arm_sign = -1.0_f64; // spine_z > 0
+        let r_sph_pred = r_spine * cos_d + sphere_arm_sign * z_spine * sin_d;
+        let z_sph_pred = z_spine * cos_d - sphere_arm_sign * r_spine * sin_d;
+        let r_cone_pred = r_spine - d * beta.cos();
+        let z_cone_pred = z_spine - d * beta.sin();
+
+        // Predicted apex.
+        let dr = r_cone_pred - r_sph_pred;
+        let dz = z_cone_pred - z_sph_pred;
+        let expected_apex_z = z_sph_pred - r_sph_pred * dz / dr;
+        let mid_z = 0.5 * (z_sph_pred + z_cone_pred);
+        let r_avg = 0.5 * (r_sph_pred + r_cone_pred);
+        let expected_beta = ((mid_z - expected_apex_z).abs() / r_avg).atan();
+
+        assert!(
+            expected_apex_z > z_sph_pred && expected_apex_z > z_cone_pred,
+            "apex should be above both contacts, got apex_z={expected_apex_z}"
+        );
+        assert!(
+            (chamfer_cone.half_angle() - expected_beta).abs() < 1e-9,
+            "chamfer half-angle should be atan(|z_apex - mid_z| / r_avg) = {expected_beta}, got {}",
+            chamfer_cone.half_angle()
+        );
+
+        // Apex on +z axis.
+        let apex = chamfer_cone.apex();
+        assert!(
+            apex.x().abs() < 1e-12 && apex.y().abs() < 1e-12,
+            "apex should be on z-axis, got {apex:?}"
+        );
+        assert!(
+            (apex.z() - expected_apex_z).abs() < 1e-9,
+            "apex z = {}, expected {expected_apex_z}",
+            apex.z()
+        );
+
+        // Cone axis = -z (apex above contacts, opens downward).
+        let axis = chamfer_cone.axis();
+        assert!(
+            axis.dot(Vec3::new(0.0, 0.0, 1.0)) < -1.0 + 1e-12,
+            "convex chamfer cone axis should be -z, got {axis:?}"
+        );
+
+        // Both contacts on chamfer cone.
+        let want_sph = Point3::new(r_sph_pred, 0.0, z_sph_pred);
+        let want_cone = Point3::new(r_cone_pred, 0.0, z_cone_pred);
+        let (u_p, v_p) = ParametricSurface::project_point(&chamfer_cone, want_sph);
+        let on_cone_sph = ParametricSurface::evaluate(&chamfer_cone, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&chamfer_cone, want_cone);
+        let on_cone_cone = ParametricSurface::evaluate(&chamfer_cone, u_q, v_q);
+        assert!(
+            (on_cone_sph - want_sph).length() < 1e-9,
+            "sphere contact must lie on chamfer cone: {on_cone_sph:?} vs {want_sph:?}"
+        );
+        assert!(
+            (on_cone_cone - want_cone).length() < 1e-9,
+            "cone contact must lie on chamfer cone: {on_cone_cone:?} vs {want_cone:?}"
+        );
+
+        // Both contacts on their respective surfaces.
+        let dist_sph = (want_sph - Point3::new(0.0, 0.0, 0.0)).length();
+        assert!(
+            (dist_sph - big_r_s).abs() < 1e-9,
+            "sphere contact must lie on sphere: distance={dist_sph}, want R_s={big_r_s}"
+        );
+        let cone_predicted_radial = (z_cone_pred + h_signed) * cot_b;
+        assert!(
+            (r_cone_pred - cone_predicted_radial).abs() < 1e-9,
+            "cone contact must lie on cone surface: predicted radial {cone_predicted_radial}, got {r_cone_pred}"
         );
     }
 
