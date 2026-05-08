@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.72.0](https://github.com/andymai/brepkit/compare/v2.71.0...v2.72.0) (2026-05-08)
+
+
+### Features
+
+* **heal:** implement split_surface_at_u/v for NURBS sub-patch extraction ([#612](https://github.com/andymai/brepkit/issues/612)) ([1f797f3](https://github.com/andymai/brepkit/commit/1f797f33febe284d1b904cf736211022e661e2d4))
+
 ## [2.71.0](https://github.com/andymai/brepkit/compare/v2.70.0...v2.71.0) (2026-05-08)
 
 
