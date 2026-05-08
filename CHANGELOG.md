@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.84.0](https://github.com/andymai/brepkit/compare/v2.83.0...v2.84.0) (2026-05-08)
+
+
+### Features
+
+* **heal:** convert_to_elementary pipeline op now also converts edges ([#645](https://github.com/andymai/brepkit/issues/645)) ([2edb879](https://github.com/andymai/brepkit/commit/2edb879d4dc862cfc59a616061d0faffa5382cd8))
+
 ## [2.83.0](https://github.com/andymai/brepkit/compare/v2.82.0...v2.83.0) (2026-05-08)
 
 
