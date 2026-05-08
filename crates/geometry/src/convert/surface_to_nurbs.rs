@@ -1,7 +1,24 @@
 //! Convert analytic surfaces to NURBS representation.
 //!
-//! These are thin wrappers around the `to_nurbs()` methods on each analytic
-//! surface type from `brepkit-math`, propagating errors as [`GeomError`].
+//! These are thin wrappers around the `to_nurbs()` methods on each
+//! analytic surface type from `brepkit-math`, propagating errors as
+//! [`GeomError`].
+//!
+//! # Exact vs sampled
+//!
+//! - [`cylinder_to_nurbs`] is **geometrically exact** (the math layer's
+//!   `CylindricalSurface::to_nurbs` uses the standard 9-CP rational
+//!   representation).
+//! - [`cone_to_nurbs`], [`sphere_to_nurbs`], and [`torus_to_nurbs`] are
+//!   **sampled approximations** (33 × 9 degree-1 grid via the math
+//!   layer's `analytic_to_nurbs_sampled`, intended for intersection
+//!   seed-finding — chord-height error ~0.5–7% of radius depending on
+//!   parameter direction).
+//!
+//! For exact rational NURBS conversions of cone/sphere/torus suitable
+//! for downstream NURBS pipelines (e.g. transform under non-uniform
+//! scale), use the corresponding functions in
+//! `brepkit_heal::construct::convert_surface`.
 
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::surfaces::{
@@ -26,10 +43,11 @@ pub fn cylinder_to_nurbs(
     Ok(cyl.to_nurbs(v_range.0, v_range.1)?)
 }
 
-/// Convert a [`SphericalSurface`] to a NURBS surface.
+/// Convert a [`SphericalSurface`] to a NURBS surface (sampled
+/// approximation, ~5% chord deviation in v).
 ///
-/// Geometrically covers the full sphere. The NURBS parameter domain is
-/// determined by the underlying `to_nurbs()` implementation.
+/// For an exact rational form, use
+/// `brepkit_heal::construct::convert_surface::sphere_to_nurbs`.
 ///
 /// # Errors
 ///
@@ -38,10 +56,16 @@ pub fn sphere_to_nurbs(sphere: &SphericalSurface) -> Result<NurbsSurface, GeomEr
     Ok(sphere.to_nurbs()?)
 }
 
-/// Convert a [`ConicalSurface`] patch to a NURBS surface.
+/// Convert a [`ConicalSurface`] patch to a NURBS surface (sampled
+/// approximation; the math layer's underlying `to_nurbs` uses
+/// `analytic_to_nurbs_sampled`).
 ///
-/// The result spans the full angular circle in the u-direction. `v_range`
-/// sets the extent along the cone's generator direction from the apex.
+/// The result spans the full angular circle in the u-direction.
+/// `v_range` sets the extent along the cone's generator direction from
+/// the apex.
+///
+/// For an exact rational form, use
+/// `brepkit_heal::construct::convert_surface::cone_to_nurbs`.
 ///
 /// # Errors
 ///
@@ -53,10 +77,11 @@ pub fn cone_to_nurbs(
     Ok(cone.to_nurbs(v_range.0, v_range.1)?)
 }
 
-/// Convert a [`ToroidalSurface`] to a NURBS surface.
+/// Convert a [`ToroidalSurface`] to a NURBS surface (sampled
+/// approximation, ~7% chord deviation of minor radius).
 ///
-/// Geometrically covers the full torus. The NURBS parameter domain is
-/// determined by the underlying `to_nurbs()` implementation.
+/// For an exact rational form, use
+/// `brepkit_heal::construct::convert_surface::torus_to_nurbs`.
 ///
 /// # Errors
 ///
