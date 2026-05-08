@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.61.0](https://github.com/andymai/brepkit/compare/v2.60.0...v2.61.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** convex sphere-sphere analytic chamfer (two intersecting spheres → cone) ([#576](https://github.com/andymai/brepkit/issues/576)) ([9437765](https://github.com/andymai/brepkit/commit/94377659a12ec33a6270083b1957e44408fbdb47))
+
 ## [2.60.0](https://github.com/andymai/brepkit/compare/v2.59.0...v2.60.0) (2026-05-08)
 
 
