@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.67.0](https://github.com/andymai/brepkit/compare/v2.66.0...v2.67.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** concave + mixed sphere-cone analytic chamfer (4-way matrix) ([#590](https://github.com/andymai/brepkit/issues/590)) ([eb423fa](https://github.com/andymai/brepkit/commit/eb423fad4dfa12275bdca70a054e8a5707a590d9))
+* **blend:** cylinder-cylinder analytic fillet (parallel axes → cylinder) ([#592](https://github.com/andymai/brepkit/issues/592)) ([d85a88b](https://github.com/andymai/brepkit/commit/d85a88b06c16b2b36fed6025017b3d97fc93d2c1))
+
 ## [2.66.0](https://github.com/andymai/brepkit/compare/v2.65.0...v2.66.0) (2026-05-08)
 
 
