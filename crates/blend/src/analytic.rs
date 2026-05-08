@@ -503,23 +503,33 @@ fn plane_plane_chamfer(
     })
 }
 
-/// Fillet between a plane and a cylinder whose axis is parallel to the plane
-/// normal.
+/// Fillet between a plane and a cylinder whose axis is parallel to the
+/// plane normal.
 ///
-/// Returns `Some(StripeResult)` with an exact toroidal blend surface for the
-/// convex perpendicular case (typical "post on a plate" geometry). Returns
-/// `None` for any case the analytic path doesn't yet cover; the caller then
-/// falls back to the walking engine. Specifically, `None` is returned when:
-///   - the cylinder axis is not parallel to the plane normal,
-///   - the cylinder face is reversed in the topology (concave / "hole through
-///     plate" geometry — the fillet rolls inside the hole, requiring a
-///     different torus major radius and tube quadrant),
+/// Returns `Some(StripeResult)` with an exact toroidal blend surface for
+/// both the convex "post on plate" case (cylinder face not reversed) and
+/// the concave "hole through plate" case (cylinder face reversed). The
+/// formulas differ only in the torus major radius:
+///
+///   - convex: `major = r_c + r`, plate-side contact at radial `r_c + r`
+///     (outside the spine on the plate);
+///   - concave: `major = r_c - r`, plate-side contact at radial `r_c - r`
+///     (inside the spine on the plate).
+///
+/// In both cases the torus center sits one fillet radius "above" the
+/// plane along `-n_p_inward` (the empty-wedge direction), the cylinder-
+/// side contact circle has radius `r_c`, and the torus axis is the
+/// cylinder axis. The active tube portion is a quarter of the small
+/// circle in either case — `[π/2, π]` for convex and `[3π/2, 2π]` for
+/// concave (mirror images about the equatorial plane).
+///
+/// Returns `None` (walker fallback) for cases the analytic path
+/// doesn't cover:
+///   - the cylinder axis isn't parallel to the plane normal,
 ///   - the spine geometry is too short or degenerate,
-///   - or the fillet radius exceeds the cylinder radius (would invert R).
-///
-/// The torus has axis parallel to the cylinder axis, major radius `r_c + r`,
-/// and minor radius `r`. The active tube portion is `v ∈ [π, 3π/2]` — the
-/// quarter that touches the plane below and the cylinder lateral inward.
+///   - the fillet radius exceeds the cylinder radius (would invert
+///     `r_c - r` for the concave case or geometrically nest the convex
+///     fillet inside the cylinder).
 ///
 /// # Errors
 ///
@@ -548,16 +558,26 @@ pub fn plane_cylinder_fillet(
         return Ok(None);
     }
 
-    // 2) Concave (hole-through-plate) case requires a different torus major
-    //    radius (`r_c - r`) and tube quadrant. Defer those to the walker.
-    if topo.face(face_cyl)?.is_reversed() {
-        return Ok(None);
-    }
+    // 2) Detect concave ("hole through plate") vs convex ("post on plate").
+    //    The cylinder face's `reversed` flag tells us which side of the
+    //    cylinder lateral the surrounding material lives on:
+    //      * not reversed: material is on the cylinder's *inward* side
+    //        (a solid post). Convex external corner.
+    //      * reversed:     material is on the cylinder's *outward* side
+    //        (a hole through a slab). Concave internal corner.
+    let concave = topo.face(face_cyl)?.is_reversed();
 
-    // 3) The radius must shrink the cylinder rather than invert it. Larger
-    //    fillet radii than the cylinder can't form a clean torus.
+    // 3) Radius bound depends on the case:
+    //    - Convex: major = `r_c + r`, always > minor = `r`, so the only
+    //      regime to reject is `r ≥ r_c` (rolling ball would encircle the
+    //      cylinder axis).
+    //    - Concave: major = `r_c - r`; needs `r < r_c` to keep major
+    //      positive *and* `r ≤ r_c/2` to keep major ≥ minor. Past `r_c/2`
+    //      the construction becomes a spindle (self-intersecting) torus
+    //      which is invalid as a fillet surface.
     let r_c = cyl.radius();
-    if radius <= tol_lin || radius >= r_c {
+    let max_radius = if concave { r_c * 0.5 } else { r_c };
+    if radius <= tol_lin || radius >= max_radius {
         return Ok(None);
     }
 
@@ -570,10 +590,13 @@ pub fn plane_cylinder_fillet(
     let p_axis_on_plane = o_c + n_p_inward * step;
 
     // 5) The torus center sits one fillet radius "above" the spine plane
-    //    along the side opposite the plane material — i.e. `-n_p_inward`.
-    //    Its axis is the cylinder axis (kept as-is for parametric clarity).
+    //    along the side opposite the plane material (`-n_p_inward`) for
+    //    both convex and concave — the empty wedge is on the same side of
+    //    the plate in either case. Major radius differs: `r_c + r` for
+    //    convex (plate contact OUTSIDE the spine), `r_c - r` for concave
+    //    (plate contact INSIDE the spine).
     let torus_center = p_axis_on_plane - n_p_inward * radius;
-    let major_radius = r_c + radius;
+    let major_radius = if concave { r_c - radius } else { r_c + radius };
     let minor_radius = radius;
 
     // 6) Spine must span an arc to be useful. `Spine::from_single_edge`
@@ -1837,5 +1860,298 @@ mod tests {
             try_analytic_chamfer(&nurbs_surf, &plane_surf, &spine, &topo, 1.0, 1.0, f1, f2)
                 .unwrap();
         assert!(result.is_none(), "NURBS-Plane chamfer should return None");
+    }
+
+    /// Concave plane-cylinder fillet — verifies the analytic helper's
+    /// concave branch (cylinder face reversed = "hole through plate")
+    /// emits a torus with `major = r_c − r` (NOT `r_c + r`), positioned
+    /// to touch the plate inside the spine and the cylinder lateral
+    /// inside the hole.
+    ///
+    /// Built via direct topology synthesis since `boolean(Cut)` would
+    /// tessellate the cylinder lateral and yield a polygonal hole.
+    #[test]
+    fn plane_cylinder_fillet_concave_emits_torus_with_smaller_major() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let r_c: f64 = 2.0;
+        let r_fillet = 0.3;
+
+        // Spine: a closed Circle3D edge of radius r_c around the +z axis,
+        // sharing a single vertex (start == end) since the spine wraps.
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_c, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c).unwrap();
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Plate face — non-reversed, normal = +z (top of plate).
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_plate = topo.add_face(Face::new(
+            w1,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        // Cylinder face — REVERSED, marking it as the wall of a hole
+        // (topological outward = -radial, opposite to the geometric +radial
+        // returned by ParametricSurface::normal).
+        let cyl_surface =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c)
+                .unwrap();
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_cyl = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cylinder(cyl_surface.clone()),
+        ));
+
+        // The fillet dispatcher applies `orient_plane_surface` so the helper
+        // sees the inward plane normal. For a plate top with outward = +z
+        // and material below, inward = -z.
+        let n_p_inward = Vec3::new(0.0, 0.0, -1.0);
+
+        let result = plane_cylinder_fillet(
+            n_p_inward,
+            0.0,
+            &cyl_surface,
+            &spine,
+            &topo,
+            r_fillet,
+            face_plate,
+            face_cyl,
+        )
+        .unwrap()
+        .expect("concave plane-cylinder fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        // Concave: major = r_c − r_fillet = 1.7, minor = 0.3.
+        assert!(
+            (torus.minor_radius() - r_fillet).abs() < 1e-9,
+            "torus minor should equal fillet radius {r_fillet}, got {}",
+            torus.minor_radius()
+        );
+        assert!(
+            (torus.major_radius() - (r_c - r_fillet)).abs() < 1e-9,
+            "torus major should be r_c − r_fillet = {} for concave, got {}",
+            r_c - r_fillet,
+            torus.major_radius()
+        );
+
+        // The torus center sits at `+r` ABOVE the plate (in the empty
+        // wedge direction = -n_p_inward = +z), distinguishing the concave
+        // case from the convex one (which would have center at `-r`).
+        let center = torus.center();
+        assert!(
+            (center.x()).abs() < 1e-9 && (center.y()).abs() < 1e-9,
+            "torus center should be on the cylinder axis"
+        );
+        assert!(
+            (center.z() - r_fillet).abs() < 1e-9,
+            "concave torus center should sit at z = +r ({r_fillet}), got {}",
+            center.z()
+        );
+    }
+
+    /// Convex plane-cylinder fillet sanity check — the existing
+    /// `fillet_cylinder_base_circle_produces_torus` integration test
+    /// covers the convex path through `fillet_v2`, but adding a direct
+    /// helper-level convex test alongside the concave one above guards
+    /// against regression in the shared `major_radius` branch.
+    #[test]
+    fn plane_cylinder_fillet_convex_emits_torus_with_larger_major() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let r_c: f64 = 2.0;
+        let r_fillet = 0.3;
+
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_c, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c).unwrap();
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_plate = topo.add_face(Face::new(
+            w1,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+        ));
+
+        // NOT reversed — typical post-on-plate cylinder face.
+        let cyl_surface =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c)
+                .unwrap();
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_cyl = topo.add_face(Face::new(
+            w2,
+            vec![],
+            FaceSurface::Cylinder(cyl_surface.clone()),
+        ));
+
+        // For the cylinder primitive bottom rim the dispatcher gives
+        // n_p_inward = +z (after flipping the bottom-cap outward = -z).
+        let n_p_inward = Vec3::new(0.0, 0.0, 1.0);
+
+        let result = plane_cylinder_fillet(
+            n_p_inward,
+            0.0,
+            &cyl_surface,
+            &spine,
+            &topo,
+            r_fillet,
+            face_plate,
+            face_cyl,
+        )
+        .unwrap()
+        .expect("convex plane-cylinder fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        assert!(
+            (torus.major_radius() - (r_c + r_fillet)).abs() < 1e-9,
+            "torus major should be r_c + r_fillet = {} for convex, got {}",
+            r_c + r_fillet,
+            torus.major_radius()
+        );
+        // Convex case: torus center at z = -r (below plate, in empty wedge).
+        let center = torus.center();
+        assert!(
+            (center.z() - (-r_fillet)).abs() < 1e-9,
+            "convex torus center should sit at z = -r ({}), got {}",
+            -r_fillet,
+            center.z()
+        );
+    }
+
+    /// Concave plane-cylinder fillet rejects radii ≥ r_c/2 — past that
+    /// threshold `major = r_c - r ≤ minor = r` and the construction
+    /// becomes a self-intersecting spindle torus, which is invalid as a
+    /// fillet surface. Convex must still accept radii up to `r_c`.
+    #[test]
+    fn plane_cylinder_fillet_concave_rejects_spindle_radius() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let r_c: f64 = 2.0;
+
+        let setup = |topo: &mut Topology, reversed: bool| {
+            let v = topo.add_vertex(Vertex::new(Point3::new(r_c, 0.0, 0.0), 1e-7));
+            let circle =
+                Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c).unwrap();
+            let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+            let spine = Spine::from_single_edge(topo, eid).unwrap();
+            let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+            let face_plate = topo.add_face(Face::new(
+                w1,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, -1.0),
+                    d: 0.0,
+                },
+            ));
+            let cyl =
+                CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c)
+                    .unwrap();
+            let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+            let face_cyl = if reversed {
+                topo.add_face(Face::new_reversed(
+                    w2,
+                    vec![],
+                    FaceSurface::Cylinder(cyl.clone()),
+                ))
+            } else {
+                topo.add_face(Face::new(w2, vec![], FaceSurface::Cylinder(cyl.clone())))
+            };
+            (spine, cyl, face_plate, face_cyl)
+        };
+
+        // Concave: r > r_c/2 ⇒ would form spindle torus ⇒ reject.
+        let mut topo_concave = Topology::new();
+        let (spine_concave, cyl_concave, fp_concave, fc_concave) = setup(&mut topo_concave, true);
+        let n_p_inward = Vec3::new(0.0, 0.0, -1.0);
+        let result = plane_cylinder_fillet(
+            n_p_inward,
+            0.0,
+            &cyl_concave,
+            &spine_concave,
+            &topo_concave,
+            // Just above r_c/2 = 1.0 — would produce major = 0.9 < minor = 1.1.
+            1.1,
+            fp_concave,
+            fc_concave,
+        )
+        .unwrap();
+        assert!(
+            result.is_none(),
+            "concave fillet must reject r > r_c/2 (spindle-torus regime)"
+        );
+
+        // Concave at r exactly r_c/2 is also a degenerate equality (major
+        // = minor); rejected.
+        let result_eq = plane_cylinder_fillet(
+            n_p_inward,
+            0.0,
+            &cyl_concave,
+            &spine_concave,
+            &topo_concave,
+            1.0,
+            fp_concave,
+            fc_concave,
+        )
+        .unwrap();
+        assert!(
+            result_eq.is_none(),
+            "concave fillet must reject r = r_c/2 (degenerate major = minor)"
+        );
+
+        // Convex at r_c/2 < r < r_c is still fine — major = r_c + r > minor.
+        let mut topo_convex = Topology::new();
+        let (spine_convex, cyl_convex, fp_convex, fc_convex) = setup(&mut topo_convex, false);
+        let n_p_inward_convex = Vec3::new(0.0, 0.0, 1.0);
+        let result_convex = plane_cylinder_fillet(
+            n_p_inward_convex,
+            0.0,
+            &cyl_convex,
+            &spine_convex,
+            &topo_convex,
+            1.5,
+            fp_convex,
+            fc_convex,
+        )
+        .unwrap();
+        assert!(
+            result_convex.is_some(),
+            "convex fillet should accept r in (r_c/2, r_c)"
+        );
     }
 }
