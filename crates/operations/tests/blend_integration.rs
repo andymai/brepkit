@@ -412,13 +412,37 @@ fn chamfer_cylinder_base_circle_produces_cone() {
         (p_plate - want_plate).length() < 1e-9,
         "cone at v={v_plate:.6} should touch plate at {want_plate:?}; got {p_plate:?}"
     );
-    // For cylinder contact at radial = r_c, z = d:
-    //   v_cyl · cos(α) = r_c
-    //   apex_axial - v_cyl · sin(α) = d  (cone z = apex_axial - v · sin(α))
+    // Cylinder contact at radial = r_c, z = +d (above the plate, on the
+    // cylinder material side). The cone here has axis +z (opening upward
+    // from apex below the plate), so cone z = apex_z + v·sin(α) and we want
+    // that to equal +d.
     let v_cyl = r_c / alpha.cos();
     let p_cyl = ParametricSurface::evaluate(&cone, 0.0, v_cyl);
     assert!(
         (p_cyl - want_cyl).length() < 1e-9,
         "cone at v={v_cyl:.6} should touch cylinder at {want_cyl:?}; got {p_cyl:?}"
+    );
+
+    // Also guard against the bug where the chamfer's separately-built
+    // contact circle gets placed on the wrong side of the plate. Walk the
+    // chamfer cone's outer wire and confirm no `Circle3D` edge is
+    // positioned at `z = -d` (the misplaced location); any preserved
+    // contact circle on the cone must sit at `z = +d` instead.
+    let cone_face = new_faces
+        .iter()
+        .copied()
+        .find(|&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cone(_)))
+        .unwrap();
+    let cone_wire = topo.face(cone_face).unwrap().outer_wire();
+    let has_misplaced = topo.wire(cone_wire).unwrap().edges().iter().any(|oe| {
+        if let EdgeCurve::Circle(c) = topo.edge(oe.edge()).unwrap().curve() {
+            (c.center().z() + d).abs() < 1e-6 && (c.radius() - r_c).abs() < 1e-6
+        } else {
+            false
+        }
+    });
+    assert!(
+        !has_misplaced,
+        "no contact circle should sit at z = -d (cylinder contact misplaced)"
     );
 }

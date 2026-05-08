@@ -733,14 +733,15 @@ fn cyl_v_at_point(cyl: &brepkit_math::surfaces::CylindricalSurface, p: Point3) -
 /// # Geometry
 ///
 /// The chamfer surface is a frustum of a cone:
-///   - axis = cylinder axis,
+///   - axis = cylinder axis (the cone's `+axis_c` direction points toward
+///     the cylinder material; `v` grows from apex into the material);
 ///   - half-angle `α = atan2(d1, d2)` (45° for symmetric `d1 = d2`),
-///   - apex at the cylinder axis, axial offset `(r_c - d1)·d2/d1` *into*
-///     the cylinder material (so the cone "grows" as `v` increases out
-///     toward the spine and beyond).
+///   - apex on the cylinder axis, axial offset `(r_c - d1)·d2/d1` away
+///     from the cylinder material (in the empty-wedge half-space — i.e.
+///     opposite to the cylinder body relative to the plate);
 ///   - contact 1 on the plate: circle at radial `r_c - d1`, on the plate;
 ///   - contact 2 on the cylinder lateral: circle at radial `r_c`, axially
-///     offset `d2` into the material.
+///     offset `+d2` into the material.
 ///
 /// Both contacts are circles around the cylinder axis. The chamfer face
 /// connects them with a flat cone (ruled surface).
@@ -803,12 +804,22 @@ pub fn plane_cylinder_chamfer(
     let step = d_plane - n_p_inward.dot(Vec3::new(o_c.x(), o_c.y(), o_c.z()));
     let p_axis_on_plane = o_c + n_p_inward * step;
 
-    // 5) Determine the "into the cylinder material" direction along the
-    //    axis. For convex cylinder primitive bottom rim with bottom-cap
-    //    inward = +n_p_inward and cylinder material on the +n_p_inward
-    //    side, "into material" is +n_p_inward. We take the axial direction
-    //    that points into material.
-    let axial_into_material = n_p_inward;
+    // 5) Establish a "spine-to-empty-wedge" axial direction. The chamfer
+    //    dispatcher (unlike the fillet dispatcher) does NOT apply
+    //    `orient_plane_surface`, so `n_p_inward` here is actually the
+    //    face's raw geometric normal — for a non-reversed bottom-cap face
+    //    of an upright cylinder it points OUTWARD (-z), away from the
+    //    cylinder material. Two distinct directions matter below:
+    //      * `axis_toward_apex = +n_p_inward` — toward the chamfer cone's
+    //        virtual apex, which lives in the empty-wedge half-space;
+    //      * `axis_toward_material = -n_p_inward` — toward the cylinder
+    //        body, where the cylinder-side contact circle lives.
+    //    The cone surface is parameterized so that its apex is on the
+    //    empty-wedge side and its `+axis_c` direction points toward the
+    //    plate, so the cone evaluation walks INTO the cylinder material as
+    //    `v` increases.
+    let axis_toward_apex = n_p_inward;
+    let axis_toward_material = -n_p_inward;
 
     // 6) Spine: detect closed-circle case so we can spin a full 2π.
     let edges = spine.edges();
@@ -824,17 +835,19 @@ pub fn plane_cylinder_chamfer(
     }
 
     // 7) Build the chamfer cone.
-    //    Axis direction (= direction the cone OPENS): goes from apex
-    //    outward. Apex is at axial offset `apex_axial_below_plate` *into*
-    //    the cylinder material (= along `+axial_into_material`), and the
-    //    cone opens outward toward the plate (decreasing axial).
+    //    The cone opens in `axis_toward_material` (= -n_p_inward), with its
+    //    apex on the empty-wedge side of the plate. As `v` grows from 0 at
+    //    the apex, the cone first sweeps to the plate at `v = (r_c - d1) /
+    //    cos(α)`, then to the cylinder lateral at `v = r_c / cos(α)`.
     let half_angle = d1.atan2(d2);
-    // Apex axial position (relative to plate, in axial_into_material units):
-    //   z_apex = (r_c - d1) · d2 / d1, into the material.
+    // Apex axial offset from the plate: derived from similar triangles —
+    // the cone's generator slopes (d1 : d2) and the apex sits where the
+    // generator extension hits r=0. Apex is on the empty-wedge side so
+    // the cone opens "through" the plate into the cylinder material as v
+    // increases.
     let apex_offset = (r_c - d1) * d2 / d1;
-    let apex_pos = p_axis_on_plane + axial_into_material * apex_offset;
-    // The cone opens toward the plate (away from axial_into_material).
-    let cone_axis = -axial_into_material;
+    let apex_pos = p_axis_on_plane + axis_toward_apex * apex_offset;
+    let cone_axis = axis_toward_material;
     let cyl_x = cyl.x_axis();
     let cone = ConicalSurface::with_ref_dir(apex_pos, cone_axis, half_angle, cyl_x)?;
 
@@ -847,7 +860,7 @@ pub fn plane_cylinder_chamfer(
         cyl_x,
         cone_y,
     )?;
-    let cyl_contact_center = p_axis_on_plane + axial_into_material * d2;
+    let cyl_contact_center = p_axis_on_plane + axis_toward_material * d2;
     let contact_cyl_circle =
         brepkit_math::curves::Circle3D::with_axes(cyl_contact_center, axis_c, r_c, cyl_x, cone_y)?;
 
