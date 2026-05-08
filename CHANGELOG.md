@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.48.0](https://github.com/andymai/brepkit/compare/v2.47.0...v2.48.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** analytic plane-cylinder fillet → exact torus surface ([#547](https://github.com/andymai/brepkit/issues/547)) ([8c71b84](https://github.com/andymai/brepkit/commit/8c71b8461b3d4ae7b9a59a9205a298b1e45b24ce))
+* **operations:** concentric-sphere boolean shortcut ([#549](https://github.com/andymai/brepkit/issues/549)) ([fd4e7fe](https://github.com/andymai/brepkit/commit/fd4e7fe2275815a476a75f88e2b30074888a051e))
+
 ## [2.47.0](https://github.com/andymai/brepkit/compare/v2.46.0...v2.47.0) (2026-05-08)
 
 
