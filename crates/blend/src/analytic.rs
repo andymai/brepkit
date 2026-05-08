@@ -263,6 +263,9 @@ pub fn try_analytic_chamfer(
         (FaceSurface::Cylinder(c1), FaceSurface::Cylinder(c2)) => {
             cylinder_cylinder_chamfer(c1, c2, spine, topo, d1, d2, face1, face2)
         }
+        (FaceSurface::Cone(co1), FaceSurface::Cone(co2)) => {
+            cone_cone_coaxial_chamfer(co1, co2, spine, topo, d1, d2, face1, face2)
+        }
         (
             FaceSurface::Plane { .. }
             | FaceSurface::Cylinder(_)
@@ -4503,6 +4506,268 @@ pub fn cone_cone_coaxial_fillet(
     let stripe = Stripe {
         spine: spine.clone(),
         surface: FaceSurface::Torus(torus),
+        pcurve1,
+        pcurve2,
+        contact1,
+        contact2,
+        face1,
+        face2,
+        sections: vec![section_start, section_end],
+    };
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
+}
+
+/// Chamfer between two **coaxial** cones with different half-angles —
+/// the chamfer surface is an axisymmetric cone connecting the two
+/// cone-generator contact circles.
+///
+/// `d1` is the linear distance along cone1's generator from the spine
+/// (going INTO cone1's face); `d2` likewise for cone2. The convex
+/// "into face" direction on each cone is opposite: cone1 goes TOWARD
+/// apex1 and cone2 goes AWAY from apex2 (since they extend from
+/// opposite sides of the spine in the typical β1 > β2 setup).
+///
+/// Handles all four convex/concave combinations via per-face
+/// `signed_offset_i = ±1`.
+///
+/// # Geometry
+///
+/// Place shared axis = +z, cone1 apex at z=0, cone2 apex at z=h_2.
+/// Spine at axial z_spine, radial r_spine (from `cone_cone_coaxial_fillet`).
+///
+/// Generator unit direction on cone i (away from apex): `(cos β_i, sin β_i)`
+/// in (r, z). Contact along generator going INTO face material:
+///   contact1 = (r_spine − s1·d1·cos β1, z_spine − s1·d1·sin β1)
+///   contact2 = (r_spine + s2·d2·cos β2, z_spine + s2·d2·sin β2)
+///
+/// (For convex s1 = s2 = +1: cone1 retreats toward apex1 (down-left),
+/// cone2 extends away from apex2 (up-right). The chord goes
+/// up-and-out from contact1 to contact2.)
+///
+/// The chamfer cone is the surface of revolution of the line from
+/// contact1 to contact2 around the shared axis. Apex on axis at the
+/// line's r=0 intersection; cone axis points from apex toward the
+/// contacts (whichever side they're on).
+///
+/// # Returns
+///
+/// `Ok(None)` (walker fallback) when:
+///   - cones aren't coaxial,
+///   - half-angles equal (sin(β1−β2) ≈ 0),
+///   - chamfer line is degenerate (Δr ≈ 0 or Δz ≈ 0),
+///   - the spine isn't at the predicted (axial, radial),
+///   - either contact lands at non-positive radial, or
+///   - the spine is degenerate.
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or NURBS construction fails.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn cone_cone_coaxial_chamfer(
+    cone1: &brepkit_math::surfaces::ConicalSurface,
+    cone2: &brepkit_math::surfaces::ConicalSurface,
+    spine: &Spine,
+    topo: &Topology,
+    d1: f64,
+    d2: f64,
+    face1: FaceId,
+    face2: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    use brepkit_math::surfaces::ConicalSurface;
+    use std::f64::consts::PI;
+
+    let tol_lin = 1e-9;
+    let tol_ang = 1e-9;
+
+    if d1 <= tol_lin || d2 <= tol_lin {
+        return Ok(None);
+    }
+    let s1: f64 = if topo.face(face1)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
+    let s2: f64 = if topo.face(face2)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
+
+    let beta1 = cone1.half_angle();
+    let beta2 = cone2.half_angle();
+    let apex1 = cone1.apex();
+    let apex2 = cone2.apex();
+    let axis1 = cone1.axis();
+    let axis2 = cone2.axis();
+
+    if axis1.dot(axis2) < 1.0 - tol_ang {
+        return Ok(None);
+    }
+    let a_cone = axis1;
+
+    let to_apex2 = apex2 - apex1;
+    let to_apex2_v = Vec3::new(to_apex2.x(), to_apex2.y(), to_apex2.z());
+    let along = to_apex2_v.dot(a_cone);
+    let perp = to_apex2_v - a_cone * along;
+    if perp.length() > tol_lin {
+        return Ok(None);
+    }
+    let h_2 = along;
+
+    let (sin_b1, cos_b1) = beta1.sin_cos();
+    let (sin_b2, cos_b2) = beta2.sin_cos();
+    let sin_minus = (beta1 - beta2).sin();
+    if sin_minus.abs() <= tol_ang {
+        return Ok(None);
+    }
+
+    // Spine geometry (shared with fillet).
+    let z_spine = h_2 * cos_b2 * sin_b1 / sin_minus;
+    let cot_b1 = cos_b1 / sin_b1;
+    let r_spine = z_spine * cot_b1;
+    if r_spine <= tol_lin {
+        return Ok(None);
+    }
+
+    // Spine validation.
+    let edges = spine.edges();
+    let is_closed_spine = if edges.len() == 1 {
+        let e = topo.edge(edges[0])?;
+        e.start() == e.end()
+    } else {
+        false
+    };
+    let spine_len = spine.length();
+    if !is_closed_spine && spine_len < tol_lin {
+        return Ok(None);
+    }
+    let p_spine_sample = spine.evaluate(topo, 0.0)?;
+    let to_sample = p_spine_sample - apex1;
+    let to_sample_v = Vec3::new(to_sample.x(), to_sample.y(), to_sample.z());
+    let sample_axial = to_sample_v.dot(a_cone);
+    let sample_radial_v = to_sample_v - a_cone * sample_axial;
+    let sample_radial = sample_radial_v.length();
+    let spine_match_tol = tol_lin * 1e3;
+    if (sample_axial - z_spine).abs() > spine_match_tol
+        || (sample_radial - r_spine).abs() > spine_match_tol
+    {
+        return Ok(None);
+    }
+
+    // Per-cone contacts along generators.
+    let r_c1 = r_spine - s1 * d1 * cos_b1;
+    let z_c1 = z_spine - s1 * d1 * sin_b1;
+    let r_c2 = r_spine + s2 * d2 * cos_b2;
+    let z_c2 = z_spine + s2 * d2 * sin_b2;
+    if r_c1 <= tol_lin || r_c2 <= tol_lin {
+        return Ok(None);
+    }
+
+    // Chamfer line P1 → P2 in (r, z). The Δr guard avoids `r_c1·dz/dr`
+    // blowing up to ±∞ when the line is vertical (Δr = 0); the
+    // `dz ≈ 0` case (horizontal line ⇒ flat-disk chamfer) is caught
+    // downstream by the half-angle ≤ 1e-3 check, so we don't need a
+    // separate guard for it.
+    let dr = r_c2 - r_c1;
+    let dz = z_c2 - z_c1;
+    if dr.abs() <= tol_lin {
+        return Ok(None);
+    }
+
+    // Apex on axis at line r=0.
+    let z_apex_chamfer = z_c1 - r_c1 * dz / dr;
+    let mid_z = 0.5 * (z_c1 + z_c2);
+    let chamfer_axis = if mid_z > z_apex_chamfer {
+        a_cone
+    } else {
+        -a_cone
+    };
+    let r_avg = 0.5 * (r_c1 + r_c2);
+    let cone_half_angle = ((mid_z - z_apex_chamfer).abs() / r_avg).atan();
+    // Reject near-degenerate cone (close to flat disk or needle).
+    // brepkit's `ConicalSurface::new` rejects β ≤ 0 or β ≥ π/2; the
+    // 1e-3 rad ≈ 0.057° margin is a project-wide convention used by all
+    // analytic chamfer helpers (plane-cone, sphere-cone, cyl-cyl-fillet)
+    // for the same purpose — see `plane_cone_chamfer` for context.
+    if cone_half_angle <= 1e-3 || cone_half_angle >= std::f64::consts::FRAC_PI_2 - 1e-3 {
+        return Ok(None);
+    }
+
+    let chamfer_apex_pos = apex1 + a_cone * z_apex_chamfer;
+    let ref_dir = cone1.x_axis();
+    let chamfer_cone =
+        ConicalSurface::with_ref_dir(chamfer_apex_pos, chamfer_axis, cone_half_angle, ref_dir)?;
+
+    // Spine plane center.
+    let spine_plane_center = apex1 + a_cone * z_spine;
+    let perp_y = a_cone.cross(ref_dir).normalize()?;
+    let u_at = |p: Point3| {
+        let v = p - spine_plane_center;
+        perp_y.dot(v).atan2(ref_dir.dot(v))
+    };
+    let u_start = u_at(p_spine_sample);
+    let u_end = if is_closed_spine {
+        u_start + 2.0 * PI
+    } else {
+        let p_spine_end = spine.evaluate(topo, spine_len)?;
+        let u_end_raw = u_at(p_spine_end);
+        if u_end_raw > u_start {
+            u_end_raw
+        } else {
+            u_end_raw + 2.0 * PI
+        }
+    };
+
+    // Contact circles.
+    let c1_center = apex1 + a_cone * z_c1;
+    let contact1_circle =
+        brepkit_math::curves::Circle3D::with_axes(c1_center, a_cone, r_c1, ref_dir, perp_y)?;
+    let c2_center = apex1 + a_cone * z_c2;
+    let contact2_circle =
+        brepkit_math::curves::Circle3D::with_axes(c2_center, a_cone, r_c2, ref_dir, perp_y)?;
+    let contact1 = circle_arc_to_nurbs(&contact1_circle, u_start, u_end)?;
+    let contact2 = circle_arc_to_nurbs(&contact2_circle, u_start, u_end)?;
+
+    // PCurves on each cone (constant-v Line2D).
+    let sample_c1 = contact1_circle.evaluate(u_start);
+    let (u_c1_start, v_c1) = ParametricSurface::project_point(cone1, sample_c1);
+    let pcurve1 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_c1_start, v_c1),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+    let sample_c2 = contact2_circle.evaluate(u_start);
+    let (u_c2_start, v_c2) = ParametricSurface::project_point(cone2, sample_c2);
+    let pcurve2 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_c2_start, v_c2),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+
+    // Cross-sections.
+    let p1_at = |u: f64| contact1_circle.evaluate(u);
+    let p2_at = |u: f64| contact2_circle.evaluate(u);
+    let section_at = |u: f64, t: f64| {
+        let p1 = p1_at(u);
+        let p2 = p2_at(u);
+        let mid = midpoint_3d(p1, p2);
+        CircSection {
+            p1,
+            p2,
+            center: mid,
+            radius: (p1 - p2).length() * 0.5,
+            uv1: (u_c1_start + (u - u_start), v_c1),
+            uv2: (u_c2_start + (u - u_start), v_c2),
+            t,
+        }
+    };
+    let section_start = section_at(u_start, 0.0);
+    let section_end = section_at(u_end, 1.0);
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Cone(chamfer_cone),
         pcurve1,
         pcurve2,
         contact1,
@@ -9178,6 +9443,147 @@ mod tests {
         assert!(
             chamfer_normal.z().abs() < 1e-12,
             "chamfer plane normal must be perpendicular to z, got {chamfer_normal:?}"
+        );
+    }
+
+    /// Cone-cone coaxial convex chamfer: two cones sharing an axis with
+    /// different half-angles. Chamfer surface is an axisymmetric cone
+    /// connecting both cone-generator contact circles.
+    ///
+    /// Same setup as the cone-cone fillet test (cone1 apex at origin
+    /// β=π/3; cone2 apex at z=2 β=π/4; faces NOT reversed; d=0.3):
+    ///   - z_spine ≈ 4.732, r_spine ≈ 2.732
+    ///   - cone1 contact retreats toward apex1: (r_spine − d·cos β1,
+    ///     z_spine − d·sin β1) ≈ (2.582, 4.472)
+    ///   - cone2 contact extends away from apex2: (r_spine + d·cos β2,
+    ///     z_spine + d·sin β2) ≈ (2.944, 4.944)
+    ///   - chamfer cone apex on axis at line P1−P2 extrapolated to r=0
+    #[test]
+    fn cone_cone_coaxial_chamfer_convex_emits_cone() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let beta1: f64 = std::f64::consts::PI / 3.0;
+        let beta2: f64 = std::f64::consts::PI / 4.0;
+        let h_2: f64 = 2.0;
+        let d: f64 = 0.3;
+
+        let sin_minus = (beta1 - beta2).sin();
+        let z_spine = h_2 * beta2.cos() * beta1.sin() / sin_minus;
+        let r_spine = z_spine * (beta1.cos() / beta1.sin());
+
+        let cone1 =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), beta1)
+                .unwrap();
+        let cone2 =
+            ConicalSurface::new(Point3::new(0.0, 0.0, h_2), Vec3::new(0.0, 0.0, 1.0), beta2)
+                .unwrap();
+
+        let spine_circle = Circle3D::new(
+            Point3::new(0.0, 0.0, z_spine),
+            Vec3::new(0.0, 0.0, 1.0),
+            r_spine,
+        )
+        .unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_spine, 0.0, z_spine), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face1 = topo.add_face(Face::new(w1, vec![], FaceSurface::Cone(cone1.clone())));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face2 = topo.add_face(Face::new(w2, vec![], FaceSurface::Cone(cone2.clone())));
+
+        let result = cone_cone_coaxial_chamfer(&cone1, &cone2, &spine, &topo, d, d, face1, face2)
+            .unwrap()
+            .expect("convex coaxial cone-cone chamfer should produce a stripe");
+
+        let chamfer_cone = match result.stripe.surface {
+            FaceSurface::Cone(c) => c,
+            other => panic!("expected Cone, got {}", other.type_tag()),
+        };
+
+        // Predicted contacts (s1=s2=+1).
+        let r_c1 = r_spine - d * beta1.cos();
+        let z_c1 = z_spine - d * beta1.sin();
+        let r_c2 = r_spine + d * beta2.cos();
+        let z_c2 = z_spine + d * beta2.sin();
+
+        // Cone1 contact retreats toward apex1 (r and z BOTH decrease).
+        assert!(
+            r_c1 < r_spine && z_c1 < z_spine,
+            "cone1 contact should retreat toward apex1: got ({r_c1}, {z_c1}) vs spine ({r_spine}, {z_spine})"
+        );
+        // Cone2 contact extends away from apex2 (r and z BOTH increase).
+        assert!(
+            r_c2 > r_spine && z_c2 > z_spine,
+            "cone2 contact should extend away from apex2: got ({r_c2}, {z_c2}) vs spine"
+        );
+
+        // Predicted chamfer apex (line extrapolated to r=0).
+        let dr = r_c2 - r_c1;
+        let dz = z_c2 - z_c1;
+        let expected_apex_z = z_c1 - r_c1 * dz / dr;
+        let mid_z = 0.5 * (z_c1 + z_c2);
+        let r_avg = 0.5 * (r_c1 + r_c2);
+        let expected_beta = ((mid_z - expected_apex_z).abs() / r_avg).atan();
+
+        let apex = chamfer_cone.apex();
+        assert!(
+            apex.x().abs() < 1e-12 && apex.y().abs() < 1e-12,
+            "apex should be on z-axis, got {apex:?}"
+        );
+        assert!(
+            (apex.z() - expected_apex_z).abs() < 1e-9,
+            "apex z = {}, expected {expected_apex_z}",
+            apex.z()
+        );
+        assert!(
+            (chamfer_cone.half_angle() - expected_beta).abs() < 1e-9,
+            "chamfer half-angle should be {expected_beta}, got {}",
+            chamfer_cone.half_angle()
+        );
+
+        // Cone axis: contacts above apex (apex z ≈ 1.105 < contacts z ≈ 4.5–5).
+        let axis = chamfer_cone.axis();
+        assert!(
+            axis.dot(Vec3::new(0.0, 0.0, 1.0)) > 1.0 - 1e-12,
+            "convex chamfer cone axis should be +z (contacts above apex), got {axis:?}"
+        );
+
+        // Both contacts on chamfer cone.
+        let want_c1 = Point3::new(r_c1, 0.0, z_c1);
+        let want_c2 = Point3::new(r_c2, 0.0, z_c2);
+        let (u_p, v_p) = ParametricSurface::project_point(&chamfer_cone, want_c1);
+        let on_cone_c1 = ParametricSurface::evaluate(&chamfer_cone, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&chamfer_cone, want_c2);
+        let on_cone_c2 = ParametricSurface::evaluate(&chamfer_cone, u_q, v_q);
+        assert!(
+            (on_cone_c1 - want_c1).length() < 1e-9,
+            "cone1 contact must lie on chamfer cone: {on_cone_c1:?} vs {want_c1:?}"
+        );
+        assert!(
+            (on_cone_c2 - want_c2).length() < 1e-9,
+            "cone2 contact must lie on chamfer cone: {on_cone_c2:?} vs {want_c2:?}"
+        );
+
+        // Both contacts on respective cones.
+        let cot_b1 = beta1.cos() / beta1.sin();
+        let cot_b2 = beta2.cos() / beta2.sin();
+        let pred_r_c1 = z_c1 * cot_b1;
+        let pred_r_c2 = (z_c2 - h_2) * cot_b2;
+        assert!(
+            (r_c1 - pred_r_c1).abs() < 1e-9,
+            "cone1 contact must lie on cone1: predicted radial {pred_r_c1}, got {r_c1}"
+        );
+        assert!(
+            (r_c2 - pred_r_c2).abs() < 1e-9,
+            "cone2 contact must lie on cone2: predicted radial {pred_r_c2}, got {r_c2}"
         );
     }
 
