@@ -1599,42 +1599,49 @@ pub fn plane_cone_chamfer(
 }
 
 /// Fillet between a plane and a sphere whose center sits along the plate
-/// normal — the classic "sphere on plate" convex case (e.g. a hemispherical
-/// post fused to a slab; the spine is the circle where sphere meets plate).
+/// normal. Handles all four sub-configurations of plane × sphere fillet
+/// via a unified `signed_offset = ±1` factor:
 ///
-/// `radius` is the rolling-ball fillet radius. Convex configuration only —
-/// concave (sphere-shaped pocket through plate top) follows up.
+///   1. Convex post-on-slab — sphere face NOT reversed, sphere center on
+///      the empty-wedge side (`h_signed < 0`, e.g. a hemisphere on a plate
+///      slab). Rolling ball **externally** tangent to sphere (`R + r`).
+///   2. Convex sphere-buried — sphere face NOT reversed, sphere center on
+///      the plate-material side (`h_signed > 0`, e.g. half-buried sphere).
+///   3. Concave spherical pocket — sphere face REVERSED, sphere center on
+///      plate-material side (`h_signed > 0`). Rolling ball **internally**
+///      tangent to sphere (`R − r`); ball is INSIDE the pocket air.
+///   4. Concave spherical hole-through-plate — sphere face REVERSED,
+///      sphere center on empty-wedge side (`h_signed < 0`). Rolling ball
+///      internally tangent, INSIDE the hole.
+///
+/// All four collapse to a single closed-form torus blend; the formulas
+/// differ only in the sign of one term.
 ///
 /// # Geometry
 ///
-/// With `h = |dot(sphere_center − p_axis_on_plane, n_p_inward)|` (always
-/// non-negative; `h = 0` means sphere center sits on the plate, e.g. a
-/// hemisphere) and `R = sphere.radius()`:
+/// Let `h_signed = (sphere_center − p_axis_on_plane) · n_p_inward` (signed)
+/// and `R = sphere.radius()`. With `signed_offset = +1` for the convex
+/// (face not reversed) configuration and `signed_offset = −1` for concave
+/// (reversed):
 ///
-///   - spine radius `r_p = √(R² − h²)`,
-///   - rolling-ball trajectory: ball center on a circle of radius
-///     `R_t = √(r_p² + 2r(R+h))` parallel to the plate, axially offset
-///     `r` (one fillet radius) on the empty-wedge side,
-///   - fillet surface: torus with axis perpendicular to the plate, major
-///     radius `R_t`, minor radius `r`,
-///   - plate-side contact: circle of radius `R_t` on the spine plane,
-///   - sphere-side contact: circle on the sphere where the rolling ball
-///     touches it (a small circle on the sphere, in a plane perpendicular
-///     to the torus axis).
-///
-/// At `h = 0` (hemisphere on plate) the formula collapses to
-/// `R_t² = R² + 2Rr`. At `h → R` (sphere just-touching plate) `r_p → 0`
-/// and the spine vanishes — rejected upstream by `Spine::length()`.
+///   - spine radius `r_p = √(R² − h_signed²)`;
+///   - rolling-ball axial offset along `n_p_inward`: `−signed_offset · r`
+///     (convex puts the ball on the −n_p_inward side / empty wedge,
+///     concave on the +n_p_inward side / inside the cavity);
+///   - **major radius** `R_t² = r_p² + signed_offset · 2r·(R − h_signed)`;
+///   - fillet surface: torus with axis ⊥ plate, major `R_t`, minor `r`;
+///   - plate-side contact: circle of radius `R_t` on the spine plane;
+///   - sphere-side contact: circle at radial `R · R_t / (R + signed_offset·r)`,
+///     axially offset `signed_offset · r · (h_signed − R) / (R + signed_offset·r)`
+///     along `n_p_inward`.
 ///
 /// # Returns
 ///
 /// `Ok(None)` (walker fallback) when:
-///   - the sphere's center isn't on the plane normal line through the
-///     spine projection (sphere not axisymmetric to the plate),
-///   - sphere face is reversed (concave pocket case — separate codepath),
-///   - sphere doesn't intersect the plate (`h ≥ R`),
-///   - `radius` is non-positive, or
-///   - the spine is degenerate.
+///   - sphere doesn't intersect the plate (`|h_signed| ≥ R`),
+///   - the spindle bound is exceeded (`major < minor` — torus
+///     self-intersects), or
+///   - `radius` is non-positive, or the spine is degenerate.
 ///
 /// # Errors
 ///
@@ -1655,16 +1662,15 @@ pub fn plane_sphere_fillet(
 
     let tol_lin = 1e-9;
 
-    // 1) Concave (sphere face reversed = pocket through plate top) is a
-    //    separate geometry — rolling ball is INTERNALLY tangent to the
-    //    sphere (`R − r` instead of `R + r`), giving a different formula
-    //    and tighter spindle bound. Defer to a follow-up.
-    if topo.face(face_sphere)?.is_reversed() {
-        return Ok(None);
-    }
+    // 1) Convex (face not reversed) vs concave (face reversed) drive a
+    //    `signed_offset = ±1` factor that flips the rolling-ball axial
+    //    side and the sphere tangency type (external `R+r` for convex,
+    //    internal `R−r` for concave).
     if radius <= tol_lin {
         return Ok(None);
     }
+    let concave = topo.face(face_sphere)?.is_reversed();
+    let signed_offset: f64 = if concave { -1.0 } else { 1.0 };
 
     let big_r = sphere.radius();
     let center = sphere.center();
@@ -1701,26 +1707,25 @@ pub fn plane_sphere_fillet(
         return Ok(None);
     }
 
-    // 5) Major radius via rolling-ball external-tangency constraint.
-    //    Ball is on the −n_p_inward side of the plate (the empty wedge,
-    //    away from plate material). Solving
-    //      R_t² + (r + h_signed)² = (R + r)²
-    //    yields
-    //      R_t² = (R + r)² − (r + h_signed)²
-    //           = (R² − h_signed²) + 2r(R − h_signed)
-    //           = r_p² + 2r(R − h_signed).
-    //    For the post-on-slab case (h_signed = −|h|) this reduces to
-    //    `r_p² + 2r(R + |h|)`; for the buried-sphere case (h_signed = +|h|)
-    //    it becomes the smaller `r_p² + 2r(R − |h|)`.
-    let major_radius_sq = r_p_sq + 2.0 * radius * (big_r - h_signed);
+    // 5) Major radius via rolling-ball constraint, unified across convex
+    //    (external tangency `R + r`) and concave (internal tangency
+    //    `R − r`). Ball axial offset is `−signed_offset · r` along
+    //    n_p_inward. Solving
+    //      R_t² + (signed_offset·r + h_signed)² = (R + signed_offset·r)²
+    //    expands to
+    //      R_t² = r_p² + signed_offset · 2r·(R − h_signed).
+    //    For convex this is `r_p² + 2r(R − h_signed)` (always ≥ r_p²
+    //    since h_signed ≤ R); for concave it's `r_p² − 2r(R − h_signed)`,
+    //    which can shrink below r_p² and even below r² (spindle).
+    let major_radius_sq = r_p_sq + signed_offset * 2.0 * radius * (big_r - h_signed);
     if major_radius_sq <= tol_lin * tol_lin {
         return Ok(None);
     }
     let major_radius = major_radius_sq.sqrt();
     let minor_radius = radius;
     // Spindle check: a torus with major < minor self-intersects and is
-    // invalid as a fillet surface. In the buried-sphere case
-    // (h_signed near R) the major can shrink below r, so guard.
+    // invalid as a fillet surface. Tightest in the concave case (and
+    // also in the convex buried-sphere sub-case where h_signed near R).
     if major_radius < minor_radius - tol_lin {
         return Ok(None);
     }
@@ -1749,9 +1754,10 @@ pub fn plane_sphere_fillet(
     let sphere_x = sphere.x_axis();
     let sphere_y = sphere.y_axis();
 
-    // Torus center on the empty-wedge side of the plate (one fillet radius
-    // away along -n_p_inward), matching the plane-cylinder convention.
-    let torus_center = p_axis_on_plane - n_p_inward * radius;
+    // Torus center on the rolling-ball side: convex puts it on the
+    // −n_p_inward side (empty wedge above plate), concave on the
+    // +n_p_inward side (inside the cavity). `−signed_offset` unifies.
+    let torus_center = p_axis_on_plane - n_p_inward * (signed_offset * radius);
     let torus = ToroidalSurface::with_axis_and_ref_dir(
         torus_center,
         major_radius,
@@ -1786,18 +1792,19 @@ pub fn plane_sphere_fillet(
     //    Plate-side: circle of radius `major_radius` at z = plate (where
     //    the torus tube touches the plate face).
     //
-    //    Sphere-side: contact = sphere_center + R · (ball − sphere_center)/(R + r).
-    //    Decomposed along n_p_inward and the radial(u) direction:
-    //      contact_radial = R_t · R / (R + r),
+    //    Sphere-side contact, unified across convex/concave:
+    //    `contact = sphere_center + R · (ball − sphere_center) / |ball − sc|`
+    //    with `|ball − sc| = R + signed_offset·r`. Decomposed:
+    //      contact_radial = R_t · R / (R + signed_offset·r),
     //      contact_axial_along_n_p_inward
-    //          = h_signed + R · (−r − h_signed)/(R + r)
-    //          = (h_signed(R + r) + R(−r − h_signed))/(R + r)
-    //          = r · (h_signed − R) / (R + r).
-    //    Sign of `contact_axial` follows `h_signed`'s sign for the
-    //    post-on-slab case (h_signed < 0 ⇒ contact_axial < 0 ⇒ point on
-    //    the −n_p_inward side, which is +z above the plate top).
-    let contact_sphere_radial = major_radius * big_r / (big_r + radius);
-    let contact_sphere_axial = radius * (h_signed - big_r) / (big_r + radius);
+    //          = signed_offset · r · (h_signed − R) / (R + signed_offset·r).
+    //    For convex this is the negative of `r·(R − h_signed)/(R+r)` (i.e.
+    //    a positive axial when h_signed < 0, meaning contact lies on the
+    //    upper hemisphere); for concave the sign flips so the contact
+    //    lies on the lower hemisphere where the actual sphere face lives.
+    let denom = big_r + signed_offset * radius;
+    let contact_sphere_radial = major_radius * big_r / denom;
+    let contact_sphere_axial = signed_offset * radius * (h_signed - big_r) / denom;
     let contact_sphere_center = p_axis_on_plane + n_p_inward * contact_sphere_axial;
 
     let contact_plane_circle = brepkit_math::curves::Circle3D::with_axes(
@@ -1840,7 +1847,8 @@ pub fn plane_sphere_fillet(
     // 11) Cross-sections at spine endpoints.
     let p_plane_at = |u: f64| contact_plane_circle.evaluate(u);
     let p_sphere_at = |u: f64| contact_sphere_circle.evaluate(u);
-    let center_at = |u: f64| contact_plane_circle.evaluate(u) - n_p_inward * radius;
+    let center_at =
+        |u: f64| contact_plane_circle.evaluate(u) - n_p_inward * (signed_offset * radius);
     let plane_uv_at = |u: f64| plane_adapter.project_point(p_plane_at(u));
     let section_at = |u: f64, t: f64| CircSection {
         p1: p_plane_at(u),
@@ -2949,6 +2957,250 @@ mod tests {
         assert!(
             (sphere_dist - big_r).abs() < 1e-9,
             "sphere contact must lie on sphere: distance from center = {sphere_dist}, want {big_r}"
+        );
+    }
+
+    /// Concave plane-sphere fillet: a spherical pocket carved out of a plate
+    /// top — fillet rounds the rim where plate top meets pocket wall. Sphere
+    /// face is REVERSED (its topological outward points INTO the pocket air,
+    /// away from plate material).
+    ///
+    /// Geometry differs from the convex post-on-slab case in two ways:
+    /// the rolling ball lives INSIDE the pocket (axially on the +n_p_inward
+    /// side) and is INTERNALLY tangent to the sphere (`R − r` instead of
+    /// `R + r`). The unified `signed_offset = −1` factor flips both.
+    ///
+    /// For sphere center at (0,0,−h)=(0,0,−1), R=2, plate top at z=0 with
+    /// raw outward +z, n_p_inward = −z, h_signed = +1, r=0.3:
+    ///   - R_t² = r_p² − 2r(R − h) = 3 − 0.6 = 2.4
+    ///   - Torus center at z = −r (below plate, in pocket)
+    ///   - Plate contact at radial R_t < r_p (closer to axis than the spine)
+    ///   - Sphere contact at z = -0.176 (below plate, on the LOWER
+    ///     hemisphere where the pocket face actually exists — confirms
+    ///     internal tangency lands on the right portion of sphere)
+    #[test]
+    fn plane_sphere_fillet_concave_emits_torus_with_smaller_major() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r: f64 = 2.0;
+        let h_real: f64 = 1.0;
+        let r_fillet: f64 = 0.3;
+        let r_p_sq = big_r * big_r - h_real * h_real;
+        let r_p = r_p_sq.sqrt();
+
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_p, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_p).unwrap();
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_plate = topo.add_face(Face::new(
+            w1,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        // Sphere centered BELOW plate (pocket); face REVERSED.
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, -h_real), big_r).unwrap();
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_sphere = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Sphere(sphere.clone()),
+        ));
+
+        let n_p_inward = Vec3::new(0.0, 0.0, -1.0);
+        let result = plane_sphere_fillet(
+            n_p_inward,
+            0.0,
+            &sphere,
+            &spine,
+            &topo,
+            r_fillet,
+            face_plate,
+            face_sphere,
+        )
+        .unwrap()
+        .expect("concave plane-sphere fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        let expected_major_sq = r_p_sq - 2.0 * r_fillet * (big_r - h_real);
+        let expected_major = expected_major_sq.sqrt();
+        assert!(
+            (torus.major_radius() - expected_major).abs() < 1e-12,
+            "concave torus major should be √(r_p² − 2r(R−h)) = {expected_major}, got {}",
+            torus.major_radius()
+        );
+        assert!(
+            torus.major_radius() < r_p,
+            "concave torus major must be smaller than spine radius (plate contact moves INWARD), got {} vs r_p={r_p}",
+            torus.major_radius()
+        );
+        assert!(
+            (torus.minor_radius() - r_fillet).abs() < 1e-12,
+            "torus minor should equal fillet radius {r_fillet}, got {}",
+            torus.minor_radius()
+        );
+
+        // Torus center at z = -r (below plate, inside pocket air).
+        let center = torus.center();
+        assert!(
+            (center.z() - (-r_fillet)).abs() < 1e-12,
+            "concave torus center z should be −r_fillet = {}, got {}",
+            -r_fillet,
+            center.z()
+        );
+
+        // Sphere contact must land on the LOWER hemisphere (z<0) — the
+        // actual pocket face. If we'd applied the convex external-tangency
+        // formula by mistake, contact would end up on the upper hemisphere
+        // (z>0) where there's no face.
+        let denom = big_r - r_fillet;
+        let want_sphere = Point3::new(
+            expected_major * big_r / denom,
+            0.0,
+            -r_fillet * (big_r - h_real) / denom,
+        );
+        assert!(
+            want_sphere.z() < 0.0,
+            "concave sphere contact must be on lower hemisphere (z<0), got z={}",
+            want_sphere.z()
+        );
+        let sphere_dist = (want_sphere - Point3::new(0.0, 0.0, -h_real)).length();
+        assert!(
+            (sphere_dist - big_r).abs() < 1e-9,
+            "sphere contact must lie on sphere: distance from center = {sphere_dist}, want {big_r}"
+        );
+
+        // Verify both contacts land on the torus surface.
+        let want_plate = Point3::new(expected_major, 0.0, 0.0);
+        let (u_p, v_p) = ParametricSurface::project_point(&torus, want_plate);
+        let on_torus_plate = ParametricSurface::evaluate(&torus, u_p, v_p);
+        let (u_s, v_s) = ParametricSurface::project_point(&torus, want_sphere);
+        let on_torus_sphere = ParametricSurface::evaluate(&torus, u_s, v_s);
+        assert!(
+            (on_torus_plate - want_plate).length() < 1e-9,
+            "plate contact must lie on torus: project→eval gave {on_torus_plate:?}, want {want_plate:?}"
+        );
+        assert!(
+            (on_torus_sphere - want_sphere).length() < 1e-9,
+            "sphere contact must lie on torus: project→eval gave {on_torus_sphere:?}, want {want_sphere:?}"
+        );
+    }
+
+    /// Concave plane-sphere fillet rejects radii past the spindle bound,
+    /// where `major² = r_p² − 2r(R−h)` would shrink below `r²`. Convex
+    /// must still accept those same radii (its `+2r(R−h)` term grows).
+    #[test]
+    fn plane_sphere_fillet_concave_rejects_spindle_radius() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r: f64 = 2.0;
+        let h_real: f64 = 1.0;
+        let r_p_sq = big_r * big_r - h_real * h_real;
+        let r_p = r_p_sq.sqrt();
+
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_p, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_p).unwrap();
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_plate = topo.add_face(Face::new(
+            w1,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, -h_real), big_r).unwrap();
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_sphere = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Sphere(sphere.clone()),
+        ));
+
+        let n_p_inward = Vec3::new(0.0, 0.0, -1.0);
+
+        // Concave spindle threshold: solving r² + 2r(R−h) > r_p² for the
+        // positive root gives r > √((R−h)² + r_p²) − (R−h).
+        // For R=2, r_p²=3, R−h=1: r > √(1+3)−1 = 1. So r=1.5 must reject.
+        let too_big = 1.5;
+        let result = plane_sphere_fillet(
+            n_p_inward,
+            0.0,
+            &sphere,
+            &spine,
+            &topo,
+            too_big,
+            face_plate,
+            face_sphere,
+        )
+        .unwrap();
+        assert!(
+            result.is_none(),
+            "concave fillet at r={too_big} should reject (spindle / R_t < minor)"
+        );
+
+        // But convex at the same r is still fine: R_t² = r_p² + 2r·3 = 3 + 9 = 12, R_t ≈ 3.46 > r.
+        // Build a mirror topology with face NOT reversed.
+        let mut topo2 = Topology::new();
+        let v2 = topo2.add_vertex(Vertex::new(Point3::new(r_p, 0.0, 0.0), 1e-7));
+        let circle2 =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_p).unwrap();
+        let eid2 = topo2.add_edge(Edge::new(v2, v2, EdgeCurve::Circle(circle2)));
+        let spine2 = Spine::from_single_edge(&topo2, eid2).unwrap();
+        let w1b = topo2.add_wire(Wire::new(vec![OrientedEdge::new(eid2, true)], true).unwrap());
+        let face_plate2 = topo2.add_face(Face::new(
+            w1b,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let sphere2 = SphericalSurface::new(Point3::new(0.0, 0.0, h_real), big_r).unwrap();
+        let w2b = topo2.add_wire(Wire::new(vec![OrientedEdge::new(eid2, false)], true).unwrap());
+        let face_sphere2 =
+            topo2.add_face(Face::new(w2b, vec![], FaceSurface::Sphere(sphere2.clone())));
+        let result_convex = plane_sphere_fillet(
+            n_p_inward,
+            0.0,
+            &sphere2,
+            &spine2,
+            &topo2,
+            too_big,
+            face_plate2,
+            face_sphere2,
+        )
+        .unwrap();
+        assert!(
+            result_convex.is_some(),
+            "convex fillet at the same r={too_big} should still succeed"
         );
     }
 
