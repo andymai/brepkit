@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.68.0](https://github.com/andymai/brepkit/compare/v2.67.0...v2.68.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** cone-cone coaxial analytic fillet (shared axis → torus) ([#594](https://github.com/andymai/brepkit/issues/594)) ([9516a69](https://github.com/andymai/brepkit/commit/9516a694becb6419cd4cd823763fbbe33e6b0637))
+
 ## [2.67.0](https://github.com/andymai/brepkit/compare/v2.66.0...v2.67.0) (2026-05-08)
 
 
