@@ -103,12 +103,11 @@ pub fn try_analytic_fillet(
             sphere_sphere_fillet(s1, s2, spine, topo, radius, face1, face2)
         }
         (FaceSurface::Cylinder(cyl), FaceSurface::Sphere(sph)) => {
-            sphere_cylinder_fillet(sph, cyl, spine, topo, radius, face2, face1).map(|opt| {
-                opt.map(|mut r| {
-                    swap_stripe_sides(&mut r);
-                    r
-                })
-            })
+            let mut result = sphere_cylinder_fillet(sph, cyl, spine, topo, radius, face2, face1)?;
+            if let Some(ref mut r) = result {
+                swap_stripe_sides(r);
+            }
+            Ok(result)
         }
         (FaceSurface::Sphere(sph), FaceSurface::Cylinder(cyl)) => {
             sphere_cylinder_fillet(sph, cyl, spine, topo, radius, face1, face2)
@@ -2611,13 +2610,18 @@ pub fn sphere_cylinder_fillet(
         return Ok(None);
     }
     let p_spine_sample = spine.evaluate(topo, 0.0)?;
-    let sample_axial = (p_spine_sample - c_s).dot(cyl_axis);
-    let spine_sign = if sample_axial >= 0.0 { 1.0 } else { -1.0 };
-    if (sample_axial.abs() - h_s).abs() > 1e-5 {
-        // Spine axial position doesn't match a valid intersection
-        // circle — likely an oblique spine the helper can't handle.
+    let to_sample = p_spine_sample - c_s;
+    let to_sample_v = Vec3::new(to_sample.x(), to_sample.y(), to_sample.z());
+    let sample_axial = to_sample_v.dot(cyl_axis);
+    let sample_radial_v = to_sample_v - cyl_axis * sample_axial;
+    let sample_radial = sample_radial_v.length();
+    // Spine must lie on one of the two intersection circles: at axial
+    // ±h_s and radial r_c from the cylinder axis. Otherwise it's an
+    // oblique slice the helper can't handle.
+    if (sample_axial.abs() - h_s).abs() > tol_lin || (sample_radial - r_c).abs() > tol_lin {
         return Ok(None);
     }
+    let spine_sign = if sample_axial >= 0.0 { 1.0 } else { -1.0 };
 
     // Effective radii.
     let q_s = big_r_s + s_sphere * radius;
@@ -2703,21 +2707,31 @@ pub fn sphere_cylinder_fillet(
     let contact_sph = circle_arc_to_nurbs(&contact_sph_circle, u_start, u_end)?;
     let contact_cyl = circle_arc_to_nurbs(&contact_cyl_circle, u_start, u_end)?;
 
-    // PCurves on each surface.
+    // PCurves on each surface. The sphere's u parameter is measured in
+    // its OWN frame (sph.x_axis / sph.y_axis) — which can differ from
+    // the cylinder frame's `ref_dir` even when their z-axes align.
+    // Project the start sample to recover the sphere's u, then sweep
+    // by the same angular delta `u_end − u_start` (the angular change
+    // is frame-independent on a circle around the shared axis).
     let sample_sph = contact_sph_circle.evaluate(u_start);
-    let v_sph = ParametricSurface::project_point(sph, sample_sph).1;
+    let (u_sph_start, v_sph) = ParametricSurface::project_point(sph, sample_sph);
     let pcurve_sph = Curve2D::Line(Line2D::new(
-        brepkit_math::vec::Point2::new(u_start, v_sph),
+        brepkit_math::vec::Point2::new(u_sph_start, v_sph),
         brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
     )?);
-    // Cylinder pcurve at constant axial-from-cyl-origin offset.
-    let v_cyl = cyl_v_at_point(cyl, contact_cyl_circle.evaluate(u_start));
+    // Cylinder pcurve. Same frame-independence reasoning: derive the
+    // cylinder's own u for the start sample.
+    let sample_cyl = contact_cyl_circle.evaluate(u_start);
+    let u_cyl_start = ParametricSurface::project_point(cyl, sample_cyl).0;
+    let v_cyl = cyl_v_at_point(cyl, sample_cyl);
     let pcurve_cyl = Curve2D::Line(Line2D::new(
-        brepkit_math::vec::Point2::new(u_start, v_cyl),
+        brepkit_math::vec::Point2::new(u_cyl_start, v_cyl),
         brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
     )?);
 
-    // Cross-sections.
+    // Cross-sections. Section uv1/uv2 must use each surface's own u
+    // parameter (matching the pcurves above), not the cylinder-frame
+    // `u` we used for the contact-circle parameterization.
     let p_sph_at = |u: f64| contact_sph_circle.evaluate(u);
     let p_cyl_at = |u: f64| contact_cyl_circle.evaluate(u);
     let section_at = |u: f64, t: f64| CircSection {
@@ -2727,8 +2741,8 @@ pub fn sphere_cylinder_fillet(
             + ref_dir * (major_radius * u.cos())
             + perp_y * (major_radius * u.sin()),
         radius,
-        uv1: (u, v_sph),
-        uv2: (u, v_cyl),
+        uv1: (u_sph_start + (u - u_start), v_sph),
+        uv2: (u_cyl_start + (u - u_start), v_cyl),
         t,
     };
     let section_start = section_at(u_start, 0.0);
