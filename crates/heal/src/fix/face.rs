@@ -69,16 +69,20 @@ pub fn fix_face(
                     .map(brepkit_topology::wire::OrientedEdge::edge),
             );
         }
-        // Resolve any reshape-recorded edge replacements, skip removed
-        // edges, and dedupe (the same edge can appear in outer + inner
-        // wires, and `ReShape::resolve_edge` can collapse multiple
-        // replaced edges onto the same target).
+        // Resolve each edge to its canonical form (post-replacement),
+        // skip removed edges, and dedupe. Critical: we MUST call
+        // SameParameter on the canonical ID, not the original — if
+        // step 1 replaced A with B, `resolve_edge(A) = Some(B)` and
+        // we want SameParameter to operate on B. Plain `retain` would
+        // keep the original A in the vector, calling
+        // `fix_same_parameter_on_face` on a (possibly stale) ID.
         let mut seen = std::collections::HashSet::new();
-        edge_ids.retain(|&eid| match ctx.reshape.resolve_edge(eid) {
-            Some(canonical) => seen.insert(canonical),
-            None => false,
-        });
-        for eid in edge_ids {
+        let canonical_edges: Vec<brepkit_topology::edge::EdgeId> = edge_ids
+            .into_iter()
+            .filter_map(|eid| ctx.reshape.resolve_edge(eid))
+            .filter(|&canon| seen.insert(canon))
+            .collect();
+        for eid in canonical_edges {
             let r = super::edge::fix_same_parameter_on_face(topo, eid, face_id, ctx, config)?;
             result.merge(&r);
         }
