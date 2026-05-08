@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.70.0](https://github.com/andymai/brepkit/compare/v2.69.0...v2.70.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** cone-cone coaxial analytic chamfer (shared axis → cone) ([#598](https://github.com/andymai/brepkit/issues/598)) ([cc5054b](https://github.com/andymai/brepkit/commit/cc5054b8afe9d7907b640ac9f439f5546c43d245))
+
 ## [2.69.0](https://github.com/andymai/brepkit/compare/v2.68.0...v2.69.0) (2026-05-08)
 
 
