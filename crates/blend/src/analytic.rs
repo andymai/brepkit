@@ -9925,11 +9925,12 @@ mod tests {
     /// s2=−1) and (s1=−1, s2=+1). For each, contacts are on different
     /// generator arms relative to the symmetric cases.
     ///
-    /// Verifies emitted contact curves via `evaluate(t_start)` so the
-    /// "lies on cone surface" assertions test the impl, not the test's
-    /// own formula (which would be tautologically true by
-    /// `r = (z + h)·cot β` regardless of sign of `s_i` — see PR #605
-    /// rework for the rationale).
+    /// Reads emitted contact endpoints via `evaluate(t_start)`. Asserts
+    /// each emitted contact matches the analytic prediction
+    /// `(r_spine ∓ s_i·d·cos β_i, z_spine ∓ s_i·d·sin β_i)` (sharper
+    /// than just "lies on cone surface", which a degenerate impl
+    /// returning `(r_spine, z_spine)` for both contacts would
+    /// trivially satisfy via `r = (z − z_apex)·cot β`).
     #[test]
     fn cone_cone_coaxial_chamfer_mixed_emits_cone() {
         use brepkit_math::curves::Circle3D;
@@ -9997,50 +9998,66 @@ mod tests {
             let (t2_start, _) = result.stripe.contact2.domain();
             let c2_point = result.stripe.contact2.evaluate(t2_start);
 
-            // Cone1 surface: r = z · cot β1 (apex at z=0).
-            let cot_b1 = beta1.cos() / beta1.sin();
+            // Compute analytic predictions: contact_i moves along
+            // generator_i from spine by s_i·d, retreating toward apex_i
+            // when s_i=+1 and extending away when s_i=−1.
+            let s1_signed = if reverse_s1 { -1.0_f64 } else { 1.0_f64 };
+            let s2_signed = if reverse_s2 { -1.0_f64 } else { 1.0_f64 };
+            let pred_c1_r = r_spine - s1_signed * d * beta1.cos();
+            let pred_c1_z = z_spine - s1_signed * d * beta1.sin();
+            let pred_c2_r = r_spine + s2_signed * d * beta2.cos();
+            let pred_c2_z = z_spine + s2_signed * d * beta2.sin();
+
             let c1_radial = (c1_point.x().powi(2) + c1_point.y().powi(2)).sqrt();
-            let c1_axial = c1_point.z();
-            let pred_r1 = c1_axial * cot_b1;
-            assert!(
-                (c1_radial - pred_r1).abs() < 1e-9,
-                "({reverse_s1}, {reverse_s2}): emitted contact1 must lie on cone1: \
-                 radial = {c1_radial}, predicted = {pred_r1}"
-            );
-
-            // Cone2 surface: r = (z − h_2) · cot β2 (apex at z=h_2).
-            let cot_b2 = beta2.cos() / beta2.sin();
             let c2_radial = (c2_point.x().powi(2) + c2_point.y().powi(2)).sqrt();
-            let c2_axial = c2_point.z();
-            let pred_r2 = (c2_axial - h_2) * cot_b2;
             assert!(
-                (c2_radial - pred_r2).abs() < 1e-9,
-                "({reverse_s1}, {reverse_s2}): emitted contact2 must lie on cone2: \
-                 radial = {c2_radial}, predicted = {pred_r2}"
+                (c1_radial - pred_c1_r).abs() < 1e-9 && (c1_point.z() - pred_c1_z).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact1 should be at (r={pred_c1_r}, z={pred_c1_z}); \
+                 got (r={c1_radial}, z={})",
+                c1_point.z()
+            );
+            assert!(
+                (c2_radial - pred_c2_r).abs() < 1e-9 && (c2_point.z() - pred_c2_z).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact2 should be at (r={pred_c2_r}, z={pred_c2_z}); \
+                 got (r={c2_radial}, z={})",
+                c2_point.z()
             );
 
-            // Emitted surface is a Cone.
+            // Emitted surface is a Cone with axis = −z (apex ABOVE
+            // contacts). Distinct from the symmetric cases which have
+            // axis = +z: in mixed configs both contacts retreat
+            // /extend along generators with the SAME radial sign
+            // (one s_i flips), so the chord between them slopes the
+            // OPPOSITE way and the line P1−P2 extrapolates to r=0
+            // ABOVE the contacts rather than below.
+            let chamfer_cone = match result.stripe.surface {
+                FaceSurface::Cone(ref c) => c,
+                ref other => panic!(
+                    "({reverse_s1}, {reverse_s2}): expected Cone, got {}",
+                    other.type_tag()
+                ),
+            };
+            let axis = chamfer_cone.axis();
             assert!(
-                matches!(result.stripe.surface, FaceSurface::Cone(_)),
-                "({reverse_s1}, {reverse_s2}): expected Cone, got {}",
-                result.stripe.surface.type_tag()
+                axis.dot(Vec3::new(0.0, 0.0, 1.0)) < -1.0 + 1e-12,
+                "({reverse_s1}, {reverse_s2}): chamfer cone axis should be −z (mixed = apex above), got {axis:?}"
             );
 
-            // Both contacts on the chamfer cone via project_point.
-            if let FaceSurface::Cone(ref cone) = result.stripe.surface {
-                let (u_p, v_p) = ParametricSurface::project_point(cone, c1_point);
-                let on_cone_p1 = ParametricSurface::evaluate(cone, u_p, v_p);
-                assert!(
-                    (on_cone_p1 - c1_point).length() < 1e-9,
-                    "({reverse_s1}, {reverse_s2}): contact1 must lie on chamfer cone"
-                );
-                let (u_q, v_q) = ParametricSurface::project_point(cone, c2_point);
-                let on_cone_p2 = ParametricSurface::evaluate(cone, u_q, v_q);
-                assert!(
-                    (on_cone_p2 - c2_point).length() < 1e-9,
-                    "({reverse_s1}, {reverse_s2}): contact2 must lie on chamfer cone"
-                );
-            }
+            // Both contacts on the chamfer cone via project_point
+            // round-trip (the impl chose them on its own surface, so
+            // this is a regression-check only).
+            let (u_p, v_p) = ParametricSurface::project_point(chamfer_cone, c1_point);
+            let on_cone_p1 = ParametricSurface::evaluate(chamfer_cone, u_p, v_p);
+            assert!(
+                (on_cone_p1 - c1_point).length() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact1 must lie on chamfer cone"
+            );
+            let (u_q, v_q) = ParametricSurface::project_point(chamfer_cone, c2_point);
+            let on_cone_p2 = ParametricSurface::evaluate(chamfer_cone, u_q, v_q);
+            assert!(
+                (on_cone_p2 - c2_point).length() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact2 must lie on chamfer cone"
+            );
         };
 
         run_case(false, true); // (s1=+1, s2=-1)
