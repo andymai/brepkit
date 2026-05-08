@@ -333,6 +333,42 @@ pub fn boolean(
                 }
             }
         }
+
+        // Coaxial-torus merge shortcut: when both A and B classify as Torus
+        // with the same center, axis (parallel/antiparallel), and major
+        // radius, Fuse and Intersect collapse to a single torus by minor
+        // radius algebra. Same family as the concentric-sphere shortcut
+        // above; sidesteps GFA's torus same-domain handling for the
+        // common shared-major case.
+        if let (
+            Some(brepkit_algo::classifier::AnalyticClassifier::Torus {
+                center: ca_center,
+                axis: aa,
+                major_radius: maj_a,
+                minor_radius: min_a,
+            }),
+            Some(brepkit_algo::classifier::AnalyticClassifier::Torus {
+                center: cb_center,
+                axis: ab,
+                major_radius: maj_b,
+                minor_radius: min_b,
+            }),
+        ) = (ca.as_ref(), cb.as_ref())
+        {
+            let coincident = (*ca_center - *cb_center).length() < tol.linear;
+            // Allow either axis orientation — a torus with axis +z is the
+            // same surface as the same torus with axis -z (the small-circle
+            // sweep is symmetric about the central plane).
+            let coaxial = aa.dot(*ab).abs() > 1.0 - tol.angular;
+            let same_major = (maj_a - maj_b).abs() < tol.linear;
+            if coincident && coaxial && same_major {
+                if let Some(result) = coaxial_torus_shortcut(
+                    topo, op, a, b, *ca_center, *aa, *maj_a, *min_a, *min_b, tol,
+                )? {
+                    return Ok(result);
+                }
+            }
+        }
     }
 
     // ── GFA pipeline ─────────────────────────────────────────────────
@@ -867,6 +903,67 @@ fn concentric_sphere_shortcut(
         crate::transform::transform_solid(topo, sphere, &xform)?;
     }
     Ok(Some(sphere))
+}
+
+/// Compute the coaxial-torus boolean for two tori sharing center, axis,
+/// and major radius. Returns `Ok(None)` when the shortcut doesn't apply
+/// (Cut, or degenerate radii / overlap).
+///
+/// Like the concentric-sphere shortcut, the result tessellation density
+/// is inherited from the higher-quality input so a 64-segment input
+/// torus never silently downgrades.
+#[allow(clippy::too_many_arguments)]
+fn coaxial_torus_shortcut(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+    center: Point3,
+    axis: Vec3,
+    major_radius: f64,
+    minor_a: f64,
+    minor_b: f64,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    if minor_a <= tol.linear || minor_b <= tol.linear || major_radius <= tol.linear {
+        return Ok(None);
+    }
+    let minor_result = match op {
+        BooleanOp::Fuse => minor_a.max(minor_b),
+        BooleanOp::Intersect => {
+            // Both minors are guaranteed > tol by the guard above.
+            minor_a.min(minor_b)
+        }
+        // Cut on coaxial tori with shared major produces a hollow torus
+        // (outer + inner small-circle shells) when minor_a > minor_b.
+        // `make_torus` doesn't build that topology — defer to GFA.
+        BooleanOp::Cut => return Ok(None),
+    };
+    if minor_result >= major_radius {
+        // make_torus rejects self-intersecting tori (minor >= major).
+        return Ok(None);
+    }
+
+    // Inherit segment count from the higher-quality input. `make_torus`
+    // accepts a `segments` param controlling u-direction discretization.
+    // We'd ideally extract this from each input solid's vertex count, but
+    // unlike make_sphere torus topology has internal seam vertices that
+    // make the relationship less clean. Approximate by the larger vertex
+    // count.
+    let segments_a = brepkit_topology::explorer::solid_vertices(topo, a)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let segments_b = brepkit_topology::explorer::solid_vertices(topo, b)
+        .map(|v| v.len())
+        .unwrap_or(0);
+    let segments = segments_a.max(segments_b).max(8);
+
+    // Build a fresh torus at the origin then transform to the shared
+    // center / axis. `make_torus` builds with axis = +z by default.
+    let torus = crate::primitives::make_torus(topo, major_radius, minor_result, segments)?;
+    let xform = xform_from_canonical_z(center, axis, tol);
+    crate::transform::transform_solid(topo, torus, &xform)?;
+    Ok(Some(torus))
 }
 
 /// Build the world-frame transform that maps a primitive built in the

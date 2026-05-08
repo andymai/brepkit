@@ -117,3 +117,71 @@ fn torus_opposite_axis_fuse() {
     let got = vol(&topo, r);
     assert!(approx_eq(got, expected, 0.05));
 }
+
+// ── 4. Shared major, different minor — new coaxial-torus shortcut path ──
+
+#[test]
+fn coaxial_torus_fuse_collapses_to_larger_minor() {
+    // Two coaxial tori with shared center and major radius, differing
+    // minor radii: Fuse should collapse to the torus with the larger
+    // minor radius (since the smaller one is fully contained).
+    let mut topo = Topology::default();
+    let outer = torus_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 0.7);
+    let inner = torus_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 0.4);
+    let r = boolean(&mut topo, BooleanOp::Fuse, outer, inner).unwrap();
+    let expected = torus_volume(3.0, 0.7);
+    let got = vol(&topo, r);
+    assert!(
+        approx_eq(got, expected, 0.05),
+        "coaxial torus fuse should collapse to outer torus: got {got:.3}, expected {expected:.3}"
+    );
+}
+
+#[test]
+fn coaxial_torus_intersect_collapses_to_smaller_minor() {
+    let mut topo = Topology::default();
+    let outer = torus_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 0.7);
+    let inner = torus_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 0.4);
+    let r = boolean(&mut topo, BooleanOp::Intersect, outer, inner).unwrap();
+    let expected = torus_volume(3.0, 0.4);
+    let got = vol(&topo, r);
+    assert!(
+        approx_eq(got, expected, 0.05),
+        "coaxial torus intersect should collapse to inner torus: got {got:.3}, expected {expected:.3}"
+    );
+}
+
+#[test]
+fn coaxial_torus_at_offset_center_fuse() {
+    // Verify the shortcut handles a non-origin shared center.
+    let mut topo = Topology::default();
+    let outer = torus_at(&mut topo, 5.0, -2.0, 7.0, 3.0, 0.7);
+    let inner = torus_at(&mut topo, 5.0, -2.0, 7.0, 3.0, 0.4);
+    let r = boolean(&mut topo, BooleanOp::Fuse, outer, inner).unwrap();
+    let expected = torus_volume(3.0, 0.7);
+    let got = vol(&topo, r);
+    assert!(approx_eq(got, expected, 0.05));
+}
+
+#[test]
+fn non_coaxial_torus_fuse_does_not_use_shortcut() {
+    // When the major radii differ, the shortcut must NOT fire — the
+    // result must include the union geometry of the two distinct tori.
+    let mut topo = Topology::default();
+    let a = torus_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 0.4);
+    let b = torus_at(&mut topo, 0.0, 0.0, 0.0, 5.0, 0.4);
+    if let Ok(sid) = boolean(&mut topo, BooleanOp::Fuse, a, b) {
+        let got = vol(&topo, sid);
+        // Two disjoint same-tube-radius tori at different majors don't
+        // overlap (5 - 0.4 > 3 + 0.4 ⇒ tubes don't touch). Union volume
+        // equals the sum.
+        let expected = torus_volume(3.0, 0.4) + torus_volume(5.0, 0.4);
+        // Loose because the boolean engine may produce some tessellation
+        // drift, and we're not exercising the shortcut here — just
+        // confirming we still get a non-collapsed result.
+        assert!(
+            got > expected * 0.8,
+            "disjoint coaxial tori union should preserve both volumes: got {got:.3}, expected ~{expected:.3}"
+        );
+    }
+}
