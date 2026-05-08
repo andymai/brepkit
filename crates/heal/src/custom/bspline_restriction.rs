@@ -8,6 +8,7 @@
 
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
+use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
@@ -59,10 +60,12 @@ pub fn check_bspline_restrictions(
     let mut violations = 0usize;
 
     // ── Check edges ──────────────────────────────────────────────
-    let solid_data = topo.solid(solid_id)?;
-    let shell_id = solid_data.outer_shell();
-    let shell = topo.shell(shell_id)?;
-    let face_ids: Vec<_> = shell.faces().to_vec();
+    // Walk outer + inner (cavity) shells. NURBS degree/segment
+    // restrictions apply to every edge and surface in the solid,
+    // including those bounding cavity volumes — restricting only
+    // the outer shell would silently leave inner-shell NURBS
+    // violations uncounted.
+    let face_ids = solid_faces(topo, solid_id)?;
 
     let mut seen_edges = std::collections::HashSet::new();
 
@@ -196,4 +199,64 @@ fn count_unique_knot_intervals(knots: &[f64], degree: usize) -> usize {
     }
 
     count.max(1)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    use crate::construct::convert_surface::sphere_to_nurbs;
+
+    fn add_nurbs_sphere_face(
+        topo: &mut Topology,
+        center: Point3,
+    ) -> brepkit_topology::face::FaceId {
+        let sphere = SphericalSurface::new(center, 1.0).unwrap();
+        let nurbs = sphere_to_nurbs(&sphere).unwrap();
+        let v = topo.add_vertex(Vertex::new(center, 1e-7));
+        let edge_id = topo.add_edge(Edge::new(v, v, EdgeCurve::Line));
+        let wire = Wire::new(vec![OrientedEdge::new(edge_id, true)], true).unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(wid, vec![], FaceSurface::Nurbs(nurbs)))
+    }
+
+    #[test]
+    fn check_bspline_restrictions_walks_inner_shells() {
+        // The sphere-to-NURBS converter produces a degree-2 surface in
+        // both u and v, so any solid with a NURBS sphere face violates a
+        // limit of `max_degree = 1`. Place such faces on BOTH the outer
+        // and an inner shell, then verify we count violations from both.
+        let mut topo = Topology::new();
+
+        let outer_face = add_nurbs_sphere_face(&mut topo, Point3::new(0.0, 0.0, 0.0));
+        let inner_face = add_nurbs_sphere_face(&mut topo, Point3::new(5.0, 0.0, 0.0));
+
+        let outer_shell = topo.add_shell(Shell::new(vec![outer_face]).unwrap());
+        let inner_shell = topo.add_shell(Shell::new(vec![inner_face]).unwrap());
+        let solid_id = topo.add_solid(Solid::new(outer_shell, vec![inner_shell]));
+
+        let options = RestrictionOptions {
+            max_degree: 1,
+            max_segments: 1000,
+            tolerance: 1e-7,
+        };
+        let violations = check_bspline_restrictions(&topo, solid_id, &options).unwrap();
+
+        // Each face has degree-2 in both u and v → 2 violations per
+        // face × 2 faces = 4 total. Without inner-shell walking we'd
+        // get only 2.
+        assert_eq!(
+            violations, 4,
+            "expected 4 violations (2 per face × 2 faces), got {violations} — inner-shell walking missing?"
+        );
+    }
 }
