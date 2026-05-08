@@ -3,15 +3,15 @@
 //! Provides conversions between analytic surface types and their NURBS
 //! representations.
 //!
-//! * `plane_to_nurbs`, `cylinder_to_nurbs`, `cone_to_nurbs`,
-//!   `sphere_to_nurbs` produce **geometrically exact** rational NURBS
-//!   (the rational forms exactly reproduce the analytic surface
-//!   within floating-point tolerance).
-//! * `torus_to_nurbs` currently delegates to `brepkit-math`'s sampled
-//!   approximation (33 × 9 degree-1×1 grid; chord-height error
-//!   ~0.5% of major radius in u, ~7–10% of minor radius in v). The
-//!   exact rational form (composition of two rational arcs) is a
-//!   tracked improvement.
+//! All conversions produce **geometrically exact** rational NURBS
+//! (the rational forms exactly reproduce the analytic surface within
+//! floating-point tolerance):
+//!
+//! - `plane_to_nurbs`: degree (1, 1), 4 corner CPs.
+//! - `cylinder_to_nurbs`: degree (2, 1), 9 × 2 grid (full revolution × axial).
+//! - `cone_to_nurbs`: degree (2, 1), 9 × 2 grid (full revolution × generator).
+//! - `sphere_to_nurbs`: degree (2, 2), 9 × 5 grid (full revolution × meridian semicircle).
+//! - `torus_to_nurbs`: degree (2, 2), 9 × 9 grid (full revolution × tube circle).
 
 use std::f64::consts::FRAC_1_SQRT_2;
 
@@ -291,19 +291,100 @@ pub fn sphere_to_nurbs(sphere: &SphericalSurface) -> Result<NurbsSurface, HealEr
     Ok(NurbsSurface::new(2, 2, knots_u, knots_v, cps, ws)?)
 }
 
-/// Convert a toroidal surface to a NURBS surface.
+/// Convert a toroidal surface to a **geometrically exact** rational
+/// NURBS surface.
 ///
-/// **Approximate.** Currently delegates to `brepkit-math`'s sampled
-/// representation (33 × 9 grid of points, degree 1 × 1 NURBS — chord
-/// deviation ~7% of minor radius mid-span). The exact rational form
-/// (degree 2 × 2, rotational sweep of a rational tube arc) is a
-/// tracked improvement.
+/// Tensor-product extension of [`sphere_to_nurbs`]: the meridian is
+/// a *full* tube cross-section circle of radius `minor` centered at
+/// `(major, 0)` in the (radial, axial) plane (vs the sphere's
+/// semicircle), so the v-direction uses the same 9-CP four-quarter-arc
+/// rational form as the u-direction. The result is degree `(2, 2)`
+/// with a 9 × 9 control grid.
+///
+/// `domain_u = [0, 2π)` matches the revolution around the major
+/// axis; `domain_v = [0, 2π)` matches the revolution around the tube
+/// cross-section.
+///
+/// As with [`sphere_to_nurbs`], the rational `(u, v) → 3D` mapping
+/// differs from `ToroidalSurface::evaluate(u, v)` (which uses
+/// `sin/cos` directly). Both describe the same 3D torus, but a
+/// fixed `(u, v)` doesn't evaluate to the same point in both.
 ///
 /// # Errors
 ///
 /// Returns [`HealError`] if NURBS construction fails.
 pub fn torus_to_nurbs(torus: &ToroidalSurface) -> Result<NurbsSurface, HealError> {
-    Ok(torus.to_nurbs()?)
+    use std::f64::consts::TAU;
+    let major = torus.major_radius();
+    let minor = torus.minor_radius();
+    let center = torus.center();
+    let x_axis = torus.x_axis();
+    let y_axis = torus.y_axis();
+    let z_axis = torus.z_axis();
+
+    // 9-CP rational unit-circle directions for both u (around major
+    // axis) and v (around tube cross-section). Corner CPs lie outside
+    // the unit circle by a factor of √2; the 1/√2 weight pulls them
+    // back onto the rational arc.
+    let dirs: [(f64, f64); 9] = [
+        (1.0, 0.0),
+        (1.0, 1.0),
+        (0.0, 1.0),
+        (-1.0, 1.0),
+        (-1.0, 0.0),
+        (-1.0, -1.0),
+        (0.0, -1.0),
+        (1.0, -1.0),
+        (1.0, 0.0),
+    ];
+    let circle_weights: [f64; 9] = [
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+    ];
+
+    // Meridian CPs in (radial, axial) plane: a 9-CP rational circle
+    // of radius `minor` centered at (major, 0).
+    let merid: Vec<(f64, f64)> = dirs
+        .iter()
+        .map(|&(dx, dy)| (major + dx * minor, dy * minor))
+        .collect();
+
+    let mut cps: Vec<Vec<Point3>> = Vec::with_capacity(9);
+    let mut ws: Vec<Vec<f64>> = Vec::with_capacity(9);
+    for (i, &(ux, uy)) in dirs.iter().enumerate() {
+        let mut row = Vec::with_capacity(9);
+        let mut wrow = Vec::with_capacity(9);
+        for (j, &(r_merid, z_merid)) in merid.iter().enumerate() {
+            let p = center + x_axis * (ux * r_merid) + y_axis * (uy * r_merid) + z_axis * z_merid;
+            row.push(p);
+            wrow.push(circle_weights[i] * circle_weights[j]);
+        }
+        cps.push(row);
+        ws.push(wrow);
+    }
+
+    let knots = vec![
+        0.0,
+        0.0,
+        0.0,
+        TAU * 0.25,
+        TAU * 0.25,
+        TAU * 0.5,
+        TAU * 0.5,
+        TAU * 0.75,
+        TAU * 0.75,
+        TAU,
+        TAU,
+        TAU,
+    ];
+    Ok(NurbsSurface::new(2, 2, knots.clone(), knots, cps, ws)?)
 }
 
 // ---------------------------------------------------------------------------
@@ -572,17 +653,24 @@ mod tests {
     }
 
     #[test]
-    fn torus_to_nurbs_approximates_torus() {
-        // Sampled NURBS — tolerance reflects chord deviation.
+    fn torus_to_nurbs_evaluates_exactly_on_torus() {
+        // Exact rational torus: every NURBS point must satisfy the
+        // implicit equation (sqrt(x²+y²) − major)² + z² = minor²
+        // within fp tolerance, NOT a chord-deviation bound.
         let center = Point3::new(0.0, 0.0, 0.0);
         let major = 3.0_f64;
         let minor = 0.5_f64;
         let torus = ToroidalSurface::new(center, major, minor).unwrap();
         let surface = torus_to_nurbs(&torus).unwrap();
 
+        // Domain should be [0, 2π) × [0, 2π) — the natural parameter
+        // ranges for the toroidal revolution.
         let u_dom = surface.domain_u();
         let v_dom = surface.domain_v();
-        let n = 12;
+        assert!(u_dom.0.abs() < 1e-12 && (u_dom.1 - std::f64::consts::TAU).abs() < 1e-12);
+        assert!(v_dom.0.abs() < 1e-12 && (v_dom.1 - std::f64::consts::TAU).abs() < 1e-12);
+
+        let n = 16;
         let mut max_err = 0.0_f64;
         for i in 0..=n {
             for j in 0..=n {
@@ -594,12 +682,41 @@ mod tests {
                 max_err = max_err.max((resid - minor).abs());
             }
         }
-        // Chord deviation is ~9–10% of minor radius at v-mid-span
-        // (degree-1 piecewise-linear interpolation across 8 spans of
-        // the cross-section circle).
         assert!(
-            max_err < 0.10 * minor,
-            "max torus tube residual {max_err} exceeds 10% of minor radius"
+            max_err < 1e-9,
+            "exact rational torus residual {max_err} exceeds 1e-9"
+        );
+    }
+
+    #[test]
+    fn torus_to_nurbs_off_origin_evaluates_on_torus() {
+        // Coordinate-and-orientation invariance: torus at off-origin
+        // center must still satisfy its implicit equation in *local*
+        // coordinates.
+        let center = Point3::new(2.0, -1.0, 3.0);
+        let major = 4.0_f64;
+        let minor = 0.7_f64;
+        let torus = ToroidalSurface::new(center, major, minor).unwrap();
+        let surface = torus_to_nurbs(&torus).unwrap();
+        let u_dom = surface.domain_u();
+        let v_dom = surface.domain_v();
+        let n = 12;
+        let mut max_err = 0.0_f64;
+        for i in 0..=n {
+            for j in 0..=n {
+                let u = u_dom.0 + (u_dom.1 - u_dom.0) * f64::from(i) / f64::from(n);
+                let v = v_dom.0 + (v_dom.1 - v_dom.0) * f64::from(j) / f64::from(n);
+                let p = ParametricSurface::evaluate(&surface, u, v);
+                // Project p into local coords: (x_local, y_local, z_local).
+                let local = p - center;
+                let rxy = (local.x().powi(2) + local.y().powi(2)).sqrt();
+                let resid = ((rxy - major).powi(2) + local.z().powi(2)).sqrt();
+                max_err = max_err.max((resid - minor).abs());
+            }
+        }
+        assert!(
+            max_err < 1e-9,
+            "off-origin torus residual {max_err} exceeds 1e-9"
         );
     }
 
