@@ -3085,7 +3085,7 @@ pub fn sphere_sphere_chamfer(
 /// # Returns
 ///
 /// `Ok(None)` (walker fallback) when:
-///   - sphere face is reversed (concave) — separate path,
+///   - either face is reversed (concave / mixed) — separate path,
 ///   - sphere center isn't on the cylinder axis line,
 ///   - sphere parametric z-axis isn't aligned with cyl axis,
 ///   - sphere doesn't enclose cylinder (`r_c ≥ R_s`),
@@ -3207,13 +3207,9 @@ pub fn sphere_cylinder_chamfer(
     let chamfer_apex_pos = c_s + cyl_axis * z_apex;
 
     // Build chamfer cone using the cyl frame as ref dir.
-    let cyl_x = cyl.x_axis();
-    let cyl_y = cyl.y_axis();
-    let ref_dir = if cyl_x.cross(cyl_axis).length() > tol_ang {
-        cyl_x
-    } else {
-        cyl_y
-    };
+    // `cyl.x_axis()` is always perpendicular to `cyl_axis` by
+    // construction, so we don't need a fallback to `cyl_y`.
+    let ref_dir = cyl.x_axis();
     let chamfer_cone =
         ConicalSurface::with_ref_dir(chamfer_apex_pos, chamfer_axis, cone_half_angle, ref_dir)?;
 
@@ -5714,6 +5710,97 @@ mod tests {
         assert!(
             (dist_cyl_radial - r_c).abs() < 1e-9,
             "cylinder contact must have radial r_c: got {dist_cyl_radial}, want {r_c}"
+        );
+    }
+
+    /// `try_analytic_chamfer` with (Cylinder, Sphere) ordering: the
+    /// dispatcher must swap d1/d2 + face1/face2 then `swap_stripe_sides`
+    /// so the caller-facing Stripe is consistent with the original
+    /// surface ordering. Confirms the swap path is wired correctly.
+    #[test]
+    fn try_analytic_chamfer_cylinder_sphere_dispatch_swaps_correctly() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::{CylindricalSurface, SphericalSurface};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r_s: f64 = 3.0;
+        let r_c: f64 = 2.0;
+        let d1_outer: f64 = 0.5; // distance on cylinder (the FIRST surface here)
+        let d2_outer: f64 = 0.4; // distance on sphere (the SECOND surface here)
+        let h_s = (big_r_s * big_r_s - r_c * r_c).sqrt();
+
+        let sph = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r_s).unwrap();
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c)
+                .unwrap();
+
+        let spine_circle =
+            Circle3D::new(Point3::new(0.0, 0.0, h_s), Vec3::new(0.0, 0.0, 1.0), r_c).unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_c, 0.0, h_s), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Note the ordering: cylinder is FIRST, sphere is SECOND.
+        let w_cyl = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face1_cyl = topo.add_face(Face::new(w_cyl, vec![], FaceSurface::Cylinder(cyl.clone())));
+        let w_sph = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face2_sph = topo.add_face(Face::new(w_sph, vec![], FaceSurface::Sphere(sph.clone())));
+
+        // Surface order: surf1 = cylinder, surf2 = sphere.
+        let surf1 = FaceSurface::Cylinder(cyl);
+        let surf2 = FaceSurface::Sphere(sph);
+        let result = try_analytic_chamfer(
+            &surf1, &surf2, &spine, &topo, d1_outer, d2_outer, face1_cyl, face2_sph,
+        )
+        .unwrap()
+        .expect("dispatcher should produce a stripe for (cyl, sphere) chamfer");
+
+        // After swap, the stripe's face1 should be the cylinder face (the
+        // dispatcher's face1) and face2 should be the sphere face. The
+        // direct (Sphere, Cylinder) call would have face1 = sphere; the
+        // swap_stripe_sides flip restores the original ordering.
+        assert_eq!(
+            result.stripe.face1, face1_cyl,
+            "stripe.face1 should match the dispatcher's first face (cylinder), \
+             confirming swap_stripe_sides restored the caller-facing ordering"
+        );
+        assert_eq!(
+            result.stripe.face2, face2_sph,
+            "stripe.face2 should match the dispatcher's second face (sphere)"
+        );
+
+        // The d1/d2 swap means the cylinder gets `d1_outer` and the
+        // sphere gets `d2_outer`. We can verify by predicting the
+        // contacts and confirming they match: cyl axial offset from
+        // spine = d1_outer (going INTO cyl).
+        let z_cyl_pred = h_s - d1_outer;
+        // sphere geodesic δ = d2_outer / R_s
+        let delta = d2_outer / big_r_s;
+        let (sin_d, cos_d) = delta.sin_cos();
+        let r_sph_pred = r_c * cos_d - h_s * sin_d;
+        let z_sph_pred = h_s * cos_d + r_c * sin_d;
+
+        let chamfer_cone = match result.stripe.surface {
+            FaceSurface::Cone(c) => c,
+            other => panic!("expected Cone, got {}", other.type_tag()),
+        };
+        let want_cyl = Point3::new(r_c, 0.0, z_cyl_pred);
+        let want_sph = Point3::new(r_sph_pred, 0.0, z_sph_pred);
+        let (u_p, v_p) = ParametricSurface::project_point(&chamfer_cone, want_cyl);
+        let on_cone_cyl = ParametricSurface::evaluate(&chamfer_cone, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&chamfer_cone, want_sph);
+        let on_cone_sph = ParametricSurface::evaluate(&chamfer_cone, u_q, v_q);
+        assert!(
+            (on_cone_cyl - want_cyl).length() < 1e-9,
+            "cylinder contact (using dispatcher's d1) must lie on cone: {on_cone_cyl:?} vs {want_cyl:?}"
+        );
+        assert!(
+            (on_cone_sph - want_sph).length() < 1e-9,
+            "sphere contact (using dispatcher's d2) must lie on cone: {on_cone_sph:?} vs {want_sph:?}"
         );
     }
 
