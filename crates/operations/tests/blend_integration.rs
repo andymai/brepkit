@@ -334,3 +334,91 @@ fn fillet_cone_bottom_rim_produces_torus() {
         "torus at v=atan2(cos α, -sin α) should touch cone at {want_cone:?}; got {p_cone:?}"
     );
 }
+
+/// Plane-cylinder chamfer on a primitive cylinder's bottom rim. The
+/// analytic dispatcher should produce an exact conical chamfer face
+/// passing through both contact circles at the predicted positions.
+#[test]
+fn chamfer_cylinder_base_circle_produces_cone() {
+    let mut topo = Topology::new();
+    let r_c = 2.0;
+    let height = 4.0;
+    let solid = make_cylinder(&mut topo, r_c, height).unwrap();
+    let d = 0.4;
+
+    let bottom_rim = solid_edges(&topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&eid| {
+            let edge = topo.edge(eid).unwrap();
+            // Pick the Circle edge whose vertex is at z=0 (the bottom rim).
+            matches!(edge.curve(), EdgeCurve::Circle(_))
+                && topo.vertex(edge.start()).unwrap().point().z().abs() < 1e-9
+        })
+        .expect("cylinder bottom rim must exist");
+
+    let result = chamfer_v2(&mut topo, solid, &[bottom_rim], d, d).unwrap();
+    assert!(
+        !result.succeeded.is_empty(),
+        "cylinder rim chamfer must produce at least one stripe; failed = {:?}",
+        result.failed
+    );
+
+    // The new blend face should be a Cone (not a NURBS approximation) when
+    // the analytic chamfer fast path fired.
+    let new_faces = solid_faces(&topo, result.solid).unwrap();
+    let cone = new_faces
+        .iter()
+        .find_map(|&fid| {
+            if let FaceSurface::Cone(c) = topo.face(fid).unwrap().surface() {
+                Some(c.clone())
+            } else {
+                None
+            }
+        })
+        .expect("plane-cylinder chamfer should produce a Cone face via the analytic fast path");
+
+    // Symmetric d1 = d2 = 0.4 ⇒ half-angle = atan2(0.4, 0.4) = π/4 (45°).
+    assert!(
+        (cone.half_angle() - std::f64::consts::FRAC_PI_4).abs() < 1e-12,
+        "cone half-angle should be π/4 for symmetric chamfer; got {}",
+        cone.half_angle()
+    );
+
+    // Verify both contacts are points on the cone:
+    //   - plate contact at radial r_c - d, on the plate (z = 0)
+    //   - cylinder contact at radial r_c, axially d into the material
+    //     (z = +d for cylinder primitive with material at z ≥ 0).
+    // Frame3::from_normal(z=+1) gives x_axis = (0, 1, 0), so the contacts
+    // appear in the +y direction at u = 0.
+    let want_plate = brepkit_math::vec::Point3::new(0.0, r_c - d, 0.0);
+    let want_cyl = brepkit_math::vec::Point3::new(0.0, r_c, d);
+    // For each predicted contact, find the cone (u, v) and verify the cone
+    // evaluates to the same point. We solve analytically:
+    //   - At cone u=0 the radial axis is +y (matches Frame3 derivation),
+    //     so position(0, v) = apex + v · (cos(α)·y + sin(α)·cone_axis).
+    //   - cone_axis = -axial_into_material = -z (away from cylinder material).
+    //   - apex axial = +d2 · (r_c - d1) / d1 (above the plate, into material).
+    //     With d1 = d2 = d: apex_axial = r_c - d.
+    let alpha = std::f64::consts::FRAC_PI_4;
+    // (apex_axial = (r_c - d) · d / d = r_c - d for symmetric chamfer)
+    // For plate contact at radial = r_c - d, z = 0:
+    //   v_plate · cos(α) = r_c - d (radial component)
+    //   v_plate · sin(α) = -apex_axial = -(r_c - d) (axial drop from apex to plate)
+    //   ⇒ v_plate = (r_c - d) / cos(α). For α=π/4: v_plate = (r_c - d) · √2.
+    let v_plate = (r_c - d) / alpha.cos();
+    let p_plate = ParametricSurface::evaluate(&cone, 0.0, v_plate);
+    assert!(
+        (p_plate - want_plate).length() < 1e-9,
+        "cone at v={v_plate:.6} should touch plate at {want_plate:?}; got {p_plate:?}"
+    );
+    // For cylinder contact at radial = r_c, z = d:
+    //   v_cyl · cos(α) = r_c
+    //   apex_axial - v_cyl · sin(α) = d  (cone z = apex_axial - v · sin(α))
+    let v_cyl = r_c / alpha.cos();
+    let p_cyl = ParametricSurface::evaluate(&cone, 0.0, v_cyl);
+    assert!(
+        (p_cyl - want_cyl).length() < 1e-9,
+        "cone at v={v_cyl:.6} should touch cylinder at {want_cyl:?}; got {p_cyl:?}"
+    );
+}

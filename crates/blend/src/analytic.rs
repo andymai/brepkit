@@ -159,6 +159,19 @@ pub fn try_analytic_chamfer(
             let result = plane_plane_chamfer(spine, topo, *n1, *n2, d1, d2, face1, face2)?;
             Ok(Some(result))
         }
+        (FaceSurface::Plane { normal, d }, FaceSurface::Cylinder(cyl)) => {
+            plane_cylinder_chamfer(*normal, *d, cyl, spine, topo, d1, d2, face1, face2)
+        }
+        (FaceSurface::Cylinder(cyl), FaceSurface::Plane { normal, d }) => {
+            // Plane on side 2: swap d1↔d2 (so they refer to the right surface
+            // in the canonical helper ordering) and swap result sides back.
+            let mut result =
+                plane_cylinder_chamfer(*normal, *d, cyl, spine, topo, d2, d1, face2, face1)?;
+            if let Some(ref mut r) = result {
+                swap_stripe_sides(r);
+            }
+            Ok(result)
+        }
         (
             FaceSurface::Plane { .. }
             | FaceSurface::Cylinder(_)
@@ -166,19 +179,18 @@ pub fn try_analytic_chamfer(
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_)
             | FaceSurface::Nurbs(_),
-            FaceSurface::Cylinder(_)
-            | FaceSurface::Cone(_)
+            FaceSurface::Cone(_)
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_)
             | FaceSurface::Nurbs(_),
         )
+        | (FaceSurface::Cylinder(_), FaceSurface::Cylinder(_))
         | (
-            FaceSurface::Cylinder(_)
-            | FaceSurface::Cone(_)
+            FaceSurface::Cone(_)
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_)
             | FaceSurface::Nurbs(_),
-            FaceSurface::Plane { .. },
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_),
         ) => Ok(None),
     }
 }
@@ -709,6 +721,211 @@ fn cyl_v_at_point(cyl: &brepkit_math::surfaces::CylindricalSurface, p: Point3) -
     let axis = cyl.axis();
     let to_p = p - cyl.origin();
     axis.dot(to_p)
+}
+
+/// Chamfer between a plane and a cylinder whose axis is parallel to the
+/// plane normal, for the convex bottom-rim case.
+///
+/// `d1` is the chamfer distance on the plane (radially inward from the
+/// spine on the plate face); `d2` is the distance on the cylinder lateral
+/// (axially into the material from the spine).
+///
+/// # Geometry
+///
+/// The chamfer surface is a frustum of a cone:
+///   - axis = cylinder axis,
+///   - half-angle `α = atan2(d1, d2)` (45° for symmetric `d1 = d2`),
+///   - apex at the cylinder axis, axial offset `(r_c - d1)·d2/d1` *into*
+///     the cylinder material (so the cone "grows" as `v` increases out
+///     toward the spine and beyond).
+///   - contact 1 on the plate: circle at radial `r_c - d1`, on the plate;
+///   - contact 2 on the cylinder lateral: circle at radial `r_c`, axially
+///     offset `d2` into the material.
+///
+/// Both contacts are circles around the cylinder axis. The chamfer face
+/// connects them with a flat cone (ruled surface).
+///
+/// Returns `None` (walker fallback) when:
+///   - the cylinder axis isn't parallel to the plane normal,
+///   - the cylinder face is reversed (concave / hole),
+///   - either chamfer distance is non-positive or `d1 >= r_c` (would
+///     pass through the cylinder axis), or
+///   - the spine is too short.
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or NURBS construction fails.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn plane_cylinder_chamfer(
+    n_p_inward: Vec3,
+    d_plane: f64,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+    spine: &Spine,
+    topo: &Topology,
+    d1: f64,
+    d2: f64,
+    face_plane: FaceId,
+    face_cyl: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    use brepkit_math::surfaces::ConicalSurface;
+    use std::f64::consts::PI;
+
+    let tol_ang = 1e-9;
+    let tol_lin = 1e-9;
+
+    // 1) Cylinder axis must be parallel (up to sign) to the inward plane
+    //    normal — perpendicular plane-cylinder configuration.
+    let axis_c = cyl.axis();
+    let n_dot = axis_c.dot(n_p_inward);
+    if n_dot.abs() < 1.0 - tol_ang {
+        return Ok(None);
+    }
+
+    // 2) Concave (cylinder face reversed = hole through plate) needs a
+    //    different chamfer geometry; defer.
+    if topo.face(face_cyl)?.is_reversed() {
+        return Ok(None);
+    }
+
+    // 3) Both distances must be positive, and d1 must leave a non-negative
+    //    radius on the plate (otherwise the contact circle would have to
+    //    pass through the cylinder axis or beyond).
+    let r_c = cyl.radius();
+    if d1 <= tol_lin || d2 <= tol_lin {
+        return Ok(None);
+    }
+    if d1 >= r_c {
+        return Ok(None);
+    }
+
+    // 4) Project the cylinder origin onto the plate.
+    let o_c = cyl.origin();
+    let step = d_plane - n_p_inward.dot(Vec3::new(o_c.x(), o_c.y(), o_c.z()));
+    let p_axis_on_plane = o_c + n_p_inward * step;
+
+    // 5) Determine the "into the cylinder material" direction along the
+    //    axis. For convex cylinder primitive bottom rim with bottom-cap
+    //    inward = +n_p_inward and cylinder material on the +n_p_inward
+    //    side, "into material" is +n_p_inward. We take the axial direction
+    //    that points into material.
+    let axial_into_material = n_p_inward;
+
+    // 6) Spine: detect closed-circle case so we can spin a full 2π.
+    let edges = spine.edges();
+    let is_closed_spine = if edges.len() == 1 {
+        let e = topo.edge(edges[0])?;
+        e.start() == e.end()
+    } else {
+        false
+    };
+    let spine_len = spine.length();
+    if !is_closed_spine && spine_len < tol_lin {
+        return Ok(None);
+    }
+
+    // 7) Build the chamfer cone.
+    //    Axis direction (= direction the cone OPENS): goes from apex
+    //    outward. Apex is at axial offset `apex_axial_below_plate` *into*
+    //    the cylinder material (= along `+axial_into_material`), and the
+    //    cone opens outward toward the plate (decreasing axial).
+    let half_angle = d1.atan2(d2);
+    // Apex axial position (relative to plate, in axial_into_material units):
+    //   z_apex = (r_c - d1) · d2 / d1, into the material.
+    let apex_offset = (r_c - d1) * d2 / d1;
+    let apex_pos = p_axis_on_plane + axial_into_material * apex_offset;
+    // The cone opens toward the plate (away from axial_into_material).
+    let cone_axis = -axial_into_material;
+    let cyl_x = cyl.x_axis();
+    let cone = ConicalSurface::with_ref_dir(apex_pos, cone_axis, half_angle, cyl_x)?;
+
+    // 8) 3D contact curves: both are circles around the cylinder axis.
+    let cone_y = cyl.y_axis();
+    let contact_plane_circle = brepkit_math::curves::Circle3D::with_axes(
+        p_axis_on_plane,
+        axis_c,
+        r_c - d1,
+        cyl_x,
+        cone_y,
+    )?;
+    let cyl_contact_center = p_axis_on_plane + axial_into_material * d2;
+    let contact_cyl_circle =
+        brepkit_math::curves::Circle3D::with_axes(cyl_contact_center, axis_c, r_c, cyl_x, cone_y)?;
+
+    // 9) Spine angular range, derived from the cylinder's u-parameter
+    //    projection of the endpoints.
+    let p_spine_start = spine.evaluate(topo, 0.0)?;
+    let u_start = ParametricSurface::project_point(cyl, p_spine_start).0;
+    let u_end = if is_closed_spine {
+        u_start + 2.0 * PI
+    } else {
+        let p_spine_end = spine.evaluate(topo, spine_len)?;
+        let u_end_raw = ParametricSurface::project_point(cyl, p_spine_end).0;
+        if u_end_raw > u_start {
+            u_end_raw
+        } else {
+            u_end_raw + 2.0 * PI
+        }
+    };
+
+    let contact_plane = circle_arc_to_nurbs(&contact_plane_circle, u_start, u_end)?;
+    let contact_cyl = circle_arc_to_nurbs(&contact_cyl_circle, u_start, u_end)?;
+
+    // 10) PCurves.
+    let plane_adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n_p_inward, d_plane);
+    let pcurve_plane = {
+        let (cu, cv) = plane_adapter.project_point(p_axis_on_plane);
+        Curve2D::Circle(brepkit_math::curves2d::Circle2D::new(
+            brepkit_math::vec::Point2::new(cu, cv),
+            r_c - d1,
+        )?)
+    };
+    let v_cyl = cyl_v_at_point(cyl, cyl_contact_center);
+    let pcurve_cyl = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_start, v_cyl),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+
+    // 11) Cross-sections at the spine endpoints. The chamfer "section"
+    //     is the straight segment between the two contacts (no rolling
+    //     ball). Use the segment midpoint as the section center and the
+    //     half-length as the section radius — `CircSection` is shaped for
+    //     fillets but the field semantics still describe the chord.
+    let p_plane_at = |u: f64| contact_plane_circle.evaluate(u);
+    let p_cyl_at = |u: f64| contact_cyl_circle.evaluate(u);
+    let plane_uv_at = |u: f64| plane_adapter.project_point(p_plane_at(u));
+    let section_at = |u: f64, t: f64| {
+        let p1 = p_plane_at(u);
+        let p2 = p_cyl_at(u);
+        let mid = midpoint_3d(p1, p2);
+        CircSection {
+            p1,
+            p2,
+            center: mid,
+            radius: (p1 - p2).length() * 0.5,
+            uv1: plane_uv_at(u),
+            uv2: (u, v_cyl),
+            t,
+        }
+    };
+    let section_start = section_at(u_start, 0.0);
+    let section_end = section_at(u_end, 1.0);
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Cone(cone),
+        pcurve1: pcurve_plane,
+        pcurve2: pcurve_cyl,
+        contact1: contact_plane,
+        contact2: contact_cyl,
+        face1: face_plane,
+        face2: face_cyl,
+        sections: vec![section_start, section_end],
+    };
+
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
 }
 
 /// Fillet between a plane and a cone whose axis is parallel to the plane
