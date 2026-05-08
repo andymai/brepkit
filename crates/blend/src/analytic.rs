@@ -1364,7 +1364,15 @@ pub fn plane_cone_chamfer(
     }
     let signed_offset: f64 = if n_dot > 0.0 { 1.0 } else { -1.0 };
     let concave = signed_offset < 0.0;
-    debug_assert_eq!(concave, topo.face(face_cone)?.is_reversed());
+    // Cross-check geometric sign against the topological flag — if a
+    // caller hands us a non-reversed face whose cone axis happens to be
+    // antiparallel to the plate normal (or vice versa), the geometry-only
+    // detection above would silently apply the wrong formula. Hard-bail
+    // (release + debug) on disagreement so callers fall back to the
+    // walker rather than getting a malformed analytic stripe.
+    if concave != topo.face(face_cone)?.is_reversed() {
+        return Ok(None);
+    }
 
     // 2) Validate half-angle and chamfer distances.
     let alpha = cone.half_angle();
