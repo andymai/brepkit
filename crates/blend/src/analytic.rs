@@ -9537,10 +9537,20 @@ mod tests {
     /// ring (one external + one internal contact) rather than aligned
     /// with it.
     ///
-    /// Verifies emitted torus major satisfies the closed-form formula
-    /// and that contacts read from emitted curves via `evaluate(t_start)`
-    /// satisfy each cone's tangency equation `R_t · sin β_i − (z_b − z_apex_i) · cos β_i = s_i · r`
-    /// with the correct sign of `r`.
+    /// Verifies emitted torus major/minor match the closed-form
+    /// solution and that contacts read from emitted curves via
+    /// `evaluate(t_start)` are positioned at the predicted offset from
+    /// the torus center along each cone's outward surface normal:
+    ///
+    /// ```text
+    /// c_i = (R_t − s_i · r · sin β_i, z_b + s_i · r · cos β_i)
+    /// ```
+    ///
+    /// The position-on-cone check (predicted (r, z) from `s_i`) is
+    /// stronger than a "lies on cone" tautology — for mixed configs
+    /// it independently confirms the implementation chose the contact
+    /// on the correct side of the spine ring (one external + one
+    /// internal tangency).
     #[test]
     fn cone_cone_coaxial_fillet_mixed_emits_torus() {
         use brepkit_math::curves::Circle3D;
@@ -9631,39 +9641,38 @@ mod tests {
                 torus.minor_radius()
             );
 
-            // Tangency check using closed form.
-            let tang1 = expected_major * beta1.sin() - expected_z_b * beta1.cos();
-            let tang2 = expected_major * beta2.sin() - (expected_z_b - h_2) * beta2.cos();
-            assert!(
-                (tang1 - s1 * r_fillet).abs() < 1e-9,
-                "({reverse_s1}, {reverse_s2}): cone1 tangency: {tang1} should equal s1·r = {}",
-                s1 * r_fillet
-            );
-            assert!(
-                (tang2 - s2 * r_fillet).abs() < 1e-9,
-                "({reverse_s1}, {reverse_s2}): cone2 tangency: {tang2} should equal s2·r = {}",
-                s2 * r_fillet
-            );
-
-            // Read EMITTED contact endpoints — c_i is on cone_i.
+            // Read EMITTED contact endpoints from the stripe, then
+            // assert they sit at the predicted (r, z) on each cone:
+            //   c_i = (R_t − s_i·r·sin β_i, z_b + s_i·r·cos β_i)
+            // Position-on-cone is stronger than "lies on cone" — for
+            // mixed configs the contact must be on the *correct side*
+            // of the spine ring (s1=+1 retreats toward apex_1; s2=−1
+            // extends from apex_2), and asserting predicted (r, z)
+            // catches that without becoming tautological with the
+            // major/minor checks above.
             let (t1_start, _) = result.stripe.contact1.domain();
             let c1_point = result.stripe.contact1.evaluate(t1_start);
             let (t2_start, _) = result.stripe.contact2.domain();
             let c2_point = result.stripe.contact2.evaluate(t2_start);
 
-            let cot_b1 = beta1.cos() / beta1.sin();
-            let cot_b2 = beta2.cos() / beta2.sin();
+            let pred_c1_r = expected_major - s1 * r_fillet * beta1.sin();
+            let pred_c1_z = expected_z_b + s1 * r_fillet * beta1.cos();
+            let pred_c2_r = expected_major - s2 * r_fillet * beta2.sin();
+            let pred_c2_z = expected_z_b + s2 * r_fillet * beta2.cos();
+
             let c1_radial = (c1_point.x().powi(2) + c1_point.y().powi(2)).sqrt();
             let c2_radial = (c2_point.x().powi(2) + c2_point.y().powi(2)).sqrt();
-            let pred_c1_radial = c1_point.z() * cot_b1;
-            let pred_c2_radial = (c2_point.z() - h_2) * cot_b2;
             assert!(
-                (c1_radial - pred_c1_radial).abs() < 1e-9,
-                "({reverse_s1}, {reverse_s2}): contact1 must lie on cone1: predicted r={pred_c1_radial}, got {c1_radial}"
+                (c1_radial - pred_c1_r).abs() < 1e-9 && (c1_point.z() - pred_c1_z).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact1 should be at \
+                 (r={pred_c1_r}, z={pred_c1_z}); got (r={c1_radial}, z={})",
+                c1_point.z()
             );
             assert!(
-                (c2_radial - pred_c2_radial).abs() < 1e-9,
-                "({reverse_s1}, {reverse_s2}): contact2 must lie on cone2: predicted r={pred_c2_radial}, got {c2_radial}"
+                (c2_radial - pred_c2_r).abs() < 1e-9 && (c2_point.z() - pred_c2_z).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact2 should be at \
+                 (r={pred_c2_r}, z={pred_c2_z}); got (r={c2_radial}, z={})",
+                c2_point.z()
             );
         };
 
