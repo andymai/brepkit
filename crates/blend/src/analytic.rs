@@ -993,37 +993,37 @@ pub fn plane_cylinder_chamfer(
 /// At the spine point, the dihedral between outward surface normals is
 /// `π - α` (where α is the cone half-angle), so the fillet wedge half-angle
 /// is `α/2` and the rolling-ball center sits at distance `r/sin(α/2)`
-/// along the outward bisector `cos(α/2)·radial - sin(α/2)·n_p_inward`.
-/// The ball center lands at radial `r_p + r·cot(α/2)` and offset
-/// `r·(-n_p_inward)` from the plate (one fillet radius in the
-/// empty-wedge direction).
+/// along the outward bisector `cos(α/2)·radial - sin(α/2)·n_p_inward`
+/// (convex) or `-cos(α/2)·radial - sin(α/2)·n_p_inward` (concave).
 ///
-/// The fillet surface is a torus:
-///   - axis = `-n_p_inward` (= `+axis_c` for the regular-frustum case
-///     where `axis_c · n_p_inward = -1`); with this convention `sin v`
-///     points away from the plate, so `sin v = -1` is what pulls the
-///     tube point back toward the plate. Plate contact lands at
-///     `v = 3π/2`; cone contact at `v = atan2(cos α, -sin α)`.
-///   - center at the cone-axis projection onto the plate, offset by
-///     `-r·n_p_inward`;
-///   - major radius `r_p + r·cot(α/2)`,
-///   - minor radius `r`;
-///   - active tube parameter `v ∈ [atan2(cos α, -sin α), 3π/2]`,
-///     width `π - α`.
+/// Convex / concave is detected via `face_cone.is_reversed()`. The two
+/// cases share torus center placement (one fillet radius "below" the
+/// plate along `-n_p_inward`), minor radius (`r`), and the cone axis
+/// direction. They differ only in the major radius:
+///   - Convex (face_cone not reversed): `major = r_p + r·cot(α/2)`,
+///     plate contact at radial `r_p + r·cot(α/2) - r·sin α` outside the
+///     spine. Geometric "post-on-plate" frustum bottom rim.
+///   - Concave (face_cone reversed): `major = r_p − r·cot(α/2)`,
+///     plate contact INSIDE the spine. Geometric "tapered hole through
+///     plate" — the rolling ball lives inside the hole and above the
+///     plate material.
 ///
 /// At α = π/2 (degenerate "cone" approaching a cylinder), `cot(π/4) = 1`
-/// so major reduces to `r_p + r` and the active range becomes
-/// `[π, 3π/2]` — exactly the plane-cylinder result.
+/// so the formulas collapse to `major = r_p ± r`, matching
+/// `plane_cylinder_fillet`'s convex/concave branches.
 ///
 /// Returns `None` when:
 ///   - the cone axis isn't parallel to the plane normal,
 ///   - `axis_c · n_p_inward > -1 + tol_ang` (cone opens *away* from the
 ///     plate — inverted-frustum or cup geometry; the major-radius formula
 ///     differs and is left to the walker),
-///   - the cone face is reversed (concave / "tapered hole" geometry),
 ///   - the half-angle α is too close to 0 or π/2 (degenerate),
-///   - the spine is too short, or
-///   - the apex is on the plate-material side.
+///   - the spine is too short,
+///   - the apex is on the plate-material side, or
+///   - the radius produces a degenerate or self-intersecting torus
+///     (concave: `r·cot(α/2) ≥ r_p` makes major non-positive, and
+///     `r·(cot(α/2) + 1) ≥ r_p` produces a spindle torus; convex always
+///     non-spindle since `r·cot(α/2) ≥ 0`).
 ///
 /// # Errors
 ///
@@ -1045,21 +1045,28 @@ pub fn plane_cone_fillet(
     let tol_ang = 1e-9;
     let tol_lin = 1e-9;
 
-    // 1) Cone axis must be antiparallel to the inward plane normal — this
-    //    means the cone opens TOWARD the plate (regular frustum bottom-rim
-    //    geometry). Inverted frustums (axes parallel) need a different
-    //    formula and are deferred to the walker.
+    // 1) Cone axis must be parallel (up to sign) to the inward plane
+    //    normal — both cases boil down to "axis points along the plate
+    //    normal." The two valid configurations differ in sign:
+    //       - Convex (post on plate): apex sits on the same side of the
+    //         plate as the cone material, so `axis_c · n_p_inward = -1`.
+    //       - Concave (tapered hole): apex sits on the empty-wedge side
+    //         (across the plate from the cone material), so
+    //         `axis_c · n_p_inward = +1`.
+    //    Either way `|n_dot| ≈ 1` must hold; the sign distinguishes the
+    //    two cases and is cross-checked against `face_cone.is_reversed()`
+    //    below.
     let axis_c = cone.axis();
     let n_dot = axis_c.dot(n_p_inward);
-    if n_dot > -1.0 + tol_ang {
+    if n_dot.abs() < 1.0 - tol_ang {
         return Ok(None);
     }
 
-    // 2) Concave (cone face reversed = "tapered hole through plate") needs a
-    //    different torus quadrant and major-radius formula; defer.
-    if topo.face(face_cone)?.is_reversed() {
-        return Ok(None);
-    }
+    // 2) Detect concave ("tapered hole through plate") vs convex ("post on
+    //    plate") via the cone face's `reversed` flag. Both cases share
+    //    torus-center placement and tube structure; they differ only in
+    //    the sign of the `r·cot(α/2)` major-radius term.
+    let concave = topo.face(face_cone)?.is_reversed();
 
     // 3) Reject degenerate half-angles. Too close to 0 → flat disk; too
     //    close to π/2 → cylinder limit (callers should hit
@@ -1072,29 +1079,50 @@ pub fn plane_cone_fillet(
     let half_alpha = alpha * 0.5;
     let cot_half = half_alpha.tan().recip();
 
-    // 4) Apex projection onto the plate. `step` is the signed distance you
-    //    move along `n_p_inward` from the apex to land on the plate. For a
-    //    regular-frustum bottom-rim geometry, the apex lies on the
-    //    `+n_p_inward` side (above the plate material in the test setup),
-    //    so `step` is negative. Reject anything else (apex on the plate or
-    //    on the inverted side — the formulas below assume the
-    //    bottom-rim configuration).
+    // 4) Apex projection onto the plate. `step` is the signed distance
+    //    you move along `n_p_inward` from the apex to land on the plate.
+    //    The valid sign depends on the case:
+    //       - Convex: apex on the material side ⇒ `step < 0` (you must
+    //         move along `+n_p_inward` to reach the plate, but `step` is
+    //         the projection sign which lands negative under
+    //         `d_plane − n_p_inward·apex`).
+    //       - Concave: apex on the empty-wedge side ⇒ `step > 0`.
+    //    Reject `step ≈ 0` (apex on the plate ⇒ degenerate `r_p = 0`).
     let apex = cone.apex();
     let step = d_plane - n_p_inward.dot(Vec3::new(apex.x(), apex.y(), apex.z()));
-    if step >= -tol_lin {
+    if step.abs() <= tol_lin {
         return Ok(None);
     }
-    let apex_height = -step;
+    // Cross-check the case against the apex-side: convex requires `step < 0`
+    // and concave requires `step > 0`. If they disagree the topology is
+    // not the regular-frustum geometry the formulas below assume.
+    if (concave && step <= 0.0) || (!concave && step >= 0.0) {
+        return Ok(None);
+    }
+    let apex_height = step.abs();
     let p_axis_on_plane = apex + n_p_inward * step;
 
     // 5) Spine radius `r_p = apex_height · cot(α)` (geometric: the cone-plate
     //    intersection circle has this radius).
     let r_p = apex_height * (alpha.cos() / alpha.sin());
 
-    // 6) Major / minor radii and torus center.
-    let major_radius = r_p + radius * cot_half;
+    // 6) Major / minor radii and torus center. Convex adds `r·cot(α/2)`
+    //    to the spine radius; concave subtracts it. Concave additionally
+    //    needs `r·(cot(α/2) + 1) ≤ r_p` to keep `major ≥ minor`
+    //    (otherwise the construction becomes a spindle torus, which is
+    //    invalid as a fillet surface). The convex case is always
+    //    non-spindle since `r·cot(α/2) ≥ 0`.
+    let signed_offset = if concave { -1.0 } else { 1.0 };
+    let major_radius = r_p + signed_offset * radius * cot_half;
     let minor_radius = radius;
     if major_radius <= tol_lin {
+        return Ok(None);
+    }
+    // `major - minor < tol` rejects both the spindle regime AND the
+    // horn-torus boundary (`major == minor`, where the tube touches the
+    // axis at a degenerate point). Tolerance lets us catch the boundary
+    // even when floating-point rounding leaves the difference at +ε.
+    if concave && major_radius - minor_radius < tol_lin {
         return Ok(None);
     }
     // Torus center sits one fillet radius below the plate (in the
@@ -1157,16 +1185,20 @@ pub fn plane_cone_fillet(
     // 10) 3D contact curves.
     //     Plate contact: circle of radius `major_radius` around the cone
     //       axis, on the plate.
-    //     Cone contact: circle of radius `r_p + r·cot(α/2) - r·sin(α)`
-    //       at axial offset `-r·(1 + cos(α))` (on the analytical cone
-    //       surface, extended below the frustum's base).
+    //     Cone contact: circle on the analytical cone surface; for
+    //       convex it lands BELOW the plate at axial `-r·(1 + cos α)`
+    //       (on the cone's analytical extension below the frustum), and
+    //       for concave ABOVE the plate at `+r·(1 + cos α)` (between
+    //       apex and plate). The axial direction toward both is the
+    //       empty-wedge direction `-n_p_inward`. The radial offset from
+    //       `major_radius` to the cone-side contact also flips sign:
+    //       `-r·sin α` for convex (contact tucks INSIDE the spine on
+    //       the cone-extension side) and `+r·sin α` for concave (contact
+    //       hangs OUTSIDE the inner-hole spine on the cone above).
     let contact_plane_radius = major_radius;
-    let contact_cone_radius = (major_radius - radius * alpha.sin()).max(tol_lin);
-    let contact_cone_axial_offset = -radius * (1.0 + alpha.cos());
-    let cone_contact_center = p_axis_on_plane + (-n_p_inward) * (-contact_cone_axial_offset);
-    // Equivalently: p_axis_on_plane + n_p_inward * (radius * (1.0 + cos(α)))
-    // — i.e. *into* plate material. Written via `-n_p_inward * |offset|`
-    // for symmetry with the torus_center formula above.
+    let contact_cone_radius = (major_radius - signed_offset * radius * alpha.sin()).max(tol_lin);
+    let contact_cone_axial_magnitude = radius * (1.0 + alpha.cos());
+    let cone_contact_center = p_axis_on_plane + (-n_p_inward) * contact_cone_axial_magnitude;
 
     let contact_plane_circle = brepkit_math::curves::Circle3D::with_axes(
         p_axis_on_plane,
@@ -2152,6 +2184,201 @@ mod tests {
         assert!(
             result_convex.is_some(),
             "convex fillet should accept r in (r_c/2, r_c)"
+        );
+    }
+
+    /// Concave plane-cone fillet ("tapered hole through plate") emits a
+    /// torus with `major = r_p − r·cot(α/2)` (the convex case is
+    /// `r_p + r·cot(α/2)`). Direct helper test mirroring the
+    /// plane-cylinder concave coverage.
+    #[test]
+    fn plane_cone_fillet_concave_emits_torus_with_smaller_major() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        // Apex 6 units above the plate, half-angle α = atan2(6, 3) so the
+        // cone-plate intersection (the spine) lands at radius r_p = 3.
+        let alpha = 6.0_f64.atan2(3.0);
+        let r_p = 3.0;
+        let r_fillet = 0.3;
+
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_p, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_p).unwrap();
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Plate face: outward = +z (top of plate, plate material below).
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_plate = topo.add_face(Face::new(
+            w1,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        // Cone face REVERSED — wall of a tapered hole, with topological
+        // outward pointing into the empty hole.
+        let cone_surface =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 6.0), Vec3::new(0.0, 0.0, -1.0), alpha)
+                .unwrap();
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_cone = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cone(cone_surface.clone()),
+        ));
+
+        // Plate top has outward = +z; after `orient_plane_surface` the
+        // helper sees inward = -z.
+        let n_p_inward = Vec3::new(0.0, 0.0, -1.0);
+
+        let result = plane_cone_fillet(
+            n_p_inward,
+            0.0,
+            &cone_surface,
+            &spine,
+            &topo,
+            r_fillet,
+            face_plate,
+            face_cone,
+        )
+        .unwrap()
+        .expect("concave plane-cone fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        // Expected: major = r_p - r·cot(α/2). For α ≈ 1.107 (atan2(6,3)),
+        // cot(α/2) ≈ 1.618. So major ≈ 3 - 0.485 = 2.515.
+        let expected_major = r_p - r_fillet * (alpha * 0.5).tan().recip();
+        assert!(
+            (torus.minor_radius() - r_fillet).abs() < 1e-9,
+            "torus minor should equal fillet radius {r_fillet}, got {}",
+            torus.minor_radius()
+        );
+        assert!(
+            (torus.major_radius() - expected_major).abs() < 1e-9,
+            "concave torus major should be r_p − r·cot(α/2) ≈ {expected_major:.6}, got {}",
+            torus.major_radius()
+        );
+
+        // Center sits at +r ABOVE the plate (in the empty wedge direction
+        // = -n_p_inward = +z), distinguishing concave from convex
+        // (which has center at -r below the plate).
+        let center = torus.center();
+        assert!(
+            (center.z() - r_fillet).abs() < 1e-9,
+            "concave torus center should sit at z = +r ({r_fillet}), got {}",
+            center.z()
+        );
+    }
+
+    /// Concave plane-cone fillet rejects radii that would produce a
+    /// spindle torus (i.e. when `r·(cot(α/2) + 1) ≥ r_p` so
+    /// `major ≤ minor`). At the cylinder limit α = π/2 this collapses to
+    /// `r ≥ r_p/2`, matching the plane-cylinder bound.
+    #[test]
+    fn plane_cone_fillet_concave_rejects_spindle_radius() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        // Same cone setup as the previous test.
+        let alpha = 6.0_f64.atan2(3.0);
+        let r_p = 3.0;
+        let cot_half = (alpha * 0.5).tan().recip();
+        // Max valid concave radius: r_p / (cot(α/2) + 1).
+        let r_max = r_p / (cot_half + 1.0);
+
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_p, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_p).unwrap();
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_plate = topo.add_face(Face::new(
+            w1,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let cone_surface =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 6.0), Vec3::new(0.0, 0.0, -1.0), alpha)
+                .unwrap();
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_cone = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cone(cone_surface.clone()),
+        ));
+        let n_p_inward = Vec3::new(0.0, 0.0, -1.0);
+
+        // Just above r_max → spindle regime → reject.
+        let result_spindle = plane_cone_fillet(
+            n_p_inward,
+            0.0,
+            &cone_surface,
+            &spine,
+            &topo,
+            r_max * 1.01,
+            face_plate,
+            face_cone,
+        )
+        .unwrap();
+        assert!(
+            result_spindle.is_none(),
+            "concave fillet must reject r > r_p / (cot(α/2)+1) (spindle-torus regime)"
+        );
+
+        // Exactly at r_max → horn-torus boundary (major = minor), where the
+        // tube touches the axis at a degenerate point — also rejected.
+        let result_horn = plane_cone_fillet(
+            n_p_inward,
+            0.0,
+            &cone_surface,
+            &spine,
+            &topo,
+            r_max,
+            face_plate,
+            face_cone,
+        )
+        .unwrap();
+        assert!(
+            result_horn.is_none(),
+            "concave fillet must reject r = r_p / (cot(α/2)+1) (horn-torus boundary)"
+        );
+
+        // Below r_max — should succeed.
+        let result_ok = plane_cone_fillet(
+            n_p_inward,
+            0.0,
+            &cone_surface,
+            &spine,
+            &topo,
+            r_max * 0.5,
+            face_plate,
+            face_cone,
+        )
+        .unwrap();
+        assert!(
+            result_ok.is_some(),
+            "concave fillet should accept r below the spindle threshold"
         );
     }
 }
