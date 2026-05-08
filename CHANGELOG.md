@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.85.2](https://github.com/andymai/brepkit/compare/v2.85.1...v2.85.2) (2026-05-08)
+
+
+### Bug Fixes
+
+* **heal:** fix_small_faces walks inner (cavity) shells ([#656](https://github.com/andymai/brepkit/issues/656)) ([84407b5](https://github.com/andymai/brepkit/commit/84407b571cf75645fb6855efeafbc9d18b4fc390))
+
 ## [2.85.1](https://github.com/andymai/brepkit/compare/v2.85.0...v2.85.1) (2026-05-08)
 
 
