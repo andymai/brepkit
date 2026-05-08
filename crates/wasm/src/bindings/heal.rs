@@ -121,6 +121,26 @@ impl BrepKernel {
         Ok(count as u32)
     }
 
+    /// Recognize and replace NURBS faces and edges with their analytic
+    /// (elementary) forms wherever possible (Plane/Cylinder/Sphere/
+    /// Cone/Torus surfaces; Line/Circle/Ellipse edges).
+    ///
+    /// Inverse of `convertToBspline`: useful after STEP/IGES import
+    /// to recover analytic types from B-spline-only exports.
+    /// Returns the total number of faces and edges converted.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if topology lookups fail.
+    #[wasm_bindgen(js_name = "convertToElementary")]
+    pub fn convert_to_elementary(&mut self, solid: u32) -> Result<u32, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let count =
+            brepkit_operations::heal::convert_to_elementary(self.topo_mut(), solid_id, TOL)?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(count as u32)
+    }
+
     /// Heal a solid topology.
     ///
     /// Returns the number of issues fixed.
