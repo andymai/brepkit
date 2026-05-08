@@ -61,6 +61,19 @@ pub fn convert_to_elementary(
                         converted += 1;
                     }
                 }
+                RecognizedSurface::Cone {
+                    apex,
+                    axis,
+                    half_angle,
+                } => {
+                    if let Ok(cone) =
+                        brepkit_math::surfaces::ConicalSurface::new(apex, axis, half_angle)
+                    {
+                        let face = topo.face_mut(*fid)?;
+                        face.set_surface(FaceSurface::Cone(cone));
+                        converted += 1;
+                    }
+                }
                 RecognizedSurface::NotRecognized => {}
             }
         }
