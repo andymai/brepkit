@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.73.0](https://github.com/andymai/brepkit/compare/v2.72.0...v2.73.0) (2026-05-08)
+
+
+### Features
+
+* **heal:** wire SameParameter into per-face fix pipeline ([#614](https://github.com/andymai/brepkit/issues/614)) ([9dd97d9](https://github.com/andymai/brepkit/commit/9dd97d9af0e7d73d370d4ca3919cb769c1df6733))
+
 ## [2.72.0](https://github.com/andymai/brepkit/compare/v2.71.0...v2.72.0) (2026-05-08)
 
 
