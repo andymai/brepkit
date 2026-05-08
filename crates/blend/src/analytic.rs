@@ -2800,27 +2800,27 @@ pub fn sphere_cylinder_fillet(
 /// intersection is a pair of circles (where they exist), and the user
 /// passes ONE of them as the spine.
 ///
-/// Convex-only for v1 (both faces NOT reversed; ball externally
-/// tangent to both). Concave / mixed cases follow up.
+/// Handles all four convex/concave combinations via per-face
+/// `signed_offset_i = ±1` (face NOT reversed = +1, face REVERSED = −1).
+/// `s_sph` flips sphere tangency type (external `R+r` ↔ internal
+/// `R−r`); `s_cone` flips cone tangency direction (ball outside cone
+/// ↔ inside).
 ///
 /// # Geometry
 ///
 /// Place sphere center at origin, cone axis = +z, cone apex at
-/// (0, 0, a_apex), half-angle β (from the radial plane to generator,
-/// brepkit convention). With `h = 0 − a_apex` (apex offset from
-/// sphere center along +cone_axis; positive means apex is BELOW the
-/// sphere center along cone_axis):
+/// `(0, 0, a_apex)`, half-angle β (radial plane to generator,
+/// brepkit convention). With `h = 0 − a_apex`, `Q_s = R_s + s_sph · r`,
+/// `A = s_cone · r + h · cos β`. Tangency constraints
+///   R_t · sin β − (z_b + h) · cos β = s_cone · r       (cone)
+///   R_t² + z_b² = Q_s²                                  (sphere)
+/// yield a quadratic in `c = z_b`:
 ///
-/// External tangency `R_t · sin β − (z_b − a_apex) · cos β = r` and
-/// `R_t² + z_b² = (R_s + r)²` (with z_b measured from sphere center)
-/// yields a quadratic in `c = z_b`:
+///   `(c + A · cos β)² = sin²β · (Q_s² − A²)`
 ///
-///   `(c + A · cos β)² = sin²β · ((R_s+r)² − A²)`
-///
-/// where `A = r + h · cos β`. Both roots correspond to the two spine
-/// candidates; the user-supplied spine determines which root to pick
-/// (we use the sign of the spine's axial offset from sphere center).
-/// Once `c = z_b` is known, `R_t = (r + (c + h)·cos β) / sin β`.
+/// Both roots correspond to the two spine candidates; the user-supplied
+/// spine selects the closer one. Once `c = z_b` is known,
+/// `R_t = (s_cone · r + (c + h)·cos β) / sin β`.
 ///
 /// At `β → π/2` the formulas collapse to plane-sphere; at `β → 0`
 /// (degenerate cone = cylinder) they collapse to sphere-cylinder.
@@ -2828,10 +2828,10 @@ pub fn sphere_cylinder_fillet(
 /// # Returns
 ///
 /// `Ok(None)` (walker fallback) when:
-///   - either face is reversed (concave / mixed) — separate path,
 ///   - sphere center isn't on the cone axis line,
 ///   - sphere parametric z-axis isn't aligned with cone axis,
-///   - `(R_s+r)² < A²` (no valid rolling-ball position),
+///   - `Q_s ≤ tol` (concave-sphere with `r ≥ R_s` — degenerate),
+///   - `Q_s² < A²` (no valid rolling-ball position),
 ///   - the spine isn't at the predicted axial position (within tol),
 ///   - the resulting major < minor (spindle), or
 ///   - the spine is degenerate.
@@ -2858,10 +2858,16 @@ pub fn sphere_cone_fillet(
     if radius <= tol_lin {
         return Ok(None);
     }
-    // Convex-only for v1.
-    if topo.face(face_sphere)?.is_reversed() || topo.face(face_cone)?.is_reversed() {
-        return Ok(None);
-    }
+    let s_sph: f64 = if topo.face(face_sphere)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
+    let s_cone: f64 = if topo.face(face_cone)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
 
     let big_r_s = sph.radius();
     let c_s = sph.center();
@@ -2893,12 +2899,22 @@ pub fn sphere_cone_fillet(
     let h_signed = along; // along = cone_axis · (c_s − apex)
 
     // Quadratic for c = z_b (ball axial position relative to sphere center
-    // along cone_axis):
-    //   (c + A·cos β)² = sin²β · ((R_s+r)² − A²)
-    // where A = r + h_signed · cos β. Two roots:
-    //   c = −A·cos β ± sin β · √((R_s+r)² − A²).
-    let big_a = radius + h_signed * cos_b;
-    let disc = (big_r_s + radius) * (big_r_s + radius) - big_a * big_a;
+    // along cone_axis), generalized for all 4 convex/concave combinations
+    // via per-face signed_offset:
+    //   (c + A·cos β)² = sin²β · (Q_s² − A²)
+    // where:
+    //   Q_s = R_s + s_sph · r       (effective sphere tangency radius)
+    //   A   = s_cone · r + h_signed · cos β   (effective cone offset)
+    // For convex-convex (s_sph = s_cone = +1) this matches the original
+    // formula. For concave-sphere s_sph = −1 ⇒ Q_s = R_s − r (internal
+    // tangency to sphere). For concave-cone s_cone = −1 ⇒ A flips sign
+    // on the radius term (ball inside cone region instead of outside).
+    let q_s = big_r_s + s_sph * radius;
+    if q_s <= tol_lin {
+        return Ok(None);
+    }
+    let big_a = s_cone * radius + h_signed * cos_b;
+    let disc = q_s * q_s - big_a * big_a;
     if disc <= tol_lin * tol_lin {
         return Ok(None);
     }
@@ -2968,7 +2984,8 @@ pub fn sphere_cone_fillet(
     } else {
         c_root_b
     };
-    let r_t = (radius + (z_b + h_signed) * cos_b) / sin_b;
+    // R_t from cone tangency: s_cone · r + (z_b + h_signed) · cos β = R_t · sin β.
+    let r_t = (s_cone * radius + (z_b + h_signed) * cos_b) / sin_b;
     if r_t <= tol_lin {
         return Ok(None);
     }
@@ -3013,11 +3030,11 @@ pub fn sphere_cone_fillet(
     };
 
     // Sphere contact: sphere_center + R_s · (ball − sphere_center) / |ball − sphere_center|.
-    // |ball − sphere_center| = R_s + r, so
-    //   sphere_contact_axial = R_s · z_b / (R_s + r),
-    //   sphere_contact_radial = R_s · R_t / (R_s + r).
-    let sph_contact_axial = big_r_s * z_b / (big_r_s + radius);
-    let sph_contact_radial = big_r_s * major_radius / (big_r_s + radius);
+    // |ball − sphere_center| = Q_s = R_s + s_sph · r, so
+    //   sphere_contact_axial = R_s · z_b / Q_s,
+    //   sphere_contact_radial = R_s · R_t / Q_s.
+    let sph_contact_axial = big_r_s * z_b / q_s;
+    let sph_contact_radial = big_r_s * major_radius / q_s;
     let sph_contact_center = c_s + cone_axis * sph_contact_axial;
     let contact_sph_circle = brepkit_math::curves::Circle3D::with_axes(
         sph_contact_center,
@@ -3046,10 +3063,12 @@ pub fn sphere_cone_fillet(
     // We chose R_t such that R_t · sin β − (z_b + h_signed) · cos β = r,
     // i.e. cos β · (z_b + h_signed) − sin β · R_t = −r.
     // Foot of perpendicular = (z_b + r·cos β, R_t − r·sin β).
-    //   cone_contact_axial_from_sphere = z_b + r·cos β.
-    //   cone_contact_radial            = R_t − r·sin β.
-    let cone_contact_axial = z_b + radius * cos_b;
-    let cone_contact_radial = major_radius - radius * sin_b;
+    // Foot of perpendicular for the unified case (cone tangency
+    // gave R_t·sin β − (z_b + h_signed)·cos β = s_cone · r):
+    //   cone_contact_axial = z_b + s_cone · r · cos β
+    //   cone_contact_radial = R_t − s_cone · r · sin β
+    let cone_contact_axial = z_b + s_cone * radius * cos_b;
+    let cone_contact_radial = major_radius - s_cone * radius * sin_b;
     if cone_contact_radial <= tol_lin {
         return Ok(None);
     }
@@ -6906,6 +6925,147 @@ mod tests {
         assert!(
             (cone_radial - predicted_cone_radial).abs() < 1e-9,
             "cone contact must lie on cone surface: predicted radial {predicted_cone_radial}, got {cone_radial}"
+        );
+    }
+
+    /// Sphere-cone fillet with cone face REVERSED (sphere convex, cone
+    /// concave) — sphere fitting into a conical cavity. With s_sph=+1,
+    /// s_cone=−1 the geometry uses internal cone tangency.
+    ///
+    /// For R_s=3, h_signed=+2, β=π/3, sphere face NOT reversed, cone
+    /// face REVERSED, r=0.3:
+    ///   - Q_s = 3.3, A = s_cone·r + h·cos β = −0.3 + 1.0 = 0.7
+    ///   - disc = Q_s² − A² = 10.4, sqrt ≈ 3.225
+    ///   - c_root_a = −A·cos β + sin β·sqrt ≈ 2.443 (closest to +z spine)
+    ///   - R_t = (s_cone·r + (c+h)·cos β)/sin β ≈ 2.219
+    ///   - Compare convex case: R_t was ≈ 2.642, so concave-cone gives
+    ///     SMALLER major (consistent with the rolling ball being inside
+    ///     the cone region instead of outside).
+    #[test]
+    fn sphere_cone_fillet_concave_cone_emits_smaller_torus() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::{ConicalSurface, SphericalSurface};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r_s: f64 = 3.0;
+        let h_signed: f64 = 2.0;
+        let beta: f64 = std::f64::consts::PI / 3.0;
+        let r_fillet: f64 = 0.3;
+
+        let cot_b = beta.cos() / beta.sin();
+        let qa_q = 1.0 / (beta.sin() * beta.sin());
+        let qb_q = 2.0 * h_signed * cot_b * cot_b;
+        let qc_q = h_signed * h_signed * cot_b * cot_b - big_r_s * big_r_s;
+        let q_disc = qb_q * qb_q - 4.0 * qa_q * qc_q;
+        let z_spine = (-qb_q + q_disc.sqrt()) / (2.0 * qa_q);
+        let r_spine = (z_spine + h_signed) * cot_b;
+
+        let sph = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r_s).unwrap();
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, -h_signed),
+            Vec3::new(0.0, 0.0, 1.0),
+            beta,
+        )
+        .unwrap();
+
+        let spine_circle = Circle3D::new(
+            Point3::new(0.0, 0.0, z_spine),
+            Vec3::new(0.0, 0.0, 1.0),
+            r_spine,
+        )
+        .unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_spine, 0.0, z_spine), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Sphere face NOT reversed (convex post); cone face REVERSED
+        // (cone-shaped cavity).
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_sphere = topo.add_face(Face::new(w1, vec![], FaceSurface::Sphere(sph.clone())));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_cone = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cone(cone.clone()),
+        ));
+
+        let result =
+            sphere_cone_fillet(&sph, &cone, &spine, &topo, r_fillet, face_sphere, face_cone)
+                .unwrap()
+                .expect("mixed sphere-cone fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        // Predicted torus parameters with s_sph=+1, s_cone=-1.
+        let q_s = big_r_s + r_fillet; // s_sph = +1
+        let big_a_pred = -r_fillet + h_signed * beta.cos(); // s_cone = -1
+        let disc = q_s * q_s - big_a_pred * big_a_pred;
+        let c_root_a = -big_a_pred * beta.cos() + beta.sin() * disc.sqrt();
+        let c_root_b = -big_a_pred * beta.cos() - beta.sin() * disc.sqrt();
+        let z_b = if (c_root_a - z_spine).abs() <= (c_root_b - z_spine).abs() {
+            c_root_a
+        } else {
+            c_root_b
+        };
+        let expected_major = (-r_fillet + (z_b + h_signed) * beta.cos()) / beta.sin();
+
+        assert!(
+            (torus.major_radius() - expected_major).abs() < 1e-9,
+            "concave-cone major should be {expected_major}, got {}",
+            torus.major_radius()
+        );
+
+        // Sanity: concave-cone major < convex-cone major at same r.
+        let big_a_convex = r_fillet + h_signed * beta.cos();
+        let disc_convex = (big_r_s + r_fillet) * (big_r_s + r_fillet) - big_a_convex * big_a_convex;
+        let c_convex = -big_a_convex * beta.cos() + beta.sin() * disc_convex.sqrt();
+        let convex_major = (r_fillet + (c_convex + h_signed) * beta.cos()) / beta.sin();
+        assert!(
+            torus.major_radius() < convex_major,
+            "concave-cone major ({}) should be smaller than convex ({convex_major})",
+            torus.major_radius()
+        );
+
+        // Sphere contact at distance R_s from sphere center.
+        let sph_axial = big_r_s * z_b / q_s;
+        let sph_radial = big_r_s * expected_major / q_s;
+        let want_sph = Point3::new(sph_radial, 0.0, sph_axial);
+        let dist_sph = (want_sph - Point3::new(0.0, 0.0, 0.0)).length();
+        assert!(
+            (dist_sph - big_r_s).abs() < 1e-9,
+            "sphere contact must lie on sphere: distance={dist_sph}, want R_s={big_r_s}"
+        );
+
+        // Cone contact at the predicted (axial, radial) — should lie on cone.
+        // s_cone = -1 ⇒ axial offset NEGATIVE, radial offset POSITIVE.
+        let cone_axial = z_b - r_fillet * beta.cos();
+        let cone_radial = expected_major + r_fillet * beta.sin();
+        let predicted_cone_radial = (cone_axial + h_signed) * cot_b;
+        assert!(
+            (cone_radial - predicted_cone_radial).abs() < 1e-9,
+            "cone contact must lie on cone: predicted radial {predicted_cone_radial}, got {cone_radial}"
+        );
+
+        // Both contacts on the torus.
+        let want_cone = Point3::new(cone_radial, 0.0, cone_axial);
+        let (u_p, v_p) = ParametricSurface::project_point(&torus, want_sph);
+        let on_torus_sph = ParametricSurface::evaluate(&torus, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&torus, want_cone);
+        let on_torus_cone = ParametricSurface::evaluate(&torus, u_q, v_q);
+        assert!(
+            (on_torus_sph - want_sph).length() < 1e-9,
+            "sphere contact must lie on torus: {on_torus_sph:?} vs {want_sph:?}"
+        );
+        assert!(
+            (on_torus_cone - want_cone).length() < 1e-9,
+            "cone contact must lie on torus: {on_torus_cone:?} vs {want_cone:?}"
         );
     }
 
