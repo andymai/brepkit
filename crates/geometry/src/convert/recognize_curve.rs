@@ -1,9 +1,9 @@
 //! Recognize NURBS curves as elementary analytic forms.
 //!
 //! Samples a NURBS curve at 16 evenly-spaced parameter values and
-//! tests whether the sample set is consistent with a line, circle, or
-//! ellipse within the given tolerance. Returns a [`RecognizedCurve`]
-//! describing the best match.
+//! tests whether the sample set is consistent with a line, circle,
+//! ellipse, or hyperbola within the given tolerance. Returns a
+//! [`RecognizedCurve`] describing the best match.
 
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point3, Vec3};
@@ -40,6 +40,19 @@ pub enum RecognizedCurve {
         /// Smaller semi-axis length.
         semi_minor: f64,
     },
+    /// Recognized as a hyperbolic arc.
+    Hyperbola {
+        /// Center of the hyperbola.
+        center: Point3,
+        /// Hyperbola normal (unit vector perpendicular to the plane).
+        normal: Vec3,
+        /// Direction of the real (semi-major) axis.
+        u_axis: Vec3,
+        /// Real semi-axis length (distance from center to vertex).
+        semi_major: f64,
+        /// Imaginary semi-axis length.
+        semi_minor: f64,
+    },
     /// The curve could not be matched to any elementary form.
     NotRecognized,
 }
@@ -54,6 +67,8 @@ pub enum RecognizedCurve {
 ///    residual against `(local_x/a)² + (local_y/b)² = 1` < `tolerance`. Tested
 ///    after circle so that a true circle is reported as `Circle`, not as
 ///    `Ellipse` with `a == b`.
+/// 4. **Hyperbola**: all points coplanar and lie on a best-fit hyperbola —
+///    max residual against `(local_x/a)² − (local_y/b)² = 1` < `tolerance`.
 ///
 /// Returns the first match, or [`RecognizedCurve::NotRecognized`].
 #[must_use]
@@ -83,6 +98,17 @@ pub fn recognize_curve(curve: &NurbsCurve, tolerance: f64) -> RecognizedCurve {
         try_recognize_ellipse(&samples, tolerance)
     {
         return RecognizedCurve::Ellipse {
+            center,
+            normal,
+            u_axis,
+            semi_major,
+            semi_minor,
+        };
+    }
+    if let Some((center, normal, u_axis, semi_major, semi_minor)) =
+        try_recognize_hyperbola(&samples, tolerance)
+    {
+        return RecognizedCurve::Hyperbola {
             center,
             normal,
             u_axis,
@@ -423,6 +449,156 @@ fn try_recognize_ellipse(
     Some((center, n, u_axis_3d, semi_major, semi_minor))
 }
 
+// ── Hyperbola recognition ────────────────────────────────────────────────────
+
+/// Check if all sample points lie on a hyperbolic arc.
+///
+/// Same algebraic conic fit as `try_recognize_ellipse`, but with
+/// `B² − 4AC > 0` (hyperbolic discriminant) and a different canonical-
+/// form recovery: after centering, the 2×2 quadratic form has one
+/// positive and one negative eigenvalue. The semi-major (real) axis is
+/// along the positive-eigenvalue eigenvector; semi-minor is the
+/// imaginary axis along the negative-eigenvalue direction. Verification
+/// uses the implicit equation `(local_x/a)² − (local_y/b)² = 1`.
+fn try_recognize_hyperbola(
+    samples: &[Point3],
+    tolerance: f64,
+) -> Option<(Point3, Vec3, Vec3, f64, f64)> {
+    if samples.len() < 5 {
+        return None;
+    }
+
+    // ── Step 1-2: plane + coplanarity (same as ellipse) ─────────────────────
+    let p0 = samples[0];
+    let mut normal: Option<Vec3> = None;
+    'outer: for i in 1..samples.len() {
+        let v1 = samples[i] - p0;
+        for pt in samples.iter().skip(i + 1) {
+            let v2 = *pt - p0;
+            let n = v1.cross(v2);
+            if n.length() > tolerance {
+                if let Ok(normalized) = n.normalize() {
+                    normal = Some(normalized);
+                    break 'outer;
+                }
+            }
+        }
+    }
+    let n = normal?;
+    let d_plane = n.dot(Vec3::new(p0.x(), p0.y(), p0.z()));
+    for pt in samples {
+        let dist = n.dot(Vec3::new(pt.x(), pt.y(), pt.z())) - d_plane;
+        if dist.abs() > tolerance {
+            return None;
+        }
+    }
+
+    // ── Step 3: project to 2D, shift origin to centroid ──────────────────────
+    let u_seed = (samples[1] - p0).normalize().ok()?;
+    let v_seed = n.cross(u_seed).normalize().ok()?;
+    let raw_pts2d: Vec<(f64, f64)> = samples
+        .iter()
+        .map(|pt| {
+            let v = *pt - p0;
+            (u_seed.dot(v), v_seed.dot(v))
+        })
+        .collect();
+    #[allow(clippy::cast_precision_loss)]
+    let n_f = raw_pts2d.len() as f64;
+    let shift_x = raw_pts2d.iter().map(|p| p.0).sum::<f64>() / n_f;
+    let shift_y = raw_pts2d.iter().map(|p| p.1).sum::<f64>() / n_f;
+    let pts2d: Vec<(f64, f64)> = raw_pts2d
+        .iter()
+        .map(|&(x, y)| (x - shift_x, y - shift_y))
+        .collect();
+
+    // ── Step 4: algebraic conic fit ──────────────────────────────────────────
+    let mut mat = [[0.0_f64; 5]; 5];
+    let mut rhs = [0.0_f64; 5];
+    for &(x, y) in &pts2d {
+        let row = [x * x, x * y, y * y, x, y];
+        for i in 0..5 {
+            for j in 0..5 {
+                mat[i][j] += row[i] * row[j];
+            }
+            rhs[i] += row[i];
+        }
+    }
+    let theta = solve_5x5(&mat, &rhs)?;
+    let (a_c, b_c, c_c, d_c, e_c) = (theta[0], theta[1], theta[2], theta[3], theta[4]);
+
+    // For a hyperbola: B² − 4AC > 0.
+    let disc = b_c * b_c - 4.0 * a_c * c_c;
+    if disc <= tolerance {
+        return None;
+    }
+
+    // ── Step 5: recover center (same formula as ellipse) ─────────────────────
+    let m_det = 4.0 * a_c * c_c - b_c * b_c;
+    if m_det.abs() < 1e-30 {
+        return None;
+    }
+    let cx_2d = (-2.0 * c_c * d_c + b_c * e_c) / m_det;
+    let cy_2d = (b_c * d_c - 2.0 * a_c * e_c) / m_det;
+
+    // K = 1 - (A·cx² + B·cx·cy + C·cy² + D·cx + E·cy).
+    let k = 1.0
+        - (a_c * cx_2d * cx_2d
+            + b_c * cx_2d * cy_2d
+            + c_c * cy_2d * cy_2d
+            + d_c * cx_2d
+            + e_c * cy_2d);
+    if k.abs() < 1e-30 {
+        return None;
+    }
+
+    // ── Step 6: eigendecompose [A B/2; B/2 C] / K. For a hyperbola
+    //    the two eigenvalues have OPPOSITE signs. The positive
+    //    eigenvalue corresponds to the real (semi-major) axis;
+    //    negative corresponds to imaginary (semi-minor). ──────────────────────
+    let aa = a_c / k;
+    let bb = b_c / k;
+    let cc = c_c / k;
+    let trace_half = 0.5 * (aa + cc);
+    let diff_half = 0.5 * (aa - cc);
+    let radical = diff_half.hypot(0.5 * bb);
+    let lambda_pos = trace_half + radical;
+    let lambda_neg = trace_half - radical;
+    if lambda_pos <= 0.0 || lambda_neg >= 0.0 {
+        // Both eigenvalues same sign → not a hyperbola in this
+        // normalization. Could happen if K has the wrong sign;
+        // reject conservatively.
+        return None;
+    }
+    let semi_major = 1.0 / lambda_pos.sqrt();
+    let semi_minor = 1.0 / (-lambda_neg).sqrt();
+
+    // Major-axis direction = eigenvector for the LARGER (positive)
+    // eigenvalue. The standard formula 2θ = atan2(B, A−C) gives this
+    // eigenvector directly (no π/2 rotation needed, unlike ellipse
+    // where we wanted the SMALLER eigenvalue's direction).
+    let theta_axis = 0.5 * bb.atan2(aa - cc);
+    let (sin_t, cos_t) = theta_axis.sin_cos();
+    let u_local = (cos_t, sin_t);
+
+    // ── Step 7: verify residual against (lu/a)² − (lv/b)² = 1 ────────────────
+    for &(x, y) in &pts2d {
+        let dx = x - cx_2d;
+        let dy = y - cy_2d;
+        let lu = dx * u_local.0 + dy * u_local.1;
+        let lv = -dx * u_local.1 + dy * u_local.0;
+        let lhs = (lu / semi_major).powi(2) - (lv / semi_minor).powi(2);
+        if (lhs - 1.0).abs() > tolerance {
+            return None;
+        }
+    }
+
+    let center = p0 + u_seed * (cx_2d + shift_x) + v_seed * (cy_2d + shift_y);
+    let u_axis_3d = (u_seed * u_local.0 + v_seed * u_local.1).normalize().ok()?;
+
+    Some((center, n, u_axis_3d, semi_major, semi_minor))
+}
+
 /// Solve a 5×5 linear system via Gaussian elimination with partial
 /// pivoting. Returns `None` if the matrix is singular.
 fn solve_5x5(mat: &[[f64; 5]; 5], rhs: &[f64; 5]) -> Option<[f64; 5]> {
@@ -588,7 +764,8 @@ mod tests {
 
     use std::f64::consts::TAU;
 
-    use brepkit_math::curves::{Circle3D, Ellipse3D};
+    use brepkit_math::curves::{Circle3D, Ellipse3D, Hyperbola3D};
+    use brepkit_math::nurbs::curve::NurbsCurve;
     use brepkit_math::vec::{Point3, Vec3};
 
     use super::*;
@@ -731,6 +908,87 @@ mod tests {
         assert!(matches!(
             recognize_curve(&nurbs, 1e-6),
             RecognizedCurve::Circle { .. }
+        ));
+    }
+
+    // ── hyperbola round-trip ──────────────────────────────────────────────────
+
+    /// Build a rational degree-2 NURBS for a hyperbolic arc, mirroring
+    /// heal's `hyperbola_to_nurbs` (geometry/curve_to_nurbs doesn't
+    /// have one yet).
+    fn hyperbola_to_nurbs_inline(hyp: &Hyperbola3D, t_min: f64, t_max: f64) -> NurbsCurve {
+        let center = hyp.center();
+        let u = hyp.u_axis();
+        let v = hyp.v_axis();
+        let a = hyp.semi_major();
+        let b = hyp.semi_minor();
+
+        let p0 = hyp.evaluate(t_min);
+        let p2 = hyp.evaluate(t_max);
+        let half = 0.5 * (t_max - t_min);
+        let tanh_b = half.tanh();
+        let p1_x = a * (t_min.cosh() + tanh_b * t_min.sinh());
+        let p1_y = b * (t_min.sinh() + tanh_b * t_min.cosh());
+        let p1 = center + u * p1_x + v * p1_y;
+        let w1 = half.cosh();
+
+        NurbsCurve::new(
+            2,
+            vec![t_min, t_min, t_min, t_max, t_max, t_max],
+            vec![p0, p1, p2],
+            vec![1.0, w1, 1.0],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn recognize_hyperbola_round_trip() {
+        let center = Point3::new(2.0, -1.0, 5.0);
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let a = 3.0_f64;
+        let b = 1.5_f64;
+        let hyp = Hyperbola3D::new(center, normal, a, b).unwrap();
+        let nurbs = hyperbola_to_nurbs_inline(&hyp, -1.5, 1.5);
+
+        match recognize_curve(&nurbs, 1e-5) {
+            RecognizedCurve::Hyperbola {
+                center: c,
+                normal: n,
+                semi_major,
+                semi_minor,
+                ..
+            } => {
+                assert!(
+                    (c - center).length() < 1e-4,
+                    "center mismatch: {c:?} vs {center:?}"
+                );
+                assert!(
+                    (n.dot(normal).abs() - 1.0).abs() < 1e-6,
+                    "normal mismatch (cos angle {})",
+                    n.dot(normal)
+                );
+                assert!(
+                    (semi_major - a).abs() < 1e-4,
+                    "semi_major {semi_major} vs {a}"
+                );
+                assert!(
+                    (semi_minor - b).abs() < 1e-4,
+                    "semi_minor {semi_minor} vs {b}"
+                );
+            }
+            other => panic!("expected Hyperbola, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ellipse_is_not_recognized_as_hyperbola() {
+        // Ellipse must hit the Ellipse path (B²−4AC < 0), not fall
+        // through to Hyperbola (B²−4AC > 0).
+        let ellipse = Ellipse3D::new(origin(), z_axis(), 3.0, 1.5).unwrap();
+        let nurbs = ellipse_to_nurbs(&ellipse, 0.0, TAU).unwrap();
+        assert!(matches!(
+            recognize_curve(&nurbs, 1e-6),
+            RecognizedCurve::Ellipse { .. }
         ));
     }
 }
