@@ -9587,6 +9587,157 @@ mod tests {
         );
     }
 
+    /// Cone-cone coaxial both-concave chamfer: two cone-shaped cavities
+    /// sharing an axis. Both s_i = −1 ⇒ each contact moves to the
+    /// OPPOSITE side along its generator from the convex case.
+    ///
+    /// Same setup as `cone_cone_coaxial_chamfer_convex_emits_cone` but
+    /// with both faces REVERSED. Per-face orientation flips compose:
+    /// cone1 contact extends AWAY from apex1 (instead of retreating
+    /// toward); cone2 contact retreats TOWARD apex2 (instead of
+    /// extending away).
+    #[test]
+    fn cone_cone_coaxial_chamfer_both_concave_emits_cone() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let beta1: f64 = std::f64::consts::PI / 3.0;
+        let beta2: f64 = std::f64::consts::PI / 4.0;
+        let h_2: f64 = 2.0;
+        let d: f64 = 0.3;
+
+        let sin_minus = (beta1 - beta2).sin();
+        let z_spine = h_2 * beta2.cos() * beta1.sin() / sin_minus;
+        let r_spine = z_spine * (beta1.cos() / beta1.sin());
+
+        let cone1 =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), beta1)
+                .unwrap();
+        let cone2 =
+            ConicalSurface::new(Point3::new(0.0, 0.0, h_2), Vec3::new(0.0, 0.0, 1.0), beta2)
+                .unwrap();
+
+        let spine_circle = Circle3D::new(
+            Point3::new(0.0, 0.0, z_spine),
+            Vec3::new(0.0, 0.0, 1.0),
+            r_spine,
+        )
+        .unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_spine, 0.0, z_spine), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Both faces REVERSED.
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face1 = topo.add_face(Face::new_reversed(
+            w1,
+            vec![],
+            FaceSurface::Cone(cone1.clone()),
+        ));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face2 = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cone(cone2.clone()),
+        ));
+
+        let result = cone_cone_coaxial_chamfer(&cone1, &cone2, &spine, &topo, d, d, face1, face2)
+            .unwrap()
+            .expect("both-concave coaxial cone-cone chamfer should produce a stripe");
+
+        let chamfer_cone = match result.stripe.surface {
+            FaceSurface::Cone(c) => c,
+            other => panic!("expected Cone, got {}", other.type_tag()),
+        };
+
+        // Predicted contacts (s1=s2=-1 ⇒ both signs flip).
+        let r_c1 = r_spine + d * beta1.cos();
+        let z_c1 = z_spine + d * beta1.sin();
+        let r_c2 = r_spine - d * beta2.cos();
+        let z_c2 = z_spine - d * beta2.sin();
+
+        // Cone1 contact extends AWAY from apex1 (opposite convex).
+        assert!(
+            r_c1 > r_spine && z_c1 > z_spine,
+            "concave cone1 contact should extend away from apex1: got ({r_c1}, {z_c1}) vs spine ({r_spine}, {z_spine})"
+        );
+        // Cone2 contact retreats TOWARD apex2 (opposite convex).
+        assert!(
+            r_c2 < r_spine && z_c2 < z_spine,
+            "concave cone2 contact should retreat toward apex2: got ({r_c2}, {z_c2}) vs spine"
+        );
+
+        // Predicted chamfer apex (line P1-P2 extrapolated to r=0) and
+        // half-angle. Two non-coaxial points on a cone determine apex z
+        // and half-angle, but axis direction needs an explicit check.
+        let dr = r_c2 - r_c1;
+        let dz = z_c2 - z_c1;
+        let expected_apex_z = z_c1 - r_c1 * dz / dr;
+        let mid_z = 0.5 * (z_c1 + z_c2);
+        let r_avg = 0.5 * (r_c1 + r_c2);
+        let expected_beta = ((mid_z - expected_apex_z).abs() / r_avg).atan();
+
+        let apex = chamfer_cone.apex();
+        assert!(
+            apex.x().abs() < 1e-12 && apex.y().abs() < 1e-12,
+            "concave apex should be on z-axis, got {apex:?}"
+        );
+        assert!(
+            (apex.z() - expected_apex_z).abs() < 1e-9,
+            "concave apex z = {}, expected {expected_apex_z}",
+            apex.z()
+        );
+        assert!(
+            (chamfer_cone.half_angle() - expected_beta).abs() < 1e-9,
+            "concave chamfer half-angle should be {expected_beta}, got {}",
+            chamfer_cone.half_angle()
+        );
+
+        // Cone axis direction (apex below contacts ⇒ axis = +z, opens
+        // upward). project_point would not catch a flipped axis with a
+        // mirrored apex, so check the axis direction explicitly.
+        let axis = chamfer_cone.axis();
+        assert!(
+            axis.dot(Vec3::new(0.0, 0.0, 1.0)) > 1.0 - 1e-12,
+            "concave chamfer cone axis should be +z (apex below contacts), got {axis:?}"
+        );
+
+        // Both contacts on chamfer cone.
+        let want_c1 = Point3::new(r_c1, 0.0, z_c1);
+        let want_c2 = Point3::new(r_c2, 0.0, z_c2);
+        let (u_p, v_p) = ParametricSurface::project_point(&chamfer_cone, want_c1);
+        let on_cone_c1 = ParametricSurface::evaluate(&chamfer_cone, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&chamfer_cone, want_c2);
+        let on_cone_c2 = ParametricSurface::evaluate(&chamfer_cone, u_q, v_q);
+        assert!(
+            (on_cone_c1 - want_c1).length() < 1e-9,
+            "cone1 contact must lie on chamfer cone: {on_cone_c1:?} vs {want_c1:?}"
+        );
+        assert!(
+            (on_cone_c2 - want_c2).length() < 1e-9,
+            "cone2 contact must lie on chamfer cone: {on_cone_c2:?} vs {want_c2:?}"
+        );
+
+        // Both contacts on respective cone surfaces.
+        let cot_b1 = beta1.cos() / beta1.sin();
+        let cot_b2 = beta2.cos() / beta2.sin();
+        let pred_r_c1 = z_c1 * cot_b1;
+        let pred_r_c2 = (z_c2 - h_2) * cot_b2;
+        assert!(
+            (r_c1 - pred_r_c1).abs() < 1e-9,
+            "cone1 contact must lie on cone1: predicted radial {pred_r_c1}, got {r_c1}"
+        );
+        assert!(
+            (r_c2 - pred_r_c2).abs() < 1e-9,
+            "cone2 contact must lie on cone2: predicted radial {pred_r_c2}, got {r_c2}"
+        );
+    }
+
     /// Concave plane-cone chamfer: chamfering the top rim of a tapered hole.
     ///
     /// Geometry: cone primitive (apex above plate at z=h, axis −z,
