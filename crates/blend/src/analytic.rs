@@ -9592,10 +9592,10 @@ mod tests {
     /// OPPOSITE side along its generator from the convex case.
     ///
     /// Same setup as `cone_cone_coaxial_chamfer_convex_emits_cone` but
-    /// with both faces REVERSED. Sphere-side and cone-side flips
-    /// compose: cone1 contact extends AWAY from apex1 (instead of
-    /// retreating toward); cone2 contact retreats TOWARD apex2 (instead
-    /// of extending away).
+    /// with both faces REVERSED. Per-face orientation flips compose:
+    /// cone1 contact extends AWAY from apex1 (instead of retreating
+    /// toward); cone2 contact retreats TOWARD apex2 (instead of
+    /// extending away).
     #[test]
     fn cone_cone_coaxial_chamfer_both_concave_emits_cone() {
         use brepkit_math::curves::Circle3D;
@@ -9670,6 +9670,41 @@ mod tests {
         assert!(
             r_c2 < r_spine && z_c2 < z_spine,
             "concave cone2 contact should retreat toward apex2: got ({r_c2}, {z_c2}) vs spine"
+        );
+
+        // Predicted chamfer apex (line P1-P2 extrapolated to r=0) and
+        // half-angle. Two non-coaxial points on a cone determine apex z
+        // and half-angle, but axis direction needs an explicit check.
+        let dr = r_c2 - r_c1;
+        let dz = z_c2 - z_c1;
+        let expected_apex_z = z_c1 - r_c1 * dz / dr;
+        let mid_z = 0.5 * (z_c1 + z_c2);
+        let r_avg = 0.5 * (r_c1 + r_c2);
+        let expected_beta = ((mid_z - expected_apex_z).abs() / r_avg).atan();
+
+        let apex = chamfer_cone.apex();
+        assert!(
+            apex.x().abs() < 1e-12 && apex.y().abs() < 1e-12,
+            "concave apex should be on z-axis, got {apex:?}"
+        );
+        assert!(
+            (apex.z() - expected_apex_z).abs() < 1e-9,
+            "concave apex z = {}, expected {expected_apex_z}",
+            apex.z()
+        );
+        assert!(
+            (chamfer_cone.half_angle() - expected_beta).abs() < 1e-9,
+            "concave chamfer half-angle should be {expected_beta}, got {}",
+            chamfer_cone.half_angle()
+        );
+
+        // Cone axis direction (apex below contacts ⇒ axis = +z, opens
+        // upward). project_point would not catch a flipped axis with a
+        // mirrored apex, so check the axis direction explicitly.
+        let axis = chamfer_cone.axis();
+        assert!(
+            axis.dot(Vec3::new(0.0, 0.0, 1.0)) > 1.0 - 1e-12,
+            "concave chamfer cone axis should be +z (apex below contacts), got {axis:?}"
         );
 
         // Both contacts on chamfer cone.
