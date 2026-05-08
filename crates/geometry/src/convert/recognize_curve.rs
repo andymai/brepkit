@@ -53,6 +53,19 @@ pub enum RecognizedCurve {
         /// Imaginary semi-axis length.
         semi_minor: f64,
     },
+    /// Recognized as a parabolic arc.
+    Parabola {
+        /// Vertex of the parabola (the point of tangency to the
+        /// directrix-parallel line).
+        vertex: Point3,
+        /// Parabola normal (unit vector perpendicular to the plane).
+        normal: Vec3,
+        /// Direction of the symmetry axis (from vertex into the
+        /// interior of the parabola, unit vector).
+        axis_dir: Vec3,
+        /// Focal length (distance from vertex to focus).
+        focal_length: f64,
+    },
     /// The curve could not be matched to any elementary form.
     NotRecognized,
 }
@@ -114,6 +127,16 @@ pub fn recognize_curve(curve: &NurbsCurve, tolerance: f64) -> RecognizedCurve {
             u_axis,
             semi_major,
             semi_minor,
+        };
+    }
+    if let Some((vertex, normal, axis_dir, focal_length)) =
+        try_recognize_parabola(&samples, tolerance)
+    {
+        return RecognizedCurve::Parabola {
+            vertex,
+            normal,
+            axis_dir,
+            focal_length,
         };
     }
     RecognizedCurve::NotRecognized
@@ -599,6 +622,263 @@ fn try_recognize_hyperbola(
     Some((center, n, u_axis_3d, semi_major, semi_minor))
 }
 
+// ── Parabola recognition ─────────────────────────────────────────────────────
+
+/// Check if all sample points lie on a parabolic arc.
+///
+/// Same algebraic conic-fit pipeline as ellipse/hyperbola, but with
+/// `B² − 4AC ≈ 0` (parabolic discriminant). Recovery of the canonical
+/// `(vertex, axis_dir, focal_length)` requires more work than for the
+/// other conics because a parabola has NO center:
+///
+/// 1. Fit conic, verify discriminant is near zero.
+/// 2. The 2×2 quadratic form `Q = [A B/2; B/2 C]` has rank 1 with
+///    eigenvalues `(0, A+C)`. The eigenvector for the zero eigenvalue
+///    is the parabola's axis direction.
+/// 3. Rotate coords so the axis is aligned with y. The conic becomes
+///    `A'·x'² + D'·x' + E'·y' + F' = 0` (the y'² and x'·y' terms vanish).
+/// 4. Complete the square in x' to get canonical form
+///    `(x' − xv)² = (4f) · (y' − yv)` where the vertex is at
+///    `(xv, yv)` and `f = −A'/(4·E')` is the focal length.
+fn try_recognize_parabola(samples: &[Point3], tolerance: f64) -> Option<(Point3, Vec3, Vec3, f64)> {
+    if samples.len() < 5 {
+        return None;
+    }
+
+    // Plane + coplanarity check (same as ellipse).
+    let p0 = samples[0];
+    let mut normal: Option<Vec3> = None;
+    'outer: for i in 1..samples.len() {
+        let v1 = samples[i] - p0;
+        for pt in samples.iter().skip(i + 1) {
+            let v2 = *pt - p0;
+            let n = v1.cross(v2);
+            if n.length() > tolerance {
+                if let Ok(normalized) = n.normalize() {
+                    normal = Some(normalized);
+                    break 'outer;
+                }
+            }
+        }
+    }
+    let n = normal?;
+    let d_plane = n.dot(Vec3::new(p0.x(), p0.y(), p0.z()));
+    for pt in samples {
+        let dist = n.dot(Vec3::new(pt.x(), pt.y(), pt.z())) - d_plane;
+        if dist.abs() > tolerance {
+            return None;
+        }
+    }
+
+    let u_seed = (samples[1] - p0).normalize().ok()?;
+    let v_seed = n.cross(u_seed).normalize().ok()?;
+    let raw_pts2d: Vec<(f64, f64)> = samples
+        .iter()
+        .map(|pt| {
+            let v = *pt - p0;
+            (u_seed.dot(v), v_seed.dot(v))
+        })
+        .collect();
+    #[allow(clippy::cast_precision_loss)]
+    let n_f = raw_pts2d.len() as f64;
+    let shift_x = raw_pts2d.iter().map(|p| p.0).sum::<f64>() / n_f;
+    let shift_y = raw_pts2d.iter().map(|p| p.1).sum::<f64>() / n_f;
+    let pts2d: Vec<(f64, f64)> = raw_pts2d
+        .iter()
+        .map(|&(x, y)| (x - shift_x, y - shift_y))
+        .collect();
+
+    // Algebraic conic fit.
+    let mut mat = [[0.0_f64; 5]; 5];
+    let mut rhs = [0.0_f64; 5];
+    for &(x, y) in &pts2d {
+        let row = [x * x, x * y, y * y, x, y];
+        for i in 0..5 {
+            for j in 0..5 {
+                mat[i][j] += row[i] * row[j];
+            }
+            rhs[i] += row[i];
+        }
+    }
+    let theta = solve_5x5(&mat, &rhs)?;
+    let (a_c, b_c, c_c) = (theta[0], theta[1], theta[2]);
+    // d_c, e_c (linear terms) aren't needed once we rotate into the
+    // axis-aligned frame and refit there.
+
+    // Parabola: |B² − 4AC| < tolerance. Use a tolerance scaled to
+    // the magnitude of the coefficients to avoid false positives on
+    // small conics.
+    let disc = b_c * b_c - 4.0 * a_c * c_c;
+    let scale = a_c.abs().max(c_c.abs()).max(1.0);
+    if disc.abs() > tolerance * scale {
+        return None;
+    }
+
+    // Eigenvector for the zero eigenvalue of Q = [A B/2; B/2 C].
+    // For B²−4AC = 0, the larger eigenvalue is A + C (assuming both
+    // A, C have the same sign or one is zero), and the zero
+    // eigenvector is perpendicular to the (cos θ, sin θ) where
+    // tan(θ) corresponds to the non-zero eigenvalue.
+    //
+    // Robust computation: the zero-eigenvector direction is
+    // proportional to (B, −2A) (orthogonal to (2A, B), which is
+    // the row of Q). Equivalently, it's `(−2C, B)` from the second
+    // row. Normalize to get the parabola axis direction.
+    let axis_2d = {
+        let v1 = (b_c, -2.0 * a_c);
+        let v2 = (-2.0 * c_c, b_c);
+        let len1 = (v1.0 * v1.0 + v1.1 * v1.1).sqrt();
+        let len2 = (v2.0 * v2.0 + v2.1 * v2.1).sqrt();
+        // Prefer the larger-magnitude vector for numerical stability.
+        let (vx, vy, len) = if len1 >= len2 {
+            (v1.0, v1.1, len1)
+        } else {
+            (v2.0, v2.1, len2)
+        };
+        if len < 1e-30 {
+            return None;
+        }
+        (vx / len, vy / len)
+    };
+    // Perpendicular (in-plane) direction to axis.
+    let perp_2d = (-axis_2d.1, axis_2d.0);
+
+    // Rotate samples so the parabola axis is aligned with the y'
+    // direction. New coords:
+    //   x' = perp_2d · (x, y)
+    //   y' = axis_2d · (x, y)
+    // In rotated coords, the conic should be
+    //   A' · x'² + D' · x' + E' · y' = 1  (B' = 0, C' = 0).
+    let mut sxx = 0.0_f64;
+    let mut sx = 0.0_f64;
+    let mut sy = 0.0_f64;
+    let mut s = 0.0_f64; // count
+    let mut sx_sq = 0.0_f64;
+    let mut sx_xx = 0.0_f64;
+    let mut sx_y = 0.0_f64;
+    let mut sxx_sq = 0.0_f64;
+    let mut sxx_y = 0.0_f64;
+    let mut sy_y = 0.0_f64;
+    // Simpler: just refit with the rotated coordinates via a 3-unknown
+    // least-squares: A' · x'² + D' · x' + E' · y' = 1.
+    let mut mat3 = [[0.0_f64; 3]; 3];
+    let mut rhs3 = [0.0_f64; 3];
+    for &(x, y) in &pts2d {
+        let xp = perp_2d.0 * x + perp_2d.1 * y;
+        let yp = axis_2d.0 * x + axis_2d.1 * y;
+        let row = [xp * xp, xp, yp];
+        for i in 0..3 {
+            for j in 0..3 {
+                mat3[i][j] += row[i] * row[j];
+            }
+            rhs3[i] += row[i];
+        }
+        sxx += xp * xp;
+        sx += xp;
+        sy += yp;
+        s += 1.0;
+        sx_sq += xp * xp * xp * xp;
+        sx_xx += xp * xp * xp;
+        sx_y += xp * yp;
+        sxx_sq += xp * xp * xp * xp;
+        sxx_y += xp * xp * yp;
+        sy_y += yp * yp;
+    }
+    let _ = (sxx, sx, sy, s, sx_sq, sx_xx, sx_y, sxx_sq, sxx_y, sy_y);
+    let sol = solve_3x3_local(mat3, rhs3)?;
+    let a_p = sol[0];
+    let d_p = sol[1];
+    let e_p = sol[2];
+
+    if a_p.abs() < 1e-30 || e_p.abs() < 1e-30 {
+        return None;
+    }
+
+    // Vertex in rotated/shifted coords: complete the square in xp:
+    //   A·(xp + D/(2A))² = 1 + D²/(4A) − E·yp
+    //   Let xpv = -D/(2A), ypv = (1 + D²/(4A))/E. Then at vertex:
+    //   xp = xpv, yp = ypv.
+    let xpv = -d_p / (2.0 * a_p);
+    let ypv = (1.0 + d_p * d_p / (4.0 * a_p)) / e_p;
+
+    // Focal length: from canonical (xp − xpv)² = -E/A · (yp − ypv)
+    //              = 4f · (yp − ypv) ⇒ f = -E / (4A).
+    // Use the absolute value (parabola direction encoded in axis sign).
+    let focal_length = (-e_p / (4.0 * a_p)).abs();
+    if focal_length < tolerance {
+        return None;
+    }
+
+    // Verify residuals in rotated coords: each sample should satisfy
+    // A·xp² + D·xp + E·yp = 1 within tolerance.
+    for &(x, y) in &pts2d {
+        let xp = perp_2d.0 * x + perp_2d.1 * y;
+        let yp = axis_2d.0 * x + axis_2d.1 * y;
+        let lhs = a_p * xp * xp + d_p * xp + e_p * yp;
+        if (lhs - 1.0).abs() > tolerance {
+            return None;
+        }
+    }
+
+    // Translate vertex back from rotated/shifted to (u_seed, v_seed)
+    // 2D coords. (xpv, ypv) are in the rotated frame whose basis is
+    // (perp_2d, axis_2d).
+    let vx = perp_2d.0 * xpv + axis_2d.0 * ypv + shift_x;
+    let vy = perp_2d.1 * xpv + axis_2d.1 * ypv + shift_y;
+    let vertex = p0 + u_seed * vx + v_seed * vy;
+
+    // Axis direction in 3D: project axis_2d through (u_seed, v_seed).
+    // Sign: choose so axis_dir points INTO the parabola (toward
+    // increasing yp from the vertex). If E > 0 in the canonical
+    // x'² = -E/A · y' form, the parabola opens in the −y' direction
+    // (negative axis_2d). If E < 0, opens in +y'. Use sign of -e_p/a_p.
+    let opening_sign = (-e_p / a_p).signum();
+    let axis_dir = (u_seed * axis_2d.0 + v_seed * axis_2d.1).normalize().ok()?;
+    let axis_dir = axis_dir * opening_sign;
+
+    Some((vertex, n, axis_dir, focal_length))
+}
+
+/// Solve a 3×3 linear system via Gaussian elimination with partial
+/// pivoting. Returns `None` if the matrix is singular.
+fn solve_3x3_local(mat: [[f64; 3]; 3], rhs: [f64; 3]) -> Option<[f64; 3]> {
+    let mut m = mat;
+    let mut b = rhs;
+    for i in 0..3 {
+        let mut max_row = i;
+        let mut max_val = m[i][i].abs();
+        for k in (i + 1)..3 {
+            if m[k][i].abs() > max_val {
+                max_val = m[k][i].abs();
+                max_row = k;
+            }
+        }
+        if max_val < 1e-30 {
+            return None;
+        }
+        if max_row != i {
+            m.swap(i, max_row);
+            b.swap(i, max_row);
+        }
+        for k in (i + 1)..3 {
+            let factor = m[k][i] / m[i][i];
+            for j in i..3 {
+                m[k][j] -= factor * m[i][j];
+            }
+            b[k] -= factor * b[i];
+        }
+    }
+    let mut x = [0.0_f64; 3];
+    for i in (0..3).rev() {
+        let mut sum = b[i];
+        for j in (i + 1)..3 {
+            sum -= m[i][j] * x[j];
+        }
+        x[i] = sum / m[i][i];
+    }
+    Some(x)
+}
+
 /// Solve a 5×5 linear system via Gaussian elimination with partial
 /// pivoting. Returns `None` if the matrix is singular.
 fn solve_5x5(mat: &[[f64; 5]; 5], rhs: &[f64; 5]) -> Option<[f64; 5]> {
@@ -764,7 +1044,7 @@ mod tests {
 
     use std::f64::consts::TAU;
 
-    use brepkit_math::curves::{Circle3D, Ellipse3D, Hyperbola3D};
+    use brepkit_math::curves::{Circle3D, Ellipse3D, Hyperbola3D, Parabola3D};
     use brepkit_math::nurbs::curve::NurbsCurve;
     use brepkit_math::vec::{Point3, Vec3};
 
@@ -984,6 +1264,76 @@ mod tests {
     fn ellipse_is_not_recognized_as_hyperbola() {
         // Ellipse must hit the Ellipse path (B²−4AC < 0), not fall
         // through to Hyperbola (B²−4AC > 0).
+        let ellipse = Ellipse3D::new(origin(), z_axis(), 3.0, 1.5).unwrap();
+        let nurbs = ellipse_to_nurbs(&ellipse, 0.0, TAU).unwrap();
+        assert!(matches!(
+            recognize_curve(&nurbs, 1e-6),
+            RecognizedCurve::Ellipse { .. }
+        ));
+    }
+
+    // ── parabola round-trip ──────────────────────────────────────────────────
+
+    /// Build a non-rational degree-2 NURBS for a parabolic arc,
+    /// mirroring heal's `parabola_to_nurbs` (geometry/curve_to_nurbs.rs
+    /// doesn't have one).
+    fn parabola_to_nurbs_inline(par: &Parabola3D, t_min: f64, t_max: f64) -> NurbsCurve {
+        let p0 = par.evaluate(t_min);
+        let p2 = par.evaluate(t_max);
+        let f = par.focal_length();
+        let p1 = par.vertex()
+            + par.axis_dir() * (t_min * t_max / (4.0 * f))
+            + par.u_axis() * f64::midpoint(t_min, t_max);
+        NurbsCurve::new(
+            2,
+            vec![t_min, t_min, t_min, t_max, t_max, t_max],
+            vec![p0, p1, p2],
+            vec![1.0, 1.0, 1.0],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn recognize_parabola_round_trip() {
+        // Parabola with vertex at origin, axis +z (in xy-plane normal),
+        // focal length 1.0. Sampled over t ∈ [-3, 3].
+        let par = Parabola3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0_f64,
+        )
+        .unwrap();
+        let nurbs = parabola_to_nurbs_inline(&par, -3.0, 3.0);
+
+        match recognize_curve(&nurbs, 1e-5) {
+            RecognizedCurve::Parabola {
+                vertex,
+                axis_dir,
+                focal_length,
+                ..
+            } => {
+                assert!(
+                    Vec3::new(vertex.x(), vertex.y(), vertex.z()).length() < 1e-3,
+                    "vertex {vertex:?} not at origin"
+                );
+                assert!(
+                    axis_dir.dot(Vec3::new(0.0, 0.0, 1.0)).abs() > 1.0 - 1e-3,
+                    "axis_dir {axis_dir:?} not aligned with z"
+                );
+                assert!(
+                    (focal_length - 1.0).abs() < 1e-3,
+                    "focal_length {focal_length} vs 1.0"
+                );
+            }
+            other => panic!("expected Parabola, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ellipse_is_not_recognized_as_parabola() {
+        // Ellipses must hit the Ellipse path, not fall through to
+        // Parabola (which would happen if my discriminant tolerance
+        // is too loose).
         let ellipse = Ellipse3D::new(origin(), z_axis(), 3.0, 1.5).unwrap();
         let nurbs = ellipse_to_nurbs(&ellipse, 0.0, TAU).unwrap();
         assert!(matches!(
