@@ -1,8 +1,9 @@
 //! Recognize NURBS curves as elementary analytic forms.
 //!
-//! Samples a NURBS curve at 16 evenly-spaced parameter values and tests
-//! whether the sample set is consistent with a line or circle within the
-//! given tolerance. Returns a [`RecognizedCurve`] describing the best match.
+//! Samples a NURBS curve at 16 evenly-spaced parameter values and
+//! tests whether the sample set is consistent with a line, circle, or
+//! ellipse within the given tolerance. Returns a [`RecognizedCurve`]
+//! describing the best match.
 
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point3, Vec3};
@@ -26,6 +27,19 @@ pub enum RecognizedCurve {
         /// Circle radius.
         radius: f64,
     },
+    /// Recognized as an ellipse (or elliptic arc, or full ellipse).
+    Ellipse {
+        /// Center of the ellipse.
+        center: Point3,
+        /// Ellipse normal (unit vector perpendicular to the ellipse plane).
+        normal: Vec3,
+        /// Direction of the semi-major axis (unit vector in the ellipse plane).
+        u_axis: Vec3,
+        /// Larger semi-axis length.
+        semi_major: f64,
+        /// Smaller semi-axis length.
+        semi_minor: f64,
+    },
     /// The curve could not be matched to any elementary form.
     NotRecognized,
 }
@@ -36,6 +50,10 @@ pub enum RecognizedCurve {
 /// 1. **Line**: all points collinear — max perpendicular deviation < `tolerance`.
 /// 2. **Circle**: all points equidistant from a best-fit center and coplanar —
 ///    max radial deviation and max out-of-plane deviation both < `tolerance`.
+/// 3. **Ellipse**: all points coplanar and lie on a best-fit ellipse — max
+///    residual against `(local_x/a)² + (local_y/b)² = 1` < `tolerance`. Tested
+///    after circle so that a true circle is reported as `Circle`, not as
+///    `Ellipse` with `a == b`.
 ///
 /// Returns the first match, or [`RecognizedCurve::NotRecognized`].
 #[must_use]
@@ -59,6 +77,17 @@ pub fn recognize_curve(curve: &NurbsCurve, tolerance: f64) -> RecognizedCurve {
             center,
             normal,
             radius,
+        };
+    }
+    if let Some((center, normal, u_axis, semi_major, semi_minor)) =
+        try_recognize_ellipse(&samples, tolerance)
+    {
+        return RecognizedCurve::Ellipse {
+            center,
+            normal,
+            u_axis,
+            semi_major,
+            semi_minor,
         };
     }
     RecognizedCurve::NotRecognized
@@ -225,6 +254,218 @@ fn try_recognize_circle(samples: &[Point3], tolerance: f64) -> Option<(Point3, V
     Some((center, n, mean_radius))
 }
 
+// ── Ellipse recognition ──────────────────────────────────────────────────────
+
+/// Check if all sample points lie on an ellipse.
+///
+/// 1. Find a stable plane normal (same as `try_recognize_circle`).
+/// 2. Require coplanarity within `tolerance`.
+/// 3. Project to 2D using the plane's `(u_seed, v_seed)` basis.
+/// 4. Solve the algebraic conic fit `A·x² + B·xy + C·y² + D·x + E·y = 1`
+///    (5 unknowns, ≥5 samples) via least-squares normal equations.
+/// 5. Recover canonical `(center, axes, semi_major, semi_minor)` from
+///    the conic coefficients.
+/// 6. Verify all samples satisfy `(local_x/a)² + (local_y/b)² = 1`
+///    within `tolerance`.
+///
+/// This direct algebraic fit avoids the bias of using the sample
+/// centroid as a center estimate — which is incorrect when samples
+/// aren't uniformly-in-angle on the ellipse (e.g., NURBS-uniform
+/// parameter sampling, which is what `recognize_curve` provides).
+fn try_recognize_ellipse(
+    samples: &[Point3],
+    tolerance: f64,
+) -> Option<(Point3, Vec3, Vec3, f64, f64)> {
+    if samples.len() < 5 {
+        return None;
+    }
+
+    // ── Step 1-2: plane + coplanarity ────────────────────────────────────────
+    let p0 = samples[0];
+    let mut normal: Option<Vec3> = None;
+    'outer: for i in 1..samples.len() {
+        let v1 = samples[i] - p0;
+        for pt in samples.iter().skip(i + 1) {
+            let v2 = *pt - p0;
+            let n = v1.cross(v2);
+            if n.length() > tolerance {
+                if let Ok(normalized) = n.normalize() {
+                    normal = Some(normalized);
+                    break 'outer;
+                }
+            }
+        }
+    }
+    let n = normal?;
+
+    let d_plane = n.dot(Vec3::new(p0.x(), p0.y(), p0.z()));
+    for pt in samples {
+        let dist = n.dot(Vec3::new(pt.x(), pt.y(), pt.z())) - d_plane;
+        if dist.abs() > tolerance {
+            return None;
+        }
+    }
+
+    // ── Step 3: project to 2D, shifting origin to the sample
+    //    centroid. This centroid is NOT necessarily the ellipse
+    //    center (sampling may be non-uniform-in-angle), but it
+    //    moves all samples far from the 2D origin so the F=-1
+    //    normalization in step 4 doesn't degenerate. (If we used
+    //    p0 as the origin, p0 is on the ellipse so F=0 and the
+    //    A·x² + … = 1 fit can't represent the conic.) ──────────────
+    let u_seed = (samples[1] - p0).normalize().ok()?;
+    let v_seed = n.cross(u_seed).normalize().ok()?;
+
+    let raw_pts2d: Vec<(f64, f64)> = samples
+        .iter()
+        .map(|pt| {
+            let v = *pt - p0;
+            (u_seed.dot(v), v_seed.dot(v))
+        })
+        .collect();
+    #[allow(clippy::cast_precision_loss)]
+    let n_f = raw_pts2d.len() as f64;
+    let shift_x = raw_pts2d.iter().map(|p| p.0).sum::<f64>() / n_f;
+    let shift_y = raw_pts2d.iter().map(|p| p.1).sum::<f64>() / n_f;
+    let pts2d: Vec<(f64, f64)> = raw_pts2d
+        .iter()
+        .map(|&(x, y)| (x - shift_x, y - shift_y))
+        .collect();
+
+    // ── Step 4: algebraic conic fit (least-squares) ──────────────────────────
+    // Solve A·x² + B·xy + C·y² + D·x + E·y = 1 via normal equations.
+    // 5×5 symmetric system M·θ = b where θ = [A, B, C, D, E]ᵀ.
+    let mut mat = [[0.0_f64; 5]; 5];
+    let mut rhs = [0.0_f64; 5];
+    for &(x, y) in &pts2d {
+        let row = [x * x, x * y, y * y, x, y];
+        for i in 0..5 {
+            for j in 0..5 {
+                mat[i][j] += row[i] * row[j];
+            }
+            rhs[i] += row[i];
+        }
+    }
+    let theta = solve_5x5(&mat, &rhs)?;
+    let (a_c, b_c, c_c, d_c, e_c) = (theta[0], theta[1], theta[2], theta[3], theta[4]);
+
+    // For an ellipse: B² < 4AC (positive discriminant for ellipse).
+    let disc = b_c * b_c - 4.0 * a_c * c_c;
+    if disc >= -tolerance {
+        return None; // Not an ellipse (could be parabola/hyperbola/degenerate).
+    }
+
+    // ── Step 5: recover canonical form ───────────────────────────────────────
+    // Center: solve [2A B; B 2C] [cx; cy] = -[D; E].
+    let m_det = 4.0 * a_c * c_c - b_c * b_c;
+    if m_det.abs() < 1e-30 {
+        return None;
+    }
+    let cx_2d = (-2.0 * c_c * d_c + b_c * e_c) / m_det;
+    let cy_2d = (b_c * d_c - 2.0 * a_c * e_c) / m_det;
+
+    // Translate to center: A·u² + B·uv + C·v² = K where
+    // K = 1 - (A·cx² + B·cx·cy + C·cy² + D·cx + E·cy).
+    let k = 1.0
+        - (a_c * cx_2d * cx_2d
+            + b_c * cx_2d * cy_2d
+            + c_c * cy_2d * cy_2d
+            + d_c * cx_2d
+            + e_c * cy_2d);
+    if k <= 0.0 {
+        return None;
+    }
+
+    // Eigendecompose [A B/2; B/2 C] / K to get principal axes and
+    // semi-axis lengths. λ_max = 1/semi_minor², λ_min = 1/semi_major².
+    let aa = a_c / k;
+    let bb = b_c / k;
+    let cc = c_c / k;
+    let trace_half = 0.5 * (aa + cc);
+    let diff_half = 0.5 * (aa - cc);
+    let radical = diff_half.hypot(0.5 * bb);
+    let lambda1 = trace_half + radical;
+    let lambda2 = trace_half - radical;
+    if lambda1 <= 0.0 || lambda2 <= 0.0 {
+        return None;
+    }
+    // Smaller eigenvalue → larger semi-axis (semi_major).
+    let semi_major = 1.0 / lambda2.sqrt();
+    let semi_minor = 1.0 / lambda1.sqrt();
+
+    // Major axis = eigenvector for the SMALLER eigenvalue (since
+    // λ_min = 1/semi_major²). The standard formula
+    //   2θ = atan2(B, A − C)
+    // gives the eigenvector for the LARGER eigenvalue (semi-minor
+    // direction); we add π/2 to rotate to the major-axis direction.
+    let theta_axis = 0.5 * bb.atan2(aa - cc) + std::f64::consts::FRAC_PI_2;
+    let (sin_t, cos_t) = theta_axis.sin_cos();
+    let u_local = (cos_t, sin_t);
+
+    // ── Step 6: verify residual against the implicit equation ────────────────
+    for &(x, y) in &pts2d {
+        let dx = x - cx_2d;
+        let dy = y - cy_2d;
+        let lu = dx * u_local.0 + dy * u_local.1;
+        let lv = -dx * u_local.1 + dy * u_local.0;
+        let resid = (lu / semi_major).hypot(lv / semi_minor) - 1.0;
+        if resid.abs() > tolerance {
+            return None;
+        }
+    }
+
+    // ── Convert center + axes back to 3D ─────────────────────────────────────
+    // cx_2d/cy_2d are in the SHIFTED coords; add back the shift to
+    // get coords in the (u_seed, v_seed) basis with origin p0.
+    let center = p0 + u_seed * (cx_2d + shift_x) + v_seed * (cy_2d + shift_y);
+    let u_axis_3d = (u_seed * u_local.0 + v_seed * u_local.1).normalize().ok()?;
+
+    Some((center, n, u_axis_3d, semi_major, semi_minor))
+}
+
+/// Solve a 5×5 linear system via Gaussian elimination with partial
+/// pivoting. Returns `None` if the matrix is singular.
+fn solve_5x5(mat: &[[f64; 5]; 5], rhs: &[f64; 5]) -> Option<[f64; 5]> {
+    let mut m = *mat;
+    let mut b = *rhs;
+    for i in 0..5 {
+        // Partial pivot.
+        let mut max_row = i;
+        let mut max_val = m[i][i].abs();
+        for k in (i + 1)..5 {
+            if m[k][i].abs() > max_val {
+                max_val = m[k][i].abs();
+                max_row = k;
+            }
+        }
+        if max_val < 1e-30 {
+            return None;
+        }
+        if max_row != i {
+            m.swap(i, max_row);
+            b.swap(i, max_row);
+        }
+        // Eliminate below.
+        for k in (i + 1)..5 {
+            let factor = m[k][i] / m[i][i];
+            for j in i..5 {
+                m[k][j] -= factor * m[i][j];
+            }
+            b[k] -= factor * b[i];
+        }
+    }
+    // Back substitute.
+    let mut x = [0.0_f64; 5];
+    for i in (0..5).rev() {
+        let mut sum = b[i];
+        for j in (i + 1)..5 {
+            sum -= m[i][j] * x[j];
+        }
+        x[i] = sum / m[i][i];
+    }
+    Some(x)
+}
+
 // ── Lightweight detection ────────────────────────────────────────────────────
 
 /// Detected geometric kind of a NURBS curve (without recovering full analytic
@@ -347,11 +588,11 @@ mod tests {
 
     use std::f64::consts::TAU;
 
-    use brepkit_math::curves::Circle3D;
+    use brepkit_math::curves::{Circle3D, Ellipse3D};
     use brepkit_math::vec::{Point3, Vec3};
 
     use super::*;
-    use crate::convert::curve_to_nurbs::{circle_to_nurbs, line_to_nurbs};
+    use crate::convert::curve_to_nurbs::{circle_to_nurbs, ellipse_to_nurbs, line_to_nurbs};
 
     fn origin() -> Point3 {
         Point3::new(0.0, 0.0, 0.0)
@@ -435,6 +676,61 @@ mod tests {
         assert!(matches!(
             recognize_curve(&nurbs, 1e-6),
             RecognizedCurve::Line { .. }
+        ));
+    }
+
+    // ── ellipse round-trip ───────────────────────────────────────────────────
+
+    #[test]
+    fn recognize_full_ellipse_round_trip() {
+        // Build a NURBS for a full ellipse, recognize it, and verify
+        // semi-axes / center / normal match within tolerance.
+        let center = Point3::new(2.0, -1.0, 5.0);
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let a = 3.0_f64;
+        let b = 1.5_f64;
+        let ellipse = Ellipse3D::new(center, normal, a, b).unwrap();
+        let nurbs = ellipse_to_nurbs(&ellipse, 0.0, TAU).unwrap();
+
+        match recognize_curve(&nurbs, 1e-5) {
+            RecognizedCurve::Ellipse {
+                center: c,
+                normal: n,
+                semi_major,
+                semi_minor,
+                ..
+            } => {
+                assert!(
+                    (c - center).length() < 1e-4,
+                    "center mismatch: {c:?} vs {center:?}"
+                );
+                assert!(
+                    (n.dot(normal).abs() - 1.0).abs() < 1e-6,
+                    "normal mismatch (cos angle {})",
+                    n.dot(normal)
+                );
+                assert!(
+                    (semi_major - a).abs() < 1e-4,
+                    "semi_major {semi_major} vs {a}"
+                );
+                assert!(
+                    (semi_minor - b).abs() < 1e-4,
+                    "semi_minor {semi_minor} vs {b}"
+                );
+            }
+            other => panic!("expected Ellipse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn circle_is_recognized_as_circle_not_ellipse() {
+        // True circles should match Circle (which is tested first), not
+        // be downgraded to an Ellipse with a == b.
+        let circle = Circle3D::new(origin(), z_axis(), 2.5).unwrap();
+        let nurbs = circle_to_nurbs(&circle, 0.0, TAU).unwrap();
+        assert!(matches!(
+            recognize_curve(&nurbs, 1e-6),
+            RecognizedCurve::Circle { .. }
         ));
     }
 }
