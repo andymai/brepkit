@@ -99,6 +99,9 @@ pub fn try_analytic_fillet(
             }
             Ok(result)
         }
+        (FaceSurface::Sphere(s1), FaceSurface::Sphere(s2)) => {
+            sphere_sphere_fillet(s1, s2, spine, topo, radius, face1, face2)
+        }
         // Pairs without an analytic path → walker fallback. Enumerated
         // exhaustively (matching `try_analytic_chamfer`) so adding a new
         // `FaceSurface` variant produces a compile error at this site
@@ -113,9 +116,10 @@ pub fn try_analytic_fillet(
             FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
         )
         | (
-            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_),
         )
+        | (FaceSurface::Sphere(_), FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
         | (
             FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
             FaceSurface::Plane { .. }
@@ -2204,6 +2208,264 @@ pub fn plane_sphere_chamfer(
     }))
 }
 
+/// Fillet between two intersecting spheres — the rolling-ball blend is
+/// an exact torus around the line connecting the sphere centers.
+///
+/// Convex-only for v1 (both faces NOT reversed; rolling ball externally
+/// tangent to both spheres). Concave / mixed cases (e.g. one or both
+/// faces reversed) defer to follow-up since they switch tangency type
+/// (`R−r` instead of `R+r`) and the spindle bound differs.
+///
+/// # Geometry
+///
+/// Place the C1→C2 line as the symmetry axis (length `D = |C2 − C1|`).
+/// The intersection circle (spine) lies in the plane perpendicular to
+/// that axis at axial position
+///   `a₀ = (R1² − R2² + D²) / (2D)`
+/// with radius `r_p = √(R1² − a₀²)` (well-defined when
+/// `|R1 − R2| < D < R1 + R2`).
+///
+/// Rolling-ball external tangency `|ball − Ci| = Ri + r` gives the
+/// fillet torus parameters:
+///   torus axis    = (C2 − C1) / D
+///   torus center  = C1 + axis · (a₀ + r·δ)    where δ = (R1 − R2)/D
+///   major radius  = R_t = √((R1 + r)² − (a₀ + r·δ)²)
+///   minor radius  = r
+///
+/// At `R1 = R2` the offset `r·δ` collapses to zero — torus center sits
+/// exactly on the symmetry-axis midpoint of the spine plane. For
+/// general `R1 ≠ R2` it shifts toward the smaller-radius sphere.
+///
+/// # Returns
+///
+/// `Ok(None)` (walker fallback) when:
+///   - either face is reversed (concave / hole / etc — separate path),
+///   - the spheres don't intersect properly (`D ≤ |R1−R2|` or
+///     `D ≥ R1+R2`),
+///   - the resulting major < minor (spindle), or
+///   - the spine is degenerate.
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or NURBS construction fails.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn sphere_sphere_fillet(
+    s1: &brepkit_math::surfaces::SphericalSurface,
+    s2: &brepkit_math::surfaces::SphericalSurface,
+    spine: &Spine,
+    topo: &Topology,
+    radius: f64,
+    face1: FaceId,
+    face2: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    use brepkit_math::surfaces::ToroidalSurface;
+    use std::f64::consts::PI;
+
+    let tol_lin = 1e-9;
+
+    if radius <= tol_lin {
+        return Ok(None);
+    }
+    // Convex only: both faces NOT reversed.
+    if topo.face(face1)?.is_reversed() || topo.face(face2)?.is_reversed() {
+        return Ok(None);
+    }
+
+    let big_r1 = s1.radius();
+    let big_r2 = s2.radius();
+    let c1 = s1.center();
+    let c2 = s2.center();
+    let c1_to_c2 = c2 - c1;
+    let big_d = c1_to_c2.length();
+    if big_d <= tol_lin {
+        return Ok(None);
+    }
+    // Spheres must form a real intersection circle: |R1−R2| < D < R1+R2.
+    if big_d <= (big_r1 - big_r2).abs() + tol_lin || big_d >= big_r1 + big_r2 - tol_lin {
+        return Ok(None);
+    }
+
+    let axis = (c1_to_c2 * (1.0 / big_d)).normalize()?;
+
+    // Spine geometry along the C1→C2 axis.
+    let a0 = (big_r1 * big_r1 - big_r2 * big_r2 + big_d * big_d) / (2.0 * big_d);
+    let r_p_sq = big_r1 * big_r1 - a0 * a0;
+    if r_p_sq <= tol_lin * tol_lin {
+        return Ok(None);
+    }
+
+    // Rolling-ball axial position and major radius.
+    let big_delta = (big_r1 - big_r2) / big_d;
+    let a_ball = a0 + radius * big_delta;
+    let major_radius_sq = (big_r1 + radius) * (big_r1 + radius) - a_ball * a_ball;
+    if major_radius_sq <= tol_lin * tol_lin {
+        return Ok(None);
+    }
+    let major_radius = major_radius_sq.sqrt();
+    let minor_radius = radius;
+    if major_radius < minor_radius - tol_lin {
+        return Ok(None);
+    }
+
+    // Spine span (closed-circle aware).
+    let edges = spine.edges();
+    let is_closed_spine = if edges.len() == 1 {
+        let e = topo.edge(edges[0])?;
+        e.start() == e.end()
+    } else {
+        false
+    };
+    let spine_len = spine.length();
+    if !is_closed_spine && spine_len < tol_lin {
+        return Ok(None);
+    }
+
+    // Axisymmetry guards: each sphere's parametric z-axis must align
+    // with the C1→C2 axis so the contact circles are constant-v
+    // latitudes on the respective spheres (otherwise the pcurves we
+    // build below as constant-v Line2Ds are wrong).
+    let tol_ang = 1e-9;
+    if s1.z_axis().dot(axis).abs() < 1.0 - tol_ang || s2.z_axis().dot(axis).abs() < 1.0 - tol_ang {
+        return Ok(None);
+    }
+
+    // Pick a reference direction perpendicular to the axis. Inherit
+    // sphere1's frame (well-defined when its z-axis is aligned with
+    // `axis`); fall back to sphere1.y_axis if x_axis happens to coincide
+    // with axis under floating-point drift.
+    let s1_x = s1.x_axis();
+    let s1_y = s1.y_axis();
+    let ref_dir = if s1_x.cross(axis).length() > tol_ang {
+        s1_x
+    } else {
+        s1_y
+    };
+
+    let torus_center = c1 + axis * a_ball;
+    let torus = ToroidalSurface::with_axis_and_ref_dir(
+        torus_center,
+        major_radius,
+        minor_radius,
+        axis,
+        ref_dir,
+    )?;
+
+    // Spine plane center (where the spine circle lies).
+    let spine_plane_center = c1 + axis * a0;
+
+    // u-parameter for a point on a contact circle around the axis.
+    // Use the in-axis-perpendicular component of (point − spine_center)
+    // projected onto (ref_dir, axis × ref_dir) to recover u.
+    let perp_y = axis.cross(ref_dir).normalize()?;
+    let u_at = |p: Point3| {
+        let v = p - spine_plane_center;
+        perp_y.dot(v).atan2(ref_dir.dot(v))
+    };
+    let p_spine_start = spine.evaluate(topo, 0.0)?;
+    let u_start = u_at(p_spine_start);
+    let u_end = if is_closed_spine {
+        u_start + 2.0 * PI
+    } else {
+        let p_spine_end = spine.evaluate(topo, spine_len)?;
+        let u_end_raw = u_at(p_spine_end);
+        if u_end_raw > u_start {
+            u_end_raw
+        } else {
+            u_end_raw + 2.0 * PI
+        }
+    };
+
+    // 3D contact circles. Plate-side analog: contact1 on sphere1,
+    // contact2 on sphere2. Each is a small circle on its respective
+    // sphere, in a plane perpendicular to the axis.
+    //
+    // Sphere1 contact: lies on sphere1 at distance R1 from C1 along the
+    // direction from C1 toward the rolling-ball center. Decomposing,
+    //   axial component (along axis from C1) = R1·a_ball/(R1+r),
+    //   radial = R1·R_t/(R1+r).
+    let s1_contact_axial = big_r1 * a_ball / (big_r1 + radius);
+    let s1_contact_radial = big_r1 * major_radius / (big_r1 + radius);
+    let s1_contact_center = c1 + axis * s1_contact_axial;
+    let contact1_circle = brepkit_math::curves::Circle3D::with_axes(
+        s1_contact_center,
+        axis,
+        s1_contact_radial,
+        ref_dir,
+        perp_y,
+    )?;
+
+    // Sphere2 contact: same logic, but the ball-center → C2 vector has
+    // axial component (a_ball − D), so
+    //   axial from C2 = R2·(a_ball − D)/(R2+r)   (negative when ball is
+    //                                              between C1 and C2),
+    //   radial = R2·R_t/(R2+r).
+    let s2_contact_axial_from_c2 = big_r2 * (a_ball - big_d) / (big_r2 + radius);
+    let s2_contact_radial = big_r2 * major_radius / (big_r2 + radius);
+    let s2_contact_center = c2 + axis * s2_contact_axial_from_c2;
+    let contact2_circle = brepkit_math::curves::Circle3D::with_axes(
+        s2_contact_center,
+        axis,
+        s2_contact_radial,
+        ref_dir,
+        perp_y,
+    )?;
+
+    let contact1 = circle_arc_to_nurbs(&contact1_circle, u_start, u_end)?;
+    let contact2 = circle_arc_to_nurbs(&contact2_circle, u_start, u_end)?;
+
+    // PCurves on each sphere — constant-v latitude lines at the
+    // contact's v-parameter (constant by axisymmetry guard above).
+    let sample1 = contact1_circle.evaluate(u_start);
+    let v1 = ParametricSurface::project_point(s1, sample1).1;
+    let pcurve1 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_start, v1),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+    let sample2 = contact2_circle.evaluate(u_start);
+    let v2 = ParametricSurface::project_point(s2, sample2).1;
+    let pcurve2 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_start, v2),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+
+    // Cross-sections at spine endpoints.
+    let p1_at = |u: f64| contact1_circle.evaluate(u);
+    let p2_at = |u: f64| contact2_circle.evaluate(u);
+    let center_at = |u: f64| {
+        let on_torus_eq = spine_plane_center
+            + ref_dir * (major_radius * u.cos())
+            + perp_y * (major_radius * u.sin());
+        on_torus_eq + axis * (a_ball - a0)
+    };
+    let section_at = |u: f64, t: f64| CircSection {
+        p1: p1_at(u),
+        p2: p2_at(u),
+        center: center_at(u),
+        radius,
+        uv1: (u, v1),
+        uv2: (u, v2),
+        t,
+    };
+    let section_start = section_at(u_start, 0.0);
+    let section_end = section_at(u_end, 1.0);
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Torus(torus),
+        pcurve1,
+        pcurve2,
+        contact1,
+        contact2,
+        face1,
+        face2,
+        sections: vec![section_start, section_end],
+    };
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
+}
+
 /// Fillet between two cylinders.
 ///
 /// Not yet implemented. Returns `None` so the caller falls back to the walking
@@ -3813,6 +4075,130 @@ mod tests {
         assert!(
             (sphere_dist - big_r).abs() < 1e-9,
             "sphere contact must lie on sphere: distance = {sphere_dist}, want {big_r}"
+        );
+    }
+
+    /// Sphere-sphere convex fillet: two intersecting spheres meeting along
+    /// a circular spine, rolling-ball blend traces a torus around the
+    /// line connecting their centers.
+    ///
+    /// For sphere1 at origin (R=2), sphere2 at (3, 0, 0) (R=2.5),
+    /// D=3, both faces NOT reversed:
+    ///   a₀ = (4 − 6.25 + 9) / 6 = 6.75/6 = 1.125
+    ///   r_p² = 4 − 1.265625 = 2.734375, r_p ≈ 1.654
+    ///   For r=0.4:
+    ///     δ = (2 − 2.5)/3 = −1/6
+    ///     a_ball = 1.125 + 0.4·(−1/6) ≈ 1.0583
+    ///     R_t² = (2.4)² − (1.0583)² = 5.76 − 1.12 = 4.64
+    ///     R_t ≈ 2.154
+    #[test]
+    fn sphere_sphere_fillet_convex_emits_torus() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r1: f64 = 2.0;
+        let big_r2: f64 = 2.5;
+        let big_d: f64 = 3.0;
+        let r_fillet: f64 = 0.4;
+
+        // Place spheres along +z (brepkit's `SphericalSurface::new` uses
+        // Frame3::from_normal with default z-axis = +z, which our
+        // axisymmetry guard requires to be aligned with the C1→C2 line).
+        // Sphere 1 at origin, sphere 2 at (0, 0, D); spine in the
+        // z = a0 plane with axis +z.
+        let a0 = (big_r1 * big_r1 - big_r2 * big_r2 + big_d * big_d) / (2.0 * big_d);
+        let r_p_sq = big_r1 * big_r1 - a0 * a0;
+        let r_p = r_p_sq.sqrt();
+
+        let s1 = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r1).unwrap();
+        let s2 = SphericalSurface::new(Point3::new(0.0, 0.0, big_d), big_r2).unwrap();
+        let spine_circle =
+            Circle3D::new(Point3::new(0.0, 0.0, a0), Vec3::new(0.0, 0.0, 1.0), r_p).unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_p, 0.0, a0), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face1 = topo.add_face(Face::new(w1, vec![], FaceSurface::Sphere(s1.clone())));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face2 = topo.add_face(Face::new(w2, vec![], FaceSurface::Sphere(s2.clone())));
+
+        let result = sphere_sphere_fillet(&s1, &s2, &spine, &topo, r_fillet, face1, face2)
+            .unwrap()
+            .expect("convex sphere-sphere fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        // Predicted torus parameters.
+        let big_delta = (big_r1 - big_r2) / big_d;
+        let a_ball = a0 + r_fillet * big_delta;
+        let expected_major = ((big_r1 + r_fillet) * (big_r1 + r_fillet) - a_ball * a_ball).sqrt();
+        assert!(
+            (torus.major_radius() - expected_major).abs() < 1e-12,
+            "major should be √((R1+r)²−a_ball²)={expected_major}, got {}",
+            torus.major_radius()
+        );
+        assert!(
+            (torus.minor_radius() - r_fillet).abs() < 1e-12,
+            "minor should equal fillet radius {r_fillet}, got {}",
+            torus.minor_radius()
+        );
+
+        // Torus center sits on the C1-C2 axis at the rolling-ball axial
+        // position. C1=origin, axis=+z, so center=(0, 0, a_ball).
+        let center = torus.center();
+        assert!(
+            center.x().abs() < 1e-12 && center.y().abs() < 1e-12,
+            "torus center should be on +z axis, got {center:?}"
+        );
+        assert!(
+            (center.z() - a_ball).abs() < 1e-12,
+            "torus center z should be a_ball={a_ball}, got {}",
+            center.z()
+        );
+
+        // Predict and verify both 3D contact points lie ON the torus.
+        // sphere1 contact axial from C1 = R1·a_ball/(R1+r).
+        let s1_axial = big_r1 * a_ball / (big_r1 + r_fillet);
+        let s1_radial = big_r1 * expected_major / (big_r1 + r_fillet);
+        let want_s1 = Point3::new(s1_radial, 0.0, s1_axial);
+        // sphere2 contact axial from C2 = R2·(a_ball − D)/(R2+r).
+        // World z = D + that.
+        let s2_axial_from_c2 = big_r2 * (a_ball - big_d) / (big_r2 + r_fillet);
+        let s2_radial = big_r2 * expected_major / (big_r2 + r_fillet);
+        let want_s2 = Point3::new(s2_radial, 0.0, big_d + s2_axial_from_c2);
+
+        let (u_p, v_p) = ParametricSurface::project_point(&torus, want_s1);
+        let on_torus_s1 = ParametricSurface::evaluate(&torus, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&torus, want_s2);
+        let on_torus_s2 = ParametricSurface::evaluate(&torus, u_q, v_q);
+        assert!(
+            (on_torus_s1 - want_s1).length() < 1e-9,
+            "sphere1 contact must lie on torus: gave {on_torus_s1:?}, want {want_s1:?}"
+        );
+        assert!(
+            (on_torus_s2 - want_s2).length() < 1e-9,
+            "sphere2 contact must lie on torus: gave {on_torus_s2:?}, want {want_s2:?}"
+        );
+
+        // And both contact points lie on their respective spheres.
+        let dist_s1 = (want_s1 - Point3::new(0.0, 0.0, 0.0)).length();
+        let dist_s2 = (want_s2 - Point3::new(0.0, 0.0, big_d)).length();
+        assert!(
+            (dist_s1 - big_r1).abs() < 1e-9,
+            "sphere1 contact must lie on sphere1: distance={dist_s1}, want R1={big_r1}"
+        );
+        assert!(
+            (dist_s2 - big_r2).abs() < 1e-9,
+            "sphere2 contact must lie on sphere2: distance={dist_s2}, want R2={big_r2}"
         );
     }
 
