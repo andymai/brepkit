@@ -212,6 +212,9 @@ pub fn try_analytic_chamfer(
             }
             Ok(result)
         }
+        (FaceSurface::Sphere(s1), FaceSurface::Sphere(s2)) => {
+            sphere_sphere_chamfer(s1, s2, spine, topo, d1, d2, face1, face2)
+        }
         (
             FaceSurface::Plane { .. }
             | FaceSurface::Cylinder(_)
@@ -222,9 +225,10 @@ pub fn try_analytic_chamfer(
             FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
         )
         | (
-            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_),
         )
+        | (FaceSurface::Sphere(_), FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
         | (
             FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
             FaceSurface::Plane { .. }
@@ -2477,6 +2481,278 @@ pub fn sphere_sphere_fillet(
     }))
 }
 
+/// Chamfer between two intersecting spheres — the chamfer surface is an
+/// axisymmetric cone connecting the two sphere-side contact circles.
+///
+/// `d1` is the geodesic distance on sphere1 (arc length along the
+/// meridian from the spine, going INTO sphere1's face); `d2` likewise
+/// on sphere2. Each sphere's "into face" direction is determined by
+/// its convexity (face NOT reversed = convex, going AWAY from the
+/// other sphere's center; face REVERSED = concave, going TOWARD).
+///
+/// All four convex/concave combinations are unified via per-sphere
+/// `signed_offset_i = ±1` flipping the meridian arm.
+///
+/// # Geometry
+///
+/// Place the C1→C2 line as the symmetry axis. Spine at axial position
+/// `a₀ = (R1² − R2² + D²)/(2D)`, radius `r_p = √(R1² − a₀²)`. With
+/// `δi = di / Ri`, contact_i in cylindrical (r, axial) coordinates
+/// (axial measured along C1→C2 from C1):
+///   contact1.r = r_p cos δ1 + s1 · a₀ · sin δ1
+///   contact1.z = a₀ cos δ1 − s1 · r_p · sin δ1
+///   contact2.r = r_p cos δ2 + s2 · (D − a₀) · sin δ2
+///   contact2.z = D − (D − a₀) cos δ2 + s2 · r_p · sin δ2
+///
+/// (At s1 = +1 / s2 = +1 the contacts go to the OUTSIDE caps — the
+/// usual convex-convex case where each sphere's face is the cap
+/// further from the other sphere's center.)
+///
+/// The chamfer surface is the cone obtained by rotating the line from
+/// contact1 to contact2 around the C1→C2 axis. Apex on that axis at
+/// `z_apex` where the line P1P2 hits `r = 0`; cone half-angle from
+/// the radial plane is determined by the line's slope.
+///
+/// # Returns
+///
+/// `Ok(None)` (walker fallback) when:
+///   - spheres don't intersect properly (`D ≤ |R1−R2|` or
+///     `D ≥ R1+R2`),
+///   - contact line is degenerate (r-axial parallel: a flat disk; or
+///     constant-r: a cylinder rather than a cone),
+///   - sphere axes don't align with C1→C2,
+///   - `d1` or `d2` non-positive, or
+///   - the spine is degenerate.
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or NURBS construction fails.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn sphere_sphere_chamfer(
+    s1: &brepkit_math::surfaces::SphericalSurface,
+    s2: &brepkit_math::surfaces::SphericalSurface,
+    spine: &Spine,
+    topo: &Topology,
+    d1: f64,
+    d2: f64,
+    face1: FaceId,
+    face2: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    use brepkit_math::surfaces::ConicalSurface;
+    use std::f64::consts::PI;
+
+    let tol_lin = 1e-9;
+    let tol_ang = 1e-9;
+
+    if d1 <= tol_lin || d2 <= tol_lin {
+        return Ok(None);
+    }
+    let s1_signed: f64 = if topo.face(face1)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
+    let s2_signed: f64 = if topo.face(face2)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
+
+    let big_r1 = s1.radius();
+    let big_r2 = s2.radius();
+    let c1 = s1.center();
+    let c2 = s2.center();
+    let c1_to_c2 = c2 - c1;
+    let big_d = c1_to_c2.length();
+    if big_d <= tol_lin {
+        return Ok(None);
+    }
+    if big_d <= (big_r1 - big_r2).abs() + tol_lin || big_d >= big_r1 + big_r2 - tol_lin {
+        return Ok(None);
+    }
+
+    let axis = (c1_to_c2 * (1.0 / big_d)).normalize()?;
+
+    // Axisymmetry guards.
+    if s1.z_axis().dot(axis).abs() < 1.0 - tol_ang || s2.z_axis().dot(axis).abs() < 1.0 - tol_ang {
+        return Ok(None);
+    }
+
+    // Spine geometry.
+    let a0 = (big_r1 * big_r1 - big_r2 * big_r2 + big_d * big_d) / (2.0 * big_d);
+    let r_p_sq = big_r1 * big_r1 - a0 * a0;
+    if r_p_sq <= tol_lin * tol_lin {
+        return Ok(None);
+    }
+    let r_p = r_p_sq.sqrt();
+
+    // Contact 1 on sphere 1 in (radial, axial-from-C1) coords.
+    let delta1 = d1 / big_r1;
+    let (sin1, cos1) = delta1.sin_cos();
+    let p1_r = r_p * cos1 + s1_signed * a0 * sin1;
+    let p1_z_from_c1 = a0 * cos1 - s1_signed * r_p * sin1;
+
+    // Contact 2 on sphere 2 in (radial, axial-from-C1) coords.
+    // For sphere 2 the "into face" direction is opposite to sphere 1's
+    // when both convex (each goes AWAY from the other), so the sign of
+    // δ in sphere2's parameterization is flipped relative to sphere 1.
+    let delta2 = d2 / big_r2;
+    let (sin2, cos2) = delta2.sin_cos();
+    let p2_r = r_p * cos2 + s2_signed * (big_d - a0) * sin2;
+    let p2_z_from_c1 = big_d - (big_d - a0) * cos2 + s2_signed * r_p * sin2;
+
+    // Both contacts have positive radial (must be on the sphere
+    // surfaces — not past the pole/equator on the wrong side).
+    if p1_r <= tol_lin || p2_r <= tol_lin {
+        return Ok(None);
+    }
+
+    // Chamfer line P1→P2 in 2D (r, z). For an axisymmetric CONE we
+    // need:
+    //   - p1_r ≠ p2_r (else line is constant-r ⇒ cylinder, degenerate)
+    //   - p1_z ≠ p2_z (else line is constant-z ⇒ flat disk)
+    let dr = p2_r - p1_r;
+    let dz = p2_z_from_c1 - p1_z_from_c1;
+    if dr.abs() <= tol_lin || dz.abs() <= tol_lin {
+        return Ok(None);
+    }
+
+    // Apex position: line P1→P2 extrapolated to r = 0.
+    // r(t) = p1_r + t·dr = 0 ⇒ t = -p1_r/dr.
+    // z(t) = p1_z + t·dz = p1_z - p1_r·dz/dr.
+    let z_apex_from_c1 = p1_z_from_c1 - p1_r * dz / dr;
+
+    // Cone axis: pointing AWAY from apex toward the contacts. The
+    // contacts are at z_from_c1 = p1_z, p2_z; if z_apex < min(p1_z,
+    // p2_z) the contacts are above apex and axis = +c1_to_c2; if
+    // z_apex > max(p1_z, p2_z) the contacts are below and axis =
+    // -c1_to_c2. The mid-contact direction sign tells us which:
+    let mid_z_from_c1 = 0.5 * (p1_z_from_c1 + p2_z_from_c1);
+    let cone_axis = if mid_z_from_c1 > z_apex_from_c1 {
+        axis
+    } else {
+        -axis
+    };
+
+    // Cone half-angle from radial plane: generator from apex to a
+    // contact has slope `tan β = |Δz_from_apex| / r_at_contact`.
+    let dz_from_apex = mid_z_from_c1 - z_apex_from_c1;
+    let r_avg = 0.5 * (p1_r + p2_r);
+    let cone_half_angle = (dz_from_apex.abs() / r_avg).atan();
+    if cone_half_angle <= 1e-3 || cone_half_angle >= std::f64::consts::FRAC_PI_2 - 1e-3 {
+        return Ok(None);
+    }
+
+    let chamfer_apex_pos = c1 + axis * z_apex_from_c1;
+
+    // Spine span (closed-circle aware).
+    let edges = spine.edges();
+    let is_closed_spine = if edges.len() == 1 {
+        let e = topo.edge(edges[0])?;
+        e.start() == e.end()
+    } else {
+        false
+    };
+    let spine_len = spine.length();
+    if !is_closed_spine && spine_len < tol_lin {
+        return Ok(None);
+    }
+
+    // Reference direction perpendicular to the axis. Inherit sphere1's
+    // frame (well-defined when its z-axis is aligned with `axis`).
+    let s1_x = s1.x_axis();
+    let s1_y = s1.y_axis();
+    let ref_dir = if s1_x.cross(axis).length() > tol_ang {
+        s1_x
+    } else {
+        s1_y
+    };
+
+    let chamfer_cone =
+        ConicalSurface::with_ref_dir(chamfer_apex_pos, cone_axis, cone_half_angle, ref_dir)?;
+
+    // Spine plane center.
+    let spine_plane_center = c1 + axis * a0;
+    let perp_y = axis.cross(ref_dir).normalize()?;
+    let u_at = |p: Point3| {
+        let v = p - spine_plane_center;
+        perp_y.dot(v).atan2(ref_dir.dot(v))
+    };
+    let p_spine_start = spine.evaluate(topo, 0.0)?;
+    let u_start = u_at(p_spine_start);
+    let u_end = if is_closed_spine {
+        u_start + 2.0 * PI
+    } else {
+        let p_spine_end = spine.evaluate(topo, spine_len)?;
+        let u_end_raw = u_at(p_spine_end);
+        if u_end_raw > u_start {
+            u_end_raw
+        } else {
+            u_end_raw + 2.0 * PI
+        }
+    };
+
+    // 3D contact circles.
+    let contact1_center = c1 + axis * p1_z_from_c1;
+    let contact1_circle =
+        brepkit_math::curves::Circle3D::with_axes(contact1_center, axis, p1_r, ref_dir, perp_y)?;
+    let contact2_center = c1 + axis * p2_z_from_c1;
+    let contact2_circle =
+        brepkit_math::curves::Circle3D::with_axes(contact2_center, axis, p2_r, ref_dir, perp_y)?;
+    let contact1 = circle_arc_to_nurbs(&contact1_circle, u_start, u_end)?;
+    let contact2 = circle_arc_to_nurbs(&contact2_circle, u_start, u_end)?;
+
+    // PCurves on each sphere — constant-v Line2D (axisymmetry guard).
+    let sample1 = contact1_circle.evaluate(u_start);
+    let v1 = ParametricSurface::project_point(s1, sample1).1;
+    let pcurve1 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_start, v1),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+    let sample2 = contact2_circle.evaluate(u_start);
+    let v2 = ParametricSurface::project_point(s2, sample2).1;
+    let pcurve2 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_start, v2),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+
+    // Cross-sections.
+    let p1_at = |u: f64| contact1_circle.evaluate(u);
+    let p2_at = |u: f64| contact2_circle.evaluate(u);
+    let section_at = |u: f64, t: f64| {
+        let p1 = p1_at(u);
+        let p2 = p2_at(u);
+        let mid = midpoint_3d(p1, p2);
+        CircSection {
+            p1,
+            p2,
+            center: mid,
+            radius: (p1 - p2).length() * 0.5,
+            uv1: (u, v1),
+            uv2: (u, v2),
+            t,
+        }
+    };
+    let section_start = section_at(u_start, 0.0);
+    let section_end = section_at(u_end, 1.0);
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Cone(chamfer_cone),
+        pcurve1,
+        pcurve2,
+        contact1,
+        contact2,
+        face1,
+        face2,
+        sections: vec![section_start, section_end],
+    };
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
+}
+
 /// Fillet between two cylinders.
 ///
 /// Not yet implemented. Returns `None` so the caller falls back to the walking
@@ -4527,6 +4803,127 @@ mod tests {
         assert!(
             (on_torus_s2 - want_s2).length() < 1e-9,
             "sphere2 contact must lie on torus: {on_torus_s2:?} vs {want_s2:?}"
+        );
+    }
+
+    /// Sphere-sphere convex chamfer: two intersecting spheres meeting
+    /// along a circular spine; chamfer surface is an axisymmetric cone
+    /// connecting both sphere-side contact circles.
+    ///
+    /// For sphere1 at origin (R=2), sphere2 at (0, 0, 3) (R=2.5), D=3,
+    /// both faces NOT reversed, symmetric d=0.4:
+    ///   - δ1 = 0.2, δ2 = 0.16
+    ///   - contact1 at radial r_p·cos δ1 + a₀·sin δ1 ≈ 1.844,
+    ///     z ≈ a₀·cos δ1 − r_p·sin δ1 ≈ 0.774 (z<a₀: below spine)
+    ///   - contact2 at radial r_p·cos δ2 + (D−a₀)·sin δ2 ≈ 1.932,
+    ///     z ≈ D − (D−a₀)·cos δ2 + r_p·sin δ2 ≈ 1.413 (z>a₀: above spine)
+    ///   - Cone apex below both contacts on the +z axis (~z=−12.6)
+    ///   - Cone axis = +z (opens upward toward both contacts)
+    #[test]
+    fn sphere_sphere_chamfer_convex_emits_cone() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r1: f64 = 2.0;
+        let big_r2: f64 = 2.5;
+        let big_d: f64 = 3.0;
+        let d: f64 = 0.4;
+
+        let a0 = (big_r1 * big_r1 - big_r2 * big_r2 + big_d * big_d) / (2.0 * big_d);
+        let r_p_sq = big_r1 * big_r1 - a0 * a0;
+        let r_p = r_p_sq.sqrt();
+
+        let s1 = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r1).unwrap();
+        let s2 = SphericalSurface::new(Point3::new(0.0, 0.0, big_d), big_r2).unwrap();
+        let spine_circle =
+            Circle3D::new(Point3::new(0.0, 0.0, a0), Vec3::new(0.0, 0.0, 1.0), r_p).unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_p, 0.0, a0), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face1 = topo.add_face(Face::new(w1, vec![], FaceSurface::Sphere(s1.clone())));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face2 = topo.add_face(Face::new(w2, vec![], FaceSurface::Sphere(s2.clone())));
+
+        let result = sphere_sphere_chamfer(&s1, &s2, &spine, &topo, d, d, face1, face2)
+            .unwrap()
+            .expect("convex sphere-sphere chamfer should produce a stripe");
+
+        let chamfer_cone = match result.stripe.surface {
+            FaceSurface::Cone(c) => c,
+            other => panic!("expected Cone, got {}", other.type_tag()),
+        };
+
+        // Predicted contacts.
+        let delta1 = d / big_r1;
+        let delta2 = d / big_r2;
+        let (sin1, cos1) = delta1.sin_cos();
+        let (sin2, cos2) = delta2.sin_cos();
+        let p1_r = r_p * cos1 + a0 * sin1;
+        let p1_z = a0 * cos1 - r_p * sin1;
+        let p2_r = r_p * cos2 + (big_d - a0) * sin2;
+        let p2_z = big_d - (big_d - a0) * cos2 + r_p * sin2;
+
+        // Contact1 below spine, contact2 above spine — characteristic
+        // of the convex-convex case (faces extend AWAY from each other).
+        assert!(p1_z < a0, "convex contact1 should be below spine z=a0");
+        assert!(p2_z > a0, "convex contact2 should be above spine z=a0");
+
+        // Predicted apex from line P1-P2 extrapolation to r=0.
+        let dr = p2_r - p1_r;
+        let dz = p2_z - p1_z;
+        let expected_apex_z = p1_z - p1_r * dz / dr;
+
+        let apex = chamfer_cone.apex();
+        assert!(
+            apex.x().abs() < 1e-12 && apex.y().abs() < 1e-12,
+            "apex should be on z-axis, got {apex:?}"
+        );
+        assert!(
+            (apex.z() - expected_apex_z).abs() < 1e-9,
+            "apex z = {}, expected {expected_apex_z}",
+            apex.z()
+        );
+
+        // Cone axis: contacts are above apex (mid_z > apex_z), so axis = +z.
+        let axis = chamfer_cone.axis();
+        assert!(
+            axis.dot(Vec3::new(0.0, 0.0, 1.0)) > 1.0 - 1e-12,
+            "convex chamfer cone axis should be +z, got {axis:?}"
+        );
+
+        // Both contacts must lie on the chamfer cone.
+        let want_p1 = Point3::new(p1_r, 0.0, p1_z);
+        let want_p2 = Point3::new(p2_r, 0.0, p2_z);
+        let (u_p, v_p) = ParametricSurface::project_point(&chamfer_cone, want_p1);
+        let on_cone_p1 = ParametricSurface::evaluate(&chamfer_cone, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&chamfer_cone, want_p2);
+        let on_cone_p2 = ParametricSurface::evaluate(&chamfer_cone, u_q, v_q);
+        assert!(
+            (on_cone_p1 - want_p1).length() < 1e-9,
+            "contact1 must lie on chamfer cone: {on_cone_p1:?} vs {want_p1:?}"
+        );
+        assert!(
+            (on_cone_p2 - want_p2).length() < 1e-9,
+            "contact2 must lie on chamfer cone: {on_cone_p2:?} vs {want_p2:?}"
+        );
+
+        // Both contacts also lie on their respective spheres.
+        let dist_s1 = (want_p1 - Point3::new(0.0, 0.0, 0.0)).length();
+        let dist_s2 = (want_p2 - Point3::new(0.0, 0.0, big_d)).length();
+        assert!(
+            (dist_s1 - big_r1).abs() < 1e-9,
+            "contact1 must lie on sphere1: distance={dist_s1}, want R1={big_r1}"
+        );
+        assert!(
+            (dist_s2 - big_r2).abs() < 1e-9,
+            "contact2 must lie on sphere2: distance={dist_s2}, want R2={big_r2}"
         );
     }
 
