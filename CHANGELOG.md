@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.85.0](https://github.com/andymai/brepkit/compare/v2.84.0...v2.85.0) (2026-05-08)
+
+
+### Features
+
+* **wasm:** expose convertToElementary binding ([#648](https://github.com/andymai/brepkit/issues/648)) ([ef6bca2](https://github.com/andymai/brepkit/commit/ef6bca2b32807766f84e00bdd9f990a55b117f91))
+
 ## [2.84.0](https://github.com/andymai/brepkit/compare/v2.83.0...v2.84.0) (2026-05-08)
 
 
