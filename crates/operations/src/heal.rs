@@ -2324,4 +2324,80 @@ mod tests {
             pt.z()
         );
     }
+
+    #[test]
+    fn convert_to_elementary_round_trip_cylinder() {
+        // Build a cylinder, convert to B-spline (loses analytic types),
+        // then convert back to elementary — should recover the cylinder
+        // surface and circle edges.
+        use brepkit_topology::face::FaceSurface;
+
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+
+        // Step 1: NURBS-ify everything.
+        let bspline_count = convert_to_bspline(&mut topo, solid).unwrap();
+        assert!(
+            bspline_count > 0,
+            "convert_to_bspline should convert at least one face/edge, got {bspline_count}"
+        );
+
+        // Verify the lateral cylinder face is now NURBS.
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+        let mut found_lateral_nurbs = false;
+        for &fid in shell.faces() {
+            let face = topo.face(fid).unwrap();
+            if matches!(face.surface(), FaceSurface::Nurbs(_)) {
+                found_lateral_nurbs = true;
+                break;
+            }
+        }
+        assert!(
+            found_lateral_nurbs,
+            "lateral face should be NURBS after convertToBspline"
+        );
+
+        // Step 2: convert back to elementary.
+        let elementary_count = convert_to_elementary(&mut topo, solid, 1e-4).unwrap();
+        assert!(
+            elementary_count > 0,
+            "convert_to_elementary should recover at least one analytic form, got {elementary_count}"
+        );
+
+        // Verify the lateral face is recognized as Cylinder again.
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+        let mut found_recovered_cylinder = false;
+        for &fid in shell.faces() {
+            let face = topo.face(fid).unwrap();
+            if let FaceSurface::Cylinder(cyl) = face.surface() {
+                assert!(
+                    (cyl.radius() - 1.0).abs() < 1e-3,
+                    "recovered cylinder radius {} should be ~1.0",
+                    cyl.radius()
+                );
+                found_recovered_cylinder = true;
+                break;
+            }
+        }
+        assert!(
+            found_recovered_cylinder,
+            "after convertToElementary, lateral face should be Cylinder again"
+        );
+    }
+
+    #[test]
+    fn convert_to_elementary_idempotent_on_clean_solid() {
+        // A solid with all-analytic geometry should have nothing to
+        // convert — no faces or edges are NURBS.
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+
+        let count = convert_to_elementary(&mut topo, solid, 1e-7).unwrap();
+        assert_eq!(
+            count, 0,
+            "all-analytic solid shouldn't convert anything, got {count}"
+        );
+    }
 }
