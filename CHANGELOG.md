@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.50.0](https://github.com/andymai/brepkit/compare/v2.49.0...v2.50.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** analytic plane-cylinder chamfer → exact cone surface ([#552](https://github.com/andymai/brepkit/issues/552)) ([5b65ab2](https://github.com/andymai/brepkit/commit/5b65ab253219d588781cbf842e9cda5bee17c85d))
+
 ## [2.49.0](https://github.com/andymai/brepkit/compare/v2.48.0...v2.49.0) (2026-05-08)
 
 
