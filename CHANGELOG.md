@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.80.0](https://github.com/andymai/brepkit/compare/v2.79.0...v2.80.0) (2026-05-08)
+
+
+### Features
+
+* **geometry:** recognize NURBS curves as hyperbolas ([#632](https://github.com/andymai/brepkit/issues/632)) ([67fc81a](https://github.com/andymai/brepkit/commit/67fc81a94da17f0fb98935c7fe604dc249d688f6))
+
 ## [2.79.0](https://github.com/andymai/brepkit/compare/v2.78.0...v2.79.0) (2026-05-08)
 
 
