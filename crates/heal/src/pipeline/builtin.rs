@@ -143,6 +143,11 @@ impl HealOperator for SameParameterOp {
         let shell = topo.shell(solid_data.outer_shell())?;
         let face_ids: Vec<_> = shell.faces().to_vec();
 
+        // Call the FACE-AWARE PCurve fixer for each (edge, face) pair
+        // rather than `fix_edge`. The latter dispatches to
+        // `fix_same_parameter_stub` (no face context), which reports
+        // DONE3 with actions_taken=0 — misleading status flags would
+        // otherwise propagate up despite no actual repair occurring.
         let mut aggregate = FixResult::ok();
         for &fid in &face_ids {
             let face = topo.face(fid)?;
@@ -153,7 +158,7 @@ impl HealOperator for SameParameterOp {
                 .map(brepkit_topology::wire::OrientedEdge::edge)
                 .collect();
             for eid in edge_ids {
-                let r = crate::fix::edge::fix_edge(topo, eid, ctx, &config)?;
+                let r = crate::fix::edge::fix_same_parameter_on_face(topo, eid, fid, ctx, &config)?;
                 aggregate.merge(&r);
             }
         }

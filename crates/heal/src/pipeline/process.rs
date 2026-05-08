@@ -81,34 +81,69 @@ impl Default for HealProcess {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::pipeline::operator::HealOperator;
+    use crate::status::Status;
     use brepkit_topology::test_utils::make_unit_cube_manifold;
 
+    /// Test-only operator that mutates `topo` in place (so the SolidId
+    /// returned matches the input) but reports `actions_taken = 7` and
+    /// `Status::DONE1`. Demonstrates the value of the trait change:
+    /// the old `SolidId == solid_id ⇒ actions = 0` heuristic would
+    /// have lost this signal entirely.
+    #[derive(Debug)]
+    struct FakeInPlaceOp;
+
+    impl HealOperator for FakeInPlaceOp {
+        fn name(&self) -> &'static str {
+            "fake_in_place"
+        }
+
+        fn execute(
+            &self,
+            _topo: &mut Topology,
+            solid_id: SolidId,
+            _ctx: &mut HealContext,
+        ) -> Result<(SolidId, FixResult), HealError> {
+            Ok((
+                solid_id,
+                FixResult {
+                    status: Status::DONE1,
+                    actions_taken: 7,
+                },
+            ))
+        }
+    }
+
     #[test]
-    fn pipeline_propagates_fix_result_from_operator() {
+    fn pipeline_surfaces_in_place_actions_taken() {
         // Regression test for the prior SolidId-comparison heuristic:
-        // a clean unit-cube run through `direct_faces` shouldn't
-        // produce a new SolidId (so the old code would call it OK), and
-        // the operator's real `FixResult` should be Status::OK with
-        // actions_taken=0 — but propagating it lets future operators
-        // that DO modify in-place report non-zero actions correctly.
+        // an in-place mutation (same SolidId returned) used to be
+        // synthesized as `actions_taken = 0` regardless of the
+        // operator's actual work. Now the operator's reported count
+        // is propagated verbatim.
         let mut topo = Topology::new();
         let solid = make_unit_cube_manifold(&mut topo);
 
         let mut process = HealProcess::new();
-        process.add_step("direct_faces");
-        let (_new_solid, results) = process.execute(&mut topo, solid).unwrap();
+        process
+            .registry_mut()
+            .register("fake_in_place", Box::new(FakeInPlaceOp));
+        process.add_step("fake_in_place");
+        let (new_solid, results) = process.execute(&mut topo, solid).unwrap();
 
-        assert_eq!(results.len(), 1, "one step → one result");
-        // The result comes from the operator itself, not synthesized
-        // from a SolidId comparison. Whether the cube needs orientation
-        // fixes is a topology-dependent detail; what matters is that
-        // we get *some* status (a non-empty bitflags value) — the old
-        // SolidId-comparison heuristic would have returned DONE1 only
-        // if the SolidId changed, missing in-place mutations entirely.
-        let r = &results[0];
+        assert_eq!(new_solid, solid, "in-place op preserves SolidId");
+        assert_eq!(results.len(), 1);
+        // Critical assertions: the operator's real values (NOT
+        // synthesized from solid_id == new_solid).
+        assert_eq!(
+            results[0].actions_taken, 7,
+            "actions_taken should propagate from operator, got {}",
+            results[0].actions_taken
+        );
         assert!(
-            !r.status.is_empty(),
-            "FixResult status should always be set, got empty"
+            results[0].status.contains(Status::DONE1),
+            "DONE1 should propagate, got {:?}",
+            results[0].status
         );
     }
 }
