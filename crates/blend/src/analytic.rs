@@ -1118,7 +1118,11 @@ pub fn plane_cone_fillet(
     if major_radius <= tol_lin {
         return Ok(None);
     }
-    if concave && major_radius < minor_radius {
+    // `major - minor < tol` rejects both the spindle regime AND the
+    // horn-torus boundary (`major == minor`, where the tube touches the
+    // axis at a degenerate point). Tolerance lets us catch the boundary
+    // even when floating-point rounding leaves the difference at +ε.
+    if concave && major_radius - minor_radius < tol_lin {
         return Ok(None);
     }
     // Torus center sits one fillet radius below the plate (in the
@@ -2340,6 +2344,24 @@ mod tests {
         assert!(
             result_spindle.is_none(),
             "concave fillet must reject r > r_p / (cot(α/2)+1) (spindle-torus regime)"
+        );
+
+        // Exactly at r_max → horn-torus boundary (major = minor), where the
+        // tube touches the axis at a degenerate point — also rejected.
+        let result_horn = plane_cone_fillet(
+            n_p_inward,
+            0.0,
+            &cone_surface,
+            &spine,
+            &topo,
+            r_max,
+            face_plate,
+            face_cone,
+        )
+        .unwrap();
+        assert!(
+            result_horn.is_none(),
+            "concave fillet must reject r = r_p / (cot(α/2)+1) (horn-torus boundary)"
         );
 
         // Below r_max — should succeed.
