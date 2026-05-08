@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.57.0](https://github.com/andymai/brepkit/compare/v2.56.0...v2.57.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** convex plane-sphere analytic fillet (sphere on plate → torus) ([#566](https://github.com/andymai/brepkit/issues/566)) ([d8637e7](https://github.com/andymai/brepkit/commit/d8637e7e6d9531d971d0cf96e24ad8bd0ed6b806))
+
 ## [2.56.0](https://github.com/andymai/brepkit/compare/v2.55.0...v2.56.0) (2026-05-08)
 
 
