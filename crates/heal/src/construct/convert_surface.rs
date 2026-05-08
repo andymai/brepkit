@@ -111,11 +111,22 @@ pub fn cone_to_nurbs(
     v_range: (f64, f64),
 ) -> Result<NurbsSurface, HealError> {
     let (v_min, v_max) = v_range;
-    if v_min <= 0.0 || v_max <= v_min {
+    // Apex degeneracy: v_min must be strictly positive (the rational
+    // form requires a non-zero radius row).
+    if v_min <= 0.0 {
         return Err(brepkit_math::MathError::ParameterOutOfRange {
             value: v_min,
             min: f64::EPSILON,
-            max: v_max,
+            max: f64::MAX,
+        }
+        .into());
+    }
+    // Empty/inverted range: v_max must lie strictly above v_min.
+    if v_max <= v_min {
+        return Err(brepkit_math::MathError::ParameterOutOfRange {
+            value: v_max,
+            min: v_min,
+            max: f64::MAX,
         }
         .into());
     }
@@ -219,7 +230,12 @@ fn plane_frame_axes(normal: Vec3) -> (Vec3, Vec3) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::float_cmp
+)]
 mod tests {
     use brepkit_math::traits::ParametricSurface;
 
@@ -273,6 +289,62 @@ mod tests {
                     p.z()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn cone_to_nurbs_rejects_apex_v_min() {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::PI / 6.0,
+        )
+        .unwrap();
+        let err = cone_to_nurbs(&cone, (0.0, 4.0)).unwrap_err();
+        // The diagnostic should report v_min as `value` and `max=f64::MAX`
+        // (NOT v_max), since the failure mode is "apex degeneracy", not
+        // "range too small".
+        match err {
+            crate::HealError::Math(brepkit_math::MathError::ParameterOutOfRange {
+                value,
+                max,
+                ..
+            }) => {
+                assert!(value <= 0.0);
+                assert_eq!(max, f64::MAX);
+            }
+            other => panic!("expected ParameterOutOfRange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cone_to_nurbs_rejects_inverted_range() {
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::PI / 6.0,
+        )
+        .unwrap();
+        let err = cone_to_nurbs(&cone, (3.0, 1.0)).unwrap_err();
+        // For inverted range (v_max < v_min), the diagnostic must
+        // describe v_max coherently — `value: v_max, min: v_min`,
+        // not v_min as value.
+        match err {
+            crate::HealError::Math(brepkit_math::MathError::ParameterOutOfRange {
+                value,
+                min,
+                ..
+            }) => {
+                assert!(
+                    (value - 1.0).abs() < 1e-12,
+                    "value should be v_max=1.0, got {value}"
+                );
+                assert!(
+                    (min - 3.0).abs() < 1e-12,
+                    "min should be v_min=3.0, got {min}"
+                );
+            }
+            other => panic!("expected ParameterOutOfRange, got {other:?}"),
         }
     }
 
