@@ -3146,7 +3146,8 @@ mod tests {
 
         let n_p_inward = Vec3::new(0.0, 0.0, -1.0);
 
-        // Concave spindle threshold: r² + 2r(R−h) > r_p² ⇒ r > √(R²+r_p²) − R.
+        // Concave spindle threshold: solving r² + 2r(R−h) > r_p² for the
+        // positive root gives r > √((R−h)² + r_p²) − (R−h).
         // For R=2, r_p²=3, R−h=1: r > √(1+3)−1 = 1. So r=1.5 must reject.
         let too_big = 1.5;
         let result = plane_sphere_fillet(
