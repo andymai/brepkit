@@ -82,23 +82,29 @@ fn identical_toruses_intersect_preserves_volume() {
     assert!(approx_eq(got, expected, 0.05));
 }
 
-// ── 2. Mismatched minor radius — must NOT be SD ───────────────────────
+// ── 2. Mismatched major radius — must NOT be SD or shortcut ───────────
 
 #[test]
-fn toruses_different_minor_radius_intersect_nontrivial() {
-    // Two toruses sharing major axis but with different tube radii produce
-    // a non-trivial intersection. Exercises NON-SD path; the SD detector
-    // correctly returns None for this pair.
+fn toruses_different_major_radius_intersect_nontrivial() {
+    // Two toruses sharing center and axis but with different MAJOR radii
+    // (minor radii also differ here). Exercises the GFA non-SD path; the
+    // coaxial-torus shortcut bails because `same_major` is false, and the
+    // SD detector correctly returns None since the toroidal surfaces
+    // differ. Originally this test used matching majors with mismatched
+    // minors, but #556 added a coaxial-torus Fuse/Intersect shortcut that
+    // would silently route those exact inputs through the fast path,
+    // hiding the GFA coverage gap. Switched to mismatched majors so the
+    // test continues to validate the GFA pipeline.
     let mut topo = Topology::default();
     let a = torus_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 0.5);
-    let b = torus_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 0.7);
+    let b = torus_at(&mut topo, 0.0, 0.0, 0.0, 4.0, 0.7);
     let r = boolean(&mut topo, BooleanOp::Intersect, a, b);
     // Either OK (positive volume) or Err (degenerate) is acceptable;
-    // the key requirement is that the SD detector did NOT mark this
-    // pair as same-domain (since minor radii differ).
+    // the key requirement is that neither the SD detector nor the
+    // coaxial-torus shortcut hijacked this pair.
     if let Ok(sid) = r {
         let v = vol(&topo, sid);
-        // Volume should be >0 and <= min(torus A, torus B).
+        // Volume should be >0 and <= the smaller-tube torus volume.
         assert!(v > 0.0);
         assert!(v <= torus_volume(3.0, 0.5) + 1e-3);
     }
@@ -164,9 +170,11 @@ fn coaxial_torus_at_offset_center_fuse() {
 }
 
 #[test]
-fn non_coaxial_torus_fuse_does_not_use_shortcut() {
-    // When the major radii differ, the shortcut must NOT fire — the
-    // result must include the union geometry of the two distinct tori.
+fn different_major_torus_fuse_does_not_use_shortcut() {
+    // The two tori share center and axis (so they ARE coaxial) but have
+    // different *major* radii. The shortcut must NOT fire — its
+    // `same_major` guard rejects this pair — so the result must include
+    // the union geometry of two distinct tori.
     let mut topo = Topology::default();
     let a = torus_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 0.4);
     let b = torus_at(&mut topo, 0.0, 0.0, 0.0, 5.0, 0.4);
