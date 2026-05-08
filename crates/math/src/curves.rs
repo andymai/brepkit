@@ -453,6 +453,14 @@ impl Parabola3D {
         self.axis_dir
     }
 
+    /// Returns the in-plane u-axis (perpendicular to `axis_dir`).
+    /// At parameter `t`, the parabola is offset by `t * u_axis` from
+    /// the symmetry axis.
+    #[must_use]
+    pub const fn u_axis(&self) -> Vec3 {
+        self.u_axis
+    }
+
     /// Returns the focus point.
     #[must_use]
     pub fn focus(&self) -> Point3 {

@@ -1,12 +1,13 @@
 //! Curve type conversion utilities.
 //!
-//! Provides conversions between analytic curve types (Line3D, Circle3D) and
-//! their NURBS representations. These are used by healing operations that
-//! need a uniform NURBS representation for fitting or comparison.
+//! Provides conversions between analytic curve types (Line3D, Circle3D,
+//! Parabola3D) and their NURBS representations. These are used by
+//! healing operations that need a uniform NURBS representation for
+//! fitting or comparison.
 
 use std::f64::consts::FRAC_PI_4;
 
-use brepkit_math::curves::Circle3D;
+use brepkit_math::curves::{Circle3D, Parabola3D};
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::Point3;
 
@@ -89,8 +90,63 @@ pub fn circle_to_nurbs(circle: &Circle3D) -> Result<NurbsCurve, HealError> {
     Ok(curve)
 }
 
+/// Convert a parabolic arc (parameter range `[t_min, t_max]`) to a
+/// degree-2 NURBS curve.
+///
+/// A parabola is geometrically exact as a degree-2 *non-rational*
+/// Bézier (single segment, 3 CPs, weights all 1). This is the simplest
+/// of the analytic-curve conversions:
+///
+/// - **CP 0** = `parabola.evaluate(t_min)` (start of arc)
+/// - **CP 2** = `parabola.evaluate(t_max)` (end of arc)
+/// - **CP 1** = tangent intersection of the parabola at the endpoints
+///
+/// The tangent intersection is at `vertex + axis_dir * (t_min·t_max
+/// / 4f) + u_axis * (t_min + t_max)/2`, which lies on both endpoint
+/// tangent lines.
+///
+/// Parameter range must be non-empty (`t_max > t_min`); the parabola
+/// is otherwise degenerate.
+///
+/// # Errors
+///
+/// Returns [`HealError`] if `t_max <= t_min` or NURBS construction
+/// fails.
+pub fn parabola_to_nurbs(
+    parabola: &Parabola3D,
+    t_min: f64,
+    t_max: f64,
+) -> Result<NurbsCurve, HealError> {
+    if t_max <= t_min {
+        return Err(brepkit_math::MathError::ParameterOutOfRange {
+            value: t_max,
+            min: t_min,
+            max: f64::INFINITY,
+        }
+        .into());
+    }
+
+    let p0 = parabola.evaluate(t_min);
+    let p2 = parabola.evaluate(t_max);
+    // Tangent intersection (Bézier middle CP): the tangent lines at
+    // t_min and t_max meet at axial = t_min·t_max / (4f), tangential
+    // = (t_min + t_max)/2 in the parabola's local (axis_dir, u_axis)
+    // frame.
+    let f = parabola.focal_length();
+    let p1 = parabola.vertex()
+        + parabola.axis_dir() * (t_min * t_max / (4.0 * f))
+        + parabola.u_axis() * f64::midpoint(t_min, t_max);
+
+    Ok(NurbsCurve::new(
+        2,
+        vec![t_min, t_min, t_min, t_max, t_max, t_max],
+        vec![p0, p1, p2],
+        vec![1.0, 1.0, 1.0],
+    )?)
+}
+
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use brepkit_math::vec::Vec3;
 
@@ -165,6 +221,68 @@ mod tests {
                 (dist_from_center - radius).abs() < 1e-6,
                 "at t={t_nurbs:.3}: distance from center = {dist_from_center:.6}, expected {radius}"
             );
+        }
+    }
+
+    #[test]
+    fn parabola_to_nurbs_evaluates_exactly_on_parabola() {
+        // Every NURBS evaluation must land on the analytic parabola
+        // within fp tolerance — degree-2 polynomial Bézier is exact
+        // for parabolas.
+        let parabola = Parabola3D::new(
+            Point3::new(1.0, 2.0, 3.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0_f64,
+        )
+        .unwrap();
+        let nurbs = parabola_to_nurbs(&parabola, -3.0, 5.0).unwrap();
+
+        // Sample the NURBS over its domain [t_min, t_max] and check
+        // each point against the analytic parabola at the same
+        // parameter.
+        let mut max_err = 0.0_f64;
+        for k in 0..=32 {
+            #[allow(clippy::cast_precision_loss)]
+            let t = -3.0 + 8.0 * (k as f64 / 32.0);
+            let p_nurbs = nurbs.evaluate(t);
+            let p_analytic = parabola.evaluate(t);
+            max_err = max_err.max((p_nurbs - p_analytic).length());
+        }
+        assert!(
+            max_err < 1e-9,
+            "exact parabola residual {max_err} exceeds 1e-9"
+        );
+    }
+
+    #[test]
+    fn parabola_to_nurbs_endpoints_match() {
+        // The first and last CPs must equal P(t_min) and P(t_max).
+        let parabola =
+            Parabola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let nurbs = parabola_to_nurbs(&parabola, -2.0, 3.0).unwrap();
+
+        let p_start = nurbs.evaluate(-2.0);
+        let p_end = nurbs.evaluate(3.0);
+        let expected_start = parabola.evaluate(-2.0);
+        let expected_end = parabola.evaluate(3.0);
+
+        assert!((p_start - expected_start).length() < 1e-12);
+        assert!((p_end - expected_end).length() < 1e-12);
+    }
+
+    #[test]
+    fn parabola_to_nurbs_rejects_inverted_range() {
+        let parabola =
+            Parabola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let err = parabola_to_nurbs(&parabola, 5.0, 1.0).unwrap_err();
+        match err {
+            HealError::Math(brepkit_math::MathError::ParameterOutOfRange {
+                value, min, ..
+            }) => {
+                assert!((value - 1.0).abs() < 1e-12);
+                assert!((min - 5.0).abs() < 1e-12);
+            }
+            other => panic!("expected ParameterOutOfRange, got {other:?}"),
         }
     }
 }
