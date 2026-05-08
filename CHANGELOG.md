@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.83.0](https://github.com/andymai/brepkit/compare/v2.82.0...v2.83.0) (2026-05-08)
+
+
+### Features
+
+* **heal:** convert NURBS edges to analytic curves via recognize_curve ([#636](https://github.com/andymai/brepkit/issues/636)) ([1934f74](https://github.com/andymai/brepkit/commit/1934f7470ac299267e8cba91afa3cc8178e2a565))
+
 ## [2.82.0](https://github.com/andymai/brepkit/compare/v2.81.0...v2.82.0) (2026-05-08)
 
 
