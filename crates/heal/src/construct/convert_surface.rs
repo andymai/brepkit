@@ -1,10 +1,23 @@
 //! Surface type conversion utilities.
 //!
 //! Provides conversions between analytic surface types and their NURBS
-//! representations. Currently implements plane-to-NURBS; cylinder, cone,
-//! sphere, and torus conversions are stubbed for future implementation.
+//! representations.
+//!
+//! * `plane_to_nurbs`, `cylinder_to_nurbs`, `cone_to_nurbs` produce
+//!   **geometrically exact** rational NURBS (the rational forms exactly
+//!   reproduce the analytic surface within floating-point tolerance).
+//! * `sphere_to_nurbs`, `torus_to_nurbs` currently delegate to
+//!   `brepkit-math`'s sampled approximation (chord-height error
+//!   ~0.5–7% of radius depending on parameter). The exact rational
+//!   forms (rotational sweep of a rational arc) are tracked as a
+//!   future improvement.
+
+use std::f64::consts::FRAC_1_SQRT_2;
 
 use brepkit_math::nurbs::surface::NurbsSurface;
+use brepkit_math::surfaces::{
+    ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
+};
 use brepkit_math::vec::{Point3, Vec3};
 
 use crate::HealError;
@@ -59,18 +72,134 @@ pub fn plane_to_nurbs(
     Ok(surface)
 }
 
-// TODO: Implement `cylinder_to_nurbs` -- rational degree 2 x 1 NURBS
-// (periodic in u, linear in v). Requires similar quarter-arc decomposition
-// as `circle_to_nurbs` in the u direction.
+/// Convert a cylindrical surface to a rational NURBS surface.
+///
+/// The result is degree 2 in u (full revolution as four quarter-arcs)
+/// and degree 1 in v (axial direction over `[v_min, v_max]`).
+///
+/// # Errors
+///
+/// Returns [`HealError`] if NURBS construction fails.
+pub fn cylinder_to_nurbs(
+    cyl: &CylindricalSurface,
+    v_range: (f64, f64),
+) -> Result<NurbsSurface, HealError> {
+    Ok(cyl.to_nurbs(v_range.0, v_range.1)?)
+}
 
-// TODO: Implement `cone_to_nurbs` -- rational degree 2 x 1 NURBS
-// with v-dependent radius scaling.
+/// Convert a conical surface patch to a **geometrically exact**
+/// rational NURBS surface.
+///
+/// Uses the same 9-CP × degree 2 rational representation in u as the
+/// cylinder (four exact 90° arcs), with the radial scaling varying
+/// linearly with v along the cone generator. The result is degree
+/// `(2, 1)` and exactly reproduces the cone within floating-point
+/// tolerance — finer than the sampled approximation in
+/// `brepkit_math::ConicalSurface::to_nurbs`.
+///
+/// `v_range = (v_min, v_max)` is measured from the apex along the
+/// cone-generator direction (NOT axial). Both endpoints must be
+/// strictly positive to avoid the apex degeneracy; passing
+/// `v_min ≤ 0` returns [`HealError`].
+///
+/// # Errors
+///
+/// Returns [`HealError`] if `v_min ≤ 0`, `v_max ≤ v_min`, or NURBS
+/// construction fails.
+pub fn cone_to_nurbs(
+    cone: &ConicalSurface,
+    v_range: (f64, f64),
+) -> Result<NurbsSurface, HealError> {
+    let (v_min, v_max) = v_range;
+    if v_min <= 0.0 || v_max <= v_min {
+        return Err(brepkit_math::MathError::ParameterOutOfRange {
+            value: v_min,
+            min: f64::EPSILON,
+            max: v_max,
+        }
+        .into());
+    }
 
-// TODO: Implement `sphere_to_nurbs` -- rational degree 2 x 2 NURBS
-// (periodic in u, semicircular arcs in v).
+    let apex = cone.apex();
+    let axis = cone.axis();
+    let x_axis = cone.x_axis();
+    let y_axis = cone.y_axis();
+    let (sin_a, cos_a) = cone.half_angle().sin_cos();
 
-// TODO: Implement `torus_to_nurbs` -- rational degree 2 x 2 NURBS
-// (periodic in both u and v).
+    let circle_weights = [
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+    ];
+    let dirs: [(f64, f64); 9] = [
+        (1.0, 0.0),
+        (1.0, 1.0),
+        (0.0, 1.0),
+        (-1.0, 1.0),
+        (-1.0, 0.0),
+        (-1.0, -1.0),
+        (0.0, -1.0),
+        (1.0, -1.0),
+        (1.0, 0.0),
+    ];
+
+    let r_lo = v_min * cos_a;
+    let r_hi = v_max * cos_a;
+    let z_lo = v_min * sin_a;
+    let z_hi = v_max * sin_a;
+
+    let mut cps = Vec::with_capacity(9);
+    let mut ws = Vec::with_capacity(9);
+    for (i, &(dx, dy)) in dirs.iter().enumerate() {
+        let dir = x_axis * dx + y_axis * dy;
+        let p_lo = apex + dir * r_lo + axis * z_lo;
+        let p_hi = apex + dir * r_hi + axis * z_hi;
+        cps.push(vec![p_lo, p_hi]);
+        ws.push(vec![circle_weights[i], circle_weights[i]]);
+    }
+
+    let knots_u = vec![
+        0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+    ];
+    let knots_v = vec![0.0, 0.0, 1.0, 1.0];
+    Ok(NurbsSurface::new(2, 1, knots_u, knots_v, cps, ws)?)
+}
+
+/// Convert a spherical surface to a NURBS surface.
+///
+/// **Approximate.** Currently delegates to `brepkit-math`'s sampled
+/// representation (33 × 9 grid of points, degree 1 × 1 NURBS — chord
+/// deviation ~0.5% of radius along u, ~5% along v). The exact rational
+/// form (degree 2 × 2, rotational sweep of a rational semi-circle
+/// arc) is a tracked improvement.
+///
+/// # Errors
+///
+/// Returns [`HealError`] if NURBS construction fails.
+pub fn sphere_to_nurbs(sphere: &SphericalSurface) -> Result<NurbsSurface, HealError> {
+    Ok(sphere.to_nurbs()?)
+}
+
+/// Convert a toroidal surface to a NURBS surface.
+///
+/// **Approximate.** Currently delegates to `brepkit-math`'s sampled
+/// representation (33 × 9 grid of points, degree 1 × 1 NURBS — chord
+/// deviation ~7% of minor radius mid-span). The exact rational form
+/// (degree 2 × 2, rotational sweep of a rational tube arc) is a
+/// tracked improvement.
+///
+/// # Errors
+///
+/// Returns [`HealError`] if NURBS construction fails.
+pub fn torus_to_nurbs(torus: &ToroidalSurface) -> Result<NurbsSurface, HealError> {
+    Ok(torus.to_nurbs()?)
+}
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -113,6 +242,135 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn cylinder_to_nurbs_evaluates_on_cylinder() {
+        let center = Point3::new(0.0, 0.0, 0.0);
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let radius = 2.5_f64;
+        let cyl = CylindricalSurface::new(center, axis, radius).unwrap();
+        let surface = cylinder_to_nurbs(&cyl, (0.0, 5.0)).unwrap();
+
+        // Sample across the surface; every point must satisfy
+        // x² + y² == r² and 0 <= z <= 5 (within fp tol).
+        let u_dom = surface.domain_u();
+        let v_dom = surface.domain_v();
+        let n = 10;
+        for i in 0..=n {
+            for j in 0..=n {
+                let u = u_dom.0 + (u_dom.1 - u_dom.0) * f64::from(i) / f64::from(n);
+                let v = v_dom.0 + (v_dom.1 - v_dom.0) * f64::from(j) / f64::from(n);
+                let p = ParametricSurface::evaluate(&surface, u, v);
+                let r = (p.x().powi(2) + p.y().powi(2)).sqrt();
+                assert!(
+                    (r - radius).abs() < 1e-9,
+                    "({u}, {v}): r={r}, expected {radius}"
+                );
+                assert!(
+                    p.z() >= -1e-9 && p.z() <= 5.0 + 1e-9,
+                    "z out of range: {}",
+                    p.z()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cone_to_nurbs_evaluates_on_cone() {
+        let apex = Point3::new(0.0, 0.0, 0.0);
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let half_angle = std::f64::consts::PI / 6.0;
+        let cone = ConicalSurface::new(apex, axis, half_angle).unwrap();
+        let surface = cone_to_nurbs(&cone, (1.0, 4.0)).unwrap();
+
+        // brepkit's `half_angle` is measured from the radial plane (NOT
+        // axis), so the cone surface satisfies `r = z · cot(α)` (with
+        // apex at origin, axis +z): radial component is v·cos(α), axial
+        // is v·sin(α), yielding r/z = cos(α)/sin(α) = cot(α).
+        let cot_a = half_angle.cos() / half_angle.sin();
+        let u_dom = surface.domain_u();
+        let v_dom = surface.domain_v();
+        let n = 10;
+        for i in 0..=n {
+            for j in 0..=n {
+                let u = u_dom.0 + (u_dom.1 - u_dom.0) * f64::from(i) / f64::from(n);
+                let v = v_dom.0 + (v_dom.1 - v_dom.0) * f64::from(j) / f64::from(n);
+                let p = ParametricSurface::evaluate(&surface, u, v);
+                let r = (p.x().powi(2) + p.y().powi(2)).sqrt();
+                let z = p.z();
+                assert!(z > 0.0, "cone NURBS sample below apex: z={z}");
+                assert!(
+                    (r / z - cot_a).abs() < 1e-9,
+                    "({u}, {v}): r/z = {} != cot(α) = {cot_a}",
+                    r / z
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sphere_to_nurbs_approximates_sphere() {
+        // Sampled NURBS (33 × 9 degree-1) — tolerance reflects chord
+        // deviation, not floating-point drift. Document max observed
+        // residual so a tightening is detectable when an exact rational
+        // form is implemented.
+        let center = Point3::new(0.0, 0.0, 0.0);
+        let radius = 1.5_f64;
+        let sphere = SphericalSurface::new(center, radius).unwrap();
+        let surface = sphere_to_nurbs(&sphere).unwrap();
+
+        let u_dom = surface.domain_u();
+        let v_dom = surface.domain_v();
+        let n = 12;
+        let mut max_err = 0.0_f64;
+        for i in 0..=n {
+            for j in 0..=n {
+                let u = u_dom.0 + (u_dom.1 - u_dom.0) * f64::from(i) / f64::from(n);
+                let v = v_dom.0 + (v_dom.1 - v_dom.0) * f64::from(j) / f64::from(n);
+                let p = ParametricSurface::evaluate(&surface, u, v);
+                let r = (p - center).length();
+                max_err = max_err.max((r - radius).abs());
+            }
+        }
+        // Sampled-NURBS approximation has chord-deviation error ~5% of
+        // radius mid-span between latitude samples.
+        assert!(
+            max_err < 0.06 * radius,
+            "max sphere residual {max_err} exceeds 6% of radius"
+        );
+    }
+
+    #[test]
+    fn torus_to_nurbs_approximates_torus() {
+        // Sampled NURBS — tolerance reflects chord deviation.
+        let center = Point3::new(0.0, 0.0, 0.0);
+        let major = 3.0_f64;
+        let minor = 0.5_f64;
+        let torus = ToroidalSurface::new(center, major, minor).unwrap();
+        let surface = torus_to_nurbs(&torus).unwrap();
+
+        let u_dom = surface.domain_u();
+        let v_dom = surface.domain_v();
+        let n = 12;
+        let mut max_err = 0.0_f64;
+        for i in 0..=n {
+            for j in 0..=n {
+                let u = u_dom.0 + (u_dom.1 - u_dom.0) * f64::from(i) / f64::from(n);
+                let v = v_dom.0 + (v_dom.1 - v_dom.0) * f64::from(j) / f64::from(n);
+                let p = ParametricSurface::evaluate(&surface, u, v);
+                let rxy = (p.x().powi(2) + p.y().powi(2)).sqrt();
+                let resid = ((rxy - major).powi(2) + p.z().powi(2)).sqrt();
+                max_err = max_err.max((resid - minor).abs());
+            }
+        }
+        // Chord deviation is ~9–10% of minor radius at v-mid-span
+        // (degree-1 piecewise-linear interpolation across 8 spans of
+        // the cross-section circle).
+        assert!(
+            max_err < 0.10 * minor,
+            "max torus tube residual {max_err} exceeds 10% of minor radius"
+        );
     }
 
     #[test]
