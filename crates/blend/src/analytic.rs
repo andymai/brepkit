@@ -6362,6 +6362,120 @@ mod tests {
         );
     }
 
+    /// Sphere-sphere both-concave chamfer: two intersecting spherical
+    /// cavities. Both `s1 = s2 = −1` flip the meridian arms; each sphere
+    /// goes TOWARD the other (instead of AWAY in the convex case).
+    ///
+    /// The implementation already handled per-sphere signed_offsets; this
+    /// test confirms it works for the symmetric concave case.
+    ///
+    /// For R1=2, R2=2.5, D=3, both faces REVERSED, symmetric d=0.4:
+    ///   - δ1 = 0.2, δ2 = 0.16, a₀ ≈ 1.125, r_p ≈ 1.654
+    ///   - p1_r = r_p·cos δ1 − a₀·sin δ1 ≈ 1.398
+    ///     (less than convex r_p+a₀_term ≈ 1.844 — going toward axis)
+    ///   - p1_z = a₀·cos δ1 + r_p·sin δ1 ≈ 1.432
+    ///     (ABOVE spine z = a₀, opposite convex which had below)
+    ///   - p2_z = D − (D−a₀)·cos δ2 − r_p·sin δ2 ≈ 0.886
+    ///     (BELOW spine, opposite convex)
+    #[test]
+    fn sphere_sphere_chamfer_both_concave_emits_cone() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r1: f64 = 2.0;
+        let big_r2: f64 = 2.5;
+        let big_d: f64 = 3.0;
+        let d: f64 = 0.4;
+
+        let a0 = (big_r1 * big_r1 - big_r2 * big_r2 + big_d * big_d) / (2.0 * big_d);
+        let r_p_sq = big_r1 * big_r1 - a0 * a0;
+        let r_p = r_p_sq.sqrt();
+
+        let s1 = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r1).unwrap();
+        let s2 = SphericalSurface::new(Point3::new(0.0, 0.0, big_d), big_r2).unwrap();
+        let spine_circle =
+            Circle3D::new(Point3::new(0.0, 0.0, a0), Vec3::new(0.0, 0.0, 1.0), r_p).unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_p, 0.0, a0), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face1 = topo.add_face(Face::new_reversed(
+            w1,
+            vec![],
+            FaceSurface::Sphere(s1.clone()),
+        ));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face2 = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Sphere(s2.clone()),
+        ));
+
+        let result = sphere_sphere_chamfer(&s1, &s2, &spine, &topo, d, d, face1, face2)
+            .unwrap()
+            .expect("both-concave sphere-sphere chamfer should produce a stripe");
+
+        let chamfer_cone = match result.stripe.surface {
+            FaceSurface::Cone(c) => c,
+            other => panic!("expected Cone, got {}", other.type_tag()),
+        };
+
+        // Predicted contacts with s1 = s2 = -1.
+        let delta1 = d / big_r1;
+        let delta2 = d / big_r2;
+        let (sin1, cos1) = delta1.sin_cos();
+        let (sin2, cos2) = delta2.sin_cos();
+        let p1_r = r_p * cos1 - a0 * sin1; // s1 = -1 ⇒ -a0
+        let p1_z = a0 * cos1 + r_p * sin1; // s1 = -1 ⇒ +r_p
+        let p2_r = r_p * cos2 - (big_d - a0) * sin2; // s2 = -1
+        let p2_z = big_d - (big_d - a0) * cos2 - r_p * sin2; // s2 = -1 ⇒ -r_p
+
+        // Concave-concave: contact1 ABOVE spine (z > a₀), contact2 BELOW
+        // spine (z < a₀) — opposite the convex-convex pattern.
+        assert!(
+            p1_z > a0,
+            "concave contact1 should be above spine (z > a0): got {p1_z}"
+        );
+        assert!(
+            p2_z < a0,
+            "concave contact2 should be below spine (z < a0): got {p2_z}"
+        );
+
+        // Both contacts on chamfer cone.
+        let want_p1 = Point3::new(p1_r, 0.0, p1_z);
+        let want_p2 = Point3::new(p2_r, 0.0, p2_z);
+        let (u_p, v_p) = ParametricSurface::project_point(&chamfer_cone, want_p1);
+        let on_cone_p1 = ParametricSurface::evaluate(&chamfer_cone, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&chamfer_cone, want_p2);
+        let on_cone_p2 = ParametricSurface::evaluate(&chamfer_cone, u_q, v_q);
+        assert!(
+            (on_cone_p1 - want_p1).length() < 1e-9,
+            "concave contact1 must lie on chamfer cone: {on_cone_p1:?} vs {want_p1:?}"
+        );
+        assert!(
+            (on_cone_p2 - want_p2).length() < 1e-9,
+            "concave contact2 must lie on chamfer cone: {on_cone_p2:?} vs {want_p2:?}"
+        );
+
+        // Both contacts on respective spheres.
+        let dist_s1 = (want_p1 - Point3::new(0.0, 0.0, 0.0)).length();
+        let dist_s2 = (want_p2 - Point3::new(0.0, 0.0, big_d)).length();
+        assert!(
+            (dist_s1 - big_r1).abs() < 1e-9,
+            "contact1 must lie on sphere1: distance={dist_s1}, want R1={big_r1}"
+        );
+        assert!(
+            (dist_s2 - big_r2).abs() < 1e-9,
+            "contact2 must lie on sphere2: distance={dist_s2}, want R2={big_r2}"
+        );
+    }
+
     /// Sphere-cylinder both-concave chamfer: spherical cavity + cylindrical
     /// hole-tool. Both `s_sph = s_cyl = −1` flip the meridian arms relative
     /// to convex.
