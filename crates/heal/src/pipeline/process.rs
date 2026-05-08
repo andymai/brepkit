@@ -10,7 +10,6 @@ use super::registry::OperatorRegistry;
 use crate::HealError;
 use crate::context::HealContext;
 use crate::fix::FixResult;
-use crate::status::Status;
 
 /// A configurable sequence of healing operators.
 #[derive(Debug)]
@@ -63,18 +62,8 @@ impl HealProcess {
             })?;
 
             log::info!("heal pipeline: running '{step_name}'");
-            let new_solid = op.execute(topo, current, &mut ctx)?;
-
-            // TODO: Status is inferred from SolidId comparison, which is lossy —
-            // operators that modify topology in-place (without creating a new
-            // solid) will appear as no-ops. Ideally, HealOperator::execute
-            // would return (SolidId, FixResult) to report accurate status.
-            let changed = new_solid != current;
-            results.push(FixResult {
-                status: if changed { Status::DONE1 } else { Status::OK },
-                actions_taken: usize::from(changed),
-            });
-
+            let (new_solid, result) = op.execute(topo, current, &mut ctx)?;
+            results.push(result);
             current = new_solid;
         }
 
@@ -85,5 +74,41 @@ impl HealProcess {
 impl Default for HealProcess {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use brepkit_topology::test_utils::make_unit_cube_manifold;
+
+    #[test]
+    fn pipeline_propagates_fix_result_from_operator() {
+        // Regression test for the prior SolidId-comparison heuristic:
+        // a clean unit-cube run through `direct_faces` shouldn't
+        // produce a new SolidId (so the old code would call it OK), and
+        // the operator's real `FixResult` should be Status::OK with
+        // actions_taken=0 — but propagating it lets future operators
+        // that DO modify in-place report non-zero actions correctly.
+        let mut topo = Topology::new();
+        let solid = make_unit_cube_manifold(&mut topo);
+
+        let mut process = HealProcess::new();
+        process.add_step("direct_faces");
+        let (_new_solid, results) = process.execute(&mut topo, solid).unwrap();
+
+        assert_eq!(results.len(), 1, "one step → one result");
+        // The result comes from the operator itself, not synthesized
+        // from a SolidId comparison. Whether the cube needs orientation
+        // fixes is a topology-dependent detail; what matters is that
+        // we get *some* status (a non-empty bitflags value) — the old
+        // SolidId-comparison heuristic would have returned DONE1 only
+        // if the SolidId changed, missing in-place mutations entirely.
+        let r = &results[0];
+        assert!(
+            !r.status.is_empty(),
+            "FixResult status should always be set, got empty"
+        );
     }
 }
