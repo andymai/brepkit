@@ -2,9 +2,11 @@
 //!
 //! The fix sequence:
 //! 1. Fix all wires in the face (delegate to `fix_wire`)
-//! 2. Fix wire orientation (outer wire CCW from surface normal)
-//! 3. Small area check (bbox diagonal < tolerance → mark for removal)
-//! 4. Duplicate face detection (stub)
+//! 2. Fix `SameParameter` for each edge on this face — rebuild PCurves
+//!    that deviate from their 3D curves by more than tolerance
+//! 3. Fix wire orientation (outer wire CCW from surface normal)
+//! 4. Small area check (bbox diagonal < tolerance → mark for removal)
+//! 5. Duplicate face detection (stub)
 
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -35,12 +37,33 @@ pub fn fix_face(
         .chain(face.inner_wires().iter().copied())
         .collect();
 
-    for wid in wire_ids {
-        let wire_result = super::wire::fix_wire_on_face(topo, wid, face_id, ctx, config)?;
+    for wid in &wire_ids {
+        let wire_result = super::wire::fix_wire_on_face(topo, *wid, face_id, ctx, config)?;
         result.merge(&wire_result);
     }
 
-    // 2. Fix wire orientation relative to the face normal.
+    // 2. SameParameter: each edge on this face must have a PCurve that
+    // matches its 3D curve within tolerance, otherwise downstream UV
+    // operations (CDT triangulation, intersection) drift.
+    if config.fix_same_parameter != FixMode::Off {
+        // Collect edges first (we'll mutate `topo` inside the loop).
+        let mut edge_ids: Vec<brepkit_topology::edge::EdgeId> = Vec::new();
+        for &wid in &wire_ids {
+            if let Ok(w) = topo.wire(wid) {
+                edge_ids.extend(
+                    w.edges()
+                        .iter()
+                        .map(brepkit_topology::wire::OrientedEdge::edge),
+                );
+            }
+        }
+        for eid in edge_ids {
+            let r = super::edge::fix_same_parameter_on_face(topo, eid, face_id, ctx, config)?;
+            result.merge(&r);
+        }
+    }
+
+    // 3. Fix wire orientation relative to the face normal.
     if config.fix_wire_orientation != FixMode::Off {
         let r = fix_wire_orientation(topo, face_id, ctx, config)?;
         result.merge(&r);
@@ -244,4 +267,94 @@ fn projected_signed_area(positions: &[Point3], normal: &Vec3) -> f64 {
     }
 
     area2 * 0.5
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::context::HealContext;
+    use crate::fix::config::{FixConfig, FixMode};
+    use brepkit_topology::test_utils::make_unit_square_face;
+
+    fn default_config() -> FixConfig {
+        // Disable everything except the SameParameter step we want to
+        // exercise so the test stays focused.
+        FixConfig {
+            fix_wire_orientation: FixMode::Off,
+            fix_small_area: FixMode::Off,
+            fix_duplicate_faces: FixMode::Off,
+            fix_same_parameter: FixMode::Auto,
+            ..FixConfig::default()
+        }
+    }
+
+    #[test]
+    fn fix_face_creates_missing_pcurves_via_same_parameter() {
+        // make_unit_square_face produces a planar face where the 4 edges
+        // have NO PCurves attached (test_utils doesn't register them).
+        // After fix_face with fix_same_parameter, every edge on the face
+        // should now have a registered PCurve.
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+
+        // Pre-condition: no PCurves yet.
+        let edges_before: Vec<_> = {
+            let face = topo.face(face_id).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            wire.edges()
+                .iter()
+                .map(brepkit_topology::wire::OrientedEdge::edge)
+                .collect()
+        };
+        for &eid in &edges_before {
+            assert!(
+                !topo.pcurves().contains(eid, face_id),
+                "edge {eid:?} should not have a PCurve before fix_face"
+            );
+        }
+
+        let mut ctx = HealContext::new();
+        let cfg = default_config();
+        let result = fix_face(&mut topo, face_id, &mut ctx, &cfg).unwrap();
+
+        // Post-condition: every edge has a PCurve.
+        for &eid in &edges_before {
+            assert!(
+                topo.pcurves().contains(eid, face_id),
+                "edge {eid:?} should have a PCurve after fix_face"
+            );
+        }
+        // And SameParameter ran for each edge → some actions taken.
+        assert!(result.actions_taken >= edges_before.len());
+    }
+
+    #[test]
+    fn fix_face_skips_same_parameter_when_off() {
+        // Symmetric: with fix_same_parameter = Off, no PCurves are created.
+        let mut topo = Topology::new();
+        let face_id = make_unit_square_face(&mut topo);
+        let edges: Vec<_> = {
+            let face = topo.face(face_id).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            wire.edges()
+                .iter()
+                .map(brepkit_topology::wire::OrientedEdge::edge)
+                .collect()
+        };
+
+        let mut ctx = HealContext::new();
+        let cfg = FixConfig {
+            fix_same_parameter: FixMode::Off,
+            ..default_config()
+        };
+        let _ = fix_face(&mut topo, face_id, &mut ctx, &cfg).unwrap();
+
+        for &eid in &edges {
+            assert!(
+                !topo.pcurves().contains(eid, face_id),
+                "edge {eid:?} should still have no PCurve when fix_same_parameter=Off"
+            );
+        }
+    }
 }
