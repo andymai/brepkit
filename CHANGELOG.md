@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.53.0](https://github.com/andymai/brepkit/compare/v2.52.0...v2.53.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** concave plane-cylinder fillet (hole through plate) ([#558](https://github.com/andymai/brepkit/issues/558)) ([7b721c4](https://github.com/andymai/brepkit/commit/7b721c4292f7375d52b27700ed6989fe6829e448))
+
 ## [2.52.0](https://github.com/andymai/brepkit/compare/v2.51.0...v2.52.0) (2026-05-08)
 
 
