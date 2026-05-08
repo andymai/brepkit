@@ -4666,10 +4666,14 @@ pub fn cone_cone_coaxial_chamfer(
         return Ok(None);
     }
 
-    // Chamfer line P1 → P2 in (r, z).
+    // Chamfer line P1 → P2 in (r, z). The Δr guard avoids `r_c1·dz/dr`
+    // blowing up to ±∞ when the line is vertical (Δr = 0); the
+    // `dz ≈ 0` case (horizontal line ⇒ flat-disk chamfer) is caught
+    // downstream by the half-angle ≤ 1e-3 check, so we don't need a
+    // separate guard for it.
     let dr = r_c2 - r_c1;
     let dz = z_c2 - z_c1;
-    if dr.abs() <= tol_lin || dz.abs() <= tol_lin {
+    if dr.abs() <= tol_lin {
         return Ok(None);
     }
 
@@ -4683,6 +4687,11 @@ pub fn cone_cone_coaxial_chamfer(
     };
     let r_avg = 0.5 * (r_c1 + r_c2);
     let cone_half_angle = ((mid_z - z_apex_chamfer).abs() / r_avg).atan();
+    // Reject near-degenerate cone (close to flat disk or needle).
+    // brepkit's `ConicalSurface::new` rejects β ≤ 0 or β ≥ π/2; the
+    // 1e-3 rad ≈ 0.057° margin is a project-wide convention used by all
+    // analytic chamfer helpers (plane-cone, sphere-cone, cyl-cyl-fillet)
+    // for the same purpose — see `plane_cone_chamfer` for context.
     if cone_half_angle <= 1e-3 || cone_half_angle >= std::f64::consts::FRAC_PI_2 - 1e-3 {
         return Ok(None);
     }
