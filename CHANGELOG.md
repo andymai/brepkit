@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.56.0](https://github.com/andymai/brepkit/compare/v2.55.0...v2.56.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** concave plane-cone chamfer (top rim of tapered hole) ([#564](https://github.com/andymai/brepkit/issues/564)) ([d50958f](https://github.com/andymai/brepkit/commit/d50958f2cd670c769b33fe91b154738732314073))
+
 ## [2.55.0](https://github.com/andymai/brepkit/compare/v2.54.0...v2.55.0) (2026-05-08)
 
 
