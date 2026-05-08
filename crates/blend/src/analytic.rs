@@ -9921,6 +9921,132 @@ mod tests {
         );
     }
 
+    /// Cone-cone coaxial mixed-convexity chamfer: covers BOTH (s1=+1,
+    /// s2=−1) and (s1=−1, s2=+1). For each, contacts are on different
+    /// generator arms relative to the symmetric cases.
+    ///
+    /// Verifies emitted contact curves via `evaluate(t_start)` so the
+    /// "lies on cone surface" assertions test the impl, not the test's
+    /// own formula (which would be tautologically true by
+    /// `r = (z + h)·cot β` regardless of sign of `s_i` — see PR #605
+    /// rework for the rationale).
+    #[test]
+    fn cone_cone_coaxial_chamfer_mixed_emits_cone() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let beta1: f64 = std::f64::consts::PI / 3.0;
+        let beta2: f64 = std::f64::consts::PI / 4.0;
+        let h_2: f64 = 2.0;
+        let d: f64 = 0.3;
+        let sin_minus = (beta1 - beta2).sin();
+        let z_spine = h_2 * beta2.cos() * beta1.sin() / sin_minus;
+        let r_spine = z_spine * (beta1.cos() / beta1.sin());
+
+        let run_case = |reverse_s1: bool, reverse_s2: bool| {
+            let mut topo = Topology::new();
+            let cone1 =
+                ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), beta1)
+                    .unwrap();
+            let cone2 =
+                ConicalSurface::new(Point3::new(0.0, 0.0, h_2), Vec3::new(0.0, 0.0, 1.0), beta2)
+                    .unwrap();
+            let spine_circle = Circle3D::new(
+                Point3::new(0.0, 0.0, z_spine),
+                Vec3::new(0.0, 0.0, 1.0),
+                r_spine,
+            )
+            .unwrap();
+            let v = topo.add_vertex(Vertex::new(Point3::new(r_spine, 0.0, z_spine), 1e-7));
+            let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+            let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+            let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+            let face1 = if reverse_s1 {
+                topo.add_face(Face::new_reversed(
+                    w1,
+                    vec![],
+                    FaceSurface::Cone(cone1.clone()),
+                ))
+            } else {
+                topo.add_face(Face::new(w1, vec![], FaceSurface::Cone(cone1.clone())))
+            };
+            let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+            let face2 = if reverse_s2 {
+                topo.add_face(Face::new_reversed(
+                    w2,
+                    vec![],
+                    FaceSurface::Cone(cone2.clone()),
+                ))
+            } else {
+                topo.add_face(Face::new(w2, vec![], FaceSurface::Cone(cone2.clone())))
+            };
+
+            let result =
+                cone_cone_coaxial_chamfer(&cone1, &cone2, &spine, &topo, d, d, face1, face2)
+                    .unwrap()
+                    .expect("mixed coaxial cone-cone chamfer should produce a stripe");
+
+            // Sample EMITTED contact curves at start of domain.
+            let (t1_start, _) = result.stripe.contact1.domain();
+            let c1_point = result.stripe.contact1.evaluate(t1_start);
+            let (t2_start, _) = result.stripe.contact2.domain();
+            let c2_point = result.stripe.contact2.evaluate(t2_start);
+
+            // Cone1 surface: r = z · cot β1 (apex at z=0).
+            let cot_b1 = beta1.cos() / beta1.sin();
+            let c1_radial = (c1_point.x().powi(2) + c1_point.y().powi(2)).sqrt();
+            let c1_axial = c1_point.z();
+            let pred_r1 = c1_axial * cot_b1;
+            assert!(
+                (c1_radial - pred_r1).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): emitted contact1 must lie on cone1: \
+                 radial = {c1_radial}, predicted = {pred_r1}"
+            );
+
+            // Cone2 surface: r = (z − h_2) · cot β2 (apex at z=h_2).
+            let cot_b2 = beta2.cos() / beta2.sin();
+            let c2_radial = (c2_point.x().powi(2) + c2_point.y().powi(2)).sqrt();
+            let c2_axial = c2_point.z();
+            let pred_r2 = (c2_axial - h_2) * cot_b2;
+            assert!(
+                (c2_radial - pred_r2).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): emitted contact2 must lie on cone2: \
+                 radial = {c2_radial}, predicted = {pred_r2}"
+            );
+
+            // Emitted surface is a Cone.
+            assert!(
+                matches!(result.stripe.surface, FaceSurface::Cone(_)),
+                "({reverse_s1}, {reverse_s2}): expected Cone, got {}",
+                result.stripe.surface.type_tag()
+            );
+
+            // Both contacts on the chamfer cone via project_point.
+            if let FaceSurface::Cone(ref cone) = result.stripe.surface {
+                let (u_p, v_p) = ParametricSurface::project_point(cone, c1_point);
+                let on_cone_p1 = ParametricSurface::evaluate(cone, u_p, v_p);
+                assert!(
+                    (on_cone_p1 - c1_point).length() < 1e-9,
+                    "({reverse_s1}, {reverse_s2}): contact1 must lie on chamfer cone"
+                );
+                let (u_q, v_q) = ParametricSurface::project_point(cone, c2_point);
+                let on_cone_p2 = ParametricSurface::evaluate(cone, u_q, v_q);
+                assert!(
+                    (on_cone_p2 - c2_point).length() < 1e-9,
+                    "({reverse_s1}, {reverse_s2}): contact2 must lie on chamfer cone"
+                );
+            }
+        };
+
+        run_case(false, true); // (s1=+1, s2=-1)
+        run_case(true, false); // (s1=-1, s2=+1)
+    }
+
     /// Sphere-cylinder both-concave fillet: spherical cavity intersecting
     /// a cylindrical hole. Both faces REVERSED ⇒ Q_sph = R_s − r,
     /// Q_cyl = r_c − r (internal tangency on both surfaces).
