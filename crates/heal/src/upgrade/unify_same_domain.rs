@@ -421,21 +421,27 @@ fn merge_collinear_edges(
     let mut i = 0;
 
     while i < n {
-        // Run starts at edge i. Only mergeable kinds (and forward-oriented
-        // runs) are eligible — see continuation conditions below.
+        // Capture the curve template the merged edge would inherit if the run
+        // extends. `None` ⇒ this edge cannot start a mergeable run; we never
+        // re-derive the curve at merge time, so the merge path has no
+        // unreachable arm.
         let head = &data[i];
-        let head_eligible = matches!(
-            head.kind,
-            EdgeKind::Line | EdgeKind::Circle(_) | EdgeKind::Ellipse(_)
-        ) && head.oe.is_forward();
+        let merge_template: Option<EdgeCurve> = if head.oe.is_forward() {
+            match &head.kind {
+                EdgeKind::Line => Some(EdgeCurve::Line),
+                EdgeKind::Circle(c) => Some(EdgeCurve::Circle(c.clone())),
+                EdgeKind::Ellipse(e) => Some(EdgeCurve::Ellipse(e.clone())),
+                EdgeKind::Other => None,
+            }
+        } else {
+            None
+        };
 
-        if !head_eligible {
+        let Some(merged_curve) = merge_template else {
             new_edges.push(head.oe);
             i += 1;
             continue;
-        }
-
-        let mut run_end_vid = head.end_vid;
+        };
 
         // For lines we additionally require subsequent segments to be parallel
         // — colocated start/end positions on the same line — so capture the
@@ -452,6 +458,7 @@ fn merge_collinear_edges(
             None
         };
 
+        let mut run_end_vid = head.end_vid;
         let mut j = i + 1;
         while j < n {
             let next = &data[j];
@@ -491,13 +498,7 @@ fn merge_collinear_edges(
             continue;
         }
 
-        let new_curve = match &head.kind {
-            EdgeKind::Line => EdgeCurve::Line,
-            EdgeKind::Circle(c) => EdgeCurve::Circle(c.clone()),
-            EdgeKind::Ellipse(e) => EdgeCurve::Ellipse(e.clone()),
-            EdgeKind::Other => unreachable!("run head must be a mergeable kind"),
-        };
-        let new_edge = Edge::new(head.start_vid, run_end_vid, new_curve);
+        let new_edge = Edge::new(head.start_vid, run_end_vid, merged_curve);
         let new_edge_id = topo.add_edge(new_edge);
         new_edges.push(OrientedEdge::new(new_edge_id, true));
         merged_count += run_length - 1;
