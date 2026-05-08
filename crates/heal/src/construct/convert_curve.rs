@@ -1,19 +1,19 @@
 //! Curve type conversion utilities.
 //!
-//! Provides geometrically exact conversions from analytic curve
-//! types (Line3D, Circle3D, Parabola3D, Hyperbola3D, plus
-//! Ellipse3D once #623 lands) to their NURBS representations.
-//! These are used by healing operations that need a uniform NURBS
-//! representation for fitting or comparison.
+//! Provides geometrically exact conversions from all 5 analytic curve
+//! types (Line3D, Circle3D, Ellipse3D, Parabola3D, Hyperbola3D) to
+//! their NURBS representations. These are used by healing operations
+//! that need a uniform NURBS representation for fitting or comparison.
 //!
 //! - `line_to_nurbs`: degree 1, 2 CPs (non-rational).
 //! - `circle_to_nurbs`: degree 2, 9 CPs (rational, four quarter-arcs).
+//! - `ellipse_to_nurbs`: degree 2, 9 CPs (rational, affine image of circle).
 //! - `parabola_to_nurbs`: degree 2, 3 CPs (non-rational Bézier).
 //! - `hyperbola_to_nurbs`: degree 2, 3 CPs (rational, conic-arc form).
 
 use std::f64::consts::FRAC_PI_4;
 
-use brepkit_math::curves::{Circle3D, Hyperbola3D, Parabola3D};
+use brepkit_math::curves::{Circle3D, Ellipse3D, Hyperbola3D, Parabola3D};
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::Point3;
 
@@ -222,6 +222,57 @@ pub fn hyperbola_to_nurbs(
         vec![p0, p1, p2],
         vec![1.0, w1, 1.0],
     )?)
+}
+
+/// Convert a full ellipse to a degree-2 rational NURBS curve.
+///
+/// An ellipse is the affine image of a circle (independent scaling
+/// along the major and minor axes). Applying that affine transform
+/// to the rational unit-circle NURBS yields the rational ellipse —
+/// since rational degree-2 curves are closed under affine maps, the
+/// result is geometrically exact within fp tolerance. The construction
+/// uses the same 9-control-point structure and the same knot vector
+/// `[0,0,0,1,1,2,2,3,3,4,4,4]` as [`circle_to_nurbs`]; only the CP
+/// positions change (replacing the circle's single `r` with
+/// independent `semi_major` along `u_axis` and `semi_minor` along
+/// `v_axis`).
+///
+/// # Errors
+///
+/// Returns [`HealError`] if the NURBS construction fails.
+pub fn ellipse_to_nurbs(ellipse: &Ellipse3D) -> Result<NurbsCurve, HealError> {
+    let center = ellipse.center();
+    let u = ellipse.u_axis();
+    let v = ellipse.v_axis();
+    let a = ellipse.semi_major();
+    let b = ellipse.semi_minor();
+
+    let w = FRAC_PI_4.cos();
+
+    // 9 CPs paralleling the circle pattern but with `r` replaced by
+    // `(a, b)` per-axis. The corner CPs at indices 1, 3, 5, 7 are at
+    // the affine images of the circle's corner CPs (which sat at the
+    // tangent intersections of consecutive on-curve points). Their
+    // weight stays `cos(π/4) = 1/√2` — the weight is determined by
+    // the half-angle subtended (π/2 here) and is invariant under
+    // affine maps that preserve the parameterization, regardless of
+    // absolute distance from center.
+    let cp = [
+        center + u * a,
+        center + u * a + v * b,
+        center + v * b,
+        center + u * (-a) + v * b,
+        center + u * (-a),
+        center + u * (-a) + v * (-b),
+        center + v * (-b),
+        center + u * a + v * (-b),
+        center + u * a,
+    ];
+
+    let weights = vec![1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0];
+    let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 2.0, 2.0, 3.0, 3.0, 4.0, 4.0, 4.0];
+
+    Ok(NurbsCurve::new(2, knots, cp.to_vec(), weights)?)
 }
 
 #[cfg(test)]
@@ -436,5 +487,65 @@ mod tests {
             }
             other => panic!("expected ParameterOutOfRange, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn ellipse_to_nurbs_quarter_points_match_analytic() {
+        // The 5 on-curve points at NURBS knots 0, 1, 2, 3, 4 must
+        // exactly match the analytic Ellipse3D::evaluate at angles
+        // 0, π/2, π, 3π/2, 2π. (Knot 0 and knot 4 evaluate to the same
+        // 3D point — the closed curve's start = end.)
+        let center = Point3::new(0.0, 0.0, 0.0);
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let a = 3.0_f64;
+        let b = 2.0_f64;
+        let ellipse = Ellipse3D::new(center, normal, a, b).unwrap();
+        let nurbs = ellipse_to_nurbs(&ellipse).unwrap();
+
+        for (knot, angle) in [
+            (0.0_f64, 0.0_f64),
+            (1.0, std::f64::consts::FRAC_PI_2),
+            (2.0, std::f64::consts::PI),
+            (3.0, 3.0 * std::f64::consts::FRAC_PI_2),
+            (4.0, std::f64::consts::TAU),
+        ] {
+            let p_nurbs = nurbs.evaluate(knot);
+            let p_analytic = ellipse.evaluate(angle);
+            assert!(
+                (p_nurbs - p_analytic).length() < 1e-10,
+                "at knot {knot}/angle {angle}: nurbs {p_nurbs:?} vs analytic {p_analytic:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn ellipse_to_nurbs_evaluates_exactly_on_ellipse() {
+        // Every NURBS evaluation must satisfy the implicit equation
+        // (x'/a)² + (y'/b)² = 1 in the ellipse's local frame, where
+        // (x', y') are the offset projections onto u_axis/v_axis.
+        let center = Point3::new(2.0, -1.0, 3.0);
+        let normal = Vec3::new(1.0, 0.5, 0.7);
+        let a = 4.0_f64;
+        let b = 1.5_f64;
+        let ellipse = Ellipse3D::new(center, normal, a, b).unwrap();
+        let nurbs = ellipse_to_nurbs(&ellipse).unwrap();
+        let u = ellipse.u_axis();
+        let v = ellipse.v_axis();
+
+        let mut max_err = 0.0_f64;
+        for i in 0..=64 {
+            #[allow(clippy::cast_precision_loss)]
+            let t = i as f64 / 64.0 * 4.0;
+            let p = nurbs.evaluate(t);
+            let offset = p - center;
+            let xr = offset.dot(u) / a;
+            let yr = offset.dot(v) / b;
+            let resid = (xr * xr + yr * yr).sqrt() - 1.0;
+            max_err = max_err.max(resid.abs());
+        }
+        assert!(
+            max_err < 1e-9,
+            "exact rational ellipse residual {max_err} exceeds 1e-9"
+        );
     }
 }
