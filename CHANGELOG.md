@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.76.0](https://github.com/andymai/brepkit/compare/v2.75.0...v2.76.0) (2026-05-08)
+
+
+### Features
+
+* **heal:** exact parabola_to_nurbs (degree-2 Bézier) ([#625](https://github.com/andymai/brepkit/issues/625)) ([09aa16c](https://github.com/andymai/brepkit/commit/09aa16cc4754614e806b730adcd9491a2a893499))
+
 ## [2.75.0](https://github.com/andymai/brepkit/compare/v2.74.0...v2.75.0) (2026-05-08)
 
 
