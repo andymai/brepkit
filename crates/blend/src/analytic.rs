@@ -7658,15 +7658,13 @@ mod tests {
                     .expect("mixed sphere-sphere chamfer should produce a stripe");
 
             // Verify emitted contact endpoints lie on their respective
-            // spheres. Using `control_points()[0]` reads the
-            // implementation's chosen 3D point directly.
-            let c1_point = result
-                .stripe
-                .contact1
-                .control_points()
-                .first()
-                .copied()
-                .unwrap();
+            // spheres. Sample the EMITTED curve via
+            // `evaluate(t_start)` rather than reading control points —
+            // rational NURBS arcs have intermediate control points
+            // OFF the curve, and even endpoint coverage couples the
+            // test to construction details (degree, knot vector).
+            let (t1_start, _) = result.stripe.contact1.domain();
+            let c1_point = result.stripe.contact1.evaluate(t1_start);
             let dist_s1 = (c1_point - Point3::new(0.0, 0.0, 0.0)).length();
             assert!(
                 (dist_s1 - big_r1).abs() < 1e-9,
@@ -7674,13 +7672,8 @@ mod tests {
                  distance = {dist_s1}, want R1 = {big_r1}"
             );
 
-            let c2_point = result
-                .stripe
-                .contact2
-                .control_points()
-                .first()
-                .copied()
-                .unwrap();
+            let (t2_start, _) = result.stripe.contact2.domain();
+            let c2_point = result.stripe.contact2.evaluate(t2_start);
             let dist_s2 = (c2_point - Point3::new(0.0, 0.0, big_d)).length();
             assert!(
                 (dist_s2 - big_r2).abs() < 1e-9,
