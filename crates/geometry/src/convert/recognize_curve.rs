@@ -2,8 +2,8 @@
 //!
 //! Samples a NURBS curve at 16 evenly-spaced parameter values and
 //! tests whether the sample set is consistent with a line, circle,
-//! ellipse, or hyperbola within the given tolerance. Returns a
-//! [`RecognizedCurve`] describing the best match.
+//! ellipse, hyperbola, or parabola within the given tolerance.
+//! Returns a [`RecognizedCurve`] describing the best match.
 
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::{Point3, Vec3};
@@ -82,6 +82,9 @@ pub enum RecognizedCurve {
 ///    `Ellipse` with `a == b`.
 /// 4. **Hyperbola**: all points coplanar and lie on a best-fit hyperbola —
 ///    max residual against `(local_x/a)² − (local_y/b)² = 1` < `tolerance`.
+/// 5. **Parabola**: discriminant `B² − 4AC ≈ 0` of the algebraic conic fit —
+///    max residual against `A'·x'² + D'·x' + E'·y' = 1` (in the axis-aligned
+///    rotated frame) < `tolerance`.
 ///
 /// Returns the first match, or [`RecognizedCurve::NotRecognized`].
 #[must_use]
@@ -639,7 +642,11 @@ fn try_recognize_hyperbola(
 ///    `A'·x'² + D'·x' + E'·y' + F' = 0` (the y'² and x'·y' terms vanish).
 /// 4. Complete the square in x' to get canonical form
 ///    `(x' − xv)² = (4f) · (y' − yv)` where the vertex is at
-///    `(xv, yv)` and `f = −A'/(4·E')` is the focal length.
+///    `(xv, yv)` and `f = −E' / (4·A')` is the focal length. (Both
+///    `A'` and `E'` are post-fit coefficients in the F=−1
+///    normalization; the absolute value is taken so `f > 0` and the
+///    parabola opening direction is encoded in `axis_dir`'s sign
+///    instead.)
 fn try_recognize_parabola(samples: &[Point3], tolerance: f64) -> Option<(Point3, Vec3, Vec3, f64)> {
     if samples.len() < 5 {
         return None;
@@ -744,23 +751,9 @@ fn try_recognize_parabola(samples: &[Point3], tolerance: f64) -> Option<(Point3,
     let perp_2d = (-axis_2d.1, axis_2d.0);
 
     // Rotate samples so the parabola axis is aligned with the y'
-    // direction. New coords:
-    //   x' = perp_2d · (x, y)
-    //   y' = axis_2d · (x, y)
-    // In rotated coords, the conic should be
+    // direction. In rotated coords the conic should be
     //   A' · x'² + D' · x' + E' · y' = 1  (B' = 0, C' = 0).
-    let mut sxx = 0.0_f64;
-    let mut sx = 0.0_f64;
-    let mut sy = 0.0_f64;
-    let mut s = 0.0_f64; // count
-    let mut sx_sq = 0.0_f64;
-    let mut sx_xx = 0.0_f64;
-    let mut sx_y = 0.0_f64;
-    let mut sxx_sq = 0.0_f64;
-    let mut sxx_y = 0.0_f64;
-    let mut sy_y = 0.0_f64;
-    // Simpler: just refit with the rotated coordinates via a 3-unknown
-    // least-squares: A' · x'² + D' · x' + E' · y' = 1.
+    // Refit via 3×3 normal equations to recover A', D', E'.
     let mut mat3 = [[0.0_f64; 3]; 3];
     let mut rhs3 = [0.0_f64; 3];
     for &(x, y) in &pts2d {
@@ -773,19 +766,10 @@ fn try_recognize_parabola(samples: &[Point3], tolerance: f64) -> Option<(Point3,
             }
             rhs3[i] += row[i];
         }
-        sxx += xp * xp;
-        sx += xp;
-        sy += yp;
-        s += 1.0;
-        sx_sq += xp * xp * xp * xp;
-        sx_xx += xp * xp * xp;
-        sx_y += xp * yp;
-        sxx_sq += xp * xp * xp * xp;
-        sxx_y += xp * xp * yp;
-        sy_y += yp * yp;
     }
-    let _ = (sxx, sx, sy, s, sx_sq, sx_xx, sx_y, sxx_sq, sxx_y, sy_y);
-    let sol = solve_3x3_local(mat3, rhs3)?;
+    // Reuse the recognize_surface 3×3 Cramer solver instead of
+    // duplicating logic.
+    let sol = super::recognize_surface::solve_3x3(mat3, rhs3)?;
     let a_p = sol[0];
     let d_p = sol[1];
     let e_p = sol[2];
@@ -837,46 +821,6 @@ fn try_recognize_parabola(samples: &[Point3], tolerance: f64) -> Option<(Point3,
     let axis_dir = axis_dir * opening_sign;
 
     Some((vertex, n, axis_dir, focal_length))
-}
-
-/// Solve a 3×3 linear system via Gaussian elimination with partial
-/// pivoting. Returns `None` if the matrix is singular.
-fn solve_3x3_local(mat: [[f64; 3]; 3], rhs: [f64; 3]) -> Option<[f64; 3]> {
-    let mut m = mat;
-    let mut b = rhs;
-    for i in 0..3 {
-        let mut max_row = i;
-        let mut max_val = m[i][i].abs();
-        for k in (i + 1)..3 {
-            if m[k][i].abs() > max_val {
-                max_val = m[k][i].abs();
-                max_row = k;
-            }
-        }
-        if max_val < 1e-30 {
-            return None;
-        }
-        if max_row != i {
-            m.swap(i, max_row);
-            b.swap(i, max_row);
-        }
-        for k in (i + 1)..3 {
-            let factor = m[k][i] / m[i][i];
-            for j in i..3 {
-                m[k][j] -= factor * m[i][j];
-            }
-            b[k] -= factor * b[i];
-        }
-    }
-    let mut x = [0.0_f64; 3];
-    for i in (0..3).rev() {
-        let mut sum = b[i];
-        for j in (i + 1)..3 {
-            sum -= m[i][j] * x[j];
-        }
-        x[i] = sum / m[i][i];
-    }
-    Some(x)
 }
 
 /// Solve a 5×5 linear system via Gaussian elimination with partial
