@@ -5,7 +5,7 @@
 //! for splitting the curve at those parameters.
 
 use brepkit_math::nurbs::curve::NurbsCurve;
-use brepkit_math::nurbs::knot_ops::curve_knot_insert;
+use brepkit_math::nurbs::knot_ops::curve_split;
 
 use crate::HealError;
 
@@ -60,14 +60,19 @@ pub fn find_continuity_breaks(curve: &NurbsCurve, min_continuity: usize) -> Vec<
 
 /// Split a NURBS curve at the given parameter values.
 ///
-/// Inserts knots at each split parameter until multiplicity reaches
-/// `degree` (C0 break), then extracts the sub-curves between
-/// consecutive break points via fitting.
+/// Returns sub-curves whose union is geometrically identical to the
+/// input — produced by repeatedly applying
+/// [`brepkit_math::nurbs::knot_ops::curve_split`] at each split
+/// parameter. Each sub-curve preserves the original degree, weights,
+/// and knot structure exactly (no fit-through-samples drift).
+///
+/// Split parameters that fall outside the curve's open knot domain or
+/// duplicate other entries are ignored.
 ///
 /// # Errors
 ///
-/// Returns [`HealError::UpgradeFailed`] if knot insertion or curve
-/// construction fails.
+/// Returns [`HealError::UpgradeFailed`] if `curve_split` fails on
+/// any sub-curve (e.g., due to malformed knot vectors).
 pub fn split_curve_at_params(
     curve: &NurbsCurve,
     params: &[f64],
@@ -76,101 +81,35 @@ pub fn split_curve_at_params(
         return Ok(vec![curve.clone()]);
     }
 
-    let degree = curve.degree();
-
     // Sort and deduplicate split parameters.
     let mut sorted_params: Vec<f64> = params.to_vec();
     sorted_params.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     sorted_params.dedup_by(|a, b| (*a - *b).abs() < KNOT_EPS);
 
-    // Insert knots at each split point to full multiplicity (degree + 1).
-    let mut refined = curve.clone();
-    for &u in &sorted_params {
-        // Count current multiplicity of u in the refined curve.
-        let current_mult = refined
-            .knots()
-            .iter()
-            .filter(|&&kv| (kv - u).abs() < KNOT_EPS)
-            .count();
+    // Drop split params outside the open domain — they would be no-ops
+    // at best and produce invalid knot vectors at worst.
+    let knots = curve.knots();
+    let degree = curve.degree();
+    let u_lo = knots[degree];
+    let u_hi = knots[knots.len() - degree - 1];
+    sorted_params.retain(|&u| u > u_lo + KNOT_EPS && u < u_hi - KNOT_EPS);
 
-        // Need multiplicity = degree for a C0 split (curve passes through CP).
-        let needed = degree.saturating_sub(current_mult);
-        if needed > 0 {
-            let result = curve_knot_insert(&refined, u, needed);
-            match result {
-                Ok(new_curve) => {
-                    refined = new_curve;
-                }
-                Err(e) => {
-                    return Err(HealError::UpgradeFailed(format!(
-                        "knot insertion failed at u={u}: {e}"
-                    )));
-                }
-            }
-        }
-    }
-
-    // Extract sub-curves: find unique knot values with full multiplicity
-    // (degree + 1) — these are the segment boundaries. Each segment's
-    // control points span between consecutive boundaries.
-    let ref_knots = refined.knots();
-
-    // Find all unique knot values that have multiplicity >= degree.
-    // These are the segment boundaries (including domain endpoints,
-    // which have multiplicity = degree + 1 in clamped B-splines).
-    let mut boundary_knots: Vec<f64> = Vec::new();
-    let mut i = 0;
-    while i < ref_knots.len() {
-        let u = ref_knots[i];
-        let mut mult = 1;
-        while i + mult < ref_knots.len() && (ref_knots[i + mult] - u).abs() < KNOT_EPS {
-            mult += 1;
-        }
-        if mult >= degree {
-            boundary_knots.push(u);
-        }
-        i += mult;
-    }
-
-    if boundary_knots.len() < 2 {
+    if sorted_params.is_empty() {
         return Ok(vec![curve.clone()]);
     }
 
-    // Extract sub-curves between consecutive boundary knots.
-    // At each boundary with multiplicity m, the curve passes through
-    // control point cp[k-m] (where k is the span index). We build
-    // clamped sub-curves by repeating the boundary knot to full
-    // multiplicity (degree+1) on each side.
-    let n_segments = boundary_knots.len() - 1;
-    let mut segments = Vec::with_capacity(n_segments);
-
-    for seg_idx in 0..n_segments {
-        let u_start = boundary_knots[seg_idx];
-        let u_end = boundary_knots[seg_idx + 1];
-
-        // Evaluate the refined curve at several points to get the sub-curve
-        // geometry, then fit a new NURBS through those points.
-        // This is simpler and more robust than partitioning knots/CPs.
-        let n_pts = degree + 4; // enough points for a good fit
-        let mut pts = Vec::with_capacity(n_pts);
-        for k in 0..n_pts {
-            #[allow(clippy::cast_precision_loss)]
-            let t = u_start + (u_end - u_start) * (k as f64 / (n_pts - 1) as f64);
-            pts.push(refined.evaluate(t));
-        }
-
-        let sub_curve = brepkit_math::nurbs::fitting::interpolate(&pts, degree).map_err(|e| {
-            HealError::UpgradeFailed(format!("failed to fit sub-curve [{u_start}, {u_end}]: {e}"))
-        })?;
-
-        segments.push(sub_curve);
+    // Repeatedly split: each call to curve_split returns (left, right),
+    // we keep splitting `right` at the next sorted parameter.
+    let mut segments: Vec<NurbsCurve> = Vec::with_capacity(sorted_params.len() + 1);
+    let mut remaining = curve.clone();
+    for &u in &sorted_params {
+        let (left, right) = curve_split(&remaining, u)
+            .map_err(|e| HealError::UpgradeFailed(format!("curve_split failed at u={u}: {e}")))?;
+        segments.push(left);
+        remaining = right;
     }
-
-    if segments.is_empty() {
-        Ok(vec![curve.clone()])
-    } else {
-        Ok(segments)
-    }
+    segments.push(remaining);
+    Ok(segments)
 }
 
 #[cfg(test)]
@@ -251,6 +190,76 @@ mod tests {
     fn split_empty_params_returns_original() {
         let curve = make_cubic_with_c0_break();
         let segments = split_curve_at_params(&curve, &[]).unwrap();
+        assert_eq!(segments.len(), 1);
+    }
+
+    #[test]
+    fn split_preserves_evaluation_exactly() {
+        // The exact-split implementation must reproduce the original
+        // curve's evaluation on each sub-piece within fp tolerance,
+        // NOT just within a fitting-error bound.
+        let curve = make_cubic_with_c0_break();
+        let segments = split_curve_at_params(&curve, &[0.5]).unwrap();
+        assert_eq!(segments.len(), 2);
+
+        // Sample the first segment over its domain and compare with the
+        // original curve at the same parameter.
+        let s0 = &segments[0];
+        let (s0_lo, s0_hi) = (
+            s0.knots()[s0.degree()],
+            s0.knots()[s0.knots().len() - s0.degree() - 1],
+        );
+        for k in 0..=10 {
+            #[allow(clippy::cast_precision_loss)]
+            let t = s0_lo + (s0_hi - s0_lo) * (k as f64 / 10.0);
+            let p_seg = s0.evaluate(t);
+            let p_orig = curve.evaluate(t);
+            assert!(
+                (p_seg - p_orig).length() < 1e-9,
+                "left segment mismatch at t={t}: seg {p_seg:?} vs orig {p_orig:?}"
+            );
+        }
+
+        let s1 = &segments[1];
+        let (s1_lo, s1_hi) = (
+            s1.knots()[s1.degree()],
+            s1.knots()[s1.knots().len() - s1.degree() - 1],
+        );
+        for k in 0..=10 {
+            #[allow(clippy::cast_precision_loss)]
+            let t = s1_lo + (s1_hi - s1_lo) * (k as f64 / 10.0);
+            let p_seg = s1.evaluate(t);
+            let p_orig = curve.evaluate(t);
+            assert!(
+                (p_seg - p_orig).length() < 1e-9,
+                "right segment mismatch at t={t}: seg {p_seg:?} vs orig {p_orig:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn split_at_multiple_params_yields_n_plus_one_segments() {
+        // Smooth degree-3 curve, splittable at any interior parameter.
+        let degree = 3;
+        let knots = vec![0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0, 1.0];
+        let cps: Vec<Point3> = (0..7)
+            .map(|i| {
+                let t = f64::from(i) / 6.0;
+                Point3::new(t, t * t, 0.0)
+            })
+            .collect();
+        let weights = vec![1.0; 7];
+        let curve = NurbsCurve::new(degree, knots, cps, weights).unwrap();
+
+        let segments = split_curve_at_params(&curve, &[0.3, 0.6]).unwrap();
+        assert_eq!(segments.len(), 3, "two splits → three segments");
+    }
+
+    #[test]
+    fn split_ignores_out_of_domain_params() {
+        let curve = make_cubic_with_c0_break();
+        // 1.5 is outside [0, 1] — should be silently ignored.
+        let segments = split_curve_at_params(&curve, &[1.5]).unwrap();
         assert_eq!(segments.len(), 1);
     }
 }
