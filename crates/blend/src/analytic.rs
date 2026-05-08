@@ -9921,6 +9921,149 @@ mod tests {
         );
     }
 
+    /// Cone-cone coaxial mixed-convexity chamfer: covers BOTH (s1=+1,
+    /// s2=−1) and (s1=−1, s2=+1). For each, contacts are on different
+    /// generator arms relative to the symmetric cases.
+    ///
+    /// Reads emitted contact endpoints via `evaluate(t_start)`. Asserts
+    /// each emitted contact matches the analytic prediction
+    /// `(r_spine ∓ s_i·d·cos β_i, z_spine ∓ s_i·d·sin β_i)` (sharper
+    /// than just "lies on cone surface", which a degenerate impl
+    /// returning `(r_spine, z_spine)` for both contacts would
+    /// trivially satisfy via `r = (z − z_apex)·cot β`).
+    #[test]
+    fn cone_cone_coaxial_chamfer_mixed_emits_cone() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let beta1: f64 = std::f64::consts::PI / 3.0;
+        let beta2: f64 = std::f64::consts::PI / 4.0;
+        let h_2: f64 = 2.0;
+        let d: f64 = 0.3;
+        let sin_minus = (beta1 - beta2).sin();
+        let z_spine = h_2 * beta2.cos() * beta1.sin() / sin_minus;
+        let r_spine = z_spine * (beta1.cos() / beta1.sin());
+
+        let run_case = |reverse_s1: bool, reverse_s2: bool| {
+            let mut topo = Topology::new();
+            let cone1 =
+                ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), beta1)
+                    .unwrap();
+            let cone2 =
+                ConicalSurface::new(Point3::new(0.0, 0.0, h_2), Vec3::new(0.0, 0.0, 1.0), beta2)
+                    .unwrap();
+            let spine_circle = Circle3D::new(
+                Point3::new(0.0, 0.0, z_spine),
+                Vec3::new(0.0, 0.0, 1.0),
+                r_spine,
+            )
+            .unwrap();
+            let v = topo.add_vertex(Vertex::new(Point3::new(r_spine, 0.0, z_spine), 1e-7));
+            let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+            let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+            let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+            let face1 = if reverse_s1 {
+                topo.add_face(Face::new_reversed(
+                    w1,
+                    vec![],
+                    FaceSurface::Cone(cone1.clone()),
+                ))
+            } else {
+                topo.add_face(Face::new(w1, vec![], FaceSurface::Cone(cone1.clone())))
+            };
+            let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+            let face2 = if reverse_s2 {
+                topo.add_face(Face::new_reversed(
+                    w2,
+                    vec![],
+                    FaceSurface::Cone(cone2.clone()),
+                ))
+            } else {
+                topo.add_face(Face::new(w2, vec![], FaceSurface::Cone(cone2.clone())))
+            };
+
+            let result =
+                cone_cone_coaxial_chamfer(&cone1, &cone2, &spine, &topo, d, d, face1, face2)
+                    .unwrap()
+                    .expect("mixed coaxial cone-cone chamfer should produce a stripe");
+
+            // Sample EMITTED contact curves at start of domain.
+            let (t1_start, _) = result.stripe.contact1.domain();
+            let c1_point = result.stripe.contact1.evaluate(t1_start);
+            let (t2_start, _) = result.stripe.contact2.domain();
+            let c2_point = result.stripe.contact2.evaluate(t2_start);
+
+            // Compute analytic predictions: contact_i moves along
+            // generator_i from spine by s_i·d, retreating toward apex_i
+            // when s_i=+1 and extending away when s_i=−1.
+            let s1_signed = if reverse_s1 { -1.0_f64 } else { 1.0_f64 };
+            let s2_signed = if reverse_s2 { -1.0_f64 } else { 1.0_f64 };
+            let pred_c1_r = r_spine - s1_signed * d * beta1.cos();
+            let pred_c1_z = z_spine - s1_signed * d * beta1.sin();
+            let pred_c2_r = r_spine + s2_signed * d * beta2.cos();
+            let pred_c2_z = z_spine + s2_signed * d * beta2.sin();
+
+            let c1_radial = (c1_point.x().powi(2) + c1_point.y().powi(2)).sqrt();
+            let c2_radial = (c2_point.x().powi(2) + c2_point.y().powi(2)).sqrt();
+            assert!(
+                (c1_radial - pred_c1_r).abs() < 1e-9 && (c1_point.z() - pred_c1_z).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact1 should be at (r={pred_c1_r}, z={pred_c1_z}); \
+                 got (r={c1_radial}, z={})",
+                c1_point.z()
+            );
+            assert!(
+                (c2_radial - pred_c2_r).abs() < 1e-9 && (c2_point.z() - pred_c2_z).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact2 should be at (r={pred_c2_r}, z={pred_c2_z}); \
+                 got (r={c2_radial}, z={})",
+                c2_point.z()
+            );
+
+            // Emitted surface is a Cone with axis = −z (apex ABOVE
+            // contacts). Distinct from the symmetric cases which have
+            // axis = +z: in mixed configs both contacts retreat
+            // /extend along generators with the SAME radial sign
+            // (one s_i flips), so the chord between them slopes the
+            // OPPOSITE way and the line P1−P2 extrapolates to r=0
+            // ABOVE the contacts rather than below.
+            let chamfer_cone = match result.stripe.surface {
+                FaceSurface::Cone(ref c) => c,
+                ref other => panic!(
+                    "({reverse_s1}, {reverse_s2}): expected Cone, got {}",
+                    other.type_tag()
+                ),
+            };
+            let axis = chamfer_cone.axis();
+            assert!(
+                axis.dot(Vec3::new(0.0, 0.0, 1.0)) < -1.0 + 1e-12,
+                "({reverse_s1}, {reverse_s2}): chamfer cone axis should be −z (mixed = apex above), got {axis:?}"
+            );
+
+            // Both contacts on the chamfer cone via project_point
+            // round-trip (the impl chose them on its own surface, so
+            // this is a regression-check only).
+            let (u_p, v_p) = ParametricSurface::project_point(chamfer_cone, c1_point);
+            let on_cone_p1 = ParametricSurface::evaluate(chamfer_cone, u_p, v_p);
+            assert!(
+                (on_cone_p1 - c1_point).length() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact1 must lie on chamfer cone"
+            );
+            let (u_q, v_q) = ParametricSurface::project_point(chamfer_cone, c2_point);
+            let on_cone_p2 = ParametricSurface::evaluate(chamfer_cone, u_q, v_q);
+            assert!(
+                (on_cone_p2 - c2_point).length() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact2 must lie on chamfer cone"
+            );
+        };
+
+        run_case(false, true); // (s1=+1, s2=-1)
+        run_case(true, false); // (s1=-1, s2=+1)
+    }
+
     /// Sphere-cylinder both-concave fillet: spherical cavity intersecting
     /// a cylindrical hole. Both faces REVERSED ⇒ Q_sph = R_s − r,
     /// Q_cyl = r_c − r (internal tangency on both surfaces).
