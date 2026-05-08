@@ -1670,25 +1670,13 @@ pub fn plane_sphere_fillet(
     let center = sphere.center();
     let center_v = Vec3::new(center.x(), center.y(), center.z());
 
-    // 2) Project sphere center onto plate. The sphere center MUST lie on
-    //    the line through `p_axis_on_plane` perpendicular to the plate
-    //    (i.e. ±n_p_inward direction) — otherwise the spine isn't an
-    //    axisymmetric circle around the n_p_inward axis and the analytic
-    //    formula doesn't apply.
+    // 2) Project sphere center onto the plate to get the spine-circle
+    //    center. By construction `p_axis_on_plane − center` is along
+    //    `n_p_inward`, so the spine is automatically axisymmetric about
+    //    the plate normal — the only valid configuration for the analytic
+    //    formula.
     let step = d_plane - n_p_inward.dot(center_v);
     let p_axis_on_plane = center + n_p_inward * step;
-    let center_offset = center - p_axis_on_plane;
-    let center_offset_v = Vec3::new(center_offset.x(), center_offset.y(), center_offset.z());
-    if center_offset_v.length() > tol_lin {
-        // Center lies above the plane but the projection didn't land back
-        // on the perpendicular — shouldn't happen mathematically, but
-        // guard against floating drift in long pipelines.
-        let along = center_offset_v.dot(n_p_inward);
-        let perp = center_offset_v - n_p_inward * along;
-        if perp.length() > tol_lin {
-            return Ok(None);
-        }
-    }
 
     // 3) Signed distance from plate to sphere center along n_p_inward:
     //    `h_signed = (sphere_center − p_axis_on_plane) · n_p_inward`.
