@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.52.0](https://github.com/andymai/brepkit/compare/v2.51.0...v2.52.0) (2026-05-08)
+
+
+### Features
+
+* **operations:** coaxial-torus boolean shortcut ([#556](https://github.com/andymai/brepkit/issues/556)) ([4818907](https://github.com/andymai/brepkit/commit/4818907c1b70304ed9b9435fcce444dcdc5f46db))
+
 ## [2.51.0](https://github.com/andymai/brepkit/compare/v2.50.0...v2.51.0) (2026-05-08)
 
 
