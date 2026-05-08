@@ -8,9 +8,11 @@
 
 use brepkit_operations::blend_ops::{chamfer_distance_angle, chamfer_v2, fillet_v2};
 use brepkit_operations::measure::solid_volume;
-use brepkit_operations::primitives::make_box;
+use brepkit_operations::primitives::{make_box, make_cylinder};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::explorer::{solid_edges, solid_faces};
+use brepkit_topology::face::FaceSurface;
 
 const BOX_VOLUME: f64 = 1000.0; // 10 x 10 x 10
 
@@ -144,4 +146,60 @@ fn fillet_empty_edges_error() {
 
     let err = fillet_v2(&mut topo, solid, &[], 1.0);
     assert!(err.is_err(), "empty edges should return an error");
+}
+
+/// Plane-cylinder fillet on a primitive cylinder. The bottom-cap circle
+/// edge sits where the plane (cap) meets the cylinder lateral; the analytic
+/// dispatcher should produce an exact toroidal fillet face for the convex
+/// "post on plate" geometry.
+#[test]
+fn fillet_cylinder_base_circle_produces_torus() {
+    let mut topo = Topology::new();
+    // Cylinder of radius 2, height 4 — convex base circle is the spine.
+    let solid = make_cylinder(&mut topo, 2.0, 4.0).unwrap();
+
+    // The two `EdgeCurve::Circle` edges on a primitive cylinder are the top
+    // and bottom rims; pick whichever the explorer surfaces first.
+    let circle_edges: Vec<_> = solid_edges(&topo, solid)
+        .unwrap()
+        .into_iter()
+        .filter(|&eid| matches!(topo.edge(eid).unwrap().curve(), EdgeCurve::Circle(_)))
+        .collect();
+    assert!(
+        !circle_edges.is_empty(),
+        "cylinder must have at least one circular rim edge"
+    );
+
+    let result = fillet_v2(&mut topo, solid, &circle_edges[..1], 0.3).unwrap();
+
+    assert!(
+        !result.succeeded.is_empty(),
+        "cylinder rim fillet must produce at least one stripe; failed = {:?}",
+        result.failed
+    );
+
+    // The new blend face should be exactly a Torus when the analytic path
+    // fired (vs a NURBS approximation when the walker fallback was used).
+    let new_faces: Vec<_> = solid_faces(&topo, result.solid).unwrap();
+    let torus = new_faces.iter().find_map(|&fid| {
+        if let FaceSurface::Torus(t) = topo.face(fid).unwrap().surface() {
+            Some(t.clone())
+        } else {
+            None
+        }
+    });
+    let torus = torus.expect("analytic fast path should produce a Torus face");
+
+    // Torus geometry: minor radius == fillet radius, major radius ==
+    // r_cylinder + r_fillet (convex case), axis parallel to cylinder axis.
+    assert!(
+        (torus.minor_radius() - 0.3).abs() < 1e-9,
+        "torus minor radius should equal fillet radius 0.3, got {}",
+        torus.minor_radius()
+    );
+    assert!(
+        (torus.major_radius() - 2.3).abs() < 1e-9,
+        "torus major radius should equal cylinder radius + fillet radius (2.3), got {}",
+        torus.major_radius()
+    );
 }
