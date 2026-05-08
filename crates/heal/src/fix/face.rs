@@ -47,15 +47,19 @@ pub fn fix_face(
     // operations (CDT triangulation, intersection) drift.
     if config.fix_same_parameter != FixMode::Off {
         // Collect edges first (we'll mutate `topo` inside the loop).
+        // Propagate wire-lookup errors with `?` for consistency with
+        // the rest of `fix_face`: at this point all `wire_ids` were
+        // already accessible in step 1, so an error here would
+        // indicate an unexpected topology mutation inside
+        // `fix_wire_on_face` and shouldn't be silently swallowed.
         let mut edge_ids: Vec<brepkit_topology::edge::EdgeId> = Vec::new();
         for &wid in &wire_ids {
-            if let Ok(w) = topo.wire(wid) {
-                edge_ids.extend(
-                    w.edges()
-                        .iter()
-                        .map(brepkit_topology::wire::OrientedEdge::edge),
-                );
-            }
+            let w = topo.wire(wid)?;
+            edge_ids.extend(
+                w.edges()
+                    .iter()
+                    .map(brepkit_topology::wire::OrientedEdge::edge),
+            );
         }
         for eid in edge_ids {
             let r = super::edge::fix_same_parameter_on_face(topo, eid, face_id, ctx, config)?;
