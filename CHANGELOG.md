@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.71.0](https://github.com/andymai/brepkit/compare/v2.70.0...v2.71.0) (2026-05-08)
+
+
+### Features
+
+* **heal:** exact rational NURBS for cone, thin-wrap cylinder/sphere/torus ([#610](https://github.com/andymai/brepkit/issues/610)) ([0410935](https://github.com/andymai/brepkit/commit/0410935be86e9dd6caf00eee276c8a9ce9a1b462))
+
 ## [2.70.0](https://github.com/andymai/brepkit/compare/v2.69.0...v2.70.0) (2026-05-08)
 
 
