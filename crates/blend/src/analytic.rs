@@ -8071,20 +8071,29 @@ mod tests {
             "concave fillet origin should be ({x_ball}, {y_ball}, *), got {origin:?}"
         );
 
-        // Verify ball is INSIDE both cyls (internal tangency).
-        let dist_to_cyl1_axis = (x_ball.powi(2) + y_ball.powi(2)).sqrt();
-        let dist_to_cyl2_axis = ((x_ball - big_d).powi(2) + y_ball.powi(2)).sqrt();
+        // Axis parallel to original cyl axes (+z).
+        let axis = fillet_cyl.axis();
         assert!(
-            dist_to_cyl1_axis < r1,
-            "concave: ball must be INSIDE cyl1 (distance {dist_to_cyl1_axis} < r1 = {r1})"
-        );
-        assert!(
-            dist_to_cyl2_axis < r2,
-            "concave: ball must be INSIDE cyl2 (distance {dist_to_cyl2_axis} < r2 = {r2})"
+            axis.dot(Vec3::new(0.0, 0.0, 1.0)) > 1.0 - 1e-12,
+            "concave fillet axis should be +z (parallel to original cyls), got {axis:?}"
         );
 
-        // Cyl1 contact at radial r1 from cyl1 axis (always — internal or
-        // external tangency contact lies on the cylinder surface).
+        // Verify ball is INSIDE both cyls (internal tangency) — read
+        // from the EMITTED cylinder origin, not from our own computed
+        // x_ball/y_ball (which would be tautologically Q_i < r_i by
+        // construction).
+        let actual_dist_to_cyl1_axis = (origin.x().powi(2) + origin.y().powi(2)).sqrt();
+        let actual_dist_to_cyl2_axis = ((origin.x() - big_d).powi(2) + origin.y().powi(2)).sqrt();
+        assert!(
+            actual_dist_to_cyl1_axis < r1 - 1e-9,
+            "concave: emitted fillet origin must be INSIDE cyl1 (distance {actual_dist_to_cyl1_axis} < r1 = {r1})"
+        );
+        assert!(
+            actual_dist_to_cyl2_axis < r2 - 1e-9,
+            "concave: emitted fillet origin must be INSIDE cyl2 (distance {actual_dist_to_cyl2_axis} < r2 = {r2})"
+        );
+
+        // Cyl1 and cyl2 contacts lie on their respective cylinder surfaces.
         let want_c1 = Point3::new(r1 * x_ball / q1, r1 * y_ball / q1, z_lo);
         let dist_c1_axis = (want_c1.x().powi(2) + want_c1.y().powi(2)).sqrt();
         assert!(
@@ -8096,6 +8105,23 @@ mod tests {
         assert!(
             (dist_c2_axis - r2).abs() < 1e-9,
             "cyl2 contact must lie on cyl2: got {dist_c2_axis}, want {r2}"
+        );
+
+        // Tangency to the EMITTED fillet cylinder: each contact must be
+        // at distance `r_fillet` from the fillet-cyl axis (the ball
+        // line) in the perpendicular plane. This catches axis/origin
+        // bugs that the previous assertions wouldn't see.
+        let dist_c1_to_ball =
+            ((want_c1.x() - origin.x()).powi(2) + (want_c1.y() - origin.y()).powi(2)).sqrt();
+        let dist_c2_to_ball =
+            ((want_c2.x() - origin.x()).powi(2) + (want_c2.y() - origin.y()).powi(2)).sqrt();
+        assert!(
+            (dist_c1_to_ball - r_fillet).abs() < 1e-9,
+            "cyl1 contact must be at distance r from fillet ball-line: got {dist_c1_to_ball}, want {r_fillet}"
+        );
+        assert!(
+            (dist_c2_to_ball - r_fillet).abs() < 1e-9,
+            "cyl2 contact must be at distance r from fillet ball-line: got {dist_c2_to_ball}, want {r_fillet}"
         );
     }
 
