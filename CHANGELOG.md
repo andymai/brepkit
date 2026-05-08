@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.74.0](https://github.com/andymai/brepkit/compare/v2.73.0...v2.74.0) (2026-05-08)
+
+
+### Features
+
+* **heal:** widened-tolerance 3D gap closing in fix_gaps_3d ([#616](https://github.com/andymai/brepkit/issues/616)) ([4f602bd](https://github.com/andymai/brepkit/commit/4f602bd6e1a7d85872f7e4a0cfc3347c9fd86cfa))
+
 ## [2.73.0](https://github.com/andymai/brepkit/compare/v2.72.0...v2.73.0) (2026-05-08)
 
 
