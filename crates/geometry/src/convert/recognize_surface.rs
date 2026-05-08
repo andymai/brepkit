@@ -345,7 +345,9 @@ fn try_recognize_sphere(surface: &NurbsSurface, tolerance: f64) -> Option<(Point
 /// Solve a 3×3 linear system `A * x = b` via Cramer's rule.
 ///
 /// Returns `None` if the determinant is near zero (singular system).
-fn solve_3x3(a: [[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
+/// Exposed at `pub(super)` so [`super::recognize_curve`] can reuse it
+/// (avoids duplicating the same 3×3 solver).
+pub(super) fn solve_3x3(a: [[f64; 3]; 3], b: [f64; 3]) -> Option<[f64; 3]> {
     let det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
         - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
         + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
