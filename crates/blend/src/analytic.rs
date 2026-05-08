@@ -3530,6 +3530,10 @@ pub fn sphere_cylinder_chamfer(
     let z_sph = a_spine * cos_d + s_sph * r_c * spine_sign * sin_d;
     if r_sph <= tol_lin {
         // Sphere meridian swept past the pole — d1 too large.
+        // (Only reachable for s_sph = +1, where r_sph = r_c·cos δ −
+        // h_s·sin δ shrinks with δ. For s_sph = −1, r_sph =
+        // r_c·cos δ + h_s·sin δ grows monotonically and never reaches
+        // zero.)
         return Ok(None);
     }
 
