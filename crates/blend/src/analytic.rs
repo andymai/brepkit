@@ -22,6 +22,34 @@ use crate::section::CircSection;
 use crate::spine::Spine;
 use crate::stripe::{Stripe, StripeResult};
 
+/// Linear tolerance for "essentially zero" guards in analytic helpers.
+///
+/// 1e-9 is tighter than `Tolerance::default().linear` (= 1e-7, the
+/// vertex-tolerance default) — appropriate here because we're checking
+/// whether floating-point intermediates have collapsed to zero (e.g.
+/// `r_p_sq <= ANALYTIC_TOL_LIN²` flags a degenerate spine), not whether
+/// two coordinates are "geometrically equal" up to vertex tol.
+const ANALYTIC_TOL_LIN: f64 = 1e-9;
+
+/// Dimensionless tolerance for parallelism / perpendicularity checks in
+/// analytic helpers, used in `1 − |cos θ|` form (dot products of unit
+/// vectors) and `|sin θ|` form (cross-product magnitudes).
+///
+/// The naming parallels `ANALYTIC_TOL_LIN` for grep-ability, but the
+/// unit is dimensionless, NOT radians. The effective angular gate
+/// depends on which form the check uses:
+///   - `dot.abs() < 1.0 − ANALYTIC_TOL_ANG` (most common): for unit
+///     vectors with `cos θ ≈ 1 − θ²/2`, the threshold corresponds to
+///     `θ ≈ √(2 · ANALYTIC_TOL_ANG) ≈ 4.5e-5 rad ≈ 9 arcseconds`.
+///   - `cross(a, b).length() > ANALYTIC_TOL_ANG`: this is `|sin θ|`,
+///     so the threshold is `θ ≈ ANALYTIC_TOL_ANG ≈ 5.7e-8°` directly.
+///
+/// 1e-9 was chosen to match the `ANALYTIC_TOL_LIN` floating-point-noise
+/// scale in the same helpers, NOT to mirror `Tolerance::default().angular
+/// = 1e-12`. A blend pair beyond either gate is no longer axis-aligned
+/// in a way that admits a closed-form solution.
+const ANALYTIC_TOL_ANG: f64 = 1e-9;
+
 /// Result of an analytic fillet/chamfer computation.
 ///
 /// Contains the blend surface and contact geometry, but not yet
@@ -633,8 +661,8 @@ pub fn plane_cylinder_fillet(
 ) -> Result<Option<StripeResult>, BlendError> {
     use brepkit_math::surfaces::ToroidalSurface;
 
-    let tol_ang = 1e-9;
-    let tol_lin = 1e-9;
+    let tol_ang = ANALYTIC_TOL_ANG;
+    let tol_lin = ANALYTIC_TOL_LIN;
 
     // 1) Cylinder axis must be parallel (up to sign) to the inward plane
     //    normal — this is the perpendicular plane-cylinder case.
@@ -888,8 +916,8 @@ pub fn plane_cylinder_chamfer(
     use brepkit_math::surfaces::ConicalSurface;
     use std::f64::consts::PI;
 
-    let tol_ang = 1e-9;
-    let tol_lin = 1e-9;
+    let tol_ang = ANALYTIC_TOL_ANG;
+    let tol_lin = ANALYTIC_TOL_LIN;
 
     // 1) Cylinder axis must be parallel (up to sign) to the inward plane
     //    normal — perpendicular plane-cylinder configuration.
@@ -1130,8 +1158,8 @@ pub fn plane_cone_fillet(
     use brepkit_math::surfaces::ToroidalSurface;
     use std::f64::consts::PI;
 
-    let tol_ang = 1e-9;
-    let tol_lin = 1e-9;
+    let tol_ang = ANALYTIC_TOL_ANG;
+    let tol_lin = ANALYTIC_TOL_LIN;
 
     // 1) Cone axis must be parallel (up to sign) to the inward plane
     //    normal — both cases boil down to "axis points along the plate
@@ -1427,8 +1455,8 @@ pub fn plane_cone_chamfer(
     use brepkit_math::surfaces::ConicalSurface;
     use std::f64::consts::PI;
 
-    let tol_ang = 1e-9;
-    let tol_lin = 1e-9;
+    let tol_ang = ANALYTIC_TOL_ANG;
+    let tol_lin = ANALYTIC_TOL_LIN;
 
     // 1) Cone axis must be (anti)parallel to the raw plate normal. The
     //    chamfer dispatcher does NOT apply `orient_plane_surface`, so
@@ -1732,8 +1760,8 @@ pub fn plane_sphere_fillet(
     use brepkit_math::surfaces::ToroidalSurface;
     use std::f64::consts::PI;
 
-    let tol_lin = 1e-9;
-    let tol_ang = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
 
     // 1) Convex (face not reversed) vs concave (face reversed) drive a
     //    `signed_offset = ±1` factor that flips the rolling-ball axial
@@ -2036,8 +2064,8 @@ pub fn plane_sphere_chamfer(
     use brepkit_math::surfaces::ConicalSurface;
     use std::f64::consts::PI;
 
-    let tol_lin = 1e-9;
-    let tol_ang = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
 
     // 1) Convex (face not reversed) vs concave (face reversed) drive the
     //    `signed_offset = ±1` factor. Convex sends the sphere-side
@@ -2315,7 +2343,7 @@ pub fn sphere_sphere_fillet(
     use brepkit_math::surfaces::ToroidalSurface;
     use std::f64::consts::PI;
 
-    let tol_lin = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
 
     if radius <= tol_lin {
         return Ok(None);
@@ -2394,7 +2422,7 @@ pub fn sphere_sphere_fillet(
     // with the C1→C2 axis so the contact circles are constant-v
     // latitudes on the respective spheres (otherwise the pcurves we
     // build below as constant-v Line2Ds are wrong).
-    let tol_ang = 1e-9;
+    let tol_ang = ANALYTIC_TOL_ANG;
     if s1.z_axis().dot(axis).abs() < 1.0 - tol_ang || s2.z_axis().dot(axis).abs() < 1.0 - tol_ang {
         return Ok(None);
     }
@@ -2587,8 +2615,8 @@ pub fn sphere_cylinder_fillet(
     use brepkit_math::surfaces::ToroidalSurface;
     use std::f64::consts::PI;
 
-    let tol_lin = 1e-9;
-    let tol_ang = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
 
     if radius <= tol_lin {
         return Ok(None);
@@ -2864,8 +2892,8 @@ pub fn sphere_cone_fillet(
     use brepkit_math::surfaces::ToroidalSurface;
     use std::f64::consts::PI;
 
-    let tol_lin = 1e-9;
-    let tol_ang = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
 
     if radius <= tol_lin {
         return Ok(None);
@@ -3197,8 +3225,8 @@ pub fn sphere_sphere_chamfer(
     use brepkit_math::surfaces::ConicalSurface;
     use std::f64::consts::PI;
 
-    let tol_lin = 1e-9;
-    let tol_ang = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
 
     if d1 <= tol_lin || d2 <= tol_lin {
         return Ok(None);
@@ -3476,8 +3504,8 @@ pub fn sphere_cylinder_chamfer(
     use brepkit_math::surfaces::ConicalSurface;
     use std::f64::consts::PI;
 
-    let tol_lin = 1e-9;
-    let tol_ang = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
 
     if d1 <= tol_lin || d2 <= tol_lin {
         return Ok(None);
@@ -3746,8 +3774,8 @@ pub fn sphere_cone_chamfer(
     use brepkit_math::surfaces::ConicalSurface;
     use std::f64::consts::PI;
 
-    let tol_lin = 1e-9;
-    let tol_ang = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
 
     if d1 <= tol_lin || d2 <= tol_lin {
         return Ok(None);
@@ -4049,8 +4077,8 @@ pub fn cylinder_cylinder_fillet(
 ) -> Result<Option<StripeResult>, BlendError> {
     use brepkit_math::surfaces::CylindricalSurface;
 
-    let tol_lin = 1e-9;
-    let tol_ang = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
 
     if radius <= tol_lin {
         return Ok(None);
@@ -4306,8 +4334,8 @@ pub fn cone_cone_coaxial_fillet(
     use brepkit_math::surfaces::ToroidalSurface;
     use std::f64::consts::PI;
 
-    let tol_lin = 1e-9;
-    let tol_ang = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
 
     if radius <= tol_lin {
         return Ok(None);
@@ -4579,8 +4607,8 @@ pub fn cone_cone_coaxial_chamfer(
     use brepkit_math::surfaces::ConicalSurface;
     use std::f64::consts::PI;
 
-    let tol_lin = 1e-9;
-    let tol_ang = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
 
     if d1 <= tol_lin || d2 <= tol_lin {
         return Ok(None);
@@ -4836,8 +4864,8 @@ pub fn cylinder_cylinder_chamfer(
     face1: FaceId,
     face2: FaceId,
 ) -> Result<Option<StripeResult>, BlendError> {
-    let tol_lin = 1e-9;
-    let tol_ang = 1e-9;
+    let tol_lin = ANALYTIC_TOL_LIN;
+    let tol_ang = ANALYTIC_TOL_ANG;
 
     if d1 <= tol_lin || d2 <= tol_lin {
         return Ok(None);
