@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.54.0](https://github.com/andymai/brepkit/compare/v2.53.0...v2.54.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** concave plane-cone fillet (tapered hole through plate) ([#560](https://github.com/andymai/brepkit/issues/560)) ([a5ded91](https://github.com/andymai/brepkit/commit/a5ded91018e04461631a87716da54b3db3b98244))
+
 ## [2.53.0](https://github.com/andymai/brepkit/compare/v2.52.0...v2.53.0) (2026-05-08)
 
 
