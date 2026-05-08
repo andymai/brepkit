@@ -172,6 +172,17 @@ pub fn try_analytic_chamfer(
             }
             Ok(result)
         }
+        (FaceSurface::Plane { normal, d }, FaceSurface::Cone(cone)) => {
+            plane_cone_chamfer(*normal, *d, cone, spine, topo, d1, d2, face1, face2)
+        }
+        (FaceSurface::Cone(cone), FaceSurface::Plane { normal, d }) => {
+            let mut result =
+                plane_cone_chamfer(*normal, *d, cone, spine, topo, d2, d1, face2, face1)?;
+            if let Some(ref mut r) = result {
+                swap_stripe_sides(r);
+            }
+            Ok(result)
+        }
         (
             FaceSurface::Plane { .. }
             | FaceSurface::Cylinder(_)
@@ -179,18 +190,15 @@ pub fn try_analytic_chamfer(
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_)
             | FaceSurface::Nurbs(_),
-            FaceSurface::Cone(_)
-            | FaceSurface::Sphere(_)
-            | FaceSurface::Torus(_)
-            | FaceSurface::Nurbs(_),
+            FaceSurface::Sphere(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
         )
-        | (FaceSurface::Cylinder(_), FaceSurface::Cylinder(_))
         | (
-            FaceSurface::Cone(_)
-            | FaceSurface::Sphere(_)
-            | FaceSurface::Torus(_)
-            | FaceSurface::Nurbs(_),
-            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
+        )
+        | (
+            FaceSurface::Sphere(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
         ) => Ok(None),
     }
 }
@@ -839,7 +847,14 @@ pub fn plane_cylinder_chamfer(
     //    apex on the empty-wedge side of the plate. As `v` grows from 0 at
     //    the apex, the cone first sweeps to the plate at `v = (r_c - d1) /
     //    cos(α)`, then to the cylinder lateral at `v = r_c / cos(α)`.
-    let half_angle = d1.atan2(d2);
+    // brepkit's `ConicalSurface` measures `half_angle` from the AXIS to
+    // the generator, so the axial component per unit v is `sin(β)` and the
+    // radial component is `cos(β)`. Generator slope `dr/dz = cos β / sin β
+    // = cot β`, and our generator goes from `(r_c - d1, 0)` to `(r_c, +d2)`
+    // with slope `d1 / d2`, giving `β = atan2(d2, d1)`. (For symmetric
+    // `d1 = d2` either ordering gives π/4, but the asymmetric case needs
+    // this convention to match the cone surface.)
+    let half_angle = d2.atan2(d1);
     // Apex axial offset from the plate: derived from similar triangles —
     // the cone's generator slopes (d1 : d2) and the apex sits where the
     // generator extension hits r=0. Apex is on the empty-wedge side so
@@ -1198,6 +1213,263 @@ pub fn plane_cone_fillet(
     let stripe = Stripe {
         spine: spine.clone(),
         surface: FaceSurface::Torus(torus),
+        pcurve1: pcurve_plane,
+        pcurve2: pcurve_cone,
+        contact1: contact_plane,
+        contact2: contact_cone,
+        face1: face_plane,
+        face2: face_cone,
+        sections: vec![section_start, section_end],
+    };
+
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
+}
+
+/// Chamfer between a plane and a cone whose axis is parallel to the plane
+/// normal, for the convex regular-frustum bottom-rim case.
+///
+/// `d1` is the chamfer distance on the plate (radially inward from the
+/// spine on the plate face); `d2` is the distance along the cone's
+/// generator (going from the spine toward the apex into the cylinder
+/// material).
+///
+/// # Geometry
+///
+/// At a frustum bottom rim with cone half-angle `α`, the plate-side
+/// contact is a circle at radial `r_p - d1` on the plate, while the
+/// cone-side contact lands at radial `r_p - d2·cos α` and axial offset
+/// `+d2·sin α` into the cylinder material. Connecting these two
+/// concentric circles with a flat ruled surface gives a cone:
+///
+///   - chamfer half-angle `β = atan2(d1 - d2·cos α, d2·sin α)`
+///     (collapses to `β = α/2` for symmetric `d1 = d2`, and to `β = π/4`
+///     in the cylinder limit `α → π/2` — matching `plane_cylinder_chamfer`);
+///   - apex on the cone axis, axial offset
+///     `(r_p - d1)·d2·sin α / (d1 - d2·cos α)` *out* of the cylinder
+///     material (in the empty-wedge half-space);
+///   - axis parallel to the cone's axis, oriented so `+axis_c` points
+///     into the cylinder material (cone evaluation walks from apex,
+///     across the plate, into the material as `v` grows).
+///
+/// Returns `None` (walker fallback) for any case the analytic path
+/// doesn't yet cover:
+///   - cone axis not anti-parallel to the inward plane normal,
+///   - cone face reversed (concave / "tapered hole"),
+///   - half-angle α too close to 0 or π/2 (degenerate),
+///   - apex on the plate-material side (`step >= 0`),
+///   - either chamfer distance non-positive,
+///   - `d1 >= r_p` (would pass through cone axis),
+///   - `d1 - d2·cos α <= 0` (chamfer "flares outward" on the cone — apex
+///     would land above the plate, distinct geometric configuration).
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or NURBS construction fails.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn plane_cone_chamfer(
+    n_p_inward: Vec3,
+    d_plane: f64,
+    cone: &brepkit_math::surfaces::ConicalSurface,
+    spine: &Spine,
+    topo: &Topology,
+    d1: f64,
+    d2: f64,
+    face_plane: FaceId,
+    face_cone: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    use brepkit_math::surfaces::ConicalSurface;
+    use std::f64::consts::PI;
+
+    let tol_ang = 1e-9;
+    let tol_lin = 1e-9;
+
+    // 1) Cone axis must be parallel to the raw plate normal — for a
+    //    regular frustum bottom-rim the cone axis (= "direction the cone
+    //    opens", -z for `make_cone(big, small, h)`) is parallel to the
+    //    bottom cap's outward normal (also -z). Note: the chamfer
+    //    dispatcher does NOT apply `orient_plane_surface`, so `n_p_inward`
+    //    here is actually the face's raw geometric (outward) normal —
+    //    detection therefore tests for parallel rather than the
+    //    fillet-convention antiparallel.
+    let axis_c = cone.axis();
+    let n_dot = axis_c.dot(n_p_inward);
+    if n_dot < 1.0 - tol_ang {
+        return Ok(None);
+    }
+
+    // 2) Concave (cone face reversed) needs a different formulation.
+    if topo.face(face_cone)?.is_reversed() {
+        return Ok(None);
+    }
+
+    // 3) Validate half-angle and chamfer distances.
+    let alpha = cone.half_angle();
+    if alpha <= 1e-3 || alpha >= std::f64::consts::FRAC_PI_2 - 1e-3 {
+        return Ok(None);
+    }
+    if d1 <= tol_lin || d2 <= tol_lin {
+        return Ok(None);
+    }
+
+    // 4) Apex projection onto the plate. For frustum bottom-rim geometry
+    //    with the chamfer's raw-normal convention `step` is positive
+    //    (apex sits on the +n_p_inward side of the plate, since
+    //    `n_p_inward` here is the outward normal pointing away from the
+    //    cylinder material).
+    let apex = cone.apex();
+    let step = d_plane - n_p_inward.dot(Vec3::new(apex.x(), apex.y(), apex.z()));
+    if step <= tol_lin {
+        return Ok(None);
+    }
+    let apex_height = step;
+    let p_axis_on_plane = apex + n_p_inward * step;
+
+    // 5) Spine radius from cone-plate intersection.
+    let r_p = apex_height * (alpha.cos() / alpha.sin());
+    if d1 >= r_p {
+        return Ok(None);
+    }
+
+    // 6) Compute chamfer cone parameters via 2D (radial, axial) generator
+    //    direction connecting the two contact points.
+    let (sin_a, cos_a) = alpha.sin_cos();
+    let dr = d1 - d2 * cos_a;
+    let dz = d2 * sin_a;
+    if dz <= tol_lin {
+        return Ok(None);
+    }
+    // V1 only handles `dr > 0` (chamfer "tilts inward" on the cone side
+    // — apex below the plate). The `dr <= 0` case ("outward-flaring"
+    // chamfer) needs a different apex placement.
+    if dr <= tol_lin {
+        return Ok(None);
+    }
+    // brepkit's `ConicalSurface` measures the half-angle from the AXIS to
+    // the generator (so the radial component of `position(0, v)` per unit v
+    // is `cos(β)`, the axial component is `sin(β)`, and the generator slope
+    // in (r, z) is `cot β = cos β / sin β`). Matching that to our generator
+    // slope `dr/dz`: cot β = dr/dz ⇒ tan β = dz/dr ⇒ β = atan2(dz, dr).
+    // For symmetric `d1 = d2` and frustum half-angle α this collapses to
+    // `β = π/2 − α/2`, and to `β = π/4` in the α → π/2 cylinder limit.
+    let chamfer_half_angle = dz.atan2(dr);
+    if chamfer_half_angle <= 1e-3 || chamfer_half_angle >= std::f64::consts::FRAC_PI_2 - 1e-3 {
+        return Ok(None);
+    }
+
+    // 7) Apex of the chamfer cone — extrapolate the generator from the
+    //    plate-side contact backward to the axis.
+    let chamfer_apex_offset = (r_p - d1) * dz / dr;
+    let axis_toward_apex = n_p_inward;
+    let axis_toward_material = -n_p_inward;
+    let chamfer_apex_pos = p_axis_on_plane + axis_toward_apex * chamfer_apex_offset;
+    let chamfer_axis = axis_toward_material;
+
+    // 8) Spine: detect closed-circle case so we can spin a full 2π without
+    //    relying on `Spine::length()` (chord-based, zero for closed loops).
+    let edges = spine.edges();
+    let is_closed_spine = if edges.len() == 1 {
+        let e = topo.edge(edges[0])?;
+        e.start() == e.end()
+    } else {
+        false
+    };
+    let spine_len = spine.length();
+    if !is_closed_spine && spine_len < tol_lin {
+        return Ok(None);
+    }
+
+    // 9) Build the chamfer cone.
+    let cone_x = cone.x_axis();
+    let cone_y = cone.y_axis();
+    let chamfer_cone =
+        ConicalSurface::with_ref_dir(chamfer_apex_pos, chamfer_axis, chamfer_half_angle, cone_x)?;
+
+    // 10) 3D contact circles. Both lie around the cone axis.
+    let plate_contact_radius = r_p - d1;
+    let cone_contact_radius = r_p - d2 * cos_a;
+    let cone_contact_axial_offset = d2 * sin_a;
+    let cone_contact_center = p_axis_on_plane + axis_toward_material * cone_contact_axial_offset;
+
+    let contact_plane_circle = brepkit_math::curves::Circle3D::with_axes(
+        p_axis_on_plane,
+        axis_c,
+        plate_contact_radius,
+        cone_x,
+        cone_y,
+    )?;
+    let contact_cone_circle = brepkit_math::curves::Circle3D::with_axes(
+        cone_contact_center,
+        axis_c,
+        cone_contact_radius,
+        cone_x,
+        cone_y,
+    )?;
+
+    // 11) Spine angular range, derived from the cone's u parameter
+    //     projection of the endpoints.
+    let u_at = |p: Point3| {
+        let v = p - p_axis_on_plane;
+        cone_y.dot(v).atan2(cone_x.dot(v))
+    };
+    let p_spine_start = spine.evaluate(topo, 0.0)?;
+    let u_start = u_at(p_spine_start);
+    let u_end = if is_closed_spine {
+        u_start + 2.0 * PI
+    } else {
+        let p_spine_end = spine.evaluate(topo, spine_len)?;
+        let u_end_raw = u_at(p_spine_end);
+        if u_end_raw > u_start {
+            u_end_raw
+        } else {
+            u_end_raw + 2.0 * PI
+        }
+    };
+
+    let contact_plane = circle_arc_to_nurbs(&contact_plane_circle, u_start, u_end)?;
+    let contact_cone = circle_arc_to_nurbs(&contact_cone_circle, u_start, u_end)?;
+
+    // 12) PCurves.
+    let plane_adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n_p_inward, d_plane);
+    let pcurve_plane = {
+        let (cu, cv) = plane_adapter.project_point(p_axis_on_plane);
+        Curve2D::Circle(brepkit_math::curves2d::Circle2D::new(
+            brepkit_math::vec::Point2::new(cu, cv),
+            plate_contact_radius,
+        )?)
+    };
+    let v_cone = ParametricSurface::project_point(cone, cone_contact_center).1;
+    let pcurve_cone = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_start, v_cone),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+
+    // 13) Cross-sections at the spine endpoints.
+    let p_plane_at = |u: f64| contact_plane_circle.evaluate(u);
+    let p_cone_at = |u: f64| contact_cone_circle.evaluate(u);
+    let plane_uv_at = |u: f64| plane_adapter.project_point(p_plane_at(u));
+    let section_at = |u: f64, t: f64| {
+        let p1 = p_plane_at(u);
+        let p2 = p_cone_at(u);
+        let mid = midpoint_3d(p1, p2);
+        CircSection {
+            p1,
+            p2,
+            center: mid,
+            radius: (p1 - p2).length() * 0.5,
+            uv1: plane_uv_at(u),
+            uv2: (u, v_cone),
+            t,
+        }
+    };
+    let section_start = section_at(u_start, 0.0);
+    let section_end = section_at(u_end, 1.0);
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Cone(chamfer_cone),
         pcurve1: pcurve_plane,
         pcurve2: pcurve_cone,
         contact1: contact_plane,
