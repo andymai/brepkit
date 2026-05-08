@@ -1598,9 +1598,26 @@ pub fn convert_to_bspline(
 /// `EdgeCurve::Hyperbola`/`Parabola` exists in topology); they keep
 /// their NURBS representation.
 ///
+/// # Atomicity
+///
+/// Recognition runs in two passes (surfaces, then edges). Each pass
+/// snapshots its inputs before mutating, and individual mutations
+/// can't fail on valid topology — the only failure path is the
+/// initial topology lookup at the start of each pass. A pass that
+/// gets past its snapshot will run to completion.
+///
+/// As a result, an error from the *edge* pass means the surface
+/// pass already committed its mutations: the topology is in a
+/// partially converted state (analytic surfaces, NURBS edges).
+/// In practice the edge-pass failure mode requires malformed
+/// topology — a cleanly-loaded solid won't hit it. Callers that
+/// need transactional semantics should checkpoint the topology
+/// first and restore on error.
+///
 /// # Errors
 ///
-/// Returns an error if any topology lookup fails.
+/// Returns an error if any topology lookup fails. See the
+/// "Atomicity" section above for partial-mutation semantics.
 pub fn convert_to_elementary(
     topo: &mut Topology,
     solid: SolidId,
