@@ -136,7 +136,17 @@ pub fn transform_solid(
                 } else {
                     let v_range = analytic_face_v_range(topo, fid, |pt| cone.project_point(pt).1)?;
                     let cone_clone = cone.clone();
-                    let nurbs = brepkit_geometry::convert::cone_to_nurbs(&cone_clone, v_range)?;
+                    // Use heal's exact rational cone converter (geometry's
+                    // delegates to math's sampled approximation; heal's is
+                    // geometrically exact). v_range is the cone-generator
+                    // distance from apex.
+                    let nurbs = brepkit_heal::construct::convert_surface::cone_to_nurbs(
+                        &cone_clone,
+                        v_range,
+                    )
+                    .map_err(|e| crate::OperationsError::InvalidInput {
+                        reason: format!("cone_to_nurbs failed: {e}"),
+                    })?;
                     let transformed = transform_nurbs_surface(&nurbs, matrix)?;
                     topo.face_mut(fid)?
                         .set_surface(FaceSurface::Nurbs(transformed));
@@ -176,7 +186,14 @@ pub fn transform_solid(
                     topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
                 } else {
                     let tor_clone = tor.clone();
-                    let nurbs = brepkit_geometry::convert::torus_to_nurbs(&tor_clone)?;
+                    // Use heal's exact rational torus converter (geometry's
+                    // delegates to math's sampled approximation; heal's is
+                    // geometrically exact 9×9 tensor product).
+                    let nurbs =
+                        brepkit_heal::construct::convert_surface::torus_to_nurbs(&tor_clone)
+                            .map_err(|e| crate::OperationsError::InvalidInput {
+                                reason: format!("torus_to_nurbs failed: {e}"),
+                            })?;
                     let transformed = transform_nurbs_surface(&nurbs, matrix)?;
                     topo.face_mut(fid)?
                         .set_surface(FaceSurface::Nurbs(transformed));
@@ -398,7 +415,11 @@ fn transform_face_surface(
             } else {
                 let v_range = analytic_face_v_range(topo, fid, |pt| cone.project_point(pt).1)?;
                 let cone_clone = cone.clone();
-                let nurbs = brepkit_geometry::convert::cone_to_nurbs(&cone_clone, v_range)?;
+                let nurbs =
+                    brepkit_heal::construct::convert_surface::cone_to_nurbs(&cone_clone, v_range)
+                        .map_err(|e| crate::OperationsError::InvalidInput {
+                        reason: format!("cone_to_nurbs failed: {e}"),
+                    })?;
                 let transformed = transform_nurbs_surface(&nurbs, matrix)?;
                 topo.face_mut(fid)?
                     .set_surface(FaceSurface::Nurbs(transformed));
@@ -433,7 +454,10 @@ fn transform_face_surface(
                 topo.face_mut(fid)?.set_surface(FaceSurface::Torus(new_tor));
             } else {
                 let tor_clone = tor.clone();
-                let nurbs = brepkit_geometry::convert::torus_to_nurbs(&tor_clone)?;
+                let nurbs = brepkit_heal::construct::convert_surface::torus_to_nurbs(&tor_clone)
+                    .map_err(|e| crate::OperationsError::InvalidInput {
+                        reason: format!("torus_to_nurbs failed: {e}"),
+                    })?;
                 let transformed = transform_nurbs_surface(&nurbs, matrix)?;
                 topo.face_mut(fid)?
                     .set_surface(FaceSurface::Nurbs(transformed));
