@@ -31,12 +31,23 @@ use crate::stripe::{Stripe, StripeResult};
 /// two coordinates are "geometrically equal" up to vertex tol.
 const ANALYTIC_TOL_LIN: f64 = 1e-9;
 
-/// Angular tolerance for parallelism / perpendicularity checks in
-/// analytic helpers. 1e-9 rad ≈ 5.7e-8°.
+/// Dimensionless tolerance for parallelism / perpendicularity checks in
+/// analytic helpers, used in `1 − |cos θ|` form (dot products of unit
+/// vectors) and `|sin θ|` form (cross-product magnitudes).
 ///
-/// Looser than `Tolerance::default().angular` (= 1e-12), but still tight
-/// enough that any pair beyond it is no longer geometrically axis-aligned
-/// in any meaningful sense for a closed-form blend.
+/// The naming parallels `ANALYTIC_TOL_LIN` for grep-ability, but the
+/// unit is dimensionless, NOT radians. The effective angular gate
+/// depends on which form the check uses:
+///   - `dot.abs() < 1.0 − ANALYTIC_TOL_ANG` (most common): for unit
+///     vectors with `cos θ ≈ 1 − θ²/2`, the threshold corresponds to
+///     `θ ≈ √(2 · ANALYTIC_TOL_ANG) ≈ 4.5e-5 rad ≈ 9 arcseconds`.
+///   - `cross(a, b).length() > ANALYTIC_TOL_ANG`: this is `|sin θ|`,
+///     so the threshold is `θ ≈ ANALYTIC_TOL_ANG ≈ 5.7e-8°` directly.
+///
+/// 1e-9 was chosen to match the `ANALYTIC_TOL_LIN` floating-point-noise
+/// scale in the same helpers, NOT to mirror `Tolerance::default().angular
+/// = 1e-12`. A blend pair beyond either gate is no longer axis-aligned
+/// in a way that admits a closed-form solution.
 const ANALYTIC_TOL_ANG: f64 = 1e-9;
 
 /// Result of an analytic fillet/chamfer computation.
