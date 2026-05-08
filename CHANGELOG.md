@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.82.0](https://github.com/andymai/brepkit/compare/v2.81.0...v2.82.0) (2026-05-08)
+
+
+### Features
+
+* **geometry:** recognize NURBS surfaces as cones ([#640](https://github.com/andymai/brepkit/issues/640)) ([b37d547](https://github.com/andymai/brepkit/commit/b37d547f390fedcd4af8a6ac1b04332ce5992db0))
+* **geometry:** recognize NURBS surfaces as toruses ([#635](https://github.com/andymai/brepkit/issues/635)) ([e438d2a](https://github.com/andymai/brepkit/commit/e438d2acb3a9074fca911a6d536a90de56169f21))
+
+
+### Bug Fixes
+
+* **geometry:** clean up parabola recognition (PR [#638](https://github.com/andymai/brepkit/issues/638) review) ([#642](https://github.com/andymai/brepkit/issues/642)) ([628141e](https://github.com/andymai/brepkit/commit/628141ea62bd1634cef3f904f5e890e7dc162abc))
+
 ## [2.81.0](https://github.com/andymai/brepkit/compare/v2.80.0...v2.81.0) (2026-05-08)
 
 
