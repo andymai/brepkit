@@ -4324,8 +4324,12 @@ pub fn cone_cone_coaxial_fillet(
     let axis1 = cone1.axis();
     let axis2 = cone2.axis();
 
-    // Axes must be parallel (same direction line).
-    if axis1.dot(axis2).abs() < 1.0 - tol_ang {
+    // Axes must point in the SAME direction. Cone axis direction is
+    // geometrically significant: flipping the axis selects the opposite
+    // nappe (v ≥ 0 from apex). Anti-parallel axes would feed the
+    // formulas the wrong cone, producing incorrect z_spine and
+    // potentially silently bypassing the spine-validation gate. Reject.
+    if axis1.dot(axis2) < 1.0 - tol_ang {
         return Ok(None);
     }
     let a_cone = axis1; // shared axis direction
@@ -4340,12 +4344,15 @@ pub fn cone_cone_coaxial_fillet(
     }
     let h_2 = along; // axial offset of cone2 apex from cone1 apex.
 
-    // Different half-angles required.
+    // Different half-angles required. With both half-angles in
+    // (0, π/2) (per `ConicalSurface::new`), `sin` is strictly monotone,
+    // so `sin(β1 − β2) ≈ 0 ⇔ β1 ≈ β2 ⇔ sin β1 ≈ sin β2`. A single
+    // sin-minus check therefore suffices; sin_diff has the same zero set.
     let (sin_b1, cos_b1) = beta1.sin_cos();
     let (sin_b2, cos_b2) = beta2.sin_cos();
     let sin_diff = sin_b1 - sin_b2;
     let sin_minus = (beta1 - beta2).sin();
-    if sin_minus.abs() <= tol_ang || sin_diff.abs() <= tol_ang {
+    if sin_minus.abs() <= tol_ang {
         return Ok(None);
     }
 
@@ -8523,6 +8530,148 @@ mod tests {
             "cone2 contact must lie on cone2 surface: predicted radial {pred_c2_radial}, got {c2_radial}"
         );
 
+        let (u_p, v_p) = ParametricSurface::project_point(&torus, want_c1);
+        let on_torus_c1 = ParametricSurface::evaluate(&torus, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&torus, want_c2);
+        let on_torus_c2 = ParametricSurface::evaluate(&torus, u_q, v_q);
+        assert!(
+            (on_torus_c1 - want_c1).length() < 1e-9,
+            "cone1 contact must lie on torus: {on_torus_c1:?} vs {want_c1:?}"
+        );
+        assert!(
+            (on_torus_c2 - want_c2).length() < 1e-9,
+            "cone2 contact must lie on torus: {on_torus_c2:?} vs {want_c2:?}"
+        );
+    }
+
+    /// Cone-cone coaxial both-concave fillet: two concave conical
+    /// cavities sharing an axis. Both s_i = −1 ⇒ rolling ball is
+    /// internally tangent to both cones.
+    ///
+    /// The same setup as the convex test (cone1 apex at origin β=π/3;
+    /// cone2 apex at z=2 β=π/4; shared axis +z; r=0.3) but with both
+    /// faces REVERSED — exercises the `s_i = −1` branches in both
+    /// `z_b` and `R_t` formulas, plus the `(s1 − s2) · r` term that
+    /// vanishes when both signs match.
+    #[test]
+    fn cone_cone_coaxial_fillet_both_concave_emits_torus() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let beta1: f64 = std::f64::consts::PI / 3.0;
+        let beta2: f64 = std::f64::consts::PI / 4.0;
+        let h_2: f64 = 2.0;
+        let r_fillet: f64 = 0.3;
+
+        let sin_minus = (beta1 - beta2).sin();
+        let z_spine = h_2 * beta2.cos() * beta1.sin() / sin_minus;
+        let r_spine = z_spine * (beta1.cos() / beta1.sin());
+
+        let cone1 =
+            ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), beta1)
+                .unwrap();
+        let cone2 =
+            ConicalSurface::new(Point3::new(0.0, 0.0, h_2), Vec3::new(0.0, 0.0, 1.0), beta2)
+                .unwrap();
+
+        let spine_circle = Circle3D::new(
+            Point3::new(0.0, 0.0, z_spine),
+            Vec3::new(0.0, 0.0, 1.0),
+            r_spine,
+        )
+        .unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_spine, 0.0, z_spine), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Both faces REVERSED.
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face1 = topo.add_face(Face::new_reversed(
+            w1,
+            vec![],
+            FaceSurface::Cone(cone1.clone()),
+        ));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face2 = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cone(cone2.clone()),
+        ));
+
+        let result =
+            cone_cone_coaxial_fillet(&cone1, &cone2, &spine, &topo, r_fillet, face1, face2)
+                .unwrap()
+                .expect("both-concave coaxial cone-cone fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        // Predicted z_b, R_t (s1=s2=-1).
+        let s1 = -1.0_f64;
+        let s2 = -1.0_f64;
+        let expected_z_b = (h_2 * beta2.cos() * beta1.sin()
+            + r_fillet * (s1 * beta2.sin() - s2 * beta1.sin()))
+            / sin_minus;
+        let expected_major =
+            (expected_z_b * (beta1.cos() - beta2.cos()) + h_2 * beta2.cos() + (s1 - s2) * r_fillet)
+                / (beta1.sin() - beta2.sin());
+
+        assert!(
+            (torus.major_radius() - expected_major).abs() < 1e-9,
+            "concave torus major should be {expected_major}, got {}",
+            torus.major_radius()
+        );
+
+        // Concave fillet sits INSIDE both cones (major < r_spine).
+        assert!(
+            torus.major_radius() < r_spine,
+            "concave fillet major ({}) should be < r_spine ({r_spine})",
+            torus.major_radius()
+        );
+
+        // Internal tangency to both cones:
+        //   R_t · sin β_i − (z_b − z_apex_i) · cos β_i = s_i · r = −r.
+        let tang1 = expected_major * beta1.sin() - expected_z_b * beta1.cos();
+        let tang2 = expected_major * beta2.sin() - (expected_z_b - h_2) * beta2.cos();
+        assert!(
+            (tang1 + r_fillet).abs() < 1e-9,
+            "cone1 internal tangency: {tang1} should equal -r = {}",
+            -r_fillet
+        );
+        assert!(
+            (tang2 + r_fillet).abs() < 1e-9,
+            "cone2 internal tangency: {tang2} should equal -r = {}",
+            -r_fillet
+        );
+
+        // Contacts on respective cone surfaces.
+        let cot_b1 = beta1.cos() / beta1.sin();
+        let cot_b2 = beta2.cos() / beta2.sin();
+        let c1_axial = expected_z_b + s1 * r_fillet * beta1.cos();
+        let c1_radial = expected_major - s1 * r_fillet * beta1.sin();
+        let c2_axial = expected_z_b + s2 * r_fillet * beta2.cos();
+        let c2_radial = expected_major - s2 * r_fillet * beta2.sin();
+        let pred_c1_radial = c1_axial * cot_b1;
+        assert!(
+            (c1_radial - pred_c1_radial).abs() < 1e-9,
+            "cone1 contact must lie on cone1: predicted {pred_c1_radial}, got {c1_radial}"
+        );
+        let pred_c2_radial = (c2_axial - h_2) * cot_b2;
+        assert!(
+            (c2_radial - pred_c2_radial).abs() < 1e-9,
+            "cone2 contact must lie on cone2: predicted {pred_c2_radial}, got {c2_radial}"
+        );
+
+        // Both contacts on torus.
+        let want_c1 = Point3::new(c1_radial, 0.0, c1_axial);
+        let want_c2 = Point3::new(c2_radial, 0.0, c2_axial);
         let (u_p, v_p) = ParametricSurface::project_point(&torus, want_c1);
         let on_torus_c1 = ParametricSurface::evaluate(&torus, u_p, v_p);
         let (u_q, v_q) = ParametricSurface::project_point(&torus, want_c2);
