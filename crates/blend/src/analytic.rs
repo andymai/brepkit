@@ -9794,6 +9794,145 @@ mod tests {
         );
     }
 
+    /// Sphere-cylinder both-concave fillet: spherical cavity intersecting
+    /// a cylindrical hole. Both faces REVERSED ⇒ Q_sph = R_s − r,
+    /// Q_cyl = r_c − r (internal tangency on both surfaces).
+    ///
+    /// For R_s=3, r_c=2 (sphere encloses cyl), both faces REVERSED,
+    /// r=0.4, +z spine:
+    ///   - Q_sph = 2.6, Q_cyl = 1.6
+    ///   - a_ball = √(Q_sph² − Q_cyl²) = √4.2 ≈ 2.049
+    ///   - major = Q_cyl = 1.6 (concave fillet sits INSIDE cyl axially)
+    ///   - Major < r_c (vs convex which has major = r_c + r > r_c) —
+    ///     confirms internal-tangency reduction.
+    #[test]
+    fn sphere_cylinder_fillet_both_concave_emits_smaller_torus() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::{CylindricalSurface, SphericalSurface};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r_s: f64 = 3.0;
+        let r_c: f64 = 2.0;
+        let r_fillet: f64 = 0.4;
+        let h_s = (big_r_s * big_r_s - r_c * r_c).sqrt();
+
+        let sph = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r_s).unwrap();
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c)
+                .unwrap();
+        let spine_circle =
+            Circle3D::new(Point3::new(0.0, 0.0, h_s), Vec3::new(0.0, 0.0, 1.0), r_c).unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_c, 0.0, h_s), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Both faces REVERSED.
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_sphere = topo.add_face(Face::new_reversed(
+            w1,
+            vec![],
+            FaceSurface::Sphere(sph.clone()),
+        ));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_cyl = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cylinder(cyl.clone()),
+        ));
+
+        let result =
+            sphere_cylinder_fillet(&sph, &cyl, &spine, &topo, r_fillet, face_sphere, face_cyl)
+                .unwrap()
+                .expect("both-concave sphere-cylinder fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        let q_sph = big_r_s - r_fillet;
+        let q_cyl = r_c - r_fillet;
+        let expected_a_ball = (q_sph * q_sph - q_cyl * q_cyl).sqrt();
+        let expected_major = q_cyl;
+
+        assert!(
+            (torus.major_radius() - expected_major).abs() < 1e-12,
+            "concave major should be Q_cyl = {expected_major}, got {}",
+            torus.major_radius()
+        );
+        assert!(
+            torus.major_radius() < r_c,
+            "concave major ({}) must be < r_c = {r_c} (vs convex which would be > r_c)",
+            torus.major_radius()
+        );
+        assert!(
+            (torus.minor_radius() - r_fillet).abs() < 1e-12,
+            "minor should equal r_fillet = {r_fillet}, got {}",
+            torus.minor_radius()
+        );
+
+        // Torus center on +z axis at z = a_ball (positive since +z spine).
+        let center = torus.center();
+        assert!(
+            center.x().abs() < 1e-12 && center.y().abs() < 1e-12,
+            "torus center on z-axis, got {center:?}"
+        );
+        assert!(
+            (center.z() - expected_a_ball).abs() < 1e-12,
+            "torus center z should be a_ball = {expected_a_ball}, got {}",
+            center.z()
+        );
+
+        // Verify ball is INSIDE both surfaces (internal tangency).
+        let actual_dist_to_sphere_center =
+            (center.x().powi(2) + center.y().powi(2) + center.z().powi(2)).sqrt();
+        assert!(
+            actual_dist_to_sphere_center < big_r_s - 1e-9,
+            "concave: ball must be INSIDE sphere (distance {actual_dist_to_sphere_center} < R_s = {big_r_s})"
+        );
+        let actual_dist_to_cyl_axis = (center.x().powi(2) + center.y().powi(2)).sqrt();
+        assert!(
+            actual_dist_to_cyl_axis < r_c - 1e-9,
+            "concave: ball must be INSIDE cyl (distance {actual_dist_to_cyl_axis} < r_c = {r_c})"
+        );
+
+        // Sphere contact at distance R_s from sphere center.
+        let sph_axial = big_r_s * expected_a_ball / q_sph;
+        let sph_radial = big_r_s * expected_major / q_sph;
+        let want_sph = Point3::new(sph_radial, 0.0, sph_axial);
+        let dist_sph = (want_sph - Point3::new(0.0, 0.0, 0.0)).length();
+        assert!(
+            (dist_sph - big_r_s).abs() < 1e-9,
+            "sphere contact must lie on sphere: {dist_sph} vs R_s = {big_r_s}"
+        );
+
+        // Cylinder contact at radial r_c.
+        let want_cyl = Point3::new(r_c, 0.0, expected_a_ball);
+        let cyl_radial = (want_cyl.x().powi(2) + want_cyl.y().powi(2)).sqrt();
+        assert!(
+            (cyl_radial - r_c).abs() < 1e-9,
+            "cyl contact must have radial r_c: got {cyl_radial}, want {r_c}"
+        );
+
+        // Both contacts lie on the torus.
+        let (u_p, v_p) = ParametricSurface::project_point(&torus, want_sph);
+        let on_torus_sph = ParametricSurface::evaluate(&torus, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&torus, want_cyl);
+        let on_torus_cyl = ParametricSurface::evaluate(&torus, u_q, v_q);
+        assert!(
+            (on_torus_sph - want_sph).length() < 1e-9,
+            "sphere contact on torus: {on_torus_sph:?} vs {want_sph:?}"
+        );
+        assert!(
+            (on_torus_cyl - want_cyl).length() < 1e-9,
+            "cyl contact on torus: {on_torus_cyl:?} vs {want_cyl:?}"
+        );
+    }
+
     /// Concave plane-cone chamfer: chamfering the top rim of a tapered hole.
     ///
     /// Geometry: cone primitive (apex above plate at z=h, axis −z,
