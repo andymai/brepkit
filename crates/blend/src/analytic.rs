@@ -2,12 +2,36 @@
 #![allow(dead_code)]
 //! Analytic fast paths for common surface pairs.
 //!
-//! Closed-form fillet and chamfer solutions for plane-plane and plane-cylinder
-//! surface pairs. These bypass the walking engine entirely, producing exact
-//! geometry that is 10-100x faster than Newton-Raphson marching.
+//! Closed-form fillet and chamfer solutions for surface pairs that admit
+//! axisymmetric or planar blend geometry. These bypass the walking engine
+//! entirely, producing exact geometry 10–100× faster than Newton-Raphson
+//! marching.
 //!
-//! About 80% of real-world fillets are between plane-plane or plane-cylinder
-//! pairs, making these fast paths high-impact optimizations.
+//! # Coverage matrix
+//!
+//! Each pair below has fast paths for both fillet and chamfer (unless
+//! noted), handling all four convex/concave combinations via per-face
+//! `signed_offset_i ∈ {+1, −1}`:
+//!
+//! | Pair                           | Blend surface           | Notes                       |
+//! |--------------------------------|-------------------------|-----------------------------|
+//! | Plane × Plane                  | Cylinder (fillet) / Plane (chamfer) | dihedral edge       |
+//! | Plane × {Cylinder, Cone, Sphere} | Torus (fillet) / Cone (chamfer)   | axis ⟂ plate       |
+//! | Sphere × {Sphere, Cylinder, Cone} | Torus (fillet) / Cone (chamfer)   | sphere on shared axis |
+//! | Cylinder × Cylinder (parallel axes) | Cylinder (fillet) / Plane (chamfer) | spine = parallel lines |
+//! | Cone × Cone (coaxial)          | Torus (fillet) / Cone (chamfer) | shared axis, β1 ≠ β2     |
+//!
+//! # Fallthrough configurations
+//!
+//! Pairs whose intersection isn't a circle, line, or pair of either
+//! return `Ok(None)` so the walker takes over:
+//!   - Cyl × Cyl with non-parallel axes (perpendicular tee, oblique)
+//!   - Cone × Cone with non-coaxial axes
+//!   - Cyl × Cone in any orientation
+//!   - Anything involving Torus or NURBS surfaces
+//!
+//! Roughly 80% of real-world fillets fit one of the analytic pairs, so
+//! these fast paths are high-impact optimizations.
 
 use brepkit_math::curves2d::{Curve2D, Line2D};
 use brepkit_math::nurbs::curve::NurbsCurve;
