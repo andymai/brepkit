@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.59.0](https://github.com/andymai/brepkit/compare/v2.58.0...v2.59.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** concave plane-sphere analytic chamfer (pocket / hole rim → cone) ([#572](https://github.com/andymai/brepkit/issues/572)) ([f2da56c](https://github.com/andymai/brepkit/commit/f2da56cb4bd5def574eb97eda4c79ef1f10cd35a))
+* **blend:** convex plane-sphere analytic chamfer (sphere on plate → cone) ([#570](https://github.com/andymai/brepkit/issues/570)) ([deb0b07](https://github.com/andymai/brepkit/commit/deb0b075168738179744fc87bf23dc87ac1106c8))
+* **blend:** convex sphere-sphere analytic fillet (two intersecting spheres → torus) ([#573](https://github.com/andymai/brepkit/issues/573)) ([c9e1a6c](https://github.com/andymai/brepkit/commit/c9e1a6c64b75df27263fd90836020dd7a285e238))
+
 ## [2.58.0](https://github.com/andymai/brepkit/compare/v2.57.0...v2.58.0) (2026-05-08)
 
 
