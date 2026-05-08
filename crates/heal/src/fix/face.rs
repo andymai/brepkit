@@ -45,6 +45,14 @@ pub fn fix_face(
     // 2. SameParameter: each edge on this face must have a PCurve that
     // matches its 3D curve within tolerance, otherwise downstream UV
     // operations (CDT triangulation, intersection) drift.
+    //
+    // Note on reshape ordering: wire fixing in step 1 records edge
+    // replacements/removals in `ctx.reshape` but does NOT apply them
+    // to `topo` (that happens at end-of-pipeline via `ReShape::apply`).
+    // We deliberately skip edges already marked for removal here —
+    // their PCurves are irrelevant. Edges replaced by other edges are
+    // resolved through `reshape.resolve_edge` so we operate on the
+    // current canonical edge.
     if config.fix_same_parameter != FixMode::Off {
         // Collect edges first (we'll mutate `topo` inside the loop).
         // Propagate wire-lookup errors with `?` for consistency with
@@ -61,6 +69,15 @@ pub fn fix_face(
                     .map(brepkit_topology::wire::OrientedEdge::edge),
             );
         }
+        // Resolve any reshape-recorded edge replacements, skip removed
+        // edges, and dedupe (the same edge can appear in outer + inner
+        // wires, and `ReShape::resolve_edge` can collapse multiple
+        // replaced edges onto the same target).
+        let mut seen = std::collections::HashSet::new();
+        edge_ids.retain(|&eid| match ctx.reshape.resolve_edge(eid) {
+            Some(canonical) => seen.insert(canonical),
+            None => false,
+        });
         for eid in edge_ids {
             let r = super::edge::fix_same_parameter_on_face(topo, eid, face_id, ctx, config)?;
             result.merge(&r);
@@ -282,8 +299,11 @@ mod tests {
     use brepkit_topology::test_utils::make_unit_square_face;
 
     fn default_config() -> FixConfig {
-        // Disable everything except the SameParameter step we want to
-        // exercise so the test stays focused.
+        // Disable face-level steps that aren't being exercised
+        // (orientation, small-area, duplicate detection). Wire-level
+        // fixes still run with their `FixConfig::default()` values
+        // (Auto), since SameParameter operates AFTER wire fixing and
+        // we want the realistic flow.
         FixConfig {
             fix_wire_orientation: FixMode::Off,
             fix_small_area: FixMode::Off,
