@@ -379,7 +379,10 @@ impl HealOperator for ConvertToBSplineOp {
 
 // ── convert_to_elementary ──────────────────────────────────────────
 
-/// Recognize and replace NURBS with elementary surfaces.
+/// Recognize and replace NURBS surfaces AND curves with their elementary
+/// analytic forms. Runs surface recognition (face NURBS → analytic
+/// surface) and curve recognition (edge NURBS → analytic curve) in
+/// sequence; reports the combined count.
 #[derive(Debug)]
 struct ConvertToElementaryOp;
 
@@ -394,12 +397,18 @@ impl HealOperator for ConvertToElementaryOp {
         solid_id: SolidId,
         ctx: &mut HealContext,
     ) -> Result<(SolidId, FixResult), HealError> {
-        let converted = crate::custom::convert_to_elementary::convert_to_elementary(
+        let surfaces = crate::custom::convert_to_elementary::convert_to_elementary(
             topo,
             solid_id,
             &ctx.tolerance,
         )?;
-        let status = if converted > 0 {
+        let edges = crate::custom::convert_to_elementary::convert_edges_to_elementary(
+            topo,
+            solid_id,
+            &ctx.tolerance,
+        )?;
+        let total = surfaces + edges;
+        let status = if total > 0 {
             crate::status::Status::DONE1
         } else {
             crate::status::Status::OK
@@ -408,7 +417,7 @@ impl HealOperator for ConvertToElementaryOp {
             solid_id,
             FixResult {
                 status,
-                actions_taken: converted,
+                actions_taken: total,
             },
         ))
     }
