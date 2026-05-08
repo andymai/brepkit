@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.79.0](https://github.com/andymai/brepkit/compare/v2.78.0...v2.79.0) (2026-05-08)
+
+
+### Features
+
+* **geometry:** recognize NURBS curves as ellipses ([#630](https://github.com/andymai/brepkit/issues/630)) ([2dc7529](https://github.com/andymai/brepkit/commit/2dc7529fbf735f9e4906516529c87bed7264fdc5))
+
 ## [2.78.0](https://github.com/andymai/brepkit/compare/v2.77.0...v2.78.0) (2026-05-08)
 
 
