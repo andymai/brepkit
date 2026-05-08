@@ -5,6 +5,7 @@ use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::tolerance::Tolerance;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
+use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
@@ -26,9 +27,12 @@ pub fn convert_to_elementary(
     solid_id: SolidId,
     tolerance: &Tolerance,
 ) -> Result<usize, HealError> {
-    let solid_data = topo.solid(solid_id)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    let face_ids: Vec<FaceId> = shell.faces().to_vec();
+    // Walk outer shell *and* inner (cavity) shells via the topology
+    // explorer helper. Hollow solids (cavities from `shell_op` or
+    // boolean cuts) hold faces in `Solid::inner_shells()`, and
+    // visiting only the outer shell would silently leave those faces
+    // unconverted.
+    let face_ids: Vec<FaceId> = solid_faces(topo, solid_id)?;
 
     let mut converted = 0;
 
@@ -124,9 +128,7 @@ pub fn convert_edges_to_elementary(
     solid_id: SolidId,
     tolerance: &Tolerance,
 ) -> Result<usize, HealError> {
-    let solid_data = topo.solid(solid_id)?;
-    let shell = topo.shell(solid_data.outer_shell())?;
-    let face_ids: Vec<FaceId> = shell.faces().to_vec();
+    let face_ids: Vec<FaceId> = solid_faces(topo, solid_id)?;
 
     // Collect unique edge IDs across all faces (edges may be shared
     // between faces).
@@ -292,5 +294,73 @@ mod tests {
         let tol = Tolerance::new();
         let n = convert_edges_to_elementary(&mut topo, solid_id, &tol).unwrap();
         assert_eq!(n, 0, "Line edges shouldn't be converted, got {n}");
+    }
+
+    #[test]
+    fn convert_walks_inner_shells() {
+        // A solid with both an outer shell and an inner (cavity) shell
+        // should have faces recognized on BOTH shells. Regression for
+        // the prior outer-shell-only behavior, which silently left
+        // cavity faces unconverted in hollow solids.
+        use crate::construct::convert_surface::sphere_to_nurbs;
+        use brepkit_math::surfaces::SphericalSurface;
+
+        let mut topo = Topology::new();
+
+        // Build two scaffolds — an outer "face" (planar) and an inner
+        // "face" carrying a NURBS sphere surface that should be
+        // recognized back as Sphere.
+        let outer_face = {
+            let v = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+            let edge_id = topo.add_edge(Edge::new(v, v, EdgeCurve::Line));
+            let wire = Wire::new(vec![OrientedEdge::new(edge_id, true)], true).unwrap();
+            let wid = topo.add_wire(wire);
+            topo.add_face(Face::new(
+                wid,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, 1.0),
+                    d: 0.0,
+                },
+            ))
+        };
+
+        let sphere = SphericalSurface::new(Point3::new(5.0, 0.0, 0.0), 1.0).unwrap();
+        let nurbs_sphere = sphere_to_nurbs(&sphere).unwrap();
+        let inner_face = {
+            let v = topo.add_vertex(Vertex::new(Point3::new(6.0, 0.0, 0.0), 1e-7));
+            let edge_id = topo.add_edge(Edge::new(v, v, EdgeCurve::Line));
+            let wire = Wire::new(vec![OrientedEdge::new(edge_id, true)], true).unwrap();
+            let wid = topo.add_wire(wire);
+            topo.add_face(Face::new(wid, vec![], FaceSurface::Nurbs(nurbs_sphere)))
+        };
+
+        let outer_shell = topo.add_shell(Shell::new(vec![outer_face]).unwrap());
+        let inner_shell = topo.add_shell(Shell::new(vec![inner_face]).unwrap());
+        let solid_id = topo.add_solid(Solid::new(outer_shell, vec![inner_shell]));
+
+        let tol = Tolerance::new();
+        let converted = convert_to_elementary(&mut topo, solid_id, &tol).unwrap();
+        assert_eq!(
+            converted, 1,
+            "should have converted the cavity-shell sphere face, got {converted}"
+        );
+
+        // The outer face was already analytic; the inner-shell face
+        // should now be Sphere, not NURBS.
+        assert!(matches!(
+            topo.face(outer_face).unwrap().surface(),
+            FaceSurface::Plane { .. }
+        ));
+        match topo.face(inner_face).unwrap().surface() {
+            FaceSurface::Sphere(s) => {
+                assert!(
+                    (s.radius() - 1.0).abs() < 1e-6,
+                    "recovered sphere radius {} should be ~1.0",
+                    s.radius()
+                );
+            }
+            other => panic!("expected inner-shell face to be Sphere, got {other:?}"),
+        }
     }
 }
