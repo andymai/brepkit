@@ -4100,17 +4100,18 @@ pub fn cylinder_cylinder_fillet(
     }
     let y_spine_abs = y_spine_sq.sqrt();
 
-    // Spine validation: project a sample onto the perpendicular plane
-    // and match to one of the two intersection lines.
+    // Spine validation: parallel-axis cyl-cyl spines are LINEAR (parallel
+    // to the cyl axes), so a closed spine signals degenerate or erroneous
+    // input — straight lines can't form loops. Bail to walker.
     let edges = spine.edges();
-    let is_closed_spine = if edges.len() == 1 {
+    if edges.len() == 1 {
         let e = topo.edge(edges[0])?;
-        e.start() == e.end()
-    } else {
-        false
-    };
+        if e.start() == e.end() {
+            return Ok(None);
+        }
+    }
     let spine_len = spine.length();
-    if !is_closed_spine && spine_len < tol_lin {
+    if spine_len < tol_lin {
         return Ok(None);
     }
     let p_spine_sample = spine.evaluate(topo, 0.0)?;
@@ -4154,11 +4155,7 @@ pub fn cylinder_cylinder_fillet(
     if spine_tangent.dot(a_cyl).abs() < 1.0 - tol_ang {
         return Ok(None);
     }
-    let p_spine_end = if is_closed_spine {
-        p_spine_start
-    } else {
-        spine.evaluate(topo, spine_len)?
-    };
+    let p_spine_end = spine.evaluate(topo, spine_len)?;
 
     // Project spine endpoints axially to (x_spine, y_spine, z).
     // The spine line has fixed (x, y) in cyl1's frame; only z varies.
@@ -7872,8 +7869,10 @@ mod tests {
     /// (r=2.5), D=3, both faces NOT reversed, r=0.4:
     ///   - x_spine = (4 − 6.25 + 9)/6 = 1.125
     ///   - y_spine = ±√(4 − 1.265625) = ±1.654
-    ///   - For r=0.4: Q1=2.4, Q2=2.9, x_ball ≈ 0.625, y_ball = sign·√(5.367) ≈ 2.317
-    ///   - Fillet cylinder axis +z at (0.625, 2.317, *), radius 0.4
+    ///   - For r=0.4: Q1=2.4, Q2=2.9
+    ///     x_ball = (Q1²−Q2²+D²)/(2D) = (5.76−8.41+9)/6 ≈ 1.058
+    ///     y_ball = sign·√(Q1²−x_ball²) = √(5.76−1.119) ≈ 2.154
+    ///   - Fillet cylinder axis +z at (1.058, 2.154, *), radius 0.4
     #[test]
     fn cylinder_cylinder_fillet_parallel_axes_emits_cylinder() {
         use brepkit_math::surfaces::CylindricalSurface;
