@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.66.0](https://github.com/andymai/brepkit/compare/v2.65.0...v2.66.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** concave + mixed sphere-cone analytic fillet (4-way matrix) ([#588](https://github.com/andymai/brepkit/issues/588)) ([fe66857](https://github.com/andymai/brepkit/commit/fe66857783a98805b0f8082948e39c5ff2820cca))
+
 ## [2.65.0](https://github.com/andymai/brepkit/compare/v2.64.0...v2.65.0) (2026-05-08)
 
 
