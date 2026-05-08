@@ -1580,6 +1580,49 @@ pub fn convert_to_bspline(
     })
 }
 
+/// Recognize and replace NURBS surfaces and edges with their analytic
+/// (elementary) forms wherever possible.
+///
+/// Runs both face-surface recognition (Plane, Cylinder, Sphere, Cone,
+/// Torus) and edge-curve recognition (Line, Circle, Ellipse) in
+/// sequence. Returns the combined number of replacements.
+///
+/// This is the inverse of [`convert_to_bspline`]: STEP/IGES imports
+/// that came in as NURBS (e.g., from CAD systems that export
+/// everything as B-splines) can be normalized back into the analytic
+/// forms that brepkit's intersection / blend / boolean operators
+/// handle most efficiently.
+///
+/// Hyperbola and Parabola curve types are recognized but cannot yet
+/// be stored as analytic `EdgeCurve` variants (no
+/// `EdgeCurve::Hyperbola`/`Parabola` exists in topology); they keep
+/// their NURBS representation.
+///
+/// # Errors
+///
+/// Returns an error if any topology lookup fails.
+pub fn convert_to_elementary(
+    topo: &mut Topology,
+    solid: SolidId,
+    tolerance: f64,
+) -> Result<usize, crate::OperationsError> {
+    let tol = brepkit_math::tolerance::Tolerance {
+        linear: tolerance,
+        ..brepkit_math::tolerance::Tolerance::new()
+    };
+    let surfaces =
+        brepkit_heal::custom::convert_to_elementary::convert_to_elementary(topo, solid, &tol)
+            .map_err(|e| crate::OperationsError::InvalidInput {
+                reason: format!("convert_to_elementary (surfaces) failed: {e}"),
+            })?;
+    let edges =
+        brepkit_heal::custom::convert_to_elementary::convert_edges_to_elementary(topo, solid, &tol)
+            .map_err(|e| crate::OperationsError::InvalidInput {
+                reason: format!("convert_to_elementary (edges) failed: {e}"),
+            })?;
+    Ok(surfaces + edges)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::print_stderr)]
