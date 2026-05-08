@@ -260,6 +260,9 @@ pub fn try_analytic_chamfer(
             }
             Ok(result)
         }
+        (FaceSurface::Cylinder(c1), FaceSurface::Cylinder(c2)) => {
+            cylinder_cylinder_chamfer(c1, c2, spine, topo, d1, d2, face1, face2)
+        }
         (
             FaceSurface::Plane { .. }
             | FaceSurface::Cylinder(_)
@@ -4514,6 +4517,247 @@ pub fn cone_cone_coaxial_fillet(
     }))
 }
 
+/// Chamfer between two cylinders with **parallel axes**, intersecting in
+/// a pair of straight lines. The chamfer surface is a **plane** that
+/// contains the two contact lines (each parallel to the cyl axes).
+///
+/// Convex/concave configurations are unified via per-face
+/// `signed_offset_i = ±1`: the angular displacement on each cylinder
+/// from the spine flips toward or away from the OTHER cylinder. For
+/// convex-convex, both contacts move AWAY from the other cyl;
+/// concave-concave moves both TOWARD; mixed configurations swap one.
+///
+/// # Geometry
+///
+/// In the perpendicular plane (cyl1's frame: x along d_perp, y
+/// perpendicular, z along axis), with the spine at `(x_spine, y_spine, *)`:
+///
+///   cyl1 contact angular displacement: Δθ_1 = sign(y_spine) · s1 · d1 / r1
+///   cyl1 contact (x, y) =
+///     (x_spine·cos Δθ_1 − y_spine·sin Δθ_1,
+///      y_spine·cos Δθ_1 + x_spine·sin Δθ_1)
+///
+///   cyl2 contact (in cyl2's local frame, then translated by D along x):
+///     Δθ_2 = −sign(y_spine) · s2 · d2 / r2 (note the negation: cyl2's
+///     "AWAY from cyl1" direction is opposite cyl1's "AWAY from cyl2")
+///     contact_in_cyl2 =
+///       ((x_spine−D)·cos Δθ_2 − y_spine·sin Δθ_2,
+///        y_spine·cos Δθ_2 + (x_spine−D)·sin Δθ_2)
+///     contact_global = (D + that.x, that.y)
+///
+/// The chamfer surface is a plane whose normal is `ẑ × (c2 − c1)`
+/// (perpendicular to both the chord between contacts and the shared
+/// axis direction; defined up to sign).
+///
+/// # Returns
+///
+/// `Ok(None)` (walker fallback) when:
+///   - cylinder axes aren't parallel,
+///   - cylinders don't intersect (`D ≤ |r1−r2|` or `D ≥ r1+r2`),
+///   - the spine isn't on one of the two intersection lines, or
+///   - chamfer line is degenerate (both contacts coincide).
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or NURBS construction fails.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn cylinder_cylinder_chamfer(
+    cyl1: &brepkit_math::surfaces::CylindricalSurface,
+    cyl2: &brepkit_math::surfaces::CylindricalSurface,
+    spine: &Spine,
+    topo: &Topology,
+    d1: f64,
+    d2: f64,
+    face1: FaceId,
+    face2: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    let tol_lin = 1e-9;
+    let tol_ang = 1e-9;
+
+    if d1 <= tol_lin || d2 <= tol_lin {
+        return Ok(None);
+    }
+    let s1: f64 = if topo.face(face1)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
+    let s2: f64 = if topo.face(face2)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
+
+    let r1 = cyl1.radius();
+    let r2 = cyl2.radius();
+    let a1 = cyl1.axis();
+    let a2 = cyl2.axis();
+
+    // Cylinder axes must be parallel.
+    if a1.dot(a2).abs() < 1.0 - tol_ang {
+        return Ok(None);
+    }
+    let a_cyl = a1;
+
+    // Perpendicular displacement between cyl axes.
+    let o1 = cyl1.origin();
+    let o2 = cyl2.origin();
+    let d_axes = o2 - o1;
+    let d_axes_v = Vec3::new(d_axes.x(), d_axes.y(), d_axes.z());
+    let perp = d_axes_v - a_cyl * d_axes_v.dot(a_cyl);
+    let big_d = perp.length();
+    if big_d <= tol_lin {
+        return Ok(None);
+    }
+    if big_d <= (r1 - r2).abs() + tol_lin || big_d >= r1 + r2 - tol_lin {
+        return Ok(None);
+    }
+
+    let x_hat = perp * (1.0 / big_d);
+    let y_hat = a_cyl.cross(x_hat).normalize()?;
+
+    // Spine intersection lines.
+    let x_spine = (r1 * r1 - r2 * r2 + big_d * big_d) / (2.0 * big_d);
+    let y_spine_sq = r1 * r1 - x_spine * x_spine;
+    if y_spine_sq <= tol_lin * tol_lin {
+        return Ok(None);
+    }
+    let y_spine_abs = y_spine_sq.sqrt();
+
+    // Spine-line validation.
+    let edges = spine.edges();
+    if edges.len() == 1 {
+        let e = topo.edge(edges[0])?;
+        if e.start() == e.end() {
+            return Ok(None);
+        }
+    }
+    let spine_len = spine.length();
+    if spine_len < tol_lin {
+        return Ok(None);
+    }
+    let p_spine_sample = spine.evaluate(topo, 0.0)?;
+    let to_sample = p_spine_sample - o1;
+    let to_sample_v = Vec3::new(to_sample.x(), to_sample.y(), to_sample.z());
+    let sample_x = to_sample_v.dot(x_hat);
+    let sample_y = to_sample_v.dot(y_hat);
+    let spine_match_tol = tol_lin * 1e3;
+    if (sample_x - x_spine).abs() > spine_match_tol {
+        return Ok(None);
+    }
+    let y_spine = if (sample_y - y_spine_abs).abs() < spine_match_tol {
+        y_spine_abs
+    } else if (sample_y + y_spine_abs).abs() < spine_match_tol {
+        -y_spine_abs
+    } else {
+        return Ok(None);
+    };
+    let y_sign = if y_spine >= 0.0 { 1.0 } else { -1.0 };
+
+    let p_spine_start = p_spine_sample;
+    let p_spine_end = spine.evaluate(topo, spine_len)?;
+    let spine_tangent = spine.tangent(topo, 0.0)?;
+    if spine_tangent.dot(a_cyl).abs() < 1.0 - tol_ang {
+        return Ok(None);
+    }
+    let to_start = p_spine_start - o1;
+    let z_start = Vec3::new(to_start.x(), to_start.y(), to_start.z()).dot(a_cyl);
+    let to_end = p_spine_end - o1;
+    let z_end = Vec3::new(to_end.x(), to_end.y(), to_end.z()).dot(a_cyl);
+
+    // Angular displacements per the unified formula.
+    let dtheta1 = y_sign * s1 * d1 / r1;
+    let dtheta2 = -y_sign * s2 * d2 / r2;
+    let (sin1, cos1) = dtheta1.sin_cos();
+    let (sin2, cos2) = dtheta2.sin_cos();
+
+    // Cyl1 contact in cyl1's frame.
+    let c1_x = x_spine * cos1 - y_spine * sin1;
+    let c1_y = y_spine * cos1 + x_spine * sin1;
+    // Cyl2 contact: in cyl2's frame use spine_local = (x_spine − D, y_spine).
+    let c2_local_x = (x_spine - big_d) * cos2 - y_spine * sin2;
+    let c2_local_y = y_spine * cos2 + (x_spine - big_d) * sin2;
+    // Translate cyl2 contact back to global frame (cyl2 origin is at +D along x_hat).
+    let c2_x = c2_local_x + big_d;
+    let c2_y = c2_local_y;
+
+    // Contact lines in 3D (parallel to a_cyl).
+    let c1_start = o1 + x_hat * c1_x + y_hat * c1_y + a_cyl * z_start;
+    let c1_end = o1 + x_hat * c1_x + y_hat * c1_y + a_cyl * z_end;
+    let c2_start = o1 + x_hat * c2_x + y_hat * c2_y + a_cyl * z_start;
+    let c2_end = o1 + x_hat * c2_x + y_hat * c2_y + a_cyl * z_end;
+
+    let chamfer_span_v = c2_start - c1_start;
+    if chamfer_span_v.length() <= tol_lin {
+        return Ok(None);
+    }
+    let chamfer_normal_raw = a_cyl.cross(chamfer_span_v);
+    let chamfer_normal = chamfer_normal_raw
+        .normalize()
+        .map_err(|_| BlendError::Math(brepkit_math::MathError::ZeroVector))?;
+    let chamfer_d = chamfer_normal.dot(Vec3::new(c1_start.x(), c1_start.y(), c1_start.z()));
+
+    let contact1 = nurbs_line(c1_start, c1_end)?;
+    let contact2 = nurbs_line(c2_start, c2_end)?;
+
+    // PCurves: each contact line is at constant u (angular) and varying
+    // v (axial) on its respective cylinder.
+    let u1 = ParametricSurface::project_point(cyl1, c1_start).0;
+    let v1_start = cyl_v_at_point(cyl1, c1_start);
+    let v1_end = cyl_v_at_point(cyl1, c1_end);
+    let pcurve1 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u1, v1_start),
+        brepkit_math::vec::Vec2::new(0.0, v1_end - v1_start),
+    )?);
+    let u2 = ParametricSurface::project_point(cyl2, c2_start).0;
+    let v2_start = cyl_v_at_point(cyl2, c2_start);
+    let v2_end = cyl_v_at_point(cyl2, c2_end);
+    let pcurve2 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u2, v2_start),
+        brepkit_math::vec::Vec2::new(0.0, v2_end - v2_start),
+    )?);
+
+    // Cross-sections at spine endpoints.
+    let chamfer_radius = (c1_start - c2_start).length() * 0.5;
+    let section_start = CircSection {
+        p1: c1_start,
+        p2: c2_start,
+        center: midpoint_3d(c1_start, c2_start),
+        radius: chamfer_radius,
+        uv1: (u1, v1_start),
+        uv2: (u2, v2_start),
+        t: 0.0,
+    };
+    let section_end = CircSection {
+        p1: c1_end,
+        p2: c2_end,
+        center: midpoint_3d(c1_end, c2_end),
+        radius: chamfer_radius,
+        uv1: (u1, v1_end),
+        uv2: (u2, v2_end),
+        t: 1.0,
+    };
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Plane {
+            normal: chamfer_normal,
+            d: chamfer_d,
+        },
+        pcurve1,
+        pcurve2,
+        contact1,
+        contact2,
+        face1,
+        face2,
+        sections: vec![section_start, section_end],
+    };
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
+}
+
 /// Build a rational quadratic NURBS for an arc on a `Circle3D` from
 /// `t_start` to `t_end` (radians).
 ///
@@ -8683,6 +8927,257 @@ mod tests {
         assert!(
             (on_torus_c2 - want_c2).length() < 1e-9,
             "cone2 contact must lie on torus: {on_torus_c2:?} vs {want_c2:?}"
+        );
+    }
+
+    /// Cylinder-cylinder convex chamfer: parallel-axis cyls with the
+    /// chamfer surface a planar bevel containing both contact lines
+    /// (each parallel to the cyl axes).
+    ///
+    /// For cyl1 r=2 at origin axis +z, cyl2 r=2.5 at (3,0,*) axis +z,
+    /// D=3, both faces NOT reversed, +y spine, d=0.4 each:
+    ///   - Spine at (1.125, √3, *)
+    ///   - Δθ_1 = +1·d/r1 = 0.2 (CCW on cyl1, AWAY from cyl2)
+    ///   - Δθ_2 = −1·d/r2 = −0.16 (CW on cyl2, AWAY from cyl1)
+    ///   - Chamfer plane through both contact lines
+    #[test]
+    fn cylinder_cylinder_chamfer_convex_emits_plane() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let r1: f64 = 2.0;
+        let r2: f64 = 2.5;
+        let big_d: f64 = 3.0;
+        let d: f64 = 0.4;
+
+        let cyl1 =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r1)
+                .unwrap();
+        let cyl2 =
+            CylindricalSurface::new(Point3::new(big_d, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r2)
+                .unwrap();
+
+        let x_spine = (r1 * r1 - r2 * r2 + big_d * big_d) / (2.0 * big_d);
+        let y_spine = (r1 * r1 - x_spine * x_spine).sqrt();
+        let z_lo = 0.0_f64;
+        let z_hi = 4.0_f64;
+        let p_start = Point3::new(x_spine, y_spine, z_lo);
+        let p_end = Point3::new(x_spine, y_spine, z_hi);
+        let v_start = topo.add_vertex(Vertex::new(p_start, 1e-7));
+        let v_end = topo.add_vertex(Vertex::new(p_end, 1e-7));
+        let line = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![p_start, p_end],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let eid = topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(line)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], false).unwrap());
+        let face1 = topo.add_face(Face::new(w1, vec![], FaceSurface::Cylinder(cyl1.clone())));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], false).unwrap());
+        let face2 = topo.add_face(Face::new(w2, vec![], FaceSurface::Cylinder(cyl2.clone())));
+
+        let result = cylinder_cylinder_chamfer(&cyl1, &cyl2, &spine, &topo, d, d, face1, face2)
+            .unwrap()
+            .expect("convex parallel-axis cyl-cyl chamfer should produce a stripe");
+
+        let (chamfer_normal, chamfer_d) = match result.stripe.surface {
+            FaceSurface::Plane { normal, d } => (normal, d),
+            other => panic!("expected Plane, got {}", other.type_tag()),
+        };
+
+        // Predicted contacts.
+        let dtheta1 = d / r1; // y_sign=+1, s1=+1
+        let dtheta2 = -d / r2; // y_sign=+1, s2=+1, negation
+        let (sin1, cos1) = dtheta1.sin_cos();
+        let (sin2, cos2) = dtheta2.sin_cos();
+        let c1_x = x_spine * cos1 - y_spine * sin1;
+        let c1_y = y_spine * cos1 + x_spine * sin1;
+        let c2_local_x = (x_spine - big_d) * cos2 - y_spine * sin2;
+        let c2_local_y = y_spine * cos2 + (x_spine - big_d) * sin2;
+        let c2_x = c2_local_x + big_d;
+        let c2_y = c2_local_y;
+
+        // Contact1 must lie on cyl1 (radial = r1 from cyl1 axis).
+        let dist_c1_axis = (c1_x.powi(2) + c1_y.powi(2)).sqrt();
+        assert!(
+            (dist_c1_axis - r1).abs() < 1e-9,
+            "cyl1 contact must lie on cyl1: distance = {dist_c1_axis}, want r1 = {r1}"
+        );
+        // Contact2 must lie on cyl2.
+        let dist_c2_axis = ((c2_x - big_d).powi(2) + c2_y.powi(2)).sqrt();
+        assert!(
+            (dist_c2_axis - r2).abs() < 1e-9,
+            "cyl2 contact must lie on cyl2: distance = {dist_c2_axis}, want r2 = {r2}"
+        );
+
+        // Both contact LINES (z varies) must lie on the chamfer plane.
+        // For a plane (normal · p = d) and contact at (c_x, c_y, z) for
+        // any z, the plane equation must hold ∀z. Since the plane normal
+        // is computed as a_cyl.cross(span) and a_cyl = +z, the normal
+        // has zero z-component. ⇒ checking with z = z_lo suffices.
+        let p1 = Point3::new(c1_x, c1_y, z_lo);
+        let p2 = Point3::new(c2_x, c2_y, z_lo);
+        let on_plane_1 = chamfer_normal.dot(Vec3::new(p1.x(), p1.y(), p1.z())) - chamfer_d;
+        let on_plane_2 = chamfer_normal.dot(Vec3::new(p2.x(), p2.y(), p2.z())) - chamfer_d;
+        assert!(
+            on_plane_1.abs() < 1e-9,
+            "cyl1 contact must lie on chamfer plane: residual {on_plane_1}"
+        );
+        assert!(
+            on_plane_2.abs() < 1e-9,
+            "cyl2 contact must lie on chamfer plane: residual {on_plane_2}"
+        );
+
+        // Chamfer plane normal must be perpendicular to the cyl axis +z
+        // (the contact lines are along +z, so the plane contains them).
+        assert!(
+            chamfer_normal.z().abs() < 1e-12,
+            "chamfer plane normal should be perpendicular to z axis, got {chamfer_normal:?}"
+        );
+    }
+
+    /// Cylinder-cylinder both-concave chamfer at the −y spine (exercises
+    /// BOTH the `s_i = −1` branches AND the `y_sign = −1` branch in the
+    /// `dtheta_i = y_sign · s_i · d_i / r_i` formulas).
+    ///
+    /// Setup: same cylinders as the convex test (r1=2, r2=2.5, D=3,
+    /// d=0.4) but spine at the −y intersection line and both faces
+    /// REVERSED. This means:
+    ///   - dtheta_1 = (−1)·(−1)·d/r1 = +d/r1 (still CCW on cyl1, but
+    ///     for a different geometric reason — concave going TOWARD
+    ///     cyl2 from the −y spine = +θ direction)
+    ///   - dtheta_2 = −(−1)·(−1)·d/r2 = −d/r2 (CW on cyl2)
+    ///
+    /// The signs happen to match the convex +y-spine case numerically,
+    /// but they reach there via a DIFFERENT path through the formulas,
+    /// exercising both the y_sign and s_i flip branches.
+    #[test]
+    fn cylinder_cylinder_chamfer_both_concave_negative_y_emits_plane() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let r1: f64 = 2.0;
+        let r2: f64 = 2.5;
+        let big_d: f64 = 3.0;
+        let d: f64 = 0.4;
+
+        let cyl1 =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r1)
+                .unwrap();
+        let cyl2 =
+            CylindricalSurface::new(Point3::new(big_d, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r2)
+                .unwrap();
+
+        let x_spine = (r1 * r1 - r2 * r2 + big_d * big_d) / (2.0 * big_d);
+        let y_spine = -((r1 * r1 - x_spine * x_spine).sqrt()); // NEGATIVE-y spine
+        let z_lo = 0.0_f64;
+        let z_hi = 4.0_f64;
+        let p_start = Point3::new(x_spine, y_spine, z_lo);
+        let p_end = Point3::new(x_spine, y_spine, z_hi);
+        let v_start = topo.add_vertex(Vertex::new(p_start, 1e-7));
+        let v_end = topo.add_vertex(Vertex::new(p_end, 1e-7));
+        let line = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![p_start, p_end],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let eid = topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(line)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Both faces REVERSED.
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], false).unwrap());
+        let face1 = topo.add_face(Face::new_reversed(
+            w1,
+            vec![],
+            FaceSurface::Cylinder(cyl1.clone()),
+        ));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], false).unwrap());
+        let face2 = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cylinder(cyl2.clone()),
+        ));
+
+        let result = cylinder_cylinder_chamfer(&cyl1, &cyl2, &spine, &topo, d, d, face1, face2)
+            .unwrap()
+            .expect("both-concave −y-spine cyl-cyl chamfer should produce a stripe");
+
+        let (chamfer_normal, chamfer_d) = match result.stripe.surface {
+            FaceSurface::Plane { normal, d } => (normal, d),
+            other => panic!("expected Plane, got {}", other.type_tag()),
+        };
+
+        // Predicted contacts. y_sign = -1, s1 = s2 = -1.
+        // dtheta_1 = (-1)·(-1)·d/r1 = +d/r1
+        // dtheta_2 = -(-1)·(-1)·d/r2 = -d/r2
+        let dtheta1 = d / r1;
+        let dtheta2 = -d / r2;
+        let (sin1, cos1) = dtheta1.sin_cos();
+        let (sin2, cos2) = dtheta2.sin_cos();
+        let c1_x = x_spine * cos1 - y_spine * sin1;
+        let c1_y = y_spine * cos1 + x_spine * sin1;
+        let c2_local_x = (x_spine - big_d) * cos2 - y_spine * sin2;
+        let c2_local_y = y_spine * cos2 + (x_spine - big_d) * sin2;
+        let c2_x = c2_local_x + big_d;
+        let c2_y = c2_local_y;
+
+        // Contacts on respective cylinder surfaces.
+        let dist_c1_axis = (c1_x.powi(2) + c1_y.powi(2)).sqrt();
+        assert!(
+            (dist_c1_axis - r1).abs() < 1e-9,
+            "cyl1 contact must lie on cyl1: distance = {dist_c1_axis}, want r1 = {r1}"
+        );
+        let dist_c2_axis = ((c2_x - big_d).powi(2) + c2_y.powi(2)).sqrt();
+        assert!(
+            (dist_c2_axis - r2).abs() < 1e-9,
+            "cyl2 contact must lie on cyl2: distance = {dist_c2_axis}, want r2 = {r2}"
+        );
+
+        // Both contacts on the chamfer plane.
+        let p1 = Point3::new(c1_x, c1_y, z_lo);
+        let p2 = Point3::new(c2_x, c2_y, z_lo);
+        let on_plane_1 = chamfer_normal.dot(Vec3::new(p1.x(), p1.y(), p1.z())) - chamfer_d;
+        let on_plane_2 = chamfer_normal.dot(Vec3::new(p2.x(), p2.y(), p2.z())) - chamfer_d;
+        assert!(
+            on_plane_1.abs() < 1e-9,
+            "cyl1 contact must lie on chamfer plane: residual {on_plane_1}"
+        );
+        assert!(
+            on_plane_2.abs() < 1e-9,
+            "cyl2 contact must lie on chamfer plane: residual {on_plane_2}"
+        );
+
+        // Concave-going-TOWARD geometry: contacts now pull TOWARD the
+        // other cyl (rather than away). For y_sign=-1 with concave, both
+        // contacts have negative y components less negative than the
+        // spine (toward y=0).
+        assert!(
+            c1_y > y_spine,
+            "concave cyl1 contact should pull TOWARD y=0: got {c1_y} vs spine {y_spine}"
+        );
+        assert!(
+            c2_y > y_spine,
+            "concave cyl2 contact should pull TOWARD y=0: got {c2_y} vs spine {y_spine}"
+        );
+
+        // Chamfer plane perpendicular to z axis.
+        assert!(
+            chamfer_normal.z().abs() < 1e-12,
+            "chamfer plane normal must be perpendicular to z, got {chamfer_normal:?}"
         );
     }
 
