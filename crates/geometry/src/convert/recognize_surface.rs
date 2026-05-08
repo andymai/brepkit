@@ -34,14 +34,27 @@ pub enum RecognizedSurface {
         /// Sphere radius.
         radius: f64,
     },
+    /// Recognized as a cone.
+    Cone {
+        /// The cone's apex (point where radius = 0).
+        apex: Point3,
+        /// Cone axis direction (from apex into the cone, unit vector).
+        axis: Vec3,
+        /// Half-angle from the radial plane to the cone generator
+        /// (radians, in `(0, π/2)`).
+        half_angle: f64,
+    },
     /// The surface could not be matched to any elementary form.
     NotRecognized,
 }
 
 /// Attempt to recognize a NURBS surface as an elementary analytic surface.
 ///
-/// Tries recognition in order: plane, cylinder, sphere. Returns the first
-/// match whose maximum sample deviation is within `tolerance`.
+/// Tries recognition in order: plane, cylinder, sphere, cone. Returns
+/// the first match whose maximum sample deviation is within
+/// `tolerance`. Cylinder is tested before cone so that constant-radius
+/// surfaces are classified as `Cylinder`, not as `Cone` with apex at
+/// infinity.
 #[must_use]
 pub fn recognize_surface(surface: &NurbsSurface, tolerance: f64) -> RecognizedSurface {
     if let Some((normal, d)) = try_recognize_plane(surface, tolerance) {
@@ -56,6 +69,13 @@ pub fn recognize_surface(surface: &NurbsSurface, tolerance: f64) -> RecognizedSu
     }
     if let Some((center, radius)) = try_recognize_sphere(surface, tolerance) {
         return RecognizedSurface::Sphere { center, radius };
+    }
+    if let Some((apex, axis, half_angle)) = try_recognize_cone(surface, tolerance) {
+        return RecognizedSurface::Cone {
+            apex,
+            axis,
+            half_angle,
+        };
     }
     RecognizedSurface::NotRecognized
 }
@@ -340,6 +360,186 @@ fn try_recognize_sphere(surface: &NurbsSurface, tolerance: f64) -> Option<(Point
     Some((center_pt, mean_radius))
 }
 
+// ── Cone recognition ──────────────────────────────────────────────────────────
+
+/// Check if all sampled surface points lie on a cone.
+///
+/// Estimates the axis from the average of "last column − first column"
+/// across all CP rows (same as cylinder, since cone has the same
+/// rotational structure). Then verifies samples lie on a cone by
+/// checking that:
+///
+/// 1. The axial-component vs radial-component relationship is linear
+///    (samples lie on a 2D wedge in `(axial, radial)` space).
+/// 2. The radial component is consistent for all u at each fixed v
+///    (each iso-v line is a circle around the axis).
+///
+/// The slope of the radial-vs-axial line gives `cot(half_angle)`; the
+/// apex is the (axial, 0) intercept extrapolated from this line.
+fn try_recognize_cone(surface: &NurbsSurface, tolerance: f64) -> Option<(Point3, Vec3, f64)> {
+    const N: usize = 8;
+    let cps = surface.control_points();
+    if cps.len() < 2 {
+        return None;
+    }
+    for row in cps {
+        if row.len() < 2 {
+            return None;
+        }
+    }
+
+    // Estimate axis direction. For cones (unlike cylinders), the
+    // (last_col - first_col) vector at row i has both an axial AND a
+    // radial component (cos_a · radial_dir(u_i) + sin_a · axis) — so
+    // averaging across u must cancel the radial part. The 33×9 CP
+    // grid produced by `analytic_to_nurbs_sampled` duplicates the
+    // u=0 and u=2π seam (CP[0] and CP[N-1] at the same 3D point),
+    // which biases the unweighted sum. Skip the last row to remove
+    // the duplicate before averaging.
+    let n_rows = cps.len();
+    let row_count = if n_rows >= 3 && (cps[0][0] - cps[n_rows - 1][0]).length() < tolerance {
+        n_rows - 1
+    } else {
+        n_rows
+    };
+    let mut axis_sum = Vec3::new(0.0, 0.0, 0.0);
+    for row in cps.iter().take(row_count) {
+        let v = row[row.len() - 1] - row[0];
+        axis_sum += v;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let axis_avg = axis_sum * (1.0 / row_count as f64);
+    if axis_avg.length() < tolerance {
+        return None;
+    }
+    let axis = axis_avg.normalize().ok()?;
+
+    // Sample at an 8×8 grid. CRITICAL: use OPEN range in u to avoid
+    // duplicating the closing seam point (u_nurbs=0 and u_nurbs=1
+    // coincide for full-revolution surfaces). Duplicates bias the
+    // centroid off-axis, which throws off the radial-component
+    // computation for samples near the duplicate.
+    let (u0, u1) = surface.domain_u();
+    let (v0, v1) = surface.domain_v();
+    let mut samples: Vec<Point3> = Vec::with_capacity(N * N);
+    for iu in 0..N {
+        #[allow(clippy::cast_precision_loss)]
+        let u = u0 + (u1 - u0) * (iu as f64 + 0.5) / (N as f64);
+        for iv in 0..N {
+            #[allow(clippy::cast_precision_loss)]
+            let v = v0 + (v1 - v0) * (iv as f64) / ((N - 1) as f64);
+            samples.push(surface.evaluate(u, v));
+        }
+    }
+
+    // Estimate the apex (axis origin) by linear-fitting (axial,
+    // radial) pairs. For each sample, `axial = axis · (p − sample[0])`
+    // is a relative axial distance; `radial` is the perpendicular
+    // distance from sample[0]'s axial projection. Wait — for cone
+    // recognition we need a robust BUT axis-relative reference. Use
+    // the centroid of all samples as the "anchor" for axial measurement.
+    #[allow(clippy::cast_precision_loss)]
+    let inv_n = 1.0 / samples.len() as f64;
+    let mut anchor_x = 0.0_f64;
+    let mut anchor_y = 0.0_f64;
+    let mut anchor_z = 0.0_f64;
+    for p in &samples {
+        anchor_x += p.x();
+        anchor_y += p.y();
+        anchor_z += p.z();
+    }
+    let anchor = Point3::new(anchor_x * inv_n, anchor_y * inv_n, anchor_z * inv_n);
+
+    // Measure axial and radial offsets from anchor along the axis.
+    // For each sample, compute axial = axis · (p − anchor) and
+    // radial = |(p − anchor) − axial · axis|. For a true cone with
+    // apex at (anchor + axial_apex · axis), the radial component is
+    // a linear function of axial: radial = |slope · (axial − axial_apex)|.
+    let mut axials: Vec<f64> = Vec::with_capacity(samples.len());
+    let mut radials: Vec<f64> = Vec::with_capacity(samples.len());
+    for p in &samples {
+        let to_p = *p - anchor;
+        let along = axis.dot(to_p);
+        let radial_vec = to_p - axis * along;
+        axials.push(along);
+        radials.push(radial_vec.length());
+    }
+
+    // Reject degenerate (all radials zero or all the same): would be
+    // a line/cylinder, not a cone.
+    let max_r = radials.iter().fold(0.0_f64, |m, &r| m.max(r));
+    let min_r = radials.iter().fold(f64::INFINITY, |m, &r| m.min(r));
+    if max_r - min_r < tolerance {
+        return None; // Constant radius → cylinder (handled earlier).
+    }
+
+    // Linear fit: radial = m · axial + b. Then cone apex is at
+    // axial_apex = -b / m, with radial_apex = 0. For axisymmetry,
+    // the radial side should be an ABSOLUTE value (always >= 0); we
+    // exploit the fact that radial is a vector magnitude, so on the
+    // cone the relationship `radial = slope · (axial − axial_apex)`
+    // holds with `slope > 0` for axials > axial_apex.
+    //
+    // We use unsigned-radial least-squares: pick the slope from a
+    // simple linear regression of (axial, radial). For a true cone
+    // the residual should be near zero.
+    let n_f = samples.len() as f64;
+    let sum_a: f64 = axials.iter().sum();
+    let sum_r: f64 = radials.iter().sum();
+    let mean_a = sum_a / n_f;
+    let mean_r = sum_r / n_f;
+    let mut s_aa = 0.0_f64;
+    let mut s_ar = 0.0_f64;
+    for i in 0..samples.len() {
+        let da = axials[i] - mean_a;
+        let dr = radials[i] - mean_r;
+        s_aa += da * da;
+        s_ar += da * dr;
+    }
+    if s_aa < 1e-30 {
+        return None;
+    }
+    let slope = s_ar / s_aa;
+    let intercept = mean_r - slope * mean_a;
+    if slope.abs() < tolerance {
+        return None; // Slope ≈ 0 → cylinder.
+    }
+    // Apex axial position relative to anchor.
+    let axial_apex = -intercept / slope;
+
+    // Verify residuals.
+    for i in 0..samples.len() {
+        let pred = slope * axials[i] + intercept;
+        if (radials[i] - pred).abs() > tolerance {
+            return None;
+        }
+    }
+
+    // Compute half-angle from slope. The cone equation in local
+    // (axial, radial) coords is `radial = (axial - axial_apex) ·
+    // |slope|` for axial > axial_apex. The slope equals
+    // cos(half_angle) / sin(half_angle) = cot(half_angle), so
+    // half_angle = atan(1 / |slope|).
+    //
+    // brepkit's half_angle convention is the angle from the RADIAL
+    // plane to the generator, so half_angle ∈ (0, π/2).
+    let half_angle = (1.0 / slope.abs()).atan();
+    if !(0.0 < half_angle && half_angle < std::f64::consts::FRAC_PI_2) {
+        return None;
+    }
+
+    // Apex in 3D. Cone axis points from apex INTO the cone (positive
+    // axial direction). If our slope is negative (radial decreases
+    // with positive axial), the apex is in the +axial direction;
+    // axis should point AWAY from the apex (negative-axial-from-apex
+    // direction, i.e., positive `slope` convention).
+    let apex_offset = axis * axial_apex;
+    let apex = anchor + apex_offset;
+    let cone_axis = if slope > 0.0 { axis } else { -axis };
+
+    Some((apex, cone_axis, half_angle))
+}
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 /// Solve a 3×3 linear system `A * x = b` via Cramer's rule.
@@ -556,11 +756,11 @@ fn estimate_cylinder_axis(points: &[Point3], center: Point3) -> Option<Vec3> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use brepkit_math::surfaces::{CylindricalSurface, SphericalSurface};
+    use brepkit_math::surfaces::{ConicalSurface, CylindricalSurface, SphericalSurface};
     use brepkit_math::vec::{Point3, Vec3};
 
     use super::*;
-    use crate::convert::surface_to_nurbs::{cylinder_to_nurbs, sphere_to_nurbs};
+    use crate::convert::surface_to_nurbs::{cone_to_nurbs, cylinder_to_nurbs, sphere_to_nurbs};
 
     fn origin() -> Point3 {
         Point3::new(0.0, 0.0, 0.0)
@@ -598,5 +798,51 @@ mod tests {
             }
             other => panic!("expected Sphere, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn recognize_cone_round_trip() {
+        // Cone with apex at origin, axis +z, half-angle π/6 (from
+        // radial plane). At v=1 from apex (along generator),
+        // radial = cos(π/6) ≈ 0.866, axial = sin(π/6) = 0.5.
+        let half_angle = std::f64::consts::PI / 6.0;
+        let cone = ConicalSurface::new(origin(), z_axis(), half_angle).unwrap();
+        let nurbs = cone_to_nurbs(&cone, (1.0, 4.0)).unwrap();
+
+        match recognize_surface(&nurbs, 0.05) {
+            RecognizedSurface::Cone {
+                apex,
+                axis,
+                half_angle: ha,
+            } => {
+                // Apex should be at origin within tolerance.
+                assert!(
+                    Vec3::new(apex.x(), apex.y(), apex.z()).length() < 0.05,
+                    "apex {apex:?}"
+                );
+                // Axis should be along +z (or -z; both describe the same cone).
+                assert!(
+                    axis.dot(z_axis()).abs() > 1.0 - 1e-3,
+                    "axis {axis:?} not aligned with z"
+                );
+                assert!(
+                    (ha - half_angle).abs() < 1e-3,
+                    "half_angle {ha} vs {half_angle}"
+                );
+            }
+            other => panic!("expected Cone, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cylinder_is_recognized_as_cylinder_not_cone() {
+        // True cylinders should match Cylinder (tested first), not
+        // fall through to Cone.
+        let cyl = CylindricalSurface::new(origin(), z_axis(), 2.0).unwrap();
+        let nurbs = cylinder_to_nurbs(&cyl, (0.0, 5.0)).unwrap();
+        assert!(matches!(
+            recognize_surface(&nurbs, 1e-4),
+            RecognizedSurface::Cylinder { .. }
+        ));
     }
 }
