@@ -1625,7 +1625,12 @@ pub fn convert_to_elementary(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::print_stderr)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::print_stderr
+    )]
 
     use brepkit_topology::Topology;
 
@@ -2328,12 +2333,39 @@ mod tests {
     #[test]
     fn convert_to_elementary_round_trip_cylinder() {
         // Build a cylinder, convert to B-spline (loses analytic types),
-        // then convert back to elementary — should recover the cylinder
-        // surface and circle edges.
+        // then convert back to elementary — should recover the lateral
+        // cylinder face and the circular cap edges.
+        use brepkit_topology::edge::EdgeCurve;
+        use brepkit_topology::explorer;
         use brepkit_topology::face::FaceSurface;
 
         let mut topo = Topology::new();
         let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+
+        // Pin the entities under test BEFORE conversion: identify the
+        // lateral face and cap circle edges by their analytic types.
+        // Holding their IDs lets us re-check the same handles after the
+        // round-trip — a weak existence test ("some face is NURBS") could
+        // be satisfied by an unrelated face changing type.
+        let solid_data = topo.solid(solid).unwrap();
+        let shell = topo.shell(solid_data.outer_shell()).unwrap();
+        let lateral_face_id = shell
+            .faces()
+            .iter()
+            .copied()
+            .find(|&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .expect("cylinder primitive should have one Cylinder face");
+        let circle_edge_ids: Vec<_> = explorer::solid_edges(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .filter(|&eid| matches!(topo.edge(eid).unwrap().curve(), EdgeCurve::Circle(_)))
+            .collect();
+        assert_eq!(
+            circle_edge_ids.len(),
+            2,
+            "cylinder primitive should have 2 circular cap edges, got {}",
+            circle_edge_ids.len()
+        );
 
         // Step 1: NURBS-ify everything.
         let bspline_count = convert_to_bspline(&mut topo, solid).unwrap();
@@ -2342,21 +2374,21 @@ mod tests {
             "convert_to_bspline should convert at least one face/edge, got {bspline_count}"
         );
 
-        // Verify the lateral cylinder face is now NURBS.
-        let solid_data = topo.solid(solid).unwrap();
-        let shell = topo.shell(solid_data.outer_shell()).unwrap();
-        let mut found_lateral_nurbs = false;
-        for &fid in shell.faces() {
-            let face = topo.face(fid).unwrap();
-            if matches!(face.surface(), FaceSurface::Nurbs(_)) {
-                found_lateral_nurbs = true;
-                break;
-            }
-        }
+        // Assert about the *specific* lateral face — not just "some face
+        // became NURBS".
         assert!(
-            found_lateral_nurbs,
-            "lateral face should be NURBS after convertToBspline"
+            matches!(
+                topo.face(lateral_face_id).unwrap().surface(),
+                FaceSurface::Nurbs(_)
+            ),
+            "lateral cylinder face should be NURBS after convert_to_bspline"
         );
+        for &eid in &circle_edge_ids {
+            assert!(
+                matches!(topo.edge(eid).unwrap().curve(), EdgeCurve::NurbsCurve(_)),
+                "cap edge {eid:?} should be NURBS after convert_to_bspline"
+            );
+        }
 
         // Step 2: convert back to elementary.
         let elementary_count = convert_to_elementary(&mut topo, solid, 1e-4).unwrap();
@@ -2365,26 +2397,35 @@ mod tests {
             "convert_to_elementary should recover at least one analytic form, got {elementary_count}"
         );
 
-        // Verify the lateral face is recognized as Cylinder again.
-        let solid_data = topo.solid(solid).unwrap();
-        let shell = topo.shell(solid_data.outer_shell()).unwrap();
-        let mut found_recovered_cylinder = false;
-        for &fid in shell.faces() {
-            let face = topo.face(fid).unwrap();
-            if let FaceSurface::Cylinder(cyl) = face.surface() {
+        // Same lateral face → Cylinder again, with the original radius.
+        if let FaceSurface::Cylinder(cyl) = topo.face(lateral_face_id).unwrap().surface() {
+            assert!(
+                (cyl.radius() - 1.0).abs() < 1e-3,
+                "recovered cylinder radius {} should be ~1.0",
+                cyl.radius()
+            );
+        } else {
+            panic!(
+                "after convert_to_elementary, lateral face should be Cylinder again, got {:?}",
+                topo.face(lateral_face_id).unwrap().surface().type_tag()
+            );
+        }
+
+        // Same cap edges → Circle again, with the original radius.
+        for &eid in &circle_edge_ids {
+            if let EdgeCurve::Circle(c) = topo.edge(eid).unwrap().curve() {
                 assert!(
-                    (cyl.radius() - 1.0).abs() < 1e-3,
-                    "recovered cylinder radius {} should be ~1.0",
-                    cyl.radius()
+                    (c.radius() - 1.0).abs() < 1e-3,
+                    "recovered circle edge {eid:?} radius {} should be ~1.0",
+                    c.radius()
                 );
-                found_recovered_cylinder = true;
-                break;
+            } else {
+                panic!(
+                    "after convert_to_elementary, edge {eid:?} should be Circle again, got {:?}",
+                    topo.edge(eid).unwrap().curve()
+                );
             }
         }
-        assert!(
-            found_recovered_cylinder,
-            "after convertToElementary, lateral face should be Cylinder again"
-        );
     }
 
     #[test]
