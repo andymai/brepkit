@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.81.0](https://github.com/andymai/brepkit/compare/v2.80.0...v2.81.0) (2026-05-08)
+
+
+### Features
+
+* **geometry:** recognize NURBS curves as parabolas ([#638](https://github.com/andymai/brepkit/issues/638)) ([d8c71d3](https://github.com/andymai/brepkit/commit/d8c71d39742b6049ee3cc2e6740964be56c29697))
+
 ## [2.80.0](https://github.com/andymai/brepkit/compare/v2.79.0...v2.80.0) (2026-05-08)
 
 
