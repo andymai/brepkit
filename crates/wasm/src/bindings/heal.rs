@@ -304,4 +304,45 @@ mod tests {
         assert!(first > 0);
         assert_eq!(second, 0, "second pass should convert nothing");
     }
+
+    #[test]
+    fn convert_to_elementary_via_batch_round_trip() {
+        // Round-trip a cylinder through the batch dispatch: NURBS-ify
+        // it, then recognize back. The convertToElementary entry was
+        // missing from `dispatch_op` before this PR, so prior to the
+        // fix this test would have hit the catch-all "unknown
+        // operation" arm.
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(
+            r#"[
+                {"op": "makeCylinder", "args": {"radius": 1, "height": 2}},
+                {"op": "convertToBspline", "args": {"solid": 0}},
+                {"op": "convertToElementary", "args": {"solid": 0}}
+            ]"#,
+        );
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        // convertToElementary must reach the dispatch arm — not the
+        // catch-all — so the result is `ok`, not `error`.
+        let ok = parsed[2]["ok"]
+            .as_object()
+            .expect("convertToElementary should be dispatched, got error");
+        assert!(ok.get("solid").is_some(), "missing 'solid' field");
+        let converted = ok["converted"].as_u64().expect("expected 'converted' u64");
+        assert!(
+            converted > 0,
+            "expected >=1 recognition (the cylinder lateral face at minimum), got {converted}"
+        );
+    }
+
+    #[test]
+    fn convert_to_elementary_via_batch_invalid_handle_errors() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(r#"[{"op": "convertToElementary", "args": {"solid": 999}}]"#);
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert!(
+            parsed[0]["error"].is_string(),
+            "expected error for invalid handle, got: {}",
+            parsed[0]
+        );
+    }
 }
