@@ -1952,9 +1952,12 @@ pub fn plane_sphere_fillet(
 /// `Ok(None)` (walker fallback) when:
 ///   - sphere doesn't intersect the plate (`|h_signed| ≥ R`),
 ///   - sphere axis isn't aligned with plate normal (oblique frame),
-///   - `d1` or `d2` non-positive, or
-///   - the chamfer line slopes the wrong way (`|Δr| < tol`, e.g. d2
-///     overshot the pole), or
+///   - `d1` or `d2` non-positive,
+///   - `Δr ≥ 0` — sphere contact lands at or beyond the plate
+///     contact's radius (e.g. asymmetric `d2 ≫ d1` in concave, where
+///     sphere_radial bulges past `r_p + d1`); the resulting outward-
+///     flaring cone is the wrong geometric configuration, or
+///   - `Δz ≈ 0` (degenerate flat-disk chamfer), or
 ///   - the spine is degenerate.
 ///
 /// # Errors
@@ -2015,16 +2018,20 @@ pub fn plane_sphere_chamfer(
     }
     let r_p = r_p_sq.sqrt();
 
-    // 3) Sphere-side contact along the meridian "into sphere material"
-    //    direction. For convex post (face NOT reversed), this is the
-    //    direction from spine toward sphere apex (decreasing ψ in the
-    //    standard parameterization). Express the contact in the local
-    //    frame where n_p_inward is +z:
-    //      sin(ψ_s − δ) = (r_p cos δ + h_signed sin δ) / R
-    //      cos(ψ_s − δ) = (r_p sin δ − h_signed cos δ) / R
-    //    so sphere_radial = r_p cos δ + h_signed sin δ,
-    //       sphere_axial  = h_signed (1 − cos δ) + r_p sin δ
-    //    (the latter is the offset along +n_p_inward from p_axis_on_plane).
+    // 3) Sphere-side contact along the meridian "into sphere face"
+    //    direction. Convex (face NOT reversed) goes -ψ from the spine
+    //    (toward apex on the upper cap); concave (face reversed) goes
+    //    +ψ (toward south pole on the lower cap). With `signed_offset
+    //    = +1 (convex) / −1 (concave)`, both reduce to the same
+    //    formulas after the meridian-arm flip:
+    //      sphere_radial = r_p cos δ + signed_offset · h_signed · sin δ
+    //      sphere_axial  = h_signed (1 − cos δ) + signed_offset · r_p · sin δ
+    //    where sphere_axial is the offset along +n_p_inward from
+    //    p_axis_on_plane. For convex post-on-slab (h_signed < 0,
+    //    signed_offset = +1) sphere_axial > 0 (contact above plate);
+    //    for concave pocket (h_signed > 0, signed_offset = −1)
+    //    sphere_axial < 0 (contact below plate, on the lower cap where
+    //    the face actually exists).
     let delta = d2 / big_r;
     let (sin_d, cos_d) = delta.sin_cos();
     let sphere_radial = r_p * cos_d + signed_offset * h_signed * sin_d;
@@ -2037,14 +2044,20 @@ pub fn plane_sphere_chamfer(
     }
 
     // 4) Chamfer line between plate contact (r_p+d1, 0) and sphere contact.
+    //    Require `Δr < 0` (sphere contact closer to axis than plate
+    //    contact) — the natural chamfer geometry for both convex post
+    //    and concave pocket. `Δr > 0` would flip the apex side and
+    //    produce an outward-flaring cone, which is a different
+    //    geometric configuration (not what the user requested). This
+    //    can arise in concave pockets with asymmetric `d2 >> d1` where
+    //    sphere_radial bulges past `r_p + d1`; bail to walker.
+    //    `Δz ≈ 0` means a flat disk, also degenerate.
     let delta_r = sphere_radial - (r_p + d1);
     let delta_z = sphere_axial;
-    // Chamfer line must have a real (non-axial-only and non-radial-only)
-    // slope. `Δr ≈ 0` means the chamfer "cone" would be a cylinder
-    // (degenerate as a cone primitive); `Δz ≈ 0` means it would be a
-    // flat disk (also degenerate). For the typical convex post and
-    // concave pocket cases `Δr < 0`; the chamfer cone is well-formed.
-    if delta_r.abs() <= tol_lin || delta_z.abs() <= tol_lin {
+    if delta_r >= -tol_lin {
+        return Ok(None);
+    }
+    if delta_z.abs() <= tol_lin {
         return Ok(None);
     }
 
