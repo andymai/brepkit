@@ -7983,6 +7983,148 @@ mod tests {
         );
     }
 
+    /// Cylinder-cylinder both-concave fillet: two intersecting cylindrical
+    /// holes with parallel axes. Both s_i = −1 ⇒ Q_i = r_i − r (internal
+    /// tangency), so the rolling ball is INSIDE both cylinders.
+    ///
+    /// For r1=2, r2=2.5, D=3, both faces REVERSED, r=0.4:
+    ///   - Q1 = 1.6, Q2 = 2.1
+    ///   - x_ball = (Q1²−Q2²+D²)/(2D) = (2.56−4.41+9)/6 ≈ 1.192
+    ///   - y_ball = sign·√(Q1²−x_ball²) = √(2.56−1.421) ≈ 1.067
+    ///   - Both contacts internal: cyl1 contact at radial r1·x_ball/Q1 from
+    ///     cyl1 axis (different from convex case)
+    #[test]
+    fn cylinder_cylinder_fillet_both_concave_emits_cylinder() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let r1: f64 = 2.0;
+        let r2: f64 = 2.5;
+        let big_d: f64 = 3.0;
+        let r_fillet: f64 = 0.4;
+
+        let cyl1 =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r1)
+                .unwrap();
+        let cyl2 =
+            CylindricalSurface::new(Point3::new(big_d, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r2)
+                .unwrap();
+
+        let x_spine = (r1 * r1 - r2 * r2 + big_d * big_d) / (2.0 * big_d);
+        let y_spine = (r1 * r1 - x_spine * x_spine).sqrt();
+        let z_lo = 0.0_f64;
+        let z_hi = 4.0_f64;
+        let p_start = Point3::new(x_spine, y_spine, z_lo);
+        let p_end = Point3::new(x_spine, y_spine, z_hi);
+        let v_start = topo.add_vertex(Vertex::new(p_start, 1e-7));
+        let v_end = topo.add_vertex(Vertex::new(p_end, 1e-7));
+        let line = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![p_start, p_end],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let eid = topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(line)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Both faces REVERSED.
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], false).unwrap());
+        let face1 = topo.add_face(Face::new_reversed(
+            w1,
+            vec![],
+            FaceSurface::Cylinder(cyl1.clone()),
+        ));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], false).unwrap());
+        let face2 = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cylinder(cyl2.clone()),
+        ));
+
+        let result = cylinder_cylinder_fillet(&cyl1, &cyl2, &spine, &topo, r_fillet, face1, face2)
+            .unwrap()
+            .expect("both-concave cyl-cyl fillet should produce a stripe");
+
+        let fillet_cyl = match result.stripe.surface {
+            FaceSurface::Cylinder(c) => c,
+            other => panic!("expected Cylinder, got {}", other.type_tag()),
+        };
+
+        let q1 = r1 - r_fillet;
+        let q2 = r2 - r_fillet;
+        let x_ball = (q1 * q1 - q2 * q2 + big_d * big_d) / (2.0 * big_d);
+        let y_ball = (q1 * q1 - x_ball * x_ball).sqrt();
+
+        assert!(
+            (fillet_cyl.radius() - r_fillet).abs() < 1e-12,
+            "fillet radius should be r = {r_fillet}, got {}",
+            fillet_cyl.radius()
+        );
+        let origin = fillet_cyl.origin();
+        assert!(
+            (origin.x() - x_ball).abs() < 1e-12 && (origin.y() - y_ball).abs() < 1e-12,
+            "concave fillet origin should be ({x_ball}, {y_ball}, *), got {origin:?}"
+        );
+
+        // Axis parallel to original cyl axes (+z).
+        let axis = fillet_cyl.axis();
+        assert!(
+            axis.dot(Vec3::new(0.0, 0.0, 1.0)) > 1.0 - 1e-12,
+            "concave fillet axis should be +z (parallel to original cyls), got {axis:?}"
+        );
+
+        // Verify ball is INSIDE both cyls (internal tangency) — read
+        // from the EMITTED cylinder origin, not from our own computed
+        // x_ball/y_ball (which would be tautologically Q_i < r_i by
+        // construction).
+        let actual_dist_to_cyl1_axis = (origin.x().powi(2) + origin.y().powi(2)).sqrt();
+        let actual_dist_to_cyl2_axis = ((origin.x() - big_d).powi(2) + origin.y().powi(2)).sqrt();
+        assert!(
+            actual_dist_to_cyl1_axis < r1 - 1e-9,
+            "concave: emitted fillet origin must be INSIDE cyl1 (distance {actual_dist_to_cyl1_axis} < r1 = {r1})"
+        );
+        assert!(
+            actual_dist_to_cyl2_axis < r2 - 1e-9,
+            "concave: emitted fillet origin must be INSIDE cyl2 (distance {actual_dist_to_cyl2_axis} < r2 = {r2})"
+        );
+
+        // Cyl1 and cyl2 contacts lie on their respective cylinder surfaces.
+        let want_c1 = Point3::new(r1 * x_ball / q1, r1 * y_ball / q1, z_lo);
+        let dist_c1_axis = (want_c1.x().powi(2) + want_c1.y().powi(2)).sqrt();
+        assert!(
+            (dist_c1_axis - r1).abs() < 1e-9,
+            "cyl1 contact must lie on cyl1: got {dist_c1_axis}, want {r1}"
+        );
+        let want_c2 = Point3::new(big_d + r2 * (x_ball - big_d) / q2, r2 * y_ball / q2, z_lo);
+        let dist_c2_axis = ((want_c2.x() - big_d).powi(2) + want_c2.y().powi(2)).sqrt();
+        assert!(
+            (dist_c2_axis - r2).abs() < 1e-9,
+            "cyl2 contact must lie on cyl2: got {dist_c2_axis}, want {r2}"
+        );
+
+        // Tangency to the EMITTED fillet cylinder: each contact must be
+        // at distance `r_fillet` from the fillet-cyl axis (the ball
+        // line) in the perpendicular plane. This catches axis/origin
+        // bugs that the previous assertions wouldn't see.
+        let dist_c1_to_ball =
+            ((want_c1.x() - origin.x()).powi(2) + (want_c1.y() - origin.y()).powi(2)).sqrt();
+        let dist_c2_to_ball =
+            ((want_c2.x() - origin.x()).powi(2) + (want_c2.y() - origin.y()).powi(2)).sqrt();
+        assert!(
+            (dist_c1_to_ball - r_fillet).abs() < 1e-9,
+            "cyl1 contact must be at distance r from fillet ball-line: got {dist_c1_to_ball}, want {r_fillet}"
+        );
+        assert!(
+            (dist_c2_to_ball - r_fillet).abs() < 1e-9,
+            "cyl2 contact must be at distance r from fillet ball-line: got {dist_c2_to_ball}, want {r_fillet}"
+        );
+    }
+
     /// Concave plane-cone chamfer: chamfering the top rim of a tapered hole.
     ///
     /// Geometry: cone primitive (apex above plate at z=h, axis −z,
