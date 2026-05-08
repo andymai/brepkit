@@ -10,6 +10,7 @@ use super::operator::HealOperator;
 use super::registry::OperatorRegistry;
 use crate::HealError;
 use crate::context::HealContext;
+use crate::fix::FixResult;
 use crate::fix::config::FixConfig;
 
 /// Register all built-in operators into a registry.
@@ -45,10 +46,10 @@ impl HealOperator for FixShapeOp {
         topo: &mut Topology,
         solid_id: SolidId,
         _ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
+    ) -> Result<(SolidId, FixResult), HealError> {
         let config = FixConfig::default();
-        let (new_solid, _result) = crate::fix::fix_shape(topo, solid_id, &config)?;
-        Ok(new_solid)
+        let (new_solid, result) = crate::fix::fix_shape(topo, solid_id, &config)?;
+        Ok((new_solid, result))
     }
 }
 
@@ -68,11 +69,23 @@ impl HealOperator for UnifySameDomainOp {
         topo: &mut Topology,
         solid_id: SolidId,
         _ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
+    ) -> Result<(SolidId, FixResult), HealError> {
         let options = crate::upgrade::unify_same_domain::UnifyOptions::default();
-        let (new_solid, _result) =
+        let (new_solid, unify) =
             crate::upgrade::unify_same_domain::unify_same_domain(topo, solid_id, &options)?;
-        Ok(new_solid)
+        let actions = unify.faces_merged + unify.edges_merged;
+        let status = if actions > 0 {
+            crate::status::Status::DONE1
+        } else {
+            crate::status::Status::OK
+        };
+        Ok((
+            new_solid,
+            FixResult {
+                status,
+                actions_taken: actions,
+            },
+        ))
     }
 }
 
@@ -92,7 +105,7 @@ impl HealOperator for DirectFacesOp {
         topo: &mut Topology,
         solid_id: SolidId,
         ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
+    ) -> Result<(SolidId, FixResult), HealError> {
         let config = FixConfig {
             fix_orientation: crate::fix::FixMode::On,
             ..Default::default()
@@ -100,8 +113,8 @@ impl HealOperator for DirectFacesOp {
         // Only run shell orientation fix.
         let solid_data = topo.solid(solid_id)?;
         let shell_id = solid_data.outer_shell();
-        crate::fix::shell::fix_shell(topo, shell_id, ctx, &config)?;
-        Ok(solid_id)
+        let result = crate::fix::shell::fix_shell(topo, shell_id, ctx, &config)?;
+        Ok((solid_id, result))
     }
 }
 
@@ -121,16 +134,21 @@ impl HealOperator for SameParameterOp {
         topo: &mut Topology,
         solid_id: SolidId,
         ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
+    ) -> Result<(SolidId, FixResult), HealError> {
         let config = FixConfig {
             fix_same_parameter: crate::fix::FixMode::On,
             ..Default::default()
         };
-        // Iterate all edges in solid.
         let solid_data = topo.solid(solid_id)?;
         let shell = topo.shell(solid_data.outer_shell())?;
         let face_ids: Vec<_> = shell.faces().to_vec();
 
+        // Call the FACE-AWARE PCurve fixer for each (edge, face) pair
+        // rather than `fix_edge`. The latter dispatches to
+        // `fix_same_parameter_stub` (no face context), which reports
+        // DONE3 with actions_taken=0 — misleading status flags would
+        // otherwise propagate up despite no actual repair occurring.
+        let mut aggregate = FixResult::ok();
         for &fid in &face_ids {
             let face = topo.face(fid)?;
             let wire = topo.wire(face.outer_wire())?;
@@ -140,11 +158,12 @@ impl HealOperator for SameParameterOp {
                 .map(brepkit_topology::wire::OrientedEdge::edge)
                 .collect();
             for eid in edge_ids {
-                crate::fix::edge::fix_edge(topo, eid, ctx, &config)?;
+                let r = crate::fix::edge::fix_same_parameter_on_face(topo, eid, fid, ctx, &config)?;
+                aggregate.merge(&r);
             }
         }
 
-        Ok(solid_id)
+        Ok((solid_id, aggregate))
     }
 }
 
@@ -164,13 +183,14 @@ impl HealOperator for MergeVerticesOp {
         topo: &mut Topology,
         solid_id: SolidId,
         ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
+    ) -> Result<(SolidId, FixResult), HealError> {
         let config = FixConfig {
             fix_coincident_vertices: crate::fix::FixMode::On,
             ..Default::default()
         };
-        crate::fix::solid::fix_solid(topo, solid_id, ctx, &config)?;
-        ctx.reshape.apply(topo, solid_id)
+        let result = crate::fix::solid::fix_solid(topo, solid_id, ctx, &config)?;
+        let new_solid = ctx.reshape.apply(topo, solid_id)?;
+        Ok((new_solid, result))
     }
 }
 
@@ -190,13 +210,14 @@ impl HealOperator for DropSmallEdgesOp {
         topo: &mut Topology,
         solid_id: SolidId,
         ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
+    ) -> Result<(SolidId, FixResult), HealError> {
         let config = FixConfig {
             fix_small_edges: crate::fix::FixMode::On,
             ..Default::default()
         };
-        crate::fix::solid::fix_solid(topo, solid_id, ctx, &config)?;
-        ctx.reshape.apply(topo, solid_id)
+        let result = crate::fix::solid::fix_solid(topo, solid_id, ctx, &config)?;
+        let new_solid = ctx.reshape.apply(topo, solid_id)?;
+        Ok((new_solid, result))
     }
 }
 
@@ -216,13 +237,14 @@ impl HealOperator for DropSmallFacesOp {
         topo: &mut Topology,
         solid_id: SolidId,
         ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
+    ) -> Result<(SolidId, FixResult), HealError> {
         let config = FixConfig {
             fix_small_faces: crate::fix::FixMode::On,
             ..Default::default()
         };
-        crate::fix::small_face::fix_small_faces(topo, solid_id, ctx, &config)?;
-        ctx.reshape.apply(topo, solid_id)
+        let result = crate::fix::small_face::fix_small_faces(topo, solid_id, ctx, &config)?;
+        let new_solid = ctx.reshape.apply(topo, solid_id)?;
+        Ok((new_solid, result))
     }
 }
 
@@ -242,9 +264,20 @@ impl HealOperator for RemoveInternalWiresOp {
         topo: &mut Topology,
         solid_id: SolidId,
         _ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
-        crate::upgrade::remove_internal_wires::remove_internal_wires(topo, solid_id)?;
-        Ok(solid_id)
+    ) -> Result<(SolidId, FixResult), HealError> {
+        let removed = crate::upgrade::remove_internal_wires::remove_internal_wires(topo, solid_id)?;
+        let status = if removed > 0 {
+            crate::status::Status::DONE1
+        } else {
+            crate::status::Status::OK
+        };
+        Ok((
+            solid_id,
+            FixResult {
+                status,
+                actions_taken: removed,
+            },
+        ))
     }
 }
 
@@ -264,11 +297,22 @@ impl HealOperator for SewShellsOp {
         topo: &mut Topology,
         solid_id: SolidId,
         ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
+    ) -> Result<(SolidId, FixResult), HealError> {
         let solid_data = topo.solid(solid_id)?;
         let shell_id = solid_data.outer_shell();
-        crate::upgrade::shell_sewing::sew_shell(topo, shell_id, ctx.tolerance.linear)?;
-        Ok(solid_id)
+        let sewn = crate::upgrade::shell_sewing::sew_shell(topo, shell_id, ctx.tolerance.linear)?;
+        let status = if sewn > 0 {
+            crate::status::Status::DONE1
+        } else {
+            crate::status::Status::OK
+        };
+        Ok((
+            solid_id,
+            FixResult {
+                status,
+                actions_taken: sewn,
+            },
+        ))
     }
 }
 
@@ -288,13 +332,14 @@ impl HealOperator for SplitCommonVertexOp {
         topo: &mut Topology,
         solid_id: SolidId,
         ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
+    ) -> Result<(SolidId, FixResult), HealError> {
         let config = FixConfig {
             fix_split_common_vertex: crate::fix::FixMode::On,
             ..Default::default()
         };
-        crate::fix::split_vertex::fix_split_common_vertex(topo, solid_id, ctx, &config)?;
-        Ok(solid_id)
+        let result =
+            crate::fix::split_vertex::fix_split_common_vertex(topo, solid_id, ctx, &config)?;
+        Ok((solid_id, result))
     }
 }
 
@@ -314,9 +359,21 @@ impl HealOperator for ConvertToBSplineOp {
         topo: &mut Topology,
         solid_id: SolidId,
         _ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
-        crate::custom::convert_to_bspline::convert_solid_to_bspline(topo, solid_id)?;
-        Ok(solid_id)
+    ) -> Result<(SolidId, FixResult), HealError> {
+        let converted =
+            crate::custom::convert_to_bspline::convert_solid_to_bspline(topo, solid_id)?;
+        let status = if converted > 0 {
+            crate::status::Status::DONE1
+        } else {
+            crate::status::Status::OK
+        };
+        Ok((
+            solid_id,
+            FixResult {
+                status,
+                actions_taken: converted,
+            },
+        ))
     }
 }
 
@@ -336,13 +393,24 @@ impl HealOperator for ConvertToElementaryOp {
         topo: &mut Topology,
         solid_id: SolidId,
         ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
-        crate::custom::convert_to_elementary::convert_to_elementary(
+    ) -> Result<(SolidId, FixResult), HealError> {
+        let converted = crate::custom::convert_to_elementary::convert_to_elementary(
             topo,
             solid_id,
             &ctx.tolerance,
         )?;
-        Ok(solid_id)
+        let status = if converted > 0 {
+            crate::status::Status::DONE1
+        } else {
+            crate::status::Status::OK
+        };
+        Ok((
+            solid_id,
+            FixResult {
+                status,
+                actions_taken: converted,
+            },
+        ))
     }
 }
 
@@ -362,14 +430,14 @@ impl HealOperator for FixWireframeOp {
         topo: &mut Topology,
         solid_id: SolidId,
         ctx: &mut HealContext,
-    ) -> Result<SolidId, HealError> {
+    ) -> Result<(SolidId, FixResult), HealError> {
         let config = FixConfig {
             fix_wireframe: crate::fix::FixMode::On,
             ..Default::default()
         };
         let solid_data = topo.solid(solid_id)?;
         let shell_id = solid_data.outer_shell();
-        crate::fix::wireframe::fix_wireframe(topo, shell_id, ctx, &config)?;
-        Ok(solid_id)
+        let result = crate::fix::wireframe::fix_wireframe(topo, shell_id, ctx, &config)?;
+        Ok((solid_id, result))
     }
 }
