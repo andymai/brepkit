@@ -122,6 +122,9 @@ pub fn try_analytic_fillet(
             }
             Ok(result)
         }
+        (FaceSurface::Cylinder(c1), FaceSurface::Cylinder(c2)) => {
+            cylinder_cylinder_fillet(c1, c2, spine, topo, radius, face1, face2)
+        }
         // Pairs without an analytic path → walker fallback. Enumerated
         // exhaustively (matching `try_analytic_chamfer`) so adding a new
         // `FaceSurface` variant produces a compile error at this site
@@ -3981,21 +3984,267 @@ pub fn sphere_cone_chamfer(
     }))
 }
 
-/// Fillet between two cylinders.
+/// Fillet between two cylinders with **parallel axes**, intersecting in
+/// a pair of straight lines (not circles). The rolling-ball blend is an
+/// exact cylinder around an axis parallel to the original cylinder axes.
 ///
-/// Not yet implemented. Returns `None` so the caller falls back to the walking
-/// engine.
-#[allow(unused_variables)]
-#[must_use]
+/// This is the only cylinder × cylinder configuration with a clean
+/// closed-form blend — perpendicular or oblique-axis cylinders intersect
+/// in a 4th-degree curve and require the walker.
+///
+/// Handles all four convex/concave combinations via per-face
+/// `signed_offset_i = ±1`.
+///
+/// # Geometry
+///
+/// Place cyl1 axis = +z through origin (axis-aligned in cyl1's frame).
+/// cyl2 axis is parallel; project its origin offset onto the perpendicular
+/// plane to get displacement vector `d_perp` of length `D`. The two cyls
+/// intersect when `|r1 − r2| < D < r1 + r2`; their intersection consists
+/// of two straight lines parallel to the cyl axes at perpendicular
+/// position
+///   x_spine = (r1² − r2² + D²) / (2D)   along d_perp from cyl1 axis,
+///   y_spine = ±√(r1² − x_spine²)        perpendicular to both.
+///
+/// With `Q1 = r1 + s1·r`, `Q2 = r2 + s2·r`, the rolling-ball position
+/// follows the same algebra:
+///   x_ball = (Q1² − Q2² + D²) / (2D),
+///   y_ball = sign(spine_y) · √(Q1² − x_ball²).
+///
+/// The fillet surface is the cylinder of radius `r` around the ball
+/// trajectory line `(x_ball, y_ball, z)`. Cyl1-side contact line at
+/// `(R1·x_ball/Q1, R1·y_ball/Q1, z)`, cyl2-side at `(D + R2·(x_ball−D)/Q2,
+/// R2·y_ball/Q2, z)`.
+///
+/// # Returns
+///
+/// `Ok(None)` (walker fallback) when:
+///   - cylinder axes aren't parallel (general cyl-cyl is non-analytic),
+///   - cylinders don't intersect (`D ≤ |r1−r2|` or `D ≥ r1+r2`),
+///   - effective radii collapse (`Q_i ≤ tol`),
+///   - the spine isn't on one of the two intersection lines, or
+///   - the spine is degenerate.
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or NURBS construction fails.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn cylinder_cylinder_fillet(
-    surf1: &FaceSurface,
-    surf2: &FaceSurface,
+    cyl1: &brepkit_math::surfaces::CylindricalSurface,
+    cyl2: &brepkit_math::surfaces::CylindricalSurface,
     spine: &Spine,
     topo: &Topology,
     radius: f64,
-) -> Option<StripeResult> {
-    // TODO: implement cylinder-cylinder fillet
-    None
+    face1: FaceId,
+    face2: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    use brepkit_math::surfaces::CylindricalSurface;
+
+    let tol_lin = 1e-9;
+    let tol_ang = 1e-9;
+
+    if radius <= tol_lin {
+        return Ok(None);
+    }
+    let s1: f64 = if topo.face(face1)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
+    let s2: f64 = if topo.face(face2)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
+
+    let r1 = cyl1.radius();
+    let r2 = cyl2.radius();
+    let a1 = cyl1.axis();
+    let a2 = cyl2.axis();
+
+    // Cylinder axes must be parallel (or anti-parallel).
+    if a1.dot(a2).abs() < 1.0 - tol_ang {
+        return Ok(None);
+    }
+    // Use cyl1's axis as the canonical direction; flip cyl2's if needed.
+    let a_cyl = a1; // shared direction
+
+    // Perpendicular displacement from cyl1 axis to cyl2 axis.
+    let o1 = cyl1.origin();
+    let o2 = cyl2.origin();
+    let d_axes = o2 - o1;
+    let d_axes_v = Vec3::new(d_axes.x(), d_axes.y(), d_axes.z());
+    let along = d_axes_v.dot(a_cyl);
+    let d_perp = d_axes_v - a_cyl * along;
+    let big_d = d_perp.length();
+    if big_d <= tol_lin {
+        // Coaxial cylinders — no intersection (parallel surfaces).
+        return Ok(None);
+    }
+
+    // Intersection requires |r1 − r2| < D < r1 + r2.
+    if big_d <= (r1 - r2).abs() + tol_lin || big_d >= r1 + r2 - tol_lin {
+        return Ok(None);
+    }
+
+    // Build local frame in the perpendicular plane: x̂ along d_perp,
+    // ŷ perpendicular (in the perpendicular plane).
+    let x_hat = d_perp * (1.0 / big_d);
+    let y_hat = a_cyl.cross(x_hat).normalize()?;
+
+    // Spine geometry (sphere-cylinder pattern, but with two LINEAR spines).
+    let x_spine = (r1 * r1 - r2 * r2 + big_d * big_d) / (2.0 * big_d);
+    let y_spine_sq = r1 * r1 - x_spine * x_spine;
+    if y_spine_sq <= tol_lin * tol_lin {
+        return Ok(None);
+    }
+    let y_spine_abs = y_spine_sq.sqrt();
+
+    // Spine validation: project a sample onto the perpendicular plane
+    // and match to one of the two intersection lines.
+    let edges = spine.edges();
+    let is_closed_spine = if edges.len() == 1 {
+        let e = topo.edge(edges[0])?;
+        e.start() == e.end()
+    } else {
+        false
+    };
+    let spine_len = spine.length();
+    if !is_closed_spine && spine_len < tol_lin {
+        return Ok(None);
+    }
+    let p_spine_sample = spine.evaluate(topo, 0.0)?;
+    let to_sample = p_spine_sample - o1;
+    let to_sample_v = Vec3::new(to_sample.x(), to_sample.y(), to_sample.z());
+    let sample_x = to_sample_v.dot(x_hat);
+    let sample_y = to_sample_v.dot(y_hat);
+    let spine_match_tol = tol_lin * 1e3;
+    if (sample_x - x_spine).abs() > spine_match_tol {
+        return Ok(None);
+    }
+    let y_spine = if (sample_y - y_spine_abs).abs() < spine_match_tol {
+        y_spine_abs
+    } else if (sample_y + y_spine_abs).abs() < spine_match_tol {
+        -y_spine_abs
+    } else {
+        return Ok(None);
+    };
+    let y_sign = if y_spine >= 0.0 { 1.0 } else { -1.0 };
+
+    // Effective radii.
+    let q1 = r1 + s1 * radius;
+    let q2 = r2 + s2 * radius;
+    if q1 <= tol_lin || q2 <= tol_lin {
+        return Ok(None);
+    }
+
+    // Rolling-ball center in (x, y) of the perpendicular plane.
+    let x_ball = (q1 * q1 - q2 * q2 + big_d * big_d) / (2.0 * big_d);
+    let y_ball_sq = q1 * q1 - x_ball * x_ball;
+    if y_ball_sq <= tol_lin * tol_lin {
+        return Ok(None);
+    }
+    let y_ball = y_sign * y_ball_sq.sqrt();
+
+    // Spine endpoints in 3D.
+    let p_spine_start = p_spine_sample;
+    let spine_tangent = spine.tangent(topo, 0.0)?;
+    // Confirm spine direction is parallel to the cyl axis (linear spine
+    // must be along the parallel axis).
+    if spine_tangent.dot(a_cyl).abs() < 1.0 - tol_ang {
+        return Ok(None);
+    }
+    let p_spine_end = if is_closed_spine {
+        p_spine_start
+    } else {
+        spine.evaluate(topo, spine_len)?
+    };
+
+    // Project spine endpoints axially to (x_spine, y_spine, z).
+    // The spine line has fixed (x, y) in cyl1's frame; only z varies.
+    // Get z extent from spine endpoint axials relative to o1.
+    let to_start = p_spine_start - o1;
+    let to_start_v = Vec3::new(to_start.x(), to_start.y(), to_start.z());
+    let z_start = to_start_v.dot(a_cyl);
+    let to_end = p_spine_end - o1;
+    let to_end_v = Vec3::new(to_end.x(), to_end.y(), to_end.z());
+    let z_end = to_end_v.dot(a_cyl);
+
+    // Fillet cylinder: axis parallel to a_cyl, origin at the ball line
+    // at the spine_start z.
+    let ball_line_origin = o1 + x_hat * x_ball + y_hat * y_ball + a_cyl * z_start;
+    let fillet_cyl = CylindricalSurface::new(ball_line_origin, a_cyl, radius)?;
+
+    // Cyl1 contact line in 3D: (r1·x_ball/q1, r1·y_ball/q1, z) in cyl1's frame.
+    let c1_x = r1 * x_ball / q1;
+    let c1_y = r1 * y_ball / q1;
+    let c1_start = o1 + x_hat * c1_x + y_hat * c1_y + a_cyl * z_start;
+    let c1_end = o1 + x_hat * c1_x + y_hat * c1_y + a_cyl * z_end;
+
+    // Cyl2 contact line in 3D: ((D + R2·(x_ball−D)/q2), R2·y_ball/q2, z)
+    // in cyl1's frame.
+    let c2_x = big_d + r2 * (x_ball - big_d) / q2;
+    let c2_y = r2 * y_ball / q2;
+    let c2_start = o1 + x_hat * c2_x + y_hat * c2_y + a_cyl * z_start;
+    let c2_end = o1 + x_hat * c2_x + y_hat * c2_y + a_cyl * z_end;
+
+    let contact1 = nurbs_line(c1_start, c1_end)?;
+    let contact2 = nurbs_line(c2_start, c2_end)?;
+
+    // PCurves: each contact line lies at constant cyl-radial direction
+    // on its respective cylinder — so it's a constant-u line with v
+    // ranging over [z_start, z_end] (cylinder's v parameter is axial).
+    let u1 = ParametricSurface::project_point(cyl1, c1_start).0;
+    let v1_start = cyl_v_at_point(cyl1, c1_start);
+    let v1_end = cyl_v_at_point(cyl1, c1_end);
+    let pcurve1 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u1, v1_start),
+        brepkit_math::vec::Vec2::new(0.0, v1_end - v1_start),
+    )?);
+    let u2 = ParametricSurface::project_point(cyl2, c2_start).0;
+    let v2_start = cyl_v_at_point(cyl2, c2_start);
+    let v2_end = cyl_v_at_point(cyl2, c2_end);
+    let pcurve2 = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u2, v2_start),
+        brepkit_math::vec::Vec2::new(0.0, v2_end - v2_start),
+    )?);
+
+    // Cross-sections at spine endpoints.
+    let section_start = CircSection {
+        p1: c1_start,
+        p2: c2_start,
+        center: ball_line_origin,
+        radius,
+        uv1: (u1, v1_start),
+        uv2: (u2, v2_start),
+        t: 0.0,
+    };
+    let ball_end = ball_line_origin + a_cyl * (z_end - z_start);
+    let section_end = CircSection {
+        p1: c1_end,
+        p2: c2_end,
+        center: ball_end,
+        radius,
+        uv1: (u1, v1_end),
+        uv2: (u2, v2_end),
+        t: 1.0,
+    };
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Cylinder(fillet_cyl),
+        pcurve1,
+        pcurve2,
+        contact1,
+        contact2,
+        face1,
+        face2,
+        sections: vec![section_start, section_end],
+    };
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
 }
 
 /// Build a rational quadratic NURBS for an arc on a `Circle3D` from
@@ -7611,6 +7860,127 @@ mod tests {
         assert!(
             (r_cone_pred - predicted_cone_radial).abs() < 1e-9,
             "cone contact must lie on cone: predicted {predicted_cone_radial}, got {r_cone_pred}"
+        );
+    }
+
+    /// Cylinder-cylinder convex fillet for two intersecting cylinders
+    /// with PARALLEL axes. The intersection is two straight lines parallel
+    /// to the cyl axes, and the rolling-ball blend is an exact cylinder
+    /// around an axis parallel to those.
+    ///
+    /// For cyl1 axis = +z through origin (r=2), cyl2 axis = +z at (3, 0, *)
+    /// (r=2.5), D=3, both faces NOT reversed, r=0.4:
+    ///   - x_spine = (4 − 6.25 + 9)/6 = 1.125
+    ///   - y_spine = ±√(4 − 1.265625) = ±1.654
+    ///   - For r=0.4: Q1=2.4, Q2=2.9, x_ball ≈ 0.625, y_ball = sign·√(5.367) ≈ 2.317
+    ///   - Fillet cylinder axis +z at (0.625, 2.317, *), radius 0.4
+    #[test]
+    fn cylinder_cylinder_fillet_parallel_axes_emits_cylinder() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let r1: f64 = 2.0;
+        let r2: f64 = 2.5;
+        let big_d: f64 = 3.0;
+        let r_fillet: f64 = 0.4;
+
+        let cyl1 =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r1)
+                .unwrap();
+        let cyl2 =
+            CylindricalSurface::new(Point3::new(big_d, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r2)
+                .unwrap();
+
+        // Spine: line at (x_spine, +y_spine, z) for z ∈ [0, 4]; segment
+        // direction = +z.
+        let x_spine = (r1 * r1 - r2 * r2 + big_d * big_d) / (2.0 * big_d);
+        let y_spine = (r1 * r1 - x_spine * x_spine).sqrt();
+        let z_lo = 0.0_f64;
+        let z_hi = 4.0_f64;
+        let p_start = Point3::new(x_spine, y_spine, z_lo);
+        let p_end = Point3::new(x_spine, y_spine, z_hi);
+        let v_start = topo.add_vertex(Vertex::new(p_start, 1e-7));
+        let v_end = topo.add_vertex(Vertex::new(p_end, 1e-7));
+        let line = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![p_start, p_end],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let eid = topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(line)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], false).unwrap());
+        let face1 = topo.add_face(Face::new(w1, vec![], FaceSurface::Cylinder(cyl1.clone())));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], false).unwrap());
+        let face2 = topo.add_face(Face::new(w2, vec![], FaceSurface::Cylinder(cyl2.clone())));
+
+        let result = cylinder_cylinder_fillet(&cyl1, &cyl2, &spine, &topo, r_fillet, face1, face2)
+            .unwrap()
+            .expect("parallel-axis cyl-cyl fillet should produce a stripe");
+
+        let fillet_cyl = match result.stripe.surface {
+            FaceSurface::Cylinder(c) => c,
+            other => panic!("expected Cylinder, got {}", other.type_tag()),
+        };
+
+        // Predicted ball position.
+        let q1 = r1 + r_fillet;
+        let q2 = r2 + r_fillet;
+        let x_ball = (q1 * q1 - q2 * q2 + big_d * big_d) / (2.0 * big_d);
+        let y_ball = (q1 * q1 - x_ball * x_ball).sqrt();
+
+        assert!(
+            (fillet_cyl.radius() - r_fillet).abs() < 1e-12,
+            "fillet cylinder radius should equal r = {r_fillet}, got {}",
+            fillet_cyl.radius()
+        );
+        // Axis = +z (parallel to original cyls).
+        let axis = fillet_cyl.axis();
+        assert!(
+            axis.dot(Vec3::new(0.0, 0.0, 1.0)) > 1.0 - 1e-12,
+            "fillet cylinder axis should be +z, got {axis:?}"
+        );
+        // Origin at (x_ball, y_ball, z_lo).
+        let origin = fillet_cyl.origin();
+        assert!(
+            (origin.x() - x_ball).abs() < 1e-12 && (origin.y() - y_ball).abs() < 1e-12,
+            "fillet cylinder origin should be ({x_ball}, {y_ball}, *), got {origin:?}"
+        );
+
+        // Cyl1 contact line at (r1·x_ball/q1, r1·y_ball/q1, z).
+        let want_c1 = Point3::new(r1 * x_ball / q1, r1 * y_ball / q1, z_lo);
+        let dist_c1_axis = (want_c1.x().powi(2) + want_c1.y().powi(2)).sqrt();
+        assert!(
+            (dist_c1_axis - r1).abs() < 1e-9,
+            "cyl1 contact must lie on cyl1 (radial = r1): got {dist_c1_axis}, want {r1}"
+        );
+        // Cyl2 contact line at (D + r2·(x_ball−D)/q2, r2·y_ball/q2, z).
+        let want_c2 = Point3::new(big_d + r2 * (x_ball - big_d) / q2, r2 * y_ball / q2, z_lo);
+        let dist_c2_axis = ((want_c2.x() - big_d).powi(2) + want_c2.y().powi(2)).sqrt();
+        assert!(
+            (dist_c2_axis - r2).abs() < 1e-9,
+            "cyl2 contact must lie on cyl2 (radial from cyl2 axis = r2): got {dist_c2_axis}, want {r2}"
+        );
+
+        // Both contacts on the fillet cylinder surface (distance r from
+        // ball-line in xy).
+        let dist_c1_to_ball =
+            ((want_c1.x() - x_ball).powi(2) + (want_c1.y() - y_ball).powi(2)).sqrt();
+        let dist_c2_to_ball =
+            ((want_c2.x() - x_ball).powi(2) + (want_c2.y() - y_ball).powi(2)).sqrt();
+        assert!(
+            (dist_c1_to_ball - r_fillet).abs() < 1e-9,
+            "cyl1 contact must lie on fillet cylinder: distance from ball-line = {dist_c1_to_ball}, want r = {r_fillet}"
+        );
+        assert!(
+            (dist_c2_to_ball - r_fillet).abs() < 1e-9,
+            "cyl2 contact must lie on fillet cylinder: distance from ball-line = {dist_c2_to_ball}, want r = {r_fillet}"
         );
     }
 
