@@ -454,4 +454,30 @@ mod tests {
             other => panic!("expected ParameterOutOfRange, got {other:?}"),
         }
     }
+
+    #[test]
+    fn split_at_v_rejects_out_of_domain() {
+        // Symmetric to split_at_u_rejects_out_of_domain — ensures the
+        // v-direction domain validation produces the same typed error
+        // shape (catches regressions where someone copies the u logic
+        // and forgets to update one of the field references).
+        let surface = make_smooth_patch();
+        let err = split_surface_at_v(&surface, -0.3).unwrap_err();
+        match err {
+            HealError::Math(brepkit_math::MathError::ParameterOutOfRange {
+                value,
+                min,
+                max,
+                ..
+            }) => {
+                assert!(
+                    (value + 0.3).abs() < 1e-12,
+                    "value should be -0.3, got {value}"
+                );
+                assert!((min - 0.0).abs() < 1e-12, "min should be 0.0, got {min}");
+                assert!((max - 1.0).abs() < 1e-12, "max should be 1.0, got {max}");
+            }
+            other => panic!("expected ParameterOutOfRange, got {other:?}"),
+        }
+    }
 }
