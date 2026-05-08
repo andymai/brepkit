@@ -83,9 +83,30 @@ pub fn try_analytic_fillet(
             }
             Ok(result)
         }
-        // Plane-Cylinder/Cylinder-Plane is handled above; the catch-all
-        // covers everything else (no analytic path yet → walker fallback).
-        _ => Ok(None),
+        // Pairs without an analytic path → walker fallback. Enumerated
+        // exhaustively (matching `try_analytic_chamfer`) so adding a new
+        // `FaceSurface` variant produces a compile error at this site
+        // rather than silently routing through the walker.
+        (
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+            FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+        )
+        | (FaceSurface::Cylinder(_), FaceSurface::Cylinder(_))
+        | (
+            FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_)
+            | FaceSurface::Nurbs(_),
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_),
+        ) => Ok(None),
     }
 }
 
@@ -598,13 +619,14 @@ pub fn plane_cylinder_fillet(
     //       cylinder's v parameter). PCurve is a horizontal Line2D in (u, v)
     //       UV-space spanning u_start → u_end at v = `r`.
     let v_cyl = cyl_v_at_point(cyl, contact_cyl_center);
+    let plane_adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n_p_inward, d_plane);
+
     // The plane contact is always an arc on a circle (the rolling-ball
     // trajectory at z=0), so represent the pcurve as `Curve2D::Circle` in
     // the plane's local frame. A line-segment pcurve would zero out for the
     // closed-spine case (start and end project to the same point).
     let pcurve_plane = {
-        let adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n_p_inward, d_plane);
-        let (cu, cv) = adapter.project_point(p_axis_on_plane);
+        let (cu, cv) = plane_adapter.project_point(p_axis_on_plane);
         Curve2D::Circle(brepkit_math::curves2d::Circle2D::new(
             brepkit_math::vec::Point2::new(cu, cv),
             major_radius,
@@ -615,10 +637,11 @@ pub fn plane_cylinder_fillet(
         brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
     )?);
 
-    // 11) Cross-sections at the spine endpoints. Each section's two contact
-    //     points and the rolling-ball center sit on a small circle of the
-    //     torus tube — they share the section's `u` and span the active `v`
-    //     quadrant from plane (v=3π/2) to cylinder (v=π).
+    // 11) Cross-sections at the spine endpoints. `uv1` is the plane contact
+    //     in the PlaneAdapter local frame; `uv2` is the cylinder contact in
+    //     `(u, v)` cylinder UV. The plane has no native UV — we use the same
+    //     adapter as `pcurve_plane` so any downstream consumer gets a
+    //     consistent local-frame pair instead of zeros or cylinder coords.
     let p_plane_at = |u: f64| contact_plane_circle.evaluate(u);
     let p_cyl_at = |u: f64| contact_cyl_circle.evaluate(u);
     let center_at = |u: f64| {
@@ -626,12 +649,13 @@ pub fn plane_cylinder_fillet(
         // to the height of the cylinder contact (axial offset `r`).
         contact_plane_circle.evaluate(u) + z_axis_dir * radius
     };
+    let plane_uv_at = |u: f64| plane_adapter.project_point(p_plane_at(u));
     let section_start = CircSection {
         p1: p_plane_at(u_start),
         p2: p_cyl_at(u_start),
         center: center_at(u_start),
         radius,
-        uv1: (u_start, v_cyl), // unused for plane
+        uv1: plane_uv_at(u_start),
         uv2: (u_start, v_cyl),
         t: 0.0,
     };
@@ -640,7 +664,7 @@ pub fn plane_cylinder_fillet(
         p2: p_cyl_at(u_end),
         center: center_at(u_end),
         radius,
-        uv1: (u_end, v_cyl),
+        uv1: plane_uv_at(u_end),
         uv2: (u_end, v_cyl),
         t: 1.0,
     };
