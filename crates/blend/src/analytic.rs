@@ -13,22 +13,26 @@
 //! noted), handling all four convex/concave combinations via per-face
 //! `signed_offset_i ∈ {+1, −1}`:
 //!
-//! | Pair                           | Blend surface           | Notes                       |
-//! |--------------------------------|-------------------------|-----------------------------|
-//! | Plane × Plane                  | Cylinder (fillet) / Plane (chamfer) | dihedral edge       |
-//! | Plane × {Cylinder, Cone, Sphere} | Torus (fillet) / Cone (chamfer)   | axis ⟂ plate       |
-//! | Sphere × {Sphere, Cylinder, Cone} | Torus (fillet) / Cone (chamfer)   | sphere on shared axis |
-//! | Cylinder × Cylinder (parallel axes) | Cylinder (fillet) / Plane (chamfer) | spine = parallel lines |
-//! | Cone × Cone (coaxial)          | Torus (fillet) / Cone (chamfer) | shared axis, β1 ≠ β2     |
+//! | Pair                           | Blend surface           | Axis-alignment requirement      |
+//! |--------------------------------|-------------------------|---------------------------------|
+//! | Plane × Plane                  | Cylinder (fillet) / Plane (chamfer) | none — dihedral edge       |
+//! | Plane × {Cylinder, Cone, Sphere} | Torus (fillet) / Cone (chamfer) | other surface's axis ⟂ plate     |
+//! | Sphere × {Cylinder, Cone}      | Torus (fillet) / Cone (chamfer) | sphere centre on cyl/cone axis line |
+//! | Sphere × Sphere                | Torus (fillet) / Cone (chamfer) | none — axis is line C1→C2 by construction |
+//! | Cylinder × Cylinder (parallel axes) | Cylinder (fillet) / Plane (chamfer) | parallel cyl axes, intersecting   |
+//! | Cone × Cone (coaxial)          | Torus (fillet) / Cone (chamfer) | shared axis line, β1 ≠ β2         |
 //!
 //! # Fallthrough configurations
 //!
-//! Pairs whose intersection isn't a circle, line, or pair of either
-//! return `Ok(None)` so the walker takes over:
-//!   - Cyl × Cyl with non-parallel axes (perpendicular tee, oblique)
-//!   - Cone × Cone with non-coaxial axes
-//!   - Cyl × Cone in any orientation
-//!   - Anything involving Torus or NURBS surfaces
+//! Each helper returns `Ok(None)` when its preconditions don't hold,
+//! so the walker takes over. Common reasons to fall through:
+//!   - Required axis alignment fails (e.g. sphere centre off the
+//!     cylinder axis, cone axes not coincident, cyl axes not parallel)
+//!   - Pair has no closed-form blend at all (Cyl × Cone in any
+//!     orientation, perpendicular cyl × cyl, non-coaxial cone × cone)
+//!   - Helper-specific guards (degenerate spine, spindle torus,
+//!     `r ≥ R_s` for concave-sphere, etc. — see each helper's docs)
+//!   - Surface variant not yet wired analytically (Torus, NURBS)
 //!
 //! Roughly 80% of real-world fillets fit one of the analytic pairs, so
 //! these fast paths are high-impact optimizations.
