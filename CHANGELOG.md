@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.85.1](https://github.com/andymai/brepkit/compare/v2.85.0...v2.85.1) (2026-05-08)
+
+
+### Bug Fixes
+
+* **heal:** convert_to_elementary now walks inner (cavity) shells ([#652](https://github.com/andymai/brepkit/issues/652)) ([0b8247b](https://github.com/andymai/brepkit/commit/0b8247bc2f8fa5ba4edcdab9e3b31065c2f3f85f))
+
 ## [2.85.0](https://github.com/andymai/brepkit/compare/v2.84.0...v2.85.0) (2026-05-08)
 
 
