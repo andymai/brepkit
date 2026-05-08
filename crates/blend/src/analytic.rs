@@ -1244,9 +1244,10 @@ pub fn plane_cone_fillet(
 /// `+d2·sin α` into the cylinder material. Connecting these two
 /// concentric circles with a flat ruled surface gives a cone:
 ///
-///   - chamfer half-angle `β = atan2(d1 - d2·cos α, d2·sin α)`
-///     (collapses to `β = α/2` for symmetric `d1 = d2`, and to `β = π/4`
-///     in the cylinder limit `α → π/2` — matching `plane_cylinder_chamfer`);
+///   - chamfer half-angle `β = atan2(d2·sin α, d1 - d2·cos α)`
+///     (collapses to `β = π/2 - α/2` for symmetric `d1 = d2`, and to
+///     `β = π/4` in the cylinder limit `α → π/2` — matching
+///     `plane_cylinder_chamfer`);
 ///   - apex on the cone axis, axial offset
 ///     `(r_p - d1)·d2·sin α / (d1 - d2·cos α)` *out* of the cylinder
 ///     material (in the empty-wedge half-space);
