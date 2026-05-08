@@ -74,6 +74,23 @@ pub fn convert_to_elementary(
                         converted += 1;
                     }
                 }
+                RecognizedSurface::Torus {
+                    center,
+                    axis,
+                    major_radius,
+                    minor_radius,
+                } => {
+                    if let Ok(torus) = brepkit_math::surfaces::ToroidalSurface::with_axis(
+                        center,
+                        major_radius,
+                        minor_radius,
+                        axis,
+                    ) {
+                        let face = topo.face_mut(*fid)?;
+                        face.set_surface(FaceSurface::Torus(torus));
+                        converted += 1;
+                    }
+                }
                 RecognizedSurface::NotRecognized => {}
             }
         }

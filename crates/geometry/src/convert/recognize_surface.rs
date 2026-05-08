@@ -44,6 +44,18 @@ pub enum RecognizedSurface {
         /// (radians, in `(0, π/2)`).
         half_angle: f64,
     },
+    /// Recognized as a torus.
+    Torus {
+        /// Torus center (the axis passes through this point).
+        center: Point3,
+        /// Torus axis direction (perpendicular to the major-circle
+        /// plane, unit vector).
+        axis: Vec3,
+        /// Major radius (distance from torus center to tube center).
+        major_radius: f64,
+        /// Minor radius (tube cross-section radius).
+        minor_radius: f64,
+    },
     /// The surface could not be matched to any elementary form.
     NotRecognized,
 }
@@ -75,6 +87,16 @@ pub fn recognize_surface(surface: &NurbsSurface, tolerance: f64) -> RecognizedSu
             apex,
             axis,
             half_angle,
+        };
+    }
+    if let Some((center, axis, major_radius, minor_radius)) =
+        try_recognize_torus(surface, tolerance)
+    {
+        return RecognizedSurface::Torus {
+            center,
+            axis,
+            major_radius,
+            minor_radius,
         };
     }
     RecognizedSurface::NotRecognized
@@ -540,6 +562,152 @@ fn try_recognize_cone(surface: &NurbsSurface, tolerance: f64) -> Option<(Point3,
     Some((apex, cone_axis, half_angle))
 }
 
+// ── Torus recognition ────────────────────────────────────────────────────────
+
+/// Check if all sampled surface points lie on a torus.
+///
+/// A torus is the surface of revolution of a cross-section circle of
+/// radius `minor_radius` whose center lies at distance `major_radius`
+/// from the axis. In `(axial, radial)` space relative to the axis, the
+/// samples lie on a circle of radius `minor_radius` centered at
+/// `(0, major_radius)`.
+///
+/// Algorithm:
+/// 1. Estimate axis (skip seam-duplicate row, same as cone).
+/// 2. Sample 8×8 with open-range u to avoid centroid bias.
+/// 3. Compute `(axial, radial)` per sample relative to the centroid.
+/// 4. Fit a circle to the `(axial, radial)` points via algebraic
+///    least-squares.
+/// 5. Verify all points lie on this circle within tolerance.
+/// 6. Center of fit circle gives `(axial_center, major_radius)`;
+///    radius gives `minor_radius`.
+#[allow(clippy::items_after_statements)]
+fn try_recognize_torus(surface: &NurbsSurface, tolerance: f64) -> Option<(Point3, Vec3, f64, f64)> {
+    const N: usize = 8;
+    let cps = surface.control_points();
+    if cps.len() < 2 {
+        return None;
+    }
+    for row in cps {
+        if row.len() < 2 {
+            return None;
+        }
+    }
+
+    // Estimate axis: for a torus, the U direction is revolution
+    // around the major axis, so the FIRST column of CPs (cps[i][0]
+    // for varying i) traces a circle in a plane perpendicular to the
+    // axis. The cylinder/cone trick (last_col − first_col averaged)
+    // doesn't work because v is closed (last_col ≈ first_col).
+    //
+    // Find three non-collinear CPs in the first column and take the
+    // cross-product of their relative offsets — that gives the
+    // plane normal, i.e., the torus axis.
+    let n_rows = cps.len();
+    if n_rows < 3 {
+        return None;
+    }
+    let p0 = cps[0][0];
+    let mut axis: Option<Vec3> = None;
+    'outer: for i in 1..n_rows {
+        let v1 = cps[i][0] - p0;
+        for j in (i + 1)..n_rows {
+            let v2 = cps[j][0] - p0;
+            let cross = v1.cross(v2);
+            if cross.length() > tolerance {
+                if let Ok(normalized) = cross.normalize() {
+                    axis = Some(normalized);
+                    break 'outer;
+                }
+            }
+        }
+    }
+    let axis = axis?;
+
+    // Sample with open-range u.
+    let (u0, u1) = surface.domain_u();
+    let (v0, v1) = surface.domain_v();
+    let mut samples: Vec<Point3> = Vec::with_capacity(N * N);
+    for iu in 0..N {
+        #[allow(clippy::cast_precision_loss)]
+        let u = u0 + (u1 - u0) * (iu as f64 + 0.5) / (N as f64);
+        for iv in 0..N {
+            #[allow(clippy::cast_precision_loss)]
+            let v = v0 + (v1 - v0) * (iv as f64) / ((N - 1) as f64);
+            samples.push(surface.evaluate(u, v));
+        }
+    }
+
+    // Centroid as anchor.
+    #[allow(clippy::cast_precision_loss)]
+    let inv_n = 1.0 / samples.len() as f64;
+    let mut ax = 0.0_f64;
+    let mut ay = 0.0_f64;
+    let mut az = 0.0_f64;
+    for p in &samples {
+        ax += p.x();
+        ay += p.y();
+        az += p.z();
+    }
+    let anchor = Point3::new(ax * inv_n, ay * inv_n, az * inv_n);
+
+    // (axial, radial) for each sample.
+    let mut axials: Vec<f64> = Vec::with_capacity(samples.len());
+    let mut radials: Vec<f64> = Vec::with_capacity(samples.len());
+    for p in &samples {
+        let to_p = *p - anchor;
+        let along = axis.dot(to_p);
+        let radial = (to_p - axis * along).length();
+        axials.push(along);
+        radials.push(radial);
+    }
+
+    // Fit a circle to (axial, radial) points: solve algebraic
+    //   x² + y² = 2·cx·x + 2·cy·y + (R² − cx² − cy²)
+    // ⇒ row = [2x, 2y, 1], rhs = x² + y², solve for [cx, cy, K].
+    let mut ata = [[0.0_f64; 3]; 3];
+    let mut atb = [0.0_f64; 3];
+    for i in 0..samples.len() {
+        let x = axials[i];
+        let y = radials[i];
+        let row = [2.0 * x, 2.0 * y, 1.0];
+        let rhs = x * x + y * y;
+        for r in 0..3 {
+            for c in 0..3 {
+                ata[r][c] += row[r] * row[c];
+            }
+            atb[r] += row[r] * rhs;
+        }
+    }
+    let sol = solve_3x3(ata, atb)?;
+    let center_axial = sol[0];
+    let major_radius = sol[1];
+    let k = sol[2]; // R² − cx² − cy²
+    let r_sq = k + center_axial * center_axial + major_radius * major_radius;
+    if r_sq <= 0.0 || major_radius <= 0.0 {
+        return None;
+    }
+    let minor_radius = r_sq.sqrt();
+
+    // Reject if minor >= major (degenerate torus / cylinder-with-radius).
+    if minor_radius >= major_radius - tolerance {
+        return None;
+    }
+
+    // Verify residuals.
+    for i in 0..samples.len() {
+        let dx = axials[i] - center_axial;
+        let dy = radials[i] - major_radius;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if (dist - minor_radius).abs() > tolerance {
+            return None;
+        }
+    }
+
+    let center = anchor + axis * center_axial;
+    Some((center, axis, major_radius, minor_radius))
+}
+
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
 /// Solve a 3×3 linear system `A * x = b` via Cramer's rule.
@@ -758,11 +926,15 @@ fn estimate_cylinder_axis(points: &[Point3], center: Point3) -> Option<Vec3> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-    use brepkit_math::surfaces::{ConicalSurface, CylindricalSurface, SphericalSurface};
+    use brepkit_math::surfaces::{
+        ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
+    };
     use brepkit_math::vec::{Point3, Vec3};
 
     use super::*;
-    use crate::convert::surface_to_nurbs::{cone_to_nurbs, cylinder_to_nurbs, sphere_to_nurbs};
+    use crate::convert::surface_to_nurbs::{
+        cone_to_nurbs, cylinder_to_nurbs, sphere_to_nurbs, torus_to_nurbs,
+    };
 
     fn origin() -> Point3 {
         Point3::new(0.0, 0.0, 0.0)
@@ -840,6 +1012,51 @@ mod tests {
     fn cylinder_is_recognized_as_cylinder_not_cone() {
         // True cylinders should match Cylinder (tested first), not
         // fall through to Cone.
+        let cyl = CylindricalSurface::new(origin(), z_axis(), 2.0).unwrap();
+        let nurbs = cylinder_to_nurbs(&cyl, (0.0, 5.0)).unwrap();
+        assert!(matches!(
+            recognize_surface(&nurbs, 1e-4),
+            RecognizedSurface::Cylinder { .. }
+        ));
+    }
+
+    #[test]
+    fn recognize_torus_round_trip() {
+        let torus = ToroidalSurface::new(origin(), 3.0, 0.5).unwrap();
+        let nurbs = torus_to_nurbs(&torus).unwrap();
+
+        match recognize_surface(&nurbs, 0.05) {
+            RecognizedSurface::Torus {
+                center,
+                axis,
+                major_radius,
+                minor_radius,
+            } => {
+                assert!(
+                    Vec3::new(center.x(), center.y(), center.z()).length() < 0.05,
+                    "center {center:?} not at origin"
+                );
+                assert!(
+                    axis.dot(z_axis()).abs() > 1.0 - 1e-3,
+                    "axis {axis:?} not aligned with z"
+                );
+                assert!(
+                    (major_radius - 3.0).abs() < 0.05,
+                    "major_radius {major_radius} vs 3.0"
+                );
+                assert!(
+                    (minor_radius - 0.5).abs() < 0.05,
+                    "minor_radius {minor_radius} vs 0.5"
+                );
+            }
+            other => panic!("expected Torus, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cylinder_is_not_recognized_as_torus() {
+        // A cylinder must hit Cylinder (tested first), not fall
+        // through to Torus.
         let cyl = CylindricalSurface::new(origin(), z_axis(), 2.0).unwrap();
         let nurbs = cylinder_to_nurbs(&cyl, (0.0, 5.0)).unwrap();
         assert!(matches!(
