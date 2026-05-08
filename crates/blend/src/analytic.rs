@@ -9525,6 +9525,161 @@ mod tests {
         );
     }
 
+    /// Cone-cone coaxial mixed-convexity fillet: covers BOTH
+    /// (s1=+1, s2=−1) and (s1=−1, s2=+1) sign combinations.
+    ///
+    /// In mixed configs the linear system
+    ///   R_t · sin β_i − (z_b − z_apex_i) · cos β_i = s_i · r
+    /// solves with `s1 ≠ s2`, so the (s1−s2) term in the major-radius
+    /// formula contributes ±2r and the (s1·sin β2 − s2·sin β1) term
+    /// adds (sin β1 + sin β2) — both opposite signs from the symmetric
+    /// cases. The result places the fillet ball *outside* the spine
+    /// ring (one external + one internal contact) rather than aligned
+    /// with it.
+    ///
+    /// Verifies emitted torus major/minor match the closed-form
+    /// solution and that contacts read from emitted curves via
+    /// `evaluate(t_start)` are positioned at the predicted offset from
+    /// the torus center along each cone's outward surface normal:
+    ///
+    /// ```text
+    /// c_i = (R_t − s_i · r · sin β_i, z_b + s_i · r · cos β_i)
+    /// ```
+    ///
+    /// The position-on-cone check (predicted (r, z) from `s_i`) is
+    /// stronger than a "lies on cone" tautology — for mixed configs
+    /// it independently confirms the implementation chose the contact
+    /// on the correct side of the spine ring (one external + one
+    /// internal tangency).
+    #[test]
+    fn cone_cone_coaxial_fillet_mixed_emits_torus() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let beta1: f64 = std::f64::consts::PI / 3.0;
+        let beta2: f64 = std::f64::consts::PI / 4.0;
+        let h_2: f64 = 2.0;
+        let r_fillet: f64 = 0.3;
+        let sin_minus = (beta1 - beta2).sin();
+        let z_spine = h_2 * beta2.cos() * beta1.sin() / sin_minus;
+        let r_spine = z_spine * (beta1.cos() / beta1.sin());
+
+        let run_case = |reverse_s1: bool, reverse_s2: bool| {
+            let mut topo = Topology::new();
+            let cone1 =
+                ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), beta1)
+                    .unwrap();
+            let cone2 =
+                ConicalSurface::new(Point3::new(0.0, 0.0, h_2), Vec3::new(0.0, 0.0, 1.0), beta2)
+                    .unwrap();
+            let spine_circle = Circle3D::new(
+                Point3::new(0.0, 0.0, z_spine),
+                Vec3::new(0.0, 0.0, 1.0),
+                r_spine,
+            )
+            .unwrap();
+            let v = topo.add_vertex(Vertex::new(Point3::new(r_spine, 0.0, z_spine), 1e-7));
+            let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+            let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+            let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+            let face1 = if reverse_s1 {
+                topo.add_face(Face::new_reversed(
+                    w1,
+                    vec![],
+                    FaceSurface::Cone(cone1.clone()),
+                ))
+            } else {
+                topo.add_face(Face::new(w1, vec![], FaceSurface::Cone(cone1.clone())))
+            };
+            let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+            let face2 = if reverse_s2 {
+                topo.add_face(Face::new_reversed(
+                    w2,
+                    vec![],
+                    FaceSurface::Cone(cone2.clone()),
+                ))
+            } else {
+                topo.add_face(Face::new(w2, vec![], FaceSurface::Cone(cone2.clone())))
+            };
+
+            let result =
+                cone_cone_coaxial_fillet(&cone1, &cone2, &spine, &topo, r_fillet, face1, face2)
+                    .unwrap()
+                    .expect("mixed coaxial cone-cone fillet should produce a stripe");
+
+            let torus = match result.stripe.surface {
+                FaceSurface::Torus(ref t) => t.clone(),
+                ref other => panic!(
+                    "({reverse_s1}, {reverse_s2}): expected Torus, got {}",
+                    other.type_tag()
+                ),
+            };
+
+            let s1 = if reverse_s1 { -1.0_f64 } else { 1.0 };
+            let s2 = if reverse_s2 { -1.0_f64 } else { 1.0 };
+            let expected_z_b = (h_2 * beta2.cos() * beta1.sin()
+                + r_fillet * (s1 * beta2.sin() - s2 * beta1.sin()))
+                / sin_minus;
+            let expected_major = (expected_z_b * (beta1.cos() - beta2.cos())
+                + h_2 * beta2.cos()
+                + (s1 - s2) * r_fillet)
+                / (beta1.sin() - beta2.sin());
+
+            assert!(
+                (torus.major_radius() - expected_major).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): mixed torus major should be {expected_major}, got {}",
+                torus.major_radius()
+            );
+            assert!(
+                (torus.minor_radius() - r_fillet).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): minor should be {r_fillet}, got {}",
+                torus.minor_radius()
+            );
+
+            // Read EMITTED contact endpoints from the stripe, then
+            // assert they sit at the predicted (r, z) on each cone:
+            //   c_i = (R_t − s_i·r·sin β_i, z_b + s_i·r·cos β_i)
+            // Position-on-cone is stronger than "lies on cone" — for
+            // mixed configs the contact must be on the *correct side*
+            // of the spine ring (s1=+1 retreats toward apex_1; s2=−1
+            // extends from apex_2), and asserting predicted (r, z)
+            // catches that without becoming tautological with the
+            // major/minor checks above.
+            let (t1_start, _) = result.stripe.contact1.domain();
+            let c1_point = result.stripe.contact1.evaluate(t1_start);
+            let (t2_start, _) = result.stripe.contact2.domain();
+            let c2_point = result.stripe.contact2.evaluate(t2_start);
+
+            let pred_c1_r = expected_major - s1 * r_fillet * beta1.sin();
+            let pred_c1_z = expected_z_b + s1 * r_fillet * beta1.cos();
+            let pred_c2_r = expected_major - s2 * r_fillet * beta2.sin();
+            let pred_c2_z = expected_z_b + s2 * r_fillet * beta2.cos();
+
+            let c1_radial = (c1_point.x().powi(2) + c1_point.y().powi(2)).sqrt();
+            let c2_radial = (c2_point.x().powi(2) + c2_point.y().powi(2)).sqrt();
+            assert!(
+                (c1_radial - pred_c1_r).abs() < 1e-9 && (c1_point.z() - pred_c1_z).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact1 should be at \
+                 (r={pred_c1_r}, z={pred_c1_z}); got (r={c1_radial}, z={})",
+                c1_point.z()
+            );
+            assert!(
+                (c2_radial - pred_c2_r).abs() < 1e-9 && (c2_point.z() - pred_c2_z).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): contact2 should be at \
+                 (r={pred_c2_r}, z={pred_c2_z}); got (r={c2_radial}, z={})",
+                c2_point.z()
+            );
+        };
+
+        run_case(false, true); // (s1=+1, s2=-1)
+        run_case(true, false); // (s1=-1, s2=+1)
+    }
+
     /// Cylinder-cylinder convex chamfer: parallel-axis cyls with the
     /// chamfer surface a planar bevel containing both contact lines
     /// (each parallel to the cyl axes).
