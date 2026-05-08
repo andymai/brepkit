@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.58.0](https://github.com/andymai/brepkit/compare/v2.57.0...v2.58.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** concave plane-sphere analytic fillet (pocket / hole rim → torus) ([#568](https://github.com/andymai/brepkit/issues/568)) ([2494d21](https://github.com/andymai/brepkit/commit/2494d217d2ee9934d3d2b55c814793b675c837b0))
+
 ## [2.57.0](https://github.com/andymai/brepkit/compare/v2.56.0...v2.57.0) (2026-05-08)
 
 
