@@ -1,13 +1,19 @@
 //! Curve type conversion utilities.
 //!
-//! Provides conversions between analytic curve types (Line3D, Circle3D,
-//! Parabola3D) and their NURBS representations. These are used by
-//! healing operations that need a uniform NURBS representation for
-//! fitting or comparison.
+//! Provides geometrically exact conversions from analytic curve
+//! types (Line3D, Circle3D, Parabola3D, Hyperbola3D, plus
+//! Ellipse3D once #623 lands) to their NURBS representations.
+//! These are used by healing operations that need a uniform NURBS
+//! representation for fitting or comparison.
+//!
+//! - `line_to_nurbs`: degree 1, 2 CPs (non-rational).
+//! - `circle_to_nurbs`: degree 2, 9 CPs (rational, four quarter-arcs).
+//! - `parabola_to_nurbs`: degree 2, 3 CPs (non-rational Bézier).
+//! - `hyperbola_to_nurbs`: degree 2, 3 CPs (rational, conic-arc form).
 
 use std::f64::consts::FRAC_PI_4;
 
-use brepkit_math::curves::{Circle3D, Parabola3D};
+use brepkit_math::curves::{Circle3D, Hyperbola3D, Parabola3D};
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::vec::Point3;
 
@@ -145,6 +151,79 @@ pub fn parabola_to_nurbs(
     )?)
 }
 
+/// Convert a hyperbolic arc (parameter range `[t_min, t_max]`) to a
+/// degree-2 *rational* NURBS curve.
+///
+/// A hyperbola is geometrically exact as a 3-CP rational Bézier:
+/// the standard conic-arc form (Piegl-Tiller §7.4) where the middle
+/// CP is the tangent intersection at the endpoints and the middle
+/// weight is determined by the half-arc-angle.
+///
+/// # Algorithm
+///
+/// In the hyperbola's local `(u_axis, v_axis)` frame, the arc traces
+/// `(a·cosh(t), b·sinh(t))` for `t ∈ [t_min, t_max]`. The conic-arc
+/// rational form has:
+///
+/// - **CP 0** = `H(t_min)` (start of arc)
+/// - **CP 2** = `H(t_max)` (end of arc)
+/// - **CP 1** = tangent intersection at the two endpoints, located at
+///   `H(t_min) + tanh(B) · T(t_min)` (in scaled coords), where
+///   `B = (t_max - t_min) / 2`. The tangent at parameter `t` is
+///   `T(t) = (a·sinh(t), b·cosh(t))`.
+/// - **Weights**: `(1, cosh(B), 1)`. The middle weight `> 1` is
+///   what distinguishes a hyperbolic arc from a parabolic arc
+///   (`w₁ = 1`) or an elliptic arc (`w₁ < 1`).
+///
+/// # Errors
+///
+/// Returns [`HealError`] if `t_max <= t_min` or NURBS construction
+/// fails.
+pub fn hyperbola_to_nurbs(
+    hyperbola: &Hyperbola3D,
+    t_min: f64,
+    t_max: f64,
+) -> Result<NurbsCurve, HealError> {
+    if t_max <= t_min {
+        return Err(brepkit_math::MathError::ParameterOutOfRange {
+            value: t_max,
+            min: t_min,
+            max: f64::INFINITY,
+        }
+        .into());
+    }
+
+    let center = hyperbola.center();
+    let u = hyperbola.u_axis();
+    let v = hyperbola.v_axis();
+    let a = hyperbola.semi_major();
+    let b = hyperbola.semi_minor();
+
+    let p0 = hyperbola.evaluate(t_min);
+    let p2 = hyperbola.evaluate(t_max);
+
+    // Tangent intersection (Piegl-Tiller conic-arc form). In scaled
+    // coords (X = x/a, Y = y/b) on the standard hyperbola
+    // X² − Y² = 1, the middle CP is at:
+    //     P1 = P0 + tanh(B) · T0
+    // where B = (t_max − t_min)/2 and T0 = (sinh(t_min), cosh(t_min)).
+    // In unscaled coords (multiplying X by a, Y by b):
+    let half = 0.5 * (t_max - t_min);
+    let tanh_b = half.tanh();
+    let p1_x = a * (t_min.cosh() + tanh_b * t_min.sinh());
+    let p1_y = b * (t_min.sinh() + tanh_b * t_min.cosh());
+    let p1 = center + u * p1_x + v * p1_y;
+
+    let w1 = half.cosh();
+
+    Ok(NurbsCurve::new(
+        2,
+        vec![t_min, t_min, t_min, t_max, t_max, t_max],
+        vec![p0, p1, p2],
+        vec![1.0, w1, 1.0],
+    )?)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -275,6 +354,79 @@ mod tests {
         let parabola =
             Parabola3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
         let err = parabola_to_nurbs(&parabola, 5.0, 1.0).unwrap_err();
+        match err {
+            HealError::Math(brepkit_math::MathError::ParameterOutOfRange {
+                value, min, ..
+            }) => {
+                assert!((value - 1.0).abs() < 1e-12);
+                assert!((min - 5.0).abs() < 1e-12);
+            }
+            other => panic!("expected ParameterOutOfRange, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hyperbola_to_nurbs_evaluates_exactly_on_hyperbola() {
+        // Every NURBS evaluation must satisfy the implicit equation
+        // (lx/a)² - (ly/b)² = 1 in the hyperbola's local frame.
+        let center = Point3::new(2.0, -1.0, 3.0);
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let a = 2.0_f64;
+        let b = 1.5_f64;
+        let hyp = Hyperbola3D::new(center, normal, a, b).unwrap();
+        let t_min = -1.5_f64;
+        let t_max = 1.5_f64;
+        let nurbs = hyperbola_to_nurbs(&hyp, t_min, t_max).unwrap();
+        let u = hyp.u_axis();
+        let v = hyp.v_axis();
+
+        let mut max_err = 0.0_f64;
+        for k in 0..=64 {
+            #[allow(clippy::cast_precision_loss)]
+            let t = t_min + (t_max - t_min) * (k as f64 / 64.0);
+            let p = nurbs.evaluate(t);
+            let off = p - center;
+            let lx = off.dot(u) / a;
+            let ly = off.dot(v) / b;
+            let resid = (lx * lx - ly * ly - 1.0).abs();
+            max_err = max_err.max(resid);
+        }
+        assert!(
+            max_err < 1e-9,
+            "exact rational hyperbola residual {max_err} exceeds 1e-9"
+        );
+    }
+
+    #[test]
+    fn hyperbola_to_nurbs_endpoints_match() {
+        // First and last NURBS evaluations must equal H(t_min) and
+        // H(t_max) exactly.
+        let hyp = Hyperbola3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            1.0,
+        )
+        .unwrap();
+        let nurbs = hyperbola_to_nurbs(&hyp, -1.0, 1.0).unwrap();
+        let p_start = nurbs.evaluate(-1.0);
+        let p_end = nurbs.evaluate(1.0);
+        let expected_start = hyp.evaluate(-1.0);
+        let expected_end = hyp.evaluate(1.0);
+        assert!((p_start - expected_start).length() < 1e-12);
+        assert!((p_end - expected_end).length() < 1e-12);
+    }
+
+    #[test]
+    fn hyperbola_to_nurbs_rejects_inverted_range() {
+        let hyp = Hyperbola3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            1.0,
+        )
+        .unwrap();
+        let err = hyperbola_to_nurbs(&hyp, 5.0, 1.0).unwrap_err();
         match err {
             HealError::Math(brepkit_math::MathError::ParameterOutOfRange {
                 value, min, ..
