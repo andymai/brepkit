@@ -1675,6 +1675,7 @@ pub fn plane_sphere_fillet(
     use std::f64::consts::PI;
 
     let tol_lin = 1e-9;
+    let tol_ang = 1e-9;
 
     // 1) Convex (face not reversed) vs concave (face reversed) drive a
     //    `signed_offset = ±1` factor that flips the rolling-ball axial
@@ -1685,6 +1686,14 @@ pub fn plane_sphere_fillet(
     }
     let concave = topo.face(face_sphere)?.is_reversed();
     let signed_offset: f64 = if concave { -1.0 } else { 1.0 };
+
+    // The pcurve_sphere construction below assumes the contact circle is
+    // a constant-v latitude on the sphere — which only holds when the
+    // sphere's parametric axis is (anti)parallel to the plate normal. If
+    // the sphere has an oblique frame, fall back to the walker.
+    if sphere.z_axis().dot(n_p_inward).abs() < 1.0 - tol_ang {
+        return Ok(None);
+    }
 
     let big_r = sphere.radius();
     let center = sphere.center();
@@ -1767,6 +1776,15 @@ pub fn plane_sphere_fillet(
     let torus_axis = n_p_inward;
     let sphere_x = sphere.x_axis();
     let sphere_y = sphere.y_axis();
+    // `with_axis_and_ref_dir` requires the ref dir non-parallel to the
+    // axis. sphere_x ⊥ sphere_z and torus_axis ∥ ±sphere_z (alignment
+    // guard above), so they're perpendicular — but guard with sphere_y
+    // as a backup against floating-point drift.
+    let ref_dir = if sphere_x.cross(torus_axis).length() > tol_ang {
+        sphere_x
+    } else {
+        sphere_y
+    };
 
     // Torus center on the rolling-ball side: convex puts it on the
     // −n_p_inward side (empty wedge above plate), concave on the
@@ -1777,7 +1795,7 @@ pub fn plane_sphere_fillet(
         major_radius,
         minor_radius,
         torus_axis,
-        sphere_x,
+        ref_dir,
     )?;
 
     // 8) Spine endpoints in 3D and corresponding u-parameters. We
@@ -1954,6 +1972,7 @@ pub fn plane_sphere_chamfer(
     use std::f64::consts::PI;
 
     let tol_lin = 1e-9;
+    let tol_ang = 1e-9;
 
     // 1) Convex only for v1: concave (sphere face reversed = pocket / hole)
     //    has a different chamfer-line direction (sphere-side contact lands
@@ -1962,6 +1981,14 @@ pub fn plane_sphere_chamfer(
         return Ok(None);
     }
     if d1 <= tol_lin || d2 <= tol_lin {
+        return Ok(None);
+    }
+
+    // The pcurve_sphere construction below assumes the contact circle is
+    // a constant-v latitude on the sphere — which only holds when the
+    // sphere's parametric axis is (anti)parallel to the plate normal. If
+    // the sphere has an oblique frame, fall back to the walker.
+    if sphere.z_axis().dot(n_p_inward).abs() < 1.0 - tol_ang {
         return Ok(None);
     }
 
@@ -1997,6 +2024,12 @@ pub fn plane_sphere_chamfer(
     let (sin_d, cos_d) = delta.sin_cos();
     let sphere_radial = r_p * cos_d + h_signed * sin_d;
     let sphere_axial = h_signed * (1.0 - cos_d) + r_p * sin_d;
+    // For very large `d2` the meridian can sweep past the pole and
+    // sphere_radial collapses to ≤ 0 — at that point Circle3D would
+    // reject the construction. Bail to the walker first.
+    if sphere_radial <= tol_lin {
+        return Ok(None);
+    }
 
     // 4) Chamfer line between plate contact (r_p+d1, 0) and sphere contact.
     //    The cone narrows going +n_p_inward (toward apex) when Δr < 0.
@@ -2038,10 +2071,19 @@ pub fn plane_sphere_chamfer(
     }
 
     // 7) Build the chamfer cone using the sphere's u=0 frame as ref dir.
+    //    `with_ref_dir` requires the ref dir to be NON-parallel to the
+    //    cone axis; sphere_x ⊥ sphere_z and chamfer_axis ∥ ±sphere_z (by
+    //    the alignment guard above), so sphere_x ⊥ chamfer_axis — but
+    //    guard with sphere_y as a backup against floating-point drift.
     let sphere_x = sphere.x_axis();
     let sphere_y = sphere.y_axis();
+    let ref_dir = if sphere_x.cross(chamfer_axis).length() > tol_ang {
+        sphere_x
+    } else {
+        sphere_y
+    };
     let chamfer_cone =
-        ConicalSurface::with_ref_dir(chamfer_apex_pos, chamfer_axis, cone_half_angle, sphere_x)?;
+        ConicalSurface::with_ref_dir(chamfer_apex_pos, chamfer_axis, cone_half_angle, ref_dir)?;
 
     // 8) Spine endpoints in 3D and corresponding u-parameters around the
     //    n_p_inward axis.
