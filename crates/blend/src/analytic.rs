@@ -2916,20 +2916,10 @@ pub fn sphere_cone_fillet(
     let sample_axial = to_sample_v.dot(cone_axis);
     let sample_radial_v = to_sample_v - cone_axis * sample_axial;
     let sample_radial = sample_radial_v.length();
-    // Spine must lie on the sphere AND on the cone — its (axial,
-    // radial) coords must satisfy both `r² + axial² = R_s²` AND
-    // `r = (axial + h_signed) · cot β` (cone surface, with axial
-    // measured from sphere center). Verify both implicitly by
-    // matching to a candidate intersection-circle position.
-    let pick_root = |c: f64| {
-        // For root c (z_b from sphere center), the corresponding spine
-        // axial is the SAME side of sphere center as the rolling-ball
-        // c (we pick the root whose c.signum matches sample_axial.signum).
-        c.signum()
-    };
     // Find the spine candidate axial — the spine axial is determined
     // by sphere ∩ cone, NOT by `c` directly. Solve sphere ∩ cone:
-    // r_spine² + z_spine² = R_s², r_spine = (z_spine + h_signed)·cot β.
+    //   r_spine² + z_spine² = R_s²,
+    //   r_spine = (z_spine + h_signed)·cot β.
     // ⇒ z_spine²·(1 + cot²β) + 2 z_spine·h_signed·cot²β + h_signed²·cot²β = R_s²
     // ⇒ z_spine²/sin²β + 2 z_spine·h_signed·cot²β + (h_signed²·cot²β − R_s²) = 0.
     let cot_b = cos_b / sin_b;
@@ -2943,29 +2933,33 @@ pub fn sphere_cone_fillet(
     let q_disc_sqrt = q_disc.sqrt();
     let z_spine_root_a = (-qb + q_disc_sqrt) / (2.0 * qa);
     let z_spine_root_b = (-qb - q_disc_sqrt) / (2.0 * qa);
-    // Pick the spine root that matches the sample.
-    let spine_z = if (sample_axial - z_spine_root_a).abs() < tol_lin * 1e3 {
+    // Pick the spine root that matches the sample (axial within tol).
+    let spine_match_tol = tol_lin * 1e3;
+    let spine_z = if (sample_axial - z_spine_root_a).abs() < spine_match_tol {
         z_spine_root_a
-    } else if (sample_axial - z_spine_root_b).abs() < tol_lin * 1e3 {
+    } else if (sample_axial - z_spine_root_b).abs() < spine_match_tol {
         z_spine_root_b
     } else {
         return Ok(None);
     };
-    // Verify radial too.
+    // Verify radial.
     let r_spine = (spine_z + h_signed) * cot_b;
-    if r_spine <= tol_lin || (sample_radial - r_spine).abs() > tol_lin * 1e3 {
+    if r_spine <= tol_lin || (sample_radial - r_spine).abs() > spine_match_tol {
         return Ok(None);
     }
 
-    // Pick rolling-ball root. The two `c` roots correspond to the two
-    // spines; take the one on the same side of sphere center as
-    // spine_z. Secondary-check by recomputing R_t > 0.
-    let z_b = if spine_z >= 0.0 {
-        c_root_a.max(c_root_b)
+    // Pick rolling-ball root. Each `c` root corresponds to a torus
+    // around ONE of the two spines; the rolling-ball axial position is
+    // close to (but not equal to) the spine axial — the small offset
+    // is the ball's perpendicular shift away from the spine into the
+    // empty wedge. Pick the root whose distance to `spine_z` is
+    // smallest. This is robust even for small half-angles where both
+    // c roots could share a sign.
+    let z_b = if (c_root_a - spine_z).abs() <= (c_root_b - spine_z).abs() {
+        c_root_a
     } else {
-        c_root_a.min(c_root_b)
+        c_root_b
     };
-    let _ = pick_root; // silence unused-helper warning
     let r_t = (radius + (z_b + h_signed) * cos_b) / sin_b;
     if r_t <= tol_lin {
         return Ok(None);
@@ -6143,7 +6137,7 @@ mod tests {
     /// fillet around one of the two sphere-cone intersection circles.
     ///
     /// For sphere at origin (R_s=3), cone apex at (0,0,−2) with axis +z
-    /// and half-angle π/3, both faces NOT reversed, r=0.4:
+    /// and half-angle π/3, both faces NOT reversed, r=0.3:
     ///   - h_signed = +2 (sphere center is 2 units above apex along axis)
     ///   - β = π/3, cos β = 0.5, sin β = √3/2
     ///   - Spine z (from sphere center) = (−4 + √384)/8 ≈ 1.949 (the +z spine)
