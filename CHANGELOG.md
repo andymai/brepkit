@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.49.0](https://github.com/andymai/brepkit/compare/v2.48.0...v2.49.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** analytic plane-cone fillet → exact torus surface ([#550](https://github.com/andymai/brepkit/issues/550)) ([8197f23](https://github.com/andymai/brepkit/commit/8197f23ef9d5e70db469eb1571b52fd8fac99783))
+
 ## [2.48.0](https://github.com/andymai/brepkit/compare/v2.47.0...v2.48.0) (2026-05-08)
 
 
