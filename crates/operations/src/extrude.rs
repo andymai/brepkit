@@ -332,7 +332,13 @@ fn side_face_surface(
             Ok((FaceSurface::Nurbs(surface), reversed))
         }
         EdgeCurve::Ellipse(ell) => {
-            let nc = ellipse_to_nurbs(ell);
+            // Delegate to heal's exact rational ellipse converter.
+            let nc =
+                brepkit_heal::construct::convert_curve::ellipse_to_nurbs(ell).map_err(|e| {
+                    crate::OperationsError::InvalidInput {
+                        reason: format!("ellipse_to_nurbs failed: {e}"),
+                    }
+                })?;
             let surface = ruled_nurbs_surface(&nc, offset)?;
             let reversed = nurbs_needs_reversal(&surface, p0, p1, offset, outer_is_cw);
             Ok((FaceSurface::Nurbs(surface), reversed))
@@ -393,40 +399,6 @@ fn ruled_nurbs_surface(
         vec![weights_row.clone(), weights_row],
     )
     .map_err(crate::OperationsError::Math)
-}
-
-/// Convert an `Ellipse3D` to a NURBS curve for ruled-surface construction.
-fn ellipse_to_nurbs(
-    ell: &brepkit_math::curves::Ellipse3D,
-) -> brepkit_math::nurbs::curve::NurbsCurve {
-    // Rational quadratic Bezier representation of a full ellipse:
-    // 9 control points, 4 quarter-arcs joined.
-    let c = ell.center();
-    let u = ell.u_axis();
-    let v = ell.v_axis();
-    let a = ell.semi_major();
-    let b = ell.semi_minor();
-    let w = std::f64::consts::FRAC_1_SQRT_2;
-
-    let control_points = vec![
-        c + u * a,
-        c + u * a + v * b,
-        c + v * b,
-        c + u * (-a) + v * b,
-        c + u * (-a),
-        c + u * (-a) + v * (-b),
-        c + v * (-b),
-        c + u * a + v * (-b),
-        c + u * a,
-    ];
-    let weights = vec![1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0];
-    let knots = vec![
-        0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
-    ];
-
-    // This is a well-formed rational quadratic B-spline; unwrap is safe.
-    #[allow(clippy::unwrap_used)]
-    brepkit_math::nurbs::curve::NurbsCurve::new(2, knots, control_points, weights).unwrap()
 }
 
 /// Extrude a planar face along a direction to produce a solid.
