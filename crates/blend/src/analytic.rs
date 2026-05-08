@@ -2228,10 +2228,11 @@ pub fn plane_sphere_chamfer(
 ///   torus center   = C1 + axis · a_ball
 ///   minor radius   = r
 ///
-/// The spine circle itself sits at `a₀ = (R1² − R2² + D²)/(2D)` with
-/// radius `r_p = √(R1² − a₀²)`. Both the convex-convex (s1=s2=+1) and
-/// concave-concave (s1=s2=−1) and mixed cases reduce to this same
-/// expression via the Q-substitution.
+/// The spine circle itself depends ONLY on the original sphere radii
+/// and center distance — `a₀ = (R1² − R2² + D²)/(2D)` with radius
+/// `r_p = √(R1² − a₀²)` — and is independent of `r` and the convexity
+/// flags. The `Q`-substitution flips the rolling-ball trajectory
+/// (`a_ball`, `R_t`) and per-sphere contact circles, but not the spine.
 ///
 /// # Returns
 ///
@@ -4402,6 +4403,130 @@ mod tests {
         assert!(
             result_convex.is_some(),
             "convex fillet at the same r={r_too_big} should still succeed"
+        );
+    }
+
+    /// Sphere-sphere mixed-convexity fillet: sphere1 face NOT reversed
+    /// (convex; ball externally tangent, `Q1 = R1 + r`); sphere2 face
+    /// REVERSED (concave; ball internally tangent, `Q2 = R2 − r`).
+    /// Geometrically this is the "post emerging through a spherical
+    /// cavity" configuration — uncommon but the Q-substitution handles
+    /// it just like the symmetric cases.
+    ///
+    /// For R1=2, R2=2.5, D=3, sphere1 NOT reversed, sphere2 REVERSED,
+    /// r=0.4:
+    ///   Q1 = 2.4, Q2 = 2.1
+    ///   a_ball = (5.76 − 4.41 + 9)/6 = 10.35/6 = 1.725
+    ///   R_t² = 5.76 − 2.976 = 2.784, R_t ≈ 1.668
+    /// (Sandwiched between the convex-convex R_t ≈ 2.154 and the
+    /// concave-concave R_t ≈ 1.067, which is what we'd expect.)
+    #[test]
+    fn sphere_sphere_fillet_mixed_emits_torus() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r1: f64 = 2.0;
+        let big_r2: f64 = 2.5;
+        let big_d: f64 = 3.0;
+        let r_fillet: f64 = 0.4;
+
+        let a0 = (big_r1 * big_r1 - big_r2 * big_r2 + big_d * big_d) / (2.0 * big_d);
+        let r_p_sq = big_r1 * big_r1 - a0 * a0;
+        let r_p = r_p_sq.sqrt();
+
+        let s1 = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r1).unwrap();
+        let s2 = SphericalSurface::new(Point3::new(0.0, 0.0, big_d), big_r2).unwrap();
+        let spine_circle =
+            Circle3D::new(Point3::new(0.0, 0.0, a0), Vec3::new(0.0, 0.0, 1.0), r_p).unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_p, 0.0, a0), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        // Sphere 1: NOT reversed (convex, external tangency).
+        let face1 = topo.add_face(Face::new(w1, vec![], FaceSurface::Sphere(s1.clone())));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        // Sphere 2: REVERSED (concave, internal tangency).
+        let face2 = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Sphere(s2.clone()),
+        ));
+
+        let result = sphere_sphere_fillet(&s1, &s2, &spine, &topo, r_fillet, face1, face2)
+            .unwrap()
+            .expect("mixed sphere-sphere fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        let q1 = big_r1 + r_fillet; // sphere1 convex
+        let q2 = big_r2 - r_fillet; // sphere2 concave
+        let a_ball = (q1 * q1 - q2 * q2 + big_d * big_d) / (2.0 * big_d);
+        let expected_major = (q1 * q1 - a_ball * a_ball).sqrt();
+
+        assert!(
+            (torus.major_radius() - expected_major).abs() < 1e-12,
+            "mixed major should be √(Q1²−a_ball²)={expected_major}, got {}",
+            torus.major_radius()
+        );
+
+        // Check ordering: mixed major must sit BETWEEN convex/convex and
+        // concave/concave at the same r — confirms the Q-substitution
+        // produces the right interpolation.
+        let q1_cc = big_r1 + r_fillet;
+        let q2_cc = big_r2 + r_fillet;
+        let a_ball_cc = (q1_cc * q1_cc - q2_cc * q2_cc + big_d * big_d) / (2.0 * big_d);
+        let convex_convex_major = (q1_cc * q1_cc - a_ball_cc * a_ball_cc).sqrt();
+        let q1_kk = big_r1 - r_fillet;
+        let q2_kk = big_r2 - r_fillet;
+        let a_ball_kk = (q1_kk * q1_kk - q2_kk * q2_kk + big_d * big_d) / (2.0 * big_d);
+        let concave_concave_major = (q1_kk * q1_kk - a_ball_kk * a_ball_kk).sqrt();
+        assert!(
+            torus.major_radius() < convex_convex_major
+                && torus.major_radius() > concave_concave_major,
+            "mixed major ({}) should sit between concave-concave ({concave_concave_major}) and convex-convex ({convex_convex_major})",
+            torus.major_radius()
+        );
+
+        // Both contacts on respective spheres.
+        let s1_axial = big_r1 * a_ball / q1;
+        let s1_radial = big_r1 * expected_major / q1;
+        let want_s1 = Point3::new(s1_radial, 0.0, s1_axial);
+        let s2_axial_from_c2 = big_r2 * (a_ball - big_d) / q2;
+        let s2_radial = big_r2 * expected_major / q2;
+        let want_s2 = Point3::new(s2_radial, 0.0, big_d + s2_axial_from_c2);
+
+        let dist_s1 = (want_s1 - Point3::new(0.0, 0.0, 0.0)).length();
+        let dist_s2 = (want_s2 - Point3::new(0.0, 0.0, big_d)).length();
+        assert!(
+            (dist_s1 - big_r1).abs() < 1e-9,
+            "sphere1 contact must lie on sphere1: distance={dist_s1}, want R1={big_r1}"
+        );
+        assert!(
+            (dist_s2 - big_r2).abs() < 1e-9,
+            "sphere2 contact must lie on sphere2: distance={dist_s2}, want R2={big_r2}"
+        );
+
+        // Both on torus.
+        let (u_p, v_p) = ParametricSurface::project_point(&torus, want_s1);
+        let on_torus_s1 = ParametricSurface::evaluate(&torus, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&torus, want_s2);
+        let on_torus_s2 = ParametricSurface::evaluate(&torus, u_q, v_q);
+        assert!(
+            (on_torus_s1 - want_s1).length() < 1e-9,
+            "sphere1 contact must lie on torus: {on_torus_s1:?} vs {want_s1:?}"
+        );
+        assert!(
+            (on_torus_s2 - want_s2).length() < 1e-9,
+            "sphere2 contact must lie on torus: {on_torus_s2:?} vs {want_s2:?}"
         );
     }
 
