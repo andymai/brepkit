@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.63.0](https://github.com/andymai/brepkit/compare/v2.62.0...v2.63.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** convex sphere-cone analytic fillet (axisymmetric corner → torus) ([#581](https://github.com/andymai/brepkit/issues/581)) ([3543697](https://github.com/andymai/brepkit/commit/35436978211cdb2f6849f2e919c7842f51e0c223))
+
 ## [2.62.0](https://github.com/andymai/brepkit/compare/v2.61.0...v2.62.0) (2026-05-08)
 
 
