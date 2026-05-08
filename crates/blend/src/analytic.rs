@@ -9087,6 +9087,153 @@ mod tests {
         );
     }
 
+    /// Cylinder-cylinder mixed-convexity fillet: covers BOTH (s1=+1,
+    /// s2=−1) and (s1=−1, s2=+1) via a parameterized closure.
+    ///
+    /// For mixed configs, one cylinder is internally tangent to the
+    /// rolling ball (`Q_i = r_i − r`) and the other externally tangent
+    /// (`Q_i = r_i + r`). The resulting fillet cylinder has its origin
+    /// at a position determined by the asymmetric `(Q1², Q2²)` pair —
+    /// distinct from both convex (both `+ r`) and both-concave
+    /// (both `− r`) cases.
+    #[test]
+    fn cylinder_cylinder_fillet_mixed_emits_cylinder() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let r1: f64 = 2.0;
+        let r2: f64 = 2.5;
+        let big_d: f64 = 3.0;
+        let r_fillet: f64 = 0.4;
+        let x_spine = (r1 * r1 - r2 * r2 + big_d * big_d) / (2.0 * big_d);
+        let y_spine = (r1 * r1 - x_spine * x_spine).sqrt();
+
+        let run_case = |reverse_s1: bool, reverse_s2: bool| {
+            let mut topo = Topology::new();
+            let cyl1 =
+                CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r1)
+                    .unwrap();
+            let cyl2 =
+                CylindricalSurface::new(Point3::new(big_d, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r2)
+                    .unwrap();
+            let z_lo = 0.0_f64;
+            let z_hi = 4.0_f64;
+            let p_start = Point3::new(x_spine, y_spine, z_lo);
+            let p_end = Point3::new(x_spine, y_spine, z_hi);
+            let v_start = topo.add_vertex(Vertex::new(p_start, 1e-7));
+            let v_end = topo.add_vertex(Vertex::new(p_end, 1e-7));
+            let line = brepkit_math::nurbs::curve::NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![p_start, p_end],
+                vec![1.0, 1.0],
+            )
+            .unwrap();
+            let eid = topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(line)));
+            let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+            let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], false).unwrap());
+            let face1 = if reverse_s1 {
+                topo.add_face(Face::new_reversed(
+                    w1,
+                    vec![],
+                    FaceSurface::Cylinder(cyl1.clone()),
+                ))
+            } else {
+                topo.add_face(Face::new(w1, vec![], FaceSurface::Cylinder(cyl1.clone())))
+            };
+            let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], false).unwrap());
+            let face2 = if reverse_s2 {
+                topo.add_face(Face::new_reversed(
+                    w2,
+                    vec![],
+                    FaceSurface::Cylinder(cyl2.clone()),
+                ))
+            } else {
+                topo.add_face(Face::new(w2, vec![], FaceSurface::Cylinder(cyl2.clone())))
+            };
+
+            let result =
+                cylinder_cylinder_fillet(&cyl1, &cyl2, &spine, &topo, r_fillet, face1, face2)
+                    .unwrap()
+                    .expect("mixed cyl-cyl fillet should produce a stripe");
+
+            let fillet_cyl = match result.stripe.surface {
+                FaceSurface::Cylinder(c) => c,
+                other => panic!(
+                    "({reverse_s1}, {reverse_s2}): expected Cylinder, got {}",
+                    other.type_tag()
+                ),
+            };
+
+            // Predicted parameters with per-face Q-substitution.
+            let s1_signed = if reverse_s1 { -1.0_f64 } else { 1.0_f64 };
+            let s2_signed = if reverse_s2 { -1.0_f64 } else { 1.0_f64 };
+            let q1 = r1 + s1_signed * r_fillet;
+            let q2 = r2 + s2_signed * r_fillet;
+            let x_ball = (q1 * q1 - q2 * q2 + big_d * big_d) / (2.0 * big_d);
+            let y_ball = (q1 * q1 - x_ball * x_ball).sqrt();
+
+            assert!(
+                (fillet_cyl.radius() - r_fillet).abs() < 1e-12,
+                "({reverse_s1}, {reverse_s2}): fillet radius should be r = {r_fillet}, got {}",
+                fillet_cyl.radius()
+            );
+            let origin = fillet_cyl.origin();
+            assert!(
+                (origin.x() - x_ball).abs() < 1e-12 && (origin.y() - y_ball).abs() < 1e-12,
+                "({reverse_s1}, {reverse_s2}): fillet origin should be ({x_ball}, {y_ball}, *), got {origin:?}"
+            );
+
+            // Axis parallel to original cyls.
+            let axis = fillet_cyl.axis();
+            assert!(
+                axis.dot(Vec3::new(0.0, 0.0, 1.0)) > 1.0 - 1e-12,
+                "({reverse_s1}, {reverse_s2}): fillet axis should be +z, got {axis:?}"
+            );
+
+            // Read EMITTED contact endpoints. Each lies on its
+            // respective cylinder (radial r_i from cyl_i axis) AND at
+            // distance r from the fillet ball-line.
+            let (t1_start, _) = result.stripe.contact1.domain();
+            let c1_point = result.stripe.contact1.evaluate(t1_start);
+            let (t2_start, _) = result.stripe.contact2.domain();
+            let c2_point = result.stripe.contact2.evaluate(t2_start);
+
+            let dist_c1_axis = (c1_point.x().powi(2) + c1_point.y().powi(2)).sqrt();
+            let dist_c2_axis = ((c2_point.x() - big_d).powi(2) + c2_point.y().powi(2)).sqrt();
+            assert!(
+                (dist_c1_axis - r1).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): c1 must lie on cyl1: {dist_c1_axis} vs r1 = {r1}"
+            );
+            assert!(
+                (dist_c2_axis - r2).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): c2 must lie on cyl2: {dist_c2_axis} vs r2 = {r2}"
+            );
+
+            let dist_c1_to_ball =
+                ((c1_point.x() - x_ball).powi(2) + (c1_point.y() - y_ball).powi(2)).sqrt();
+            let dist_c2_to_ball =
+                ((c2_point.x() - x_ball).powi(2) + (c2_point.y() - y_ball).powi(2)).sqrt();
+            assert!(
+                (dist_c1_to_ball - r_fillet).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): c1 must be at r from fillet ball-line: \
+                 {dist_c1_to_ball} vs r = {r_fillet}"
+            );
+            assert!(
+                (dist_c2_to_ball - r_fillet).abs() < 1e-9,
+                "({reverse_s1}, {reverse_s2}): c2 must be at r from fillet ball-line: \
+                 {dist_c2_to_ball} vs r = {r_fillet}"
+            );
+        };
+
+        run_case(false, true); // (s1=+1, s2=-1)
+        run_case(true, false); // (s1=-1, s2=+1)
+    }
+
     /// Cone-cone coaxial convex fillet: two cones sharing the same axis
     /// line with different half-angles. Their intersection is a single
     /// circle, and the rolling-ball blend is a torus.
