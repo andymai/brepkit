@@ -3,17 +3,15 @@
 //! Provides conversions between analytic surface types and their NURBS
 //! representations.
 //!
-//! * `plane_to_nurbs`, `cylinder_to_nurbs`, `cone_to_nurbs` produce
-//!   **geometrically exact** rational NURBS (the rational forms exactly
-//!   reproduce the analytic surface within floating-point tolerance).
-//! * `sphere_to_nurbs`, `torus_to_nurbs` currently delegate to
-//!   `brepkit-math`'s sampled approximation (33 × 9 degree-1×1 grid).
-//!   Chord-height error: sphere ~0.5% in u, ~2% in v (8 spans across
-//!   180° of latitude); torus ~0.5% in u, ~7–10% of *minor* radius
-//!   in v (8 spans across the full 360° tube cross-section, so the
-//!   per-span angular width is twice the sphere's). The exact
-//!   rational forms (rotational sweep of a rational arc) are
-//!   tracked as a future improvement.
+//! * `plane_to_nurbs`, `cylinder_to_nurbs`, `cone_to_nurbs`,
+//!   `sphere_to_nurbs` produce **geometrically exact** rational NURBS
+//!   (the rational forms exactly reproduce the analytic surface
+//!   within floating-point tolerance).
+//! * `torus_to_nurbs` currently delegates to `brepkit-math`'s sampled
+//!   approximation (33 × 9 degree-1×1 grid; chord-height error
+//!   ~0.5% of major radius in u, ~7–10% of minor radius in v). The
+//!   exact rational form (composition of two rational arcs) is a
+//!   tracked improvement.
 
 use std::f64::consts::FRAC_1_SQRT_2;
 
@@ -189,20 +187,108 @@ pub fn cone_to_nurbs(
     Ok(NurbsSurface::new(2, 1, knots_u, knots_v, cps, ws)?)
 }
 
-/// Convert a spherical surface to a NURBS surface.
+/// Convert a spherical surface to a **geometrically exact** rational
+/// NURBS surface.
 ///
-/// **Approximate.** Currently delegates to `brepkit-math`'s sampled
-/// representation (33 × 9 grid of points, degree 1 × 1 NURBS). The
-/// chord-height error is ~0.5% of radius along u (33 samples on
-/// 360° revolution) and ~2% along v (9 samples on 180° latitude).
-/// The exact rational form (degree 2 × 2, rotational sweep of a
-/// rational semi-circle arc) is a tracked improvement.
+/// Uses the standard tensor-product rational form (Piegl-Tiller §7.5):
+/// degree `(2, 2)` with a 9 × 5 control grid where the u-direction
+/// is the cylinder/cone 9-CP four-quarter-arc circle and the
+/// v-direction is the meridian semicircle (5 CPs, two quarter-arcs).
+/// Weights are the tensor product `w_uv = w_u · w_v`.
+///
+/// The result has `domain_u = [0, 2π)` and `domain_v = [-π/2, π/2]`,
+/// matching `SphericalSurface`'s natural parameter ranges. Note the
+/// `(u, v) → 3D` mapping itself differs from `SphericalSurface::evaluate`:
+/// the analytic form uses `sin/cos`, while the rational NURBS uses a
+/// piecewise polynomial-of-rationals that can't reproduce sin/cos at
+/// every parameter. Both surfaces describe the same 3D sphere, but a
+/// fixed `(u, v)` does NOT evaluate to the same point in both — only
+/// the underlying surface (set of 3D points) is preserved exactly.
+///
+/// The poles (`v = ±π/2`) are degenerate in the parameterization
+/// (multiple `u` values map to the same point), as is standard for
+/// tensor-product spheres. This matches OCCT's `Geom_SphericalSurface`
+/// behavior.
 ///
 /// # Errors
 ///
 /// Returns [`HealError`] if NURBS construction fails.
 pub fn sphere_to_nurbs(sphere: &SphericalSurface) -> Result<NurbsSurface, HealError> {
-    Ok(sphere.to_nurbs()?)
+    use std::f64::consts::{FRAC_PI_2, TAU};
+    let r = sphere.radius();
+    let center = sphere.center();
+    let x_axis = sphere.x_axis();
+    let y_axis = sphere.y_axis();
+    let z_axis = sphere.z_axis();
+
+    // u-direction: 9 CPs around the unit circle (four quarter-arcs).
+    // (Corner CPs lie at distance √2 from origin; the 1/√2 weight
+    // pulls them onto the rational unit circle.)
+    let dirs_u: [(f64, f64); 9] = [
+        (1.0, 0.0),
+        (1.0, 1.0),
+        (0.0, 1.0),
+        (-1.0, 1.0),
+        (-1.0, 0.0),
+        (-1.0, -1.0),
+        (0.0, -1.0),
+        (1.0, -1.0),
+        (1.0, 0.0),
+    ];
+    let weights_u: [f64; 9] = [
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+        FRAC_1_SQRT_2,
+        1.0,
+    ];
+
+    // v-direction: 5 CPs for a meridian semicircle in the (radial, axial)
+    // half-plane. South pole at v=-π/2 → (radial=0, axial=-r). The two
+    // off-meridian corner CPs at (r, ±r) are at √2·r from the meridian
+    // axis but pulled back onto the semicircle by their 1/√2 weights.
+    let merid_pts: [(f64, f64); 5] = [(0.0, -r), (r, -r), (r, 0.0), (r, r), (0.0, r)];
+    let weights_v: [f64; 5] = [1.0, FRAC_1_SQRT_2, 1.0, FRAC_1_SQRT_2, 1.0];
+
+    let mut cps: Vec<Vec<Point3>> = Vec::with_capacity(9);
+    let mut ws: Vec<Vec<f64>> = Vec::with_capacity(9);
+    for (i, &(dx, dy)) in dirs_u.iter().enumerate() {
+        let mut row = Vec::with_capacity(5);
+        let mut wrow = Vec::with_capacity(5);
+        for (j, &(r_merid, z_merid)) in merid_pts.iter().enumerate() {
+            // CP is the meridian point's radial component, rotated by
+            // the unit-circle CP direction, plus axial offset along z.
+            let p = center + x_axis * (dx * r_merid) + y_axis * (dy * r_merid) + z_axis * z_merid;
+            row.push(p);
+            wrow.push(weights_u[i] * weights_v[j]);
+        }
+        cps.push(row);
+        ws.push(wrow);
+    }
+
+    let knots_u = vec![
+        0.0,
+        0.0,
+        0.0,
+        TAU * 0.25,
+        TAU * 0.25,
+        TAU * 0.5,
+        TAU * 0.5,
+        TAU * 0.75,
+        TAU * 0.75,
+        TAU,
+        TAU,
+        TAU,
+    ];
+    let knots_v = vec![
+        -FRAC_PI_2, -FRAC_PI_2, -FRAC_PI_2, 0.0, 0.0, FRAC_PI_2, FRAC_PI_2, FRAC_PI_2,
+    ];
+
+    Ok(NurbsSurface::new(2, 2, knots_u, knots_v, cps, ws)?)
 }
 
 /// Convert a toroidal surface to a NURBS surface.
@@ -418,22 +504,32 @@ mod tests {
     }
 
     #[test]
-    fn sphere_to_nurbs_approximates_sphere() {
-        // Sampled NURBS (33 × 9 degree-1) — tolerance reflects chord
-        // deviation, not floating-point drift. Document max observed
-        // residual so a tightening is detectable when an exact rational
-        // form is implemented.
+    fn sphere_to_nurbs_evaluates_exactly_on_sphere() {
+        // Exact rational sphere — every sampled NURBS point lies on
+        // the sphere within floating-point tolerance, NOT just within
+        // a chord-deviation bound.
         let center = Point3::new(0.0, 0.0, 0.0);
         let radius = 1.5_f64;
         let sphere = SphericalSurface::new(center, radius).unwrap();
         let surface = sphere_to_nurbs(&sphere).unwrap();
 
+        // Domain should be the sphere's natural parameterization
+        // [0, 2π) × [-π/2, π/2].
         let u_dom = surface.domain_u();
         let v_dom = surface.domain_v();
-        let n = 12;
+        assert!(u_dom.0.abs() < 1e-12 && (u_dom.1 - std::f64::consts::TAU).abs() < 1e-12);
+        assert!(
+            (v_dom.0 + std::f64::consts::FRAC_PI_2).abs() < 1e-12
+                && (v_dom.1 - std::f64::consts::FRAC_PI_2).abs() < 1e-12
+        );
+
+        let n = 16;
         let mut max_err = 0.0_f64;
         for i in 0..=n {
-            for j in 0..=n {
+            for j in 1..n {
+                // Skip exact poles to dodge parameterization degeneracy
+                // (multiple u values map to the same pole point — the
+                // residual is still 0 there, just a noisier evaluation).
                 let u = u_dom.0 + (u_dom.1 - u_dom.0) * f64::from(i) / f64::from(n);
                 let v = v_dom.0 + (v_dom.1 - v_dom.0) * f64::from(j) / f64::from(n);
                 let p = ParametricSurface::evaluate(&surface, u, v);
@@ -441,14 +537,37 @@ mod tests {
                 max_err = max_err.max((r - radius).abs());
             }
         }
-        // Sampled-NURBS approximation: 9 latitude samples across 180°
-        // = 8 spans of 22.5°, max chord deviation per span
-        // = R(1 − cos(11.25°)) ≈ 1.9% of radius. Bound at 3% to
-        // detect regressions while allowing for fp jitter and the
-        // sample grid's worst-case non-equator latitudes.
         assert!(
-            max_err < 0.03 * radius,
-            "max sphere residual {max_err} exceeds 3% of radius"
+            max_err < 1e-9,
+            "exact rational sphere residual {max_err} exceeds 1e-9"
+        );
+    }
+
+    #[test]
+    fn sphere_to_nurbs_off_origin_evaluates_on_sphere() {
+        // Sanity check that the off-origin / oriented case also stays
+        // on the sphere — exact rational form should be coordinate-
+        // and-orientation-invariant.
+        let center = Point3::new(2.0, -1.0, 3.0);
+        let radius = 1.7_f64;
+        let sphere = SphericalSurface::with_axis(center, radius, Vec3::new(1.0, 1.0, 1.0)).unwrap();
+        let surface = sphere_to_nurbs(&sphere).unwrap();
+        let u_dom = surface.domain_u();
+        let v_dom = surface.domain_v();
+        let n = 12;
+        let mut max_err = 0.0_f64;
+        for i in 0..=n {
+            for j in 1..n {
+                let u = u_dom.0 + (u_dom.1 - u_dom.0) * f64::from(i) / f64::from(n);
+                let v = v_dom.0 + (v_dom.1 - v_dom.0) * f64::from(j) / f64::from(n);
+                let p = ParametricSurface::evaluate(&surface, u, v);
+                let r = (p - center).length();
+                max_err = max_err.max((r - radius).abs());
+            }
+        }
+        assert!(
+            max_err < 1e-9,
+            "off-origin oriented sphere residual {max_err} exceeds 1e-9"
         );
     }
 
