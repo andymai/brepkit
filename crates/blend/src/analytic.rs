@@ -88,6 +88,17 @@ pub fn try_analytic_fillet(
             }
             Ok(result)
         }
+        (FaceSurface::Plane { normal, d }, FaceSurface::Sphere(sph)) => {
+            plane_sphere_fillet(*normal, *d, sph, spine, topo, radius, face1, face2)
+        }
+        (FaceSurface::Sphere(sph), FaceSurface::Plane { normal, d }) => {
+            let mut result =
+                plane_sphere_fillet(*normal, *d, sph, spine, topo, radius, face2, face1)?;
+            if let Some(ref mut r) = result {
+                swap_stripe_sides(r);
+            }
+            Ok(result)
+        }
         // Pairs without an analytic path → walker fallback. Enumerated
         // exhaustively (matching `try_analytic_chamfer`) so adding a new
         // `FaceSurface` variant produces a compile error at this site
@@ -99,15 +110,18 @@ pub fn try_analytic_fillet(
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_)
             | FaceSurface::Nurbs(_),
-            FaceSurface::Sphere(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
+            FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
         )
         | (
-            FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
-            FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_),
         )
         | (
-            FaceSurface::Sphere(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
-            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
+            FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_),
         ) => Ok(None),
     }
 }
@@ -1584,6 +1598,279 @@ pub fn plane_cone_chamfer(
     }))
 }
 
+/// Fillet between a plane and a sphere whose center sits along the plate
+/// normal — the classic "sphere on plate" convex case (e.g. a hemispherical
+/// post fused to a slab; the spine is the circle where sphere meets plate).
+///
+/// `radius` is the rolling-ball fillet radius. Convex configuration only —
+/// concave (sphere-shaped pocket through plate top) follows up.
+///
+/// # Geometry
+///
+/// With `h = |dot(sphere_center − p_axis_on_plane, n_p_inward)|` (always
+/// non-negative; `h = 0` means sphere center sits on the plate, e.g. a
+/// hemisphere) and `R = sphere.radius()`:
+///
+///   - spine radius `r_p = √(R² − h²)`,
+///   - rolling-ball trajectory: ball center on a circle of radius
+///     `R_t = √(r_p² + 2r(R+h))` parallel to the plate, axially offset
+///     `r` (one fillet radius) on the empty-wedge side,
+///   - fillet surface: torus with axis perpendicular to the plate, major
+///     radius `R_t`, minor radius `r`,
+///   - plate-side contact: circle of radius `R_t` on the spine plane,
+///   - sphere-side contact: circle on the sphere where the rolling ball
+///     touches it (a small circle on the sphere, in a plane perpendicular
+///     to the torus axis).
+///
+/// At `h = 0` (hemisphere on plate) the formula collapses to
+/// `R_t² = R² + 2Rr`. At `h → R` (sphere just-touching plate) `r_p → 0`
+/// and the spine vanishes — rejected upstream by `Spine::length()`.
+///
+/// # Returns
+///
+/// `Ok(None)` (walker fallback) when:
+///   - the sphere's center isn't on the plane normal line through the
+///     spine projection (sphere not axisymmetric to the plate),
+///   - sphere face is reversed (concave pocket case — separate codepath),
+///   - sphere doesn't intersect the plate (`h ≥ R`),
+///   - `radius` is non-positive, or
+///   - the spine is degenerate.
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or NURBS construction fails.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn plane_sphere_fillet(
+    n_p_inward: Vec3,
+    d_plane: f64,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    spine: &Spine,
+    topo: &Topology,
+    radius: f64,
+    face_plane: FaceId,
+    face_sphere: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    use brepkit_math::surfaces::ToroidalSurface;
+    use std::f64::consts::PI;
+
+    let tol_lin = 1e-9;
+
+    // 1) Concave (sphere face reversed = pocket through plate top) is a
+    //    separate geometry — rolling ball is INTERNALLY tangent to the
+    //    sphere (`R − r` instead of `R + r`), giving a different formula
+    //    and tighter spindle bound. Defer to a follow-up.
+    if topo.face(face_sphere)?.is_reversed() {
+        return Ok(None);
+    }
+    if radius <= tol_lin {
+        return Ok(None);
+    }
+
+    let big_r = sphere.radius();
+    let center = sphere.center();
+    let center_v = Vec3::new(center.x(), center.y(), center.z());
+
+    // 2) Project sphere center onto the plate to get the spine-circle
+    //    center. By construction `p_axis_on_plane − center` is along
+    //    `n_p_inward`, so the spine is automatically axisymmetric about
+    //    the plate normal — the only valid configuration for the analytic
+    //    formula.
+    let step = d_plane - n_p_inward.dot(center_v);
+    let p_axis_on_plane = center + n_p_inward * step;
+
+    // 3) Signed distance from plate to sphere center along n_p_inward:
+    //    `h_signed = (sphere_center − p_axis_on_plane) · n_p_inward`.
+    //    Negative means sphere center is on the side OPPOSITE the plate
+    //    material (the typical "sphere post on plate slab"); positive
+    //    means same side as plate material (sphere buried with cap
+    //    emerging). The R_t formula and contact_sphere placement use
+    //    `h_signed` directly — both convex configurations share a
+    //    unified expression `R_t² = r_p² + 2r(R − h_signed)` once the
+    //    sign is preserved.
+    let h_signed = -step;
+    let h_abs = h_signed.abs();
+
+    // 4) Sphere must intersect the plate to give a spine. `|h_signed| < R`
+    //    ⇒ spine exists.
+    if h_abs >= big_r - tol_lin {
+        return Ok(None);
+    }
+
+    let r_p_sq = big_r * big_r - h_abs * h_abs;
+    if r_p_sq <= tol_lin * tol_lin {
+        return Ok(None);
+    }
+
+    // 5) Major radius via rolling-ball external-tangency constraint.
+    //    Ball is on the −n_p_inward side of the plate (the empty wedge,
+    //    away from plate material). Solving
+    //      R_t² + (r + h_signed)² = (R + r)²
+    //    yields
+    //      R_t² = (R + r)² − (r + h_signed)²
+    //           = (R² − h_signed²) + 2r(R − h_signed)
+    //           = r_p² + 2r(R − h_signed).
+    //    For the post-on-slab case (h_signed = −|h|) this reduces to
+    //    `r_p² + 2r(R + |h|)`; for the buried-sphere case (h_signed = +|h|)
+    //    it becomes the smaller `r_p² + 2r(R − |h|)`.
+    let major_radius_sq = r_p_sq + 2.0 * radius * (big_r - h_signed);
+    if major_radius_sq <= tol_lin * tol_lin {
+        return Ok(None);
+    }
+    let major_radius = major_radius_sq.sqrt();
+    let minor_radius = radius;
+    // Spindle check: a torus with major < minor self-intersects and is
+    // invalid as a fillet surface. In the buried-sphere case
+    // (h_signed near R) the major can shrink below r, so guard.
+    if major_radius < minor_radius - tol_lin {
+        return Ok(None);
+    }
+
+    // 6) Spine span — same closed-circle handling as plane-cylinder.
+    let edges = spine.edges();
+    let is_closed_spine = if edges.len() == 1 {
+        let e = topo.edge(edges[0])?;
+        e.start() == e.end()
+    } else {
+        false
+    };
+    let spine_len = spine.length();
+    if !is_closed_spine && spine_len < tol_lin {
+        return Ok(None);
+    }
+
+    // 7) Construct the torus. Axis: parallel to n_p_inward (always — the
+    //    torus is symmetric about the line from sphere center perpendicular
+    //    to the plate, which IS the n_p_inward axis). Reference direction:
+    //    inherit the sphere's u=0 frame so contact-circle parameterization
+    //    aligns with the sphere's u-coord. For brepkit's SphericalSurface
+    //    `Frame3::from_normal(axis)` produces (x_axis, y_axis) consistent
+    //    with the spine's u parameter when projected.
+    let torus_axis = n_p_inward;
+    let sphere_x = sphere.x_axis();
+    let sphere_y = sphere.y_axis();
+
+    // Torus center on the empty-wedge side of the plate (one fillet radius
+    // away along -n_p_inward), matching the plane-cylinder convention.
+    let torus_center = p_axis_on_plane - n_p_inward * radius;
+    let torus = ToroidalSurface::with_axis_and_ref_dir(
+        torus_center,
+        major_radius,
+        minor_radius,
+        torus_axis,
+        sphere_x,
+    )?;
+
+    // 8) Spine endpoints in 3D and corresponding u-parameters. We
+    //    parameterize the contact circles with the sphere's frame so the
+    //    pcurve on the sphere is a horizontal Line2D in (u, v).
+    let u_at = |p: Point3| {
+        let v = p - p_axis_on_plane;
+        sphere_y.dot(v).atan2(sphere_x.dot(v))
+    };
+    let p_spine_start = spine.evaluate(topo, 0.0)?;
+    let u_start = u_at(p_spine_start);
+    let u_end = if is_closed_spine {
+        u_start + 2.0 * PI
+    } else {
+        let p_spine_end = spine.evaluate(topo, spine_len)?;
+        let u_end_raw = u_at(p_spine_end);
+        if u_end_raw > u_start {
+            u_end_raw
+        } else {
+            u_end_raw + 2.0 * PI
+        }
+    };
+
+    // 9) Contact circles.
+    //
+    //    Plate-side: circle of radius `major_radius` at z = plate (where
+    //    the torus tube touches the plate face).
+    //
+    //    Sphere-side: contact = sphere_center + R · (ball − sphere_center)/(R + r).
+    //    Decomposed along n_p_inward and the radial(u) direction:
+    //      contact_radial = R_t · R / (R + r),
+    //      contact_axial_along_n_p_inward
+    //          = h_signed + R · (−r − h_signed)/(R + r)
+    //          = (h_signed(R + r) + R(−r − h_signed))/(R + r)
+    //          = r · (h_signed − R) / (R + r).
+    //    Sign of `contact_axial` follows `h_signed`'s sign for the
+    //    post-on-slab case (h_signed < 0 ⇒ contact_axial < 0 ⇒ point on
+    //    the −n_p_inward side, which is +z above the plate top).
+    let contact_sphere_radial = major_radius * big_r / (big_r + radius);
+    let contact_sphere_axial = radius * (h_signed - big_r) / (big_r + radius);
+    let contact_sphere_center = p_axis_on_plane + n_p_inward * contact_sphere_axial;
+
+    let contact_plane_circle = brepkit_math::curves::Circle3D::with_axes(
+        p_axis_on_plane,
+        torus_axis,
+        major_radius,
+        sphere_x,
+        sphere_y,
+    )?;
+    let contact_sphere_circle = brepkit_math::curves::Circle3D::with_axes(
+        contact_sphere_center,
+        torus_axis,
+        contact_sphere_radial,
+        sphere_x,
+        sphere_y,
+    )?;
+    let contact_plane = circle_arc_to_nurbs(&contact_plane_circle, u_start, u_end)?;
+    let contact_sphere = circle_arc_to_nurbs(&contact_sphere_circle, u_start, u_end)?;
+
+    // 10) PCurves.
+    let plane_adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n_p_inward, d_plane);
+    let pcurve_plane = {
+        let (cu, cv) = plane_adapter.project_point(p_axis_on_plane);
+        Curve2D::Circle(brepkit_math::curves2d::Circle2D::new(
+            brepkit_math::vec::Point2::new(cu, cv),
+            major_radius,
+        )?)
+    };
+    // Sphere pcurve at constant v (latitude on sphere). Use
+    // ParametricSurface::project_point to get the correct (u, v) for one
+    // point on the contact circle, then sweep u. For brepkit's
+    // SphericalSurface the v-parameter is co-latitude from the +axis.
+    let sample_p = contact_sphere_circle.evaluate(u_start);
+    let v_sphere = ParametricSurface::project_point(sphere, sample_p).1;
+    let pcurve_sphere = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_start, v_sphere),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+
+    // 11) Cross-sections at spine endpoints.
+    let p_plane_at = |u: f64| contact_plane_circle.evaluate(u);
+    let p_sphere_at = |u: f64| contact_sphere_circle.evaluate(u);
+    let center_at = |u: f64| contact_plane_circle.evaluate(u) - n_p_inward * radius;
+    let plane_uv_at = |u: f64| plane_adapter.project_point(p_plane_at(u));
+    let section_at = |u: f64, t: f64| CircSection {
+        p1: p_plane_at(u),
+        p2: p_sphere_at(u),
+        center: center_at(u),
+        radius,
+        uv1: plane_uv_at(u),
+        uv2: (u, v_sphere),
+        t,
+    };
+    let section_start = section_at(u_start, 0.0);
+    let section_end = section_at(u_end, 1.0);
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Torus(torus),
+        pcurve1: pcurve_plane,
+        pcurve2: pcurve_sphere,
+        contact1: contact_plane,
+        contact2: contact_sphere,
+        face1: face_plane,
+        face2: face_sphere,
+        sections: vec![section_start, section_end],
+    };
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
+}
+
 /// Fillet between two cylinders.
 ///
 /// Not yet implemented. Returns `None` so the caller falls back to the walking
@@ -2528,6 +2815,140 @@ mod tests {
         assert!(
             closest_cyl < 1e-3,
             "concave chamfer cone should pass near cyl contact at {want_cyl:?}; closest = {closest_cyl:.6}"
+        );
+    }
+
+    /// Convex plane-sphere fillet: a sphere intersecting a plate from above
+    /// (post-on-slab configuration). The fillet rounds the convex spine
+    /// circle and produces a Toroidal blend surface.
+    ///
+    /// Scenario:
+    ///   - Plate top face at z=0 with raw outward = +z.
+    ///   - After orient_plane_surface (which the dispatcher applies for
+    ///     fillet), n_p_inward = -z (into plate material below).
+    ///   - Sphere center at (0,0,h)=( 0,0,1) above plate, radius R=2,
+    ///     so spine circle is z=0 with r_p = √(R²−h²) = √3.
+    ///   - Fillet radius r=0.3.
+    ///
+    /// Predicted analytics (using h_signed = -h = -1):
+    ///   - R_t² = r_p² + 2r(R − h_signed) = 3 + 2·0.3·(2−(−1)) = 4.8
+    ///   - Torus center: p_axis − n_p_inward · r = (0,0,0) − (−z)·0.3 = (0,0,+0.3)
+    ///   - Plate contact at radial R_t, z=0
+    ///   - Sphere contact at radial R·R_t/(R+r) ≈ 1.905,
+    ///     z = +r(R − h_signed)/(R + r) ≈ +0.391 (above plate)
+    #[test]
+    fn plane_sphere_fillet_convex_emits_torus() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r: f64 = 2.0;
+        let h_real: f64 = 1.0;
+        let r_fillet: f64 = 0.3;
+        let r_p_sq = big_r * big_r - h_real * h_real;
+        let r_p = r_p_sq.sqrt();
+
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_p, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_p).unwrap();
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Plate top face at z=0 with raw outward = +z (away from plate
+        // material at z<0). After orient_plane_surface, the dispatcher
+        // would pass n_p_inward = -z; we mirror that here.
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_plate = topo.add_face(Face::new(
+            w1,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+
+        // Sphere centered above plate, NOT reversed (convex post).
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, h_real), big_r).unwrap();
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_sphere = topo.add_face(Face::new(w2, vec![], FaceSurface::Sphere(sphere.clone())));
+
+        let n_p_inward = Vec3::new(0.0, 0.0, -1.0);
+        let result = plane_sphere_fillet(
+            n_p_inward,
+            0.0,
+            &sphere,
+            &spine,
+            &topo,
+            r_fillet,
+            face_plate,
+            face_sphere,
+        )
+        .unwrap()
+        .expect("convex plane-sphere fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        let expected_major_sq = r_p_sq + 2.0 * r_fillet * (big_r + h_real);
+        let expected_major = expected_major_sq.sqrt();
+        assert!(
+            (torus.major_radius() - expected_major).abs() < 1e-12,
+            "torus major should be √(r_p² + 2r(R+h)) = {expected_major}, got {}",
+            torus.major_radius()
+        );
+        assert!(
+            (torus.minor_radius() - r_fillet).abs() < 1e-12,
+            "torus minor should equal fillet radius {r_fillet}, got {}",
+            torus.minor_radius()
+        );
+
+        // Torus center at z = +r (above plate, in empty wedge between
+        // plate top and upper hemisphere).
+        let center = torus.center();
+        assert!(
+            (center.x()).abs() < 1e-12 && (center.y()).abs() < 1e-12,
+            "torus center should be on z-axis, got {center:?}"
+        );
+        assert!(
+            (center.z() - r_fillet).abs() < 1e-12,
+            "torus center z should be +r_fillet = {r_fillet}, got {}",
+            center.z()
+        );
+
+        // Both contacts must lie ON the torus surface — verify via
+        // project_point (frame-orientation-agnostic).
+        let want_plate = Point3::new(expected_major, 0.0, 0.0);
+        let r_plus_r = big_r + r_fillet;
+        let want_sphere = Point3::new(
+            expected_major * big_r / r_plus_r,
+            0.0,
+            r_fillet * (big_r + h_real) / r_plus_r,
+        );
+        let (u_p, v_p) = ParametricSurface::project_point(&torus, want_plate);
+        let on_torus_plate = ParametricSurface::evaluate(&torus, u_p, v_p);
+        let (u_s, v_s) = ParametricSurface::project_point(&torus, want_sphere);
+        let on_torus_sphere = ParametricSurface::evaluate(&torus, u_s, v_s);
+        assert!(
+            (on_torus_plate - want_plate).length() < 1e-9,
+            "plate contact must lie on torus: project→eval gave {on_torus_plate:?}, want {want_plate:?}"
+        );
+        assert!(
+            (on_torus_sphere - want_sphere).length() < 1e-9,
+            "sphere contact must lie on torus: project→eval gave {on_torus_sphere:?}, want {want_sphere:?}"
+        );
+
+        // Sanity-check: sphere contact point should also lie on the
+        // sphere surface itself (distance R from center).
+        let sphere_dist = (want_sphere - Point3::new(0.0, 0.0, h_real)).length();
+        assert!(
+            (sphere_dist - big_r).abs() < 1e-9,
+            "sphere contact must lie on sphere: distance from center = {sphere_dist}, want {big_r}"
         );
     }
 
