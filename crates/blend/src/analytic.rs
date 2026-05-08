@@ -2592,10 +2592,15 @@ pub fn sphere_sphere_chamfer(
     let p1_r = r_p * cos1 + s1_signed * a0 * sin1;
     let p1_z_from_c1 = a0 * cos1 - s1_signed * r_p * sin1;
 
-    // Contact 2 on sphere 2 in (radial, axial-from-C1) coords.
-    // For sphere 2 the "into face" direction is opposite to sphere 1's
-    // when both convex (each goes AWAY from the other), so the sign of
-    // δ in sphere2's parameterization is flipped relative to sphere 1.
+    // Contact 2 on sphere 2 in (radial, axial-from-C1) coords. Sphere 2
+    // is centered at C2 (axial offset = D from C1), so its formulas use
+    // `(D − a0)` (axial distance from C2 to spine) where sphere 1 used
+    // `a0`. That structural asymmetry — not `s2_signed` — is what
+    // encodes the convex-convex case's "spheres extend away from each
+    // other" geometry: in the convex-convex case both contacts lie on
+    // their respective FAR caps. `s2_signed` only flips when sphere 2's
+    // FACE is reversed (concave), redirecting its meridian arm just
+    // like `s1_signed` does for sphere 1.
     let delta2 = d2 / big_r2;
     let (sin2, cos2) = delta2.sin_cos();
     let p2_r = r_p * cos2 + s2_signed * (big_d - a0) * sin2;
