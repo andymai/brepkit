@@ -554,6 +554,21 @@ impl Hyperbola3D {
         self.normal
     }
 
+    /// Returns the in-plane u-axis (real semi-axis direction).
+    /// At parameter `t`, the hyperbola is at offset
+    /// `semi_major * cosh(t) * u_axis + semi_minor * sinh(t) * v_axis`
+    /// from the center.
+    #[must_use]
+    pub const fn u_axis(&self) -> Vec3 {
+        self.u_axis
+    }
+
+    /// Returns the in-plane v-axis (imaginary semi-axis direction).
+    #[must_use]
+    pub const fn v_axis(&self) -> Vec3 {
+        self.v_axis
+    }
+
     /// Returns the eccentricity: `e = sqrt(1 + (b/a)²)`.
     #[must_use]
     pub fn eccentricity(&self) -> f64 {
