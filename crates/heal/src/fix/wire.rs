@@ -219,13 +219,30 @@ fn fix_reorder(
 
 /// Close gaps between consecutive edges by merging nearby vertices.
 ///
+/// Uses `ctx.tolerance.linear` as the merge threshold. For widened-
+/// tolerance gap closing, see [`fix_gaps_3d`] which retries with a
+/// wider threshold when nominal-tolerance closing leaves gaps behind.
+///
 /// Ported from `operations::heal::close_wire_gaps`.
-#[allow(clippy::needless_pass_by_ref_mut)]
 fn fix_connected(
     topo: &mut Topology,
     wire_id: WireId,
     ctx: &mut HealContext,
     config: &FixConfig,
+) -> Result<FixResult, HealError> {
+    let merge_tol = ctx.tolerance.linear;
+    fix_connected_with_tol(topo, wire_id, ctx, config, merge_tol)
+}
+
+/// Parameterized gap-closing helper — used by both [`fix_connected`]
+/// (nominal tolerance) and [`fix_gaps_3d`] (widened tolerance).
+#[allow(clippy::needless_pass_by_ref_mut)]
+fn fix_connected_with_tol(
+    topo: &mut Topology,
+    wire_id: WireId,
+    ctx: &mut HealContext,
+    config: &FixConfig,
+    merge_tol: f64,
 ) -> Result<FixResult, HealError> {
     let analysis = crate::analysis::wire::analyze_wire(topo, wire_id, &ctx.tolerance)?;
     let has_issue = !analysis.gaps.is_empty();
@@ -243,7 +260,7 @@ fn fix_connected(
         return Ok(FixResult::ok());
     }
 
-    let tol_sq = ctx.tolerance.linear * ctx.tolerance.linear;
+    let tol_sq = merge_tol * merge_tol;
     let mut merge_pairs: Vec<(VertexId, VertexId)> = Vec::new();
 
     // Snapshot all oriented endpoint vertex IDs.
@@ -465,17 +482,65 @@ fn fix_degenerate(
     })
 }
 
-/// Close 3D gaps between edges — delegates to `fix_connected`.
+/// Close 3D gaps between consecutive edges, including gaps wider than
+/// the nominal `ctx.tolerance.linear` that [`fix_connected`] would not
+/// close.
+///
+/// # Algorithm
+///
+/// 1. First attempt at `ctx.tolerance.linear`.
+/// 2. If `analyze_wire` still reports gaps after step 1, recompute the
+///    largest residual gap and retry once at a widened tolerance:
+///    `widened = min(2 * largest_gap, 100 * linear, MAX_GAP_3D_BOUND)`.
+///    The 2× safety factor on `largest_gap` ensures we close the
+///    measured gap; the `100 * linear` cap prevents runaway widening
+///    on degenerate inputs; the absolute upper bound
+///    [`MAX_GAP_3D_BOUND`] caps catastrophic merges in mm-scale
+///    geometry.
+/// 3. If gaps remain after the widened pass, return the partial
+///    result (caller / pipeline can decide whether to escalate).
 fn fix_gaps_3d(
     topo: &mut Topology,
     wire_id: WireId,
     ctx: &mut HealContext,
     config: &FixConfig,
 ) -> Result<FixResult, HealError> {
-    // TODO: implement 3D-specific gap closing (e.g. tolerance widening,
-    // or bridging gaps that fix_connected cannot close at the nominal tol).
-    fix_connected(topo, wire_id, ctx, config)
+    let mut result = fix_connected(topo, wire_id, ctx, config)?;
+
+    // Re-analyze: did nominal-tolerance pass close every gap?
+    let post = crate::analysis::wire::analyze_wire(topo, wire_id, &ctx.tolerance)?;
+    if post.gaps.is_empty() {
+        return Ok(result);
+    }
+
+    let largest_gap = post.gaps.iter().map(|g| g.distance).fold(0.0_f64, f64::max);
+
+    let nominal = ctx.tolerance.linear;
+    let widened = (2.0 * largest_gap)
+        .min(100.0 * nominal)
+        .min(MAX_GAP_3D_BOUND);
+    if widened <= nominal {
+        // Nothing more we can do — the residual gaps are below our
+        // floor or the bounded widened tolerance doesn't actually
+        // exceed the nominal one.
+        return Ok(result);
+    }
+
+    ctx.info(format!(
+        "Wire {wire_id:?}: retrying gap close at widened tolerance \
+         {widened:.2e} (nominal={nominal:.2e}, largest_gap={largest_gap:.2e})",
+    ));
+
+    let widened_result = fix_connected_with_tol(topo, wire_id, ctx, config, widened)?;
+    result.merge(&widened_result);
+    Ok(result)
 }
+
+/// Absolute upper bound on the widened tolerance used for 3D gap
+/// closing. 1mm is a sensible cap for STEP/IGES imports of mm-scale
+/// CAD parts — gaps larger than this typically indicate a real
+/// modeling error, not numerical drift.
+const MAX_GAP_3D_BOUND: f64 = 1e-3;
 
 /// Remove short trailing edges at wire ends (open wires only).
 fn fix_tail(
@@ -1208,4 +1273,81 @@ fn fix_coincident_vertices(
     }
 
     Ok(merged)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::context::HealContext;
+    use crate::fix::config::FixConfig;
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::edge::Edge;
+    use brepkit_topology::vertex::Vertex;
+
+    /// Build an open wire of two collinear edges with a gap of `gap`
+    /// between the end of edge1 and the start of edge2 (along +x).
+    /// Returns the wire id and the inner gap-vertex IDs (start_v2 then
+    /// end_v1) so tests can assert on reshape state.
+    fn make_two_edges_with_gap(topo: &mut Topology, gap: f64) -> (WireId, VertexId, VertexId) {
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        // Both edges have line geometry (EdgeCurve::Line), endpoints
+        // come from vertex positions.
+        let v1_end = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let v2_start = topo.add_vertex(Vertex::new(Point3::new(1.0 + gap, 0.0, 0.0), 1e-7));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(2.0, 0.0, 0.0), 1e-7));
+
+        let e1 = topo.add_edge(Edge::new(v0, v1_end, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2_start, v3, EdgeCurve::Line));
+
+        let wire = Wire::new(
+            vec![OrientedEdge::new(e1, true), OrientedEdge::new(e2, true)],
+            false,
+        )
+        .expect("wire");
+        let wid = topo.add_wire(wire);
+        (wid, v2_start, v1_end)
+    }
+
+    #[test]
+    fn fix_gaps_3d_widens_tolerance_to_close_gap_above_nominal() {
+        // Gap ~5e-6 — above nominal linear tol (1e-7) but well below
+        // the 1mm widening cap. fix_gaps_3d should close it via the
+        // widened-tolerance second pass.
+        let mut topo = Topology::new();
+        let (wid, v_from, v_to) = make_two_edges_with_gap(&mut topo, 5e-6);
+
+        let mut ctx = HealContext::new();
+        let cfg = FixConfig::default();
+        let result = fix_gaps_3d(&mut topo, wid, &mut ctx, &cfg).unwrap();
+
+        // The widened pass should have merged the two endpoint vertices
+        // (recorded in reshape).
+        assert_eq!(
+            ctx.reshape.resolve_vertex(v_from),
+            v_to,
+            "v_from should resolve to v_to after gap close"
+        );
+        assert!(result.actions_taken >= 1);
+    }
+
+    #[test]
+    fn fix_gaps_3d_does_not_close_gap_above_max_bound() {
+        // Gap of 5mm is above the 1mm MAX_GAP_3D_BOUND, so neither the
+        // nominal pass nor the widened pass should close it. This
+        // protects against runaway widening on real modeling errors.
+        let mut topo = Topology::new();
+        let (wid, v_from, _) = make_two_edges_with_gap(&mut topo, 5e-3);
+
+        let mut ctx = HealContext::new();
+        let cfg = FixConfig::default();
+        let _ = fix_gaps_3d(&mut topo, wid, &mut ctx, &cfg).unwrap();
+
+        // v_from should NOT have been merged (no replacement recorded).
+        assert_eq!(
+            ctx.reshape.resolve_vertex(v_from),
+            v_from,
+            "5mm gap is above MAX_GAP_3D_BOUND (1mm); should not be closed"
+        );
+    }
 }
