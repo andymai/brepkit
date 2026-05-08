@@ -102,6 +102,17 @@ pub fn try_analytic_fillet(
         (FaceSurface::Sphere(s1), FaceSurface::Sphere(s2)) => {
             sphere_sphere_fillet(s1, s2, spine, topo, radius, face1, face2)
         }
+        (FaceSurface::Cylinder(cyl), FaceSurface::Sphere(sph)) => {
+            sphere_cylinder_fillet(sph, cyl, spine, topo, radius, face2, face1).map(|opt| {
+                opt.map(|mut r| {
+                    swap_stripe_sides(&mut r);
+                    r
+                })
+            })
+        }
+        (FaceSurface::Sphere(sph), FaceSurface::Cylinder(cyl)) => {
+            sphere_cylinder_fillet(sph, cyl, spine, topo, radius, face1, face2)
+        }
         // Pairs without an analytic path → walker fallback. Enumerated
         // exhaustively (matching `try_analytic_chamfer`) so adding a new
         // `FaceSurface` variant produces a compile error at this site
@@ -117,9 +128,10 @@ pub fn try_analytic_fillet(
         )
         | (
             FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
-            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
         )
-        | (FaceSurface::Sphere(_), FaceSurface::Cylinder(_) | FaceSurface::Cone(_))
+        | (FaceSurface::Sphere(_), FaceSurface::Cone(_))
+        | (FaceSurface::Cone(_), FaceSurface::Sphere(_))
         | (
             FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
             FaceSurface::Plane { .. }
@@ -2473,6 +2485,264 @@ pub fn sphere_sphere_fillet(
         contact2,
         face1,
         face2,
+        sections: vec![section_start, section_end],
+    };
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
+}
+
+/// Fillet between a sphere and a cylinder whose axis passes through the
+/// sphere center — the rolling-ball blend is an exact torus around the
+/// cylinder axis.
+///
+/// Spine exists only when the cylinder axis-line passes through the
+/// sphere center: the sphere–cylinder intersection is then a pair of
+/// circles at axial offsets `±h_s = ±√(R_s² − r_c²)` from the sphere
+/// center along the cylinder axis (each of radius `r_c`). The user
+/// passes ONE of these as the spine.
+///
+/// Handles all four convex/concave combinations via per-face
+/// `signed_offset_i = ±1` (face NOT reversed = +1 = external tangency
+/// `Q_i = R_i + r`; face REVERSED = −1 = internal tangency `Q_i = R_i − r`).
+///
+/// # Geometry
+///
+/// Place sphere center at the origin, cylinder axis = +z. Define
+///   `Q_s = R_s + s_s · r`,
+///   `Q_c = r_c + s_c · r`.
+/// Tangency constraints `|ball − C_s| = Q_s`, `|ball − cyl_axis| = Q_c`
+/// give:
+///   torus axis    = cyl axis (same direction as the spine's signed
+///                   axial offset from sphere center)
+///   torus center  = sphere_center + axis · a_ball
+///   major         = R_t = Q_c
+///   a_ball        = sign(spine_axial) · √(Q_s² − Q_c²)
+///   minor         = r
+///
+/// # Returns
+///
+/// `Ok(None)` (walker fallback) when:
+///   - sphere center isn't on the cylinder axis,
+///   - sphere doesn't enclose cylinder (`r_c ≥ R_s`),
+///   - effective radii collapse (e.g. `Q_c ≤ 0` for very large `r` in
+///     concave-cylinder),
+///   - resulting major < minor (spindle: `Q_c < r` ⇒ `r > r_c/2` for
+///     concave cylinder), or
+///   - `Q_s ≤ Q_c` (the rolling ball can't reach axially), or
+///   - the spine is degenerate.
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or NURBS construction fails.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub fn sphere_cylinder_fillet(
+    sph: &brepkit_math::surfaces::SphericalSurface,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+    spine: &Spine,
+    topo: &Topology,
+    radius: f64,
+    face_sphere: FaceId,
+    face_cyl: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    use brepkit_math::surfaces::ToroidalSurface;
+    use std::f64::consts::PI;
+
+    let tol_lin = 1e-9;
+    let tol_ang = 1e-9;
+
+    if radius <= tol_lin {
+        return Ok(None);
+    }
+    let s_sphere: f64 = if topo.face(face_sphere)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
+    let s_cyl: f64 = if topo.face(face_cyl)?.is_reversed() {
+        -1.0
+    } else {
+        1.0
+    };
+
+    let big_r_s = sph.radius();
+    let r_c = cyl.radius();
+    let c_s = sph.center();
+    let cyl_origin = cyl.origin();
+    let cyl_axis = cyl.axis();
+
+    // Sphere center must lie on the cylinder axis line.
+    let to_sphere = c_s - cyl_origin;
+    let to_sphere_v = Vec3::new(to_sphere.x(), to_sphere.y(), to_sphere.z());
+    let along = to_sphere_v.dot(cyl_axis);
+    let perp = to_sphere_v - cyl_axis * along;
+    if perp.length() > tol_lin {
+        return Ok(None);
+    }
+
+    // Sphere's parametric z_axis must be (anti)parallel to the cylinder
+    // axis so the contact circle on the sphere is a constant-v latitude.
+    if sph.z_axis().dot(cyl_axis).abs() < 1.0 - tol_ang {
+        return Ok(None);
+    }
+
+    // Sphere must enclose cylinder: r_c < R_s for spine to exist.
+    if r_c >= big_r_s - tol_lin {
+        return Ok(None);
+    }
+    let h_s_sq = big_r_s * big_r_s - r_c * r_c;
+    if h_s_sq <= tol_lin * tol_lin {
+        return Ok(None);
+    }
+    let h_s = h_s_sq.sqrt();
+
+    // Determine which spine the user passed (z = +h_s or z = −h_s
+    // along cyl_axis from sphere center). Project a spine sample.
+    let edges = spine.edges();
+    let is_closed_spine = if edges.len() == 1 {
+        let e = topo.edge(edges[0])?;
+        e.start() == e.end()
+    } else {
+        false
+    };
+    let spine_len = spine.length();
+    if !is_closed_spine && spine_len < tol_lin {
+        return Ok(None);
+    }
+    let p_spine_sample = spine.evaluate(topo, 0.0)?;
+    let sample_axial = (p_spine_sample - c_s).dot(cyl_axis);
+    let spine_sign = if sample_axial >= 0.0 { 1.0 } else { -1.0 };
+    if (sample_axial.abs() - h_s).abs() > 1e-5 {
+        // Spine axial position doesn't match a valid intersection
+        // circle — likely an oblique spine the helper can't handle.
+        return Ok(None);
+    }
+
+    // Effective radii.
+    let q_s = big_r_s + s_sphere * radius;
+    let q_c = r_c + s_cyl * radius;
+    if q_s <= tol_lin || q_c <= tol_lin {
+        return Ok(None);
+    }
+
+    // Rolling-ball position. Q_s² − Q_c² must be ≥ 0 (else ball can't
+    // reach the spine axially).
+    let a_ball_sq = q_s * q_s - q_c * q_c;
+    if a_ball_sq <= tol_lin * tol_lin {
+        return Ok(None);
+    }
+    let a_ball = spine_sign * a_ball_sq.sqrt();
+
+    let major_radius = q_c;
+    let minor_radius = radius;
+    if major_radius < minor_radius - tol_lin {
+        return Ok(None);
+    }
+
+    // Build the torus.
+    let cyl_x = cyl.x_axis();
+    let cyl_y = cyl.y_axis();
+    let ref_dir = if cyl_x.cross(cyl_axis).length() > tol_ang {
+        cyl_x
+    } else {
+        cyl_y
+    };
+    let torus_center = c_s + cyl_axis * a_ball;
+    let torus = ToroidalSurface::with_axis_and_ref_dir(
+        torus_center,
+        major_radius,
+        minor_radius,
+        cyl_axis,
+        ref_dir,
+    )?;
+
+    // Spine plane center on cylinder axis at axial = sample_axial.
+    let spine_plane_center = c_s + cyl_axis * sample_axial;
+    let perp_y = cyl_axis.cross(ref_dir).normalize()?;
+    let u_at = |p: Point3| {
+        let v = p - spine_plane_center;
+        perp_y.dot(v).atan2(ref_dir.dot(v))
+    };
+    let u_start = u_at(p_spine_sample);
+    let u_end = if is_closed_spine {
+        u_start + 2.0 * PI
+    } else {
+        let p_spine_end = spine.evaluate(topo, spine_len)?;
+        let u_end_raw = u_at(p_spine_end);
+        if u_end_raw > u_start {
+            u_end_raw
+        } else {
+            u_end_raw + 2.0 * PI
+        }
+    };
+
+    // Sphere contact: sphere_center + R_s · (ball − sphere_center) / Q_s.
+    let sph_contact_axial = big_r_s * a_ball / q_s;
+    let sph_contact_radial = big_r_s * major_radius / q_s;
+    let sph_contact_center = c_s + cyl_axis * sph_contact_axial;
+    let contact_sph_circle = brepkit_math::curves::Circle3D::with_axes(
+        sph_contact_center,
+        cyl_axis,
+        sph_contact_radial,
+        ref_dir,
+        perp_y,
+    )?;
+
+    // Cylinder contact: at axial = a_ball (along cyl axis from sphere
+    // center; convert to cyl-origin frame), radial = r_c.
+    let cyl_contact_axial_world = c_s + cyl_axis * a_ball; // same as torus_center
+    let contact_cyl_circle = brepkit_math::curves::Circle3D::with_axes(
+        cyl_contact_axial_world,
+        cyl_axis,
+        r_c,
+        ref_dir,
+        perp_y,
+    )?;
+
+    let contact_sph = circle_arc_to_nurbs(&contact_sph_circle, u_start, u_end)?;
+    let contact_cyl = circle_arc_to_nurbs(&contact_cyl_circle, u_start, u_end)?;
+
+    // PCurves on each surface.
+    let sample_sph = contact_sph_circle.evaluate(u_start);
+    let v_sph = ParametricSurface::project_point(sph, sample_sph).1;
+    let pcurve_sph = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_start, v_sph),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+    // Cylinder pcurve at constant axial-from-cyl-origin offset.
+    let v_cyl = cyl_v_at_point(cyl, contact_cyl_circle.evaluate(u_start));
+    let pcurve_cyl = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_start, v_cyl),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+
+    // Cross-sections.
+    let p_sph_at = |u: f64| contact_sph_circle.evaluate(u);
+    let p_cyl_at = |u: f64| contact_cyl_circle.evaluate(u);
+    let section_at = |u: f64, t: f64| CircSection {
+        p1: p_sph_at(u),
+        p2: p_cyl_at(u),
+        center: torus_center
+            + ref_dir * (major_radius * u.cos())
+            + perp_y * (major_radius * u.sin()),
+        radius,
+        uv1: (u, v_sph),
+        uv2: (u, v_cyl),
+        t,
+    };
+    let section_start = section_at(u_start, 0.0);
+    let section_end = section_at(u_end, 1.0);
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Torus(torus),
+        pcurve1: pcurve_sph,
+        pcurve2: pcurve_cyl,
+        contact1: contact_sph,
+        contact2: contact_cyl,
+        face1: face_sphere,
+        face2: face_cyl,
         sections: vec![section_start, section_end],
     };
     Ok(Some(StripeResult {
@@ -4929,6 +5199,122 @@ mod tests {
         assert!(
             (dist_s2 - big_r2).abs() < 1e-9,
             "contact2 must lie on sphere2: distance={dist_s2}, want R2={big_r2}"
+        );
+    }
+
+    /// Sphere-cylinder convex fillet: a sphere primitive fused to a
+    /// cylinder primitive along their shared axis. The intersection is
+    /// a pair of circles at axial offset ±h_s = ±√(R_s²−r_c²) from the
+    /// sphere center; we fillet the +h_s spine.
+    ///
+    /// For sphere at origin (R=3), cylinder axis +z through origin
+    /// (r_c=2), both faces NOT reversed, r=0.4:
+    ///   - h_s = √(9−4) = √5 ≈ 2.236
+    ///   - Q_s = 3.4, Q_c = 2.4
+    ///   - a_ball = √(Q_s² − Q_c²) = √(11.56 − 5.76) = √5.8 ≈ 2.408
+    ///   - major = Q_c = 2.4
+    #[test]
+    fn sphere_cylinder_fillet_convex_emits_torus() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::{CylindricalSurface, SphericalSurface};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r_s: f64 = 3.0;
+        let r_c: f64 = 2.0;
+        let r_fillet: f64 = 0.4;
+        let h_s = (big_r_s * big_r_s - r_c * r_c).sqrt();
+
+        let sph = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r_s).unwrap();
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r_c)
+                .unwrap();
+
+        // Spine: circle at z = +h_s, radius r_c, axis +z.
+        let spine_circle =
+            Circle3D::new(Point3::new(0.0, 0.0, h_s), Vec3::new(0.0, 0.0, 1.0), r_c).unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_c, 0.0, h_s), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_sphere = topo.add_face(Face::new(w1, vec![], FaceSurface::Sphere(sph.clone())));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_cyl = topo.add_face(Face::new(w2, vec![], FaceSurface::Cylinder(cyl.clone())));
+
+        let result =
+            sphere_cylinder_fillet(&sph, &cyl, &spine, &topo, r_fillet, face_sphere, face_cyl)
+                .unwrap()
+                .expect("convex sphere-cylinder fillet should produce a stripe");
+
+        let torus = match result.stripe.surface {
+            FaceSurface::Torus(t) => t,
+            other => panic!("expected Torus, got {}", other.type_tag()),
+        };
+
+        let q_s = big_r_s + r_fillet;
+        let q_c = r_c + r_fillet;
+        let expected_major = q_c;
+        let expected_a_ball = (q_s * q_s - q_c * q_c).sqrt();
+
+        assert!(
+            (torus.major_radius() - expected_major).abs() < 1e-12,
+            "major should be Q_c = {expected_major}, got {}",
+            torus.major_radius()
+        );
+        assert!(
+            (torus.minor_radius() - r_fillet).abs() < 1e-12,
+            "minor should be r = {r_fillet}, got {}",
+            torus.minor_radius()
+        );
+
+        // Torus center on +z axis at z = a_ball (positive since spine
+        // is at +h_s).
+        let center = torus.center();
+        assert!(
+            center.x().abs() < 1e-12 && center.y().abs() < 1e-12,
+            "torus center should be on z-axis, got {center:?}"
+        );
+        assert!(
+            (center.z() - expected_a_ball).abs() < 1e-12,
+            "torus center z should be a_ball = {expected_a_ball}, got {}",
+            center.z()
+        );
+
+        // Sphere contact radial = R_s · Q_c / Q_s, axial = R_s · a_ball / Q_s.
+        let sph_axial = big_r_s * expected_a_ball / q_s;
+        let sph_radial = big_r_s * q_c / q_s;
+        let want_sph = Point3::new(sph_radial, 0.0, sph_axial);
+        // Cylinder contact at radial r_c, axial a_ball.
+        let want_cyl = Point3::new(r_c, 0.0, expected_a_ball);
+
+        // Both lie on torus.
+        let (u_p, v_p) = ParametricSurface::project_point(&torus, want_sph);
+        let on_torus_sph = ParametricSurface::evaluate(&torus, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&torus, want_cyl);
+        let on_torus_cyl = ParametricSurface::evaluate(&torus, u_q, v_q);
+        assert!(
+            (on_torus_sph - want_sph).length() < 1e-9,
+            "sphere contact must lie on torus: {on_torus_sph:?} vs {want_sph:?}"
+        );
+        assert!(
+            (on_torus_cyl - want_cyl).length() < 1e-9,
+            "cylinder contact must lie on torus: {on_torus_cyl:?} vs {want_cyl:?}"
+        );
+
+        // Both lie on their respective surfaces.
+        let dist_sph = (want_sph - Point3::new(0.0, 0.0, 0.0)).length();
+        assert!(
+            (dist_sph - big_r_s).abs() < 1e-9,
+            "sphere contact must lie on sphere: distance = {dist_sph}, want R_s = {big_r_s}"
+        );
+        let dist_cyl_radial = (want_cyl.x().powi(2) + want_cyl.y().powi(2)).sqrt();
+        assert!(
+            (dist_cyl_radial - r_c).abs() < 1e-9,
+            "cylinder contact must lie on cylinder: radial = {dist_cyl_radial}, want r_c = {r_c}"
         );
     }
 
