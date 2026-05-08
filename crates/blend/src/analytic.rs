@@ -73,13 +73,18 @@ pub fn try_analytic_fillet(
             let mut result =
                 plane_cylinder_fillet(*normal, *d, cyl, spine, topo, radius, face2, face1)?;
             if let Some(ref mut r) = result {
-                std::mem::swap(&mut r.stripe.face1, &mut r.stripe.face2);
-                std::mem::swap(&mut r.stripe.pcurve1, &mut r.stripe.pcurve2);
-                std::mem::swap(&mut r.stripe.contact1, &mut r.stripe.contact2);
-                for s in &mut r.stripe.sections {
-                    std::mem::swap(&mut s.p1, &mut s.p2);
-                    std::mem::swap(&mut s.uv1, &mut s.uv2);
-                }
+                swap_stripe_sides(r);
+            }
+            Ok(result)
+        }
+        (FaceSurface::Plane { normal, d }, FaceSurface::Cone(cone)) => {
+            plane_cone_fillet(*normal, *d, cone, spine, topo, radius, face1, face2)
+        }
+        (FaceSurface::Cone(cone), FaceSurface::Plane { normal, d }) => {
+            let mut result =
+                plane_cone_fillet(*normal, *d, cone, spine, topo, radius, face2, face1)?;
+            if let Some(ref mut r) = result {
+                swap_stripe_sides(r);
             }
             Ok(result)
         }
@@ -94,19 +99,31 @@ pub fn try_analytic_fillet(
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_)
             | FaceSurface::Nurbs(_),
-            FaceSurface::Cone(_)
-            | FaceSurface::Sphere(_)
-            | FaceSurface::Torus(_)
-            | FaceSurface::Nurbs(_),
+            FaceSurface::Sphere(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
         )
-        | (FaceSurface::Cylinder(_), FaceSurface::Cylinder(_))
         | (
-            FaceSurface::Cone(_)
-            | FaceSurface::Sphere(_)
-            | FaceSurface::Torus(_)
-            | FaceSurface::Nurbs(_),
-            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
+        )
+        | (
+            FaceSurface::Sphere(_) | FaceSurface::Torus(_) | FaceSurface::Nurbs(_),
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_),
         ) => Ok(None),
+    }
+}
+
+/// Swap face1↔face2, pcurve1↔pcurve2, contact1↔contact2, and section.p1↔p2,
+/// uv1↔uv2 in a `StripeResult`. Used when the analytic helper is called with
+/// the canonical "plane first" ordering but the dispatcher saw the pair
+/// reversed; the caller-facing `face1`/`face2` must reflect the original
+/// ordering, not the helper's internal one.
+fn swap_stripe_sides(r: &mut StripeResult) {
+    std::mem::swap(&mut r.stripe.face1, &mut r.stripe.face2);
+    std::mem::swap(&mut r.stripe.pcurve1, &mut r.stripe.pcurve2);
+    std::mem::swap(&mut r.stripe.contact1, &mut r.stripe.contact2);
+    for s in &mut r.stripe.sections {
+        std::mem::swap(&mut s.p1, &mut s.p2);
+        std::mem::swap(&mut s.uv1, &mut s.uv2);
     }
 }
 
@@ -694,21 +711,269 @@ fn cyl_v_at_point(cyl: &brepkit_math::surfaces::CylindricalSurface, p: Point3) -
     axis.dot(to_p)
 }
 
-/// Fillet between a plane and a cone.
+/// Fillet between a plane and a cone whose axis is parallel to the plane
+/// normal, for the convex "regular frustum bottom rim" geometry.
 ///
-/// Not yet implemented. Returns `None` so the caller falls back to the walking
-/// engine.
-#[allow(unused_variables)]
-#[must_use]
+/// Returns `Some(StripeResult)` with an exact toroidal blend when the cone
+/// opens *toward* the plate (cone axis anti-parallel to the inward plane
+/// normal — this is the configuration where filleting the bottom rim of a
+/// frustum makes the corner convex from outside). Returns `None` for any
+/// other configuration so the walker handles it.
+///
+/// # Geometry
+///
+/// At the spine point, the dihedral between outward surface normals is
+/// `π - α` (where α is the cone half-angle), so the fillet wedge half-angle
+/// is `α/2` and the rolling-ball center sits at distance `r/sin(α/2)`
+/// along the outward bisector `cos(α/2)·radial - sin(α/2)·n_p_inward`.
+/// The ball center lands at radial `r_p + r·cot(α/2)` and offset
+/// `r·(-n_p_inward)` from the plate (one fillet radius in the
+/// empty-wedge direction).
+///
+/// The fillet surface is a torus:
+///   - axis = `-axis_c` (= `+n_p_inward`), so `v=π/2` lands on the plate;
+///   - center at the cone-axis projection onto the plate, offset by
+///     `-r·n_p_inward`;
+///   - major radius `r_p + r·cot(α/2)`,
+///   - minor radius `r`;
+///   - active tube parameter `v ∈ [π/2, 3π/2 - α]`, width `π - α`.
+///
+/// At α = π/2 (degenerate "cone" approaching a cylinder), `cot(π/4) = 1`
+/// so major reduces to `r_p + r` and the active range becomes `[π/2, π]` —
+/// exactly the plane-cylinder result.
+///
+/// Returns `None` when:
+///   - the cone axis isn't parallel to the plane normal,
+///   - `axis_c · n_p_inward > -1 + tol_ang` (cone opens *away* from the
+///     plate — inverted-frustum or cup geometry; the major-radius formula
+///     differs and is left to the walker),
+///   - the cone face is reversed (concave / "tapered hole" geometry),
+///   - the half-angle α is too close to 0 or π/2 (degenerate),
+///   - the spine is too short, or
+///   - the apex is on the plate-material side.
+///
+/// # Errors
+///
+/// Returns `BlendError` if topology lookups or NURBS construction fails.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub fn plane_cone_fillet(
-    surf_plane: &FaceSurface,
-    surf_cone: &FaceSurface,
+    n_p_inward: Vec3,
+    d_plane: f64,
+    cone: &brepkit_math::surfaces::ConicalSurface,
     spine: &Spine,
     topo: &Topology,
     radius: f64,
-) -> Option<StripeResult> {
-    // TODO: implement plane-cone fillet
-    None
+    face_plane: FaceId,
+    face_cone: FaceId,
+) -> Result<Option<StripeResult>, BlendError> {
+    use brepkit_math::surfaces::ToroidalSurface;
+    use std::f64::consts::PI;
+
+    let tol_ang = 1e-9;
+    let tol_lin = 1e-9;
+
+    // 1) Cone axis must be antiparallel to the inward plane normal — this
+    //    means the cone opens TOWARD the plate (regular frustum bottom-rim
+    //    geometry). Inverted frustums (axes parallel) need a different
+    //    formula and are deferred to the walker.
+    let axis_c = cone.axis();
+    let n_dot = axis_c.dot(n_p_inward);
+    if n_dot > -1.0 + tol_ang {
+        return Ok(None);
+    }
+
+    // 2) Concave (cone face reversed = "tapered hole through plate") needs a
+    //    different torus quadrant and major-radius formula; defer.
+    if topo.face(face_cone)?.is_reversed() {
+        return Ok(None);
+    }
+
+    // 3) Reject degenerate half-angles. Too close to 0 → flat disk; too
+    //    close to π/2 → cylinder limit (callers should hit
+    //    `plane_cylinder_fillet` instead since the surface tag would be
+    //    `Cylinder`, not `Cone`, for that case).
+    let alpha = cone.half_angle();
+    if alpha <= 1e-3 || alpha >= std::f64::consts::FRAC_PI_2 - 1e-3 {
+        return Ok(None);
+    }
+    let half_alpha = alpha * 0.5;
+    let cot_half = half_alpha.tan().recip();
+
+    // 4) Apex projection onto the plate. `step` is the signed distance you
+    //    move along `n_p_inward` from the apex to land on the plate. For a
+    //    regular-frustum bottom-rim geometry, the apex lies on the
+    //    `+n_p_inward` side (above the plate material in the test setup),
+    //    so `step` is negative. Reject anything else (apex on the plate or
+    //    on the inverted side — the formulas below assume the
+    //    bottom-rim configuration).
+    let apex = cone.apex();
+    let step = d_plane - n_p_inward.dot(Vec3::new(apex.x(), apex.y(), apex.z()));
+    if step >= -tol_lin {
+        return Ok(None);
+    }
+    let apex_height = -step;
+    let p_axis_on_plane = apex + n_p_inward * step;
+
+    // 5) Spine radius `r_p = apex_height · cot(α)` (geometric: the cone-plate
+    //    intersection circle has this radius).
+    let r_p = apex_height * (alpha.cos() / alpha.sin());
+
+    // 6) Major / minor radii and torus center.
+    let major_radius = r_p + radius * cot_half;
+    let minor_radius = radius;
+    if major_radius <= tol_lin {
+        return Ok(None);
+    }
+    // Torus center sits one fillet radius below the plate (in the
+    // -n_p_inward direction, where the empty wedge is).
+    let torus_center = p_axis_on_plane - n_p_inward * radius;
+    // Torus axis points "out of the plate material" so v = π/2 is the
+    // plate-contact direction (top of small circle) and v = 3π/2 - α is
+    // the cone-contact direction.
+    let axis_dir = -n_p_inward;
+
+    // 7) Spine: detect closed-circle case so we can spin a full 2π without
+    //    relying on `Spine::length()` (which measures chord length and is
+    //    zero for closed-loop edges).
+    let edges = spine.edges();
+    let is_closed_spine = if edges.len() == 1 {
+        let e = topo.edge(edges[0])?;
+        e.start() == e.end()
+    } else {
+        false
+    };
+    let spine_len = spine.length();
+    if !is_closed_spine && spine_len < tol_lin {
+        return Ok(None);
+    }
+
+    // 8) Build the torus. The torus's ref direction is the cone's x_axis so
+    //    its angular u parameter aligns with the cone's u parameter.
+    let cone_x = cone.x_axis();
+    let cone_y = cone.y_axis();
+    let torus = ToroidalSurface::with_axis_and_ref_dir(
+        torus_center,
+        major_radius,
+        minor_radius,
+        axis_dir,
+        cone_x,
+    )?;
+
+    // 9) Spine angular range. Project endpoints into the (cone_x, cone_y)
+    //    plane to recover their u parameter.
+    let u_at = |p: Point3| {
+        let v = p - p_axis_on_plane;
+        cone_y.dot(v).atan2(cone_x.dot(v))
+    };
+    let p_spine_start = spine.evaluate(topo, 0.0)?;
+    let u_start = u_at(p_spine_start);
+    let u_end = if is_closed_spine {
+        u_start + 2.0 * PI
+    } else {
+        let p_spine_end = spine.evaluate(topo, spine_len)?;
+        let u_end_raw = u_at(p_spine_end);
+        if u_end_raw > u_start {
+            u_end_raw
+        } else {
+            u_end_raw + 2.0 * PI
+        }
+    };
+
+    // 10) 3D contact curves.
+    //     Plate contact: circle of radius `major_radius` around the cone
+    //       axis, on the plate.
+    //     Cone contact: circle of radius `r_p + r·cot(α/2) - r·sin(α)`
+    //       at axial offset `-r·(1 + cos(α))` (on the analytical cone
+    //       surface, extended below the frustum's base).
+    let contact_plane_radius = major_radius;
+    let contact_cone_radius = (major_radius - radius * alpha.sin()).max(tol_lin);
+    let contact_cone_axial_offset = -radius * (1.0 + alpha.cos());
+    let cone_contact_center = p_axis_on_plane + (-n_p_inward) * (-contact_cone_axial_offset);
+    // Equivalently: p_axis_on_plane + n_p_inward * (radius * (1.0 + cos(α)))
+    // — i.e. *into* plate material. Written via `-n_p_inward * |offset|`
+    // for symmetry with the torus_center formula above.
+
+    let contact_plane_circle = brepkit_math::curves::Circle3D::with_axes(
+        p_axis_on_plane,
+        axis_dir,
+        contact_plane_radius,
+        cone_x,
+        cone_y,
+    )?;
+    let contact_cone_circle = brepkit_math::curves::Circle3D::with_axes(
+        cone_contact_center,
+        axis_dir,
+        contact_cone_radius,
+        cone_x,
+        cone_y,
+    )?;
+
+    let contact_plane = circle_arc_to_nurbs(&contact_plane_circle, u_start, u_end)?;
+    let contact_cone = circle_arc_to_nurbs(&contact_cone_circle, u_start, u_end)?;
+
+    // 11) PCurves.
+    //     Plane contact is a `Curve2D::Circle` in the PlaneAdapter local
+    //     frame (a Line2D would zero out for the closed-spine case).
+    //     Cone contact runs at constant `v_cone` in the cone's UV; v_cone
+    //     is recovered by projecting the cone-contact center onto the cone.
+    let plane_adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n_p_inward, d_plane);
+    let pcurve_plane = {
+        let (cu, cv) = plane_adapter.project_point(p_axis_on_plane);
+        Curve2D::Circle(brepkit_math::curves2d::Circle2D::new(
+            brepkit_math::vec::Point2::new(cu, cv),
+            major_radius,
+        )?)
+    };
+    let v_cone = ParametricSurface::project_point(cone, cone_contact_center).1;
+    let pcurve_cone = Curve2D::Line(Line2D::new(
+        brepkit_math::vec::Point2::new(u_start, v_cone),
+        brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
+    )?);
+
+    // 12) Cross-sections at the spine endpoints.
+    let p_plane_at = |u: f64| contact_plane_circle.evaluate(u);
+    let p_cone_at = |u: f64| contact_cone_circle.evaluate(u);
+    let center_at = |u: f64| {
+        // Ball trajectory: same circle as `contact_plane_circle` but lifted
+        // by `-r·n_p_inward` (one fillet radius into the empty wedge).
+        contact_plane_circle.evaluate(u) + (-n_p_inward) * radius
+    };
+    let plane_uv_at = |u: f64| plane_adapter.project_point(p_plane_at(u));
+    let section_start = CircSection {
+        p1: p_plane_at(u_start),
+        p2: p_cone_at(u_start),
+        center: center_at(u_start),
+        radius,
+        uv1: plane_uv_at(u_start),
+        uv2: (u_start, v_cone),
+        t: 0.0,
+    };
+    let section_end = CircSection {
+        p1: p_plane_at(u_end),
+        p2: p_cone_at(u_end),
+        center: center_at(u_end),
+        radius,
+        uv1: plane_uv_at(u_end),
+        uv2: (u_end, v_cone),
+        t: 1.0,
+    };
+
+    let stripe = Stripe {
+        spine: spine.clone(),
+        surface: FaceSurface::Torus(torus),
+        pcurve1: pcurve_plane,
+        pcurve2: pcurve_cone,
+        contact1: contact_plane,
+        contact2: contact_cone,
+        face1: face_plane,
+        face2: face_cone,
+        sections: vec![section_start, section_end],
+    };
+
+    Ok(Some(StripeResult {
+        stripe,
+        new_edges: Vec::new(),
+    }))
 }
 
 /// Fillet between two cylinders.
