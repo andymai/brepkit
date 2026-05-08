@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.69.0](https://github.com/andymai/brepkit/compare/v2.68.0...v2.69.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** cylinder-cylinder analytic chamfer (parallel axes → plane) ([#596](https://github.com/andymai/brepkit/issues/596)) ([2938f65](https://github.com/andymai/brepkit/commit/2938f65d3f90d1fa242f861ee003eba1feb43b26))
+
 ## [2.68.0](https://github.com/andymai/brepkit/compare/v2.67.0...v2.68.0) (2026-05-08)
 
 
