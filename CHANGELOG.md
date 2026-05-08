@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.64.0](https://github.com/andymai/brepkit/compare/v2.63.0...v2.64.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** convex sphere-cone analytic chamfer (axisymmetric corner → cone) ([#583](https://github.com/andymai/brepkit/issues/583)) ([d665913](https://github.com/andymai/brepkit/commit/d66591389430c7a5819f05e6ff973ef366087e7e))
+
 ## [2.63.0](https://github.com/andymai/brepkit/compare/v2.62.0...v2.63.0) (2026-05-08)
 
 
