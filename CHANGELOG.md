@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.55.0](https://github.com/andymai/brepkit/compare/v2.54.0...v2.55.0) (2026-05-08)
+
+
+### Features
+
+* **blend:** concave plane-cylinder chamfer (chamfer top rim of hole) ([#562](https://github.com/andymai/brepkit/issues/562)) ([89eeea9](https://github.com/andymai/brepkit/commit/89eeea9225d038d4539c7d763548702ce67cfc12))
+
 ## [2.54.0](https://github.com/andymai/brepkit/compare/v2.53.0...v2.54.0) (2026-05-08)
 
 
