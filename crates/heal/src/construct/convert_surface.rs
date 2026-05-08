@@ -7,10 +7,13 @@
 //!   **geometrically exact** rational NURBS (the rational forms exactly
 //!   reproduce the analytic surface within floating-point tolerance).
 //! * `sphere_to_nurbs`, `torus_to_nurbs` currently delegate to
-//!   `brepkit-math`'s sampled approximation (chord-height error
-//!   ~0.5–7% of radius depending on parameter). The exact rational
-//!   forms (rotational sweep of a rational arc) are tracked as a
-//!   future improvement.
+//!   `brepkit-math`'s sampled approximation (33 × 9 degree-1×1 grid).
+//!   Chord-height error: sphere ~0.5% in u, ~2% in v (8 spans across
+//!   180° of latitude); torus ~0.5% in u, ~7–10% of *minor* radius
+//!   in v (8 spans across the full 360° tube cross-section, so the
+//!   per-span angular width is twice the sphere's). The exact
+//!   rational forms (rotational sweep of a rational arc) are
+//!   tracked as a future improvement.
 
 use std::f64::consts::FRAC_1_SQRT_2;
 
@@ -185,10 +188,11 @@ pub fn cone_to_nurbs(
 /// Convert a spherical surface to a NURBS surface.
 ///
 /// **Approximate.** Currently delegates to `brepkit-math`'s sampled
-/// representation (33 × 9 grid of points, degree 1 × 1 NURBS — chord
-/// deviation ~0.5% of radius along u, ~5% along v). The exact rational
-/// form (degree 2 × 2, rotational sweep of a rational semi-circle
-/// arc) is a tracked improvement.
+/// representation (33 × 9 grid of points, degree 1 × 1 NURBS). The
+/// chord-height error is ~0.5% of radius along u (33 samples on
+/// 360° revolution) and ~2% along v (9 samples on 180° latitude).
+/// The exact rational form (degree 2 × 2, rotational sweep of a
+/// rational semi-circle arc) is a tracked improvement.
 ///
 /// # Errors
 ///
@@ -405,11 +409,14 @@ mod tests {
                 max_err = max_err.max((r - radius).abs());
             }
         }
-        // Sampled-NURBS approximation has chord-deviation error ~5% of
-        // radius mid-span between latitude samples.
+        // Sampled-NURBS approximation: 9 latitude samples across 180°
+        // = 8 spans of 22.5°, max chord deviation per span
+        // = R(1 − cos(11.25°)) ≈ 1.9% of radius. Bound at 3% to
+        // detect regressions while allowing for fp jitter and the
+        // sample grid's worst-case non-equator latitudes.
         assert!(
-            max_err < 0.06 * radius,
-            "max sphere residual {max_err} exceeds 6% of radius"
+            max_err < 0.03 * radius,
+            "max sphere residual {max_err} exceeds 3% of radius"
         );
     }
 
