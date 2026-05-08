@@ -120,7 +120,7 @@ pub fn cone_to_nurbs(
         return Err(brepkit_math::MathError::ParameterOutOfRange {
             value: v_min,
             min: f64::EPSILON,
-            max: f64::MAX,
+            max: f64::INFINITY,
         }
         .into());
     }
@@ -129,7 +129,7 @@ pub fn cone_to_nurbs(
         return Err(brepkit_math::MathError::ParameterOutOfRange {
             value: v_max,
             min: v_min,
-            max: f64::MAX,
+            max: f64::INFINITY,
         }
         .into());
     }
@@ -181,7 +181,11 @@ pub fn cone_to_nurbs(
     let knots_u = vec![
         0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
     ];
-    let knots_v = vec![0.0, 0.0, 1.0, 1.0];
+    // Carry the user's `v_range` into the v-knots so `domain_v()`
+    // matches the input. Lets callers evaluate at physical-v
+    // coordinates (e.g. v=2.5 within (1.0, 4.0)) and join cleanly
+    // with adjacent faces sharing boundary parameters.
+    let knots_v = vec![v_min, v_min, v_max, v_max];
     Ok(NurbsSurface::new(2, 1, knots_u, knots_v, cps, ws)?)
 }
 
@@ -305,9 +309,9 @@ mod tests {
         )
         .unwrap();
         let err = cone_to_nurbs(&cone, (0.0, 4.0)).unwrap_err();
-        // The diagnostic should report v_min as `value` and `max=f64::MAX`
-        // (NOT v_max), since the failure mode is "apex degeneracy", not
-        // "range too small".
+        // The diagnostic should report v_min as `value` and
+        // `max=f64::INFINITY` (NOT v_max), since the failure mode is
+        // "apex degeneracy", not "range too small".
         match err {
             crate::HealError::Math(brepkit_math::MathError::ParameterOutOfRange {
                 value,
@@ -315,7 +319,7 @@ mod tests {
                 ..
             }) => {
                 assert!(value <= 0.0);
-                assert_eq!(max, f64::MAX);
+                assert!(max.is_infinite());
             }
             other => panic!("expected ParameterOutOfRange, got {other:?}"),
         }
@@ -350,6 +354,34 @@ mod tests {
             }
             other => panic!("expected ParameterOutOfRange, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn cone_to_nurbs_carries_v_range_into_domain() {
+        // Regression for greptile P1: v-knots used to be hard-coded to
+        // [0,0,1,1] regardless of v_range, so domain_v() returned
+        // (0.0, 1.0) for any input — surface couldn't be evaluated at
+        // physical v-coordinates and didn't join cleanly with adjacent
+        // patches sharing boundary parameters.
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::PI / 6.0,
+        )
+        .unwrap();
+        let surface = cone_to_nurbs(&cone, (1.0, 4.0)).unwrap();
+        let (v_lo, v_hi) = surface.domain_v();
+        assert!(
+            (v_lo - 1.0).abs() < 1e-12,
+            "v_lo should match v_min, got {v_lo}"
+        );
+        assert!(
+            (v_hi - 4.0).abs() < 1e-12,
+            "v_hi should match v_max, got {v_hi}"
+        );
+        // Also: evaluating at the geometric midpoint v=2.5 (inside
+        // the user's range) should not panic.
+        let _ = ParametricSurface::evaluate(&surface, 0.0, 2.5);
     }
 
     #[test]
