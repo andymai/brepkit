@@ -3691,7 +3691,7 @@ pub fn sphere_cylinder_chamfer(
 ///
 /// Place sphere center at origin, cone axis = +z, cone apex at
 /// `(0, 0, −h_signed)`. Spine on sphere ∩ cone: `r² + z² = R_s²` AND
-/// `r = (z + h) · cot β`.
+/// `r = (z + h_signed) · cot β`.
 ///
 /// With `δ1 = d1/R_s` and `sphere_arm_sign = −spine_sign · s_sph`:
 ///   r_sph = r_spine · cos δ1 + sphere_arm_sign · spine_z · sin δ1
@@ -3854,8 +3854,10 @@ pub fn sphere_cone_chamfer(
     let r_cone = r_spine - s_cone * d2 * cos_b;
     let z_cone = spine_z - s_cone * d2 * sin_b;
     if r_cone <= tol_lin {
-        // Cone overshoot (apex direction at convex, or goes past the
-        // half-domain at concave). Bail to walker.
+        // Cone overshoot toward the apex — only reachable for the convex
+        // case (s_cone = +1). For concave (s_cone = −1), `r_cone =
+        // r_spine + d2·cos β` strictly grows with d2 and never reaches
+        // tol; this branch is dead in concave but harmless.
         return Ok(None);
     }
 
@@ -7485,6 +7487,130 @@ mod tests {
         assert!(
             (r_cone_pred - predicted_cone_radial).abs() < 1e-9,
             "cone contact must lie on cone surface: predicted radial {predicted_cone_radial}, got {r_cone_pred}"
+        );
+    }
+
+    /// Sphere-cone mixed chamfer: sphere convex (s_sph=+1) + cone
+    /// concave (s_cone=−1). Sphere contact lies on the AWAY-from-cone
+    /// cap (like convex-convex), but cone contact moves AWAY from
+    /// apex along generator instead of toward it (like both-concave
+    /// for the cone arm).
+    ///
+    /// For R_s=3, h=2, β=π/3, sphere NOT reversed, cone REVERSED, d=0.3:
+    ///   - sphere_arm_sign = -1·+1 = -1 (convex)
+    ///   - r_sph = r_spine·cos δ − spine_z·sin δ ≈ 2.073 (same as convex)
+    ///   - z_sph = spine_z·cos δ + r_spine·sin δ ≈ 2.167 (above spine)
+    ///   - cone goes AWAY from apex: r_cone = r_spine + d·cos β ≈ 2.429,
+    ///     z_cone = spine_z + d·sin β ≈ 2.209 (above spine, toward sphere)
+    #[test]
+    fn sphere_cone_chamfer_mixed_emits_cone() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::{ConicalSurface, SphericalSurface};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let big_r_s: f64 = 3.0;
+        let h_signed: f64 = 2.0;
+        let beta: f64 = std::f64::consts::PI / 3.0;
+        let d: f64 = 0.3;
+
+        let cot_b = beta.cos() / beta.sin();
+        let qa_q = 1.0 / (beta.sin() * beta.sin());
+        let qb_q = 2.0 * h_signed * cot_b * cot_b;
+        let qc_q = h_signed * h_signed * cot_b * cot_b - big_r_s * big_r_s;
+        let q_disc = qb_q * qb_q - 4.0 * qa_q * qc_q;
+        let z_spine = (-qb_q + q_disc.sqrt()) / (2.0 * qa_q);
+        let r_spine = (z_spine + h_signed) * cot_b;
+
+        let sph = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), big_r_s).unwrap();
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, -h_signed),
+            Vec3::new(0.0, 0.0, 1.0),
+            beta,
+        )
+        .unwrap();
+
+        let spine_circle = Circle3D::new(
+            Point3::new(0.0, 0.0, z_spine),
+            Vec3::new(0.0, 0.0, 1.0),
+            r_spine,
+        )
+        .unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(r_spine, 0.0, z_spine), 1e-7));
+        let eid = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(spine_circle)));
+        let spine = Spine::from_single_edge(&topo, eid).unwrap();
+
+        // Sphere NOT reversed, cone REVERSED.
+        let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap());
+        let face_sphere = topo.add_face(Face::new(w1, vec![], FaceSurface::Sphere(sph.clone())));
+        let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], true).unwrap());
+        let face_cone = topo.add_face(Face::new_reversed(
+            w2,
+            vec![],
+            FaceSurface::Cone(cone.clone()),
+        ));
+
+        let result = sphere_cone_chamfer(&sph, &cone, &spine, &topo, d, d, face_sphere, face_cone)
+            .unwrap()
+            .expect("mixed sphere-cone chamfer should produce a stripe");
+
+        let chamfer_cone = match result.stripe.surface {
+            FaceSurface::Cone(c) => c,
+            other => panic!("expected Cone, got {}", other.type_tag()),
+        };
+
+        // Predicted contacts (s_sph=+1, s_cone=-1).
+        let delta = d / big_r_s;
+        let (sin_d, cos_d) = delta.sin_cos();
+        // sphere_arm_sign = -spine_sign · s_sph = -1 · +1 = -1 (convex sphere).
+        let r_sph_pred = r_spine * cos_d - z_spine * sin_d;
+        let z_sph_pred = z_spine * cos_d + r_spine * sin_d;
+        // s_cone = -1 ⇒ cone goes AWAY from apex.
+        let r_cone_pred = r_spine + d * beta.cos();
+        let z_cone_pred = z_spine + d * beta.sin();
+
+        // Sphere contact on natural convex arm (above spine).
+        assert!(
+            z_sph_pred > z_spine,
+            "convex sphere contact should be above spine: got {z_sph_pred}"
+        );
+        // Cone contact moves AWAY from apex (away from convex direction).
+        assert!(
+            r_cone_pred > r_spine && z_cone_pred > z_spine,
+            "concave cone contact should be away from apex: got ({r_cone_pred}, {z_cone_pred})"
+        );
+
+        // Both contacts on chamfer cone.
+        let want_sph = Point3::new(r_sph_pred, 0.0, z_sph_pred);
+        let want_cone = Point3::new(r_cone_pred, 0.0, z_cone_pred);
+        let (u_p, v_p) = ParametricSurface::project_point(&chamfer_cone, want_sph);
+        let on_cone_sph = ParametricSurface::evaluate(&chamfer_cone, u_p, v_p);
+        let (u_q, v_q) = ParametricSurface::project_point(&chamfer_cone, want_cone);
+        let on_cone_cone = ParametricSurface::evaluate(&chamfer_cone, u_q, v_q);
+        assert!(
+            (on_cone_sph - want_sph).length() < 1e-9,
+            "sphere contact must lie on chamfer cone: {on_cone_sph:?} vs {want_sph:?}"
+        );
+        assert!(
+            (on_cone_cone - want_cone).length() < 1e-9,
+            "cone contact must lie on chamfer cone: {on_cone_cone:?} vs {want_cone:?}"
+        );
+
+        // Sphere contact at distance R_s.
+        let dist_sph = (want_sph - Point3::new(0.0, 0.0, 0.0)).length();
+        assert!(
+            (dist_sph - big_r_s).abs() < 1e-9,
+            "sphere contact must lie on sphere: {dist_sph} vs R_s={big_r_s}"
+        );
+
+        // Cone contact on cone surface.
+        let predicted_cone_radial = (z_cone_pred + h_signed) * cot_b;
+        assert!(
+            (r_cone_pred - predicted_cone_radial).abs() < 1e-9,
+            "cone contact must lie on cone: predicted {predicted_cone_radial}, got {r_cone_pred}"
         );
     }
 
