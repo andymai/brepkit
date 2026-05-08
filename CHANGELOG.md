@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.77.0](https://github.com/andymai/brepkit/compare/v2.76.0...v2.77.0) (2026-05-08)
+
+
+### Features
+
+* **heal:** exact rational hyperbola_to_nurbs ([#627](https://github.com/andymai/brepkit/issues/627)) ([5c2bd7f](https://github.com/andymai/brepkit/commit/5c2bd7fe0949f36dcb182a231475f6ba699003ca))
+
 ## [2.76.0](https://github.com/andymai/brepkit/compare/v2.75.0...v2.76.0) (2026-05-08)
 
 
