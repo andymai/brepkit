@@ -7,6 +7,7 @@ use std::io::Write;
 
 use brepkit_operations::tessellate;
 use brepkit_topology::Topology;
+use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::solid::SolidId;
 
 /// Write one or more solids to glTF binary (.glb) format.
@@ -31,10 +32,11 @@ pub fn write_glb(
     let mut vertex_offset: u32 = 0;
 
     for &solid_id in solids {
-        let solid = topo.solid(solid_id)?;
-        let shell = topo.shell(solid.outer_shell())?;
+        // Walk outer + inner (cavity) shells so hollow solids'
+        // cavity surfaces are present in the GLB output.
+        let face_ids = solid_faces(topo, solid_id)?;
 
-        for &face_id in shell.faces() {
+        for &face_id in &face_ids {
             let mesh = tessellate::tessellate(topo, face_id, deflection)?;
             let offset = vertex_offset;
 
