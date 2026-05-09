@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.86.1](https://github.com/andymai/brepkit/compare/v2.86.0...v2.86.1) (2026-05-09)
+
+
+### Bug Fixes
+
+* **io:** mesh writers (OBJ/PLY/glTF) walk inner (cavity) shells ([#666](https://github.com/andymai/brepkit/issues/666)) ([3735254](https://github.com/andymai/brepkit/commit/3735254fb280e525c05c9ed173232c63bdbb5430))
+
 ## [2.86.0](https://github.com/andymai/brepkit/compare/v2.85.5...v2.86.0) (2026-05-09)
 
 
