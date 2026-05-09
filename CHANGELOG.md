@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.85.4](https://github.com/andymai/brepkit/compare/v2.85.3...v2.85.4) (2026-05-09)
+
+
+### Bug Fixes
+
+* **heal:** remove_internal_wires walks inner (cavity) shells ([#661](https://github.com/andymai/brepkit/issues/661)) ([712a988](https://github.com/andymai/brepkit/commit/712a9887c89ab25367ef701bbf38cd7d3de49955))
+
 ## [2.85.3](https://github.com/andymai/brepkit/compare/v2.85.2...v2.85.3) (2026-05-08)
 
 
