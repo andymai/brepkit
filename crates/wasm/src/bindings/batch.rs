@@ -679,6 +679,18 @@ impl BrepKernel {
                     "converted": count,
                 }))
             }
+            "convertToElementary" => {
+                let s = get_u32(args, "solid")?;
+                let tol = get_f64(args, "tolerance").unwrap_or(crate::helpers::TOL);
+                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
+                let count =
+                    brepkit_operations::heal::convert_to_elementary(self.topo_mut(), solid_id, tol)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({
+                    "solid": solid_id_to_u32(solid_id),
+                    "converted": count,
+                }))
+            }
             "healSolid" => {
                 let s = get_u32(args, "solid")?;
                 let tol = get_f64(args, "tolerance").unwrap_or(1e-7);
