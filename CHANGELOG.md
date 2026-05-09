@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.85.5](https://github.com/andymai/brepkit/compare/v2.85.4...v2.85.5) (2026-05-09)
+
+
+### Bug Fixes
+
+* **heal:** fix_split_common_vertex walks inner (cavity) shells ([#663](https://github.com/andymai/brepkit/issues/663)) ([64ef366](https://github.com/andymai/brepkit/commit/64ef3661ff6b75062361b4619338c918f2310309))
+
 ## [2.85.4](https://github.com/andymai/brepkit/compare/v2.85.3...v2.85.4) (2026-05-09)
 
 
