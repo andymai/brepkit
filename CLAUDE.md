@@ -465,6 +465,31 @@ files since `_ =>` could be re-introduced:
 - `io/src/iges/writer.rs`
 - `operations/src/offset_face.rs`
 
+### Walking faces in a solid
+A solid has both an `outer_shell()` and zero-or-more `inner_shells()`
+(cavity shells produced by `shell_op` and boolean cuts). A function
+that visits only `outer_shell()` will silently miss cavity faces on
+hollow solids. Default to `topology::explorer::solid_faces`, which
+flattens outer + inner shells into a single `Vec<FaceId>`:
+
+```rust
+// ✅ Correct: covers cavity faces too
+use brepkit_topology::explorer::solid_faces;
+let face_ids = solid_faces(topo, solid_id)?;
+
+// ❌ Wrong: silently skips inner-shell faces
+let solid_data = topo.solid(solid_id)?;
+let shell = topo.shell(solid_data.outer_shell())?;
+let face_ids = shell.faces().to_vec();
+```
+
+Exceptions: operations that are fundamentally per-shell (orientation
+fixes, sewing, "don't empty this shell" guards) should still iterate
+shell-by-shell — call `solid_faces` only when the operation is
+solid-scoped (counting, recognition, type-conversion). The
+`heal::fix::small_face` pattern (top-level loop over shells +
+per-shell helper with its own guard) is the template for those.
+
 ### Dev-dependency cycles
 Never add `brepkit-operations` as a dev-dependency of `brepkit-topology` — this
 creates a "two versions" error. Use the `test-utils` feature flag instead.
