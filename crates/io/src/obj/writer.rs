@@ -4,6 +4,7 @@ use std::fmt::Write;
 
 use brepkit_operations::tessellate::{self, TriangleMesh};
 use brepkit_topology::Topology;
+use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::solid::SolidId;
 
 /// Write one or more solids to OBJ format as a UTF-8 string.
@@ -22,10 +23,13 @@ pub fn write_obj(
     let mut merged = TriangleMesh::default();
 
     for &solid_id in solids {
-        let solid = topo.solid(solid_id)?;
-        let shell = topo.shell(solid.outer_shell())?;
+        // Walk outer + inner (cavity) shells. A hollow solid's
+        // cavity surface is part of the geometry the user expects
+        // to round-trip through OBJ; outer-shell-only would emit a
+        // mesh with the void unrepresented.
+        let face_ids = solid_faces(topo, solid_id)?;
 
-        for &face_id in shell.faces() {
+        for &face_id in &face_ids {
             let mesh = tessellate::tessellate(topo, face_id, deflection)?;
             let offset = merged.positions.len();
 
