@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.86.0](https://github.com/andymai/brepkit/compare/v2.85.5...v2.86.0) (2026-05-09)
+
+
+### Features
+
+* **wasm:** register convertToElementary in batch dispatch ([#654](https://github.com/andymai/brepkit/issues/654)) ([d4b8b10](https://github.com/andymai/brepkit/commit/d4b8b1022055c60c2a0577ef6c478def1e2018e6))
+
 ## [2.85.5](https://github.com/andymai/brepkit/compare/v2.85.4...v2.85.5) (2026-05-09)
 
 
