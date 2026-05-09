@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
+use brepkit_topology::explorer::solid_faces;
 use brepkit_topology::solid::SolidId;
 use brepkit_topology::vertex::{Vertex, VertexId};
 
@@ -40,10 +41,11 @@ pub fn fix_split_common_vertex(
     ctx: &mut HealContext,
     _config: &FixConfig,
 ) -> Result<FixResult, HealError> {
-    let solid_data = topo.solid(solid_id)?;
-    let shell_id = solid_data.outer_shell();
-    let shell = topo.shell(shell_id)?;
-    let face_ids: Vec<_> = shell.faces().to_vec();
+    // Walk outer + inner (cavity) shells. Over-connection counting
+    // is solid-scoped: a vertex can be over-connected via a mix of
+    // outer-shell and inner-shell edges, and outer-shell-only would
+    // miss those cases.
+    let face_ids = solid_faces(topo, solid_id)?;
 
     // Count edges per vertex and collect edge-face associations.
     let mut vertex_edge_count: HashMap<usize, (VertexId, usize)> = HashMap::new();
@@ -128,10 +130,9 @@ fn split_vertex(
     ctx: &mut HealContext,
 ) -> Result<usize, HealError> {
     // ── Step 1: Find all edges connected to this vertex ──────────
-    let solid_data = topo.solid(solid_id)?;
-    let shell_id = solid_data.outer_shell();
-    let shell = topo.shell(shell_id)?;
-    let face_ids: Vec<_> = shell.faces().to_vec();
+    // Walk outer + inner (cavity) shells (see top-level comment in
+    // `fix_split_common_vertex`).
+    let face_ids = solid_faces(topo, solid_id)?;
 
     // Build: edge_id -> set of face_ids that reference it
     // Also: collect edges that touch our vertex
