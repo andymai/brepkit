@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.85.3](https://github.com/andymai/brepkit/compare/v2.85.2...v2.85.3) (2026-05-08)
+
+
+### Bug Fixes
+
+* **heal:** analyze_contents counts inner (cavity) shell entities ([#659](https://github.com/andymai/brepkit/issues/659)) ([e0a8ac0](https://github.com/andymai/brepkit/commit/e0a8ac0ed4fc321d015469ebb7094aab6bca0840))
+* **heal:** check_bspline_restrictions walks inner (cavity) shells ([#658](https://github.com/andymai/brepkit/issues/658)) ([5910daa](https://github.com/andymai/brepkit/commit/5910daa967f7389fbaccf785426f03e8c4fb0dc8))
+
 ## [2.85.2](https://github.com/andymai/brepkit/compare/v2.85.1...v2.85.2) (2026-05-08)
 
 
