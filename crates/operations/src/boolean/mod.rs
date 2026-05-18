@@ -423,23 +423,26 @@ pub fn boolean(
                     );
                     return Ok(result);
                 }
-                // Multi-region manifold result (e.g., a cut that splits a
-                // solid into N disjoint pieces). N independently closed
-                // manifolds have combined Euler = 2*N. Falling back to mesh
-                // boolean here would collapse the disjoint pieces down to a
-                // single region's volume (the symptom we were seeing in
-                // `cut with simplify` returning vol 166 instead of 1000).
+                // Multi-region manifold result (e.g., a Cut that splits a
+                // solid into N spatially-disjoint pieces). N independently
+                // closed manifolds have combined Euler = 2*N. Falling back
+                // to mesh boolean would collapse the disjoint pieces into
+                // a single region's volume (the `cut with simplify`
+                // returning vol 166 instead of 1000 symptom).
                 //
-                // Gate strictly on closed-manifold (every edge shared by
-                // exactly 2 faces) AND on the face-adjacency component
-                // count matching Euler/2, so a partially-assembled GFA
-                // failure (boundary edges, dangling faces, non-shared
-                // edges) still falls through to mesh-boolean.
-                let components = crate::boolean::assembly::count_face_components(topo, result);
+                // Gate: every edge must be shared by exactly 2 faces
+                // (closed-manifold) AND the components must be pairwise
+                // spatially disjoint (AABBs do not overlap). The latter
+                // distinguishes a "cut into N pieces" from a hollow solid
+                // (outer surface + cavity surface — same number of
+                // components, same Euler relation, but AABBs overlap).
+                let components_vec = crate::boolean::assembly::face_components(topo, result);
+                let components = components_vec.len();
                 #[allow(clippy::cast_possible_wrap)]
                 let expected_euler = (components as i64) * 2;
                 if components >= 2
                     && euler == expected_euler
+                    && components_are_disjoint_pieces(topo, &components_vec)
                     && is_closed_manifold(topo, result).unwrap_or(false)
                     && validate_boolean_result(topo, result).is_ok()
                 {
@@ -471,9 +474,9 @@ pub fn boolean(
     // pieces. Cut distributes over disjoint union; Fuse/Intersect have
     // more complex interaction semantics so we leave those to mesh.
     if op == BooleanOp::Cut {
-        let comp_count = crate::boolean::assembly::count_face_components(topo, a);
-        if comp_count >= 2 {
-            if let Ok(result) = cut_multi_region_input(topo, a, b, comp_count) {
+        let components = crate::boolean::assembly::face_components(topo, a);
+        if components.len() >= 2 && components_are_disjoint_pieces(topo, &components) {
+            if let Ok(result) = cut_multi_region_input(topo, a, b, components.len()) {
                 return Ok(result);
             }
         }
@@ -1300,6 +1303,72 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
         });
     }
     specs
+}
+
+/// True when the outer-shell face components represent disjoint solid
+/// pieces (e.g., a previous cut split one solid into N parts), false
+/// when one component is concentric inside another (a hollow solid:
+/// outer surface + cavity surface both live in the outer shell).
+///
+/// The check is AABB-based: if any component's bounding box is
+/// strictly contained in another's, treat the whole solid as hollow
+/// and skip the multi-region split path.
+fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -> bool {
+    let aabbs: Vec<(Point3, Point3)> = components
+        .iter()
+        .map(|comp| {
+            let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+            let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for &fid in comp {
+                let Ok(face) = topo.face(fid) else {
+                    continue;
+                };
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    let Ok(wire) = topo.wire(wid) else {
+                        continue;
+                    };
+                    for oe in wire.edges() {
+                        let Ok(edge) = topo.edge(oe.edge()) else {
+                            continue;
+                        };
+                        for vid in [edge.start(), edge.end()] {
+                            if let Ok(v) = topo.vertex(vid) {
+                                let p = v.point();
+                                min = Point3::new(
+                                    min.x().min(p.x()),
+                                    min.y().min(p.y()),
+                                    min.z().min(p.z()),
+                                );
+                                max = Point3::new(
+                                    max.x().max(p.x()),
+                                    max.y().max(p.y()),
+                                    max.z().max(p.z()),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            (min, max)
+        })
+        .collect();
+
+    let eps = 1e-7;
+    for i in 0..aabbs.len() {
+        for j in (i + 1)..aabbs.len() {
+            let (i_min, i_max) = aabbs[i];
+            let (j_min, j_max) = aabbs[j];
+            let x_overlap = i_min.x().max(j_min.x()) + eps < i_max.x().min(j_max.x());
+            let y_overlap = i_min.y().max(j_min.y()) + eps < i_max.y().min(j_max.y());
+            let z_overlap = i_min.z().max(j_min.z()) + eps < i_max.z().min(j_max.z());
+            if x_overlap && y_overlap && z_overlap {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 /// Merge duplicate vertices in a solid's shell by position.
