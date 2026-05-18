@@ -404,6 +404,9 @@ fn rodrigues_rotation(axis: Vec3, angle: f64) -> brepkit_math::mat::Mat4 {
 /// surface isn't planar.
 fn face_recognized_circle(topo: &Topology, face_id: FaceId) -> Option<(Point3, Vec3, f64)> {
     let face = topo.face(face_id).ok()?;
+    if !face.inner_wires().is_empty() {
+        return None;
+    }
     let normal = match face.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => return None,

@@ -189,13 +189,20 @@ fn sample_wire_points(
                     points.push(c.evaluate(tau / 3.0));
                     points.push(c.evaluate(2.0 * tau / 3.0));
                 } else {
+                    // Short-way midpoint between the two oriented endpoints:
+                    // walk the smaller of the two arcs (delta in [-π, π]) so
+                    // reversed edges sample the same physical arc as forward
+                    // ones, not the long complementary path.
                     let end_pt = topo.vertex(oe.oriented_end(edge))?.point();
-                    let t_start = c.project(start_pt);
-                    let mut t_end = c.project(end_pt);
-                    if t_end <= t_start {
-                        t_end += tau;
+                    let t_a = c.project(start_pt);
+                    let t_b = c.project(end_pt);
+                    let mut delta = t_b - t_a;
+                    if delta > std::f64::consts::PI {
+                        delta -= tau;
+                    } else if delta < -std::f64::consts::PI {
+                        delta += tau;
                     }
-                    points.push(c.evaluate(0.5 * (t_start + t_end)));
+                    points.push(c.evaluate(t_a + delta * 0.5));
                 }
             }
             EdgeCurve::Ellipse(e) => {
@@ -205,12 +212,15 @@ fn sample_wire_points(
                     points.push(e.evaluate(2.0 * tau / 3.0));
                 } else {
                     let end_pt = topo.vertex(oe.oriented_end(edge))?.point();
-                    let t_start = e.project(start_pt);
-                    let mut t_end = e.project(end_pt);
-                    if t_end <= t_start {
-                        t_end += tau;
+                    let t_a = e.project(start_pt);
+                    let t_b = e.project(end_pt);
+                    let mut delta = t_b - t_a;
+                    if delta > std::f64::consts::PI {
+                        delta -= tau;
+                    } else if delta < -std::f64::consts::PI {
+                        delta += tau;
                     }
-                    points.push(e.evaluate(0.5 * (t_start + t_end)));
+                    points.push(e.evaluate(t_a + delta * 0.5));
                 }
             }
             EdgeCurve::NurbsCurve(nc) => {

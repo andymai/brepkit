@@ -1518,18 +1518,23 @@ fn make_solid_from_face_subset(
             normalized.push(fid);
             continue;
         }
+        // Only Plane has a trivial negate-the-normal flip. Non-planar
+        // reversed faces (cylinder/cone/sphere/torus/nurbs) cannot have
+        // their surface negated cheaply — they hit surface-specific GFA
+        // paths that don't suffer from the same reversed-flag sensitivity.
+        // Exhaustive match so a new FaceSurface variant fails to compile
+        // rather than silently passing through un-normalized.
         let flipped_surface = match face.surface() {
             FaceSurface::Plane { normal, d } => FaceSurface::Plane {
                 normal: -*normal,
                 d: -*d,
             },
-            // Non-planar reversed faces (cylinder/cone/etc.) cannot have
-            // their surface negated trivially. Leave as-is — those cases
-            // hit cylinder/sphere-specific code paths in GFA that don't
-            // suffer from the same reversed-flag sensitivity.
-            other => {
+            FaceSurface::Nurbs(_)
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => {
                 normalized.push(fid);
-                let _ = other;
                 continue;
             }
         };
