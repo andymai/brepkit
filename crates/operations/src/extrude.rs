@@ -52,14 +52,30 @@ pub fn maybe_split_closed_wire(
     tol: f64,
     deflection: f64,
 ) -> Result<Vec<OrientedEdge>, crate::OperationsError> {
-    // Only need splitting when the wire has edges whose start==end vertex.
-    // Collect all edges that need splitting, and pass through the rest.
+    maybe_split_closed_wire_with(
+        topo, oriented, tol, deflection, /*pass_through_circles=*/ false,
+    )
+}
+
+/// Internal variant that lets the caller opt in to passing closed circle /
+/// ellipse / NURBS-recognized-as-circle edges through unsplit. The basic
+/// extrude path uses this so the side face can be built as a true analytic
+/// cylinder (matching OCCT's exact π·r²·h), while sweep / complexExtrude /
+/// twist still split — they apply per-edge profiles that don't work on a
+/// single closed-curve edge.
+pub(crate) fn maybe_split_closed_wire_with(
+    topo: &mut Topology,
+    oriented: &[OrientedEdge],
+    tol: f64,
+    deflection: f64,
+    pass_through_circles: bool,
+) -> Result<Vec<OrientedEdge>, crate::OperationsError> {
     let mut result = Vec::with_capacity(oriented.len() * 4);
     for oe in oriented {
         let edge = topo.edge(oe.edge())?;
-        if edge.start() == edge.end() {
-            // Closed edge — split the curve at evenly-spaced parameters.
-            // Compute segment count from chord-height deviation bound.
+        if edge.start() == edge.end()
+            && !(pass_through_circles && curve_is_analytic_circle(edge.curve()))
+        {
             let n = closed_edge_segments(edge.curve(), deflection);
             let split_edges = split_closed_edge(topo, oe.edge(), n, tol)?;
             for se in split_edges {
@@ -70,6 +86,23 @@ pub fn maybe_split_closed_wire(
         }
     }
     Ok(result)
+}
+
+/// Whether a closed edge's curve is a Circle, Ellipse, or a rational
+/// NURBS recognized as one of those — i.e., something the extrude path
+/// can convert into an exact analytic cylinder/NURBS-of-revolution side
+/// face without polyline-ing.
+fn curve_is_analytic_circle(curve: &EdgeCurve) -> bool {
+    let tol = Tolerance::new().linear;
+    match curve {
+        EdgeCurve::Line => false,
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => true,
+        EdgeCurve::NurbsCurve(nc) => matches!(
+            brepkit_geometry::convert::recognize_curve(nc, tol * 100.0),
+            brepkit_geometry::convert::RecognizedCurve::Circle { .. }
+                | brepkit_geometry::convert::RecognizedCurve::Ellipse { .. }
+        ),
+    }
 }
 
 /// Compute the number of segments for splitting a closed edge based on
@@ -202,14 +235,44 @@ fn extrude_wire_vertices(
     ),
     crate::OperationsError,
 > {
+    extrude_wire_vertices_with(topo, wire_id, offset, /*pass_through_circles=*/ false)
+}
+
+#[allow(clippy::type_complexity)]
+fn extrude_wire_vertices_with(
+    topo: &mut Topology,
+    wire_id: WireId,
+    offset: Vec3,
+    pass_through_circles: bool,
+) -> Result<
+    (
+        Vec<VertexId>,
+        Vec<Point3>,
+        Vec<OrientedEdge>,
+        Vec<EdgeId>,
+        Vec<VertexId>,
+        Vec<EdgeId>,
+        Vec<EdgeId>,
+    ),
+    crate::OperationsError,
+> {
     let tol = Tolerance::new();
     let wire = topo.wire(wire_id)?;
     let original_oriented: Vec<_> = wire.edges().to_vec();
 
     // Check for closed single-edge wires (e.g. a full circle) and split them
     // into multiple edges so that the extrusion can create proper side faces.
-    let oriented =
-        maybe_split_closed_wire(topo, &original_oriented, tol.linear, DEFAULT_DEFLECTION)?;
+    // Closed circles/ellipses (incl. NURBS-recognized ones) optionally pass
+    // through unsplit when the caller can handle analytic side faces. Inner
+    // wires of an extrude DON'T pass through — the inner side face
+    // construction still expects the per-edge polyline layout.
+    let oriented = maybe_split_closed_wire_with(
+        topo,
+        &original_oriented,
+        tol.linear,
+        DEFAULT_DEFLECTION,
+        pass_through_circles,
+    )?;
 
     let mut verts: Vec<VertexId> = Vec::with_capacity(oriented.len());
     for oe in &oriented {
@@ -327,6 +390,38 @@ fn side_face_surface(
             Ok((FaceSurface::Cylinder(cyl), reversed))
         }
         EdgeCurve::NurbsCurve(nc) => {
+            // brepjs (and other callers) often construct circles as rational
+            // quadratic NURBS via `makeCircleEdge`. Extruding those as ruled
+            // NURBS surfaces leaves a ~0.12% volume deficit vs the exact
+            // π·r²·h answer that OCCT returns. Recognize the NURBS as a
+            // circle and use a true `Cylinder` surface for the side face
+            // when possible — the recognition is geometrically exact for
+            // the rational-quadratic circle construction.
+            let tol = brepkit_math::tolerance::Tolerance::new().linear;
+            if let brepkit_geometry::convert::RecognizedCurve::Circle {
+                center,
+                normal: _,
+                radius,
+            } = brepkit_geometry::convert::recognize_curve(nc, tol * 100.0)
+            {
+                let cyl = brepkit_math::surfaces::CylindricalSurface::new(
+                    center,
+                    offset.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0)),
+                    radius,
+                )
+                .map_err(crate::OperationsError::Math)?;
+                let edge_dir = p1 - p0;
+                let expected = if outer_is_cw {
+                    offset.cross(edge_dir)
+                } else {
+                    edge_dir.cross(offset)
+                };
+                let to_pt = p0 - center;
+                let along_axis = cyl.axis() * cyl.axis().dot(to_pt);
+                let radial = to_pt - along_axis;
+                let reversed = radial.dot(expected) < 0.0;
+                return Ok((FaceSurface::Cylinder(cyl), reversed));
+            }
             let surface = ruled_nurbs_surface(nc, offset)?;
             let reversed = nurbs_needs_reversal(&surface, p0, p1, offset, outer_is_cw);
             Ok((FaceSurface::Nurbs(surface), reversed))
@@ -355,23 +450,45 @@ fn nurbs_needs_reversal(
     offset: Vec3,
     outer_is_cw: bool,
 ) -> bool {
-    // Expected outward normal (same formula as for planar side faces).
+    let (u_lo, u_hi) = surface.domain_u();
+    let (v_lo, v_hi) = surface.domain_v();
+    let u_mid = 0.5 * (u_lo + u_hi);
+    let v_mid = 0.5 * (v_lo + v_hi);
+    let Ok(native) = surface.normal(u_mid, v_mid) else {
+        return false;
+    };
+
+    // For an open arc the original "edge_dir.cross(offset)" formula gives the
+    // expected outward direction. For a closed loop p0 == p1 — edge_dir
+    // collapses to zero, the cross product is zero, and the dot test below
+    // becomes useless (always false). Sample the bottom curve at a second
+    // point and use the secant as the local edge direction instead, so
+    // closed ellipse / NURBS-circle extrusions get the correct outward
+    // orientation.
     let edge_dir = p1 - p0;
+    let edge_dir = if edge_dir.length_squared() > 1e-20 {
+        edge_dir
+    } else {
+        // Sample two points on the bottom curve a short parameter apart
+        // and take their difference as the tangent direction.
+        let v_next = if v_mid + 0.01 * (v_hi - v_lo) < v_hi {
+            v_mid + 0.01 * (v_hi - v_lo)
+        } else {
+            v_mid - 0.01 * (v_hi - v_lo)
+        };
+        let p_mid = surface.evaluate(u_lo, v_mid);
+        let p_next = surface.evaluate(u_lo, v_next);
+        p_next - p_mid
+    };
     let expected = if outer_is_cw {
         offset.cross(edge_dir)
     } else {
         edge_dir.cross(offset)
     };
-    // Evaluate the surface's native normal at the midpoint of the domain.
-    let (u_lo, u_hi) = surface.domain_u();
-    let (v_lo, v_hi) = surface.domain_v();
-    let u_mid = 0.5 * (u_lo + u_hi);
-    let v_mid = 0.5 * (v_lo + v_hi);
-    if let Ok(native) = surface.normal(u_mid, v_mid) {
-        native.dot(expected) < 0.0
-    } else {
-        false
+    if expected.length_squared() < 1e-20 {
+        return false;
     }
+    native.dot(expected) < 0.0
 }
 
 /// Build a ruled NURBS surface by linearly interpolating between a bottom
@@ -462,7 +579,12 @@ pub fn extrude(
         _top_verts,
         top_edge_ids,
         vertical_edge_ids,
-    ) = extrude_wire_vertices(topo, input_wire_id, offset)?;
+    ) = extrude_wire_vertices_with(
+        topo,
+        input_wire_id,
+        offset,
+        /*pass_through_circles=*/ true,
+    )?;
     let n = input_verts.len();
 
     // Detect CW-wound outer wire (e.g. from brepjs polygon approximations).
@@ -1347,24 +1469,29 @@ mod tests {
         );
     }
 
-    /// Extruding a face with a NURBS arc edge should produce NURBS side faces
-    /// for the curved edges and planar side faces for the straight edges.
+    /// Extruding a face with a NURBS curve edge that is geometrically a
+    /// circular arc should produce a `Cylinder` side face (not a ruled
+    /// NURBS surface). This matches the OCCT-equivalent behavior: brepjs
+    /// constructs circles as rational-quadratic NURBS, and extruding those
+    /// as NURBS leaves a small but persistent volume deficit. Recognizing
+    /// the curve as a circle and using the exact analytic cylinder surface
+    /// recovers π·r²·h precisely.
+    ///
+    /// For a NURBS that is *not* recognized as any analytic curve, the
+    /// behavior is still to produce a NURBS ruled surface (covered by the
+    /// rest of the side_face_surface match arm).
     #[test]
-    fn extrude_nurbs_arc_edge_produces_nurbs_side_face() {
+    fn extrude_recognized_circle_nurbs_arc_uses_cylinder_side_face() {
         use brepkit_math::nurbs::curve::NurbsCurve;
 
         let mut topo = Topology::new();
         let tol = Tolerance::new();
 
-        // Build a face shaped like a square with one curved edge (quarter-circle arc).
-        // Vertices: v0=(0,0,0), v1=(1,0,0), v2=(1,1,0), v3=(0,1,0)
-        // Replace the edge v1→v2 with a NURBS arc that bulges outward.
         let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol.linear));
         let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), tol.linear));
         let v2 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), tol.linear));
         let v3 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), tol.linear));
 
-        // Rational quadratic arc: (1,0,0) → (1.5,0.5,0) → (1,1,0) with weight 1/√2 at midpoint
         let arc_curve = NurbsCurve::new(
             2,
             vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
@@ -1407,39 +1534,26 @@ mod tests {
         let s = topo.solid(solid).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
 
-        // 4 side faces + 2 caps = 6 faces
         assert_eq!(sh.faces().len(), 6, "should have 6 faces");
 
-        // Count surface types: expect 1 NURBS side face (from the arc edge),
-        // 3 planar side faces, and 2 planar caps = 5 planar + 1 NURBS.
         let nurbs_count = sh
             .faces()
             .iter()
             .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
             .count();
-        assert_eq!(
-            nurbs_count, 1,
-            "exactly 1 side face should be a NURBS ruled surface, got {nurbs_count}"
-        );
-
-        // The NURBS surface should have 2 rows (ruled) and degree 1 in v-direction.
-        let nurbs_face = sh
+        let cylinder_count = sh
             .faces()
             .iter()
-            .find(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Nurbs(_)))
-            .unwrap();
-        if let FaceSurface::Nurbs(surf) = topo.face(*nurbs_face).unwrap().surface() {
-            assert_eq!(
-                surf.degree_u(),
-                1,
-                "ruled surface should have degree_u=1 (extrusion direction)"
-            );
-            assert_eq!(
-                surf.control_points().len(),
-                2,
-                "ruled surface should have 2 rows of control points"
-            );
-        }
+            .filter(|&&fid| matches!(topo.face(fid).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .count();
+        assert_eq!(
+            cylinder_count, 1,
+            "rational-quadratic circular arc should produce 1 Cylinder side face"
+        );
+        assert_eq!(
+            nurbs_count, 0,
+            "no NURBS side face expected once the arc is recognized as a Circle"
+        );
     }
 
     /// Extruding a face with a Circle edge should produce a cylindrical side face.

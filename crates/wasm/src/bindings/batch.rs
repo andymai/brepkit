@@ -79,17 +79,65 @@ impl BrepKernel {
 }
 
 impl BrepKernel {
-    /// Extract a `NurbsCurve` from an edge, or error if it's a line.
+    /// Extract a `NurbsCurve` from an edge.
+    ///
+    /// NURBS edges are returned directly. Line, Circle, and Ellipse edges
+    /// are converted to their exact rational NURBS equivalent using the
+    /// edge's bounding vertices (and the curve's analytic params for
+    /// circles/ellipses).
     pub(crate) fn extract_nurbs_curve(&self, edge: u32) -> Result<NurbsCurve, JsError> {
+        use brepkit_geometry::convert::{circle_to_nurbs, ellipse_to_nurbs, line_to_nurbs};
+        use std::f64::consts::TAU;
+
         let edge_id = self.resolve_edge(edge)?;
         let edge_data = self.topo.edge(edge_id)?;
+        let start_v = edge_data.start();
+        let end_v = edge_data.end();
+        let start_pt = self.topo.vertex(start_v)?.point();
+        let end_pt = self.topo.vertex(end_v)?.point();
+
         match edge_data.curve() {
             EdgeCurve::NurbsCurve(c) => Ok(c.clone()),
-            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
-                Err(WasmError::InvalidInput {
-                    reason: "edge is not a NURBS curve".into(),
-                }
-                .into())
+            EdgeCurve::Line => {
+                Ok(
+                    line_to_nurbs(start_pt, end_pt).map_err(|e| WasmError::InvalidInput {
+                        reason: format!("line_to_nurbs failed: {e}"),
+                    })?,
+                )
+            }
+            EdgeCurve::Circle(c) => {
+                let (t_start, t_end) = if start_v == end_v {
+                    (0.0, TAU)
+                } else {
+                    let ts = c.project(start_pt);
+                    let mut te = c.project(end_pt);
+                    if te <= ts {
+                        te += TAU;
+                    }
+                    (ts, te)
+                };
+                Ok(
+                    circle_to_nurbs(c, t_start, t_end).map_err(|e| WasmError::InvalidInput {
+                        reason: format!("circle_to_nurbs failed: {e}"),
+                    })?,
+                )
+            }
+            EdgeCurve::Ellipse(e) => {
+                let (t_start, t_end) = if start_v == end_v {
+                    (0.0, TAU)
+                } else {
+                    let ts = e.project(start_pt);
+                    let mut te = e.project(end_pt);
+                    if te <= ts {
+                        te += TAU;
+                    }
+                    (ts, te)
+                };
+                Ok(
+                    ellipse_to_nurbs(e, t_start, t_end).map_err(|err| WasmError::InvalidInput {
+                        reason: format!("ellipse_to_nurbs failed: {err}"),
+                    })?,
+                )
             }
         }
     }

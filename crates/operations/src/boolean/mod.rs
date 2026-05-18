@@ -4,7 +4,7 @@
 //! with mesh boolean (co-refinement) as a fallback when GFA fails or produces
 //! invalid results.
 
-mod assembly;
+pub mod assembly;
 mod classify;
 mod types;
 use assembly::validate_boolean_result;
@@ -92,8 +92,11 @@ pub fn boolean(
                     && i_max.z() <= o_max.z() + margin
             };
         // AABB-strictly-contains (strict): outer must also be ≥10% larger in
-        // ≥2 dims. Used as the no-classifier fallback to avoid false-positive
-        // containment when AABBs overlap but neither solid contains the other.
+        // ALL 3 dims. Used as the no-classifier fallback to detect true
+        // nested containment (e.g., a ring fully inside a shell's cavity)
+        // without false-positives on sparse multi-shell solids (e.g., a
+        // fuse of disjoint boxes whose AABB technically encloses another
+        // solid's AABB while mostly being empty space).
         let aabb_strictly_contains =
             |inner: &Option<(Point3, Point3)>, outer: &Option<(Point3, Point3)>| -> bool {
                 if !aabb_encloses(inner, outer) {
@@ -137,11 +140,12 @@ pub fn boolean(
             .unwrap_or(false);
 
         // Containment shortcut: A contains B when all B vertices are
-        // inside-or-on A AND A's AABB encloses B's. The vertex check
-        // handles cases where AABB centers coincide (e.g., concentric
-        // cylinders of same radius, different heights) where the prior
-        // center-based check failed. Falls back to AABB-only when the
-        // containing solid's classifier is unavailable.
+        // inside-or-on A AND A's AABB encloses B's. Falls back to a
+        // strict AABB-only check when the containing solid has no
+        // classifier — the strict check requires ≥10% larger in ALL
+        // three dims so that sparse multi-shell solids (e.g., a fuse
+        // of two disjoint boxes) don't false-positive as "contains
+        // another solid".
         let b_in_a = (all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
             || (ca.is_none() && aabb_strictly_contains(&aabb_b, &aabb_a));
         let a_in_b = (all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
@@ -421,17 +425,78 @@ pub fn boolean(
                     );
                     return Ok(result);
                 }
+                // Multi-region manifold result (e.g., a Cut that splits a
+                // solid into N spatially-disjoint pieces). N independently
+                // closed manifolds have combined Euler = 2*N. Falling back
+                // to mesh boolean would collapse the disjoint pieces into
+                // a single region's volume (the `cut with simplify`
+                // returning vol 166 instead of 1000 symptom).
+                //
+                // Gate: every edge must be shared by exactly 2 faces
+                // (closed-manifold) AND the components must be pairwise
+                // spatially disjoint (AABBs do not overlap). The latter
+                // distinguishes a "cut into N pieces" from a hollow solid
+                // (outer surface + cavity surface — same number of
+                // components, same Euler relation, but AABBs overlap).
+                let components_vec = crate::boolean::assembly::face_components(topo, result);
+                let components = components_vec.len();
+                #[allow(clippy::cast_possible_wrap)]
+                let expected_euler = (components as i64) * 2;
+                // For Cut, also verify no component is a "B-interior piece" —
+                // GFA can produce N closed manifolds where one of them is the
+                // tool's interior (sphere - cylinder example: 3 pieces =
+                // top cap + bottom cap + cylinder interior). Sample a point
+                // inside each component's AABB and classify against B; if any
+                // sits inside B, the GFA result included the cut-out piece
+                // and should be rejected. Fuse/Intersect don't have this
+                // failure mode.
+                let cut_safe = op != BooleanOp::Cut
+                    || brepkit_algo::classifier::try_build_analytic_classifier(topo, b)
+                        .as_ref()
+                        .is_none_or(|cls_b| {
+                            all_component_centers_outside(topo, &components_vec, cls_b, tol)
+                        });
+                if op == BooleanOp::Cut
+                    && components >= 2
+                    && euler == expected_euler
+                    && components_are_disjoint_pieces(topo, &components_vec)
+                    && cut_safe
+                    && is_closed_manifold(topo, result).unwrap_or(false)
+                    && validate_boolean_result(topo, result).is_ok()
+                {
+                    log::info!(
+                        "GFA multi-region succeeded in {:.1}ms ({result_faces} faces, {components} pieces)",
+                        timer_elapsed_ms(gfa_start)
+                    );
+                    return Ok(result);
+                }
             }
             log::warn!(
-                "GFA result failed validation in {:.1}ms (faces={result_faces}), falling back to mesh boolean",
+                "GFA result failed validation in {:.1}ms (faces={result_faces}), falling back",
                 timer_elapsed_ms(gfa_start)
             );
         }
         Err(e) => {
             log::warn!(
-                "GFA boolean failed in {:.1}ms ({e}), falling back to mesh boolean",
+                "GFA boolean failed in {:.1}ms ({e}), falling back",
                 timer_elapsed_ms(gfa_start)
             );
+        }
+    }
+
+    // ── Multi-region input fallback (Cut only) ───────────────────────
+    // When the input solid carries multiple disjoint pieces (a previous
+    // cut split a solid into N parts), GFA's pavefiller can't process
+    // them together — feeding the whole thing in loses regions. Splitting
+    // into per-component cuts and recombining preserves the missing
+    // pieces. Cut distributes over disjoint union; Fuse/Intersect have
+    // more complex interaction semantics so we leave those to mesh.
+    if op == BooleanOp::Cut {
+        let components = crate::boolean::assembly::face_components(topo, a);
+        if components.len() >= 2 && components_are_disjoint_pieces(topo, &components) {
+            if let Ok(result) = cut_multi_region_input(topo, a, b, components.len()) {
+                return Ok(result);
+            }
         }
     }
 
@@ -556,8 +621,15 @@ pub fn boolean_with_evolution(
     let centroid_dist_sq_max = 100.0;
 
     for &(out_idx, out_normal, out_centroid) in &output_faces {
+        // Collect every input face whose normal+centroid is "close enough"
+        // to the output face. When fuse simplifies two coincident-plane
+        // inputs into one output (e.g. fuse of touching boxes via the
+        // box-pair shortcut: the top faces of A and B both collapse onto
+        // the result's top face), picking only the single best-scoring
+        // input drops the other input's metadata. Recording every
+        // qualifying input under the same output preserves both origins.
         let mut best_score = f64::NEG_INFINITY;
-        let mut best_input: Option<usize> = None;
+        let mut matches: Vec<(usize, f64)> = Vec::new();
 
         for &(in_idx, in_normal, in_centroid) in &input_faces {
             let dot = out_normal.dot(in_normal);
@@ -574,19 +646,28 @@ pub fn boolean_with_evolution(
                 continue;
             }
 
-            // Score: higher normal alignment + closer centroid = better.
             let score = dot - dist_sq / centroid_dist_sq_max;
             if score > best_score {
                 best_score = score;
-                best_input = Some(in_idx);
             }
+            matches.push((in_idx, score));
         }
 
-        if let Some(in_idx) = best_input {
-            evo.add_modified(in_idx, out_idx);
-            matched_inputs.insert(in_idx);
-        } else {
+        if matches.is_empty() {
             unmatched_outputs.push((out_idx, out_normal, out_centroid));
+            continue;
+        }
+
+        // Accept any match within a small tolerance of the best score —
+        // ties (or near-ties) usually indicate two input faces that
+        // legitimately contributed to the same output (e.g., the two
+        // halves of a face that merged across a same-domain boundary).
+        let score_tol = 0.05;
+        for &(in_idx, score) in &matches {
+            if score >= best_score - score_tol {
+                evo.add_modified(in_idx, out_idx);
+                matched_inputs.insert(in_idx);
+            }
         }
     }
 
@@ -701,7 +782,16 @@ fn box_pair_shortcut(
                 ),
             )
         }
-        BooleanOp::Cut => return Ok(None),
+        BooleanOp::Cut => {
+            // Cut shortcut: when B spans A in 2 of 3 dims (≥ A's extent
+            // on both sides) and overlaps in the third, the result is
+            // up-to-2 axis-aligned boxes (the leftover slabs on either
+            // side of B in the cutting dim). This avoids routing through
+            // GFA's same-domain handling which currently mishandles the
+            // 4-coincident-face case (target's lateral walls + tool's
+            // matching walls).
+            return box_pair_cut_shortcut(topo, a_min, a_max, b_min, b_max, eps);
+        }
     };
     let dx = max.x() - min.x();
     let dy = max.y() - min.y();
@@ -715,6 +805,116 @@ fn box_pair_shortcut(
         crate::transform::transform_solid(topo, bx, &xform)?;
     }
     Ok(Some(bx))
+}
+
+/// Cut shortcut for two axis-aligned boxes: returns the leftover
+/// portion(s) when B slices through A in one dimension while spanning
+/// A in the other two dimensions. The result is 0, 1, or 2 axis-aligned
+/// boxes packaged into a single multi-region Solid.
+///
+/// Returns `Ok(None)` when the shortcut doesn't fit — e.g., B doesn't
+/// span A in any 2 dims, B touches only a corner, etc. The general path
+/// (GFA) handles those cases.
+fn box_pair_cut_shortcut(
+    topo: &mut Topology,
+    a_min: Point3,
+    a_max: Point3,
+    b_min: Point3,
+    b_max: Point3,
+    eps: f64,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    // B must span A in 2 of 3 dims (B_min ≤ A_min - eps AND B_max ≥ A_max + eps,
+    // i.e., B's extent covers A's extent in that dim).
+    let x_spans = b_min.x() <= a_min.x() + eps && b_max.x() >= a_max.x() - eps;
+    let y_spans = b_min.y() <= a_min.y() + eps && b_max.y() >= a_max.y() - eps;
+    let z_spans = b_min.z() <= a_min.z() + eps && b_max.z() >= a_max.z() - eps;
+    let spans_count = u8::from(x_spans) + u8::from(y_spans) + u8::from(z_spans);
+    if spans_count != 2 {
+        return Ok(None);
+    }
+    // In the non-spanning dim, B must actually intersect A.
+    let (a_lo, a_hi, b_lo, b_hi) = if !x_spans {
+        (a_min.x(), a_max.x(), b_min.x(), b_max.x())
+    } else if !y_spans {
+        (a_min.y(), a_max.y(), b_min.y(), b_max.y())
+    } else {
+        (a_min.z(), a_max.z(), b_min.z(), b_max.z())
+    };
+    if b_hi <= a_lo + eps || b_lo >= a_hi - eps {
+        return Ok(None);
+    }
+
+    // Build the leftover slabs. There are 0, 1, or 2 pieces depending on
+    // whether B extends past A on each side in the cutting dim.
+    let cuts: Vec<(f64, f64)> = {
+        let mut pieces = Vec::with_capacity(2);
+        if b_lo > a_lo + eps {
+            pieces.push((a_lo, b_lo)); // slab before B
+        }
+        if b_hi < a_hi - eps {
+            pieces.push((b_hi, a_hi)); // slab after B
+        }
+        pieces
+    };
+    if cuts.is_empty() {
+        // B fully covers A in the cutting dim → cut leaves nothing.
+        // Let the general path handle this (it errors).
+        return Ok(None);
+    }
+
+    let piece_solids: Vec<SolidId> = cuts
+        .iter()
+        .map(|&(lo, hi)| -> Result<SolidId, crate::OperationsError> {
+            let (dx, dy, dz, tx, ty, tz) = if !x_spans {
+                (
+                    hi - lo,
+                    a_max.y() - a_min.y(),
+                    a_max.z() - a_min.z(),
+                    lo,
+                    a_min.y(),
+                    a_min.z(),
+                )
+            } else if !y_spans {
+                (
+                    a_max.x() - a_min.x(),
+                    hi - lo,
+                    a_max.z() - a_min.z(),
+                    a_min.x(),
+                    lo,
+                    a_min.z(),
+                )
+            } else {
+                (
+                    a_max.x() - a_min.x(),
+                    a_max.y() - a_min.y(),
+                    hi - lo,
+                    a_min.x(),
+                    a_min.y(),
+                    lo,
+                )
+            };
+            let bx = crate::primitives::make_box(topo, dx, dy, dz)?;
+            if tx.abs() > eps || ty.abs() > eps || tz.abs() > eps {
+                let xform = brepkit_math::mat::Mat4::translation(tx, ty, tz);
+                crate::transform::transform_solid(topo, bx, &xform)?;
+            }
+            Ok(bx)
+        })
+        .collect::<Result<_, _>>()?;
+
+    if piece_solids.len() == 1 {
+        return Ok(Some(piece_solids[0]));
+    }
+
+    // Combine pieces into a single multi-region solid.
+    let mut all_faces: Vec<brepkit_topology::face::FaceId> = Vec::new();
+    for &p in &piece_solids {
+        let p_data = topo.solid(p)?;
+        for &fid in topo.shell(p_data.outer_shell())?.faces() {
+            all_faces.push(fid);
+        }
+    }
+    Ok(Some(make_solid_from_face_subset(topo, &all_faces)?))
 }
 
 /// Compute the coaxial-cylinder boolean for two cylinders sharing axis,
@@ -1123,8 +1323,283 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
     specs
 }
 
+/// True when the outer-shell face components represent disjoint solid
+/// pieces (e.g., a previous cut split one solid into N parts), false
+/// when one component is concentric inside another (a hollow solid:
+/// outer surface + cavity surface both live in the outer shell).
+///
+/// The check is AABB-based: if any component's bounding box is
+/// strictly contained in another's, treat the whole solid as hollow
+/// and skip the multi-region split path.
+/// Check that every component's AABB centre classifies as outside the
+/// supplied classifier. Used to reject multi-region GFA Cut results that
+/// erroneously include the tool's interior as one of the pieces.
+fn all_component_centers_outside(
+    topo: &Topology,
+    components: &[Vec<FaceId>],
+    classifier: &brepkit_algo::classifier::AnalyticClassifier,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    use brepkit_algo::FaceClass;
+    for comp in components {
+        let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for &fid in comp {
+            let Ok(face) = topo.face(fid) else { continue };
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                let Ok(wire) = topo.wire(wid) else { continue };
+                for oe in wire.edges() {
+                    let Ok(edge) = topo.edge(oe.edge()) else {
+                        continue;
+                    };
+                    for vid in [edge.start(), edge.end()] {
+                        if let Ok(v) = topo.vertex(vid) {
+                            let p = v.point();
+                            min = Point3::new(
+                                min.x().min(p.x()),
+                                min.y().min(p.y()),
+                                min.z().min(p.z()),
+                            );
+                            max = Point3::new(
+                                max.x().max(p.x()),
+                                max.y().max(p.y()),
+                                max.z().max(p.z()),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let centre = Point3::new(
+            (min.x() + max.x()) * 0.5,
+            (min.y() + max.y()) * 0.5,
+            (min.z() + max.z()) * 0.5,
+        );
+        if matches!(classifier.classify(centre, tol), Some(FaceClass::Inside)) {
+            return false;
+        }
+    }
+    true
+}
+
+fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -> bool {
+    let aabbs: Vec<(Point3, Point3)> = components
+        .iter()
+        .map(|comp| {
+            let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+            let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+            for &fid in comp {
+                let Ok(face) = topo.face(fid) else {
+                    continue;
+                };
+                for wid in
+                    std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                {
+                    let Ok(wire) = topo.wire(wid) else {
+                        continue;
+                    };
+                    for oe in wire.edges() {
+                        let Ok(edge) = topo.edge(oe.edge()) else {
+                            continue;
+                        };
+                        for vid in [edge.start(), edge.end()] {
+                            if let Ok(v) = topo.vertex(vid) {
+                                let p = v.point();
+                                min = Point3::new(
+                                    min.x().min(p.x()),
+                                    min.y().min(p.y()),
+                                    min.z().min(p.z()),
+                                );
+                                max = Point3::new(
+                                    max.x().max(p.x()),
+                                    max.y().max(p.y()),
+                                    max.z().max(p.z()),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            (min, max)
+        })
+        .collect();
+
+    let eps = 1e-7;
+    for i in 0..aabbs.len() {
+        for j in (i + 1)..aabbs.len() {
+            let (i_min, i_max) = aabbs[i];
+            let (j_min, j_max) = aabbs[j];
+            let x_overlap = i_min.x().max(j_min.x()) + eps < i_max.x().min(j_max.x());
+            let y_overlap = i_min.y().max(j_min.y()) + eps < i_max.y().min(j_max.y());
+            let z_overlap = i_min.z().max(j_min.z()) + eps < i_max.z().min(j_max.z());
+            if x_overlap && y_overlap && z_overlap {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Merge duplicate vertices in a solid's shell by position.
 ///
+/// Cut a multi-region input solid: split the components, cut each
+/// against `b` independently, then combine the per-component results
+/// back into a single multi-region solid.
+///
+/// This works around the GFA pavefiller's assumption of a single
+/// connected input — feeding a 2-piece "solid" into GFA loses one piece
+/// at a time as the cut proceeds (Category B `multiple cuts creating
+/// three pieces` and gear bore are both downstream of this).
+fn cut_multi_region_input(
+    topo: &mut Topology,
+    a: SolidId,
+    b: SolidId,
+    comp_count: usize,
+) -> Result<SolidId, crate::OperationsError> {
+    let components = crate::boolean::assembly::face_components(topo, a);
+    debug_assert_eq!(components.len(), comp_count);
+
+    let mut per_component_results: Vec<SolidId> = Vec::with_capacity(components.len());
+    for comp_faces in components {
+        // Copy the component's faces into a fresh single-component solid
+        // so the boolean engine sees a connected manifold.
+        let comp_solid_raw = make_solid_from_face_subset(topo, &comp_faces)?;
+        // Deep-copy the component into a fresh solid so its faces/edges/
+        // vertices have fresh IDs disjoint from the original multi-region
+        // input — GFA's pavefiller can stumble on shared vertex IDs across
+        // what it considers a single "solid A".
+        let comp_solid = crate::copy::copy_solid(topo, comp_solid_raw)?;
+        match boolean(topo, BooleanOp::Cut, comp_solid, b) {
+            Ok(r) => per_component_results.push(r),
+            Err(crate::OperationsError::InvalidInput { .. }) => {
+                per_component_results.push(comp_solid);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Combine all per-component results into a single multi-region solid.
+    // Collect every face from every result into one outer shell. The
+    // results are pairwise disjoint by construction (each came from a
+    // disjoint input component cut by the same tool), so a single shell
+    // containing all their faces is a valid manifold representation.
+    let mut all_faces: Vec<brepkit_topology::face::FaceId> = Vec::new();
+    for &r in &per_component_results {
+        let r_data = topo.solid(r)?;
+        for &fid in topo.shell(r_data.outer_shell())?.faces() {
+            all_faces.push(fid);
+        }
+    }
+    make_solid_from_face_subset(topo, &all_faces)
+}
+
+/// Build a new solid whose outer shell consists exactly of the given
+/// faces. Faces are referenced as-is (no copying) — the caller is
+/// expected to pass faces that already form a closed manifold.
+///
+/// `reversed=true` faces are NORMALIZED on the way in: a fresh face is
+/// created with the surface normal negated, the wires reversed, and
+/// `reversed=false`. Boolean operations downstream are sensitive to the
+/// `reversed` flag (cut1's output carries reversed faces that GFA can't
+/// re-process cleanly even via deep-copy), so handing GFA an
+/// orientation-normalized solid recovers the fresh-primitive code path.
+fn make_solid_from_face_subset(
+    topo: &mut Topology,
+    faces: &[brepkit_topology::face::FaceId],
+) -> Result<SolidId, crate::OperationsError> {
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut normalized: Vec<brepkit_topology::face::FaceId> = Vec::with_capacity(faces.len());
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        if !face.is_reversed() {
+            normalized.push(fid);
+            continue;
+        }
+        // Only Plane has a trivial negate-the-normal flip. Non-planar
+        // reversed faces (cylinder/cone/sphere/torus/nurbs) cannot have
+        // their surface negated cheaply — they hit surface-specific GFA
+        // paths that don't suffer from the same reversed-flag sensitivity.
+        // Exhaustive match so a new FaceSurface variant fails to compile
+        // rather than silently passing through un-normalized.
+        let flipped_surface = match face.surface() {
+            FaceSurface::Plane { normal, d } => FaceSurface::Plane {
+                normal: -*normal,
+                d: -*d,
+            },
+            FaceSurface::Nurbs(_)
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => {
+                normalized.push(fid);
+                continue;
+            }
+        };
+        let outer_wid = face.outer_wire();
+        let inner_wids: Vec<_> = face.inner_wires().to_vec();
+        let outer_wire = topo.wire(outer_wid)?;
+        let outer_reversed: Vec<OrientedEdge> = outer_wire
+            .edges()
+            .iter()
+            .rev()
+            .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+            .collect();
+        let new_outer_wire =
+            Wire::new(outer_reversed, true).map_err(crate::OperationsError::Topology)?;
+        let new_outer_wid = topo.add_wire(new_outer_wire);
+        let mut new_inner_wids = Vec::with_capacity(inner_wids.len());
+        for iw in &inner_wids {
+            let w = topo.wire(*iw)?;
+            let rev: Vec<OrientedEdge> = w
+                .edges()
+                .iter()
+                .rev()
+                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                .collect();
+            let new_w = Wire::new(rev, true).map_err(crate::OperationsError::Topology)?;
+            new_inner_wids.push(topo.add_wire(new_w));
+        }
+        let new_face = Face::new(new_outer_wid, new_inner_wids, flipped_surface);
+        normalized.push(topo.add_face(new_face));
+    }
+
+    let shell = brepkit_topology::shell::Shell::new(normalized)
+        .map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.add_shell(shell);
+    let solid = brepkit_topology::solid::Solid::new(shell_id, Vec::new());
+    Ok(topo.add_solid(solid))
+}
+
+/// Check whether a solid's outer shell is a closed manifold: every edge
+/// is shared by exactly 2 faces. Returns `false` for open shells
+/// (boundary edges with count == 1) and non-manifold shells (count > 2).
+///
+/// Stricter than [`brepkit_topology::validation::validate_shell_manifold`],
+/// which only rejects edges shared by *more* than two faces.
+fn is_closed_manifold(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
+    use std::collections::HashMap;
+
+    let s = topo.solid(solid)?;
+    let shell = topo.shell(s.outer_shell())?;
+    let mut counts: HashMap<usize, usize> = HashMap::new();
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                *counts.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    if counts.is_empty() {
+        return Ok(false);
+    }
+    Ok(counts.values().all(|&c| c == 2))
+}
+
 /// For each vertex position (quantized at tolerance), picks one canonical
 /// vertex. Rebuilds all edges and wires to use canonical vertices.
 /// Creates new edges (doesn't mutate existing ones) to avoid corrupting

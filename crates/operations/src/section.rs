@@ -174,16 +174,139 @@ pub fn section(
         });
     }
 
-    // Create faces from wires.
-    let mut result_faces = Vec::with_capacity(wires.len());
-    for wid in wires {
-        let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d }));
+    // Group wires by containment: outer wires get their inner wires as holes.
+    // Without this, a hollow shape's section would produce two separate faces
+    // (outer rectangle + inner hole rectangle) instead of one face-with-hole.
+    let groups = group_wires_by_containment(topo, &wires, normal);
+
+    let mut result_faces = Vec::with_capacity(groups.len());
+    for (outer, inners) in groups {
+        let face = topo.add_face(Face::new(outer, inners, FaceSurface::Plane { normal, d }));
         result_faces.push(face);
     }
 
     Ok(Section {
         faces: result_faces,
     })
+}
+
+/// Group section wires by containment: each outer wire collects all wires that
+/// are spatially inside it as inner (hole) wires. Returns `(outer, [inner])` tuples.
+///
+/// A wire is "inner" when it sits inside another wire (in the section plane) and
+/// is not itself inside any wire that's already inside another. Two-level nesting
+/// (holes within holes within holes) is collapsed into the outermost containment;
+/// CAD sections don't typically produce deeper nesting and OCCT treats them the
+/// same way.
+fn group_wires_by_containment(
+    topo: &Topology,
+    wires: &[WireId],
+    normal: Vec3,
+) -> Vec<(WireId, Vec<WireId>)> {
+    if wires.len() <= 1 {
+        return wires.iter().map(|&w| (w, vec![])).collect();
+    }
+
+    // Collect each wire's vertex polygon (used for both bounding-box and
+    // point-in-polygon checks below).
+    let polygons: Vec<Vec<Point3>> = wires.iter().map(|&wid| wire_vertices(topo, wid)).collect();
+
+    // For each wire, find the smallest wire that strictly contains it.
+    // A wire with no strict container is itself an outer wire.
+    let mut parent: Vec<Option<usize>> = vec![None; wires.len()];
+    for (i, poly_i) in polygons.iter().enumerate() {
+        if poly_i.is_empty() {
+            continue;
+        }
+        let sample = poly_i[0];
+        let mut best_parent: Option<usize> = None;
+        let mut best_area = f64::INFINITY;
+        for (j, poly_j) in polygons.iter().enumerate() {
+            if i == j || poly_j.len() < 3 {
+                continue;
+            }
+            if crate::distance::point_in_polygon_3d(&sample, poly_j, &normal) {
+                let area = polygon_area_3d(poly_j, normal);
+                if area < best_area {
+                    best_area = area;
+                    best_parent = Some(j);
+                }
+            }
+        }
+        parent[i] = best_parent;
+    }
+
+    // Build groups: each outer wire (no parent) collects its direct children.
+    let mut groups: Vec<(WireId, Vec<WireId>)> = Vec::new();
+    let mut group_of: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (i, &wid) in wires.iter().enumerate() {
+        if parent[i].is_none() {
+            group_of.insert(i, groups.len());
+            groups.push((wid, vec![]));
+        }
+    }
+    for (i, &wid) in wires.iter().enumerate() {
+        if let Some(p) = parent[i] {
+            // Walk up to the outermost ancestor (in case of nested holes).
+            let mut top = p;
+            while let Some(next) = parent[top] {
+                top = next;
+            }
+            if let Some(&group_idx) = group_of.get(&top) {
+                groups[group_idx].1.push(wid);
+            }
+        }
+    }
+
+    groups
+}
+
+fn wire_vertices(topo: &Topology, wire_id: WireId) -> Vec<Point3> {
+    let Ok(wire) = topo.wire(wire_id) else {
+        return vec![];
+    };
+    let mut pts = Vec::with_capacity(wire.edges().len());
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        let vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        if let Ok(v) = topo.vertex(vid) {
+            pts.push(v.point());
+        }
+    }
+    pts
+}
+
+/// Unsigned area of a 3D planar polygon (projected to dominant axis plane).
+fn polygon_area_3d(polygon: &[Point3], normal: Vec3) -> f64 {
+    if polygon.len() < 3 {
+        return 0.0;
+    }
+    let ax = normal.x().abs();
+    let ay = normal.y().abs();
+    let az = normal.z().abs();
+    let to_2d = |p: Point3| -> (f64, f64) {
+        if az >= ax && az >= ay {
+            (p.x(), p.y())
+        } else if ay >= ax {
+            (p.x(), p.z())
+        } else {
+            (p.y(), p.z())
+        }
+    };
+    let mut sum = 0.0;
+    let n = polygon.len();
+    for i in 0..n {
+        let (x0, y0) = to_2d(polygon[i]);
+        let (x1, y1) = to_2d(polygon[(i + 1) % n]);
+        sum += x0 * y1 - x1 * y0;
+    }
+    (sum * 0.5).abs()
 }
 
 type EdgeKey = ((i64, i64, i64), (i64, i64, i64));
@@ -366,17 +489,15 @@ fn assemble_wires(
     let mut remaining: Vec<(Point3, Point3)> = segments.to_vec();
     let mut wires = Vec::new();
 
-    // Compute a chaining tolerance that accommodates tessellated geometry.
-    // Use 50% of the average segment length — this is generous enough to
-    // bridge gaps between adjacent triangle crossings while still
-    // rejecting clearly unrelated segments.
-    let avg_len = if segments.is_empty() {
-        tol.linear * 1000.0
-    } else {
-        let total: f64 = segments.iter().map(|(a, b)| (*a - *b).length()).sum();
-        total / segments.len() as f64
-    };
-    let chain_tol = avg_len.max(tol.linear * 1000.0);
+    // Chaining tolerance must be tight enough to keep separate loops apart
+    // (e.g., the outer perimeter and the inner hole of a hollow shape) while
+    // still tolerating the small endpoint drift produced by tessellated NURBS
+    // intersections. `tol.linear * 1000` (≈ 1e-4) is OCCT-compatible for both.
+    //
+    // Earlier this defaulted to 50% of the average segment length, which for
+    // a hollow 20×20 box section was ≈ 15 — wildly generous, bridging the
+    // outer and inner wires into one self-intersecting polygon.
+    let chain_tol = tol.linear * 1000.0;
 
     while !remaining.is_empty() {
         // Start a new chain with the first remaining segment.

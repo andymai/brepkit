@@ -118,6 +118,17 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         });
     }
 
+    // Fast path: lofting two coaxial circles (incl. NURBS-recognized
+    // circles produced by brepjs `sketchCircle`) collapses to an exact
+    // cylinder / cone / frustum. The general path tessellates the
+    // circles into N line segments, losing 0.6-1% of the true π·r²·h
+    // (or frustum) volume.
+    if profiles.len() == 2 {
+        if let Some(cone_solid) = try_loft_coaxial_circles(topo, profiles[0], profiles[1])? {
+            return Ok(cone_solid);
+        }
+    }
+
     // Collect vertex positions for each profile.
     let mut profile_verts: Vec<Vec<Point3>> = Vec::with_capacity(profiles.len());
     for &fid in profiles {
@@ -285,6 +296,143 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
+}
+
+/// Detect "loft between two coaxial circles" and produce an exact
+/// cylinder / cone / frustum via `make_cylinder` / `make_cone`. Returns
+/// `Ok(None)` when the profiles don't both reduce to circles, when they
+/// don't share an axis, or when something else doesn't fit the fast
+/// path — the general loft then handles the case.
+fn try_loft_coaxial_circles(
+    topo: &mut Topology,
+    profile_a: FaceId,
+    profile_b: FaceId,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let tol = Tolerance::new();
+
+    let (center_a, normal_a, radius_a) = match face_recognized_circle(topo, profile_a) {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+    let (center_b, normal_b, radius_b) = match face_recognized_circle(topo, profile_b) {
+        Some(c) => c,
+        None => return Ok(None),
+    };
+
+    // Normals must be parallel (same or opposite direction) — the axis
+    // between the two circle centers must also be parallel to both
+    // normals, otherwise the profiles aren't coaxial.
+    let axis = center_b - center_a;
+    let axis_len = axis.length();
+    if axis_len < tol.linear {
+        return Ok(None); // identical profile positions — degenerate loft
+    }
+    let axis_unit = axis * (1.0 / axis_len);
+    let normal_a_aligned = normal_a.dot(axis_unit).abs() > 1.0 - tol.angular;
+    let normal_b_aligned = normal_b.dot(axis_unit).abs() > 1.0 - tol.angular;
+    if !normal_a_aligned || !normal_b_aligned {
+        return Ok(None);
+    }
+
+    // Build the cylinder/cone/frustum at the origin along +Z, then
+    // transform it to place center_a at the bottom and center_b at the top.
+    let solid = if (radius_a - radius_b).abs() < tol.linear {
+        crate::primitives::make_cylinder(topo, radius_a, axis_len)?
+    } else {
+        crate::primitives::make_cone(topo, radius_a, radius_b, axis_len)?
+    };
+
+    // Orient the new solid: its base is at z=0 axis +Z. Rotate +Z onto
+    // `axis_unit`, then translate to `center_a`.
+    let z_axis = brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0);
+    let target_axis = axis_unit;
+    if (z_axis - target_axis).length() > tol.linear {
+        let rot_axis = z_axis.cross(target_axis);
+        let rot_axis_len = rot_axis.length();
+        let mat = if rot_axis_len < tol.linear {
+            brepkit_math::mat::Mat4::rotation_x(std::f64::consts::PI)
+        } else {
+            let angle = z_axis.dot(target_axis).clamp(-1.0, 1.0).acos();
+            rodrigues_rotation(rot_axis * (1.0 / rot_axis_len), angle)
+        };
+        crate::transform::transform_solid(topo, solid, &mat)?;
+    }
+    if center_a.x().abs() > tol.linear
+        || center_a.y().abs() > tol.linear
+        || center_a.z().abs() > tol.linear
+    {
+        let xform = brepkit_math::mat::Mat4::translation(center_a.x(), center_a.y(), center_a.z());
+        crate::transform::transform_solid(topo, solid, &xform)?;
+    }
+    Ok(Some(solid))
+}
+
+/// Rotation matrix around an arbitrary unit axis by `angle` radians
+/// (Rodrigues' formula). Duplicates `pattern::rotation_matrix` so loft
+/// stays self-contained.
+fn rodrigues_rotation(axis: Vec3, angle: f64) -> brepkit_math::mat::Mat4 {
+    let cos_a = angle.cos();
+    let sin_a = angle.sin();
+    let omc = 1.0 - cos_a;
+    let (ax, ay, az) = (axis.x(), axis.y(), axis.z());
+    brepkit_math::mat::Mat4([
+        [
+            omc.mul_add(ax * ax, cos_a),
+            ax.mul_add(ay * omc, -(sin_a * az)),
+            ax.mul_add(az * omc, sin_a * ay),
+            0.0,
+        ],
+        [
+            ax.mul_add(ay * omc, sin_a * az),
+            omc.mul_add(ay * ay, cos_a),
+            ay.mul_add(az * omc, -(sin_a * ax)),
+            0.0,
+        ],
+        [
+            ax.mul_add(az * omc, -(sin_a * ay)),
+            ay.mul_add(az * omc, sin_a * ax),
+            omc.mul_add(az * az, cos_a),
+            0.0,
+        ],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+}
+
+/// Recognize a planar face as a circle (center, plane normal, radius).
+/// Returns `None` when the face's outer wire isn't a single closed
+/// circular edge (or NURBS-recognized circular edge), or when the
+/// surface isn't planar.
+fn face_recognized_circle(topo: &Topology, face_id: FaceId) -> Option<(Point3, Vec3, f64)> {
+    let face = topo.face(face_id).ok()?;
+    if !face.inner_wires().is_empty() {
+        return None;
+    }
+    let normal = match face.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        _ => return None,
+    };
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let edges = wire.edges();
+    if edges.len() != 1 {
+        return None;
+    }
+    let edge = topo.edge(edges[0].edge()).ok()?;
+    if edge.start() != edge.end() {
+        return None; // not a closed-loop circle
+    }
+    match edge.curve() {
+        brepkit_topology::edge::EdgeCurve::Circle(c) => Some((c.center(), normal, c.radius())),
+        brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) => {
+            let tol = Tolerance::new().linear;
+            match brepkit_geometry::convert::recognize_curve(nc, tol * 100.0) {
+                brepkit_geometry::convert::RecognizedCurve::Circle { center, radius, .. } => {
+                    Some((center, normal, radius))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Loft profiles into a solid with smooth NURBS side surfaces.

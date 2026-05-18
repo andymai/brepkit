@@ -630,23 +630,22 @@ pub(super) fn validate_boolean_result(
     Ok(())
 }
 
-/// Count connected components in a solid's outer shell via face adjacency.
+/// Split a solid's outer shell into connected face groups.
 ///
-/// Two faces are adjacent if they share an edge. Returns 1 for a topologically
-/// connected solid. Returns >1 if the boolean assembled disconnected groups.
-#[allow(dead_code)]
-pub(super) fn count_face_components(topo: &Topology, solid: SolidId) -> usize {
+/// Two faces are adjacent if they share an edge. Returns each connected
+/// group as a Vec<FaceId> — a single-component solid produces one group,
+/// a multi-region solid (disjoint pieces in one shell) produces N groups.
+pub(super) fn face_components(topo: &Topology, solid: SolidId) -> Vec<Vec<FaceId>> {
     let shell = match topo.solid(solid).and_then(|s| topo.shell(s.outer_shell())) {
         Ok(sh) => sh,
-        Err(_) => return 0,
+        Err(_) => return Vec::new(),
     };
-    let face_ids = shell.faces();
+    let face_ids: Vec<FaceId> = shell.faces().to_vec();
     if face_ids.is_empty() {
-        return 0;
+        return Vec::new();
     }
     let n = face_ids.len();
 
-    // Build edge→face index map
     let mut edge_faces: HashMap<usize, Vec<usize>> = HashMap::new();
     for (fi, &fid) in face_ids.iter().enumerate() {
         let Ok(face) = topo.face(fid) else { continue };
@@ -658,7 +657,6 @@ pub(super) fn count_face_components(topo: &Topology, solid: SolidId) -> usize {
         }
     }
 
-    // Build face adjacency
     let mut adj: Vec<Vec<usize>> = vec![Vec::new(); n];
     for faces_at_edge in edge_faces.values() {
         for &fi in faces_at_edge {
@@ -670,26 +668,27 @@ pub(super) fn count_face_components(topo: &Topology, solid: SolidId) -> usize {
         }
     }
 
-    // Flood-fill to count components
     let mut visited = vec![false; n];
-    let mut components = 0usize;
+    let mut components: Vec<Vec<FaceId>> = Vec::new();
     for start in 0..n {
         if visited[start] {
             continue;
         }
-        components += 1;
+        let mut comp_faces = Vec::new();
         let mut stack = vec![start];
         while let Some(fi) = stack.pop() {
             if visited[fi] {
                 continue;
             }
             visited[fi] = true;
+            comp_faces.push(face_ids[fi]);
             for &nfi in &adj[fi] {
                 if !visited[nfi] {
                     stack.push(nfi);
                 }
             }
         }
+        components.push(comp_faces);
     }
     components
 }
