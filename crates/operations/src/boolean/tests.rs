@@ -47,6 +47,91 @@ fn fuse_disjoint_cubes() {
 }
 
 #[test]
+fn fuse_six_disjoint_boxes_2x3_grid() {
+    // Mirrors brepjs's `rectangularPattern() > creates a 2x3 grid` test:
+    // 6 boxes of 5×5×5 at (col*10, row*10, 0), fused pairwise via
+    // divide-and-conquer. Expected fused volume = 6 × 125 = 750.
+    use crate::measure::solid_volume;
+
+    fn pairwise(
+        topo: &mut brepkit_topology::Topology,
+        ids: &[brepkit_topology::solid::SolidId],
+        start: usize,
+        end: usize,
+    ) -> brepkit_topology::solid::SolidId {
+        let n = end - start;
+        if n == 1 {
+            return ids[start];
+        }
+        if n == 2 {
+            return boolean(topo, BooleanOp::Fuse, ids[start], ids[start + 1]).unwrap();
+        }
+        let mid = start + n.div_ceil(2);
+        let left = pairwise(topo, ids, start, mid);
+        let right = pairwise(topo, ids, mid, end);
+        boolean(topo, BooleanOp::Fuse, left, right).unwrap()
+    }
+
+    let mut topo = Topology::new();
+    let mut boxes = Vec::new();
+    for row in 0..3 {
+        for col in 0..2 {
+            #[allow(clippy::cast_precision_loss)]
+            let x = f64::from(col) * 10.0;
+            #[allow(clippy::cast_precision_loss)]
+            let y = f64::from(row) * 10.0;
+            let b = crate::primitives::make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
+            crate::transform::transform_solid(
+                &mut topo,
+                b,
+                &brepkit_math::mat::Mat4::translation(x, y, 0.0),
+            )
+            .unwrap();
+            boxes.push(b);
+        }
+    }
+    let result = pairwise(&mut topo, &boxes, 0, boxes.len());
+    let vol = solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        (vol - 750.0).abs() < 5.0,
+        "6-box grid fuse lost volume: got {vol}, expected 750"
+    );
+}
+
+#[test]
+fn fuse_disjoint_cubes_volume_chained() {
+    use crate::measure::solid_volume;
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        b,
+        &brepkit_math::mat::Mat4::translation(10.0, 0.0, 0.0),
+    )
+    .unwrap();
+    let c = crate::primitives::make_box(&mut topo, 5.0, 5.0, 5.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        c,
+        &brepkit_math::mat::Mat4::translation(0.0, 10.0, 0.0),
+    )
+    .unwrap();
+    let ab = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+    let vol_ab = solid_volume(&topo, ab, 0.05).unwrap();
+    let abc = boolean(&mut topo, BooleanOp::Fuse, ab, c).unwrap();
+    let vol_abc = solid_volume(&topo, abc, 0.05).unwrap();
+    assert!(
+        (vol_ab - 250.0).abs() < 5.0,
+        "fuse of 2 disjoint cubes lost volume: got {vol_ab}, expected 250"
+    );
+    assert!(
+        (vol_abc - 375.0).abs() < 5.0,
+        "fuse of disjoint-2-result with third cube lost volume: got {vol_abc}, expected 375"
+    );
+}
+
+#[test]
 fn cut_disjoint_returns_a() {
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);

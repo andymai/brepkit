@@ -111,9 +111,7 @@ pub fn boolean(
                     (o_max.z() - o_min.z(), i_max.z() - i_min.z()),
                 ];
                 dims.iter()
-                    .filter(|(outer_d, inner_d)| *outer_d > *inner_d * 1.1)
-                    .count()
-                    >= 2
+                    .all(|(outer_d, inner_d)| *outer_d > *inner_d * 1.1)
             };
 
         // Bidirectional vertex check via the analytic classifier — the
