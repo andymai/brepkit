@@ -451,58 +451,49 @@ fn assemble(
     growth_shells: Vec<Vec<FaceId>>,
     hole_shells: Vec<Vec<FaceId>>,
 ) -> Result<SolidId, AlgoError> {
-    // When there are multiple growth shells and no hole shells, combine all
-    // growth pieces into a single outer shell. A Shell is just a list of
-    // faces — it does not need to be a single connected component, and the
-    // divergence-theorem volume sum is correct as long as every face is
-    // included. This handles disjoint cut/fuse results (e.g., a cut that
-    // splits a solid into two pieces) without marking spare pieces as
-    // cavities (which would invert their volume contribution).
-    //
-    // When hole shells exist, the result genuinely has cavities (e.g., a
-    // shelled solid where the inner wall is reversed). Keep the classic
-    // "largest growth = outer, additional growths = inner shells" placement
-    // so the cavity vs sibling-piece distinction is preserved for callers.
-    let (outer_faces, extra_growth_shells) = if hole_shells.is_empty() && growth_shells.len() > 1 {
-        let combined: Vec<FaceId> = growth_shells.into_iter().flatten().collect();
-        (combined, Vec::<Vec<FaceId>>::new())
-    } else {
-        let outer_idx = growth_shells
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, s)| s.len())
-            .map(|(i, _)| i)
-            .unwrap_or(0);
-        let mut outer = Vec::new();
-        let mut extras = Vec::new();
-        for (i, gs) in growth_shells.into_iter().enumerate() {
-            if i == outer_idx {
-                outer = gs;
-            } else {
-                extras.push(gs);
-            }
-        }
-        (outer, extras)
-    };
+    // Use the largest growth shell as outer
+    let outer_idx = growth_shells
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, s)| s.len())
+        .map(|(i, _)| i)
+        .unwrap_or(0);
 
-    let outer_shell = Shell::new(outer_faces)
+    let outer_shell = Shell::new(growth_shells[outer_idx].clone())
         .map_err(|e| AlgoError::AssemblyFailed(format!("outer shell: {e}")))?;
     let outer_id = topo.add_shell(outer_shell);
 
+    // All hole shells become inner shells of this solid
     let mut inner_ids = Vec::new();
     for hole in &hole_shells {
         if let Ok(inner_shell) = Shell::new(hole.clone()) {
             inner_ids.push(topo.add_shell(inner_shell));
         }
     }
-    for gs in &extra_growth_shells {
-        if let Ok(extra_shell) = Shell::new(gs.clone()) {
-            inner_ids.push(topo.add_shell(extra_shell));
+
+    // Additional growth shells (disjoint outward-oriented regions) are added
+    // as extra shells. For boolean results this typically doesn't happen (single
+    // connected result), but disjoint fuse can produce multiple growth shells.
+    // TODO: use Compound for true multi-region results.
+    for (i, gs) in growth_shells.iter().enumerate() {
+        if i != outer_idx {
+            if let Ok(extra_shell) = Shell::new(gs.clone()) {
+                inner_ids.push(topo.add_shell(extra_shell));
+            }
         }
     }
 
     let solid = Solid::new(outer_id, inner_ids);
     let solid_id = topo.add_solid(solid);
+
+    log::debug!(
+        "BuilderSolid: assembled solid {solid_id:?} with {} faces",
+        growth_shells
+            .iter()
+            .chain(hole_shells.iter())
+            .map(Vec::len)
+            .sum::<usize>()
+    );
 
     Ok(solid_id)
 }

@@ -111,7 +111,9 @@ pub fn boolean(
                     (o_max.z() - o_min.z(), i_max.z() - i_min.z()),
                 ];
                 dims.iter()
-                    .all(|(outer_d, inner_d)| *outer_d > *inner_d * 1.1)
+                    .filter(|(outer_d, inner_d)| *outer_d > *inner_d * 1.1)
+                    .count()
+                    >= 2
             };
 
         // Bidirectional vertex check via the analytic classifier — the
@@ -440,9 +442,25 @@ pub fn boolean(
                 let components = components_vec.len();
                 #[allow(clippy::cast_possible_wrap)]
                 let expected_euler = (components as i64) * 2;
-                if components >= 2
+                // For Cut, also verify no component is a "B-interior piece" —
+                // GFA can produce N closed manifolds where one of them is the
+                // tool's interior (sphere - cylinder example: 3 pieces =
+                // top cap + bottom cap + cylinder interior). Sample a point
+                // inside each component's AABB and classify against B; if any
+                // sits inside B, the GFA result included the cut-out piece
+                // and should be rejected. Fuse/Intersect don't have this
+                // failure mode.
+                let cut_safe = op != BooleanOp::Cut
+                    || brepkit_algo::classifier::try_build_analytic_classifier(topo, b)
+                        .as_ref()
+                        .is_none_or(|cls_b| {
+                            all_component_centers_outside(topo, &components_vec, cls_b, tol)
+                        });
+                if op == BooleanOp::Cut
+                    && components >= 2
                     && euler == expected_euler
                     && components_are_disjoint_pieces(topo, &components_vec)
+                    && cut_safe
                     && is_closed_manifold(topo, result).unwrap_or(false)
                     && validate_boolean_result(topo, result).is_ok()
                 {
@@ -1313,6 +1331,58 @@ fn mesh_result_to_face_specs(result: &crate::mesh_boolean::MeshBooleanResult) ->
 /// The check is AABB-based: if any component's bounding box is
 /// strictly contained in another's, treat the whole solid as hollow
 /// and skip the multi-region split path.
+/// Check that every component's AABB centre classifies as outside the
+/// supplied classifier. Used to reject multi-region GFA Cut results that
+/// erroneously include the tool's interior as one of the pieces.
+fn all_component_centers_outside(
+    topo: &Topology,
+    components: &[Vec<FaceId>],
+    classifier: &brepkit_algo::classifier::AnalyticClassifier,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    use brepkit_algo::FaceClass;
+    for comp in components {
+        let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for &fid in comp {
+            let Ok(face) = topo.face(fid) else { continue };
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                let Ok(wire) = topo.wire(wid) else { continue };
+                for oe in wire.edges() {
+                    let Ok(edge) = topo.edge(oe.edge()) else {
+                        continue;
+                    };
+                    for vid in [edge.start(), edge.end()] {
+                        if let Ok(v) = topo.vertex(vid) {
+                            let p = v.point();
+                            min = Point3::new(
+                                min.x().min(p.x()),
+                                min.y().min(p.y()),
+                                min.z().min(p.z()),
+                            );
+                            max = Point3::new(
+                                max.x().max(p.x()),
+                                max.y().max(p.y()),
+                                max.z().max(p.z()),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let centre = Point3::new(
+            (min.x() + max.x()) * 0.5,
+            (min.y() + max.y()) * 0.5,
+            (min.z() + max.z()) * 0.5,
+        );
+        if matches!(classifier.classify(centre, tol), Some(FaceClass::Inside)) {
+            return false;
+        }
+    }
+    true
+}
+
 fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -> bool {
     let aabbs: Vec<(Point3, Point3)> = components
         .iter()
