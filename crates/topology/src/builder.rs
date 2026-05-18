@@ -175,27 +175,42 @@ fn sample_wire_points(
         points.push(start_pt);
 
         // For curved edges, sample the midpoint to get a non-collinear point.
+        // The midpoint MUST lie on the actual arc between this edge's
+        // start and end — using a fixed parameter like π was sampling the
+        // global antipodal point of the underlying circle/ellipse, which
+        // for short arcs (e.g., gear tip arcs near angle 0) lands far from
+        // the arc and produced a polygon whose Newell normal had the
+        // wrong sign.
         match edge.curve() {
             EdgeCurve::Line => {}
             EdgeCurve::Circle(c) => {
+                let tau = std::f64::consts::TAU;
                 if edge.start() == edge.end() {
-                    // Full circle: sample at 1/3 and 2/3 of parameter range
-                    // in monotonic order so Newell's method gives correct
-                    // normal sign.
-                    let tau = std::f64::consts::TAU;
                     points.push(c.evaluate(tau / 3.0));
                     points.push(c.evaluate(2.0 * tau / 3.0));
                 } else {
-                    points.push(c.evaluate(PI));
+                    let end_pt = topo.vertex(oe.oriented_end(edge))?.point();
+                    let t_start = c.project(start_pt);
+                    let mut t_end = c.project(end_pt);
+                    if t_end <= t_start {
+                        t_end += tau;
+                    }
+                    points.push(c.evaluate(0.5 * (t_start + t_end)));
                 }
             }
             EdgeCurve::Ellipse(e) => {
+                let tau = std::f64::consts::TAU;
                 if edge.start() == edge.end() {
-                    let tau = std::f64::consts::TAU;
                     points.push(e.evaluate(tau / 3.0));
                     points.push(e.evaluate(2.0 * tau / 3.0));
                 } else {
-                    points.push(e.evaluate(PI));
+                    let end_pt = topo.vertex(oe.oriented_end(edge))?.point();
+                    let t_start = e.project(start_pt);
+                    let mut t_end = e.project(end_pt);
+                    if t_end <= t_start {
+                        t_end += tau;
+                    }
+                    points.push(e.evaluate(0.5 * (t_start + t_end)));
                 }
             }
             EdgeCurve::NurbsCurve(nc) => {
