@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.87.1](https://github.com/andymai/brepkit/compare/v2.87.0...v2.87.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* **boolean:** restore all-3-dims aabb_strictly_contains ([#675](https://github.com/andymai/brepkit/issues/675)) ([fe792a0](https://github.com/andymai/brepkit/commit/fe792a0666f6ba91c42fa4e14175024d29348edc))
+
 ## [2.87.0](https://github.com/andymai/brepkit/compare/v2.86.1...v2.87.0) (2026-05-18)
 
 
