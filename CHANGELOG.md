@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.87.0](https://github.com/andymai/brepkit/compare/v2.86.1...v2.87.0) (2026-05-18)
+
+
+### Features
+
+* **parity:** land 7 cleanroom-target fixes against brepjs spec ([#673](https://github.com/andymai/brepkit/issues/673)) ([cf15d9b](https://github.com/andymai/brepkit/commit/cf15d9bf77a9643d535170bc147406a1c5cc5ee8))
+
 ## [2.86.1](https://github.com/andymai/brepkit/compare/v2.86.0...v2.86.1) (2026-05-09)
 
 
