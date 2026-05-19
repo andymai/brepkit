@@ -1765,13 +1765,21 @@ fn compound_cut_shelled_target_9_tools() {
     let result = compound_cut(&mut topo, target, &tools, opts).unwrap();
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
+    // Lower-bound guard: with the relaxed `rel < 2.0` bound below, a true
+    // collapse to zero (rel = 1.0) would silently pass. Pin a hard floor
+    // at 10% of seq_vol so any catastrophic regression that loses most
+    // of the volume still fails loudly.
+    assert!(
+        compound_vol > seq_vol * 0.1,
+        "compound_cut produced near-zero volume ({compound_vol:.4}); \
+         expected ~{seq_vol:.4}"
+    );
     let rel = (compound_vol - seq_vol).abs() / seq_vol;
     // Two stable answers (rel ≈ 1.6) reproduce under cargo-llvm-cov and at
     // ~3% rate under plain `cargo test`, driven by HashMap iteration order
     // somewhere in the GFA cut pipeline that #683 narrowed but did not
     // eliminate. Until that's traced, this test only catches wholesale
-    // regressions (zero volume, NaN, the result entirely missing the
-    // cavity, etc.) rather than the tight compound-vs-sequential parity it
+    // regressions rather than the tight compound-vs-sequential parity it
     // was originally written for.
     assert!(
         rel < 2.0,
