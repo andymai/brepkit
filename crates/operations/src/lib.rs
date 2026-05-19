@@ -109,6 +109,21 @@ pub enum OperationsError {
     #[error("non-manifold result")]
     NonManifoldResult,
 
+    /// The operation produced an empty result (no geometry).
+    ///
+    /// Boolean operations return this when the algebraic outcome is the
+    /// empty set: `Cut(A, B)` when `A ⊆ B`, or any operation on
+    /// pre-collapsed inputs. Distinguishable from [`InvalidInput`] so
+    /// callers can apply empty-operand identity rules without
+    /// string-matching the error message.
+    ///
+    /// [`InvalidInput`]: Self::InvalidInput
+    #[error("empty result: {reason}")]
+    EmptyResult {
+        /// Description of the empty-result scenario.
+        reason: String,
+    },
+
     /// A referenced topology entity was not found.
     #[error(transparent)]
     Topology(#[from] brepkit_topology::TopologyError),
