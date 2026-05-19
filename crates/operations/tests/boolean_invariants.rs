@@ -3,7 +3,7 @@
 //! Verifies conservation laws, commutativity, and algebraic identities
 //! that must hold for any correct boolean implementation.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use brepkit_math::mat::Mat4;
 use brepkit_operations::OperationsError;
@@ -401,7 +401,8 @@ fn identical_solids_cut_errors_or_empty() {
 fn safe_vol(topo: &Topology, result: Result<SolidId, OperationsError>) -> f64 {
     match result {
         Ok(s) => solid_volume(topo, s, DEFLECTION).unwrap_or(0.0),
-        Err(_) => 0.0,
+        Err(OperationsError::EmptyResult { .. }) => 0.0,
+        Err(e) => panic!("unexpected boolean error (only EmptyResult should map to 0): {e:?}"),
     }
 }
 
@@ -532,7 +533,9 @@ fn intersect_contained_solid_returns_contained() {
 #[test]
 fn cut_then_fuse_back_containment() {
     // Full invariant: vol((A-B) ∪ (A∩B)) ≈ vol(A), with A ⊂ B.
-    // (A-B) is empty (A is fully cut away). (A∩B) ≈ A.
+    // (A-B) is empty (A is fully cut away), so applying the empty-operand
+    // identity `empty ∪ X = X` leaves (A∩B), which the containment
+    // shortcut returns as ≈ A.
     let mut topo = Topology::new();
     let a = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
     let b = make_box(&mut topo, 0.95, 0.95, 0.95).unwrap();
@@ -545,25 +548,16 @@ fn cut_then_fuse_back_containment() {
         matches!(diff_result, Err(OperationsError::EmptyResult { .. })),
         "Cut(A ⊂ B, B) should return EmptyResult, got {diff_result:?}"
     );
-    let diff_opt: Option<SolidId> = diff_result.ok();
 
     let inter = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
     let vol_inter = vol(&topo, inter);
 
-    let vol_fused = match diff_opt {
-        Some(diff) => {
-            let fused = boolean(&mut topo, BooleanOp::Fuse, diff, inter).unwrap();
-            vol(&topo, fused)
-        }
-        None => vol_inter,
-    };
-
-    let rel_error = (vol_fused - vol_a).abs() / vol_a;
+    // With (A-B) empty, the invariant reduces to vol_inter ≈ vol_a.
+    let rel_error = (vol_inter - vol_a).abs() / vol_a;
     assert!(
         rel_error < 1e-5,
-        "(A-B) ∪ (A∩B) should reconstruct A (A ⊂ B): got vol_fused={vol_fused:.10}, \
-         vol_a={vol_a:.10}, vol_inter={vol_inter:.10}, diff_was_empty={} (rel error {:.4}%)",
-        diff_opt.is_none(),
+        "empty ∪ (A∩B) should reconstruct A (A ⊂ B): vol_inter={vol_inter:.10}, \
+         vol_a={vol_a:.10} (rel error {:.4}%)",
         rel_error * 100.0
     );
 }
