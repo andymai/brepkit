@@ -562,6 +562,60 @@ fn cut_then_fuse_back_containment() {
     );
 }
 
+// -- Fuse(thin_shell, larger_solid_that_contains_it) ----------------------
+//
+// Brepjs counterexample for `cut-then-fuse-back recovers original volume`:
+//   A = unitCube(0.5000001)  // [0, 0.5000001]³, vol ≈ 0.125000075
+//   B = unitCube(0.5)        // [0, 0.5]³, vol = 0.125
+//   diff   = Cut(A, B)       // thin L-shell, vol ≈ 7.5e-8
+//   inter  = Intersect(A, B) // identical-shortcut: copy of A, vol ≈ 0.125000075
+//   fused  = Fuse(diff, inter)
+//   expect: vol(fused) ≈ vol(A) since diff ⊂ inter
+//   actual: vol(fused) ≈ vol(diff) — fuse collapses to just the thin shell.
+
+#[test]
+#[ignore = "GFA classifier votes Inside arbitrarily when sample is coplanar with opposing solid's boundary; partial Plane sample-point fix narrowed but didn't close this case"]
+fn fuse_thin_shell_with_containing_solid_preserves_larger_volume() {
+    // Diagnosis (after the Plane sample-point fix in `algo/src/builder/mod.rs`):
+    // 5/6 of inter's faces correctly classify as Outside diff, but the 6th
+    // (inter's face coplanar with diff's L-shape boundary) still votes Inside.
+    // Ray-cast from a sample point coplanar with the opposing solid's
+    // boundary is fragile — starting-on-face tiebreaks flip parity.
+    // Closing this needs either (a) extending SD detection to pair the
+    // L-shape diff face with the smaller inter square it geometrically
+    // contains regardless of edge-set match, or (b) further offsetting
+    // the sample along the face normal (which breaks regular faces unless
+    // SD handles the resulting duplicates).
+    //
+    // Uses 0.5001 (above tol.linear) so the identical-Cut shortcut doesn't
+    // fire and Cut(A,B) actually goes through GFA, producing the L-shell.
+    let mut topo = Topology::new();
+    let a = make_box(&mut topo, 0.500_1, 0.500_1, 0.500_1).unwrap();
+    let b = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let vol_a = vol(&topo, a);
+
+    let diff = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
+    let vol_diff = vol(&topo, diff);
+
+    let a2 = make_box(&mut topo, 0.500_1, 0.500_1, 0.500_1).unwrap();
+    let b2 = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let inter = boolean(&mut topo, BooleanOp::Intersect, a2, b2).unwrap();
+    let vol_inter = vol(&topo, inter);
+
+    let fused = boolean(&mut topo, BooleanOp::Fuse, diff, inter).unwrap();
+    let vol_fused = vol(&topo, fused);
+
+    // diff ⊂ inter (≈ A), so Fuse should return ≈ A.
+    let rel_error = (vol_fused - vol_a).abs() / vol_a;
+    assert!(
+        rel_error < 1e-4,
+        "Fuse(thin_shell, A_copy) should return ≈ vol(A): vol_fused={vol_fused:.10}, \
+         vol_a={vol_a:.10}, vol_diff={vol_diff:.3e}, vol_inter={vol_inter:.10} \
+         (rel error {:.4}%)",
+        rel_error * 100.0
+    );
+}
+
 // -- Cut cylinder from box ------------------------------------------------
 
 #[test]
