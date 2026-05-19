@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.88.1](https://github.com/andymai/brepkit/compare/v2.88.0...v2.88.1) (2026-05-19)
+
+
+### Bug Fixes
+
+* **boolean:** correct intersect/cut for containment + classify empty results clearly ([#681](https://github.com/andymai/brepkit/issues/681)) ([ef7a777](https://github.com/andymai/brepkit/commit/ef7a777ded3ae4022b1ec26f051c93beb75f2e7c))
+* **boolean:** deterministic face order in face_components ([#683](https://github.com/andymai/brepkit/issues/683)) ([5a200f6](https://github.com/andymai/brepkit/commit/5a200f640569bc448625b9c779b2314615921bc4))
+
 ## [2.88.0](https://github.com/andymai/brepkit/compare/v2.87.1...v2.88.0) (2026-05-19)
 
 
