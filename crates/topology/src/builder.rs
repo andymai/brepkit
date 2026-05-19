@@ -4,6 +4,7 @@
 
 use std::f64::consts::PI;
 
+use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
@@ -38,6 +39,60 @@ pub fn make_line_edge(
     let v0 = topo.add_vertex(Vertex::new(start, tolerance));
     let v1 = topo.add_vertex(Vertex::new(end, tolerance));
     Ok(topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line)))
+}
+
+/// Create a closed circular edge.
+///
+/// Constructs a [`Circle3D`] from `center`, `normal`, and `radius`, then
+/// creates a single closed edge whose start and end share a seam vertex
+/// at `circle.evaluate(0.0)`. The edge has parameter domain `[0, 2π]`.
+///
+/// # Errors
+///
+/// Returns an error if `radius` is non-positive or `normal` is a zero vector.
+pub fn make_circle_edge(
+    topo: &mut Topology,
+    center: Point3,
+    normal: Vec3,
+    radius: f64,
+    tolerance: f64,
+) -> Result<EdgeId, crate::TopologyError> {
+    let circle =
+        Circle3D::new(center, normal, radius).map_err(|e| crate::TopologyError::NonManifold {
+            reason: format!("invalid circle: {e}"),
+        })?;
+    let seam = circle.evaluate(0.0);
+    let v = topo.add_vertex(Vertex::new(seam, tolerance));
+    Ok(topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))))
+}
+
+/// Create a closed elliptical edge.
+///
+/// Constructs an [`Ellipse3D`] from `center`, `normal`, and the two
+/// semi-axis lengths, then creates a single closed edge whose start and
+/// end share a seam vertex at `ellipse.evaluate(0.0)`. The edge has
+/// parameter domain `[0, 2π]`.
+///
+/// # Errors
+///
+/// Returns an error if either semi-axis is non-positive, `semi_minor`
+/// exceeds `semi_major`, or `normal` is a zero vector.
+pub fn make_ellipse_edge(
+    topo: &mut Topology,
+    center: Point3,
+    normal: Vec3,
+    semi_major: f64,
+    semi_minor: f64,
+    tolerance: f64,
+) -> Result<EdgeId, crate::TopologyError> {
+    let ellipse = Ellipse3D::new(center, normal, semi_major, semi_minor).map_err(|e| {
+        crate::TopologyError::NonManifold {
+            reason: format!("invalid ellipse: {e}"),
+        }
+    })?;
+    let seam = ellipse.evaluate(0.0);
+    let v = topo.add_vertex(Vertex::new(seam, tolerance));
+    Ok(topo.add_edge(Edge::new(v, v, EdgeCurve::Ellipse(ellipse))))
 }
 
 /// Create a closed wire from an ordered list of points.
@@ -455,6 +510,97 @@ mod tests {
         let mut topo = Topology::new();
         let p = Point3::new(1.0, 2.0, 3.0);
         assert!(make_line_edge(&mut topo, p, p, TOL).is_err());
+    }
+
+    #[test]
+    fn make_circle_edge_is_closed_with_circle_curve() {
+        let mut topo = Topology::new();
+        let eid = make_circle_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.5,
+            TOL,
+        )
+        .unwrap();
+
+        let edge = topo.edge(eid).unwrap();
+        assert!(edge.is_closed(), "circle edge must be closed");
+        assert_eq!(edge.curve().type_tag(), "circle");
+
+        let seam = topo.vertex(edge.start()).unwrap().point();
+        let (t_min, t_max) = edge.curve().domain_with_endpoints(seam, seam);
+        assert!((t_min - 0.0).abs() < 1e-12);
+        assert!((t_max - std::f64::consts::TAU).abs() < 1e-12);
+    }
+
+    #[test]
+    fn make_circle_edge_zero_radius_error() {
+        let mut topo = Topology::new();
+        assert!(
+            make_circle_edge(
+                &mut topo,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                0.0,
+                TOL,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn make_circle_edge_zero_normal_error() {
+        let mut topo = Topology::new();
+        assert!(
+            make_circle_edge(
+                &mut topo,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 0.0),
+                1.0,
+                TOL,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn make_ellipse_edge_is_closed_with_ellipse_curve() {
+        let mut topo = Topology::new();
+        let eid = make_ellipse_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            2.0,
+            TOL,
+        )
+        .unwrap();
+
+        let edge = topo.edge(eid).unwrap();
+        assert!(edge.is_closed(), "ellipse edge must be closed");
+        assert_eq!(edge.curve().type_tag(), "ellipse");
+
+        let seam = topo.vertex(edge.start()).unwrap().point();
+        let (t_min, t_max) = edge.curve().domain_with_endpoints(seam, seam);
+        assert!((t_min - 0.0).abs() < 1e-12);
+        assert!((t_max - std::f64::consts::TAU).abs() < 1e-12);
+    }
+
+    #[test]
+    fn make_ellipse_edge_minor_exceeds_major_error() {
+        let mut topo = Topology::new();
+        assert!(
+            make_ellipse_edge(
+                &mut topo,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0,
+                2.0,
+                TOL,
+            )
+            .is_err()
+        );
     }
 
     #[test]

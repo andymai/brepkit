@@ -160,6 +160,111 @@ impl BrepKernel {
         Ok(edge_id_to_u32(eid))
     }
 
+    /// Create a closed circular edge with true `Circle` curve geometry.
+    ///
+    /// Unlike `makeCircle` (which returns a polygon face approximation),
+    /// this creates a single closed edge with an [`EdgeCurve::Circle`]
+    /// backing curve and parameter domain `[0, 2π]`. The start and end
+    /// vertex are shared at the seam point `circle.evaluate(0.0)`.
+    ///
+    /// Returns an edge handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any coordinate is NaN/infinite, `radius` is
+    /// non-positive, or the normal vector is zero.
+    #[wasm_bindgen(js_name = "makeCircleEdge")]
+    pub fn make_circle_edge(
+        &mut self,
+        cx: f64,
+        cy: f64,
+        cz: f64,
+        nx: f64,
+        ny: f64,
+        nz: f64,
+        radius: f64,
+    ) -> Result<u32, JsError> {
+        validate_finite(cx, "cx")?;
+        validate_finite(cy, "cy")?;
+        validate_finite(cz, "cz")?;
+        validate_finite(nx, "nx")?;
+        validate_finite(ny, "ny")?;
+        validate_finite(nz, "nz")?;
+        validate_positive(radius, "radius")?;
+
+        let center = Point3::new(cx, cy, cz);
+        let normal = Vec3::new(nx, ny, nz);
+        normal.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid normal: {e}"),
+        })?;
+        let eid = brepkit_topology::builder::make_circle_edge(
+            self.topo_mut(),
+            center,
+            normal,
+            radius,
+            TOL,
+        )?;
+        Ok(edge_id_to_u32(eid))
+    }
+
+    /// Create a closed elliptical edge with true `Ellipse` curve geometry.
+    ///
+    /// Creates a single closed edge with an [`EdgeCurve::Ellipse`] backing
+    /// curve and parameter domain `[0, 2π]`. The start and end vertex are
+    /// shared at the seam point `ellipse.evaluate(0.0)`.
+    ///
+    /// Returns an edge handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any coordinate is NaN/infinite, either
+    /// semi-axis is non-positive, `semi_minor` exceeds `semi_major`, or
+    /// the normal vector is zero.
+    #[wasm_bindgen(js_name = "makeEllipseEdge")]
+    pub fn make_ellipse_edge(
+        &mut self,
+        cx: f64,
+        cy: f64,
+        cz: f64,
+        nx: f64,
+        ny: f64,
+        nz: f64,
+        semi_major: f64,
+        semi_minor: f64,
+    ) -> Result<u32, JsError> {
+        validate_finite(cx, "cx")?;
+        validate_finite(cy, "cy")?;
+        validate_finite(cz, "cz")?;
+        validate_finite(nx, "nx")?;
+        validate_finite(ny, "ny")?;
+        validate_finite(nz, "nz")?;
+        validate_positive(semi_major, "semi_major")?;
+        validate_positive(semi_minor, "semi_minor")?;
+        if semi_minor > semi_major {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "semi_minor ({semi_minor}) must not exceed semi_major ({semi_major})"
+                ),
+            }
+            .into());
+        }
+
+        let center = Point3::new(cx, cy, cz);
+        let normal = Vec3::new(nx, ny, nz);
+        normal.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid normal: {e}"),
+        })?;
+        let eid = brepkit_topology::builder::make_ellipse_edge(
+            self.topo_mut(),
+            center,
+            normal,
+            semi_major,
+            semi_minor,
+            TOL,
+        )?;
+        Ok(edge_id_to_u32(eid))
+    }
+
     /// Create a circular arc edge between two points.
     ///
     /// The arc lies on a circle with the given center, normal axis, and
