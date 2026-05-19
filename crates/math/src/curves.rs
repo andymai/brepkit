@@ -121,6 +121,40 @@ impl Circle3D {
         })
     }
 
+    /// Create a new circle with a caller-supplied reference x-direction.
+    ///
+    /// `ref_dir` is projected onto the plane perpendicular to `normal` to
+    /// produce `u_axis`. Circles are radially symmetric so the choice of
+    /// `u_axis` has no geometric effect — but it does fix the seam vertex
+    /// at `evaluate(0.0)`, which downstream code (closed-edge construction,
+    /// PCurve computation) can depend on.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `radius` is non-positive or `normal` is zero.
+    pub fn new_with_ref(
+        center: Point3,
+        normal: Vec3,
+        radius: f64,
+        ref_dir: Vec3,
+    ) -> Result<Self, MathError> {
+        if radius <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: radius,
+                min: 0.0,
+                max: f64::INFINITY,
+            });
+        }
+        let f = Frame3::from_normal_and_ref(center, normal, ref_dir)?;
+        Ok(Self {
+            center,
+            normal: f.z,
+            radius,
+            u_axis: f.x,
+            v_axis: f.y,
+        })
+    }
+
     /// Evaluate the circle at angle `t` (radians).
     #[must_use]
     pub fn evaluate(&self, t: f64) -> Point3 {
@@ -256,6 +290,49 @@ impl Ellipse3D {
             });
         }
         let f = Frame3::from_normal(center, normal)?;
+        Ok(Self {
+            center,
+            normal: f.z,
+            semi_major,
+            semi_minor,
+            u_axis: f.x,
+            v_axis: f.y,
+        })
+    }
+
+    /// Create a new ellipse with a caller-supplied reference major-axis direction.
+    ///
+    /// `ref_dir` is projected onto the plane perpendicular to `normal` to
+    /// produce `u_axis` (which carries the `semi_major` extent). If
+    /// `ref_dir` is parallel to `normal`, falls back to an arbitrary
+    /// perpendicular choice per [`Frame3::from_normal_and_ref`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either semi-axis is non-positive, `semi_minor`
+    /// exceeds `semi_major`, or `normal` is zero.
+    pub fn new_with_ref(
+        center: Point3,
+        normal: Vec3,
+        semi_major: f64,
+        semi_minor: f64,
+        ref_dir: Vec3,
+    ) -> Result<Self, MathError> {
+        if semi_major <= 0.0 || semi_minor <= 0.0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: semi_major.min(semi_minor),
+                min: 0.0,
+                max: f64::INFINITY,
+            });
+        }
+        if semi_minor > semi_major {
+            return Err(MathError::ParameterOutOfRange {
+                value: semi_minor,
+                min: 0.0,
+                max: semi_major,
+            });
+        }
+        let f = Frame3::from_normal_and_ref(center, normal, ref_dir)?;
         Ok(Self {
             center,
             normal: f.z,
