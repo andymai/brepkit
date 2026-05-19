@@ -194,6 +194,9 @@ impl BrepKernel {
 
         let center = Point3::new(cx, cy, cz);
         let normal = Vec3::new(nx, ny, nz);
+        normal.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid normal: {e}"),
+        })?;
         let eid = brepkit_topology::builder::make_circle_edge(
             self.topo_mut(),
             center,
@@ -237,9 +240,20 @@ impl BrepKernel {
         validate_finite(nz, "nz")?;
         validate_positive(semi_major, "semi_major")?;
         validate_positive(semi_minor, "semi_minor")?;
+        if semi_minor > semi_major {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "semi_minor ({semi_minor}) must not exceed semi_major ({semi_major})"
+                ),
+            }
+            .into());
+        }
 
         let center = Point3::new(cx, cy, cz);
         let normal = Vec3::new(nx, ny, nz);
+        normal.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid normal: {e}"),
+        })?;
         let eid = brepkit_topology::builder::make_ellipse_edge(
             self.topo_mut(),
             center,

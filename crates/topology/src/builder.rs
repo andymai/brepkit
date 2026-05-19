@@ -528,9 +528,8 @@ mod tests {
         assert!(edge.is_closed(), "circle edge must be closed");
         assert_eq!(edge.curve().type_tag(), "circle");
 
-        let (t_min, t_max) = edge
-            .curve()
-            .domain_with_endpoints(Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 0.0));
+        let seam = topo.vertex(edge.start()).unwrap().point();
+        let (t_min, t_max) = edge.curve().domain_with_endpoints(seam, seam);
         assert!((t_min - 0.0).abs() < 1e-12);
         assert!((t_max - std::f64::consts::TAU).abs() < 1e-12);
     }
@@ -582,9 +581,8 @@ mod tests {
         assert!(edge.is_closed(), "ellipse edge must be closed");
         assert_eq!(edge.curve().type_tag(), "ellipse");
 
-        let (t_min, t_max) = edge
-            .curve()
-            .domain_with_endpoints(Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 0.0, 0.0));
+        let seam = topo.vertex(edge.start()).unwrap().point();
+        let (t_min, t_max) = edge.curve().domain_with_endpoints(seam, seam);
         assert!((t_min - 0.0).abs() < 1e-12);
         assert!((t_max - std::f64::consts::TAU).abs() < 1e-12);
     }
