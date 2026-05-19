@@ -5,6 +5,7 @@
 use std::f64::consts::PI;
 
 use brepkit_math::curves::{Circle3D, Ellipse3D};
+use brepkit_math::frame::Frame3;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
@@ -41,11 +42,49 @@ pub fn make_line_edge(
     Ok(topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line)))
 }
 
+/// Create a closed circular edge with a caller-supplied reference x-direction.
+///
+/// `ref_dir` is projected onto the plane perpendicular to `normal` to fix
+/// the orientation of the circle's `u_axis` — and therefore the position
+/// of the seam vertex at `circle.evaluate(0.0)`. The edge has parameter
+/// domain `[0, 2π]`.
+///
+/// If `ref_dir` is zero or (nearly) parallel to `normal`, the underlying
+/// [`Frame3::from_normal_and_ref`] falls back to an arbitrary perpendicular
+/// axis — the seam orientation is *not* pinned in that case. The WASM
+/// boundary rejects zero `ref_dir` outright; callers of the topology
+/// layer should pass a non-zero, non-parallel direction to actually pin
+/// the seam.
+///
+/// # Errors
+///
+/// Returns an error if `radius` is non-positive or `normal` is a zero vector.
+pub fn make_circle_edge_with_ref(
+    topo: &mut Topology,
+    center: Point3,
+    normal: Vec3,
+    radius: f64,
+    ref_dir: Vec3,
+    tolerance: f64,
+) -> Result<EdgeId, crate::TopologyError> {
+    let circle = Circle3D::new_with_ref(center, normal, radius, ref_dir).map_err(|e| {
+        crate::TopologyError::NonManifold {
+            reason: format!("invalid circle: {e}"),
+        }
+    })?;
+    let seam = circle.evaluate(0.0);
+    let v = topo.add_vertex(Vertex::new(seam, tolerance));
+    Ok(topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))))
+}
+
 /// Create a closed circular edge.
 ///
 /// Constructs a [`Circle3D`] from `center`, `normal`, and `radius`, then
 /// creates a single closed edge whose start and end share a seam vertex
 /// at `circle.evaluate(0.0)`. The edge has parameter domain `[0, 2π]`.
+///
+/// Delegates to [`make_circle_edge_with_ref`] using the default frame's
+/// x-axis ([`Frame3::from_normal`]) as the reference direction.
 ///
 /// # Errors
 ///
@@ -57,13 +96,47 @@ pub fn make_circle_edge(
     radius: f64,
     tolerance: f64,
 ) -> Result<EdgeId, crate::TopologyError> {
-    let circle =
-        Circle3D::new(center, normal, radius).map_err(|e| crate::TopologyError::NonManifold {
-            reason: format!("invalid circle: {e}"),
+    let ref_dir = Frame3::from_normal(center, normal)
+        .map_err(|e| crate::TopologyError::NonManifold {
+            reason: format!("invalid circle frame: {e}"),
+        })?
+        .x;
+    make_circle_edge_with_ref(topo, center, normal, radius, ref_dir, tolerance)
+}
+
+/// Create a closed elliptical edge with a caller-supplied reference major-axis.
+///
+/// `ref_dir` is projected onto the plane perpendicular to `normal` to fix
+/// the orientation of the ellipse's major axis (`u_axis`, carrying the
+/// `semi_major` extent). The edge has parameter domain `[0, 2π]`.
+///
+/// If `ref_dir` is zero or (nearly) parallel to `normal`, the underlying
+/// [`Frame3::from_normal_and_ref`] falls back to an arbitrary perpendicular
+/// axis — the major-axis orientation is *not* pinned in that case. The
+/// WASM boundary rejects zero `ref_dir` outright; callers of the topology
+/// layer should pass a non-zero, non-parallel direction to actually pin
+/// the major axis.
+///
+/// # Errors
+///
+/// Returns an error if either semi-axis is non-positive, `semi_minor`
+/// exceeds `semi_major`, or `normal` is a zero vector.
+pub fn make_ellipse_edge_with_ref(
+    topo: &mut Topology,
+    center: Point3,
+    normal: Vec3,
+    semi_major: f64,
+    semi_minor: f64,
+    ref_dir: Vec3,
+    tolerance: f64,
+) -> Result<EdgeId, crate::TopologyError> {
+    let ellipse = Ellipse3D::new_with_ref(center, normal, semi_major, semi_minor, ref_dir)
+        .map_err(|e| crate::TopologyError::NonManifold {
+            reason: format!("invalid ellipse: {e}"),
         })?;
-    let seam = circle.evaluate(0.0);
+    let seam = ellipse.evaluate(0.0);
     let v = topo.add_vertex(Vertex::new(seam, tolerance));
-    Ok(topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))))
+    Ok(topo.add_edge(Edge::new(v, v, EdgeCurve::Ellipse(ellipse))))
 }
 
 /// Create a closed elliptical edge.
@@ -72,6 +145,9 @@ pub fn make_circle_edge(
 /// semi-axis lengths, then creates a single closed edge whose start and
 /// end share a seam vertex at `ellipse.evaluate(0.0)`. The edge has
 /// parameter domain `[0, 2π]`.
+///
+/// Delegates to [`make_ellipse_edge_with_ref`] using the default frame's
+/// x-axis ([`Frame3::from_normal`]) as the reference direction.
 ///
 /// # Errors
 ///
@@ -85,14 +161,14 @@ pub fn make_ellipse_edge(
     semi_minor: f64,
     tolerance: f64,
 ) -> Result<EdgeId, crate::TopologyError> {
-    let ellipse = Ellipse3D::new(center, normal, semi_major, semi_minor).map_err(|e| {
-        crate::TopologyError::NonManifold {
-            reason: format!("invalid ellipse: {e}"),
-        }
-    })?;
-    let seam = ellipse.evaluate(0.0);
-    let v = topo.add_vertex(Vertex::new(seam, tolerance));
-    Ok(topo.add_edge(Edge::new(v, v, EdgeCurve::Ellipse(ellipse))))
+    let ref_dir = Frame3::from_normal(center, normal)
+        .map_err(|e| crate::TopologyError::NonManifold {
+            reason: format!("invalid ellipse frame: {e}"),
+        })?
+        .x;
+    make_ellipse_edge_with_ref(
+        topo, center, normal, semi_major, semi_minor, ref_dir, tolerance,
+    )
 }
 
 /// Create a closed wire from an ordered list of points.
@@ -600,6 +676,117 @@ mod tests {
                 TOL,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn make_circle_edge_with_ref_seam_at_supplied_x() {
+        // ref_dir=[1,0,0] with normal=[0,0,1]: u_axis should align with +x,
+        // putting the seam vertex (circle.evaluate(0.0) = center + r·u_axis)
+        // at (r, 0, 0). The default frame produces u_axis=[0,1,0] so the
+        // seam lands at (0, r, 0) — verifies the ref_dir takes effect.
+        let mut topo = Topology::new();
+        let eid = make_circle_edge_with_ref(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            TOL,
+        )
+        .unwrap();
+
+        let edge = topo.edge(eid).unwrap();
+        let seam = topo.vertex(edge.start()).unwrap().point();
+        assert!(
+            (seam.x() - 3.0).abs() < 1e-12,
+            "seam.x should be 3.0, got {}",
+            seam.x()
+        );
+        assert!(
+            seam.y().abs() < 1e-12,
+            "seam.y should be 0, got {}",
+            seam.y()
+        );
+        assert!(
+            seam.z().abs() < 1e-12,
+            "seam.z should be 0, got {}",
+            seam.z()
+        );
+
+        // Sanity: default-frame variant puts the seam at +y instead.
+        let mut topo2 = Topology::new();
+        let eid2 = make_circle_edge(
+            &mut topo2,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            TOL,
+        )
+        .unwrap();
+        let seam2 = topo2
+            .vertex(topo2.edge(eid2).unwrap().start())
+            .unwrap()
+            .point();
+        assert!(
+            (seam2.y() - 3.0).abs() < 1e-12,
+            "default-frame seam.y should be 3.0, got {}",
+            seam2.y()
+        );
+    }
+
+    #[test]
+    fn make_ellipse_edge_with_ref_major_axis_along_supplied_dir() {
+        // ref_dir=[1,0,0] with normal=[0,0,1]: u_axis aligns with +x, so
+        // the seam vertex (ellipse.evaluate(0.0) = center + semi_major·u_axis)
+        // lands at (semi_major, 0, 0). This is what brepjs's `sketchEllipse`
+        // assumes; the default frame puts the major axis along +y, which
+        // breaks the volume of `sketchEllipse(5,2).extrude(10)` because
+        // the adapter falls back to a NURBS approximation.
+        let mut topo = Topology::new();
+        let eid = make_ellipse_edge_with_ref(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            5.0,
+            2.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            TOL,
+        )
+        .unwrap();
+
+        let edge = topo.edge(eid).unwrap();
+        let seam = topo.vertex(edge.start()).unwrap().point();
+        assert!(
+            (seam.x() - 5.0).abs() < 1e-12,
+            "seam.x should be semi_major (5.0), got {}",
+            seam.x()
+        );
+        assert!(
+            seam.y().abs() < 1e-12,
+            "seam.y should be 0, got {}",
+            seam.y()
+        );
+
+        // Sanity: default-frame variant puts the major-axis seam along +y.
+        let mut topo2 = Topology::new();
+        let eid2 = make_ellipse_edge(
+            &mut topo2,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            5.0,
+            2.0,
+            TOL,
+        )
+        .unwrap();
+        let seam2 = topo2
+            .vertex(topo2.edge(eid2).unwrap().start())
+            .unwrap()
+            .point();
+        assert!(
+            (seam2.y() - 5.0).abs() < 1e-12,
+            "default-frame seam.y should be 5.0, got {}",
+            seam2.y()
         );
     }
 

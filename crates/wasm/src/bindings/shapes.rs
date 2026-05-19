@@ -265,6 +265,148 @@ impl BrepKernel {
         Ok(edge_id_to_u32(eid))
     }
 
+    /// Create a closed circular edge with a caller-supplied reference x-direction.
+    ///
+    /// Like [`makeCircleEdge`](Self::make_circle_edge), but `ref_dir = (rx, ry, rz)`
+    /// is projected onto the plane perpendicular to the normal to fix the
+    /// circle's `u_axis` — which controls the seam vertex position at
+    /// `circle.evaluate(0.0)`. Use when downstream code (PCurve computation,
+    /// extrusion frame) depends on a specific seam placement.
+    ///
+    /// `ref_dir` must be non-zero (rejected at this boundary) and ideally
+    /// not parallel to the normal — `Frame3::from_normal_and_ref` falls
+    /// back to an arbitrary perpendicular when the projection of `ref_dir`
+    /// onto the plane is degenerate, defeating the purpose of this call.
+    ///
+    /// Returns an edge handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any coordinate is NaN/infinite, `radius` is
+    /// non-positive, or the normal vector or `ref_dir` is zero.
+    #[wasm_bindgen(js_name = "makeCircleEdgeWithRef")]
+    pub fn make_circle_edge_with_ref(
+        &mut self,
+        cx: f64,
+        cy: f64,
+        cz: f64,
+        nx: f64,
+        ny: f64,
+        nz: f64,
+        radius: f64,
+        rx: f64,
+        ry: f64,
+        rz: f64,
+    ) -> Result<u32, JsError> {
+        validate_finite(cx, "cx")?;
+        validate_finite(cy, "cy")?;
+        validate_finite(cz, "cz")?;
+        validate_finite(nx, "nx")?;
+        validate_finite(ny, "ny")?;
+        validate_finite(nz, "nz")?;
+        validate_finite(rx, "rx")?;
+        validate_finite(ry, "ry")?;
+        validate_finite(rz, "rz")?;
+        validate_positive(radius, "radius")?;
+
+        let center = Point3::new(cx, cy, cz);
+        let normal = Vec3::new(nx, ny, nz);
+        normal.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid normal: {e}"),
+        })?;
+        let ref_dir = Vec3::new(rx, ry, rz);
+        ref_dir.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid ref_dir: {e}"),
+        })?;
+        let eid = brepkit_topology::builder::make_circle_edge_with_ref(
+            self.topo_mut(),
+            center,
+            normal,
+            radius,
+            ref_dir,
+            TOL,
+        )?;
+        Ok(edge_id_to_u32(eid))
+    }
+
+    /// Create a closed elliptical edge with a caller-supplied reference major-axis.
+    ///
+    /// Like [`makeEllipseEdge`](Self::make_ellipse_edge), but `ref_dir = (rx, ry, rz)`
+    /// is projected onto the plane perpendicular to the normal to fix the
+    /// ellipse's major-axis direction (`u_axis`, carrying `semi_major`).
+    /// Use this when the caller has an intended major-axis orientation —
+    /// otherwise the default-frame variant chooses an arbitrary
+    /// perpendicular, which can cause adapters to fall back to NURBS
+    /// approximations to preserve their requested orientation.
+    ///
+    /// `ref_dir` must be non-zero (rejected at this boundary) and ideally
+    /// not parallel to the normal — `Frame3::from_normal_and_ref` falls
+    /// back to an arbitrary perpendicular when the projection of `ref_dir`
+    /// onto the plane is degenerate, defeating the purpose of this call.
+    ///
+    /// Returns an edge handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any coordinate is NaN/infinite, either
+    /// semi-axis is non-positive, `semi_minor` exceeds `semi_major`, or
+    /// the normal vector or `ref_dir` is zero.
+    #[wasm_bindgen(js_name = "makeEllipseEdgeWithRef")]
+    pub fn make_ellipse_edge_with_ref(
+        &mut self,
+        cx: f64,
+        cy: f64,
+        cz: f64,
+        nx: f64,
+        ny: f64,
+        nz: f64,
+        semi_major: f64,
+        semi_minor: f64,
+        rx: f64,
+        ry: f64,
+        rz: f64,
+    ) -> Result<u32, JsError> {
+        validate_finite(cx, "cx")?;
+        validate_finite(cy, "cy")?;
+        validate_finite(cz, "cz")?;
+        validate_finite(nx, "nx")?;
+        validate_finite(ny, "ny")?;
+        validate_finite(nz, "nz")?;
+        validate_finite(rx, "rx")?;
+        validate_finite(ry, "ry")?;
+        validate_finite(rz, "rz")?;
+        validate_positive(semi_major, "semi_major")?;
+        validate_positive(semi_minor, "semi_minor")?;
+        if semi_minor > semi_major {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "semi_minor ({semi_minor}) must not exceed semi_major ({semi_major})"
+                ),
+            }
+            .into());
+        }
+
+        let center = Point3::new(cx, cy, cz);
+        let normal = Vec3::new(nx, ny, nz);
+        normal.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid normal: {e}"),
+        })?;
+        let ref_dir = Vec3::new(rx, ry, rz);
+        ref_dir.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid ref_dir: {e}"),
+        })?;
+        let eid = brepkit_topology::builder::make_ellipse_edge_with_ref(
+            self.topo_mut(),
+            center,
+            normal,
+            semi_major,
+            semi_minor,
+            ref_dir,
+            TOL,
+        )?;
+        Ok(edge_id_to_u32(eid))
+    }
+
     /// Create a circular arc edge between two points.
     ///
     /// The arc lies on a circle with the given center, normal axis, and
