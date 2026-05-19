@@ -668,6 +668,16 @@ pub(super) fn face_components(topo: &Topology, solid: SolidId) -> Vec<Vec<FaceId
         }
     }
 
+    // Sort + dedup adjacency so DFS visits neighbors in a stable order,
+    // independent of HashMap iteration order in `edge_faces`. Without this,
+    // `cut_multi_region_input` builds per-component subsolids with
+    // shuffled face order, which percolates through the boolean pipeline
+    // and makes `compound_cut_*` tests flaky.
+    for neighbors in &mut adj {
+        neighbors.sort_unstable();
+        neighbors.dedup();
+    }
+
     let mut visited = vec![false; n];
     let mut components: Vec<Vec<FaceId>> = Vec::new();
     for start in 0..n {
