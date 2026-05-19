@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.88.0](https://github.com/andymai/brepkit/compare/v2.87.1...v2.88.0) (2026-05-19)
+
+
+### Features
+
+* **topology+wasm:** add makeCircleEdge / makeEllipseEdge bindings ([#679](https://github.com/andymai/brepkit/issues/679)) ([40f8de8](https://github.com/andymai/brepkit/commit/40f8de803c90675f1dc5081018b4b5558153b0b6))
+
 ## [2.87.1](https://github.com/andymai/brepkit/compare/v2.87.0...v2.87.1) (2026-05-18)
 
 
