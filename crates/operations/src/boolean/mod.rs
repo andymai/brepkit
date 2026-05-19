@@ -157,12 +157,25 @@ pub fn boolean(
         if aabbs_match && all_b_verts_in_a && all_a_verts_in_b {
             return match op {
                 BooleanOp::Fuse | BooleanOp::Intersect => Ok(crate::copy::copy_solid(topo, a)?),
-                BooleanOp::Cut => Err(crate::OperationsError::InvalidInput {
-                    reason: "Cut of identical solids produces empty result".into(),
+                BooleanOp::Cut => Err(crate::OperationsError::EmptyResult {
+                    reason: "Cut of identical solids".into(),
                 }),
             };
         }
-        // For Cut with containment, defer to GFA (produces shelled solid).
+        // Containment shortcuts:
+        // - Fuse/Intersect with either containment direction: copy the
+        //   appropriate solid.
+        // - Cut with A ⊆ B: result is empty (A is fully removed). Return
+        //   EmptyResult explicitly — without this short-circuit, GFA falls
+        //   back to producing a degenerate vol=0 solid that callers
+        //   mistake for a real result, breaking volume invariants like
+        //   `vol((A-B) ∪ (A∩B)) = vol(A)`.
+        // - Cut with B ⊂ A: defer to GFA (produces hollow solid).
+        if op == BooleanOp::Cut && a_in_b && !b_in_a {
+            return Err(crate::OperationsError::EmptyResult {
+                reason: "Cut with target fully contained in tool".into(),
+            });
+        }
         if (b_in_a || a_in_b) && op != BooleanOp::Cut {
             return match (op, b_in_a, a_in_b) {
                 (BooleanOp::Fuse, true, _) => Ok(crate::copy::copy_solid(topo, a)?),
@@ -1276,8 +1289,8 @@ fn mesh_boolean_fallback(
     let mb_result = crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, tol.linear)?;
     let face_specs = mesh_result_to_face_specs(&mb_result);
     if face_specs.is_empty() {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "mesh boolean produced empty result".into(),
+        return Err(crate::OperationsError::EmptyResult {
+            reason: "mesh boolean produced no output faces".into(),
         });
     }
     let result = assemble_solid_mixed(topo, &face_specs, tol)?;
@@ -1470,7 +1483,10 @@ fn cut_multi_region_input(
         let comp_solid = crate::copy::copy_solid(topo, comp_solid_raw)?;
         match boolean(topo, BooleanOp::Cut, comp_solid, b) {
             Ok(r) => per_component_results.push(r),
-            Err(crate::OperationsError::InvalidInput { .. }) => {
+            Err(
+                crate::OperationsError::EmptyResult { .. }
+                | crate::OperationsError::InvalidInput { .. },
+            ) => {
                 per_component_results.push(comp_solid);
             }
             Err(e) => return Err(e),

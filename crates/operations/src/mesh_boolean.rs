@@ -66,8 +66,8 @@ pub fn mesh_boolean(
     let mesh = assemble_result(&split_a, &split_b, &classify_a, &classify_b, op);
 
     if mesh.positions.is_empty() {
-        return Err(OperationsError::InvalidInput {
-            reason: "mesh boolean produced empty result".into(),
+        return Err(OperationsError::EmptyResult {
+            reason: "mesh boolean produced no output vertices".into(),
         });
     }
 

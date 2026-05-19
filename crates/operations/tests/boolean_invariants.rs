@@ -3,9 +3,10 @@
 //! Verifies conservation laws, commutativity, and algebraic identities
 //! that must hold for any correct boolean implementation.
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use brepkit_math::mat::Mat4;
+use brepkit_operations::OperationsError;
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::copy::copy_solid;
 use brepkit_operations::measure::solid_volume;
@@ -385,6 +386,180 @@ fn identical_solids_cut_errors_or_empty() {
             );
         }
     }
+}
+
+// -- Near-coincident-face robustness (brepjs parity) ---------------------
+//
+// Both scenarios put face coincidence within the default `Tolerance::new()
+// .linear = 1e-7` band. They mirror brepjs parity tests that exposed the
+// classifier failing to handle near-coincident face geometry consistently.
+//
+// These tests use the same empty-result contract as `cut_box_by_large_sphere_containment`
+// in `boolean/tests.rs`: a boolean returning `Err` is treated as an empty result
+// (volume 0) so the invariant can be evaluated set-theoretically.
+
+fn safe_vol(topo: &Topology, result: Result<SolidId, OperationsError>) -> f64 {
+    match result {
+        Ok(s) => solid_volume(topo, s, DEFLECTION).unwrap_or(0.0),
+        Err(OperationsError::EmptyResult { .. }) => 0.0,
+        Err(e) => panic!("unexpected boolean error (only EmptyResult should map to 0): {e:?}"),
+    }
+}
+
+#[test]
+fn cut_then_fuse_back_recovers_volume_near_coincident() {
+    // INVARIANT: vol((A - B) ∪ (A ∩ B)) === vol(A)
+    //
+    // A = 0.5000001³ box at origin; B = 0.5³ box at origin.
+    // B is nearly contained in A — the +x/+y/+z faces are 1e-7 apart, exactly
+    // the default linear tolerance. Empty-result contract: `(A - B)` may
+    // legitimately return `Err` (the difference is sub-tolerance and treated
+    // as empty); when that happens, `(empty) ∪ (A ∩ B) = (A ∩ B)`.
+    let mut topo = Topology::new();
+    let a = make_box(&mut topo, 0.500_000_1, 0.500_000_1, 0.500_000_1).unwrap();
+    let b = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let vol_a = vol(&topo, a);
+
+    let a_cut = make_box(&mut topo, 0.500_000_1, 0.500_000_1, 0.500_000_1).unwrap();
+    let b_cut = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let diff_opt: Option<SolidId> = boolean(&mut topo, BooleanOp::Cut, a_cut, b_cut).ok();
+    let vol_diff = diff_opt.map(|s| vol(&topo, s)).unwrap_or(0.0);
+
+    let inter = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+    let vol_inter = vol(&topo, inter);
+
+    // Build the (A-B) ∪ (A∩B) — when diff is empty, just use inter.
+    let vol_fused = match diff_opt {
+        Some(diff) => {
+            let fused = boolean(&mut topo, BooleanOp::Fuse, diff, inter).unwrap();
+            vol(&topo, fused)
+        }
+        None => vol_inter,
+    };
+
+    let rel_error = (vol_fused - vol_a).abs() / vol_a;
+    assert!(
+        rel_error < 1e-4,
+        "(A-B) ∪ (A∩B) should reconstruct A: got vol_fused={vol_fused:.10}, vol_a={vol_a:.10} \
+         (rel error {:.4}%). vol(A-B)={vol_diff:.3e}, vol(A∩B)={vol_inter:.10}",
+        rel_error * 100.0
+    );
+}
+
+#[test]
+fn inclusion_exclusion_near_coincident_faces() {
+    // INVARIANT: vol(A ∪ B) + vol(A ∩ B) === vol(A) + vol(B)
+    //
+    // A = 0.5³ box at origin. B = 0.5³ box shifted by (0, 0.5 - 1e-7, 0).
+    // A's +y face (y=0.5) and B's -y face (y=0.4999999) are 1e-7 apart,
+    // exactly the default linear tolerance. Either operation may legitimately
+    // return an empty-result error; account for that with the safe_vol helper.
+    let mut topo = Topology::new();
+    let a = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let b = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let offset = 0.5_f64 - 1e-7;
+    transform_solid(&mut topo, b, &Mat4::translation(0.0, offset, 0.0)).unwrap();
+    let vol_a = vol(&topo, a);
+    let vol_b = vol(&topo, b);
+
+    let a2 = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let b2 = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    transform_solid(&mut topo, b2, &Mat4::translation(0.0, offset, 0.0)).unwrap();
+    let fused_result = boolean(&mut topo, BooleanOp::Fuse, a2, b2);
+    let vol_fused = safe_vol(&topo, fused_result);
+
+    let a3 = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let b3 = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    transform_solid(&mut topo, b3, &Mat4::translation(0.0, offset, 0.0)).unwrap();
+    let inter_result = boolean(&mut topo, BooleanOp::Intersect, a3, b3);
+    let vol_inter = safe_vol(&topo, inter_result);
+
+    let lhs = vol_a + vol_b;
+    let rhs = vol_fused + vol_inter;
+    let rel_error = (lhs - rhs).abs() / lhs;
+    assert!(
+        rel_error < 1e-4,
+        "inclusion-exclusion: V(A)+V(B)={lhs:.10}, V(A∪B)+V(A∩B)={rhs:.10} \
+         (vol_fused={vol_fused:.10}, vol_inter={vol_inter:.3e}, rel error {:.4}%)",
+        rel_error * 100.0
+    );
+}
+
+// -- Containment robustness (brepjs parity) ------------------------------
+//
+// A ⊂ B sharing the origin corner. Mathematically:
+//   intersect(A, B) = A         (vol 0.125)
+//   cut(A, B)       = ∅         (Err per empty-result contract)
+//   fuse(∅, A)      = A         (vol 0.125)
+//
+// brepjs counterexample for cut-then-fuse-back: `[0.5, 0.9531210881257514,
+// 1.7801e-308]` decodes to A=unitCube(0.5,0.5,0.5), B=unitCube(0.95,0.95,0.95)
+// offset by (1.78e-308, 0, 0) ≈ origin. Failure mode on brepjs: vol_fused=0,
+// meaning intersect(A,B) didn't return A.
+
+#[test]
+fn cut_contained_solid_returns_empty_result() {
+    // A ⊂ B → Cut(A, B) is empty per the empty-result contract.
+    // Without the explicit containment-Cut shortcut, GFA fabricates a
+    // degenerate vol=0 solid that callers mistake for a real result.
+    let mut topo = Topology::new();
+    let a = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let b = make_box(&mut topo, 0.95, 0.95, 0.95).unwrap();
+    let result = boolean(&mut topo, BooleanOp::Cut, a, b);
+    assert!(
+        matches!(result, Err(OperationsError::EmptyResult { .. })),
+        "Cut(A ⊂ B, B) should return EmptyResult, got {result:?}"
+    );
+}
+
+#[test]
+fn intersect_contained_solid_returns_contained() {
+    // A ⊂ B with shared origin corner. intersect(A, B) must return ≈ A.
+    let mut topo = Topology::new();
+    let a = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let b = make_box(&mut topo, 0.95, 0.95, 0.95).unwrap();
+    let inter = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+    let v = vol(&topo, inter);
+    let expected = 0.125_f64;
+    let rel_error = (v - expected).abs() / expected;
+    assert!(
+        rel_error < 1e-5,
+        "intersect(A ⊂ B) should return A: got vol={v:.10}, expected {expected:.10} \
+         (rel error {:.4}%)",
+        rel_error * 100.0
+    );
+}
+
+#[test]
+fn cut_then_fuse_back_containment() {
+    // Full invariant: vol((A-B) ∪ (A∩B)) ≈ vol(A), with A ⊂ B.
+    // (A-B) is empty (A is fully cut away), so applying the empty-operand
+    // identity `empty ∪ X = X` leaves (A∩B), which the containment
+    // shortcut returns as ≈ A.
+    let mut topo = Topology::new();
+    let a = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let b = make_box(&mut topo, 0.95, 0.95, 0.95).unwrap();
+    let vol_a = vol(&topo, a);
+
+    let a_cut = make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+    let b_cut = make_box(&mut topo, 0.95, 0.95, 0.95).unwrap();
+    let diff_result = boolean(&mut topo, BooleanOp::Cut, a_cut, b_cut);
+    assert!(
+        matches!(diff_result, Err(OperationsError::EmptyResult { .. })),
+        "Cut(A ⊂ B, B) should return EmptyResult, got {diff_result:?}"
+    );
+
+    let inter = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+    let vol_inter = vol(&topo, inter);
+
+    // With (A-B) empty, the invariant reduces to vol_inter ≈ vol_a.
+    let rel_error = (vol_inter - vol_a).abs() / vol_a;
+    assert!(
+        rel_error < 1e-5,
+        "empty ∪ (A∩B) should reconstruct A (A ⊂ B): vol_inter={vol_inter:.10}, \
+         vol_a={vol_a:.10} (rel error {:.4}%)",
+        rel_error * 100.0
+    );
 }
 
 // -- Cut cylinder from box ------------------------------------------------
