@@ -273,12 +273,17 @@ impl BrepKernel {
     /// `circle.evaluate(0.0)`. Use when downstream code (PCurve computation,
     /// extrusion frame) depends on a specific seam placement.
     ///
+    /// `ref_dir` must be non-zero (rejected at this boundary) and ideally
+    /// not parallel to the normal — `Frame3::from_normal_and_ref` falls
+    /// back to an arbitrary perpendicular when the projection of `ref_dir`
+    /// onto the plane is degenerate, defeating the purpose of this call.
+    ///
     /// Returns an edge handle (`u32`).
     ///
     /// # Errors
     ///
     /// Returns an error if any coordinate is NaN/infinite, `radius` is
-    /// non-positive, or the normal vector is zero.
+    /// non-positive, or the normal vector or `ref_dir` is zero.
     #[wasm_bindgen(js_name = "makeCircleEdgeWithRef")]
     pub fn make_circle_edge_with_ref(
         &mut self,
@@ -310,6 +315,9 @@ impl BrepKernel {
             reason: format!("invalid normal: {e}"),
         })?;
         let ref_dir = Vec3::new(rx, ry, rz);
+        ref_dir.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid ref_dir: {e}"),
+        })?;
         let eid = brepkit_topology::builder::make_circle_edge_with_ref(
             self.topo_mut(),
             center,
@@ -331,13 +339,18 @@ impl BrepKernel {
     /// perpendicular, which can cause adapters to fall back to NURBS
     /// approximations to preserve their requested orientation.
     ///
+    /// `ref_dir` must be non-zero (rejected at this boundary) and ideally
+    /// not parallel to the normal — `Frame3::from_normal_and_ref` falls
+    /// back to an arbitrary perpendicular when the projection of `ref_dir`
+    /// onto the plane is degenerate, defeating the purpose of this call.
+    ///
     /// Returns an edge handle (`u32`).
     ///
     /// # Errors
     ///
     /// Returns an error if any coordinate is NaN/infinite, either
     /// semi-axis is non-positive, `semi_minor` exceeds `semi_major`, or
-    /// the normal vector is zero.
+    /// the normal vector or `ref_dir` is zero.
     #[wasm_bindgen(js_name = "makeEllipseEdgeWithRef")]
     pub fn make_ellipse_edge_with_ref(
         &mut self,
@@ -379,6 +392,9 @@ impl BrepKernel {
             reason: format!("invalid normal: {e}"),
         })?;
         let ref_dir = Vec3::new(rx, ry, rz);
+        ref_dir.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid ref_dir: {e}"),
+        })?;
         let eid = brepkit_topology::builder::make_ellipse_edge_with_ref(
             self.topo_mut(),
             center,

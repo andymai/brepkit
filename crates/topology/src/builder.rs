@@ -49,6 +49,13 @@ pub fn make_line_edge(
 /// of the seam vertex at `circle.evaluate(0.0)`. The edge has parameter
 /// domain `[0, 2π]`.
 ///
+/// If `ref_dir` is zero or (nearly) parallel to `normal`, the underlying
+/// [`Frame3::from_normal_and_ref`] falls back to an arbitrary perpendicular
+/// axis — the seam orientation is *not* pinned in that case. The WASM
+/// boundary rejects zero `ref_dir` outright; callers of the topology
+/// layer should pass a non-zero, non-parallel direction to actually pin
+/// the seam.
+///
 /// # Errors
 ///
 /// Returns an error if `radius` is non-positive or `normal` is a zero vector.
@@ -102,6 +109,13 @@ pub fn make_circle_edge(
 /// `ref_dir` is projected onto the plane perpendicular to `normal` to fix
 /// the orientation of the ellipse's major axis (`u_axis`, carrying the
 /// `semi_major` extent). The edge has parameter domain `[0, 2π]`.
+///
+/// If `ref_dir` is zero or (nearly) parallel to `normal`, the underlying
+/// [`Frame3::from_normal_and_ref`] falls back to an arbitrary perpendicular
+/// axis — the major-axis orientation is *not* pinned in that case. The
+/// WASM boundary rejects zero `ref_dir` outright; callers of the topology
+/// layer should pass a non-zero, non-parallel direction to actually pin
+/// the major axis.
 ///
 /// # Errors
 ///
