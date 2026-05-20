@@ -47,6 +47,56 @@ pub fn mesh_boolean(
     op: BooleanOp,
     tolerance: f64,
 ) -> Result<MeshBooleanResult, OperationsError> {
+    mesh_boolean_with_metadata(mesh_a, None, mesh_b, None, op, tolerance)
+}
+
+/// Like [`mesh_boolean`] but accepts optional per-triangle planarity
+/// metadata (issue #696).
+///
+/// `planar_a`/`planar_b`, when provided, contain one `bool` per triangle
+/// in the corresponding input mesh; `true` means the triangle lies on a
+/// planar input face. The splitter uses these flags to drop collinear
+/// midpoints introduced by tessellation-diagonal-vs-plane intersections
+/// (planar-face tessellation artifacts) while leaving curved-surface
+/// intersections untouched. Passing `None` for both is equivalent to
+/// calling [`mesh_boolean`].
+///
+/// # Errors
+/// Returns an error if the operation cannot be completed (e.g. the
+/// intersection of disjoint meshes is empty), or if a planarity slice
+/// length doesn't match the corresponding mesh's triangle count.
+#[allow(clippy::too_many_lines)]
+pub fn mesh_boolean_with_metadata(
+    mesh_a: &TriangleMesh,
+    planar_a: Option<&[bool]>,
+    mesh_b: &TriangleMesh,
+    planar_b: Option<&[bool]>,
+    op: BooleanOp,
+    tolerance: f64,
+) -> Result<MeshBooleanResult, OperationsError> {
+    let tri_count_a = mesh_a.indices.len() / 3;
+    let tri_count_b = mesh_b.indices.len() / 3;
+    if let Some(p) = planar_a {
+        if p.len() != tri_count_a {
+            return Err(OperationsError::InvalidInput {
+                reason: format!(
+                    "mesh_boolean_with_metadata: planar_a length {} != triangle count {tri_count_a}",
+                    p.len()
+                ),
+            });
+        }
+    }
+    if let Some(p) = planar_b {
+        if p.len() != tri_count_b {
+            return Err(OperationsError::InvalidInput {
+                reason: format!(
+                    "mesh_boolean_with_metadata: planar_b length {} != triangle count {tri_count_b}",
+                    p.len()
+                ),
+            });
+        }
+    }
+
     // Step 1: BVH broad-phase
     let (bvh_b, _aabbs_b) = build_triangle_bvh(mesh_b);
     let pairs = find_intersecting_pairs(mesh_a, &bvh_b);
@@ -55,8 +105,8 @@ pub fn mesh_boolean(
     let intersections = compute_all_intersections(mesh_a, mesh_b, &pairs, tolerance);
 
     // Step 3: Split meshes by intersection edges
-    let split_a = split_mesh_by_intersections(mesh_a, &intersections, true, tolerance);
-    let split_b = split_mesh_by_intersections(mesh_b, &intersections, false, tolerance);
+    let split_a = split_mesh_by_intersections(mesh_a, planar_a, &intersections, true, tolerance);
+    let split_b = split_mesh_by_intersections(mesh_b, planar_b, &intersections, false, tolerance);
 
     // Step 4: Classify sub-triangles
     let classify_a = classify_triangles(&split_a, mesh_b, tolerance);
@@ -127,6 +177,12 @@ struct TriTriIntersection {
     tri_a: usize,
     /// Index of the triangle in mesh B.
     tri_b: usize,
+    /// `true` when the two source triangles lay in the same plane and the
+    /// intersection came from `intersect_coplanar_triangles`. The
+    /// downstream collinear-midpoint drop (issue #696) skips coplanar
+    /// segments — those intermediates are along the shared plane and
+    /// represent real cap-on-cap geometry, not tessellation artifacts.
+    from_coplanar: bool,
 }
 
 /// Compute all triangle-triangle intersections for the given candidate pairs.
@@ -244,6 +300,7 @@ fn intersect_triangles(
         p1,
         tri_a: 0,
         tri_b: 0,
+        from_coplanar: false,
     })
 }
 
@@ -344,6 +401,7 @@ fn intersect_coplanar_triangles(
         p1: best_p1,
         tri_a: 0,
         tri_b: 0,
+        from_coplanar: true,
     })
 }
 
@@ -606,20 +664,26 @@ struct SplitMesh {
 #[allow(clippy::too_many_lines)]
 fn split_mesh_by_intersections(
     mesh: &TriangleMesh,
+    planar: Option<&[bool]>,
     intersections: &[TriTriIntersection],
     is_mesh_a: bool,
     tolerance: f64,
 ) -> SplitMesh {
     let tri_count = mesh.indices.len() / 3;
 
-    // Group intersection segments by triangle index.
+    // Group intersection segments by triangle index. Track whether ANY of
+    // a triangle's segments came from coplanar-triangle intersections —
+    // those need special handling for the issue-#696 midpoint drop below.
     let mut tri_segments: HashMap<usize, Vec<(Point3, Point3)>> = HashMap::new();
+    let mut tri_has_coplanar_segment: HashMap<usize, bool> = HashMap::new();
     for isect in intersections {
         let tri_idx = if is_mesh_a { isect.tri_a } else { isect.tri_b };
         tri_segments
             .entry(tri_idx)
             .or_default()
             .push((isect.p0, isect.p1));
+        let entry = tri_has_coplanar_segment.entry(tri_idx).or_insert(false);
+        *entry |= isect.from_coplanar;
     }
 
     let mut positions = mesh.positions.clone();
@@ -643,6 +707,30 @@ fn split_mesh_by_intersections(
             for &(p0, p1) in segments {
                 maybe_add_unique(&mut insert_pts, p0, tolerance);
                 maybe_add_unique(&mut insert_pts, p1, tolerance);
+            }
+
+            // Drop tessellation-artifact collinear midpoints (issue #696):
+            // when this triangle is on a planar input face and the OTHER
+            // mesh has triangles whose tessellation-diagonal crosses our
+            // plane, the diagonal-vs-plane intersection appears as an
+            // extra insertion point collinear with two corner crossings.
+            // Removing it makes the split produce one straight hole edge
+            // instead of two collinear sub-edges, which is what the BREP
+            // boundary actually wants.
+            //
+            // Safety gates:
+            //   * `planar[i]` — only fires for triangles on planar input
+            //     faces. Curved surfaces (cylinder, sphere) need their
+            //     intermediates as load-bearing tessellation vertices.
+            //   * no coplanar segments — if ANY segment on this triangle
+            //     came from `intersect_coplanar_triangles`, intermediates
+            //     along it represent real cap-on-cap geometry (e.g. two
+            //     cylinder caps overlapping at z=0) and must not be
+            //     dropped.
+            let this_planar = planar.is_some_and(|p| p[i]);
+            let any_coplanar = tri_has_coplanar_segment.get(&i).copied().unwrap_or(false);
+            if this_planar && !any_coplanar {
+                drop_collinear_midpoints(&mut insert_pts, tolerance);
             }
 
             // Split the triangle by inserting these points.
@@ -673,6 +761,88 @@ fn split_mesh_by_intersections(
         normals,
         triangles,
     }
+}
+
+/// Remove points that lie strictly collinear between two other points.
+///
+/// Issue #696: when a triangle in this mesh (on a planar input face) is
+/// crossed by two triangles in the OTHER mesh that share a tessellation-
+/// diagonal edge, each contributes a segment ending at the diagonal-vs-
+/// plane crossing. That crossing is mathematically collinear with the
+/// segments' outer endpoints — it's a tessellation artifact, not a
+/// BREP topology vertex. Keeping it splits the triangle into extra
+/// collinear sub-edges that don't pair with anything on the other side,
+/// leaving boundary edges in the assembled solid.
+///
+/// Callers gate this by the host triangle's planarity flag: for curved
+/// inputs (cylinder, sphere), the intermediates are load-bearing
+/// tessellation vertices and dropping them creates T-junctions.
+///
+/// Algorithmically O(n³) over candidate points. A naïve O(n²) version
+/// using the extreme pair was tried and rejected — when a triangle is
+/// crossed by intersection segments along multiple distinct lines (e.g.,
+/// a planar face cut by all four sides of a rectangular hole), the
+/// extreme pair only captures one diagonal and misses the per-side
+/// midpoints. The triple loop scans every collinear triple, so each
+/// intersection line's midpoints are caught regardless of orientation.
+/// In practice n is 2–8 (one segment endpoint per intersecting opposing-
+/// mesh triangle), so the cubic bound stays cheap.
+fn drop_collinear_midpoints(pts: &mut Vec<Point3>, tolerance: f64) {
+    if pts.len() < 3 {
+        return;
+    }
+    let tol_sq = tolerance * tolerance;
+    let mut keep = vec![true; pts.len()];
+    for i in 0..pts.len() {
+        if !keep[i] {
+            continue;
+        }
+        for j in 0..pts.len() {
+            if !keep[j] || i == j {
+                continue;
+            }
+            for k in (j + 1)..pts.len() {
+                if !keep[k] || i == k {
+                    continue;
+                }
+                if point_strictly_between(pts[i], pts[j], pts[k], tol_sq) {
+                    keep[i] = false;
+                    break;
+                }
+            }
+            if !keep[i] {
+                break;
+            }
+        }
+    }
+    let filtered: Vec<Point3> = pts
+        .iter()
+        .copied()
+        .zip(keep.iter())
+        .filter_map(|(p, &k)| if k { Some(p) } else { None })
+        .collect();
+    *pts = filtered;
+}
+
+/// True iff `p` lies strictly between `a` and `b` on their segment
+/// (collinear, with `p` not within tolerance of either endpoint).
+fn point_strictly_between(p: Point3, a: Point3, b: Point3, tol_sq: f64) -> bool {
+    let ab = b - a;
+    let ap = p - a;
+    let ab_len_sq = ab.dot(ab);
+    if ab_len_sq < tol_sq {
+        return false;
+    }
+    // Collinearity: |cross(ab, ap)|² ≤ tol² · |ab|² ⇔ distance² ≤ tol².
+    let cross = ab.cross(ap);
+    if cross.dot(cross) > tol_sq * ab_len_sq {
+        return false;
+    }
+    // "Between": projection parameter t = (ap·ab)/|ab|² in (0, 1) with
+    // tolerance margins so endpoints don't qualify.
+    let t = ap.dot(ab) / ab_len_sq;
+    let tol_t = (tol_sq / ab_len_sq).sqrt();
+    t > tol_t && t < 1.0 - tol_t
 }
 
 /// Add a point to a list if no existing point is within tolerance.
