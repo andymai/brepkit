@@ -777,28 +777,60 @@ fn assemble_mixed_with_nurbs() {
 /// V(box) = 1000
 /// Intersection ≤ min(V_box, V_sphere) = 1000.
 /// The sphere extends 7 units into the box but only from origin.
-/// Intersection volume must be > 0 and < both input volumes.
+/// Intersection result must be a closed-manifold spherical octant:
+/// 4 faces (3 plane sub-faces + 1 spherical patch), volume ≈ 1/8 of the
+/// sphere. Previously the box-sphere intersect fell back to mesh boolean
+/// and lost the analytic sphere face; the box-sphere shortcut restores it.
 fn intersect_box_sphere_succeeds() {
     let mut topo = Topology::new();
     let bx = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
     let sp = crate::primitives::make_sphere(&mut topo, 7.0, 16).unwrap();
     let result = boolean(&mut topo, BooleanOp::Intersect, bx, sp).unwrap();
 
+    let face_ids = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    let (mut planes, mut spheres, mut others) = (0usize, 0usize, 0usize);
+    for fid in &face_ids {
+        match topo.face(*fid).unwrap().surface() {
+            brepkit_topology::face::FaceSurface::Plane { .. } => planes += 1,
+            brepkit_topology::face::FaceSurface::Sphere(_) => spheres += 1,
+            _ => others += 1,
+        }
+    }
+    assert_eq!(
+        face_ids.len(),
+        4,
+        "spherical octant should have 4 faces, got {}",
+        face_ids.len()
+    );
+    assert_eq!(planes, 3, "expected 3 plane sub-faces, got {planes}");
+    assert_eq!(
+        spheres, 1,
+        "expected 1 spherical patch (lost without the shortcut), got {spheres}"
+    );
+    assert_eq!(others, 0, "no non-analytic faces expected, got {others}");
+
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, result).unwrap();
+    let euler = v as i64 - e as i64 + f as i64;
+    assert_eq!(
+        euler, 2,
+        "Euler V-E+F should be 2, got {euler} (V={v}, E={e}, F={f})"
+    );
+
     let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
-    // Intersection must be positive and less than both inputs.
     let vol_box = 1000.0;
     let vol_sphere = 4.0 / 3.0 * std::f64::consts::PI * 343.0;
+    // Volume sanity bounds — looser than an analytic-octant check because
+    // the current tessellator's UV-range inference for a spherical patch
+    // bounded by 3 great-circle arcs over-counts area (it doesn't trim
+    // to the wire polygon), so the measured volume comes out closer to a
+    // half-sphere than the true 1/8. The face-count + Euler assertions
+    // above are the actual topology gate; this just rules out a fallback
+    // to mesh boolean (which would either lose the Sphere face or
+    // produce volumes outside [0, sphere]).
+    assert!(vol > 0.0, "volume should be positive, got {vol}");
     assert!(
-        vol > 0.0,
-        "intersection volume should be positive, got {vol}"
-    );
-    assert!(
-        vol < vol_box,
-        "intersection volume {vol:.1} should be < box volume {vol_box}"
-    );
-    assert!(
-        vol < vol_sphere,
-        "intersection volume {vol:.1} should be < sphere volume {vol_sphere:.1}"
+        vol < vol_box && vol < vol_sphere,
+        "volume {vol:.1} should be smaller than both inputs ({vol_box}, {vol_sphere:.1})"
     );
 }
 
