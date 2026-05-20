@@ -3198,3 +3198,285 @@ fn coplanar_box_cut_d1a2() {
     // Volume check
     assert_volume_near(&topo, result, 0.75, 0.01);
 }
+
+// ── #696 diagnostic: N-iteration repro ───────────────────────────────
+//
+// The gridfinity-layout-tool dovetail tests fail with 6–20 non-manifold
+// mesh edges in the exported STL. Diagnostic logging from #701 showed
+// brepkit's GFA path produces invalid topology on **every** boolean op
+// in that pipeline (Euler ≠ 2, NM edges, boundary edges, wires-not-
+// closed) and falls back to mesh boolean each time. Synthetic dovetail
+// tests in `tessellate/tests.rs` all PASS, so the bug needs the
+// cumulative state of the slab after many prior operations.
+//
+// This test reproduces a simplified version of the consumer's pipeline
+// (slab → many pockets → connector nubs/holes) and prints topology
+// metrics after each step. The aim is to find the smallest N at which
+// GFA first starts producing invalid output, so the underlying issue
+// can be investigated against a minimal repro instead of the full
+// consumer geometry. It is `#[ignore]`d in CI — invoke explicitly:
+//
+//     cargo test -p brepkit-operations --lib n_iteration_repro \
+//         -- --ignored --nocapture
+//
+// Approximates a 4×4 gridfinity baseplate (168×168×8mm) with 16 pocket
+// cuts plus a handful of trapezoidal connector nubs on the perimeter.
+#[test]
+#[ignore = "diagnostic — prints topology degradation per step, see #696"]
+#[allow(clippy::too_many_lines, clippy::items_after_statements)]
+fn n_iteration_repro_dovetail_pipeline_issue_696() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
+    use std::collections::HashMap;
+
+    let mut topo = Topology::new();
+
+    fn report(topo: &Topology, solid: SolidId, label: &str) {
+        let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, solid).unwrap();
+        let euler = (v as i64) - (e as i64) + (f as i64);
+
+        // Walk every face's wires; count edge usage to find NM edges + boundary.
+        let mut edge_count: HashMap<usize, usize> = HashMap::new();
+        let faces = brepkit_topology::explorer::solid_faces(topo, solid).unwrap();
+        for fid in &faces {
+            let face = topo.face(*fid).unwrap();
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                let wire = topo.wire(wid).unwrap();
+                for oe in wire.edges() {
+                    *edge_count.entry(oe.edge().index()).or_default() += 1;
+                }
+            }
+        }
+        let nm = edge_count.values().filter(|&&c| c > 2).count();
+        let bd = edge_count.values().filter(|&&c| c < 2).count();
+
+        // Wire-closure validation: count wires that don't form a closed loop.
+        let mut wire_open = 0;
+        for fid in &faces {
+            let face = topo.face(*fid).unwrap();
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                let wire = topo.wire(wid).unwrap();
+                if brepkit_topology::validation::validate_wire_closed(wire, topo).is_err() {
+                    wire_open += 1;
+                }
+            }
+        }
+
+        let euler_ok = if euler == 2 { "✓" } else { "✗" };
+        eprintln!(
+            "{label:<28} F={f:>4} E={e:>4} V={v:>4} Euler={euler:>4} {euler_ok} \
+             NM={nm:>3} bd={bd:>3} wires_open={wire_open}"
+        );
+    }
+
+    // Build a 4×4 gridfinity-style trapezoidal tongue and extrude it to a
+    // small height. Returns the resulting solid.
+    fn make_tongue(topo: &mut Topology, wall_x: f64, bp_y: f64, protrude_dir: f64) -> SolidId {
+        const PROTRUSION: f64 = 1.5;
+        const BASE_HALF: f64 = 1.0;
+        const TIP_HALF: f64 = 1.3;
+        let p = PROTRUSION;
+        let bw = BASE_HALF;
+        let tw = TIP_HALF;
+        let d = protrude_dir;
+        let pts = vec![
+            Point3::new(wall_x - d * 0.0, bp_y + bw, 0.0),
+            Point3::new(wall_x + d * p, bp_y + tw, 0.0),
+            Point3::new(wall_x + d * p, bp_y - tw, 0.0),
+            Point3::new(wall_x - d * 0.0, bp_y - bw, 0.0),
+        ];
+        // CCW for protrude_dir = -1; CW otherwise — make_face_from_wire computes
+        // a normal from the wire, so winding controls solid orientation. Use
+        // the same winding regardless and rely on the extrude direction.
+        let wire = make_polygon_wire(topo, &pts, 1e-7).unwrap();
+        let face = make_face_from_wire(topo, wire).unwrap();
+        crate::extrude::extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), 8.0).unwrap()
+    }
+
+    eprintln!("\n=== #696 dovetail pipeline progression ===");
+    eprintln!(
+        "{:<28} {:<24} {:<24} {:<5}",
+        "step", "topology counts", "issues", "notes"
+    );
+
+    // Step 0: build the slab. 168×168×8 mimics a 4×4 baseplate at 42mm grid.
+    let slab = crate::primitives::make_box(&mut topo, 168.0, 168.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, slab, &Mat4::translation(-84.0, -84.0, -8.0))
+        .unwrap();
+    let mut current = slab;
+    report(&topo, current, "0. slab");
+
+    // Steps 1..=16: cut 16 grid pockets (37×37×6mm, 5mm spacing) from the top.
+    // Print progression every 4 pockets so we can see where the topology
+    // first breaks (Euler ≠ 2 or first NM edge).
+    let mut n_pockets = 0;
+    for row in 0..4 {
+        for col in 0..4 {
+            let pocket = crate::primitives::make_box(&mut topo, 37.0, 37.0, 6.0).unwrap();
+            #[allow(clippy::cast_precision_loss)]
+            let cx = -63.0 + (col as f64) * 42.0;
+            #[allow(clippy::cast_precision_loss)]
+            let cy = -63.0 + (row as f64) * 42.0;
+            crate::transform::transform_solid(
+                &mut topo,
+                pocket,
+                &Mat4::translation(cx - 18.5, cy - 18.5, -2.0),
+            )
+            .unwrap();
+            current = boolean(&mut topo, BooleanOp::Cut, current, pocket).unwrap();
+            n_pockets += 1;
+            if n_pockets == 1 || n_pockets == 2 || n_pockets % 4 == 0 {
+                report(
+                    &topo,
+                    current,
+                    &format!("{n_pockets}. pocket cut #{n_pockets}"),
+                );
+            }
+        }
+    }
+
+    // Steps 17..: connector nubs on the perimeter — 3 per edge × 4 edges.
+    // Mimic the 4×4 join-all topology that the failing test produces.
+    let wall_x_left = -84.0;
+    let wall_x_right = 84.0;
+    let wall_y_front = -84.0;
+    let wall_y_back = 84.0;
+
+    let mut step = 16;
+    for k in 1..=3 {
+        #[allow(clippy::cast_precision_loss)]
+        let bp = -84.0 + (k as f64) * 42.0;
+        // left edge
+        let t = make_tongue(&mut topo, wall_x_left, bp, -1.0);
+        crate::transform::transform_solid(&mut topo, t, &Mat4::translation(0.0, 0.0, -8.0))
+            .unwrap();
+        current = boolean(&mut topo, BooleanOp::Fuse, current, t).unwrap();
+        step += 1;
+        // right edge
+        let t = make_tongue(&mut topo, wall_x_right, bp, 1.0);
+        crate::transform::transform_solid(&mut topo, t, &Mat4::translation(0.0, 0.0, -8.0))
+            .unwrap();
+        current = boolean(&mut topo, BooleanOp::Fuse, current, t).unwrap();
+        step += 1;
+        // front edge (rotate the tongue by reusing make_tongue with swapped axes)
+        // Build directly here for clarity.
+        let pts = vec![
+            Point3::new(bp + 1.0, wall_y_front - 0.0, 0.0),
+            Point3::new(bp + 1.3, wall_y_front - 1.5, 0.0),
+            Point3::new(bp - 1.3, wall_y_front - 1.5, 0.0),
+            Point3::new(bp - 1.0, wall_y_front - 0.0, 0.0),
+        ];
+        let wire = make_polygon_wire(&mut topo, &pts, 1e-7).unwrap();
+        let face = make_face_from_wire(&mut topo, wire).unwrap();
+        let t = crate::extrude::extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 8.0).unwrap();
+        crate::transform::transform_solid(&mut topo, t, &Mat4::translation(0.0, 0.0, -8.0))
+            .unwrap();
+        current = boolean(&mut topo, BooleanOp::Fuse, current, t).unwrap();
+        step += 1;
+        // back edge
+        let pts = vec![
+            Point3::new(bp - 1.0, wall_y_back + 0.0, 0.0),
+            Point3::new(bp - 1.3, wall_y_back + 1.5, 0.0),
+            Point3::new(bp + 1.3, wall_y_back + 1.5, 0.0),
+            Point3::new(bp + 1.0, wall_y_back + 0.0, 0.0),
+        ];
+        let wire = make_polygon_wire(&mut topo, &pts, 1e-7).unwrap();
+        let face = make_face_from_wire(&mut topo, wire).unwrap();
+        let t = crate::extrude::extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 8.0).unwrap();
+        crate::transform::transform_solid(&mut topo, t, &Mat4::translation(0.0, 0.0, -8.0))
+            .unwrap();
+        current = boolean(&mut topo, BooleanOp::Fuse, current, t).unwrap();
+        step += 1;
+
+        report(&topo, current, &format!("{step}. nub row {k} (×4 sides)"));
+    }
+
+    // Final check using non-manifold edge count from the consumer's
+    // analyzer perspective: tessellate + count branching mesh edges.
+    let mesh = crate::tessellate::tessellate_solid(&topo, current, 0.1).unwrap();
+    let mesh_nm = crate::tessellate::non_manifold_edge_count(&mesh);
+    let mesh_bd = crate::tessellate::boundary_edge_count(&mesh);
+    eprintln!(
+        "\nfinal tessellated mesh: tris={}, NM={mesh_nm}, boundary={mesh_bd}",
+        mesh.indices.len() / 3
+    );
+
+    // No assertions — the goal is observation, not a pass/fail gate. The
+    // intent is to watch which step first breaks Euler / introduces NM
+    // edges, so the GFA path's behavior can be investigated on a known
+    // brepkit-side input.
+}
+
+/// Minimal repro distilled from `n_iteration_repro_dovetail_pipeline_issue_696`:
+/// the very first pocket cut already breaks Euler. A 168×168×8 slab cut by a
+/// single 37×37×6 box positioned 2.5mm in from a corner and 2mm below the top
+/// should produce a closed manifold solid. brepkit currently leaves boundary
+/// edges in the topology — Euler=1 instead of 2, 4 boundary edges, 4 extra
+/// vertices.
+///
+/// **Root cause** (per investigation 2026-05-20): the boolean runs through
+/// mesh-fallback (GFA also fails this case, with a different error). The
+/// 4 extra vertices come from the **diagonals of the pocket's tessellated
+/// side faces intersecting the slab top plane**. Each pocket vertical face
+/// (a 37×6 rectangle) is triangulated with a diagonal from corner to
+/// corner; mesh_boolean splits that diagonal at z=0, introducing an
+/// intermediate intersection point like `(-69.166667, -44.5, 0)` — exactly
+/// `-81.5 + 37/3`, i.e., where the diagonal crosses z=0. These intermediates
+/// don't exist in the BREP geometry; they're tessellation artifacts.
+///
+/// 4 such artifacts (one per pocket side face) survive vertex merging
+/// because the slab top face's hole inner wire uses them but the pocket
+/// vertical faces below z=0 use 3-edge outlines that don't all share the
+/// same edges, leaving 4 unpaired half-edges → boundary edges.
+///
+/// If this passes, the dovetail bug should mostly resolve since the rest
+/// of the pipeline depends on each boolean being clean.
+#[test]
+#[ignore = "diagnostic — currently fails; minimal repro for #696"]
+fn minimal_box_cut_pocket_should_be_manifold() {
+    use brepkit_math::mat::Mat4;
+    use std::collections::HashMap;
+
+    let _ = env_logger::try_init();
+    let mut topo = Topology::new();
+    let slab = crate::primitives::make_box(&mut topo, 168.0, 168.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, slab, &Mat4::translation(-84.0, -84.0, -8.0))
+        .unwrap();
+
+    let pocket = crate::primitives::make_box(&mut topo, 37.0, 37.0, 6.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        pocket,
+        &Mat4::translation(-63.0 - 18.5, -63.0 - 18.5, -2.0),
+    )
+    .unwrap();
+
+    let result = boolean(&mut topo, BooleanOp::Cut, slab, pocket).unwrap();
+
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, result).unwrap();
+    let euler = (v as i64) - (e as i64) + (f as i64);
+
+    let mut edge_count: HashMap<usize, usize> = HashMap::new();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    for fid in &faces {
+        let face = topo.face(*fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).unwrap();
+            for oe in wire.edges() {
+                *edge_count.entry(oe.edge().index()).or_default() += 1;
+            }
+        }
+    }
+    let nm = edge_count.values().filter(|&&c| c > 2).count();
+    let bd = edge_count.values().filter(|&&c| c < 2).count();
+
+    eprintln!("box - pocket: F={f} E={e} V={v} Euler={euler} NM={nm} boundary={bd}");
+
+    // The single-pocket cut should produce a closed manifold solid.
+    // Expected: F=11, E=24, V=16, Euler=2, NM=0, boundary=0.
+    assert_eq!(euler, 2, "Euler should be 2, got {euler}");
+    assert_eq!(nm, 0, "result should have 0 non-manifold edges, got {nm}");
+    assert_eq!(bd, 0, "result should have 0 boundary edges, got {bd}");
+}
