@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.93.0](https://github.com/andymai/brepkit/compare/v2.92.0...v2.93.0) (2026-05-20)
+
+
+### Features
+
+* **heal:** split self-intersecting inner wires ([#696](https://github.com/andymai/brepkit/issues/696) follow-up) ([#710](https://github.com/andymai/brepkit/issues/710)) ([3758a16](https://github.com/andymai/brepkit/commit/3758a167fb0b5e746a40630c01f72b57b71b6c31))
+
 ## [2.92.0](https://github.com/andymai/brepkit/compare/v2.91.2...v2.92.0) (2026-05-20)
 
 
