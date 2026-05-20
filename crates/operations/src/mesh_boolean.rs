@@ -105,10 +105,8 @@ pub fn mesh_boolean_with_metadata(
     let intersections = compute_all_intersections(mesh_a, mesh_b, &pairs, tolerance);
 
     // Step 3: Split meshes by intersection edges
-    let split_a =
-        split_mesh_by_intersections(mesh_a, mesh_b, planar_a, &intersections, true, tolerance);
-    let split_b =
-        split_mesh_by_intersections(mesh_b, mesh_a, planar_b, &intersections, false, tolerance);
+    let split_a = split_mesh_by_intersections(mesh_a, planar_a, &intersections, true, tolerance);
+    let split_b = split_mesh_by_intersections(mesh_b, planar_b, &intersections, false, tolerance);
 
     // Step 4: Classify sub-triangles
     let classify_a = classify_triangles(&split_a, mesh_b, tolerance);
@@ -666,7 +664,6 @@ struct SplitMesh {
 #[allow(clippy::too_many_lines)]
 fn split_mesh_by_intersections(
     mesh: &TriangleMesh,
-    other_mesh: &TriangleMesh,
     planar: Option<&[bool]>,
     intersections: &[TriTriIntersection],
     is_mesh_a: bool,
@@ -735,8 +732,6 @@ fn split_mesh_by_intersections(
             if this_planar && !any_coplanar {
                 drop_collinear_midpoints(&mut insert_pts, tolerance);
             }
-            // Reserved for future cross-mesh planarity checks.
-            let _ = other_mesh;
 
             // Split the triangle by inserting these points.
             let sub_tris = split_triangle_by_points(v0, v1, v2, &insert_pts, tolerance);
@@ -782,6 +777,16 @@ fn split_mesh_by_intersections(
 /// Callers gate this by the host triangle's planarity flag: for curved
 /// inputs (cylinder, sphere), the intermediates are load-bearing
 /// tessellation vertices and dropping them creates T-junctions.
+///
+/// Algorithmically O(n³) over candidate points. A naïve O(n²) version
+/// using the extreme pair was tried and rejected — when a triangle is
+/// crossed by intersection segments along multiple distinct lines (e.g.,
+/// a planar face cut by all four sides of a rectangular hole), the
+/// extreme pair only captures one diagonal and misses the per-side
+/// midpoints. The triple loop scans every collinear triple, so each
+/// intersection line's midpoints are caught regardless of orientation.
+/// In practice n is 2–8 (one segment endpoint per intersecting opposing-
+/// mesh triangle), so the cubic bound stays cheap.
 fn drop_collinear_midpoints(pts: &mut Vec<Point3>, tolerance: f64) {
     if pts.len() < 3 {
         return;

@@ -1756,15 +1756,21 @@ fn infer_planar_triangle_flags(
     let tri_count = mesh.indices.len() / 3;
     let mut flags = vec![false; tri_count];
 
-    // Collect planar topology faces with their plane equations. Empty
-    // collection ⇒ all flags stay false (boolean falls back to baseline
-    // behavior).
+    // Collect planar topology faces with their plane equations, normalized
+    // to unit normals so the comparisons below can use exact cos thresholds
+    // and point-on-plane distances. `validate_solid_relaxed_with_options`
+    // allows non-unit normals in the topology, so we can't assume the
+    // stored `normal` has magnitude 1 — divide through here. Empty
+    // collection ⇒ all flags stay false (boolean falls back to baseline).
     let mut planes: Vec<(brepkit_math::vec::Vec3, f64)> = Vec::new();
     if let Ok(face_ids) = brepkit_topology::explorer::solid_faces(topo, solid) {
         for fid in face_ids {
             if let Ok(face) = topo.face(fid) {
                 if let brepkit_topology::face::FaceSurface::Plane { normal, d } = face.surface() {
-                    planes.push((*normal, *d));
+                    let len = normal.dot(*normal).sqrt();
+                    if len > tol.linear {
+                        planes.push((*normal * (1.0 / len), *d / len));
+                    }
                 }
             }
         }
@@ -1775,6 +1781,10 @@ fn infer_planar_triangle_flags(
 
     let lin_tol = tol.linear;
     let ang_tol = tol.angular.max(1e-9);
+    // Degenerate-area threshold: the cross-product magnitude is parallelogram
+    // area (length²), so compare against length² to match dimensions. A
+    // triangle with edge length below `lin_tol` has area below `lin_tol²`.
+    let degen_area_sq = lin_tol * lin_tol;
 
     for t in 0..tri_count {
         let i0 = mesh.indices[t * 3] as usize;
@@ -1784,26 +1794,29 @@ fn infer_planar_triangle_flags(
         let v1 = mesh.positions[i1];
         let v2 = mesh.positions[i2];
         let face_normal = (v1 - v0).cross(v2 - v0);
-        let fn_len = face_normal.dot(face_normal).sqrt();
-        if fn_len < lin_tol {
-            continue; // degenerate triangle
+        let area_sq = face_normal.dot(face_normal);
+        if area_sq < degen_area_sq {
+            continue; // degenerate triangle: no reliable normal direction.
         }
+        let fn_len = area_sq.sqrt();
         let unit = face_normal * (1.0 / fn_len);
         let centroid_x = (v0.x() + v1.x() + v2.x()) / 3.0;
         let centroid_y = (v0.y() + v1.y() + v2.y()) / 3.0;
         let centroid_z = (v0.z() + v1.z() + v2.z()) / 3.0;
         for &(plane_normal, d) in &planes {
             // Normals parallel (within angular tolerance, either direction).
+            // Plane normal is unit-normalized above.
             let cos = plane_normal.dot(unit);
             if cos.abs() < 1.0 - ang_tol {
                 continue;
             }
-            // Centroid on plane: |n·c - d| ≤ lin_tol.
+            // Centroid on plane: |n·c - d| ≤ lin_tol (both n and d are
+            // unit-normalized, so this is the true point-to-plane distance).
             let dist = plane_normal.x() * centroid_x
                 + plane_normal.y() * centroid_y
                 + plane_normal.z() * centroid_z
                 - d;
-            if dist.abs() <= lin_tol.max(fn_len * 1e-6) {
+            if dist.abs() <= lin_tol {
                 flags[t] = true;
                 break;
             }
