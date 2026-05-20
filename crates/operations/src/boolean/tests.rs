@@ -3471,3 +3471,144 @@ fn minimal_box_cut_pocket_should_be_manifold() {
     assert_eq!(nm, 0, "result should have 0 non-manifold edges, got {nm}");
     assert_eq!(bd, 0, "result should have 0 boundary edges, got {bd}");
 }
+
+/// Diagnostic: dump positions of boundary edges (used by exactly 1 face)
+/// in the 2-pocket cumulative case, which is the first step in
+/// `n_iteration_repro_dovetail_pipeline_issue_696` where `bd` becomes
+/// non-zero (bd=4 right after the second cut). Identifying which edges
+/// these are is the entry point to deciding whether the next #696
+/// follow-up belongs in `refine_boundary_edges`, `stitch_boundary_edges`,
+/// or upstream in `mesh_boolean`.
+#[test]
+#[ignore = "diagnostic — prints boundary edge positions for #696 next-step planning"]
+fn dump_boundary_edges_after_two_pocket_cuts() {
+    use brepkit_math::mat::Mat4;
+
+    let _ = env_logger::try_init();
+    let mut topo = Topology::new();
+
+    let slab = crate::primitives::make_box(&mut topo, 168.0, 168.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, slab, &Mat4::translation(-84.0, -84.0, -8.0))
+        .unwrap();
+
+    // Two pockets, matching n_iteration positions 1 and 2.
+    let mut current = slab;
+    for col in 0..2 {
+        let pocket = crate::primitives::make_box(&mut topo, 37.0, 37.0, 6.0).unwrap();
+        #[allow(clippy::cast_precision_loss)]
+        let cx = -63.0 + (col as f64) * 42.0;
+        let cy = -63.0;
+        crate::transform::transform_solid(
+            &mut topo,
+            pocket,
+            &Mat4::translation(cx - 18.5, cy - 18.5, -2.0),
+        )
+        .unwrap();
+        current = boolean(&mut topo, BooleanOp::Cut, current, pocket).unwrap();
+    }
+
+    // Walk faces; count edge usage; print the (Vertex, Vertex) positions
+    // for every edge that appears in exactly 1 wire.
+    let mut edge_count: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut edge_owner: std::collections::HashMap<usize, brepkit_topology::face::FaceId> =
+        std::collections::HashMap::new();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, current).unwrap();
+    for &fid in &faces {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).unwrap();
+            for oe in wire.edges() {
+                let idx = oe.edge().index();
+                *edge_count.entry(idx).or_default() += 1;
+                edge_owner.entry(idx).or_insert(fid);
+            }
+        }
+    }
+
+    eprintln!("=== boundary edges after 2 pocket cuts ===");
+    let mut boundary: Vec<usize> = edge_count
+        .iter()
+        .filter(|&(_, &c)| c < 2)
+        .map(|(&k, _)| k)
+        .collect();
+    boundary.sort_unstable();
+    for eidx in &boundary {
+        let eid = topo.edge_id_from_index(*eidx).unwrap();
+        let edge = topo.edge(eid).unwrap();
+        let s = topo.vertex(edge.start()).unwrap().point();
+        let e = topo.vertex(edge.end()).unwrap().point();
+        let owner = edge_owner.get(eidx).copied();
+        let curve_kind = match edge.curve() {
+            brepkit_topology::edge::EdgeCurve::Line => "Line",
+            brepkit_topology::edge::EdgeCurve::Circle(_) => "Circle",
+            brepkit_topology::edge::EdgeCurve::Ellipse(_) => "Ellipse",
+            brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => "Nurbs",
+        };
+        eprintln!(
+            "  Edge {eidx:>4} [{curve_kind}] ({:.3}, {:.3}, {:.3}) → ({:.3}, {:.3}, {:.3}) owner={owner:?}",
+            s.x(),
+            s.y(),
+            s.z(),
+            e.x(),
+            e.y(),
+            e.z()
+        );
+    }
+    eprintln!("=== {} boundary edges total ===", boundary.len());
+
+    // Dump full wire structure for every face touching a boundary edge.
+    let mut faces_to_dump: std::collections::HashSet<brepkit_topology::face::FaceId> =
+        std::collections::HashSet::new();
+    for eidx in &boundary {
+        if let Some(&owner) = edge_owner.get(eidx) {
+            faces_to_dump.insert(owner);
+        }
+    }
+    eprintln!(
+        "=== Faces touching the {} boundary edges ===",
+        boundary.len()
+    );
+    for fid in faces_to_dump {
+        let face = topo.face(fid).unwrap();
+        let surface_kind = match face.surface() {
+            brepkit_topology::face::FaceSurface::Plane { normal, d } => {
+                format!("Plane(n={:.3?}, d={:.3})", normal, d)
+            }
+            _ => "Other".to_string(),
+        };
+        eprintln!(
+            "Face {fid:?}: outer + {} inner wires, surface={surface_kind}",
+            face.inner_wires().len()
+        );
+        for (wname, wid) in std::iter::once(("outer", face.outer_wire())).chain(
+            face.inner_wires().iter().enumerate().map(|(i, &w)| {
+                let name = if i == 0 { "inner[0]" } else { "inner[1+]" };
+                (name, w)
+            }),
+        ) {
+            let wire = topo.wire(wid).unwrap();
+            eprintln!("  {wname} wire ({} edges):", wire.edges().len());
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge()).unwrap();
+                let (s, e) = if oe.is_forward() {
+                    (edge.start(), edge.end())
+                } else {
+                    (edge.end(), edge.start())
+                };
+                let sp = topo.vertex(s).unwrap().point();
+                let ep = topo.vertex(e).unwrap().point();
+                let n_users = edge_count.get(&oe.edge().index()).copied().unwrap_or(0);
+                eprintln!(
+                    "    Edge {:>4} usage={n_users} ({:.3}, {:.3}, {:.3}) → ({:.3}, {:.3}, {:.3})",
+                    oe.edge().index(),
+                    sp.x(),
+                    sp.y(),
+                    sp.z(),
+                    ep.x(),
+                    ep.y(),
+                    ep.z()
+                );
+            }
+        }
+    }
+}

@@ -8,5 +8,6 @@ pub mod convert_to_bezier;
 pub mod remove_internal_wires;
 pub mod shell_sewing;
 pub mod split_curve;
+pub mod split_self_intersecting_wires;
 pub mod split_surface;
 pub mod unify_same_domain;
