@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.90.2](https://github.com/andymai/brepkit/compare/v2.90.1...v2.90.2) (2026-05-20)
+
+
+### Bug Fixes
+
+* **algo:** within-rank same-domain detection with point-in-face containment ([#696](https://github.com/andymai/brepkit/issues/696)) ([#699](https://github.com/andymai/brepkit/issues/699)) ([dd4b53a](https://github.com/andymai/brepkit/commit/dd4b53a3fba2989ba716d45b3a9edaaeeb490e5a))
+
 ## [2.90.1](https://github.com/andymai/brepkit/compare/v2.90.0...v2.90.1) (2026-05-20)
 
 
