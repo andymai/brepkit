@@ -35,7 +35,7 @@
 //! defensive structural cleanup so a later pass can layer
 //! bridge-edge removal on top of well-formed cycles.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
@@ -84,6 +84,14 @@ pub fn split_self_intersecting_inner_wires(
         }
 
         if face_changed {
+            // The face's old figure-8 `WireId` is no longer referenced
+            // here. `Topology` does not currently support entity
+            // removal, so the old wire entry stays live in the arena
+            // but becomes unreachable through any face — any later
+            // pass that enumerates wires by walking faces (the
+            // standard pattern, e.g. `solid_faces` + `face.inner_wires()`)
+            // will skip it. Direct arena scans should not act on
+            // unreachable wires.
             let face_mut = topo.face_mut(fid)?;
             let iw = face_mut.inner_wires_mut();
             iw.clear();
@@ -123,10 +131,10 @@ fn try_split_wire(
     }
 
     // Quick scan: does any vertex appear twice? If not, we're done.
-    let mut first_seen: HashMap<VertexId, usize> = HashMap::with_capacity(n);
+    let mut first_seen: HashSet<VertexId> = HashSet::with_capacity(n);
     let mut has_pinch = false;
     for &v in &vertex_seq {
-        if first_seen.insert(v, 0).is_some() {
+        if !first_seen.insert(v) {
             has_pinch = true;
             break;
         }
