@@ -318,6 +318,55 @@ pub fn boolean(
             }
         }
 
+        // Box-sphere intersect shortcut: when one input classifies as an
+        // axis-aligned `Box` and the other as a `Sphere`, the Intersect
+        // result has a closed analytic form in two common cases:
+        //   - sphere fully inside box → result is a copy of the sphere
+        //   - exactly 3 of the 6 box planes cut the sphere (their meeting
+        //     corner sits at or inside the sphere) → spherical "octant"
+        //     bounded by 3 quarter-disc box sub-faces + 1 spherical patch
+        // Other configurations fall through to GFA.
+        //
+        // Cut/Fuse aren't covered here yet — they need outer/inner shell
+        // construction (Cut: box with spherical hole) or full periodic-
+        // sphere handling (Fuse: box with spherical bulge), both larger
+        // than this shortcut warrants.
+        if op == BooleanOp::Intersect {
+            let (box_args, sphere_args) = match (ca.as_ref(), cb.as_ref()) {
+                (
+                    Some(brepkit_algo::classifier::AnalyticClassifier::Box {
+                        min: bmin,
+                        max: bmax,
+                    }),
+                    Some(brepkit_algo::classifier::AnalyticClassifier::Sphere { center, radius }),
+                ) => (Some((*bmin, *bmax)), Some((*center, *radius))),
+                (
+                    Some(brepkit_algo::classifier::AnalyticClassifier::Sphere { center, radius }),
+                    Some(brepkit_algo::classifier::AnalyticClassifier::Box {
+                        min: bmin,
+                        max: bmax,
+                    }),
+                ) => (Some((*bmin, *bmax)), Some((*center, *radius))),
+                _ => (None, None),
+            };
+            if let (Some((bmin, bmax)), Some((sc, sr))) = (box_args, sphere_args) {
+                let segs = brepkit_topology::explorer::solid_vertices(topo, a)
+                    .map(|v| v.len())
+                    .unwrap_or(0)
+                    .max(
+                        brepkit_topology::explorer::solid_vertices(topo, b)
+                            .map(|v| v.len())
+                            .unwrap_or(0),
+                    )
+                    .max(16);
+                if let Some(result) =
+                    box_sphere_intersect_shortcut(topo, bmin, bmax, sc, sr, segs, tol)?
+                {
+                    return Ok(result);
+                }
+            }
+        }
+
         // Concentric-sphere merge shortcut: when both A and B classify as
         // Sphere with coincident centers, Fuse and Intersect collapse to a
         // single sphere by radius algebra. Bypasses GFA's coplanar-pole
@@ -1054,6 +1103,360 @@ fn coaxial_cone_shortcut(
 }
 
 /// Compute the concentric-sphere boolean for two spheres sharing a
+/// Box-sphere `Intersect` shortcut. Handles two configurations exactly,
+/// returning `Ok(None)` to fall through to GFA otherwise:
+///
+/// 1. **Sphere fully inside box** — every box face plane has the sphere
+///    on the box-interior side with margin ≥ `R` (`s ≤ -R + eps`). The
+///    result is a fresh sphere primitive at `sphere_center` with radius
+///    `sphere_radius`.
+/// 2. **Spherical "octant"** — exactly 3 of the 6 box face planes cut
+///    the sphere (`|s| < R - eps`) and the other 3 leave the sphere on
+///    the box-interior side. The 3 cutting planes are mutually orthogonal
+///    (axis-aligned box invariant) and meet at a single box corner `O`.
+///    The result is the sphere region in the box-interior octant of `O`,
+///    bounded by 3 quarter-disc box sub-faces and 1 spherical patch.
+///
+/// `s` is the signed distance from `sphere_center` to a face plane along
+/// the face's outward normal (positive = sphere on box-exterior side).
+/// If any face has `s ≥ R - eps` the result is empty (sphere doesn't
+/// reach into the box from that side) — we return `None` rather than an
+/// empty solid so the caller can produce the canonical `EmptyResult`
+/// error via the regular path.
+#[allow(clippy::too_many_arguments)]
+fn box_sphere_intersect_shortcut(
+    topo: &mut Topology,
+    box_min: Point3,
+    box_max: Point3,
+    sphere_center: Point3,
+    sphere_radius: f64,
+    sphere_segments: usize,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let r = sphere_radius;
+    let eps = tol.linear;
+    if r <= eps {
+        return Ok(None);
+    }
+    // Sanity: degenerate or inverted box.
+    if box_max.x() <= box_min.x() + eps
+        || box_max.y() <= box_min.y() + eps
+        || box_max.z() <= box_min.z() + eps
+    {
+        return Ok(None);
+    }
+
+    // For each of 6 box face planes, compute `s` (signed distance from
+    // sphere center along outward normal). Classify each plane.
+    let faces: [(Vec3, f64); 6] = [
+        (Vec3::new(-1.0, 0.0, 0.0), -box_min.x()),
+        (Vec3::new(1.0, 0.0, 0.0), box_max.x()),
+        (Vec3::new(0.0, -1.0, 0.0), -box_min.y()),
+        (Vec3::new(0.0, 1.0, 0.0), box_max.y()),
+        (Vec3::new(0.0, 0.0, -1.0), -box_min.z()),
+        (Vec3::new(0.0, 0.0, 1.0), box_max.z()),
+    ];
+    let signed_dist = |n: Vec3, d: f64| -> f64 {
+        n.x() * sphere_center.x() + n.y() * sphere_center.y() + n.z() * sphere_center.z() - d
+    };
+
+    let mut cuts: Vec<usize> = Vec::new();
+    for (i, &(n, d)) in faces.iter().enumerate() {
+        let s = signed_dist(n, d);
+        if s >= r - eps {
+            // Sphere is fully on the exterior side of this plane → box ∩
+            // sphere = empty. Defer to GFA which will surface an
+            // EmptyResult error in its usual form.
+            return Ok(None);
+        }
+        if s.abs() < r - eps {
+            cuts.push(i);
+        }
+        // else: s ≤ -r + eps → sphere fully inside this plane, face
+        // doesn't bound the result; nothing to do.
+    }
+
+    // Case 1: sphere fully inside box (no cutting planes).
+    if cuts.is_empty() {
+        let sphere = crate::primitives::make_sphere(topo, r, sphere_segments)?;
+        if sphere_center.x().abs() > eps
+            || sphere_center.y().abs() > eps
+            || sphere_center.z().abs() > eps
+        {
+            let xform = brepkit_math::mat::Mat4::translation(
+                sphere_center.x(),
+                sphere_center.y(),
+                sphere_center.z(),
+            );
+            crate::transform::transform_solid(topo, sphere, &xform)?;
+        }
+        return Ok(Some(sphere));
+    }
+
+    // Case 2: 3 cutting planes meeting at a box corner → spherical
+    // octant. The 3 cut planes' outward normals are mutually orthogonal
+    // (axis-aligned box invariant) so the in-box direction perpendicular
+    // to each is the negated outward normal.
+    if cuts.len() == 3 {
+        return build_box_sphere_octant(topo, &faces, &cuts, sphere_center, r, tol);
+    }
+
+    // 1, 2, 4, 5, 6 cutting planes — more complex geometries (caps,
+    // lenses, etc.). Out of scope for this shortcut; fall through.
+    Ok(None)
+}
+
+/// Construct the result of `box ∩ sphere` when exactly 3 box face planes
+/// cut the sphere and meet at a single corner `O`. The result topology
+/// is 4 faces (3 quarter-discs + 1 spherical patch), 6 edges, 4 vertices.
+fn build_box_sphere_octant(
+    topo: &mut Topology,
+    faces: &[(Vec3, f64); 6],
+    cuts: &[usize],
+    sphere_center: Point3,
+    r: f64,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    // Cutting plane normals + their box-plane-d values.
+    let cut_planes: Vec<(Vec3, f64)> = cuts.iter().map(|&i| faces[i]).collect();
+    // The 3 outward normals must be mutually orthogonal (axis-aligned box).
+    let n0 = cut_planes[0].0;
+    let n1 = cut_planes[1].0;
+    let n2 = cut_planes[2].0;
+    if n0.dot(n1).abs() > tol.angular
+        || n0.dot(n2).abs() > tol.angular
+        || n1.dot(n2).abs() > tol.angular
+    {
+        // Not orthogonal — defer to GFA.
+        return Ok(None);
+    }
+    // The corner O is at the intersection of the 3 cutting planes:
+    //   n_i · O = d_i  for all 3 i.
+    // Since the normals are axis-aligned (±x, ±y, ±z), we can pull each
+    // coordinate of O directly off the matching plane's d.
+    let coord_from_axis = |axis: Vec3, d: f64| -> f64 {
+        if axis.x().abs() > 0.5 {
+            d * axis.x().signum()
+        } else if axis.y().abs() > 0.5 {
+            d * axis.y().signum()
+        } else {
+            d * axis.z().signum()
+        }
+    };
+    let mut o = [0.0_f64; 3];
+    for &(n, d) in &cut_planes {
+        if n.x().abs() > 0.5 {
+            o[0] = coord_from_axis(n, d);
+        } else if n.y().abs() > 0.5 {
+            o[1] = coord_from_axis(n, d);
+        } else {
+            o[2] = coord_from_axis(n, d);
+        }
+    }
+    let o = Point3::new(o[0], o[1], o[2]);
+
+    // In-box direction perpendicular to each cutting plane = -n_i.
+    let in_dirs: Vec<Vec3> = cut_planes
+        .iter()
+        .map(|&(n, _)| Vec3::new(-n.x(), -n.y(), -n.z()))
+        .collect();
+
+    // For each cutting plane i, the box edge from O in direction in_dirs[i]
+    // is the intersection of the other two cutting planes. Find the sphere
+    // intersection with this edge — the vertex on the sphere along the box
+    // edge.
+    //
+    // Edge parameterised as O + t·d_i for t ≥ 0. Sphere: |P - C|² = R².
+    //   (O + t·d_i - C) · (O + t·d_i - C) = R²
+    //   Let v = O - C; expand:
+    //     t² + 2 t (v · d_i) + |v|² - R² = 0
+    //   So t = -v·d_i ± sqrt((v·d_i)² - |v|² + R²)
+    let mut sphere_pts: [Point3; 3] = [Point3::new(0.0, 0.0, 0.0); 3];
+    for (idx, &dir) in in_dirs.iter().enumerate() {
+        let vx = o.x() - sphere_center.x();
+        let vy = o.y() - sphere_center.y();
+        let vz = o.z() - sphere_center.z();
+        let v_dot_d = vx * dir.x() + vy * dir.y() + vz * dir.z();
+        let v_sq = vx * vx + vy * vy + vz * vz;
+        let disc = v_dot_d * v_dot_d - v_sq + r * r;
+        if disc < -tol.linear * tol.linear {
+            return Ok(None);
+        }
+        let t = -v_dot_d + disc.max(0.0).sqrt();
+        if t <= tol.linear {
+            return Ok(None);
+        }
+        sphere_pts[idx] = Point3::new(
+            o.x() + t * dir.x(),
+            o.y() + t * dir.y(),
+            o.z() + t * dir.z(),
+        );
+    }
+
+    // Topology: 4 vertices, 6 edges, 4 faces.
+    let v_o = topo.add_vertex(Vertex::new(o, tol.linear));
+    let v_x = topo.add_vertex(Vertex::new(sphere_pts[0], tol.linear));
+    let v_y = topo.add_vertex(Vertex::new(sphere_pts[1], tol.linear));
+    let v_z = topo.add_vertex(Vertex::new(sphere_pts[2], tol.linear));
+
+    // 3 line edges from O along the box edges.
+    let e_ox = topo.add_edge(Edge::new(v_o, v_x, EdgeCurve::Line));
+    let e_oy = topo.add_edge(Edge::new(v_o, v_y, EdgeCurve::Line));
+    let e_oz = topo.add_edge(Edge::new(v_o, v_z, EdgeCurve::Line));
+
+    // 3 arc edges on the sphere. Each arc lies on one of the cutting planes:
+    // the arc opposite vertex `i` (i.e., between the other two vertices)
+    // sits on cutting plane `i` (normal `n_i`), because those two vertices
+    // lie on edges perpendicular to the remaining two normals — and both
+    // of those edges lie within the plane perpendicular to `n_i`.
+    let mut build_arc_edge =
+        |n: Vec3,
+         p_start: Point3,
+         p_end: Point3,
+         start_vid,
+         end_vid|
+         -> Result<brepkit_topology::edge::EdgeId, crate::OperationsError> {
+            let dist = n.x() * (sphere_center.x() - p_start.x())
+                + n.y() * (sphere_center.y() - p_start.y())
+                + n.z() * (sphere_center.z() - p_start.z());
+            let circle_center = Point3::new(
+                sphere_center.x() - dist * n.x(),
+                sphere_center.y() - dist * n.y(),
+                sphere_center.z() - dist * n.z(),
+            );
+            let circle_r = (r * r - dist * dist).max(0.0).sqrt();
+            if circle_r <= tol.linear {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "box-sphere octant: degenerate arc radius".into(),
+                });
+            }
+            let dx = p_start.x() - circle_center.x();
+            let dy = p_start.y() - circle_center.y();
+            let dz = p_start.z() - circle_center.z();
+            let len = (dx * dx + dy * dy + dz * dz).sqrt();
+            if len <= tol.linear {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "box-sphere octant: degenerate arc reference".into(),
+                });
+            }
+            let u_ref = Vec3::new(dx / len, dy / len, dz / len);
+            let circle =
+                Circle3D::new_with_ref(circle_center, n, circle_r, u_ref).map_err(|e| {
+                    crate::OperationsError::InvalidInput {
+                        reason: format!("box-sphere octant: circle construction failed: {e}"),
+                    }
+                })?;
+            let _ = p_end; // p_end is used only via end_vid (already pre-placed at the correct sphere point)
+            Ok(topo.add_edge(Edge::new(start_vid, end_vid, EdgeCurve::Circle(circle))))
+        };
+
+    // Arc on cut plane 0 (between v_y and v_z, i.e., the edge "opposite" v_x).
+    let arc_yz = build_arc_edge(n0, sphere_pts[1], sphere_pts[2], v_y, v_z)?;
+    // Arc on cut plane 1 (between v_z and v_x).
+    let arc_zx = build_arc_edge(n1, sphere_pts[2], sphere_pts[0], v_z, v_x)?;
+    // Arc on cut plane 2 (between v_x and v_y).
+    let arc_xy = build_arc_edge(n2, sphere_pts[0], sphere_pts[1], v_x, v_y)?;
+
+    // Quarter-disc face on cut plane 0 (perpendicular to n0): bounded by
+    // box edges O-Y and O-Z + arc Y→Z.
+    let qd0_wire = Wire::new(
+        vec![
+            OrientedEdge::new(e_oy, true),   // O → Y
+            OrientedEdge::new(arc_yz, true), // Y → Z (arc)
+            OrientedEdge::new(e_oz, false),  // Z → O (reversed)
+        ],
+        true,
+    )
+    .map_err(crate::OperationsError::Topology)?;
+    let qd0_id = topo.add_wire(qd0_wire);
+    let qd0_face = topo.add_face(Face::new(
+        qd0_id,
+        Vec::new(),
+        FaceSurface::Plane {
+            normal: n0,
+            d: cut_planes[0].1,
+        },
+    ));
+
+    let qd1_wire = Wire::new(
+        vec![
+            OrientedEdge::new(e_oz, true),   // O → Z
+            OrientedEdge::new(arc_zx, true), // Z → X (arc)
+            OrientedEdge::new(e_ox, false),  // X → O (reversed)
+        ],
+        true,
+    )
+    .map_err(crate::OperationsError::Topology)?;
+    let qd1_id = topo.add_wire(qd1_wire);
+    let qd1_face = topo.add_face(Face::new(
+        qd1_id,
+        Vec::new(),
+        FaceSurface::Plane {
+            normal: n1,
+            d: cut_planes[1].1,
+        },
+    ));
+
+    let qd2_wire = Wire::new(
+        vec![
+            OrientedEdge::new(e_ox, true),   // O → X
+            OrientedEdge::new(arc_xy, true), // X → Y (arc)
+            OrientedEdge::new(e_oy, false),  // Y → O (reversed)
+        ],
+        true,
+    )
+    .map_err(crate::OperationsError::Topology)?;
+    let qd2_id = topo.add_wire(qd2_wire);
+    let qd2_face = topo.add_face(Face::new(
+        qd2_id,
+        Vec::new(),
+        FaceSurface::Plane {
+            normal: n2,
+            d: cut_planes[2].1,
+        },
+    ));
+
+    // Spherical patch: bounded by the 3 arcs.
+    // Wind so the sphere's outward normal matches the resulting volume
+    // (outside the octant). With arcs going X→Y→Z→X around the patch,
+    // the right-hand rule gives an outward normal pointing AWAY from O.
+    let sph_wire = Wire::new(
+        vec![
+            OrientedEdge::new(arc_xy, true), // X → Y
+            OrientedEdge::new(arc_yz, true), // Y → Z
+            OrientedEdge::new(arc_zx, true), // Z → X
+        ],
+        true,
+    )
+    .map_err(crate::OperationsError::Topology)?;
+    let sph_wire_id = topo.add_wire(sph_wire);
+    let sphere_surface = SphericalSurface::new(sphere_center, r).map_err(|e| {
+        crate::OperationsError::InvalidInput {
+            reason: format!("box-sphere octant: sphere surface construction failed: {e}"),
+        }
+    })?;
+    let sphere_face = topo.add_face(Face::new(
+        sph_wire_id,
+        Vec::new(),
+        FaceSurface::Sphere(sphere_surface),
+    ));
+
+    let shell = Shell::new(vec![qd0_face, qd1_face, qd2_face, sphere_face])
+        .map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.add_shell(shell);
+    let solid = topo.add_solid(Solid::new(shell_id, Vec::new()));
+    Ok(Some(solid))
+}
+
 /// center. Returns `Ok(None)` when the shortcut doesn't apply (Cut, or
 /// degenerate radii).
 ///

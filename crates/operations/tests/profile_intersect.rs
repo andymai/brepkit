@@ -8,6 +8,77 @@ use brepkit_topology::explorer;
 use std::time::Instant;
 
 #[test]
+#[ignore = "diagnostic — inspect topology of r=7 case after shortcut"]
+fn profile_box_sphere_r7_topology() {
+    let mut topo = Topology::new();
+    let bx = primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let sp = primitives::make_sphere(&mut topo, 7.0, 16).unwrap();
+    let r = boolean(&mut topo, BooleanOp::Intersect, bx, sp).unwrap();
+    let fids = brepkit_topology::explorer::solid_faces(&topo, r).unwrap();
+    let v = brepkit_operations::measure::solid_volume(&topo, r, 0.1).unwrap();
+    println!("volume = {v}, faces = {}", fids.len());
+    for fid in fids {
+        let face = topo.face(fid).unwrap();
+        let kind = match face.surface() {
+            brepkit_topology::face::FaceSurface::Plane { normal, d } => {
+                format!(
+                    "Plane n=({:.2},{:.2},{:.2}) d={d:.2}",
+                    normal.x(),
+                    normal.y(),
+                    normal.z()
+                )
+            }
+            brepkit_topology::face::FaceSurface::Sphere(s) => {
+                let c = s.center();
+                format!(
+                    "Sphere c=({:.2},{:.2},{:.2}) r={:.2}",
+                    c.x(),
+                    c.y(),
+                    c.z(),
+                    s.radius()
+                )
+            }
+            _ => "?".into(),
+        };
+        let outer = topo.wire(face.outer_wire()).unwrap();
+        println!(
+            "  {fid:?} reversed={} {kind} edges={}",
+            face.is_reversed(),
+            outer.edges().len()
+        );
+        for oe in outer.edges() {
+            let e = topo.edge(oe.edge()).unwrap();
+            let sv = topo.vertex(e.start()).unwrap();
+            let ev = topo.vertex(e.end()).unwrap();
+            let curve = match e.curve() {
+                brepkit_topology::edge::EdgeCurve::Line => "Line".to_string(),
+                brepkit_topology::edge::EdgeCurve::Circle(c) => format!(
+                    "Circle(c=({:.2},{:.2},{:.2}), r={:.2})",
+                    c.center().x(),
+                    c.center().y(),
+                    c.center().z(),
+                    c.radius()
+                ),
+                _ => "?".to_string(),
+            };
+            let sp = sv.point();
+            let ep = ev.point();
+            println!(
+                "    {:?} fwd={} ({:.2},{:.2},{:.2}) → ({:.2},{:.2},{:.2}) {curve}",
+                oe.edge(),
+                oe.is_forward(),
+                sp.x(),
+                sp.y(),
+                sp.z(),
+                ep.x(),
+                ep.y(),
+                ep.z()
+            );
+        }
+    }
+}
+
+#[test]
 #[ignore = "diagnostic — direct GFA call to inspect 3-face result before fallback"]
 fn profile_gfa_box_sphere_direct() {
     let _ = env_logger::Builder::from_default_env()
