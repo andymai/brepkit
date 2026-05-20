@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.91.0](https://github.com/andymai/brepkit/compare/v2.90.2...v2.91.0) (2026-05-20)
+
+
+### Features
+
+* **wasm:** bridge Rust log calls to JS console ([#696](https://github.com/andymai/brepkit/issues/696) diagnostics) ([#701](https://github.com/andymai/brepkit/issues/701)) ([a2e7733](https://github.com/andymai/brepkit/commit/a2e773303473d0b72838c439190c6986a1a609c7))
+
 ## [2.90.2](https://github.com/andymai/brepkit/compare/v2.90.1...v2.90.2) (2026-05-20)
 
 
