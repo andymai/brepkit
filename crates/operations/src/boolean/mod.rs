@@ -1697,7 +1697,22 @@ fn mesh_boolean_fallback(
     let mesh_a = crate::tessellate::tessellate_solid(topo, a, deflection)?;
     let mesh_b = crate::tessellate::tessellate_solid(topo, b, deflection)?;
 
-    let mb_result = crate::mesh_boolean::mesh_boolean(&mesh_a, &mesh_b, op, tol.linear)?;
+    // Compute per-triangle "is on a planar face" flags by matching each
+    // triangle's centroid + normal against the input solid's planar
+    // face equations. Used by mesh_boolean to drop tessellation-diagonal
+    // artifacts on planar faces while keeping load-bearing intermediates
+    // on curved surfaces (issue #696).
+    let planar_a = infer_planar_triangle_flags(topo, a, &mesh_a, tol);
+    let planar_b = infer_planar_triangle_flags(topo, b, &mesh_b, tol);
+
+    let mb_result = crate::mesh_boolean::mesh_boolean_with_metadata(
+        &mesh_a,
+        Some(&planar_a),
+        &mesh_b,
+        Some(&planar_b),
+        op,
+        tol.linear,
+    )?;
     let face_specs = mesh_result_to_face_specs(&mb_result);
     if face_specs.is_empty() {
         return Err(crate::OperationsError::EmptyResult {
@@ -1719,6 +1734,82 @@ fn mesh_boolean_fallback(
         face_specs.len()
     );
     Ok(result)
+}
+
+/// For each triangle in `mesh`, return `true` iff the triangle is coplanar
+/// with one of `solid`'s planar topology faces. Used by mesh_boolean to
+/// gate the collinear-midpoint drop (issue #696): the drop is safe only
+/// for triangles on planar input faces, where the dropped intermediate is
+/// a tessellation diagonal artifact rather than a load-bearing tessellation
+/// vertex.
+///
+/// Matching criterion: triangle's face normal aligns with the topology
+/// plane's normal AND the triangle centroid lies on the plane within
+/// linear tolerance. Triangles whose source is curved (cylinder, sphere,
+/// NURBS, etc.) won't match any planar face and get `false`.
+fn infer_planar_triangle_flags(
+    topo: &Topology,
+    solid: SolidId,
+    mesh: &crate::tessellate::TriangleMesh,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Vec<bool> {
+    let tri_count = mesh.indices.len() / 3;
+    let mut flags = vec![false; tri_count];
+
+    // Collect planar topology faces with their plane equations. Empty
+    // collection ⇒ all flags stay false (boolean falls back to baseline
+    // behavior).
+    let mut planes: Vec<(brepkit_math::vec::Vec3, f64)> = Vec::new();
+    if let Ok(face_ids) = brepkit_topology::explorer::solid_faces(topo, solid) {
+        for fid in face_ids {
+            if let Ok(face) = topo.face(fid) {
+                if let brepkit_topology::face::FaceSurface::Plane { normal, d } = face.surface() {
+                    planes.push((*normal, *d));
+                }
+            }
+        }
+    }
+    if planes.is_empty() {
+        return flags;
+    }
+
+    let lin_tol = tol.linear;
+    let ang_tol = tol.angular.max(1e-9);
+
+    for t in 0..tri_count {
+        let i0 = mesh.indices[t * 3] as usize;
+        let i1 = mesh.indices[t * 3 + 1] as usize;
+        let i2 = mesh.indices[t * 3 + 2] as usize;
+        let v0 = mesh.positions[i0];
+        let v1 = mesh.positions[i1];
+        let v2 = mesh.positions[i2];
+        let face_normal = (v1 - v0).cross(v2 - v0);
+        let fn_len = face_normal.dot(face_normal).sqrt();
+        if fn_len < lin_tol {
+            continue; // degenerate triangle
+        }
+        let unit = face_normal * (1.0 / fn_len);
+        let centroid_x = (v0.x() + v1.x() + v2.x()) / 3.0;
+        let centroid_y = (v0.y() + v1.y() + v2.y()) / 3.0;
+        let centroid_z = (v0.z() + v1.z() + v2.z()) / 3.0;
+        for &(plane_normal, d) in &planes {
+            // Normals parallel (within angular tolerance, either direction).
+            let cos = plane_normal.dot(unit);
+            if cos.abs() < 1.0 - ang_tol {
+                continue;
+            }
+            // Centroid on plane: |n·c - d| ≤ lin_tol.
+            let dist = plane_normal.x() * centroid_x
+                + plane_normal.y() * centroid_y
+                + plane_normal.z() * centroid_z
+                - d;
+            if dist.abs() <= lin_tol.max(fn_len * 1e-6) {
+                flags[t] = true;
+                break;
+            }
+        }
+    }
+    flags
 }
 
 /// Convert a mesh boolean result into `FaceSpec` entries for solid assembly.

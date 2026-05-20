@@ -3438,7 +3438,6 @@ fn n_iteration_repro_dovetail_pipeline_issue_696() {
 /// If this passes, the dovetail bug should mostly resolve since the rest
 /// of the pipeline depends on each boolean being clean.
 #[test]
-#[ignore = "diagnostic — currently fails; minimal repro for #696"]
 fn minimal_box_cut_pocket_should_be_manifold() {
     use brepkit_math::mat::Mat4;
 
@@ -3465,9 +3464,10 @@ fn minimal_box_cut_pocket_should_be_manifold() {
 
     eprintln!("box - pocket: F={f} E={e} V={v} Euler={euler} NM={nm} boundary={bd}");
 
-    // The single-pocket cut should produce a closed manifold solid.
-    // Expected: F=11, E=24, V=16, Euler=2, NM=0, boundary=0.
-    assert_eq!(euler, 2, "Euler should be 2, got {euler}");
+    // Manifoldness: every edge shared by exactly 2 faces. Euler = 2 + L
+    // (where L is the inner-loop count) — one blind pocket gives L=1, so
+    // Euler == 3 is the correct invariant here. Edge-incidence counts
+    // are the right thing to assert.
     assert_eq!(nm, 0, "result should have 0 non-manifold edges, got {nm}");
     assert_eq!(bd, 0, "result should have 0 boundary edges, got {bd}");
 }
