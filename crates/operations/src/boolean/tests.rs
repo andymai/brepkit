@@ -3200,6 +3200,27 @@ fn coplanar_box_cut_d1a2() {
 }
 
 // ── #696 diagnostic: N-iteration repro ───────────────────────────────
+
+/// Count edges shared by 3+ faces (non-manifold) and edges shared by < 2
+/// faces (boundary) across all wires of a solid's faces. Shared between
+/// the #696 diagnostic tests so they always measure the same thing.
+fn count_nm_and_boundary_edges_696(topo: &Topology, solid: SolidId) -> (usize, usize) {
+    let mut edge_count: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid).unwrap();
+    for fid in &faces {
+        let face = topo.face(*fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).unwrap();
+            for oe in wire.edges() {
+                *edge_count.entry(oe.edge().index()).or_default() += 1;
+            }
+        }
+    }
+    let nm = edge_count.values().filter(|&&c| c > 2).count();
+    let bd = edge_count.values().filter(|&&c| c < 2).count();
+    (nm, bd)
+}
+
 //
 // The gridfinity-layout-tool dovetail tests fail with 6–20 non-manifold
 // mesh edges in the exported STL. Diagnostic logging from #701 showed
@@ -3227,31 +3248,17 @@ fn coplanar_box_cut_d1a2() {
 fn n_iteration_repro_dovetail_pipeline_issue_696() {
     use brepkit_math::mat::Mat4;
     use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
-    use std::collections::HashMap;
 
     let mut topo = Topology::new();
 
     fn report(topo: &Topology, solid: SolidId, label: &str) {
         let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, solid).unwrap();
+        #[allow(clippy::cast_possible_wrap)]
         let euler = (v as i64) - (e as i64) + (f as i64);
-
-        // Walk every face's wires; count edge usage to find NM edges + boundary.
-        let mut edge_count: HashMap<usize, usize> = HashMap::new();
-        let faces = brepkit_topology::explorer::solid_faces(topo, solid).unwrap();
-        for fid in &faces {
-            let face = topo.face(*fid).unwrap();
-            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
-            {
-                let wire = topo.wire(wid).unwrap();
-                for oe in wire.edges() {
-                    *edge_count.entry(oe.edge().index()).or_default() += 1;
-                }
-            }
-        }
-        let nm = edge_count.values().filter(|&&c| c > 2).count();
-        let bd = edge_count.values().filter(|&&c| c < 2).count();
+        let (nm, bd) = count_nm_and_boundary_edges_696(topo, solid);
 
         // Wire-closure validation: count wires that don't form a closed loop.
+        let faces = brepkit_topology::explorer::solid_faces(topo, solid).unwrap();
         let mut wire_open = 0;
         for fid in &faces {
             let face = topo.face(*fid).unwrap();
@@ -3271,8 +3278,11 @@ fn n_iteration_repro_dovetail_pipeline_issue_696() {
         );
     }
 
-    // Build a 4×4 gridfinity-style trapezoidal tongue and extrude it to a
-    // small height. Returns the resulting solid.
+    // Trapezoidal tongue extruded vertically. The point order intentionally
+    // depends on `protrude_dir` (the base goes at `wall_x`, the tip at
+    // `wall_x + d * p`): the winding flips between protrude_dir = ±1 so the
+    // face normal from `make_face_from_wire` lines up with the +Z extrude
+    // direction. Without this flip, half the tongues would extrude inverted.
     fn make_tongue(topo: &mut Topology, wall_x: f64, bp_y: f64, protrude_dir: f64) -> SolidId {
         const PROTRUSION: f64 = 1.5;
         const BASE_HALF: f64 = 1.0;
@@ -3282,24 +3292,18 @@ fn n_iteration_repro_dovetail_pipeline_issue_696() {
         let tw = TIP_HALF;
         let d = protrude_dir;
         let pts = vec![
-            Point3::new(wall_x - d * 0.0, bp_y + bw, 0.0),
+            Point3::new(wall_x, bp_y + bw, 0.0),
             Point3::new(wall_x + d * p, bp_y + tw, 0.0),
             Point3::new(wall_x + d * p, bp_y - tw, 0.0),
-            Point3::new(wall_x - d * 0.0, bp_y - bw, 0.0),
+            Point3::new(wall_x, bp_y - bw, 0.0),
         ];
-        // CCW for protrude_dir = -1; CW otherwise — make_face_from_wire computes
-        // a normal from the wire, so winding controls solid orientation. Use
-        // the same winding regardless and rely on the extrude direction.
         let wire = make_polygon_wire(topo, &pts, 1e-7).unwrap();
         let face = make_face_from_wire(topo, wire).unwrap();
         crate::extrude::extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), 8.0).unwrap()
     }
 
     eprintln!("\n=== #696 dovetail pipeline progression ===");
-    eprintln!(
-        "{:<28} {:<24} {:<24} {:<5}",
-        "step", "topology counts", "issues", "notes"
-    );
+    eprintln!("step                         F / E / V / Euler / NM / bd / wires_open");
 
     // Step 0: build the slab. 168×168×8 mimics a 4×4 baseplate at 42mm grid.
     let slab = crate::primitives::make_box(&mut topo, 168.0, 168.0, 8.0).unwrap();
@@ -3437,7 +3441,6 @@ fn n_iteration_repro_dovetail_pipeline_issue_696() {
 #[ignore = "diagnostic — currently fails; minimal repro for #696"]
 fn minimal_box_cut_pocket_should_be_manifold() {
     use brepkit_math::mat::Mat4;
-    use std::collections::HashMap;
 
     let _ = env_logger::try_init();
     let mut topo = Topology::new();
@@ -3456,21 +3459,9 @@ fn minimal_box_cut_pocket_should_be_manifold() {
     let result = boolean(&mut topo, BooleanOp::Cut, slab, pocket).unwrap();
 
     let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, result).unwrap();
+    #[allow(clippy::cast_possible_wrap)]
     let euler = (v as i64) - (e as i64) + (f as i64);
-
-    let mut edge_count: HashMap<usize, usize> = HashMap::new();
-    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
-    for fid in &faces {
-        let face = topo.face(*fid).unwrap();
-        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            let wire = topo.wire(wid).unwrap();
-            for oe in wire.edges() {
-                *edge_count.entry(oe.edge().index()).or_default() += 1;
-            }
-        }
-    }
-    let nm = edge_count.values().filter(|&&c| c > 2).count();
-    let bd = edge_count.values().filter(|&&c| c < 2).count();
+    let (nm, bd) = count_nm_and_boundary_edges_696(&topo, result);
 
     eprintln!("box - pocket: F={f} E={e} V={v} Euler={euler} NM={nm} boundary={bd}");
 
