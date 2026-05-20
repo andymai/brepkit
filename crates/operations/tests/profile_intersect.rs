@@ -1,11 +1,53 @@
 //! Diagnostic: time the intersect(box,sphere) path to find the bottleneck.
-#![allow(clippy::unwrap_used, clippy::print_stdout)]
+#![allow(clippy::unwrap_used, clippy::print_stdout, clippy::expect_used)]
 
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::primitives;
 use brepkit_topology::Topology;
 use brepkit_topology::explorer;
 use std::time::Instant;
+
+#[test]
+#[ignore = "diagnostic — direct GFA call to inspect 3-face result before fallback"]
+fn profile_gfa_box_sphere_direct() {
+    let _ = env_logger::Builder::from_default_env()
+        .filter_level(log::LevelFilter::Debug)
+        .is_test(true)
+        .try_init();
+    let mut topo = Topology::new();
+    let a = primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let sph = primitives::make_sphere(&mut topo, 8.0, 16).unwrap();
+    println!(
+        "box faces: {:?}",
+        brepkit_topology::explorer::solid_faces(&topo, a).unwrap()
+    );
+    println!(
+        "sphere faces: {:?}",
+        brepkit_topology::explorer::solid_faces(&topo, sph).unwrap()
+    );
+    // Direct GFA call, bypassing the validation+fallback in boolean().
+    let result =
+        brepkit_algo::gfa::boolean(&mut topo, brepkit_algo::bop::BooleanOp::Intersect, a, sph)
+            .expect("GFA should not error");
+    let face_ids = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    println!("GFA-direct intersect(box,sphere): {} faces", face_ids.len());
+    for fid in face_ids {
+        let face = topo.face(fid).unwrap();
+        let kind = match face.surface() {
+            brepkit_topology::face::FaceSurface::Plane { normal, d } => {
+                format!("Plane(n={:?}, d={:.3})", normal, d)
+            }
+            brepkit_topology::face::FaceSurface::Sphere(s) => {
+                format!("Sphere(c={:?}, r={:.3})", s.center(), s.radius())
+            }
+            other => format!("{other:?}"),
+        };
+        let outer = topo.wire(face.outer_wire()).unwrap();
+        let nedges = outer.edges().len();
+        let n_inner = face.inner_wires().len();
+        println!("  {fid:?}: {kind} outer_edges={nedges} inner_wires={n_inner}");
+    }
+}
 
 #[test]
 #[ignore = "diagnostic — explicit-only profile of the box-sphere GFA regression"]

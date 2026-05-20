@@ -243,6 +243,126 @@ impl Circle3D {
             v_axis,
         })
     }
+
+    /// Intersect the circle with a 3D line segment.
+    ///
+    /// Returns up to 2 intersection points along with their angle parameter
+    /// `t` on the circle. Points returned are restricted to the segment
+    /// `[seg_start, seg_end]` (with `tol` slack on the endpoints).
+    ///
+    /// Cases:
+    /// - Segment crosses the circle's plane at one point: at most 1
+    ///   intersection (when that crossing is on the circle, within `tol`).
+    /// - Segment lies in the circle's plane: up to 2 intersections.
+    /// - Segment is parallel to the plane but offset: 0 intersections.
+    ///
+    /// `tol` is the absolute linear tolerance for "on the plane" and
+    /// "on the circle" tests, and for clamping the segment parameter.
+    #[must_use]
+    pub fn intersect_segment(
+        &self,
+        seg_start: Point3,
+        seg_end: Point3,
+        tol: f64,
+    ) -> Vec<(Point3, f64)> {
+        let mut out = Vec::new();
+        let d = seg_end - seg_start;
+        let seg_len_sq = d.length_squared();
+        if seg_len_sq < tol * tol {
+            return out;
+        }
+
+        // Signed distance of each endpoint to the circle's plane.
+        let h0 = (seg_start - self.center).dot(self.normal);
+        let h1 = (seg_end - self.center).dot(self.normal);
+
+        let on_plane = |p: Point3| -> bool {
+            let v = p - self.center;
+            let in_plane = v.dot(self.normal).abs() < tol;
+            let r = v.length();
+            in_plane && (r - self.radius).abs() < tol
+        };
+
+        // Helper: append `t_seg` (segment parameter) → intersection point with
+        // `tol` slack on the endpoints; drop duplicates within `tol`.
+        let mut push_if_unique = |p: Point3| {
+            let v = p - self.center;
+            // angle in [0, 2π)
+            let mut t = v.dot(self.v_axis).atan2(v.dot(self.u_axis));
+            if t < 0.0 {
+                t += std::f64::consts::TAU;
+            }
+            if out
+                .iter()
+                .any(|(q, _): &(Point3, f64)| (*q - p).length() < tol)
+            {
+                return;
+            }
+            out.push((p, t));
+        };
+
+        if h0.abs() < tol && h1.abs() < tol {
+            // Segment lies in the circle's plane: solve 2D line-circle.
+            // Project everything into UV coordinates centered at the circle.
+            let p0_u = (seg_start - self.center).dot(self.u_axis);
+            let p0_v = (seg_start - self.center).dot(self.v_axis);
+            let p1_u = (seg_end - self.center).dot(self.u_axis);
+            let p1_v = (seg_end - self.center).dot(self.v_axis);
+            let du = p1_u - p0_u;
+            let dv = p1_v - p0_v;
+            // |P0 + s*(P1-P0)|² = r²
+            // a*s² + 2*b*s + c = 0 where
+            //   a = du² + dv²
+            //   b = p0_u*du + p0_v*dv
+            //   c = p0_u² + p0_v² - r²
+            let a = du * du + dv * dv;
+            let b = p0_u * du + p0_v * dv;
+            let c = p0_u * p0_u + p0_v * p0_v - self.radius * self.radius;
+            let disc = b * b - a * c;
+            if a < tol * tol || disc < -tol {
+                return out;
+            }
+            let disc = disc.max(0.0);
+            let sqrt_disc = disc.sqrt();
+            let s_slack = tol / seg_len_sq.sqrt();
+            for s in [(-b - sqrt_disc) / a, (-b + sqrt_disc) / a] {
+                if s >= -s_slack && s <= 1.0 + s_slack {
+                    let s = s.clamp(0.0, 1.0);
+                    let p = Point3::new(
+                        seg_start.x() + s * d.x(),
+                        seg_start.y() + s * d.y(),
+                        seg_start.z() + s * d.z(),
+                    );
+                    push_if_unique(p);
+                }
+            }
+        } else if h0 * h1 <= tol * tol {
+            // Segment crosses the circle's plane (or touches it). Solve
+            // for the unique s where signed-distance = 0:
+            //   h0 + s*(h1 - h0) = 0  →  s = h0 / (h0 - h1)
+            let denom = h0 - h1;
+            if denom.abs() < tol {
+                return out;
+            }
+            let s = h0 / denom;
+            let s_slack = tol / seg_len_sq.sqrt();
+            if s < -s_slack || s > 1.0 + s_slack {
+                return out;
+            }
+            let s = s.clamp(0.0, 1.0);
+            let p = Point3::new(
+                seg_start.x() + s * d.x(),
+                seg_start.y() + s * d.y(),
+                seg_start.z() + s * d.z(),
+            );
+            if on_plane(p) {
+                push_if_unique(p);
+            }
+        }
+        // else: segment is on one side of the plane → no crossings.
+
+        out
+    }
 }
 
 // ── Ellipse3D ──────────────────────────────────────────────────────
@@ -763,6 +883,65 @@ mod tests {
     #[test]
     fn circle_zero_radius_error() {
         assert!(Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 0.0).is_err());
+    }
+
+    #[test]
+    fn circle_intersect_segment_in_plane_two_points() {
+        // Unit circle in xy plane, segment from (-2,0,0) to (2,0,0) — crosses at ±1 along x.
+        let c = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let hits = c.intersect_segment(
+            Point3::new(-2.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            1e-9,
+        );
+        assert_eq!(hits.len(), 2);
+        // u_axis defaults to +x for a +z normal; so points are at t = 0 and π.
+        let xs: Vec<f64> = hits.iter().map(|(p, _)| p.x()).collect();
+        assert!(xs.iter().any(|x| (x - 1.0).abs() < 1e-9));
+        assert!(xs.iter().any(|x| (x + 1.0).abs() < 1e-9));
+    }
+
+    #[test]
+    fn circle_intersect_segment_crosses_plane() {
+        // Great circle in x=0 plane (sphere-equator type): radius 8, normal +x.
+        // Segment from (1, 8, 0) to (-1, 8, 0): crosses x=0 at (0, 8, 0), which is on the circle.
+        let c = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 8.0).unwrap();
+        let hits = c.intersect_segment(
+            Point3::new(1.0, 8.0, 0.0),
+            Point3::new(-1.0, 8.0, 0.0),
+            1e-7,
+        );
+        assert_eq!(hits.len(), 1);
+        let (p, _t) = hits[0];
+        assert!((p.x()).abs() < 1e-7);
+        assert!((p.y() - 8.0).abs() < 1e-7);
+        assert!((p.z()).abs() < 1e-7);
+    }
+
+    #[test]
+    fn circle_intersect_segment_polygon_vertex_on_circle() {
+        // The box-sphere case: equator polygon edge from a vertex AT (0,8,0)
+        // (which lies on a great circle from the x=0 plane) outward.
+        let c = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0), 8.0).unwrap();
+        // Polygon vertex 4 at (0, 8, 0), polygon vertex 5 at (-3.06..., 7.39..., 0).
+        let v4 = Point3::new(0.0, 8.0, 0.0);
+        let v5 = Point3::new(-8.0 * (5.0_f64).cos(), 8.0 * (5.0_f64).sin(), 0.0);
+        let _ = v5; // silence unused warn — this test only needs the vertex case.
+        let v3 = Point3::new(3.061_467_458_920_71_f64, 7.391_036_260_090_294_f64, 0.0);
+        // Edge from v3 (x>0) to v4 (x=0) — the vertex is on the great circle's plane and circle.
+        let hits = c.intersect_segment(v3, v4, 1e-7);
+        assert_eq!(hits.len(), 1, "expected one hit at the polygon vertex");
+        let (p, _) = hits[0];
+        assert!((p - v4).length() < 1e-6, "hit should be at v4");
+    }
+
+    #[test]
+    fn circle_intersect_segment_no_crossing() {
+        // Segment fully on one side of circle's plane, no crossing.
+        let c = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let hits =
+            c.intersect_segment(Point3::new(0.0, 0.0, 1.0), Point3::new(0.0, 0.0, 2.0), 1e-9);
+        assert!(hits.is_empty());
     }
 
     // ── Ellipse tests ──────────────────────────────────────────────
