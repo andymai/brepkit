@@ -84,6 +84,118 @@ pub fn non_manifold_edge_count(mesh: &TriangleMesh) -> usize {
     edge_count.values().filter(|&&c| c > 2).count()
 }
 
+/// Remove duplicate triangles, cancelling opposing pairs and dedup same-winding pairs.
+///
+/// Workaround for issue #696: when a boolean leaves overlapping coplanar faces
+/// in its output (the GFA path can do this without breaking Euler), tessellating
+/// each face independently produces multiple triangles on the same 3D positions.
+/// Slicers see this as branching (an edge shared by 3+ triangles), then "repair"
+/// it by dropping pieces — turning hollow baseplates into solid blocks.
+///
+/// Triangles are keyed by their **quantized vertex positions** (sorted), not
+/// global vertex IDs — boundary-vertex welding only runs on edges that already
+/// look like boundaries, so two coplanar interior overlaps can survive with
+/// distinct IDs at coincident positions. Pairs with matching winding
+/// (sort-permutation parity equal) deduplicate to one triangle; pairs with
+/// opposite winding cancel (both removed) — that's the signature of two faces
+/// tessellated from opposite sides of the same plane.
+pub(super) fn dedupe_coincident_triangles(mesh: &mut TriangleMesh) {
+    use std::collections::HashMap;
+
+    /// 1nm grid: tight enough that legitimately distinct CAD features (down to
+    /// 1µm geometry like thin plates) keep separate keys, while still merging
+    /// post-merge floating-point noise in coincident vertices that
+    /// boundary-vertex welding didn't catch.
+    const POS_GRID: f64 = 1e-6;
+
+    type TriKey = [(i64, i64, i64); 3];
+    type TriRefs = Vec<(usize, bool)>;
+
+    let tri_count = mesh.indices.len() / 3;
+    if tri_count < 2 {
+        return;
+    }
+
+    #[allow(clippy::cast_possible_truncation)]
+    let quant = |p: Point3| -> (i64, i64, i64) {
+        let s = 1.0 / POS_GRID;
+        (
+            (p.x() * s).round() as i64,
+            (p.y() * s).round() as i64,
+            (p.z() * s).round() as i64,
+        )
+    };
+
+    let mut by_key: HashMap<TriKey, TriRefs> = HashMap::new();
+    for t in 0..tri_count {
+        let (a, b, c) = (
+            mesh.indices[t * 3] as usize,
+            mesh.indices[t * 3 + 1] as usize,
+            mesh.indices[t * 3 + 2] as usize,
+        );
+        let mut tri_pts = [
+            quant(mesh.positions[a]),
+            quant(mesh.positions[b]),
+            quant(mesh.positions[c]),
+        ];
+        // Sort tri_pts ascending; track parity of the sort permutation.
+        let mut parity_even = true;
+        if tri_pts[0] > tri_pts[1] {
+            tri_pts.swap(0, 1);
+            parity_even = !parity_even;
+        }
+        if tri_pts[1] > tri_pts[2] {
+            tri_pts.swap(1, 2);
+            parity_even = !parity_even;
+        }
+        if tri_pts[0] > tri_pts[1] {
+            tri_pts.swap(0, 1);
+            parity_even = !parity_even;
+        }
+        // Skip degenerate triangles (collapsed to <3 distinct positions).
+        if tri_pts[0] == tri_pts[1] || tri_pts[1] == tri_pts[2] {
+            continue;
+        }
+        by_key.entry(tri_pts).or_default().push((t, parity_even));
+    }
+
+    let mut keep = vec![true; tri_count];
+    for tris in by_key.values() {
+        if tris.len() < 2 {
+            continue;
+        }
+        let (even, odd): (Vec<_>, Vec<_>) = tris.iter().partition(|&&(_, p)| p);
+        let cancel_pairs = even.len().min(odd.len());
+        for &(t, _) in even.iter().take(cancel_pairs) {
+            keep[t] = false;
+        }
+        for &(t, _) in odd.iter().take(cancel_pairs) {
+            keep[t] = false;
+        }
+        // Of the surviving same-winding triangles, keep only one.
+        let leftover_even: Vec<_> = even.iter().skip(cancel_pairs).copied().collect();
+        let leftover_odd: Vec<_> = odd.iter().skip(cancel_pairs).copied().collect();
+        for &(t, _) in leftover_even.iter().skip(1) {
+            keep[t] = false;
+        }
+        for &(t, _) in leftover_odd.iter().skip(1) {
+            keep[t] = false;
+        }
+    }
+
+    if keep.iter().all(|&k| k) {
+        return;
+    }
+
+    let mut new_indices = Vec::with_capacity(mesh.indices.len());
+    for (t, &k) in keep.iter().enumerate().take(tri_count) {
+        if k {
+            new_indices.extend_from_slice(&mesh.indices[t * 3..t * 3 + 3]);
+        }
+    }
+    mesh.indices = new_indices;
+}
+
 /// Edge polyline data for wireframe visualization.
 ///
 /// Contains flattened position data for all edges in a solid, plus offsets

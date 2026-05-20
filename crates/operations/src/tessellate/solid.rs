@@ -10,7 +10,7 @@ use brepkit_topology::solid::SolidId;
 
 use super::TriangleMesh;
 use super::edge_sampling::{circle_param_range, sample_edge, segments_for_chord_deviation};
-use super::mesh_ops::weld_boundary_vertices;
+use super::mesh_ops::{dedupe_coincident_triangles, weld_boundary_vertices};
 use super::nonplanar::{tessellate_nonplanar_cdt, tessellate_nonplanar_snap};
 use super::nurbs::{compute_angular_range, compute_v_param_range};
 use super::planar::{
@@ -521,6 +521,12 @@ pub fn tessellate_solid(
 
     // Phase 6: Weld boundary vertices.
     weld_boundary_vertices(&mut merged, deflection);
+
+    // Phase 7: Drop coincident/cancelling triangles left by booleans that
+    // produced overlapping coplanar faces (issue #696). Keyed on quantized
+    // positions so position-coincident triangles with distinct vertex IDs
+    // are still caught.
+    dedupe_coincident_triangles(&mut merged);
 
     Ok(merged)
 }
