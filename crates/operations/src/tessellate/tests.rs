@@ -273,6 +273,146 @@ fn tessellate_plain_cylinder_watertight() {
     );
 }
 
+/// Regression for issue #696: dovetail-style fuse where a small tongue protrudes
+/// into two adjacent slabs. The downstream consumer (gridfinity-layout-tool)
+/// adds a TONGUE_PROTRUSION specifically to avoid coplanar fuse residue under
+/// OCCT, but brepkit's pipeline produced non-manifold tessellation output. This
+/// minimal case exercises the same topological pattern.
+#[test]
+fn tessellate_dovetail_fuse_manifold_issue_696() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let slab_a = crate::primitives::make_box(&mut topo, 10.0, 10.0, 1.0).unwrap();
+    let slab_b = crate::primitives::make_box(&mut topo, 10.0, 10.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, slab_b, &Mat4::translation(10.0, 0.0, 0.0))
+        .unwrap();
+    // Tongue from x=8 to x=12 — 2mm protrusion into each slab. Centered on
+    // the y axis at y=4..6, full slab height z=0..1.
+    let tongue = crate::primitives::make_box(&mut topo, 4.0, 2.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, tongue, &Mat4::translation(8.0, 4.0, 0.0))
+        .unwrap();
+
+    let ab = crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, slab_a, slab_b)
+        .unwrap();
+    let result =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, ab, tongue).unwrap();
+
+    let mesh = tessellate_solid(&topo, result, 0.1).unwrap();
+    let nm = non_manifold_edge_count(&mesh);
+    let boundary = boundary_edge_count(&mesh);
+    assert_eq!(
+        nm, 0,
+        "dovetail fuse should produce a 2-manifold mesh (0 non-manifold edges), got {nm}"
+    );
+    assert_eq!(
+        boundary, 0,
+        "dovetail fuse should produce a watertight mesh (0 boundary edges), got {boundary}"
+    );
+}
+
+/// Extension of #696 repro: multi-tile chain (3 slabs, 2 tongues) plus a hollow
+/// cut. Approximates the lightweight-floor + multi-join-edge pattern from the
+/// failing 4x4 / 5x4 dovetail baseplates.
+#[test]
+fn tessellate_dovetail_multi_tile_hollow_issue_696() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let slab_a = crate::primitives::make_box(&mut topo, 10.0, 10.0, 1.0).unwrap();
+    let slab_b = crate::primitives::make_box(&mut topo, 10.0, 10.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, slab_b, &Mat4::translation(10.0, 0.0, 0.0))
+        .unwrap();
+    let slab_c = crate::primitives::make_box(&mut topo, 10.0, 10.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, slab_c, &Mat4::translation(20.0, 0.0, 0.0))
+        .unwrap();
+
+    let tongue_ab = crate::primitives::make_box(&mut topo, 4.0, 2.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, tongue_ab, &Mat4::translation(8.0, 4.0, 0.0))
+        .unwrap();
+    let tongue_bc = crate::primitives::make_box(&mut topo, 4.0, 2.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, tongue_bc, &Mat4::translation(18.0, 4.0, 0.0))
+        .unwrap();
+
+    let ab = crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, slab_a, slab_b)
+        .unwrap();
+    let ab2 =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, ab, tongue_ab).unwrap();
+    let abc =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, ab2, slab_c).unwrap();
+    let fused = crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, abc, tongue_bc)
+        .unwrap();
+
+    // Hollow out the floor: cut a thin interior pocket.
+    let pocket = crate::primitives::make_box(&mut topo, 28.0, 8.0, 0.6).unwrap();
+    crate::transform::transform_solid(&mut topo, pocket, &Mat4::translation(1.0, 1.0, 0.2))
+        .unwrap();
+    let result =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, fused, pocket).unwrap();
+
+    let mesh = tessellate_solid(&topo, result, 0.1).unwrap();
+    let nm = non_manifold_edge_count(&mesh);
+    let boundary = boundary_edge_count(&mesh);
+    assert_eq!(
+        nm, 0,
+        "multi-tile dovetail+hollow should be 2-manifold (0 non-manifold edges), got {nm}"
+    );
+    assert_eq!(
+        boundary, 0,
+        "multi-tile dovetail+hollow should be watertight (0 boundary edges), got {boundary}"
+    );
+}
+
+/// Trapezoidal tongue (real dovetail profile — narrow at tip, wider at base)
+/// joining two slabs. The trapezoid creates 45-degree edges where the tongue
+/// meets the slabs, which is where coplanar fuse residue tends to appear.
+#[test]
+fn tessellate_dovetail_trapezoidal_tongue_issue_696() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
+
+    let mut topo = Topology::new();
+    let slab_a = crate::primitives::make_box(&mut topo, 10.0, 10.0, 1.0).unwrap();
+    let slab_b = crate::primitives::make_box(&mut topo, 10.0, 10.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, slab_b, &Mat4::translation(10.0, 0.0, 0.0))
+        .unwrap();
+
+    // Trapezoidal tongue extruded in +Z. Wide bases at x=8 and x=12 (each
+    // 2mm inside its slab); narrow waist at x=9.8 / x=10.2. CCW order so
+    // the face normal points up.
+    let pts = vec![
+        Point3::new(8.0, 4.0, 0.0),
+        Point3::new(9.8, 4.8, 0.0),
+        Point3::new(10.2, 4.8, 0.0),
+        Point3::new(12.0, 4.0, 0.0),
+        Point3::new(12.0, 6.0, 0.0),
+        Point3::new(10.2, 5.2, 0.0),
+        Point3::new(9.8, 5.2, 0.0),
+        Point3::new(8.0, 6.0, 0.0),
+    ];
+    let wire_id = make_polygon_wire(&mut topo, &pts, 1e-7).unwrap();
+    let face_id = make_face_from_wire(&mut topo, wire_id).unwrap();
+    let tongue =
+        crate::extrude::extrude(&mut topo, face_id, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+
+    let ab = crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, slab_a, slab_b)
+        .unwrap();
+    let result =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Fuse, ab, tongue).unwrap();
+
+    let mesh = tessellate_solid(&topo, result, 0.1).unwrap();
+    let nm = non_manifold_edge_count(&mesh);
+    let boundary = boundary_edge_count(&mesh);
+    assert_eq!(
+        nm, 0,
+        "trapezoidal-tongue fuse should produce a 2-manifold mesh, got {nm} non-manifold edges"
+    );
+    assert_eq!(
+        boundary, 0,
+        "trapezoidal-tongue fuse should produce a watertight mesh, got {boundary} boundary edges"
+    );
+}
+
 #[test]
 fn tessellate_boolean_cut_cylinder_watertight() {
     use brepkit_math::mat::Mat4;

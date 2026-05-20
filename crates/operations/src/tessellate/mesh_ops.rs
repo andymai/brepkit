@@ -36,7 +36,7 @@ pub fn is_watertight(mesh: &TriangleMesh) -> bool {
         .all(|&(a, b)| half_edges.contains(&(b, a)))
 }
 
-/// Count boundary (non-manifold) edges in a mesh.
+/// Count boundary (one-sided) edges in a mesh.
 ///
 /// A boundary edge is one where the half-edge `(a, b)` exists but `(b, a)`
 /// does not. Returns the number of such edges. A watertight mesh has 0.
@@ -60,6 +60,28 @@ pub fn boundary_edge_count(mesh: &TriangleMesh) -> usize {
         .iter()
         .filter(|&&(a, b)| !half_edges.contains(&(b, a)))
         .count()
+}
+
+/// Count non-manifold (branching) edges in a mesh.
+///
+/// An undirected edge `{a, b}` is non-manifold when 3 or more triangles
+/// reference it. A 2-manifold mesh has 0 such edges. Distinct from
+/// [`boundary_edge_count`], which counts 1-sided edges. Use both together
+/// to validate that a tessellated solid is a closed 2-manifold.
+#[must_use]
+pub fn non_manifold_edge_count(mesh: &TriangleMesh) -> usize {
+    use std::collections::HashMap;
+
+    let mut edge_count: HashMap<(u32, u32), u32> = HashMap::new();
+    for tri in mesh.indices.chunks_exact(3) {
+        let (a, b, c) = (tri[0], tri[1], tri[2]);
+        for (p, q) in [(a, b), (b, c), (c, a)] {
+            let key = if p < q { (p, q) } else { (q, p) };
+            *edge_count.entry(key).or_default() += 1;
+        }
+    }
+
+    edge_count.values().filter(|&&c| c > 2).count()
 }
 
 /// Edge polyline data for wireframe visualization.

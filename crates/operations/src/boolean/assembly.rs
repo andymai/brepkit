@@ -478,10 +478,16 @@ fn build_manifold_shell(
     }
 
     // Find non-manifold edges (shared by 3+ faces).
-    let nonmanifold: Vec<(EdgeId, Vec<(usize, bool)>)> = edge_faces
+    // Sort by EdgeId so subsequent face-removal decisions are reproducible
+    // across runs — the same class of HashMap-iteration variance fixed in
+    // #689/#692, propagated to this pass. Order matters because each NM
+    // edge's "remove the opposing-normal face" decision interacts with
+    // others when faces are shared between multiple NM edges.
+    let mut nonmanifold: Vec<(EdgeId, Vec<(usize, bool)>)> = edge_faces
         .into_iter()
         .filter(|(_, faces)| faces.len() > 2)
         .collect();
+    nonmanifold.sort_by_key(|(eid, _)| eid.index());
 
     if nonmanifold.is_empty() {
         return Ok(face_ids.to_vec());
@@ -1369,10 +1375,15 @@ pub(super) fn split_nonmanifold_edges(
     }
 
     // Find non-manifold edges (shared by > 2 faces).
-    let nonmanifold: Vec<(usize, Vec<(usize, bool)>)> = edge_faces
+    // Sort by edge index for deterministic processing order — each NM-edge
+    // split mutates the topology (via edge_replacements), so order changes
+    // the assembly outcome when edges share faces. Same pattern fixed in
+    // #689/#692 for earlier GFA iteration sites.
+    let mut nonmanifold: Vec<(usize, Vec<(usize, bool)>)> = edge_faces
         .into_iter()
         .filter(|(_, faces)| faces.len() > 2)
         .collect();
+    nonmanifold.sort_by_key(|(eid, _)| *eid);
 
     if nonmanifold.is_empty() {
         return Ok(());
