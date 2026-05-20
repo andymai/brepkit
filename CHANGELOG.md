@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.90.0](https://github.com/andymai/brepkit/compare/v2.89.2...v2.90.0) (2026-05-20)
+
+
+### Features
+
+* **boolean:** box-sphere intersect analytic shortcut (closes box-sphere perf gap) ([#694](https://github.com/andymai/brepkit/issues/694)) ([113df1b](https://github.com/andymai/brepkit/commit/113df1b8eec027b2c36c3d4140563fa00786dec8))
+
 ## [2.89.2](https://github.com/andymai/brepkit/compare/v2.89.1...v2.89.2) (2026-05-20)
 
 
