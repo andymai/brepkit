@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.92.0](https://github.com/andymai/brepkit/compare/v2.91.2...v2.92.0) (2026-05-20)
+
+
+### Features
+
+* **heal:** cross-face collinear-vertex collapse pass ([#696](https://github.com/andymai/brepkit/issues/696) follow-up) ([#708](https://github.com/andymai/brepkit/issues/708)) ([948ffc6](https://github.com/andymai/brepkit/commit/948ffc6d2b80bc846c985a78dc65e49788404211))
+
 ## [2.91.2](https://github.com/andymai/brepkit/compare/v2.91.1...v2.91.2) (2026-05-20)
 
 
