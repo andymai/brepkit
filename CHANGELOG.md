@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.91.1](https://github.com/andymai/brepkit/compare/v2.91.0...v2.91.1) (2026-05-20)
+
+
+### Bug Fixes
+
+* **algo:** preserve dropped holes in face splitter ([#696](https://github.com/andymai/brepkit/issues/696) diagnostic) ([#703](https://github.com/andymai/brepkit/issues/703)) ([9fca2e2](https://github.com/andymai/brepkit/commit/9fca2e2141d4935c900b04cc66c5abbfc2d20585))
+
 ## [2.91.0](https://github.com/andymai/brepkit/compare/v2.90.2...v2.91.0) (2026-05-20)
 
 
