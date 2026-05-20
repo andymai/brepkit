@@ -15,7 +15,7 @@
 
 use std::collections::HashSet;
 
-use crate::builder::same_domain::SameDomainPair;
+use crate::builder::same_domain::{SameDomainPair, WithinRankDuplicate};
 use crate::builder::{FaceClass, SubFace};
 use crate::ds::Rank;
 
@@ -44,6 +44,7 @@ pub(crate) fn select_faces(
     sub_faces: &[SubFace],
     op: BooleanOp,
     sd_pairs: &[SameDomainPair],
+    within_rank_dups: &[WithinRankDuplicate],
 ) -> Vec<SelectedFace> {
     // Step 1: Filter SD pairs to only those with valid (in-bounds) indices.
     // Invalid pairs are logged and excluded so they don't cause valid faces
@@ -65,6 +66,16 @@ pub(crate) fn select_faces(
         })
         .collect();
 
+    // Step 1b: Within-rank duplicates (issue #696) — same-domain faces from
+    // the same input solid. No operation-specific logic: the duplicate is
+    // just removed from the selection. Filter by valid index in case the
+    // upstream pipeline produces stale records after a split.
+    let dup_indices: HashSet<usize> = within_rank_dups
+        .iter()
+        .filter(|d| d.duplicate < sub_faces.len() && d.representative < sub_faces.len())
+        .map(|d| d.duplicate)
+        .collect();
+
     // Step 2: Identify which sub-face indices are part of valid SD pairs
     let sd_indices: HashSet<usize> = valid_sd_pairs
         .iter()
@@ -78,6 +89,12 @@ pub(crate) fn select_faces(
         .filter_map(|(idx, sf)| {
             // Skip SD faces — handled separately below
             if sd_indices.contains(&idx) {
+                return None;
+            }
+            // Skip within-rank SD duplicates (#696). Their representative
+            // (the lowest-indexed face in the group) goes through the normal
+            // truth-table selection; the duplicate is dropped here.
+            if dup_indices.contains(&idx) {
                 return None;
             }
 
@@ -244,7 +261,7 @@ mod tests {
             make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
             make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
         ];
-        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &[]);
+        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &[], &[]);
         assert_eq!(selected.len(), 2);
     }
 
@@ -260,7 +277,7 @@ mod tests {
             b_contained_in_a: false,
         }];
         // Should not panic — out-of-bounds pairs are skipped
-        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs);
+        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &sd_pairs, &[]);
         // The non-SD face should still be selected
         assert_eq!(selected.len(), 1);
     }
@@ -274,7 +291,7 @@ mod tests {
             make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
             make_sub_face(&mut topo, Rank::B, FaceClass::Inside),
         ];
-        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &[]);
+        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &[], &[]);
         assert_eq!(selected.len(), 2, "Fuse keeps only Outside faces");
     }
 
@@ -287,7 +304,7 @@ mod tests {
             make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
             make_sub_face(&mut topo, Rank::B, FaceClass::Inside),
         ];
-        let selected = select_faces(&sub_faces, BooleanOp::Cut, &[]);
+        let selected = select_faces(&sub_faces, BooleanOp::Cut, &[], &[]);
         assert_eq!(selected.len(), 2, "Cut keeps A-Outside + B-Inside");
         assert!(
             selected.iter().any(|s| s.reversed),
@@ -304,7 +321,7 @@ mod tests {
             make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
             make_sub_face(&mut topo, Rank::B, FaceClass::Inside),
         ];
-        let selected = select_faces(&sub_faces, BooleanOp::Intersect, &[]);
+        let selected = select_faces(&sub_faces, BooleanOp::Intersect, &[], &[]);
         assert_eq!(selected.len(), 2, "Intersect keeps only Inside faces");
     }
 }

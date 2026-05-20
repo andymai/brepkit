@@ -78,6 +78,9 @@ pub struct Builder {
     face_ranks: HashMap<FaceId, Rank>,
     /// Same-domain face pairs detected by `same_domain`.
     sd_pairs: Vec<same_domain::SameDomainPair>,
+    /// Within-rank SD duplicates (boolean residue accumulated across
+    /// sequential operations — issue #696). Excluded before classification.
+    sd_within_rank_dups: Vec<same_domain::WithinRankDuplicate>,
 }
 
 impl Builder {
@@ -99,6 +102,7 @@ impl Builder {
             sub_faces: Vec::new(),
             face_ranks: HashMap::new(),
             sd_pairs: Vec::new(),
+            sd_within_rank_dups: Vec::new(),
         }
     }
 
@@ -125,7 +129,12 @@ impl Builder {
     /// Returns [`AlgoError`] if face selection produces no faces or
     /// assembly fails.
     pub fn build_result(mut self, op: BooleanOp) -> Result<(Topology, SolidId), AlgoError> {
-        let selected = bop::select_faces(&self.sub_faces, op, &self.sd_pairs);
+        let selected = bop::select_faces(
+            &self.sub_faces,
+            op,
+            &self.sd_pairs,
+            &self.sd_within_rank_dups,
+        );
         let solid_id = assemble::assemble_solid(&mut self.topo, &selected)?;
         Ok((self.topo, solid_id))
     }
@@ -171,13 +180,15 @@ impl Builder {
         log::debug!("Builder: {} sub-faces created", self.sub_faces.len());
 
         // Step 3: same-domain detection (records pairs, does NOT set FaceClass)
-        self.sd_pairs = same_domain::detect_same_domain(
+        let sd_result = same_domain::detect_same_domain(
             &self.topo,
             &self.arena,
             &self.sub_faces,
             &self.face_ranks,
             self.tol,
         );
+        self.sd_pairs = sd_result.pairs;
+        self.sd_within_rank_dups = sd_result.within_rank_dups;
 
         // Note: SD representative replacement (replacing B's face_id with
         // A's face_id) was attempted but produces degenerate 2-edge faces
@@ -199,14 +210,21 @@ impl Builder {
         //
         // Skip SD index construction entirely when no SD pairs exist
         // (common case for non-overlapping solids).
-        let sd_indices: std::collections::HashSet<usize> = if self.sd_pairs.is_empty() {
-            std::collections::HashSet::new()
-        } else {
-            self.sd_pairs
-                .iter()
-                .flat_map(|p| [p.idx_a, p.idx_b])
-                .collect()
-        };
+        // Only the cross-rank SD pair indices and the within-rank duplicates
+        // (NOT their representatives) should bypass ray-cast classification.
+        // The representative still needs normal IN/OUT classification because
+        // `select_faces` routes it through the standard truth table — adding
+        // it to `sd_indices` would force it to "On" with no matching pair
+        // record, so `apply_sd_selection` would never pick it up and the
+        // face would silently drop out.
+        let sd_indices: std::collections::HashSet<usize> =
+            if self.sd_pairs.is_empty() && self.sd_within_rank_dups.is_empty() {
+                std::collections::HashSet::new()
+            } else {
+                let cross = self.sd_pairs.iter().flat_map(|p| [p.idx_a, p.idx_b]);
+                let within = self.sd_within_rank_dups.iter().map(|d| d.duplicate);
+                cross.chain(within).collect()
+            };
 
         for (idx, sf) in self.sub_faces.iter_mut().enumerate() {
             if !sd_indices.is_empty() && sd_indices.contains(&idx) {
