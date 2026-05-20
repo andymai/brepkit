@@ -38,6 +38,33 @@ pub struct SameDomainPair {
     pub b_contained_in_a: bool,
 }
 
+/// A within-rank duplicate sub-face: same edge set, same surface, same input
+/// solid as another face. Issue #696: sequential boolean operations
+/// (`booleanPipeline` in the consumer) accumulate stale coincident faces in
+/// the input solid; when the next boolean splits its inputs into sub-faces,
+/// these duplicates produce 3+-face junctions in the output topology that
+/// tessellate as branching mesh edges. The `representative` is the lowest-
+/// indexed sub-face in the group; `duplicate` should be excluded from the
+/// boolean result.
+#[derive(Debug, Clone, Copy)]
+pub struct WithinRankDuplicate {
+    /// Sub-face index that stays in the result.
+    pub representative: usize,
+    /// Sub-face index that should be dropped.
+    pub duplicate: usize,
+}
+
+/// Output of [`detect_same_domain`].
+#[derive(Debug, Default, Clone)]
+pub struct SameDomainResult {
+    /// Cross-rank pairs (one face from A, one from B).
+    pub pairs: Vec<SameDomainPair>,
+    /// Within-rank duplicates (multiple faces from the same input solid
+    /// occupying the same domain — boolean residue that needs removing
+    /// before classification).
+    pub within_rank_dups: Vec<WithinRankDuplicate>,
+}
+
 /// Quantized 3D grid position — collision-free vertex identity.
 type QVert = (i64, i64, i64);
 
@@ -64,10 +91,10 @@ pub fn detect_same_domain<S: BuildHasher>(
     sub_faces: &[SubFace],
     _face_ranks: &HashMap<FaceId, Rank, S>,
     tol: Tolerance,
-) -> Vec<SameDomainPair> {
+) -> SameDomainResult {
     let n = sub_faces.len();
     if n < 2 {
-        return Vec::new();
+        return SameDomainResult::default();
     }
 
     // Step 1: Compute canonical edge sets for each sub-face.
@@ -105,33 +132,84 @@ pub fn detect_same_domain<S: BuildHasher>(
 
     let mut uf = UnionFind::new(n);
     let mut pair_data: HashMap<(usize, usize), bool> = HashMap::new(); // (min,max) → same_orientation
+    // Tracks pairs unioned by the geometric containment pass (Step 3b).
+    // Cross-rank groups containing such pairs are "overlapping" same-domain
+    // faces, not "touching" — `b_contained_in_a` must be true for them so
+    // `apply_sd_selection` cancels both faces under Cut instead of keeping A.
+    let mut geometric_overlap_groups: HashSet<usize> = HashSet::new();
 
     for members in groups.values() {
         if members.len() < 2 {
             continue;
         }
 
-        // Check all pairs within this edge-set group
+        // Check all pairs within this edge-set group. Pairs can be cross-rank
+        // (the classic SD case — same domain across two input solids) or
+        // within-rank (issue #696 — boolean residue accumulated in one input
+        // across sequential operations). Both unify into the same group; the
+        // representative-emission step below splits them by rank composition.
         for (mi, &i) in members.iter().enumerate() {
-            let rank_i = sub_faces[i].rank;
             let Some(surf_i) = surfaces[i] else {
                 continue;
             };
 
             for &j in &members[mi + 1..] {
-                // Only pair faces from opposing solids
-                if sub_faces[j].rank == rank_i {
-                    continue;
-                }
                 let Some(surf_j) = surfaces[j] else {
                     continue;
                 };
 
-                // Verify surface equivalence
+                // Verify surface equivalence.
                 if let Some(same_dir) = surfaces_same_domain(surf_i, surf_j, tol) {
                     uf.union(i, j);
                     let key = (i.min(j), i.max(j));
                     pair_data.insert(key, same_dir);
+                }
+            }
+        }
+    }
+
+    // Step 3b (issue #696): geometric containment pass for planar faces.
+    // Edge-set hashing alone misses the common boolean-residue pattern where
+    // one face is fully contained inside another with a different boundary
+    // (e.g., a stale nub-bottom face filling the hole in a slab-top face).
+    // For planar faces with the same surface, test whether one's
+    // pre-computed interior point lies inside the other's wire — if so, the
+    // contained face is a duplicate. Limited to planar faces because the
+    // analytic surfaces (cylinder/sphere/etc) produce well-defined trimmed
+    // patches that rarely accumulate residue, and a 2D containment test on
+    // their parametric domains needs surface-specific handling.
+    {
+        let mut planar_indices: Vec<usize> = Vec::new();
+        for (idx, surf) in surfaces.iter().enumerate() {
+            if matches!(surf, Some(FaceSurface::Plane { .. })) {
+                planar_indices.push(idx);
+            }
+        }
+        for (mi, &i) in planar_indices.iter().enumerate() {
+            if sub_faces[i].interior_point.is_none() {
+                continue;
+            }
+            for &j in &planar_indices[mi + 1..] {
+                if sub_faces[j].interior_point.is_none() {
+                    continue;
+                }
+                // Cheap surface-match guard first.
+                let same_dir = match (surfaces[i], surfaces[j]) {
+                    (Some(si), Some(sj)) => surfaces_same_domain(si, sj, tol),
+                    _ => None,
+                };
+                let Some(same_dir) = same_dir else { continue };
+                if uf.find(i) == uf.find(j) {
+                    continue; // already grouped
+                }
+                if planar_faces_overlap(topo, sub_faces, i, j) {
+                    uf.union(i, j);
+                    let key = (i.min(j), i.max(j));
+                    pair_data.insert(key, same_dir);
+                    // Mark the post-union root so the emission code knows
+                    // this group came from geometric containment, not from
+                    // boundary-identical edge sets.
+                    geometric_overlap_groups.insert(uf.find(i));
                 }
             }
         }
@@ -155,13 +233,13 @@ pub fn detect_same_domain<S: BuildHasher>(
     }
 
     let mut pairs = Vec::new();
+    let mut within_rank_dups = Vec::new();
 
-    for members in sd_groups.values() {
+    for (root, members) in &sd_groups {
         if members.len() < 2 {
             continue;
         }
 
-        // Find the best representative from Rank::A (smallest index)
         let repr_a = members
             .iter()
             .filter(|&&idx| sub_faces[idx].rank == Rank::A)
@@ -173,40 +251,79 @@ pub fn detect_same_domain<S: BuildHasher>(
             .min()
             .copied();
 
-        // Build a pair for each A-B combination in the group.
-        // For simple cases (1 from A, 1 from B), this produces exactly 1 pair.
-        if let (Some(idx_a), Some(idx_b)) = (repr_a, repr_b) {
-            let key = (idx_a.min(idx_b), idx_a.max(idx_b));
-            let same_orientation = pair_data.get(&key).copied().unwrap_or(true);
+        // True if any pair in this group was unioned by the geometric
+        // containment pass. Cross-rank groups flagged here have actual
+        // interior overlap (one face fully contained in another), not just
+        // a shared boundary — `apply_sd_selection` needs `b_contained_in_a`
+        // to be true so Cut cancels both faces instead of keeping A.
+        let geometric_overlap = geometric_overlap_groups.contains(root);
 
-            pairs.push(SameDomainPair {
-                idx_a,
-                idx_b,
-                same_orientation,
-                // Edge-set matched faces have identical boundaries.
-                // b_contained_in_a=false → touching (default for same-boundary faces).
-                b_contained_in_a: false,
-            });
+        match (repr_a, repr_b) {
+            // Cross-rank: classic SD pair — emit for operation-specific selection.
+            (Some(idx_a), Some(idx_b)) => {
+                let key = (idx_a.min(idx_b), idx_a.max(idx_b));
+                let same_orientation = pair_data.get(&key).copied().unwrap_or(true);
+
+                pairs.push(SameDomainPair {
+                    idx_a,
+                    idx_b,
+                    same_orientation,
+                    b_contained_in_a: geometric_overlap,
+                });
+
+                // The group may also contain additional same-rank members
+                // (rare — a 3+ member group spanning both ranks). Treat those
+                // as within-rank duplicates against the matching-rank repr.
+                for &idx in members {
+                    if idx == idx_a || idx == idx_b {
+                        continue;
+                    }
+                    let rep = if sub_faces[idx].rank == Rank::A {
+                        idx_a
+                    } else {
+                        idx_b
+                    };
+                    within_rank_dups.push(WithinRankDuplicate {
+                        representative: rep,
+                        duplicate: idx,
+                    });
+                }
+            }
+            // Within-rank only (A-only or B-only): cumulative boolean residue.
+            // Keep the lowest-indexed face as representative; mark the rest
+            // as duplicates so the BOP selector can drop them before
+            // classification (issue #696).
+            (Some(rep), None) | (None, Some(rep)) => {
+                for &idx in members {
+                    if idx != rep {
+                        within_rank_dups.push(WithinRankDuplicate {
+                            representative: rep,
+                            duplicate: idx,
+                        });
+                    }
+                }
+            }
+            (None, None) => {}
         }
     }
 
-    // Sort pairs by (idx_a, idx_b) — `sd_groups.values()` above iterates
-    // a HashMap, so `pairs` was being assembled in random order.
-    // Downstream `apply_sd_selection` in bop.rs iterates pairs and pushes
-    // to the `selected` faces Vec; the random order propagated into face
-    // ordering in the result shell and drove 100-500× perf variance in
-    // `bench_boolean_64_holes`. Sorting recovers determinism without
-    // changing semantics (pairs is a logical set, not an ordered list).
-    // Unstable sort is fine — keys (idx_a, idx_b) are unique within
-    // the per-group representative pick above, so no ties exist to
-    // reorder.
+    // Sort outputs deterministically — `sd_groups.values()` iterates a
+    // HashMap, so without sorting the pair order varies per run and
+    // propagates into face ordering in the result shell (drove 100–500×
+    // perf variance in `bench_boolean_64_holes`).
     pairs.sort_unstable_by_key(|p| (p.idx_a, p.idx_b));
+    within_rank_dups.sort_unstable_by_key(|d| (d.representative, d.duplicate));
 
     log::debug!(
-        "detect_same_domain: {} same-domain pairs found (edge-set hash)",
-        pairs.len()
+        "detect_same_domain: {} cross-rank pairs, {} within-rank duplicates (edge-set hash)",
+        pairs.len(),
+        within_rank_dups.len()
     );
-    pairs
+
+    SameDomainResult {
+        pairs,
+        within_rank_dups,
+    }
 }
 
 /// Compute the canonical edge set for a face using quantized vertex positions.
@@ -260,6 +377,98 @@ fn compute_edge_set_quantized(
 
     pairs.sort_unstable();
     Some(pairs)
+}
+
+/// Test whether two planar sub-faces are geometrically coincident or one
+/// is fully contained inside the other.
+///
+/// Returns `true` only when ALL outer-wire vertices of one face lie inside
+/// or on the boundary of the other face's outer polygon (and the interior
+/// sample point confirms it). A weaker "interior-only" containment test was
+/// tried and rejected: adjacent coplanar faces with concave geometry could
+/// have an interior point that happens to land inside a neighbor's polygon
+/// without the faces actually overlapping. Requiring whole-wire containment
+/// is the conservative criterion that catches boolean residue (issue #696)
+/// — typically a small "filling" face inside a larger face's outer
+/// boundary — without firing on legitimate adjacent face pairs.
+fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usize) -> bool {
+    let Some(p_i) = sub_faces[i].interior_point else {
+        return false;
+    };
+    let Some(p_j) = sub_faces[j].interior_point else {
+        return false;
+    };
+    let Ok(face_i) = topo.face(sub_faces[i].face_id) else {
+        return false;
+    };
+    let Ok(face_j) = topo.face(sub_faces[j].face_id) else {
+        return false;
+    };
+    let FaceSurface::Plane {
+        normal: normal_i, ..
+    } = *face_i.surface()
+    else {
+        return false;
+    };
+
+    let wire_points = |face: &brepkit_topology::face::Face| -> Vec<brepkit_math::vec::Point3> {
+        let mut pts = Vec::new();
+        let Ok(wire) = topo.wire(face.outer_wire()) else {
+            return pts;
+        };
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let vid = if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            };
+            if let Ok(v) = topo.vertex(vid) {
+                pts.push(v.point());
+            }
+        }
+        pts
+    };
+
+    let pts_i = wire_points(face_i);
+    let pts_j = wire_points(face_j);
+    if pts_i.len() < 3 || pts_j.len() < 3 {
+        return false;
+    }
+    let frame = super::plane_frame::PlaneFrame::from_plane_face(normal_i, &pts_i);
+    let poly_i: Vec<_> = pts_i.iter().map(|&p| frame.project(p)).collect();
+    let poly_j: Vec<_> = pts_j.iter().map(|&p| frame.project(p)).collect();
+
+    // NOTE: `point_in_polygon_2d` uses a strict ray-cast with no boundary
+    // tolerance. Vertices that land exactly on the containing polygon's
+    // edge (e.g., two faces that share a boundary segment) may return false
+    // unpredictably and cause `all_inside` below to silently miss the pair.
+    // The edge-set pass above already handles identical-boundary cases, so
+    // Step 3b only reaches pairs with different outlines — contained-face
+    // vertices that lie exactly on the container's edge are rare in
+    // practice, but worth keeping in mind when extending this check.
+    let p_i_2d = frame.project(p_i);
+    let p_j_2d = frame.project(p_j);
+
+    let all_inside =
+        |verts: &[brepkit_math::vec::Point2], poly: &[brepkit_math::vec::Point2]| -> bool {
+            verts
+                .iter()
+                .all(|&v| super::classify_2d::point_in_polygon_2d(v, poly))
+        };
+
+    // i fully contained in j: every vertex of i (plus its interior sample)
+    // is inside j's polygon.
+    if super::classify_2d::point_in_polygon_2d(p_i_2d, &poly_j) && all_inside(&poly_i, &poly_j) {
+        return true;
+    }
+    // j fully contained in i.
+    if super::classify_2d::point_in_polygon_2d(p_j_2d, &poly_i) && all_inside(&poly_j, &poly_i) {
+        return true;
+    }
+    false
 }
 
 /// Quantize a 3D point to integer grid coordinates.
@@ -412,8 +621,169 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use super::*;
+    use crate::builder::FaceClass;
+    use crate::ds::Rank;
     use brepkit_math::tolerance::Tolerance;
     use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
+
+    /// Build a planar rectangular sub-face on the z=0 plane.
+    fn rect_sub_face(
+        topo: &mut Topology,
+        min_x: f64,
+        max_x: f64,
+        min_y: f64,
+        max_y: f64,
+        rank: Rank,
+        interior: Point3,
+    ) -> SubFace {
+        let pts = vec![
+            Point3::new(min_x, min_y, 0.0),
+            Point3::new(max_x, min_y, 0.0),
+            Point3::new(max_x, max_y, 0.0),
+            Point3::new(min_x, max_y, 0.0),
+        ];
+        let wire = make_polygon_wire(topo, &pts, 1e-7).unwrap();
+        let face_id = make_face_from_wire(topo, wire).unwrap();
+        SubFace {
+            face_id,
+            classification: FaceClass::Unknown,
+            rank,
+            interior_point: Some(interior),
+        }
+    }
+
+    /// Regression test for issue #696: two same-rank planar faces with one
+    /// fully contained inside the other should be reported as a
+    /// within-rank duplicate, not as a cross-rank SD pair.
+    #[test]
+    fn detects_within_rank_planar_containment() {
+        let mut topo = Topology::new();
+        let arena = GfaArena::new();
+        let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+        let tol = Tolerance::new();
+
+        // Large outer face (rank A) and small contained face (also rank A).
+        // Edge sets differ (different vertex sets), so the edge-set pass
+        // skips them — the geometric containment pass catches the dup.
+        let large = rect_sub_face(
+            &mut topo,
+            0.0,
+            10.0,
+            0.0,
+            10.0,
+            Rank::A,
+            Point3::new(5.0, 5.0, 0.0),
+        );
+        let small = rect_sub_face(
+            &mut topo,
+            3.0,
+            5.0,
+            3.0,
+            5.0,
+            Rank::A,
+            Point3::new(4.0, 4.0, 0.0),
+        );
+        let sub_faces = vec![large, small];
+
+        let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+
+        assert!(result.pairs.is_empty(), "no cross-rank pair expected");
+        assert_eq!(
+            result.within_rank_dups.len(),
+            1,
+            "expected exactly one within-rank duplicate"
+        );
+        let dup = &result.within_rank_dups[0];
+        assert_eq!(dup.representative, 0, "large face (idx 0) is the rep");
+        assert_eq!(dup.duplicate, 1, "small face (idx 1) is the duplicate");
+    }
+
+    /// Two adjacent non-overlapping coplanar faces should NOT be unioned —
+    /// regression guard against the over-aggressive interior-only test
+    /// that broke `fuse_ring_overlapping_shelled_box_height`.
+    #[test]
+    fn adjacent_coplanar_faces_not_duplicates() {
+        let mut topo = Topology::new();
+        let arena = GfaArena::new();
+        let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+        let tol = Tolerance::new();
+
+        // Two side-by-side rectangles, sharing one edge but not overlapping.
+        let left = rect_sub_face(
+            &mut topo,
+            0.0,
+            5.0,
+            0.0,
+            10.0,
+            Rank::A,
+            Point3::new(2.5, 5.0, 0.0),
+        );
+        let right = rect_sub_face(
+            &mut topo,
+            5.0,
+            10.0,
+            0.0,
+            10.0,
+            Rank::A,
+            Point3::new(7.5, 5.0, 0.0),
+        );
+        let sub_faces = vec![left, right];
+
+        let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+
+        assert!(result.pairs.is_empty(), "no cross-rank pair expected");
+        assert!(
+            result.within_rank_dups.is_empty(),
+            "adjacent non-overlapping faces should not be unioned, got {} dup(s)",
+            result.within_rank_dups.len()
+        );
+    }
+
+    /// Cross-rank geometric containment should set `b_contained_in_a=true`
+    /// so `apply_sd_selection` cancels the pair under Cut. Regression for
+    /// the P1 review comment on the original PR.
+    #[test]
+    fn cross_rank_geometric_containment_marks_overlapping() {
+        let mut topo = Topology::new();
+        let arena = GfaArena::new();
+        let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+        let tol = Tolerance::new();
+
+        // Rank A: large face. Rank B: small face fully inside A's outline,
+        // with a different boundary (the edge-set pass misses it).
+        let large_a = rect_sub_face(
+            &mut topo,
+            0.0,
+            10.0,
+            0.0,
+            10.0,
+            Rank::A,
+            Point3::new(5.0, 5.0, 0.0),
+        );
+        let small_b = rect_sub_face(
+            &mut topo,
+            3.0,
+            5.0,
+            3.0,
+            5.0,
+            Rank::B,
+            Point3::new(4.0, 4.0, 0.0),
+        );
+        let sub_faces = vec![large_a, small_b];
+
+        let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+
+        assert!(
+            result.within_rank_dups.is_empty(),
+            "cross-rank pair should not be reported as within-rank dup"
+        );
+        assert_eq!(result.pairs.len(), 1, "expected one cross-rank SD pair");
+        assert!(
+            result.pairs[0].b_contained_in_a,
+            "geometric containment must set b_contained_in_a=true so Cut cancels both"
+        );
+    }
 
     #[test]
     fn planes_same_domain_same_direction() {

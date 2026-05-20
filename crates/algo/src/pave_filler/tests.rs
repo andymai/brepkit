@@ -855,7 +855,7 @@ fn trace_builder_overlapping_box_fuse() {
     }
 
     // Simulate BOP selection
-    let selected = crate::bop::select_faces(sub_faces, crate::bop::BooleanOp::Fuse, sd_pairs);
+    let selected = crate::bop::select_faces(sub_faces, crate::bop::BooleanOp::Fuse, sd_pairs, &[]);
     eprintln!("BOP selected: {} faces", selected.len());
     for (i, sf) in selected.iter().enumerate() {
         let n_edges = topo
@@ -1072,7 +1072,7 @@ fn trace_builder_z_axis_overlap() {
         );
     }
 
-    let selected = crate::bop::select_faces(sub_faces, crate::bop::BooleanOp::Fuse, sd_pairs);
+    let selected = crate::bop::select_faces(sub_faces, crate::bop::BooleanOp::Fuse, sd_pairs, &[]);
     eprintln!("BOP selected: {} faces", selected.len());
 }
 
