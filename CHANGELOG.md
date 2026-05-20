@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.91.2](https://github.com/andymai/brepkit/compare/v2.91.1...v2.91.2) (2026-05-20)
+
+
+### Bug Fixes
+
+* **operations:** planarity-aware tessellation-artifact dedup in mesh_boolean ([#696](https://github.com/andymai/brepkit/issues/696)) ([#706](https://github.com/andymai/brepkit/issues/706)) ([42e6a3a](https://github.com/andymai/brepkit/commit/42e6a3a30ff6468471163f6bb695bbb002f20edf))
+
 ## [2.91.1](https://github.com/andymai/brepkit/compare/v2.91.0...v2.91.1) (2026-05-20)
 
 
