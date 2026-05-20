@@ -468,7 +468,15 @@ pub fn boolean(
                 #[allow(clippy::cast_possible_wrap)]
                 let euler_pre2 = (v2 as i64) - (e2 as i64) + (f2 as i64);
 
-                if euler_pre2 != 2 {
+                // Run unify_faces if Euler is off (existing condition) OR if
+                // the topology already has 3+-face junctions, which can occur
+                // with Euler==2 when overlapping coplanar faces cancel in V-E+F
+                // counting. The same-domain detection in the assembler only
+                // pairs faces across opposing ranks with identical edge sets,
+                // so within-rank or different-boundary overlaps slip through;
+                // unify_faces is the safety net for those (issue #696).
+                let needs_unify = euler_pre2 != 2 || !is_closed_manifold(topo, result)?;
+                if needs_unify {
                     for _ in 0..3 {
                         if crate::heal::unify_faces(topo, result)? == 0 {
                             break;
