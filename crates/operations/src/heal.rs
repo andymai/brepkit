@@ -1206,7 +1206,17 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
     }
 
     // Only process groups with ≥2 faces.
-    let merge_groups: Vec<Vec<usize>> = groups.into_values().filter(|g| g.len() >= 2).collect();
+    // Sort groups by their lowest face index so downstream processing
+    // (especially `canonical_vtx` first-seen-wins) is deterministic.
+    // Without the sort, `groups.into_values()` returns groups in HashMap
+    // iteration order, and the first group to insert a vertex into
+    // `canonical_vtx` "wins" the canonical mapping — which then drives
+    // different edge re-allocations between runs.
+    let mut merge_groups: Vec<Vec<usize>> = groups.into_values().filter(|g| g.len() >= 2).collect();
+    for g in &mut merge_groups {
+        g.sort_unstable();
+    }
+    merge_groups.sort_unstable_by_key(|g| g.first().copied().unwrap_or(usize::MAX));
 
     if merge_groups.is_empty() {
         return Ok(0);
