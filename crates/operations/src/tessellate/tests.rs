@@ -413,6 +413,106 @@ fn tessellate_dovetail_trapezoidal_tongue_issue_696() {
     );
 }
 
+/// Direct unit tests for `dedupe_coincident_triangles` — the synthetic
+/// dovetail tests above don't reproduce the upstream symptom and so leave the
+/// new Phase-7 pass untested by itself.
+#[test]
+fn dedupe_cancels_opposing_winding_pair() {
+    let mut mesh = TriangleMesh {
+        positions: vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ],
+        normals: vec![Vec3::new(0.0, 0.0, 1.0); 3],
+        indices: vec![0, 1, 2, 0, 2, 1],
+    };
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh);
+    assert_eq!(
+        mesh.indices.len(),
+        0,
+        "opposing-winding triangle pair should cancel"
+    );
+    assert_eq!(
+        mesh.positions.len(),
+        0,
+        "unreferenced positions should be dropped after cancel"
+    );
+}
+
+#[test]
+fn dedupe_collapses_same_winding_duplicate() {
+    let mut mesh = TriangleMesh {
+        positions: vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ],
+        normals: vec![Vec3::new(0.0, 0.0, 1.0); 3],
+        indices: vec![0, 1, 2, 0, 1, 2],
+    };
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh);
+    assert_eq!(
+        mesh.indices.len(),
+        3,
+        "same-winding duplicate should collapse to one triangle"
+    );
+    assert_eq!(mesh.positions.len(), 3, "all 3 vertices still referenced");
+}
+
+#[test]
+fn dedupe_matches_position_coincidence_not_index() {
+    // Two triangles at the same positions but with distinct vertex IDs —
+    // the case where boundary-vertex welding didn't catch them. Same
+    // winding, so dedup keeps one.
+    let p = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+    ];
+    let mut mesh = TriangleMesh {
+        positions: vec![p[0], p[1], p[2], p[0], p[1], p[2]],
+        normals: vec![Vec3::new(0.0, 0.0, 1.0); 6],
+        indices: vec![0, 1, 2, 3, 4, 5],
+    };
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh);
+    assert_eq!(
+        mesh.indices.len(),
+        3,
+        "position-coincident triangle should collapse even with distinct IDs"
+    );
+    assert_eq!(
+        mesh.positions.len(),
+        3,
+        "duplicate positions should be compacted"
+    );
+}
+
+#[test]
+fn dedupe_preserves_thin_plate_geometry() {
+    // 1e-4mm-thick plate: front face (z=0) and back face (z=1e-4) tessellate
+    // to disjoint triangle pairs that share x/y. The quantization grid must
+    // be tight enough to keep them distinct.
+    let mut mesh = TriangleMesh {
+        positions: vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 1e-4),
+            Point3::new(1.0, 0.0, 1e-4),
+            Point3::new(0.0, 1.0, 1e-4),
+        ],
+        normals: vec![Vec3::new(0.0, 0.0, 1.0); 6],
+        indices: vec![0, 1, 2, 3, 5, 4],
+    };
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh);
+    assert_eq!(
+        mesh.indices.len(),
+        6,
+        "1e-4mm-apart triangles should NOT collapse"
+    );
+}
+
 #[test]
 fn tessellate_boolean_cut_cylinder_watertight() {
     use brepkit_math::mat::Mat4;

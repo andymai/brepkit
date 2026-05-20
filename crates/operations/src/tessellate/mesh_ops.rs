@@ -1,6 +1,6 @@
 //! Mesh validation and boundary operations.
 
-use brepkit_math::vec::Point3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
@@ -8,32 +8,15 @@ use brepkit_topology::solid::SolidId;
 use super::TriangleMesh;
 use super::edge_sampling::sample_edge;
 
-/// Check if a mesh is watertight (every edge shared by exactly 2 triangles).
+/// Check if a mesh is a closed 2-manifold.
 ///
-/// Returns `true` if the mesh is a closed 2-manifold: every half-edge
-/// `(a, b)` in the mesh has a corresponding reverse half-edge `(b, a)`.
-///
-/// This is useful for validating that `tessellate_solid` produces
-/// gap-free meshes.
+/// Returns `true` iff every edge is shared by exactly 2 triangles: no gaps
+/// (boundary edges), no branching (non-manifold edges). Useful for
+/// validating that `tessellate_solid` produces watertight meshes suitable
+/// for slicers and downstream geometric operations.
 #[must_use]
 pub fn is_watertight(mesh: &TriangleMesh) -> bool {
-    use std::collections::HashSet;
-
-    let mut half_edges: HashSet<(u32, u32)> = HashSet::new();
-    let tri_count = mesh.indices.len() / 3;
-
-    for t in 0..tri_count {
-        let i0 = mesh.indices[t * 3];
-        let i1 = mesh.indices[t * 3 + 1];
-        let i2 = mesh.indices[t * 3 + 2];
-        half_edges.insert((i0, i1));
-        half_edges.insert((i1, i2));
-        half_edges.insert((i2, i0));
-    }
-
-    half_edges
-        .iter()
-        .all(|&(a, b)| half_edges.contains(&(b, a)))
+    boundary_edge_count(mesh) == 0 && non_manifold_edge_count(mesh) == 0
 }
 
 /// Count boundary (one-sided) edges in a mesh.
@@ -102,9 +85,9 @@ pub fn non_manifold_edge_count(mesh: &TriangleMesh) -> usize {
 pub(super) fn dedupe_coincident_triangles(mesh: &mut TriangleMesh) {
     use std::collections::HashMap;
 
-    /// 1nm grid: tight enough that legitimately distinct CAD features (down to
-    /// 1µm geometry like thin plates) keep separate keys, while still merging
-    /// post-merge floating-point noise in coincident vertices that
+    /// 1µm grid: tight enough that legitimately distinct CAD features (down to
+    /// ~10µm geometry like thin plates) keep separate keys, while still
+    /// merging post-merge floating-point noise in coincident vertices that
     /// boundary-vertex welding didn't catch.
     const POS_GRID: f64 = 1e-6;
 
@@ -193,7 +176,32 @@ pub(super) fn dedupe_coincident_triangles(mesh: &mut TriangleMesh) {
             new_indices.extend_from_slice(&mesh.indices[t * 3..t * 3 + 3]);
         }
     }
+
+    // Compact the position/normal buffers: drop any vertex no longer
+    // referenced by a surviving triangle. Downstream consumers that iterate
+    // `mesh.positions` directly (e.g. bbox passes, exporters that walk
+    // vertices rather than triangle indices) would otherwise see phantom
+    // vertices from removed triangles.
+    let n_verts = mesh.positions.len();
+    let mut remap: Vec<u32> = vec![u32::MAX; n_verts];
+    let mut new_positions: Vec<Point3> = Vec::new();
+    let mut new_normals: Vec<Vec3> = Vec::new();
+    for idx in &mut new_indices {
+        let old = *idx as usize;
+        if remap[old] == u32::MAX {
+            #[allow(clippy::cast_possible_truncation)]
+            let new_id = new_positions.len() as u32;
+            remap[old] = new_id;
+            new_positions.push(mesh.positions[old]);
+            if old < mesh.normals.len() {
+                new_normals.push(mesh.normals[old]);
+            }
+        }
+        *idx = remap[old];
+    }
     mesh.indices = new_indices;
+    mesh.positions = new_positions;
+    mesh.normals = new_normals;
 }
 
 /// Edge polyline data for wireframe visualization.
