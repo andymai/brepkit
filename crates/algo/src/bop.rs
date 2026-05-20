@@ -324,4 +324,46 @@ mod tests {
         let selected = select_faces(&sub_faces, BooleanOp::Intersect, &[], &[]);
         assert_eq!(selected.len(), 2, "Intersect keeps only Inside faces");
     }
+
+    #[test]
+    fn within_rank_dup_drops_duplicate_keeps_representative() {
+        // idx 0 (representative) + idx 1 (duplicate): both rank A, Outside —
+        // would normally both be selected for Fuse. The dup record should
+        // remove idx 1, keep idx 0.
+        let mut topo = Topology::new();
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
+        ];
+        let dups = vec![WithinRankDuplicate {
+            representative: 0,
+            duplicate: 1,
+        }];
+        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &[], &dups);
+        assert_eq!(
+            selected.len(),
+            2,
+            "Fuse should keep representative + B-Outside, drop within-rank duplicate"
+        );
+    }
+
+    #[test]
+    fn within_rank_dup_out_of_bounds_skips_gracefully() {
+        let mut topo = Topology::new();
+        let sub_faces = vec![
+            make_sub_face(&mut topo, Rank::A, FaceClass::Outside),
+            make_sub_face(&mut topo, Rank::B, FaceClass::Outside),
+        ];
+        let dups = vec![WithinRankDuplicate {
+            representative: 5,
+            duplicate: 10,
+        }];
+        let selected = select_faces(&sub_faces, BooleanOp::Fuse, &[], &dups);
+        assert_eq!(
+            selected.len(),
+            2,
+            "Out-of-bounds within-rank-dup record should be ignored, not panic"
+        );
+    }
 }
