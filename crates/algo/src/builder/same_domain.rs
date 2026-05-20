@@ -190,6 +190,15 @@ pub fn detect_same_domain<S: BuildHasher>(
         }
     }
 
+    // Sort pairs by (idx_a, idx_b) — `sd_groups.values()` above iterates
+    // a HashMap, so `pairs` was being assembled in random order.
+    // Downstream `apply_sd_selection` in bop.rs iterates pairs and pushes
+    // to the `selected` faces Vec; the random order propagated into face
+    // ordering in the result shell and drove 100-500× perf variance in
+    // `bench_boolean_64_holes`. Sorting recovers determinism without
+    // changing semantics (pairs is a logical set, not an ordered list).
+    pairs.sort_by_key(|p| (p.idx_a, p.idx_b));
+
     log::debug!(
         "detect_same_domain: {} same-domain pairs found (edge-set hash)",
         pairs.len()

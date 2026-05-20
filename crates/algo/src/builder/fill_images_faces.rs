@@ -88,12 +88,25 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     };
 
     // Build vertex seed from VV-phase merged vertices.
+    //
+    // `same_domain_vertices` is a BTreeMap (deterministic iteration), but
+    // the previous implementation collected its values into a HashSet for
+    // dedup before iterating. HashSet iteration uses a randomized hasher,
+    // so the order of `seed.entry(key).or_insert(vid)` calls varied per
+    // run — when two distinct VertexIds quantized to the same key, the
+    // "winning" vid was nondeterministic. That nondeterminism propagated
+    // into face ordering in the result solid and ultimately drove
+    // 100-500× variance in `bench_boolean_64_holes`. Dedup the BTreeMap
+    // values via a sorted Vec instead, preserving deterministic
+    // insertion order.
     let vv_vertex_seed: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> = {
         let scale = VERTEX_DEDUP_SCALE;
         let mut seed = BTreeMap::new();
-        let canonical_vids: std::collections::HashSet<brepkit_topology::vertex::VertexId> =
+        let mut canonical_vids: Vec<brepkit_topology::vertex::VertexId> =
             arena.same_domain_vertices.values().copied().collect();
-        for &vid in &canonical_vids {
+        canonical_vids.sort();
+        canonical_vids.dedup();
+        for vid in canonical_vids {
             if let Ok(v) = topo.vertex(vid) {
                 let pt = v.point();
                 let key = (
