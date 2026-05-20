@@ -487,23 +487,56 @@ pub fn split_face_2d(
 
     // Distribute original inner wires (holes from the source face) to sub-faces.
     // Each hole is assigned to the sub-face whose outer wire contains it.
+    //
+    // Test with the hole's interior sample (a point inside the hole's enclosed
+    // area), not its first vertex — when the splitter cuts the face along a
+    // line that passes through a hole vertex, that vertex sits exactly on a
+    // sub-face boundary and `point_in_polygon_2d`'s strict ray-cast returns
+    // false for every sub-face. The earlier code logged a warning and
+    // silently dropped the hole, leaving the sub-face missing its cutout.
+    // Falling back to the largest-area sub-face when even the interior
+    // sample doesn't match keeps the geometry intact for the rare residual
+    // cases (e.g., hole straddling multiple sub-faces); a warning still fires
+    // so the case is visible.
     if !original_inner_wires.is_empty() {
         for hole in &original_inner_wires {
-            if let Some(first_pt) = hole.first().map(|e| e.start_uv) {
-                let mut assigned = false;
-                for sf in &mut sub_faces {
-                    let outer_pts = sample_wire_loop_uv(&sf.outer_wire);
-                    if super::classify_2d::point_in_polygon_2d(first_pt, &outer_pts) {
-                        sf.inner_wires.push(hole.clone());
-                        assigned = true;
-                        break;
-                    }
+            let hole_pts = sample_wire_loop_uv(hole);
+            if hole_pts.len() < 3 {
+                continue;
+            }
+            let probe = super::classify_2d::sample_interior_point(&hole_pts);
+            let mut assigned = false;
+            for sf in &mut sub_faces {
+                let outer_pts = sample_wire_loop_uv(&sf.outer_wire);
+                if super::classify_2d::point_in_polygon_2d(probe, &outer_pts) {
+                    sf.inner_wires.push(hole.clone());
+                    assigned = true;
+                    break;
                 }
-                if !assigned {
-                    log::warn!(
-                        "face_splitter: hole with {} edges could not be assigned to any sub-face",
-                        hole.len()
-                    );
+            }
+            if !assigned {
+                log::warn!(
+                    "face_splitter: hole with {} edges did not contain-test in any \
+                     sub-face; attaching to largest sub-face as fallback",
+                    hole.len()
+                );
+                let target_idx = sub_faces
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| {
+                        let area_a =
+                            super::classify_2d::signed_area_2d(&sample_wire_loop_uv(&a.outer_wire))
+                                .abs();
+                        let area_b =
+                            super::classify_2d::signed_area_2d(&sample_wire_loop_uv(&b.outer_wire))
+                                .abs();
+                        area_a
+                            .partial_cmp(&area_b)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|(i, _)| i);
+                if let Some(idx) = target_idx {
+                    sub_faces[idx].inner_wires.push(hole.clone());
                 }
             }
         }
