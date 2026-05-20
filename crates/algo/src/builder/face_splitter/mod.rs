@@ -486,25 +486,65 @@ pub fn split_face_2d(
     }
 
     // Distribute original inner wires (holes from the source face) to sub-faces.
-    // Each hole is assigned to the sub-face whose outer wire contains it.
+    // Each hole is assigned to the sub-face whose outer wire contains its
+    // interior sample point (a point inside the hole's enclosed area, not
+    // its first vertex — that vertex often sits exactly on a sub-face
+    // boundary when the split passes through it, and `point_in_polygon_2d`'s
+    // strict ray-cast returns false for every sub-face). If no sub-face
+    // claims the hole — degenerate UV sample, hole straddling multiple
+    // sub-faces, etc. — fall back to the largest-area sub-face. A warning
+    // fires for the fallback so the case stays visible; what we never do is
+    // silently drop the hole as the earlier code did.
     if !original_inner_wires.is_empty() {
+        let largest_sub_face_idx = |sub_faces: &[SplitSubFace]| -> Option<usize> {
+            sub_faces
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| {
+                    let area_a =
+                        super::classify_2d::signed_area_2d(&sample_wire_loop_uv(&a.outer_wire))
+                            .abs();
+                    let area_b =
+                        super::classify_2d::signed_area_2d(&sample_wire_loop_uv(&b.outer_wire))
+                            .abs();
+                    area_a
+                        .partial_cmp(&area_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|(i, _)| i)
+        };
+
         for hole in &original_inner_wires {
-            if let Some(first_pt) = hole.first().map(|e| e.start_uv) {
-                let mut assigned = false;
-                for sf in &mut sub_faces {
+            let hole_pts = sample_wire_loop_uv(hole);
+            let assigned = if hole_pts.len() >= 3 {
+                let probe = super::classify_2d::sample_interior_point(&hole_pts);
+                sub_faces.iter_mut().find_map(|sf| {
                     let outer_pts = sample_wire_loop_uv(&sf.outer_wire);
-                    if super::classify_2d::point_in_polygon_2d(first_pt, &outer_pts) {
+                    super::classify_2d::point_in_polygon_2d(probe, &outer_pts).then(|| {
                         sf.inner_wires.push(hole.clone());
-                        assigned = true;
-                        break;
-                    }
-                }
-                if !assigned {
-                    log::warn!(
-                        "face_splitter: hole with {} edges could not be assigned to any sub-face",
-                        hole.len()
-                    );
-                }
+                    })
+                })
+            } else {
+                None
+            };
+            if assigned.is_some() {
+                continue;
+            }
+            // Fallback path: degenerate sample OR no sub-face contained the
+            // probe point. Attach to the largest sub-face so the geometry is
+            // preserved.
+            let reason = if hole_pts.len() < 3 {
+                "produced a degenerate UV sample (<3 pts)"
+            } else {
+                "did not contain-test in any sub-face"
+            };
+            log::warn!(
+                "face_splitter: hole with {} edges {reason}; attaching to largest sub-face \
+                 as fallback",
+                hole.len()
+            );
+            if let Some(idx) = largest_sub_face_idx(&sub_faces) {
+                sub_faces[idx].inner_wires.push(hole.clone());
             }
         }
     }
