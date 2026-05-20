@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.89.1](https://github.com/andymai/brepkit/compare/v2.89.0...v2.89.1) (2026-05-20)
+
+
+### Bug Fixes
+
+* **algo:** two HashMap iteration sites driving 64-cut bench variance ([#689](https://github.com/andymai/brepkit/issues/689)) ([fa2fdb7](https://github.com/andymai/brepkit/commit/fa2fdb7c5106f6d9eec21ee92b214fe074b48e83))
+
 ## [2.89.0](https://github.com/andymai/brepkit/compare/v2.88.1...v2.89.0) (2026-05-19)
 
 
