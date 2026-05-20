@@ -138,6 +138,38 @@ pub fn perform(
             };
 
             for raw in raw_curves {
+                // Closed Circle3D sections — produced by plane-sphere
+                // intersections — get split at face-boundary crossings so
+                // downstream face splitters see open arcs they can match
+                // up. Without this, the closed curve is dropped by
+                // `split_noseam_face_direct` and the spherical sub-face is
+                // lost entirely.
+                //
+                // Note: the split here is structurally correct (the FF
+                // arcs now have proper endpoints on the analytic face's
+                // boundary), but `split_noseam_face_direct` still can't
+                // form a single closed cap loop when 2+ arcs cross on a
+                // sphere hemisphere (e.g. the great circles from x=0 and
+                // y=0 planes meeting at the pole). The hemisphere falls
+                // back to "unsplit" → the spherical sub-face is missing
+                // from the GFA output → the boolean pipeline retries with
+                // mesh boolean. Closing that gap requires generalising
+                // the face splitter for multi-arc sphere hemispheres —
+                // see `crates/algo/src/builder/face_splitter/mod.rs:138`
+                // dispatch and `special_cases.rs::split_noseam_face_direct`.
+                if let EdgeCurve::Circle(circle) = &raw.curve {
+                    let is_closed = (raw.p_start - raw.p_end).length() < tol.linear;
+                    if is_closed {
+                        let crossings = closed_circle_boundary_crossings(topo, fa, fb, circle, tol);
+                        if crossings.len() >= 2 {
+                            emit_split_circle_arcs(
+                                topo, arena, fa, fb, &raw, circle, &crossings, tol,
+                            );
+                            continue;
+                        }
+                    }
+                }
+
                 // Create topology vertices at the curve endpoints.
                 // For closed curves (Circle/Ellipse), start and end are the same
                 // 3D point — reuse one vertex for correct seam topology.
@@ -644,6 +676,315 @@ fn find_nearby_face_vertex(
         }
     }
     None
+}
+
+/// Find where a closed `Circle3D` section crosses the outer-wire
+/// boundary of the analytic-surface face in the pair (the non-plane
+/// face, which holds the boundary the curve actually exits at).
+///
+/// Returns crossings as `(t_on_circle, point_3d)` sorted by `t`, with
+/// duplicates removed. Only `Line`-curve boundary edges are considered.
+///
+/// Rationale: for plane-sphere intersections, the closed curve lies on
+/// both the plane face and the sphere hemisphere, but the *meaningful*
+/// boundary crossings are on the sphere hemisphere's equator polygon
+/// — those are the points where the section enters/leaves the
+/// hemisphere region. Using those crossings as split points gives
+/// half-arcs that cleanly bound a spherical cap sub-face. The plane
+/// face's boundary crossings can introduce points interior to the
+/// sphere hemisphere, producing arcs that don't form closed loops on
+/// the hemisphere.
+fn closed_circle_boundary_crossings(
+    topo: &Topology,
+    face_a: FaceId,
+    face_b: FaceId,
+    circle: &brepkit_math::curves::Circle3D,
+    tol: Tolerance,
+) -> Vec<(f64, Point3)> {
+    let mut hits: Vec<(f64, Point3)> = Vec::new();
+
+    // Pick the non-plane face for boundary crossings. If both are planes
+    // or both are non-plane, fall back to using both (existing behavior).
+    let analytic_face = |fid: FaceId| -> Option<FaceId> {
+        let face = topo.face(fid).ok()?;
+        if matches!(face.surface(), FaceSurface::Plane { .. }) {
+            None
+        } else {
+            Some(fid)
+        }
+    };
+    let analytic_a = analytic_face(face_a);
+    let analytic_b = analytic_face(face_b);
+    let faces_to_check: Vec<FaceId> = match (analytic_a, analytic_b) {
+        (None, Some(b)) => vec![b],
+        (Some(a), None) => vec![a],
+        _ => vec![face_a, face_b],
+    };
+
+    for &fid in &faces_to_check {
+        let Ok(face) = topo.face(fid) else {
+            continue;
+        };
+        let Ok(wire) = topo.wire(face.outer_wire()) else {
+            continue;
+        };
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            // Only line boundary edges are supported for now (covers all
+            // current sphere-hemisphere + box-face boundaries).
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                continue;
+            }
+            let Ok(sv) = topo.vertex(edge.start()) else {
+                continue;
+            };
+            let Ok(ev) = topo.vertex(edge.end()) else {
+                continue;
+            };
+            for (p, t) in circle.intersect_segment(sv.point(), ev.point(), tol.linear) {
+                // Dedup against existing hits by 3D distance.
+                let dup = hits
+                    .iter()
+                    .any(|(_, q)| (*q - p).length() < tol.linear * 10.0);
+                if !dup {
+                    hits.push((t, p));
+                }
+            }
+        }
+    }
+
+    hits.sort_by(|a, b| a.0.total_cmp(&b.0));
+
+    log::trace!(
+        "closed_circle_boundary_crossings: face_a={face_a:?} face_b={face_b:?} hits={}",
+        hits.len()
+    );
+
+    // If we found more than 4 crossings, the circle is almost certainly
+    // coincident with one of the face boundaries (e.g. the equator polygon
+    // approximating a great circle on a sphere). In that case the curve
+    // is the boundary itself, not an interior section — fall back to the
+    // existing closed-curve handling instead of splitting.
+    if hits.len() > 4 {
+        log::debug!(
+            "closed_circle_boundary_crossings: {} hits — assuming coincident with boundary, \
+             skipping split",
+            hits.len()
+        );
+        return Vec::new();
+    }
+
+    hits
+}
+
+/// Emit N arc edges + `IntersectionCurveDS` entries for a closed-circle
+/// section split at `crossings` (≥ 2 entries, sorted by circle parameter
+/// `t`).
+///
+/// Each arc becomes its own `IntersectionCurveDS` so that the downstream
+/// `build_section_edges` path sees N separate (open) section sources
+/// instead of one closed curve. `build_section_edges` reconstructs each
+/// section's start/end from the curve's `t_range`, so the per-arc t-range
+/// here is what carries the split through.
+///
+/// Arcs whose midpoints fall outside the AABB of either face are dropped
+/// — those portions of the original closed curve are not geometrically
+/// "on" the face pair, so emitting them as sections would confuse the
+/// face splitter.
+#[allow(clippy::too_many_arguments)]
+fn emit_split_circle_arcs(
+    topo: &mut Topology,
+    arena: &mut GfaArena,
+    face_a: FaceId,
+    face_b: FaceId,
+    raw: &RawCurve,
+    circle: &brepkit_math::curves::Circle3D,
+    crossings: &[(f64, Point3)],
+    tol: Tolerance,
+) {
+    // Compute AABBs for each face. For analytic faces the outer wire
+    // alone doesn't enclose the face region (e.g. a sphere hemisphere has
+    // its outer wire on the equator plane while the surface extends to
+    // the pole) — so we union the wire AABB with the surface's AABB to
+    // get a usable bounding region.
+    let face_aabb = |fid: FaceId| -> Option<Aabb3> {
+        let face = topo.face(fid).ok()?;
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        let mut min = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+        let mut max = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        let mut any = false;
+        for oe in wire.edges() {
+            if let Ok(edge) = topo.edge(oe.edge()) {
+                for vid in [edge.start(), edge.end()] {
+                    if let Ok(v) = topo.vertex(vid) {
+                        let p = v.point();
+                        min =
+                            Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
+                        max =
+                            Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
+                        any = true;
+                    }
+                }
+            }
+        }
+        if !any {
+            return None;
+        }
+        // For analytic surfaces with finite extent, union the wire AABB
+        // with the surface AABB. This expands a "degenerate-in-Z hemisphere
+        // wire" (z=0 only) up to the actual hemisphere extent.
+        if let FaceSurface::Sphere(sphere) = face.surface() {
+            let r = sphere.radius();
+            let c = sphere.center();
+            min = Point3::new(
+                min.x().min(c.x() - r),
+                min.y().min(c.y() - r),
+                min.z().min(c.z() - r),
+            );
+            max = Point3::new(
+                max.x().max(c.x() + r),
+                max.y().max(c.y() + r),
+                max.z().max(c.z() + r),
+            );
+        }
+        Some(Aabb3 { min, max }.expanded(tol.linear * 10.0))
+    };
+    let bbox_a = face_aabb(face_a);
+    let bbox_b = face_aabb(face_b);
+    let in_both = |p: Point3| -> bool {
+        let a_ok = bbox_a.as_ref().is_none_or(|b| b.contains_point(p));
+        let b_ok = bbox_b.as_ref().is_none_or(|b| b.contains_point(p));
+        a_ok && b_ok
+    };
+
+    // Pass 1: determine which arcs survive the AABB filter, *before*
+    // allocating any topology vertices. Otherwise dropping an arc could
+    // leave its crossing vertices orphaned in the topology (no edges
+    // reference them) — visible to any downstream pass that iterates all
+    // vertices. We also split each surviving arc into sub-arcs of span
+    // ≤ π so the resulting `EdgeCurve::Circle` is unambiguous: several
+    // downstream consumers (tessellation's `shorter_arc_range` in
+    // `tessellate/mod.rs`, wire sampling in `topology/builder.rs`)
+    // interpret an open circle edge as the *shorter* arc between its
+    // endpoints, so a span > π would be flipped to the complementary
+    // arc and break face splitting/classification.
+    //
+    // Each survivor records the inserted crossing points along with
+    // their (t, 3D) values; pass 2 then materialises just those
+    // vertices (in order) and builds the edges.
+    //
+    // Each point is `(t, 3D point, original-crossing-index-or-None)`.
+    // Endpoints carry `Some(crossing_index)` so we can dedup with
+    // adjacent arcs sharing the same crossing vertex; midpoints
+    // (inserted to keep span ≤ π) carry `None` and always get a fresh
+    // vertex allocation.
+    let n = crossings.len();
+    let mut survivors: Vec<Vec<(f64, Point3, Option<usize>)>> = Vec::new();
+    for i in 0..n {
+        let (t0, _p0) = crossings[i];
+        // Wrap to next crossing; for the last arc that means going back to
+        // the first crossing through the seam (t0 → t1 + 2π).
+        let next_i = (i + 1) % n;
+        let (mut t1, _p1) = crossings[next_i];
+        if t1 <= t0 {
+            t1 += std::f64::consts::TAU;
+        }
+
+        let t_mid = (t0 + t1) * 0.5;
+        let mid_3d = circle.evaluate(t_mid);
+        if !in_both(mid_3d) {
+            log::debug!(
+                "FF: drop closed-circle arc {i}/{n} (midpoint {mid_3d:?} outside face pair)"
+            );
+            continue;
+        }
+
+        // Split spans > π into 2+ sub-arcs by inserting midpoint vertices
+        // at evenly spaced t-values. Each sub-arc then has span ≤ π so
+        // downstream "shorter arc" interpretation matches the intended arc.
+        let arc_span = t1 - t0;
+        let n_sub = (arc_span / std::f64::consts::PI).ceil().max(1.0) as usize;
+        let step = arc_span / n_sub as f64;
+        let mut points: Vec<(f64, Point3, Option<usize>)> = Vec::with_capacity(n_sub + 1);
+        points.push((t0, crossings[i].1, Some(i)));
+        for k in 1..n_sub {
+            let tk = t0 + step * k as f64;
+            points.push((tk, circle.evaluate(tk), None));
+        }
+        points.push((t1, crossings[next_i].1, Some(next_i)));
+
+        survivors.push(points);
+    }
+
+    // Pass 2: allocate vertices only for crossings/midpoints used by
+    // surviving arcs, then materialise edges + pave blocks.
+    let mut crossing_vids: Vec<Option<brepkit_topology::vertex::VertexId>> = vec![None; n];
+    let resolve_crossing =
+        |topo: &mut Topology, arena: &GfaArena, p: Point3| -> brepkit_topology::vertex::VertexId {
+            super::helpers::find_nearby_pave_vertex(topo, arena, p, tol)
+                .or_else(|| find_nearby_face_vertex(topo, face_a, p, tol))
+                .or_else(|| find_nearby_face_vertex(topo, face_b, p, tol))
+                .unwrap_or_else(|| topo.add_vertex(Vertex::new(p, tol.linear)))
+        };
+
+    let mut emitted = 0_usize;
+    let num_survivors = survivors.len();
+    for (a_idx, arc_points) in survivors.into_iter().enumerate() {
+        // Walk consecutive (t, point) pairs to emit one edge per sub-arc.
+        for w in arc_points.windows(2) {
+            let (t_s, p_s, idx_s) = w[0];
+            let (t_e, p_e, idx_e) = w[1];
+
+            let start_vid = match idx_s {
+                Some(ci) => {
+                    *crossing_vids[ci].get_or_insert_with(|| resolve_crossing(topo, arena, p_s))
+                }
+                None => topo.add_vertex(Vertex::new(p_s, tol.linear)),
+            };
+            let end_vid = match idx_e {
+                Some(ci) => {
+                    *crossing_vids[ci].get_or_insert_with(|| resolve_crossing(topo, arena, p_e))
+                }
+                None => topo.add_vertex(Vertex::new(p_e, tol.linear)),
+            };
+
+            let edge = Edge::new(start_vid, end_vid, EdgeCurve::Circle(circle.clone()));
+            let edge_id = topo.add_edge(edge);
+
+            let start_pave = Pave::new(start_vid, t_s);
+            let end_pave = Pave::new(end_vid, t_e);
+            let pb = PaveBlock::new(edge_id, start_pave, end_pave);
+            let pb_id = arena.pave_blocks.alloc(pb);
+
+            let curve_index = arena.curves.len();
+            arena.curves.push(IntersectionCurveDS {
+                curve: EdgeCurve::Circle(circle.clone()),
+                face_a,
+                face_b,
+                // The full-circle bbox is a safe over-approximation for any arc.
+                bbox: raw.bbox,
+                pave_blocks: vec![pb_id],
+                t_range: (t_s, t_e),
+            });
+
+            arena.interference.ff.push(Interference::FF {
+                f1: face_a,
+                f2: face_b,
+                curve_index,
+            });
+            emitted += 1;
+
+            log::debug!(
+                "FF: split closed circle arc {a_idx}/{num_survivors}: \
+                 faces {face_a:?}/{face_b:?} t=[{t_s:.4},{t_e:.4}] \
+                 edge={edge_id:?} pb={pb_id:?}"
+            );
+        }
+    }
+
+    log::debug!("FF: emitted {emitted}/{n} arcs after AABB filter for {face_a:?}/{face_b:?}");
 }
 
 /// Compute AABB for a NURBS curve.
