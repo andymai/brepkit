@@ -755,7 +755,7 @@ fn closed_circle_boundary_crossings(
         }
     }
 
-    hits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     log::trace!(
         "closed_circle_boundary_crossings: face_a={face_a:?} face_b={face_b:?} hits={}",
@@ -859,19 +859,29 @@ fn emit_split_circle_arcs(
         a_ok && b_ok
     };
 
-    // Create / snap vertices at each crossing point.
-    let mut crossing_vids: Vec<brepkit_topology::vertex::VertexId> =
-        Vec::with_capacity(crossings.len());
-    for (_, p) in crossings {
-        let vid = super::helpers::find_nearby_pave_vertex(topo, arena, *p, tol)
-            .or_else(|| find_nearby_face_vertex(topo, face_a, *p, tol))
-            .or_else(|| find_nearby_face_vertex(topo, face_b, *p, tol))
-            .unwrap_or_else(|| topo.add_vertex(Vertex::new(*p, tol.linear)));
-        crossing_vids.push(vid);
-    }
-
+    // Pass 1: determine which arcs survive the AABB filter, *before*
+    // allocating any topology vertices. Otherwise dropping an arc could
+    // leave its crossing vertices orphaned in the topology (no edges
+    // reference them) — visible to any downstream pass that iterates all
+    // vertices. We also split each surviving arc into sub-arcs of span
+    // ≤ π so the resulting `EdgeCurve::Circle` is unambiguous: several
+    // downstream consumers (tessellation's `shorter_arc_range` in
+    // `tessellate/mod.rs`, wire sampling in `topology/builder.rs`)
+    // interpret an open circle edge as the *shorter* arc between its
+    // endpoints, so a span > π would be flipped to the complementary
+    // arc and break face splitting/classification.
+    //
+    // Each survivor records the inserted crossing points along with
+    // their (t, 3D) values; pass 2 then materialises just those
+    // vertices (in order) and builds the edges.
+    //
+    // Each point is `(t, 3D point, original-crossing-index-or-None)`.
+    // Endpoints carry `Some(crossing_index)` so we can dedup with
+    // adjacent arcs sharing the same crossing vertex; midpoints
+    // (inserted to keep span ≤ π) carry `None` and always get a fresh
+    // vertex allocation.
     let n = crossings.len();
-    let mut emitted = 0_usize;
+    let mut survivors: Vec<Vec<(f64, Point3, Option<usize>)>> = Vec::new();
     for i in 0..n {
         let (t0, _p0) = crossings[i];
         // Wrap to next crossing; for the last arc that means going back to
@@ -882,7 +892,6 @@ fn emit_split_circle_arcs(
             t1 += std::f64::consts::TAU;
         }
 
-        // Sample the arc midpoint and drop the arc if it isn't on both faces.
         let t_mid = (t0 + t1) * 0.5;
         let mid_3d = circle.evaluate(t_mid);
         if !in_both(mid_3d) {
@@ -892,39 +901,87 @@ fn emit_split_circle_arcs(
             continue;
         }
 
-        let start_vid = crossing_vids[i];
-        let end_vid = crossing_vids[next_i];
+        // Split spans > π into 2+ sub-arcs by inserting midpoint vertices
+        // at evenly spaced t-values. Each sub-arc then has span ≤ π so
+        // downstream "shorter arc" interpretation matches the intended arc.
+        let arc_span = t1 - t0;
+        let n_sub = (arc_span / std::f64::consts::PI).ceil().max(1.0) as usize;
+        let step = arc_span / n_sub as f64;
+        let mut points: Vec<(f64, Point3, Option<usize>)> = Vec::with_capacity(n_sub + 1);
+        points.push((t0, crossings[i].1, Some(i)));
+        for k in 1..n_sub {
+            let tk = t0 + step * k as f64;
+            points.push((tk, circle.evaluate(tk), None));
+        }
+        points.push((t1, crossings[next_i].1, Some(next_i)));
 
-        let edge = Edge::new(start_vid, end_vid, EdgeCurve::Circle(circle.clone()));
-        let edge_id = topo.add_edge(edge);
+        survivors.push(points);
+    }
 
-        let start_pave = Pave::new(start_vid, t0);
-        let end_pave = Pave::new(end_vid, t1);
-        let pb = PaveBlock::new(edge_id, start_pave, end_pave);
-        let pb_id = arena.pave_blocks.alloc(pb);
+    // Pass 2: allocate vertices only for crossings/midpoints used by
+    // surviving arcs, then materialise edges + pave blocks.
+    let mut crossing_vids: Vec<Option<brepkit_topology::vertex::VertexId>> = vec![None; n];
+    let resolve_crossing =
+        |topo: &mut Topology, arena: &GfaArena, p: Point3| -> brepkit_topology::vertex::VertexId {
+            super::helpers::find_nearby_pave_vertex(topo, arena, p, tol)
+                .or_else(|| find_nearby_face_vertex(topo, face_a, p, tol))
+                .or_else(|| find_nearby_face_vertex(topo, face_b, p, tol))
+                .unwrap_or_else(|| topo.add_vertex(Vertex::new(p, tol.linear)))
+        };
 
-        let curve_index = arena.curves.len();
-        arena.curves.push(IntersectionCurveDS {
-            curve: EdgeCurve::Circle(circle.clone()),
-            face_a,
-            face_b,
-            // The full-circle bbox is a safe over-approximation for any arc.
-            bbox: raw.bbox,
-            pave_blocks: vec![pb_id],
-            t_range: (t0, t1),
-        });
+    let mut emitted = 0_usize;
+    let num_survivors = survivors.len();
+    for (a_idx, arc_points) in survivors.into_iter().enumerate() {
+        // Walk consecutive (t, point) pairs to emit one edge per sub-arc.
+        for w in arc_points.windows(2) {
+            let (t_s, p_s, idx_s) = w[0];
+            let (t_e, p_e, idx_e) = w[1];
 
-        arena.interference.ff.push(Interference::FF {
-            f1: face_a,
-            f2: face_b,
-            curve_index,
-        });
-        emitted += 1;
+            let start_vid = match idx_s {
+                Some(ci) => {
+                    *crossing_vids[ci].get_or_insert_with(|| resolve_crossing(topo, arena, p_s))
+                }
+                None => topo.add_vertex(Vertex::new(p_s, tol.linear)),
+            };
+            let end_vid = match idx_e {
+                Some(ci) => {
+                    *crossing_vids[ci].get_or_insert_with(|| resolve_crossing(topo, arena, p_e))
+                }
+                None => topo.add_vertex(Vertex::new(p_e, tol.linear)),
+            };
 
-        log::debug!(
-            "FF: split closed circle arc {i}/{n}: faces {face_a:?}/{face_b:?} \
-             t=[{t0:.4},{t1:.4}] edge={edge_id:?} pb={pb_id:?}"
-        );
+            let edge = Edge::new(start_vid, end_vid, EdgeCurve::Circle(circle.clone()));
+            let edge_id = topo.add_edge(edge);
+
+            let start_pave = Pave::new(start_vid, t_s);
+            let end_pave = Pave::new(end_vid, t_e);
+            let pb = PaveBlock::new(edge_id, start_pave, end_pave);
+            let pb_id = arena.pave_blocks.alloc(pb);
+
+            let curve_index = arena.curves.len();
+            arena.curves.push(IntersectionCurveDS {
+                curve: EdgeCurve::Circle(circle.clone()),
+                face_a,
+                face_b,
+                // The full-circle bbox is a safe over-approximation for any arc.
+                bbox: raw.bbox,
+                pave_blocks: vec![pb_id],
+                t_range: (t_s, t_e),
+            });
+
+            arena.interference.ff.push(Interference::FF {
+                f1: face_a,
+                f2: face_b,
+                curve_index,
+            });
+            emitted += 1;
+
+            log::debug!(
+                "FF: split closed circle arc {a_idx}/{num_survivors}: \
+                 faces {face_a:?}/{face_b:?} t=[{t_s:.4},{t_e:.4}] \
+                 edge={edge_id:?} pb={pb_id:?}"
+            );
+        }
     }
 
     log::debug!("FF: emitted {emitted}/{n} arcs after AABB filter for {face_a:?}/{face_b:?}");

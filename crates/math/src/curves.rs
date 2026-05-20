@@ -319,7 +319,12 @@ impl Circle3D {
             let b = p0_u * du + p0_v * dv;
             let c = p0_u * p0_u + p0_v * p0_v - self.radius * self.radius;
             let disc = b * b - a * c;
-            if a < tol * tol || disc < -tol {
+            // `disc` has units of length^4 (it's b² - a·c, both products of
+            // squared coordinates). Compare against a scale-aware threshold
+            // `(tol² · a)` rather than raw `tol` (which is length).
+            // Negative discriminants smaller than this in magnitude are
+            // floating-point noise on a tangent intersection — clamp to 0.
+            if a < tol * tol || disc < -tol * tol * a {
                 return out;
             }
             let disc = disc.max(0.0);
