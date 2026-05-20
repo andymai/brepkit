@@ -3,6 +3,7 @@
 //! The most important operation is [`unify_same_domain`], which merges
 //! adjacent faces that share the same underlying surface.
 
+pub mod collapse_collinear_vertices;
 pub mod convert_to_bezier;
 pub mod remove_internal_wires;
 pub mod shell_sewing;

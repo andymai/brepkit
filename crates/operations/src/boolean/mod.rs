@@ -1724,6 +1724,22 @@ fn mesh_boolean_fallback(
     if opts.unify_faces {
         let _ = crate::heal::unify_faces(topo, result)?;
     }
+    // Cross-face symmetrization: tessellation diagonals that one face
+    // dropped while its neighbour kept (#696) leave structurally
+    // orphan collinear interior wire vertices. Collapse those so both
+    // sides reference the same EdgeId for the shared 3D segment,
+    // eliminating the residual non-manifold edges that `unify_faces`
+    // can't symmetrize from per-face surface matching alone.
+    let collapsed =
+        brepkit_heal::upgrade::collapse_collinear_vertices::collapse_collinear_wire_vertices(
+            topo, result, tol,
+        )
+        .unwrap_or(0);
+    if collapsed > 0 {
+        log::info!(
+            "boolean {op:?}: collapsed {collapsed} collinear interior wire vertex/vertices post-mesh-assembly",
+        );
+    }
     if opts.heal_after_boolean {
         let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
     }
