@@ -96,9 +96,15 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // run — when two distinct VertexIds quantized to the same key, the
     // "winning" vid was nondeterministic. That nondeterminism propagated
     // into face ordering in the result solid and ultimately drove
-    // 100-500× variance in `bench_boolean_64_holes`. Dedup the BTreeMap
-    // values via a sorted Vec instead, preserving deterministic
-    // insertion order.
+    // 100-500× variance in `bench_boolean_64_holes`.
+    //
+    // Fix: dedup the BTreeMap values via a sorted Vec. The canonical
+    // policy is now explicit — lowest VertexId wins per quantized key,
+    // independent of how `same_domain_vertices` was populated. Different
+    // from the BTreeMap's natural value order (which is the order keys
+    // were inserted), but that order wasn't load-bearing here, and an
+    // explicit "lowest id wins" policy is easier to reason about than
+    // "whatever the BTreeMap's value iteration happened to be."
     let vv_vertex_seed: BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId> = {
         let scale = VERTEX_DEDUP_SCALE;
         let mut seed = BTreeMap::new();

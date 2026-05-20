@@ -62,10 +62,11 @@ fn run_64_cut_snapshot() -> Vec<(usize, usize, usize)> {
 /// vv_vertex_seed sorted Vec) the divergence still occurs at cut 1;
 /// follow this harness to localize the next site.
 #[test]
-#[ignore = "diagnostic — explicit-only nondeterminism bisect tool"]
+#[ignore = "diagnostic — explicit-only nondeterminism bisect tool; fails until full determinism is achieved"]
 fn diverge_first_cut() {
     let a = run_64_cut_snapshot();
     let b = run_64_cut_snapshot();
+    let mut divergence: Option<usize> = None;
     for (i, (sa, sb)) in a.iter().zip(b.iter()).enumerate() {
         if sa != sb {
             println!(
@@ -78,8 +79,20 @@ fn diverge_first_cut() {
                     a[j].0, a[j].1, a[j].2, b[j].0, b[j].1, b[j].2
                 );
             }
-            return;
+            divergence = Some(i);
+            break;
         }
     }
-    println!("No divergence in 64 cuts (all snapshots match) — runs are deterministic");
+    // Fail loudly so explicit `--ignored` runs (and any script wrapping
+    // this) get an unambiguous non-zero exit when nondeterminism is
+    // present. Today this assertion fails (the two source-side fixes in
+    // this PR narrow but don't close the variance); when the next round
+    // of HashMap iteration fixes lands, this assertion will start
+    // passing and the test becomes a real determinism gate.
+    assert!(
+        divergence.is_none(),
+        "64-cut sequence is nondeterministic — first divergence at cut {} (full trace above)",
+        divergence.unwrap_or(0)
+    );
+    println!("No divergence in 64 cuts — runs are deterministic");
 }

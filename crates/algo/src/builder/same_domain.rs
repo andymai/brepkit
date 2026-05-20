@@ -197,7 +197,10 @@ pub fn detect_same_domain<S: BuildHasher>(
     // ordering in the result shell and drove 100-500× perf variance in
     // `bench_boolean_64_holes`. Sorting recovers determinism without
     // changing semantics (pairs is a logical set, not an ordered list).
-    pairs.sort_by_key(|p| (p.idx_a, p.idx_b));
+    // Unstable sort is fine — keys (idx_a, idx_b) are unique within
+    // the per-group representative pick above, so no ties exist to
+    // reorder.
+    pairs.sort_unstable_by_key(|p| (p.idx_a, p.idx_b));
 
     log::debug!(
         "detect_same_domain: {} same-domain pairs found (edge-set hash)",
