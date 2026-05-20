@@ -1743,6 +1743,29 @@ fn mesh_boolean_fallback(
             "boolean {op:?}: collapsed {collapsed} collinear interior wire vertex/vertices post-mesh-assembly",
         );
     }
+    // Mesh-fallback can glue two physically-separate holes into a
+    // single figure-8 inner wire via diagonal "bridge" edges across
+    // gap material (#696 cumulative pattern: a slab top with multiple
+    // pocket cuts ends up with one self-intersecting inner wire that
+    // visits each pocket region). Split such wires at every pinch
+    // vertex so each physical hole is its own simple inner wire —
+    // the resulting topology is well-formed for downstream
+    // tessellation, validation, and STEP export, even when the
+    // bridge edges themselves remain as boundary edges (those are a
+    // separate cleanup).
+    let wires_split =
+        brepkit_heal::upgrade::split_self_intersecting_wires::split_self_intersecting_inner_wires(
+            topo, result,
+        )
+        .unwrap_or_else(|e| {
+            log::warn!("boolean {op:?}: split_self_intersecting_inner_wires failed: {e}");
+            0
+        });
+    if wires_split > 0 {
+        log::info!(
+            "boolean {op:?}: split {wires_split} self-intersecting inner wire(s) post-mesh-assembly",
+        );
+    }
     if opts.heal_after_boolean {
         let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
     }
