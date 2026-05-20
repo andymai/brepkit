@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.89.2](https://github.com/andymai/brepkit/compare/v2.89.1...v2.89.2) (2026-05-20)
+
+
+### Bug Fixes
+
+* **algo:** close compound boolean variance + lay foundation for box-sphere intersect ([#692](https://github.com/andymai/brepkit/issues/692)) ([b8cf167](https://github.com/andymai/brepkit/commit/b8cf167da4f4dd06babfb33c6ce142cd6121754f))
+
 ## [2.89.1](https://github.com/andymai/brepkit/compare/v2.89.0...v2.89.1) (2026-05-20)
 
 
