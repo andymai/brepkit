@@ -12,6 +12,7 @@ pub mod error;
 mod handles;
 mod helpers;
 pub mod kernel;
+mod logging;
 pub mod shapes;
 mod state;
 mod types;
