@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.90.1](https://github.com/andymai/brepkit/compare/v2.90.0...v2.90.1) (2026-05-20)
+
+
+### Bug Fixes
+
+* **tessellate:** partial fix for [#696](https://github.com/andymai/brepkit/issues/696) — dedupe coincident triangles + NM diagnostics ([#697](https://github.com/andymai/brepkit/issues/697)) ([923d04d](https://github.com/andymai/brepkit/commit/923d04d7daaa4516edb08e5ea359e2285751b264))
+
 ## [2.90.0](https://github.com/andymai/brepkit/compare/v2.89.2...v2.90.0) (2026-05-20)
 
 
