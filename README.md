@@ -71,6 +71,16 @@ brepkit is in active development. Core modeling works. Some areas are still matu
 | **Evolution**           | Face provenance tracking through operations                    | Beta    |
 | **Defeaturing**         | Remove specified faces/features from solid                     | Beta    |
 
+## Scope
+
+To set expectations, this project deliberately does not:
+
+- **Render scenes or manage viewports** — brepkit produces geometry and tessellated meshes; rendering (camera, lighting, shading) is left to the caller (e.g. Three.js, wgpu).
+- **Perform toolpath planning or slicing** — export STEP, STL, or 3MF and pass the output to a CAM tool or slicer (Bambu Studio, PrusaSlicer, etc.).
+- **Support mesh-based modeling** — the kernel operates on exact B-Rep geometry; subdivision surfaces, polygon meshes, and voxel representations are out of scope.
+- **Provide a GUI or interactive editor** — brepkit is a library; building a UI around it (like [gridfinitylayouttool.com](https://gridfinitylayouttool.com)) is the application's responsibility.
+- **Simulate physics or perform FEA** — measurement (volume, CoM, inertia) is included, but stress analysis, collision detection, and dynamics are not.
+
 ## Roadmap
 
 Broad directions, no dates.
@@ -131,7 +141,7 @@ Median times from the [brepjs benchmark suite](https://github.com/andymai/brepjs
 | ------------------------ | -------------- | ----------- | ------- | ---------------- |
 | fuse(box, box)           | 5.7 ms         | 83.7 ms     | 15x     | 336 µs           |
 | cut(box, cylinder)       | 4.2 ms         | 123.8 ms    | 29x     | 221 µs           |
-| intersect(box, sphere)   | 31.9 ms        | 107.1 ms    | 3.4x    | 2.4 ms           |
+| intersect(box, sphere)   | 31.9 ms        | 107.1 ms    | 3.4x    | 1.8 ms           |
 | box + chamfer            | 0.1 ms         | 7.8 ms      | 78x     | 55 µs            |
 | box + fillet             | 0.3 ms         | 8.1 ms      | 27x     | 75 µs            |
 | multi-boolean (16 holes) | 1.7 ms         | 52.0 ms     | 31x     | 1.2 ms           |
