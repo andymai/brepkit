@@ -1734,7 +1734,10 @@ fn mesh_boolean_fallback(
         brepkit_heal::upgrade::collapse_collinear_vertices::collapse_collinear_wire_vertices(
             topo, result, tol,
         )
-        .unwrap_or(0);
+        .unwrap_or_else(|e| {
+            log::warn!("boolean {op:?}: collapse_collinear_wire_vertices failed: {e}");
+            0
+        });
     if collapsed > 0 {
         log::info!(
             "boolean {op:?}: collapsed {collapsed} collinear interior wire vertex/vertices post-mesh-assembly",

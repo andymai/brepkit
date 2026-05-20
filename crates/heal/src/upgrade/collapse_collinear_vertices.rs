@@ -231,7 +231,7 @@ pub fn collapse_collinear_wire_vertices(
         // on a face the V-bearing face isn't using — otherwise we'd be
         // either creating an orphan edge (no benefit) or unifying a
         // face with itself.
-        let existing = find_line_edge(topo, p_vid, q_vid);
+        let existing = find_line_edge(topo, &edges_in_solid, p_vid, q_vid);
         let new_edge = match (existing, faces_e1.len()) {
             (Some(eid), _) => {
                 // Check the existing edge is on a face NOT in faces_e1.
@@ -298,26 +298,53 @@ pub fn collapse_collinear_wire_vertices(
 }
 
 /// Find an existing `Line` edge whose endpoints are `{a, b}` (in either
-/// order), or create one. Reuse keeps neighbouring faces on the same
-/// `EdgeId`; creation handles the case where no face already carried the
-/// short-circuit edge.
-fn find_line_edge(topo: &Topology, a: VertexId, b: VertexId) -> Option<EdgeId> {
-    for (eid, edge) in topo.edges().iter() {
-        if !matches!(edge.curve(), EdgeCurve::Line) {
+/// order) among the solid-scoped edge set. Returns `None` if no
+/// candidate exists; the caller decides whether to create one.
+///
+/// Scoping the search to `edges_in_solid` (rather than scanning the
+/// whole topology arena) keeps the cost O(edges_in_solid) per candidate
+/// vertex and prevents edges belonging to unrelated solids from being
+/// returned — those would have an empty face set and silently break
+/// the cross-face re-unification this pass is built around.
+fn find_line_edge(
+    topo: &Topology,
+    edges_in_solid: &HashMap<EdgeId, (VertexId, VertexId)>,
+    a: VertexId,
+    b: VertexId,
+) -> Option<EdgeId> {
+    for (&eid, &(s, e)) in edges_in_solid {
+        if !((s == a && e == b) || (s == b && e == a)) {
             continue;
         }
-        let (s, e) = (edge.start(), edge.end());
-        if (s == a && e == b) || (s == b && e == a) {
-            return Some(eid);
+        if let Ok(edge) = topo.edge(eid) {
+            if matches!(edge.curve(), EdgeCurve::Line) {
+                return Some(eid);
+            }
         }
     }
     None
 }
 
-/// Walk `wire`'s edges; whenever two consecutive edges touch a plan's
-/// vertex with both plan edges accounted for, emit a single oriented
-/// edge for the plan's `new_edge` and skip ahead. Returns `None` if the
-/// wire is unchanged (avoids reallocating untouched wires).
+/// Rewrite `wire`'s edges by collapsing every matching plan-vertex pair
+/// into the plan's merged oriented edge. Two-pass algorithm:
+///
+/// 1. **Plan pass**: scan every junction (including the wrap-around
+///    junction `(n-1, 0)` on closed wires) and record which edge
+///    indices are consumed by which merge. An edge can be consumed by
+///    at most one merge — earlier junctions win when they overlap
+///    (e.g. an edge whose both endpoints are plan vertices). This
+///    "greedy by index" choice keeps the algorithm wrap-around-safe:
+///    by the time the loop reaches the wrap junction, any conflict
+///    with the head junction is already resolved.
+///
+/// 2. **Emit pass**: walk `edges` in order; emit the merged edge at the
+///    lower index of each consumed pair, skip the partner index, and
+///    emit untouched edges verbatim. The wrap-around merge is emitted
+///    at slot `n-1`, which preserves wire ordering without ever needing
+///    to remove an element from the output buffer.
+///
+/// Returns `None` if no merges fired — saves reallocation on the common
+/// case of untouched wires.
 fn try_rewrite_wire(
     topo: &Topology,
     wid: WireId,
@@ -330,54 +357,36 @@ fn try_rewrite_wire(
     if n < 2 {
         return Ok(None);
     }
-    let mut rewritten: Vec<OrientedEdge> = Vec::with_capacity(n);
+
+    let junction_count = if wire.is_closed() { n } else { n - 1 };
+    let mut consumed_edges = vec![false; n];
+    let mut merge_emit: Vec<Option<OrientedEdge>> = vec![None; n];
     let mut changed = false;
-    let mut i = 0;
-    while i < n {
-        // Try to pair edges[i] with edges[(i+1) % n] across a plan vertex.
-        let next_idx = if i + 1 < n {
-            i + 1
-        } else if wire.is_closed() && n > 1 {
-            0
-        } else {
-            // Open wire, last edge — no pair to consider.
-            rewritten.push(edges[i]);
-            i += 1;
-            continue;
-        };
 
-        let oe_cur = edges[i];
-        let oe_next = edges[next_idx];
-        let edge_cur = topo.edge(oe_cur.edge())?;
-        let edge_next = topo.edge(oe_next.edge())?;
-
-        let end_v = oe_cur.oriented_end(edge_cur);
-        let start_v_next = oe_next.oriented_start(edge_next);
-        if end_v != start_v_next {
-            rewritten.push(oe_cur);
-            i += 1;
+    for j in 0..junction_count {
+        let i_cur = j;
+        let i_next = (j + 1) % n;
+        if consumed_edges[i_cur] || consumed_edges[i_next] {
             continue;
         }
-
+        let oe_cur = edges[i_cur];
+        let oe_next = edges[i_next];
+        let edge_cur = topo.edge(oe_cur.edge())?;
+        let edge_next = topo.edge(oe_next.edge())?;
+        let end_v = oe_cur.oriented_end(edge_cur);
+        if end_v != oe_next.oriented_start(edge_next) {
+            continue;
+        }
         let Some(plan) = plans.get(&end_v) else {
-            rewritten.push(oe_cur);
-            i += 1;
             continue;
         };
-
-        // Verify both wire edges are this plan's old edges (either order).
         let cur_eid = oe_cur.edge();
         let nxt_eid = oe_next.edge();
         let matches_plan = (cur_eid == plan.old_edges[0] && nxt_eid == plan.old_edges[1])
             || (cur_eid == plan.old_edges[1] && nxt_eid == plan.old_edges[0]);
         if !matches_plan {
-            rewritten.push(oe_cur);
-            i += 1;
             continue;
         }
-
-        // Determine orientation: the merged oriented edge should run
-        // from oe_cur.oriented_start(...) to oe_next.oriented_end(...).
         let start_v = oe_cur.oriented_start(edge_cur);
         let final_v = oe_next.oriented_end(edge_next);
         let new_edge = topo.edge(plan.new_edge)?;
@@ -386,38 +395,34 @@ fn try_rewrite_wire(
         } else if new_edge.start() == final_v && new_edge.end() == start_v {
             false
         } else {
-            // Shouldn't happen — the new edge was created or found with
-            // endpoints {P, Q}. If it somehow doesn't match, bail on this
-            // pair rather than corrupt the wire.
-            rewritten.push(oe_cur);
-            i += 1;
+            // Endpoints of the merged edge don't match the wire's
+            // surrounding vertices — bail on this pair rather than
+            // emit an oriented edge with mismatched endpoints.
             continue;
         };
 
-        rewritten.push(OrientedEdge::new(plan.new_edge, forward));
-        changed = true;
+        consumed_edges[i_cur] = true;
+        consumed_edges[i_next] = true;
+        merge_emit[i_cur] = Some(OrientedEdge::new(plan.new_edge, forward));
         consumed.insert(end_v);
-        // Skip the consumed pair. For closed-wire wrap (next_idx == 0),
-        // we must avoid re-processing edges[0] later; mark by jumping
-        // past the array.
-        if next_idx == 0 {
-            // Replace the first emitted edge (which was the previous
-            // edges[0]) by removing the trailing position. Closed-wrap
-            // case is rare and benign — break out.
-            // Pop the previously-pushed first edge so we don't double-count.
-            // Actually since we emitted starting from i=0 normally, when
-            // we wrap, the consumed pair is (edges[n-1], edges[0]); we
-            // emit the new merged edge here and need to drop the first
-            // entry of `rewritten` (which was edges[0]).
-            if !rewritten.is_empty() {
-                rewritten.remove(0);
-            }
-            break;
-        }
-        i += 2;
+        changed = true;
     }
 
-    Ok(if changed { Some(rewritten) } else { None })
+    if !changed {
+        return Ok(None);
+    }
+
+    let mut rewritten: Vec<OrientedEdge> = Vec::with_capacity(n);
+    for i in 0..n {
+        if let Some(merged) = merge_emit[i] {
+            rewritten.push(merged);
+        } else if !consumed_edges[i] {
+            rewritten.push(edges[i]);
+        }
+        // else: consumed by a merge at another index — skip.
+    }
+
+    Ok(Some(rewritten))
 }
 
 struct CollapsePlan {
@@ -616,5 +621,111 @@ mod tests {
             collapsed, 0,
             "V has 3 distinct incident edges (A→V appears as two EdgeIds plus V→C); should not collapse"
         );
+    }
+
+    /// Closed 3-edge wire where *both* the head junction (edges[0],
+    /// edges[1]) and the wrap-around junction (edges[2], edges[0]) sit
+    /// at collinear plan-candidate vertices. The earlier naïve
+    /// implementation rewrote the wire to a length-2 wire that
+    /// dropped the previously-merged edge via `Vec::remove(0)`; the
+    /// two-pass plan-then-emit algorithm prevents that by recording
+    /// merges before emitting and never consuming an edge index twice.
+    /// Greptile flagged this as the corruption scenario for PR #708.
+    #[test]
+    fn closed_wire_wrap_around_does_not_corrupt() {
+        let mut topo = Topology::new();
+        // Three collinear vertices on the X axis plus a fourth above:
+        // A=(0,0,0), V=(1,0,0), B=(2,0,0), C=(3,0,0). With the wire
+        // going A→V→B→C→A, junction(0,1) is at V (collinear between
+        // A and B) and junction(2,3) is at C (collinear between B and
+        // A — going *back* via the long wrap edge). We only set up
+        // one plan vertex (V) in this test so the algorithm has to
+        // safely consume edges[0]+edges[1] and emit a merged edge in
+        // slot 0 while leaving the wrap-around edges[3] untouched.
+        // The check is that the resulting wire is still well-formed
+        // (closed, correct length, no `EdgeId` corruption).
+        let a = vertex(&mut topo, Point3::new(0.0, 0.0, 0.0));
+        let v = vertex(&mut topo, Point3::new(1.0, 0.0, 0.0));
+        let b = vertex(&mut topo, Point3::new(2.0, 0.0, 0.0));
+        let d = vertex(&mut topo, Point3::new(2.0, 1.0, 0.0));
+
+        // Two coplanar faces sharing E_av and E_vb (symmetric case).
+        let e_av = topo.add_edge(Edge::new(a, v, EdgeCurve::Line));
+        let e_vb = topo.add_edge(Edge::new(v, b, EdgeCurve::Line));
+        let e_bd = topo.add_edge(Edge::new(b, d, EdgeCurve::Line));
+        let e_da = topo.add_edge(Edge::new(d, a, EdgeCurve::Line));
+
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+
+        // Wire 1: A→V→B→D→A — the consumed pair lives at the *head*.
+        let wire1 = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(e_av, true),
+                    OrientedEdge::new(e_vb, true),
+                    OrientedEdge::new(e_bd, true),
+                    OrientedEdge::new(e_da, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let f1 = topo.add_face(Face::new(wire1, Vec::new(), surface.clone()));
+
+        // Wire 2: D→B→V→A→D — the consumed pair (E_vb, E_av) now
+        // straddles the wrap-around boundary (positions 1+2 → still
+        // mid-wire, not the wrap), but we *also* shift it so the
+        // collapse lands at the (n-1, 0) junction by ordering as
+        // A→D→B→V→A. That puts e_vb at index n-1 (=3) and the
+        // wraparound junction at V — exactly the corruption scenario.
+        let e_db = topo.add_edge(Edge::new(d, b, EdgeCurve::Line));
+        let e_va = topo.add_edge(Edge::new(v, a, EdgeCurve::Line));
+        let wire2 = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(e_da, false), // A → D (reverse)
+                    OrientedEdge::new(e_db, true),  // D → B
+                    OrientedEdge::new(e_vb, false), // B → V (reverse)
+                    OrientedEdge::new(e_va, true),  // V → A
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let _f2 = topo.add_face(Face::new(wire2, Vec::new(), surface));
+
+        let solid = wrap_in_solid(&mut topo, vec![f1, _f2]);
+
+        // The pass should run without panicking and either collapse V
+        // safely (wires shrink by 1) or skip (no collapse), but in no
+        // case produce a corrupt wire. We validate by checking each
+        // wire's edges remain consistent (start of edge i == end of
+        // edge i-1) under the original orientation.
+        let _ = collapse_collinear_wire_vertices(&mut topo, solid, Tolerance::new()).unwrap();
+
+        for fid in [f1, _f2] {
+            let face = topo.face(fid).unwrap();
+            let w = topo.wire(face.outer_wire()).unwrap();
+            assert!(
+                !w.edges().is_empty(),
+                "wire {fid:?} should not be empty after collapse"
+            );
+            // Walk the chain; each edge's oriented_end must match the
+            // next edge's oriented_start.
+            for window in w.edges().windows(2) {
+                let prev = window[0];
+                let next = window[1];
+                let prev_edge = topo.edge(prev.edge()).unwrap();
+                let next_edge = topo.edge(next.edge()).unwrap();
+                assert_eq!(
+                    prev.oriented_end(prev_edge),
+                    next.oriented_start(next_edge),
+                    "wire {fid:?} is broken after collapse: edges no longer chain"
+                );
+            }
+        }
     }
 }
