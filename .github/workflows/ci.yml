@@ -44,7 +44,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@nextest
+      - uses: taiki-e/install-action@132b6d4aaab26f88e6372807be16a43977a9b0cb # nextest
       - run: cargo nextest run --workspace
       # nextest doesn't run doc tests, so run them separately
       - run: cargo test --workspace --doc
@@ -57,7 +57,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: taiki-e/install-action@746b11920844c2e70d8ffeae9868a564abe127ab # cargo-llvm-cov
       - name: Generate coverage
         run: |
           cargo llvm-cov --workspace --no-report
@@ -83,7 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       # Override rust-toolchain.toml to test the declared minimum version
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@c93f4f9c67595668add93d3d6895795ce52d8c2d # 1.85.0
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: msrv
@@ -97,7 +97,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@wasm-pack
+      - uses: taiki-e/install-action@9298de362fe84bbfbde4cea75ef84b5e54ed12e4 # wasm-pack
       - name: Build and validate WASM
         run: cargo xtask wasm-build --skip-opt
 
