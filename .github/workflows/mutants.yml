@@ -19,7 +19,9 @@ jobs:
         with:
           fetch-depth: 0
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
-      - uses: taiki-e/install-action@132b6d4aaab26f88e6372807be16a43977a9b0cb # nextest
+      - uses: taiki-e/install-action@f48d2f8ba2b452934c948b7be1a768079c3632ff # v2.62.30
+        with:
+          tool: nextest
       - name: Install cargo-mutants
         run: cargo install cargo-mutants --locked
       - name: Run mutation testing on critical modules
