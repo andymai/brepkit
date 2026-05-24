@@ -1,0 +1,46 @@
+name: OSV Scan
+
+# Complements the Dependabot cooldown: cooldown blocks fresh-but-untrusted,
+# OSV blocks old-but-known-bad. Covers both Cargo and npm lockfiles.
+# PRs are report-only; main + weekly schedule fail closed.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * 1'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Don't cancel in-progress main/schedule scans — a rapid second push would
+  # otherwise leave the older commit's lockfile unscanned.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  scan-pr:
+    name: OSV Scan (report-only)
+    if: github.event_name == 'pull_request'
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    with:
+      scan-args: |-
+        --lockfile=Cargo.lock
+        --lockfile=package-lock.json
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+  scan-main:
+    name: OSV Scan (blocking)
+    if: github.event_name != 'pull_request'
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+    with:
+      scan-args: |-
+        --lockfile=Cargo.lock
+        --lockfile=package-lock.json
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
