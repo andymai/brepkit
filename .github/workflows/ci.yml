@@ -57,7 +57,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@746b11920844c2e70d8ffeae9868a564abe127ab # cargo-llvm-cov
+      - uses: taiki-e/install-action@132b6d4aaab26f88e6372807be16a43977a9b0cb # cargo-llvm-cov
       - name: Generate coverage
         run: |
           cargo llvm-cov --workspace --no-report
@@ -97,7 +97,7 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: taiki-e/install-action@9298de362fe84bbfbde4cea75ef84b5e54ed12e4 # wasm-pack
+      - uses: taiki-e/install-action@132b6d4aaab26f88e6372807be16a43977a9b0cb # wasm-pack
       - name: Build and validate WASM
         run: cargo xtask wasm-build --skip-opt
 
