@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.94.0](https://github.com/andymai/brepkit/compare/v2.93.0...v2.94.0) (2026-05-29)
+
+
+### Features
+
+* **tessellate:** add angular tolerance for curvature-driven arc density ([#717](https://github.com/andymai/brepkit/issues/717)) ([a9403e5](https://github.com/andymai/brepkit/commit/a9403e52a1801ef306d009d967b9001cdd64c05d))
+* **wasm:** expose read-only NURBS curve/surface data extraction ([#715](https://github.com/andymai/brepkit/issues/715)) ([64266b4](https://github.com/andymai/brepkit/commit/64266b4a0193f75b0903f6af9477d0cda6b7fdc6))
+
 ## [2.93.0](https://github.com/andymai/brepkit/compare/v2.92.0...v2.93.0) (2026-05-20)
 
 
