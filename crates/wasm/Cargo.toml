@@ -20,6 +20,7 @@ io = ["dep:brepkit-io"]
 brepkit-algo.workspace = true
 brepkit-check.workspace = true
 brepkit-geometry.workspace = true
+brepkit-heal.workspace = true
 brepkit-io = {workspace = true, optional = true}
 brepkit-math.workspace = true
 brepkit-operations.workspace = true

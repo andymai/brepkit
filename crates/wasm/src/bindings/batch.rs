@@ -78,6 +78,27 @@ impl BrepKernel {
     }
 }
 
+/// A `(u_range, v_range)` pair, each `(min, max)`.
+type UvRanges = ((f64, f64), (f64, f64));
+
+/// Build the in-plane axes used by `plane_to_nurbs`.
+///
+/// Must match `brepkit_heal::construct::convert_surface`'s private frame
+/// so projected face corners reconstruct the plane rectangle consistently.
+fn plane_frame_axes(normal: Vec3) -> (Vec3, Vec3) {
+    let seed = if normal.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    let u_axis = normal
+        .cross(seed)
+        .normalize()
+        .unwrap_or_else(|_| Vec3::new(1.0, 0.0, 0.0));
+    let v_axis = normal.cross(u_axis);
+    (u_axis, v_axis)
+}
+
 impl BrepKernel {
     /// Extract a `NurbsCurve` from an edge.
     ///
@@ -85,7 +106,7 @@ impl BrepKernel {
     /// are converted to their exact rational NURBS equivalent using the
     /// edge's bounding vertices (and the curve's analytic params for
     /// circles/ellipses).
-    pub(crate) fn extract_nurbs_curve(&self, edge: u32) -> Result<NurbsCurve, JsError> {
+    pub(crate) fn extract_nurbs_curve(&self, edge: u32) -> Result<NurbsCurve, WasmError> {
         use brepkit_geometry::convert::{circle_to_nurbs, ellipse_to_nurbs, line_to_nurbs};
         use std::f64::consts::TAU;
 
@@ -140,6 +161,126 @@ impl BrepKernel {
                 )
             }
         }
+    }
+
+    /// Extract a `NurbsSurface` from a face.
+    ///
+    /// NURBS faces are returned directly. Analytic surfaces are converted to
+    /// their NURBS equivalent: planes and cylinders are geometrically exact;
+    /// cones, spheres, and tori use the exact rational forms from
+    /// `brepkit_heal::construct::convert_surface`. Plane and cone parameter
+    /// ranges are derived from the face's boundary vertices.
+    pub(crate) fn extract_nurbs_surface(&self, face: u32) -> Result<NurbsSurface, WasmError> {
+        use brepkit_heal::construct::convert_surface;
+        use brepkit_topology::face::FaceSurface;
+
+        let face_id = self.resolve_face(face)?;
+        let face_data = self.topo.face(face_id)?;
+
+        let map_err = |context: &str, e: brepkit_heal::HealError| WasmError::InvalidInput {
+            reason: format!("{context}: {e}"),
+        };
+
+        match face_data.surface() {
+            FaceSurface::Nurbs(s) => Ok(s.clone()),
+            FaceSurface::Plane { normal, d } => {
+                let (u_range, v_range) = self.plane_face_uv_bounds(face_id, *normal, *d)?;
+                convert_surface::plane_to_nurbs(*normal, *d, u_range, v_range)
+                    .map_err(|e| map_err("plane_to_nurbs failed", e))
+            }
+            FaceSurface::Cylinder(c) => {
+                let v_range = self.analytic_face_v_bounds(face_id, face_data.surface())?;
+                convert_surface::cylinder_to_nurbs(c, v_range)
+                    .map_err(|e| map_err("cylinder_to_nurbs failed", e))
+            }
+            FaceSurface::Cone(c) => {
+                let v_range = self.analytic_face_v_bounds(face_id, face_data.surface())?;
+                convert_surface::cone_to_nurbs(c, v_range)
+                    .map_err(|e| map_err("cone_to_nurbs failed", e))
+            }
+            FaceSurface::Sphere(s) => convert_surface::sphere_to_nurbs(s)
+                .map_err(|e| map_err("sphere_to_nurbs failed", e)),
+            FaceSurface::Torus(t) => {
+                convert_surface::torus_to_nurbs(t).map_err(|e| map_err("torus_to_nurbs failed", e))
+            }
+        }
+    }
+
+    /// Derive the parametric rectangle of a planar face by sampling its outer
+    /// boundary edges and projecting the samples onto the same local frame
+    /// `plane_to_nurbs` uses.
+    ///
+    /// Sampling the edge curves (not just the bounding vertices) is required for
+    /// circle- and ellipse-bounded faces such as cylinder/cone caps, whose
+    /// outer wire may carry a single seam vertex while the disk spans a finite
+    /// rectangle in the plane frame.
+    #[allow(clippy::cast_precision_loss)]
+    fn plane_face_uv_bounds(
+        &self,
+        face_id: brepkit_topology::face::FaceId,
+        normal: Vec3,
+        d: f64,
+    ) -> Result<UvRanges, WasmError> {
+        const EDGE_SAMPLES: usize = 16;
+
+        let face_data = self.topo.face(face_id)?;
+        let wire = self.topo.wire(face_data.outer_wire())?;
+        let origin = Point3::new(0.0, 0.0, 0.0) + normal * d;
+        let (u_axis, v_axis) = plane_frame_axes(normal);
+
+        let mut u_min = f64::INFINITY;
+        let mut u_max = f64::NEG_INFINITY;
+        let mut v_min = f64::INFINITY;
+        let mut v_max = f64::NEG_INFINITY;
+        for oe in wire.edges() {
+            let edge = self.topo.edge(oe.edge())?;
+            let start = self.topo.vertex(edge.start())?.point();
+            let end = self.topo.vertex(edge.end())?.point();
+            let curve = edge.curve();
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            for i in 0..=EDGE_SAMPLES {
+                let t = t0 + (t1 - t0) * (i as f64 / EDGE_SAMPLES as f64);
+                let p = curve.evaluate_with_endpoints(t, start, end);
+                let rel = p - origin;
+                let u = rel.dot(u_axis);
+                let v = rel.dot(v_axis);
+                u_min = u_min.min(u);
+                u_max = u_max.max(u);
+                v_min = v_min.min(v);
+                v_max = v_max.max(v);
+            }
+        }
+        if u_max <= u_min || v_max <= v_min {
+            return Err(WasmError::InvalidInput {
+                reason: "planar face has degenerate parametric extent".to_string(),
+            });
+        }
+        Ok(((u_min, u_max), (v_min, v_max)))
+    }
+
+    /// Derive the axial/generator parameter range of an analytic face by
+    /// projecting its boundary vertices onto the surface.
+    fn analytic_face_v_bounds(
+        &self,
+        face_id: brepkit_topology::face::FaceId,
+        surface: &brepkit_topology::face::FaceSurface,
+    ) -> Result<(f64, f64), WasmError> {
+        let verts = brepkit_topology::explorer::face_vertices(&self.topo, face_id)?;
+        let mut v_min = f64::INFINITY;
+        let mut v_max = f64::NEG_INFINITY;
+        for vid in verts {
+            let p = self.topo.vertex(vid)?.point();
+            if let Some((_, v)) = surface.project_point(p) {
+                v_min = v_min.min(v);
+                v_max = v_max.max(v);
+            }
+        }
+        if v_max <= v_min {
+            return Err(WasmError::InvalidInput {
+                reason: "analytic face has degenerate axial extent".to_string(),
+            });
+        }
+        Ok((v_min, v_max))
     }
 
     /// Create an edge from a `NurbsCurve`, using its endpoints.
@@ -1175,6 +1316,18 @@ impl BrepKernel {
                 )
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(wire_id_to_u32(wire_id)))
+            }
+            "getNurbsCurveData" => {
+                let edge = get_u32(args, "edge")?;
+                let curve = self.extract_nurbs_curve(edge).map_err(|e| e.to_string())?;
+                Ok(super::nurbs::curve_data_json(&curve))
+            }
+            "getNurbsSurfaceData" => {
+                let face = get_u32(args, "face")?;
+                let surface = self
+                    .extract_nurbs_surface(face)
+                    .map_err(|e| e.to_string())?;
+                Ok(super::nurbs::surface_data_json(&surface))
             }
             _ => Err(format!("unknown operation: {op}")),
         }
