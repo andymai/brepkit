@@ -332,10 +332,13 @@ pub(super) fn tessellate_planar(
                     (ts, te)
                 };
                 let arc_range = t_end - t_start;
-                let min_curv_radius =
-                    ellipse.semi_minor() * ellipse.semi_minor() / ellipse.semi_major();
+                // Largest radius of curvature (a^2/b) governs uniform-parameter
+                // sampling density; matches the wall edge sampling so the cap
+                // boundary stays watertight against the side faces.
+                let max_curv_radius =
+                    ellipse.semi_major() * ellipse.semi_major() / ellipse.semi_minor();
                 let n_samples = segments_for_chord_deviation_a(
-                    min_curv_radius,
+                    max_curv_radius,
                     arc_range,
                     deflection,
                     angular_tol,

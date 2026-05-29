@@ -1500,3 +1500,101 @@ fn fillet_cylinder_triangle_count() {
         );
     }
 }
+
+/// Build a solid by extruding a closed ellipse (`semi_major`, `semi_minor`) in
+/// the XY plane by `height` along +Z. The boundary is a single closed
+/// `Ellipse` edge, matching what `sketchEllipse(a, b).extrude(h)` produces.
+fn extrude_ellipse(
+    topo: &mut Topology,
+    semi_major: f64,
+    semi_minor: f64,
+    height: f64,
+) -> brepkit_topology::solid::SolidId {
+    let center = Point3::new(0.0, 0.0, 0.0);
+    let normal = Vec3::new(0.0, 0.0, 1.0);
+    let ellipse =
+        brepkit_math::curves::Ellipse3D::new(center, normal, semi_major, semi_minor).unwrap();
+
+    // A single closed edge (start == end) at the major-axis vertex (t = 0).
+    let seam = ellipse.evaluate(0.0);
+    let vid = topo.add_vertex(Vertex::new(seam, 1e-7));
+    let edge = topo.add_edge(Edge::new(vid, vid, EdgeCurve::Ellipse(ellipse)));
+    let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+    let face = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane { normal, d: 0.0 },
+    ));
+
+    crate::extrude::extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), height).unwrap()
+}
+
+#[test]
+fn eccentric_ellipse_extrude_volume_matches_analytic() {
+    use std::f64::consts::PI;
+
+    // Regression guard for the #717 ellipse tessellation density drop.
+    // sketchEllipse(5, 2).extrude(10) must mesh densely enough that the
+    // tessellation-derived volume matches the analytic pi*a*b*h within the
+    // brepjs parity tolerance (toBeCloseTo(vol, 0) => |err| < 0.5 absolute).
+    let cases = [
+        (5.0_f64, 2.0_f64, 10.0_f64),
+        (10.0, 1.0, 4.0),
+        (8.0, 3.0, 2.0),
+    ];
+    for (a, b, h) in cases {
+        let mut topo = Topology::new();
+        let solid = extrude_ellipse(&mut topo, a, b, h);
+        // brepjs measureVolume uses DEFAULT_DEFLECTION = 0.01.
+        let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        let analytic = PI * a * b * h;
+        assert!(
+            (vol - analytic).abs() < 0.5,
+            "ellipse({a},{b}).extrude({h}): mesh volume {vol:.4} vs analytic {analytic:.4} \
+             (err {:.4}); eccentric ellipse wall under-tessellated",
+            (vol - analytic).abs()
+        );
+    }
+}
+
+#[test]
+fn ellipse_wall_facet_count_is_curvature_appropriate() {
+    // The elliptical wall must carry enough facets to resolve its curvature
+    // at the default deflection. For ellipse(5, 2) at deflection 0.01 a
+    // curvature-faithful sampler needs ~200 segments around the loop; assert a
+    // conservative floor so a future density regression is caught directly at
+    // the tessellation layer (not only via the volume check).
+    let mut topo = Topology::new();
+    let solid = extrude_ellipse(&mut topo, 5.0, 2.0, 10.0);
+    let mesh = tessellate_solid(&topo, solid, 0.01).unwrap();
+    let n_pos = mesh.positions.len();
+    assert!(
+        n_pos >= 200,
+        "ellipse(5,2) wall under-tessellated: only {n_pos} mesh vertices at deflection 0.01"
+    );
+}
+
+#[test]
+fn circle_and_degenerate_ellipse_do_not_over_tessellate() {
+    // The fix must not blow up density on near-circular or circular inputs.
+    // A near-circular ellipse(5, 5) extrude should produce a similar facet
+    // count to a true circle of the same radius, and stay well bounded.
+    let mut topo_e = Topology::new();
+    let solid_e = extrude_ellipse(&mut topo_e, 5.0, 5.0, 10.0);
+    let mesh_e = tessellate_solid(&topo_e, solid_e, 0.01).unwrap();
+    let n_e = mesh_e.positions.len();
+
+    let mut topo_c = Topology::new();
+    let solid_c = crate::primitives::make_cylinder(&mut topo_c, 5.0, 10.0).unwrap();
+    let mesh_c = tessellate_solid(&topo_c, solid_c, 0.01).unwrap();
+    let n_c = mesh_c.positions.len();
+
+    assert!(
+        n_e < 4 * n_c.max(1),
+        "near-circular ellipse over-tessellates: {n_e} verts vs cylinder {n_c}"
+    );
+    assert!(
+        n_e < 5_000,
+        "near-circular ellipse(5,5) over-tessellates: {n_e} mesh vertices"
+    );
+}
