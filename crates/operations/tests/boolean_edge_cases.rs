@@ -222,16 +222,25 @@ fn test_cut_removes_all() {
 
 #[test]
 fn test_intersect_disjoint() {
-    // Two disjoint boxes with no overlap.
+    // Two disjoint boxes with no overlap — the intersection is the empty
+    // set, returned as a successful zero-face, zero-volume result.
     let mut topo = Topology::new();
     let a = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
     let b = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
     transform_solid(&mut topo, b, &Mat4::translation(5.0, 5.0, 5.0)).unwrap();
 
-    let result = boolean(&mut topo, BooleanOp::Intersect, a, b);
+    let result = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+    assert_eq!(
+        brepkit_topology::explorer::solid_faces(&topo, result)
+            .unwrap()
+            .len(),
+        0,
+        "disjoint intersect should produce zero faces"
+    );
+    let vol = solid_volume(&topo, result, 0.05).unwrap();
     assert!(
-        result.is_err(),
-        "intersecting disjoint solids should return Err"
+        vol <= 1e-6,
+        "disjoint intersect volume should be ~0, got {vol}"
     );
 }
 

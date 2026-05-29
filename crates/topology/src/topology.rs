@@ -270,6 +270,35 @@ impl Topology {
         Id = CompSolidId
     );
 
+    // ── Empty-result sentinel ─────────────────────────────────────
+
+    /// Allocates an empty-result solid: a solid backed by a faceless
+    /// [`Shell::empty`].
+    ///
+    /// Booleans whose algebraic outcome is the empty set (e.g. the
+    /// intersection of disjoint solids) return this so the result is a
+    /// valid, queryable handle reporting zero faces and zero volume,
+    /// distinct from a malformed-input error. A shell cannot otherwise
+    /// hold zero faces, so this is the only path that produces one.
+    pub fn add_empty_solid(&mut self) -> SolidId {
+        let shell = self.add_shell(Shell::empty());
+        self.add_solid(Solid::new(shell, Vec::new()))
+    }
+
+    /// Returns `true` when `solid` is an empty-result sentinel — its
+    /// outer shell is faceless and it has no inner shells (see
+    /// [`Topology::add_empty_solid`]).
+    #[must_use]
+    pub fn is_empty_solid(&self, solid: SolidId) -> bool {
+        self.solids.get(solid).is_some_and(|s| {
+            s.inner_shells().is_empty()
+                && self
+                    .shells
+                    .get(s.outer_shell())
+                    .is_some_and(Shell::is_empty)
+        })
+    }
+
     // ── PCurve registry ───────────────────────────────────────────
 
     /// Returns a shared reference to the pcurve registry.

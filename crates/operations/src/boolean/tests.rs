@@ -142,12 +142,107 @@ fn cut_disjoint_returns_a() {
 }
 
 #[test]
-fn intersect_disjoint_returns_error() {
+fn intersect_disjoint_returns_empty() {
+    use brepkit_topology::explorer::solid_faces;
+
     let mut topo = Topology::new();
     let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
     let b = make_unit_cube_manifold_at(&mut topo, 5.0, 0.0, 0.0);
 
-    assert!(boolean(&mut topo, BooleanOp::Intersect, a, b).is_err());
+    let result = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+    assert_eq!(
+        solid_faces(&topo, result).unwrap().len(),
+        0,
+        "disjoint intersect should produce zero faces"
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        vol <= 1e-6,
+        "disjoint intersect volume should be ~0, got {vol}"
+    );
+}
+
+#[test]
+fn intersect_far_apart_boxes_returns_empty() {
+    use brepkit_topology::explorer::solid_faces;
+
+    // Mirrors the cross-kernel geometry: 10×10×10 boxes 100 apart.
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        b,
+        &brepkit_math::mat::Mat4::translation(100.0, 0.0, 0.0),
+    )
+    .unwrap();
+
+    let result = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+    assert_eq!(solid_faces(&topo, result).unwrap().len(), 0);
+    let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        vol < 1.0,
+        "far-apart intersect volume should be < 1, got {vol}"
+    );
+}
+
+#[test]
+fn intersect_touching_boxes_returns_empty() {
+    use brepkit_topology::explorer::solid_faces;
+
+    // Two unit cubes sharing only the x=1 plane — interiors do not overlap.
+    let mut topo = Topology::new();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 1.0, 0.0, 0.0);
+
+    let result = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+    assert_eq!(solid_faces(&topo, result).unwrap().len(), 0);
+    let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        vol <= 1e-6,
+        "touching-disjoint intersect volume should be ~0, got {vol}"
+    );
+}
+
+#[test]
+fn empty_intersect_survives_measure_and_tessellate() {
+    let mut topo = Topology::new();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 5.0, 0.0, 0.0);
+
+    let result = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+    assert!(topo.is_empty_solid(result));
+
+    // Downstream queries must accept the empty sentinel without panicking.
+    let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+    assert!(vol <= 1e-6);
+    let mesh = crate::tessellate::tessellate_solid(&topo, result, 0.05).unwrap();
+    assert!(
+        mesh.indices.is_empty(),
+        "empty solid should tessellate to no triangles"
+    );
+}
+
+#[test]
+fn intersect_overlapping_boxes_is_nonempty() {
+    use brepkit_topology::explorer::solid_faces;
+
+    // Positive control: two unit cubes offset by 0.5 in x overlap in a
+    // 0.5×1×1 = 0.5 volume — the disjoint detection must not over-fire.
+    let mut topo = Topology::new();
+    let a = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+    let b = make_unit_cube_manifold_at(&mut topo, 0.5, 0.0, 0.0);
+
+    let result = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+    assert!(
+        !solid_faces(&topo, result).unwrap().is_empty(),
+        "overlapping intersect should produce faces"
+    );
+    let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        (vol - 0.5).abs() < 1e-3,
+        "overlap volume should be ~0.5, got {vol}"
+    );
 }
 
 // ── Diagnostic tests ─────────────────────────────────────────────────
