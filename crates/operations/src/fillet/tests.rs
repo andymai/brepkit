@@ -351,6 +351,40 @@ fn vertex_blend_all_edges_box() {
 }
 
 #[test]
+fn vertex_blend_all_edges_box_volume() {
+    // Fillet all 12 edges of a 10×10×10 box at r=1.0. The result must be a
+    // closed, manifold, genus-0 solid (26 faces) whose volume reflects only
+    // the fillet-arc and corner-blend material removal — not gross corner
+    // excision. Analytic expectation ≈ 975.6:
+    //   1000 − 12·(1−π/4)·1²·8 (edge slivers ≈ 20.6)
+    //        − 8·(1−π/6)·1³    (corner blends ≈ 3.8).
+    let mut topo = Topology::new();
+    let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let edges = solid_edge_ids(&topo, cube);
+    assert_eq!(edges.len(), 12, "box should have 12 edges");
+
+    let result =
+        fillet_rolling_ball(&mut topo, cube, &edges, 1.0).expect("all-edges fillet should succeed");
+
+    let s = topo.solid(result).expect("result solid");
+    let sh = topo.shell(s.outer_shell()).expect("shell");
+    validate_shell_manifold(sh, &topo).expect("filleted box should be manifold");
+    assert_euler_genus0(&topo, result);
+
+    assert_eq!(
+        sh.faces().len(),
+        26,
+        "expected 26 faces (6 planar + 12 fillet + 8 blend)"
+    );
+
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        vol > 974.0 && vol < 978.0,
+        "filleted box volume should be ≈975.6 (in 974..978), got {vol}"
+    );
+}
+
+#[test]
 fn vertex_blend_tessellates_successfully() {
     // Verify the fully-filleted box can be tessellated without error.
     // Watertight stitching at NURBS-to-planar seams is a tessellation-level
@@ -377,14 +411,14 @@ fn vertex_blend_positive_volume() {
     let result =
         fillet_rolling_ball(&mut topo, cube, &edges, 0.1).expect("all-edges fillet should succeed");
 
-    let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
-    // Unit cube volume = 1.0. Filleting removes corner material, so volume < 1.0 but > 0.5.
-    // TODO: vertex blend volume is inflated (~1.3) after edge fillet contact direction fix.
-    // The vertex blend patches overlap with adjacent geometry when edge fillet positions
-    // change. This only affects all-edges fillet with vertex blends — single-edge fillets
-    // (as used in gridfinity) are correct.
-    assert!(vol > 0.5, "filleted cube volume should be > 0.5, got {vol}");
-    assert!(vol < 1.5, "filleted cube volume should be < 1.5, got {vol}");
+    let vol = crate::measure::solid_volume(&topo, result, 0.005).unwrap();
+    // Analytic rounded-cube volume for s=1, r=0.1 (Minkowski sum of the inner
+    // (s−2r)³ box with a ball of radius r):
+    //   (0.8)³ + 6·(0.8)²·0.1 + 12·0.8·(π/4)·0.1² + (4/3)π·0.1³ ≈ 0.9756.
+    assert!(
+        vol > 0.970 && vol < 0.980,
+        "filleted unit-cube volume should be ≈0.9756 (in 0.970..0.980), got {vol}"
+    );
 }
 
 #[test]
