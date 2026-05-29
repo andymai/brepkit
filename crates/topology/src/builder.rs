@@ -314,6 +314,11 @@ pub fn make_planar_face_from_wire(
 /// Sample points and tolerance gathered from a wire for planarity testing.
 struct WireSamples {
     points: Vec<Point3>,
+    /// Boundary points in wire-traversal order, used to orient the plane
+    /// normal consistently with the wire winding (right-hand rule). Unlike
+    /// `points`, these are strictly ordered along the loop so Newell's method
+    /// yields the correct winding sign.
+    ordered: Vec<Point3>,
     /// Squared effective tolerance: `max(base linear, max edge tolerance)²`.
     tol_sq: f64,
     /// Plane derived directly from the first conic edge, if any. A conic is
@@ -330,6 +335,7 @@ fn sample_wire_for_planarity(
     edges: &[OrientedEdge],
 ) -> Result<WireSamples, crate::TopologyError> {
     let mut points = Vec::with_capacity(edges.len() * 4);
+    let mut ordered = Vec::with_capacity(edges.len() * 4);
     let mut tol = Tolerance::new().linear;
     let mut conic_plane = None;
 
@@ -350,11 +356,13 @@ fn sample_wire_for_planarity(
                 points.push(start_pt);
                 points.push(end_pt);
                 points.push(start_pt + (end_pt - start_pt) * 0.5);
+                ordered.push(start_pt);
             }
             EdgeCurve::Circle(c) => {
                 if conic_plane.is_none() {
                     conic_plane = Some(plane_from(c.center(), c.normal()));
                 }
+                let before = points.len();
                 sample_conic(
                     start_pt,
                     end_pt,
@@ -363,11 +371,13 @@ fn sample_wire_for_planarity(
                     |t| c.evaluate(t),
                     |p| c.project(p),
                 );
+                ordered.extend_from_slice(&points[before..]);
             }
             EdgeCurve::Ellipse(e) => {
                 if conic_plane.is_none() {
                     conic_plane = Some(plane_from(e.center(), e.normal()));
                 }
+                let before = points.len();
                 sample_conic(
                     start_pt,
                     end_pt,
@@ -376,15 +386,19 @@ fn sample_wire_for_planarity(
                     |t| e.evaluate(t),
                     |p| e.project(p),
                 );
+                ordered.extend_from_slice(&points[before..]);
             }
             EdgeCurve::NurbsCurve(nc) => {
                 points.extend_from_slice(nc.control_points());
+                ordered.push(start_pt);
+                ordered.push(start_pt + (end_pt - start_pt) * 0.5);
             }
         }
     }
 
     Ok(WireSamples {
         points,
+        ordered,
         tol_sq: tol * tol,
         conic_plane,
     })
@@ -430,7 +444,7 @@ fn plane_from(point: Point3, normal: Vec3) -> (Vec3, f64) {
 /// every sample lies within tolerance of it. Returns `None` when no plane
 /// can be formed or verification fails.
 fn verified_plane(samples: &WireSamples) -> Option<(Vec3, f64)> {
-    let (normal, d) = samples
+    let (mut normal, mut d) = samples
         .conic_plane
         .or_else(|| fit_plane(&samples.points, samples.tol_sq))?;
 
@@ -441,7 +455,40 @@ fn verified_plane(samples: &WireSamples) -> Option<(Vec3, f64)> {
             return None;
         }
     }
+
+    // Orient the normal consistently with the wire winding (right-hand rule).
+    // `fit_plane` and a conic's intrinsic plane both yield a normal whose sign
+    // is independent of traversal order; downstream consumers (e.g. extrude)
+    // require the normal to follow the boundary's CCW winding so cap and wall
+    // orientations come out correct.
+    if let Some(winding_normal) = newell_normal(&samples.ordered) {
+        if normal.dot(winding_normal) < 0.0 {
+            normal = -normal;
+            d = -d;
+        }
+    }
     Some((normal, d))
+}
+
+/// Newell's-method normal for an ordered loop of boundary points. The result
+/// follows the winding (CCW gives the right-hand-rule normal). Returns `None`
+/// for fewer than 3 points or a degenerate (collinear) loop.
+fn newell_normal(ordered: &[Point3]) -> Option<Vec3> {
+    if ordered.len() < 3 {
+        return None;
+    }
+    let mut nx = 0.0_f64;
+    let mut ny = 0.0_f64;
+    let mut nz = 0.0_f64;
+    let n = ordered.len();
+    for i in 0..n {
+        let curr = ordered[i];
+        let next = ordered[(i + 1) % n];
+        nx += (curr.y() - next.y()) * (curr.z() + next.z());
+        ny += (curr.z() - next.z()) * (curr.x() + next.x());
+        nz += (curr.x() - next.x()) * (curr.y() + next.y());
+    }
+    Vec3::new(nx, ny, nz).normalize().ok()
 }
 
 /// Fit a candidate plane from scattered sample points using the most
@@ -683,7 +730,7 @@ pub fn make_nurbs_face(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::panic)]
 
     use brepkit_math::tolerance::Tolerance;
     use brepkit_math::vec::Point3;
@@ -974,10 +1021,43 @@ mod tests {
 
         let fid = make_face_from_wire(&mut topo, wid).unwrap();
         let face = topo.face(fid).unwrap();
-        if let FaceSurface::Plane { normal, .. } = face.surface() {
-            let tol = Tolerance::new();
-            assert!(tol.approx_eq(normal.z().abs(), 1.0), "normal should be ±Z");
-        }
+        let FaceSurface::Plane { normal, .. } = face.surface() else {
+            panic!("square wire must produce a planar face");
+        };
+        let tol = Tolerance::new();
+        // CCW square in the XY plane: right-hand rule normal must point +Z.
+        // A sign-agnostic plane fit would (incorrectly) allow -Z here, which
+        // flips extruded caps and collapses solid volume.
+        assert!(
+            tol.approx_eq(normal.z(), 1.0),
+            "CCW square normal must be +Z"
+        );
+    }
+
+    #[test]
+    fn make_face_from_wire_cw_square_normal_is_minus_z() {
+        let mut topo = Topology::new();
+        // CW winding (reverse of the CCW square): normal must point -Z.
+        let wid = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ],
+            TOL,
+        )
+        .unwrap();
+        let fid = make_face_from_wire(&mut topo, wid).unwrap();
+        let FaceSurface::Plane { normal, .. } = topo.face(fid).unwrap().surface() else {
+            panic!("square wire must produce a planar face");
+        };
+        let tol = Tolerance::new();
+        assert!(
+            tol.approx_eq(normal.z(), -1.0),
+            "CW square normal must be -Z"
+        );
     }
 
     #[test]
