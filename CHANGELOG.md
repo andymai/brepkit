@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.97.1](https://github.com/andymai/brepkit/compare/v2.97.0...v2.97.1) (2026-05-29)
+
+
+### Bug Fixes
+
+* **tessellate:** use max curvature radius for ellipse facet density ([#724](https://github.com/andymai/brepkit/issues/724)) ([b4faef5](https://github.com/andymai/brepkit/commit/b4faef5d8fbf276fce92af714843d5f7330db9be))
+
 ## [2.97.0](https://github.com/andymai/brepkit/compare/v2.96.0...v2.97.0) (2026-05-29)
 
 
