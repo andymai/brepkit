@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.97.0](https://github.com/andymai/brepkit/compare/v2.96.0...v2.97.0) (2026-05-29)
+
+
+### Features
+
+* **topology:** validate wire planarity before planar face construction ([#722](https://github.com/andymai/brepkit/issues/722)) ([8e8ca24](https://github.com/andymai/brepkit/commit/8e8ca246fcc8812093c97ab9e60ea50bd3f828d5))
+
 ## [2.96.0](https://github.com/andymai/brepkit/compare/v2.95.0...v2.96.0) (2026-05-29)
 
 
