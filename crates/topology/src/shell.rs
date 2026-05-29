@@ -30,6 +30,26 @@ impl Shell {
         Ok(Self { faces })
     }
 
+    /// Creates a faceless shell backing an empty-result sentinel.
+    ///
+    /// A regular shell rejects an empty face list because an ordinary
+    /// surface boundary must enclose something. The empty shell exists
+    /// only so a boolean whose algebraic outcome is the empty set
+    /// (e.g. the intersection of disjoint solids) can be represented as
+    /// a valid, queryable solid handle reporting zero faces and zero
+    /// volume — distinct from a malformed-input error.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self { faces: Vec::new() }
+    }
+
+    /// Returns `true` when this shell has no faces (the empty-result
+    /// sentinel — see [`Shell::empty`]).
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.faces.is_empty()
+    }
+
     /// Returns the faces of this shell.
     #[must_use]
     pub fn faces(&self) -> &[FaceId] {

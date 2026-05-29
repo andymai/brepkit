@@ -445,9 +445,20 @@ fn disjoint_intersect_empty() {
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0);
     let b = box_at(&mut topo, 10.0, 0.0, 0.0, 1.0, 1.0, 1.0);
 
-    // Should error (empty result).
-    let result = boolean(&mut topo, BooleanOp::Intersect, a, b);
-    assert!(result.is_err(), "disjoint intersect should fail");
+    // The empty intersection succeeds with a zero-face, zero-volume result.
+    let result = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+    assert_eq!(
+        brepkit_topology::explorer::solid_faces(&topo, result)
+            .unwrap()
+            .len(),
+        0,
+        "disjoint intersect should produce zero faces"
+    );
+    let vol = solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        vol <= 1e-6,
+        "disjoint intersect volume should be ~0, got {vol}"
+    );
 }
 
 // ===========================================================================

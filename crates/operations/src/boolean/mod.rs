@@ -435,6 +435,24 @@ pub fn boolean(
         }
     }
 
+    // ── Broad-phase disjoint intersect ───────────────────────────────
+    // If the curvature-aware AABBs of A and B are separated on any axis
+    // by more than linear tolerance, the solids provably do not overlap
+    // and their intersection is the empty set. Containment shortcuts have
+    // already run above (a contained solid has overlapping, not separated,
+    // AABBs), so reaching here with separated boxes is an exact witness.
+    // The boxes are conservative outer bounds, so box non-overlap implies
+    // solid non-overlap. Symmetric in A and B by construction.
+    if op == BooleanOp::Intersect {
+        let bb_a = crate::measure::solid_bounding_box(topo, a).ok();
+        let bb_b = crate::measure::solid_bounding_box(topo, b).ok();
+        if let Some((a_box, b_box)) = bb_a.zip(bb_b) {
+            if aabbs_separated(&a_box, &b_box, tol.linear) {
+                return Ok(topo.add_empty_solid());
+            }
+        }
+    }
+
     // ── GFA pipeline ─────────────────────────────────────────────────
     let algo_op = match op {
         BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
@@ -447,6 +465,17 @@ pub fn boolean(
             let result_faces = brepkit_topology::explorer::solid_faces(topo, result)
                 .map(|f| f.len())
                 .unwrap_or(0);
+            // Narrow-phase empty intersect: overlapping AABBs but the engine
+            // selected no faces for the common region (e.g. boxes whose boxes
+            // overlap by tolerance but whose interiors do not). This is the
+            // authoritative witness of an empty intersection.
+            if op == BooleanOp::Intersect && result_faces == 0 {
+                log::info!(
+                    "GFA intersect empty in {:.1}ms (no common faces)",
+                    timer_elapsed_ms(gfa_start)
+                );
+                return Ok(topo.add_empty_solid());
+            }
             if result_faces > 0 {
                 let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
                 // Check Euler before unify_faces — if already valid, skip
@@ -570,7 +599,16 @@ pub fn boolean(
 
     // ── Mesh boolean fallback (no recursion) ─────────────────────────
     let opts = BooleanOptions::default();
-    let raw = mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts)?;
+    let raw = match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
+        Ok(raw) => raw,
+        // An empty mesh-boolean output for an intersect means the common
+        // region is empty — return the empty-result sentinel rather than
+        // surfacing the empty set as an error.
+        Err(crate::OperationsError::EmptyResult { .. }) if op == BooleanOp::Intersect => {
+            return Ok(topo.add_empty_solid());
+        }
+        Err(e) => return Err(e),
+    };
     let result = crate::copy::copy_solid(topo, raw)?;
     let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
     for _ in 0..3 {
@@ -1637,6 +1675,26 @@ fn xform_from_canonical_z(
         [0.0, 0.0, 0.0, 1.0],
     ]);
     translate * rot
+}
+
+/// Returns `true` when two axis-aligned boxes are separated on at least
+/// one axis by more than `margin` — i.e. their (margin-expanded) extents
+/// do not overlap and the solids they bound provably do not intersect.
+///
+/// The `margin` shrinks the overlap test so boxes that only touch (or
+/// nearly touch) within `margin` are treated as separated: a shared
+/// face/edge/corner has zero overlap volume.
+fn aabbs_separated(
+    a: &brepkit_math::aabb::Aabb3,
+    b: &brepkit_math::aabb::Aabb3,
+    margin: f64,
+) -> bool {
+    a.max.x() < b.min.x() + margin
+        || b.max.x() < a.min.x() + margin
+        || a.max.y() < b.min.y() + margin
+        || b.max.y() < a.min.y() + margin
+        || a.max.z() < b.min.z() + margin
+        || b.max.z() < a.min.z() + margin
 }
 
 /// Check whether every boundary vertex of `solid` is classified as

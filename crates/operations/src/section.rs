@@ -46,6 +46,8 @@ pub struct Section {
 /// Returns the cross-section as one or more planar faces lying on the
 /// cutting plane. For a simple convex solid this is typically one face;
 /// for solids with holes or disconnected volumes there may be multiple.
+/// A plane that misses the solid entirely yields an empty face list
+/// (a successful empty result, not an error).
 ///
 /// # Algorithm
 ///
@@ -57,8 +59,9 @@ pub struct Section {
 ///
 /// # Errors
 ///
-/// Returns an error if no intersection exists (plane doesn't cut
-/// the solid), or if NURBS intersection computation fails.
+/// Returns an error if NURBS intersection computation fails, or if
+/// intersection segments exist but cannot be assembled into a closed
+/// cross-section wire.
 pub fn section(
     topo: &mut Topology,
     solid: SolidId,
@@ -149,10 +152,11 @@ pub fn section(
         segments = coplanar_segs;
     }
 
+    // No crossing segments and no coplanar boundary across outer + inner
+    // shells means the cutting plane lies wholly on one side of the solid:
+    // a genuine miss. The empty set is a valid section, not an error.
     if segments.is_empty() {
-        return Err(crate::OperationsError::InvalidInput {
-            reason: "cutting plane does not intersect the solid".into(),
-        });
+        return Ok(Section { faces: Vec::new() });
     }
 
     // Assemble segments into closed wires.
@@ -719,14 +723,44 @@ mod tests {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);
 
-        // Plane above the cube.
+        // Plane above the cube — misses entirely.
         let result = section(
             &mut topo,
             cube,
             Point3::new(0.0, 0.0, 5.0),
             Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+        assert!(
+            result.faces.is_empty(),
+            "plane above cube should produce an empty section"
         );
-        assert!(result.is_err(), "plane above cube should produce error");
+    }
+
+    #[test]
+    fn section_plane_flush_with_top_face() {
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_manifold(&mut topo);
+
+        // Plane coincident with the cube's top face at z=1 — the coplanar
+        // boundary fallback must yield the face outline, not a miss.
+        let result = section(
+            &mut topo,
+            cube,
+            Point3::new(0.0, 0.0, 1.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+        assert_eq!(
+            result.faces.len(),
+            1,
+            "flush plane should yield the face outline"
+        );
+        let area = crate::measure::face_area(&topo, result.faces[0], 0.1).unwrap();
+        assert!(
+            (area - 1.0).abs() < 1e-6,
+            "flush-face section area should be ~1.0, got {area}"
+        );
     }
 
     #[test]
