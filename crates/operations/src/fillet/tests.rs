@@ -174,6 +174,32 @@ fn fillet_variable_linear_law() {
 }
 
 #[test]
+fn fillet_variable_removes_material_linear_law() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let edges = solid_edge_ids(&topo, solid);
+    let laws = vec![(
+        edges[0],
+        FilletRadiusLaw::Linear {
+            start: 0.5,
+            end: 1.5,
+        },
+    )];
+    let result = fillet_variable(&mut topo, solid, &laws).expect("variable fillet");
+    let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+    assert!(vol < 1000.0, "fillet must remove material, got {vol}");
+    assert!(
+        vol > 900.0,
+        "single-edge fillet removes only a sliver, got {vol}"
+    );
+
+    let s = topo.solid(result).expect("result solid");
+    let sh = topo.shell(s.outer_shell()).expect("shell");
+    validate_shell_manifold(sh, &topo).expect("variable fillet result should be manifold");
+    assert_euler_genus0(&topo, result);
+}
+
+#[test]
 fn fillet_has_positive_volume() {
     let mut topo = Topology::new();
     let cube = make_unit_cube_manifold(&mut topo);
