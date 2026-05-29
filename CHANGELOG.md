@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.97.2](https://github.com/andymai/brepkit/compare/v2.97.1...v2.97.2) (2026-05-29)
+
+
+### Bug Fixes
+
+* **topology:** orient planar face normal by wire winding ([#726](https://github.com/andymai/brepkit/issues/726)) ([fe59a48](https://github.com/andymai/brepkit/commit/fe59a488d519292464fb4cc7dccd55d8b866cbe2))
+
 ## [2.97.1](https://github.com/andymai/brepkit/compare/v2.97.0...v2.97.1) (2026-05-29)
 
 
