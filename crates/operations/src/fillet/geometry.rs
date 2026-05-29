@@ -94,6 +94,49 @@ pub(super) fn edge_v_samples(curve: &EdgeCurve) -> usize {
     }
 }
 
+/// Per-station rolling-ball cross-section directions at an edge sample point.
+///
+/// `ld1`/`ld2` are unit directions lying in faces 1/2 respectively, normal to
+/// the edge tangent, pointing away from the edge into the channel between the
+/// faces (i.e. toward the other face's material side). The contact points are
+/// `p + ld_k * r`. `bisector` points into the dihedral; `half_angle` is half
+/// the arc sweep. The sign convention matches the validated constant-radius
+/// rolling-ball path: `ld_k` is chosen opposite to the other face's outward
+/// normal so the blend cuts a concave channel inward rather than bulging out.
+pub(super) struct CrossSection {
+    pub(super) ld1: Vec3,
+    pub(super) ld2: Vec3,
+    pub(super) bisector: Vec3,
+    pub(super) half_angle: f64,
+}
+
+/// Compute the cross-section directions at a sample point, given the edge
+/// tangent and the two faces' outward normals there. Degenerate cross products
+/// fall back to the supplied reference directions.
+pub(super) fn cross_section_dirs(
+    tan: Vec3,
+    n1: Vec3,
+    n2: Vec3,
+    fallback_d1: Vec3,
+    fallback_d2: Vec3,
+) -> CrossSection {
+    let c1 = tan.cross(n1);
+    let c2 = tan.cross(n2);
+    let ld1 = if c1.dot(n2) < 0.0 { c1 } else { -c1 };
+    let ld2 = if c2.dot(n1) < 0.0 { c2 } else { -c2 };
+    let ld1 = ld1.normalize().unwrap_or(fallback_d1);
+    let ld2 = ld2.normalize().unwrap_or(fallback_d2);
+    let cos_half = ld1.dot(ld2).clamp(-1.0, 1.0);
+    let half_angle = cos_half.acos() / 2.0;
+    let bisector = (ld1 + ld2).normalize().unwrap_or(fallback_d1);
+    CrossSection {
+        ld1,
+        ld2,
+        bisector,
+        half_angle,
+    }
+}
+
 /// Compute the outward surface normal of a `FaceSurface` at a given 3D point.
 ///
 /// For analytic surfaces this is exact (no parameter-space projection needed).

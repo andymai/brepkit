@@ -500,8 +500,74 @@ pub fn fillet_variable(
         .map(|(eid, law)| (eid.index(), law))
         .collect();
 
-    // Use the constant-radius trimming from the basic fillet for the planar faces.
-    // The NURBS canal surface replaces the fillet face.
+    // Shared contact map: the SAME inward contact point used both to trim the
+    // adjacent faces and to anchor the blend boundary, keyed by
+    // (vertex_index, edge_index, face_index). Computing it once guarantees the
+    // trimmed face boundary and the blend boundary coincide (watertight shell).
+    // Per-end radius: the edge's start vertex uses R(0), the end uses R(1).
+    let fillet_contact_map: HashMap<(usize, usize, usize), Point3> = {
+        let mut map = HashMap::new();
+        for (edge_id, law) in edge_laws {
+            let edge = topo.edge(*edge_id)?;
+            let p_start = topo.vertex(edge.start())?.point();
+            let p_end = topo.vertex(edge.end())?.point();
+
+            let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
+                continue;
+            };
+            if face_list.len() < 2 {
+                continue;
+            }
+            let f1 = face_list[0];
+            let f2 = face_list[1];
+
+            let (Some(surf1), Some(surf2)) = (
+                face_surfaces.get(&f1.index()),
+                face_surfaces.get(&f2.index()),
+            ) else {
+                continue;
+            };
+
+            let edge_curve = edge.curve().clone();
+            if geometry::sample_edge_tangent(&edge_curve, p_start, p_end, 0.0).length() < tol.linear
+            {
+                continue;
+            }
+
+            for &(t, vid) in &[(0.0_f64, edge.start()), (1.0_f64, edge.end())] {
+                let r = law.evaluate(t);
+                let p = geometry::sample_edge_point(&edge_curve, p_start, p_end, t);
+                let tan = geometry::sample_edge_tangent(&edge_curve, p_start, p_end, t);
+                let Ok(local_dir) = tan.normalize() else {
+                    continue;
+                };
+                let (Some(n1), Some(n2)) = (
+                    face_surface_normal_at(surf1, p),
+                    face_surface_normal_at(surf2, p),
+                ) else {
+                    continue;
+                };
+                let cs = geometry::cross_section_dirs(local_dir, n1, n2, local_dir, local_dir);
+                map.insert((vid.index(), edge_id.index(), f1.index()), p + cs.ld1 * r);
+                map.insert((vid.index(), edge_id.index(), f2.index()), p + cs.ld2 * r);
+            }
+        }
+        map
+    };
+
+    // Vertices at endpoints of filleted edges. A side face (one that shares
+    // such a vertex but whose own edges are not filleted) must split that
+    // corner into the two blend contact points, or the blend boundary is left
+    // unmatched and the shell becomes non-manifold.
+    let mut vertex_fillet_endpoints: HashSet<usize> = HashSet::new();
+    for (edge_id, _) in edge_laws {
+        let edge = topo.edge(*edge_id)?;
+        vertex_fillet_endpoints.insert(edge.start().index());
+        vertex_fillet_endpoints.insert(edge.end().index());
+    }
+
+    // Trim planar faces by replacing each filleted-edge boundary vertex with
+    // the shared contact point. The NURBS canal surface replaces the fillet face.
     let mut all_specs: Vec<FaceSpec> = Vec::new();
 
     for &face_id in &shell_face_ids {
@@ -531,6 +597,7 @@ pub fn fillet_variable(
         }
 
         let mut new_verts: Vec<Point3> = Vec::with_capacity(n + target_set.len());
+        let fi = face_id.index();
 
         for i in 0..n {
             let prev_i = if i == 0 { n - 1 } else { i - 1 };
@@ -540,32 +607,76 @@ pub fn fillet_variable(
             let pos = poly.positions[i];
             let prev_pos = poly.positions[prev_i];
             let next_pos = poly.positions[next_i];
+            let vi = poly.vertex_ids[i].index();
+            let at_fillet_endpoint = vertex_fillet_endpoints.contains(&vi);
 
-            // Look up per-edge radius at this vertex:
-            // - "before" edge (prev_i): vertex i is at its end → evaluate(1.0)
-            // - "after" edge (i): vertex i is at its start → evaluate(0.0)
-            let radius_before = edge_law_map
-                .get(&poly.wire_edge_ids[prev_i].index())
-                .map_or(0.0, |law| law.evaluate(1.0));
-            let radius_after = edge_law_map
-                .get(&poly.wire_edge_ids[i].index())
-                .map_or(0.0, |law| law.evaluate(0.0));
-
-            match (before_filleted, after_filleted) {
-                (false, false) => new_verts.push(pos),
-                (true, false) => {
-                    let dir = (next_pos - pos).normalize()?;
-                    new_verts.push(pos + dir * radius_before);
+            match (before_filleted, after_filleted, at_fillet_endpoint) {
+                (false, false, false) => new_verts.push(pos),
+                // Side face: vertex sits at a filleted-edge endpoint but neither
+                // of this face's edges is filleted. Split the corner into the two
+                // blend contacts at this vertex (one per filleted-adjacent face),
+                // ordered toward prev/next to keep the wire convex.
+                (false, false, true) => {
+                    let mut unique_contacts: Vec<Point3> = Vec::new();
+                    for (&(vi_k, _, _), &pt) in &fillet_contact_map {
+                        if vi_k == vi
+                            && !unique_contacts
+                                .iter()
+                                .any(|uc| (*uc - pt).length() < tol.linear)
+                        {
+                            unique_contacts.push(pt);
+                        }
+                    }
+                    if unique_contacts.len() >= 2 {
+                        let approx_prev = (prev_pos - pos)
+                            .normalize()
+                            .map_or(pos, |d| pos + d * tol.linear);
+                        let d0 = (unique_contacts[0] - approx_prev).length();
+                        let d1 = (unique_contacts[1] - approx_prev).length();
+                        if d0 <= d1 {
+                            new_verts.push(unique_contacts[0]);
+                            new_verts.push(unique_contacts[1]);
+                        } else {
+                            new_verts.push(unique_contacts[1]);
+                            new_verts.push(unique_contacts[0]);
+                        }
+                    } else {
+                        new_verts.push(pos);
+                    }
                 }
-                (false, true) => {
-                    let dir = (prev_pos - pos).normalize()?;
-                    new_verts.push(pos + dir * radius_after);
+                (true, false, _) => {
+                    let ei = poly.wire_edge_ids[prev_i].index();
+                    if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
+                        new_verts.push(pt);
+                    } else {
+                        let dir = (next_pos - pos).normalize()?;
+                        new_verts.push(pos + dir * edge_law_map[&ei].evaluate(1.0));
+                    }
                 }
-                (true, true) => {
-                    let dir_prev = (prev_pos - pos).normalize()?;
-                    new_verts.push(pos + dir_prev * radius_before);
-                    let dir_next = (next_pos - pos).normalize()?;
-                    new_verts.push(pos + dir_next * radius_after);
+                (false, true, _) => {
+                    let ei = poly.wire_edge_ids[i].index();
+                    if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
+                        new_verts.push(pt);
+                    } else {
+                        let dir = (prev_pos - pos).normalize()?;
+                        new_verts.push(pos + dir * edge_law_map[&ei].evaluate(0.0));
+                    }
+                }
+                (true, true, _) => {
+                    let ei_after = poly.wire_edge_ids[i].index();
+                    if let Some(&pt) = fillet_contact_map.get(&(vi, ei_after, fi)) {
+                        new_verts.push(pt);
+                    } else {
+                        let dir_prev = (prev_pos - pos).normalize()?;
+                        new_verts.push(pos + dir_prev * edge_law_map[&ei_after].evaluate(0.0));
+                    }
+                    let ei_before = poly.wire_edge_ids[prev_i].index();
+                    if let Some(&pt) = fillet_contact_map.get(&(vi, ei_before, fi)) {
+                        new_verts.push(pt);
+                    } else {
+                        let dir_next = (next_pos - pos).normalize()?;
+                        new_verts.push(pos + dir_next * edge_law_map[&ei_before].evaluate(1.0));
+                    }
                 }
             }
         }
@@ -581,6 +692,7 @@ pub fn fillet_variable(
 
     // Build variable-radius NURBS canal surfaces for each edge.
     let n_samples = 5; // Number of cross-sections along each edge
+    let mut fillet_face_indices: Vec<usize> = Vec::new();
 
     for (edge_id, law) in edge_laws {
         let edge = topo.edge(*edge_id)?;
@@ -621,24 +733,11 @@ pub fn fillet_variable(
         let edge_dir = edge_tan.normalize()?;
 
         // Reference cross-section at t=0 for fallback directions.
-        let cross1_ref = edge_dir.cross(n1_start);
-        let cross2_ref = edge_dir.cross(n2_start);
-        let d1_ref = if cross1_ref.dot(n2_start) > 0.0 {
-            cross1_ref
-        } else {
-            -cross1_ref
-        };
-        let d2_ref = if cross2_ref.dot(n1_start) > 0.0 {
-            cross2_ref
-        } else {
-            -cross2_ref
-        };
-        let d1_ref = d1_ref.normalize().unwrap_or(d1_ref);
-        let d2_ref = d2_ref.normalize().unwrap_or(d2_ref);
-        let cos_half_ref = d1_ref.dot(d2_ref).clamp(-1.0, 1.0);
-        let half_angle = cos_half_ref.acos() / 2.0;
+        let cs_ref = geometry::cross_section_dirs(edge_dir, n1_start, n2_start, edge_dir, edge_dir);
+        let d1_ref = cs_ref.ld1;
+        let d2_ref = cs_ref.ld2;
 
-        if half_angle.abs() < tol.angular {
+        if cs_ref.half_angle.abs() < tol.angular {
             continue;
         }
 
@@ -667,30 +766,42 @@ pub fn fillet_variable(
             let ln1 = face_surface_normal_at(surf1, p).unwrap_or(n1_start);
             let ln2 = face_surface_normal_at(surf2, p).unwrap_or(n2_start);
 
-            // Vertex blend direction: uses original convention (toward other face's
-            // outward normal). The vertex blend fills the gap between fillet strips
-            // at a vertex, and its geometry depends on the edge fillet positions.
-            // TODO(#260): vertex blend direction may need adjustment after edge
-            // fillet direction fix — currently causes ~30% volume inflation on
-            // all-edges fillet. Investigate vertex blend contact point computation.
-            let c1 = local_dir.cross(ln1);
-            let c2 = local_dir.cross(ln2);
-            let ld1 = if c1.dot(ln2) > 0.0 { c1 } else { -c1 };
-            let ld2 = if c2.dot(ln1) > 0.0 { c2 } else { -c2 };
-            let ld1 = ld1.normalize().unwrap_or(d1_ref);
-            let ld2 = ld2.normalize().unwrap_or(d2_ref);
+            let cs = geometry::cross_section_dirs(local_dir, ln1, ln2, d1_ref, d2_ref);
 
-            let local_cos = ld1.dot(ld2).clamp(-1.0, 1.0);
-            let local_half = local_cos.acos() / 2.0;
-            let bisector = (ld1 + ld2).normalize().unwrap_or(d1_ref);
+            // cos(φ/2) is the rational-quadratic arc weight; clamp to a positive
+            // floor so nearly-coplanar faces (φ/2 → π/2) don't yield a zero
+            // weight (degenerate control point).
+            let w = cs.half_angle.cos().max(0.01);
+            let contact1 = p + cs.ld1 * r;
+            let contact2 = p + cs.ld2 * r;
+            // The middle control point is the apex of the tangent cone — the
+            // intersection of the two contact tangents. For a rolling ball on
+            // surfaces meeting at the edge this is the edge point itself, so the
+            // weighted arc bulges concavely toward the solid interior (cutting
+            // material). Placing it on the bisector ray past the ball center
+            // would bulge the blend outward and add volume.
+            let mid_cp = p;
 
-            let contact1 = p + ld1 * r;
-            let contact2 = p + ld2 * r;
-            let mid_dist = r / local_half.cos().max(0.01);
-            let mid_cp = p + bisector * mid_dist;
-
-            sample_weights.push(local_half.cos().max(0.01));
+            sample_weights.push(w);
             grid.push(vec![contact1, mid_cp, contact2]);
+        }
+
+        // Anchor the blend boundary contacts to the shared contact map so the
+        // interpolated NURBS boundary coincides exactly with the trimmed-face
+        // vertices (bitwise-identical, no duplicate vertices in assembly).
+        let v_start = edge.start().index();
+        let v_end = edge.end().index();
+        if let Some(&pt) = fillet_contact_map.get(&(v_start, edge_id.index(), f1.index())) {
+            grid[0][0] = pt;
+        }
+        if let Some(&pt) = fillet_contact_map.get(&(v_start, edge_id.index(), f2.index())) {
+            grid[0][2] = pt;
+        }
+        if let Some(&pt) = fillet_contact_map.get(&(v_end, edge_id.index(), f1.index())) {
+            grid[n_v - 1][0] = pt;
+        }
+        if let Some(&pt) = fillet_contact_map.get(&(v_end, edge_id.index(), f2.index())) {
+            grid[n_v - 1][2] = pt;
         }
 
         // Build a rational NURBS surface with exact circular arc cross-sections.
@@ -758,7 +869,33 @@ pub fn fillet_variable(
             reversed: false,
             inner_wires: vec![],
         });
+
+        // Mark for reversal if the surface mid-normal points into the dihedral
+        // (toward the solid) rather than outward.
+        let srf_mid_normal = match &all_specs[all_specs.len() - 1] {
+            FaceSpec::Surface {
+                surface: FaceSurface::Nurbs(srf),
+                ..
+            } => srf.normal(0.5, 0.5).unwrap_or(cs_ref.bisector),
+            _ => cs_ref.bisector,
+        };
+        if srf_mid_normal.dot(cs_ref.bisector) > 0.0 {
+            fillet_face_indices.push(all_specs.len() - 1);
+        }
     }
 
-    crate::boolean::assemble_solid_mixed(topo, &all_specs, tol)
+    let solid_id = crate::boolean::assemble_solid_mixed(topo, &all_specs, tol)?;
+
+    if !fillet_face_indices.is_empty() {
+        let solid_data = topo.solid(solid_id)?;
+        let shell = topo.shell(solid_data.outer_shell())?;
+        let face_ids: Vec<_> = shell.faces().to_vec();
+        for &fi in &fillet_face_indices {
+            if fi < face_ids.len() {
+                topo.face_mut(face_ids[fi])?.set_reversed(true);
+            }
+        }
+    }
+
+    Ok(solid_id)
 }
