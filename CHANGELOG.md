@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.98.0](https://github.com/andymai/brepkit/compare/v2.97.2...v2.98.0) (2026-05-29)
+
+
+### Features
+
+* **wasm:** expose type-gated free-form surface data extraction ([#729](https://github.com/andymai/brepkit/issues/729)) ([b9c01f7](https://github.com/andymai/brepkit/commit/b9c01f71eda5cbcbdd3d8f404a7185a86d8c73a0))
+
 ## [2.97.2](https://github.com/andymai/brepkit/compare/v2.97.1...v2.97.2) (2026-05-29)
 
 
