@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.101.1](https://github.com/andymai/brepkit/compare/v2.101.0...v2.101.1) (2026-05-29)
+
+
+### Bug Fixes
+
+* **fillet:** variable fillet removes material instead of inflating volume ([#739](https://github.com/andymai/brepkit/issues/739)) ([7398d23](https://github.com/andymai/brepkit/commit/7398d23c19516aade199f64fecf9de8ae163e977))
+
 ## [2.101.0](https://github.com/andymai/brepkit/compare/v2.100.0...v2.101.0) (2026-05-29)
 
 
