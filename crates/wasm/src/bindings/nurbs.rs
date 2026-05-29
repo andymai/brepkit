@@ -537,6 +537,156 @@ mod tests {
         assert_eq!(expanded, out_knots);
     }
 
+    fn assert_complete_bspline(data: &serde_json::Value, expected_degree: u64) {
+        let degree = data["degree"].as_u64().expect("degree present");
+        assert_eq!(degree, expected_degree);
+
+        let cps: Vec<[f64; 3]> = serde_json::from_value(data["controlPoints"].clone()).unwrap();
+        let n = cps.len();
+        assert!(n > expected_degree as usize, "n {n} >= degree+1");
+
+        let knots: Vec<f64> = serde_json::from_value(data["knots"].clone()).unwrap();
+        assert_eq!(knots.len(), n + degree as usize + 1);
+        assert!(knots.windows(2).all(|w| w[1] >= w[0]), "non-decreasing");
+
+        let weights: Vec<f64> = serde_json::from_value(data["weights"].clone()).unwrap();
+        assert_eq!(weights.len(), n);
+
+        let dk: Vec<f64> = serde_json::from_value(data["distinctKnots"].clone()).unwrap();
+        let mult: Vec<u32> = serde_json::from_value(data["multiplicities"].clone()).unwrap();
+        let expanded: Vec<f64> = dk
+            .iter()
+            .zip(&mult)
+            .flat_map(|(&v, &m)| std::iter::repeat_n(v, m as usize))
+            .collect();
+        assert_eq!(expanded, knots, "compressed knots round-trip");
+        assert_eq!(mult.iter().sum::<u32>() as usize, n + degree as usize + 1);
+
+        let domain: [f64; 2] = serde_json::from_value(data["domain"].clone()).unwrap();
+        assert!(domain[1] > domain[0], "domain {domain:?}");
+    }
+
+    fn rebuild_curve(data: &serde_json::Value) -> NurbsCurve {
+        let degree = data["degree"].as_u64().unwrap() as usize;
+        let knots: Vec<f64> = serde_json::from_value(data["knots"].clone()).unwrap();
+        let weights: Vec<f64> = serde_json::from_value(data["weights"].clone()).unwrap();
+        let cps: Vec<Point3> =
+            serde_json::from_value::<Vec<[f64; 3]>>(data["controlPoints"].clone())
+                .unwrap()
+                .into_iter()
+                .map(|c| Point3::new(c[0], c[1], c[2]))
+                .collect();
+        NurbsCurve::new(degree, knots, cps, weights).unwrap()
+    }
+
+    fn extract(k: &mut BrepKernel, handle: u32) -> serde_json::Value {
+        let before = entity_counts(k);
+        let data = dispatch_ok(k, "getNurbsCurveData", serde_json::json!({"edge": handle}));
+        assert_eq!(before, entity_counts(k), "query must not mutate topology");
+        data
+    }
+
+    #[test]
+    fn interpolated_curve_data_never_null() {
+        let mut k = BrepKernel::new();
+        let points = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 2.0, 0.5),
+            Point3::new(3.0, 1.5, 1.0),
+            Point3::new(5.0, 0.0, 0.0),
+        ];
+        let curve = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
+        let eid = make_nurbs_edge_from_curve(k.topo_mut(), &curve, TOL);
+        let handle = edge_id_to_u32(eid);
+
+        let data = extract(&mut k, handle);
+        assert_complete_bspline(&data, 3);
+        assert!(!data["rational"].as_bool().unwrap(), "plain interpolation");
+
+        let rebuilt = rebuild_curve(&data);
+        let (a, b) = rebuilt.domain();
+        for i in 0..=16 {
+            let t = a + (b - a) * (f64::from(i) / 16.0);
+            let d = (rebuilt.evaluate(t) - curve.evaluate(t)).length();
+            assert!(d < 1e-9, "round-trip mismatch {d} at t={t}");
+        }
+    }
+
+    #[test]
+    fn approximated_curve_data_never_null() {
+        let mut k = BrepKernel::new();
+        let points: Vec<Point3> = (0..8)
+            .map(|i| {
+                let t = f64::from(i) / 7.0;
+                Point3::new(t * 6.0, (t * std::f64::consts::PI).sin() * 2.0, t)
+            })
+            .collect();
+        let curve = brepkit_math::nurbs::fitting::approximate(&points, 3, 5).unwrap();
+        let eid = make_nurbs_edge_from_curve(k.topo_mut(), &curve, TOL);
+        let handle = edge_id_to_u32(eid);
+
+        let data = extract(&mut k, handle);
+        assert_complete_bspline(&data, 3);
+        let cps: Vec<[f64; 3]> = serde_json::from_value(data["controlPoints"].clone()).unwrap();
+        assert_eq!(cps.len(), 5, "poles match requested control-point count");
+    }
+
+    #[test]
+    fn lspia_curve_data_never_null() {
+        let mut k = BrepKernel::new();
+        let points: Vec<Point3> = (0..10)
+            .map(|i| {
+                let t = f64::from(i) / 9.0;
+                Point3::new(t * 4.0, (t * 6.0).cos(), t * t)
+            })
+            .collect();
+        let curve =
+            brepkit_math::nurbs::fitting::approximate_lspia(&points, 3, 6, 1e-6, 50).unwrap();
+        let eid = make_nurbs_edge_from_curve(k.topo_mut(), &curve, TOL);
+        let handle = edge_id_to_u32(eid);
+
+        let data = extract(&mut k, handle);
+        assert_complete_bspline(&data, 3);
+    }
+
+    #[test]
+    fn two_point_interpolation_degree_clamped() {
+        let mut k = BrepKernel::new();
+        let points = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 3.0, 1.0)];
+        let curve = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
+        let eid = make_nurbs_edge_from_curve(k.topo_mut(), &curve, TOL);
+        let handle = edge_id_to_u32(eid);
+
+        let data = extract(&mut k, handle);
+        assert_complete_bspline(&data, 1);
+        let cps: Vec<[f64; 3]> = serde_json::from_value(data["controlPoints"].clone()).unwrap();
+        assert_eq!(cps.len(), 2);
+        let knots: Vec<f64> = serde_json::from_value(data["knots"].clone()).unwrap();
+        assert_eq!(knots, vec![0.0, 0.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn fitted_straight_curve_keeps_explicit_poles() {
+        let mut k = BrepKernel::new();
+        let points: Vec<Point3> = (0..5)
+            .map(|i| {
+                let t = f64::from(i) / 4.0;
+                Point3::new(t * 10.0, t * 10.0, 0.0)
+            })
+            .collect();
+        let curve = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
+        let eid = make_nurbs_edge_from_curve(k.topo_mut(), &curve, TOL);
+        let handle = edge_id_to_u32(eid);
+
+        let data = extract(&mut k, handle);
+        assert_complete_bspline(&data, 3);
+        let cps: Vec<[f64; 3]> = serde_json::from_value(data["controlPoints"].clone()).unwrap();
+        assert!(
+            cps.len() >= 2,
+            "fitted curve not collapsed to analytic form"
+        );
+    }
+
     #[test]
     fn circle_edge_extracts_rational_quadratic() {
         let mut k = BrepKernel::new();
