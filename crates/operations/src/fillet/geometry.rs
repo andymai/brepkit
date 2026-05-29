@@ -94,6 +94,19 @@ pub(super) fn edge_v_samples(curve: &EdgeCurve) -> usize {
     }
 }
 
+/// In-plane direction from the edge toward the rolling-ball contact on a face.
+///
+/// Within the section plane (normal `tangent`), this is the face normal `n_self`
+/// projected onto the plane, with the sign flipped so it points into the solid
+/// material (toward the ball center) rather than out along the outward normal.
+/// `n_other` is the outward normal of the neighbouring face; the wedge interior
+/// lies on the side away from `n_other`, which fixes the sign unambiguously.
+pub(super) fn inward_section_dir(tangent: Vec3, n_self: Vec3, n_other: Vec3) -> Option<Vec3> {
+    let c = tangent.cross(n_self);
+    let dir = if c.dot(n_other) < 0.0 { c } else { -c };
+    dir.normalize().ok()
+}
+
 /// Compute the outward surface normal of a `FaceSurface` at a given 3D point.
 ///
 /// For analytic surfaces this is exact (no parameter-space projection needed).

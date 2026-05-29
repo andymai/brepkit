@@ -171,6 +171,71 @@ fn fillet_variable_linear_law() {
 
     let vol = crate::measure::solid_volume(&topo, result, 0.1).unwrap();
     assert!(vol > 0.5, "filleted cube should have volume, got {vol}");
+    assert!(
+        vol < 1.0,
+        "convex-edge fillet must remove material from the unit cube, got {vol}"
+    );
+}
+
+#[test]
+fn fillet_variable_linear_law_removes_material() {
+    let mut topo = Topology::new();
+    let cube = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+
+    let edges = solid_edge_ids(&topo, cube);
+    let laws = vec![(
+        edges[0],
+        FilletRadiusLaw::Linear {
+            start: 1.0,
+            end: 3.0,
+        },
+    )];
+
+    let result = fillet_variable(&mut topo, cube, &laws).expect("variable fillet should work");
+
+    let s = topo.solid(result).expect("result solid");
+    let sh = topo.shell(s.outer_shell()).expect("shell");
+    validate_shell_manifold(sh, &topo).expect("variable fillet result should be manifold");
+    assert_eq!(
+        sh.faces().len(),
+        7,
+        "single-edge fillet on a box adds exactly one blend face"
+    );
+
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        vol > 7000.0,
+        "variable fillet over-removed material from box(20,20,20), got {vol}"
+    );
+    assert!(
+        vol < 8000.0,
+        "convex-edge variable fillet must remove material (V < 8000), got {vol}"
+    );
+}
+
+#[test]
+fn fillet_variable_constant_law_matches_rolling_ball() {
+    let mut topo = Topology::new();
+    let cube = crate::primitives::make_box(&mut topo, 20.0, 20.0, 20.0).unwrap();
+    let edges = solid_edge_ids(&topo, cube);
+    let target = edges[0];
+
+    let variable = fillet_variable(&mut topo, cube, &[(target, FilletRadiusLaw::Constant(2.0))])
+        .expect("variable fillet should work");
+    let vol_variable = crate::measure::solid_volume(&topo, variable, 0.01).unwrap();
+
+    let mut topo2 = Topology::new();
+    let cube2 = crate::primitives::make_box(&mut topo2, 20.0, 20.0, 20.0).unwrap();
+    let edges2 = solid_edge_ids(&topo2, cube2);
+    let rolling = fillet_rolling_ball(&mut topo2, cube2, &[edges2[0]], 2.0)
+        .expect("rolling ball should work");
+    let vol_rolling = crate::measure::solid_volume(&topo2, rolling, 0.01).unwrap();
+
+    let rel = (vol_variable - vol_rolling).abs() / vol_rolling;
+    assert!(
+        rel < 0.01,
+        "constant-law variable fillet ({vol_variable}) must match rolling-ball ({vol_rolling}) within 1%"
+    );
 }
 
 #[test]
