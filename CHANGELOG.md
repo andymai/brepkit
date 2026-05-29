@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.100.0](https://github.com/andymai/brepkit/compare/v2.99.0...v2.100.0) (2026-05-29)
+
+
+### Features
+
+* **wasm:** add copyFace binding for face deep-copy ([#736](https://github.com/andymai/brepkit/issues/736)) ([c766b9c](https://github.com/andymai/brepkit/commit/c766b9c27ff2bd4d86b43055d027664344f94419))
+
+
+### Bug Fixes
+
+* **fillet:** correct corner over-removal in all-edges rolling-ball fillet ([#734](https://github.com/andymai/brepkit/issues/734)) ([d0ce22c](https://github.com/andymai/brepkit/commit/d0ce22cd7e69022e8f976c676b3dcf48f8e88812))
+
 ## [2.99.0](https://github.com/andymai/brepkit/compare/v2.98.0...v2.99.0) (2026-05-29)
 
 
