@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.95.0](https://github.com/andymai/brepkit/compare/v2.94.0...v2.95.0) (2026-05-29)
+
+
+### Features
+
+* **boolean:** empty result for disjoint intersect and section miss ([#718](https://github.com/andymai/brepkit/issues/718)) ([7ec776c](https://github.com/andymai/brepkit/commit/7ec776cc91db4d2a10847cb8880b7f4dfc504287))
+
 ## [2.94.0](https://github.com/andymai/brepkit/compare/v2.93.0...v2.94.0) (2026-05-29)
 
 
