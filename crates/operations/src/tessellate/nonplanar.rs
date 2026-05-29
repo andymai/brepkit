@@ -6,7 +6,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
-use super::edge_sampling::{sample_edge, segments_for_chord_deviation};
+use super::edge_sampling::{sample_edge, segments_for_chord_deviation_a};
 use super::{MERGE_GRID, TriangleMesh, point_merge_key};
 
 /// CDT-based tessellation for non-planar faces with exact boundary constraints.
@@ -14,12 +14,13 @@ use super::{MERGE_GRID, TriangleMesh, point_merge_key};
 /// Projects shared edge points into (u,v) parameter space, generates interior
 /// sample points, then runs Constrained Delaunay Triangulation. Boundary
 /// vertices use their pre-existing global IDs (watertight by construction).
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub(super) fn tessellate_nonplanar_cdt(
     topo: &Topology,
     face_id: FaceId,
     face_data: &brepkit_topology::face::Face,
     deflection: f64,
+    angular_tol: f64,
     edge_global_indices: &HashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
     point_to_global: &mut HashMap<(i64, i64, i64), u32>,
@@ -62,7 +63,7 @@ pub(super) fn tessellate_nonplanar_cdt(
         } else {
             // Edge not in shared pool -- insert directly.
             let edge_data = topo.edge(oe.edge())?;
-            let points = sample_edge(topo, edge_data, deflection)?;
+            let points = sample_edge(topo, edge_data, deflection, angular_tol)?;
             let ordered: Vec<Point3> = if is_fwd {
                 points
             } else {
@@ -301,7 +302,8 @@ pub(super) fn tessellate_nonplanar_cdt(
     let du = u_max - u_min;
     let dv = v_max - v_min;
     if du > 1e-15 && dv > 1e-15 {
-        let (n_u, n_v) = interior_grid_resolution(face_data.surface(), du, dv, deflection);
+        let (n_u, n_v) =
+            interior_grid_resolution(face_data.surface(), du, dv, deflection, angular_tol);
 
         let boundary_uv_ref = &boundary_uv;
         let interior_pts: Vec<Point2> = (1..n_u)
@@ -465,17 +467,22 @@ fn interior_grid_resolution(
     du: f64,
     dv: f64,
     deflection: f64,
+    angular_tol: f64,
 ) -> (usize, usize) {
     match surface {
         FaceSurface::Sphere(sphere) => {
             let r = sphere.radius();
-            let n_u = segments_for_chord_deviation(r, du, deflection).max(2);
-            let n_v = segments_for_chord_deviation(r, dv, deflection).max(2);
+            let n_u = segments_for_chord_deviation_a(r, du, deflection, angular_tol).max(2);
+            let n_v = segments_for_chord_deviation_a(r, dv, deflection, angular_tol).max(2);
             (n_u, n_v)
         }
         FaceSurface::Torus(torus) => {
-            let n_u = segments_for_chord_deviation(torus.major_radius(), du, deflection).max(2);
-            let n_v = segments_for_chord_deviation(torus.minor_radius(), dv, deflection).max(2);
+            let n_u =
+                segments_for_chord_deviation_a(torus.major_radius(), du, deflection, angular_tol)
+                    .max(2);
+            let n_v =
+                segments_for_chord_deviation_a(torus.minor_radius(), dv, deflection, angular_tol)
+                    .max(2);
             (n_u, n_v)
         }
         FaceSurface::Plane { .. }
@@ -483,8 +490,8 @@ fn interior_grid_resolution(
         | FaceSurface::Cylinder(_)
         | FaceSurface::Cone(_) => {
             let r = estimate_surface_radius(surface);
-            let n_u = segments_for_chord_deviation(r, du, deflection).max(2);
-            let n_v = segments_for_chord_deviation(r, dv, deflection).max(2);
+            let n_u = segments_for_chord_deviation_a(r, du, deflection, angular_tol).max(2);
+            let n_v = segments_for_chord_deviation_a(r, dv, deflection, angular_tol).max(2);
             (n_u, n_v)
         }
     }
@@ -519,16 +526,18 @@ pub(super) fn point_in_polygon_2d(polygon: &[(f64, f64)], pt: brepkit_math::vec:
 }
 
 /// Snap-based fallback tessellation for non-planar faces.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn tessellate_nonplanar_snap(
     topo: &Topology,
     face_id: FaceId,
     face_data: &brepkit_topology::face::Face,
     deflection: f64,
+    angular_tol: f64,
     edge_global_indices: &HashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
     point_to_global: &mut HashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
-    let mut face_mesh = super::tessellate(topo, face_id, deflection)?;
+    let mut face_mesh = super::tessellate_with_tolerance(topo, face_id, deflection, angular_tol)?;
 
     // `tessellate()` already applies the `is_reversed` flip. The caller
     // `tessellate_face_with_shared_edges` will apply its own flip, so undo

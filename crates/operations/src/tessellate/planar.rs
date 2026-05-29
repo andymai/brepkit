@@ -6,7 +6,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 
 use super::edge_sampling::{
-    measure_max_chord_deviation, sample_wire_positions, segments_for_chord_deviation,
+    measure_max_chord_deviation, sample_wire_positions, segments_for_chord_deviation_a,
 };
 use super::shorter_arc_range;
 use super::{AnalyticKind, MERGE_GRID, TriangleMesh, TriangleMeshUV, point_merge_key};
@@ -26,6 +26,7 @@ pub(super) fn tessellate_analytic_with_boundary(
     face_data: &brepkit_topology::face::Face,
     cyl: &brepkit_math::surfaces::CylindricalSurface,
     _deflection: f64,
+    _angular_tol: f64,
 ) -> Result<TriangleMeshUV, crate::OperationsError> {
     // NOTE: Do NOT handle is_reversed here -- `tessellate_with_uvs` applies
     // a common reversal pass for all face types after this function returns.
@@ -258,6 +259,7 @@ pub(super) fn tessellate_planar(
     face_data: &brepkit_topology::face::Face,
     normal: Vec3,
     deflection: f64,
+    angular_tol: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
 
@@ -301,8 +303,12 @@ pub(super) fn tessellate_planar(
                     shorter_arc_range(circle, topo, edge)?
                 };
                 let arc_range = (t_end - t_start).abs();
-                let n_samples =
-                    segments_for_chord_deviation(circle.radius(), arc_range, deflection);
+                let n_samples = segments_for_chord_deviation_a(
+                    circle.radius(),
+                    arc_range,
+                    deflection,
+                    angular_tol,
+                );
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(
                     &|t| circle.evaluate(t),
@@ -326,8 +332,14 @@ pub(super) fn tessellate_planar(
                     (ts, te)
                 };
                 let arc_range = t_end - t_start;
-                let n_samples =
-                    segments_for_chord_deviation(ellipse.semi_major(), arc_range, deflection);
+                let min_curv_radius =
+                    ellipse.semi_minor() * ellipse.semi_minor() / ellipse.semi_major();
+                let n_samples = segments_for_chord_deviation_a(
+                    min_curv_radius,
+                    arc_range,
+                    deflection,
+                    angular_tol,
+                );
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(
                     &|t| ellipse.evaluate(t),
@@ -424,7 +436,7 @@ pub(super) fn tessellate_planar(
         })
     } else {
         // CDT path for faces with holes.
-        tessellate_planar_with_holes(topo, face_data, &positions, normal, deflection)
+        tessellate_planar_with_holes(topo, face_data, &positions, normal, deflection, angular_tol)
     }
 }
 
@@ -473,6 +485,7 @@ fn tessellate_planar_with_holes(
     outer_positions: &[Point3],
     normal: Vec3,
     deflection: f64,
+    angular_tol: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
@@ -486,7 +499,7 @@ fn tessellate_planar_with_holes(
     let tol = 1e-10;
     for &iw_id in face_data.inner_wires() {
         let iw = topo.wire(iw_id)?;
-        let inner_pts = sample_wire_positions(topo, iw, tol, deflection)?;
+        let inner_pts = sample_wire_positions(topo, iw, tol, deflection, angular_tol)?;
         let start = all_positions.len();
         all_positions.extend_from_slice(&inner_pts);
         let end = all_positions.len();

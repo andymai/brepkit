@@ -292,6 +292,40 @@ fn safe_normal(surface: &brepkit_math::nurbs::surface::NurbsSurface, u: f64, v: 
     surface.normal(u, v).unwrap_or(Vec3::new(0.0, 0.0, 1.0))
 }
 
+/// Whether a quad cell's normals turn by more than `angular_tol` across any
+/// pair of its sampled corners/center.
+///
+/// `angular_tol <= 0` disables the angular criterion.
+#[allow(clippy::similar_names)]
+fn cell_exceeds_angular(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    u_min: f64,
+    u_max: f64,
+    v_min: f64,
+    v_max: f64,
+    angular_tol: f64,
+) -> bool {
+    if angular_tol <= 0.0 {
+        return false;
+    }
+    let u_mid = 0.5 * (u_min + u_max);
+    let v_mid = 0.5 * (v_min + v_max);
+    let normals = [
+        safe_normal(surface, u_min, v_min),
+        safe_normal(surface, u_max, v_min),
+        safe_normal(surface, u_max, v_max),
+        safe_normal(surface, u_min, v_max),
+        safe_normal(surface, u_mid, v_mid),
+    ];
+    let mut min_dot = 1.0_f64;
+    for i in 0..normals.len() {
+        for j in (i + 1)..normals.len() {
+            min_dot = min_dot.min(normals[i].dot(normals[j]));
+        }
+    }
+    min_dot.clamp(-1.0, 1.0).acos() > angular_tol
+}
+
 /// Compute the refinement error for a quad cell using combined metrics.
 #[allow(clippy::similar_names)]
 fn cell_refinement_error(
@@ -375,6 +409,7 @@ fn build_quadtree(
     cells: &mut Vec<AdaptiveCell>,
     cell_idx: usize,
     threshold: f64,
+    angular_tol: f64,
 ) {
     let cell = &cells[cell_idx];
     if cell.depth >= MAX_DEPTH {
@@ -388,7 +423,8 @@ fn build_quadtree(
     let depth = cell.depth;
 
     let error = cell_refinement_error(surface, u_min, u_max, v_min, v_max);
-    if error <= threshold {
+    let angular_exceeded = cell_exceeds_angular(surface, u_min, u_max, v_min, v_max, angular_tol);
+    if error <= threshold && !angular_exceeded {
         return;
     }
 
@@ -433,7 +469,7 @@ fn build_quadtree(
     cells[cell_idx].children = Some([c0, c0 + 1, c0 + 2, c0 + 3]);
 
     for i in 0..4 {
-        build_quadtree(surface, cells, c0 + i, threshold);
+        build_quadtree(surface, cells, c0 + i, threshold, angular_tol);
     }
 }
 
@@ -602,6 +638,7 @@ fn force_subdivide(
 pub(super) fn tessellate_nurbs(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     deflection: f64,
+    angular_tol: f64,
 ) -> TriangleMeshUV {
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
@@ -637,7 +674,7 @@ pub(super) fn tessellate_nurbs(
 
     let n_roots = INITIAL_CELLS * INITIAL_CELLS;
     for i in 0..n_roots {
-        build_quadtree(surface, &mut cells, i, deflection);
+        build_quadtree(surface, &mut cells, i, deflection, angular_tol);
     }
 
     conforming_pass(surface, &mut cells);
