@@ -92,4 +92,9 @@ pub enum TopologyError {
         /// The kind of entity that was empty.
         entity: &'static str,
     },
+
+    /// A wire's edge geometry does not lie within tolerance of any single
+    /// plane, so a planar face cannot be constructed from it.
+    #[error("wire is not planar")]
+    NotPlanar,
 }

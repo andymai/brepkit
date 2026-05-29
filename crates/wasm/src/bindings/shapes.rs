@@ -648,13 +648,32 @@ impl BrepKernel {
         Ok(wire_id_to_u32(wid))
     }
 
-    /// Create a planar face from a wire (computes normal from first 3 vertices).
+    /// Create a face from a wire.
+    ///
+    /// Samples the wire's edges and attaches a planar surface only if the
+    /// geometry lies within tolerance of a single plane; otherwise a
+    /// non-planar surface is attached, so `getSurfaceType` never reports
+    /// `"plane"` for a non-coplanar wire.
     ///
     /// Returns a face handle (`u32`).
     #[wasm_bindgen(js_name = "makeFaceFromWire")]
     pub fn make_face_from_wire(&mut self, wire: u32) -> Result<u32, JsError> {
         let wid = self.resolve_wire(wire)?;
         let fid = brepkit_topology::builder::make_face_from_wire(self.topo_mut(), wid)?;
+        Ok(face_id_to_u32(fid))
+    }
+
+    /// Create a strictly planar face from a wire.
+    ///
+    /// Fails with a "wire is not planar" error if the wire's geometry does
+    /// not lie within tolerance of a single plane. Use this for planar-only
+    /// construction intent (probing whether a wire is planar).
+    ///
+    /// Returns a face handle (`u32`).
+    #[wasm_bindgen(js_name = "makePlanarFaceFromWire")]
+    pub fn make_planar_face_from_wire(&mut self, wire: u32) -> Result<u32, JsError> {
+        let wid = self.resolve_wire(wire)?;
+        let fid = brepkit_topology::builder::make_planar_face_from_wire(self.topo_mut(), wid)?;
         Ok(face_id_to_u32(fid))
     }
 

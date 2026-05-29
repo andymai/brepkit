@@ -1466,6 +1466,9 @@ impl BrepKernel {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+    use brepkit_math::vec::Point3;
+
+    use crate::handles::face_id_to_u32;
     use crate::kernel::test_fixtures::{kernel_with_box, kernel_with_cylinder};
 
     // ── get_solid_faces ───────────────────────────────────────────
@@ -1942,5 +1945,70 @@ mod tests {
                 "torus minor radius should be 1.0, got {minor_r}"
             );
         }
+    }
+
+    fn closed_polygon_wire(
+        k: &mut crate::kernel::BrepKernel,
+        pts: &[Point3],
+    ) -> brepkit_topology::wire::WireId {
+        brepkit_topology::builder::make_polygon_wire(k.topo_mut(), pts, 1e-7).unwrap()
+    }
+
+    #[test]
+    fn surface_type_noncoplanar_wire_is_not_plane() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let wid = closed_polygon_wire(
+            &mut k,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+                Point3::new(10.0, 10.0, 0.0),
+                Point3::new(5.0, 5.0, 5.0),
+            ],
+        );
+        let fid = brepkit_topology::builder::make_face_from_wire(k.topo_mut(), wid).unwrap();
+        let stype = k.get_surface_type(face_id_to_u32(fid)).unwrap();
+        assert_ne!(stype, "plane", "non-coplanar wire must not report a plane");
+    }
+
+    #[test]
+    fn surface_type_planar_square_wire_is_plane() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let wid = closed_polygon_wire(
+            &mut k,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+                Point3::new(10.0, 10.0, 0.0),
+                Point3::new(0.0, 10.0, 0.0),
+            ],
+        );
+        let fid = brepkit_topology::builder::make_face_from_wire(k.topo_mut(), wid).unwrap();
+        let stype = k.get_surface_type(face_id_to_u32(fid)).unwrap();
+        assert_eq!(stype, "plane");
+    }
+
+    #[test]
+    fn make_planar_face_from_wire_rejects_noncoplanar() {
+        let mut k = crate::kernel::BrepKernel::new();
+        let wid = closed_polygon_wire(
+            &mut k,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+                Point3::new(10.0, 10.0, 0.0),
+                Point3::new(5.0, 5.0, 5.0),
+            ],
+        );
+        let res = brepkit_topology::builder::make_planar_face_from_wire(k.topo_mut(), wid);
+        assert!(
+            res.is_err(),
+            "planar-only build must reject non-coplanar wire"
+        );
+        let msg = res.err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(
+            msg.contains("not planar"),
+            "error must mention 'not planar', got {msg}"
+        );
     }
 }
