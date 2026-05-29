@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.101.0](https://github.com/andymai/brepkit/compare/v2.100.0...v2.101.0) (2026-05-29)
+
+
+### Features
+
+* **wasm:** route wire offsets through join-aware builder (offsetWire2DWithJoin) ([#737](https://github.com/andymai/brepkit/issues/737)) ([cd41676](https://github.com/andymai/brepkit/commit/cd416764fd52a1388568eb819ed325e817937ee6))
+
 ## [2.100.0](https://github.com/andymai/brepkit/compare/v2.99.0...v2.100.0) (2026-05-29)
 
 
