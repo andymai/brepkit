@@ -249,14 +249,18 @@ pub fn make_regular_polygon_wire(
     make_polygon_wire(topo, &points, tolerance)
 }
 
-/// Create a planar face from a closed wire.
+/// Create a face from a closed wire (general construction mode).
 ///
-/// Computes the face normal from the first three vertices of the wire.
+/// Samples points along the wire's edges, fits a candidate plane, and
+/// verifies that every sample lies within tolerance of it. If verification
+/// succeeds the face carries a planar surface; otherwise a non-planar
+/// (bilinear NURBS) surface is attached so that a surface-type query never
+/// reports `plane` for a wire whose geometry is not coplanar.
 ///
 /// # Errors
 ///
-/// Returns an error if the wire has fewer than 3 edges or the normal
-/// is degenerate.
+/// Returns an error if the wire has no edges or fewer than 3 usable sample
+/// points (the wire is degenerate or collinear).
 pub fn make_face_from_wire(
     topo: &mut Topology,
     wire_id: WireId,
@@ -269,143 +273,266 @@ pub fn make_face_from_wire(
         });
     }
 
-    // Compute the plane normal from sample points along the wire.
-    // For wires with fewer than 3 edges (e.g. a single circle), we cannot
-    // rely on 3 distinct vertex positions. Instead, sample points along the
-    // edge curves to obtain non-collinear positions.
-    let sample_points = sample_wire_points(topo, edges)?;
+    let sampled = sample_wire_for_planarity(topo, edges)?;
+    let surface = match verified_plane(&sampled) {
+        Some((normal, d)) => FaceSurface::Plane { normal, d },
+        None => FaceSurface::Nurbs(bilinear_surface(&sampled.points)?),
+    };
 
-    let normal = compute_plane_normal(&sample_points)?;
-    let d = normal.x().mul_add(
-        sample_points[0].x(),
-        normal
-            .y()
-            .mul_add(sample_points[0].y(), normal.z() * sample_points[0].z()),
-    );
-
-    let face_id = topo.add_face(Face::new(wire_id, vec![], FaceSurface::Plane { normal, d }));
-
-    Ok(face_id)
+    Ok(topo.add_face(Face::new(wire_id, vec![], surface)))
 }
 
-/// Sample at least 3 non-coincident points from a wire's edges.
+/// Create a strictly planar face from a closed wire.
 ///
-/// For each edge, collects the start vertex and (for non-line curves) a
-/// midpoint sample. This ensures that even a single closed circle edge
-/// yields 3 well-spaced points for normal computation.
-fn sample_wire_points(
+/// Like [`make_face_from_wire`] but in planar-only mode: if the wire's
+/// geometry does not lie within tolerance of a single plane, construction
+/// fails with [`crate::TopologyError::NotPlanar`] instead of falling back to
+/// a non-planar surface.
+///
+/// # Errors
+///
+/// Returns an error if the wire has no edges, has fewer than 3 usable sample
+/// points, or its samples do not lie within tolerance of any single plane.
+pub fn make_planar_face_from_wire(
+    topo: &mut Topology,
+    wire_id: WireId,
+) -> Result<FaceId, crate::TopologyError> {
+    let wire = topo.wire(wire_id)?;
+    let edges = wire.edges();
+    if edges.is_empty() {
+        return Err(crate::TopologyError::Empty {
+            entity: "wire (no edges)",
+        });
+    }
+
+    let sampled = sample_wire_for_planarity(topo, edges)?;
+    let (normal, d) = verified_plane(&sampled).ok_or(crate::TopologyError::NotPlanar)?;
+
+    Ok(topo.add_face(Face::new(wire_id, vec![], FaceSurface::Plane { normal, d })))
+}
+
+/// Sample points and tolerance gathered from a wire for planarity testing.
+struct WireSamples {
+    points: Vec<Point3>,
+    /// Squared effective tolerance: `max(base linear, max edge tolerance)²`.
+    tol_sq: f64,
+    /// Plane derived directly from the first conic edge, if any. A conic is
+    /// intrinsically planar, so its own axis-system plane is exact and is
+    /// preferred over a scatter fit.
+    conic_plane: Option<(Vec3, f64)>,
+}
+
+/// A spline lies in a plane iff all its control points do, so the poles are
+/// the exact planarity witnesses; a conic is intrinsically planar and four
+/// well-spaced points pin its inclusion; a line needs only its endpoints.
+fn sample_wire_for_planarity(
     topo: &Topology,
     edges: &[OrientedEdge],
-) -> Result<Vec<Point3>, crate::TopologyError> {
-    let mut points = Vec::with_capacity(edges.len() * 2);
+) -> Result<WireSamples, crate::TopologyError> {
+    let mut points = Vec::with_capacity(edges.len() * 4);
+    let mut tol = Tolerance::new().linear;
+    let mut conic_plane = None;
 
     for oe in edges {
         let edge = topo.edge(oe.edge())?;
-        let start_vid = oe.oriented_start(edge);
-        let start_pt = topo.vertex(start_vid)?.point();
-        points.push(start_pt);
+        let edge_tol = edge.tolerance().unwrap_or_else(|| {
+            let a = topo.vertex(edge.start()).map_or(0.0, Vertex::tolerance);
+            let b = topo.vertex(edge.end()).map_or(0.0, Vertex::tolerance);
+            a.max(b)
+        });
+        tol = tol.max(edge_tol);
 
-        // For curved edges, sample the midpoint to get a non-collinear point.
-        // The midpoint MUST lie on the actual arc between this edge's
-        // start and end — using a fixed parameter like π was sampling the
-        // global antipodal point of the underlying circle/ellipse, which
-        // for short arcs (e.g., gear tip arcs near angle 0) lands far from
-        // the arc and produced a polygon whose Newell normal had the
-        // wrong sign.
+        let start_pt = topo.vertex(oe.oriented_start(edge))?.point();
+        let end_pt = topo.vertex(oe.oriented_end(edge))?.point();
+
         match edge.curve() {
-            EdgeCurve::Line => {}
+            EdgeCurve::Line => {
+                points.push(start_pt);
+                points.push(end_pt);
+                points.push(start_pt + (end_pt - start_pt) * 0.5);
+            }
             EdgeCurve::Circle(c) => {
-                let tau = std::f64::consts::TAU;
-                if edge.start() == edge.end() {
-                    points.push(c.evaluate(tau / 3.0));
-                    points.push(c.evaluate(2.0 * tau / 3.0));
-                } else {
-                    // Short-way midpoint between the two oriented endpoints:
-                    // walk the smaller of the two arcs (delta in [-π, π]) so
-                    // reversed edges sample the same physical arc as forward
-                    // ones, not the long complementary path.
-                    let end_pt = topo.vertex(oe.oriented_end(edge))?.point();
-                    let t_a = c.project(start_pt);
-                    let t_b = c.project(end_pt);
-                    let mut delta = t_b - t_a;
-                    if delta > std::f64::consts::PI {
-                        delta -= tau;
-                    } else if delta < -std::f64::consts::PI {
-                        delta += tau;
-                    }
-                    points.push(c.evaluate(t_a + delta * 0.5));
+                if conic_plane.is_none() {
+                    conic_plane = Some(plane_from(c.center(), c.normal()));
                 }
+                sample_conic(
+                    start_pt,
+                    end_pt,
+                    edge.is_closed(),
+                    &mut points,
+                    |t| c.evaluate(t),
+                    |p| c.project(p),
+                );
             }
             EdgeCurve::Ellipse(e) => {
-                let tau = std::f64::consts::TAU;
-                if edge.start() == edge.end() {
-                    points.push(e.evaluate(tau / 3.0));
-                    points.push(e.evaluate(2.0 * tau / 3.0));
-                } else {
-                    let end_pt = topo.vertex(oe.oriented_end(edge))?.point();
-                    let t_a = e.project(start_pt);
-                    let t_b = e.project(end_pt);
-                    let mut delta = t_b - t_a;
-                    if delta > std::f64::consts::PI {
-                        delta -= tau;
-                    } else if delta < -std::f64::consts::PI {
-                        delta += tau;
-                    }
-                    points.push(e.evaluate(t_a + delta * 0.5));
+                if conic_plane.is_none() {
+                    conic_plane = Some(plane_from(e.center(), e.normal()));
                 }
+                sample_conic(
+                    start_pt,
+                    end_pt,
+                    edge.is_closed(),
+                    &mut points,
+                    |t| e.evaluate(t),
+                    |p| e.project(p),
+                );
             }
             EdgeCurve::NurbsCurve(nc) => {
-                let knots = nc.knots();
-                let mid_u = f64::midpoint(knots[0], knots[knots.len() - 1]);
-                if edge.start() == edge.end() {
-                    // Sample at 1/3 and 2/3 in monotonic order so Newell's
-                    // method gives correct normal sign.
-                    let third_u = knots[0] + (knots[knots.len() - 1] - knots[0]) / 3.0;
-                    let two_third_u = knots[0] + 2.0 * (knots[knots.len() - 1] - knots[0]) / 3.0;
-                    points.push(nc.evaluate(third_u));
-                    points.push(nc.evaluate(two_third_u));
-                } else {
-                    points.push(nc.evaluate(mid_u));
-                }
+                points.extend_from_slice(nc.control_points());
             }
         }
     }
 
-    Ok(points)
+    Ok(WireSamples {
+        points,
+        tol_sq: tol * tol,
+        conic_plane,
+    })
 }
 
-/// Compute a unit plane normal from a set of sample points using Newell's
-/// method. Works for any number of points >= 3.
-fn compute_plane_normal(points: &[Point3]) -> Result<Vec3, crate::TopologyError> {
+/// Sample an oriented conic sub-arc at four points along the short way
+/// between its endpoints, so samples lie on the real curve segment rather
+/// than the antipodal arc.
+fn sample_conic(
+    start_pt: Point3,
+    end_pt: Point3,
+    closed: bool,
+    out: &mut Vec<Point3>,
+    evaluate: impl Fn(f64) -> Point3,
+    project: impl Fn(Point3) -> f64,
+) {
+    let tau = std::f64::consts::TAU;
+    if closed {
+        for i in 0..4 {
+            out.push(evaluate(tau * f64::from(i) / 4.0));
+        }
+        return;
+    }
+    let t_a = project(start_pt);
+    let t_b = project(end_pt);
+    let mut delta = t_b - t_a;
+    if delta > PI {
+        delta -= tau;
+    } else if delta < -PI {
+        delta += tau;
+    }
+    for i in 0..=3 {
+        out.push(evaluate(t_a + delta * f64::from(i) / 3.0));
+    }
+}
+
+fn plane_from(point: Point3, normal: Vec3) -> (Vec3, f64) {
+    let n = normal.normalize().unwrap_or(normal);
+    (n, n.dot(point - Point3::new(0.0, 0.0, 0.0)))
+}
+
+/// Obtain a candidate plane (conic-derived or scatter-fit) and verify that
+/// every sample lies within tolerance of it. Returns `None` when no plane
+/// can be formed or verification fails.
+fn verified_plane(samples: &WireSamples) -> Option<(Vec3, f64)> {
+    let (normal, d) = samples
+        .conic_plane
+        .or_else(|| fit_plane(&samples.points, samples.tol_sq))?;
+
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    for p in &samples.points {
+        let dist = normal.dot(*p - origin) - d;
+        if dist * dist > samples.tol_sq {
+            return None;
+        }
+    }
+    Some((normal, d))
+}
+
+/// Fit a candidate plane from scattered sample points using the most
+/// extreme, least-collinear triple. Returns `None` for degenerate
+/// (coincident) or collinear point sets.
+fn fit_plane(points: &[Point3], tol_sq: f64) -> Option<(Vec3, f64)> {
+    if points.len() < 3 {
+        return None;
+    }
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let p0 = points[0];
+
+    let (p1, far_sq) = points
+        .iter()
+        .map(|&p| (p, (p - p0).length_squared()))
+        .fold((p0, 0.0), |acc, c| if c.1 > acc.1 { c } else { acc });
+    if far_sq <= tol_sq {
+        return None;
+    }
+    let v1 = p1 - p0;
+
+    let (p2, off_sq) = points
+        .iter()
+        .map(|&p| (p, v1.cross(p - p0).length_squared()))
+        .fold((p0, 0.0), |acc, c| if c.1 > acc.1 { c } else { acc });
+    if (p2 - p0).length_squared() <= tol_sq {
+        return None;
+    }
+
+    let v2 = p2 - p0;
+    let angular = Tolerance::new().angular;
+    if off_sq <= v1.length_squared() * v2.length_squared() * angular * angular {
+        return None;
+    }
+
+    let normal = v1.cross(v2).normalize().ok()?;
+    let d = normal.dot(p0 - origin);
+    Some((normal, d))
+}
+
+/// Build a degree-1 bilinear NURBS patch spanning the extreme corners of the
+/// sample set, used as a non-planar surface for wires that fail planarity
+/// verification in general construction mode.
+fn bilinear_surface(points: &[Point3]) -> Result<NurbsSurface, crate::TopologyError> {
     if points.len() < 3 {
         return Err(crate::TopologyError::NonManifold {
-            reason: "need at least 3 sample points for face normal".into(),
+            reason: "need at least 3 sample points for a non-planar face".into(),
         });
     }
+    let p0 = points[0];
+    let p1 = *points
+        .iter()
+        .max_by(|a, b| {
+            (**a - p0)
+                .length_squared()
+                .total_cmp(&(**b - p0).length_squared())
+        })
+        .unwrap_or(&p0);
+    let v1 = p1 - p0;
+    let p2 = *points
+        .iter()
+        .max_by(|a, b| {
+            v1.cross(**a - p0)
+                .length_squared()
+                .total_cmp(&v1.cross(**b - p0).length_squared())
+        })
+        .unwrap_or(&p0);
 
-    // Newell's method: accumulate cross-product contributions from all
-    // consecutive point pairs. More robust than using just 3 points when
-    // the polygon has near-collinear segments.
-    let mut nx = 0.0_f64;
-    let mut ny = 0.0_f64;
-    let mut nz = 0.0_f64;
-    let n = points.len();
-    for i in 0..n {
-        let curr = points[i];
-        let next = points[(i + 1) % n];
-        nx += (curr.y() - next.y()) * (curr.z() + next.z());
-        ny += (curr.z() - next.z()) * (curr.x() + next.x());
-        nz += (curr.x() - next.x()) * (curr.y() + next.y());
-    }
+    // p3 must be the actual sample farthest off the (p0, p1, p2) plane so the
+    // resulting bilinear patch is genuinely twisted; a parallelogram corner
+    // would be coplanar with p0/p1/p2 and recognized as a plane downstream.
+    let plane_n = v1.cross(p2 - p0).normalize().unwrap_or(v1);
+    let p3 = *points
+        .iter()
+        .max_by(|a, b| {
+            plane_n
+                .dot(**a - p0)
+                .abs()
+                .total_cmp(&plane_n.dot(**b - p0).abs())
+        })
+        .unwrap_or(&p2);
 
-    let len = (nx * nx + ny * ny + nz * nz).sqrt();
-    if len < 1e-15 {
-        return Err(crate::TopologyError::NonManifold {
-            reason: "face normal is degenerate (collinear points)".into(),
-        });
-    }
+    let grid = vec![vec![p0, p2], vec![p1, p3]];
+    let weights = vec![vec![1.0, 1.0], vec![1.0, 1.0]];
+    let knots = vec![0.0, 0.0, 1.0, 1.0];
 
-    Ok(Vec3::new(nx / len, ny / len, nz / len))
+    NurbsSurface::new(1, 1, knots.clone(), knots, grid, weights).map_err(|e| {
+        crate::TopologyError::NonManifold {
+            reason: format!("non-planar surface construction failed: {e}"),
+        }
+    })
 }
 
 /// Create a rectangular face on the XY plane centered at the origin.
@@ -879,5 +1006,126 @@ mod tests {
     fn make_circle_face_zero_radius_error() {
         let mut topo = Topology::new();
         assert!(make_circle_face(&mut topo, 0.0, 16, TOL).is_err());
+    }
+
+    fn polygon_wire_3d(topo: &mut Topology, pts: &[Point3]) -> WireId {
+        make_polygon_wire(topo, pts, TOL).unwrap()
+    }
+
+    #[test]
+    fn make_planar_face_from_wire_rejects_noncoplanar_wire() {
+        let mut topo = Topology::new();
+        let wid = polygon_wire_3d(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+                Point3::new(10.0, 10.0, 0.0),
+                Point3::new(5.0, 5.0, 5.0),
+            ],
+        );
+
+        let res = make_planar_face_from_wire(&mut topo, wid);
+        assert!(matches!(res, Err(crate::TopologyError::NotPlanar)));
+    }
+
+    #[test]
+    fn make_face_from_wire_noncoplanar_is_not_plane_surface() {
+        let mut topo = Topology::new();
+        let wid = polygon_wire_3d(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+                Point3::new(10.0, 10.0, 0.0),
+                Point3::new(5.0, 5.0, 5.0),
+            ],
+        );
+
+        let fid = make_face_from_wire(&mut topo, wid).unwrap();
+        let face = topo.face(fid).unwrap();
+        assert!(
+            !matches!(face.surface(), FaceSurface::Plane { .. }),
+            "non-coplanar wire must not produce a planar surface"
+        );
+    }
+
+    #[test]
+    fn make_planar_face_from_wire_accepts_square() {
+        let mut topo = Topology::new();
+        let wid = polygon_wire_3d(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+                Point3::new(10.0, 10.0, 0.0),
+                Point3::new(0.0, 10.0, 0.0),
+            ],
+        );
+
+        let fid = make_planar_face_from_wire(&mut topo, wid).unwrap();
+        let face = topo.face(fid).unwrap();
+        assert!(
+            matches!(face.surface(), FaceSurface::Plane { .. }),
+            "square wire must classify as plane"
+        );
+        if let FaceSurface::Plane { normal, .. } = face.surface() {
+            let tol = Tolerance::new();
+            assert!(tol.approx_eq(normal.z().abs(), 1.0), "normal should be ±Z");
+        }
+    }
+
+    #[test]
+    fn make_planar_face_from_wire_accepts_single_circle() {
+        let mut topo = Topology::new();
+        let eid = make_circle_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            2.0,
+            TOL,
+        )
+        .unwrap();
+        let wire = Wire::new(vec![OrientedEdge::new(eid, true)], true).unwrap();
+        let wid = topo.add_wire(wire);
+
+        let fid = make_planar_face_from_wire(&mut topo, wid).unwrap();
+        let face = topo.face(fid).unwrap();
+        assert!(
+            matches!(face.surface(), FaceSurface::Plane { .. }),
+            "single circle loop must classify as plane"
+        );
+    }
+
+    #[test]
+    fn make_planar_face_from_wire_near_miss_boundary() {
+        let eps = 1e-6;
+        let within = eps * 0.4;
+        let beyond = eps * 4.0;
+
+        let build = |z: f64| {
+            let mut topo = Topology::new();
+            let wid = make_polygon_wire(
+                &mut topo,
+                &[
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(10.0, 0.0, 0.0),
+                    Point3::new(10.0, 10.0, 0.0),
+                    Point3::new(0.0, 10.0, z),
+                ],
+                eps,
+            )
+            .unwrap();
+            make_planar_face_from_wire(&mut topo, wid)
+        };
+
+        assert!(
+            build(within).is_ok(),
+            "within-tolerance wire must be accepted"
+        );
+        assert!(
+            matches!(build(beyond), Err(crate::TopologyError::NotPlanar)),
+            "beyond-tolerance wire must be rejected"
+        );
     }
 }
