@@ -123,6 +123,48 @@ pub(crate) fn surface_data_json(surface: &NurbsSurface) -> serde_json::Value {
     })
 }
 
+/// Serialize a `NurbsSurface` to the parity extraction object.
+///
+/// The parity shape uses `poles`/`nbPolesU`/`nbPolesV`, distinct `knotsU`/`knotsV`
+/// paired with `multiplicitiesU`/`multiplicitiesV`, and `isPeriodicU`/`isPeriodicV`/
+/// `isRational`. Distinct knots are emitted (not the flat vector); a consumer
+/// rebuilds the flat vector by repeating each value by its multiplicity.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn surface_data_parity_json(surface: &NurbsSurface) -> serde_json::Value {
+    let poles: Vec<Vec<[f64; 3]>> = surface
+        .control_points()
+        .iter()
+        .map(|row| row.iter().map(|p| [p.x(), p.y(), p.z()]).collect())
+        .collect();
+    let weights = surface.weights();
+    let rational = weights
+        .iter()
+        .flatten()
+        .any(|&w| (w - 1.0).abs() > WEIGHT_UNIT_TOL);
+
+    let nb_poles_u = poles.len();
+    let nb_poles_v = poles.first().map_or(0, Vec::len);
+
+    let (distinct_u, mult_u) = compress_knots(surface.knots_u());
+    let (distinct_v, mult_v) = compress_knots(surface.knots_v());
+
+    serde_json::json!({
+        "degreeU": surface.degree_u(),
+        "degreeV": surface.degree_v(),
+        "nbPolesU": nb_poles_u,
+        "nbPolesV": nb_poles_v,
+        "poles": poles,
+        "weights": weights,
+        "knotsU": distinct_u,
+        "knotsV": distinct_v,
+        "multiplicitiesU": mult_u,
+        "multiplicitiesV": mult_v,
+        "isPeriodicU": surface.is_periodic_u(),
+        "isPeriodicV": surface.is_periodic_v(),
+        "isRational": rational,
+    })
+}
+
 /// Two control rows coincide pointwise within the closure tolerance.
 fn rows_coincide(a: &[Point3], b: &[Point3]) -> bool {
     a.len() == b.len()
@@ -361,6 +403,42 @@ impl BrepKernel {
     pub fn get_nurbs_surface_data(&self, face: u32) -> Result<String, JsError> {
         let surface = self.extract_nurbs_surface(face)?;
         Ok(surface_data_json(&surface).to_string())
+    }
+
+    /// Type-gated read-only B-Spline/NURBS surface data for a face.
+    ///
+    /// Unlike `getNurbsSurfaceData`, this never converts analytic surfaces:
+    /// faces backed by a plane, cylinder, cone, sphere, or torus return the
+    /// JSON literal `null`. Only intrinsically free-form (B-Spline/NURBS) faces
+    /// yield a record with `degreeU`/`degreeV`, `nbPolesU`/`nbPolesV`, the
+    /// row-major `poles` grid (u-major, v-minor) with the matching `weights`
+    /// grid, distinct `knotsU`/`knotsV` paired with `multiplicitiesU`/
+    /// `multiplicitiesV`, `isPeriodicU`/`isPeriodicV`, and `isRational`.
+    #[wasm_bindgen(js_name = "getNurbsSurfaceDataParity")]
+    pub fn get_nurbs_surface_data_parity(&self, face: u32) -> Result<String, JsError> {
+        Ok(self.free_form_surface_data_parity(face)?.to_string())
+    }
+}
+
+impl BrepKernel {
+    /// Return parity surface data only for intrinsically free-form faces,
+    /// else JSON `null`. Pure: resolves the face without touching the arena.
+    pub(crate) fn free_form_surface_data_parity(
+        &self,
+        face: u32,
+    ) -> Result<serde_json::Value, WasmError> {
+        use brepkit_topology::face::FaceSurface;
+
+        let face_id = self.resolve_face(face)?;
+        let face_data = self.topo.face(face_id)?;
+        match face_data.surface() {
+            FaceSurface::Nurbs(s) => Ok(surface_data_parity_json(s)),
+            FaceSurface::Plane { .. }
+            | FaceSurface::Cylinder(_)
+            | FaceSurface::Cone(_)
+            | FaceSurface::Sphere(_)
+            | FaceSurface::Torus(_) => Ok(serde_json::Value::Null),
+        }
     }
 }
 
@@ -641,6 +719,144 @@ mod tests {
             - ys.iter().copied().fold(f64::INFINITY, f64::min);
         assert!(dx >= 2.0 * radius - 1e-9, "cap u-extent {dx}");
         assert!(dy >= 2.0 * radius - 1e-9, "cap v-extent {dy}");
+    }
+
+    fn first_analytic_face(k: &BrepKernel, solid: brepkit_topology::solid::SolidId) -> u32 {
+        let faces = brepkit_topology::explorer::solid_faces(&k.topo, solid).unwrap();
+        face_id_to_u32(faces[0])
+    }
+
+    #[test]
+    fn parity_planar_face_returns_null() {
+        let mut k = BrepKernel::new();
+        let solid = brepkit_operations::primitives::make_box(k.topo_mut(), 4.0, 6.0, 2.0).unwrap();
+        let handle = first_analytic_face(&k, solid);
+
+        let before = entity_counts(&k);
+        let data = dispatch_ok(
+            &mut k,
+            "getNurbsSurfaceDataParity",
+            serde_json::json!({"face": handle}),
+        );
+        assert_eq!(before, entity_counts(&k), "query must not mutate topology");
+        assert!(data.is_null(), "planar face must yield null, got {data}");
+    }
+
+    #[test]
+    fn parity_analytic_faces_return_null() {
+        let mut k = BrepKernel::new();
+        let cyl = brepkit_operations::primitives::make_cylinder(k.topo_mut(), 3.0, 5.0).unwrap();
+        let cone = brepkit_operations::primitives::make_cone(k.topo_mut(), 3.0, 1.0, 5.0).unwrap();
+        let sphere = brepkit_operations::primitives::make_sphere(k.topo_mut(), 2.0, 16).unwrap();
+        let torus = brepkit_operations::primitives::make_torus(k.topo_mut(), 4.0, 1.0, 16).unwrap();
+
+        for solid in [cyl, cone, sphere, torus] {
+            let faces = brepkit_topology::explorer::solid_faces(&k.topo, solid).unwrap();
+            for fid in faces {
+                let handle = face_id_to_u32(fid);
+                let data = dispatch_ok(
+                    &mut k,
+                    "getNurbsSurfaceDataParity",
+                    serde_json::json!({"face": handle}),
+                );
+                assert!(
+                    data.is_null(),
+                    "analytic face {handle} must yield null, got {data}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn parity_nurbs_face_extracts_full_data() {
+        let mut k = BrepKernel::new();
+        let mut grid = Vec::new();
+        for i in 0..4 {
+            let mut row = Vec::new();
+            for j in 0..4 {
+                let x = i as f64;
+                let y = j as f64;
+                let z = (x * y).sin() * 0.3;
+                row.push(Point3::new(x, y, z));
+            }
+            grid.push(row);
+        }
+        let surface = interpolate_surface(&grid, 3, 3).unwrap();
+        let fid = make_nurbs_face(k.topo_mut(), surface.clone(), TOL).unwrap();
+        let handle = face_id_to_u32(fid);
+
+        let before = entity_counts(&k);
+        let data = dispatch_ok(
+            &mut k,
+            "getNurbsSurfaceDataParity",
+            serde_json::json!({"face": handle}),
+        );
+        assert_eq!(before, entity_counts(&k), "query must not mutate topology");
+        assert!(!data.is_null());
+
+        let du = data["degreeU"].as_u64().unwrap() as usize;
+        let dv = data["degreeV"].as_u64().unwrap() as usize;
+        let nb_u = data["nbPolesU"].as_u64().unwrap() as usize;
+        let nb_v = data["nbPolesV"].as_u64().unwrap() as usize;
+        let poles: Vec<Vec<[f64; 3]>> = serde_json::from_value(data["poles"].clone()).unwrap();
+        let weights: Vec<Vec<f64>> = serde_json::from_value(data["weights"].clone()).unwrap();
+        let knots_u: Vec<f64> = serde_json::from_value(data["knotsU"].clone()).unwrap();
+        let knots_v: Vec<f64> = serde_json::from_value(data["knotsV"].clone()).unwrap();
+        let mult_u: Vec<u32> = serde_json::from_value(data["multiplicitiesU"].clone()).unwrap();
+        let mult_v: Vec<u32> = serde_json::from_value(data["multiplicitiesV"].clone()).unwrap();
+
+        assert_eq!(poles.len(), nb_u);
+        assert!(poles.iter().all(|r| r.len() == nb_v), "rectangular grid");
+        assert_eq!(weights.len(), nb_u);
+        assert!(weights.iter().all(|r| r.len() == nb_v));
+        assert!(!data["isRational"].as_bool().unwrap());
+
+        assert_eq!(knots_u.len(), mult_u.len());
+        assert_eq!(knots_v.len(), mult_v.len());
+        assert!(
+            knots_u.windows(2).all(|w| w[1] > w[0]),
+            "strictly increasing"
+        );
+        assert!(
+            knots_v.windows(2).all(|w| w[1] > w[0]),
+            "strictly increasing"
+        );
+        assert_eq!(mult_u.iter().sum::<u32>() as usize, nb_u + du + 1);
+        assert_eq!(mult_v.iter().sum::<u32>() as usize, nb_v + dv + 1);
+
+        let flat_u: Vec<f64> = knots_u
+            .iter()
+            .zip(&mult_u)
+            .flat_map(|(&v, &m)| std::iter::repeat_n(v, m as usize))
+            .collect();
+        let flat_v: Vec<f64> = knots_v
+            .iter()
+            .zip(&mult_v)
+            .flat_map(|(&v, &m)| std::iter::repeat_n(v, m as usize))
+            .collect();
+
+        let rebuilt = NurbsSurface::new(
+            du,
+            dv,
+            flat_u,
+            flat_v,
+            poles
+                .iter()
+                .map(|row| row.iter().map(|c| Point3::new(c[0], c[1], c[2])).collect())
+                .collect(),
+            weights,
+        )
+        .unwrap();
+        let (ua, ub) = surface.domain_u();
+        let (va, vb) = surface.domain_v();
+        for i in 0..=4 {
+            for j in 0..=4 {
+                let u = ua + (ub - ua) * (i as f64 / 4.0);
+                let v = va + (vb - va) * (j as f64 / 4.0);
+                let d = (rebuilt.evaluate(u, v) - surface.evaluate(u, v)).length();
+                assert!(d < 1e-9, "round-trip mismatch {d} at ({u},{v})");
+            }
+        }
     }
 
     #[test]

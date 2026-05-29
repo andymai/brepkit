@@ -1329,6 +1329,11 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(super::nurbs::surface_data_json(&surface))
             }
+            "getNurbsSurfaceDataParity" => {
+                let face = get_u32(args, "face")?;
+                self.free_form_surface_data_parity(face)
+                    .map_err(|e| e.to_string())
+            }
             _ => Err(format!("unknown operation: {op}")),
         }
     }
