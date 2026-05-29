@@ -1221,3 +1221,61 @@ fn center_of_mass_from_faces(
     let denom = 4.0 * total_vol;
     Ok(Point3::new(cx / denom, cy / denom, cz / denom))
 }
+
+#[cfg(test)]
+mod regression_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
+    use brepkit_topology::face::FaceSurface;
+
+    fn unit_square_extrude_volume() -> (f64, bool) {
+        let mut topo = Topology::new();
+        let pts = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        let wire = make_polygon_wire(&mut topo, &pts, 1e-7).unwrap();
+        let face = make_face_from_wire(&mut topo, wire).unwrap();
+        let cap_is_plane = matches!(
+            topo.face(face).unwrap().surface(),
+            FaceSurface::Plane { .. }
+        );
+        let solid =
+            crate::extrude::extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let vol = solid_volume(&topo, solid, 0.01).unwrap();
+        (vol, cap_is_plane)
+    }
+
+    #[test]
+    fn unit_square_extrude_volume_is_one() {
+        let (vol, cap_is_plane) = unit_square_extrude_volume();
+        assert!(
+            cap_is_plane,
+            "axis-aligned square cap must be a planar face"
+        );
+        assert!((vol - 1.0).abs() < 1e-6, "expected 1.0, got {vol}");
+    }
+
+    #[test]
+    fn rectangle_extrude_volume_matches_box() {
+        // A non-square, non-unit axis-aligned rectangle whose winding-derived
+        // cap normal must still come out correct.
+        let mut topo = Topology::new();
+        let pts = vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(5.0, 0.0, 0.0),
+            Point3::new(5.0, 2.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+        ];
+        let wire = make_polygon_wire(&mut topo, &pts, 1e-7).unwrap();
+        let face = make_face_from_wire(&mut topo, wire).unwrap();
+        let solid =
+            crate::extrude::extrude(&mut topo, face, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+        let vol = solid_volume(&topo, solid, 0.01).unwrap();
+        assert!((vol - 30.0).abs() < 1e-6, "expected 30.0, got {vol}");
+    }
+}
