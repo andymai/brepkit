@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.99.0](https://github.com/andymai/brepkit/compare/v2.98.0...v2.99.0) (2026-05-29)
+
+
+### Features
+
+* **heal:** merge co-surface face groups with holes in unify_same_domain ([#731](https://github.com/andymai/brepkit/issues/731)) ([c4c03ca](https://github.com/andymai/brepkit/commit/c4c03ca8aec4aafcd9f488ef54d71dc14d867e5d))
+
 ## [2.98.0](https://github.com/andymai/brepkit/compare/v2.97.2...v2.98.0) (2026-05-29)
 
 
