@@ -1019,6 +1019,13 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(wire_id_to_u32(copy)))
             }
+            "copyFace" => {
+                let f = get_u32(args, "face")?;
+                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
+                let copy = brepkit_operations::copy::copy_face(self.topo_mut(), face_id)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(face_id_to_u32(copy)))
+            }
             "transformWire" => {
                 let w = get_u32(args, "wire")?;
                 let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;

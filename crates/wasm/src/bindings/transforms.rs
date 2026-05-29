@@ -9,7 +9,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::transform::transform_solid;
 
 use crate::error::{WasmError, validate_finite, validate_positive};
-use crate::handles::{compound_id_to_u32, solid_id_to_u32, wire_id_to_u32};
+use crate::handles::{compound_id_to_u32, face_id_to_u32, solid_id_to_u32, wire_id_to_u32};
 use crate::kernel::BrepKernel;
 
 #[wasm_bindgen]
@@ -112,6 +112,21 @@ impl BrepKernel {
         let wire_id = self.resolve_wire(wire)?;
         let copy = brepkit_operations::copy::copy_wire(self.topo_mut(), wire_id)?;
         Ok(wire_id_to_u32(copy))
+    }
+
+    /// Deep copy a face, returning a new independent face handle.
+    ///
+    /// The copy shares no sub-entities with the original, so translating it
+    /// (to form a pocket or boss profile) does not mutate the donor solid.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face handle is invalid.
+    #[wasm_bindgen(js_name = "copyFace")]
+    pub fn copy_face(&mut self, face: u32) -> Result<u32, JsError> {
+        let face_id = self.resolve_face(face)?;
+        let copy = brepkit_operations::copy::copy_face(self.topo_mut(), face_id)?;
+        Ok(face_id_to_u32(copy))
     }
 
     /// Apply a 4×4 affine transform to a wire (in place).
@@ -420,6 +435,28 @@ mod tests {
     fn copy_solid_invalid_handle_errors() {
         let mut k = BrepKernel::new();
         let r = k.execute_batch(r#"[{"op": "copySolid", "args": {"solid": 9999}}]"#);
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        assert!(parsed[0]["error"].is_string());
+    }
+
+    // ── copy_face ─────────────────────────────────────────────────
+
+    #[test]
+    fn copy_face_returns_new_handle() {
+        let mut k = BrepKernel::new();
+        let s = k.make_box_solid(1.0, 1.0, 1.0).unwrap();
+        let face = k.get_solid_faces(s).unwrap()[0];
+        let batch = format!(r#"[{{"op": "copyFace", "args": {{"face": {face}}}}}]"#);
+        let r = k.execute_batch(&batch);
+        let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
+        let copy = parsed[0]["ok"].as_u64().unwrap();
+        assert_ne!(copy, u64::from(face));
+    }
+
+    #[test]
+    fn copy_face_invalid_handle_errors() {
+        let mut k = BrepKernel::new();
+        let r = k.execute_batch(r#"[{"op": "copyFace", "args": {"face": 9999}}]"#);
         let parsed: serde_json::Value = serde_json::from_str(&r).unwrap();
         assert!(parsed[0]["error"].is_string());
     }

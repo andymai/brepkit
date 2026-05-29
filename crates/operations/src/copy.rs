@@ -9,7 +9,7 @@ use brepkit_math::curves::{Circle3D, Ellipse3D};
 use brepkit_math::vec::Point3;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
-use brepkit_topology::face::{Face, FaceSurface};
+use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::{Vertex, VertexId};
@@ -688,6 +688,135 @@ pub fn copy_wire(topo: &mut Topology, wire_id: WireId) -> Result<WireId, crate::
     Ok(topo.add_wire(new_wire))
 }
 
+/// Create a deep copy of a single face and all its sub-entities.
+///
+/// Returns a new [`FaceId`] for the copy. The original face and any shape that
+/// shares its sub-entities are left untouched, so the copy can be translated to
+/// form a pocket or boss profile without corrupting the donor solid. The
+/// surface carrier and orientation (`reversed`) flag are cloned verbatim — no
+/// geometry is recomputed.
+///
+/// # Errors
+///
+/// Returns an error if any topology lookup fails.
+pub fn copy_face(topo: &mut Topology, face_id: FaceId) -> Result<FaceId, crate::OperationsError> {
+    // ── Read phase ─────────────────────────────────────────────────
+    let face = topo.face(face_id)?;
+    let surface = face.surface().clone();
+    let reversed = face.is_reversed();
+    let outer_wire_index = face.outer_wire().index();
+    let inner_wire_indices: Vec<usize> = face.inner_wires().iter().map(|w| w.index()).collect();
+
+    let mut vertex_snaps: Vec<VertexSnap> = Vec::new();
+    let mut edge_snaps: Vec<EdgeSnap> = Vec::new();
+    let mut wire_snaps: Vec<WireSnap> = Vec::new();
+
+    let mut seen_vertices = std::collections::HashSet::new();
+    let mut seen_edges = std::collections::HashSet::new();
+    let mut seen_wires = std::collections::HashSet::new();
+
+    for wire_id_val in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+    {
+        if !seen_wires.insert(wire_id_val.index()) {
+            continue;
+        }
+        let wire = topo.wire(wire_id_val)?;
+        let mut edge_refs = Vec::new();
+
+        for oe in wire.edges() {
+            let edge_idx = oe.edge().index();
+            edge_refs.push((edge_idx, oe.is_forward()));
+
+            if !seen_edges.insert(edge_idx) {
+                continue;
+            }
+            let edge = topo.edge(oe.edge())?;
+            let start_idx = edge.start().index();
+            let end_idx = edge.end().index();
+
+            for &vid_idx in &[start_idx, end_idx] {
+                if seen_vertices.insert(vid_idx) {
+                    let vid = if vid_idx == start_idx {
+                        edge.start()
+                    } else {
+                        edge.end()
+                    };
+                    let v = topo.vertex(vid)?;
+                    vertex_snaps.push(VertexSnap {
+                        old_index: vid_idx,
+                        point: v.point(),
+                        tol: v.tolerance(),
+                    });
+                }
+            }
+
+            edge_snaps.push(EdgeSnap {
+                old_index: edge_idx,
+                start_index: start_idx,
+                end_index: end_idx,
+                curve: edge.curve().clone(),
+                tolerance: edge.tolerance(),
+            });
+        }
+
+        wire_snaps.push(WireSnap {
+            old_index: wire_id_val.index(),
+            edges: edge_refs,
+            closed: wire.is_closed(),
+        });
+    }
+
+    // ── Write phase ────────────────────────────────────────────────
+    topo.reserve(
+        vertex_snaps.len(),
+        edge_snaps.len(),
+        wire_snaps.len(),
+        1,
+        0,
+        0,
+    );
+
+    let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
+    for vsnap in &vertex_snaps {
+        let new_vid = topo.add_vertex(Vertex::new(vsnap.point, vsnap.tol));
+        vertex_map.insert(vsnap.old_index, new_vid);
+    }
+
+    let mut edge_map: HashMap<usize, brepkit_topology::edge::EdgeId> = HashMap::new();
+    for esnap in &edge_snaps {
+        let new_start = vertex_map[&esnap.start_index];
+        let new_end = vertex_map[&esnap.end_index];
+        let copied_edge = topo.add_edge(Edge::with_tolerance(
+            new_start,
+            new_end,
+            esnap.curve.clone(),
+            esnap.tolerance,
+        ));
+        edge_map.insert(esnap.old_index, copied_edge);
+    }
+
+    let mut wire_map: HashMap<usize, WireId> = HashMap::new();
+    for wsnap in &wire_snaps {
+        let new_edges: Vec<OrientedEdge> = wsnap
+            .edges
+            .iter()
+            .map(|&(edge_idx, fwd)| OrientedEdge::new(edge_map[&edge_idx], fwd))
+            .collect();
+        let new_wire =
+            Wire::new(new_edges, wsnap.closed).map_err(crate::OperationsError::Topology)?;
+        wire_map.insert(wsnap.old_index, topo.add_wire(new_wire));
+    }
+
+    let new_outer = wire_map[&outer_wire_index];
+    let new_inner: Vec<WireId> = inner_wire_indices.iter().map(|idx| wire_map[idx]).collect();
+    let new_face = if reversed {
+        Face::new_reversed(new_outer, new_inner, surface)
+    } else {
+        Face::new(new_outer, new_inner, surface)
+    };
+    Ok(topo.add_face(new_face))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -872,6 +1001,235 @@ mod tests {
 
         // Verify the copied wire has a circle edge.
         let copy_wire = topo.wire(copy_wid).unwrap();
+        let copy_edge = topo.edge(copy_wire.edges()[0].edge()).unwrap();
+        assert!(
+            matches!(copy_edge.curve(), EdgeCurve::Circle(_)),
+            "copied edge should be a Circle"
+        );
+    }
+
+    fn make_plane_quad(topo: &mut Topology) -> brepkit_topology::face::FaceId {
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::builder::make_polygon_wire;
+        use brepkit_topology::face::{Face, FaceSurface};
+
+        let outer = make_polygon_wire(
+            topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(4.0, 0.0, 0.0),
+                Point3::new(4.0, 4.0, 0.0),
+                Point3::new(0.0, 4.0, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        topo.add_face(Face::new(outer, Vec::new(), surface))
+    }
+
+    fn distinct_vertex_count(topo: &Topology, face_id: brepkit_topology::face::FaceId) -> usize {
+        let face = topo.face(face_id).unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                let edge = topo.edge(oe.edge()).unwrap();
+                seen.insert(edge.start().index());
+                seen.insert(edge.end().index());
+            }
+        }
+        seen.len()
+    }
+
+    fn total_edge_count(topo: &Topology, face_id: brepkit_topology::face::FaceId) -> usize {
+        let face = topo.face(face_id).unwrap();
+        let mut seen = std::collections::HashSet::new();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).unwrap().edges() {
+                seen.insert(oe.edge().index());
+            }
+        }
+        seen.len()
+    }
+
+    fn loop_count(topo: &Topology, face_id: brepkit_topology::face::FaceId) -> usize {
+        let face = topo.face(face_id).unwrap();
+        1 + face.inner_wires().len()
+    }
+
+    #[test]
+    fn copy_face_creates_new_face() {
+        let mut topo = Topology::new();
+        let orig = make_plane_quad(&mut topo);
+        let copy = copy_face(&mut topo, orig).unwrap();
+        assert_ne!(orig.index(), copy.index());
+    }
+
+    #[test]
+    fn copy_face_preserves_topology_counts() {
+        use brepkit_topology::explorer::solid_faces;
+
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+        let box_face = *solid_faces(&topo, solid).unwrap().first().unwrap();
+        let copy = copy_face(&mut topo, box_face).unwrap();
+
+        assert_eq!(loop_count(&topo, box_face), loop_count(&topo, copy));
+        assert_eq!(
+            total_edge_count(&topo, box_face),
+            total_edge_count(&topo, copy)
+        );
+        assert_eq!(
+            distinct_vertex_count(&topo, box_face),
+            distinct_vertex_count(&topo, copy)
+        );
+
+        // Face with one inner loop (hole).
+        let holed = make_holed_face(&mut topo);
+        let holed_copy = copy_face(&mut topo, holed).unwrap();
+        assert_eq!(loop_count(&topo, holed), 2);
+        assert_eq!(loop_count(&topo, holed_copy), 2);
+        assert_eq!(
+            total_edge_count(&topo, holed),
+            total_edge_count(&topo, holed_copy)
+        );
+        assert_eq!(
+            distinct_vertex_count(&topo, holed),
+            distinct_vertex_count(&topo, holed_copy)
+        );
+    }
+
+    fn make_holed_face(topo: &mut Topology) -> brepkit_topology::face::FaceId {
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::builder::make_polygon_wire;
+        use brepkit_topology::face::{Face, FaceSurface};
+
+        let outer = make_polygon_wire(
+            topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 0.0),
+                Point3::new(10.0, 10.0, 0.0),
+                Point3::new(0.0, 10.0, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let inner = make_polygon_wire(
+            topo,
+            &[
+                Point3::new(3.0, 3.0, 0.0),
+                Point3::new(7.0, 3.0, 0.0),
+                Point3::new(7.0, 7.0, 0.0),
+                Point3::new(3.0, 7.0, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        topo.add_face(Face::new(outer, vec![inner], surface))
+    }
+
+    #[test]
+    fn copy_face_is_independent() {
+        use brepkit_math::mat::Mat4;
+
+        let mut topo = Topology::new();
+        let orig = make_plane_quad(&mut topo);
+
+        let orig_first_vertex = {
+            let face = topo.face(orig).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            topo.edge(wire.edges()[0].edge()).unwrap().start()
+        };
+        let orig_start_x = topo.vertex(orig_first_vertex).unwrap().point().x();
+
+        let copy = copy_face(&mut topo, orig).unwrap();
+        crate::transform::transform_face(&mut topo, copy, &Mat4::translation(10.0, 0.0, 0.0))
+            .unwrap();
+
+        let tol = Tolerance::new();
+        let orig_x_after = topo.vertex(orig_first_vertex).unwrap().point().x();
+        assert!(
+            tol.approx_eq(orig_x_after, orig_start_x),
+            "original face vertex should be unchanged, x = {orig_x_after}"
+        );
+
+        let copy_first_vertex = {
+            let face = topo.face(copy).unwrap();
+            let wire = topo.wire(face.outer_wire()).unwrap();
+            topo.edge(wire.edges()[0].edge()).unwrap().start()
+        };
+        let copy_x = topo.vertex(copy_first_vertex).unwrap().point().x();
+        assert!(
+            tol.approx_eq(copy_x, orig_start_x + 10.0),
+            "copy face vertex should be shifted by 10, x = {copy_x}"
+        );
+    }
+
+    #[test]
+    fn copy_face_preserves_orientation() {
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::builder::make_polygon_wire;
+        use brepkit_topology::face::{Face, FaceSurface};
+
+        let mut topo = Topology::new();
+        let outer = make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let orig = topo.add_face(Face::new_reversed(outer, Vec::new(), surface));
+
+        let copy = copy_face(&mut topo, orig).unwrap();
+        assert!(
+            topo.face(copy).unwrap().is_reversed(),
+            "copied face should preserve the reversed orientation flag"
+        );
+    }
+
+    #[test]
+    fn copy_face_with_circle_edge() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let v = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let wire = Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap();
+        let wid = topo.add_wire(wire);
+        let surface = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let orig = topo.add_face(Face::new(wid, Vec::new(), surface));
+
+        let copy = copy_face(&mut topo, orig).unwrap();
+        assert_eq!(distinct_vertex_count(&topo, copy), 1);
+
+        let copy_face_data = topo.face(copy).unwrap();
+        let copy_wire = topo.wire(copy_face_data.outer_wire()).unwrap();
         let copy_edge = topo.edge(copy_wire.edges()[0].edge()).unwrap();
         assert!(
             matches!(copy_edge.curve(), EdgeCurve::Circle(_)),
