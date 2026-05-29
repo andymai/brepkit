@@ -49,8 +49,7 @@ use super::helpers::{FacePolygon, extract_inner_wire_positions};
 #[allow(clippy::too_many_lines)]
 #[deprecated(
     since = "2.44.0",
-    note = "Use brepkit_blend::fillet_builder::FilletBuilder (via blend_ops::fillet_v2) instead. \
-            This implementation has known corner overlap issues at multi-edge vertices."
+    note = "Use brepkit_blend::fillet_builder::FilletBuilder (via blend_ops::fillet_v2) instead."
 )]
 pub fn fillet_rolling_ball(
     topo: &mut Topology,
@@ -540,11 +539,96 @@ pub fn fillet_rolling_ball(
         }
     }
 
+    // Setback map: at a junction vertex where this edge meets ANOTHER filleted
+    // edge sharing one of its adjacent faces, the blend strip must stop short
+    // of the vertex by setback = radius / tan(θ/2), where θ is the angle (via
+    // edge tangents at the vertex) between the two filleted edges.  This leaves
+    // a corner gap that the spherical-triangle patch (Phase 5b) fills, rather
+    // than letting full-length strips interpenetrate and over-remove material.
+    //
+    // Key: (edge_index, vertex_index) → setback distance along the edge.
+    let setback_map: HashMap<(usize, usize), f64> = {
+        let mut map = HashMap::new();
+        for &edge_id in &filtered_edges {
+            let edge = topo.edge(edge_id)?;
+            let start_vid = edge.start();
+            let end_vid = edge.end();
+            let p_start = topo.vertex(start_vid)?.point();
+            let p_end = topo.vertex(end_vid)?.point();
+            let curve = edge.curve().clone();
+
+            for &(vid, t_self) in &[(start_vid, 0.0_f64), (end_vid, 1.0_f64)] {
+                let Some(neighbors) = vertex_fillet_edges.get(&vid.index()) else {
+                    continue;
+                };
+                let t_away = sample_edge_tangent(&curve, p_start, p_end, t_self);
+                let t_away = if t_self > 0.5 { -t_away } else { t_away };
+                let Ok(t_self_n) = t_away.normalize() else {
+                    continue;
+                };
+
+                let mut max_setback = 0.0_f64;
+                for &nb in neighbors {
+                    if nb.index() == edge_id.index() {
+                        continue;
+                    }
+                    let nb_edge = topo.edge(nb)?;
+                    let nb_start = nb_edge.start();
+                    let nb_end = nb_edge.end();
+                    let nbp_start = topo.vertex(nb_start)?.point();
+                    let nbp_end = topo.vertex(nb_end)?.point();
+                    let nb_curve = nb_edge.curve().clone();
+                    let t_nb_param = if nb_start.index() == vid.index() {
+                        0.0
+                    } else {
+                        1.0
+                    };
+                    let t_nb_raw = sample_edge_tangent(&nb_curve, nbp_start, nbp_end, t_nb_param);
+                    let t_nb_raw = if t_nb_param > 0.5 {
+                        -t_nb_raw
+                    } else {
+                        t_nb_raw
+                    };
+                    let Ok(t_nb_n) = t_nb_raw.normalize() else {
+                        continue;
+                    };
+
+                    let cos_t = t_self_n.dot(t_nb_n).clamp(-1.0, 1.0);
+                    let theta = cos_t.acos();
+                    let half_tan = (theta / 2.0).tan();
+                    if half_tan > tol.linear {
+                        max_setback = max_setback.max(radius / half_tan);
+                    }
+                }
+
+                if max_setback > tol.linear {
+                    map.insert((edge_id.index(), vid.index()), max_setback);
+                }
+            }
+        }
+        map
+    };
+
+    // Convert a setback distance into a normalised edge parameter for a line
+    // edge of given length.  For curved edges the strip is still sampled in
+    // normalised t, so the fraction is an approximation adequate for the gap.
+    let setback_fraction = |sb: f64, edge_len: f64| -> f64 {
+        if edge_len > tol.linear {
+            (sb / edge_len).clamp(0.0, 0.49)
+        } else {
+            0.0
+        }
+    };
+
     // Pre-pass: precompute fillet strip endpoint contacts using Phase 4's
     // cross-product method.  Phase 3's face trimming will look up these exact
     // values instead of recomputing them from polygon neighbour directions.
     // This ensures both phases produce bitwise-identical positions, preventing
     // duplicate vertices (and thus boundary edges) in assemble_solid_mixed.
+    //
+    // The contact is sampled at the setback STATION (not the raw vertex), so
+    // the trimmed flat-face corner coincides with the setback-trimmed strip end
+    // and the spherical-triangle corner-patch boundary.
     //
     // Key: (vertex_index, edge_index, face_index) → contact Point3
     let fillet_contact_map: HashMap<(usize, usize, usize), Point3> = {
@@ -554,6 +638,7 @@ pub fn fillet_rolling_ball(
             let edge = topo.edge(edge_id)?;
             let p_start = topo.vertex(edge.start())?.point();
             let p_end = topo.vertex(edge.end())?.point();
+            let edge_len = (p_end - p_start).length();
 
             let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
                 continue;
@@ -577,8 +662,18 @@ pub fn fillet_rolling_ball(
                 continue;
             }
 
-            // Compute contacts at start (t=0) and end (t=1).
-            for &(t, vid) in &[(0.0_f64, edge.start()), (1.0_f64, edge.end())] {
+            // Compute contacts at the setback stations near start and end.
+            let sb_start = setback_map
+                .get(&(edge_id.index(), edge.start().index()))
+                .copied()
+                .unwrap_or(0.0);
+            let sb_end = setback_map
+                .get(&(edge_id.index(), edge.end().index()))
+                .copied()
+                .unwrap_or(0.0);
+            let t_lo = setback_fraction(sb_start, edge_len);
+            let t_hi = 1.0 - setback_fraction(sb_end, edge_len);
+            for &(t, vid) in &[(t_lo, edge.start()), (t_hi, edge.end())] {
                 let p = sample_edge_point(&edge_curve, p_start, p_end, t);
                 let tan = sample_edge_tangent(&edge_curve, p_start, p_end, t);
                 let local_dir = match tan.normalize() {
@@ -624,7 +719,6 @@ pub fn fillet_rolling_ball(
 
     // Phase 3: Build modified (trimmed) planar faces.
     let mut all_specs: Vec<FaceSpec> = Vec::new();
-    let mut fillet_face_indices: Vec<usize> = Vec::new();
 
     for &face_id in &shell_face_ids {
         // Non-planar faces: either pass through or trim at fillet contact points.
@@ -1019,13 +1113,28 @@ pub fn fillet_rolling_ball(
             edge_v_samples(&edge_curve).max(7)
         };
 
+        // Setback-trim the swept interval so the strip stops short of any
+        // multi-fillet junction vertex, leaving room for the corner patch.
+        let edge_len = (p_end - p_start).length();
+        let sb_start = setback_map
+            .get(&(edge_id.index(), edge.start().index()))
+            .copied()
+            .unwrap_or(0.0);
+        let sb_end = setback_map
+            .get(&(edge_id.index(), edge.end().index()))
+            .copied()
+            .unwrap_or(0.0);
+        let t_lo = setback_fraction(sb_start, edge_len);
+        let t_hi = 1.0 - setback_fraction(sb_end, edge_len);
+
         // Sample cross-section geometry at each v-station along the edge curve.
         let mut grid: Vec<[Point3; 3]> = Vec::with_capacity(n_v);
         let mut bisector_ref = Vec3::new(0.0, 0.0, 0.0);
 
         #[allow(clippy::cast_precision_loss)]
         for s in 0..n_v {
-            let t = s as f64 / (n_v - 1).max(1) as f64;
+            let frac = s as f64 / (n_v - 1).max(1) as f64;
+            let t = t_lo + (t_hi - t_lo) * frac;
             let p = sample_edge_point(&edge_curve, p_start, p_end, t);
             let tan = sample_edge_tangent(&edge_curve, p_start, p_end, t);
             let local_dir = tan.normalize().unwrap_or(edge_dir);
@@ -1046,8 +1155,6 @@ pub fn fillet_rolling_ball(
             let ld1 = ld1.normalize().unwrap_or(d1_ref);
             let ld2 = ld2.normalize().unwrap_or(d2_ref);
 
-            let local_cos = ld1.dot(ld2).clamp(-1.0, 1.0);
-            let local_half = local_cos.acos() / 2.0;
             let bisector = (ld1 + ld2).normalize().unwrap_or(d1_ref);
 
             if s == 0 {
@@ -1055,9 +1162,14 @@ pub fn fillet_rolling_ball(
             }
 
             let contact1 = p + ld1 * radius;
-            let mid_dist = radius / local_half.cos().max(0.01);
-            let mid_cp = p + bisector * mid_dist;
             let contact2 = p + ld2 * radius;
+            // Rational-quadratic arc middle control point: the intersection of
+            // the face-tangents at the two contacts, which for a rolling-ball
+            // fillet is the original sharp-edge point `p` (the cylinder axis
+            // sits on the opposite side, toward the material interior).  Using
+            // `p` makes the arc bulge toward the edge (a true convex fillet);
+            // placing it at the ball centre would invert the arc and over-cut.
+            let mid_cp = p;
 
             grid.push([contact1, mid_cp, contact2]);
         }
@@ -1120,24 +1232,21 @@ pub fn fillet_rolling_ball(
                 .map_err(crate::OperationsError::Math)?
         };
 
+        // The fillet strip's outward normal must point away from the solid
+        // interior.  `bisector_ref` points from the edge toward the material
+        // (interior), so the surface is reversed when its natural normal agrees
+        // with the bisector.  Setting `reversed` here (instead of patching the
+        // assembled shell afterwards) keeps the flag attached to the spec, which
+        // survives face reordering and merging in assembly.
+        let strip_normal = fillet_surface.normal(0.5, 0.5).unwrap_or(bisector_ref);
+        let strip_reversed = strip_normal.dot(bisector_ref) > 0.0;
+
         all_specs.push(FaceSpec::Surface {
             vertices: vec![contact1_start, contact2_start, contact2_end, contact1_end],
             surface: FaceSurface::Nurbs(fillet_surface),
-            reversed: false,
+            reversed: strip_reversed,
             inner_wires: vec![],
         });
-
-        // Track which faces need normal reversal.
-        let srf_mid_normal = match &all_specs[all_specs.len() - 1] {
-            FaceSpec::Surface {
-                surface: FaceSurface::Nurbs(srf),
-                ..
-            } => srf.normal(0.5, 0.5).unwrap_or(bisector_ref),
-            _ => bisector_ref,
-        };
-        if srf_mid_normal.dot(bisector_ref) > 0.0 {
-            fillet_face_indices.push(all_specs.len() - 1);
-        }
 
         // Record contact points at each vertex for vertex blend detection.
         let start_vi = edge.start().index();
@@ -1385,41 +1494,31 @@ pub fn fillet_rolling_ball(
                     arc_mid_and_weight(p1, p2),
                     arc_mid_and_weight(p2, p0),
                 ) {
-                    // Apex: point on sphere in the average direction of the
-                    // three boundary radial vectors.
-                    let apex = {
-                        let avg = Vec3::new(
-                            (p0 - sphere_center).x()
-                                + (p1 - sphere_center).x()
-                                + (p2 - sphere_center).x(),
-                            (p0 - sphere_center).y()
-                                + (p1 - sphere_center).y()
-                                + (p2 - sphere_center).y(),
-                            (p0 - sphere_center).z()
-                                + (p1 - sphere_center).z()
-                                + (p2 - sphere_center).z(),
-                        );
-                        let len = avg.length().max(1e-15);
-                        let r_actual = (p0 - sphere_center).length();
-                        Point3::new(
-                            sphere_center.x() + avg.x() / len * r_actual,
-                            sphere_center.y() + avg.y() / len * r_actual,
-                            sphere_center.z() + avg.z() / len * r_actual,
-                        )
-                    };
+                    // Interior control point: a single degree-(2,2) rational
+                    // patch over a wide spherical triangle sags inward at its
+                    // centre if the interior control point sits on the sphere.
+                    // Place it instead at the intersection of the three corner
+                    // tangent planes (the apex of the tangent cone), pushed out
+                    // along the average radial direction.  For an orthogonal
+                    // (box) corner this lands at center + r·Σdir (overshoot √3),
+                    // and the rational blend then tracks the sphere within a few
+                    // percent of R — inside the corner-blend deviation budget.
+                    let r_actual = (p0 - sphere_center).length();
+                    let dir0 = (p0 - sphere_center) * (1.0 / r_actual);
+                    let dir1 = (p1 - sphere_center) * (1.0 / r_actual);
+                    let dir2 = (p2 - sphere_center) * (1.0 / r_actual);
+                    let radial_sum = dir0 + dir1 + dir2;
+                    let apex = Point3::new(
+                        sphere_center.x() + radial_sum.x() * r_actual,
+                        sphere_center.y() + radial_sum.y() * r_actual,
+                        sphere_center.z() + radial_sum.z() * r_actual,
+                    );
 
-                    // Apex weight: product of the three edge weights gives
-                    // a consistent rational patch for the spherical triangle.
+                    // Apex weight: the product of the three edge weights yields
+                    // the rational triangle that hugs the sphere most closely.
                     let w_apex = w01 * w12 * w20;
 
-                    // Build a degree (2,2) patch: 3×3 control points.
-                    // u=0: p0→m20→p2, u=0.5: m01→apex→m12, u=1: p1→m12→p2
-                    // v=1 boundary degenerates to single point p2.
-                    //
-                    // Weight grid — per-edge weights on each boundary arc,
-                    // apex weight in the interior, 1.0 at corners.
-                    // Column 2 (degenerate, all CPs = p2) uses 1.0
-                    // for symmetric interior parametrization.
+                    // Degree (2,2) rational patch with a degenerate column.
                     let cap_surface = NurbsSurface::new(
                         2,
                         2,
@@ -1434,26 +1533,26 @@ pub fn fillet_rolling_ball(
                     )
                     .map_err(crate::OperationsError::Math)?;
 
+                    // The cap's outward normal must point away from the sphere
+                    // centre (for a convex corner) so the tessellated patch faces
+                    // outward.  Evaluating the natural normal at an interior
+                    // station and comparing against the radial direction gives a
+                    // robust reversal flag that is stored on the spec (so it is
+                    // not lost when assembly reorders/merges faces).
+                    let cap_mid = cap_surface.evaluate(0.5, 0.5);
+                    let radial = (cap_mid - sphere_center)
+                        .normalize()
+                        .unwrap_or(blend_normal);
+                    let outward = if is_concave { -radial } else { radial };
+                    let cap_norm = cap_surface.normal(0.5, 0.5).unwrap_or(outward);
+                    let cap_reversed = cap_norm.dot(outward) < 0.0;
+
                     all_specs.push(FaceSpec::Surface {
                         vertices: ordered_points,
                         surface: FaceSurface::Nurbs(cap_surface),
-                        reversed: false,
+                        reversed: cap_reversed,
                         inner_wires: vec![],
                     });
-
-                    // Check if we need to flip this face.
-                    let cap_norm = match &all_specs[all_specs.len() - 1] {
-                        FaceSpec::Surface {
-                            surface: FaceSurface::Nurbs(srf),
-                            ..
-                        } => srf.normal(0.5, 0.5).unwrap_or(blend_normal),
-                        _ => blend_normal,
-                    };
-                    // The cap normal should point away from the original vertex.
-                    let to_vertex = v_pos - centroid;
-                    if to_vertex.dot(cap_norm) > 0.0 {
-                        fillet_face_indices.push(all_specs.len() - 1);
-                    }
                     continue;
                 }
             }
@@ -1599,24 +1698,10 @@ pub fn fillet_rolling_ball(
         }
     }
 
-    // Phase 6: Assemble the solid using mixed-surface assembly.
+    // Phase 6: Assemble the solid using mixed-surface assembly.  Each fillet
+    // strip and corner-patch spec already carries the `reversed` flag needed
+    // for an outward-facing normal, so no post-assembly fix-up is required.
     let solid_id = crate::boolean::assemble_solid_mixed(topo, &all_specs, tol)?;
-
-    // Phase 7: Mark fillet faces whose NURBS surface normal points inward
-    // as reversed. This ensures tessellation produces outward-facing
-    // triangles for correct volume computation and rendering.
-    if !fillet_face_indices.is_empty() {
-        let solid_data = topo.solid(solid_id)?;
-        let shell = topo.shell(solid_data.outer_shell())?;
-        let face_ids: Vec<_> = shell.faces().to_vec();
-        for &fi in &fillet_face_indices {
-            if fi < face_ids.len() {
-                let fid = face_ids[fi];
-                let face = topo.face_mut(fid)?;
-                face.set_reversed(true);
-            }
-        }
-    }
 
     // Merge co-surface faces that the fillet may have split. This keeps the
     // face count minimal, preventing the downstream boolean from triggering

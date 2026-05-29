@@ -142,12 +142,20 @@ pub fn json_f64(val: &serde_json::Value, key: &str) -> Result<f64, JsError> {
 
 // ── Edge/face helpers ─────────────────────────────────────────────
 
-/// Attempt fillet using the blend crate's `FilletBuilder` (primary),
-/// falling back to rolling-ball then flat bevel on failure.
+/// Attempt a fillet, choosing the engine by edge count.
 ///
-/// The blend crate path has correct corner geometry (spherical triangle
-/// patches) for multi-edge fillets. Rolling-ball is kept as fallback
-/// for edge cases where `FilletBuilder` fails.
+/// Multi-edge fillets need per-corner setback trimming and spherical blend
+/// patches so the rounded edges meeting at a vertex remove only the rounded
+/// sliver instead of excising the whole corner octant. The rolling-ball
+/// engine does this; the walking `FilletBuilder` over-removes corner material
+/// on that case (e.g. all 12 box edges drop to ~470 instead of ~975). So
+/// multi-edge inputs go to rolling-ball first.
+///
+/// Single-edge fillets have no shared-corner interaction, and the
+/// `FilletBuilder` output integrates more cleanly with downstream booleans,
+/// so they go to `FilletBuilder` first.
+///
+/// Each engine falls back to the other, then to a flat bevel, on failure.
 #[allow(deprecated)]
 pub fn try_fillet(
     topo: &mut brepkit_topology::Topology,
@@ -155,15 +163,21 @@ pub fn try_fillet(
     edge_ids: &[brepkit_topology::edge::EdgeId],
     radius: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
-    // Primary path: blend crate FilletBuilder (correct corner geometry)
-    brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edge_ids, radius)
-        .map(|r| r.solid)
-        // Fallback 1: rolling-ball (legacy, known corner overlap issues)
-        .or_else(|_| {
-            brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
-        })
-        // Fallback 2: flat bevel (simplest)
-        .or_else(|_| brepkit_operations::fillet::fillet(topo, solid_id, edge_ids, radius))
+    let rolling_ball = |topo: &mut brepkit_topology::Topology| {
+        brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
+    };
+    let builder = |topo: &mut brepkit_topology::Topology| {
+        brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edge_ids, radius).map(|r| r.solid)
+    };
+
+    let result = if edge_ids.len() > 1 {
+        rolling_ball(topo).or_else(|_| builder(topo))
+    } else {
+        builder(topo).or_else(|_| rolling_ball(topo))
+    };
+
+    // Final fallback: flat bevel (simplest).
+    result.or_else(|_| brepkit_operations::fillet::fillet(topo, solid_id, edge_ids, radius))
 }
 
 /// Extract a human-readable message from a `catch_unwind` panic payload.
@@ -464,4 +478,54 @@ pub fn segments_intersect_2d(a1: Point2, a2: Point2, b1: Point2, b2: Point2) -> 
 
     ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0))
         && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
+}
+
+#[cfg(test)]
+mod fillet_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use std::collections::HashSet;
+
+    use brepkit_topology::Topology;
+    use brepkit_topology::edge::EdgeId;
+    use brepkit_topology::solid::SolidId;
+
+    use super::try_fillet;
+
+    fn solid_edge_ids(topo: &Topology, solid_id: SolidId) -> Vec<EdgeId> {
+        let solid = topo.solid(solid_id).expect("solid");
+        let shell = topo.shell(solid.outer_shell()).expect("shell");
+        let mut seen = HashSet::new();
+        let mut edges = Vec::new();
+        for &fid in shell.faces() {
+            let face = topo.face(fid).expect("face");
+            let wire = topo.wire(face.outer_wire()).expect("wire");
+            for oe in wire.edges() {
+                if seen.insert(oe.edge().index()) {
+                    edges.push(oe.edge());
+                }
+            }
+        }
+        edges
+    }
+
+    // The wasm `fillet` binding (and its batch sibling) route through
+    // `try_fillet`. Filleting all 12 box edges must remove only the rounded
+    // slivers (volume ≈ 975.6 for a 10³ box at r=1), not excise whole corner
+    // octants. This guards the consumer path against regressing to the
+    // over-removing walking engine.
+    #[test]
+    fn try_fillet_all_box_edges_no_corner_over_removal() {
+        let mut topo = Topology::new();
+        let cube = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let edges = solid_edge_ids(&topo, cube);
+        assert_eq!(edges.len(), 12, "box should have 12 edges");
+
+        let result = try_fillet(&mut topo, cube, &edges, 1.0).expect("all-edges fillet");
+        let vol = brepkit_operations::measure::solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            vol > 970.0 && vol < 1000.0,
+            "filleted box volume should be ≈975.6, got {vol}"
+        );
+    }
 }
