@@ -40,6 +40,16 @@ pub fn offset_polygon_2d(
 
     let miter_limit_dist = distance.abs() * DEFAULT_MITER_LIMIT;
 
+    // The outward-normal convention below assumes CCW winding. For a CW
+    // loop the same perpendicular points inward, inverting the sign of
+    // `distance`. Detect the actual winding via the signed area and flip
+    // the effective distance so that negative always shrinks the loop.
+    let area2 = signed_area_2x(vertices);
+    if area2.abs() < tolerance {
+        return Err(MathError::EmptyInput);
+    }
+    let distance = if area2 < 0.0 { -distance } else { distance };
+
     // Compute offset edge lines: each edge shifts by distance along its outward normal.
     // For a CCW polygon, the outward normal of edge (A→B) is (dy, -dx) normalized.
     let mut result = Vec::with_capacity(n);
@@ -209,6 +219,19 @@ fn segment_intersection_2d(
     }
 }
 
+/// Twice the signed area of a closed 2D polygon (shoelace formula).
+///
+/// Positive for CCW winding, negative for CW.
+fn signed_area_2x(vertices: &[Point2]) -> f64 {
+    let n = vertices.len();
+    let mut acc = 0.0;
+    for i in 0..n {
+        let j = (i + 1) % n;
+        acc += vertices[i].x() * vertices[j].y() - vertices[j].x() * vertices[i].y();
+    }
+    acc
+}
+
 /// Compute the outward normal of a 2D edge (assuming CCW winding).
 ///
 /// For edge A→B, the outward normal is the left-perpendicular of (B-A),
@@ -293,5 +316,42 @@ mod tests {
     fn too_few_vertices() {
         let pts = vec![Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)];
         assert!(offset_polygon_2d(&pts, 0.1, 1e-10).is_err());
+    }
+
+    fn signed_area(poly: &[Point2]) -> f64 {
+        let n = poly.len();
+        let mut acc = 0.0;
+        for i in 0..n {
+            let j = (i + 1) % n;
+            acc += poly[i].x() * poly[j].y() - poly[j].x() * poly[i].y();
+        }
+        acc * 0.5
+    }
+
+    #[test]
+    fn offset_cw_square_inward() {
+        // Clockwise-wound 20x20 square. A negative distance must shrink it
+        // (area 256), regardless of winding.
+        let cw_square = vec![
+            Point2::new(20.0, 0.0),
+            Point2::new(0.0, 0.0),
+            Point2::new(0.0, 20.0),
+            Point2::new(20.0, 20.0),
+        ];
+        let inward = offset_polygon_2d(&cw_square, -2.0, 1e-10).unwrap();
+        assert_eq!(inward.len(), 4);
+        assert!(
+            (signed_area(&inward).abs() - 256.0).abs() < 1e-6,
+            "CW square offset -2 should enclose area 256, got {}",
+            signed_area(&inward).abs()
+        );
+
+        let outward = offset_polygon_2d(&cw_square, 2.0, 1e-10).unwrap();
+        assert_eq!(outward.len(), 4);
+        assert!(
+            (signed_area(&outward).abs() - 576.0).abs() < 1e-6,
+            "CW square offset +2 should enclose area 576, got {}",
+            signed_area(&outward).abs()
+        );
     }
 }
