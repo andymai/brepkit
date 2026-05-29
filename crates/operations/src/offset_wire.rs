@@ -105,6 +105,29 @@ pub fn offset_wire_with_join(
         });
     }
 
+    // The `edge_dir x face_normal` convention below points outward only
+    // when the loop winds CCW as seen from the +face_normal side. The
+    // loop's traversal order comes from stored edge orientations and is
+    // not guaranteed to match the face normal's sign, so detect the
+    // actual winding and flip the effective distance to keep negative =
+    // inward. Twice the signed area as seen from +N is sum((Vi x Vj).N).
+    let area2 = {
+        let mut acc = Vec3::new(0.0, 0.0, 0.0);
+        for i in 0..n {
+            let j = (i + 1) % n;
+            let vi = Vec3::new(verts[i].x(), verts[i].y(), verts[i].z());
+            let vj = Vec3::new(verts[j].x(), verts[j].y(), verts[j].z());
+            acc += vi.cross(vj);
+        }
+        acc.dot(face_normal)
+    };
+    if area2.abs() < tol.linear {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "wire loop has degenerate (zero) signed area".into(),
+        });
+    }
+    let distance = if area2 < 0.0 { -distance } else { distance };
+
     // Compute edge normals (outward-pointing, in the face plane).
     // For a CCW-wound wire viewed from the face normal direction,
     // the outward normal of edge (i -> i+1) is edge_direction x face_normal.
@@ -464,6 +487,85 @@ mod tests {
                 d: 0.0,
             },
         ))
+    }
+
+    /// Helper: make a 20x20 face whose loop winds clockwise in the (x, y)
+    /// projection and whose surface normal points -Z, mirroring the bottom
+    /// face of a box. Loop order: (20,0) -> (0,0) -> (0,20) -> (20,20).
+    fn make_cw_bottom_face(topo: &mut Topology) -> brepkit_topology::face::FaceId {
+        let tol_val = 1e-7;
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(20.0, 0.0, 0.0), tol_val));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol_val));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(0.0, 20.0, 0.0), tol_val));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(20.0, 20.0, 0.0), tol_val));
+
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    fn wire_signed_area(topo: &Topology, wid: brepkit_topology::wire::WireId) -> f64 {
+        let wire = topo.wire(wid).unwrap();
+        let pts: Vec<Point3> = wire
+            .edges()
+            .iter()
+            .map(|oe| {
+                let edge = topo.edge(oe.edge()).unwrap();
+                topo.vertex(edge.start()).unwrap().point()
+            })
+            .collect();
+        let n = pts.len();
+        let mut acc = 0.0;
+        for i in 0..n {
+            let j = (i + 1) % n;
+            acc += pts[i].x() * pts[j].y() - pts[j].x() * pts[i].y();
+        }
+        acc * 0.5
+    }
+
+    #[test]
+    fn offset_cw_bottom_face_inward() {
+        let mut topo = Topology::new();
+        let face = make_cw_bottom_face(&mut topo);
+
+        let inward = offset_wire(&mut topo, face, -2.0).unwrap();
+        let wire = topo.wire(inward).unwrap();
+        assert!(wire.is_closed());
+        assert_eq!(wire.edges().len(), 4);
+        assert!(
+            (wire_signed_area(&topo, inward).abs() - 256.0).abs() < 1e-6,
+            "CW bottom face offset -2 should enclose area 256, got {}",
+            wire_signed_area(&topo, inward).abs()
+        );
+
+        let outward = offset_wire(&mut topo, face, 2.0).unwrap();
+        assert!(
+            (wire_signed_area(&topo, outward).abs() - 576.0).abs() < 1e-6,
+            "CW bottom face offset +2 should enclose area 576, got {}",
+            wire_signed_area(&topo, outward).abs()
+        );
     }
 
     #[test]
