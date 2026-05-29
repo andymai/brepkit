@@ -118,15 +118,13 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         });
     }
 
-    // Fast path: lofting two coaxial circles (incl. NURBS-recognized
+    // Fast path: lofting a stack of coaxial circles (incl. NURBS-recognized
     // circles produced by brepjs `sketchCircle`) collapses to an exact
-    // cylinder / cone / frustum. The general path tessellates the
-    // circles into N line segments, losing 0.6-1% of the true π·r²·h
-    // (or frustum) volume.
-    if profiles.len() == 2 {
-        if let Some(cone_solid) = try_loft_coaxial_circles(topo, profiles[0], profiles[1])? {
-            return Ok(cone_solid);
-        }
+    // sequence of cylinder / cone / frustum bands. The general path
+    // tessellates the circles into N line segments, losing 0.6-1% of the
+    // true π·r²·h (or frustum) volume per band.
+    if let Some(stack_solid) = try_loft_coaxial_circle_stack(topo, profiles)? {
+        return Ok(stack_solid);
     }
 
     // Collect vertex positions for each profile.
@@ -298,70 +296,81 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
-/// Detect "loft between two coaxial circles" and produce an exact
-/// cylinder / cone / frustum via `make_cylinder` / `make_cone`. Returns
-/// `Ok(None)` when the profiles don't both reduce to circles, when they
-/// don't share an axis, or when something else doesn't fit the fast
-/// path — the general loft then handles the case.
-fn try_loft_coaxial_circles(
+/// Detect "loft across a stack of coaxial circles" and produce an exact
+/// chain of cylinder / cone / frustum bands. Returns `Ok(None)` when any
+/// profile is not a recognized circle, when the circles don't share a
+/// common axis, or when adjacent centers coincide — the general loft then
+/// handles the case.
+///
+/// All circle centers must lie on one line whose direction is parallel to
+/// every circle's plane normal, and consecutive centers must be ordered
+/// monotonically along that line (no zero-height bands).
+fn try_loft_coaxial_circle_stack(
     topo: &mut Topology,
-    profile_a: FaceId,
-    profile_b: FaceId,
+    profiles: &[FaceId],
 ) -> Result<Option<SolidId>, crate::OperationsError> {
     let tol = Tolerance::new();
 
-    let (center_a, normal_a, radius_a) = match face_recognized_circle(topo, profile_a) {
-        Some(c) => c,
-        None => return Ok(None),
-    };
-    let (center_b, normal_b, radius_b) = match face_recognized_circle(topo, profile_b) {
-        Some(c) => c,
-        None => return Ok(None),
-    };
+    let mut circles: Vec<(Point3, Vec3, f64)> = Vec::with_capacity(profiles.len());
+    for &fid in profiles {
+        match face_recognized_circle(topo, fid) {
+            Some(c) => circles.push(c),
+            None => return Ok(None),
+        }
+    }
 
-    // Normals must be parallel (same or opposite direction) — the axis
-    // between the two circle centers must also be parallel to both
-    // normals, otherwise the profiles aren't coaxial.
-    let axis = center_b - center_a;
+    let (center_0, _, _) = circles[0];
+    let (center_1, _, _) = circles[1];
+    let axis = center_1 - center_0;
     let axis_len = axis.length();
     if axis_len < tol.linear {
-        return Ok(None); // identical profile positions — degenerate loft
-    }
-    let axis_unit = axis * (1.0 / axis_len);
-    let normal_a_aligned = normal_a.dot(axis_unit).abs() > 1.0 - tol.angular;
-    let normal_b_aligned = normal_b.dot(axis_unit).abs() > 1.0 - tol.angular;
-    if !normal_a_aligned || !normal_b_aligned {
         return Ok(None);
     }
+    let axis_unit = axis * (1.0 / axis_len);
 
-    // Build the cylinder/cone/frustum at the origin along +Z, then
-    // transform it to place center_a at the bottom and center_b at the top.
-    let solid = if (radius_a - radius_b).abs() < tol.linear {
-        crate::primitives::make_cylinder(topo, radius_a, axis_len)?
-    } else {
-        crate::primitives::make_cone(topo, radius_a, radius_b, axis_len)?
-    };
+    // Every circle's normal must be parallel to the stacking axis, every
+    // center must lie on the axis line, and the signed axial positions must
+    // be strictly increasing (so each band has positive height).
+    let mut axial = Vec::with_capacity(circles.len());
+    let mut prev_t = f64::NEG_INFINITY;
+    for &(center, normal, _) in &circles {
+        if normal.dot(axis_unit).abs() <= 1.0 - tol.angular {
+            return Ok(None);
+        }
+        let rel = center - center_0;
+        let t = rel.dot(axis_unit);
+        // Reject lateral offset from the axis line.
+        let radial = rel - axis_unit * t;
+        if radial.length() > tol.linear {
+            return Ok(None);
+        }
+        if t <= prev_t + tol.linear {
+            return Ok(None);
+        }
+        prev_t = t;
+        axial.push(t);
+    }
 
-    // Orient the new solid: its base is at z=0 axis +Z. Rotate +Z onto
-    // `axis_unit`, then translate to `center_a`.
-    let z_axis = brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0);
-    let target_axis = axis_unit;
-    if (z_axis - target_axis).length() > tol.linear {
-        let rot_axis = z_axis.cross(target_axis);
+    let radii: Vec<f64> = circles.iter().map(|&(_, _, r)| r).collect();
+    let solid = build_coaxial_band_stack(topo, &axial, &radii)?;
+
+    let z_axis = Vec3::new(0.0, 0.0, 1.0);
+    if (z_axis - axis_unit).length() > tol.linear {
+        let rot_axis = z_axis.cross(axis_unit);
         let rot_axis_len = rot_axis.length();
         let mat = if rot_axis_len < tol.linear {
             brepkit_math::mat::Mat4::rotation_x(std::f64::consts::PI)
         } else {
-            let angle = z_axis.dot(target_axis).clamp(-1.0, 1.0).acos();
+            let angle = z_axis.dot(axis_unit).clamp(-1.0, 1.0).acos();
             rodrigues_rotation(rot_axis * (1.0 / rot_axis_len), angle)
         };
         crate::transform::transform_solid(topo, solid, &mat)?;
     }
-    if center_a.x().abs() > tol.linear
-        || center_a.y().abs() > tol.linear
-        || center_a.z().abs() > tol.linear
+    if center_0.x().abs() > tol.linear
+        || center_0.y().abs() > tol.linear
+        || center_0.z().abs() > tol.linear
     {
-        let xform = brepkit_math::mat::Mat4::translation(center_a.x(), center_a.y(), center_a.z());
+        let xform = brepkit_math::mat::Mat4::translation(center_0.x(), center_0.y(), center_0.z());
         crate::transform::transform_solid(topo, solid, &xform)?;
     }
     Ok(Some(solid))
@@ -396,6 +405,120 @@ fn rodrigues_rotation(axis: Vec3, angle: f64) -> brepkit_math::mat::Mat4 {
         ],
         [0.0, 0.0, 0.0, 1.0],
     ])
+}
+
+/// Build a watertight stack of analytic cylinder/cone bands along +Z.
+///
+/// `axial[k]` is the z-height of ring `k`, `radii[k]` its circle radius.
+/// Adjacent rings are connected by a cylindrical patch (equal radii) or a
+/// conical patch (differing radii). Ring circle edges are shared between
+/// neighbouring bands (and the two end caps) for watertight topology.
+#[allow(clippy::too_many_lines)]
+fn build_coaxial_band_stack(
+    topo: &mut Topology,
+    axial: &[f64],
+    radii: &[f64],
+) -> Result<SolidId, crate::OperationsError> {
+    let tol = Tolerance::new();
+    let z_axis = Vec3::new(0.0, 0.0, 1.0);
+
+    // One shared circle edge per ring (degenerate seam vertex at angle 0).
+    let mut ring_edges = Vec::with_capacity(axial.len());
+    let mut ring_seam_verts = Vec::with_capacity(axial.len());
+    for (&z, &r) in axial.iter().zip(radii.iter()) {
+        let circle = brepkit_math::curves::Circle3D::new(Point3::new(0.0, 0.0, z), z_axis, r)
+            .map_err(crate::OperationsError::Math)?;
+        let seam_v = topo.add_vertex(Vertex::new(Point3::new(r, 0.0, z), tol.linear));
+        let e = topo.add_edge(Edge::new(seam_v, seam_v, EdgeCurve::Circle(circle)));
+        ring_edges.push(e);
+        ring_seam_verts.push(seam_v);
+    }
+
+    let mut faces = Vec::new();
+
+    for band in 0..axial.len() - 1 {
+        let (z0, z1) = (axial[band], axial[band + 1]);
+        let (r0, r1) = (radii[band], radii[band + 1]);
+        let height = z1 - z0;
+
+        let seam = topo.add_edge(Edge::new(
+            ring_seam_verts[band],
+            ring_seam_verts[band + 1],
+            EdgeCurve::Line,
+        ));
+
+        let surface = if (r0 - r1).abs() < tol.linear {
+            let cyl = brepkit_math::surfaces::CylindricalSurface::new(
+                Point3::new(0.0, 0.0, z0),
+                z_axis,
+                r0,
+            )
+            .map_err(crate::OperationsError::Math)?;
+            FaceSurface::Cylinder(cyl)
+        } else {
+            // Virtual apex where the band's generator reaches radius zero.
+            let z_apex = z0 - r0 * height / (r1 - r0);
+            // Axis points apex → larger-radius end so the v>0 generator
+            // sweeps outward; half-angle is measured from the radial plane.
+            let (apex_z, axis_sign, r_ref, axial_to_ref) = if r1 > r0 {
+                (z_apex, 1.0_f64, r1, z1 - z_apex)
+            } else {
+                (z_apex, -1.0_f64, r0, z_apex - z0)
+            };
+            let half_angle = axial_to_ref.abs().atan2(r_ref);
+            let cone = brepkit_math::surfaces::ConicalSurface::new(
+                Point3::new(0.0, 0.0, apex_z),
+                Vec3::new(0.0, 0.0, axis_sign),
+                half_angle,
+            )
+            .map_err(crate::OperationsError::Math)?;
+            FaceSurface::Cone(cone)
+        };
+
+        let lateral_wire = Wire::new(
+            vec![
+                OrientedEdge::new(ring_edges[band], true),
+                OrientedEdge::new(seam, true),
+                OrientedEdge::new(ring_edges[band + 1], false),
+                OrientedEdge::new(seam, false),
+            ],
+            true,
+        )
+        .map_err(crate::OperationsError::Topology)?;
+        let lateral_wid = topo.add_wire(lateral_wire);
+        faces.push(topo.add_face(Face::new(lateral_wid, vec![], surface)));
+    }
+
+    // Bottom cap (reversed first ring edge → outward normal -Z).
+    let bot_wire = Wire::new(vec![OrientedEdge::new(ring_edges[0], false)], true)
+        .map_err(crate::OperationsError::Topology)?;
+    let bot_wid = topo.add_wire(bot_wire);
+    faces.push(topo.add_face(Face::new(
+        bot_wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: -axial[0],
+        },
+    )));
+
+    // Top cap (forward last ring edge → outward normal +Z).
+    let last = axial.len() - 1;
+    let top_wire = Wire::new(vec![OrientedEdge::new(ring_edges[last], true)], true)
+        .map_err(crate::OperationsError::Topology)?;
+    let top_wid = topo.add_wire(top_wire);
+    faces.push(topo.add_face(Face::new(
+        top_wid,
+        vec![],
+        FaceSurface::Plane {
+            normal: z_axis,
+            d: axial[last],
+        },
+    )));
+
+    let shell = Shell::new(faces).map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.add_shell(shell);
+    Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
 /// Recognize a planar face as a circle (center, plane normal, radius).
@@ -942,6 +1065,177 @@ mod tests {
 
         let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
         assert!(vol > 0.0, "smooth loft should have positive volume");
+    }
+
+    /// Helper: make a planar circle face whose single outer edge is an
+    /// analytic [`Circle3D`], centered at `(0,0,z)` with axis +Z.
+    fn make_circle_face_at(topo: &mut Topology, radius: f64, z: f64) -> FaceId {
+        let tol_val = 1e-7;
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let center = Point3::new(0.0, 0.0, z);
+        let circle = brepkit_math::curves::Circle3D::new(center, axis, radius).unwrap();
+        let seam = topo.add_vertex(Vertex::new(circle.evaluate(0.0), tol_val));
+        let edge = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Circle(circle)));
+        let wire = Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane { normal: axis, d: z },
+        ))
+    }
+
+    /// Helper: make a planar circle face whose outer edge is stored as a
+    /// rational NURBS curve that is geometrically a circle (exercises the
+    /// canonical-recognition branch).
+    fn make_nurbs_circle_face_at(topo: &mut Topology, radius: f64, z: f64) -> FaceId {
+        let tol_val = 1e-7;
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let center = Point3::new(0.0, 0.0, z);
+        let circle = brepkit_math::curves::Circle3D::new(center, axis, radius).unwrap();
+        let nurbs =
+            brepkit_geometry::convert::circle_to_nurbs(&circle, 0.0, 2.0 * std::f64::consts::PI)
+                .unwrap();
+        let seam = topo.add_vertex(Vertex::new(circle.evaluate(0.0), tol_val));
+        let edge = topo.add_edge(Edge::new(seam, seam, EdgeCurve::NurbsCurve(nurbs)));
+        let wire = Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane { normal: axis, d: z },
+        ))
+    }
+
+    fn assert_analytic_frustum_solid(topo: &Topology, solid: SolidId, expected_volume: f64) {
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+        assert_eq!(
+            sh.faces().len(),
+            3,
+            "analytic loft must emit exactly 3 faces (two caps + one analytic side)"
+        );
+        let has_curved_side = sh.faces().iter().any(|&fid| {
+            matches!(
+                topo.face(fid).unwrap().surface(),
+                FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+            )
+        });
+        assert!(
+            has_curved_side,
+            "analytic loft side face must be cylindrical/conical, not planar"
+        );
+        let vol = crate::measure::solid_volume(topo, solid, 0.05).unwrap();
+        let rel_err = (vol - expected_volume).abs() / expected_volume;
+        assert!(
+            rel_err < 0.005,
+            "analytic loft volume {vol} should be within 0.5% of {expected_volume} (err {:.3}%)",
+            rel_err * 100.0
+        );
+    }
+
+    #[test]
+    fn loft_two_circles_volume_within_0_5pct_of_truncated_cone() {
+        let h = 20.0;
+        let big = 10.0;
+        let small = 5.0;
+        let expected = std::f64::consts::PI * h / 3.0 * (big * big + big * small + small * small);
+
+        let mut topo = Topology::new();
+        let bottom = make_circle_face_at(&mut topo, big, 0.0);
+        let top = make_circle_face_at(&mut topo, small, h);
+        let solid = loft(&mut topo, &[bottom, top]).unwrap();
+        assert_analytic_frustum_solid(&topo, solid, expected);
+
+        let mut topo2 = Topology::new();
+        let bottom2 = make_nurbs_circle_face_at(&mut topo2, big, 0.0);
+        let top2 = make_nurbs_circle_face_at(&mut topo2, small, h);
+        let solid2 = loft(&mut topo2, &[bottom2, top2]).unwrap();
+        assert_analytic_frustum_solid(&topo2, solid2, expected);
+    }
+
+    #[test]
+    fn loft_two_equal_circles_makes_cylinder() {
+        let h = 20.0;
+        let r = 10.0;
+        let expected = std::f64::consts::PI * r * r * h;
+
+        let mut topo = Topology::new();
+        let bottom = make_circle_face_at(&mut topo, r, 0.0);
+        let top = make_circle_face_at(&mut topo, r, h);
+        let solid = loft(&mut topo, &[bottom, top]).unwrap();
+        assert_analytic_frustum_solid(&topo, solid, expected);
+    }
+
+    #[test]
+    fn loft_non_coaxial_circles_falls_back_with_positive_volume() {
+        let mut topo = Topology::new();
+        let bottom = make_circle_face_at(&mut topo, 10.0, 0.0);
+        let tol_val = 1e-7;
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let center = Point3::new(8.0, 0.0, 20.0);
+        let circle = brepkit_math::curves::Circle3D::new(center, axis, 5.0).unwrap();
+        let seam = topo.add_vertex(Vertex::new(circle.evaluate(0.0), tol_val));
+        let edge = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Circle(circle)));
+        let wire = Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap();
+        let wid = topo.add_wire(wire);
+        let top = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: axis,
+                d: 20.0,
+            },
+        ));
+
+        let solid = loft(&mut topo, &[bottom, top]).unwrap();
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 0.0,
+            "non-coaxial loft should fall back to a positive-volume solid, got {vol}"
+        );
+    }
+
+    #[test]
+    fn loft_three_coaxial_circles_two_analytic_bands() {
+        let r_big = 10.0;
+        let r_mid = 5.0;
+        let h = 20.0;
+        let band =
+            |ra: f64, rb: f64| std::f64::consts::PI * h / 3.0 * (ra * ra + ra * rb + rb * rb);
+        let expected = band(r_big, r_mid) + band(r_mid, r_big);
+
+        let mut topo = Topology::new();
+        let p0 = make_circle_face_at(&mut topo, r_big, 0.0);
+        let p1 = make_circle_face_at(&mut topo, r_mid, h);
+        let p2 = make_circle_face_at(&mut topo, r_big, 2.0 * h);
+
+        let solid = loft(&mut topo, &[p0, p1, p2]).unwrap();
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        let analytic_sides = sh
+            .faces()
+            .iter()
+            .filter(|&&fid| {
+                matches!(
+                    topo.face(fid).unwrap().surface(),
+                    FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+                )
+            })
+            .count();
+        assert_eq!(
+            analytic_sides, 2,
+            "three coaxial circles should emit two analytic frustum bands"
+        );
+
+        let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
+        let rel_err = (vol - expected).abs() / expected;
+        assert!(
+            rel_err < 0.005,
+            "three-circle loft volume {vol} should be within 0.5% of {expected} (err {:.3}%)",
+            rel_err * 100.0
+        );
     }
 
     #[test]
