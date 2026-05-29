@@ -34,12 +34,12 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::FaceId;
 
 // Re-export all public items.
-pub use face::tessellate_with_uvs;
+pub use face::{tessellate_with_uvs, tessellate_with_uvs_a};
 pub use mesh_ops::{
     EdgeLines, boundary_edge_count, is_watertight, non_manifold_edge_count, sample_solid_edges,
     sample_solid_edges_filtered,
 };
-pub use solid::tessellate_solid;
+pub use solid::{tessellate_solid, tessellate_solid_with_tolerance};
 
 /// Merge-grid cell size for tolerance-based vertex deduplication.
 ///
@@ -136,6 +136,23 @@ pub fn tessellate(
     deflection: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
     tessellate_with_uvs(topo, face, deflection).map(|uv| uv.mesh)
+}
+
+/// Tessellate a face with explicit linear and angular tolerances.
+///
+/// `angular_tol` (radians) caps the per-segment tangent turn; pass `0.0` to
+/// disable the angular criterion (linear-only path).
+///
+/// # Errors
+///
+/// Returns an error if the face geometry cannot be tessellated.
+pub fn tessellate_with_tolerance(
+    topo: &Topology,
+    face: FaceId,
+    deflection: f64,
+    angular_tol: f64,
+) -> Result<TriangleMesh, crate::OperationsError> {
+    face::tessellate_with_uvs_a(topo, face, deflection, angular_tol).map(|uv| uv.mesh)
 }
 
 /// Check if a mesh is watertight (every edge shared by exactly 2 triangles).

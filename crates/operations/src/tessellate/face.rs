@@ -6,12 +6,17 @@ use brepkit_topology::face::{FaceId, FaceSurface};
 
 use super::AnalyticKind;
 use super::TriangleMeshUV;
-use super::edge_sampling::{plane_axes, segments_for_chord_deviation};
+use super::edge_sampling::{plane_axes, segments_for_chord_deviation_a};
 use super::nurbs::{
     compute_angular_range, compute_axial_range, compute_sphere_v_range, compute_v_param_range,
     sphere_analytic_kind, tessellate_nurbs,
 };
 use super::planar::{tessellate_analytic, tessellate_analytic_with_boundary, tessellate_planar};
+
+/// Step shrink factor for spheres: both u and v are curved simultaneously, so
+/// the diagonal sag is the worst case. Tightening the per-direction step keeps
+/// the diagonal within tolerance.
+const SPHERE_DIAG: f64 = 0.7;
 
 /// Tessellate a face and return mesh with per-vertex UV coordinates.
 ///
@@ -27,12 +32,31 @@ pub fn tessellate_with_uvs(
     face: FaceId,
     deflection: f64,
 ) -> Result<TriangleMeshUV, crate::OperationsError> {
+    tessellate_with_uvs_a(
+        topo,
+        face,
+        deflection,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+    )
+}
+
+/// Tessellate a face (with UVs) using explicit linear and angular tolerances.
+///
+/// # Errors
+///
+/// Returns an error if the face geometry cannot be tessellated.
+pub fn tessellate_with_uvs_a(
+    topo: &Topology,
+    face: FaceId,
+    deflection: f64,
+    angular_tol: f64,
+) -> Result<TriangleMeshUV, crate::OperationsError> {
     let face_data = topo.face(face)?;
     let is_reversed = face_data.is_reversed();
 
     let mut result = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => {
-            let mesh = tessellate_planar(topo, face_data, *normal, deflection)?;
+            let mesh = tessellate_planar(topo, face_data, *normal, deflection, angular_tol)?;
             // For planar faces, project onto plane axes to get UVs.
             let (u_axis, v_axis) = plane_axes(*normal);
             let origin = if mesh.positions.is_empty() {
@@ -50,7 +74,7 @@ pub fn tessellate_with_uvs(
                 .collect();
             Ok::<_, crate::OperationsError>(TriangleMeshUV { mesh, uvs })
         }
-        FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection)),
+        FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection, angular_tol)),
         FaceSurface::Cylinder(cyl) => {
             // Check if the boundary is non-standard (e.g., boolean result
             // with arbitrary polyline boundary instead of circles + seams).
@@ -71,12 +95,16 @@ pub fn tessellate_with_uvs(
             };
 
             if has_non_standard_boundary {
-                tessellate_analytic_with_boundary(topo, face_data, cyl, deflection)
+                tessellate_analytic_with_boundary(topo, face_data, cyl, deflection, angular_tol)
             } else {
                 let v_range = compute_axial_range(topo, face_data, cyl.origin(), cyl.axis());
                 let u_range = compute_angular_range(topo, face_data, |p| cyl.project_point(p));
-                let nu =
-                    segments_for_chord_deviation(cyl.radius(), u_range.1 - u_range.0, deflection);
+                let nu = segments_for_chord_deviation_a(
+                    cyl.radius(),
+                    u_range.1 - u_range.0,
+                    deflection,
+                    angular_tol,
+                );
                 let nv = 1;
                 let cyl = cyl.clone();
                 Ok(tessellate_analytic(
@@ -94,10 +122,11 @@ pub fn tessellate_with_uvs(
             let v_range = compute_v_param_range(topo, face_data, |p| cone.project_point(p).1);
             let u_range = compute_angular_range(topo, face_data, |p| cone.project_point(p));
             let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
-            let nu = segments_for_chord_deviation(
+            let nu = segments_for_chord_deviation_a(
                 max_radius.max(0.01),
                 u_range.1 - u_range.0,
                 deflection,
+                angular_tol,
             );
             let nv = 1;
             let kind = if v_range.0.abs() < 1e-10 {
@@ -119,10 +148,20 @@ pub fn tessellate_with_uvs(
         FaceSurface::Sphere(sphere) => {
             let u_range = compute_angular_range(topo, face_data, |p| sphere.project_point(p));
             let v_range = compute_sphere_v_range(topo, face_data, sphere);
-            let nu =
-                segments_for_chord_deviation(sphere.radius(), u_range.1 - u_range.0, deflection);
-            let nv =
-                segments_for_chord_deviation(sphere.radius(), v_range.1 - v_range.0, deflection);
+            // Both directions are curved at once; the worst-case sag is along
+            // the diagonal, so shrink the step (~0.7) to keep it within tol.
+            let nu = segments_for_chord_deviation_a(
+                sphere.radius(),
+                u_range.1 - u_range.0,
+                deflection * SPHERE_DIAG,
+                angular_tol * SPHERE_DIAG,
+            );
+            let nv = segments_for_chord_deviation_a(
+                sphere.radius(),
+                v_range.1 - v_range.0,
+                deflection * SPHERE_DIAG,
+                angular_tol * SPHERE_DIAG,
+            );
             let kind = sphere_analytic_kind(v_range);
             let sphere = sphere.clone();
             Ok(tessellate_analytic(
@@ -138,15 +177,17 @@ pub fn tessellate_with_uvs(
         FaceSurface::Torus(torus) => {
             let u_range = compute_angular_range(topo, face_data, |p| torus.project_point(p));
             let v_range = (0.0, std::f64::consts::TAU);
-            let nu = segments_for_chord_deviation(
+            let nu = segments_for_chord_deviation_a(
                 torus.major_radius(),
                 u_range.1 - u_range.0,
                 deflection,
+                angular_tol,
             );
-            let nv = segments_for_chord_deviation(
+            let nv = segments_for_chord_deviation_a(
                 torus.minor_radius(),
                 v_range.1 - v_range.0,
                 deflection,
+                angular_tol,
             );
             let torus = torus.clone();
             Ok(tessellate_analytic(

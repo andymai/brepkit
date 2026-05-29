@@ -5,12 +5,23 @@ use brepkit_topology::Topology;
 
 use super::shorter_arc_range;
 
-/// Compute the angular resolution needed for a circular arc to achieve
-/// a given chord deviation (sag).
+/// Combined linear+angular segment count for a circular arc.
 ///
-/// Delegates to [`brepkit_math::chord::segments_for_chord_deviation`].
-pub(super) fn segments_for_chord_deviation(radius: f64, arc_range: f64, deflection: f64) -> usize {
-    brepkit_math::chord::segments_for_chord_deviation(radius, arc_range, deflection)
+/// Delegates to [`brepkit_math::chord::segments_for_chord_deviation_with_angle`]
+/// with no minimum-edge-length clamp.
+pub(super) fn segments_for_chord_deviation_a(
+    radius: f64,
+    arc_range: f64,
+    deflection: f64,
+    angular_tol: f64,
+) -> usize {
+    brepkit_math::chord::segments_for_chord_deviation_with_angle(
+        radius,
+        arc_range,
+        deflection,
+        angular_tol,
+        0.0,
+    )
 }
 
 /// Compute orthogonal axes for a plane given its normal.
@@ -41,6 +52,7 @@ pub(super) fn edge_sample_count(
     topo: &Topology,
     edge: &brepkit_topology::edge::Edge,
     deflection: f64,
+    angular_tol: f64,
 ) -> usize {
     use brepkit_topology::edge::EdgeCurve;
 
@@ -54,18 +66,23 @@ pub(super) fn edge_sample_count(
             // allowing the snap path to achieve watertight stitching.
             if let Ok((t_start, t_end)) = circle_param_range(topo, edge, c) {
                 let arc_range = (t_end - t_start).abs();
-                segments_for_chord_deviation(radius, arc_range, deflection) + 1
+                segments_for_chord_deviation_a(radius, arc_range, deflection, angular_tol) + 1
             } else {
-                segments_for_chord_deviation(radius, std::f64::consts::TAU, deflection) + 1
+                segments_for_chord_deviation_a(
+                    radius,
+                    std::f64::consts::TAU,
+                    deflection,
+                    angular_tol,
+                ) + 1
             }
         }
         EdgeCurve::Ellipse(ellipse) => {
-            // Use chord-deviation formula with max curvature radius (a^2/b).
-            // An ellipse's curvature is highest at the ends of the semi-major axis
-            // where the radius of curvature equals a^2/b.
+            // The tightest bend governs: an ellipse's smallest radius of
+            // curvature is b^2/a at the major-axis ends, so the criterion
+            // evaluated there yields the finest (correct) segment count.
             let a = ellipse.semi_major();
             let b = ellipse.semi_minor();
-            let max_curv_radius = a * a / b;
+            let min_curv_radius = b * b / a;
             let arc_range = if edge.is_closed() {
                 std::f64::consts::TAU
             } else if let (Ok(sp), Ok(ep)) = (
@@ -83,10 +100,12 @@ pub(super) fn edge_sample_count(
             } else {
                 std::f64::consts::TAU
             };
-            segments_for_chord_deviation(max_curv_radius, arc_range, deflection).min(4096)
+            segments_for_chord_deviation_a(min_curv_radius, arc_range, deflection, angular_tol)
+                .min(4096)
         }
         EdgeCurve::NurbsCurve(nurbs) => {
-            // Adaptive: coarse-pass deviation measurement, then refine if needed.
+            // Adaptive: coarse-pass deviation measurement, then refine if the
+            // chord sag OR the per-segment turn exceeds tolerance.
             let (u0, u1) = nurbs.domain();
             let n_spans = nurbs
                 .control_points()
@@ -95,12 +114,25 @@ pub(super) fn edge_sample_count(
                 .max(1);
             let coarse_n = (n_spans * 4).clamp(8, 128);
             let max_dev = measure_max_chord_deviation(nurbs, u0, u1, coarse_n);
-            if max_dev <= deflection {
+            let max_turn = measure_max_segment_turn(nurbs, u0, u1, coarse_n);
+            let sag_ok = max_dev <= deflection;
+            let turn_ok = angular_tol <= 0.0 || max_turn <= angular_tol * 0.5;
+            if sag_ok && turn_ok {
                 coarse_n
             } else {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let refined = ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize;
-                refined.clamp(8, 4096)
+                let sag_n = if sag_ok {
+                    coarse_n
+                } else {
+                    ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize
+                };
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let turn_n = if turn_ok {
+                    coarse_n
+                } else {
+                    ((coarse_n as f64) * (max_turn / (angular_tol * 0.5))).ceil() as usize
+                };
+                sag_n.max(turn_n).clamp(8, 4096)
             }
         }
     }
@@ -133,6 +165,30 @@ pub(super) fn measure_max_chord_deviation(
         max_dev = max_dev.max(dev);
     }
     max_dev
+}
+
+/// Measure the maximum tangent turn angle (radians) at segment midpoints of a
+/// NURBS curve sampled over `n` uniform segments.
+///
+/// For each segment the curve tangent is compared at the segment endpoints; the
+/// angle between them is the swing across that segment.
+pub(super) fn measure_max_segment_turn(
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+    u0: f64,
+    u1: f64,
+    n: usize,
+) -> f64 {
+    let mut max_turn: f64 = 0.0;
+    #[allow(clippy::cast_precision_loss)]
+    for i in 0..n {
+        let t0 = u0 + (u1 - u0) * (i as f64) / (n as f64);
+        let t1 = u0 + (u1 - u0) * ((i + 1) as f64) / (n as f64);
+        if let (Ok(a), Ok(b)) = (nurbs.tangent(t0), nurbs.tangent(t1)) {
+            let dot = a.dot(b).clamp(-1.0, 1.0);
+            max_turn = max_turn.max(dot.acos());
+        }
+    }
+    max_turn
 }
 
 /// Get the parameter range for a circle edge.
@@ -172,11 +228,12 @@ pub(super) fn sample_edge(
     topo: &Topology,
     edge: &brepkit_topology::edge::Edge,
     deflection: f64,
+    angular_tol: f64,
 ) -> Result<Vec<Point3>, crate::OperationsError> {
     use brepkit_geometry::sampling::sample_uniform;
     use brepkit_topology::edge::EdgeCurve;
 
-    let n = edge_sample_count(topo, edge, deflection);
+    let n = edge_sample_count(topo, edge, deflection, angular_tol);
 
     let points = match edge.curve() {
         EdgeCurve::Line => {
@@ -219,6 +276,7 @@ pub(super) fn sample_wire_positions(
     wire: &brepkit_topology::wire::Wire,
     tol: f64,
     deflection: f64,
+    angular_tol: f64,
 ) -> Result<Vec<Point3>, crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
 
@@ -257,8 +315,12 @@ pub(super) fn sample_wire_positions(
                     shorter_arc_range(circle, topo, edge)?
                 };
                 let arc_range = (t_end - t_start).abs();
-                let n_samples =
-                    segments_for_chord_deviation(circle.radius(), arc_range, deflection);
+                let n_samples = segments_for_chord_deviation_a(
+                    circle.radius(),
+                    arc_range,
+                    deflection,
+                    angular_tol,
+                );
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve_into(
                     &|t| circle.evaluate(t),
@@ -282,8 +344,14 @@ pub(super) fn sample_wire_positions(
                     (ts, te)
                 };
                 let arc_range = t_end - t_start;
-                let n_samples =
-                    segments_for_chord_deviation(ellipse.semi_major(), arc_range, deflection);
+                let min_curv_radius =
+                    ellipse.semi_minor() * ellipse.semi_minor() / ellipse.semi_major();
+                let n_samples = segments_for_chord_deviation_a(
+                    min_curv_radius,
+                    arc_range,
+                    deflection,
+                    angular_tol,
+                );
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve_into(
                     &|t| ellipse.evaluate(t),
@@ -302,11 +370,24 @@ pub(super) fn sample_wire_positions(
                     .max(1);
                 let coarse_n = (n_spans * 4).clamp(8, 128);
                 let max_dev = measure_max_chord_deviation(nurbs, u0, u1, coarse_n);
+                let max_turn = measure_max_segment_turn(nurbs, u0, u1, coarse_n);
+                let sag_ok = max_dev <= deflection;
+                let turn_ok = angular_tol <= 0.0 || max_turn <= angular_tol * 0.5;
                 #[allow(clippy::cast_sign_loss)]
-                let n_samples = if max_dev <= deflection {
+                let n_samples = if sag_ok && turn_ok {
                     coarse_n
                 } else {
-                    ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize
+                    let sag_n = if sag_ok {
+                        coarse_n
+                    } else {
+                        ((coarse_n as f64) * (max_dev / deflection).sqrt()).ceil() as usize
+                    };
+                    let turn_n = if turn_ok {
+                        coarse_n
+                    } else {
+                        ((coarse_n as f64) * (max_turn / (angular_tol * 0.5))).ceil() as usize
+                    };
+                    sag_n.max(turn_n)
                 }
                 .clamp(8, 4096);
                 #[allow(clippy::cast_precision_loss)]

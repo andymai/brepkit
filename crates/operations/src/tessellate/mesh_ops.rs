@@ -325,7 +325,12 @@ pub fn sample_solid_edges_filtered(
 
         result.offsets.push(result.positions.len());
         let edge = topo.edge(*edge_id)?;
-        let points = sample_edge(topo, edge, deflection)?;
+        let points = sample_edge(
+            topo,
+            edge,
+            deflection,
+            brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        )?;
         result.positions.extend(points);
     }
 

@@ -174,7 +174,7 @@ fn tessellate_flat_surface_few_triangles() {
     )
     .unwrap();
 
-    let mesh = tessellate_nurbs(&surface, 0.1).mesh;
+    let mesh = tessellate_nurbs(&surface, 0.1, 0.0).mesh;
 
     assert_eq!(
         mesh.indices.len() / 3,
@@ -225,8 +225,8 @@ fn tessellate_curved_surface_more_at_curves() {
     .unwrap();
 
     let deflection = 0.05;
-    let flat_mesh = tessellate_nurbs(&flat, deflection).mesh;
-    let curved_mesh = tessellate_nurbs(&curved, deflection).mesh;
+    let flat_mesh = tessellate_nurbs(&flat, deflection, 0.0).mesh;
+    let curved_mesh = tessellate_nurbs(&curved, deflection, 0.0).mesh;
 
     let flat_tris = flat_mesh.indices.len() / 3;
     let curved_tris = curved_mesh.indices.len() / 3;
@@ -700,8 +700,8 @@ fn curvature_adaptive_refines_high_curvature() {
     )
     .unwrap();
 
-    let fine_mesh = tessellate_nurbs(&dome, 0.01).mesh;
-    let coarse_mesh = tessellate_nurbs(&dome, 0.5).mesh;
+    let fine_mesh = tessellate_nurbs(&dome, 0.01, 0.0).mesh;
+    let coarse_mesh = tessellate_nurbs(&dome, 0.5, 0.0).mesh;
 
     assert!(
         fine_mesh.indices.len() / 3 > coarse_mesh.indices.len() / 3,
@@ -739,7 +739,7 @@ fn curvature_adaptive_midpoint_sag_check() {
     .unwrap();
 
     let deflection = 0.05;
-    let mesh = tessellate_nurbs(&surface, deflection).mesh;
+    let mesh = tessellate_nurbs(&surface, deflection, 0.0).mesh;
 
     let tri_count = mesh.indices.len() / 3;
     assert!(
@@ -1381,6 +1381,107 @@ fn torus_tessellation_count() {
     assert!(
         tri_count < 10_000,
         "torus tessellation should be bounded: got {tri_count} triangles (issue #259)"
+    );
+}
+
+/// Count distinct angular bands around a cylinder's circumference by
+/// projecting lateral-face vertices to their angle about the z axis.
+fn distinct_angular_bands(mesh: &TriangleMesh, radius: f64) -> usize {
+    use std::collections::HashSet;
+    let mut bins: HashSet<i64> = HashSet::new();
+    for p in &mesh.positions {
+        let rr = (p.x() * p.x() + p.y() * p.y()).sqrt();
+        if (rr - radius).abs() > radius * 0.05 {
+            continue;
+        }
+        let ang = p.y().atan2(p.x());
+        // 0.01 rad bins -- finer than any per-segment angle of interest.
+        bins.insert((ang / 0.01).round() as i64);
+    }
+    bins.len()
+}
+
+#[test]
+fn cylinder_small_radius_respects_angular_tolerance() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_cylinder(&mut topo, 0.5, 2.0).unwrap();
+
+    let mesh = tessellate_solid_with_tolerance(&topo, solid, 0.1, 0.35).unwrap();
+    let bands = distinct_angular_bands(&mesh, 0.5);
+    let expected = (std::f64::consts::TAU / 0.35).ceil() as usize;
+    assert!(
+        bands >= expected,
+        "small-radius cylinder should have >= {expected} angular bands, got {bands}"
+    );
+}
+
+#[test]
+fn torus_minor_arc_min_segments() {
+    use std::collections::HashSet;
+
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_torus(&mut topo, 5.0, 0.4, 32).unwrap();
+
+    let alpha = 0.35;
+    let mesh = tessellate_solid_with_tolerance(&topo, solid, 0.1, alpha).unwrap();
+
+    // Count distinct minor-circle latitudes by binning distance from the
+    // tube center circle (radius R) -- a proxy for the v direction density.
+    let r_major = 5.0;
+    let mut bins: HashSet<i64> = HashSet::new();
+    for p in &mesh.positions {
+        let rho = (p.x() * p.x() + p.y() * p.y()).sqrt();
+        let dr = rho - r_major;
+        bins.insert(((dr).atan2(p.z()) / 0.01).round() as i64);
+    }
+    let expected = (std::f64::consts::TAU / alpha).ceil() as usize;
+    assert!(
+        bins.len() >= expected,
+        "torus minor circle should have >= {expected} bands, got {}",
+        bins.len()
+    );
+}
+
+#[test]
+fn angular_tolerance_monotonic() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_cylinder(&mut topo, 0.5, 2.0).unwrap();
+
+    let coarse = tessellate_solid_with_tolerance(&topo, solid, 0.1, 0.5).unwrap();
+    let fine = tessellate_solid_with_tolerance(&topo, solid, 0.1, 0.2).unwrap();
+    assert!(
+        fine.indices.len() >= coarse.indices.len(),
+        "tighter angular tol must not reduce triangles: fine={} coarse={}",
+        fine.indices.len(),
+        coarse.indices.len()
+    );
+}
+
+#[test]
+fn coarse_curvature_unchanged() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_cylinder(&mut topo, 100.0, 5.0).unwrap();
+
+    // theta_lin << alpha here, so the angular cap is inactive and the output
+    // must match the legacy linear-only path (alpha disabled => 0.0).
+    let with_alpha = tessellate_solid_with_tolerance(&topo, solid, 0.01, 0.5).unwrap();
+    let linear_only = tessellate_solid_with_tolerance(&topo, solid, 0.01, 0.0).unwrap();
+    assert_eq!(
+        with_alpha.indices.len(),
+        linear_only.indices.len(),
+        "large-radius geometry must be backward compatible"
+    );
+}
+
+#[test]
+fn small_radius_cylinder_watertight_with_angular_tol() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_cylinder(&mut topo, 0.5, 2.0).unwrap();
+    let mesh = tessellate_solid_with_tolerance(&topo, solid, 0.1, 0.2).unwrap();
+    assert_eq!(
+        boundary_edge_count(&mesh),
+        0,
+        "small-radius cylinder must stay watertight with angular tol"
     );
 }
 

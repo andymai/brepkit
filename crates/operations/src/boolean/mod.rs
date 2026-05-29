@@ -1694,8 +1694,11 @@ fn mesh_boolean_fallback(
     tol: brepkit_math::tolerance::Tolerance,
     opts: &BooleanOptions,
 ) -> Result<SolidId, crate::OperationsError> {
-    let mesh_a = crate::tessellate::tessellate_solid(topo, a, deflection)?;
-    let mesh_b = crate::tessellate::tessellate_solid(topo, b, deflection)?;
+    // Mesh density here is a boolean-robustness concern, independent of the
+    // rendering angular tolerance; use the linear-only criterion so the
+    // resulting face count is unaffected by the display deflection cap.
+    let mesh_a = crate::tessellate::tessellate_solid_with_tolerance(topo, a, deflection, 0.0)?;
+    let mesh_b = crate::tessellate::tessellate_solid_with_tolerance(topo, b, deflection, 0.0)?;
 
     // Compute per-triangle "is on a planar face" flags by matching each
     // triangle's centroid + normal against the input solid's planar

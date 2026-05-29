@@ -10,6 +10,18 @@ use crate::kernel::BrepKernel;
 use crate::shapes::JsMesh;
 use crate::types::{GroupedMeshResult, UvMeshResult};
 
+/// Resolve an optional angular-tolerance argument, validating it when present
+/// and falling back to the default angular cap when absent.
+fn resolve_angular_tol(angular_tolerance: Option<f64>) -> Result<f64, JsError> {
+    match angular_tolerance {
+        Some(a) => {
+            validate_positive(a, "angularTolerance")?;
+            Ok(a)
+        }
+        None => Ok(brepkit_math::chord::DEFAULT_ANGULAR_TOL),
+    }
+}
+
 #[wasm_bindgen]
 impl BrepKernel {
     // ── Tessellation ───────────────────────────────────────────────
@@ -20,10 +32,17 @@ impl BrepKernel {
     ///
     /// Returns an error if the face handle is invalid or tessellation fails.
     #[wasm_bindgen(js_name = "tessellateFace")]
-    pub fn tessellate_face(&self, face: u32, deflection: f64) -> Result<JsMesh, JsError> {
+    pub fn tessellate_face(
+        &self,
+        face: u32,
+        deflection: f64,
+        angular_tolerance: Option<f64>,
+    ) -> Result<JsMesh, JsError> {
         validate_positive(deflection, "deflection")?;
+        let angular_tol = resolve_angular_tol(angular_tolerance)?;
         let face_id = self.resolve_face(face)?;
-        let mesh = tessellate::tessellate(&self.topo, face_id, deflection)?;
+        let mesh =
+            tessellate::tessellate_with_tolerance(&self.topo, face_id, deflection, angular_tol)?;
         Ok(mesh.into())
     }
 
@@ -35,13 +54,24 @@ impl BrepKernel {
     ///
     /// Returns an error if the solid handle is invalid or tessellation fails.
     #[wasm_bindgen(js_name = "tessellateSolid")]
-    pub fn tessellate_solid(&self, solid: u32, deflection: f64) -> Result<JsMesh, JsError> {
+    pub fn tessellate_solid(
+        &self,
+        solid: u32,
+        deflection: f64,
+        angular_tolerance: Option<f64>,
+    ) -> Result<JsMesh, JsError> {
         validate_positive(deflection, "deflection")?;
+        let angular_tol = resolve_angular_tol(angular_tolerance)?;
         let solid_id = self.resolve_solid(solid)?;
 
         // Use watertight tessellation that shares edge vertices between
         // adjacent faces, eliminating cracks at face boundaries.
-        let merged = tessellate::tessellate_solid(&self.topo, solid_id, deflection)?;
+        let merged = tessellate::tessellate_solid_with_tolerance(
+            &self.topo,
+            solid_id,
+            deflection,
+            angular_tol,
+        )?;
 
         Ok(merged.into())
     }
@@ -56,8 +86,10 @@ impl BrepKernel {
         &self,
         solid: u32,
         deflection: f64,
+        angular_tolerance: Option<f64>,
     ) -> Result<JsValue, JsError> {
         validate_positive(deflection, "deflection")?;
+        let angular_tol = resolve_angular_tol(angular_tolerance)?;
         let solid_id = self.resolve_solid(solid)?;
         let faces = brepkit_topology::explorer::solid_faces(&self.topo, solid_id)?;
 
@@ -71,7 +103,12 @@ impl BrepKernel {
             let idx_offset = (all_positions.len() / 3) as u32;
             face_offsets.push(all_indices.len() as u32);
 
-            let mesh = tessellate::tessellate(&self.topo, face_id, deflection)?;
+            let mesh = tessellate::tessellate_with_tolerance(
+                &self.topo,
+                face_id,
+                deflection,
+                angular_tol,
+            )?;
             for p in &mesh.positions {
                 all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
             }
@@ -107,8 +144,14 @@ impl BrepKernel {
     ///
     /// Returns an error if the solid handle is invalid or tessellation fails.
     #[wasm_bindgen(js_name = "tessellateSolidUV")]
-    pub fn tessellate_solid_uv(&self, solid: u32, deflection: f64) -> Result<JsValue, JsError> {
+    pub fn tessellate_solid_uv(
+        &self,
+        solid: u32,
+        deflection: f64,
+        angular_tolerance: Option<f64>,
+    ) -> Result<JsValue, JsError> {
         validate_positive(deflection, "deflection")?;
+        let angular_tol = resolve_angular_tol(angular_tolerance)?;
         let solid_id = self.resolve_solid(solid)?;
         let faces = brepkit_topology::explorer::solid_faces(&self.topo, solid_id)?;
 
@@ -121,7 +164,8 @@ impl BrepKernel {
             #[allow(clippy::cast_possible_truncation)]
             let idx_offset = (all_positions.len() / 3) as u32;
 
-            let mesh_uv = tessellate::tessellate_with_uvs(&self.topo, face_id, deflection)?;
+            let mesh_uv =
+                tessellate::tessellate_with_uvs_a(&self.topo, face_id, deflection, angular_tol)?;
             for p in &mesh_uv.mesh.positions {
                 all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
             }
@@ -206,7 +250,7 @@ mod tests {
     #[test]
     fn tessellate_solid_box_produces_nonempty_mesh() {
         let (k, solid) = kernel_with_box();
-        let mesh = k.tessellate_solid(solid, 0.1).unwrap();
+        let mesh = k.tessellate_solid(solid, 0.1, None).unwrap();
         assert!(mesh.vertex_count() > 0, "expected vertices, got 0");
         assert!(mesh.triangle_count() > 0, "expected triangles, got 0");
     }
@@ -214,7 +258,7 @@ mod tests {
     #[test]
     fn tessellate_solid_positions_and_normals_lengths_match() {
         let (k, solid) = kernel_with_box();
-        let mesh = k.tessellate_solid(solid, 0.1).unwrap();
+        let mesh = k.tessellate_solid(solid, 0.1, None).unwrap();
         let positions = mesh.positions();
         let normals = mesh.normals();
         // Both must be flat [x, y, z, …] arrays — same length
@@ -232,7 +276,7 @@ mod tests {
     #[test]
     fn tessellate_solid_indices_are_valid_vertex_refs() {
         let (k, solid) = kernel_with_box();
-        let mesh = k.tessellate_solid(solid, 0.1).unwrap();
+        let mesh = k.tessellate_solid(solid, 0.1, None).unwrap();
         let vertex_count = mesh.vertex_count();
         let indices = mesh.indices();
         for &idx in &indices {
@@ -246,8 +290,8 @@ mod tests {
     #[test]
     fn tessellate_solid_coarser_deflection_has_fewer_triangles() {
         let (k, solid) = kernel_with_box();
-        let fine = k.tessellate_solid(solid, 0.01).unwrap();
-        let coarse = k.tessellate_solid(solid, 1.0).unwrap();
+        let fine = k.tessellate_solid(solid, 0.01, None).unwrap();
+        let coarse = k.tessellate_solid(solid, 1.0, None).unwrap();
         assert!(
             fine.triangle_count() >= coarse.triangle_count(),
             "fine={} coarse={}",
