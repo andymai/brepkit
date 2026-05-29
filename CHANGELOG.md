@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.96.0](https://github.com/andymai/brepkit/compare/v2.95.0...v2.96.0) (2026-05-29)
+
+
+### Features
+
+* **loft:** exact analytic skinning across coaxial circle stacks ([#720](https://github.com/andymai/brepkit/issues/720)) ([0794754](https://github.com/andymai/brepkit/commit/07947544ca6ff31205bbb48c218febef02017799))
+
 ## [2.95.0](https://github.com/andymai/brepkit/compare/v2.94.0...v2.95.0) (2026-05-29)
 
 
