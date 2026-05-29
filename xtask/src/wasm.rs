@@ -3,9 +3,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Pinned wasm-bindgen-cli version. Must match `wasm-bindgen = "=0.2.114"` in
+/// Pinned wasm-bindgen-cli version. Must match `wasm-bindgen = "=0.2.121"` in
 /// the workspace Cargo.toml.
-const WASM_BINDGEN_VERSION: &str = "0.2.114";
+const WASM_BINDGEN_VERSION: &str = "0.2.121";
 
 /// Minimum number of exported methods expected in the .d.ts file.
 /// Based on ~185 methods in the current BrepKernel. Update when the API surface
@@ -81,7 +81,7 @@ pub fn check_tools() -> Result<()> {
         let version = run_cmd_output(
             Command::new("wasm-bindgen").arg("--version"),
         )?;
-        // Output is like "wasm-bindgen 0.2.114"
+        // Output is like "wasm-bindgen 0.2.121"
         let installed = version.split_whitespace().last().unwrap_or("");
         if installed != WASM_BINDGEN_VERSION {
             bail!(
