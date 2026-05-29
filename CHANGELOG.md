@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.101.2](https://github.com/andymai/brepkit/compare/v2.101.1...v2.101.2) (2026-05-29)
+
+
+### Bug Fixes
+
+* **offset:** make planar wire/polygon offset sign winding-robust ([#741](https://github.com/andymai/brepkit/issues/741)) ([fcabaeb](https://github.com/andymai/brepkit/commit/fcabaeb20034ac5b9501a1aaa78c39a462b8612d))
+
 ## [2.101.1](https://github.com/andymai/brepkit/compare/v2.101.0...v2.101.1) (2026-05-29)
 
 
