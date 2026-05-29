@@ -1324,6 +1324,27 @@ impl BrepKernel {
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(wire_id_to_u32(wire_id)))
             }
+            "offsetWire2DWithJoin" => {
+                let w = get_u32(args, "wire")?;
+                let dist = get_f64(args, "distance")?;
+                let jt_str = args["joinType"]
+                    .as_str()
+                    .ok_or("missing or invalid 'joinType' string")?;
+                let jt =
+                    super::operations::parse_join_type_str(jt_str).map_err(|e| e.to_string())?;
+                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
+                let face_id =
+                    brepkit_topology::builder::make_planar_face_from_wire(self.topo_mut(), wire_id)
+                        .map_err(|e| e.to_string())?;
+                let result = brepkit_operations::offset_wire::offset_wire_with_join(
+                    self.topo_mut(),
+                    face_id,
+                    dist,
+                    jt,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(wire_id_to_u32(result)))
+            }
             "getNurbsCurveData" => {
                 let edge = get_u32(args, "edge")?;
                 let curve = self.extract_nurbs_curve(edge).map_err(|e| e.to_string())?;

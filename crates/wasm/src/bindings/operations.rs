@@ -1187,6 +1187,43 @@ impl BrepKernel {
         Ok(wire_id_to_u32(wire_id))
     }
 
+    /// Offset a planar wire directly by a distance with a specific join type.
+    ///
+    /// Builds a planar face from the wire internally, then offsets it with
+    /// the requested corner join. This is the wire-based counterpart to
+    /// [`offset_wire_with_join_type`](Self::offset_wire_with_join_type),
+    /// which requires a face handle. Consumers that only hold a wire (such
+    /// as 2D sketch offsets) can route a join type through this entry point
+    /// without first constructing a face.
+    ///
+    /// `join_type` must be one of `"intersection"`, `"arc"`, or `"chamfer"`.
+    /// Returns a new wire handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the wire handle is invalid, the wire is not
+    /// planar, the join type string is unrecognized, or the offset
+    /// operation fails.
+    #[wasm_bindgen(js_name = "offsetWire2DWithJoin")]
+    pub fn offset_wire_2d_with_join(
+        &mut self,
+        wire: u32,
+        distance: f64,
+        join_type: &str,
+    ) -> Result<u32, JsError> {
+        let wire_id = self.resolve_wire(wire)?;
+        let jt = parse_join_type_str(join_type)?;
+        let face_id =
+            brepkit_topology::builder::make_planar_face_from_wire(self.topo_mut(), wire_id)?;
+        let result = brepkit_operations::offset_wire::offset_wire_with_join(
+            self.topo_mut(),
+            face_id,
+            distance,
+            jt,
+        )?;
+        Ok(wire_id_to_u32(result))
+    }
+
     // ── Orientation ───────────────────────────────────────────────
 
     /// Get the orientation of a shape.
@@ -1340,5 +1377,104 @@ impl BrepKernel {
             angle,
         )?;
         Ok(solid_id_to_u32(result.solid))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::builder::make_polygon_wire;
+
+    use crate::handles::wire_id_to_u32;
+    use crate::helpers::TOL;
+    use crate::kernel::BrepKernel;
+
+    fn square_wire(k: &mut BrepKernel) -> u32 {
+        let pts = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(10.0, 10.0, 0.0),
+            Point3::new(0.0, 10.0, 0.0),
+        ];
+        let wid = make_polygon_wire(k.topo_mut(), &pts, TOL).unwrap();
+        wire_id_to_u32(wid)
+    }
+
+    fn dispatch(k: &mut BrepKernel, op: &str, args: serde_json::Value) -> serde_json::Value {
+        let batch = serde_json::json!([{ "op": op, "args": args }]);
+        let out = k.execute_batch(&batch.to_string());
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        parsed[0].clone()
+    }
+
+    fn wire_perimeter(k: &BrepKernel, wire_handle: u32) -> f64 {
+        let wid = k.resolve_wire(wire_handle).unwrap();
+        brepkit_operations::measure::wire_length(&k.topo, wid).unwrap()
+    }
+
+    #[test]
+    fn offset_wire_2d_with_join_routes_arc_distinct_from_chamfer() {
+        let mut k = BrepKernel::new();
+        let w_int = square_wire(&mut k);
+        let w_arc = square_wire(&mut k);
+        let w_chamfer = square_wire(&mut k);
+
+        let intersection = dispatch(
+            &mut k,
+            "offsetWire2DWithJoin",
+            serde_json::json!({"wire": w_int, "distance": 2.0, "joinType": "intersection"}),
+        );
+        let arc = dispatch(
+            &mut k,
+            "offsetWire2DWithJoin",
+            serde_json::json!({"wire": w_arc, "distance": 2.0, "joinType": "arc"}),
+        );
+        let chamfer = dispatch(
+            &mut k,
+            "offsetWire2DWithJoin",
+            serde_json::json!({"wire": w_chamfer, "distance": 2.0, "joinType": "chamfer"}),
+        );
+
+        for (label, entry) in [
+            ("intersection", &intersection),
+            ("arc", &arc),
+            ("chamfer", &chamfer),
+        ] {
+            assert!(entry.get("error").is_none(), "{label} errored: {entry}");
+        }
+
+        let int_wire = intersection["ok"].as_u64().unwrap() as u32;
+        let arc_wire = arc["ok"].as_u64().unwrap() as u32;
+        let chamfer_wire = chamfer["ok"].as_u64().unwrap() as u32;
+
+        let int_len = wire_perimeter(&k, int_wire);
+        let arc_len = wire_perimeter(&k, arc_wire);
+        let chamfer_len = wire_perimeter(&k, chamfer_wire);
+
+        assert!(int_len > 0.0 && arc_len > 0.0 && chamfer_len > 0.0);
+        // Arc joins round the four convex corners, so the perimeter must
+        // differ from the sharp/chamfer join shapes — proving the join type
+        // is actually threaded through rather than silently ignored.
+        assert!(
+            (arc_len - chamfer_len).abs() > 1.0,
+            "arc ({arc_len}) should differ from chamfer ({chamfer_len})"
+        );
+    }
+
+    #[test]
+    fn offset_wire_2d_with_join_rejects_unknown_join_type() {
+        let mut k = BrepKernel::new();
+        let w = square_wire(&mut k);
+        let entry = dispatch(
+            &mut k,
+            "offsetWire2DWithJoin",
+            serde_json::json!({"wire": w, "distance": 2.0, "joinType": "bogus"}),
+        );
+        assert!(
+            entry.get("error").is_some(),
+            "unknown join type should error: {entry}"
+        );
     }
 }
