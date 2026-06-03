@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.101.3](https://github.com/andymai/brepkit/compare/v2.101.2...v2.101.3) (2026-06-03)
+
+
+### Bug Fixes
+
+* **heal:** deterministic same-domain merge ordering ([#748](https://github.com/andymai/brepkit/issues/748)) ([d51ca74](https://github.com/andymai/brepkit/commit/d51ca74a441a74c52f9081b4ea4b648763c7192a))
+
 ## [2.101.2](https://github.com/andymai/brepkit/compare/v2.101.1...v2.101.2) (2026-05-29)
 
 
