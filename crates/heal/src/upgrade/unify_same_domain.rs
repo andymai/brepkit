@@ -180,7 +180,13 @@ pub fn unify_same_domain(
         groups.entry(uf.find(i)).or_default().push(i);
     }
 
-    let merge_groups: Vec<Vec<usize>> = groups.into_values().filter(|g| g.len() > 1).collect();
+    // `into_values()` yields groups in seed-dependent HashMap order. The merge
+    // order cascades through face creation/removal and vertex welding, so an
+    // unstable order makes sequential booleans non-deterministic across
+    // processes. Each group's first element is its minimum face index (members
+    // are pushed in 0..n order), giving a stable key to sort on.
+    let mut merge_groups: Vec<Vec<usize>> = groups.into_values().filter(|g| g.len() > 1).collect();
+    merge_groups.sort_unstable_by_key(|g| g[0]);
 
     if merge_groups.is_empty() {
         return Ok((
