@@ -444,7 +444,6 @@ fn compound_cut_then_measure() {
 ///
 /// Solids: 0=box, 1=cylinder, 2-4=copies, 5-7=cut results
 #[test]
-#[ignore = "volume error 7% — boolean pipeline coplanar face classification (#260)"]
 fn sequential_booleans_volume_accuracy() {
     let mut k = BrepKernel::new();
     let result = k.execute_batch(

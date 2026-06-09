@@ -466,7 +466,6 @@ fn disjoint_intersect_empty() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn cut_cylinder_from_box() {
     let mut topo = Topology::new();
     let base = box_at(&mut topo, 0.0, 0.0, 0.0, 4.0, 4.0, 4.0);
@@ -860,7 +859,6 @@ fn volume_large_boxes() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn cut_cylinder_from_box_volume() {
     // Box 4×4×4 at origin (z=0..4), cylinder r=1, h=6 at z=0..6
     // (make_cylinder places base at z=0), translated to (2,2,-1) → z=-1..5.

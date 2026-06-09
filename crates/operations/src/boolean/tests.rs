@@ -1337,7 +1337,6 @@ fn profile_cylinder_cylinder_intersect() {
 /// Verify that `cut(box, cylinder)` produces a reasonable edge count
 /// with proper Circle edges (not tessellated into N line segments).
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn box_cut_cylinder_edge_count() {
     let mut topo = Topology::new();
 
@@ -1550,7 +1549,6 @@ fn compound_cut_empty_tools_returns_target() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn compound_cut_single_tool_matches_boolean() {
     use brepkit_math::mat::Mat4;
 
@@ -1569,7 +1567,6 @@ fn compound_cut_single_tool_matches_boolean() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn compound_cut_two_disjoint_cylinders() {
     use brepkit_math::mat::Mat4;
 
@@ -2712,7 +2709,6 @@ fn sequential_boolean_face_count_bounded() {
 /// Regression test for #270: without the mesh boolean threshold, the
 /// chord-based path preserves `FaceSurface::Cylinder` variants.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn sequential_cut_preserves_surface_types() {
     let mut topo = Topology::new();
     let base = crate::primitives::make_box(&mut topo, 10.0, 10.0, 5.0).unwrap();
