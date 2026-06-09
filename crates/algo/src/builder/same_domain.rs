@@ -473,11 +473,34 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
         })
     };
 
+    // A single interior sample can miss the hole for a non-convex candidate
+    // straddling a hole boundary: the sample may land on solid material while
+    // the candidate's footprint actually sits entirely over the container's
+    // holes. As an additional (not replacement) suppressor, also reject when
+    // EVERY sampled point of the candidate that lies inside the container's
+    // outer boundary falls inside one of the container's holes. This keeps
+    // the common case (interior sample alone) identical and only fires extra
+    // for footprints fully over holes.
+    let footprint_in_holes = |sample: brepkit_math::vec::Point2,
+                              verts: &[brepkit_math::vec::Point2],
+                              outer: &[brepkit_math::vec::Point2],
+                              face: &brepkit_topology::face::Face|
+     -> bool {
+        if face.inner_wires().is_empty() {
+            return false;
+        }
+        std::iter::once(sample)
+            .chain(verts.iter().copied())
+            .filter(|&p| super::classify_2d::point_in_polygon_2d(p, outer))
+            .all(|p| in_hole(p, face))
+    };
+
     // i fully contained in j: every vertex of i (plus its interior sample)
     // is inside j's polygon.
     if super::classify_2d::point_in_polygon_2d(p_i_2d, &poly_j)
         && all_inside(&poly_i, &poly_j)
         && !in_hole(p_i_2d, face_j)
+        && !footprint_in_holes(p_i_2d, &poly_i, &poly_j, face_j)
     {
         return true;
     }
@@ -485,6 +508,7 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
     if super::classify_2d::point_in_polygon_2d(p_j_2d, &poly_i)
         && all_inside(&poly_j, &poly_i)
         && !in_hole(p_j_2d, face_i)
+        && !footprint_in_holes(p_j_2d, &poly_j, &poly_i, face_i)
     {
         return true;
     }
