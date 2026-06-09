@@ -6,10 +6,12 @@
 
 use std::collections::HashSet;
 
+use crate::builder::classify_2d::{distance_to_polygon_boundary, point_in_polygon_2d};
+use crate::builder::plane_frame::PlaneFrame;
 use crate::ds::{GfaArena, Interference, Pave};
 use crate::error::AlgoError;
 use brepkit_math::tolerance::Tolerance;
-use brepkit_math::vec::{Point3, Vec3};
+use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -91,6 +93,17 @@ fn check_edge_face_pairs(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
+    // Plane crossings come from the INFINITE plane; without a bounds check
+    // an edge "crosses" a face far outside its boundary, creating spurious
+    // paves that propagate bogus edge splits. Gated to planar faces whose
+    // outer wires are all Line edges; curved boundaries keep the unfiltered
+    // behavior. Inner wires (holes) are not checked — a crossing inside a
+    // hole still paves, which is harmless since both neighbor faces see it.
+    let face_polygons: Vec<Option<(PlaneFrame, Vec<Point2>)>> = faces
+        .iter()
+        .map(|&fid| planar_face_polygon(topo, fid))
+        .collect();
+
     for &eid in edges {
         // Snapshot edge data to avoid holding immutable borrow across add_vertex
         let (curve, start_pos, end_pos, t0, t1) = {
@@ -118,6 +131,12 @@ fn check_edge_face_pairs(
             };
 
             for (t, pt) in crossings {
+                if let Some((frame, polygon)) = &face_polygons[face_idx] {
+                    if !point_on_face_2d(pt, frame, polygon, tol.linear) {
+                        continue;
+                    }
+                }
+
                 // Check if an existing vertex is at this point
                 let existing = find_nearby_vertex(topo, arena, pt, tol);
 
@@ -148,6 +167,44 @@ fn check_edge_face_pairs(
     }
 
     Ok(())
+}
+
+/// Build the outer-wire 2D polygon for a planar face whose boundary is
+/// all Line edges. Returns `None` for non-planar faces or curved wires.
+fn planar_face_polygon(topo: &Topology, fid: FaceId) -> Option<(PlaneFrame, Vec<Point2>)> {
+    let face = topo.face(fid).ok()?;
+    let FaceSurface::Plane { normal, .. } = face.surface() else {
+        return None;
+    };
+    let normal = *normal;
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut pts = Vec::with_capacity(wire.edges().len());
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        if !matches!(edge.curve(), EdgeCurve::Line) {
+            return None;
+        }
+        let vid = if oe.is_forward() {
+            edge.start()
+        } else {
+            edge.end()
+        };
+        pts.push(topo.vertex(vid).ok()?.point());
+    }
+    if pts.len() < 3 {
+        return None;
+    }
+    let frame = PlaneFrame::from_normal_and_point(normal, pts[0]);
+    let polygon = pts.iter().map(|&p| frame.project(p)).collect();
+    Some((frame, polygon))
+}
+
+/// Test whether a 3D point lies within the face's outer-wire polygon.
+/// Boundary touches within `tol_linear` count as on-face — they are
+/// genuine paves (edge endpoints landing on the face boundary).
+fn point_on_face_2d(pt: Point3, frame: &PlaneFrame, polygon: &[Point2], tol_linear: f64) -> bool {
+    let p2 = frame.project(pt);
+    point_in_polygon_2d(p2, polygon) || distance_to_polygon_boundary(p2, polygon) <= tol_linear
 }
 
 /// Find edge-plane crossings using algebraic ray-plane intersection.

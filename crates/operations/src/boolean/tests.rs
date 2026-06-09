@@ -2499,7 +2499,6 @@ fn cut_lofted_frustums_octagon_profiles() {
 // an over-extended chord, causing the wrong split and producing a result
 // solid with an incorrect volume.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn test_boolean_concave_face_chord_clip() {
     let mut topo = Topology::new();
 
@@ -2745,7 +2744,6 @@ fn sequential_cut_preserves_surface_types() {
 /// Fuse two boxes into L-shape (creates non-convex merged face), then cut
 /// through the concave corner.
 #[test]
-#[ignore = "flush-face fuse — GFA produces Euler≠2 for touching non-unit boxes"]
 fn non_convex_face_survives_subsequent_cut() {
     let mut topo = Topology::new();
 

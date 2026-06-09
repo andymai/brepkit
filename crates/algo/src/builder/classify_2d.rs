@@ -89,7 +89,8 @@ fn boundary_eps(loop_pts: &[Point2]) -> f64 {
     (diag * 1e-6).max(1e-12)
 }
 
-fn distance_to_polygon_boundary(p: Point2, loop_pts: &[Point2]) -> f64 {
+/// Minimum distance from a 2D point to the polygon's boundary segments.
+pub fn distance_to_polygon_boundary(p: Point2, loop_pts: &[Point2]) -> f64 {
     let mut best = f64::INFINITY;
     let n = loop_pts.len();
     for i in 0..n {

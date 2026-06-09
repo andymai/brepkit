@@ -46,7 +46,7 @@ use super::split_types::{SectionEdge, SurfaceInfo};
 pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     topo: &mut Topology,
     arena: &GfaArena,
-    _edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
+    edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
     face_ranks: &HashMap<FaceId, Rank, S2>,
     tol: Tolerance,
 ) -> Vec<SubFace> {
@@ -281,10 +281,12 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 &qpos,
                 tol,
             );
+            let expanded =
+                rebuild_face_with_edge_images(topo, face_id, edge_images).unwrap_or(face_id);
             let rebuilt =
-                rebuild_face_with_cb_edges(topo, face_id, &cb_qpair_edges, &vv_vertex_seed, tol);
+                rebuild_face_with_cb_edges(topo, expanded, &cb_qpair_edges, &vv_vertex_seed, tol);
             sub_faces.push(SubFace {
-                face_id: rebuilt.unwrap_or(face_id),
+                face_id: rebuilt.unwrap_or(expanded),
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
@@ -310,8 +312,10 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         );
 
         if sections.is_empty() {
+            let expanded =
+                rebuild_face_with_edge_images(topo, face_id, edge_images).unwrap_or(face_id);
             sub_faces.push(SubFace {
-                face_id,
+                face_id: expanded,
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
@@ -340,8 +344,10 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
 
         if split_results.is_empty() {
             log::warn!("fill_images_faces: split_face_2d returned empty for face {face_id:?}");
+            let expanded =
+                rebuild_face_with_edge_images(topo, face_id, edge_images).unwrap_or(face_id);
             sub_faces.push(SubFace {
-                face_id,
+                face_id: expanded,
                 classification: FaceClass::Unknown,
                 rank,
                 interior_point: None,
@@ -633,7 +639,7 @@ fn rebuild_face_with_fresh_vertices(
 /// Rebuild a face expanding boundary edges that have been split into
 /// multiple children. Only expands edges with 2+ split images; single-edge
 /// replacements (1:1 CB mappings) are left for `merge_duplicate_edges`.
-#[allow(clippy::too_many_lines, dead_code)]
+#[allow(clippy::too_many_lines)]
 fn rebuild_face_with_edge_images<S: BuildHasher>(
     topo: &mut Topology,
     face_id: FaceId,
@@ -718,7 +724,6 @@ fn rebuild_face_with_edge_images<S: BuildHasher>(
 
 /// Expand a single edge into its multi-split image edges.
 /// Only expands Line edges with 2+ children; keeps everything else as-is.
-#[allow(dead_code)]
 fn expand_edge<S: BuildHasher>(
     topo: &Topology,
     eid: EdgeId,
