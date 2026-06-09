@@ -73,16 +73,34 @@ fn identical_cones_fuse_preserves_volume() {
 // ── 2. Cap-on-cap stack (frustum + inverse) ────────────────────────────
 
 #[test]
-#[ignore = "Gap: cone cap-on-cap stack — cap planes are SD; lateral cone surfaces \
-            share apex/axis/half-angle so are also SD via apex line. GFA fails."]
 fn cone_cap_on_cap_stack_fuse() {
-    // Frustum A: r1=1 (z=0), r2=0.5 (z=1).
-    // Frustum B: r1=0.5 (z=1), r2=0.25 (z=2). Same apex/axis/half-angle.
+    // Frustum A: r1=1 (z=0), r2=0.5 (z=1), slope 0.5 (apex z=2).
+    // Frustum B: r1=0.5 (z=1), r2=0.25 (z=1.5), slope 0.5 — same
+    // apex/axis/half-angle, so both laterals lie on one infinite cone.
+    let mut topo = Topology::default();
+    let a = cone_at_z(&mut topo, 0.0, 1.0, 0.5, 1.0);
+    let b = cone_at_z(&mut topo, 1.0, 0.5, 0.25, 0.5);
+    let r = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+    let expected = frustum_volume(1.0, 0.25, 1.5);
+    let got = vol(&topo, r);
+    assert!(approx_eq(got, expected, 0.03));
+}
+
+#[test]
+#[ignore = "Gap: cap-on-cap touching solids with non-same-domain lateral cone \
+            surfaces collapse to one component through the mesh fallback; \
+            union volume comes out as a single frustum instead of the stacked \
+            pair (expected 2.2907)."]
+fn cone_cap_on_cap_stack_fuse_gfa_direct() {
+    // Frustum A: r1=1 (z=0), r2=0.5 (z=1), slope 0.5 (apex z=2).
+    // Frustum B: r1=0.5 (z=1), r2=0.25 (z=2), slope 0.25 (apex z=3).
+    // Different half-angles — laterals are NOT same-domain; only the cap
+    // planes at z=1 coincide.
     let mut topo = Topology::default();
     let a = cone_at_z(&mut topo, 0.0, 1.0, 0.5, 1.0);
     let b = cone_at_z(&mut topo, 1.0, 0.5, 0.25, 1.0);
     let r = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
-    let expected = frustum_volume(1.0, 0.25, 2.0);
+    let expected = frustum_volume(1.0, 0.5, 1.0) + frustum_volume(0.5, 0.25, 1.0);
     let got = vol(&topo, r);
     assert!(approx_eq(got, expected, 0.03));
 }
