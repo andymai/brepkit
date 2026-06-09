@@ -25,6 +25,10 @@ impl PlaneFrame {
     /// `v = normal x u`.
     #[must_use]
     pub fn from_normal_and_point(normal: Vec3, origin: Point3) -> Self {
+        // FaceSurface::Plane does not guarantee a unit normal; v = normal x u
+        // inherits |normal|, so an unnormalized normal scales v-axis projection
+        // distances and breaks tol.linear comparisons downstream.
+        let normal = normal.normalize().unwrap_or(Vec3::new(0.0, 0.0, 1.0));
         // Choose a seed vector not parallel to the normal.
         let seed = if normal.x().abs() < 0.9 {
             Vec3::new(1.0, 0.0, 0.0)
@@ -141,5 +145,16 @@ mod tests {
         assert!(frame.u_axis().dot(frame.v_axis()).abs() < 1e-10);
         assert!(frame.u_axis().dot(normal).abs() < 1e-10);
         assert!(frame.v_axis().dot(normal).abs() < 1e-10);
+    }
+
+    #[test]
+    fn unnormalized_normal_yields_unit_axes() {
+        let frame =
+            PlaneFrame::from_normal_and_point(Vec3::new(0.0, 0.0, 7.5), Point3::new(0.0, 0.0, 0.0));
+        assert!((frame.u_axis().length() - 1.0).abs() < 1e-10);
+        assert!((frame.v_axis().length() - 1.0).abs() < 1e-10);
+        let p2 = frame.project(Point3::new(3.0, 4.0, 0.0));
+        let dist_2d = (p2.x() * p2.x() + p2.y() * p2.y()).sqrt();
+        assert!((dist_2d - 5.0).abs() < 1e-10);
     }
 }

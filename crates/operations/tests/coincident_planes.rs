@@ -91,9 +91,6 @@ fn face_on_face_tall_thin_stack_fuse() {
 // ── 2. Partial face overlap (offset stacks) ────────────────────────────
 
 #[test]
-#[ignore = "Gap: partial face overlap (offset stack) currently produces non-manifold output. \
-            SD detector requires identical edge sets; partial overlap goes through FF intersection \
-            path which has issues here. Tracked as a same-domain robustness gap."]
 fn partial_face_overlap_quarter_offset_fuse() {
     // B sits half-on, half-off A in x. Shared face is partial.
     let mut topo = Topology::default();
@@ -224,9 +221,6 @@ fn super_tolerance_gap_fuse_disjoint() {
 // ── 7. Multi-axis coincidence (faces shared along several axes) ───────
 
 #[test]
-#[ignore = "Gap: L-shape fuse (multi-axis face share) produces non-manifold output. \
-            Two boxes meeting along an L-junction expose the same partial-overlap path \
-            as `partial_face_overlap_quarter_offset_fuse`."]
 fn multi_axis_face_share_l_shape_fuse() {
     // L-shape: A=[0,2]×[0,1]^2, B=[0,1]×[1,2]×[0,1]. Share x∈[0,1], y=1.
     let mut topo = Topology::default();
