@@ -17,6 +17,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
+use brepkit_topology::wire::{OrientedEdge, WireId};
 
 use crate::bop::SelectedFace;
 use crate::error::AlgoError;
@@ -445,12 +446,186 @@ fn signed_volume_of_shell(topo: &Topology, faces: &[FaceId]) -> f64 {
 
 // ── Phase 4 ──────────────────────────────────────────────────────────
 
+/// Quantized traversal-order endpoint positions for each oriented edge.
+fn oriented_edge_endpoints(topo: &Topology, oes: &[OrientedEdge]) -> Option<Vec<(QPos, QPos)>> {
+    let mut ends = Vec::with_capacity(oes.len());
+    for oe in oes {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let sp = topo.vertex(oe.oriented_start(edge)).ok()?.point();
+        let ep = topo.vertex(oe.oriented_end(edge)).ok()?.point();
+        ends.push((quantize_point(sp, MERGE_TOL), quantize_point(ep, MERGE_TOL)));
+    }
+    Some(ends)
+}
+
+/// Iteratively remove edges that cannot belong to any closed loop: in a
+/// closed wire every endpoint position has even degree >= 2, so an edge with
+/// a degree-1 endpoint is dangling debris (e.g. a stray section edge left in
+/// a face wire by coplanar splitting). Returns `true` if any edge was removed.
+fn prune_dangling_edges(topo: &Topology, oes: &mut Vec<OrientedEdge>) -> bool {
+    let mut changed = false;
+    loop {
+        let Some(ends) = oriented_edge_endpoints(topo, oes) else {
+            return changed;
+        };
+        let mut degree: HashMap<QPos, usize> = HashMap::new();
+        for (s, e) in &ends {
+            *degree.entry(*s).or_insert(0) += 1;
+            *degree.entry(*e).or_insert(0) += 1;
+        }
+        let keep: Vec<bool> = ends
+            .iter()
+            .map(|(s, e)| {
+                degree.get(s).copied().unwrap_or(0) >= 2 && degree.get(e).copied().unwrap_or(0) >= 2
+            })
+            .collect();
+        if keep.iter().all(|&k| k) {
+            return changed;
+        }
+        let mut idx = 0;
+        oes.retain(|_| {
+            let k = keep[idx];
+            idx += 1;
+            k
+        });
+        changed = true;
+        if oes.is_empty() {
+            return changed;
+        }
+    }
+}
+
+/// Reorder oriented edges into sequential traversal order by quantized
+/// endpoint position. Wires assembled from section edges can carry a
+/// geometrically closed loop whose edge list is permuted (each edge
+/// correctly oriented but stored out of chain order); downstream
+/// wire-closure validation and polygon walks assume sequential order.
+/// Lists that are not a single unambiguous closed chain are left untouched.
+/// Returns `true` if the order changed.
+fn order_edges_sequential(topo: &Topology, oes: &mut Vec<OrientedEdge>) -> bool {
+    let n = oes.len();
+    if n < 3 {
+        return false;
+    }
+    let Some(ends) = oriented_edge_endpoints(topo, oes) else {
+        return false;
+    };
+    if (0..n).all(|i| ends[i].1 == ends[(i + 1) % n].0) {
+        return false;
+    }
+    let mut by_start: HashMap<QPos, usize> = HashMap::with_capacity(n);
+    for (i, (s, _)) in ends.iter().enumerate() {
+        if by_start.insert(*s, i).is_some() {
+            return false;
+        }
+    }
+    let mut order = Vec::with_capacity(n);
+    let mut used = vec![false; n];
+    let mut cur = 0usize;
+    loop {
+        order.push(cur);
+        used[cur] = true;
+        if order.len() == n {
+            break;
+        }
+        let Some(&j) = by_start.get(&ends[cur].1) else {
+            return false;
+        };
+        if used[j] {
+            return false;
+        }
+        cur = j;
+    }
+    if ends[cur].1 != ends[order[0]].0 {
+        return false;
+    }
+    *oes = order.iter().map(|&i| oes[i]).collect();
+    true
+}
+
+/// Normalize a face's wires before final assembly: prune dangling debris
+/// edges, drop inner wires that cannot form a loop, and restore sequential
+/// edge order. The outer wire is never emptied — if pruning would remove
+/// all of its edges the face is left untouched.
+fn normalize_face_wires(topo: &mut Topology, fid: FaceId) {
+    let Ok(face) = topo.face(fid) else { return };
+    let outer_wid = face.outer_wire();
+    let inner_wids: Vec<WireId> = face.inner_wires().to_vec();
+    let surface = face.surface().clone();
+    let is_reversed = face.is_reversed();
+
+    let load = |topo: &Topology, wid: WireId| -> Option<Vec<OrientedEdge>> {
+        topo.wire(wid).ok().map(|w| w.edges().to_vec())
+    };
+
+    let Some(mut outer_oes) = load(topo, outer_wid) else {
+        return;
+    };
+    let orig_outer = outer_oes.clone();
+    let pruned = prune_dangling_edges(topo, &mut outer_oes);
+    let outer_pruned = if outer_oes.is_empty() {
+        outer_oes = orig_outer;
+        false
+    } else {
+        pruned
+    };
+    let outer_changed = outer_pruned | order_edges_sequential(topo, &mut outer_oes);
+
+    let mut inners_changed = false;
+    let mut new_inners: Vec<Vec<OrientedEdge>> = Vec::with_capacity(inner_wids.len());
+    for wid in &inner_wids {
+        let Some(mut oes) = load(topo, *wid) else {
+            continue;
+        };
+        let changed = prune_dangling_edges(topo, &mut oes);
+        if oes.is_empty() {
+            inners_changed = true;
+            continue;
+        }
+        inners_changed |= changed | order_edges_sequential(topo, &mut oes);
+        new_inners.push(oes);
+    }
+
+    if !outer_changed && !inners_changed {
+        return;
+    }
+
+    let Ok(new_outer) = brepkit_topology::wire::Wire::new(outer_oes, true) else {
+        return;
+    };
+    let new_outer_wid = topo.add_wire(new_outer);
+    let mut new_inner_wids = Vec::with_capacity(new_inners.len());
+    for oes in new_inners {
+        if let Ok(w) = brepkit_topology::wire::Wire::new(oes, true) {
+            new_inner_wids.push(topo.add_wire(w));
+        }
+    }
+    let new_face = if is_reversed {
+        Face::new_reversed(new_outer_wid, new_inner_wids, surface)
+    } else {
+        Face::new(new_outer_wid, new_inner_wids, surface)
+    };
+    if let Ok(f) = topo.face_mut(fid) {
+        *f = new_face;
+    }
+}
+
 /// Final assembly: build Solid from growth + hole shells.
 fn assemble(
     topo: &mut Topology,
     growth_shells: Vec<Vec<FaceId>>,
     hole_shells: Vec<Vec<FaceId>>,
 ) -> Result<SolidId, AlgoError> {
+    let all_faces: Vec<FaceId> = growth_shells
+        .iter()
+        .chain(hole_shells.iter())
+        .flatten()
+        .copied()
+        .collect();
+    for fid in all_faces {
+        normalize_face_wires(topo, fid);
+    }
+
     // Use the largest growth shell as outer
     let outer_idx = growth_shells
         .iter()
@@ -459,7 +634,18 @@ fn assemble(
         .map(|(i, _)| i)
         .unwrap_or(0);
 
-    let outer_shell = Shell::new(growth_shells[outer_idx].clone())
+    // Additional growth shells (disjoint outward-oriented regions, e.g. a cut
+    // that severs the solid into pieces) go into the same outer shell. Inner
+    // shells are reserved for cavities (hole shells); putting a disjoint piece
+    // there would mark it as a cavity and downstream multi-region handling
+    // walks only the outer shell.
+    let mut outer_faces = growth_shells[outer_idx].clone();
+    for (i, gs) in growth_shells.iter().enumerate() {
+        if i != outer_idx {
+            outer_faces.extend_from_slice(gs);
+        }
+    }
+    let outer_shell = Shell::new(outer_faces)
         .map_err(|e| AlgoError::AssemblyFailed(format!("outer shell: {e}")))?;
     let outer_id = topo.add_shell(outer_shell);
 
@@ -468,18 +654,6 @@ fn assemble(
     for hole in &hole_shells {
         if let Ok(inner_shell) = Shell::new(hole.clone()) {
             inner_ids.push(topo.add_shell(inner_shell));
-        }
-    }
-
-    // Additional growth shells (disjoint outward-oriented regions) are added
-    // as extra shells. For boolean results this typically doesn't happen (single
-    // connected result), but disjoint fuse can produce multiple growth shells.
-    // TODO: use Compound for true multi-region results.
-    for (i, gs) in growth_shells.iter().enumerate() {
-        if i != outer_idx {
-            if let Ok(extra_shell) = Shell::new(gs.clone()) {
-                inner_ids.push(topo.add_shell(extra_shell));
-            }
         }
     }
 
