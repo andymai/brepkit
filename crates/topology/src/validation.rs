@@ -10,11 +10,22 @@ use crate::TopologyError;
 use crate::shell::Shell;
 use crate::wire::{Wire, WireId};
 
+/// Linear tolerance for treating two distinct vertices as coincident during
+/// wire-closure checks. Matches the default linear tolerance (`1e-7`) and the
+/// quantization step used when wires are chained by endpoint position, so a
+/// loop chained through position-equal but ID-distinct vertices still
+/// validates as closed.
+const CLOSURE_POS_TOL: f64 = 1e-7;
+
 /// Validates that a wire forms a closed loop.
 ///
 /// A closed wire requires that for each consecutive pair of oriented edges
-/// the end vertex of the first equals the start vertex of the second, and
-/// that the last edge connects back to the first.
+/// the end vertex of the first connects to the start vertex of the second,
+/// and that the last edge connects back to the first. Connection is by
+/// `VertexId` equality, falling back to coincident position (within
+/// [`CLOSURE_POS_TOL`]) so wires assembled by chaining edges on endpoint
+/// position — which can leave distinct-but-coincident vertex IDs — are not
+/// rejected as open.
 ///
 /// # Errors
 ///
@@ -25,6 +36,16 @@ pub fn validate_wire_closed(wire: &Wire, topo: &Topology) -> Result<(), Topology
         return Err(TopologyError::WireNotClosed);
     }
 
+    let connects =
+        |a: crate::vertex::VertexId, b: crate::vertex::VertexId| -> Result<bool, TopologyError> {
+            if a == b {
+                return Ok(true);
+            }
+            let pa = topo.vertex(a)?.point();
+            let pb = topo.vertex(b)?.point();
+            Ok((pa - pb).length() <= CLOSURE_POS_TOL)
+        };
+
     let oriented = wire.edges();
     for window in oriented.windows(2) {
         let current = &window[0];
@@ -33,7 +54,10 @@ pub fn validate_wire_closed(wire: &Wire, topo: &Topology) -> Result<(), Topology
         let current_edge = topo.edge(current.edge())?;
         let next_edge = topo.edge(next.edge())?;
 
-        if current.oriented_end(current_edge) != next.oriented_start(next_edge) {
+        if !connects(
+            current.oriented_end(current_edge),
+            next.oriented_start(next_edge),
+        )? {
             return Err(TopologyError::WireNotClosed);
         }
     }
@@ -43,7 +67,10 @@ pub fn validate_wire_closed(wire: &Wire, topo: &Topology) -> Result<(), Topology
         let last_edge = topo.edge(last.edge())?;
         let first_edge = topo.edge(first.edge())?;
 
-        if last.oriented_end(last_edge) != first.oriented_start(first_edge) {
+        if !connects(
+            last.oriented_end(last_edge),
+            first.oriented_start(first_edge),
+        )? {
             return Err(TopologyError::WireNotClosed);
         }
     }

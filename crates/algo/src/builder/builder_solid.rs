@@ -458,6 +458,21 @@ fn oriented_edge_endpoints(topo: &Topology, oes: &[OrientedEdge]) -> Option<Vec<
     Some(ends)
 }
 
+/// Whether a list of oriented edges forms a closed loop in quantized-position
+/// space: every endpoint chains to the next and the last closes back to the
+/// first. Used to derive a wire's `closed` flag after normalization rather
+/// than asserting it unconditionally.
+fn oriented_edges_form_closed_loop(topo: &Topology, oes: &[OrientedEdge]) -> bool {
+    let Some(ends) = oriented_edge_endpoints(topo, oes) else {
+        return false;
+    };
+    let n = ends.len();
+    if n == 0 {
+        return false;
+    }
+    (0..n).all(|i| ends[i].1 == ends[(i + 1) % n].0)
+}
+
 /// Iteratively remove edges that cannot belong to any closed loop: in a
 /// closed wire every endpoint position has even degree >= 2, so an edge with
 /// a degree-1 endpoint is dangling debris (e.g. a stray section edge left in
@@ -551,8 +566,6 @@ fn normalize_face_wires(topo: &mut Topology, fid: FaceId) {
     let Ok(face) = topo.face(fid) else { return };
     let outer_wid = face.outer_wire();
     let inner_wids: Vec<WireId> = face.inner_wires().to_vec();
-    let surface = face.surface().clone();
-    let is_reversed = face.is_reversed();
 
     let load = |topo: &Topology, wid: WireId| -> Option<Vec<OrientedEdge>> {
         topo.wire(wid).ok().map(|w| w.edges().to_vec())
@@ -571,10 +584,18 @@ fn normalize_face_wires(topo: &mut Topology, fid: FaceId) {
     };
     let outer_changed = outer_pruned | order_edges_sequential(topo, &mut outer_oes);
 
+    // Normalize each inner wire. A wire whose edges all prune away is dropped
+    // (it could never form a loop). A wire that fails to load is kept as-is
+    // rather than silently discarded, so a transient lookup error never
+    // deletes hole geometry. Surviving wires reuse their original WireId by
+    // overwriting in place, which avoids orphaning entries in the append-only
+    // arena.
     let mut inners_changed = false;
-    let mut new_inners: Vec<Vec<OrientedEdge>> = Vec::with_capacity(inner_wids.len());
+    let mut kept_inner_wids: Vec<WireId> = Vec::with_capacity(inner_wids.len());
+    let mut normalized_inners: Vec<(WireId, Vec<OrientedEdge>)> = Vec::new();
     for wid in &inner_wids {
         let Some(mut oes) = load(topo, *wid) else {
+            kept_inner_wids.push(*wid);
             continue;
         };
         let changed = prune_dangling_edges(topo, &mut oes);
@@ -582,31 +603,45 @@ fn normalize_face_wires(topo: &mut Topology, fid: FaceId) {
             inners_changed = true;
             continue;
         }
-        inners_changed |= changed | order_edges_sequential(topo, &mut oes);
-        new_inners.push(oes);
+        if changed | order_edges_sequential(topo, &mut oes) {
+            inners_changed = true;
+            normalized_inners.push((*wid, oes));
+        }
+        kept_inner_wids.push(*wid);
     }
 
     if !outer_changed && !inners_changed {
         return;
     }
 
-    let Ok(new_outer) = brepkit_topology::wire::Wire::new(outer_oes, true) else {
-        return;
-    };
-    let new_outer_wid = topo.add_wire(new_outer);
-    let mut new_inner_wids = Vec::with_capacity(new_inners.len());
-    for oes in new_inners {
-        if let Ok(w) = brepkit_topology::wire::Wire::new(oes, true) {
-            new_inner_wids.push(topo.add_wire(w));
+    // Overwrite the outer wire in place (reuse its WireId) so the face's wire
+    // references stay valid and no arena entry is orphaned.
+    if outer_changed {
+        let closed = oriented_edges_form_closed_loop(topo, &outer_oes);
+        if let (Ok(new_outer), Ok(slot)) = (
+            brepkit_topology::wire::Wire::new(outer_oes, closed),
+            topo.wire_mut(outer_wid),
+        ) {
+            *slot = new_outer;
         }
     }
-    let new_face = if is_reversed {
-        Face::new_reversed(new_outer_wid, new_inner_wids, surface)
-    } else {
-        Face::new(new_outer_wid, new_inner_wids, surface)
-    };
-    if let Ok(f) = topo.face_mut(fid) {
-        *f = new_face;
+
+    for (wid, oes) in normalized_inners {
+        let closed = oriented_edges_form_closed_loop(topo, &oes);
+        if let (Ok(new_inner), Ok(slot)) = (
+            brepkit_topology::wire::Wire::new(oes, closed),
+            topo.wire_mut(wid),
+        ) {
+            *slot = new_inner;
+        }
+    }
+
+    // Only the inner-wire *list* changes when empties were dropped; the face
+    // already points at the (in-place updated) outer and surviving wires.
+    if kept_inner_wids.len() != inner_wids.len() {
+        if let Ok(f) = topo.face_mut(fid) {
+            *f.inner_wires_mut() = kept_inner_wids;
+        }
     }
 }
 
