@@ -16,6 +16,26 @@ use brepkit_topology::solid::SolidId;
 use crate::builder::FaceClass;
 use crate::error::AlgoError;
 
+/// Per-face geometry used for ray crossing tests.
+enum FaceGeom {
+    /// A planar (or planar-approximated) face: boundary polygon, hole
+    /// polygons, and the supporting plane.
+    Planar {
+        verts: Vec<Point3>,
+        holes: Vec<Vec<Point3>>,
+        normal: Vec3,
+        d: f64,
+    },
+    /// A full-period cylindrical face (e.g. a bore lateral). Crossings are
+    /// computed analytically — a flat polygon approximation counts one
+    /// crossing where the real surface has two, flipping the parity.
+    Cylinder {
+        surface: brepkit_math::surfaces::CylindricalSurface,
+        v_min: f64,
+        v_max: f64,
+    },
+}
+
 /// Classify a point by ray casting against the solid's faces.
 ///
 /// Shoots 3 rays (+Z, +X, +Y) and uses majority vote. A point is
@@ -30,7 +50,7 @@ pub fn classify_ray_cast(
     solid: SolidId,
     point: Point3,
 ) -> Result<FaceClass, AlgoError> {
-    let face_data = collect_face_polygons(topo, solid)?;
+    let face_data = collect_face_geoms(topo, solid)?;
 
     if face_data.is_empty() {
         return Err(AlgoError::ClassificationFailed(
@@ -48,8 +68,8 @@ pub fn classify_ray_cast(
     let mut inside_votes = 0u8;
     for ray_dir in &ray_dirs {
         let mut crossings = 0i32;
-        for &(ref verts, normal, d) in &face_data {
-            crossings += ray_face_crossing(point, *ray_dir, verts, normal, d, tol);
+        for geom in &face_data {
+            crossings += ray_geom_crossings(point, *ray_dir, geom, tol);
         }
         if crossings % 2 != 0 {
             inside_votes += 1;
@@ -63,41 +83,152 @@ pub fn classify_ray_cast(
     }
 }
 
-/// Collect face polygons from a solid for ray-cast testing.
+/// Sample a wire into a polygon by geometrically chaining its edges.
 ///
-/// For each face, samples boundary edges to get polygon vertices. For
-/// curved edges, samples at the midpoint for better coverage.
-fn collect_face_polygons(
+/// Wires are not guaranteed to list edges in traversal order (primitive
+/// builders store edge sets), so each edge is sampled into a polyline and
+/// the polylines are chained by endpoint matching. Closed curved edges
+/// (full circles) get dense sampling; open curved edges get interior
+/// samples for better coverage.
+fn wire_polygon(
     topo: &Topology,
-    solid: SolidId,
-) -> Result<Vec<(Vec<Point3>, Vec3, f64)>, AlgoError> {
+    wire_id: brepkit_topology::wire::WireId,
+) -> Result<Vec<Point3>, AlgoError> {
+    let wire = topo.wire(wire_id)?;
+
+    // Sample each edge into a polyline in its oriented direction.
+    let mut polylines: Vec<Vec<Point3>> = Vec::with_capacity(wire.edges().len());
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let raw_start = topo.vertex(edge.start())?.point();
+        let raw_end = topo.vertex(edge.end())?.point();
+        let mut pts = vec![raw_start];
+        if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
+            let (t0, t1) = edge.curve().domain_with_endpoints(raw_start, raw_end);
+            let is_closed = (raw_start - raw_end).length() < 1e-9;
+            let n_samples = if is_closed { 16_i32 } else { 3_i32 };
+            for k in 1..=n_samples {
+                let t = t0 + (t1 - t0) * f64::from(k) / f64::from(n_samples + 1);
+                pts.push(edge.curve().evaluate_with_endpoints(t, raw_start, raw_end));
+            }
+        }
+        pts.push(raw_end);
+        if !oe.is_forward() {
+            pts.reverse();
+        }
+        polylines.push(pts);
+    }
+
+    // Chain polylines by endpoint proximity.
+    let join_tol = 1e-6;
+    let mut used = vec![false; polylines.len()];
+    let mut verts: Vec<Point3> = Vec::new();
+    let Some(first) = polylines.first() else {
+        return Ok(verts);
+    };
+    verts.extend_from_slice(first);
+    used[0] = true;
+    for _ in 1..polylines.len() {
+        let tail = match verts.last() {
+            Some(p) => *p,
+            None => break,
+        };
+        let next = polylines.iter().enumerate().find_map(|(i, pl)| {
+            if used[i] {
+                return None;
+            }
+            let s = *pl.first()?;
+            let e = *pl.last()?;
+            if (s - tail).length() < join_tol {
+                Some((i, false))
+            } else if (e - tail).length() < join_tol {
+                Some((i, true))
+            } else {
+                None
+            }
+        });
+        let Some((idx, rev)) = next else { break };
+        used[idx] = true;
+        let mut pl = polylines[idx].clone();
+        if rev {
+            pl.reverse();
+        }
+        verts.extend_from_slice(&pl[1..]);
+    }
+    // Append any unchained polylines so no geometry is silently lost
+    // (matches the previous behavior of emitting all edge samples).
+    for (i, pl) in polylines.iter().enumerate() {
+        if !used[i] {
+            verts.extend_from_slice(pl);
+        }
+    }
+    // Drop the duplicated closing point.
+    if verts.len() >= 2 {
+        let first_pt = verts[0];
+        if let Some(last) = verts.last() {
+            if (*last - first_pt).length() < join_tol {
+                verts.pop();
+            }
+        }
+    }
+    Ok(verts)
+}
+
+/// Collect per-face ray-cast geometry from a solid.
+fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, AlgoError> {
     let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     let mut result = Vec::with_capacity(faces.len());
 
     for fid in faces {
         let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
 
-        let mut verts = Vec::new();
-        for oe in wire.edges() {
-            let edge = topo.edge(oe.edge())?;
-            let start_pos = topo.vertex(edge.start())?.point();
-            let end_pos = topo.vertex(edge.end())?.point();
-            verts.push(start_pos);
-
-            // For curved edges, add a midpoint sample.
-            if !matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Line) {
-                let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
-                let t_mid = 0.5_f64.mul_add(t1 - t0, t0);
-                let mid = edge
-                    .curve()
-                    .evaluate_with_endpoints(t_mid, start_pos, end_pos);
-                verts.push(mid);
+        // Full-period cylindrical faces: the outer wire contains a closed
+        // circle edge, so the face wraps the entire circumference and the
+        // analytic crossing test applies. Partial cylinder patches fall
+        // through to the polygon approximation.
+        if let brepkit_topology::face::FaceSurface::Cylinder(cyl) = face.surface() {
+            let wire = topo.wire(face.outer_wire())?;
+            let mut has_closed_circle = false;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                if matches!(edge.curve(), brepkit_topology::edge::EdgeCurve::Circle(_))
+                    && edge.start() == edge.end()
+                {
+                    has_closed_circle = true;
+                    break;
+                }
+            }
+            if has_closed_circle && face.inner_wires().is_empty() {
+                let verts = wire_polygon(topo, face.outer_wire())?;
+                let mut v_min = f64::INFINITY;
+                let mut v_max = f64::NEG_INFINITY;
+                for p in &verts {
+                    let (_, v) = cyl.project_point(*p);
+                    v_min = v_min.min(v);
+                    v_max = v_max.max(v);
+                }
+                if v_min.is_finite() && v_max > v_min {
+                    result.push(FaceGeom::Cylinder {
+                        surface: cyl.clone(),
+                        v_min,
+                        v_max,
+                    });
+                    continue;
+                }
             }
         }
 
+        let verts = wire_polygon(topo, face.outer_wire())?;
         if verts.len() < 3 {
             continue;
+        }
+
+        let mut holes = Vec::with_capacity(face.inner_wires().len());
+        for &iw in face.inner_wires() {
+            let hole = wire_polygon(topo, iw)?;
+            if hole.len() >= 3 {
+                holes.push(hole);
+            }
         }
 
         // Compute face normal.
@@ -114,20 +245,45 @@ fn collect_face_polygons(
         };
 
         let d = dot_normal_point(normal, verts[0]);
-        result.push((verts, normal, d));
+        result.push(FaceGeom::Planar {
+            verts,
+            holes,
+            normal,
+            d,
+        });
     }
 
     Ok(result)
 }
 
+/// Count ray crossings against a face geometry.
+#[inline]
+fn ray_geom_crossings(origin: Point3, ray_dir: Vec3, geom: &FaceGeom, tol: Tolerance) -> i32 {
+    match geom {
+        FaceGeom::Planar {
+            verts,
+            holes,
+            normal,
+            d,
+        } => ray_face_crossing(origin, ray_dir, verts, holes, *normal, *d, tol),
+        FaceGeom::Cylinder {
+            surface,
+            v_min,
+            v_max,
+        } => ray_cylinder_crossings(origin, ray_dir, surface, *v_min, *v_max, tol),
+    }
+}
+
 /// Test a single face polygon against a ray for crossing parity.
 ///
-/// Returns +1 for a crossing, 0 for no intersection.
+/// Returns +1 for a crossing, 0 for no intersection. Hits inside a hole
+/// polygon do not count.
 #[inline]
 fn ray_face_crossing(
     origin: Point3,
     ray_dir: Vec3,
     verts: &[Point3],
+    holes: &[Vec<Point3>],
     normal: Vec3,
     d: f64,
     tol: Tolerance,
@@ -146,11 +302,63 @@ fn ray_face_crossing(
         origin.y() + ray_dir.y() * t,
         origin.z() + ray_dir.z() * t,
     );
-    if point_in_face_3d(hit, verts, &normal) {
-        1
-    } else {
-        0
+    if !point_in_face_3d(hit, verts, &normal) {
+        return 0;
     }
+    if holes.iter().any(|h| point_in_face_3d(hit, h, &normal)) {
+        return 0;
+    }
+    1
+}
+
+/// Count ray crossings with a bounded full-period cylindrical face.
+///
+/// Solves the ray/infinite-cylinder quadratic and counts roots whose axial
+/// parameter falls within the face's v-range. Tangent grazes (discriminant
+/// ≈ 0) count as zero crossings, which preserves parity.
+fn ray_cylinder_crossings(
+    origin: Point3,
+    ray_dir: Vec3,
+    surface: &brepkit_math::surfaces::CylindricalSurface,
+    v_min: f64,
+    v_max: f64,
+    tol: Tolerance,
+) -> i32 {
+    let axis = surface.axis();
+    let m = origin - surface.origin();
+    let d_perp = ray_dir - axis * ray_dir.dot(axis);
+    let m_perp = m - axis * m.dot(axis);
+
+    let a = d_perp.dot(d_perp);
+    if a < 1e-14 {
+        return 0;
+    }
+    let b = 2.0 * m_perp.dot(d_perp);
+    let c = surface
+        .radius()
+        .mul_add(-surface.radius(), m_perp.dot(m_perp));
+    let disc = b.mul_add(b, -4.0 * a * c);
+    // Treat near-tangent rays as misses: counting one graze flips parity.
+    if disc < 1e-12 * a * surface.radius() * surface.radius() {
+        return 0;
+    }
+    let sqrt_disc = disc.sqrt();
+    let mut crossings = 0;
+    for t in [(-b - sqrt_disc) / (2.0 * a), (-b + sqrt_disc) / (2.0 * a)] {
+        if t <= tol.linear {
+            continue;
+        }
+        let hit = Point3::new(
+            origin.x() + ray_dir.x() * t,
+            origin.y() + ray_dir.y() * t,
+            origin.z() + ray_dir.z() * t,
+        );
+        let v = axis.dot(hit - surface.origin());
+        if v >= v_min - tol.linear && v <= v_max + tol.linear {
+            crossings += 1;
+        }
+    }
+    crossings
 }
 
 /// Test if a 3D point lies inside a planar face polygon by projecting to 2D.
