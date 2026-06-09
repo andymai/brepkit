@@ -1426,7 +1426,9 @@ fn gfa_cut_box_cylinder_grid_through_sequential_produces_valid_topology() {
 fn gfa_cut_box_cylinder_coplanar_caps_produces_valid_topology() {
     let mut topo = Topology::default();
     let box_id = make_box(&mut topo, [0.0, 0.0, 0.0], [4.0, 4.0, 2.0]);
-    let cyl = make_cylinder(&mut topo, 1.0, 1.0, 0.0, 0.3, 2.0);
+    let cyl_radius = 0.3;
+    let cyl_height = 2.0;
+    let cyl = make_cylinder(&mut topo, 1.0, 1.0, 0.0, cyl_radius, cyl_height);
 
     let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, box_id, cyl)
         .expect("GFA cut of box with coplanar-cap cylinder should succeed");
@@ -1523,7 +1525,7 @@ fn gfa_cut_box_cylinder_coplanar_caps_produces_valid_topology() {
         }
     }
 
-    let expected_vol = 32.0 - std::f64::consts::PI * 0.09 * 2.0;
+    let expected_vol = 32.0 - std::f64::consts::PI * (cyl_radius * cyl_radius) * cyl_height;
     // Order 5 is too coarse for full-period trig integrands on the
     // cylindrical hole wall; 16 keeps quadrature error far below the
     // 0.1% assertion budget.
