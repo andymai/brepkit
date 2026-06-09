@@ -20,6 +20,37 @@ use crate::error::AlgoError;
 /// Quantized 3D position pair for endpoint matching.
 type QPair = ((i64, i64, i64), (i64, i64, i64));
 
+/// Quantized circle geometry (center, radius, axis up to sign) for
+/// matching full closed blocks whose seam vertices differ.
+type QCircle = ((i64, i64, i64), i64, (i64, i64, i64));
+
+/// Quantization scale for unit axis directions.
+const AXIS_SCALE: f64 = 1.0e7;
+
+fn circle_key(
+    c: &brepkit_math::curves::Circle3D,
+    qpt: impl Fn(brepkit_math::vec::Point3) -> (i64, i64, i64),
+    linear_scale: f64,
+) -> QCircle {
+    let n = c.normal();
+    // Canonicalize axis sign so opposite-facing but coincident circles match.
+    let flip = match (n.x().abs() > 0.5, n.y().abs() > 0.5) {
+        (true, _) => n.x() < 0.0,
+        (false, true) => n.y() < 0.0,
+        (false, false) => n.z() < 0.0,
+    };
+    let n = if flip { -n } else { n };
+    #[allow(clippy::cast_possible_truncation)]
+    let qaxis = (
+        (n.x() * AXIS_SCALE).round() as i64,
+        (n.y() * AXIS_SCALE).round() as i64,
+        (n.z() * AXIS_SCALE).round() as i64,
+    );
+    #[allow(clippy::cast_possible_truncation)]
+    let qr = (c.radius() * linear_scale).round() as i64;
+    (qpt(c.center()), qr, qaxis)
+}
+
 /// Link section PBs to coincident boundary PBs via CommonBlocks.
 ///
 /// For each leaf section PB (from `arena.curves`), resolves its vertex
@@ -47,6 +78,12 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
     let mut boundary_index: std::collections::HashMap<QPair, Vec<PaveBlockId>> =
         std::collections::HashMap::new();
 
+    // Secondary index for full closed circle blocks (start == end vertex):
+    // their endpoint is an arbitrary seam vertex, so endpoint-pair keys
+    // cannot match across differently-seamed but coincident circles.
+    let mut closed_index: std::collections::HashMap<QCircle, Vec<PaveBlockId>> =
+        std::collections::HashMap::new();
+
     let all_edge_pbs: Vec<Vec<PaveBlockId>> = arena
         .edge_pave_blocks
         .values()
@@ -70,6 +107,17 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
             let qe = qpt(ep);
             let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
             boundary_index.entry(key).or_default().push(pb_id);
+
+            if sv == ev {
+                if let Ok(edge) = topo.edge(pb.original_edge) {
+                    if let EdgeCurve::Circle(c) = edge.curve() {
+                        closed_index
+                            .entry(circle_key(c, qpt, scale))
+                            .or_default()
+                            .push(pb_id);
+                    }
+                }
+            }
         }
     }
 
@@ -106,11 +154,6 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
             let qe = qpt(ep);
             let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
 
-            let Some(candidates) = boundary_index.get(&key) else {
-                log::trace!("link_existing: no boundary PB at position");
-                continue;
-            };
-
             // Check curve compatibility with each candidate.
             // Use graceful skip (not `?`) for edge lookups — consistent with
             // vertex lookups above. A stale original_edge should skip the PB,
@@ -120,51 +163,48 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
             };
             let section_curve = section_edge.curve().clone();
 
-            for &boundary_pb_id in candidates {
-                // Self-match guard: coplanar FF section PBs can appear in both
-                // arena.curves and arena.edge_pave_blocks. Skip self-pairing.
-                if boundary_pb_id == section_pb_id {
-                    continue;
-                }
-
-                // Already in same CB
-                if arena.pb_to_cb.get(&boundary_pb_id) == arena.pb_to_cb.get(&section_pb_id)
-                    && arena.pb_to_cb.contains_key(&section_pb_id)
-                {
-                    continue;
-                }
-
-                let Some(boundary_pb) = arena.pave_blocks.get(boundary_pb_id) else {
-                    continue;
-                };
-
-                let Ok(boundary_edge) = topo.edge(boundary_pb.original_edge) else {
-                    continue;
-                };
-                let boundary_curve = boundary_edge.curve();
-
-                if !curves_compatible(&section_curve, boundary_curve, tol) {
-                    continue;
-                }
-
-                // Link: add section PB to boundary PB's CB, or create new CB
-                if let Some(&cb_id) = arena.pb_to_cb.get(&boundary_pb_id) {
-                    // Add section PB to existing CB
-                    if let Some(cb) = arena.common_blocks.get_mut(cb_id) {
-                        cb.pave_blocks.push(section_pb_id);
+            let mut linked_this = false;
+            if let Some(candidates) = boundary_index.get(&key) {
+                for &boundary_pb_id in candidates {
+                    if try_link(
+                        topo,
+                        tol,
+                        arena,
+                        section_pb_id,
+                        &section_curve,
+                        boundary_pb_id,
+                    ) {
+                        linked += 1;
+                        linked_this = true;
+                        break; // One match is sufficient
                     }
-                    arena.pb_to_cb.insert(section_pb_id, cb_id);
-                } else {
-                    // Create new CB for the pair
-                    arena.create_common_block(vec![boundary_pb_id, section_pb_id], tol.linear);
                 }
+            } else {
+                log::trace!("link_existing: no boundary PB at position");
+            }
 
-                linked += 1;
-                log::debug!(
-                    "link_existing: linked section PB {section_pb_id:?} with boundary PB \
-                     {boundary_pb_id:?}"
-                );
-                break; // One match is sufficient
+            // Fallback for full closed circles: the endpoint-pair key uses
+            // the seam vertex, which is arbitrary, so coincident circles
+            // with different seams never share a key. Match on quantized
+            // circle geometry instead.
+            if !linked_this && sv == ev {
+                if let EdgeCurve::Circle(c) = &section_curve {
+                    if let Some(candidates) = closed_index.get(&circle_key(c, qpt, scale)) {
+                        for &boundary_pb_id in candidates {
+                            if try_link(
+                                topo,
+                                tol,
+                                arena,
+                                section_pb_id,
+                                &section_curve,
+                                boundary_pb_id,
+                            ) {
+                                linked += 1;
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -178,6 +218,60 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
     }
 
     Ok(())
+}
+
+/// Attempt to link a section PB with a boundary PB into a CommonBlock.
+///
+/// Returns `true` if the pair was linked. Skips self-pairs, pairs already
+/// sharing a CB, and geometrically incompatible curves.
+fn try_link(
+    topo: &Topology,
+    tol: Tolerance,
+    arena: &mut GfaArena,
+    section_pb_id: PaveBlockId,
+    section_curve: &EdgeCurve,
+    boundary_pb_id: PaveBlockId,
+) -> bool {
+    // Self-match guard: coplanar FF section PBs can appear in both
+    // arena.curves and arena.edge_pave_blocks. Skip self-pairing.
+    if boundary_pb_id == section_pb_id {
+        return false;
+    }
+
+    // Already in same CB
+    if arena.pb_to_cb.get(&boundary_pb_id) == arena.pb_to_cb.get(&section_pb_id)
+        && arena.pb_to_cb.contains_key(&section_pb_id)
+    {
+        return false;
+    }
+
+    let Some(boundary_pb) = arena.pave_blocks.get(boundary_pb_id) else {
+        return false;
+    };
+
+    let Ok(boundary_edge) = topo.edge(boundary_pb.original_edge) else {
+        return false;
+    };
+    let boundary_curve = boundary_edge.curve();
+
+    if !curves_compatible(section_curve, boundary_curve, tol) {
+        return false;
+    }
+
+    // Link: add section PB to boundary PB's CB, or create new CB
+    if let Some(&cb_id) = arena.pb_to_cb.get(&boundary_pb_id) {
+        if let Some(cb) = arena.common_blocks.get_mut(cb_id) {
+            cb.pave_blocks.push(section_pb_id);
+        }
+        arena.pb_to_cb.insert(section_pb_id, cb_id);
+    } else {
+        arena.create_common_block(vec![boundary_pb_id, section_pb_id], tol.linear);
+    }
+
+    log::debug!(
+        "link_existing: linked section PB {section_pb_id:?} with boundary PB {boundary_pb_id:?}"
+    );
+    true
 }
 
 /// Check if two edge curves are geometrically compatible.

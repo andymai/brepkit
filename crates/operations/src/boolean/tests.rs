@@ -1607,7 +1607,12 @@ fn compound_cut_all_tools_disjoint_returns_unchanged_volume() {
 }
 
 #[test]
-#[ignore = "flaky ~25% — SD non-determinism at coplanar boundaries"]
+#[ignore = "Gap: cuts after the first lose the cap faces — the face splitter \
+            drops faces that carry pre-existing internal hole loops when a new \
+            coplanar closed section arrives, so cuts 2-4 fall back to the mesh \
+            path and the absolute volume lands ~27% low. The first coplanar-cap \
+            cut is fixed (seam adoption); re-enable when internal-loop face \
+            splitting lands."]
 fn compound_cut_matches_sequential_2x2_grid() {
     use brepkit_math::mat::Mat4;
 
@@ -1648,10 +1653,17 @@ fn compound_cut_matches_sequential_2x2_grid() {
     let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
-    let rel = (compound_vol - seq_vol).abs() / seq_vol;
+    // 4x4x2 box minus four full-height r=0.3 cylinders.
+    let expected = 2.0f64.mul_add(4.0 * 4.0, -(4.0 * std::f64::consts::PI * r * r * 2.0));
+    let seq_rel = (seq_vol - expected).abs() / expected;
     assert!(
-        rel < 0.05,
-        "compound_cut volume {compound_vol:.4} != sequential {seq_vol:.4} (rel={rel:.4})"
+        seq_rel < 0.01,
+        "sequential volume {seq_vol:.4} should be within 1% of {expected:.4} (rel={seq_rel:.4})"
+    );
+    let rel = (compound_vol - expected).abs() / expected;
+    assert!(
+        rel < 0.01,
+        "compound_cut volume {compound_vol:.4} should be within 1% of {expected:.4} (rel={rel:.4})"
     );
 }
 

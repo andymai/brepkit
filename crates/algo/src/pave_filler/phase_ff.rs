@@ -138,6 +138,7 @@ pub fn perform(
             };
 
             for raw in raw_curves {
+                let mut raw = raw;
                 // Closed Circle3D sections — produced by plane-sphere
                 // intersections — get split at face-boundary crossings so
                 // downstream face splitters see open arcs they can match
@@ -180,11 +181,41 @@ pub fn perform(
                 // endpoints share vertices with face boundaries, so the face
                 // splitter produces sub-faces with consistent vertex identity.
                 let is_closed = (raw.p_start - raw.p_end).length() < tol.linear;
-                let start_vid =
+
+                // For closed curves the start/end point is at an arbitrary
+                // curve parameter. If an existing boundary vertex of either
+                // face already lies on the curve (e.g. the seam vertex of a
+                // coincident cap circle), adopt it as the seam and shift the
+                // parameter range to start there — so the section edge and
+                // the existing boundary edge share endpoint identity and can
+                // be linked into a CommonBlock by `link_existing`.
+                //
+                // Only safe when the circle stays inside (or on) both faces:
+                // a circle that properly crosses a face boundary must keep
+                // the legacy fresh-seam path so the downstream splitter can
+                // trim it to the in-face arcs.
+                let adopted_seam = match &raw.curve {
+                    EdgeCurve::Circle(c)
+                        if is_closed
+                            && !closed_circle_crosses_face_boundaries(topo, fa, fb, c, tol) =>
+                    {
+                        find_boundary_vertex_on_curve(topo, fa, fb, &raw.curve, tol)
+                    }
+                    _ => None,
+                };
+                if let Some((_, t_seam, p_seam)) = adopted_seam {
+                    let span = raw.t_range.1 - raw.t_range.0;
+                    raw.t_range = (t_seam, t_seam + span);
+                    raw.p_start = p_seam;
+                    raw.p_end = p_seam;
+                }
+
+                let start_vid = adopted_seam.map(|(vid, _, _)| vid).unwrap_or_else(|| {
                     super::helpers::find_nearby_pave_vertex(topo, arena, raw.p_start, tol)
                         .or_else(|| find_nearby_face_vertex(topo, fa, raw.p_start, tol))
                         .or_else(|| find_nearby_face_vertex(topo, fb, raw.p_start, tol))
-                        .unwrap_or_else(|| topo.add_vertex(Vertex::new(raw.p_start, tol.linear)));
+                        .unwrap_or_else(|| topo.add_vertex(Vertex::new(raw.p_start, tol.linear)))
+                });
                 let end_vid = if is_closed {
                     start_vid
                 } else {
@@ -676,6 +707,132 @@ fn find_nearby_face_vertex(
         }
     }
     None
+}
+
+/// Find an existing boundary vertex of either face that lies on a closed
+/// section curve, returning the vertex, its curve parameter, and its 3D
+/// position.
+///
+/// Scans the outer and inner wires of both faces and returns the first
+/// vertex whose distance to the curve is within `tol.linear`. Only
+/// analytic closed curves (Circle, Ellipse) are supported.
+fn find_boundary_vertex_on_curve(
+    topo: &Topology,
+    face_a: FaceId,
+    face_b: FaceId,
+    curve: &EdgeCurve,
+    tol: Tolerance,
+) -> Option<(brepkit_topology::vertex::VertexId, f64, Point3)> {
+    let project_eval = |p: Point3| -> Option<(f64, Point3)> {
+        match curve {
+            EdgeCurve::Circle(c) => {
+                let t = c.project(p);
+                Some((t, c.evaluate(t)))
+            }
+            EdgeCurve::Ellipse(e) => {
+                let t = e.project(p);
+                Some((t, e.evaluate(t)))
+            }
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+        }
+    };
+
+    for fid in [face_a, face_b] {
+        let Ok(face) = topo.face(fid) else {
+            continue;
+        };
+        let wires: Vec<brepkit_topology::wire::WireId> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+        for wid in wires {
+            let Ok(wire) = topo.wire(wid) else {
+                continue;
+            };
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                for vid in [edge.start(), edge.end()] {
+                    let Ok(v) = topo.vertex(vid) else {
+                        continue;
+                    };
+                    let p = v.point();
+                    let (t, foot) = project_eval(p)?;
+                    if (foot - p).length() < tol.linear {
+                        return Some((vid, t, p));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Check whether a closed section circle properly crosses any boundary
+/// edge (outer or inner wire) of either face.
+///
+/// Line boundary edges count via segment intersection, ignoring hits at
+/// the segment endpoints (a seam line legitimately starts on the circle).
+/// Circle boundary edges count via the coplanar circle-circle relation:
+/// two distinct coplanar circles cross when the in-plane center distance
+/// lies strictly between `|r1 - r2|` and `r1 + r2`. Other curve types are
+/// not checked.
+fn closed_circle_crosses_face_boundaries(
+    topo: &Topology,
+    face_a: FaceId,
+    face_b: FaceId,
+    circle: &brepkit_math::curves::Circle3D,
+    tol: Tolerance,
+) -> bool {
+    for fid in [face_a, face_b] {
+        let Ok(face) = topo.face(fid) else {
+            continue;
+        };
+        let wires: Vec<brepkit_topology::wire::WireId> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+        for wid in wires {
+            let Ok(wire) = topo.wire(wid) else {
+                continue;
+            };
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                match edge.curve() {
+                    EdgeCurve::Line => {
+                        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+                        else {
+                            continue;
+                        };
+                        let (sp, ep) = (sv.point(), ev.point());
+                        for (p, _) in circle.intersect_segment(sp, ep, tol.linear) {
+                            let at_endpoint = (p - sp).length() < tol.linear * 10.0
+                                || (p - ep).length() < tol.linear * 10.0;
+                            if !at_endpoint {
+                                return true;
+                            }
+                        }
+                    }
+                    EdgeCurve::Circle(b) => {
+                        let coplanar = circle.normal().dot(b.normal()).abs() > 1.0 - 1e-9
+                            && (b.center() - circle.center()).dot(circle.normal()).abs()
+                                < tol.linear;
+                        if !coplanar {
+                            continue;
+                        }
+                        let d = (b.center() - circle.center()).length();
+                        let (r1, r2) = (circle.radius(), b.radius());
+                        if d > (r1 - r2).abs() + tol.linear && d < r1 + r2 - tol.linear {
+                            return true;
+                        }
+                    }
+                    EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => {}
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Find where a closed `Circle3D` section crosses the outer-wire
