@@ -1257,10 +1257,21 @@ fn closed_curve_coincides_with_boundary(
     };
     let ellipses_match = |a: &brepkit_math::curves::Ellipse3D,
                           b: &brepkit_math::curves::Ellipse3D| {
-        (a.center() - b.center()).length() < tol
+        let geometry_matches = (a.center() - b.center()).length() < tol
             && (a.semi_major() - b.semi_major()).abs() < tol
             && (a.semi_minor() - b.semi_minor()).abs() < tol
-            && a.normal().dot(b.normal()).abs() > 1.0 - 1e-9
+            && a.normal().dot(b.normal()).abs() > 1.0 - 1e-9;
+        if !geometry_matches {
+            return false;
+        }
+        // When the semi-axes are equal the ellipse is a circle and the
+        // major-axis direction is undefined, so only its length matters.
+        if (a.semi_major() - a.semi_minor()).abs() < tol {
+            return true;
+        }
+        // The major axis and its negation describe the same ellipse, so
+        // compare directions up to sign.
+        a.u_axis().dot(b.u_axis()).abs() > 1.0 - 1e-9
     };
 
     if !matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
