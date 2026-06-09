@@ -2113,7 +2113,10 @@ fn build_topology_face(
             );
             let edge = Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone());
             let edge_id = topo.add_edge(edge);
-            inner_oriented.push(OrientedEdge::new(edge_id, pcurve_edge.forward));
+            // Same rule as the outer wire: Line edge vertices already
+            // encode traversal order, so the oriented edge is forward.
+            let forward = matches!(pcurve_edge.curve_3d, EdgeCurve::Line) || pcurve_edge.forward;
+            inner_oriented.push(OrientedEdge::new(edge_id, forward));
         }
         if let Ok(inner_wire) = Wire::new(inner_oriented, true) {
             inner_wire_ids.push(topo.add_wire(inner_wire));
