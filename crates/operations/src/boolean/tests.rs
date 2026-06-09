@@ -1604,12 +1604,6 @@ fn compound_cut_all_tools_disjoint_returns_unchanged_volume() {
 }
 
 #[test]
-#[ignore = "Gap: cuts after the first lose the cap faces — the face splitter \
-            drops faces that carry pre-existing internal hole loops when a new \
-            coplanar closed section arrives, so cuts 2-4 fall back to the mesh \
-            path and the absolute volume lands ~27% low. The first coplanar-cap \
-            cut is fixed (seam adoption); re-enable when internal-loop face \
-            splitting lands."]
 fn compound_cut_matches_sequential_2x2_grid() {
     use brepkit_math::mat::Mat4;
 

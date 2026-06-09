@@ -411,7 +411,14 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
         return false;
     };
 
+    // Sample each edge into several points along its curve, not just the
+    // start vertex. A closed wire built from a single circular edge (a
+    // circular hole left by an earlier cut) has one start vertex, so a
+    // vertex-only polygon collapses to a single point and the hole
+    // containment test silently treats the hole as absent — letting a
+    // coincident coplanar face be wrongly cancelled through the hole.
     let wire_points = |wire_id: brepkit_topology::wire::WireId| -> Vec<brepkit_math::vec::Point3> {
+        let samples_per_edge: usize = 8;
         let mut pts = Vec::new();
         let Ok(wire) = topo.wire(wire_id) else {
             return pts;
@@ -420,13 +427,20 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
             let Ok(edge) = topo.edge(oe.edge()) else {
                 continue;
             };
-            let vid = if oe.is_forward() {
-                edge.start()
-            } else {
-                edge.end()
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
             };
-            if let Ok(v) = topo.vertex(vid) {
-                pts.push(v.point());
+            let (sp, ep) = (sv.point(), ev.point());
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            for k in 0..samples_per_edge {
+                #[allow(clippy::cast_precision_loss)]
+                let frac = k as f64 / samples_per_edge as f64;
+                let t = if oe.is_forward() {
+                    (t1 - t0).mul_add(frac, t0)
+                } else {
+                    (t0 - t1).mul_add(frac, t1)
+                };
+                pts.push(edge.curve().evaluate_with_endpoints(t, sp, ep));
             }
         }
         pts

@@ -1510,3 +1510,47 @@ fn gfa_cut_box_cylinder_coplanar_caps_produces_valid_topology() {
         "volume {vol:.6} should be within 0.1% of {expected_vol:.6} (rel={rel:.5})"
     );
 }
+
+/// Sequential coplanar-cap cuts: a second flush-cap cylinder cut onto a box
+/// wall that already carries a circular hole from the first cut. The wall's
+/// existing circular hole must stay visible to the same-domain hole test
+/// (sampled, not vertex-only) so the wall face is not cancelled, and the
+/// second tool's flush cap must not fragment into a many-sided polygon that
+/// survives the cut. Expected: 4 sides + 2 holed caps + 2 lateral walls.
+#[test]
+fn gfa_cut_box_two_coplanar_cap_cylinders_sequential_valid() {
+    let mut topo = Topology::default();
+    let mut target = make_box(&mut topo, [0.0, 0.0, 0.0], [4.0, 4.0, 2.0]);
+    for (cx, cy) in [(1.0, 1.0), (3.0, 3.0)] {
+        let cyl = make_cylinder(&mut topo, cx, cy, 0.0, 0.3, 2.0);
+        target = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, target, cyl)
+            .expect("sequential coplanar-cap cut should succeed");
+    }
+
+    let (f, e, v, euler) = solid_topology_summary(&topo, target);
+    assert_eq!(f, 8, "expected 4 sides + 2 caps + 2 laterals, got {f}");
+    assert_eq!(
+        euler, 2,
+        "Euler V-E+F should be 2 for a closed genus-2 manifold, got V={v} E={e} F={f}"
+    );
+
+    let s = topo.solid(target).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
+    let manifold = brepkit_topology::validation::validate_shell_closed(sh, &topo);
+    assert!(
+        manifold.is_ok(),
+        "result must be manifold, got {manifold:?}"
+    );
+
+    let expected_vol = 32.0 - 2.0 * std::f64::consts::PI * 0.3 * 0.3 * 2.0;
+    let options = brepkit_check::properties::PropertiesOptions {
+        gauss_order: 16,
+        ..Default::default()
+    };
+    let vol = brepkit_check::properties::solid_volume(&topo, target, &options).unwrap();
+    let rel = (vol - expected_vol).abs() / expected_vol;
+    assert!(
+        rel < 0.001,
+        "volume {vol:.6} should be within 0.1% of {expected_vol:.6} (rel={rel:.5})"
+    );
+}
