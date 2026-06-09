@@ -535,7 +535,6 @@ fn tessellate_boolean_cut_cylinder_watertight() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation -- old boolean pipeline removed"]
 fn tessellate_boolean_cut_cone_watertight() {
     use brepkit_math::mat::Mat4;
 
