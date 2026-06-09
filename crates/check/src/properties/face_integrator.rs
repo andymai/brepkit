@@ -215,9 +215,20 @@ fn face_uv_bounds<S: ParametricSurface>(
     }
 
     let u_min = uvs.iter().map(|uv| uv.0).fold(f64::INFINITY, f64::min);
-    let u_max = uvs.iter().map(|uv| uv.0).fold(f64::NEG_INFINITY, f64::max);
+    let mut u_max = uvs.iter().map(|uv| uv.0).fold(f64::NEG_INFINITY, f64::max);
     let v_min = uvs.iter().map(|uv| uv.1).fold(f64::INFINITY, f64::min);
-    let v_max = uvs.iter().map(|uv| uv.1).fold(f64::NEG_INFINITY, f64::max);
+    let mut v_max = uvs.iter().map(|uv| uv.1).fold(f64::NEG_INFINITY, f64::max);
+
+    // All boundary vertices on the seam of a periodic axis (e.g. a
+    // full-revolution lateral face whose circles start/end at the seam)
+    // collapse that axis's range to zero — the face actually spans the
+    // full period.
+    if periodic_u && u_max - u_min < 1e-9 {
+        u_max = u_min + std::f64::consts::TAU;
+    }
+    if periodic_v && v_max - v_min < 1e-9 {
+        v_max = v_min + std::f64::consts::TAU;
+    }
 
     if u_min >= u_max || v_min >= v_max {
         return Err(CheckError::IntegrationFailed(
@@ -239,14 +250,39 @@ fn unwrap_angle(prev: f64, next: f64) -> f64 {
 }
 
 /// Integrate a planar face using polygon fan triangulation.
+///
+/// Inner wires (holes) are integrated the same way and subtracted from the
+/// outer-wire contribution.
 fn integrate_planar_face(
     topo: &Topology,
     face_id: FaceId,
     normal: Vec3,
 ) -> Result<FaceContribution, CheckError> {
     let polygon = crate::util::face_polygon(topo, face_id)?;
+    let mut contrib = integrate_planar_polygon(&polygon, normal);
+
+    let face = topo.face(face_id)?;
+    let inner: Vec<_> = face.inner_wires().to_vec();
+    for wid in inner {
+        let hole = crate::util::wire_polygon(topo, wid)?;
+        let h = integrate_planar_polygon(&hole, normal);
+        contrib.area -= h.area;
+        contrib.volume -= h.volume;
+        contrib.volume_moment_x -= h.volume_moment_x;
+        contrib.volume_moment_y -= h.volume_moment_y;
+        contrib.volume_moment_z -= h.volume_moment_z;
+        contrib.centroid_x -= h.centroid_x;
+        contrib.centroid_y -= h.centroid_y;
+        contrib.centroid_z -= h.centroid_z;
+    }
+
+    Ok(contrib)
+}
+
+/// Integrate a planar polygon's contribution via fan triangulation.
+fn integrate_planar_polygon(polygon: &[Point3], normal: Vec3) -> FaceContribution {
     if polygon.len() < 3 {
-        return Ok(FaceContribution {
+        return FaceContribution {
             area: 0.0,
             volume: 0.0,
             volume_moment_x: 0.0,
@@ -255,7 +291,7 @@ fn integrate_planar_face(
             centroid_x: 0.0,
             centroid_y: 0.0,
             centroid_z: 0.0,
-        });
+        };
     }
 
     // Fan triangulation from vertex 0
@@ -323,7 +359,7 @@ fn integrate_planar_face(
         cz += centroid.z() * tri_area;
     }
 
-    Ok(FaceContribution {
+    FaceContribution {
         area,
         volume: vol,
         volume_moment_x: mx,
@@ -332,7 +368,7 @@ fn integrate_planar_face(
         centroid_x: cx,
         centroid_y: cy,
         centroid_z: cz,
-    })
+    }
 }
 
 /// Integrate a parametric surface using Gauss quadrature over the UV domain.
