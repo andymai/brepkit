@@ -229,6 +229,22 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // Pre-compute which faces have section edges from which curves
     let section_map = build_section_map(arena);
 
+    // ── Periodic seam anchor pre-pass ───────────────────────────────
+    // Closed circle intersection curves on a u-periodic face (cylinder /
+    // cone lateral) are re-anchored so the circle's start/end vertex sits
+    // on the face's seam. The band splitter connects consecutive circles
+    // with seam segments; without re-anchoring, those segments would join
+    // arbitrary section angles and cut through the surface interior.
+    // Pre-registering the anchor vertices makes the periodic face's band
+    // wires and the opposing plane faces' hole wires resolve to the same
+    // VertexId, so merge_duplicate_edges can share the circle edge.
+    let seam_anchors = compute_seam_anchors(topo, arena);
+    for &anchor in seam_anchors.values() {
+        pb_vertex_registry
+            .entry(qpos(anchor))
+            .or_insert_with(|| topo.add_vertex(Vertex::new(anchor, tol.linear)));
+    }
+
     // No boundary edge cache — each face creates its own edges with its own
     // vertices. Cross-face edge sharing is handled by merge_duplicate_edges
     // in builder_solid. Sharing edges across parent faces via a position-pair
@@ -277,7 +293,14 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         }
 
         // Build SectionEdge entries from pave block data
-        let sections = build_section_edges(topo, arena, face_id, &section_map, tol.linear);
+        let sections = build_section_edges(
+            topo,
+            arena,
+            face_id,
+            &section_map,
+            &seam_anchors,
+            tol.linear,
+        );
 
         log::debug!(
             "fill_images_faces: face {:?} has_sections={} sections={}",
@@ -958,6 +981,74 @@ enum SectionSource {
     PaveBlock(PaveBlockId),
 }
 
+/// Compute seam-anchored start points for closed circle intersection curves.
+///
+/// For each full-circle FF curve whose face pair includes a u-periodic
+/// surface (cylinder/cone) with a seam Line edge, returns the point on the
+/// circle at the seam's u parameter. Keyed by the curve's arena index.
+fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Point3> {
+    use std::f64::consts::TAU;
+
+    let mut anchors = BTreeMap::new();
+    for (idx, curve_ds) in arena.curves.iter().enumerate() {
+        let EdgeCurve::Circle(circle) = &curve_ds.curve else {
+            continue;
+        };
+        let (t0, t1) = curve_ds.t_range;
+        if ((t1 - t0).abs() - TAU).abs() > 1e-9 {
+            continue;
+        }
+        for fid in [curve_ds.face_a, curve_ds.face_b] {
+            let Ok(face) = topo.face(fid) else { continue };
+            let surface = face.surface();
+            if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+                continue;
+            }
+            let Some(anchor) = seam_anchor_on_circle(topo, face, circle) else {
+                continue;
+            };
+            anchors.insert(idx, anchor);
+            break;
+        }
+    }
+    anchors
+}
+
+/// Find the point on `circle` at the seam u of `face`'s periodic surface.
+///
+/// Returns `None` if the face has no non-degenerate seam Line edge, the
+/// projections fail, or the seam point at the circle's v does not actually
+/// lie on the circle (e.g. the circle is not a constant-v iso-curve).
+fn seam_anchor_on_circle(
+    topo: &Topology,
+    face: &Face,
+    circle: &brepkit_math::curves::Circle3D,
+) -> Option<Point3> {
+    let surface = face.surface();
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut seam_pt = None;
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        if matches!(edge.curve(), EdgeCurve::Line) {
+            let sp = topo.vertex(edge.start()).ok()?.point();
+            let ep = topo.vertex(edge.end()).ok()?.point();
+            if (sp - ep).length() > 1e-10 {
+                seam_pt = Some(sp);
+                break;
+            }
+        }
+    }
+    let (seam_u, _) = surface.project_point(seam_pt?)?;
+    let (_, v_circle) = surface.project_point(circle.evaluate(0.0))?;
+    let anchor = surface.evaluate(seam_u, v_circle)?;
+    let radial = anchor - circle.center();
+    let on_circle = (radial.length() - circle.radius()).abs() < 1e-6
+        && radial.dot(circle.normal()).abs() < 1e-6;
+    on_circle.then_some(anchor)
+}
+
 fn build_section_map(arena: &GfaArena) -> HashMap<FaceId, Vec<SectionSource>> {
     let mut map: HashMap<FaceId, Vec<SectionSource>> = HashMap::new();
     // Section edges from FF intersection curves.
@@ -1027,6 +1118,7 @@ fn build_section_edges(
     arena: &GfaArena,
     face_id: FaceId,
     section_map: &HashMap<FaceId, Vec<SectionSource>>,
+    seam_anchors: &BTreeMap<usize, Point3>,
     tol: f64,
 ) -> Vec<SectionEdge> {
     use brepkit_math::vec::Point3;
@@ -1079,8 +1171,33 @@ fn build_section_edges(
                     _ => continue,
                 };
 
+                // Seam-anchored closed circles: re-parameterize so the
+                // circle starts at the periodic face's seam point. Both
+                // faces of the pair receive the same anchored geometry.
+                let (curve_3d, start, end) = match seam_anchors.get(curve_idx) {
+                    Some(&anchor) => {
+                        let reanchored = if let EdgeCurve::Circle(c) = &curve_ds.curve {
+                            brepkit_math::curves::Circle3D::new_with_ref(
+                                c.center(),
+                                c.normal(),
+                                c.radius(),
+                                anchor - c.center(),
+                            )
+                            .ok()
+                            .map(EdgeCurve::Circle)
+                        } else {
+                            None
+                        };
+                        match reanchored {
+                            Some(c) => (c, anchor, anchor),
+                            None => (curve_ds.curve.clone(), start, end),
+                        }
+                    }
+                    None => (curve_ds.curve.clone(), start, end),
+                };
+
                 let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
-                    &curve_ds.curve,
+                    &curve_3d,
                     start,
                     end,
                     face.surface(),
@@ -1100,12 +1217,9 @@ fn build_section_edges(
                     let start_uv = face.surface().project_point(start);
                     if let Some((su, sv)) = start_uv {
                         // Sample the curve at t=0.25 to determine winding direction.
-                        let (t0, t1) = curve_ds.curve.domain_with_endpoints(start, end);
-                        let mid_3d = curve_ds.curve.evaluate_with_endpoints(
-                            t0 + (t1 - t0) * 0.25,
-                            start,
-                            end,
-                        );
+                        let (t0, t1) = curve_3d.domain_with_endpoints(start, end);
+                        let mid_3d =
+                            curve_3d.evaluate_with_endpoints(t0 + (t1 - t0) * 0.25, start, end);
                         let mid_uv = face.surface().project_point(mid_3d);
                         if let Some((mu, _mv)) = mid_uv {
                             // Determine winding: does the curve go in +u or -u
@@ -1132,7 +1246,7 @@ fn build_section_edges(
                 };
 
                 sections.push(SectionEdge {
-                    curve_3d: curve_ds.curve.clone(),
+                    curve_3d,
                     pcurve_a: pcurve.clone(),
                     pcurve_b: pcurve,
                     start,

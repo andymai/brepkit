@@ -204,6 +204,207 @@ pub(super) fn split_noseam_face_direct(
 // See PRs #534, #535, #537 for the pinning test history.
 // ---------------------------------------------------------------------------
 
+/// Split a u-periodic face (cylinder/cone lateral) into stacked bands at
+/// its closed section circles.
+///
+/// A closed circle on a u-periodic surface does not bound a disc — it
+/// separates the surface into bands. For N internal circles sorted by v,
+/// emits N+1 band sub-faces, each bounded by:
+/// lower circle + seam segment up + upper circle reversed + seam segment
+/// down. The end bands reuse the face's original boundary circle edges.
+///
+/// Preconditions (returns `None` so the caller can fall back otherwise):
+/// - surface is a cylinder or cone
+/// - boundary is exactly 2 closed circle edges plus seam Line edges, all
+///   seam endpoints at the same u
+/// - every section is a full closed circle whose start point sits on the
+///   seam (guaranteed by the seam-anchor pre-pass) at a v strictly between
+///   the boundary circles, with no two circles at the same v
+#[allow(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::items_after_statements
+)]
+pub(super) fn split_periodic_face_into_bands(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    sections: &[SectionEdge],
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2};
+    use std::f64::consts::{PI, TAU};
+
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return None;
+    }
+    let close_tol = tol * 100.0;
+
+    // Partition boundary into closed circle edges and seam Line edges.
+    let mut boundary_circles: Vec<&OrientedPCurveEdge> = Vec::new();
+    let mut seam_edges: Vec<&OrientedPCurveEdge> = Vec::new();
+    for e in boundary_edges {
+        let is_closed = (e.start_3d - e.end_3d).length() < close_tol;
+        match (&e.curve_3d, is_closed) {
+            (EdgeCurve::Circle(_), true) => boundary_circles.push(e),
+            (EdgeCurve::Line, false) => seam_edges.push(e),
+            _ => return None,
+        }
+    }
+    if boundary_circles.len() != 2 || seam_edges.is_empty() {
+        return None;
+    }
+
+    // Seam u — shared by every seam edge endpoint (mod 2π).
+    let (seam_u, _) = surface.project_point(seam_edges[0].start_3d)?;
+    for e in &seam_edges {
+        for p in [e.start_3d, e.end_3d] {
+            let (u, _) = surface.project_point(p)?;
+            let du = (u - seam_u + PI).rem_euclid(TAU) - PI;
+            if du.abs() > 1e-6 {
+                return None;
+            }
+        }
+    }
+
+    // Every circle must start on the seam; collect (v, lower_fwd, edge).
+    let circle_v = |e: &OrientedPCurveEdge| -> Option<f64> {
+        let (_, v) = surface.project_point(e.start_3d)?;
+        let on_seam = surface.evaluate(seam_u, v)?;
+        ((on_seam - e.start_3d).length() < close_tol).then_some(v)
+    };
+
+    let v0 = circle_v(boundary_circles[0])?;
+    let v1 = circle_v(boundary_circles[1])?;
+    let (v_bot, bot_edge, v_top, top_edge) = if v0 < v1 {
+        (v0, boundary_circles[0], v1, boundary_circles[1])
+    } else {
+        (v1, boundary_circles[1], v0, boundary_circles[0])
+    };
+    if v_top - v_bot < close_tol {
+        return None;
+    }
+
+    // Reference traversal tangent: how the original bottom circle is
+    // traversed at the seam. Section circles in the lower role must
+    // traverse the same way; in the upper role, the opposite way.
+    let traversal_tangent = |e: &OrientedPCurveEdge| -> Option<brepkit_math::vec::Vec3> {
+        let EdgeCurve::Circle(c) = &e.curve_3d else {
+            return None;
+        };
+        let t = c.tangent(c.project(e.start_3d));
+        Some(if e.forward { t } else { -t })
+    };
+    let ref_tan = traversal_tangent(bot_edge)?;
+
+    // Collect section circles with their v and natural-direction alignment.
+    struct BandCircle {
+        v: f64,
+        lower: OrientedPCurveEdge,
+        upper: OrientedPCurveEdge,
+    }
+    let mut mids: Vec<BandCircle> = Vec::with_capacity(sections.len());
+    for s in sections {
+        if (s.start - s.end).length() > close_tol {
+            return None;
+        }
+        let EdgeCurve::Circle(c) = &s.curve_3d else {
+            return None;
+        };
+        let (_, v) = surface.project_point(s.start)?;
+        let on_seam = surface.evaluate(seam_u, v)?;
+        if (on_seam - s.start).length() > close_tol {
+            return None;
+        }
+        if v - v_bot < close_tol || v_top - v < close_tol {
+            return None;
+        }
+        let natural_tan = c.tangent(c.project(s.start));
+        let lower_fwd = natural_tan.dot(ref_tan) > 0.0;
+        let pcurve = match rank {
+            Rank::A => &s.pcurve_a,
+            Rank::B => &s.pcurve_b,
+        };
+        let mk = |forward: bool| OrientedPCurveEdge {
+            curve_3d: s.curve_3d.clone(),
+            pcurve: pcurve.clone(),
+            start_uv: Point2::new(seam_u, v),
+            end_uv: Point2::new(seam_u, v),
+            start_3d: s.start,
+            end_3d: s.start,
+            forward,
+            source_edge_idx: None,
+            pave_block_id: s.pave_block_id,
+        };
+        mids.push(BandCircle {
+            v,
+            lower: mk(lower_fwd),
+            upper: mk(!lower_fwd),
+        });
+    }
+    if mids.is_empty() {
+        return None;
+    }
+    mids.sort_by(|a, b| a.v.partial_cmp(&b.v).unwrap_or(std::cmp::Ordering::Equal));
+    if mids.windows(2).any(|w| w[1].v - w[0].v < close_tol) {
+        return None;
+    }
+
+    let mk_seam = |va: f64, vb: f64| -> Option<OrientedPCurveEdge> {
+        let pa = surface.evaluate(seam_u, va)?;
+        let pb = surface.evaluate(seam_u, vb)?;
+        let dir = Vec2::new(0.0, if vb > va { 1.0 } else { -1.0 });
+        let pcurve = Curve2D::Line(Line2D::new(Point2::new(seam_u, va), dir).ok()?);
+        Some(OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve,
+            start_uv: Point2::new(seam_u, va),
+            end_uv: Point2::new(seam_u, vb),
+            start_3d: pa,
+            end_3d: pb,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        })
+    };
+
+    // Assemble bands bottom-to-top. Levels: bot boundary, sections, top
+    // boundary. Each band: lower circle, seam up, upper circle, seam down.
+    let mut levels: Vec<(f64, OrientedPCurveEdge, OrientedPCurveEdge)> = Vec::new();
+    levels.push((v_bot, bot_edge.clone(), bot_edge.clone()));
+    for m in mids {
+        levels.push((m.v, m.lower, m.upper));
+    }
+    levels.push((v_top, top_edge.clone(), top_edge.clone()));
+
+    let mut bands = Vec::with_capacity(levels.len() - 1);
+    for w in levels.windows(2) {
+        let (va, lower, _) = &w[0];
+        let (vb, _, upper) = &w[1];
+        let (va, vb) = (*va, *vb);
+        let wire = vec![
+            lower.clone(),
+            mk_seam(va, vb)?,
+            upper.clone(),
+            mk_seam(vb, va)?,
+        ];
+        let interior = surface.evaluate(seam_u + PI, f64::midpoint(va, vb))?;
+        bands.push(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: wire,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(interior),
+        });
+    }
+    Some(bands)
+}
+
 /// Split a face when ALL section edges are interior (don't touch the boundary).
 ///
 /// Groups section edges into closed loops by chaining shared 3D endpoints.
@@ -221,6 +422,7 @@ pub(super) fn split_noseam_face_direct(
 pub(super) fn split_face_with_internal_loops(
     surface: &FaceSurface,
     boundary_edges: &[OrientedPCurveEdge],
+    original_inner_wires: &[Vec<OrientedPCurveEdge>],
     sections: &[SectionEdge],
     rank: Rank,
     reversed: bool,
@@ -443,6 +645,10 @@ pub(super) fn split_face_with_internal_loops(
     }
 
     // The "outside" sub-face: original boundary with all loops as holes.
+    // Pre-existing holes (from earlier boolean operations) stay with the
+    // outside sub-face — dropping them would leave the faces ringing those
+    // holes with free edges.
+    all_holes.extend(original_inner_wires.iter().cloned());
     result.push(SplitSubFace {
         surface: surface.clone(),
         outer_wire: boundary_edges.to_vec(),
