@@ -319,7 +319,12 @@ pub(super) fn split_periodic_face_into_bands(
         if (on_seam - s.start).length() > close_tol {
             return None;
         }
-        if v - v_bot < close_tol || v_top - v < close_tol {
+        // A section circle at a boundary circle's v duplicates the existing
+        // boundary edge (flush cap configuration) — no split there.
+        if (v - v_bot).abs() < close_tol || (v_top - v).abs() < close_tol {
+            continue;
+        }
+        if v < v_bot || v > v_top {
             return None;
         }
         let natural_tan = c.tangent(c.project(s.start));
@@ -346,6 +351,9 @@ pub(super) fn split_periodic_face_into_bands(
         });
     }
     if mids.is_empty() {
+        // Every section coincided with a boundary circle (fully flush
+        // tool): no band split applies — let the generic paths handle the
+        // coplanar-cap interaction.
         return None;
     }
     mids.sort_by(|a, b| a.v.partial_cmp(&b.v).unwrap_or(std::cmp::Ordering::Equal));
