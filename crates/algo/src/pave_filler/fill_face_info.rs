@@ -121,6 +121,10 @@ fn fill_section_sc(arena: &mut GfaArena) {
 }
 
 /// Edges from EF interference go into the face's `pave_blocks_in`.
+///
+/// Only the leaf pave blocks adjacent to the crossing parameter are
+/// inserted — the rest of the edge lies outside the face and would feed
+/// out-of-face fragments into the splitter as degenerate inner wires.
 fn fill_ef_in(arena: &mut GfaArena) {
     // Snapshot EF data
     let ef_data: Vec<_> = arena
@@ -128,19 +132,40 @@ fn fill_ef_in(arena: &mut GfaArena) {
         .ef
         .iter()
         .filter_map(|interf| {
-            if let Interference::EF { edge, face, .. } = interf {
-                Some((*edge, *face))
+            if let Interference::EF {
+                edge,
+                face,
+                parameter,
+                ..
+            } = interf
+            {
+                Some((*edge, *face, *parameter))
             } else {
                 None
             }
         })
         .collect();
 
-    for (edge_id, face_id) in ef_data {
+    for (edge_id, face_id, parameter) in ef_data {
         if let Some(pb_ids) = arena.edge_pave_blocks.get(&edge_id).cloned() {
             let leaves = arena.collect_leaf_pave_blocks(&pb_ids);
+            let selected: Vec<PaveBlockId> = match parameter {
+                Some(t) => leaves
+                    .into_iter()
+                    .filter(|&leaf_id| {
+                        arena.pave_blocks.get(leaf_id).is_some_and(|pb| {
+                            let (a, b) = pb.parameter_range();
+                            let lo = a.min(b);
+                            let hi = a.max(b);
+                            let eps = (hi - lo).abs().max(1.0) * 1e-9;
+                            (lo - eps..=hi + eps).contains(&t)
+                        })
+                    })
+                    .collect(),
+                None => leaves,
+            };
             let fi = arena.face_info_mut(face_id);
-            for leaf_id in leaves {
+            for leaf_id in selected {
                 fi.pave_blocks_in.insert(leaf_id);
             }
         }

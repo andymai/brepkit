@@ -6,10 +6,13 @@
 
 use std::collections::HashSet;
 
+use crate::builder::classify_2d::point_in_polygon_2d;
+use crate::builder::plane_frame::PlaneFrame;
 use crate::ds::{GfaArena, Interference, Pave};
 use crate::error::AlgoError;
+use brepkit_math::aabb::Aabb3;
 use brepkit_math::tolerance::Tolerance;
-use brepkit_math::vec::{Point3, Vec3};
+use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -20,6 +23,9 @@ use super::helpers::{add_pave_to_edge, find_nearby_pave_vertex as find_nearby_ve
 
 /// Number of samples along each edge for sign-change detection.
 const N_SAMPLES: usize = 64;
+
+/// Number of samples per boundary edge for face containment polygons.
+const N_BOUNDARY_SAMPLES: usize = 32;
 
 /// Detect edge-face intersections between the two solids.
 ///
@@ -81,6 +87,151 @@ fn collect_face_boundary_edges(
     Ok(result)
 }
 
+/// Spatial containment test for a face, built from sampled boundary edges.
+///
+/// Surface crossings are found against infinite surfaces; this rejects
+/// crossing points that lie outside the trimmed face region.
+struct FaceContainment {
+    bbox: Aabb3,
+    planar: Option<PlanarContainment>,
+}
+
+struct PlanarContainment {
+    frame: PlaneFrame,
+    polygon: Vec<Point2>,
+    margin: f64,
+}
+
+impl FaceContainment {
+    fn accepts(&self, pt: Point3) -> bool {
+        if !self.bbox.contains_point(pt) {
+            return false;
+        }
+        let Some(planar) = &self.planar else {
+            return true;
+        };
+        let p2 = planar.frame.project(pt);
+        point_in_polygon_2d(p2, &planar.polygon)
+            || distance_to_polygon_boundary(p2, &planar.polygon) <= planar.margin
+    }
+}
+
+/// Distance from a 2D point to the closest segment of a closed polygon.
+fn distance_to_polygon_boundary(p: Point2, polygon: &[Point2]) -> f64 {
+    let mut best = f64::MAX;
+    let n = polygon.len();
+    for i in 0..n {
+        let a = polygon[i];
+        let b = polygon[(i + 1) % n];
+        let ab = b - a;
+        let len_sq = ab.dot(ab);
+        let s = if len_sq > 0.0 {
+            ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let closest = a + ab * s;
+        best = best.min((p - closest).length());
+    }
+    best
+}
+
+/// Sample a face's boundary into an AABB plus, for planar faces, an
+/// in-plane outer-wire polygon for exact containment testing.
+fn build_face_containment(
+    topo: &Topology,
+    fid: FaceId,
+    tol: Tolerance,
+) -> Result<FaceContainment, AlgoError> {
+    let face = topo.face(fid)?;
+    let surface = face.surface().clone();
+    let outer_wire_id = face.outer_wire();
+
+    let mut all_points = Vec::new();
+    let mut outer_points = Vec::new();
+    let mut max_chord = 0.0_f64;
+
+    let outer_wire = topo.wire(outer_wire_id)?;
+    let oriented: Vec<_> = outer_wire.edges().to_vec();
+    for oe in &oriented {
+        let edge = topo.edge(oe.edge())?;
+        let start_pos = topo.vertex(edge.start())?.point();
+        let end_pos = topo.vertex(edge.end())?.point();
+        let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+        let n = N_BOUNDARY_SAMPLES;
+        let mut prev: Option<Point3> = None;
+        for i in 0..n {
+            let frac = i as f64 / n as f64;
+            let frac = if oe.is_forward() { frac } else { 1.0 - frac };
+            let t = t0 + (t1 - t0) * frac;
+            let pt = edge.curve().evaluate_with_endpoints(t, start_pos, end_pos);
+            if let Some(p) = prev {
+                max_chord = max_chord.max((pt - p).length());
+            }
+            prev = Some(pt);
+            outer_points.push(pt);
+        }
+    }
+    all_points.extend_from_slice(&outer_points);
+
+    for &inner_wid in face.inner_wires() {
+        let inner_wire = topo.wire(inner_wid)?;
+        let inner_edges: Vec<_> = inner_wire.edges().to_vec();
+        for oe in &inner_edges {
+            let edge = topo.edge(oe.edge())?;
+            let start_pos = topo.vertex(edge.start())?.point();
+            let end_pos = topo.vertex(edge.end())?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
+            let n = N_BOUNDARY_SAMPLES;
+            for i in 0..=n {
+                let t = t0 + (t1 - t0) * (i as f64 / n as f64);
+                all_points.push(edge.curve().evaluate_with_endpoints(t, start_pos, end_pos));
+            }
+        }
+    }
+
+    let Some(bbox) = Aabb3::try_from_points(all_points) else {
+        return Ok(FaceContainment {
+            bbox: Aabb3 {
+                min: Point3::new(0.0, 0.0, 0.0),
+                max: Point3::new(0.0, 0.0, 0.0),
+            },
+            planar: None,
+        });
+    };
+    let diag = (bbox.max - bbox.min).length();
+
+    if let FaceSurface::Plane { normal, .. } = &surface {
+        if outer_points.len() >= 3 {
+            // Sampled chords undercut curved boundary arcs by at most the
+            // sagitta, which is bounded by a quarter of the chord length;
+            // the margin keeps true near-boundary crossings accepted.
+            let margin = (max_chord * 0.25).max(tol.linear * 10.0);
+            let frame = PlaneFrame::from_normal_and_point(*normal, outer_points[0]);
+            let polygon: Vec<Point2> = outer_points.iter().map(|&p| frame.project(p)).collect();
+            return Ok(FaceContainment {
+                bbox: bbox.expanded(margin),
+                planar: Some(PlanarContainment {
+                    frame,
+                    polygon,
+                    margin,
+                }),
+            });
+        }
+        return Ok(FaceContainment {
+            bbox: bbox.expanded((diag * 0.5).max(tol.linear * 10.0)),
+            planar: None,
+        });
+    }
+
+    // Curved faces can bulge past their boundary AABB (e.g. a hemisphere
+    // bounded by its equator), so expand generously by half the diagonal.
+    Ok(FaceContainment {
+        bbox: bbox.expanded((diag * 0.5).max(tol.linear * 10.0)),
+        planar: None,
+    })
+}
+
 /// Check each edge against each face.
 #[allow(clippy::too_many_lines)]
 fn check_edge_face_pairs(
@@ -91,6 +242,11 @@ fn check_edge_face_pairs(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
+    let mut containments = Vec::with_capacity(faces.len());
+    for &fid in faces {
+        containments.push(build_face_containment(topo, fid, tol)?);
+    }
+
     for &eid in edges {
         // Snapshot edge data to avoid holding immutable borrow across add_vertex
         let (curve, start_pos, end_pos, t0, t1) = {
@@ -118,6 +274,13 @@ fn check_edge_face_pairs(
             };
 
             for (t, pt) in crossings {
+                if !containments[face_idx].accepts(pt) {
+                    log::debug!(
+                        "EF: dropping crossing of edge {eid:?} at t={t:.6} — outside face {fid:?} boundary",
+                    );
+                    continue;
+                }
+
                 // Check if an existing vertex is at this point
                 let existing = find_nearby_vertex(topo, arena, pt, tol);
 
