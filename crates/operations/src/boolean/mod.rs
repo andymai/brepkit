@@ -515,7 +515,15 @@ pub fn boolean(
                 let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(topo, result)?;
                 #[allow(clippy::cast_possible_wrap)]
                 let euler = (v as i64) - (e as i64) + (f as i64);
-                if euler == 2 && validate_boolean_result(topo, result).is_ok() {
+                // Free edges in an Intersect result mean faces were dropped
+                // (e.g. a tolerance-thin sliver kept only some of its
+                // bounding faces) — reject even when Euler accidentally
+                // balances. Cut and Fuse keep the legacy lenient gate: some
+                // coplanar cut/fuse results carry boundary edges yet are
+                // still the best available output (the mesh fallback loses
+                // more volume than the open GFA shell does).
+                let open_shell_ok = op != BooleanOp::Intersect || !has_free_edges(topo, result)?;
+                if euler == 2 && open_shell_ok && validate_boolean_result(topo, result).is_ok() {
                     log::info!(
                         "GFA boolean succeeded in {:.1}ms ({result_faces} faces)",
                         timer_elapsed_ms(gfa_start)
@@ -2230,6 +2238,28 @@ fn is_closed_manifold(topo: &Topology, solid: SolidId) -> Result<bool, crate::Op
         return Ok(false);
     }
     Ok(counts.values().all(|&c| c == 2))
+}
+
+/// Check whether a solid's outer shell has free edges: edges used by only
+/// one wire occurrence. A free edge means the shell is open (e.g. a phantom
+/// membrane face left a circle edge unmatched), which is never a valid
+/// boolean result even when Euler accidentally balances.
+fn has_free_edges(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
+    use std::collections::HashMap;
+
+    let s = topo.solid(solid)?;
+    let shell = topo.shell(s.outer_shell())?;
+    let mut counts: HashMap<usize, usize> = HashMap::new();
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                *counts.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    Ok(counts.values().any(|&c| c == 1))
 }
 
 /// For each vertex position (quantized at tolerance), picks one canonical
