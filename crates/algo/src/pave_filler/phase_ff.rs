@@ -31,9 +31,9 @@ const NURBS_MARCH_STEP: f64 = 0.01;
 /// Detect face-face intersections between the two solids.
 ///
 /// For each face pair (one from each solid), computes intersection
-/// curves using surface-type-specific algorithms. Raw intersection
-/// curves are stored in the arena without trimming to face boundaries
-/// (boundary trimming is a later phase).
+/// curves using surface-type-specific algorithms. Plane-plane line
+/// curves are trimmed to the mutual overlap of the two faces; other
+/// raw curves are stored untrimmed (boundary trimming is a later phase).
 ///
 /// Creates topology vertices and edges for each intersection curve
 /// endpoint, and a pave block spanning the full parameter range.
@@ -102,33 +102,45 @@ pub fn perform(
             let raw_curves =
                 compute_raw_curves(surf_a, surf_b, bbox_a, bbox_b, v_range_a, v_range_b)?;
 
-            // For plane-plane Line curves with all-straight-edge faces, filter
-            // curves whose clipped ranges on each face have a LARGE gap (no
-            // overlap). A small gap or touching boundary is kept (the face
-            // splitter handles final trimming). Only curves with a significant
-            // separation (>10% of curve length) between the two ranges are
-            // rejected as truly spurious.
+            // For plane-plane Line curves with all-straight-edge faces, trim
+            // each curve to the mutual overlap of the two faces' clipped
+            // ranges. Without this the section curve spans the union of both
+            // face extents, producing over-long chords that cross face
+            // boundaries mid-edge and corrupt the downstream face partition.
+            // When a face's polygon is built but the line lies outside it the
+            // overlap is empty and the curve is dropped; when a polygon can't
+            // be built (or is non-convex) the raw curve is kept conservatively.
             let raw_curves: Vec<RawCurve> = if matches!(surf_a, FaceSurface::Plane { .. })
                 && matches!(surf_b, FaceSurface::Plane { .. })
             {
                 raw_curves
                     .into_iter()
-                    .filter(|raw| {
+                    .filter_map(|raw| {
                         if !matches!(raw.curve, EdgeCurve::Line) {
-                            return true;
+                            return Some(raw);
                         }
-                        let range_a = clip_line_to_face(topo, fa, raw);
-                        let range_b = clip_line_to_face(topo, fb, raw);
-                        match (range_a, range_b) {
-                            (None, None) => false,                     // Outside both faces
-                            (Some(_), None) | (None, Some(_)) => true, // Inside one face
-                            (Some(a), Some(b)) => {
-                                // Check gap between ranges
-                                let t_min = a.0.max(b.0);
-                                let t_max = a.1.min(b.1);
-                                let gap = t_min - t_max;
-                                // Keep if gap < 10% of curve length (allows touching)
-                                gap < 0.1
+                        let clip_a = clip_line_to_face(topo, fa, &raw);
+                        let clip_b = clip_line_to_face(topo, fb, &raw);
+                        match (clip_a, clip_b) {
+                            // A face's polygon was built but the line lies
+                            // entirely outside it: the mutual overlap is
+                            // empty, so the section curve does not belong on
+                            // this pair — drop it.
+                            (FaceClip::Empty, _) | (_, FaceClip::Empty) => None,
+                            // Both clips produced an interval: trim to the
+                            // mutual overlap.
+                            (FaceClip::Range(a), FaceClip::Range(b)) => {
+                                let f0 = a.0.max(b.0);
+                                let f1 = a.1.min(b.1);
+                                trim_raw_line(&raw, f0, f1, tol)
+                            }
+                            // At least one face could not build a usable
+                            // polygon (degenerate wire, non-line edges, or a
+                            // non-convex outline the Cyrus-Beck clip can't
+                            // handle). Conservatively keep the raw curve and
+                            // leave trimming to a later phase.
+                            (FaceClip::Indeterminate, _) | (_, FaceClip::Indeterminate) => {
+                                Some(raw)
                             }
                         }
                     })
@@ -1159,32 +1171,110 @@ fn nurbs_curve_bbox(curve: &brepkit_math::nurbs::curve::NurbsCurve) -> Aabb3 {
 
 // ── FF curve boundary filtering ──────────────────────────────────────
 
-/// Clip a Line curve to a planar face's boundary polygon.
-fn clip_line_to_face(topo: &Topology, face_id: FaceId, raw: &RawCurve) -> Option<(f64, f64)> {
-    let face = topo.face(face_id).ok()?;
-    let FaceSurface::Plane { normal, .. } = face.surface() else {
-        return Some((0.0, 1.0));
+/// Shrink a `Line` raw curve to the fractional sub-range `[f0, f1]` of its
+/// current extent, recomputing endpoints, parameter range, and bbox.
+///
+/// Returns `None` when the trimmed segment is shorter than `tol.linear`
+/// (touching or disjoint clip ranges — no real overlap).
+fn trim_raw_line(raw: &RawCurve, f0: f64, f1: f64, tol: Tolerance) -> Option<RawCurve> {
+    let span = raw.t_range.1 - raw.t_range.0;
+    let t0 = raw.t_range.0 + f0 * span;
+    let t1 = raw.t_range.0 + f1 * span;
+    let seg = raw.p_end - raw.p_start;
+    if (f1 - f0) * seg.length() < tol.linear {
+        return None;
+    }
+    let p0 = raw.p_start + seg * f0;
+    let p1 = raw.p_start + seg * f1;
+    let bbox = Aabb3 {
+        min: Point3::new(p0.x().min(p1.x()), p0.y().min(p1.y()), p0.z().min(p1.z())),
+        max: Point3::new(p0.x().max(p1.x()), p0.y().max(p1.y()), p0.z().max(p1.z())),
     };
-    let wire = topo.wire(face.outer_wire()).ok()?;
+    Some(RawCurve {
+        curve: raw.curve.clone(),
+        bbox,
+        t_range: (t0, t1),
+        p_start: p0,
+        p_end: p1,
+    })
+}
+
+/// Outcome of clipping a Line raw curve to a planar face's outer polygon.
+///
+/// The two "no overlap" causes are kept distinct: `Empty` means a valid
+/// convex polygon was built and the line provably lies outside it (the
+/// section should be dropped), while `Indeterminate` means the polygon
+/// could not be built or is non-convex (the caller should conservatively
+/// keep the untrimmed curve, since the Cyrus-Beck clip is only correct
+/// for convex polygons).
+enum FaceClip {
+    /// Fractional `[t_min, t_max]` sub-range of the raw line inside the face.
+    Range((f64, f64)),
+    /// Convex polygon built; line lies entirely outside it.
+    Empty,
+    /// Polygon could not be built or is non-convex — keep raw curve.
+    Indeterminate,
+}
+
+/// Clip a Line curve to a planar face's boundary polygon.
+fn clip_line_to_face(topo: &Topology, face_id: FaceId, raw: &RawCurve) -> FaceClip {
+    let Ok(face) = topo.face(face_id) else {
+        return FaceClip::Indeterminate;
+    };
+    let FaceSurface::Plane { normal, .. } = face.surface() else {
+        return FaceClip::Indeterminate;
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return FaceClip::Indeterminate;
+    };
     if !wire.edges().iter().all(|oe| {
         topo.edge(oe.edge())
             .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
     }) {
-        return Some((0.0, 1.0));
+        return FaceClip::Indeterminate;
     }
 
-    let mut verts = Vec::new();
+    // Chain edges by shared vertex IDs rather than trusting stored
+    // orientation flags — wires from external builders may carry
+    // inconsistent `is_forward` flags, and a mis-ordered polygon makes
+    // the clip silently truncate the range.
+    let mut remaining: Vec<(
+        brepkit_topology::vertex::VertexId,
+        brepkit_topology::vertex::VertexId,
+    )> = Vec::new();
     for oe in wire.edges() {
-        let edge = topo.edge(oe.edge()).ok()?;
-        let vid = if oe.is_forward() {
-            edge.start()
-        } else {
-            edge.end()
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            return FaceClip::Indeterminate;
         };
-        verts.push(topo.vertex(vid).ok()?.point());
+        remaining.push((edge.start(), edge.end()));
+    }
+    if remaining.len() < 3 {
+        return FaceClip::Indeterminate;
+    }
+    let (first_start, first_end) = remaining.swap_remove(0);
+    let mut vert_ids = vec![first_start, first_end];
+    while !remaining.is_empty() {
+        let Some(&cur) = vert_ids.last() else {
+            return FaceClip::Indeterminate;
+        };
+        let Some(pos) = remaining.iter().position(|&(s, e)| s == cur || e == cur) else {
+            return FaceClip::Indeterminate;
+        };
+        let (s, e) = remaining.swap_remove(pos);
+        vert_ids.push(if s == cur { e } else { s });
+    }
+    if vert_ids.first() == vert_ids.last() {
+        vert_ids.pop();
+    }
+    let mut verts = Vec::with_capacity(vert_ids.len());
+    for vid in vert_ids {
+        let Ok(v) = topo.vertex(vid) else {
+            return FaceClip::Indeterminate;
+        };
+        verts.push(v.point());
     }
     if verts.len() < 3 {
-        return Some((0.0, 1.0));
+        return FaceClip::Indeterminate;
     }
 
     let frame =
@@ -1196,12 +1286,53 @@ fn clip_line_to_face(topo: &Topology, face_id: FaceId, raw: &RawCurve) -> Option
             (uv.x(), uv.y())
         })
         .collect();
+    // Cyrus-Beck is only correct for convex polygons. A non-convex outline
+    // would produce a wrong (over-trimmed) interval, so treat it as
+    // indeterminate and let the caller keep the raw curve.
+    if !polygon_is_convex(&poly) {
+        return FaceClip::Indeterminate;
+    }
     let s = frame.project(raw.p_start);
     let e = frame.project(raw.p_end);
-    clip_line_to_polygon((s.x(), s.y()), (e.x(), e.y()), &poly)
+    match clip_line_to_polygon((s.x(), s.y()), (e.x(), e.y()), &poly) {
+        Some(range) => FaceClip::Range(range),
+        None => FaceClip::Empty,
+    }
+}
+
+/// Test whether a simple polygon is convex via a signed-cross-product
+/// sweep: all consecutive edge turns must share the same sign.
+///
+/// Collinear vertices (zero cross product) are tolerated. Degenerate
+/// polygons (< 3 vertices) are reported non-convex.
+fn polygon_is_convex(polygon: &[(f64, f64)]) -> bool {
+    let n = polygon.len();
+    if n < 3 {
+        return false;
+    }
+    let mut sign: i32 = 0;
+    for i in 0..n {
+        let a = polygon[i];
+        let b = polygon[(i + 1) % n];
+        let c = polygon[(i + 2) % n];
+        let cross = (b.0 - a.0) * (c.1 - b.1) - (b.1 - a.1) * (c.0 - b.0);
+        if cross.abs() < 1e-12 {
+            continue;
+        }
+        let s = if cross > 0.0 { 1 } else { -1 };
+        if sign == 0 {
+            sign = s;
+        } else if s != sign {
+            return false;
+        }
+    }
+    true
 }
 
 /// Cyrus-Beck line-polygon clipping. Handles CCW and CW winding.
+///
+/// Only correct for convex polygons — callers must gate non-convex
+/// outlines (see [`polygon_is_convex`]).
 fn clip_line_to_polygon(
     start: (f64, f64),
     end: (f64, f64),
@@ -1284,5 +1415,32 @@ mod tests {
         let r = clip_line_to_polygon((-1.0, 0.5), (2.0, 0.5), &poly).unwrap();
         assert!((r.0 - 1.0 / 3.0).abs() < 1e-6);
         assert!((r.1 - 2.0 / 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn clip_outside_means_drop() {
+        // A line provably outside a built (convex) polygon yields `None`,
+        // which the FF trim path maps to `FaceClip::Empty` → drop the curve.
+        let poly = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        assert!(clip_line_to_polygon((2.0, 0.5), (3.0, 0.5), &poly).is_none());
+    }
+
+    #[test]
+    fn convex_square_is_convex() {
+        let poly = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        assert!(polygon_is_convex(&poly));
+    }
+
+    #[test]
+    fn convex_check_tolerates_collinear() {
+        let poly = vec![(0.0, 0.0), (0.5, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        assert!(polygon_is_convex(&poly));
+    }
+
+    #[test]
+    fn arrow_polygon_is_non_convex() {
+        // A concave "arrowhead": the reflex vertex flips the turn sign.
+        let poly = vec![(0.0, 0.0), (2.0, 1.0), (0.0, 2.0), (1.0, 1.0)];
+        assert!(!polygon_is_convex(&poly));
     }
 }

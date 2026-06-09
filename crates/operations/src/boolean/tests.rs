@@ -3285,7 +3285,6 @@ fn d4_shelled_box_fuse_lip() {
 // must split faces correctly.
 
 #[test]
-#[ignore = "GFA coplanar face handling not yet complete"]
 fn coplanar_box_cut_d1a2() {
     let _ = env_logger::try_init();
     let mut topo = Topology::new();

@@ -55,19 +55,20 @@ fn make_box(topo: &mut Topology, min: [f64; 3], max: [f64; 3]) -> brepkit_topolo
     let e37 = edge(3, 7);
 
     let fwd = |eid| OrientedEdge::new(eid, true);
+    let rev = |eid| OrientedEdge::new(eid, false);
 
     let w_bot =
-        topo.add_wire(Wire::new(vec![fwd(e01), fwd(e12), fwd(e23), fwd(e30)], true).unwrap());
+        topo.add_wire(Wire::new(vec![rev(e01), rev(e30), rev(e23), rev(e12)], true).unwrap());
     let w_top =
         topo.add_wire(Wire::new(vec![fwd(e45), fwd(e56), fwd(e67), fwd(e74)], true).unwrap());
     let w_front =
-        topo.add_wire(Wire::new(vec![fwd(e01), fwd(e15), fwd(e45), fwd(e04)], true).unwrap());
+        topo.add_wire(Wire::new(vec![fwd(e01), fwd(e15), rev(e45), rev(e04)], true).unwrap());
     let w_back =
-        topo.add_wire(Wire::new(vec![fwd(e23), fwd(e37), fwd(e67), fwd(e26)], true).unwrap());
+        topo.add_wire(Wire::new(vec![fwd(e23), fwd(e37), rev(e67), rev(e26)], true).unwrap());
     let w_left =
-        topo.add_wire(Wire::new(vec![fwd(e30), fwd(e04), fwd(e74), fwd(e37)], true).unwrap());
+        topo.add_wire(Wire::new(vec![fwd(e30), fwd(e04), rev(e74), rev(e37)], true).unwrap());
     let w_right =
-        topo.add_wire(Wire::new(vec![fwd(e12), fwd(e26), fwd(e56), fwd(e15)], true).unwrap());
+        topo.add_wire(Wire::new(vec![fwd(e12), fwd(e26), rev(e56), rev(e15)], true).unwrap());
 
     let f_bot = topo.add_face(Face::new(
         w_bot,
@@ -561,12 +562,13 @@ fn gfa_fuse_overlapping_boxes_face_count() {
     let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Fuse, a, b)
         .expect("fuse of overlapping boxes");
     let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
-    // GFA produces quadrant-split faces (24) at the algo level.
-    // The operations-level `boolean_gfa` unifies coplanar faces to 10.
-    // Accept either count here since this tests the algo crate directly.
+    // Section curves are trimmed to the mutual face overlap, so each cut
+    // face splits into exactly 2 sub-faces (kept L + discarded square):
+    // 6 untouched faces + 6 L-faces = 12 at the algo level. The
+    // operations-level `boolean_gfa` unifies coplanar faces to 10.
     assert!(
-        faces.len() == 10 || faces.len() == 24,
-        "overlapping fuse should have 10 or 24 faces, got {}",
+        faces.len() == 10 || faces.len() == 12,
+        "overlapping fuse should have 10 or 12 faces, got {}",
         faces.len()
     );
 }

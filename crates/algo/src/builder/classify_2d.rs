@@ -30,8 +30,12 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
     let cy = loop_pts.iter().map(|p| p.y()).sum::<f64>() / n;
     let centroid = Point2::new(cx, cy);
 
-    // 2. If centroid is inside, use it.
-    if point_in_polygon_2d(centroid, loop_pts) {
+    // 2. If centroid is inside, use it. A centroid that lands on the
+    // boundary itself (e.g. the reflex corner of an L-shaped loop) passes
+    // the even-odd test unpredictably and is not a safe interior sample.
+    if point_in_polygon_2d(centroid, loop_pts)
+        && distance_to_polygon_boundary(centroid, loop_pts) > boundary_eps(loop_pts)
+    {
         return centroid;
     }
 
@@ -70,6 +74,40 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
     }
     // All edge midpoints failed -- return centroid as last resort.
     centroid
+}
+
+fn boundary_eps(loop_pts: &[Point2]) -> f64 {
+    let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
+    let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for p in loop_pts {
+        min_x = min_x.min(p.x());
+        min_y = min_y.min(p.y());
+        max_x = max_x.max(p.x());
+        max_y = max_y.max(p.y());
+    }
+    let diag = ((max_x - min_x).powi(2) + (max_y - min_y).powi(2)).sqrt();
+    (diag * 1e-6).max(1e-12)
+}
+
+fn distance_to_polygon_boundary(p: Point2, loop_pts: &[Point2]) -> f64 {
+    let mut best = f64::INFINITY;
+    let n = loop_pts.len();
+    for i in 0..n {
+        let a = loop_pts[i];
+        let b = loop_pts[(i + 1) % n];
+        let ab = Vec2::new(b.x() - a.x(), b.y() - a.y());
+        let ap = Vec2::new(p.x() - a.x(), p.y() - a.y());
+        let len_sq = ab.x() * ab.x() + ab.y() * ab.y();
+        let t = if len_sq < 1e-30 {
+            0.0
+        } else {
+            ((ap.x() * ab.x() + ap.y() * ab.y()) / len_sq).clamp(0.0, 1.0)
+        };
+        let dx = p.x() - (a.x() + ab.x() * t);
+        let dy = p.y() - (a.y() + ab.y() * t);
+        best = best.min((dx * dx + dy * dy).sqrt());
+    }
+    best
 }
 
 /// Test whether a 2D point is inside a closed polygon using ray-casting
