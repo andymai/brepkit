@@ -1071,6 +1071,15 @@ fn build_section_edges(
                     None => continue,
                 };
 
+                // A closed section curve that coincides with one of this
+                // face's own closed boundary edges does not split the face —
+                // it lies entirely on the boundary. Feeding it to the face
+                // splitter would corrupt the wire (the boundary circle gets
+                // re-split against its own geometry).
+                if closed_curve_coincides_with_boundary(topo, face_id, &curve_ds.curve, tol) {
+                    continue;
+                }
+
                 // Find start/end 3D points by evaluating the curve at its
                 // parametric endpoints. For closed curves (circles), start ≈ end.
                 let (start, end) = curve_endpoints(topo, arena, curve_ds);
@@ -1229,6 +1238,63 @@ fn build_section_edges(
     dedup_collinear_sections(&mut sections, tol);
 
     sections
+}
+
+/// Check whether a closed section curve (Circle/Ellipse) coincides with
+/// one of the face's own closed boundary edges.
+fn closed_curve_coincides_with_boundary(
+    topo: &Topology,
+    face_id: FaceId,
+    curve: &brepkit_topology::edge::EdgeCurve,
+    tol: f64,
+) -> bool {
+    use brepkit_topology::edge::EdgeCurve;
+
+    let circles_match = |a: &brepkit_math::curves::Circle3D, b: &brepkit_math::curves::Circle3D| {
+        (a.center() - b.center()).length() < tol
+            && (a.radius() - b.radius()).abs() < tol
+            && a.normal().dot(b.normal()).abs() > 1.0 - 1e-9
+    };
+    let ellipses_match = |a: &brepkit_math::curves::Ellipse3D,
+                          b: &brepkit_math::curves::Ellipse3D| {
+        (a.center() - b.center()).length() < tol
+            && (a.semi_major() - b.semi_major()).abs() < tol
+            && (a.semi_minor() - b.semi_minor()).abs() < tol
+            && a.normal().dot(b.normal()).abs() > 1.0 - 1e-9
+    };
+
+    if !matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
+        return false;
+    }
+
+    let Ok(face) = topo.face(face_id) else {
+        return false;
+    };
+    let wires: Vec<_> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .collect();
+    for wid in wires {
+        let Ok(wire) = topo.wire(wid) else {
+            continue;
+        };
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            if edge.start() != edge.end() {
+                continue;
+            }
+            let coincides = match (curve, edge.curve()) {
+                (EdgeCurve::Circle(a), EdgeCurve::Circle(b)) => circles_match(a, b),
+                (EdgeCurve::Ellipse(a), EdgeCurve::Ellipse(b)) => ellipses_match(a, b),
+                _ => false,
+            };
+            if coincides {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Find the overall 3D start/end points of an intersection curve

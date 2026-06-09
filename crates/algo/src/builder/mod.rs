@@ -325,6 +325,49 @@ fn sample_face_interior(
         )));
     }
 
+    // Periodic faces bounded by closed curves (e.g. an unsplit cylinder
+    // lateral wall between two full boundary circles): the closed-edge
+    // midpoint lies on a v-extreme of the face, and the tangent-cross-normal
+    // offset direction is unreliable there. Sample at the closed edge's u
+    // and the midpoint of the face's v-range instead — interior in v by
+    // construction, interior in u because the boundary curve spans the
+    // full period.
+    if !face.surface().is_planar() {
+        let mut closed_mid: Option<Point3> = None;
+        let mut v_min = f64::MAX;
+        let mut v_max = f64::MIN;
+        for oe in edges {
+            let e = topo.edge(oe.edge())?;
+            let sp = topo.vertex(e.start())?.point();
+            let ep = topo.vertex(e.end())?.point();
+            let (t0, t1) = e.curve().domain_with_endpoints(sp, ep);
+            let mid = e
+                .curve()
+                .evaluate_with_endpoints(0.5_f64.mul_add(t1 - t0, t0), sp, ep);
+            if e.start() == e.end()
+                && !matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line)
+                && closed_mid.is_none()
+            {
+                closed_mid = Some(mid);
+            }
+            for p in [sp, ep, mid] {
+                if let Some((_, v)) = face.surface().project_point(p) {
+                    v_min = v_min.min(v);
+                    v_max = v_max.max(v);
+                }
+            }
+        }
+        if let Some(mid) = closed_mid {
+            if v_max - v_min > tol.linear {
+                if let Some((u, _)) = face.surface().project_point(mid) {
+                    if let Some(pt) = face.surface().evaluate(u, 0.5 * (v_min + v_max)) {
+                        return Ok(pt);
+                    }
+                }
+            }
+        }
+    }
+
     // Compute face bounding box diagonal for size-relative offset.
     // Sample all edge endpoints to estimate face extent.
     let mut min_pt = Point3::new(f64::MAX, f64::MAX, f64::MAX);

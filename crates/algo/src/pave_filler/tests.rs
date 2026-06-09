@@ -1415,3 +1415,126 @@ fn gfa_cut_box_cylinder_grid_through_sequential_produces_valid_topology() {
         "Euler V-E+F should be 2 for closed manifold, got V={v} E={e} F={f} euler={euler}",
     );
 }
+
+/// Coplanar-cap cylinder cut: the tool's caps lie exactly on the box's
+/// z=0 and z=2 planes. The wall-plane section circles coincide with the
+/// tool's existing cap boundary circles, so the section edges must adopt
+/// the cap circles' seam vertices (or be geometrically linked) — otherwise
+/// duplicate coincident circle edges survive, SD pairing finds nothing,
+/// and the result is non-manifold.
+#[test]
+fn gfa_cut_box_cylinder_coplanar_caps_produces_valid_topology() {
+    let mut topo = Topology::default();
+    let box_id = make_box(&mut topo, [0.0, 0.0, 0.0], [4.0, 4.0, 2.0]);
+    let cyl = make_cylinder(&mut topo, 1.0, 1.0, 0.0, 0.3, 2.0);
+
+    let result = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, box_id, cyl)
+        .expect("GFA cut of box with coplanar-cap cylinder should succeed");
+
+    let (f, e, v, euler) = solid_topology_summary(&topo, result);
+    eprintln!("coplanar-cap cut: faces={f}, edges={e}, verts={v}, euler={euler}");
+
+    // Manifold: every edge shared by exactly 2 oriented-edge uses.
+    let mut edge_use_count: std::collections::HashMap<brepkit_topology::edge::EdgeId, usize> =
+        std::collections::HashMap::new();
+    let s = topo.solid(result).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
+    for &fid in sh.faces() {
+        let face = topo.face(fid).unwrap();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).unwrap();
+            for oe in wire.edges() {
+                *edge_use_count.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+    for &fid in sh.faces() {
+        let face = topo.face(fid).unwrap();
+        let surf = match face.surface() {
+            FaceSurface::Plane { normal, d } => format!(
+                "Plane(n=({:.0},{:.0},{:.0}),d={d:.1})",
+                normal.x(),
+                normal.y(),
+                normal.z()
+            ),
+            FaceSurface::Cylinder(_) => "Cylinder".to_string(),
+            _ => "Other".to_string(),
+        };
+        eprintln!("  face {fid:?} {surf}:");
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).unwrap();
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge()).unwrap();
+                let sp = topo.vertex(edge.start()).unwrap().point();
+                let ep = topo.vertex(edge.end()).unwrap().point();
+                eprintln!(
+                    "    edge {:?} {} fwd={} ({:.2},{:.2},{:.2})->({:.2},{:.2},{:.2})",
+                    oe.edge(),
+                    edge.curve().type_tag(),
+                    oe.is_forward(),
+                    sp.x(),
+                    sp.y(),
+                    sp.z(),
+                    ep.x(),
+                    ep.y(),
+                    ep.z()
+                );
+            }
+        }
+    }
+    for (&eid, &count) in &edge_use_count {
+        assert_eq!(
+            count, 2,
+            "edge {eid:?} is used by {count} face-wire slots (expected 2)"
+        );
+    }
+
+    assert_eq!(
+        euler, 2,
+        "Euler V-E+F should be 2, got V={v} E={e} F={f} euler={euler}"
+    );
+
+    // No two coincident full-circle edges (same center/radius/axis).
+    let mut full_circles: Vec<(
+        brepkit_topology::edge::EdgeId,
+        brepkit_math::curves::Circle3D,
+    )> = Vec::new();
+    for &eid in edge_use_count.keys() {
+        let edge = topo.edge(eid).unwrap();
+        if edge.start() == edge.end() {
+            if let EdgeCurve::Circle(c) = edge.curve() {
+                full_circles.push((eid, c.clone()));
+            }
+        }
+    }
+    for i in 0..full_circles.len() {
+        for j in (i + 1)..full_circles.len() {
+            let (ea, ca) = &full_circles[i];
+            let (eb, cb) = &full_circles[j];
+            let coincident = (ca.center() - cb.center()).length() < 1e-7
+                && (ca.radius() - cb.radius()).abs() < 1e-7
+                && ca.normal().dot(cb.normal()).abs() > 1.0 - 1e-9;
+            assert!(
+                !coincident,
+                "coincident full-circle edges {ea:?} and {eb:?} (center={:?}, r={})",
+                ca.center(),
+                ca.radius()
+            );
+        }
+    }
+
+    let expected_vol = 32.0 - std::f64::consts::PI * 0.09 * 2.0;
+    // Order 5 is too coarse for full-period trig integrands on the
+    // cylindrical hole wall; 16 keeps quadrature error far below the
+    // 0.1% assertion budget.
+    let options = brepkit_check::properties::PropertiesOptions {
+        gauss_order: 16,
+        ..Default::default()
+    };
+    let vol = brepkit_check::properties::solid_volume(&topo, result, &options).unwrap();
+    let rel = (vol - expected_vol).abs() / expected_vol;
+    assert!(
+        rel < 0.001,
+        "volume {vol:.6} should be within 0.1% of {expected_vol:.6} (rel={rel:.5})"
+    );
+}
