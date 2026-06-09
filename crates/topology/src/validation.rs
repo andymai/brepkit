@@ -108,6 +108,48 @@ pub fn validate_shell_manifold(shell: &Shell, topo: &Topology) -> Result<(), Top
     Ok(())
 }
 
+/// Validates that a shell is a closed 2-manifold.
+///
+/// Stricter than [`validate_shell_manifold`]: every edge must be used by
+/// exactly two oriented-edge occurrences across the shell's wires. Edges
+/// used once (free/boundary edges of an open shell) are rejected, not just
+/// edges shared by 3+ faces.
+///
+/// # Errors
+///
+/// Returns [`TopologyError::NonManifold`] if any edge usage count differs
+/// from two. Returns entity-not-found errors if any referenced ID is
+/// invalid.
+pub fn validate_shell_closed(shell: &Shell, topo: &Topology) -> Result<(), TopologyError> {
+    let mut edge_counts: HashMap<usize, usize> = HashMap::new();
+
+    for &face_id in shell.faces() {
+        let face = topo.face(face_id)?;
+        count_wire_edges(face.outer_wire(), topo, &mut edge_counts)?;
+        for &inner_wire_id in face.inner_wires() {
+            count_wire_edges(inner_wire_id, topo, &mut edge_counts)?;
+        }
+    }
+
+    for (&edge_index, &count) in &edge_counts {
+        if count != 2 {
+            let kind = if count == 1 {
+                "free edge"
+            } else {
+                "over-shared"
+            };
+            return Err(TopologyError::NonManifold {
+                reason: format!(
+                    "edge index {edge_index} is used by {count} wires ({kind}; closed manifold \
+                     requires exactly 2)"
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -199,6 +241,61 @@ mod tests {
 
         let shell = Shell::new(vec![f0, f1]).unwrap();
         assert!(validate_shell_manifold(&shell, &topo).is_ok());
+    }
+
+    #[test]
+    fn closed_validation_rejects_free_edges() {
+        // A single triangular face: every edge is used once -> open shell.
+        let mut topo = Topology::new();
+        let wid = make_triangle(&mut topo);
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let f = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane { normal, d: 0.0 },
+        ));
+        let shell = crate::shell::Shell::new(vec![f]).unwrap();
+
+        assert!(validate_shell_manifold(&shell, &topo).is_ok());
+        let err = validate_shell_closed(&shell, &topo).unwrap_err();
+        assert!(
+            matches!(err, TopologyError::NonManifold { .. }),
+            "expected NonManifold for free edges, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn closed_validation_accepts_two_sided_triangle() {
+        // Two faces over the same three edges (front + back): every edge
+        // is used exactly twice.
+        let mut topo = Topology::new();
+        let wid = make_triangle(&mut topo);
+        let back_oes: Vec<OrientedEdge> = topo
+            .wire(wid)
+            .unwrap()
+            .edges()
+            .iter()
+            .rev()
+            .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+            .collect();
+        let back_wid = topo.add_wire(Wire::new(back_oes, true).unwrap());
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let f0 = topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane { normal, d: 0.0 },
+        ));
+        let f1 = topo.add_face(Face::new(
+            back_wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: -normal,
+                d: 0.0,
+            },
+        ));
+        let shell = crate::shell::Shell::new(vec![f0, f1]).unwrap();
+
+        assert!(validate_shell_closed(&shell, &topo).is_ok());
     }
 
     #[test]

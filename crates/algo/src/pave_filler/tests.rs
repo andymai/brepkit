@@ -1277,15 +1277,6 @@ fn solid_topology_summary(
 }
 
 #[test]
-#[ignore = "Gap: GFA `split_face_with_internal_loops` applies a disc-loop \
-            interpretation to closed section circles, which is correct only \
-            for plane faces. On a cylinder lateral, a single closed circle \
-            doesn't bound a disc — two parallel circles split the cylinder \
-            into 3 bands. Fixing this requires a `split_periodic_face_into_bands` \
-            that constructs band sub-faces (bottom circle + seam + top circle \
-            reversed + seam reversed) AND avoids regressing compound_cut grids \
-            (where multiple cylinders share section planes). Tracked: \
-            gridfinity-layout-tool #260 / #270."]
 fn gfa_cut_box_cylinder_through_produces_valid_topology() {
     // Box [0,10]^3 with a cylinder r=1 at (5,5) piercing fully through
     // (z=-2 to z=12). The result should be a closed manifold solid:
@@ -1313,7 +1304,7 @@ fn gfa_cut_box_cylinder_through_produces_valid_topology() {
     // Manifold check: every edge must be shared by exactly 2 faces.
     let s = topo.solid(result).unwrap();
     let sh = topo.shell(s.outer_shell()).unwrap();
-    let manifold = brepkit_topology::validation::validate_shell_manifold(sh, &topo);
+    let manifold = brepkit_topology::validation::validate_shell_closed(sh, &topo);
     assert!(
         manifold.is_ok(),
         "result shell must be manifold, got {manifold:?}"
@@ -1327,21 +1318,6 @@ fn gfa_cut_box_cylinder_through_produces_valid_topology() {
 }
 
 #[test]
-#[ignore = "Gap: GFA-direct sequential cuts on a 4×4 cylinder grid degrade \
-            after the first iteration. As of PR #535: all 16 boolean calls \
-            return Ok, but the final topology is F=8 E=17 V=12 (Euler=3, \
-            non-manifold — edge shared by 3 faces) instead of the \
-            expected F=22 Euler=2. Only the first cylinder's geometry \
-            survives in the result; subsequent cuts silently no-op or \
-            corrupt the prior topology. The operations-layer companion \
-            `compound_cut_matches_sequential_4x4_grid` masks this because \
-            both compound and sequential paths fall back to mesh-boolean \
-            (boolean/tests.rs:1542). This is the regression carrier PR #535 \
-            cited when reverting the band-merger attempt: any \
-            `merge_periodic_discs_into_bands` post-pass must repair the \
-            single-cyl case (see sibling test) WITHOUT activating in a way \
-            that lets BOP misclassify band interiors across grid cylinders \
-            sharing section planes. Tracked: gridfinity-layout-tool #260 / #270."]
 fn gfa_cut_box_cylinder_grid_through_sequential_produces_valid_topology() {
     // Slab [0,20]×[0,20]×[0,2] cut by a 4×4 grid of cylinders r=0.5,
     // z = -1 to +3 (piercing fully through), positions (2 + col*4, 2 + row*4)
@@ -1349,10 +1325,7 @@ fn gfa_cut_box_cylinder_grid_through_sequential_produces_valid_topology() {
     //
     // This mirrors `compound_cut_matches_sequential_4x4_grid` in
     // `operations/src/boolean/tests.rs`, but calls `crate::gfa::boolean`
-    // directly — the operations-layer test passes only because both
-    // compound and sequential paths fall through to the mesh-boolean
-    // fallback (see comment at boolean/tests.rs:1542). This test bypasses
-    // the fallback so the GFA-direct failure surfaces.
+    // directly so no mesh-boolean fallback can mask a GFA failure.
     //
     // Expected result (closed manifold):
     //   - 4 box side faces
@@ -1362,11 +1335,6 @@ fn gfa_cut_box_cylinder_grid_through_sequential_produces_valid_topology() {
     //     reversed + seam reversed)
     //
     // Total: 22 faces. Euler V-E+F = 2 for a closed manifold of genus 0.
-    //
-    // Companion to PR #534 (single-cyl pinning). Resolution likely shares
-    // a `merge_periodic_discs_into_bands` post-pass with that test —
-    // see PR #535 follow-up notes for the architectural sketch and the
-    // gating problem (this grid case is the regression carrier).
     let mut topo = Topology::default();
     let mut target = make_box(&mut topo, [0.0, 0.0, 0.0], [20.0, 20.0, 2.0]);
 
@@ -1402,7 +1370,7 @@ fn gfa_cut_box_cylinder_grid_through_sequential_produces_valid_topology() {
 
     let s = topo.solid(target).unwrap();
     let sh = topo.shell(s.outer_shell()).unwrap();
-    let manifold = brepkit_topology::validation::validate_shell_manifold(sh, &topo);
+    let manifold = brepkit_topology::validation::validate_shell_closed(sh, &topo);
     assert!(
         manifold.is_ok(),
         "result shell must be manifold, got {manifold:?}"
@@ -1536,6 +1504,50 @@ fn gfa_cut_box_cylinder_coplanar_caps_produces_valid_topology() {
         ..Default::default()
     };
     let vol = brepkit_check::properties::solid_volume(&topo, result, &options).unwrap();
+    let rel = (vol - expected_vol).abs() / expected_vol;
+    assert!(
+        rel < 0.001,
+        "volume {vol:.6} should be within 0.1% of {expected_vol:.6} (rel={rel:.5})"
+    );
+}
+
+/// Sequential coplanar-cap cuts: a second flush-cap cylinder cut onto a box
+/// wall that already carries a circular hole from the first cut. The wall's
+/// existing circular hole must stay visible to the same-domain hole test
+/// (sampled, not vertex-only) so the wall face is not cancelled, and the
+/// second tool's flush cap must not fragment into a many-sided polygon that
+/// survives the cut. Expected: 4 sides + 2 holed caps + 2 lateral walls.
+#[test]
+fn gfa_cut_box_two_coplanar_cap_cylinders_sequential_valid() {
+    let mut topo = Topology::default();
+    let mut target = make_box(&mut topo, [0.0, 0.0, 0.0], [4.0, 4.0, 2.0]);
+    for (cx, cy) in [(1.0, 1.0), (3.0, 3.0)] {
+        let cyl = make_cylinder(&mut topo, cx, cy, 0.0, 0.3, 2.0);
+        target = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, target, cyl)
+            .expect("sequential coplanar-cap cut should succeed");
+    }
+
+    let (f, e, v, euler) = solid_topology_summary(&topo, target);
+    assert_eq!(f, 8, "expected 4 sides + 2 caps + 2 laterals, got {f}");
+    assert_eq!(
+        euler, 2,
+        "Euler V-E+F should be 2 for a closed genus-2 manifold, got V={v} E={e} F={f}"
+    );
+
+    let s = topo.solid(target).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
+    let manifold = brepkit_topology::validation::validate_shell_closed(sh, &topo);
+    assert!(
+        manifold.is_ok(),
+        "result must be manifold, got {manifold:?}"
+    );
+
+    let expected_vol = 32.0 - 2.0 * std::f64::consts::PI * 0.3 * 0.3 * 2.0;
+    let options = brepkit_check::properties::PropertiesOptions {
+        gauss_order: 16,
+        ..Default::default()
+    };
+    let vol = brepkit_check::properties::solid_volume(&topo, target, &options).unwrap();
     let rel = (vol - expected_vol).abs() / expected_vol;
     assert!(
         rel < 0.001,

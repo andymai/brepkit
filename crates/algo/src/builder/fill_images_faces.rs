@@ -227,7 +227,23 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // (pb_vertex_registry and CB pre-pass moved above rank pool)
 
     // Pre-compute which faces have section edges from which curves
-    let section_map = build_section_map(arena);
+    let section_map = build_section_map(topo, arena);
+
+    // ── Periodic seam anchor pre-pass ───────────────────────────────
+    // Closed circle intersection curves on a u-periodic face (cylinder /
+    // cone lateral) are re-anchored so the circle's start/end vertex sits
+    // on the face's seam. The band splitter connects consecutive circles
+    // with seam segments; without re-anchoring, those segments would join
+    // arbitrary section angles and cut through the surface interior.
+    // Pre-registering the anchor vertices makes the periodic face's band
+    // wires and the opposing plane faces' hole wires resolve to the same
+    // VertexId, so merge_duplicate_edges can share the circle edge.
+    let seam_anchors = compute_seam_anchors(topo, arena);
+    for &anchor in seam_anchors.values() {
+        pb_vertex_registry
+            .entry(qpos(anchor))
+            .or_insert_with(|| topo.add_vertex(Vertex::new(anchor, tol.linear)));
+    }
 
     // No boundary edge cache — each face creates its own edges with its own
     // vertices. Cross-face edge sharing is handled by merge_duplicate_edges
@@ -277,7 +293,14 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         }
 
         // Build SectionEdge entries from pave block data
-        let sections = build_section_edges(topo, arena, face_id, &section_map, tol.linear);
+        let sections = build_section_edges(
+            topo,
+            arena,
+            face_id,
+            &section_map,
+            &seam_anchors,
+            tol.linear,
+        );
 
         log::debug!(
             "fill_images_faces: face {:?} has_sections={} sections={}",
@@ -958,7 +981,88 @@ enum SectionSource {
     PaveBlock(PaveBlockId),
 }
 
-fn build_section_map(arena: &GfaArena) -> HashMap<FaceId, Vec<SectionSource>> {
+/// Tolerance on `|t_range| - 2π` for treating a circle edge as a full circle.
+/// Angular (radian) comparison on a parameter span.
+const FULL_CIRCLE_T_TOL: f64 = 1e-9;
+
+/// Minimum 3D length for a seam Line edge to count as non-degenerate.
+const SEAM_DEGENERATE_TOL: f64 = 1e-10;
+
+/// Radial/planar tolerance for accepting the seam point as lying on the
+/// circle. Looser than the linear default (1e-7) because the anchor is built
+/// from two `project_point` + `evaluate` round-trips whose float error
+/// accumulates; tightening it would spuriously reject valid anchors.
+const SEAM_ON_CIRCLE_TOL: f64 = 1e-6;
+
+/// Compute seam-anchored start points for closed circle intersection curves.
+///
+/// For each full-circle FF curve whose face pair includes a u-periodic
+/// surface (cylinder/cone) with a seam Line edge, returns the point on the
+/// circle at the seam's u parameter. Keyed by the curve's arena index.
+fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Point3> {
+    use std::f64::consts::TAU;
+
+    let mut anchors = BTreeMap::new();
+    for (idx, curve_ds) in arena.curves.iter().enumerate() {
+        let EdgeCurve::Circle(circle) = &curve_ds.curve else {
+            continue;
+        };
+        let (t0, t1) = curve_ds.t_range;
+        if ((t1 - t0).abs() - TAU).abs() > FULL_CIRCLE_T_TOL {
+            continue;
+        }
+        for fid in [curve_ds.face_a, curve_ds.face_b] {
+            let Ok(face) = topo.face(fid) else { continue };
+            let surface = face.surface();
+            if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+                continue;
+            }
+            let Some(anchor) = seam_anchor_on_circle(topo, face, circle) else {
+                continue;
+            };
+            anchors.insert(idx, anchor);
+            break;
+        }
+    }
+    anchors
+}
+
+/// Find the point on `circle` at the seam u of `face`'s periodic surface.
+///
+/// Returns `None` if the face has no non-degenerate seam Line edge, the
+/// projections fail, or the seam point at the circle's v does not actually
+/// lie on the circle (e.g. the circle is not a constant-v iso-curve).
+fn seam_anchor_on_circle(
+    topo: &Topology,
+    face: &Face,
+    circle: &brepkit_math::curves::Circle3D,
+) -> Option<Point3> {
+    let surface = face.surface();
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut seam_pt = None;
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            continue;
+        };
+        if matches!(edge.curve(), EdgeCurve::Line) {
+            let sp = topo.vertex(edge.start()).ok()?.point();
+            let ep = topo.vertex(edge.end()).ok()?.point();
+            if (sp - ep).length() > SEAM_DEGENERATE_TOL {
+                seam_pt = Some(sp);
+                break;
+            }
+        }
+    }
+    let (seam_u, _) = surface.project_point(seam_pt?)?;
+    let (_, v_circle) = surface.project_point(circle.evaluate(0.0))?;
+    let anchor = surface.evaluate(seam_u, v_circle)?;
+    let radial = anchor - circle.center();
+    let on_circle = (radial.length() - circle.radius()).abs() < SEAM_ON_CIRCLE_TOL
+        && radial.dot(circle.normal()).abs() < SEAM_ON_CIRCLE_TOL;
+    on_circle.then_some(anchor)
+}
+
+fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<SectionSource>> {
     let mut map: HashMap<FaceId, Vec<SectionSource>> = HashMap::new();
     // Section edges from FF intersection curves.
     // For non-Line curves (Circle, Ellipse, NURBS): use one Curve entry per curve
@@ -1008,13 +1112,73 @@ fn build_section_map(arena: &GfaArena) -> HashMap<FaceId, Vec<SectionSource>> {
         if faces_with_curved_ff.contains(&face_id.index()) {
             continue; // Face has curved FF curve — IN PBs are redundant.
         }
+        // A plane cap disc (outer boundary is a single closed circle, e.g.
+        // the cutting tool's own cap lying flush on a wall) needs no interior
+        // splitting: its boundary already trims it. IN edges projected onto
+        // such a cap from the wall's rectangle and other holes are spurious
+        // arcs that fragment the clean disc into a many-sided polygon, which
+        // then fails edge-set same-domain pairing with the wall's matching
+        // cap disc and survives the cut as a stray face. Keep only IN edges
+        // strictly inside the disc; drop those on or outside its boundary.
+        let cap_disc = cap_disc_circle(topo, face_id);
         for &pb_id in &fi.pave_blocks_in {
+            if let Some(circle) = &cap_disc {
+                if !pb_strictly_inside_circle(topo, arena, pb_id, circle) {
+                    continue;
+                }
+            }
             map.entry(face_id)
                 .or_default()
                 .push(SectionSource::PaveBlock(pb_id));
         }
     }
     map
+}
+
+/// If `face_id` is a plane whose outer wire is a single closed circular edge
+/// (a cap disc), return that circle; otherwise `None`.
+fn cap_disc_circle(topo: &Topology, face_id: FaceId) -> Option<brepkit_math::curves::Circle3D> {
+    let face = topo.face(face_id).ok()?;
+    if !matches!(face.surface(), FaceSurface::Plane { .. }) {
+        return None;
+    }
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    if wire.edges().len() != 1 {
+        return None;
+    }
+    let edge = topo.edge(wire.edges()[0].edge()).ok()?;
+    match edge.curve() {
+        EdgeCurve::Circle(c) => Some(c.clone()),
+        _ => None,
+    }
+}
+
+/// Whether the pave block's edge midpoint lies strictly inside (not on) the
+/// disc bounded by `circle` — its in-plane distance from the centre is below
+/// the radius by more than tolerance.
+fn pb_strictly_inside_circle(
+    topo: &Topology,
+    arena: &GfaArena,
+    pb_id: crate::ds::PaveBlockId,
+    circle: &brepkit_math::curves::Circle3D,
+) -> bool {
+    let Some(pb) = arena.pave_blocks.get(pb_id) else {
+        return false;
+    };
+    let Ok(edge) = topo.edge(pb.original_edge) else {
+        return false;
+    };
+    let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+        return false;
+    };
+    let (sp, ep) = (sv.point(), ev.point());
+    let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+    let mid = edge
+        .curve()
+        .evaluate_with_endpoints(0.5 * (t0 + t1), sp, ep);
+    let radial = mid - circle.center();
+    let in_plane = radial - circle.normal() * radial.dot(circle.normal());
+    in_plane.length() < circle.radius() - SEAM_ON_CIRCLE_TOL
 }
 
 /// Convert section sources to `SectionEdge` entries.
@@ -1027,6 +1191,7 @@ fn build_section_edges(
     arena: &GfaArena,
     face_id: FaceId,
     section_map: &HashMap<FaceId, Vec<SectionSource>>,
+    seam_anchors: &BTreeMap<usize, Point3>,
     tol: f64,
 ) -> Vec<SectionEdge> {
     use brepkit_math::vec::Point3;
@@ -1076,7 +1241,24 @@ fn build_section_edges(
                 // it lies entirely on the boundary. Feeding it to the face
                 // splitter would corrupt the wire (the boundary circle gets
                 // re-split against its own geometry).
-                if closed_curve_coincides_with_boundary(topo, face_id, &curve_ds.curve, tol) {
+                //
+                // This only holds when the circle is genuinely redundant: it
+                // bounds a region that lies fully on the partner FF face (a
+                // flush coplanar cap sitting inside a wall). When the circle
+                // is a real section larger than the partner — e.g. a cylinder
+                // rim where another, narrower cylinder's cap plane slices the
+                // lateral — keeping the lateral whole drops the split the
+                // cut/fuse needs and yields invalid topology. Require the
+                // partner face to host the full circle within its extent
+                // before treating the coincidence as a pure self-boundary.
+                let partner = if curve_ds.face_a == face_id {
+                    curve_ds.face_b
+                } else {
+                    curve_ds.face_a
+                };
+                if closed_curve_coincides_with_boundary(topo, face_id, &curve_ds.curve, tol)
+                    && circle_inside_face(topo, partner, &curve_ds.curve, tol)
+                {
                     continue;
                 }
 
@@ -1088,8 +1270,33 @@ fn build_section_edges(
                     _ => continue,
                 };
 
+                // Seam-anchored closed circles: re-parameterize so the
+                // circle starts at the periodic face's seam point. Both
+                // faces of the pair receive the same anchored geometry.
+                let (curve_3d, start, end) = match seam_anchors.get(curve_idx) {
+                    Some(&anchor) => {
+                        let reanchored = if let EdgeCurve::Circle(c) = &curve_ds.curve {
+                            brepkit_math::curves::Circle3D::new_with_ref(
+                                c.center(),
+                                c.normal(),
+                                c.radius(),
+                                anchor - c.center(),
+                            )
+                            .ok()
+                            .map(EdgeCurve::Circle)
+                        } else {
+                            None
+                        };
+                        match reanchored {
+                            Some(c) => (c, anchor, anchor),
+                            None => (curve_ds.curve.clone(), start, end),
+                        }
+                    }
+                    None => (curve_ds.curve.clone(), start, end),
+                };
+
                 let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
-                    &curve_ds.curve,
+                    &curve_3d,
                     start,
                     end,
                     face.surface(),
@@ -1109,12 +1316,9 @@ fn build_section_edges(
                     let start_uv = face.surface().project_point(start);
                     if let Some((su, sv)) = start_uv {
                         // Sample the curve at t=0.25 to determine winding direction.
-                        let (t0, t1) = curve_ds.curve.domain_with_endpoints(start, end);
-                        let mid_3d = curve_ds.curve.evaluate_with_endpoints(
-                            t0 + (t1 - t0) * 0.25,
-                            start,
-                            end,
-                        );
+                        let (t0, t1) = curve_3d.domain_with_endpoints(start, end);
+                        let mid_3d =
+                            curve_3d.evaluate_with_endpoints(t0 + (t1 - t0) * 0.25, start, end);
                         let mid_uv = face.surface().project_point(mid_3d);
                         if let Some((mu, _mv)) = mid_uv {
                             // Determine winding: does the curve go in +u or -u
@@ -1141,7 +1345,7 @@ fn build_section_edges(
                 };
 
                 sections.push(SectionEdge {
-                    curve_3d: curve_ds.curve.clone(),
+                    curve_3d,
                     pcurve_a: pcurve.clone(),
                     pcurve_b: pcurve,
                     start,
@@ -1238,6 +1442,73 @@ fn build_section_edges(
     dedup_collinear_sections(&mut sections, tol);
 
     sections
+}
+
+/// Whether the closed `curve` (a circle/ellipse) is contained within
+/// `face`'s 3D extent (its outer-wire bounding box, expanded by tolerance).
+///
+/// Distinguishes a flush coplanar cap whose rim sits inside a wall (the
+/// circle fits the wall → redundant, skip-safe) from a rim that extends
+/// beyond a smaller partner face (e.g. a cylinder rim slicing a narrower
+/// cylinder's cap → a real section that must split the partner, never skip).
+fn circle_inside_face(
+    topo: &Topology,
+    face_id: FaceId,
+    curve: &brepkit_topology::edge::EdgeCurve,
+    tol: f64,
+) -> bool {
+    let Ok(face) = topo.face(face_id) else {
+        return false;
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return false;
+    };
+    let mut min = Point3::new(f64::MAX, f64::MAX, f64::MAX);
+    let mut max = Point3::new(f64::MIN, f64::MIN, f64::MIN);
+    let mut have = false;
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            return false;
+        };
+        let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            return false;
+        };
+        let (sp, ep) = (sv.point(), ev.point());
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        for k in 0..=8 {
+            #[allow(clippy::cast_precision_loss)]
+            let frac = k as f64 / 8.0;
+            let p = edge
+                .curve()
+                .evaluate_with_endpoints((t1 - t0).mul_add(frac, t0), sp, ep);
+            min = Point3::new(min.x().min(p.x()), min.y().min(p.y()), min.z().min(p.z()));
+            max = Point3::new(max.x().max(p.x()), max.y().max(p.y()), max.z().max(p.z()));
+            have = true;
+        }
+    }
+    if !have {
+        return false;
+    }
+
+    // Closed Circle/Ellipse: evaluate_with_endpoints ignores the reference
+    // points and dispatches to the parametric domain directly.
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let (t0, t1) = curve.domain_with_endpoints(origin, origin);
+    for k in 0..16 {
+        #[allow(clippy::cast_precision_loss)]
+        let frac = k as f64 / 16.0;
+        let p = curve.evaluate_with_endpoints((t1 - t0).mul_add(frac, t0), origin, origin);
+        if p.x() < min.x() - tol
+            || p.x() > max.x() + tol
+            || p.y() < min.y() - tol
+            || p.y() > max.y() + tol
+            || p.z() < min.z() - tol
+            || p.z() > max.z() + tol
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// Check whether a closed section curve (Circle/Ellipse) coincides with

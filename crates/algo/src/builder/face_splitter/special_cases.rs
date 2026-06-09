@@ -144,65 +144,223 @@ pub(super) fn split_noseam_face_direct(
 }
 
 // ---------------------------------------------------------------------------
-// Known gap: disc-loop interpretation is wrong for periodic surfaces.
-//
-// `split_face_with_internal_loops` below treats each closed section curve
-// as a planar disc (loop bounds a disc-shaped sub-face). This is correct
-// for plane faces, but on a u-periodic surface (cylinder/cone/sphere/torus
-// lateral) a single closed circle does NOT bound a disc — it splits the
-// periodic surface into bands. The disc-pair output produces invalid
-// topology (Euler=3, non-manifold) for box-cylinder cuts; see the pinning
-// tests:
-//   - `gfa_cut_box_cylinder_through_produces_valid_topology` (PR #534)
-//   - `gfa_cut_box_cylinder_grid_through_sequential_produces_valid_topology`
-//     (PR #537)
-//
-// The operations layer's mesh-boolean fallback rescues most callers, but
-// at the cost of falling out of GFA for any cylinder cut.
-//
-// The proper fix is a `split_periodic_face_at_circles` post-pass that
-// emits N+1 band sub-faces (each: bot_circle + seam + top_circle_rev +
-// seam_rev) for a u-periodic face cut by N closed section circles.
-//
-// Investigation notes (2026-04-30, ultimately reverted before merge):
-//
-//   1. **Topology piece works.** A band-builder gated on
-//      `cylinder_face_count == 1` (pre-registering closed-circle section
-//      endpoints in `pb_vertex_registry` so cross-face vertex sharing
-//      via `merge_duplicate_edges` fires) un-ignores the single-cyl pin:
-//      F=7 E=15 V=10 Euler=2 manifold.
-//
-//   2. **Geometry piece is the blocker.** The band-builder reused the
-//      existing section-circle endpoint chosen by `phase_ff` (some
-//      arbitrary u-angle, e.g. (5,4,0) rather than the seam (6,5,0)) as
-//      the band's wire endpoint. The seam-segment Line then connects
-//      two off-seam points, crossing the cylinder interior. This is
-//      topologically valid but geometrically inconsistent. Downstream
-//      ops that use face geometry (volume, intersection in subsequent
-//      compound_cut iterations, tessellation) hang or produce wrong
-//      results — `compound_cut_honeycomb` (9 cyls in a 3×3 grid) hangs
-//      indefinitely on iter 2 even with the band-builder gated off for
-//      that iter, because iter 1's corrupt geometry propagates.
-//
-//   3. **What the next attempt needs.** A pre-pass that, for each closed
-//      section circle on a u-periodic face: (a) creates a vertex at
-//      `surface.evaluate(seam_u, v_section)`, (b) re-parameterizes the
-//      section's pcurve to start at `u = seam_u`, (c) splits the existing
-//      seam Line edge at `v_section` so the band's seam-segment endpoints
-//      land on real topology vertices. Without (a)+(b)+(c) the band's
-//      seam doesn't lie on the cylinder surface and downstream ops break.
-//      `pb_vertex_registry` is the right place to wire the new vertices —
-//      `resolve_edge_vertices` already consults it.
-//
-//   4. **Multi-cylinder gating is a separate hard problem.** Even with
-//      correct seam geometry, multi-tool scenarios (compound_cut with
-//      tools sharing section planes — e.g. 4×4 grid) confuse BOP face-
-//      image classification. PR #535's body recommends gating on
-//      "BOP can reliably classify this band's interior" — easier to
-//      derive empirically than design a priori.
-//
-// See PRs #534, #535, #537 for the pinning test history.
+// Periodic faces take `split_periodic_face_into_bands` below; the disc-loop
+// interpretation in `split_face_with_internal_loops` applies to plane faces
+// (and to periodic faces only as a fallback when the band preconditions
+// don't hold). The band path depends on the seam-anchor pre-pass in
+// `fill_images_faces`, which re-parameterizes closed section circles to
+// start at the face's seam — without it, the band's seam segments would
+// connect arbitrary section angles and cut through the surface interior.
 // ---------------------------------------------------------------------------
+
+/// Split a u-periodic face (cylinder/cone lateral) into stacked bands at
+/// its closed section circles.
+///
+/// A closed circle on a u-periodic surface does not bound a disc — it
+/// separates the surface into bands. For N internal circles sorted by v,
+/// emits N+1 band sub-faces, each bounded by:
+/// lower circle + seam segment up + upper circle reversed + seam segment
+/// down. The end bands reuse the face's original boundary circle edges.
+///
+/// Preconditions (returns `None` so the caller can fall back otherwise):
+/// - surface is a cylinder or cone
+/// - boundary is exactly 2 closed circle edges plus seam Line edges, all
+///   seam endpoints at the same u
+/// - every section is a full closed circle whose start point sits on the
+///   seam (guaranteed by the seam-anchor pre-pass) at a v strictly between
+///   the boundary circles, with no two circles at the same v
+#[allow(
+    clippy::too_many_lines,
+    clippy::too_many_arguments,
+    clippy::items_after_statements
+)]
+pub(super) fn split_periodic_face_into_bands(
+    surface: &FaceSurface,
+    boundary_edges: &[OrientedPCurveEdge],
+    sections: &[SectionEdge],
+    rank: Rank,
+    reversed: bool,
+    face_id: FaceId,
+    tol: f64,
+) -> Option<Vec<SplitSubFace>> {
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2};
+    use std::f64::consts::{PI, TAU};
+
+    if !matches!(surface, FaceSurface::Cylinder(_) | FaceSurface::Cone(_)) {
+        return None;
+    }
+    let close_tol = tol * 100.0;
+
+    // Partition boundary into closed circle edges and seam Line edges.
+    let mut boundary_circles: Vec<&OrientedPCurveEdge> = Vec::new();
+    let mut seam_edges: Vec<&OrientedPCurveEdge> = Vec::new();
+    for e in boundary_edges {
+        let is_closed = (e.start_3d - e.end_3d).length() < close_tol;
+        match (&e.curve_3d, is_closed) {
+            (EdgeCurve::Circle(_), true) => boundary_circles.push(e),
+            (EdgeCurve::Line, false) => seam_edges.push(e),
+            _ => return None,
+        }
+    }
+    if boundary_circles.len() != 2 || seam_edges.is_empty() {
+        return None;
+    }
+
+    // Seam u — shared by every seam edge endpoint (mod 2π).
+    let (seam_u, _) = surface.project_point(seam_edges[0].start_3d)?;
+    for e in &seam_edges {
+        for p in [e.start_3d, e.end_3d] {
+            let (u, _) = surface.project_point(p)?;
+            let du = (u - seam_u + PI).rem_euclid(TAU) - PI;
+            if du.abs() > 1e-6 {
+                return None;
+            }
+        }
+    }
+
+    // Every circle must start on the seam; collect (v, lower_fwd, edge).
+    let circle_v = |e: &OrientedPCurveEdge| -> Option<f64> {
+        let (_, v) = surface.project_point(e.start_3d)?;
+        let on_seam = surface.evaluate(seam_u, v)?;
+        ((on_seam - e.start_3d).length() < close_tol).then_some(v)
+    };
+
+    let v0 = circle_v(boundary_circles[0])?;
+    let v1 = circle_v(boundary_circles[1])?;
+    let (v_bot, bot_edge, v_top, top_edge) = if v0 < v1 {
+        (v0, boundary_circles[0], v1, boundary_circles[1])
+    } else {
+        (v1, boundary_circles[1], v0, boundary_circles[0])
+    };
+    if v_top - v_bot < close_tol {
+        return None;
+    }
+
+    // Reference traversal tangent: how the original bottom circle is
+    // traversed at the seam. Section circles in the lower role must
+    // traverse the same way; in the upper role, the opposite way.
+    let traversal_tangent = |e: &OrientedPCurveEdge| -> Option<brepkit_math::vec::Vec3> {
+        let EdgeCurve::Circle(c) = &e.curve_3d else {
+            return None;
+        };
+        let t = c.tangent(c.project(e.start_3d));
+        Some(if e.forward { t } else { -t })
+    };
+    let ref_tan = traversal_tangent(bot_edge)?;
+
+    // Collect section circles with their v and natural-direction alignment.
+    struct BandCircle {
+        v: f64,
+        lower: OrientedPCurveEdge,
+        upper: OrientedPCurveEdge,
+    }
+    let mut mids: Vec<BandCircle> = Vec::with_capacity(sections.len());
+    for s in sections {
+        if (s.start - s.end).length() > close_tol {
+            return None;
+        }
+        let EdgeCurve::Circle(c) = &s.curve_3d else {
+            return None;
+        };
+        let (_, v) = surface.project_point(s.start)?;
+        let on_seam = surface.evaluate(seam_u, v)?;
+        if (on_seam - s.start).length() > close_tol {
+            return None;
+        }
+        // A section circle at a boundary circle's v duplicates the existing
+        // boundary edge (flush cap configuration) — no split there.
+        if (v - v_bot).abs() < close_tol || (v_top - v).abs() < close_tol {
+            continue;
+        }
+        if v < v_bot || v > v_top {
+            return None;
+        }
+        let natural_tan = c.tangent(c.project(s.start));
+        let lower_fwd = natural_tan.dot(ref_tan) > 0.0;
+        let pcurve = match rank {
+            Rank::A => &s.pcurve_a,
+            Rank::B => &s.pcurve_b,
+        };
+        let mk = |forward: bool| OrientedPCurveEdge {
+            curve_3d: s.curve_3d.clone(),
+            pcurve: pcurve.clone(),
+            start_uv: Point2::new(seam_u, v),
+            end_uv: Point2::new(seam_u, v),
+            start_3d: s.start,
+            end_3d: s.start,
+            forward,
+            source_edge_idx: None,
+            pave_block_id: s.pave_block_id,
+        };
+        mids.push(BandCircle {
+            v,
+            lower: mk(lower_fwd),
+            upper: mk(!lower_fwd),
+        });
+    }
+    if mids.is_empty() {
+        // Every section coincided with a boundary circle (fully flush
+        // tool): no band split applies — let the generic paths handle the
+        // coplanar-cap interaction.
+        return None;
+    }
+    mids.sort_by(|a, b| a.v.partial_cmp(&b.v).unwrap_or(std::cmp::Ordering::Equal));
+    if mids.windows(2).any(|w| w[1].v - w[0].v < close_tol) {
+        return None;
+    }
+
+    let mk_seam = |va: f64, vb: f64| -> Option<OrientedPCurveEdge> {
+        let pa = surface.evaluate(seam_u, va)?;
+        let pb = surface.evaluate(seam_u, vb)?;
+        let dir = Vec2::new(0.0, if vb > va { 1.0 } else { -1.0 });
+        let pcurve = Curve2D::Line(Line2D::new(Point2::new(seam_u, va), dir).ok()?);
+        Some(OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve,
+            start_uv: Point2::new(seam_u, va),
+            end_uv: Point2::new(seam_u, vb),
+            start_3d: pa,
+            end_3d: pb,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        })
+    };
+
+    // Assemble bands bottom-to-top. Levels: bot boundary, sections, top
+    // boundary. Each band: lower circle, seam up, upper circle, seam down.
+    let mut levels: Vec<(f64, OrientedPCurveEdge, OrientedPCurveEdge)> = Vec::new();
+    levels.push((v_bot, bot_edge.clone(), bot_edge.clone()));
+    for m in mids {
+        levels.push((m.v, m.lower, m.upper));
+    }
+    levels.push((v_top, top_edge.clone(), top_edge.clone()));
+
+    let mut bands = Vec::with_capacity(levels.len() - 1);
+    for w in levels.windows(2) {
+        let (va, lower, _) = &w[0];
+        let (vb, _, upper) = &w[1];
+        let (va, vb) = (*va, *vb);
+        let wire = vec![
+            lower.clone(),
+            mk_seam(va, vb)?,
+            upper.clone(),
+            mk_seam(vb, va)?,
+        ];
+        let interior = surface.evaluate((seam_u + PI).rem_euclid(TAU), f64::midpoint(va, vb))?;
+        bands.push(SplitSubFace {
+            surface: surface.clone(),
+            outer_wire: wire,
+            inner_wires: Vec::new(),
+            reversed,
+            parent: face_id,
+            rank,
+            precomputed_interior: Some(interior),
+        });
+    }
+    Some(bands)
+}
 
 /// Split a face when ALL section edges are interior (don't touch the boundary).
 ///
@@ -214,13 +372,15 @@ pub(super) fn split_noseam_face_direct(
 /// The "outside" sub-face has the original boundary as outer wire with all
 /// loops as holes.
 ///
-/// **Known limitation**: applies the planar disc-loop interpretation to
-/// periodic surfaces (cylinder/cone/sphere/torus laterals), which is
-/// wrong — see the module-level investigation notes above.
+/// The disc-loop interpretation is only correct for plane faces (and
+/// sphere caps). Cylinder/cone laterals are routed to
+/// [`split_periodic_face_into_bands`] first and only reach this fallback
+/// when the band preconditions don't hold.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn split_face_with_internal_loops(
     surface: &FaceSurface,
     boundary_edges: &[OrientedPCurveEdge],
+    original_inner_wires: &[Vec<OrientedPCurveEdge>],
     sections: &[SectionEdge],
     rank: Rank,
     reversed: bool,
@@ -443,6 +603,10 @@ pub(super) fn split_face_with_internal_loops(
     }
 
     // The "outside" sub-face: original boundary with all loops as holes.
+    // Pre-existing holes (from earlier boolean operations) stay with the
+    // outside sub-face — dropping them would leave the faces ringing those
+    // holes with free edges.
+    all_holes.extend(original_inner_wires.iter().cloned());
     result.push(SplitSubFace {
         surface: surface.clone(),
         outer_wire: boundary_edges.to_vec(),
@@ -725,4 +889,32 @@ pub(super) fn try_split_crossing_plane_face(
         });
     }
     Some(result)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use brepkit_math::surfaces::CylindricalSurface;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::face::FaceSurface;
+    use std::f64::consts::{PI, TAU};
+
+    #[test]
+    fn band_interior_antipode_wraps_into_domain() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+
+        // Seam in (π, 2π): the unwrapped antipode seam_u + π exceeds 2π.
+        for &seam_u in &[1.1 * PI, 1.5 * PI, 1.9 * PI] {
+            let wrapped = (seam_u + PI).rem_euclid(TAU);
+            assert!((0.0..TAU).contains(&wrapped));
+            // The wrap is behavior-preserving on a periodic surface: the
+            // in-domain parameter evaluates to the same 3D interior point.
+            let a = surface.evaluate(seam_u + PI, 3.0).unwrap();
+            let b = surface.evaluate(wrapped, 3.0).unwrap();
+            assert!((a - b).length() < 1e-9);
+        }
+    }
 }

@@ -31,7 +31,8 @@ use conversion::{
 use edge_splitting::split_boundary_edges_at_3d_points;
 use sampling::{sample_wire_loop_uv, sample_wire_loop_uv_periodic};
 use special_cases::{
-    split_face_with_internal_loops, split_noseam_face_direct, try_split_crossing_plane_face,
+    split_face_with_internal_loops, split_noseam_face_direct, split_periodic_face_into_bands,
+    try_split_crossing_plane_face,
 };
 
 /// Split a face by its section edges, producing sub-faces.
@@ -99,15 +100,23 @@ pub fn split_face_2d(
         .iter()
         .filter_map(|&iw_id| {
             let iw_pts = collect_wire_points(topo, iw_id);
-            if iw_pts.len() < 3 {
-                return None;
-            }
             let edges = if is_plane {
                 boundary_edges_to_pcurve(topo, iw_id, &surface, &iw_pts, Some(frame))
             } else {
                 boundary_edges_to_pcurve(topo, iw_id, &surface, &iw_pts, None)
             };
-            if edges.is_empty() { None } else { Some(edges) }
+            // A hole bounded by closed curved edges (e.g. a single full
+            // circle) has fewer than 3 distinct wire points but is a valid
+            // inner wire; only polyline-style wires need 3+ points.
+            let has_closed_curve = edges.iter().any(|e| {
+                !matches!(e.curve_3d, EdgeCurve::Line)
+                    && (e.start_3d - e.end_3d).length() < tol.linear * 100.0
+            });
+            if edges.is_empty() || (iw_pts.len() < 3 && !has_closed_curve) {
+                None
+            } else {
+                Some(edges)
+            }
         })
         .collect();
 
@@ -147,6 +156,24 @@ pub fn split_face_2d(
         );
     }
 
+    // Band shortcut: closed section circles on a u-periodic face split it
+    // into stacked bands, not discs. Requires seam-anchored circles (see
+    // the seam-anchor pre-pass in fill_images_faces); falls through to the
+    // generic paths when preconditions don't hold.
+    if u_periodic && !is_plane && original_inner_wires.is_empty() {
+        if let Some(bands) = split_periodic_face_into_bands(
+            &surface,
+            &boundary_edges,
+            sections,
+            rank,
+            reversed,
+            face_id,
+            tol.linear,
+        ) {
+            return bands;
+        }
+    }
+
     // Internal section edge shortcut: when section edges form closed loops
     // entirely within the face (not connecting to boundary edges), the wire
     // builder struggles with periodic UV and 4-way junctions. Instead, group
@@ -182,6 +209,7 @@ pub fn split_face_2d(
         return split_face_with_internal_loops(
             &surface,
             &boundary_edges,
+            &original_inner_wires,
             sections,
             rank,
             reversed,
