@@ -29,10 +29,15 @@ enum FaceGeom {
     /// A full-period cylindrical face (e.g. a bore lateral). Crossings are
     /// computed analytically — a flat polygon approximation counts one
     /// crossing where the real surface has two, flipping the parity.
+    ///
+    /// `hole_bands` are full-circumference v-ranges carved out of the lateral
+    /// (a flush-cap interaction can leave such a holed lateral). A crossing
+    /// whose axial parameter falls inside a hole band is excluded.
     Cylinder {
         surface: brepkit_math::surfaces::CylindricalSurface,
         v_min: f64,
         v_max: f64,
+        hole_bands: Vec<(f64, f64)>,
     },
 }
 
@@ -184,8 +189,10 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
 
         // Full-period cylindrical faces: the outer wire contains a closed
         // circle edge, so the face wraps the entire circumference and the
-        // analytic crossing test applies. Partial cylinder patches fall
-        // through to the polygon approximation.
+        // analytic crossing test applies. Inner wires are accepted only when
+        // each is a full-circumference v-band (the shape a flush-cap
+        // interaction carves out); any non-banded hole forces the polygon
+        // fallback. Partial cylinder patches also fall through.
         if let brepkit_topology::face::FaceSurface::Cylinder(cyl) = face.surface() {
             let wire = topo.wire(face.outer_wire())?;
             let mut has_closed_circle = false;
@@ -198,7 +205,7 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
                     break;
                 }
             }
-            if has_closed_circle && face.inner_wires().is_empty() {
+            if has_closed_circle {
                 let verts = wire_polygon(topo, face.outer_wire())?;
                 let mut v_min = f64::INFINITY;
                 let mut v_max = f64::NEG_INFINITY;
@@ -207,11 +214,14 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
                     v_min = v_min.min(v);
                     v_max = v_max.max(v);
                 }
-                if v_min.is_finite() && v_max > v_min {
+                let hole_bands = cylinder_hole_bands(topo, face, cyl)?;
+                let holes_banded = hole_bands.len() == face.inner_wires().len();
+                if v_min.is_finite() && v_max > v_min && holes_banded {
                     result.push(FaceGeom::Cylinder {
                         surface: cyl.clone(),
                         v_min,
                         v_max,
+                        hole_bands,
                     });
                     continue;
                 }
@@ -256,6 +266,47 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
     Ok(result)
 }
 
+/// Collect full-circumference v-band holes carved out of a cylindrical face.
+///
+/// Each inner wire is sampled and projected into `(u, v)`. A wire is treated
+/// as a band only when its u-samples wrap the full circumference; the band's
+/// `[v_lo, v_hi]` is the projected axial span. Returns one entry per qualifying
+/// inner wire — a count short of `face.inner_wires().len()` signals a
+/// non-banded hole, which the caller uses to force the polygon fallback.
+fn cylinder_hole_bands(
+    topo: &Topology,
+    face: &brepkit_topology::face::Face,
+    cyl: &brepkit_math::surfaces::CylindricalSurface,
+) -> Result<Vec<(f64, f64)>, AlgoError> {
+    use std::f64::consts::TAU;
+
+    let mut bands = Vec::with_capacity(face.inner_wires().len());
+    for &iw in face.inner_wires() {
+        let pts = wire_polygon(topo, iw)?;
+        if pts.len() < 3 {
+            continue;
+        }
+        let mut v_lo = f64::INFINITY;
+        let mut v_hi = f64::NEG_INFINITY;
+        let mut u_min = f64::INFINITY;
+        let mut u_max = f64::NEG_INFINITY;
+        for p in &pts {
+            let (u, v) = cyl.project_point(*p);
+            v_lo = v_lo.min(v);
+            v_hi = v_hi.max(v);
+            u_min = u_min.min(u);
+            u_max = u_max.max(u);
+        }
+        // Only full-circumference bands qualify: a partial-arc hole would be
+        // over-excluded by a v-band test.
+        let wraps_full = (u_max - u_min) >= TAU - 1e-3;
+        if wraps_full && v_hi > v_lo {
+            bands.push((v_lo, v_hi));
+        }
+    }
+    Ok(bands)
+}
+
 /// Count ray crossings against a face geometry.
 #[inline]
 fn ray_geom_crossings(origin: Point3, ray_dir: Vec3, geom: &FaceGeom, tol: Tolerance) -> i32 {
@@ -270,7 +321,8 @@ fn ray_geom_crossings(origin: Point3, ray_dir: Vec3, geom: &FaceGeom, tol: Toler
             surface,
             v_min,
             v_max,
-        } => ray_cylinder_crossings(origin, ray_dir, surface, *v_min, *v_max, tol),
+            hole_bands,
+        } => ray_cylinder_crossings(origin, ray_dir, surface, *v_min, *v_max, hole_bands, tol),
     }
 }
 
@@ -314,14 +366,16 @@ fn ray_face_crossing(
 /// Count ray crossings with a bounded full-period cylindrical face.
 ///
 /// Solves the ray/infinite-cylinder quadratic and counts roots whose axial
-/// parameter falls within the face's v-range. Tangent grazes (discriminant
-/// ≈ 0) count as zero crossings, which preserves parity.
+/// parameter falls within the face's v-range but outside any `hole_bands`
+/// (full-circumference v-ranges carved out of the lateral). Tangent grazes
+/// (discriminant ≈ 0) count as zero crossings, which preserves parity.
 fn ray_cylinder_crossings(
     origin: Point3,
     ray_dir: Vec3,
     surface: &brepkit_math::surfaces::CylindricalSurface,
     v_min: f64,
     v_max: f64,
+    hole_bands: &[(f64, f64)],
     tol: Tolerance,
 ) -> i32 {
     let axis = surface.axis();
@@ -354,9 +408,16 @@ fn ray_cylinder_crossings(
             origin.z() + ray_dir.z() * t,
         );
         let v = axis.dot(hit - surface.origin());
-        if v >= v_min - tol.linear && v <= v_max + tol.linear {
-            crossings += 1;
+        if v < v_min - tol.linear || v > v_max + tol.linear {
+            continue;
         }
+        if hole_bands
+            .iter()
+            .any(|&(lo, hi)| v > lo + tol.linear && v < hi - tol.linear)
+        {
+            continue;
+        }
+        crossings += 1;
     }
     crossings
 }
