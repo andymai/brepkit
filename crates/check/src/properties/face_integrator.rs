@@ -224,10 +224,10 @@ fn face_uv_bounds<S: ParametricSurface>(
     // collapse that axis's range to zero — the face actually spans the
     // full period.
     if periodic_u && u_max - u_min < 1e-9 {
-        u_max = u_min + std::f64::consts::TAU;
+        u_max = u_min + (full_domain.0.1 - full_domain.0.0);
     }
     if periodic_v && v_max - v_min < 1e-9 {
-        v_max = v_min + std::f64::consts::TAU;
+        v_max = v_min + (full_domain.1.1 - full_domain.1.0);
     }
 
     if u_min >= u_max || v_min >= v_max {
