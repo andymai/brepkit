@@ -23,7 +23,7 @@ const CLOSURE_POS_TOL: f64 = 1e-7;
 /// the end vertex of the first connects to the start vertex of the second,
 /// and that the last edge connects back to the first. Connection is by
 /// `VertexId` equality, falling back to coincident position (within
-/// [`CLOSURE_POS_TOL`]) so wires assembled by chaining edges on endpoint
+/// `CLOSURE_POS_TOL`) so wires assembled by chaining edges on endpoint
 /// position — which can leave distinct-but-coincident vertex IDs — are not
 /// rejected as open.
 ///
