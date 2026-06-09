@@ -981,6 +981,19 @@ enum SectionSource {
     PaveBlock(PaveBlockId),
 }
 
+/// Tolerance on `|t_range| - 2π` for treating a circle edge as a full circle.
+/// Angular (radian) comparison on a parameter span.
+const FULL_CIRCLE_T_TOL: f64 = 1e-9;
+
+/// Minimum 3D length for a seam Line edge to count as non-degenerate.
+const SEAM_DEGENERATE_TOL: f64 = 1e-10;
+
+/// Radial/planar tolerance for accepting the seam point as lying on the
+/// circle. Looser than the linear default (1e-7) because the anchor is built
+/// from two `project_point` + `evaluate` round-trips whose float error
+/// accumulates; tightening it would spuriously reject valid anchors.
+const SEAM_ON_CIRCLE_TOL: f64 = 1e-6;
+
 /// Compute seam-anchored start points for closed circle intersection curves.
 ///
 /// For each full-circle FF curve whose face pair includes a u-periodic
@@ -995,7 +1008,7 @@ fn compute_seam_anchors(topo: &Topology, arena: &GfaArena) -> BTreeMap<usize, Po
             continue;
         };
         let (t0, t1) = curve_ds.t_range;
-        if ((t1 - t0).abs() - TAU).abs() > 1e-9 {
+        if ((t1 - t0).abs() - TAU).abs() > FULL_CIRCLE_T_TOL {
             continue;
         }
         for fid in [curve_ds.face_a, curve_ds.face_b] {
@@ -1034,7 +1047,7 @@ fn seam_anchor_on_circle(
         if matches!(edge.curve(), EdgeCurve::Line) {
             let sp = topo.vertex(edge.start()).ok()?.point();
             let ep = topo.vertex(edge.end()).ok()?.point();
-            if (sp - ep).length() > 1e-10 {
+            if (sp - ep).length() > SEAM_DEGENERATE_TOL {
                 seam_pt = Some(sp);
                 break;
             }
@@ -1044,8 +1057,8 @@ fn seam_anchor_on_circle(
     let (_, v_circle) = surface.project_point(circle.evaluate(0.0))?;
     let anchor = surface.evaluate(seam_u, v_circle)?;
     let radial = anchor - circle.center();
-    let on_circle = (radial.length() - circle.radius()).abs() < 1e-6
-        && radial.dot(circle.normal()).abs() < 1e-6;
+    let on_circle = (radial.length() - circle.radius()).abs() < SEAM_ON_CIRCLE_TOL
+        && radial.dot(circle.normal()).abs() < SEAM_ON_CIRCLE_TOL;
     on_circle.then_some(anchor)
 }
 
