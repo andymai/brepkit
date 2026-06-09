@@ -273,7 +273,6 @@ fn test_sequential_cuts_volume() {
 }
 
 #[test]
-#[ignore = "vertex drift 6.7% after 10 fuse+cut cycles on disjoint addons (threshold 5%)"]
 fn test_sequential_boolean_vertex_drift() {
     // Perform 10 fuse+cut cycles. Volume should return to original each time.
     let mut topo = Topology::new();
@@ -303,7 +302,6 @@ fn test_sequential_boolean_vertex_drift() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn test_alternating_union_cut() {
     // A|B - C pattern.
     // A: (0-2, 0-1, 0-1), B: (1-3, 0-1, 0-1), C: (1-2, 0-1, 0-1).

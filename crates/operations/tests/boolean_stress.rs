@@ -193,7 +193,6 @@ fn near_miss_cut_barely_touching() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn thin_wall_cut() {
     // Cut a thin slice from a box — result has very thin geometry.
     let mut topo = Topology::new();
@@ -537,7 +536,6 @@ fn small_overlap_1_percent() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_asymmetric_boxes() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0);

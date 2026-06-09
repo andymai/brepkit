@@ -77,28 +77,92 @@ pub fn sample_edge_curve(curve: &EdgeCurve, n: usize) -> Vec<Point3> {
 /// Returns an error if any topology entity referenced by the face is missing.
 pub fn face_polygon(topo: &Topology, face_id: FaceId) -> Result<Vec<Point3>, CheckError> {
     let face = topo.face(face_id)?;
-    let wire = topo.wire(face.outer_wire())?;
+    wire_polygon(topo, face.outer_wire())
+}
+
+/// Build a polygon from a wire by sampling vertex positions and closed-edge
+/// curves.
+///
+/// Wires store edges in loop order, but the per-edge orientation flags are
+/// not guaranteed to chain head-to-tail; each edge's traversal direction is
+/// re-derived from vertex connectivity with the previous edge so the polygon
+/// follows the actual loop.
+///
+/// # Errors
+///
+/// Returns an error if any topology entity referenced by the wire is missing.
+pub fn wire_polygon(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+) -> Result<Vec<Point3>, CheckError> {
+    let wire = topo.wire(wire_id)?;
     let mut pts = Vec::new();
+    let mut prev_end: Option<brepkit_topology::vertex::VertexId> = None;
 
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
         let curve = edge.curve();
         let start_vid = edge.start();
         let end_vid = edge.end();
+        let forward = match prev_end {
+            Some(pe) if start_vid == pe && end_vid != pe => true,
+            Some(pe) if end_vid == pe && start_vid != pe => false,
+            _ => oe.is_forward(),
+        };
         let is_closed_edge = start_vid == end_vid
             && matches!(
                 curve,
                 EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_)
             );
         if is_closed_edge {
-            let mut sampled = sample_edge_curve(curve, CLOSED_CURVE_SAMPLES);
-            if !oe.is_forward() {
-                sampled.reverse();
-            }
+            // Start sampling at the edge's seam vertex so the polygon chains
+            // cleanly with adjacent edges; the curve's own parameter origin
+            // is unrelated to the vertex.
+            let seam_pt = topo.vertex(start_vid)?.point();
+            let t0 = match curve {
+                EdgeCurve::Circle(c) => Some(c.project(seam_pt)),
+                EdgeCurve::Ellipse(e) => Some(e.project(seam_pt)),
+                EdgeCurve::NurbsCurve(_) | EdgeCurve::Line => None,
+            };
+            // Traversal must start at the seam vertex in both directions:
+            // forward covers [t0, t0 + TAU), reversed covers (t0, t0 + TAU]
+            // walked backwards — the next edge supplies the closing point.
+            #[allow(clippy::cast_precision_loss)]
+            let params = |n: usize| -> Vec<f64> {
+                if forward {
+                    (0..n)
+                        .map(|i| std::f64::consts::TAU.mul_add((i as f64) / (n as f64), 0.0))
+                        .collect()
+                } else {
+                    (1..=n)
+                        .rev()
+                        .map(|i| std::f64::consts::TAU.mul_add((i as f64) / (n as f64), 0.0))
+                        .collect()
+                }
+            };
+            let sampled: Vec<Point3> = match (curve, t0) {
+                (EdgeCurve::Circle(c), Some(t0)) => params(CLOSED_CURVE_SAMPLES)
+                    .into_iter()
+                    .map(|dt| c.evaluate(t0 + dt))
+                    .collect(),
+                (EdgeCurve::Ellipse(e), Some(t0)) => params(CLOSED_CURVE_SAMPLES)
+                    .into_iter()
+                    .map(|dt| e.evaluate(t0 + dt))
+                    .collect(),
+                _ => {
+                    let mut s = sample_edge_curve(curve, CLOSED_CURVE_SAMPLES);
+                    if !forward {
+                        s.reverse();
+                    }
+                    s
+                }
+            };
             pts.extend(sampled);
+            prev_end = Some(start_vid);
         } else {
-            let vid = oe.oriented_start(edge);
+            let vid = if forward { start_vid } else { end_vid };
             pts.push(topo.vertex(vid)?.point());
+            prev_end = Some(if forward { end_vid } else { start_vid });
         }
     }
 

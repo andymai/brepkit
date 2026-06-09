@@ -602,18 +602,19 @@ mod tests {
         let e37 = edge(3, 7);
 
         let fwd = |eid| OrientedEdge::new(eid, true);
+        let rev = |eid| OrientedEdge::new(eid, false);
         let w_bot =
-            topo.add_wire(Wire::new(vec![fwd(e01), fwd(e12), fwd(e23), fwd(e30)], true).unwrap());
+            topo.add_wire(Wire::new(vec![rev(e01), rev(e30), rev(e23), rev(e12)], true).unwrap());
         let w_top =
             topo.add_wire(Wire::new(vec![fwd(e45), fwd(e56), fwd(e67), fwd(e74)], true).unwrap());
         let w_front =
-            topo.add_wire(Wire::new(vec![fwd(e01), fwd(e15), fwd(e45), fwd(e04)], true).unwrap());
+            topo.add_wire(Wire::new(vec![fwd(e01), fwd(e15), rev(e45), rev(e04)], true).unwrap());
         let w_back =
-            topo.add_wire(Wire::new(vec![fwd(e23), fwd(e37), fwd(e67), fwd(e26)], true).unwrap());
+            topo.add_wire(Wire::new(vec![fwd(e23), fwd(e37), rev(e67), rev(e26)], true).unwrap());
         let w_left =
-            topo.add_wire(Wire::new(vec![fwd(e30), fwd(e04), fwd(e74), fwd(e37)], true).unwrap());
+            topo.add_wire(Wire::new(vec![fwd(e30), fwd(e04), rev(e74), rev(e37)], true).unwrap());
         let w_right =
-            topo.add_wire(Wire::new(vec![fwd(e12), fwd(e26), fwd(e56), fwd(e15)], true).unwrap());
+            topo.add_wire(Wire::new(vec![fwd(e12), fwd(e26), rev(e56), rev(e15)], true).unwrap());
 
         let mk_face =
             |w, n: Vec3, d: f64| Face::new(w, vec![], FaceSurface::Plane { normal: n, d });
