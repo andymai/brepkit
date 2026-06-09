@@ -677,7 +677,7 @@ fn rebuild_face_with_edge_images<S: BuildHasher>(
         .iter()
         .chain(inner_edges_list.iter().flatten())
         .any(|(eid, _)| {
-            edge_images.get(eid).is_some_and(|imgs| imgs.len() > 1)
+            non_degenerate_image_count(topo, *eid, edge_images) > 1
                 && topo
                     .edge(*eid)
                     .is_ok_and(|e| matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line))
@@ -722,18 +722,39 @@ fn rebuild_face_with_edge_images<S: BuildHasher>(
     Some(new_fid)
 }
 
+/// True when an image edge collapses to a point (shared start/end vertex).
+///
+/// Phase EF intersects each edge against the INFINITE plane of every face,
+/// so a split point landing on an edge's own endpoint yields a zero-length
+/// stub image. Propagating that stub into a rebuilt wire corrupts the face
+/// and produces free edges, so such images must be discarded.
+fn is_degenerate_image(topo: &Topology, img: EdgeId) -> bool {
+    topo.edge(img).is_ok_and(|e| e.start() == e.end())
+}
+
+/// Count of an edge's split images that are not zero-length stubs.
+fn non_degenerate_image_count<S: BuildHasher>(
+    topo: &Topology,
+    eid: EdgeId,
+    edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
+) -> usize {
+    edge_images.get(&eid).map_or(0, |imgs| {
+        imgs.iter()
+            .filter(|&&img| !is_degenerate_image(topo, img))
+            .count()
+    })
+}
+
 /// Expand a single edge into its multi-split image edges.
-/// Only expands Line edges with 2+ children; keeps everything else as-is.
+/// Only expands Line edges with 2+ non-degenerate children; keeps
+/// everything else (including edges whose only extra images are
+/// zero-length stubs) as-is.
 fn expand_edge<S: BuildHasher>(
     topo: &Topology,
     eid: EdgeId,
     fwd: bool,
     edge_images: &HashMap<EdgeId, Vec<EdgeId>, S>,
 ) -> Vec<OrientedEdge> {
-    let imgs = match edge_images.get(&eid) {
-        Some(imgs) if imgs.len() > 1 => imgs,
-        _ => return vec![OrientedEdge::new(eid, fwd)],
-    };
     // Only expand Line edges
     if !topo
         .edge(eid)
@@ -741,12 +762,25 @@ fn expand_edge<S: BuildHasher>(
     {
         return vec![OrientedEdge::new(eid, fwd)];
     }
+    let real_imgs: Vec<EdgeId> = match edge_images.get(&eid) {
+        Some(imgs) => imgs
+            .iter()
+            .copied()
+            .filter(|&img| !is_degenerate_image(topo, img))
+            .collect(),
+        None => return vec![OrientedEdge::new(eid, fwd)],
+    };
+    if real_imgs.len() < 2 {
+        return vec![OrientedEdge::new(eid, fwd)];
+    }
     if fwd {
-        imgs.iter()
+        real_imgs
+            .iter()
             .map(|&img| OrientedEdge::new(img, true))
             .collect()
     } else {
-        imgs.iter()
+        real_imgs
+            .iter()
             .rev()
             .map(|&img| OrientedEdge::new(img, false))
             .collect()
