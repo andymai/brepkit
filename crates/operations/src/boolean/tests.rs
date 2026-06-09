@@ -1660,11 +1660,6 @@ fn compound_cut_matches_sequential_2x2_grid() {
 
 /// 3×3 grid (9 tools) exercises the compound path (threshold = 8).
 #[test]
-#[ignore = "flaky — multi-tool compound/sequential cuts through the mesh-boolean \
-            fallback are non-deterministic across processes (seed-dependent vertex \
-            welding); with the oracle's box volume corrected to the actual \
-            make_box(10,10,2) = 200, both paths intermittently remove little or \
-            nothing. Tracked in #747; revisit under the GFA rewrite."]
 fn compound_cut_matches_sequential_3x3_grid() {
     use brepkit_math::mat::Mat4;
 
@@ -1721,10 +1716,6 @@ fn compound_cut_matches_sequential_3x3_grid() {
 
 /// 4×4 grid (16 tools) — larger compound cut test.
 #[test]
-#[ignore = "flaky — multi-tool compound/sequential cuts through the mesh-boolean \
-            fallback are non-deterministic across processes (seed-dependent vertex \
-            welding) and under-cut faceted re-input; the `< box*0.99` oracle passes \
-            on garbage. Tracked in #747; revisit under the GFA rewrite."]
 fn compound_cut_matches_sequential_4x4_grid() {
     use brepkit_math::mat::Mat4;
 

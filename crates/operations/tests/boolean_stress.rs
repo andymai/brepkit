@@ -386,7 +386,6 @@ fn chained_fuse_three_boxes() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn chained_cut_multiple_holes() {
     let mut topo = Topology::new();
     let base = box_at(&mut topo, 0.0, 0.0, 0.0, 10.0, 10.0, 10.0);
@@ -401,7 +400,6 @@ fn chained_cut_multiple_holes() {
 }
 
 #[test]
-#[ignore = "flaky — FF curve filter borderline for chained booleans"]
 fn chained_fuse_then_cut() {
     let mut topo = Topology::new();
     let a = box_at(&mut topo, 0.0, 0.0, 0.0, 3.0, 3.0, 3.0);
@@ -635,7 +633,6 @@ fn edge_aligned_overlap_x() {
 // ===========================================================================
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn multiple_cuts_from_same_base() {
     let mut topo = Topology::new();
     let base = box_at(&mut topo, 0.0, 0.0, 0.0, 10.0, 10.0, 2.0);
