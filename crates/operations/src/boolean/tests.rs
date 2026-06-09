@@ -1657,10 +1657,6 @@ fn compound_cut_matches_sequential_2x2_grid() {
 
 /// 3×3 grid (9 tools) exercises the compound path (threshold = 8).
 #[test]
-#[ignore = "flaky — multi-tool compound/sequential cuts through the mesh-boolean \
-            fallback are non-deterministic across processes (seed-dependent vertex \
-            welding) and under-cut faceted re-input; the `< box*0.99` oracle passes \
-            on garbage. Tracked in #747; revisit under the GFA rewrite."]
 fn compound_cut_matches_sequential_3x3_grid() {
     use brepkit_math::mat::Mat4;
 
@@ -1781,7 +1777,6 @@ fn compound_cut_matches_sequential_4x4_grid() {
 /// This simulates the gridfinity honeycomb scenario where the target
 /// has cylindrical fillets (rounded corners) and the tools are hex prisms.
 #[test]
-#[ignore = "flaky — vertex merge non-determinism for complex compound operations"]
 fn compound_cut_shelled_target_many_tools() {
     use brepkit_math::mat::Mat4;
 
@@ -2541,7 +2536,6 @@ fn test_boolean_concave_face_chord_clip() {
 // does not break the common convex-face case. A large box minus a half-
 // overlapping smaller box: expected volume = 8.0 - 0.5 = 7.5.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn test_boolean_convex_face_chord_clip_regression() {
     let mut topo = Topology::new();
 
@@ -2628,7 +2622,6 @@ fn boolean_fuse_overlapping_boxes_positive_volume() {
 /// Sequential compound cut with many tools should produce a valid solid
 /// with bounded face count (unify_faces prevents explosion).
 #[test]
-#[ignore = "flaky — compound boolean non-determinism can produce zero-volume result on CI"]
 fn compound_cut_sequential_reduces_volume() {
     let mut topo = Topology::new();
     let target = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();

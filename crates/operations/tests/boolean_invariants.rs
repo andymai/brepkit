@@ -619,7 +619,6 @@ fn fuse_thin_shell_with_containing_solid_preserves_larger_volume() {
 // -- Cut cylinder from box ------------------------------------------------
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn cut_cylinder_from_box_volume() {
     // Cylinder centered in box, protruding above and below.
     let mut topo = Topology::new();

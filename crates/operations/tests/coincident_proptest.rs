@@ -53,14 +53,8 @@ proptest! {
     }
 
     // Rotation invariance: rotating both boxes of a face-stack by the
-    // same Z rotation should preserve volume. The boolean exhibits up
-    // to ~15% volume drift at certain non-axis-aligned angles, which
-    // is a known gap (see ignored cylinder/cone/torus SD tests for the
-    // related GFA-integration weakness on non-axis-aligned shapes).
+    // same Z rotation should preserve volume.
     #[test]
-    #[ignore = "Gap: face-stack fuse exhibits up to ~15% volume drift at certain \
-                Z-rotation angles (e.g. 3.98 rad). Likely related to GFA face-splitting \
-                producing an extra internal face at off-axis rotations."]
     fn prop_face_stack_z_rotation_invariant(angle in 0.0f64..std::f64::consts::TAU) {
         let mut topo = Topology::default();
         let a = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
