@@ -348,7 +348,7 @@ pub(super) fn split_periodic_face_into_bands(
             upper.clone(),
             mk_seam(vb, va)?,
         ];
-        let interior = surface.evaluate(seam_u + PI, f64::midpoint(va, vb))?;
+        let interior = surface.evaluate((seam_u + PI).rem_euclid(TAU), f64::midpoint(va, vb))?;
         bands.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire: wire,
@@ -889,4 +889,32 @@ pub(super) fn try_split_crossing_plane_face(
         });
     }
     Some(result)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use brepkit_math::surfaces::CylindricalSurface;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::face::FaceSurface;
+    use std::f64::consts::{PI, TAU};
+
+    #[test]
+    fn band_interior_antipode_wraps_into_domain() {
+        let cyl =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+        let surface = FaceSurface::Cylinder(cyl);
+
+        // Seam in (π, 2π): the unwrapped antipode seam_u + π exceeds 2π.
+        for &seam_u in &[1.1 * PI, 1.5 * PI, 1.9 * PI] {
+            let wrapped = (seam_u + PI).rem_euclid(TAU);
+            assert!((0.0..TAU).contains(&wrapped));
+            // The wrap is behavior-preserving on a periodic surface: the
+            // in-domain parameter evaluates to the same 3D interior point.
+            let a = surface.evaluate(seam_u + PI, 3.0).unwrap();
+            let b = surface.evaluate(wrapped, 3.0).unwrap();
+            assert!((a - b).length() < 1e-9);
+        }
+    }
 }
