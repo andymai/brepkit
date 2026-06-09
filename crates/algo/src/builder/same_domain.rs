@@ -30,7 +30,8 @@ pub struct SameDomainPair {
     pub idx_a: usize,
     /// Sub-face index from solid B.
     pub idx_b: usize,
-    /// `true` if normals point the same direction, `false` if opposite.
+    /// `true` if the effective oriented normals (surface normal combined
+    /// with face reversal) point the same direction, `false` if opposite.
     pub same_orientation: bool,
     /// `true` if B's face is fully contained within A's boundary.
     /// For edge-set matched faces, both faces have identical boundaries,
@@ -130,6 +131,17 @@ pub fn detect_same_domain<S: BuildHasher>(
         })
         .collect();
 
+    // Surface normals alone don't define orientation: faces kept through a
+    // Cut carry their original surface with a reversal flag, so the
+    // effective normal is the surface normal flipped when reversed.
+    let reversed: Vec<bool> = sub_faces
+        .iter()
+        .map(|sf| {
+            topo.face(sf.face_id)
+                .is_ok_and(brepkit_topology::face::Face::is_reversed)
+        })
+        .collect();
+
     let mut uf = UnionFind::new(n);
     let mut pair_data: HashMap<(usize, usize), bool> = HashMap::new(); // (min,max) → same_orientation
     // Tracks pairs unioned by the geometric containment pass (Step 3b).
@@ -162,7 +174,7 @@ pub fn detect_same_domain<S: BuildHasher>(
                 if let Some(same_dir) = surfaces_same_domain(surf_i, surf_j, tol) {
                     uf.union(i, j);
                     let key = (i.min(j), i.max(j));
-                    pair_data.insert(key, same_dir);
+                    pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
                 }
             }
         }
@@ -205,7 +217,7 @@ pub fn detect_same_domain<S: BuildHasher>(
                 if planar_faces_overlap(topo, sub_faces, i, j) {
                     uf.union(i, j);
                     let key = (i.min(j), i.max(j));
-                    pair_data.insert(key, same_dir);
+                    pair_data.insert(key, same_dir ^ (reversed[i] != reversed[j]));
                     // Mark the post-union root so the emission code knows
                     // this group came from geometric containment, not from
                     // boundary-identical edge sets.
@@ -840,6 +852,46 @@ mod tests {
         assert!(
             result.pairs[0].b_contained_in_a,
             "geometric containment must set b_contained_in_a=true so Cut cancels both"
+        );
+    }
+
+    /// A reversed face's effective normal is opposite its surface normal, so
+    /// pairing a reversed and an unreversed coplanar face with identical
+    /// boundaries must report `same_orientation = false`.
+    #[test]
+    fn reversed_face_flips_same_orientation() {
+        let mut topo = Topology::new();
+        let arena = GfaArena::new();
+        let face_ranks: HashMap<FaceId, Rank> = HashMap::new();
+        let tol = Tolerance::new();
+
+        let face_a = rect_sub_face(
+            &mut topo,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            Rank::A,
+            Point3::new(0.5, 0.5, 0.0),
+        );
+        let face_b = rect_sub_face(
+            &mut topo,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            Rank::B,
+            Point3::new(0.5, 0.5, 0.0),
+        );
+        topo.face_mut(face_b.face_id).unwrap().set_reversed(true);
+        let sub_faces = vec![face_a, face_b];
+
+        let result = detect_same_domain(&topo, &arena, &sub_faces, &face_ranks, tol);
+
+        assert_eq!(result.pairs.len(), 1, "expected one cross-rank SD pair");
+        assert!(
+            !result.pairs[0].same_orientation,
+            "reversed face must flip effective orientation"
         );
     }
 

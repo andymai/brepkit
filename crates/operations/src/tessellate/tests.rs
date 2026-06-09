@@ -1094,7 +1094,6 @@ fn test_circle_deflection_scaling() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation -- old boolean pipeline removed"]
 fn test_tessellate_boolean_result_watertight() {
     use std::collections::{HashMap, HashSet};
 

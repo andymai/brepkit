@@ -87,10 +87,6 @@ fn cone_cap_on_cap_stack_fuse() {
 }
 
 #[test]
-#[ignore = "Gap: cap-on-cap touching solids with non-same-domain lateral cone \
-            surfaces collapse to one component through the mesh fallback; \
-            union volume comes out as a single frustum instead of the stacked \
-            pair (expected 2.2907)."]
 fn cone_cap_on_cap_stack_fuse_gfa_direct() {
     // Frustum A: r1=1 (z=0), r2=0.5 (z=1), slope 0.5 (apex z=2).
     // Frustum B: r1=0.5 (z=1), r2=0.25 (z=2), slope 0.25 (apex z=3).
@@ -101,8 +97,27 @@ fn cone_cap_on_cap_stack_fuse_gfa_direct() {
     let b = cone_at_z(&mut topo, 1.0, 0.5, 0.25, 1.0);
     let r = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
     let expected = frustum_volume(1.0, 0.5, 1.0) + frustum_volume(0.5, 0.25, 1.0);
-    let got = vol(&topo, r);
-    assert!(approx_eq(got, expected, 0.03));
+    // Measure at a fine deflection: inscribed tessellation at the suite-wide
+    // 0.05 underestimates cone volume by ~3.2%, right at the oracle margin.
+    let got = solid_volume(&topo, r, 0.005).unwrap();
+    assert!(
+        approx_eq(got, expected, 0.03),
+        "stacked-frustum fuse volume: got {got:.6}, expected {expected:.6}"
+    );
+}
+
+#[test]
+fn cone_stack_fuse_volume_measurement_is_deterministic() {
+    let mut topo = Topology::default();
+    let a = cone_at_z(&mut topo, 0.0, 1.0, 0.5, 1.0);
+    let b = cone_at_z(&mut topo, 1.0, 0.5, 0.25, 1.0);
+    let r = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+    let v1 = vol(&topo, r);
+    let v2 = vol(&topo, r);
+    assert!(
+        (v1 - v2).abs() < 1e-12,
+        "volume measurement must be deterministic: v1={v1:.12}, v2={v2:.12}"
+    );
 }
 
 // ── 3. Coaxial overlap (lateral SD on cone surface) ───────────────────

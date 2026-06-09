@@ -360,17 +360,22 @@ pub(super) fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
     }
 
     // Boundary vertices: incident on half-edges without a matching reverse.
-    let mut boundary_verts: HashSet<u32> = HashSet::new();
+    let mut boundary_set: HashSet<u32> = HashSet::new();
     for &(a, b) in half_edges.keys() {
         if !half_edges.contains_key(&(b, a)) {
-            boundary_verts.insert(a);
-            boundary_verts.insert(b);
+            boundary_set.insert(a);
+            boundary_set.insert(b);
         }
     }
 
-    if boundary_verts.is_empty() {
+    if boundary_set.is_empty() {
         return;
     }
+
+    // Sorted iteration keeps grid-cell contents and union order independent
+    // of HashSet iteration order, so welded meshes are reproducible.
+    let mut boundary_verts: Vec<u32> = boundary_set.into_iter().collect();
+    boundary_verts.sort_unstable();
 
     #[allow(clippy::items_after_statements)]
     fn uf_find(parent: &mut [u32], mut x: u32) -> u32 {
@@ -380,12 +385,15 @@ pub(super) fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
         }
         x
     }
+    // Rooting at the smallest index makes the cluster representative a pure
+    // function of the weld partition, independent of union call order.
     #[allow(clippy::items_after_statements)]
     fn uf_union(parent: &mut [u32], a: u32, b: u32) {
         let ra = uf_find(parent, a);
         let rb = uf_find(parent, b);
         if ra != rb {
-            parent[rb as usize] = ra;
+            let (root, child) = (ra.min(rb), ra.max(rb));
+            parent[child as usize] = root;
         }
     }
 
