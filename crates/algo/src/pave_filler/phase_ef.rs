@@ -153,23 +153,39 @@ fn build_face_containment(
 
     let outer_wire = topo.wire(outer_wire_id)?;
     let oriented: Vec<_> = outer_wire.edges().to_vec();
+    let mut prev: Option<Point3> = None;
     for oe in &oriented {
         let edge = topo.edge(oe.edge())?;
         let start_pos = topo.vertex(edge.start())?.point();
         let end_pos = topo.vertex(edge.end())?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
         let n = N_BOUNDARY_SAMPLES;
-        let mut prev: Option<Point3> = None;
-        for i in 0..n {
+        // Sample inclusive of the edge's end vertex (0..=n) so the closing
+        // segment of a closed wire reaches the true endpoint; consecutive
+        // edges share a vertex, so dedup against the previous point.
+        for i in 0..=n {
             let frac = i as f64 / n as f64;
             let frac = if oe.is_forward() { frac } else { 1.0 - frac };
             let t = t0 + (t1 - t0) * frac;
             let pt = edge.curve().evaluate_with_endpoints(t, start_pos, end_pos);
             if let Some(p) = prev {
+                if (pt - p).length() <= tol.linear {
+                    continue;
+                }
                 max_chord = max_chord.max((pt - p).length());
             }
             prev = Some(pt);
             outer_points.push(pt);
+        }
+    }
+    // The last edge's end vertex coincides with the first edge's start
+    // vertex on a closed wire; drop the duplicate so the closing polygon
+    // segment isn't degenerate.
+    if outer_points.len() >= 2 {
+        if let (Some(&first), Some(&last)) = (outer_points.first(), outer_points.last()) {
+            if (last - first).length() <= tol.linear {
+                outer_points.pop();
+            }
         }
     }
     all_points.extend_from_slice(&outer_points);
@@ -204,9 +220,11 @@ fn build_face_containment(
     if let FaceSurface::Plane { normal, .. } = &surface {
         if outer_points.len() >= 3 {
             // Sampled chords undercut curved boundary arcs by at most the
-            // sagitta, which is bounded by a quarter of the chord length;
-            // the margin keeps true near-boundary crossings accepted.
-            let margin = (max_chord * 0.25).max(tol.linear * 10.0);
+            // sagitta. For an arc of half-angle φ the sagitta/chord ratio is
+            // tan(φ/2)/2, which reaches 0.5 at a 180° arc, so half the chord
+            // length is a conservative bound for sub-semicircle samples.
+            // The margin keeps true near-boundary crossings accepted.
+            let margin = (max_chord * 0.5).max(tol.linear * 10.0);
             let frame = PlaneFrame::from_normal_and_point(*normal, outer_points[0]);
             let polygon: Vec<Point2> = outer_points.iter().map(|&p| frame.project(p)).collect();
             return Ok(FaceContainment {
