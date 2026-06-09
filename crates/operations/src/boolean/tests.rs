@@ -1780,7 +1780,7 @@ fn compound_cut_matches_sequential_4x4_grid() {
 
 /// Test compound_cut with a shelled target + many box cutters.
 /// This simulates the gridfinity honeycomb scenario where the target
-/// has cylindrical fillets (rounded corners) and the tools are hex prisms.
+/// has cylindrical fillets (rounded corners) and the tools are boxes.
 #[test]
 fn compound_cut_shelled_target_many_tools() {
     use brepkit_math::mat::Mat4;
