@@ -411,9 +411,9 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
         return false;
     };
 
-    let wire_points = |face: &brepkit_topology::face::Face| -> Vec<brepkit_math::vec::Point3> {
+    let wire_points = |wire_id: brepkit_topology::wire::WireId| -> Vec<brepkit_math::vec::Point3> {
         let mut pts = Vec::new();
-        let Ok(wire) = topo.wire(face.outer_wire()) else {
+        let Ok(wire) = topo.wire(wire_id) else {
             return pts;
         };
         for oe in wire.edges() {
@@ -432,8 +432,8 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
         pts
     };
 
-    let pts_i = wire_points(face_i);
-    let pts_j = wire_points(face_j);
+    let pts_i = wire_points(face_i.outer_wire());
+    let pts_j = wire_points(face_j.outer_wire());
     if pts_i.len() < 3 || pts_j.len() < 3 {
         return false;
     }
@@ -459,13 +459,33 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
                 .all(|&v| super::classify_2d::point_in_polygon_2d(v, poly))
         };
 
+    // A point landing inside one of the container's inner wires sits in a
+    // hole, not on the face — e.g. a frame face whose hole exactly hosts
+    // the candidate. Containment through a hole is not overlap.
+    let in_hole = |p: brepkit_math::vec::Point2, face: &brepkit_topology::face::Face| -> bool {
+        face.inner_wires().iter().any(|&wid| {
+            let pts = wire_points(wid);
+            if pts.len() < 3 {
+                return false;
+            }
+            let poly: Vec<_> = pts.iter().map(|&q| frame.project(q)).collect();
+            super::classify_2d::point_in_polygon_2d(p, &poly)
+        })
+    };
+
     // i fully contained in j: every vertex of i (plus its interior sample)
     // is inside j's polygon.
-    if super::classify_2d::point_in_polygon_2d(p_i_2d, &poly_j) && all_inside(&poly_i, &poly_j) {
+    if super::classify_2d::point_in_polygon_2d(p_i_2d, &poly_j)
+        && all_inside(&poly_i, &poly_j)
+        && !in_hole(p_i_2d, face_j)
+    {
         return true;
     }
     // j fully contained in i.
-    if super::classify_2d::point_in_polygon_2d(p_j_2d, &poly_i) && all_inside(&poly_j, &poly_i) {
+    if super::classify_2d::point_in_polygon_2d(p_j_2d, &poly_i)
+        && all_inside(&poly_j, &poly_i)
+        && !in_hole(p_j_2d, face_i)
+    {
         return true;
     }
     false
