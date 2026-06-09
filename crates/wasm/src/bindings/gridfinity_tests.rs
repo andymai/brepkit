@@ -1024,7 +1024,6 @@ fn gridfinity_d1a_concentric_box_cut() {
 /// Tests whether the boolean issue is specific to loft geometry or
 /// whether it also affects simple extrusions with many coplanar caps.
 #[test]
-#[ignore = "Euler=0 — boolean coplanar face classification drops inner faces"]
 fn gridfinity_d1a1c_octagon_cut() {
     let mut k = BrepKernel::new();
 

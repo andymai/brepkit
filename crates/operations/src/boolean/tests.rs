@@ -1660,11 +1660,6 @@ fn compound_cut_matches_sequential_2x2_grid() {
 
 /// 3×3 grid (9 tools) exercises the compound path (threshold = 8).
 #[test]
-#[ignore = "flaky — multi-tool compound/sequential cuts through the mesh-boolean \
-            fallback are non-deterministic across processes (seed-dependent vertex \
-            welding); with the oracle's box volume corrected to the actual \
-            make_box(10,10,2) = 200, both paths intermittently remove little or \
-            nothing. Tracked in #747; revisit under the GFA rewrite."]
 fn compound_cut_matches_sequential_3x3_grid() {
     use brepkit_math::mat::Mat4;
 
@@ -1705,26 +1700,29 @@ fn compound_cut_matches_sequential_3x3_grid() {
     let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
-    // Both paths use mesh boolean fallback for cylinder-box cuts, which
-    // can produce different volumes under different execution conditions.
-    // Assert each path individually: volume must be less than the uncut box.
-    let box_vol = 10.0 * 10.0 * 2.0;
+    // 10x10x2 box minus nine full-height r=0.5 cylinders.
+    #[allow(clippy::cast_precision_loss)]
+    let n_tools = tools.len() as f64;
+    let expected = 2.0f64.mul_add(10.0 * 10.0, -(n_tools * std::f64::consts::PI * r * r * 2.0));
+    let seq_rel = (seq_vol - expected).abs() / expected;
     assert!(
-        compound_vol < box_vol * 0.99,
-        "compound_cut should reduce volume: {compound_vol:.1} vs box {box_vol:.1}"
+        seq_rel < 0.01,
+        "sequential volume {seq_vol:.4} should be within 1% of {expected:.4} (rel={seq_rel:.4})"
     );
+    let rel = (compound_vol - expected).abs() / expected;
     assert!(
-        seq_vol < box_vol * 0.99,
-        "sequential cuts should reduce volume: {seq_vol:.1} vs box {box_vol:.1}"
+        rel < 0.01,
+        "compound_cut volume {compound_vol:.4} should be within 1% of {expected:.4} (rel={rel:.4})"
+    );
+    let agree = (compound_vol - seq_vol).abs() / expected;
+    assert!(
+        agree < 0.01,
+        "compound {compound_vol:.4} and sequential {seq_vol:.4} should agree within 1% (rel={agree:.4})"
     );
 }
 
 /// 4×4 grid (16 tools) — larger compound cut test.
 #[test]
-#[ignore = "flaky — multi-tool compound/sequential cuts through the mesh-boolean \
-            fallback are non-deterministic across processes (seed-dependent vertex \
-            welding) and under-cut faceted re-input; the `< box*0.99` oracle passes \
-            on garbage. Tracked in #747; revisit under the GFA rewrite."]
 fn compound_cut_matches_sequential_4x4_grid() {
     use brepkit_math::mat::Mat4;
 
@@ -1765,19 +1763,24 @@ fn compound_cut_matches_sequential_4x4_grid() {
     let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
-    // The compound and sequential paths both use mesh boolean fallback for
-    // cylinder-box cuts, which can produce slightly different volumes depending
-    // on tessellation details. Under coverage instrumentation the mesh fallback
-    // may behave differently due to FP sensitivity.
-    // Assert each path individually: volume must be less than the uncut box.
-    let box_vol = 20.0 * 20.0 * 2.0;
+    // 20x20x2 box minus sixteen full-height r=0.5 cylinders.
+    #[allow(clippy::cast_precision_loss)]
+    let n_tools = tools.len() as f64;
+    let expected = 2.0f64.mul_add(20.0 * 20.0, -(n_tools * std::f64::consts::PI * r * r * 2.0));
+    let seq_rel = (seq_vol - expected).abs() / expected;
     assert!(
-        compound_vol < box_vol * 0.99,
-        "compound_cut should reduce volume: {compound_vol:.1} vs box {box_vol:.1}"
+        seq_rel < 0.01,
+        "sequential volume {seq_vol:.4} should be within 1% of {expected:.4} (rel={seq_rel:.4})"
     );
+    let rel = (compound_vol - expected).abs() / expected;
     assert!(
-        seq_vol < box_vol * 0.99,
-        "sequential cuts should reduce volume: {seq_vol:.1} vs box {box_vol:.1}"
+        rel < 0.01,
+        "compound_cut volume {compound_vol:.4} should be within 1% of {expected:.4} (rel={rel:.4})"
+    );
+    let agree = (compound_vol - seq_vol).abs() / expected;
+    assert!(
+        agree < 0.01,
+        "compound {compound_vol:.4} and sequential {seq_vol:.4} should agree within 1% (rel={agree:.4})"
     );
 }
 

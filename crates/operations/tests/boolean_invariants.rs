@@ -574,19 +574,8 @@ fn cut_then_fuse_back_containment() {
 //   actual: vol(fused) ≈ vol(diff) — fuse collapses to just the thin shell.
 
 #[test]
-#[ignore = "GFA classifier votes Inside arbitrarily when sample is coplanar with opposing solid's boundary; partial Plane sample-point fix narrowed but didn't close this case"]
+#[ignore = "GFA face selection is correct (same-domain orientation now honors face reversal), but assembly leaves an open shell: diff's outer faces keep long unsplit edges that don't match the collinear sliver edges on adjacent split faces (18 free edges), so the wrapper falls back to mesh boolean. Needs a collinear-edge refinement pass in GFA assembly plus closed-shell-aware wrapper acceptance."]
 fn fuse_thin_shell_with_containing_solid_preserves_larger_volume() {
-    // Diagnosis (after the Plane sample-point fix in `algo/src/builder/mod.rs`):
-    // 5/6 of inter's faces correctly classify as Outside diff, but the 6th
-    // (inter's face coplanar with diff's L-shape boundary) still votes Inside.
-    // Ray-cast from a sample point coplanar with the opposing solid's
-    // boundary is fragile — starting-on-face tiebreaks flip parity.
-    // Closing this needs either (a) extending SD detection to pair the
-    // L-shape diff face with the smaller inter square it geometrically
-    // contains regardless of edge-set match, or (b) further offsetting
-    // the sample along the face normal (which breaks regular faces unless
-    // SD handles the resulting duplicates).
-    //
     // Uses 0.5001 (above tol.linear) so the identical-Cut shortcut doesn't
     // fire and Cut(A,B) actually goes through GFA, producing the L-shell.
     let mut topo = Topology::new();

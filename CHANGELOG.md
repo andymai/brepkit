@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.102.0](https://github.com/andymai/brepkit/compare/v2.101.3...v2.102.0) (2026-06-09)
+
+
+### Features
+
+* **algo:** split u-periodic faces into bands at internal section circles ([#756](https://github.com/andymai/brepkit/issues/756)) ([39e9425](https://github.com/andymai/brepkit/commit/39e9425fd9e21a95c5aa9db48440389f28481d4e))
+
+
+### Bug Fixes
+
+* **algo:** adopt existing boundary vertices as seams for closed section curves ([#755](https://github.com/andymai/brepkit/issues/755)) ([3342271](https://github.com/andymai/brepkit/commit/3342271cdc0ec9f63e3b752c9dd699fe0aecad1c))
+* **algo:** trim plane-plane section curves to mutual face overlap ([#754](https://github.com/andymai/brepkit/issues/754)) ([e692c9c](https://github.com/andymai/brepkit/commit/e692c9cb3fd50960a44c6876a345d1d2424cdc5b))
+
 ## [2.101.3](https://github.com/andymai/brepkit/compare/v2.101.2...v2.101.3) (2026-06-03)
 
 
