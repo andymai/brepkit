@@ -8,6 +8,7 @@
 use std::f64::consts::TAU;
 
 use brepkit_math::curves2d::{Curve2D, Line2D, NurbsCurve2D};
+use brepkit_math::traits::ParametricCurve;
 use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::FaceSurface;
@@ -206,20 +207,43 @@ pub(super) fn sample_edge_to_uv(
 /// Evaluate a 3D edge curve at parameter t in [0, 1].
 ///
 /// For `Line`, linearly interpolates between start and end.
-/// For `Circle`/`Ellipse`/`NurbsCurve`, uses `evaluate_with_endpoints`.
+/// For open `Circle`/`Ellipse` edges, traces the shorter arc between the
+/// endpoints. For closed edges and `NurbsCurve`, uses the curve domain.
 pub(super) fn evaluate_edge_at_t(curve: &EdgeCurve, start: Point3, end: Point3, t: f64) -> Point3 {
-    if matches!(curve, EdgeCurve::Line) {
-        Point3::new(
+    match curve {
+        EdgeCurve::Line => Point3::new(
             start.x() + (end.x() - start.x()) * t,
             start.y() + (end.y() - start.y()) * t,
             start.z() + (end.z() - start.z()) * t,
-        )
-    } else {
-        // Delegate to EdgeCurve's parametric evaluation.
-        let (t0, t1) = curve.domain_with_endpoints(start, end);
-        let param = t0 + (t1 - t0) * t;
-        curve.evaluate_with_endpoints(param, start, end)
+        ),
+        // Open circle/ellipse edges follow the shorter-arc convention shared
+        // with tessellation and topology wire sampling: `domain_with_endpoints`
+        // returns the full [0, 2pi] regardless of endpoints, which is only
+        // right for closed edges — sampling an open arc over it would trace
+        // the whole circle.
+        EdgeCurve::Circle(c) if (start - end).length() > 1e-12 => {
+            let t0 = c.project(start);
+            let d = shorter_arc_delta(c.project(end) - t0);
+            ParametricCurve::evaluate(c, t0 + d * t)
+        }
+        EdgeCurve::Ellipse(e) if (start - end).length() > 1e-12 => {
+            let t0 = e.project(start);
+            let d = shorter_arc_delta(e.project(end) - t0);
+            ParametricCurve::evaluate(e, t0 + d * t)
+        }
+        _ => {
+            // Closed curves and NURBS: parametric evaluation over the domain.
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            let param = t0 + (t1 - t0) * t;
+            curve.evaluate_with_endpoints(param, start, end)
+        }
     }
+}
+
+/// Wrap an angular difference into (-pi, pi] — the shorter way around.
+fn shorter_arc_delta(d: f64) -> f64 {
+    let w = d.rem_euclid(TAU);
+    if w > std::f64::consts::PI { w - TAU } else { w }
 }
 
 /// Sample points along a 3D edge curve and project each to UV via `PlaneFrame`.

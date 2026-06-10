@@ -247,7 +247,7 @@ fn test_intersect_disjoint() {
 // ── Sequential booleans ─────────────────────────────────────────────
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
+#[ignore = "sequential column cuts produce a non-manifold result (an edge shared by 3 faces)"]
 fn test_sequential_cuts_volume() {
     // Start with 10x10x10 box. Cut 5 columns (1x1x10 each) at different positions.
     let mut topo = Topology::new();
