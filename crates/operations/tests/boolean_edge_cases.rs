@@ -386,7 +386,6 @@ fn test_boolean_cone_box() {
 }
 
 #[test]
-#[ignore = "cone-cylinder cut volume 11.19 vs expected 19.63 (43% low) — material over-removed"]
 fn test_boolean_cone_cylinder() {
     // Cone r_bottom=2, r_top=1, height=3. Cylinder radius 0.5, height 3.
     let mut topo = Topology::new();

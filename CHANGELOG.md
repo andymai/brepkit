@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.102.3](https://github.com/andymai/brepkit/compare/v2.102.2...v2.102.3) (2026-06-10)
+
+
+### Bug Fixes
+
+* **algo:** filter section curves to mutual face footprints; fix(operations): loft cap winding ([#766](https://github.com/andymai/brepkit/issues/766)) ([90d48be](https://github.com/andymai/brepkit/commit/90d48bef877cef2397ba6a8077c13a4121d21aca))
+
+## [2.102.2](https://github.com/andymai/brepkit/compare/v2.102.1...v2.102.2) (2026-06-10)
+
+
+### Bug Fixes
+
+* **algo:** contain edge-face crossings to face boundaries; orient inner wires by face reversal ([#761](https://github.com/andymai/brepkit/issues/761)) ([63b914d](https://github.com/andymai/brepkit/commit/63b914d5b1a5fe85ff220ab16b2ce1302c20ea57))
+
 ## [2.102.1](https://github.com/andymai/brepkit/compare/v2.102.0...v2.102.1) (2026-06-10)
 
 

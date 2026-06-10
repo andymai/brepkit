@@ -2119,12 +2119,14 @@ fn build_topology_face(
             // edges are shared across parent faces with different vertex caches.
             topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
         };
-        // For Line edges: start_vid at start_3d, end_vid at end_3d encode
-        // the traversal direction directly — always use forward=true.
-        // For curved edges (Circle, Ellipse, etc.): the curve has its own
-        // parameterization that may differ from start_3d→end_3d order.
-        // Use pcurve_edge.forward to preserve the intended traversal.
-        let forward = matches!(pcurve_edge.curve_3d, EdgeCurve::Line) || pcurve_edge.forward;
+        // The edge was just created with start_vid at start_3d and end_vid
+        // at end_3d, so the vertex order itself encodes the traversal
+        // direction — open edges always get forward=true regardless of the
+        // pcurve direction flag (using the flag here would contradict the
+        // vertex order and break wire closure). Closed curved edges
+        // (start_vid == end_vid) can't encode direction via vertices, so
+        // they keep pcurve_edge.forward to preserve winding.
+        let forward = start_vid != end_vid || pcurve_edge.forward;
         oriented_edges.push(OrientedEdge::new(edge_id, forward));
     }
 
@@ -2152,7 +2154,10 @@ fn build_topology_face(
             );
             let edge = Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone());
             let edge_id = topo.add_edge(edge);
-            inner_oriented.push(OrientedEdge::new(edge_id, pcurve_edge.forward));
+            // Same rule as the outer wire: Line edge vertices already
+            // encode traversal order, so the oriented edge is forward.
+            let forward = matches!(pcurve_edge.curve_3d, EdgeCurve::Line) || pcurve_edge.forward;
+            inner_oriented.push(OrientedEdge::new(edge_id, forward));
         }
         if let Ok(inner_wire) = Wire::new(inner_oriented, true) {
             inner_wire_ids.push(topo.add_wire(inner_wire));

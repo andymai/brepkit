@@ -29,6 +29,11 @@ use crate::error::AlgoError;
 /// different input solids have separate vertex entities at the same position.
 type VPair = (QPos, QPos);
 
+/// Bounding boxes of two growth shells are shrunk by this amount before testing
+/// interior overlap, so shells that merely touch at a shared face, edge, or
+/// vertex are still recognized as separate lumps.
+const INTERIOR_OVERLAP_MARGIN: f64 = 1e-6;
+
 /// Build a solid from BOP-selected faces using the 4-phase algorithm.
 ///
 /// # Errors
@@ -40,6 +45,7 @@ pub fn build_solid(topo: &mut Topology, selected: &[SelectedFace]) -> Result<Sol
     if selected.is_empty() {
         return Err(AlgoError::AssemblyFailed("no faces selected".into()));
     }
+    log::debug!("BuilderSolid: {} faces selected", selected.len());
 
     // Step 0: Create reversed copies for Cut B-faces
     let mut face_ids: Vec<FaceId> = Vec::with_capacity(selected.len());
@@ -55,6 +61,31 @@ pub fn build_solid(topo: &mut Topology, selected: &[SelectedFace]) -> Result<Sol
             face_ids.push(sf.face_id);
         }
     }
+
+    // Step 0a-pre: Drop degenerate sliver faces — all-Line outer wires with
+    // fewer than 3 distinct vertex positions enclose zero area (e.g. a loft
+    // band built over a duplicated profile point, giving [e, e-reversed]).
+    // Keeping them turns their edges non-manifold in an otherwise valid
+    // result. Faces with curved edges are exempt (two half-circles bound a
+    // real disc with only 2 vertices).
+    face_ids.retain(|&fid| !is_degenerate_line_sliver(topo, fid));
+    if face_ids.is_empty() {
+        return Err(AlgoError::AssemblyFailed(
+            "all faces degenerate slivers".into(),
+        ));
+    }
+
+    // Step 0a-pre2: Strip zero-length Line edges from wires (duplicated
+    // input vertices produce them; their twin lives only on the degenerate
+    // slivers removed above, so they would survive as free edges).
+    remove_zero_length_edges(topo, &mut face_ids)?;
+
+    // Step 0a: Split Line edges at intermediate collinear vertices.
+    // Adjacent faces can partition the same geometric boundary differently
+    // (one whole edge vs several sub-edges split at paves); refining every
+    // Line edge against the global vertex set gives both sides identical
+    // partitions so the merge below can unify them.
+    split_edges_at_collinear_vertices(topo, &mut face_ids)?;
 
     // Step 0b: Merge duplicate edges across selected faces.
     // Faces from different input solids may have separate edge entities for the
@@ -398,6 +429,44 @@ fn perform_areas(topo: &Topology, shells: &[Vec<FaceId>]) -> (Vec<Vec<FaceId>>, 
     (growth, holes)
 }
 
+/// Axis-aligned bounding box of a shell's boundary vertices.
+fn shell_aabb(topo: &Topology, faces: &[FaceId]) -> Option<brepkit_math::aabb::Aabb3> {
+    let mut points = Vec::new();
+    for &fid in faces {
+        let Ok(face) = topo.face(fid) else { continue };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let Ok(wire) = topo.wire(wid) else { continue };
+            for oe in wire.edges() {
+                let Ok(edge) = topo.edge(oe.edge()) else {
+                    continue;
+                };
+                if let Ok(v) = topo.vertex(edge.start()) {
+                    points.push(v.point());
+                }
+                if let Ok(v) = topo.vertex(edge.end()) {
+                    points.push(v.point());
+                }
+            }
+        }
+    }
+    brepkit_math::aabb::Aabb3::try_from_points(points)
+}
+
+/// Whether a shell is closed: every quantized boundary edge is shared by an
+/// even number of the shell's own faces (a watertight, manifold lump).
+fn shell_is_closed(topo: &Topology, faces: &[FaceId]) -> bool {
+    let mut edge_counts: HashMap<VPair, u32> = HashMap::new();
+    for &fid in faces {
+        let Ok(keys) = face_edge_keys(topo, fid) else {
+            return false;
+        };
+        for key in keys {
+            *edge_counts.entry(key).or_default() += 1;
+        }
+    }
+    !edge_counts.is_empty() && edge_counts.values().all(|&c| c % 2 == 0)
+}
+
 /// Compute a signed volume estimate for a shell using the divergence theorem.
 ///
 /// Positive = outward-oriented normals (growth shell).
@@ -687,22 +756,45 @@ fn assemble(
         normalize_face_wires(topo, fid);
     }
 
-    // Use the largest growth shell as outer
+    // The outer shell bounds the largest enclosed region. Selecting by face
+    // count instead lets a heavily fragmented but small growth shell (e.g. an
+    // overlap region split into many tiny faces) win over the shell that
+    // actually carries the bulk of the volume, demoting that bulk shell to an
+    // inner shell and collapsing the measured volume.
     let outer_idx = growth_shells
         .iter()
         .enumerate()
-        .max_by_key(|(_, s)| s.len())
+        .map(|(i, s)| (i, signed_volume_of_shell(topo, s)))
+        .max_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(i, _)| i)
         .unwrap_or(0);
 
     // Additional growth shells (disjoint outward-oriented regions, e.g. a cut
-    // that severs the solid into pieces) go into the same outer shell. Inner
-    // shells are reserved for cavities (hole shells); putting a disjoint piece
-    // there would mark it as a cavity and downstream multi-region handling
-    // walks only the outer shell.
+    // that severs the solid into pieces, or a disjoint fuse) join the same
+    // outer shell so their positive volume adds correctly — inner shells are
+    // reserved for cavities (hole shells), and downstream multi-region handling
+    // walks only the outer shell. A non-outer growth shell joins only when it
+    // is a genuine separate lump: closed in itself (watertight) and with an
+    // interior that does not overlap the outer shell's interior. Two boxes that
+    // merely touch at a face, edge, or vertex (their bounding boxes meet but
+    // interiors don't) are both real lumps and are kept; a residual fragment
+    // that is still open or shares the outer shell's interior is a
+    // fragmentation sliver, not a separate piece, so it is dropped rather than
+    // polluting the assembled volume. Interior overlap is tested with bounding
+    // boxes shrunk by a hair so a shared boundary does not read as an overlap.
+    // TODO: use a `Compound` for true multi-region results.
+    let outer_aabb = shell_aabb(topo, &growth_shells[outer_idx]);
     let mut outer_faces = growth_shells[outer_idx].clone();
     for (i, gs) in growth_shells.iter().enumerate() {
-        if i != outer_idx {
+        if i == outer_idx {
+            continue;
+        }
+        let interior_disjoint = matches!(
+            (outer_aabb, shell_aabb(topo, gs)),
+            (Some(a), Some(b)) if !a.expanded(-INTERIOR_OVERLAP_MARGIN)
+                .intersects(b.expanded(-INTERIOR_OVERLAP_MARGIN))
+        );
+        if interior_disjoint && shell_is_closed(topo, gs) {
             outer_faces.extend_from_slice(gs);
         }
     }
@@ -710,7 +802,7 @@ fn assemble(
         .map_err(|e| AlgoError::AssemblyFailed(format!("outer shell: {e}")))?;
     let outer_id = topo.add_shell(outer_shell);
 
-    // All hole shells become inner shells of this solid
+    // Genuine hole shells (negative signed volume) become inner shells.
     let mut inner_ids = Vec::new();
     for hole in &hole_shells {
         if let Ok(inner_shell) = Shell::new(hole.clone()) {
@@ -756,6 +848,299 @@ struct EdgeEntry {
     edge_id: brepkit_topology::edge::EdgeId,
     face_idx: usize,
     qpair: QPosEdge,
+}
+
+/// Rebuild faces whose wires contain zero-length Line edges (quantized
+/// start == end), dropping those edges. Closed curved edges (full circles)
+/// legitimately have coincident endpoints and are kept.
+fn remove_zero_length_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result<(), AlgoError> {
+    use brepkit_topology::edge::{EdgeCurve, EdgeId};
+
+    for fid in face_ids.iter_mut() {
+        let (surface, is_reversed, outer_oes, inner_oes_list, has_zero) = {
+            let face = topo.face(*fid)?;
+            let surface = face.surface().clone();
+            let is_reversed = face.is_reversed();
+            let collect = |wid| -> Result<Vec<(EdgeId, bool, bool)>, AlgoError> {
+                let mut out = Vec::new();
+                let wire = topo.wire(wid)?;
+                for oe in wire.edges() {
+                    let edge = topo.edge(oe.edge())?;
+                    let zero = matches!(edge.curve(), EdgeCurve::Line) && {
+                        let sp = topo.vertex(edge.start())?.point();
+                        let ep = topo.vertex(edge.end())?.point();
+                        quantize_point(sp, MERGE_TOL) == quantize_point(ep, MERGE_TOL)
+                    };
+                    out.push((oe.edge(), oe.is_forward(), zero));
+                }
+                Ok(out)
+            };
+            let outer_oes = collect(face.outer_wire())?;
+            let inner_wids = face.inner_wires().to_vec();
+            let mut inner_oes_list = Vec::new();
+            for iw in inner_wids {
+                inner_oes_list.push(collect(iw)?);
+            }
+            let has_zero = outer_oes
+                .iter()
+                .chain(inner_oes_list.iter().flatten())
+                .any(|&(_, _, z)| z);
+            (surface, is_reversed, outer_oes, inner_oes_list, has_zero)
+        };
+        if !has_zero {
+            continue;
+        }
+
+        let strip = |oes: &[(EdgeId, bool, bool)]| -> Vec<OrientedEdge> {
+            oes.iter()
+                .filter(|&&(_, _, z)| !z)
+                .map(|&(eid, fwd, _)| OrientedEdge::new(eid, fwd))
+                .collect()
+        };
+        let new_outer = strip(&outer_oes);
+        if !is_rebuildable_loop(topo, &new_outer) {
+            continue;
+        }
+        let Ok(new_outer_wire) = brepkit_topology::wire::Wire::new(new_outer, true) else {
+            continue;
+        };
+        let new_outer_id = topo.add_wire(new_outer_wire);
+        let mut new_inner_ids = Vec::new();
+        for inner_oes in &inner_oes_list {
+            let kept = strip(inner_oes);
+            if is_rebuildable_loop(topo, &kept) {
+                if let Ok(w) = brepkit_topology::wire::Wire::new(kept, true) {
+                    new_inner_ids.push(topo.add_wire(w));
+                }
+            }
+        }
+        let mut new_face = Face::new(new_outer_id, new_inner_ids, surface);
+        if is_reversed {
+            new_face.set_reversed(true);
+        }
+        *fid = topo.add_face(new_face);
+    }
+    Ok(())
+}
+
+/// Whether a stripped edge list can form a valid closed wire loop. Two or
+/// more edges always qualify. A single edge qualifies only when it is itself
+/// closed (e.g. a circular hole is one closed-circle edge) — start vertex
+/// equals end vertex, or the curve is inherently closed (Circle/Ellipse).
+/// Genuinely degenerate single-Line leftovers are rejected.
+fn is_rebuildable_loop(topo: &Topology, oes: &[OrientedEdge]) -> bool {
+    use brepkit_topology::edge::EdgeCurve;
+
+    match oes {
+        [] => false,
+        [single] => {
+            let Ok(edge) = topo.edge(single.edge()) else {
+                return false;
+            };
+            edge.is_closed() || matches!(edge.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+        }
+        _ => true,
+    }
+}
+
+/// Whether a face's outer wire is an all-Line loop with fewer than 3
+/// distinct vertex positions (zero enclosed area).
+fn is_degenerate_line_sliver(topo: &Topology, fid: FaceId) -> bool {
+    use brepkit_topology::edge::EdgeCurve;
+
+    let Ok(face) = topo.face(fid) else {
+        return false;
+    };
+    let Ok(wire) = topo.wire(face.outer_wire()) else {
+        return false;
+    };
+    let mut positions: HashSet<QPos> = HashSet::new();
+    for oe in wire.edges() {
+        let Ok(edge) = topo.edge(oe.edge()) else {
+            return false;
+        };
+        if !matches!(edge.curve(), EdgeCurve::Line) {
+            return false;
+        }
+        for vid in [edge.start(), edge.end()] {
+            let Ok(v) = topo.vertex(vid) else {
+                return false;
+            };
+            positions.insert(quantize_point(v.point(), MERGE_TOL));
+            if positions.len() >= 3 {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Split Line edges at intermediate collinear vertices from the global
+/// vertex set of the selected faces.
+///
+/// Splitting is driven purely by vertex position, so geometrically
+/// coincident edges on different faces always receive identical
+/// partitions; the sub-edge entities are created once per `EdgeId`, so
+/// faces sharing an edge keep sharing its sub-edges.
+#[allow(clippy::too_many_lines)]
+fn split_edges_at_collinear_vertices(
+    topo: &mut Topology,
+    face_ids: &mut [FaceId],
+) -> Result<(), AlgoError> {
+    use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
+    use brepkit_topology::vertex::VertexId;
+
+    let tol = MERGE_TOL;
+    let snap = tol * 10.0;
+
+    // Canonical vertex per quantized position, and unique Line edges.
+    let mut vert_at: HashMap<QPos, (VertexId, Point3)> = HashMap::new();
+    let mut line_edges: Vec<(EdgeId, VertexId, VertexId, Point3, Point3)> = Vec::new();
+    let mut seen_edges: HashSet<EdgeId> = HashSet::new();
+
+    for &fid in face_ids.iter() {
+        let face = topo.face(fid)?;
+        let wids: Vec<WireId> = std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .collect();
+        for wid in wids {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let (sv, ev) = (edge.start(), edge.end());
+                let is_line = matches!(edge.curve(), EdgeCurve::Line);
+                let sp = topo.vertex(sv)?.point();
+                let ep = topo.vertex(ev)?.point();
+                vert_at.entry(quantize_point(sp, tol)).or_insert((sv, sp));
+                vert_at.entry(quantize_point(ep, tol)).or_insert((ev, ep));
+                if is_line && seen_edges.insert(oe.edge()) {
+                    line_edges.push((oe.edge(), sv, ev, sp, ep));
+                }
+            }
+        }
+    }
+
+    // Deterministic order for sub-edge allocation.
+    line_edges.sort_by_key(|(eid, ..)| eid.index());
+
+    let mut replacements: HashMap<EdgeId, Vec<OrientedEdge>> = HashMap::new();
+    for (eid, sv, ev, sp, ep) in line_edges {
+        let dir = ep - sp;
+        let len2 = dir.dot(dir);
+        if len2 < snap * snap {
+            continue;
+        }
+        let mut cuts: Vec<(f64, VertexId)> = Vec::new();
+        for &(vid, p) in vert_at.values() {
+            if (p - sp).length() < snap || (p - ep).length() < snap {
+                continue;
+            }
+            let t = (p - sp).dot(dir) / len2;
+            if !(0.0..=1.0).contains(&t) {
+                continue;
+            }
+            let foot = sp + dir * t;
+            if (p - foot).length() > snap {
+                continue;
+            }
+            cuts.push((t, vid));
+        }
+        if cuts.is_empty() {
+            continue;
+        }
+        cuts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut chain: Vec<VertexId> = Vec::with_capacity(cuts.len() + 2);
+        chain.push(sv);
+        chain.extend(cuts.iter().map(|&(_, vid)| vid));
+        chain.push(ev);
+        let mut subs = Vec::with_capacity(chain.len() - 1);
+        for w in chain.windows(2) {
+            let sub_eid = topo.add_edge(Edge::new(w[0], w[1], EdgeCurve::Line));
+            subs.push(OrientedEdge::new(sub_eid, true));
+        }
+        replacements.insert(eid, subs);
+    }
+
+    if replacements.is_empty() {
+        return Ok(());
+    }
+    let split_count = replacements.len();
+
+    // Rebuild faces whose wires reference a split edge.
+    for fid in face_ids.iter_mut() {
+        let (surface, is_reversed, outer_oes, inner_oes_list) = {
+            let face = topo.face(*fid)?;
+            let surface = face.surface().clone();
+            let is_reversed = face.is_reversed();
+            let outer_oes: Vec<(EdgeId, bool)> = topo
+                .wire(face.outer_wire())?
+                .edges()
+                .iter()
+                .map(|oe| (oe.edge(), oe.is_forward()))
+                .collect();
+            let mut inner_oes_list = Vec::new();
+            for &iw in face.inner_wires() {
+                inner_oes_list.push(
+                    topo.wire(iw)?
+                        .edges()
+                        .iter()
+                        .map(|oe| (oe.edge(), oe.is_forward()))
+                        .collect::<Vec<(EdgeId, bool)>>(),
+                );
+            }
+            (surface, is_reversed, outer_oes, inner_oes_list)
+        };
+
+        let touched = outer_oes
+            .iter()
+            .chain(inner_oes_list.iter().flatten())
+            .any(|(eid, _)| replacements.contains_key(eid));
+        if !touched {
+            continue;
+        }
+
+        let expand = |oes: &[(EdgeId, bool)]| -> Vec<OrientedEdge> {
+            let mut out = Vec::with_capacity(oes.len());
+            for &(eid, fwd) in oes {
+                if let Some(subs) = replacements.get(&eid) {
+                    if fwd {
+                        out.extend(subs.iter().copied());
+                    } else {
+                        out.extend(
+                            subs.iter()
+                                .rev()
+                                .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward())),
+                        );
+                    }
+                } else {
+                    out.push(OrientedEdge::new(eid, fwd));
+                }
+            }
+            out
+        };
+
+        let Ok(new_outer) = brepkit_topology::wire::Wire::new(expand(&outer_oes), true) else {
+            continue;
+        };
+        let new_outer_id = topo.add_wire(new_outer);
+        let mut new_inner_ids = Vec::new();
+        for inner_oes in &inner_oes_list {
+            if let Ok(w) = brepkit_topology::wire::Wire::new(expand(inner_oes), true) {
+                new_inner_ids.push(topo.add_wire(w));
+            }
+        }
+
+        let mut new_face = Face::new(new_outer_id, new_inner_ids, surface);
+        if is_reversed {
+            new_face.set_reversed(true);
+        }
+        *fid = topo.add_face(new_face);
+    }
+
+    log::debug!("split_edges_at_collinear_vertices: split {split_count} edges");
+
+    Ok(())
 }
 
 /// Merge duplicate edges across selected faces by quantized endpoint position.

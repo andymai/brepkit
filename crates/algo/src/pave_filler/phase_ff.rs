@@ -149,6 +149,34 @@ pub fn perform(
                 raw_curves
             };
 
+            // Raw curves come from UNTRIMMED surface-surface intersection, so
+            // a curve can lie entirely beyond both faces' trimmed extents
+            // (e.g. tangency curvelets where a cone grazes a narrower
+            // cylinder, or a full cap circle paired with a smaller distant
+            // cap). Such curves fragment faces with spurious holes and bogus
+            // sub-faces downstream. Keep a curve only if at least one sample
+            // lies inside both faces' inflated AABBs.
+            let bb_a = bbox_a.expanded(tol.linear * 10.0);
+            let bb_b = bbox_b.expanded(tol.linear * 10.0);
+            let raw_curves: Vec<RawCurve> = raw_curves
+                .into_iter()
+                .filter(|raw| {
+                    let n = 16;
+                    (0..=n).any(|i| {
+                        let f = f64::from(i) / f64::from(n);
+                        // Line t_range is absolute arc length, not a
+                        // normalized [0,1] span — sample by endpoint lerp.
+                        let p = if matches!(raw.curve, EdgeCurve::Line) {
+                            raw.p_start + (raw.p_end - raw.p_start) * f
+                        } else {
+                            let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+                            raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
+                        };
+                        bb_a.contains_point(p) && bb_b.contains_point(p)
+                    })
+                })
+                .collect();
+
             for raw in raw_curves {
                 let mut raw = raw;
                 // Closed Circle3D sections — produced by plane-sphere
@@ -848,21 +876,27 @@ fn closed_circle_crosses_face_boundaries(
 }
 
 /// Find where a closed `Circle3D` section crosses the outer-wire
-/// boundary of the analytic-surface face in the pair (the non-plane
-/// face, which holds the boundary the curve actually exits at).
+/// boundaries of the face pair.
 ///
 /// Returns crossings as `(t_on_circle, point_3d)` sorted by `t`, with
 /// duplicates removed. Only `Line`-curve boundary edges are considered.
 ///
-/// Rationale: for plane-sphere intersections, the closed curve lies on
-/// both the plane face and the sphere hemisphere, but the *meaningful*
-/// boundary crossings are on the sphere hemisphere's equator polygon
-/// — those are the points where the section enters/leaves the
-/// hemisphere region. Using those crossings as split points gives
-/// half-arcs that cleanly bound a spherical cap sub-face. The plane
-/// face's boundary crossings can introduce points interior to the
-/// sphere hemisphere, producing arcs that don't form closed loops on
-/// the hemisphere.
+/// Hits are collected per face. A face whose boundary yields more than
+/// 4 hits is treated as circle-coincident (a chord polygon inscribed in
+/// the circle — every chord endpoint lies on the circle, e.g. the
+/// equator polygon of a faceted sphere whose great circle IS the
+/// section): its hits describe the boundary itself rather than
+/// entry/exit points, so they are excluded and only the other face's
+/// crossings are used.
+///
+/// When the pair contains a sphere face, the surviving hits from BOTH
+/// faces are unioned so the arcs are trimmed to the mutual overlap of
+/// the two face regions (a sphere face has no seam structure, so its
+/// noseam splitter needs arcs whose endpoints all land on the mutual
+/// region boundary). For other analytic pairs (cylinder/cone laterals)
+/// only the non-plane face's crossings are used — those surfaces keep
+/// full closed section circles for the periodic band splitter, and
+/// their seam-line hit must not combine with plane-boundary hits.
 fn closed_circle_boundary_crossings(
     topo: &Topology,
     face_a: FaceId,
@@ -870,32 +904,13 @@ fn closed_circle_boundary_crossings(
     circle: &brepkit_math::curves::Circle3D,
     tol: Tolerance,
 ) -> Vec<(f64, Point3)> {
-    let mut hits: Vec<(f64, Point3)> = Vec::new();
-
-    // Pick the non-plane face for boundary crossings. If both are planes
-    // or both are non-plane, fall back to using both (existing behavior).
-    let analytic_face = |fid: FaceId| -> Option<FaceId> {
-        let face = topo.face(fid).ok()?;
-        if matches!(face.surface(), FaceSurface::Plane { .. }) {
-            None
-        } else {
-            Some(fid)
-        }
-    };
-    let analytic_a = analytic_face(face_a);
-    let analytic_b = analytic_face(face_b);
-    let faces_to_check: Vec<FaceId> = match (analytic_a, analytic_b) {
-        (None, Some(b)) => vec![b],
-        (Some(a), None) => vec![a],
-        _ => vec![face_a, face_b],
-    };
-
-    for &fid in &faces_to_check {
+    let face_hits = |fid: FaceId| -> Vec<(f64, Point3)> {
+        let mut hits: Vec<(f64, Point3)> = Vec::new();
         let Ok(face) = topo.face(fid) else {
-            continue;
+            return hits;
         };
         let Ok(wire) = topo.wire(face.outer_wire()) else {
-            continue;
+            return hits;
         };
         for oe in wire.edges() {
             let Ok(edge) = topo.edge(oe.edge()) else {
@@ -913,13 +928,57 @@ fn closed_circle_boundary_crossings(
                 continue;
             };
             for (p, t) in circle.intersect_segment(sv.point(), ev.point(), tol.linear) {
-                // Dedup against existing hits by 3D distance.
                 let dup = hits
                     .iter()
                     .any(|(_, q)| (*q - p).length() < tol.linear * 10.0);
                 if !dup {
                     hits.push((t, p));
                 }
+            }
+        }
+        hits
+    };
+
+    let surface_of = |fid: FaceId| topo.face(fid).ok().map(|f| f.surface().clone());
+    let surf_a = surface_of(face_a);
+    let surf_b = surface_of(face_b);
+    let is_plane = |s: &Option<FaceSurface>| matches!(s, Some(FaceSurface::Plane { .. }));
+    let is_sphere = |s: &Option<FaceSurface>| matches!(s, Some(FaceSurface::Sphere(_)));
+
+    let pair_has_sphere = is_sphere(&surf_a) || is_sphere(&surf_b);
+    let faces_to_check: Vec<FaceId> = if pair_has_sphere {
+        vec![face_a, face_b]
+    } else {
+        match (is_plane(&surf_a), is_plane(&surf_b)) {
+            (true, false) => vec![face_b],
+            (false, true) => vec![face_a],
+            _ => vec![face_a, face_b],
+        }
+    };
+
+    let mut hits: Vec<(f64, Point3)> = Vec::new();
+    for &fid in &faces_to_check {
+        let fh = face_hits(fid);
+        // The boundary is coincident with the section circle when its
+        // segments are chords of an *inscribed* polygon: every vertex lands
+        // on the circle, so the hits are the polygon's vertices, evenly
+        // distributed around the full turn. A bare `len > 4` count misses a
+        // 4-segment inscribed polygon (square equator → exactly 4 hits), so
+        // test even angular distribution instead of relying on the count.
+        if hits_are_inscribed_polygon(&fh) {
+            log::debug!(
+                "closed_circle_boundary_crossings: {fid:?} has {} hits evenly distributed on \
+                 the circle — boundary coincident with circle, excluding its hits",
+                fh.len()
+            );
+            continue;
+        }
+        for (t, p) in fh {
+            let dup = hits
+                .iter()
+                .any(|(_, q)| (*q - p).length() < tol.linear * 10.0);
+            if !dup {
+                hits.push((t, p));
             }
         }
     }
@@ -931,21 +990,42 @@ fn closed_circle_boundary_crossings(
         hits.len()
     );
 
-    // If we found more than 4 crossings, the circle is almost certainly
-    // coincident with one of the face boundaries (e.g. the equator polygon
-    // approximating a great circle on a sphere). In that case the curve
-    // is the boundary itself, not an interior section — fall back to the
-    // existing closed-curve handling instead of splitting.
-    if hits.len() > 4 {
-        log::debug!(
-            "closed_circle_boundary_crossings: {} hits — assuming coincident with boundary, \
-             skipping split",
-            hits.len()
-        );
-        return Vec::new();
-    }
-
     hits
+}
+
+/// Whether boundary/circle hits describe an inscribed polygon (the boundary
+/// is coincident with the section circle) rather than a small set of
+/// entry/exit crossings.
+///
+/// Hits store the circle parameter `t` (an angle). An inscribed polygon's
+/// vertices spread evenly around the full circle, so the sorted angular gaps
+/// between consecutive hits (including the wrap-around gap) are all
+/// approximately equal and there are at least three of them. Two entry/exit
+/// crossings, or a few unevenly clustered hits, fail this test.
+fn hits_are_inscribed_polygon(hits: &[(f64, Point3)]) -> bool {
+    use std::f64::consts::TAU;
+    if hits.len() < 3 {
+        return false;
+    }
+    let mut angles: Vec<f64> = hits.iter().map(|(t, _)| t.rem_euclid(TAU)).collect();
+    angles.sort_by(f64::total_cmp);
+    #[allow(clippy::cast_precision_loss)]
+    let expected = TAU / angles.len() as f64;
+    // Relative slack so coarse polygons (few segments) and fine ones (many)
+    // are both accepted; a clustered entry/exit pattern has a dominant gap
+    // far from `expected` and fails.
+    let slack = expected * 0.25;
+    for i in 0..angles.len() {
+        let next = if i + 1 == angles.len() {
+            angles[0] + TAU
+        } else {
+            angles[i + 1]
+        };
+        if (next - angles[i] - expected).abs() > slack {
+            return false;
+        }
+    }
+    true
 }
 
 /// Emit N arc edges + `IntersectionCurveDS` entries for a closed-circle
@@ -1022,10 +1102,65 @@ fn emit_split_circle_arcs(
     };
     let bbox_a = face_aabb(face_a);
     let bbox_b = face_aabb(face_b);
+
+    // A sphere face's wire+surface AABB covers the whole ball, so the AABB
+    // filter alone cannot tell its hemisphere from its twin's. Derive the
+    // hemisphere axis from the boundary wire orientation (region lies to
+    // the left of the wire under the outward surface normal): the sum of
+    // normal x edge-direction over the wire points into the face's region.
+    let sphere_side = |fid: FaceId| -> Option<(Point3, Vec3)> {
+        let face = topo.face(fid).ok()?;
+        let FaceSurface::Sphere(s) = face.surface() else {
+            return None;
+        };
+        let center = s.center();
+        let wire = topo.wire(face.outer_wire()).ok()?;
+        let mut axis = Vec3::new(0.0, 0.0, 0.0);
+        // The accumulated cross products have units of length^2, so the
+        // degeneracy threshold must be derived from the input magnitudes
+        // rather than compared against a bare linear tolerance. `scale`
+        // sums each term's magnitude bound (|mid - center| * |ep - sp|);
+        // a true near-parallel/cancelling wire leaves `axis` small
+        // relative to it.
+        let mut scale = 0.0;
+        for oe in wire.edges() {
+            let Ok(edge) = topo.edge(oe.edge()) else {
+                continue;
+            };
+            let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+                continue;
+            };
+            let (sp, ep) = if oe.is_forward() {
+                (sv.point(), ev.point())
+            } else {
+                (ev.point(), sv.point())
+            };
+            let mid = sp + (ep - sp) * 0.5;
+            let radial = mid - center;
+            let chord = ep - sp;
+            scale += radial.length() * chord.length();
+            axis += radial.cross(chord);
+        }
+        if face.is_reversed() {
+            axis = axis * -1.0;
+        }
+        let len = axis.length();
+        if scale < tol.linear * tol.linear || len < scale * tol.linear {
+            return None;
+        }
+        Some((center, axis * (1.0 / len)))
+    };
+    let side_a = sphere_side(face_a);
+    let side_b = sphere_side(face_b);
+    let side_eps = tol.linear * 10.0;
     let in_both = |p: Point3| -> bool {
         let a_ok = bbox_a.as_ref().is_none_or(|b| b.contains_point(p));
         let b_ok = bbox_b.as_ref().is_none_or(|b| b.contains_point(p));
-        a_ok && b_ok
+        let side_ok = |side: &Option<(Point3, Vec3)>| {
+            side.as_ref()
+                .is_none_or(|(c, axis)| (p - *c).dot(*axis) >= -side_eps)
+        };
+        a_ok && b_ok && side_ok(&side_a) && side_ok(&side_b)
     };
 
     // Pass 1: determine which arcs survive the AABB filter, *before*
@@ -1098,6 +1233,37 @@ fn emit_split_circle_arcs(
                 .unwrap_or_else(|| topo.add_vertex(Vertex::new(p, tol.linear)))
         };
 
+    // A geometrically identical arc may already exist from an earlier pair
+    // sharing a face (e.g. both hemispheres of a faceted sphere paired with
+    // the same coplanar box face yield the same equator arc). Re-emitting it
+    // would hand the shared face two coincident sections and corrupt its
+    // split. First pair wins; the later pair contributes nothing new to the
+    // shared face anyway (the circle lies along its twin's region boundary).
+    let close_pts = |a: Point3, b: Point3| (a - b).length() < tol.linear * 10.0;
+    let arc_exists = |arena: &GfaArena, p_s: Point3, p_e: Point3, p_m: Point3| -> bool {
+        arena.curves.iter().any(|c| {
+            let EdgeCurve::Circle(existing) = &c.curve else {
+                return false;
+            };
+            let shares_face = c.face_a == face_a
+                || c.face_a == face_b
+                || c.face_b == face_a
+                || c.face_b == face_b;
+            if !shares_face
+                || (existing.center() - circle.center()).length() > tol.linear * 10.0
+                || (existing.radius() - circle.radius()).abs() > tol.linear * 10.0
+            {
+                return false;
+            }
+            let s = existing.evaluate(c.t_range.0);
+            let e = existing.evaluate(c.t_range.1);
+            let m = existing.evaluate(0.5 * (c.t_range.0 + c.t_range.1));
+            close_pts(m, p_m)
+                && ((close_pts(s, p_s) && close_pts(e, p_e))
+                    || (close_pts(s, p_e) && close_pts(e, p_s)))
+        })
+    };
+
     let mut emitted = 0_usize;
     let num_survivors = survivors.len();
     for (a_idx, arc_points) in survivors.into_iter().enumerate() {
@@ -1105,6 +1271,15 @@ fn emit_split_circle_arcs(
         for w in arc_points.windows(2) {
             let (t_s, p_s, idx_s) = w[0];
             let (t_e, p_e, idx_e) = w[1];
+
+            let p_m = circle.evaluate(0.5 * (t_s + t_e));
+            if arc_exists(arena, p_s, p_e, p_m) {
+                log::debug!(
+                    "FF: skip duplicate closed-circle arc t=[{t_s:.4},{t_e:.4}] \
+                     for {face_a:?}/{face_b:?}"
+                );
+                continue;
+            }
 
             let start_vid = match idx_s {
                 Some(ci) => {
@@ -1442,5 +1617,42 @@ mod tests {
         // A concave "arrowhead": the reflex vertex flips the turn sign.
         let poly = vec![(0.0, 0.0), (2.0, 1.0), (0.0, 2.0), (1.0, 1.0)];
         assert!(!polygon_is_convex(&poly));
+    }
+
+    fn hit_at(angle: f64) -> (f64, Point3) {
+        (angle, Point3::new(angle.cos(), angle.sin(), 0.0))
+    }
+
+    #[test]
+    fn inscribed_square_equator_is_coincident() {
+        // A 4-segment polygon inscribed in the circle (square equator)
+        // yields exactly 4 evenly distributed hits — the bare `len > 4`
+        // count missed this, treating the boundary as entry/exit crossings.
+        use std::f64::consts::FRAC_PI_2;
+        let hits: Vec<_> = (0..4).map(|k| hit_at(k as f64 * FRAC_PI_2)).collect();
+        assert!(hits_are_inscribed_polygon(&hits));
+    }
+
+    #[test]
+    fn inscribed_hexagon_is_coincident() {
+        use std::f64::consts::FRAC_PI_3;
+        let hits: Vec<_> = (0..6).map(|k| hit_at(k as f64 * FRAC_PI_3)).collect();
+        assert!(hits_are_inscribed_polygon(&hits));
+    }
+
+    #[test]
+    fn entry_exit_pair_is_not_coincident() {
+        // Two crossings (genuine entry/exit) must not be mistaken for an
+        // inscribed boundary.
+        let hits = vec![hit_at(0.3), hit_at(2.9)];
+        assert!(!hits_are_inscribed_polygon(&hits));
+    }
+
+    #[test]
+    fn clustered_hits_are_not_coincident() {
+        // Four hits clustered on one side leave a dominant wrap-around gap,
+        // far from the even spacing of an inscribed polygon.
+        let hits = vec![hit_at(0.1), hit_at(0.2), hit_at(0.3), hit_at(0.4)];
+        assert!(!hits_are_inscribed_polygon(&hits));
     }
 }

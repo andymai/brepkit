@@ -76,7 +76,10 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
     centroid
 }
 
-fn boundary_eps(loop_pts: &[Point2]) -> f64 {
+/// Scale-aware boundary tolerance for a 2D loop: a small fraction of the
+/// loop's bounding-box diagonal, floored to avoid collapsing to zero for
+/// degenerate inputs.
+pub fn boundary_eps(loop_pts: &[Point2]) -> f64 {
     let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
     let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
     for p in loop_pts {

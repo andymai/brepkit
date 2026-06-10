@@ -153,6 +153,7 @@ pub fn split_face_2d(
             reversed,
             face_id,
             &wire_pts,
+            tol.linear,
         );
     }
 
@@ -183,16 +184,25 @@ pub fn split_face_2d(
     // boundary in UV space. Project each section endpoint to UV and test
     // if it lies on any boundary edge's UV segment (within tolerance).
     // This is surface-type agnostic and handles curved boundary edges.
+    let mut deduped_line_loops: Option<Vec<SectionEdge>> = None;
     let all_sections_internal = if sections.is_empty() {
         false
     } else if is_plane {
-        // Only for plane faces with exactly 1 closed section curve.
-        // Multiple circles on the same plane face need the wire builder
-        // for correct loop formation.
-        sections.len() == 1
+        // Plane faces: exactly 1 closed section curve, or all-Line
+        // sections forming closed loops strictly inside the boundary
+        // (nested coplanar footprints). Multiple circles on the same
+        // plane face still need the wire builder for loop formation.
+        let single_closed = sections.len() == 1
             && sections.iter().all(|s| {
                 (s.start - s.end).length() < tol.linear // closed curve
-            })
+            });
+        if single_closed {
+            true
+        } else {
+            deduped_line_loops =
+                plane_internal_line_loops(sections, frame, &boundary_edges, tol.linear);
+            deduped_line_loops.is_some()
+        }
     } else {
         // Non-plane faces: check if all section endpoints are off the
         // boundary in UV space.
@@ -206,11 +216,16 @@ pub fn split_face_2d(
     };
 
     if all_sections_internal {
+        let secs = deduped_line_loops.as_deref().unwrap_or(sections);
+        log::debug!(
+            "split_face_2d: face {face_id:?} routed to internal-loops path ({} sections)",
+            secs.len()
+        );
         return split_face_with_internal_loops(
             &surface,
             &boundary_edges,
             &original_inner_wires,
-            sections,
+            secs,
             rank,
             reversed,
             face_id,
@@ -313,11 +328,6 @@ pub fn split_face_2d(
     // Convert section edges to OrientedPCurveEdge (both orientations).
     let mut all_edges = boundary_edges;
     for section in sections {
-        let pcurve_on_this_face = match rank {
-            Rank::A => &section.pcurve_a,
-            Rank::B => &section.pcurve_b,
-        };
-
         // Skip full-circle section edges on plane faces -- they have
         // start approx end in 3D and would produce degenerate UV edges.
         // The half-arc section edges handle the plane face correctly.
@@ -326,6 +336,30 @@ pub fn split_face_2d(
             continue;
         }
 
+        // Curved sections on plane faces must live in the same PlaneFrame
+        // as the boundary edges. The pcurve from build_section_edges was
+        // fitted in a frame anchored at the original (pre-split) wire, so
+        // its UV space — and its NURBS parameter domain — need not match
+        // `frame`; using it would disconnect the section from the boundary
+        // in UV. Refit it in this face's frame.
+        let owned_pcurve;
+        let pcurve_on_this_face = if is_plane && !matches!(section.curve_3d, EdgeCurve::Line) {
+            owned_pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                &section.curve_3d,
+                section.start,
+                section.end,
+                &surface,
+                &wire_pts,
+                Some(frame),
+            );
+            &owned_pcurve
+        } else {
+            match rank {
+                Rank::A => &section.pcurve_a,
+                Rank::B => &section.pcurve_b,
+            }
+        };
+
         // Project section endpoints to UV.
         // Use pre-computed UV endpoints when available (e.g. seam-split half-arcs
         // where the unwrapped UV was computed from the arc samples). Otherwise,
@@ -333,35 +367,38 @@ pub fn split_face_2d(
         // of independent surface projection -- this ensures UV endpoints are
         // consistent with the pcurve's unwrapped parameterization (e.g. arc
         // ending at u=2pi rather than u=0 after periodic unwrapping).
-        let (start_uv, end_uv) = match rank {
-            Rank::A => {
-                if let (Some(su), Some(eu)) = (section.start_uv_a, section.end_uv_a) {
-                    (su, eu)
-                } else if is_plane {
-                    (frame.project(section.start), frame.project(section.end))
-                } else {
-                    uv_endpoints_from_pcurve(
-                        pcurve_on_this_face,
-                        section.start,
-                        section.end,
-                        &surface,
-                        &wire_pts,
-                    )
+        let (start_uv, end_uv) = if is_plane {
+            // Plane faces: project in the boundary's frame. Precomputed UVs
+            // (when present) come from build_section_edges' own frame and
+            // would not connect to the boundary edges in UV.
+            (frame.project(section.start), frame.project(section.end))
+        } else {
+            match rank {
+                Rank::A => {
+                    if let (Some(su), Some(eu)) = (section.start_uv_a, section.end_uv_a) {
+                        (su, eu)
+                    } else {
+                        uv_endpoints_from_pcurve(
+                            pcurve_on_this_face,
+                            section.start,
+                            section.end,
+                            &surface,
+                            &wire_pts,
+                        )
+                    }
                 }
-            }
-            Rank::B => {
-                if let (Some(su), Some(eu)) = (section.start_uv_b, section.end_uv_b) {
-                    (su, eu)
-                } else if is_plane {
-                    (frame.project(section.start), frame.project(section.end))
-                } else {
-                    uv_endpoints_from_pcurve(
-                        pcurve_on_this_face,
-                        section.start,
-                        section.end,
-                        &surface,
-                        &wire_pts,
-                    )
+                Rank::B => {
+                    if let (Some(su), Some(eu)) = (section.start_uv_b, section.end_uv_b) {
+                        (su, eu)
+                    } else {
+                        uv_endpoints_from_pcurve(
+                            pcurve_on_this_face,
+                            section.start,
+                            section.end,
+                            &surface,
+                            &wire_pts,
+                        )
+                    }
                 }
             }
         };
@@ -707,4 +744,129 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
         });
     let n = sub_face.outer_wire.len() as f64;
     Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
+}
+
+/// Detect all-Line section edges forming closed loops strictly inside a
+/// plane face's boundary (nested coplanar footprints), and dedup repeated
+/// segments. Both the coplanar-contact pass and adjacent-face plane-plane
+/// intersections can emit the same footprint segment, so identical
+/// segments (by unordered quantized endpoints) collapse to one.
+///
+/// Returns the deduped sections when every quantized endpoint has degree
+/// exactly 2 (disjoint closed loops) and every endpoint lies strictly
+/// interior to the boundary polygon; `None` routes back to the generic
+/// wire-builder path.
+fn plane_internal_line_loops(
+    sections: &[SectionEdge],
+    frame: &PlaneFrame,
+    boundary_edges: &[OrientedPCurveEdge],
+    tol_linear: f64,
+) -> Option<Vec<SectionEdge>> {
+    use std::collections::{HashMap, HashSet};
+
+    type QPt = (i64, i64, i64);
+
+    if sections.len() < 3
+        || !sections
+            .iter()
+            .all(|s| matches!(s.curve_3d, EdgeCurve::Line))
+    {
+        return None;
+    }
+    let polygon: Vec<Point2> = boundary_edges.iter().map(|e| e.start_uv).collect();
+    if polygon.len() < 3 {
+        return None;
+    }
+
+    let quant = |p: Point3| -> QPt {
+        let s = 1.0 / (tol_linear * 100.0);
+        (
+            (p.x() * s).round() as i64,
+            (p.y() * s).round() as i64,
+            (p.z() * s).round() as i64,
+        )
+    };
+
+    let margin = tol_linear * 100.0;
+    let on_plane = |p: Point3| {
+        let uv = frame.project(p);
+        (frame.evaluate(uv.x(), uv.y()) - p).length() <= margin
+    };
+
+    let mut seen: HashSet<(QPt, QPt)> = HashSet::new();
+    let mut deduped: Vec<SectionEdge> = Vec::new();
+    for s in sections {
+        // A section can only bound a sub-face of this plane if it lies on
+        // the plane; off-plane segments (e.g. lateral edges grazing the
+        // face at one endpoint) are noise for this face.
+        if !on_plane(s.start) || !on_plane(s.end) {
+            continue;
+        }
+        let a = quant(s.start);
+        let b = quant(s.end);
+        if a == b {
+            return None;
+        }
+        let key = if a <= b { (a, b) } else { (b, a) };
+        if seen.insert(key) {
+            deduped.push(s.clone());
+        }
+    }
+    if deduped.len() < 3 {
+        return None;
+    }
+
+    // The same footprint side can arrive both whole and as sub-segments
+    // split at paves. Drop any segment that another section's endpoint
+    // subdivides (collinear, strictly interior) — the sub-segments carry
+    // the same geometry. If the sub-segments turn out incomplete, the
+    // degree check below rejects and the generic path takes over.
+    let endpoints: Vec<Point3> = deduped.iter().flat_map(|s| [s.start, s.end]).collect();
+    deduped.retain(|s| {
+        let dir = s.end - s.start;
+        let len2 = dir.dot(dir);
+        if len2 < margin * margin {
+            return true;
+        }
+        !endpoints.iter().any(|&p| {
+            if (p - s.start).length() < margin || (p - s.end).length() < margin {
+                return false;
+            }
+            let t = (p - s.start).dot(dir) / len2;
+            if !(0.0..=1.0).contains(&t) {
+                return false;
+            }
+            let foot = s.start + dir * t;
+            (p - foot).length() < margin
+        })
+    });
+
+    let mut degree: HashMap<QPt, u32> = HashMap::new();
+    for s in &deduped {
+        *degree.entry(quant(s.start)).or_insert(0) += 1;
+        *degree.entry(quant(s.end)).or_insert(0) += 1;
+        for p in [s.start, s.end] {
+            let uv = frame.project(p);
+            if !super::classify_2d::point_in_polygon_2d(uv, &polygon)
+                || super::classify_2d::distance_to_polygon_boundary(uv, &polygon) <= margin
+            {
+                log::debug!(
+                    "plane_internal_line_loops: endpoint {p:?} not strictly interior (dist {})",
+                    super::classify_2d::distance_to_polygon_boundary(uv, &polygon)
+                );
+                return None;
+            }
+        }
+    }
+    if degree.values().any(|&d| d != 2) {
+        let bad: Vec<_> = degree.iter().filter(|&(_, &d)| d != 2).collect();
+        log::debug!(
+            "plane_internal_line_loops: {} endpoints with degree != 2 (deduped {} of {}): {bad:?}",
+            bad.len(),
+            deduped.len(),
+            degree.len()
+        );
+        return None;
+    }
+    Some(deduped)
 }
