@@ -269,6 +269,20 @@ fn check_edge_face_pairs(
             let face = topo.face(fid)?;
             let surface = face.surface();
 
+            // An edge lying entirely ON the face's surface is a coincidence
+            // handled by the FF/same-domain machinery, not a set of
+            // crossings; sampling it here would emit dozens of fake paves
+            // (e.g. a cap circle lying in the opposing cap's plane).
+            let n_chk = 16;
+            let edge_on_surface = (0..=n_chk).all(|i| {
+                let t = t0 + (t1 - t0) * (f64::from(i) / f64::from(n_chk));
+                let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+                distance_to_surface(pt, surface) < tol.linear
+            });
+            if edge_on_surface {
+                continue;
+            }
+
             let crossings = match surface {
                 FaceSurface::Plane { normal, d } => {
                     find_edge_plane_crossings(&curve, start_pos, end_pos, t0, t1, *normal, *d, tol)
