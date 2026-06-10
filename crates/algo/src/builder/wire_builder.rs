@@ -72,7 +72,15 @@ pub fn build_wire_loops_with_winding(
 
     let turn_score = |incoming: f64, candidate: f64| -> f64 {
         let cw = clockwise_angle(incoming, candidate);
-        if cw_boundary { TAU - cw } else { cw }
+        // `clockwise_angle` returns TAU for exact continuation, which must rank
+        // as the worst (largest) score in both windings. The mirrored rule maps
+        // every other angle to `TAU - cw` but would map a continuation to 0
+        // (best), so keep it pinned at TAU.
+        if cw_boundary {
+            if cw >= TAU { TAU } else { TAU - cw }
+        } else {
+            cw
+        }
     };
 
     let u_period = if u_periodic { Some(TAU) } else { None };

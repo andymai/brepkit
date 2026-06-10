@@ -605,7 +605,10 @@ pub fn split_face_2d(
             // forward then backward when a coplanar partner's boundary
             // coincides with the face's own corner arc. Classifying it as
             // outer creates a zero-area face; as hole, a spurious inner wire.
-            let perimeter: f64 = pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+            let mut perimeter: f64 = pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+            if let (Some(first), Some(last)) = (pts.first(), pts.last()) {
+                perimeter += (*last - *first).length();
+            }
             if area.abs() <= perimeter * tol.linear {
                 continue;
             }
