@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.102.5](https://github.com/andymai/brepkit/compare/v2.102.4...v2.102.5) (2026-06-10)
+
+
+### Bug Fixes
+
+* **algo:** require mutual containment for boundary-tolerant same-domain merge ([#772](https://github.com/andymai/brepkit/issues/772)) ([31de678](https://github.com/andymai/brepkit/commit/31de6785562201675cfaa52947939734b5270e8c))
+
 ## [2.102.4](https://github.com/andymai/brepkit/compare/v2.102.3...v2.102.4) (2026-06-10)
 
 
