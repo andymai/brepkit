@@ -48,28 +48,32 @@ pub fn face_area(
                 let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
                 let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
                 let height = (v_max - v_min).abs();
-                // Compute angular sweep from boundary points projected onto the
-                // circular cross-section. For full cylinders this gives 2pi; for
-                // partial cylinders it gives the actual angular extent.
-                let u_vals: Vec<f64> = positions
-                    .iter()
-                    .map(|p| {
-                        let rel = *p - origin;
-                        let along = axis.dot(rel);
-                        let radial = rel - axis * along;
-                        radial.y().atan2(radial.x())
-                    })
-                    .collect();
-                let u_min = u_vals.iter().copied().fold(f64::INFINITY, f64::min);
-                let u_max = u_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                let angular_span = u_max - u_min;
-                // If the angular span covers most of a full circle (> 350 deg),
-                // treat it as a full revolution -- boundary sampling may not
-                // reach exactly +/-pi.
-                let sweep = if angular_span > 330.0_f64.to_radians() {
-                    std::f64::consts::TAU
+                let sweep = if let Some(s) = cylinder_arc_sweep(topo, face_id, axis, origin)? {
+                    s
                 } else {
-                    angular_span
+                    // Compute angular sweep from boundary points projected onto the
+                    // circular cross-section. For full cylinders this gives 2pi; for
+                    // partial cylinders it gives the actual angular extent.
+                    let u_vals: Vec<f64> = positions
+                        .iter()
+                        .map(|p| {
+                            let rel = *p - origin;
+                            let along = axis.dot(rel);
+                            let radial = rel - axis * along;
+                            radial.y().atan2(radial.x())
+                        })
+                        .collect();
+                    let u_min = u_vals.iter().copied().fold(f64::INFINITY, f64::min);
+                    let u_max = u_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                    let angular_span = u_max - u_min;
+                    // If the angular span covers most of a full circle (> 350 deg),
+                    // treat it as a full revolution -- boundary sampling may not
+                    // reach exactly +/-pi.
+                    if angular_span > 330.0_f64.to_radians() {
+                        std::f64::consts::TAU
+                    } else {
+                        angular_span
+                    }
                 };
                 Ok(sweep * r * height)
             } else {
@@ -104,6 +108,58 @@ pub fn face_area(
             Ok(triangle_mesh_area(&mesh))
         }
     }
+}
+
+/// Angular sweep of a cylindrical face derived from its boundary arc edges.
+///
+/// `face_polygon` only contributes endpoint vertices for partial arcs, so a
+/// point-based angular range misreads spans that cross the atan2 branch cut
+/// (e.g. a 90-degree corner arc straddling u=pi reads as 270 degrees). The
+/// stored `Circle` arcs carry the true span (CCW start→end around their own
+/// axis): sum the spans per axial level and take the widest level.
+///
+/// Returns `None` when the boundary has no circle arcs (chord-polygon faces),
+/// letting the caller fall back to point-based estimation.
+fn cylinder_arc_sweep(
+    topo: &Topology,
+    face_id: FaceId,
+    axis: Vec3,
+    origin: Point3,
+) -> Result<Option<f64>, crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+
+    let face = topo.face(face_id)?;
+    let wire = topo.wire(face.outer_wire())?;
+    let mut levels: Vec<(f64, f64)> = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let EdgeCurve::Circle(circle) = edge.curve() else {
+            continue;
+        };
+        if edge.start() == edge.end() {
+            return Ok(Some(std::f64::consts::TAU));
+        }
+        let sp = topo.vertex(edge.start())?.point();
+        let ep = topo.vertex(edge.end())?.point();
+        let ts = circle.project(sp);
+        let mut te = circle.project(ep);
+        if te <= ts {
+            te += std::f64::consts::TAU;
+        }
+        let span = te - ts;
+        let v = axis.dot(circle.center() - origin);
+        if let Some(entry) = levels.iter_mut().find(|(lv, _)| (*lv - v).abs() < 1e-6) {
+            entry.1 += span;
+        } else {
+            levels.push((v, span));
+        }
+    }
+    Ok(levels
+        .iter()
+        .map(|&(_, span)| span.min(std::f64::consts::TAU))
+        .fold(None, |acc: Option<f64>, span| {
+            Some(acc.map_or(span, |a| a.max(span)))
+        }))
 }
 
 /// Compute the area of a conical face analytically.

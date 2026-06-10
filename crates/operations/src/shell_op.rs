@@ -1356,4 +1356,205 @@ mod tests {
             bbox_y - d
         );
     }
+
+    /// Regression oracle for arc-edge identity in shelled rounded rects.
+    ///
+    /// When wire traversal runs u-decreasing around a corner cylinder, the
+    /// stored `EdgeCurve::Circle` arc must still be the intended 90-degree
+    /// corner arc, not its 270-degree complement. The complement corrupts
+    /// face areas, the synthesized rim annulus, the floor trim, and makes
+    /// tessellation non-watertight.
+    #[test]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::too_many_lines,
+        clippy::items_after_statements
+    )]
+    fn shell_rounded_rect_watertight() {
+        use std::collections::HashMap;
+
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let tol = Tolerance::new();
+
+        // Gridfinity 1x1 bin body: 41.5 x 41.5, corner radius 3.75.
+        let w = 41.5_f64;
+        let d = 41.5_f64;
+        let h = 21.0_f64;
+        let r = 3.75_f64;
+        let thickness = 1.2_f64;
+
+        let hw = w / 2.0;
+        let hd = d / 2.0;
+
+        let pts = [
+            Point3::new(hw - r, -hd, 0.0),
+            Point3::new(hw, -hd + r, 0.0),
+            Point3::new(hw, hd - r, 0.0),
+            Point3::new(hw - r, hd, 0.0),
+            Point3::new(-hw + r, hd, 0.0),
+            Point3::new(-hw, hd - r, 0.0),
+            Point3::new(-hw, -hd + r, 0.0),
+            Point3::new(-hw + r, -hd, 0.0),
+        ];
+        let vids: Vec<_> = pts
+            .iter()
+            .map(|p| topo.add_vertex(Vertex::new(*p, tol.linear)))
+            .collect();
+
+        let c_br = Point3::new(hw - r, -hd + r, 0.0);
+        let c_tr = Point3::new(hw - r, hd - r, 0.0);
+        let c_tl = Point3::new(-hw + r, hd - r, 0.0);
+        let c_bl = Point3::new(-hw + r, -hd + r, 0.0);
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+
+        let mk_line = |topo: &mut Topology, s, e| topo.add_edge(Edge::new(s, e, EdgeCurve::Line));
+        let mk_arc = |topo: &mut Topology, s, e, center: Point3| {
+            let circle = Circle3D::new(center, z_axis, r).unwrap();
+            topo.add_edge(Edge::new(s, e, EdgeCurve::Circle(circle)))
+        };
+
+        let e_bot = mk_line(&mut topo, vids[7], vids[0]);
+        let e_br = mk_arc(&mut topo, vids[0], vids[1], c_br);
+        let e_right = mk_line(&mut topo, vids[1], vids[2]);
+        let e_tr = mk_arc(&mut topo, vids[2], vids[3], c_tr);
+        let e_top = mk_line(&mut topo, vids[3], vids[4]);
+        let e_tl = mk_arc(&mut topo, vids[4], vids[5], c_tl);
+        let e_left = mk_line(&mut topo, vids[5], vids[6]);
+        let e_bl = mk_arc(&mut topo, vids[6], vids[7], c_bl);
+
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e_bot, true),
+                OrientedEdge::new(e_br, true),
+                OrientedEdge::new(e_right, true),
+                OrientedEdge::new(e_tr, true),
+                OrientedEdge::new(e_top, true),
+                OrientedEdge::new(e_tl, true),
+                OrientedEdge::new(e_left, true),
+                OrientedEdge::new(e_bl, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire_id = topo.add_wire(wire);
+
+        let normal = Vec3::new(0.0, 0.0, 1.0);
+        let face = Face::new(wire_id, vec![], FaceSurface::Plane { normal, d: 0.0 });
+        let face_id = topo.add_face(face);
+
+        let solid =
+            crate::extrude::extrude(&mut topo, face_id, Vec3::new(0.0, 0.0, 1.0), h).unwrap();
+
+        let top = find_faces_by_normal(&topo, solid, Vec3::new(0.0, 0.0, 1.0));
+        assert_eq!(top.len(), 1, "one top face");
+
+        let shelled = shell(&mut topo, solid, thickness, &top).unwrap();
+
+        // Analytic reference values.
+        let r_in = r - thickness;
+        let h_in = h - thickness;
+        let outer_corner_area = std::f64::consts::FRAC_PI_2 * r * h; // 123.70
+        let inner_corner_area = std::f64::consts::FRAC_PI_2 * r_in * h_in; // 79.31
+        let outer_section = w * d - (4.0 - std::f64::consts::PI) * r * r;
+        let inner_section = (w - 2.0 * thickness) * (d - 2.0 * thickness)
+            - (4.0 - std::f64::consts::PI) * r_in * r_in;
+        let rim_area = outer_section - inner_section; // 186.95
+        let floor_area = inner_section; // 1523.23
+        let expected_volume = outer_section * h - inner_section * h_in; // 5753.8
+
+        let face_ids = brepkit_topology::explorer::solid_faces(&topo, shelled).unwrap();
+
+        let mut outer_corners = 0;
+        let mut inner_corners = 0;
+        let mut rim_total = 0.0;
+        let mut floor_total = 0.0;
+        for &fid in &face_ids {
+            let f = topo.face(fid).unwrap();
+            let area = crate::measure::face_area(&topo, fid, 0.01).unwrap();
+            match f.surface() {
+                FaceSurface::Cylinder(_) => {
+                    if (area - outer_corner_area).abs() < 0.1 {
+                        outer_corners += 1;
+                    } else if (area - inner_corner_area).abs() < 0.1 {
+                        inner_corners += 1;
+                    } else {
+                        unreachable!(
+                            "cylinder face {} area {area:.2} matches neither outer corner \
+                             {outer_corner_area:.2} nor inner corner {inner_corner_area:.2}",
+                            fid.index()
+                        );
+                    }
+                }
+                FaceSurface::Plane { normal, .. } if normal.z().abs() > 0.9 => {
+                    let ow = topo.wire(f.outer_wire()).unwrap();
+                    let oe0 = ow.edges()[0];
+                    let z0 = topo
+                        .vertex(topo.edge(oe0.edge()).unwrap().start())
+                        .unwrap()
+                        .point()
+                        .z();
+                    if (z0 - h).abs() < 1e-6 {
+                        rim_total += area;
+                    } else if (z0 - thickness).abs() < 1e-6 {
+                        floor_total += area;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(outer_corners, 4, "4 outer corner cylinder faces");
+        assert_eq!(inner_corners, 4, "4 inner corner cylinder faces");
+        assert!(
+            (rim_total - rim_area).abs() < 0.5,
+            "rim annulus area {rim_total:.2} != expected {rim_area:.2}"
+        );
+        assert!(
+            (floor_total - floor_area).abs() < 0.5,
+            "floor area {floor_total:.2} != expected {floor_area:.2}"
+        );
+
+        let vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
+        assert!(
+            (vol - expected_volume).abs() < 1.0,
+            "shell volume {vol:.2} != expected {expected_volume:.2}"
+        );
+
+        // Watertightness: every quantized mesh edge must be shared by
+        // exactly two triangles at all deflections.
+        type QuantPoint = (i64, i64, i64);
+        for defl in [0.01_f64, 0.1, 0.5] {
+            let mesh = crate::tessellate::tessellate_solid(&topo, shelled, defl).unwrap();
+            let q = |x: f64| (x * 1e4).round() as i64;
+            let mut edge_counts: HashMap<(QuantPoint, QuantPoint), u32> = HashMap::new();
+            for tri in mesh.indices.chunks_exact(3) {
+                let keys: Vec<_> = tri
+                    .iter()
+                    .map(|&i| {
+                        let p = mesh.positions[i as usize];
+                        (q(p.x()), q(p.y()), q(p.z()))
+                    })
+                    .collect();
+                for i in 0..3 {
+                    let a = keys[i];
+                    let b = keys[(i + 1) % 3];
+                    let key = if a < b { (a, b) } else { (b, a) };
+                    *edge_counts.entry(key).or_insert(0) += 1;
+                }
+            }
+            let boundary = edge_counts.values().filter(|&&c| c == 1).count();
+            let nonmanifold = edge_counts.values().filter(|&&c| c > 2).count();
+            assert_eq!(
+                (boundary, nonmanifold),
+                (0, 0),
+                "mesh at deflection {defl} has {boundary} boundary and {nonmanifold} \
+                 non-manifold edges"
+            );
+        }
+    }
 }
