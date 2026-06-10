@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.102.6](https://github.com/andymai/brepkit/compare/v2.102.5...v2.102.6) (2026-06-10)
+
+
+### Bug Fixes
+
+* **algo:** deterministic iteration in GFA pipeline ([#774](https://github.com/andymai/brepkit/issues/774)) ([4b84679](https://github.com/andymai/brepkit/commit/4b84679aa1b80054b7c294b4429d7234de10a477))
+
 ## [2.102.5](https://github.com/andymai/brepkit/compare/v2.102.4...v2.102.5) (2026-06-10)
 
 
