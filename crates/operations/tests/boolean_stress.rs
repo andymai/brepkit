@@ -474,7 +474,7 @@ fn cut_cylinder_from_box() {
 }
 
 #[test]
-#[ignore = "flush-coincident cap: same-domain selection drops both faces of a same-orientation pair, leaving an open shell"]
+#[ignore = "flush-coincident cap: fuse result is non-manifold (an edge at the cylinder cap / box top boundary is shared by 3 faces)"]
 fn fuse_cylinder_and_box() {
     let mut topo = Topology::new();
     let base = box_at(&mut topo, 0.0, 0.0, 0.0, 4.0, 4.0, 2.0);

@@ -800,7 +800,7 @@ fn sample_solid_edges_cylinder() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation -- old boolean pipeline removed"]
+#[ignore = "coplanar-edge filtering removes nothing on the fused result (filtered 18 == unfiltered 18)"]
 fn sample_solid_edges_boolean_filters_coplanar() {
     let mut topo = Topology::new();
     let big = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
