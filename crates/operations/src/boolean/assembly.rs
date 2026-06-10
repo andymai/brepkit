@@ -581,9 +581,52 @@ fn build_manifold_shell(
 /// Checks for:
 /// - Too few faces (< `MIN_SOLID_FACES`)
 /// - No edges or vertices (empty topology)
-/// - Euler characteristic, manifold edges, boundary edges, wire closure,
-///   degenerate faces, and face area via [`crate::validate::validate_solid`]
+/// - Unclosed wires and non-manifold edges (hard errors)
+/// - Euler characteristic, boundary edges, degenerate faces, and face area
+///   via [`crate::validate::validate_solid`] (logged as warnings)
+///
+/// This is the strict acceptance gate for results that still have a fallback
+/// available (the GFA pipeline). The mesh fallback's terminal sanity check is
+/// [`validate_boolean_result_lenient`].
 pub(super) fn validate_boolean_result(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<(), crate::OperationsError> {
+    validate_boolean_result_lenient(topo, solid)?;
+
+    // Unclosed wires and non-manifold edges are hard failures here: both
+    // defects break downstream tessellation and export, so a GFA result
+    // carrying them must fail safe to the mesh fallback.
+    let mut unclosed_wires = 0usize;
+    let mut edge_uses: HashMap<usize, usize> = HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            if brepkit_topology::validation::validate_wire_closed(wire, topo).is_err() {
+                unclosed_wires += 1;
+            }
+            for oe in wire.edges() {
+                *edge_uses.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    let non_manifold_edges = edge_uses.values().filter(|&&c| c > 2).count();
+    if unclosed_wires > 0 || non_manifold_edges > 0 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!(
+                "boolean result has {unclosed_wires} unclosed wire(s) and \
+                 {non_manifold_edges} non-manifold edge(s)"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+/// Lenient validation for terminal results with no remaining fallback
+/// (mesh boolean output): rejects only degenerate topology.
+pub(super) fn validate_boolean_result_lenient(
     topo: &Topology,
     solid: SolidId,
 ) -> Result<(), crate::OperationsError> {
@@ -607,8 +650,8 @@ pub(super) fn validate_boolean_result(
         });
     }
 
-    // Full topological validation: Euler characteristic, manifold edges,
-    // boundary edges, wire closure, degenerate faces.
+    // Topological validation: Euler characteristic, boundary edges,
+    // degenerate faces.
     // Logged as warnings rather than hard errors — many boolean results have
     // minor topological imperfections (e.g., boundary edges on analytic faces)
     // that don't prevent downstream use. Hard-failing here would reject ~25%

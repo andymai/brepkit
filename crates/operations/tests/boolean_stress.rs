@@ -474,7 +474,7 @@ fn cut_cylinder_from_box() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
+#[ignore = "flush-coincident cap: same-domain selection drops both faces of a same-orientation pair, leaving an open shell"]
 fn fuse_cylinder_and_box() {
     let mut topo = Topology::new();
     let base = box_at(&mut topo, 0.0, 0.0, 0.0, 4.0, 4.0, 2.0);
@@ -875,7 +875,6 @@ fn cut_cylinder_from_box_volume() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fuse_cylinder_and_box_volume() {
     // Box 4×4×2 at origin (z=0..2), cylinder r=1, h=4 at origin
     // (z=0..4), translated to (2,2,-1) → z=-1..3, sticks out 1 above + 1 below.

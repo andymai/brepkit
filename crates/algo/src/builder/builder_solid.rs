@@ -17,6 +17,7 @@ use brepkit_topology::Topology;
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
+use brepkit_topology::wire::{OrientedEdge, WireId};
 
 use crate::bop::SelectedFace;
 use crate::error::AlgoError;
@@ -488,12 +489,247 @@ fn signed_volume_of_shell(topo: &Topology, faces: &[FaceId]) -> f64 {
 
 // ── Phase 4 ──────────────────────────────────────────────────────────
 
+/// Quantized traversal-order endpoint positions for each oriented edge.
+fn oriented_edge_endpoints(topo: &Topology, oes: &[OrientedEdge]) -> Option<Vec<(QPos, QPos)>> {
+    let mut ends = Vec::with_capacity(oes.len());
+    for oe in oes {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let sp = topo.vertex(oe.oriented_start(edge)).ok()?.point();
+        let ep = topo.vertex(oe.oriented_end(edge)).ok()?.point();
+        ends.push((quantize_point(sp, MERGE_TOL), quantize_point(ep, MERGE_TOL)));
+    }
+    Some(ends)
+}
+
+/// Whether a list of oriented edges forms a closed loop in quantized-position
+/// space: every endpoint chains to the next and the last closes back to the
+/// first. Used to derive a wire's `closed` flag after normalization rather
+/// than asserting it unconditionally.
+fn oriented_edges_form_closed_loop(topo: &Topology, oes: &[OrientedEdge]) -> bool {
+    let Some(ends) = oriented_edge_endpoints(topo, oes) else {
+        return false;
+    };
+    let n = ends.len();
+    if n == 0 {
+        return false;
+    }
+    (0..n).all(|i| ends[i].1 == ends[(i + 1) % n].0)
+}
+
+/// Whether any oriented edge (same `EdgeId` and direction) appears more than
+/// once in the list. Such a wire cannot be a simple loop: the repeat encloses
+/// zero area and marks degenerate hole debris from coplanar section splitting.
+fn has_repeated_oriented_edge(oes: &[OrientedEdge]) -> bool {
+    let mut seen: HashSet<(usize, bool)> = HashSet::with_capacity(oes.len());
+    for oe in oes {
+        if !seen.insert((oe.edge().index(), oe.is_forward())) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Iteratively remove edges that cannot belong to any closed loop: in a
+/// closed wire every endpoint position has even degree >= 2, so an edge with
+/// a degree-1 endpoint is dangling debris (e.g. a stray section edge left in
+/// a face wire by coplanar splitting). Returns `true` if any edge was removed.
+fn prune_dangling_edges(topo: &Topology, oes: &mut Vec<OrientedEdge>) -> bool {
+    let mut changed = false;
+    loop {
+        let Some(ends) = oriented_edge_endpoints(topo, oes) else {
+            return changed;
+        };
+        let mut degree: HashMap<QPos, usize> = HashMap::new();
+        for (s, e) in &ends {
+            *degree.entry(*s).or_insert(0) += 1;
+            *degree.entry(*e).or_insert(0) += 1;
+        }
+        let keep: Vec<bool> = ends
+            .iter()
+            .map(|(s, e)| {
+                degree.get(s).copied().unwrap_or(0) >= 2 && degree.get(e).copied().unwrap_or(0) >= 2
+            })
+            .collect();
+        if keep.iter().all(|&k| k) {
+            return changed;
+        }
+        let mut idx = 0;
+        oes.retain(|_| {
+            let k = keep[idx];
+            idx += 1;
+            k
+        });
+        changed = true;
+        if oes.is_empty() {
+            return changed;
+        }
+    }
+}
+
+/// Reorder oriented edges into sequential traversal order by quantized
+/// endpoint position. Wires assembled from section edges can carry a
+/// geometrically closed loop whose edge list is permuted (each edge
+/// correctly oriented but stored out of chain order); downstream
+/// wire-closure validation and polygon walks assume sequential order.
+/// Lists that are not a single unambiguous closed chain are left untouched.
+/// Returns `true` if the order changed.
+fn order_edges_sequential(topo: &Topology, oes: &mut Vec<OrientedEdge>) -> bool {
+    let n = oes.len();
+    if n < 3 {
+        return false;
+    }
+    let Some(ends) = oriented_edge_endpoints(topo, oes) else {
+        return false;
+    };
+    if (0..n).all(|i| ends[i].1 == ends[(i + 1) % n].0) {
+        return false;
+    }
+    let mut by_start: HashMap<QPos, usize> = HashMap::with_capacity(n);
+    for (i, (s, _)) in ends.iter().enumerate() {
+        if by_start.insert(*s, i).is_some() {
+            return false;
+        }
+    }
+    let mut order = Vec::with_capacity(n);
+    let mut used = vec![false; n];
+    let mut cur = 0usize;
+    loop {
+        order.push(cur);
+        used[cur] = true;
+        if order.len() == n {
+            break;
+        }
+        let Some(&j) = by_start.get(&ends[cur].1) else {
+            return false;
+        };
+        if used[j] {
+            return false;
+        }
+        cur = j;
+    }
+    if ends[cur].1 != ends[order[0]].0 {
+        return false;
+    }
+    *oes = order.iter().map(|&i| oes[i]).collect();
+    true
+}
+
+/// Normalize a face's wires before final assembly: prune dangling debris
+/// edges, drop inner wires that cannot form a loop, and restore sequential
+/// edge order. The outer wire is never emptied — if pruning would remove
+/// all of its edges the face is left untouched.
+fn normalize_face_wires(topo: &mut Topology, fid: FaceId) {
+    let Ok(face) = topo.face(fid) else { return };
+    let outer_wid = face.outer_wire();
+    let inner_wids: Vec<WireId> = face.inner_wires().to_vec();
+
+    let load = |topo: &Topology, wid: WireId| -> Option<Vec<OrientedEdge>> {
+        topo.wire(wid).ok().map(|w| w.edges().to_vec())
+    };
+
+    let Some(mut outer_oes) = load(topo, outer_wid) else {
+        return;
+    };
+    let orig_outer = outer_oes.clone();
+    let pruned = prune_dangling_edges(topo, &mut outer_oes);
+    let outer_pruned = if outer_oes.is_empty() {
+        outer_oes = orig_outer;
+        false
+    } else {
+        pruned
+    };
+    let outer_changed = outer_pruned | order_edges_sequential(topo, &mut outer_oes);
+
+    // Normalize each inner wire. A wire whose edges all prune away is dropped
+    // (it could never form a loop). A wire that fails to load is kept as-is
+    // rather than silently discarded, so a transient lookup error never
+    // deletes hole geometry. Surviving wires reuse their original WireId by
+    // overwriting in place, which avoids orphaning entries in the append-only
+    // arena.
+    //
+    // An inner wire that lists the same oriented edge more than once is
+    // degenerate hole debris (e.g. coplanar band-splitting can emit a single
+    // section edge twice in the same direction, enclosing zero area). It
+    // carries no real hole, so it is dropped. This is deliberately narrow:
+    // valid hole wires never repeat an oriented edge, so genuine holes — even
+    // ones whose edge order is permuted — are preserved. Outer wires are never
+    // dropped this way; a malformed outer wire must survive to the acceptance
+    // gate, which can fall the whole result back to mesh.
+    let mut inners_changed = false;
+    let mut kept_inner_wids: Vec<WireId> = Vec::with_capacity(inner_wids.len());
+    let mut normalized_inners: Vec<(WireId, Vec<OrientedEdge>)> = Vec::new();
+    for wid in &inner_wids {
+        let Some(mut oes) = load(topo, *wid) else {
+            kept_inner_wids.push(*wid);
+            continue;
+        };
+        if has_repeated_oriented_edge(&oes) {
+            inners_changed = true;
+            continue;
+        }
+        let changed = prune_dangling_edges(topo, &mut oes);
+        if oes.is_empty() {
+            inners_changed = true;
+            continue;
+        }
+        if changed | order_edges_sequential(topo, &mut oes) {
+            inners_changed = true;
+            normalized_inners.push((*wid, oes));
+        }
+        kept_inner_wids.push(*wid);
+    }
+
+    if !outer_changed && !inners_changed {
+        return;
+    }
+
+    // Overwrite the outer wire in place (reuse its WireId) so the face's wire
+    // references stay valid and no arena entry is orphaned.
+    if outer_changed {
+        let closed = oriented_edges_form_closed_loop(topo, &outer_oes);
+        if let (Ok(new_outer), Ok(slot)) = (
+            brepkit_topology::wire::Wire::new(outer_oes, closed),
+            topo.wire_mut(outer_wid),
+        ) {
+            *slot = new_outer;
+        }
+    }
+
+    for (wid, oes) in normalized_inners {
+        let closed = oriented_edges_form_closed_loop(topo, &oes);
+        if let (Ok(new_inner), Ok(slot)) = (
+            brepkit_topology::wire::Wire::new(oes, closed),
+            topo.wire_mut(wid),
+        ) {
+            *slot = new_inner;
+        }
+    }
+
+    // Only the inner-wire *list* changes when empties were dropped; the face
+    // already points at the (in-place updated) outer and surviving wires.
+    if kept_inner_wids.len() != inner_wids.len() {
+        if let Ok(f) = topo.face_mut(fid) {
+            *f.inner_wires_mut() = kept_inner_wids;
+        }
+    }
+}
+
 /// Final assembly: build Solid from growth + hole shells.
 fn assemble(
     topo: &mut Topology,
     growth_shells: Vec<Vec<FaceId>>,
     hole_shells: Vec<Vec<FaceId>>,
 ) -> Result<SolidId, AlgoError> {
+    let all_faces: Vec<FaceId> = growth_shells
+        .iter()
+        .chain(hole_shells.iter())
+        .flatten()
+        .copied()
+        .collect();
+    for fid in all_faces {
+        normalize_face_wires(topo, fid);
+    }
+
     // The outer shell bounds the largest enclosed region. Selecting by face
     // count instead lets a heavily fragmented but small growth shell (e.g. an
     // overlap region split into many tiny faces) win over the shell that
@@ -507,30 +743,22 @@ fn assemble(
         .map(|(i, _)| i)
         .unwrap_or(0);
 
-    let outer_shell = Shell::new(growth_shells[outer_idx].clone())
-        .map_err(|e| AlgoError::AssemblyFailed(format!("outer shell: {e}")))?;
-    let outer_id = topo.add_shell(outer_shell);
-
-    // Genuine hole shells (negative signed volume) become inner shells.
-    let mut inner_ids = Vec::new();
-    for hole in &hole_shells {
-        if let Ok(inner_shell) = Shell::new(hole.clone()) {
-            inner_ids.push(topo.add_shell(inner_shell));
-        }
-    }
-
-    // A non-outer growth shell is kept as an extra shell — its positive volume
-    // then adds correctly — only when it is a genuine separate lump: closed in
-    // itself (watertight) and with an interior that does not overlap the outer
-    // shell's interior. Two boxes that merely touch at a face, edge, or vertex
-    // (their bounding boxes meet but interiors don't) are both real lumps and
-    // are kept; a residual fragment that is still open or shares the outer
-    // shell's interior is not watertight against the rest, so filing it under
-    // `inner_shells` poisons the multi-shell volume integral and collapses the
-    // result, and it is dropped. Interior overlap is tested with bounding boxes
-    // shrunk by a hair so a shared boundary does not read as an overlap.
+    // Additional growth shells (disjoint outward-oriented regions, e.g. a cut
+    // that severs the solid into pieces, or a disjoint fuse) join the same
+    // outer shell so their positive volume adds correctly — inner shells are
+    // reserved for cavities (hole shells), and downstream multi-region handling
+    // walks only the outer shell. A non-outer growth shell joins only when it
+    // is a genuine separate lump: closed in itself (watertight) and with an
+    // interior that does not overlap the outer shell's interior. Two boxes that
+    // merely touch at a face, edge, or vertex (their bounding boxes meet but
+    // interiors don't) are both real lumps and are kept; a residual fragment
+    // that is still open or shares the outer shell's interior is a
+    // fragmentation sliver, not a separate piece, so it is dropped rather than
+    // polluting the assembled volume. Interior overlap is tested with bounding
+    // boxes shrunk by a hair so a shared boundary does not read as an overlap.
     // TODO: use a `Compound` for true multi-region results.
     let outer_aabb = shell_aabb(topo, &growth_shells[outer_idx]);
+    let mut outer_faces = growth_shells[outer_idx].clone();
     for (i, gs) in growth_shells.iter().enumerate() {
         if i == outer_idx {
             continue;
@@ -541,9 +769,18 @@ fn assemble(
                 .intersects(b.expanded(-INTERIOR_OVERLAP_MARGIN))
         );
         if interior_disjoint && shell_is_closed(topo, gs) {
-            if let Ok(extra_shell) = Shell::new(gs.clone()) {
-                inner_ids.push(topo.add_shell(extra_shell));
-            }
+            outer_faces.extend_from_slice(gs);
+        }
+    }
+    let outer_shell = Shell::new(outer_faces)
+        .map_err(|e| AlgoError::AssemblyFailed(format!("outer shell: {e}")))?;
+    let outer_id = topo.add_shell(outer_shell);
+
+    // Genuine hole shells (negative signed volume) become inner shells.
+    let mut inner_ids = Vec::new();
+    for hole in &hole_shells {
+        if let Ok(inner_shell) = Shell::new(hole.clone()) {
+            inner_ids.push(topo.add_shell(inner_shell));
         }
     }
 

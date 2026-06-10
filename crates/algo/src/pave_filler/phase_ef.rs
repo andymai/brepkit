@@ -6,7 +6,7 @@
 
 use std::collections::HashSet;
 
-use crate::builder::classify_2d::point_in_polygon_2d;
+use crate::builder::classify_2d::{distance_to_polygon_boundary, point_in_polygon_2d};
 use crate::builder::plane_frame::PlaneFrame;
 use crate::ds::{GfaArena, Interference, Pave};
 use crate::error::AlgoError;
@@ -114,26 +114,6 @@ impl FaceContainment {
         point_in_polygon_2d(p2, &planar.polygon)
             || distance_to_polygon_boundary(p2, &planar.polygon) <= planar.margin
     }
-}
-
-/// Distance from a 2D point to the closest segment of a closed polygon.
-fn distance_to_polygon_boundary(p: Point2, polygon: &[Point2]) -> f64 {
-    let mut best = f64::MAX;
-    let n = polygon.len();
-    for i in 0..n {
-        let a = polygon[i];
-        let b = polygon[(i + 1) % n];
-        let ab = b - a;
-        let len_sq = ab.dot(ab);
-        let s = if len_sq > 0.0 {
-            ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        let closest = a + ab * s;
-        best = best.min((p - closest).length());
-    }
-    best
 }
 
 /// Sample a face's boundary into an AABB plus, for planar faces, an
@@ -260,6 +240,11 @@ fn check_edge_face_pairs(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
+    // Surface crossings are found against INFINITE surfaces; without a bounds
+    // check an edge "crosses" a face far outside its trimmed region, creating
+    // spurious paves that propagate bogus edge splits. The containment test
+    // bounds-checks every crossing against the face's sampled boundary (bbox
+    // for all faces, in-plane outer + inner-wire polygon for planar faces).
     let mut containments = Vec::with_capacity(faces.len());
     for &fid in faces {
         containments.push(build_face_containment(topo, fid, tol)?);

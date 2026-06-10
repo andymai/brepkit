@@ -497,14 +497,26 @@ pub fn boolean(
                 #[allow(clippy::cast_possible_wrap)]
                 let euler_pre2 = (v2 as i64) - (e2 as i64) + (f2 as i64);
 
-                // Run unify_faces if Euler is off (existing condition) OR if
-                // the topology already has 3+-face junctions, which can occur
-                // with Euler==2 when overlapping coplanar faces cancel in V-E+F
-                // counting. The same-domain detection in the assembler only
-                // pairs faces across opposing ranks with identical edge sets,
-                // so within-rank or different-boundary overlaps slip through;
-                // unify_faces is the safety net for those (issue #696).
-                let needs_unify = euler_pre2 != 2 || !is_closed_manifold(topo, result)?;
+                // Hole-aware Euler: a face with L inner wire loops raises V-E+F
+                // by L (Euler-Poincare: V-E+F-L = 2(1-g)), so a valid genus-0
+                // result with holed faces (e.g. a fuse leaving circular holes in
+                // box faces) has euler = 2 + L. Compute the inner-wire surplus
+                // once here so both the unify decision and the acceptance gate
+                // use the same hole-aware balance — otherwise a result that
+                // deviates from euler==2 solely because of inner wires would
+                // still trigger an unnecessary unify_faces pass.
+                let inner_wire_count_pre = solid_inner_wire_count(topo, result)?;
+                let euler_balanced_pre = euler_pre2 == 2
+                    || (inner_wire_count_pre > 0 && euler_pre2 - inner_wire_count_pre == 2);
+
+                // Run unify_faces if the (hole-aware) Euler is off OR if the
+                // topology has 3+-face junctions, which can occur with a
+                // balanced Euler when overlapping coplanar faces cancel in
+                // V-E+F counting. The same-domain detection in the assembler
+                // only pairs faces across opposing ranks with identical edge
+                // sets, so within-rank or different-boundary overlaps slip
+                // through; unify_faces is the safety net for those (issue #696).
+                let needs_unify = !euler_balanced_pre || !is_closed_manifold(topo, result)?;
                 if needs_unify {
                     for _ in 0..3 {
                         if crate::heal::unify_faces(topo, result)? == 0 {
@@ -523,7 +535,18 @@ pub fn boolean(
                 // still the best available output (the mesh fallback loses
                 // more volume than the open GFA shell does).
                 let open_shell_ok = op != BooleanOp::Intersect || !has_free_edges(topo, result)?;
-                if euler == 2 && open_shell_ok && validate_boolean_result(topo, result).is_ok() {
+                // Hole-aware Euler acceptance: re-measure the inner-wire surplus
+                // after unify (which can merge faces and change wire counts) and
+                // accept euler == 2 + L. The holed acceptance additionally
+                // requires a closed manifold so that accidental cancellations
+                // (open shells whose missing faces offset the inner-wire
+                // surplus) still fail safe to the mesh fallback.
+                let inner_wire_count = solid_inner_wire_count(topo, result)?;
+                let euler_ok = euler == 2
+                    || (inner_wire_count > 0
+                        && euler - inner_wire_count == 2
+                        && is_closed_manifold(topo, result)?);
+                if euler_ok && open_shell_ok && validate_boolean_result(topo, result).is_ok() {
                     log::info!(
                         "GFA boolean succeeded in {:.1}ms ({result_faces} faces)",
                         timer_elapsed_ms(gfa_start)
@@ -1838,7 +1861,7 @@ fn mesh_boolean_fallback(
     if opts.heal_after_boolean {
         let _ = crate::heal::heal_solid(topo, result, tol.linear)?;
     }
-    validate_boolean_result(topo, result)?;
+    assembly::validate_boolean_result_lenient(topo, result)?;
     log::info!(
         "boolean {op:?}: mesh boolean path → solid {} ({} faces, surface types lost)",
         result.index(),
@@ -2211,6 +2234,19 @@ fn make_solid_from_face_subset(
     let shell_id = topo.add_shell(shell);
     let solid = brepkit_topology::solid::Solid::new(shell_id, Vec::new());
     Ok(topo.add_solid(solid))
+}
+
+/// Count inner wire loops across all faces of a solid (outer + inner shells).
+fn solid_inner_wire_count(topo: &Topology, solid: SolidId) -> Result<i64, crate::OperationsError> {
+    let mut count: i64 = 0;
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let face = topo.face(fid)?;
+        #[allow(clippy::cast_possible_wrap)]
+        {
+            count += face.inner_wires().len() as i64;
+        }
+    }
+    Ok(count)
 }
 
 /// Check whether a solid's outer shell is a closed manifold: every edge

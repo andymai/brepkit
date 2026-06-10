@@ -1,7 +1,6 @@
 //! Planar and simple analytic face tessellation.
 
-use std::collections::HashMap;
-
+use brepkit_math::det_hash::{DetHashMap, DetHashSet};
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 
@@ -492,7 +491,6 @@ fn tessellate_planar_with_holes(
 ) -> Result<TriangleMesh, crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
-    use std::collections::HashSet;
 
     // Collect all positions: outer + inner wires.
     let mut all_positions: Vec<Point3> = outer_positions.to_vec();
@@ -563,7 +561,7 @@ fn tessellate_planar_with_holes(
 
     // Remove hole interiors by seeding from each hole's centroid.
     // Build a set of all constraint edges for flood-fill stopping.
-    let constraint_set: HashSet<(usize, usize)> = all_constraints
+    let constraint_set: DetHashSet<(usize, usize)> = all_constraints
         .iter()
         .flat_map(|&(a, b)| {
             let (lo, hi) = if a < b { (a, b) } else { (b, a) };
@@ -593,13 +591,13 @@ fn tessellate_planar_with_holes(
     let mut indices_out = Vec::with_capacity(num_tris * 3);
 
     // Build O(1) reverse map: CDT vertex index -> original position index.
-    let mut vi_to_orig: HashMap<usize, usize> = HashMap::new();
+    let mut vi_to_orig: DetHashMap<usize, usize> = DetHashMap::default();
     for (orig_idx, &cdt_vi) in cdt_indices.iter().enumerate() {
         vi_to_orig.entry(cdt_vi).or_insert(orig_idx);
     }
 
     // Map CDT point indices -> output mesh indices.
-    let mut cdt_to_mesh: HashMap<usize, u32> = HashMap::new();
+    let mut cdt_to_mesh: DetHashMap<usize, u32> = DetHashMap::default();
     for &(v0, v1, v2) in &cdt_triangles {
         for &vi in &[v0, v1, v2] {
             if let std::collections::hash_map::Entry::Vacant(e) = cdt_to_mesh.entry(vi) {
@@ -783,7 +781,7 @@ pub(super) fn cdt_triangulate_simple(positions: &[Point3], normal: Vec3) -> Vec<
 
     let cdt_triangles = cdt.triangles();
 
-    let mut cdt_to_input: HashMap<usize, usize> = HashMap::new();
+    let mut cdt_to_input: DetHashMap<usize, usize> = DetHashMap::default();
     for (input_idx, &cdt_idx) in cdt_indices.iter().enumerate() {
         cdt_to_input.entry(cdt_idx).or_insert(input_idx);
     }
@@ -828,7 +826,7 @@ pub(super) fn fan_triangulate(n: usize) -> Vec<u32> {
 /// Collect global vertex IDs from a wire, deduplicating consecutive vertices.
 pub(super) fn collect_wire_global_vertices(
     wire: &brepkit_topology::wire::Wire,
-    edge_global_indices: &HashMap<usize, Vec<u32>>,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     positions: &[Point3],
     tol: f64,
 ) -> (Vec<Point3>, Vec<Option<u32>>) {
@@ -913,13 +911,12 @@ pub(super) fn tessellate_planar_shared_with_holes(
     boundary_global_ids: &[u32],
     outer_positions: &[Point3],
     normal: Vec3,
-    edge_global_indices: &HashMap<usize, Vec<u32>>,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
-    use std::collections::HashSet;
 
     let mut all_positions: Vec<Point3> = outer_positions.to_vec();
     let mut all_global_ids: Vec<Option<u32>> =
@@ -1010,7 +1007,7 @@ pub(super) fn tessellate_planar_shared_with_holes(
         .collect();
     cdt.remove_exterior(&outer_constraints);
 
-    let constraint_set: HashSet<(usize, usize)> = all_constraints
+    let constraint_set: DetHashSet<(usize, usize)> = all_constraints
         .iter()
         .flat_map(|&(a, b)| {
             let (lo, hi) = if a < b { (a, b) } else { (b, a) };
@@ -1037,7 +1034,7 @@ pub(super) fn tessellate_planar_shared_with_holes(
 
     let cdt_triangles = cdt.triangles();
 
-    let mut cdt_to_global: HashMap<usize, u32> = HashMap::new();
+    let mut cdt_to_global: DetHashMap<usize, u32> = DetHashMap::default();
     for (local_idx, &cdt_idx) in cdt_indices.iter().enumerate() {
         if let Some(gid) = all_global_ids[local_idx] {
             cdt_to_global.insert(cdt_idx, gid);
@@ -1096,7 +1093,6 @@ pub(super) fn run_planar_cdt(
 ) -> Result<Vec<(usize, usize, usize)>, crate::OperationsError> {
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
-    use std::collections::HashSet;
 
     let bounds = compute_cdt_bounds(pts2d);
 
@@ -1141,7 +1137,7 @@ pub(super) fn run_planar_cdt(
         .collect();
     cdt.remove_exterior(&outer_constraints);
 
-    let constraint_set: HashSet<(usize, usize)> = all_constraints
+    let constraint_set: DetHashSet<(usize, usize)> = all_constraints
         .iter()
         .flat_map(|&(a, b)| {
             let (lo, hi) = if a < b { (a, b) } else { (b, a) };
@@ -1168,7 +1164,7 @@ pub(super) fn run_planar_cdt(
 
     let cdt_triangles = cdt.triangles();
 
-    let mut cdt_to_input: HashMap<usize, usize> = HashMap::new();
+    let mut cdt_to_input: DetHashMap<usize, usize> = DetHashMap::default();
     for (input_idx, &cdt_idx) in cdt_indices.iter().enumerate() {
         cdt_to_input.entry(cdt_idx).or_insert(input_idx);
     }

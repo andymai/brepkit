@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.102.1](https://github.com/andymai/brepkit/compare/v2.102.0...v2.102.1) (2026-06-10)
+
+
+### Bug Fixes
+
+* **algo:** assemble disjoint result pieces into outer shell; fix(operations): hole-aware strict boolean acceptance gate ([#762](https://github.com/andymai/brepkit/issues/762)) ([213f355](https://github.com/andymai/brepkit/commit/213f355adfe16abbd937c9bfb47dab966969401c))
+* **algo:** propagate split-edge images to unsplit neighbor faces ([#760](https://github.com/andymai/brepkit/issues/760)) ([822213e](https://github.com/andymai/brepkit/commit/822213e141886cb4a458d3d417ae33b52784f69b))
+* **operations:** deterministic hashing in mesh tessellation path ([#764](https://github.com/andymai/brepkit/issues/764)) ([410d491](https://github.com/andymai/brepkit/commit/410d491d5337aa7e79b26e9cfe305bdfa1b92409))
+* **tessellate:** deterministic vertex welding; fix(algo): honor face reversal in same-domain orientation ([#759](https://github.com/andymai/brepkit/issues/759)) ([2ff70e6](https://github.com/andymai/brepkit/commit/2ff70e6a0e69148ace2ec7dcd2e20c61f76eebe6))
+
 ## [2.102.0](https://github.com/andymai/brepkit/compare/v2.101.3...v2.102.0) (2026-06-09)
 
 

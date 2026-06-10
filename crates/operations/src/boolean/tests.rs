@@ -2502,7 +2502,6 @@ fn cut_lofted_frustums_octagon_profiles() {
 // an over-extended chord, causing the wrong split and producing a result
 // solid with an incorrect volume.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn test_boolean_concave_face_chord_clip() {
     let mut topo = Topology::new();
 
@@ -2748,7 +2747,6 @@ fn sequential_cut_preserves_surface_types() {
 /// Fuse two boxes into L-shape (creates non-convex merged face), then cut
 /// through the concave corner.
 #[test]
-#[ignore = "flush-face fuse — GFA produces Euler≠2 for touching non-unit boxes"]
 fn non_convex_face_survives_subsequent_cut() {
     let mut topo = Topology::new();
 
@@ -3113,8 +3111,11 @@ fn gfa_box_cone_intersect() {
 ///
 /// Root cause path: `boolean_with_options` → `both_complex=true` → skips analytic
 /// → `boolean_pipeline` → pipeline succeeds but produces non-manifold topology
-/// (adj_euler=4 instead of 2). `validate_boolean_result` doesn't reject it
-/// because topological validation is logged as warnings, not hard errors.
+/// (adj_euler=4 instead of 2). The strict `validate_boolean_result` gate now
+/// rejects this (non-manifold edges and unclosed wires are hard failures), so
+/// the GFA result is discarded and the operation falls back to the mesh
+/// boolean — which still does not produce the correct manifold fuse for this
+/// shelled-box + lip combination.
 ///
 /// The pipeline's parameter-space splitting doesn't handle the combination of:
 /// - Shelled solid (inner wires on boundary faces)

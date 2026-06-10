@@ -76,6 +76,7 @@ pub mod chord;
 pub mod convex_hull;
 pub mod curves;
 pub mod curves2d;
+pub mod det_hash;
 pub mod filtered;
 pub mod frame;
 pub mod mat;
