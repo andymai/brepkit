@@ -68,31 +68,17 @@ fn resample_closed_polygon(points: &[Point3], target_count: usize) -> Vec<Point3
     result
 }
 
-/// Extract the outward cap normal from a planar face, accounting for winding reversal.
+/// Outward cap normal from the corrected (CCW-relative-to-stack) profile
+/// vertices.
 ///
-/// `inward` controls the sign convention: `true` for the start cap (points into
-/// the loft interior, away from the profile direction), `false` for the end cap.
-fn cap_normal_from_face(
-    face: &brepkit_topology::face::Face,
-    winding_reversed: bool,
-    inward: bool,
-) -> Result<Vec3, crate::OperationsError> {
-    match face.surface() {
-        FaceSurface::Plane { normal, .. } => {
-            // The stored face normal comes from Newell on the original (pre-reversal)
-            // winding. When winding_reversed is true, that normal points the wrong way,
-            // so we negate it. The inward flag then flips the sign for the start cap.
-            let sign = if winding_reversed == inward {
-                1.0
-            } else {
-                -1.0
-            };
-            Ok(*normal * sign)
-        }
-        _ => Err(crate::OperationsError::InvalidInput {
-            reason: "unexpected non-planar face".into(),
-        }),
-    }
+/// The stored profile-face plane normal cannot be trusted: callers may build
+/// profiles with an arbitrary normal (e.g. always +Z) regardless of vertex
+/// winding. Newell on the post-correction vertices points along the stacking
+/// direction by construction, so the start cap (`inward = true`) is its
+/// negation and the end cap is the normal itself.
+fn cap_normal_from_verts(verts: &[Point3], inward: bool) -> Result<Vec3, crate::OperationsError> {
+    let unit = crate::winding::newell_normal(verts).normalize()?;
+    Ok(if inward { unit * -1.0 } else { unit })
 }
 
 /// Loft two or more planar profiles into a solid.
@@ -160,7 +146,7 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     // Ensure profile vertex winding is CCW relative to the stacking direction.
     // The side normal formula `edge_dir.cross(connect_dir)` gives outward normals
     // only when vertices go CCW from the stacking direction.
-    let winding_reversed = ensure_ccw_profiles(&mut profile_verts);
+    let _ = ensure_ccw_profiles(&mut profile_verts);
 
     let num_profiles = profile_verts.len();
     let num_sections = num_profiles - 1;
@@ -208,8 +194,7 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
 
     // Start cap: reversed first profile (outward normal pointing away from loft).
     {
-        let face_data = topo.face(profiles[0])?;
-        let cap_normal = cap_normal_from_face(face_data, winding_reversed, true)?;
+        let cap_normal = cap_normal_from_verts(&profile_verts[0], true)?;
         let reversed_edges: Vec<OrientedEdge> = (0..n)
             .rev()
             .map(|i| OrientedEdge::new(ring_edges[0][i], false))
@@ -271,8 +256,7 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
 
     // End cap: last profile with forward orientation.
     {
-        let face_data = topo.face(profiles[num_profiles - 1])?;
-        let cap_normal = cap_normal_from_face(face_data, winding_reversed, false)?;
+        let cap_normal = cap_normal_from_verts(&profile_verts[num_profiles - 1], false)?;
         let edges: Vec<OrientedEdge> = (0..n)
             .map(|i| OrientedEdge::new(ring_edges[num_profiles - 1][i], true))
             .collect();
@@ -623,7 +607,7 @@ pub fn loft_smooth(
     }
 
     // Ensure profile vertex winding is CCW relative to the stacking direction.
-    let winding_reversed = ensure_ccw_profiles(&mut profile_verts);
+    let _ = ensure_ccw_profiles(&mut profile_verts);
 
     let num_profiles = profile_verts.len();
 
@@ -655,8 +639,7 @@ pub fn loft_smooth(
 
     // Start cap: reversed first profile.
     {
-        let face_data = topo.face(profiles[0])?;
-        let cap_normal = cap_normal_from_face(face_data, winding_reversed, true)?;
+        let cap_normal = cap_normal_from_verts(&profile_verts[0], true)?;
         let reversed_edges: Vec<OrientedEdge> = (0..n)
             .rev()
             .map(|i| OrientedEdge::new(ring_edges[0][i], false))
@@ -734,8 +717,7 @@ pub fn loft_smooth(
 
     // End cap: last profile with forward orientation.
     {
-        let face_data = topo.face(profiles[num_profiles - 1])?;
-        let cap_normal = cap_normal_from_face(face_data, winding_reversed, false)?;
+        let cap_normal = cap_normal_from_verts(&profile_verts[num_profiles - 1], false)?;
         let edges: Vec<OrientedEdge> = (0..n)
             .map(|i| OrientedEdge::new(ring_edges[num_profiles - 1][i], true))
             .collect();
