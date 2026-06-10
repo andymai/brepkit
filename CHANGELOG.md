@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.102.10](https://github.com/andymai/brepkit/compare/v2.102.9...v2.102.10) (2026-06-10)
+
+
+### Bug Fixes
+
+* **algo:** correct sequential multi-tool cuts on thin-walled solids ([#779](https://github.com/andymai/brepkit/issues/779)) ([45e8fb4](https://github.com/andymai/brepkit/commit/45e8fb4c71e5f66d8867e83d63832792cc885a8e))
+
 ## [2.102.9](https://github.com/andymai/brepkit/compare/v2.102.8...v2.102.9) (2026-06-10)
 
 
