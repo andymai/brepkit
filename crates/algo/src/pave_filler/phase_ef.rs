@@ -298,6 +298,19 @@ fn check_edge_face_pairs(
                     continue;
                 }
 
+                // A contact at the edge's own endpoint is a vertex-face
+                // incidence (VF territory), not an edge crossing. Recording
+                // it as EF marks the adjacent pave block as lying inside the
+                // face even though the edge merely touches the face there
+                // (e.g. a cap-rim arc tangent to a coplanar wall corner).
+                if (pt - start_pos).length() <= tol.linear || (pt - end_pos).length() <= tol.linear
+                {
+                    log::debug!(
+                        "EF: dropping endpoint contact of edge {eid:?} at t={t:.6} on face {fid:?}",
+                    );
+                    continue;
+                }
+
                 // Check if an existing vertex is at this point
                 let existing = find_nearby_vertex(topo, arena, pt, tol);
 
