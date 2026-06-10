@@ -130,16 +130,13 @@ fn build_inner_wires(
             let vi = iw_vert_ids[i].index();
             let vj = iw_vert_ids[j].index();
             let (key_min, key_max) = if vi <= vj { (vi, vj) } else { (vj, vi) };
-            let is_forward = vi <= vj;
 
             let edge_id = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
-                let (start, end) = if vi <= vj {
-                    (iw_vert_ids[i], iw_vert_ids[j])
-                } else {
-                    (iw_vert_ids[j], iw_vert_ids[i])
-                };
-                topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
+                topo.add_edge(Edge::new(iw_vert_ids[i], iw_vert_ids[j], EdgeCurve::Line))
             });
+            // Shared edges may carry a geometric direction (circle arcs), so
+            // derive orientation from the stored start vertex.
+            let is_forward = topo.edge(edge_id)?.start() == iw_vert_ids[i];
 
             iw_oriented_edges.push(OrientedEdge::new(edge_id, is_forward));
         }
@@ -230,14 +227,10 @@ pub(crate) fn assemble_solid_mixed(
                         continue; // Skip degenerate zero-length edges.
                     }
                     let (key_min, key_max) = if vi <= vj { (vi, vj) } else { (vj, vi) };
-                    let is_forward = vi <= vj;
 
                     let edge_id = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
-                        let (start, end) = if vi <= vj {
-                            (vert_ids[i], vert_ids[j])
-                        } else {
-                            (vert_ids[j], vert_ids[i])
-                        };
+                        let start = vert_ids[i];
+                        let end = vert_ids[j];
 
                         // Determine if this edge is angular (arc) or axial (line)
                         // by projecting both endpoints onto the cylinder.
@@ -252,13 +245,28 @@ pub(crate) fn assemble_solid_mixed(
                             && u_diff < (std::f64::consts::TAU - tol.linear)
                             && v_diff < tol.linear * 100.0
                         {
+                            // A stored Circle arc runs CCW start→end around its
+                            // axis. Build the arc along the polygon traversal
+                            // i→j: when the wrapped u-step is negative the
+                            // traversal runs clockwise around cylinder.axis(),
+                            // so negate the axis — otherwise the stored arc
+                            // would be the complement of the intended span.
+                            let mut du = u2 - u1;
+                            if du > std::f64::consts::PI {
+                                du -= std::f64::consts::TAU;
+                            } else if du < -std::f64::consts::PI {
+                                du += std::f64::consts::TAU;
+                            }
+                            let axis = if du >= 0.0 {
+                                cylinder.axis()
+                            } else {
+                                -cylinder.axis()
+                            };
                             // Create a Circle3D at the v-level of this edge.
                             let center = cylinder.origin() + cylinder.axis() * ((v1 + v2) * 0.5);
-                            if let Ok(circle) = brepkit_math::curves::Circle3D::new(
-                                center,
-                                cylinder.axis(),
-                                cylinder.radius(),
-                            ) {
+                            if let Ok(circle) =
+                                brepkit_math::curves::Circle3D::new(center, axis, cylinder.radius())
+                            {
                                 topo.add_edge(Edge::new(start, end, EdgeCurve::Circle(circle)))
                             } else {
                                 topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
@@ -268,6 +276,7 @@ pub(crate) fn assemble_solid_mixed(
                             topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
                         }
                     });
+                    let is_forward = topo.edge(edge_id)?.start() == vert_ids[i];
 
                     if oriented_edges
                         .last()
@@ -350,16 +359,15 @@ pub(crate) fn assemble_solid_mixed(
                         continue;
                     }
                     let (key_min, key_max) = if vi <= vj { (vi, vj) } else { (vj, vi) };
-                    let is_forward = vi <= vj;
 
                     let edge_id = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
-                        let (start, end) = if vi <= vj {
-                            (vert_ids[i], vert_ids[j])
-                        } else {
-                            (vert_ids[j], vert_ids[i])
-                        };
-                        topo.add_edge(Edge::new(start, end, EdgeCurve::Line))
+                        topo.add_edge(Edge::new(vert_ids[i], vert_ids[j], EdgeCurve::Line))
                     });
+                    // Shared edges (e.g. circle arcs created by an adjacent
+                    // cylindrical face) carry a geometric direction, so derive
+                    // orientation from the stored start vertex rather than
+                    // vertex-index order.
+                    let is_forward = topo.edge(edge_id)?.start() == vert_ids[i];
 
                     // Skip duplicate edges anywhere in the wire (not just consecutive).
                     // Duplicates arise when the polygon revisits a vertex pair due to
@@ -1026,11 +1034,16 @@ pub(super) fn refine_boundary_edges(
                     } else {
                         (vb_idx, va_idx)
                     };
-                    let fwd = va_idx <= vb_idx;
                     let sub_eid = *edge_map.entry((key_min, key_max)).or_insert_with(|| {
-                        let (s, e) = if fwd { (va, vb) } else { (vb, va) };
+                        // The chain runs in this wire's traversal order; a
+                        // stored Circle arc means CCW start→end around its
+                        // axis, so a sub-edge of a reversed traversal must be
+                        // stored with swapped endpoints to keep the sub-arc
+                        // on the parent arc's span.
+                        let (s, e) = if oe.is_forward() { (va, vb) } else { (vb, va) };
                         topo.add_edge(Edge::new(s, e, original_curve.clone()))
                     });
+                    let fwd = topo.edge(sub_eid)?.start() == va;
                     // Skip if edge already in wire (prevents duplicates from
                     // vertex merging creating overlapping segments).
                     if !new_oriented_edges
