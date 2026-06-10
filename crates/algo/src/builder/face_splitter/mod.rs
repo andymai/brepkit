@@ -313,11 +313,6 @@ pub fn split_face_2d(
     // Convert section edges to OrientedPCurveEdge (both orientations).
     let mut all_edges = boundary_edges;
     for section in sections {
-        let pcurve_on_this_face = match rank {
-            Rank::A => &section.pcurve_a,
-            Rank::B => &section.pcurve_b,
-        };
-
         // Skip full-circle section edges on plane faces -- they have
         // start approx end in 3D and would produce degenerate UV edges.
         // The half-arc section edges handle the plane face correctly.
@@ -326,6 +321,30 @@ pub fn split_face_2d(
             continue;
         }
 
+        // Curved sections on plane faces must live in the same PlaneFrame
+        // as the boundary edges. The pcurve from build_section_edges was
+        // fitted in a frame anchored at the original (pre-split) wire, so
+        // its UV space — and its NURBS parameter domain — need not match
+        // `frame`; using it would disconnect the section from the boundary
+        // in UV. Refit it in this face's frame.
+        let owned_pcurve;
+        let pcurve_on_this_face = if is_plane && !matches!(section.curve_3d, EdgeCurve::Line) {
+            owned_pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                &section.curve_3d,
+                section.start,
+                section.end,
+                &surface,
+                &wire_pts,
+                Some(frame),
+            );
+            &owned_pcurve
+        } else {
+            match rank {
+                Rank::A => &section.pcurve_a,
+                Rank::B => &section.pcurve_b,
+            }
+        };
+
         // Project section endpoints to UV.
         // Use pre-computed UV endpoints when available (e.g. seam-split half-arcs
         // where the unwrapped UV was computed from the arc samples). Otherwise,
@@ -333,35 +352,38 @@ pub fn split_face_2d(
         // of independent surface projection -- this ensures UV endpoints are
         // consistent with the pcurve's unwrapped parameterization (e.g. arc
         // ending at u=2pi rather than u=0 after periodic unwrapping).
-        let (start_uv, end_uv) = match rank {
-            Rank::A => {
-                if let (Some(su), Some(eu)) = (section.start_uv_a, section.end_uv_a) {
-                    (su, eu)
-                } else if is_plane {
-                    (frame.project(section.start), frame.project(section.end))
-                } else {
-                    uv_endpoints_from_pcurve(
-                        pcurve_on_this_face,
-                        section.start,
-                        section.end,
-                        &surface,
-                        &wire_pts,
-                    )
+        let (start_uv, end_uv) = if is_plane {
+            // Plane faces: project in the boundary's frame. Precomputed UVs
+            // (when present) come from build_section_edges' own frame and
+            // would not connect to the boundary edges in UV.
+            (frame.project(section.start), frame.project(section.end))
+        } else {
+            match rank {
+                Rank::A => {
+                    if let (Some(su), Some(eu)) = (section.start_uv_a, section.end_uv_a) {
+                        (su, eu)
+                    } else {
+                        uv_endpoints_from_pcurve(
+                            pcurve_on_this_face,
+                            section.start,
+                            section.end,
+                            &surface,
+                            &wire_pts,
+                        )
+                    }
                 }
-            }
-            Rank::B => {
-                if let (Some(su), Some(eu)) = (section.start_uv_b, section.end_uv_b) {
-                    (su, eu)
-                } else if is_plane {
-                    (frame.project(section.start), frame.project(section.end))
-                } else {
-                    uv_endpoints_from_pcurve(
-                        pcurve_on_this_face,
-                        section.start,
-                        section.end,
-                        &surface,
-                        &wire_pts,
-                    )
+                Rank::B => {
+                    if let (Some(su), Some(eu)) = (section.start_uv_b, section.end_uv_b) {
+                        (su, eu)
+                    } else {
+                        uv_endpoints_from_pcurve(
+                            pcurve_on_this_face,
+                            section.start,
+                            section.end,
+                            &surface,
+                            &wire_pts,
+                        )
+                    }
                 }
             }
         };

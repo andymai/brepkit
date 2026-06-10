@@ -10,16 +10,21 @@ use super::conversion::uv_endpoints_from_pcurve;
 use super::edge_splitting::split_boundary_edges_at_3d_points;
 use crate::ds::Rank;
 
-/// Split a face with no seam edges directly into cap + band sub-faces.
+/// Split a face with no seam edges directly into cap + remainder sub-faces.
 ///
 /// Faces whose boundary consists entirely of Line edges (no seam edges)
 /// can't be split by the wire builder (it needs vertical seam connections).
 /// This function bypasses the wire builder and constructs sub-faces
 /// geometrically from the section edges:
 ///
-/// - **Cap**: bounded by the section circle (2 half-arcs).
-/// - **Band**: bounded by the original boundary, with the section as hole.
-#[allow(clippy::too_many_arguments)]
+/// - **Cap**: bounded by the section arcs chained into one closed loop.
+/// - **Remainder**: when the cap loop stays interior, the original boundary
+///   with the reversed cap as a hole; when a cap arc runs along the face
+///   boundary (e.g. the in-region equator arc of a faceted sphere whose
+///   boundary polygon is inscribed in the same circle), the covered boundary
+///   edges are replaced by the arc, and the remainder is chained from the
+///   uncovered boundary edges plus the reversed non-coincident arcs.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) fn split_noseam_face_direct(
     surface: &FaceSurface,
     boundary_edges: &[OrientedPCurveEdge],
@@ -29,6 +34,9 @@ pub(super) fn split_noseam_face_direct(
     face_id: FaceId,
     wire_pts: &[Point3],
 ) -> Vec<SplitSubFace> {
+    let tol = brepkit_math::tolerance::Tolerance::new().linear;
+    let close_tol = tol * 100.0;
+
     // Helper: return the face unsplit (used in fallback paths).
     let unsplit = || {
         vec![SplitSubFace {
@@ -42,10 +50,8 @@ pub(super) fn split_noseam_face_direct(
         }]
     };
 
-    // Collect section forward/reverse edges on this face.
-    let mut cap_edges = Vec::new();
-    let mut hole_edges = Vec::new();
-
+    // Collect open section arcs on this face.
+    let mut open_sections: Vec<OrientedPCurveEdge> = Vec::new();
     for section in sections {
         let pcurve_on_this_face = match rank {
             Rank::A => &section.pcurve_a,
@@ -53,9 +59,8 @@ pub(super) fn split_noseam_face_direct(
         };
 
         // Skip full-circle section edges (start approx end in 3D) -- only use
-        // the half-arcs produced by build_seam_split_sections.
-        if (section.start - section.end).length() < brepkit_math::tolerance::Tolerance::new().linear
-        {
+        // the open arcs produced by the FF closed-circle split.
+        if (section.start - section.end).length() < tol {
             continue;
         }
 
@@ -73,8 +78,7 @@ pub(super) fn split_noseam_face_direct(
             )
         });
 
-        // Forward: for the cap outer wire.
-        cap_edges.push(OrientedPCurveEdge {
+        open_sections.push(OrientedPCurveEdge {
             curve_3d: section.curve_3d.clone(),
             pcurve: pcurve_on_this_face.clone(),
             start_uv,
@@ -85,42 +89,91 @@ pub(super) fn split_noseam_face_direct(
             source_edge_idx: None,
             pave_block_id: None,
         });
-
-        // Reverse: for the band's inner wire (hole).
-        hole_edges.push(OrientedPCurveEdge {
-            curve_3d: section.curve_3d.clone(),
-            pcurve: pcurve_on_this_face.clone(),
-            start_uv: end_uv,
-            end_uv: start_uv,
-            start_3d: section.end,
-            end_3d: section.start,
-            forward: false,
-            source_edge_idx: None,
-            pave_block_id: None,
-        });
     }
 
-    if cap_edges.is_empty() {
-        // No valid section edges -- return the face unsplit.
+    if open_sections.is_empty() {
         return unsplit();
     }
 
-    // Validate: cap edges must form a single closed loop (last end approx first start).
-    // If the topology is unexpected (multiple loops, open chain), fall back to unsplit.
-    let loop_gap = (cap_edges
-        .last()
-        .map_or(Point3::new(0.0, 0.0, 0.0), |e| e.end_3d)
-        - cap_edges
-            .first()
-            .map_or(Point3::new(0.0, 0.0, 0.0), |e| e.start_3d))
-    .length();
-    if loop_gap > brepkit_math::tolerance::Tolerance::new().linear * 100.0 {
+    // Chain the arcs into a single closed loop, greedily matching endpoints
+    // (with reversal). Disconnected or open chains fall back to unsplit.
+    let Some(cap_edges) = chain_closed_loop(open_sections, close_tol) else {
         return unsplit();
+    };
+
+    // Boundary edges covered by a cap arc: both segment endpoints lie on
+    // the arc's circle within its angular span. Those edges are replaced
+    // by the (exact) arc in the cap; the remainder must not reuse them.
+    let covered: Vec<bool> = boundary_edges
+        .iter()
+        .map(|be| cap_edges.iter().any(|arc| arc_covers_segment(arc, be, tol)))
+        .collect();
+    let coincident: Vec<bool> = cap_edges
+        .iter()
+        .map(|arc| {
+            boundary_edges
+                .iter()
+                .zip(&covered)
+                .any(|(be, &cov)| cov && arc_covers_segment(arc, be, tol))
+        })
+        .collect();
+
+    let reverse_of = |e: &OrientedPCurveEdge| OrientedPCurveEdge {
+        curve_3d: e.curve_3d.clone(),
+        pcurve: e.pcurve.clone(),
+        start_uv: e.end_uv,
+        end_uv: e.start_uv,
+        start_3d: e.end_3d,
+        end_3d: e.start_3d,
+        forward: !e.forward,
+        source_edge_idx: e.source_edge_idx,
+        pave_block_id: e.pave_block_id,
+    };
+
+    if covered.iter().any(|&c| c) {
+        // Cap loop runs along part of the boundary: remainder = uncovered
+        // boundary edges + reversed non-coincident arcs, chained closed.
+        let mut pool: Vec<OrientedPCurveEdge> = boundary_edges
+            .iter()
+            .zip(&covered)
+            .filter(|&(_, &cov)| !cov)
+            .map(|(be, _)| be.clone())
+            .collect();
+        for (arc, &coin) in cap_edges.iter().zip(&coincident) {
+            if !coin {
+                pool.push(reverse_of(arc));
+            }
+        }
+        let Some(remainder) = chain_closed_loop(pool, close_tol) else {
+            return unsplit();
+        };
+
+        let cap_interior = sphere_loop_interior(surface, &cap_edges);
+        let remainder_interior = sphere_loop_interior(surface, &remainder);
+        return vec![
+            SplitSubFace {
+                surface: surface.clone(),
+                outer_wire: cap_edges,
+                inner_wires: Vec::new(),
+                reversed,
+                parent: face_id,
+                rank,
+                precomputed_interior: cap_interior,
+            },
+            SplitSubFace {
+                surface: surface.clone(),
+                outer_wire: remainder,
+                inner_wires: Vec::new(),
+                reversed,
+                parent: face_id,
+                rank,
+                precomputed_interior: remainder_interior,
+            },
+        ];
     }
 
-    // Cap sub-face: outer wire = section forward half-arcs.
-    // The half-arcs connect end-to-end, forming a closed loop (the section circle).
-    // Band sub-face: outer wire = equatorial boundary, inner wire = section reversed.
+    // Cap loop is interior to the boundary: cap + band-with-hole.
+    let hole_edges: Vec<OrientedPCurveEdge> = cap_edges.iter().map(reverse_of).collect();
     vec![
         SplitSubFace {
             surface: surface.clone(),
@@ -141,6 +194,106 @@ pub(super) fn split_noseam_face_direct(
             precomputed_interior: None,
         },
     ]
+}
+
+/// Greedily chain edges into one closed loop by matching 3D endpoints,
+/// reversing edges as needed. Returns `None` when the edges are
+/// disconnected, leave leftovers, or do not close.
+fn chain_closed_loop(
+    mut pool: Vec<OrientedPCurveEdge>,
+    close_tol: f64,
+) -> Option<Vec<OrientedPCurveEdge>> {
+    if pool.is_empty() {
+        return None;
+    }
+    let mut chain = vec![pool.remove(0)];
+    while !pool.is_empty() {
+        let cur_end = chain.last()?.end_3d;
+        if let Some(pos) = pool
+            .iter()
+            .position(|e| (e.start_3d - cur_end).length() < close_tol)
+        {
+            chain.push(pool.remove(pos));
+        } else if let Some(pos) = pool
+            .iter()
+            .position(|e| (e.end_3d - cur_end).length() < close_tol)
+        {
+            let mut e = pool.remove(pos);
+            std::mem::swap(&mut e.start_uv, &mut e.end_uv);
+            std::mem::swap(&mut e.start_3d, &mut e.end_3d);
+            e.forward = !e.forward;
+            chain.push(e);
+        } else {
+            return None;
+        }
+    }
+    let gap = (chain.last()?.end_3d - chain.first()?.start_3d).length();
+    if gap > close_tol { None } else { Some(chain) }
+}
+
+/// Whether a straight boundary segment lies along (is a chord of) the
+/// arc: both endpoints on the arc's circle, within the arc's angular span.
+fn arc_covers_segment(arc: &OrientedPCurveEdge, segment: &OrientedPCurveEdge, tol: f64) -> bool {
+    use brepkit_topology::edge::EdgeCurve;
+    let EdgeCurve::Circle(c) = &arc.curve_3d else {
+        return false;
+    };
+    if !matches!(segment.curve_3d, EdgeCurve::Line) {
+        return false;
+    }
+    let on_circle = |p: Point3| -> bool {
+        let r = p - c.center();
+        let axial = c.normal().dot(r);
+        let radial = (r - c.normal() * axial).length();
+        axial.abs() < tol * 100.0 && (radial - c.radius()).abs() < tol * 100.0
+    };
+    if !on_circle(segment.start_3d) || !on_circle(segment.end_3d) {
+        return false;
+    }
+    let t0 = c.project(arc.start_3d);
+    let span = wrap_to_half_turn(c.project(arc.end_3d) - t0);
+    let eps = 1e-6;
+    let within = |p: Point3| -> bool {
+        let d = wrap_to_half_turn(c.project(p) - t0);
+        if span >= 0.0 {
+            (-eps..=span + eps).contains(&d)
+        } else {
+            (span - eps..=eps).contains(&d)
+        }
+    };
+    within(segment.start_3d) && within(segment.end_3d)
+}
+
+/// Wrap an angular difference into (-pi, pi].
+fn wrap_to_half_turn(d: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    let w = d.rem_euclid(tau);
+    if w > std::f64::consts::PI { w - tau } else { w }
+}
+
+/// Interior point for a loop on a sphere face: the spherical centroid of
+/// the loop edges' midpoints, projected back onto the sphere. `None` for
+/// non-sphere surfaces (callers fall back to UV-based interior sampling).
+fn sphere_loop_interior(surface: &FaceSurface, edges: &[OrientedPCurveEdge]) -> Option<Point3> {
+    use brepkit_math::vec::Vec3;
+    let FaceSurface::Sphere(s) = surface else {
+        return None;
+    };
+    let center = s.center();
+    let mut dir = Vec3::new(0.0, 0.0, 0.0);
+    for e in edges {
+        let mid = super::super::pcurve_compute::evaluate_edge_at_t(
+            &e.curve_3d,
+            e.start_3d,
+            e.end_3d,
+            0.5,
+        );
+        if let Ok(d) = (mid - center).normalize() {
+            dir += d;
+        }
+    }
+    let d = dir.normalize().ok()?;
+    Some(center + d * s.radius())
 }
 
 // ---------------------------------------------------------------------------
