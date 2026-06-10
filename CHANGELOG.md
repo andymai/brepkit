@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.102.9](https://github.com/andymai/brepkit/compare/v2.102.8...v2.102.9) (2026-06-10)
+
+
+### Bug Fixes
+
+* **algo:** post-merge review follow-ups for rounded-rect booleans ([#783](https://github.com/andymai/brepkit/issues/783)) ([e433a81](https://github.com/andymai/brepkit/commit/e433a8150c58f3a923d77cc4021391f740628494))
+* **operations:** build shell arc edges along wire traversal direction ([#781](https://github.com/andymai/brepkit/issues/781)) ([f771eb9](https://github.com/andymai/brepkit/commit/f771eb90c0039d2b56bae17785834f396660b406))
+* **tessellate:** route grouped solid tessellation through the watertight shared-edge pipeline ([#780](https://github.com/andymai/brepkit/issues/780)) ([ba4f07b](https://github.com/andymai/brepkit/commit/ba4f07bcc60d49ab59b126c724c60771507ab5ea))
+
 ## [2.102.8](https://github.com/andymai/brepkit/compare/v2.102.7...v2.102.8) (2026-06-10)
 
 
