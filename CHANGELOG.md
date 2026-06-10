@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.102.2](https://github.com/andymai/brepkit/compare/v2.102.1...v2.102.2) (2026-06-10)
+
+
+### Bug Fixes
+
+* **algo:** contain edge-face crossings to face boundaries; orient inner wires by face reversal ([#761](https://github.com/andymai/brepkit/issues/761)) ([63b914d](https://github.com/andymai/brepkit/commit/63b914d5b1a5fe85ff220ab16b2ce1302c20ea57))
+
 ## [2.102.1](https://github.com/andymai/brepkit/compare/v2.102.0...v2.102.1) (2026-06-10)
 
 
