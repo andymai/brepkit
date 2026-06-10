@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.102.7](https://github.com/andymai/brepkit/compare/v2.102.6...v2.102.7) (2026-06-10)
+
+
+### Bug Fixes
+
+* **algo:** total-order float comparison in collinear cut sort ([#776](https://github.com/andymai/brepkit/issues/776)) ([21fd3cd](https://github.com/andymai/brepkit/commit/21fd3cd9ee4b90e3b78e655def8866ece46cdedd))
+
 ## [2.102.6](https://github.com/andymai/brepkit/compare/v2.102.5...v2.102.6) (2026-06-10)
 
 
