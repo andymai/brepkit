@@ -467,19 +467,41 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
         |p| frame.project(p),
     );
 
+    // Strict containment: every vertex of `verts` lies inside `poly` by the
+    // ray-cast test, no boundary tolerance.
+    let all_inside_strict =
+        |verts: &[brepkit_math::vec::Point2], poly: &[brepkit_math::vec::Point2]| -> bool {
+            verts
+                .iter()
+                .all(|&v| super::classify_2d::point_in_polygon_2d(v, poly))
+        };
+
     // Boundary-tolerant containment: a coincident-outline pair (e.g. a
     // section-loop disc vs. the opposing solid's cap with differently split
     // boundary edges) has every vertex exactly ON the container's polygon,
-    // where the strict ray-cast is unpredictable. The interior-point test
-    // below remains strict, so faces that merely touch along a shared
-    // boundary segment still don't pair.
-    let all_inside =
+    // where the strict ray-cast is unpredictable.
+    let all_inside_tol =
         |verts: &[brepkit_math::vec::Point2], poly: &[brepkit_math::vec::Point2]| -> bool {
             let boundary_eps = super::classify_2d::boundary_eps(poly);
             verts.iter().all(|&v| {
                 super::classify_2d::point_in_polygon_2d(v, poly)
                     || super::classify_2d::distance_to_polygon_boundary(v, poly) <= boundary_eps
             })
+        };
+
+    // Two coplanar faces that tile disjoint side-by-side regions share a
+    // boundary segment, so every vertex of one lands ON the other's polygon
+    // and `all_inside_tol` reports a false containment in a single direction.
+    // A genuine coincident-outline pair (the case boundary tolerance exists
+    // for) instead has BOTH faces' interior points mutually inside, because
+    // the outlines coincide. Require that mutual containment before trusting
+    // a boundary-tolerant match; strict containment needs no such guard.
+    let ip_i_in_j = super::classify_2d::point_in_polygon_2d(p_i_2d, &poly_j);
+    let ip_j_in_i = super::classify_2d::point_in_polygon_2d(p_j_2d, &poly_i);
+    let outlines_coincide = ip_i_in_j && ip_j_in_i;
+    let all_inside =
+        |verts: &[brepkit_math::vec::Point2], poly: &[brepkit_math::vec::Point2]| -> bool {
+            all_inside_strict(verts, poly) || (outlines_coincide && all_inside_tol(verts, poly))
         };
 
     // A point landing inside one of the container's inner wires sits in a
@@ -520,7 +542,7 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
 
     // i fully contained in j: every vertex of i (plus its interior sample)
     // is inside j's polygon.
-    if super::classify_2d::point_in_polygon_2d(p_i_2d, &poly_j)
+    if ip_i_in_j
         && all_inside(&poly_i, &poly_j)
         && !in_hole(p_i_2d, face_j)
         && !footprint_in_holes(p_i_2d, &poly_i, &poly_j, face_j)
@@ -528,7 +550,7 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
         return true;
     }
     // j fully contained in i.
-    if super::classify_2d::point_in_polygon_2d(p_j_2d, &poly_i)
+    if ip_j_in_i
         && all_inside(&poly_j, &poly_i)
         && !in_hole(p_j_2d, face_i)
         && !footprint_in_holes(p_j_2d, &poly_j, &poly_i, face_i)
