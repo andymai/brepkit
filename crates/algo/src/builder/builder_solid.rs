@@ -1015,8 +1015,7 @@ fn split_edges_at_collinear_vertices(
         // the `vid` tiebreak makes this a total order — without it, cuts at
         // equal `t` keep nondeterministic hash order and sub-edge IDs drift.
         cuts.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            a.0.total_cmp(&b.0)
                 .then_with(|| a.1.index().cmp(&b.1.index()))
         });
 
