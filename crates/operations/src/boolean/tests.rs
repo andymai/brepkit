@@ -3990,7 +3990,6 @@ fn cut_concentric_rounded_rect_arc_prisms_overshoot() {
 }
 
 #[test]
-#[ignore = "known bug: acceptance gate rejects nested-cavity GFA result"]
 fn cut_concentric_rounded_rect_arc_prisms_cavity() {
     // Fully-enclosed cavity: tool z=5..20 strictly inside body z=0..21.
     let mut topo = Topology::new();
