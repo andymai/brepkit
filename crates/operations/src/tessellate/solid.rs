@@ -1,7 +1,6 @@
 //! Solid-level tessellation orchestration.
 
-use std::collections::HashMap;
-
+use brepkit_math::det_hash::{DetHashMap, DetHashSet};
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
@@ -75,10 +74,13 @@ pub fn tessellate_solid_with_tolerance(
     let all_faces = explorer::solid_faces(topo, solid)?;
     let edge_face_map = explorer::edge_to_face_map(topo, solid)?;
 
-    // Phase 2: Tessellate each unique edge once.
-    let edge_indices: Vec<usize> = edge_face_map.keys().copied().collect();
+    // Phase 2: Tessellate each unique edge once. The map is a std `HashMap`,
+    // so sort its keys into ID order before use — keeping all downstream
+    // iteration deterministic regardless of insertion-order hashing.
+    let mut edge_indices: Vec<usize> = edge_face_map.keys().copied().collect();
+    edge_indices.sort_unstable();
     #[cfg(not(target_arch = "wasm32"))]
-    let mut edge_points: HashMap<usize, Vec<Point3>> = if edge_indices.len() >= 32 {
+    let mut edge_points: DetHashMap<usize, Vec<Point3>> = if edge_indices.len() >= 32 {
         use rayon::prelude::*;
         let results: Vec<Result<(usize, Vec<Point3>), crate::OperationsError>> = edge_indices
             .par_iter()
@@ -94,14 +96,14 @@ pub fn tessellate_solid_with_tolerance(
                 )
             })
             .collect();
-        let mut map = HashMap::new();
+        let mut map = DetHashMap::default();
         for r in results {
             let (idx, pts) = r?;
             map.insert(idx, pts);
         }
         map
     } else {
-        let mut map = HashMap::new();
+        let mut map = DetHashMap::default();
         for &edge_idx in &edge_indices {
             if let Some(edge_id) = topo.edge_id_from_index(edge_idx) {
                 if let Ok(edge_data) = topo.edge(edge_id) {
@@ -113,8 +115,8 @@ pub fn tessellate_solid_with_tolerance(
         map
     };
     #[cfg(target_arch = "wasm32")]
-    let mut edge_points: HashMap<usize, Vec<Point3>> = {
-        let mut map = HashMap::new();
+    let mut edge_points: DetHashMap<usize, Vec<Point3>> = {
+        let mut map = DetHashMap::default();
         for &edge_idx in &edge_indices {
             if let Some(edge_id) = topo.edge_id_from_index(edge_idx) {
                 if let Ok(edge_data) = topo.edge(edge_id) {
@@ -191,8 +193,8 @@ pub fn tessellate_solid_with_tolerance(
 
     // Phase 3: Build merged mesh with shared edge vertices.
     let mut merged = TriangleMesh::default();
-    let mut point_to_global: HashMap<(i64, i64, i64), u32> = HashMap::new();
-    let mut edge_global_indices: HashMap<usize, Vec<u32>> = HashMap::new();
+    let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
+    let mut edge_global_indices: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
 
     for (&edge_idx, points) in &edge_points {
         let mut global_ids = Vec::with_capacity(points.len());
@@ -212,8 +214,6 @@ pub fn tessellate_solid_with_tolerance(
 
     // Phase 3b: Circle edge refinement.
     {
-        use std::collections::HashSet;
-
         let tol_linear = brepkit_math::tolerance::Tolerance::new().linear;
         let refine_tol = tol_linear * 10.0;
 
@@ -244,7 +244,7 @@ pub fn tessellate_solid_with_tolerance(
                 .get(&edge_idx)
                 .cloned()
                 .unwrap_or_default();
-            let existing_gids: HashSet<u32> = existing_gids_vec.iter().copied().collect();
+            let existing_gids: DetHashSet<u32> = existing_gids_vec.iter().copied().collect();
 
             let mut insertions: Vec<(f64, u32)> = Vec::new();
             for (gid, pos) in merged.positions.iter().enumerate() {
@@ -293,7 +293,7 @@ pub fn tessellate_solid_with_tolerance(
                 .collect();
             all_with_t.extend(insertions);
             all_with_t.sort_by(|a, b| a.0.total_cmp(&b.0));
-            let mut seen_gids = HashSet::new();
+            let mut seen_gids = DetHashSet::default();
             all_with_t.retain(|(_, gid)| seen_gids.insert(*gid));
 
             let refined: Vec<u32> = all_with_t.into_iter().map(|(_, gid)| gid).collect();
@@ -476,9 +476,7 @@ pub fn tessellate_solid_with_tolerance(
     }
 
     {
-        use std::collections::HashSet;
-
-        let mut vertex_faces: HashMap<usize, HashSet<FaceId>> = HashMap::new();
+        let mut vertex_faces: DetHashMap<usize, DetHashSet<FaceId>> = DetHashMap::default();
         for (&edge_idx, global_ids) in &edge_global_indices {
             if let Some(face_ids) = edge_face_map.get(&edge_idx) {
                 for &gid in global_ids {
@@ -570,9 +568,9 @@ pub(super) fn tessellate_face_with_shared_edges(
     face_id: FaceId,
     deflection: f64,
     angular_tol: f64,
-    edge_global_indices: &HashMap<usize, Vec<u32>>,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
     let face_data = topo.face(face_id)?;
     let is_reversed = face_data.is_reversed();

@@ -1,7 +1,6 @@
 //! NURBS adaptive quadtree tessellation.
 
-use std::collections::HashMap;
-
+use brepkit_math::det_hash::DetHashMap;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 
@@ -680,20 +679,20 @@ pub(super) fn tessellate_nurbs(
     conforming_pass(surface, &mut cells);
 
     let leaf_count = cells.iter().filter(|c| c.children.is_none()).count();
-    let mut eval_cache: HashMap<(u64, u64), (Point3, Vec3)> = HashMap::new();
+    let mut eval_cache: DetHashMap<(u64, u64), (Point3, Vec3)> = DetHashMap::default();
     let mut positions = Vec::with_capacity(leaf_count * 4);
     let mut normals = Vec::with_capacity(leaf_count * 4);
     let mut uvs: Vec<[f64; 2]> = Vec::with_capacity(leaf_count * 4);
     let mut indices = Vec::with_capacity(leaf_count * 6);
-    let mut vertex_map: HashMap<(u64, u64), u32> = HashMap::new();
+    let mut vertex_map: DetHashMap<(u64, u64), u32> = DetHashMap::default();
 
     let get_or_insert_vertex = |u: f64,
                                 v: f64,
-                                eval_cache: &mut HashMap<(u64, u64), (Point3, Vec3)>,
+                                eval_cache: &mut DetHashMap<(u64, u64), (Point3, Vec3)>,
                                 positions: &mut Vec<Point3>,
                                 normals: &mut Vec<Vec3>,
                                 uvs: &mut Vec<[f64; 2]>,
-                                vertex_map: &mut HashMap<(u64, u64), u32>|
+                                vertex_map: &mut DetHashMap<(u64, u64), u32>|
      -> u32 {
         let key = (u.to_bits(), v.to_bits());
         if let Some(&idx) = vertex_map.get(&key) {

@@ -35,7 +35,7 @@ mod locate;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashSet;
+use crate::det_hash::DetHashSet;
 
 use crate::MathError;
 use crate::predicates::{in_circle, orient2d};
@@ -106,7 +106,7 @@ pub struct Cdt {
     vertices: Vec<Point2>,
     triangles: Vec<CdtTriangle>,
     /// Set of constrained edges stored as sorted `(min, max)` vertex pairs.
-    constraints: HashSet<(usize, usize)>,
+    constraints: DetHashSet<(usize, usize)>,
     /// Number of super-triangle vertices at the start of the vertex list.
     super_count: usize,
     /// Spatial hash for O(1) amortized duplicate point detection.
@@ -178,7 +178,7 @@ impl Cdt {
         Self {
             vertices,
             triangles,
-            constraints: HashSet::new(),
+            constraints: DetHashSet::default(),
             super_count: 3,
             dup_grid: std::collections::HashMap::new(),
             last_located: 0,
@@ -386,11 +386,11 @@ impl Cdt {
     /// super-triangle vertex.
     pub fn remove_exterior(&mut self, boundary: &[(usize, usize)]) {
         // Build the constraint set for boundary edges.
-        let boundary_set: HashSet<(usize, usize)> =
+        let boundary_set: DetHashSet<(usize, usize)> =
             boundary.iter().map(|&(a, b)| sorted_pair(a, b)).collect();
 
         // Merge with existing constraints for the flood-fill barrier.
-        let all_constraints: HashSet<(usize, usize)> =
+        let all_constraints: DetHashSet<(usize, usize)> =
             self.constraints.union(&boundary_set).copied().collect();
 
         // Start flood-fill from triangles touching super-triangle vertices.
@@ -448,7 +448,7 @@ impl Cdt {
     pub fn flood_remove_from_point(
         &mut self,
         seed: Point2,
-        constraints: &HashSet<(usize, usize)>,
+        constraints: &DetHashSet<(usize, usize)>,
     ) -> bool {
         // Use the walking point-location search (O(sqrt(n))) instead of
         // linear scan (O(n)) to find the seed triangle.
@@ -517,7 +517,7 @@ impl Cdt {
     ///   Stored as sorted `(min, max)` pairs.
     #[must_use]
     pub fn extract_regions(&self, separators: &[(usize, usize)]) -> Vec<Vec<Point2>> {
-        let sep_set: HashSet<(usize, usize)> =
+        let sep_set: DetHashSet<(usize, usize)> =
             separators.iter().map(|&(a, b)| sorted_pair(a, b)).collect();
 
         let sc = self.super_count;
@@ -611,7 +611,7 @@ impl Cdt {
     /// Useful for distinguishing boundary constraints from interior
     /// (separator) constraints in callers like NURBS boolean splitting.
     #[must_use]
-    pub fn constraint_edges(&self) -> &HashSet<(usize, usize)> {
+    pub fn constraint_edges(&self) -> &DetHashSet<(usize, usize)> {
         &self.constraints
     }
 }
@@ -631,11 +631,11 @@ fn walk_region_boundary(
     vertices: &[Point2],
     super_count: usize,
 ) -> Vec<Point2> {
-    use std::collections::HashMap;
+    use crate::det_hash::DetHashMap;
 
     // Count how many times each edge appears in the region.
     // An edge appearing once is a boundary edge.
-    let mut edge_count: HashMap<(usize, usize), Vec<(usize, usize)>> = HashMap::new();
+    let mut edge_count: DetHashMap<(usize, usize), Vec<(usize, usize)>> = DetHashMap::default();
     for &ti in region_tris {
         let tri = &triangles[ti];
         for local in 0..3 {
@@ -648,7 +648,7 @@ fn walk_region_boundary(
     }
 
     // Boundary edges: appear exactly once. Keep them directed (CCW winding).
-    let mut next_map: HashMap<usize, usize> = HashMap::new();
+    let mut next_map: DetHashMap<usize, usize> = DetHashMap::default();
     for directed_edges in edge_count.values() {
         if directed_edges.len() == 1 {
             let (va, vb) = directed_edges[0];

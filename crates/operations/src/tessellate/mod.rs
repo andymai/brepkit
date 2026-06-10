@@ -165,14 +165,14 @@ pub fn tessellate_with_tolerance(
 #[cfg(test)]
 #[must_use]
 pub(super) fn position_based_boundary_count(mesh: &TriangleMesh) -> usize {
-    use std::collections::{HashMap, HashSet};
-
     /// 1um grid -- intentionally coarser than `MERGE_GRID` (1e-7) to catch
     /// gaps the production pipeline should have closed.
     const DIAGNOSTIC_GRID: f64 = 1e-6;
 
+    use brepkit_math::det_hash::{DetHashMap, DetHashSet};
+
     // Build canonical vertex ID from snapped position.
-    let mut pos_to_canonical: HashMap<(i64, i64, i64), u32> = HashMap::new();
+    let mut pos_to_canonical: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
     let mut canonical_ids: Vec<u32> = Vec::with_capacity(mesh.positions.len());
     let mut next_id: u32 = 0;
 
@@ -187,7 +187,7 @@ pub(super) fn position_based_boundary_count(mesh: &TriangleMesh) -> usize {
     }
 
     // Build half-edge set using canonical IDs.
-    let mut half_edges: HashSet<(u32, u32)> = HashSet::new();
+    let mut half_edges: DetHashSet<(u32, u32)> = DetHashSet::default();
     for tri in mesh.indices.chunks_exact(3) {
         let i0 = canonical_ids[tri[0] as usize];
         let i1 = canonical_ids[tri[1] as usize];
