@@ -3718,3 +3718,62 @@ fn dump_boundary_edges_after_two_pocket_cuts() {
         }
     }
 }
+
+/// Regression: a shelled (tray-like) target cut by a box tool passing
+/// through the cavity opening must come out of the exact pipeline as a
+/// closed manifold with hole-nested loops handled correctly.
+///
+/// Previously the tool's cross-section at the rim plane was stamped onto
+/// the rim face as a nested inner loop (inside the existing cavity hole),
+/// leaving four free edges, and the acceptance gate rejected the genus-1
+/// Euler balance, so every such cut fell through to the mesh fallback.
+#[test]
+fn cut_shelled_target_single_tool_exact_gfa() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let opts = BooleanOptions {
+        unify_faces: false,
+        ..Default::default()
+    };
+
+    // Tray: outer 40x40x10 minus inner 36x36x8 at (2,2,2) — open at the top.
+    let target = crate::primitives::make_box(&mut topo, 40.0, 40.0, 10.0).unwrap();
+    let inner_box = crate::primitives::make_box(&mut topo, 36.0, 36.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, inner_box, &Mat4::translation(2.0, 2.0, 2.0))
+        .unwrap();
+    let target = boolean_with_options(&mut topo, BooleanOp::Cut, target, inner_box, opts).unwrap();
+
+    let tray_vol = crate::measure::solid_volume(&topo, target, 0.05).unwrap();
+    assert!(
+        (tray_vol - 5632.0).abs() < 1e-6,
+        "tray volume should be exactly 5632, got {tray_vol}"
+    );
+
+    // Box tool through the cavity opening and the tray floor.
+    let tool = crate::primitives::make_box(&mut topo, 3.0, 3.0, 20.0).unwrap();
+    crate::transform::transform_solid(&mut topo, tool, &Mat4::translation(4.0, 4.0, -5.0)).unwrap();
+
+    let result = boolean_with_options(&mut topo, BooleanOp::Cut, target, tool, opts).unwrap();
+
+    // Exact B-Rep result: 11 tray faces + 4 hole walls; the rim face keeps
+    // exactly its one cavity inner wire (no nested loop from the tool).
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).unwrap();
+    assert_eq!(faces.len(), 15, "expected exact GFA topology, not mesh");
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert!(!has_free_edges(&topo, result).unwrap());
+
+    // Genus-1 Euler balance: V - E + F = 2(1 - g) + L = 0 + 3.
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, result).unwrap();
+    let euler = v as i64 - e as i64 + f as i64;
+    let inner_wires = solid_inner_wire_count(&topo, result).unwrap();
+    assert_eq!(inner_wires, 3);
+    assert_eq!(euler, 3);
+
+    // Exact volume: 5632 - 3*3*2 (tool through the 2-thick floor).
+    let vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+    assert!(
+        (vol - 5614.0).abs() < 1e-6,
+        "volume should be exactly 5614, got {vol}"
+    );
+}
