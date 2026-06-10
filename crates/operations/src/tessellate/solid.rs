@@ -67,7 +67,7 @@ pub fn tessellate_solid_with_tolerance(
     deflection: f64,
     angular_tol: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
-    tessellate_solid_core(topo, solid, deflection, angular_tol).map(|(mesh, _, _)| mesh)
+    tessellate_solid_core(topo, solid, deflection, angular_tol, false).map(|(mesh, _, _)| mesh)
 }
 
 /// Watertight solid tessellation with per-face triangle grouping.
@@ -89,7 +89,8 @@ pub fn tessellate_solid_grouped_with_tolerance(
     angular_tol: f64,
 ) -> Result<(TriangleMesh, Vec<u32>), crate::OperationsError> {
     let (mut mesh, tri_faces, n_faces) =
-        tessellate_solid_core(topo, solid, deflection, angular_tol)?;
+        tessellate_solid_core(topo, solid, deflection, angular_tol, true)?;
+    let tri_faces = tri_faces.unwrap_or_default();
     debug_assert_eq!(tri_faces.len() * 3, mesh.indices.len());
 
     let mut counts = vec![0_u32; n_faces];
@@ -128,16 +129,18 @@ pub fn tessellate_solid_grouped_with_tolerance(
 
 /// Core watertight tessellation pipeline.
 ///
-/// Returns the merged mesh, a parallel `tri -> face` array (one entry per
-/// triangle, holding the index of the owning face within
-/// `explorer::solid_faces` order), and the face count.
+/// When `track_faces` is set, also returns a parallel `tri -> face` array (one
+/// entry per triangle, holding the index of the owning face within
+/// `explorer::solid_faces` order); otherwise the attribution bookkeeping is
+/// skipped and `None` is returned. The face count is always returned.
 #[allow(clippy::too_many_lines)]
 fn tessellate_solid_core(
     topo: &Topology,
     solid: SolidId,
     deflection: f64,
     angular_tol: f64,
-) -> Result<(TriangleMesh, Vec<u32>, usize), crate::OperationsError> {
+    track_faces: bool,
+) -> Result<(TriangleMesh, Option<Vec<u32>>, usize), crate::OperationsError> {
     use brepkit_topology::explorer;
 
     // Phase 1: Collect all faces and build edge->face adjacency.
@@ -372,9 +375,10 @@ fn tessellate_solid_core(
     }
 
     // Phase 4: Tessellate each face using its boundary edge vertices.
-    // `tri_faces` runs parallel to the mesh triangles: tri_faces[t] is the
-    // index (into `all_faces`) of the face that produced triangle t.
-    let mut tri_faces: Vec<u32> = Vec::new();
+    // When tracking, `tri_faces` runs parallel to the mesh triangles:
+    // tri_faces[t] is the index (into `all_faces`) of the face that produced
+    // triangle t. The ungrouped caller skips this bookkeeping entirely.
+    let mut tri_faces: Option<Vec<u32>> = track_faces.then(Vec::new);
     #[allow(clippy::items_after_statements)]
     struct CdtJob {
         face_index: u32,
@@ -512,7 +516,9 @@ fn tessellate_solid_core(
             let g0 = job.all_global_ids[i0].unwrap_or(0);
             let g1 = job.all_global_ids[i1].unwrap_or(0);
             let g2 = job.all_global_ids[i2].unwrap_or(0);
-            tri_faces.push(job.face_index);
+            if let Some(tf) = tri_faces.as_mut() {
+                tf.push(job.face_index);
+            }
             if needs_flip {
                 merged.indices.push(g0);
                 merged.indices.push(g2);
@@ -540,8 +546,10 @@ fn tessellate_solid_core(
         }
         // Attribute every triangle appended by this face (even partial output
         // before an error) so tri_faces stays parallel to the triangle list.
-        #[allow(clippy::cast_possible_truncation)]
-        tri_faces.resize(merged.indices.len() / 3, fi as u32);
+        if let Some(tf) = tri_faces.as_mut() {
+            #[allow(clippy::cast_possible_truncation)]
+            tf.resize(merged.indices.len() / 3, fi as u32);
+        }
     }
 
     // Phase 5: Surface-aware vertex normals.
@@ -631,13 +639,13 @@ fn tessellate_solid_core(
     }
 
     // Phase 6: Weld boundary vertices.
-    weld_boundary_vertices(&mut merged, deflection, &mut tri_faces);
+    weld_boundary_vertices(&mut merged, deflection, tri_faces.as_mut());
 
     // Phase 7: Drop coincident/cancelling triangles left by booleans that
     // produced overlapping coplanar faces (issue #696). Keyed on quantized
     // positions so position-coincident triangles with distinct vertex IDs
     // are still caught.
-    dedupe_coincident_triangles(&mut merged, &mut tri_faces);
+    dedupe_coincident_triangles(&mut merged, tri_faces.as_mut());
 
     Ok((merged, tri_faces, all_faces.len()))
 }

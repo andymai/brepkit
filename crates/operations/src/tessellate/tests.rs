@@ -429,7 +429,7 @@ fn dedupe_cancels_opposing_winding_pair() {
         indices: vec![0, 1, 2, 0, 2, 1],
     };
     let mut tri_faces = vec![0_u32; mesh.indices.len() / 3];
-    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, &mut tri_faces);
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, Some(&mut tri_faces));
     assert_eq!(
         mesh.indices.len(),
         0,
@@ -454,7 +454,7 @@ fn dedupe_collapses_same_winding_duplicate() {
         indices: vec![0, 1, 2, 0, 1, 2],
     };
     let mut tri_faces = vec![0_u32; mesh.indices.len() / 3];
-    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, &mut tri_faces);
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, Some(&mut tri_faces));
     assert_eq!(
         mesh.indices.len(),
         3,
@@ -479,7 +479,7 @@ fn dedupe_matches_position_coincidence_not_index() {
         indices: vec![0, 1, 2, 3, 4, 5],
     };
     let mut tri_faces = vec![0_u32; mesh.indices.len() / 3];
-    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, &mut tri_faces);
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, Some(&mut tri_faces));
     assert_eq!(
         mesh.indices.len(),
         3,
@@ -510,7 +510,7 @@ fn dedupe_preserves_thin_plate_geometry() {
         indices: vec![0, 1, 2, 3, 5, 4],
     };
     let mut tri_faces = vec![0_u32; mesh.indices.len() / 3];
-    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, &mut tri_faces);
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, Some(&mut tri_faces));
     assert_eq!(
         mesh.indices.len(),
         6,

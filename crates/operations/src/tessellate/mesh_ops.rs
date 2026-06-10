@@ -82,7 +82,10 @@ pub fn non_manifold_edge_count(mesh: &TriangleMesh) -> usize {
 /// `tri_faces` is a parallel tri -> face attribution array (one entry per
 /// triangle); entries for removed triangles are filtered alongside so group
 /// offsets recomputed from it stay aligned.
-pub(super) fn dedupe_coincident_triangles(mesh: &mut TriangleMesh, tri_faces: &mut Vec<u32>) {
+pub(super) fn dedupe_coincident_triangles(
+    mesh: &mut TriangleMesh,
+    tri_faces: Option<&mut Vec<u32>>,
+) {
     /// 1µm grid: tight enough that legitimately distinct CAD features (down to
     /// ~10µm geometry like thin plates) keep separate keys, while still
     /// merging post-merge floating-point noise in coincident vertices that
@@ -169,16 +172,18 @@ pub(super) fn dedupe_coincident_triangles(mesh: &mut TriangleMesh, tri_faces: &m
     }
 
     let mut new_indices = Vec::with_capacity(mesh.indices.len());
-    let mut new_tri_faces = Vec::with_capacity(tri_faces.len());
+    let mut new_tri_faces = Vec::with_capacity(tri_faces.as_ref().map_or(0, |tf| tf.len()));
     for (t, &k) in keep.iter().enumerate().take(tri_count) {
         if k {
             new_indices.extend_from_slice(&mesh.indices[t * 3..t * 3 + 3]);
-            if let Some(&f) = tri_faces.get(t) {
+            if let Some(&f) = tri_faces.as_ref().and_then(|tf| tf.get(t)) {
                 new_tri_faces.push(f);
             }
         }
     }
-    *tri_faces = new_tri_faces;
+    if let Some(tf) = tri_faces {
+        *tf = new_tri_faces;
+    }
 
     // Compact the position/normal buffers: drop any vertex no longer
     // referenced by a surviving triangle. Downstream consumers that iterate
@@ -350,7 +355,7 @@ pub fn sample_solid_edges_filtered(
 pub(super) fn weld_boundary_vertices(
     mesh: &mut TriangleMesh,
     deflection: f64,
-    tri_faces: &mut Vec<u32>,
+    tri_faces: Option<&mut Vec<u32>>,
 ) {
     let n_verts = mesh.positions.len();
     if n_verts == 0 || mesh.indices.is_empty() {
@@ -458,19 +463,21 @@ pub(super) fn weld_boundary_vertices(
 
     if changed {
         let mut new_indices = Vec::with_capacity(mesh.indices.len());
-        let mut new_tri_faces = Vec::with_capacity(tri_faces.len());
+        let mut new_tri_faces = Vec::with_capacity(tri_faces.as_ref().map_or(0, |tf| tf.len()));
         for (t, tri) in mesh.indices.chunks_exact(3).enumerate() {
             let (i0, i1, i2) = (tri[0], tri[1], tri[2]);
             if i0 != i1 && i1 != i2 && i2 != i0 {
                 new_indices.push(i0);
                 new_indices.push(i1);
                 new_indices.push(i2);
-                if let Some(&f) = tri_faces.get(t) {
+                if let Some(&f) = tri_faces.as_ref().and_then(|tf| tf.get(t)) {
                     new_tri_faces.push(f);
                 }
             }
         }
         mesh.indices = new_indices;
-        *tri_faces = new_tri_faces;
+        if let Some(tf) = tri_faces {
+            *tf = new_tri_faces;
+        }
     }
 }
