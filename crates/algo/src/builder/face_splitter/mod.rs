@@ -532,6 +532,15 @@ pub fn split_face_2d(
         } else {
             let pts = sample_wire_loop_uv_periodic(&wire_loop, u_per_opt, v_per_opt);
             let area = signed_area_2d(&pts);
+            // Sliver guard: a loop enclosing less area than a tol-wide band
+            // along its own perimeter is degenerate — e.g. an arc traversed
+            // forward then backward when a coplanar partner's boundary
+            // coincides with the face's own corner arc. Classifying it as
+            // outer creates a zero-area face; as hole, a spurious inner wire.
+            let perimeter: f64 = pts.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+            if area.abs() <= perimeter * tol.linear {
+                continue;
+            }
             if area > 0.0 {
                 outers.push((wire_loop, area));
             } else {

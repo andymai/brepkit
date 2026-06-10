@@ -181,6 +181,20 @@ fn find_edge_edge_crossings(
         return Ok(line_line_intersection(ea, eb, tol));
     }
 
+    // Coincident circles (same center/axis/radius): the arcs overlap along
+    // a shared curve, not at isolated points. Like collinear parallel lines
+    // (which return no crossings above), the overlap is handled by VE paves
+    // at arc endpoints plus ForceInterfEE common blocks — sampling here
+    // would emit a spurious crossing at every sample pair along the arc.
+    if let (EdgeCurve::Circle(ca), EdgeCurve::Circle(cb)) = (edge_a.curve(), edge_b.curve()) {
+        if (ca.radius() - cb.radius()).abs() < tol.linear
+            && (ca.center() - cb.center()).length() < tol.linear
+            && ca.normal().dot(cb.normal()).abs() > 1.0 - tol.angular
+        {
+            return Ok(Vec::new());
+        }
+    }
+
     // General case: sample both edges and find close segment pairs
     let n: usize = 32;
     let mut crossings = Vec::new();

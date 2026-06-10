@@ -2108,17 +2108,7 @@ fn build_topology_face(
         // different per-call vertex caches, so shared edges would have wrong
         // VertexId connections at wire junctions.
         // merge_duplicate_edges in BuilderSolid handles cross-face sharing.
-        let edge_id = if let Some(_pb_id) = pcurve_edge.pave_block_id {
-            topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
-        } else if let Some(_idx) = pcurve_edge.source_edge_idx {
-            topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
-        } else {
-            // Each face creates its own boundary edges with its own vertices.
-            // Cross-face sharing is handled by merge_duplicate_edges in
-            // builder_solid. This avoids VertexId mismatches that occur when
-            // edges are shared across parent faces with different vertex caches.
-            topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()))
-        };
+        let edge_id = topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()));
         // The edge was just created with start_vid at start_3d and end_vid
         // at end_3d, so the vertex order itself encodes the traversal
         // direction — open edges always get forward=true regardless of the

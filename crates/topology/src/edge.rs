@@ -59,14 +59,39 @@ impl EdgeCurve {
 
     /// Parameter domain of this curve.
     ///
-    /// `Line` uses `[0, 1]`. Circle and Ellipse use `[0, 2π]`. NURBS uses
-    /// its knot span.
+    /// `Line` uses `[0, 1]`. NURBS uses its knot span. Closed Circle and
+    /// Ellipse edges (`start ≈ end`) use the full `[0, 2π]` domain. Open
+    /// arcs project both endpoints onto the curve and return the CCW
+    /// angular range `[a₀, a₁]` with `a₁ > a₀`, so sampling the domain
+    /// traces exactly the trimmed arc rather than the full curve.
     #[must_use]
-    pub fn domain_with_endpoints(&self, _start: Point3, _end: Point3) -> (f64, f64) {
+    pub fn domain_with_endpoints(&self, start: Point3, end: Point3) -> (f64, f64) {
+        const TAU: f64 = std::f64::consts::TAU;
+        // Below this chord the endpoints are considered coincident and the
+        // edge is treated as a closed (full) curve.
+        const CLOSED_EPS: f64 = 1e-9;
         match self {
             Self::Line => (0.0, 1.0),
-            Self::Circle(c) => ParametricCurve::domain(c),
-            Self::Ellipse(e) => ParametricCurve::domain(e),
+            Self::Circle(c) => {
+                if (start - end).length() < CLOSED_EPS {
+                    ParametricCurve::domain(c)
+                } else {
+                    let a0 = c.project(start);
+                    let delta = (c.project(end) - a0).rem_euclid(TAU);
+                    let delta = if delta < 1e-12 { TAU } else { delta };
+                    (a0, a0 + delta)
+                }
+            }
+            Self::Ellipse(e) => {
+                if (start - end).length() < CLOSED_EPS {
+                    ParametricCurve::domain(e)
+                } else {
+                    let a0 = e.project(start);
+                    let delta = (e.project(end) - a0).rem_euclid(TAU);
+                    let delta = if delta < 1e-12 { TAU } else { delta };
+                    (a0, a0 + delta)
+                }
+            }
             Self::NurbsCurve(n) => ParametricCurve::domain(n),
         }
     }
