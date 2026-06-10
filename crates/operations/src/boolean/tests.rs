@@ -3774,3 +3774,243 @@ fn cut_shelled_target_single_tool_exact_gfa() {
         "volume should be exactly 5614, got {vol}"
     );
 }
+
+// ── Rounded-rect prisms with true Circle arc corners ────────────────
+//
+// Gridfinity-shaped repros: extruded rounded rectangles (4 planes +
+// 4 tangent quarter-cylinder corners) fused at coplanar interfaces or
+// cut concentrically. Volume oracles are exact closed forms:
+// area = w*d - (4 - PI) * r^2.
+
+/// Build a rounded-rectangle planar face at height `z` with 4 line edges
+/// and 4 true quarter-circle `EdgeCurve::Circle` arc edges (CCW, +Z normal).
+fn make_rounded_rect_arc_face(topo: &mut Topology, hw: f64, hd: f64, r: f64, z: f64) -> FaceId {
+    use brepkit_math::curves::Circle3D;
+
+    let tol_val = 1e-7;
+    // 8 tangent points, CCW starting at bottom of the right edge.
+    let pts: [(f64, f64); 8] = [
+        (hw, -(hd - r)),
+        (hw, hd - r),
+        (hw - r, hd),
+        (-(hw - r), hd),
+        (-hw, hd - r),
+        (-hw, -(hd - r)),
+        (-(hw - r), -hd),
+        (hw - r, -hd),
+    ];
+    let centers: [(f64, f64); 4] = [
+        (hw - r, hd - r),
+        (-(hw - r), hd - r),
+        (-(hw - r), -(hd - r)),
+        (hw - r, -(hd - r)),
+    ];
+
+    let vids: Vec<_> = pts
+        .iter()
+        .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, z), tol_val)))
+        .collect();
+
+    let normal = Vec3::new(0.0, 0.0, 1.0);
+    let mut eids: Vec<EdgeId> = Vec::with_capacity(8);
+    for i in 0..4 {
+        let line_start = vids[2 * i];
+        let line_end = vids[(2 * i + 1) % 8];
+        eids.push(topo.add_edge(Edge::new(line_start, line_end, EdgeCurve::Line)));
+
+        let arc_start = vids[(2 * i + 1) % 8];
+        let arc_end = vids[(2 * i + 2) % 8];
+        let (cx, cy) = centers[i];
+        let center = Point3::new(cx, cy, z);
+        let start_pt = Point3::new(pts[(2 * i + 1) % 8].0, pts[(2 * i + 1) % 8].1, z);
+        let radial = start_pt - center;
+        let u_axis = Vec3::new(radial.x() / r, radial.y() / r, radial.z() / r);
+        let v_axis = normal.cross(u_axis);
+        let circle = Circle3D::with_axes(center, normal, r, u_axis, v_axis).unwrap();
+        eids.push(topo.add_edge(Edge::new(arc_start, arc_end, EdgeCurve::Circle(circle))));
+    }
+
+    let wire = Wire::new(
+        eids.iter()
+            .map(|&eid| OrientedEdge::new(eid, true))
+            .collect(),
+        true,
+    )
+    .unwrap();
+    let wid = topo.add_wire(wire);
+    topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d: z }))
+}
+
+/// Extrude a rounded-rect arc face from `z0` upward by `height`.
+fn make_rounded_rect_arc_prism(
+    topo: &mut Topology,
+    hw: f64,
+    hd: f64,
+    r: f64,
+    z0: f64,
+    height: f64,
+) -> SolidId {
+    let face = make_rounded_rect_arc_face(topo, hw, hd, r, z0);
+    crate::extrude::extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), height).unwrap()
+}
+
+fn rounded_rect_area(hw: f64, hd: f64, r: f64) -> f64 {
+    4.0 * hw * hd - (4.0 - std::f64::consts::PI) * r * r
+}
+
+fn count_cylinder_faces(topo: &Topology, solid: SolidId) -> usize {
+    brepkit_topology::explorer::solid_faces(topo, solid)
+        .unwrap()
+        .iter()
+        .filter(|&&fid| {
+            matches!(
+                topo.face(fid).unwrap().surface(),
+                FaceSurface::Cylinder { .. }
+            )
+        })
+        .count()
+}
+
+#[test]
+fn rounded_rect_arc_prism_volume_baseline() {
+    let mut topo = Topology::new();
+    let a = make_rounded_rect_arc_prism(&mut topo, 20.75, 20.75, 3.75, 0.0, 16.0);
+    let expected = rounded_rect_area(20.75, 20.75, 3.75) * 16.0;
+    let vol = crate::measure::solid_volume(&topo, a, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "prism volume {vol:.2} != expected {expected:.2}"
+    );
+    assert_eq!(count_cylinder_faces(&topo, a), 4);
+    assert!(is_closed_manifold(&topo, a).unwrap());
+}
+
+#[test]
+fn fuse_stacked_rounded_rect_arc_prisms_same_footprint() {
+    let mut topo = Topology::new();
+    let a = make_rounded_rect_arc_prism(&mut topo, 20.75, 20.75, 3.75, 0.0, 16.0);
+    let b = make_rounded_rect_arc_prism(&mut topo, 20.75, 20.75, 3.75, -4.0, 4.0);
+
+    let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+
+    let expected = rounded_rect_area(20.75, 20.75, 3.75) * 20.0;
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "fused volume {vol:.2} != expected {expected:.2}"
+    );
+    assert!(
+        is_closed_manifold(&topo, result).unwrap(),
+        "fuse result must be closed-manifold"
+    );
+    assert!(!has_free_edges(&topo, result).unwrap());
+    let cyl = count_cylinder_faces(&topo, result);
+    assert!(
+        (4..=8).contains(&cyl),
+        "expected 4-8 analytic cylinder corner faces (no mesh fallback), got {cyl}"
+    );
+}
+
+#[test]
+fn fuse_overlapping_rounded_rect_arc_prisms_same_footprint() {
+    let mut topo = Topology::new();
+    let a = make_rounded_rect_arc_prism(&mut topo, 20.75, 20.75, 3.75, 0.0, 16.0);
+    let b = make_rounded_rect_arc_prism(&mut topo, 20.75, 20.75, 3.75, -4.0, 5.0);
+
+    let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+
+    let expected = rounded_rect_area(20.75, 20.75, 3.75) * 20.0;
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "fused volume {vol:.2} != expected {expected:.2}"
+    );
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert!(!has_free_edges(&topo, result).unwrap());
+    // The partial overlap leaves three lateral z-bands (below, overlap,
+    // above); a valid result keeps every corner analytic whether or not
+    // the bands merge: 4 corners x up to 3 bands. A mesh fallback would
+    // leave 0 cylinder faces.
+    let cyl = count_cylinder_faces(&topo, result);
+    assert!(
+        (4..=12).contains(&cyl),
+        "expected 4-12 analytic cylinder corner faces (no mesh fallback), got {cyl}"
+    );
+}
+
+#[test]
+fn fuse_stacked_rounded_rect_arc_prisms_nested_footprint() {
+    // Tool's coplanar interface face strictly contained in the body's
+    // bottom cap: socket (smaller) below the body, touching at z=0.
+    let mut topo = Topology::new();
+    let a = make_rounded_rect_arc_prism(&mut topo, 20.75, 20.75, 3.75, 0.0, 16.0);
+    let b = make_rounded_rect_arc_prism(&mut topo, 19.55, 19.55, 2.55, -4.0, 4.0);
+
+    let result = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+
+    let expected =
+        rounded_rect_area(20.75, 20.75, 3.75) * 16.0 + rounded_rect_area(19.55, 19.55, 2.55) * 4.0;
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "fused volume {vol:.2} != expected {expected:.2}"
+    );
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert!(!has_free_edges(&topo, result).unwrap());
+    let cyl = count_cylinder_faces(&topo, result);
+    assert_eq!(
+        cyl, 8,
+        "expected 8 analytic cylinder corner faces (no mesh fallback), got {cyl}"
+    );
+}
+
+#[test]
+fn cut_concentric_rounded_rect_arc_prisms_overshoot() {
+    // Gridfinity bin pocket: outer 41.5 sq r=3.75 z=0..21, tool
+    // 39.1 sq r=2.55 z=5..25 (overshoots the top).
+    let mut topo = Topology::new();
+    let body = make_rounded_rect_arc_prism(&mut topo, 20.75, 20.75, 3.75, 0.0, 21.0);
+    let tool = make_rounded_rect_arc_prism(&mut topo, 19.55, 19.55, 2.55, 5.0, 20.0);
+
+    let result = boolean(&mut topo, BooleanOp::Cut, body, tool).unwrap();
+
+    let expected =
+        rounded_rect_area(20.75, 20.75, 3.75) * 21.0 - rounded_rect_area(19.55, 19.55, 2.55) * 16.0;
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "cut volume {vol:.2} != expected {expected:.2}"
+    );
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert!(!has_free_edges(&topo, result).unwrap());
+    let cyl = count_cylinder_faces(&topo, result);
+    assert_eq!(
+        cyl, 8,
+        "expected 8 analytic cylinder faces (4 outer + 4 pocket), got {cyl}"
+    );
+}
+
+#[test]
+fn cut_concentric_rounded_rect_arc_prisms_cavity() {
+    // Fully-enclosed cavity: tool z=5..20 strictly inside body z=0..21.
+    let mut topo = Topology::new();
+    let body = make_rounded_rect_arc_prism(&mut topo, 20.75, 20.75, 3.75, 0.0, 21.0);
+    let tool = make_rounded_rect_arc_prism(&mut topo, 19.55, 19.55, 2.55, 5.0, 15.0);
+
+    let result = boolean(&mut topo, BooleanOp::Cut, body, tool).unwrap();
+
+    let expected =
+        rounded_rect_area(20.75, 20.75, 3.75) * 21.0 - rounded_rect_area(19.55, 19.55, 2.55) * 15.0;
+    let vol = crate::measure::solid_volume(&topo, result, 0.01).unwrap();
+    assert!(
+        (vol - expected).abs() / expected < 1e-3,
+        "cavity cut volume {vol:.2} != expected {expected:.2}"
+    );
+    assert!(is_closed_manifold(&topo, result).unwrap());
+    assert!(!has_free_edges(&topo, result).unwrap());
+    let cyl = count_cylinder_faces(&topo, result);
+    assert_eq!(
+        cyl, 8,
+        "expected 8 analytic cylinder faces (4 outer + 4 cavity), got {cyl}"
+    );
+}

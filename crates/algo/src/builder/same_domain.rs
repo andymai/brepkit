@@ -431,16 +431,21 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
                 continue;
             };
             let (sp, ep) = (sv.point(), ev.point());
-            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            // Sample via the shorter-arc evaluator: split faces can store
+            // arc edges whose vertex order opposes the circle's CCW
+            // parameterization, and domain-based sampling would then trace
+            // the complementary (long-way) arc, corrupting the polygon used
+            // for the containment tests below.
             for k in 0..samples_per_edge {
                 #[allow(clippy::cast_precision_loss)]
                 let frac = k as f64 / samples_per_edge as f64;
-                let t = if oe.is_forward() {
-                    (t1 - t0).mul_add(frac, t0)
-                } else {
-                    (t0 - t1).mul_add(frac, t1)
-                };
-                pts.push(edge.curve().evaluate_with_endpoints(t, sp, ep));
+                let frac = if oe.is_forward() { frac } else { 1.0 - frac };
+                pts.push(super::pcurve_compute::evaluate_edge_at_t(
+                    edge.curve(),
+                    sp,
+                    ep,
+                    frac,
+                ));
             }
         }
         pts

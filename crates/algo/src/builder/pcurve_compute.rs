@@ -241,7 +241,7 @@ pub(super) fn evaluate_edge_at_t(curve: &EdgeCurve, start: Point3, end: Point3, 
 }
 
 /// Wrap an angular difference into (-pi, pi] — the shorter way around.
-fn shorter_arc_delta(d: f64) -> f64 {
+pub(super) fn shorter_arc_delta(d: f64) -> f64 {
     let w = d.rem_euclid(TAU);
     if w > std::f64::consts::PI { w - TAU } else { w }
 }

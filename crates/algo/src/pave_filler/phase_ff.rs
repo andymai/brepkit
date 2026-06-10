@@ -134,14 +134,22 @@ pub fn perform(
                                 let f1 = a.1.min(b.1);
                                 trim_raw_line(&raw, f0, f1, tol)
                             }
-                            // At least one face could not build a usable
-                            // polygon (degenerate wire, non-line edges, or a
-                            // non-convex outline the Cyrus-Beck clip can't
-                            // handle). Conservatively keep the raw curve and
-                            // leave trimming to a later phase.
-                            (FaceClip::Indeterminate, _) | (_, FaceClip::Indeterminate) => {
-                                Some(raw)
+                            // One face produced an interval, the other could
+                            // not build a usable polygon (degenerate wire,
+                            // non-line edges such as rounded-rect corner
+                            // arcs, or a non-convex outline). The single
+                            // interval is still a superset of the mutual
+                            // overlap, so trim to it — keeping the raw curve
+                            // here produced over-long chords that crossed
+                            // the partner's arc sections mid-edge.
+                            (FaceClip::Range(r), FaceClip::Indeterminate)
+                            | (FaceClip::Indeterminate, FaceClip::Range(r)) => {
+                                trim_raw_line(&raw, r.0, r.1, tol)
                             }
+                            // Neither face could build a usable polygon.
+                            // Conservatively keep the raw curve and leave
+                            // trimming to a later phase.
+                            (FaceClip::Indeterminate, FaceClip::Indeterminate) => Some(raw),
                         }
                     })
                     .collect()

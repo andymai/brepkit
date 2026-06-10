@@ -497,6 +497,15 @@ pub fn boolean(
                 #[allow(clippy::cast_possible_wrap)]
                 let euler_pre2 = (v2 as i64) - (e2 as i64) + (f2 as i64);
 
+                // Hollow results (a Cut whose tool sits strictly inside the
+                // target) arrive from GFA with the cavity assembled as inner
+                // shells. Each closed genus-0 cavity shell adds 2 to V-E+F,
+                // so the Euler acceptance below must compare against
+                // 2 + 2*K instead of 2. Entity counts above already include
+                // inner-shell entities via `solid_entity_counts`.
+                #[allow(clippy::cast_possible_wrap)]
+                let inner_shell_surplus = 2 * (topo.solid(result)?.inner_shells().len() as i64);
+
                 // Hole-aware Euler: a face with L inner wire loops raises V-E+F
                 // by L (Euler-Poincare: V-E+F-L = 2(1-g)), so a valid genus-0
                 // result with holed faces (e.g. a fuse leaving circular holes in
@@ -506,8 +515,8 @@ pub fn boolean(
                 // deviates from euler==2 solely because of inner wires would
                 // still trigger an unnecessary unify_faces pass.
                 let inner_wire_count_pre = solid_inner_wire_count(topo, result)?;
-                let euler_balanced_pre =
-                    euler_pre2 == 2 || euler_balanced(euler_pre2, inner_wire_count_pre);
+                let euler_balanced_pre = euler_pre2 - inner_shell_surplus == 2
+                    || euler_balanced(euler_pre2 - inner_shell_surplus, inner_wire_count_pre);
 
                 // Run unify_faces if the (hole-aware) Euler is off OR if the
                 // topology has 3+-face junctions, which can occur with a
@@ -543,9 +552,15 @@ pub fn boolean(
                 // offset the inner-wire surplus) still fail safe to the mesh
                 // fallback.
                 let inner_wire_count = solid_inner_wire_count(topo, result)?;
-                let euler_ok = euler == 2
-                    || (euler_balanced(euler, inner_wire_count)
-                        && is_closed_manifold(topo, result)?);
+                // A hollow result must additionally have every shell closed:
+                // a missing cavity face could otherwise cancel against the
+                // inner-shell surplus and balance Euler by accident.
+                let hollow_ok = inner_shell_surplus == 0 || is_closed_manifold(topo, result)?;
+                let euler_eff = euler - inner_shell_surplus;
+                let euler_ok = hollow_ok
+                    && (euler_eff == 2
+                        || (euler_balanced(euler_eff, inner_wire_count)
+                            && is_closed_manifold(topo, result)?));
                 if euler_ok && open_shell_ok && validate_boolean_result(topo, result).is_ok() {
                     log::info!(
                         "GFA boolean succeeded in {:.1}ms ({result_faces} faces)",
@@ -2284,14 +2299,45 @@ fn solid_edge_use_counts(
     Ok(counts)
 }
 
-/// Check whether a solid's boundary is a closed manifold: every edge
-/// is shared by exactly 2 faces. Returns `false` for open shells
-/// (boundary edges with count == 1) and non-manifold shells (count > 2).
+/// Check whether every shell of a solid is a closed manifold: every edge
+/// is shared by exactly 2 faces within its shell. Returns `false` for open
+/// shells (boundary edges with count == 1) and non-manifold shells
+/// (count > 2). Walks inner (cavity) shells as well as the outer shell —
+/// each shell is an independent closed surface, so a single pooled count
+/// per shell is correct.
 ///
 /// Stricter than [`brepkit_topology::validation::validate_shell_manifold`],
 /// which only rejects edges shared by *more* than two faces.
 fn is_closed_manifold(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
-    let counts = solid_edge_use_counts(topo, solid)?;
+    let s = topo.solid(solid)?;
+    let shell_ids: Vec<_> = std::iter::once(s.outer_shell())
+        .chain(s.inner_shells().iter().copied())
+        .collect();
+    for shell_id in shell_ids {
+        let shell = topo.shell(shell_id)?;
+        if !shell_is_closed_manifold(topo, shell)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn shell_is_closed_manifold(
+    topo: &Topology,
+    shell: &brepkit_topology::shell::Shell,
+) -> Result<bool, crate::OperationsError> {
+    use std::collections::HashMap;
+
+    let mut counts: HashMap<usize, usize> = HashMap::new();
+    for &fid in shell.faces() {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                *counts.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
     if counts.is_empty() {
         return Ok(false);
     }
