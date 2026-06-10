@@ -268,6 +268,12 @@ impl Builder {
                 Ok(point) => {
                     sf.classification =
                         classifier::classify_point(&self.topo, opposing_solid, point)?;
+                    log::trace!(
+                        "classify_sub_faces: idx={idx} face={:?} rank={:?} pt={point:?} class={:?}",
+                        sf.face_id,
+                        sf.rank,
+                        sf.classification
+                    );
                 }
                 Err(e) => {
                     return Err(AlgoError::ClassificationFailed(format!(
@@ -400,8 +406,22 @@ fn sample_face_interior(
     // Use 1e-4 of the diagonal, but at least the linear tolerance
     let offset_scale = (diag * 1e-4).max(tol.linear);
 
-    // Take the first boundary edge and evaluate at its midpoint
-    let first_oe = &edges[0];
+    // Take the longest boundary edge and evaluate at its midpoint. The
+    // longest edge gives the most room for the inward offset, and its
+    // midpoint is least likely to sit on a shared junction plane where
+    // the axis-aligned classification rays graze adjacent faces.
+    let mut first_oe = &edges[0];
+    let mut best_len = 0.0_f64;
+    for oe in edges {
+        let e = topo.edge(oe.edge())?;
+        let sp = topo.vertex(e.start())?.point();
+        let ep = topo.vertex(e.end())?.point();
+        let len = (ep - sp).length();
+        if len > best_len {
+            best_len = len;
+            first_oe = oe;
+        }
+    }
     let edge = topo.edge(first_oe.edge())?;
     let start_pos = topo.vertex(edge.start())?.point();
     let end_pos = topo.vertex(edge.end())?.point();
@@ -433,12 +453,33 @@ fn sample_face_interior(
     let inward = tangent.cross(face_normal);
     let inward_len = inward.length();
 
-    let offset = if inward_len > 1e-12 {
+    let mut offset = if inward_len > 1e-12 {
         inward * (offset_scale / inward_len)
     } else {
         // Degenerate — use a tiny offset along the face normal instead
         face_normal * offset_scale
     };
+
+    // The tangent-cross-normal direction assumes CCW winding; reversed or
+    // CW-wound faces flip it, sending the sample outside the face. Use the
+    // boundary vertex centroid to pick the side that points into the face.
+    let centroid = {
+        let mut sum = Vec3::new(0.0, 0.0, 0.0);
+        let mut n = 0_usize;
+        for oe in edges {
+            let e = topo.edge(oe.edge())?;
+            for vid in [e.start(), e.end()] {
+                let p = topo.vertex(vid)?.point();
+                sum += Vec3::new(p.x(), p.y(), p.z());
+                n += 1;
+            }
+        }
+        #[allow(clippy::cast_precision_loss)]
+        Point3::new(sum.x() / n as f64, sum.y() / n as f64, sum.z() / n as f64)
+    };
+    if offset.dot(centroid - mid_pt) < 0.0 {
+        offset = offset * -1.0;
+    }
 
     let interior_pt = mid_pt + offset;
 
@@ -447,6 +488,14 @@ fn sample_face_interior(
         if let Some(on_surface) = surface.evaluate(u, v) {
             return Ok(on_surface);
         }
+    }
+
+    // Planes have no UV projection, but the inward offset is already
+    // in-plane — the offset point itself is the on-surface sample.
+    // Falling back to `mid_pt` here would put the sample exactly on the
+    // face boundary, where junction-plane-grazing rays misclassify.
+    if matches!(surface, brepkit_topology::face::FaceSurface::Plane { .. }) && inward_len > 1e-12 {
+        return Ok(interior_pt);
     }
 
     // Fallback: use the midpoint itself (it's on the boundary, not ideal

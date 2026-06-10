@@ -198,13 +198,7 @@ pub fn detect_same_domain<S: BuildHasher>(
             }
         }
         for (mi, &i) in planar_indices.iter().enumerate() {
-            if sub_faces[i].interior_point.is_none() {
-                continue;
-            }
             for &j in &planar_indices[mi + 1..] {
-                if sub_faces[j].interior_point.is_none() {
-                    continue;
-                }
                 // Cheap surface-match guard first.
                 let same_dir = match (surfaces[i], surfaces[j]) {
                     (Some(si), Some(sj)) => surfaces_same_domain(si, sj, tol),
@@ -404,12 +398,6 @@ fn compute_edge_set_quantized(
 /// — typically a small "filling" face inside a larger face's outer
 /// boundary — without firing on legitimate adjacent face pairs.
 fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usize) -> bool {
-    let Some(p_i) = sub_faces[i].interior_point else {
-        return false;
-    };
-    let Some(p_j) = sub_faces[j].interior_point else {
-        return false;
-    };
     let Ok(face_i) = topo.face(sub_faces[i].face_id) else {
         return false;
     };
@@ -467,22 +455,31 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
     let poly_i: Vec<_> = pts_i.iter().map(|&p| frame.project(p)).collect();
     let poly_j: Vec<_> = pts_j.iter().map(|&p| frame.project(p)).collect();
 
-    // NOTE: `point_in_polygon_2d` uses a strict ray-cast with no boundary
-    // tolerance. Vertices that land exactly on the containing polygon's
-    // edge (e.g., two faces that share a boundary segment) may return false
-    // unpredictably and cause `all_inside` below to silently miss the pair.
-    // The edge-set pass above already handles identical-boundary cases, so
-    // Step 3b only reaches pairs with different outlines — contained-face
-    // vertices that lie exactly on the container's edge are rare in
-    // practice, but worth keeping in mind when extending this check.
-    let p_i_2d = frame.project(p_i);
-    let p_j_2d = frame.project(p_j);
+    // Passthrough faces arrive without a pre-computed interior point;
+    // derive one from the projected outer polygon so coincident-outline
+    // pairs (split disc vs. unsplit opposing cap) are still testable.
+    let p_i_2d = sub_faces[i].interior_point.map_or_else(
+        || super::classify_2d::sample_interior_point(&poly_i),
+        |p| frame.project(p),
+    );
+    let p_j_2d = sub_faces[j].interior_point.map_or_else(
+        || super::classify_2d::sample_interior_point(&poly_j),
+        |p| frame.project(p),
+    );
 
+    // Boundary-tolerant containment: a coincident-outline pair (e.g. a
+    // section-loop disc vs. the opposing solid's cap with differently split
+    // boundary edges) has every vertex exactly ON the container's polygon,
+    // where the strict ray-cast is unpredictable. The interior-point test
+    // below remains strict, so faces that merely touch along a shared
+    // boundary segment still don't pair.
+    let boundary_eps = 1e-6;
     let all_inside =
         |verts: &[brepkit_math::vec::Point2], poly: &[brepkit_math::vec::Point2]| -> bool {
-            verts
-                .iter()
-                .all(|&v| super::classify_2d::point_in_polygon_2d(v, poly))
+            verts.iter().all(|&v| {
+                super::classify_2d::point_in_polygon_2d(v, poly)
+                    || super::classify_2d::distance_to_polygon_boundary(v, poly) <= boundary_eps
+            })
         };
 
     // A point landing inside one of the container's inner wires sits in a
