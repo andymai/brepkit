@@ -2153,7 +2153,6 @@ fn fuse_ring_overlapping_shelled_box_height() {
 /// Reproduce Gridfinity lip volume bug: cut two lofted frustums, check
 /// that mesh volume is translation-invariant (proves consistent normals).
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn cut_lofted_frustums_consistent_normals() {
     use crate::copy::copy_solid;
     use crate::loft::loft;
@@ -2368,7 +2367,6 @@ fn cut_lofted_frustums_consistent_normals() {
 /// Reproduce the EXACT brepjs Gridfinity lip geometry: 8-vertex octagon
 /// profiles from drawRoundedRectangle → face_polygon.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn cut_lofted_frustums_octagon_profiles() {
     use crate::copy::copy_solid;
     use crate::loft::loft;
@@ -2462,7 +2460,6 @@ fn cut_lofted_frustums_octagon_profiles() {
 
     let outer_vol = crate::measure::solid_volume(&topo, outer, 0.01).unwrap();
     let inner_vol = crate::measure::solid_volume(&topo, inner, 0.01).unwrap();
-
     // Cut outer - inner
     let lip = boolean(&mut topo, BooleanOp::Cut, outer, inner).unwrap();
     let lip_vol = crate::measure::solid_volume(&topo, lip, 0.01).unwrap();

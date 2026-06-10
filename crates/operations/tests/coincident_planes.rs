@@ -115,10 +115,6 @@ fn partial_face_overlap_diagonal_offset_fuse() {
 // ── 3. Fully nested coplanar (small face inside larger) ────────────────
 
 #[test]
-#[ignore = "Gap: fully-nested coplanar fuse produces volume drift (~2% surplus). \
-            Tessellation-based volume reads ~17.33 instead of 17.0, suggesting either \
-            an internal-face leak in the result topology or winding inconsistency \
-            in the assembled shell."]
 fn fully_nested_coplanar_fuse() {
     // Small box stacked on the centre of a larger one, top face of A
     // strictly contains bottom face of B.

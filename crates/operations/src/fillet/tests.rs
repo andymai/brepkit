@@ -652,7 +652,6 @@ fn vertex_blend_sphere_center_inside_solid() {
 /// Fillet on a boolean result: fuse(box, cylinder) → fillet should work
 /// on edges shared between two planar faces.
 #[test]
-#[ignore = "GFA pipeline limitation — old boolean pipeline removed"]
 fn fillet_on_boolean_result() {
     let mut topo = Topology::new();
     let base = crate::primitives::make_box(&mut topo, 80.0, 60.0, 10.0).unwrap();
