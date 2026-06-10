@@ -931,10 +931,16 @@ fn closed_circle_boundary_crossings(
     let mut hits: Vec<(f64, Point3)> = Vec::new();
     for &fid in &faces_to_check {
         let fh = face_hits(fid);
-        if fh.len() > 4 {
+        // The boundary is coincident with the section circle when its
+        // segments are chords of an *inscribed* polygon: every vertex lands
+        // on the circle, so the hits are the polygon's vertices, evenly
+        // distributed around the full turn. A bare `len > 4` count misses a
+        // 4-segment inscribed polygon (square equator → exactly 4 hits), so
+        // test even angular distribution instead of relying on the count.
+        if hits_are_inscribed_polygon(&fh) {
             log::debug!(
-                "closed_circle_boundary_crossings: {fid:?} has {} hits — boundary coincident \
-                 with circle, excluding its hits",
+                "closed_circle_boundary_crossings: {fid:?} has {} hits evenly distributed on \
+                 the circle — boundary coincident with circle, excluding its hits",
                 fh.len()
             );
             continue;
@@ -957,6 +963,41 @@ fn closed_circle_boundary_crossings(
     );
 
     hits
+}
+
+/// Whether boundary/circle hits describe an inscribed polygon (the boundary
+/// is coincident with the section circle) rather than a small set of
+/// entry/exit crossings.
+///
+/// Hits store the circle parameter `t` (an angle). An inscribed polygon's
+/// vertices spread evenly around the full circle, so the sorted angular gaps
+/// between consecutive hits (including the wrap-around gap) are all
+/// approximately equal and there are at least three of them. Two entry/exit
+/// crossings, or a few unevenly clustered hits, fail this test.
+fn hits_are_inscribed_polygon(hits: &[(f64, Point3)]) -> bool {
+    use std::f64::consts::TAU;
+    if hits.len() < 3 {
+        return false;
+    }
+    let mut angles: Vec<f64> = hits.iter().map(|(t, _)| t.rem_euclid(TAU)).collect();
+    angles.sort_by(f64::total_cmp);
+    #[allow(clippy::cast_precision_loss)]
+    let expected = TAU / angles.len() as f64;
+    // Relative slack so coarse polygons (few segments) and fine ones (many)
+    // are both accepted; a clustered entry/exit pattern has a dominant gap
+    // far from `expected` and fails.
+    let slack = expected * 0.25;
+    for i in 0..angles.len() {
+        let next = if i + 1 == angles.len() {
+            angles[0] + TAU
+        } else {
+            angles[i + 1]
+        };
+        if (next - angles[i] - expected).abs() > slack {
+            return false;
+        }
+    }
+    true
 }
 
 /// Emit N arc edges + `IntersectionCurveDS` entries for a closed-circle
@@ -1047,6 +1088,13 @@ fn emit_split_circle_arcs(
         let center = s.center();
         let wire = topo.wire(face.outer_wire()).ok()?;
         let mut axis = Vec3::new(0.0, 0.0, 0.0);
+        // The accumulated cross products have units of length^2, so the
+        // degeneracy threshold must be derived from the input magnitudes
+        // rather than compared against a bare linear tolerance. `scale`
+        // sums each term's magnitude bound (|mid - center| * |ep - sp|);
+        // a true near-parallel/cancelling wire leaves `axis` small
+        // relative to it.
+        let mut scale = 0.0;
         for oe in wire.edges() {
             let Ok(edge) = topo.edge(oe.edge()) else {
                 continue;
@@ -1060,13 +1108,16 @@ fn emit_split_circle_arcs(
                 (ev.point(), sv.point())
             };
             let mid = sp + (ep - sp) * 0.5;
-            axis += (mid - center).cross(ep - sp);
+            let radial = mid - center;
+            let chord = ep - sp;
+            scale += radial.length() * chord.length();
+            axis += radial.cross(chord);
         }
         if face.is_reversed() {
             axis = axis * -1.0;
         }
         let len = axis.length();
-        if len < tol.linear {
+        if scale < tol.linear * tol.linear || len < scale * tol.linear {
             return None;
         }
         Some((center, axis * (1.0 / len)))
@@ -1538,5 +1589,42 @@ mod tests {
         // A concave "arrowhead": the reflex vertex flips the turn sign.
         let poly = vec![(0.0, 0.0), (2.0, 1.0), (0.0, 2.0), (1.0, 1.0)];
         assert!(!polygon_is_convex(&poly));
+    }
+
+    fn hit_at(angle: f64) -> (f64, Point3) {
+        (angle, Point3::new(angle.cos(), angle.sin(), 0.0))
+    }
+
+    #[test]
+    fn inscribed_square_equator_is_coincident() {
+        // A 4-segment polygon inscribed in the circle (square equator)
+        // yields exactly 4 evenly distributed hits — the bare `len > 4`
+        // count missed this, treating the boundary as entry/exit crossings.
+        use std::f64::consts::FRAC_PI_2;
+        let hits: Vec<_> = (0..4).map(|k| hit_at(k as f64 * FRAC_PI_2)).collect();
+        assert!(hits_are_inscribed_polygon(&hits));
+    }
+
+    #[test]
+    fn inscribed_hexagon_is_coincident() {
+        use std::f64::consts::FRAC_PI_3;
+        let hits: Vec<_> = (0..6).map(|k| hit_at(k as f64 * FRAC_PI_3)).collect();
+        assert!(hits_are_inscribed_polygon(&hits));
+    }
+
+    #[test]
+    fn entry_exit_pair_is_not_coincident() {
+        // Two crossings (genuine entry/exit) must not be mistaken for an
+        // inscribed boundary.
+        let hits = vec![hit_at(0.3), hit_at(2.9)];
+        assert!(!hits_are_inscribed_polygon(&hits));
+    }
+
+    #[test]
+    fn clustered_hits_are_not_coincident() {
+        // Four hits clustered on one side leave a dominant wrap-around gap,
+        // far from the even spacing of an inscribed polygon.
+        let hits = vec![hit_at(0.1), hit_at(0.2), hit_at(0.3), hit_at(0.4)];
+        assert!(!hits_are_inscribed_polygon(&hits));
     }
 }

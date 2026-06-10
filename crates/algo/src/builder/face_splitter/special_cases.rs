@@ -33,8 +33,8 @@ pub(super) fn split_noseam_face_direct(
     reversed: bool,
     face_id: FaceId,
     wire_pts: &[Point3],
+    tol: f64,
 ) -> Vec<SplitSubFace> {
-    let tol = brepkit_math::tolerance::Tolerance::new().linear;
     let close_tol = tol * 100.0;
 
     // Helper: return the face unsplit (used in fallback paths).
@@ -250,25 +250,34 @@ fn arc_covers_segment(arc: &OrientedPCurveEdge, segment: &OrientedPCurveEdge, to
     if !on_circle(segment.start_3d) || !on_circle(segment.end_3d) {
         return false;
     }
+    // The arc's traversal direction comes from `forward` relative to the
+    // circle's native (CCW) parameterization — not from the endpoint angles
+    // alone, which are direction-ambiguous. Measuring membership as the
+    // forward-progress delta from the start handles spans across the full
+    // (0, 2pi) range, including arcs longer than pi (a 270° arc no longer
+    // collapses to its complementary 90° short arc).
+    let tau = std::f64::consts::TAU;
     let t0 = c.project(arc.start_3d);
-    let span = wrap_to_half_turn(c.project(arc.end_3d) - t0);
-    let eps = 1e-6;
-    let within = |p: Point3| -> bool {
-        let d = wrap_to_half_turn(c.project(p) - t0);
-        if span >= 0.0 {
-            (-eps..=span + eps).contains(&d)
+    // Forward progress (always in [0, 2pi)) of `p` from the arc start in the
+    // arc's traversal direction.
+    let progress = |p: Point3| -> f64 {
+        let delta = c.project(p) - t0;
+        if arc.forward {
+            delta.rem_euclid(tau)
         } else {
-            (span - eps..=eps).contains(&d)
+            (-delta).rem_euclid(tau)
         }
     };
+    let span = progress(arc.end_3d);
+    let eps = 1e-6;
+    let within = |p: Point3| -> bool {
+        let d = progress(p);
+        // A point at the arc start wraps to ~2pi under rem_euclid; treat it
+        // as 0 so segment endpoints coincident with the start still match.
+        let d = if d > tau - eps { 0.0 } else { d };
+        d <= span + eps
+    };
     within(segment.start_3d) && within(segment.end_3d)
-}
-
-/// Wrap an angular difference into (-pi, pi].
-fn wrap_to_half_turn(d: f64) -> f64 {
-    let tau = std::f64::consts::TAU;
-    let w = d.rem_euclid(tau);
-    if w > std::f64::consts::PI { w - tau } else { w }
 }
 
 /// Interior point for a loop on a sphere face: the spherical centroid of
@@ -1047,10 +1056,87 @@ pub(super) fn try_split_crossing_plane_face(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
+    use super::{OrientedPCurveEdge, arc_covers_segment};
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::curves2d::{Curve2D, Line2D};
     use brepkit_math::surfaces::CylindricalSurface;
-    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
+    use brepkit_topology::edge::EdgeCurve;
     use brepkit_topology::face::FaceSurface;
     use std::f64::consts::{PI, TAU};
+
+    fn dummy_pcurve() -> Curve2D {
+        Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap())
+    }
+
+    fn arc_edge(
+        circle: &Circle3D,
+        start_angle: f64,
+        end_angle: f64,
+        forward: bool,
+    ) -> OrientedPCurveEdge {
+        OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Circle(circle.clone()),
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(0.0, 0.0),
+            start_3d: circle.evaluate(start_angle),
+            end_3d: circle.evaluate(end_angle),
+            forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        }
+    }
+
+    fn line_chord(start: Point3, end: Point3) -> OrientedPCurveEdge {
+        OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Line,
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(0.0, 0.0),
+            start_3d: start,
+            end_3d: end,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        }
+    }
+
+    #[test]
+    fn arc_covers_chord_within_270_degree_span() {
+        // A 270° arc (0 → 3π/2, CCW). A chord whose endpoints lie within
+        // that span is covered; a chord in the complementary 90° gap is not.
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let arc = arc_edge(&circle, 0.0, 1.5 * PI, true);
+        let tol = 1e-7;
+
+        // Chord between angles 0.5π and π — inside the 270° sweep.
+        let inside = line_chord(circle.evaluate(0.5 * PI), circle.evaluate(PI));
+        assert!(arc_covers_segment(&arc, &inside, tol));
+
+        // Chord between angles 1.6π and 1.9π — inside the complementary
+        // 90° gap, which the arc does NOT cover. The old half-turn wrap
+        // mistook this complementary short arc for the real one.
+        let outside = line_chord(circle.evaluate(1.6 * PI), circle.evaluate(1.9 * PI));
+        assert!(!arc_covers_segment(&arc, &outside, tol));
+    }
+
+    #[test]
+    fn arc_covers_chord_on_reversed_arc() {
+        // Same geometry traversed CW (forward = false): the swept region is
+        // the complementary 90° arc, so the membership flips.
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let arc = arc_edge(&circle, 0.0, 1.5 * PI, false);
+        let tol = 1e-7;
+
+        let in_gap = line_chord(circle.evaluate(1.6 * PI), circle.evaluate(1.9 * PI));
+        assert!(arc_covers_segment(&arc, &in_gap, tol));
+
+        let in_long = line_chord(circle.evaluate(0.5 * PI), circle.evaluate(PI));
+        assert!(!arc_covers_segment(&arc, &in_long, tol));
+    }
 
     #[test]
     fn band_interior_antipode_wraps_into_domain() {

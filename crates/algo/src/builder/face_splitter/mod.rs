@@ -153,6 +153,7 @@ pub fn split_face_2d(
             reversed,
             face_id,
             &wire_pts,
+            tol.linear,
         );
     }
 
