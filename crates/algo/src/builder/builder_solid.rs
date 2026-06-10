@@ -1011,7 +1011,14 @@ fn split_edges_at_collinear_vertices(
         if cuts.is_empty() {
             continue;
         }
-        cuts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        // `cuts` is gathered by iterating `vert_at.values()` (a HashMap), so
+        // the `vid` tiebreak makes this a total order — without it, cuts at
+        // equal `t` keep nondeterministic hash order and sub-edge IDs drift.
+        cuts.sort_by(|a, b| {
+            a.0.partial_cmp(&b.0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.1.index().cmp(&b.1.index()))
+        });
 
         let mut chain: Vec<VertexId> = Vec::with_capacity(cuts.len() + 2);
         chain.push(sv);
