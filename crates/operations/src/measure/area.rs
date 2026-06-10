@@ -128,6 +128,12 @@ fn cylinder_arc_sweep(
 ) -> Result<Option<f64>, crate::OperationsError> {
     use brepkit_topology::edge::EdgeCurve;
 
+    // Axial-level merge guard. `v` is `axis · (center − origin)`, which
+    // accumulates more rounding error than a single distance comparison, so
+    // this stays looser than the 1e-7 default linear tolerance to keep arcs at
+    // the same axial height from splitting into distinct levels.
+    const LEVEL_MERGE_TOL: f64 = 1e-6;
+
     let face = topo.face(face_id)?;
     let wire = topo.wire(face.outer_wire())?;
     let mut levels: Vec<(f64, f64)> = Vec::new();
@@ -148,7 +154,10 @@ fn cylinder_arc_sweep(
         }
         let span = te - ts;
         let v = axis.dot(circle.center() - origin);
-        if let Some(entry) = levels.iter_mut().find(|(lv, _)| (*lv - v).abs() < 1e-6) {
+        if let Some(entry) = levels
+            .iter_mut()
+            .find(|(lv, _)| (*lv - v).abs() < LEVEL_MERGE_TOL)
+        {
             entry.1 += span;
         } else {
             levels.push((v, span));
