@@ -506,8 +506,8 @@ pub fn boolean(
                 // deviates from euler==2 solely because of inner wires would
                 // still trigger an unnecessary unify_faces pass.
                 let inner_wire_count_pre = solid_inner_wire_count(topo, result)?;
-                let euler_balanced_pre = euler_pre2 == 2
-                    || (inner_wire_count_pre > 0 && euler_pre2 - inner_wire_count_pre == 2);
+                let euler_balanced_pre =
+                    euler_pre2 == 2 || euler_balanced(euler_pre2, inner_wire_count_pre);
 
                 // Run unify_faces if the (hole-aware) Euler is off OR if the
                 // topology has 3+-face junctions, which can occur with a
@@ -537,14 +537,14 @@ pub fn boolean(
                 let open_shell_ok = op != BooleanOp::Intersect || !has_free_edges(topo, result)?;
                 // Hole-aware Euler acceptance: re-measure the inner-wire surplus
                 // after unify (which can merge faces and change wire counts) and
-                // accept euler == 2 + L. The holed acceptance additionally
-                // requires a closed manifold so that accidental cancellations
-                // (open shells whose missing faces offset the inner-wire
-                // surplus) still fail safe to the mesh fallback.
+                // accept euler - L == 2 - 2g for genus g >= 0. The holed/genus
+                // acceptance additionally requires a closed manifold so that
+                // accidental cancellations (open shells whose missing faces
+                // offset the inner-wire surplus) still fail safe to the mesh
+                // fallback.
                 let inner_wire_count = solid_inner_wire_count(topo, result)?;
                 let euler_ok = euler == 2
-                    || (inner_wire_count > 0
-                        && euler - inner_wire_count == 2
+                    || (euler_balanced(euler, inner_wire_count)
                         && is_closed_manifold(topo, result)?);
                 if euler_ok && open_shell_ok && validate_boolean_result(topo, result).is_ok() {
                     log::info!(
@@ -2247,6 +2247,23 @@ fn solid_inner_wire_count(topo: &Topology, solid: SolidId) -> Result<i64, crate:
         }
     }
     Ok(count)
+}
+
+/// Genus-aware Euler balance for a closed orientable surface with holed faces.
+///
+/// Euler-Poincare for a closed surface of genus `g`: `V - E + F - L = 2(1 - g)`,
+/// so the inner-wire surplus `euler - L` equals `2 - 2g` and is valid only when
+/// it is a non-negative even number no greater than 2: `2` for genus 0, `0` for
+/// genus 1 (e.g. a tunnel cut through a shelled box). A negative surplus would
+/// imply genus >= 2 (not produced by these booleans) or a miscounted shell, so
+/// it is rejected. Callers must pair this with a closed-manifold check — the
+/// relation only holds for closed surfaces.
+const fn euler_balanced(euler: i64, inner_wires: i64) -> bool {
+    let surplus = euler - inner_wires;
+    #[allow(clippy::manual_range_contains)]
+    {
+        surplus >= 0 && surplus <= 2 && surplus % 2 == 0
+    }
 }
 
 /// Check whether a solid's outer shell is a closed manifold: every edge

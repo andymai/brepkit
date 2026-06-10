@@ -18,6 +18,7 @@ use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
 use super::classify_2d::{sample_interior_point, signed_area_2d};
+use super::pcurve_compute::evaluate_edge_at_t;
 use super::plane_frame::PlaneFrame;
 use super::split_types::{OrientedPCurveEdge, SectionEdge, SplitSubFace, SurfaceInfo};
 use super::wire_builder::build_wire_loops;
@@ -34,6 +35,10 @@ use special_cases::{
     split_face_with_internal_loops, split_noseam_face_direct, split_periodic_face_into_bands,
     try_split_crossing_plane_face,
 };
+
+/// Number of probe points (plus one for the closing sample) walked along a
+/// section edge when testing whether it lies entirely inside an existing hole.
+const HOLE_PROBE_SAMPLES: usize = 8;
 
 /// Split a face by its section edges, producing sub-faces.
 ///
@@ -119,6 +124,42 @@ pub fn split_face_2d(
             }
         })
         .collect();
+
+    // A section edge lying entirely inside an existing hole runs through
+    // air, not face material (a tool passing through a cavity opening still
+    // intersects the face's surface plane inside the hole). Keeping it would
+    // stamp a spurious nested loop onto the face, leaving free edges.
+    let filtered_sections: Vec<SectionEdge>;
+    let sections = if original_inner_wires.is_empty() {
+        sections
+    } else {
+        let to_uv = |p: Point3| -> Option<Point2> {
+            if is_plane {
+                Some(frame.project(p))
+            } else {
+                surface.project_point(p).map(|(u, v)| Point2::new(u, v))
+            }
+        };
+        // Sample along the actual curve, not the start/mid/end chord: a
+        // strongly curved section edge can bow outside the hole while its
+        // endpoints and chord midpoint all sit inside it. Walking the curve
+        // via `evaluate_edge_at_t` also covers closed-circle sections
+        // (start == end), where chord sampling collapses to a single point.
+        filtered_sections = sections
+            .iter()
+            .filter(|s| {
+                let all_in_hole = (0..=HOLE_PROBE_SAMPLES).all(|i| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = i as f64 / HOLE_PROBE_SAMPLES as f64;
+                    let p = evaluate_edge_at_t(&s.curve_3d, s.start, s.end, t);
+                    to_uv(p).is_some_and(|uv| is_inside_any_hole(&uv, &original_inner_wires))
+                });
+                !all_in_hole
+            })
+            .cloned()
+            .collect();
+        &filtered_sections
+    };
 
     // If no section edges, the face is unsplit -- return as-is with original holes.
     if sections.is_empty() {

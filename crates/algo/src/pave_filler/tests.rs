@@ -1554,3 +1554,48 @@ fn gfa_cut_box_two_coplanar_cap_cylinders_sequential_valid() {
         "volume {vol:.6} should be within 0.1% of {expected_vol:.6} (rel={rel:.5})"
     );
 }
+
+/// Regression: a tray-shaped target (box with an open-top cavity) cut by a
+/// tool passing through the cavity opening. The tool's cross-section at the
+/// rim plane lies inside the rim face's existing hole — air, not face
+/// material — and must not be stamped onto the rim face as a nested loop.
+/// Previously it was, leaving four free edges and a broken manifold.
+#[test]
+fn gfa_cut_shelled_box_through_floor_is_manifold() {
+    use std::collections::HashMap;
+
+    let mut topo = Topology::new();
+    let outer = make_box(&mut topo, [0.0, 0.0, 0.0], [40.0, 40.0, 10.0]);
+    let cavity = make_box(&mut topo, [2.0, 2.0, 2.0], [38.0, 38.0, 10.0]);
+    let tray = crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, outer, cavity)
+        .expect("tray cut");
+
+    let tool = make_box(&mut topo, [4.0, 4.0, -5.0], [7.0, 7.0, 15.0]);
+    let result =
+        crate::gfa::boolean(&mut topo, crate::bop::BooleanOp::Cut, tray, tool).expect("floor cut");
+
+    let faces = brepkit_topology::explorer::solid_faces(&topo, result).expect("faces");
+    assert_eq!(
+        faces.len(),
+        15,
+        "11 tray faces + 4 hole walls; the rim face must keep only its cavity hole"
+    );
+
+    let mut edge_uses: HashMap<usize, usize> = HashMap::new();
+    let mut inner_wires = 0usize;
+    for &fid in &faces {
+        let face = topo.face(fid).expect("face");
+        inner_wires += face.inner_wires().len();
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid).expect("wire");
+            for oe in wire.edges() {
+                *edge_uses.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    assert_eq!(inner_wires, 3, "bottom hole + floor hole + cavity rim hole");
+    assert!(
+        edge_uses.values().all(|&c| c == 2),
+        "closed manifold: every edge shared by exactly two wires"
+    );
+}
