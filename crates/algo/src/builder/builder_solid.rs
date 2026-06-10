@@ -898,7 +898,7 @@ fn remove_zero_length_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Res
                 .collect()
         };
         let new_outer = strip(&outer_oes);
-        if new_outer.len() < 2 {
+        if !is_rebuildable_loop(topo, &new_outer) {
             continue;
         }
         let Ok(new_outer_wire) = brepkit_topology::wire::Wire::new(new_outer, true) else {
@@ -908,7 +908,7 @@ fn remove_zero_length_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Res
         let mut new_inner_ids = Vec::new();
         for inner_oes in &inner_oes_list {
             let kept = strip(inner_oes);
-            if kept.len() >= 2 {
+            if is_rebuildable_loop(topo, &kept) {
                 if let Ok(w) = brepkit_topology::wire::Wire::new(kept, true) {
                     new_inner_ids.push(topo.add_wire(w));
                 }
@@ -921,6 +921,26 @@ fn remove_zero_length_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Res
         *fid = topo.add_face(new_face);
     }
     Ok(())
+}
+
+/// Whether a stripped edge list can form a valid closed wire loop. Two or
+/// more edges always qualify. A single edge qualifies only when it is itself
+/// closed (e.g. a circular hole is one closed-circle edge) — start vertex
+/// equals end vertex, or the curve is inherently closed (Circle/Ellipse).
+/// Genuinely degenerate single-Line leftovers are rejected.
+fn is_rebuildable_loop(topo: &Topology, oes: &[OrientedEdge]) -> bool {
+    use brepkit_topology::edge::EdgeCurve;
+
+    match oes {
+        [] => false,
+        [single] => {
+            let Ok(edge) = topo.edge(single.edge()) else {
+                return false;
+            };
+            edge.is_closed() || matches!(edge.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+        }
+        _ => true,
+    }
 }
 
 /// Whether a face's outer wire is an all-Line loop with fewer than 3

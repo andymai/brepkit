@@ -156,11 +156,11 @@ pub fn perform(
             // cap). Such curves fragment faces with spurious holes and bogus
             // sub-faces downstream. Keep a curve only if at least one sample
             // lies inside both faces' inflated AABBs.
+            let bb_a = bbox_a.expanded(tol.linear * 10.0);
+            let bb_b = bbox_b.expanded(tol.linear * 10.0);
             let raw_curves: Vec<RawCurve> = raw_curves
                 .into_iter()
                 .filter(|raw| {
-                    let bb_a = bbox_a.expanded(tol.linear * 10.0);
-                    let bb_b = bbox_b.expanded(tol.linear * 10.0);
                     let n = 16;
                     (0..=n).any(|i| {
                         let f = f64::from(i) / f64::from(n);

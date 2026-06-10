@@ -473,9 +473,9 @@ fn planar_faces_overlap(topo: &Topology, sub_faces: &[SubFace], i: usize, j: usi
     // where the strict ray-cast is unpredictable. The interior-point test
     // below remains strict, so faces that merely touch along a shared
     // boundary segment still don't pair.
-    let boundary_eps = 1e-6;
     let all_inside =
         |verts: &[brepkit_math::vec::Point2], poly: &[brepkit_math::vec::Point2]| -> bool {
+            let boundary_eps = super::classify_2d::boundary_eps(poly);
             verts.iter().all(|&v| {
                 super::classify_2d::point_in_polygon_2d(v, poly)
                     || super::classify_2d::distance_to_polygon_boundary(v, poly) <= boundary_eps
