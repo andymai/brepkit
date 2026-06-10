@@ -49,9 +49,31 @@ pub fn build_wire_loops(
     u_periodic: bool,
     v_periodic: bool,
 ) -> Vec<Vec<OrientedPCurveEdge>> {
+    build_wire_loops_with_winding(edges, tol, u_periodic, v_periodic, false)
+}
+
+/// [`build_wire_loops`] with explicit boundary winding.
+///
+/// The minimum-clockwise-angle rule produces minimal loops only when the
+/// face boundary winds counter-clockwise in UV. For faces whose boundary
+/// winds clockwise (legal — UV frames are built from the surface normal,
+/// not the effective face orientation), pass `cw_boundary = true` to use
+/// the mirrored minimum-counter-clockwise rule instead.
+pub fn build_wire_loops_with_winding(
+    edges: &[OrientedPCurveEdge],
+    tol: f64,
+    u_periodic: bool,
+    v_periodic: bool,
+    cw_boundary: bool,
+) -> Vec<Vec<OrientedPCurveEdge>> {
     if edges.is_empty() {
         return Vec::new();
     }
+
+    let turn_score = |incoming: f64, candidate: f64| -> f64 {
+        let cw = clockwise_angle(incoming, candidate);
+        if cw_boundary { TAU - cw } else { cw }
+    };
 
     let u_period = if u_periodic { Some(TAU) } else { None };
     let v_period = if v_periodic { Some(TAU) } else { None };
@@ -145,7 +167,7 @@ pub fn build_wire_loops(
                     }
                 }
 
-                let cw = clockwise_angle(incoming_angle, entry.angle);
+                let cw = turn_score(incoming_angle, entry.angle);
                 if cw < best_cw {
                     best_cw = cw;
                     best_idx = Some(entry.edge_idx);
@@ -159,8 +181,8 @@ pub fn build_wire_loops(
                     .iter()
                     .filter(|e| e.outgoing && !used[e.edge_idx])
                     .min_by(|a, b| {
-                        clockwise_angle(incoming_angle, a.angle)
-                            .partial_cmp(&clockwise_angle(incoming_angle, b.angle))
+                        turn_score(incoming_angle, a.angle)
+                            .partial_cmp(&turn_score(incoming_angle, b.angle))
                             .unwrap_or(std::cmp::Ordering::Equal)
                     });
                 if let Some(fb) = fallback {

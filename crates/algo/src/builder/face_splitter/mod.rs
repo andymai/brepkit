@@ -21,7 +21,7 @@ use super::classify_2d::{sample_interior_point, signed_area_2d};
 use super::pcurve_compute::evaluate_edge_at_t;
 use super::plane_frame::PlaneFrame;
 use super::split_types::{OrientedPCurveEdge, SectionEdge, SplitSubFace, SurfaceInfo};
-use super::wire_builder::build_wire_loops;
+use super::wire_builder::{build_wire_loops, build_wire_loops_with_winding};
 use crate::ds::Rank;
 
 use containment::{find_point_outside_holes, is_inside_any_hole};
@@ -368,6 +368,7 @@ pub fn split_face_2d(
 
     // Convert section edges to OrientedPCurveEdge (both orientations).
     let mut all_edges = boundary_edges;
+    let n_boundary_edges = all_edges.len();
     for section in sections {
         // Skip full-circle section edges on plane faces -- they have
         // start approx end in 3D and would produce degenerate UV edges.
@@ -473,8 +474,71 @@ pub fn split_face_2d(
         });
     }
 
+    // Partial-band u unwrap: a face whose u-window touches the period seam
+    // (e.g. a rounded-rect corner cylinder spanning [3pi/2, 2pi]) carries
+    // mixed u anchors — surface projection returns u in [0, 2pi), so
+    // endpoints exactly on the seam come back as 0 while their neighbours
+    // sit near 2pi. Partial bands are treated as non-periodic (see
+    // build_surface_info), so quantized junction keys would never match.
+    // Remap every endpoint u into the continuous window that starts after
+    // the largest angular gap.
+    if !u_periodic && !is_plane {
+        if let (Some(u_period), _) = super::pcurve_compute::surface_periods(&surface) {
+            let mut us: Vec<f64> = all_edges
+                .iter()
+                .flat_map(|e| [e.start_uv.x(), e.end_uv.x()])
+                .map(|u| u.rem_euclid(u_period))
+                .collect();
+            us.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            if us.len() >= 2 {
+                let mut gap_start = us[us.len() - 1];
+                let mut max_gap = u_period - (us[us.len() - 1] - us[0]);
+                for w in us.windows(2) {
+                    if w[1] - w[0] > max_gap {
+                        max_gap = w[1] - w[0];
+                        gap_start = w[0];
+                    }
+                }
+                if max_gap > 0.05 {
+                    let lo = gap_start + max_gap;
+                    for e in &mut all_edges {
+                        let remap = |uv: Point2| -> Point2 {
+                            let mut d = (uv.x() - lo).rem_euclid(u_period);
+                            if d > u_period - 1e-6 {
+                                d = 0.0;
+                            }
+                            Point2::new(lo + d, uv.y())
+                        };
+                        e.start_uv = remap(e.start_uv);
+                        e.end_uv = remap(e.end_uv);
+                    }
+                }
+            }
+        }
+    }
+
     // Build wire loops via angular-sorting traversal.
-    let loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
+    let mut loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
+
+    // Clockwise-boundary retry: the min-clockwise turn rule merges
+    // everything into a single loop when the boundary winds clockwise in
+    // this UV frame (the frame derives from the raw surface normal, not the
+    // effective face orientation). If the default traversal failed to split
+    // despite having sections, and the boundary is CW, retry with the
+    // mirrored turn rule. Loop areas from the retry are sign-flipped for
+    // the outer/hole classification below.
+    let mut cw_loops = false;
+    if loops.len() <= 1 && all_edges.len() > n_boundary_edges && !u_periodic && !v_periodic {
+        let boundary_pts = sample_wire_loop_uv(&all_edges[..n_boundary_edges]);
+        if signed_area_2d(&boundary_pts) < 0.0 {
+            let retry =
+                build_wire_loops_with_winding(&all_edges, tol.linear, u_periodic, v_periodic, true);
+            if retry.len() > loops.len() {
+                loops = retry;
+                cw_loops = true;
+            }
+        }
+    }
 
     // Fallback: wire builder produced only 1 loop despite having 2+ section
     // edges that cross in the face interior. Use direct geometric quadrant
@@ -531,7 +595,11 @@ pub fn split_face_2d(
             }
         } else {
             let pts = sample_wire_loop_uv_periodic(&wire_loop, u_per_opt, v_per_opt);
-            let area = signed_area_2d(&pts);
+            let area = if cw_loops {
+                -signed_area_2d(&pts)
+            } else {
+                signed_area_2d(&pts)
+            };
             // Sliver guard: a loop enclosing less area than a tol-wide band
             // along its own perimeter is degenerate — e.g. an arc traversed
             // forward then backward when a coplanar partner's boundary
@@ -816,10 +884,15 @@ fn plane_internal_line_loops(
 
     type QPt = (i64, i64, i64);
 
+    // Accept Line and open arc (Circle/Ellipse) sections: a rounded-rect
+    // tool footprint stamps a mixed line+arc loop onto a coplanar cap.
+    // Closed curves (start == end) are handled by the single-closed path.
     if sections.len() < 3
-        || !sections
-            .iter()
-            .all(|s| matches!(s.curve_3d, EdgeCurve::Line))
+        || !sections.iter().all(|s| match s.curve_3d {
+            EdgeCurve::Line => true,
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => (s.start - s.end).length() > tol_linear,
+            EdgeCurve::NurbsCurve(_) => false,
+        })
     {
         return None;
     }
@@ -873,6 +946,9 @@ fn plane_internal_line_loops(
     // degree check below rejects and the generic path takes over.
     let endpoints: Vec<Point3> = deduped.iter().flat_map(|s| [s.start, s.end]).collect();
     deduped.retain(|s| {
+        if !matches!(s.curve_3d, EdgeCurve::Line) {
+            return true;
+        }
         let dir = s.end - s.start;
         let len2 = dir.dot(dir);
         if len2 < margin * margin {

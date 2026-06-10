@@ -3936,7 +3936,6 @@ fn fuse_overlapping_rounded_rect_arc_prisms_same_footprint() {
 }
 
 #[test]
-#[ignore = "known bug: tool dropped when coplanar interface is contained in partner cap"]
 fn fuse_stacked_rounded_rect_arc_prisms_nested_footprint() {
     // Tool's coplanar interface face strictly contained in the body's
     // bottom cap: socket (smaller) below the body, touching at z=0.
@@ -3963,7 +3962,6 @@ fn fuse_stacked_rounded_rect_arc_prisms_nested_footprint() {
 }
 
 #[test]
-#[ignore = "known bug: split-edge mismatch at the cut plane for arc boundaries"]
 fn cut_concentric_rounded_rect_arc_prisms_overshoot() {
     // Gridfinity bin pocket: outer 41.5 sq r=3.75 z=0..21, tool
     // 39.1 sq r=2.55 z=5..25 (overshoots the top).

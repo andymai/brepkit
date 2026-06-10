@@ -1379,6 +1379,15 @@ fn build_section_edges(
                         // Plane surface — project via pcurve.
                         (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
                     }
+                } else if matches!(pcurve, brepkit_math::curves2d::Curve2D::Line(_)) {
+                    // Line2D pcurves use arc-length parameterization, so
+                    // `evaluate(1.0)` is one UV unit along the line, not the
+                    // endpoint (e.g. a horizontal circle on a cylinder maps
+                    // to a Line2D spanning the angular extent). Leave the
+                    // endpoints unset; downstream consumers fall back to
+                    // `uv_endpoints_from_pcurve`, which measures the true
+                    // 2D length.
+                    (None, None)
                 } else {
                     (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
                 };
@@ -1840,17 +1849,59 @@ fn point_to_segment_dist_3d(pt: Point3, a: Point3, b: Point3) -> f64 {
     (pt - proj).length()
 }
 
+/// Angular u-extent of a face's outer wire on a u-periodic surface,
+/// measured as the period minus the largest angular gap between boundary
+/// samples (robust against the 2pi wrap).
+fn face_u_span(topo: &Topology, face: &brepkit_topology::face::Face) -> Option<f64> {
+    const TAU: f64 = std::f64::consts::TAU;
+    let surface = face.surface();
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let mut us: Vec<f64> = Vec::new();
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let sp = topo.vertex(edge.start()).ok()?.point();
+        let ep = topo.vertex(edge.end()).ok()?.point();
+        for i in 0..=8 {
+            #[allow(clippy::cast_precision_loss)]
+            let t = f64::from(i) / 8.0;
+            let p = super::pcurve_compute::evaluate_edge_at_t(edge.curve(), sp, ep, t);
+            if let Some((u, _)) = surface.project_point(p) {
+                us.push(u.rem_euclid(TAU));
+            }
+        }
+    }
+    if us.len() < 2 {
+        return None;
+    }
+    us.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut max_gap = TAU - (us[us.len() - 1] - us[0]);
+    for w in us.windows(2) {
+        max_gap = max_gap.max(w[1] - w[0]);
+    }
+    Some(TAU - max_gap)
+}
+
 /// Build `SurfaceInfo` for a face (periodicity flags).
 fn build_surface_info(topo: &Topology, face_id: FaceId) -> Option<SurfaceInfo> {
     let face = topo.face(face_id).ok()?;
+    // A partial angular band (e.g. a quarter-cylinder corner of an extruded
+    // rounded rectangle) must not be treated as u-periodic: the periodic
+    // wire-builder normalizes u into [0, 2pi) and rejects "seam-crossing"
+    // loop closures, both of which corrupt loops on faces that merely touch
+    // u = 2pi without wrapping.
+    // Only quarter-or-less bands are demoted: half-cylinder faces (common
+    // after a box cut) still rely on the periodic seam machinery for their
+    // own splits, and the wrap-corner unwrap in `split_face_2d` handles
+    // sub-half bands without it.
+    let u_wraps = || face_u_span(topo, face).is_none_or(|span| span > std::f64::consts::PI + 0.05);
     match face.surface() {
         FaceSurface::Plane { .. } => None,
         FaceSurface::Cylinder(_) => Some(SurfaceInfo::Parametric {
-            u_periodic: true,
+            u_periodic: u_wraps(),
             v_periodic: false,
         }),
         FaceSurface::Cone(_) => Some(SurfaceInfo::Parametric {
-            u_periodic: true,
+            u_periodic: u_wraps(),
             v_periodic: false,
         }),
         FaceSurface::Sphere(_) => Some(SurfaceInfo::Parametric {
