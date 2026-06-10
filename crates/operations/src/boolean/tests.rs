@@ -3912,7 +3912,6 @@ fn fuse_stacked_rounded_rect_arc_prisms_same_footprint() {
 }
 
 #[test]
-#[ignore = "known bug: SD replacement missing for partially-overlapping lateral faces"]
 fn fuse_overlapping_rounded_rect_arc_prisms_same_footprint() {
     let mut topo = Topology::new();
     let a = make_rounded_rect_arc_prism(&mut topo, 20.75, 20.75, 3.75, 0.0, 16.0);
@@ -3928,10 +3927,14 @@ fn fuse_overlapping_rounded_rect_arc_prisms_same_footprint() {
     );
     assert!(is_closed_manifold(&topo, result).unwrap());
     assert!(!has_free_edges(&topo, result).unwrap());
+    // The partial overlap leaves three lateral z-bands (below, overlap,
+    // above); a valid result keeps every corner analytic whether or not
+    // the bands merge: 4 corners x up to 3 bands. A mesh fallback would
+    // leave 0 cylinder faces.
     let cyl = count_cylinder_faces(&topo, result);
     assert!(
-        (4..=8).contains(&cyl),
-        "expected 4-8 analytic cylinder corner faces (no mesh fallback), got {cyl}"
+        (4..=12).contains(&cyl),
+        "expected 4-12 analytic cylinder corner faces (no mesh fallback), got {cyl}"
     );
 }
 

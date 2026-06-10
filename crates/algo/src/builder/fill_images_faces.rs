@@ -2159,15 +2159,7 @@ fn build_topology_face(
         // different per-call vertex caches, so shared edges would have wrong
         // VertexId connections at wire junctions.
         // merge_duplicate_edges in BuilderSolid handles cross-face sharing.
-        let edge_id = topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()));
-        // The edge was just created with start_vid at start_3d and end_vid
-        // at end_3d, so the vertex order itself encodes the traversal
-        // direction — open edges always get forward=true regardless of the
-        // pcurve direction flag (using the flag here would contradict the
-        // vertex order and break wire closure). Closed curved edges
-        // (start_vid == end_vid) can't encode direction via vertices, so
-        // they keep pcurve_edge.forward to preserve winding.
-        let forward = start_vid != end_vid || pcurve_edge.forward;
+        let (edge_id, forward) = instantiate_wire_edge(topo, start_vid, end_vid, pcurve_edge);
         oriented_edges.push(OrientedEdge::new(edge_id, forward));
     }
 
@@ -2193,11 +2185,7 @@ fn build_topology_face(
                 &quantize,
                 tol,
             );
-            let edge = Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone());
-            let edge_id = topo.add_edge(edge);
-            // Same rule as the outer wire: Line edge vertices already
-            // encode traversal order, so the oriented edge is forward.
-            let forward = matches!(pcurve_edge.curve_3d, EdgeCurve::Line) || pcurve_edge.forward;
+            let (edge_id, forward) = instantiate_wire_edge(topo, start_vid, end_vid, pcurve_edge);
             inner_oriented.push(OrientedEdge::new(edge_id, forward));
         }
         if let Ok(inner_wire) = Wire::new(inner_oriented, true) {
@@ -2213,4 +2201,33 @@ fn build_topology_face(
     let face_id = topo.add_face(face);
 
     Some(face_id)
+}
+
+/// Create a topology edge for a wire's pcurve edge, returning the edge id
+/// and the oriented-edge forward flag for the wire traversal.
+///
+/// Open Line edges encode the traversal in their vertex order and are
+/// always forward. Open Circle/Ellipse edges must keep their vertex order
+/// aligned with the curve parameterization — an open arc edge implicitly
+/// spans the CCW range from its start vertex to its end vertex, so storing
+/// traversal order for a reverse-traversed arc would flip the geometry to
+/// the complementary arc. Closed curved edges (start == end) cannot encode
+/// direction via vertices and keep the pcurve flag for winding.
+fn instantiate_wire_edge(
+    topo: &mut Topology,
+    start_vid: brepkit_topology::vertex::VertexId,
+    end_vid: brepkit_topology::vertex::VertexId,
+    pcurve_edge: &super::split_types::OrientedPCurveEdge,
+) -> (brepkit_topology::edge::EdgeId, bool) {
+    let is_arc = matches!(
+        pcurve_edge.curve_3d,
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)
+    );
+    if is_arc && start_vid != end_vid && !pcurve_edge.forward {
+        let edge_id = topo.add_edge(Edge::new(end_vid, start_vid, pcurve_edge.curve_3d.clone()));
+        (edge_id, false)
+    } else {
+        let edge_id = topo.add_edge(Edge::new(start_vid, end_vid, pcurve_edge.curve_3d.clone()));
+        (edge_id, start_vid != end_vid || pcurve_edge.forward)
+    }
 }
