@@ -17,6 +17,12 @@ use brepkit_topology::vertex::VertexId;
 use crate::ds::{GfaArena, Interference, PaveBlockId};
 use crate::error::AlgoError;
 
+/// Relative slack on a leaf pave block's parameter span when matching the
+/// EF crossing parameter. The crossing `t` and the block endpoints are
+/// computed by independent paths, so a few ULPs of rounding can push `t`
+/// just outside an adjacent block; this widens each interval by that much.
+const LEAF_PARAM_REL_EPS: f64 = 1e-9;
+
 /// Populate [`FaceInfo`] for all faces with their classified pave blocks.
 ///
 /// - `pave_blocks_on`: split boundary edges of each face
@@ -121,6 +127,10 @@ fn fill_section_sc(arena: &mut GfaArena) {
 }
 
 /// Edges from EF interference go into the face's `pave_blocks_in`.
+///
+/// Only the leaf pave blocks adjacent to the crossing parameter are
+/// inserted — the rest of the edge lies outside the face and would feed
+/// out-of-face fragments into the splitter as degenerate inner wires.
 fn fill_ef_in(arena: &mut GfaArena) {
     // Snapshot EF data
     let ef_data: Vec<_> = arena
@@ -128,19 +138,51 @@ fn fill_ef_in(arena: &mut GfaArena) {
         .ef
         .iter()
         .filter_map(|interf| {
-            if let Interference::EF { edge, face, .. } = interf {
-                Some((*edge, *face))
+            if let Interference::EF {
+                edge,
+                face,
+                parameter,
+                ..
+            } = interf
+            {
+                Some((*edge, *face, *parameter))
             } else {
                 None
             }
         })
         .collect();
 
-    for (edge_id, face_id) in ef_data {
+    for (edge_id, face_id, parameter) in ef_data {
         if let Some(pb_ids) = arena.edge_pave_blocks.get(&edge_id).cloned() {
             let leaves = arena.collect_leaf_pave_blocks(&pb_ids);
+            let selected: Vec<PaveBlockId> = match parameter {
+                Some(t) => {
+                    let filtered: Vec<PaveBlockId> = leaves
+                        .iter()
+                        .copied()
+                        .filter(|&leaf_id| {
+                            arena.pave_blocks.get(leaf_id).is_some_and(|pb| {
+                                let (a, b) = pb.parameter_range();
+                                let lo = a.min(b);
+                                let hi = a.max(b);
+                                let eps = (hi - lo).abs().max(1.0) * LEAF_PARAM_REL_EPS;
+                                (lo - eps..=hi + eps).contains(&t)
+                            })
+                        })
+                        .collect();
+                    // If rounding pushed `t` outside every leaf interval,
+                    // keep all leaves rather than silently dropping the
+                    // interference (pre-PR behavior).
+                    if filtered.is_empty() {
+                        leaves
+                    } else {
+                        filtered
+                    }
+                }
+                None => leaves,
+            };
             let fi = arena.face_info_mut(face_id);
-            for leaf_id in leaves {
+            for leaf_id in selected {
                 fi.pave_blocks_in.insert(leaf_id);
             }
         }

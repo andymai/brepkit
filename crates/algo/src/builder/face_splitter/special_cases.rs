@@ -449,15 +449,31 @@ pub(super) fn split_face_with_internal_loops(
                 break;
             }
 
-            // Find the next unused edge whose start matches last_end.
-            let next = forward_edges
-                .iter()
-                .enumerate()
-                .find(|(i, e)| !used[*i] && (e.start_3d - last_end).length() < tol_3d * 100.0);
+            // Find the next unused edge connecting to last_end. Section
+            // edges arrive with arbitrary orientation (each face-pair
+            // emits its own direction), so reversed matches are accepted
+            // and flipped into chain order.
+            let next = forward_edges.iter().enumerate().find_map(|(i, e)| {
+                if used[i] {
+                    None
+                } else if (e.start_3d - last_end).length() < tol_3d * 100.0 {
+                    Some((i, false))
+                } else if (e.end_3d - last_end).length() < tol_3d * 100.0 {
+                    Some((i, true))
+                } else {
+                    None
+                }
+            });
 
-            if let Some((idx, _)) = next {
+            if let Some((idx, rev)) = next {
                 used[idx] = true;
-                chain.push(forward_edges[idx].clone());
+                let mut e = forward_edges[idx].clone();
+                if rev {
+                    std::mem::swap(&mut e.start_uv, &mut e.end_uv);
+                    std::mem::swap(&mut e.start_3d, &mut e.end_3d);
+                    e.forward = !e.forward;
+                }
+                chain.push(e);
             } else {
                 break; // Can't continue -- open chain.
             }
@@ -470,6 +486,13 @@ pub(super) fn split_face_with_internal_loops(
             loops.push(chain);
         }
     }
+
+    log::debug!(
+        "split_face_with_internal_loops: face {face_id:?} {} sections -> {} loops (sizes {:?})",
+        sections.len(),
+        loops.len(),
+        loops.iter().map(Vec::len).collect::<Vec<_>>()
+    );
 
     // Build sub-faces.
     let mut result = Vec::new();
@@ -528,26 +551,31 @@ pub(super) fn split_face_with_internal_loops(
         // coplanar boundary face, causing ambiguous ray-cast classification.
         // Offset the point slightly along the face normal to break the tie.
         let disc_interior = {
-            // Sample 3D points along the circle to find its centroid.
-            let edge = &loop_edges[0];
-            let (t0, t1) = edge
-                .curve_3d
-                .domain_with_endpoints(edge.start_3d, edge.end_3d);
+            // Sample 3D points along every loop edge to find the loop's
+            // centroid (the circle center for single-circle loops, the
+            // polygon centroid for multi-Line footprint loops).
             let n_samples = 16;
             let mut sum = brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0);
-            for k in 0..n_samples {
-                #[allow(clippy::cast_precision_loss)]
-                let t = t0 + (t1 - t0) * (k as f64 / n_samples as f64);
-                let pt = edge
+            let mut count = 0_usize;
+            for edge in loop_edges.iter() {
+                let (t0, t1) = edge
                     .curve_3d
-                    .evaluate_with_endpoints(t, edge.start_3d, edge.end_3d);
-                sum += brepkit_math::vec::Vec3::new(pt.x(), pt.y(), pt.z());
+                    .domain_with_endpoints(edge.start_3d, edge.end_3d);
+                for k in 0..n_samples {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = t0 + (t1 - t0) * (k as f64 / n_samples as f64);
+                    let pt = edge
+                        .curve_3d
+                        .evaluate_with_endpoints(t, edge.start_3d, edge.end_3d);
+                    sum += brepkit_math::vec::Vec3::new(pt.x(), pt.y(), pt.z());
+                    count += 1;
+                }
             }
             #[allow(clippy::cast_precision_loss)]
             let centroid = Point3::new(
-                sum.x() / n_samples as f64,
-                sum.y() / n_samples as f64,
-                sum.z() / n_samples as f64,
+                sum.x() / count as f64,
+                sum.y() / count as f64,
+                sum.z() / count as f64,
             );
             // Offset along the face normal by a small amount to ensure
             // the point is clearly inside the opposing solid (not on the
@@ -602,6 +630,50 @@ pub(super) fn split_face_with_internal_loops(
         }
     }
 
+    // For all-Line hole loops, compute the frame interior point in 3D:
+    // midway between the longest outer boundary edge's midpoint and its
+    // projection onto the hole polyline. The UV-based hole avoidance in
+    // `interior_point_3d` can miss multi-Line holes (sampled hole polygon
+    // in a mismatched frame), which classifies the frame as inside the
+    // opposing solid and silently drops the whole cap.
+    let all_line_holes = !all_holes.is_empty()
+        && all_holes
+            .iter()
+            .flatten()
+            .all(|e| matches!(e.curve_3d, EdgeCurve::Line));
+    let frame_interior = if all_line_holes {
+        boundary_edges
+            .iter()
+            .map(|e| {
+                let mid = e.start_3d + (e.end_3d - e.start_3d) * 0.5;
+                ((e.end_3d - e.start_3d).length(), mid)
+            })
+            .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(_, outer_mid)| {
+                let mut nearest: Option<(f64, Point3)> = None;
+                for e in all_holes.iter().flatten() {
+                    let dir = e.end_3d - e.start_3d;
+                    let len2 = dir.dot(dir);
+                    let t = if len2 > 1e-18 {
+                        ((outer_mid - e.start_3d).dot(dir) / len2).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let foot = e.start_3d + dir * t;
+                    let d = (foot - outer_mid).length();
+                    if nearest.is_none_or(|(dn, _)| d < dn) {
+                        nearest = Some((d, foot));
+                    }
+                }
+                match nearest {
+                    Some((_, hp)) => outer_mid + (hp - outer_mid) * 0.5,
+                    None => outer_mid,
+                }
+            })
+    } else {
+        None
+    };
+
     // The "outside" sub-face: original boundary with all loops as holes.
     // Pre-existing holes (from earlier boolean operations) stay with the
     // outside sub-face — dropping them would leave the faces ringing those
@@ -614,7 +686,7 @@ pub(super) fn split_face_with_internal_loops(
         reversed,
         parent: face_id,
         rank,
-        precomputed_interior: None,
+        precomputed_interior: frame_interior,
     });
 
     result

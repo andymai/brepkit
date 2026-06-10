@@ -149,6 +149,34 @@ pub fn perform(
                 raw_curves
             };
 
+            // Raw curves come from UNTRIMMED surface-surface intersection, so
+            // a curve can lie entirely beyond both faces' trimmed extents
+            // (e.g. tangency curvelets where a cone grazes a narrower
+            // cylinder, or a full cap circle paired with a smaller distant
+            // cap). Such curves fragment faces with spurious holes and bogus
+            // sub-faces downstream. Keep a curve only if at least one sample
+            // lies inside both faces' inflated AABBs.
+            let bb_a = bbox_a.expanded(tol.linear * 10.0);
+            let bb_b = bbox_b.expanded(tol.linear * 10.0);
+            let raw_curves: Vec<RawCurve> = raw_curves
+                .into_iter()
+                .filter(|raw| {
+                    let n = 16;
+                    (0..=n).any(|i| {
+                        let f = f64::from(i) / f64::from(n);
+                        // Line t_range is absolute arc length, not a
+                        // normalized [0,1] span — sample by endpoint lerp.
+                        let p = if matches!(raw.curve, EdgeCurve::Line) {
+                            raw.p_start + (raw.p_end - raw.p_start) * f
+                        } else {
+                            let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+                            raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
+                        };
+                        bb_a.contains_point(p) && bb_b.contains_point(p)
+                    })
+                })
+                .collect();
+
             for raw in raw_curves {
                 let mut raw = raw;
                 // Closed Circle3D sections — produced by plane-sphere
