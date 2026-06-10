@@ -79,7 +79,13 @@ pub fn non_manifold_edge_count(mesh: &TriangleMesh) -> usize {
 /// (sort-permutation parity equal) deduplicate to one triangle; pairs with
 /// opposite winding cancel (both removed) — that's the signature of two faces
 /// tessellated from opposite sides of the same plane.
-pub(super) fn dedupe_coincident_triangles(mesh: &mut TriangleMesh) {
+/// `tri_faces` is a parallel tri -> face attribution array (one entry per
+/// triangle); entries for removed triangles are filtered alongside so group
+/// offsets recomputed from it stay aligned.
+pub(super) fn dedupe_coincident_triangles(
+    mesh: &mut TriangleMesh,
+    tri_faces: Option<&mut Vec<u32>>,
+) {
     /// 1µm grid: tight enough that legitimately distinct CAD features (down to
     /// ~10µm geometry like thin plates) keep separate keys, while still
     /// merging post-merge floating-point noise in coincident vertices that
@@ -166,10 +172,17 @@ pub(super) fn dedupe_coincident_triangles(mesh: &mut TriangleMesh) {
     }
 
     let mut new_indices = Vec::with_capacity(mesh.indices.len());
+    let mut new_tri_faces = Vec::with_capacity(tri_faces.as_ref().map_or(0, |tf| tf.len()));
     for (t, &k) in keep.iter().enumerate().take(tri_count) {
         if k {
             new_indices.extend_from_slice(&mesh.indices[t * 3..t * 3 + 3]);
+            if let Some(&f) = tri_faces.as_ref().and_then(|tf| tf.get(t)) {
+                new_tri_faces.push(f);
+            }
         }
+    }
+    if let Some(tf) = tri_faces {
+        *tf = new_tri_faces;
     }
 
     // Compact the position/normal buffers: drop any vertex no longer
@@ -337,7 +350,13 @@ pub fn sample_solid_edges_filtered(
 /// Uses union-find over a spatial hash grid to merge boundary vertices that
 /// are within `weld_tol` of each other. Rewrites triangle indices and removes
 /// degenerate triangles (where merged indices create duplicate vertices).
-pub(super) fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
+/// `tri_faces` is the parallel tri -> face attribution array; entries for
+/// removed degenerate triangles are filtered alongside.
+pub(super) fn weld_boundary_vertices(
+    mesh: &mut TriangleMesh,
+    deflection: f64,
+    tri_faces: Option<&mut Vec<u32>>,
+) {
     let n_verts = mesh.positions.len();
     if n_verts == 0 || mesh.indices.is_empty() {
         return;
@@ -444,14 +463,21 @@ pub(super) fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
 
     if changed {
         let mut new_indices = Vec::with_capacity(mesh.indices.len());
-        for tri in mesh.indices.chunks_exact(3) {
+        let mut new_tri_faces = Vec::with_capacity(tri_faces.as_ref().map_or(0, |tf| tf.len()));
+        for (t, tri) in mesh.indices.chunks_exact(3).enumerate() {
             let (i0, i1, i2) = (tri[0], tri[1], tri[2]);
             if i0 != i1 && i1 != i2 && i2 != i0 {
                 new_indices.push(i0);
                 new_indices.push(i1);
                 new_indices.push(i2);
+                if let Some(&f) = tri_faces.as_ref().and_then(|tf| tf.get(t)) {
+                    new_tri_faces.push(f);
+                }
             }
         }
         mesh.indices = new_indices;
+        if let Some(tf) = tri_faces {
+            *tf = new_tri_faces;
+        }
     }
 }
