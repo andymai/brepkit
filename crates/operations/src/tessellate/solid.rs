@@ -74,8 +74,11 @@ pub fn tessellate_solid_with_tolerance(
     let all_faces = explorer::solid_faces(topo, solid)?;
     let edge_face_map = explorer::edge_to_face_map(topo, solid)?;
 
-    // Phase 2: Tessellate each unique edge once.
-    let edge_indices: Vec<usize> = edge_face_map.keys().copied().collect();
+    // Phase 2: Tessellate each unique edge once. The map is a std `HashMap`,
+    // so sort its keys into ID order before use — keeping all downstream
+    // iteration deterministic regardless of insertion-order hashing.
+    let mut edge_indices: Vec<usize> = edge_face_map.keys().copied().collect();
+    edge_indices.sort_unstable();
     #[cfg(not(target_arch = "wasm32"))]
     let mut edge_points: DetHashMap<usize, Vec<Point3>> = if edge_indices.len() >= 32 {
         use rayon::prelude::*;

@@ -580,10 +580,8 @@ pub(super) fn tessellate_nonplanar_snap(
     // Build spatial hash for O(1) snap lookups.
     let snap_tol = 1e-6;
     let inv_cell = 1.0 / snap_tol;
-    let mut snap_grid: DetHashMap<(i64, i64, i64), Vec<u32>> = DetHashMap::with_capacity_and_hasher(
-        snap_targets.len(),
-        brepkit_math::det_hash::DetState::default(),
-    );
+    let mut snap_grid: DetHashMap<(i64, i64, i64), Vec<u32>> =
+        DetHashMap::with_capacity_and_hasher(snap_targets.len(), brepkit_math::det_hash::DetState);
     for &(target_pos, gid) in &snap_targets {
         let cx = (target_pos.x() * inv_cell).round() as i64;
         let cy = (target_pos.y() * inv_cell).round() as i64;
