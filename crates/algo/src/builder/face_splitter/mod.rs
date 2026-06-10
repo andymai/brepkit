@@ -120,6 +120,35 @@ pub fn split_face_2d(
         })
         .collect();
 
+    // A section edge lying entirely inside an existing hole runs through
+    // air, not face material (a tool passing through a cavity opening still
+    // intersects the face's surface plane inside the hole). Keeping it would
+    // stamp a spurious nested loop onto the face, leaving free edges.
+    let filtered_sections: Vec<SectionEdge>;
+    let sections = if original_inner_wires.is_empty() {
+        sections
+    } else {
+        let to_uv = |p: Point3| -> Option<Point2> {
+            if is_plane {
+                Some(frame.project(p))
+            } else {
+                surface.project_point(p).map(|(u, v)| Point2::new(u, v))
+            }
+        };
+        filtered_sections = sections
+            .iter()
+            .filter(|s| {
+                let mid = s.start + (s.end - s.start) * 0.5;
+                let all_in_hole = [s.start, mid, s.end].iter().all(|&p| {
+                    to_uv(p).is_some_and(|uv| is_inside_any_hole(&uv, &original_inner_wires))
+                });
+                !all_in_hole
+            })
+            .cloned()
+            .collect();
+        &filtered_sections
+    };
+
     // If no section edges, the face is unsplit -- return as-is with original holes.
     if sections.is_empty() {
         return vec![SplitSubFace {
