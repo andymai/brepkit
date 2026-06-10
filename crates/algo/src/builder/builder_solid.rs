@@ -473,6 +473,19 @@ fn oriented_edges_form_closed_loop(topo: &Topology, oes: &[OrientedEdge]) -> boo
     (0..n).all(|i| ends[i].1 == ends[(i + 1) % n].0)
 }
 
+/// Whether any oriented edge (same `EdgeId` and direction) appears more than
+/// once in the list. Such a wire cannot be a simple loop: the repeat encloses
+/// zero area and marks degenerate hole debris from coplanar section splitting.
+fn has_repeated_oriented_edge(oes: &[OrientedEdge]) -> bool {
+    let mut seen: HashSet<(usize, bool)> = HashSet::with_capacity(oes.len());
+    for oe in oes {
+        if !seen.insert((oe.edge().index(), oe.is_forward())) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Iteratively remove edges that cannot belong to any closed loop: in a
 /// closed wire every endpoint position has even degree >= 2, so an edge with
 /// a degree-1 endpoint is dangling debris (e.g. a stray section edge left in
@@ -590,6 +603,15 @@ fn normalize_face_wires(topo: &mut Topology, fid: FaceId) {
     // deletes hole geometry. Surviving wires reuse their original WireId by
     // overwriting in place, which avoids orphaning entries in the append-only
     // arena.
+    //
+    // An inner wire that lists the same oriented edge more than once is
+    // degenerate hole debris (e.g. coplanar band-splitting can emit a single
+    // section edge twice in the same direction, enclosing zero area). It
+    // carries no real hole, so it is dropped. This is deliberately narrow:
+    // valid hole wires never repeat an oriented edge, so genuine holes — even
+    // ones whose edge order is permuted — are preserved. Outer wires are never
+    // dropped this way; a malformed outer wire must survive to the acceptance
+    // gate, which can fall the whole result back to mesh.
     let mut inners_changed = false;
     let mut kept_inner_wids: Vec<WireId> = Vec::with_capacity(inner_wids.len());
     let mut normalized_inners: Vec<(WireId, Vec<OrientedEdge>)> = Vec::new();
@@ -598,6 +620,10 @@ fn normalize_face_wires(topo: &mut Topology, fid: FaceId) {
             kept_inner_wids.push(*wid);
             continue;
         };
+        if has_repeated_oriented_edge(&oes) {
+            inners_changed = true;
+            continue;
+        }
         let changed = prune_dangling_edges(topo, &mut oes);
         if oes.is_empty() {
             inners_changed = true;
