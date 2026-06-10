@@ -2237,17 +2237,6 @@ fn make_solid_from_face_subset(
 }
 
 /// Count inner wire loops across all faces of a solid (outer + inner shells).
-/// Genus-aware Euler balance for a closed orientable surface with holed
-/// faces: V - E + F - L = 2(1 - g), so a valid result has an even
-/// inner-wire surplus `euler - L` no greater than 2 (g == 0 gives 2; each
-/// through-hole lowers it by 2, e.g. a tunnel cut through a shelled box
-/// gives 0). Callers must pair this with a closed-manifold check — the
-/// relation only holds for closed surfaces.
-const fn euler_balanced(euler: i64, inner_wires: i64) -> bool {
-    let surplus = euler - inner_wires;
-    surplus <= 2 && surplus % 2 == 0
-}
-
 fn solid_inner_wire_count(topo: &Topology, solid: SolidId) -> Result<i64, crate::OperationsError> {
     let mut count: i64 = 0;
     for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
@@ -2258,6 +2247,23 @@ fn solid_inner_wire_count(topo: &Topology, solid: SolidId) -> Result<i64, crate:
         }
     }
     Ok(count)
+}
+
+/// Genus-aware Euler balance for a closed orientable surface with holed faces.
+///
+/// Euler-Poincare for a closed surface of genus `g`: `V - E + F - L = 2(1 - g)`,
+/// so the inner-wire surplus `euler - L` equals `2 - 2g` and is valid only when
+/// it is a non-negative even number no greater than 2: `2` for genus 0, `0` for
+/// genus 1 (e.g. a tunnel cut through a shelled box). A negative surplus would
+/// imply genus >= 2 (not produced by these booleans) or a miscounted shell, so
+/// it is rejected. Callers must pair this with a closed-manifold check — the
+/// relation only holds for closed surfaces.
+const fn euler_balanced(euler: i64, inner_wires: i64) -> bool {
+    let surplus = euler - inner_wires;
+    #[allow(clippy::manual_range_contains)]
+    {
+        surplus >= 0 && surplus <= 2 && surplus % 2 == 0
+    }
 }
 
 /// Check whether a solid's outer shell is a closed manifold: every edge
