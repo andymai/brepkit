@@ -39,7 +39,9 @@ pub use mesh_ops::{
     EdgeLines, boundary_edge_count, is_watertight, non_manifold_edge_count, sample_solid_edges,
     sample_solid_edges_filtered,
 };
-pub use solid::{tessellate_solid, tessellate_solid_with_tolerance};
+pub use solid::{
+    tessellate_solid, tessellate_solid_grouped_with_tolerance, tessellate_solid_with_tolerance,
+};
 
 /// Merge-grid cell size for tolerance-based vertex deduplication.
 ///

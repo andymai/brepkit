@@ -81,6 +81,10 @@ impl BrepKernel {
     /// Returns a JSON string containing `{ positions, normals, indices, faceOffsets }`.
     /// `faceOffsets` is an array where `faceOffsets[i]` is the start index into
     /// `indices` for face `i`, and the last element is `indices.length`.
+    ///
+    /// Uses the watertight shared-edge-pool tessellation: adjacent faces share
+    /// identical boundary vertices, so the exported mesh has no T-junctions
+    /// regardless of how the solid was constructed (booleans included).
     #[wasm_bindgen(js_name = "tessellateSolidGrouped")]
     pub fn tessellate_solid_grouped(
         &self,
@@ -91,41 +95,27 @@ impl BrepKernel {
         validate_positive(deflection, "deflection")?;
         let angular_tol = resolve_angular_tol(angular_tolerance)?;
         let solid_id = self.resolve_solid(solid)?;
-        let faces = brepkit_topology::explorer::solid_faces(&self.topo, solid_id)?;
 
-        let mut all_positions: Vec<f64> = Vec::new();
-        let mut all_normals: Vec<f64> = Vec::new();
-        let mut all_indices: Vec<u32> = Vec::new();
-        let mut face_offsets: Vec<u32> = Vec::new();
+        let (mesh, face_offsets) = tessellate::tessellate_solid_grouped_with_tolerance(
+            &self.topo,
+            solid_id,
+            deflection,
+            angular_tol,
+        )?;
 
-        for &face_id in &faces {
-            #[allow(clippy::cast_possible_truncation)]
-            let idx_offset = (all_positions.len() / 3) as u32;
-            face_offsets.push(all_indices.len() as u32);
-
-            let mesh = tessellate::tessellate_with_tolerance(
-                &self.topo,
-                face_id,
-                deflection,
-                angular_tol,
-            )?;
-            for p in &mesh.positions {
-                all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
-            }
-            for n in &mesh.normals {
-                all_normals.extend_from_slice(&[n.x(), n.y(), n.z()]);
-            }
-            for &idx in &mesh.indices {
-                all_indices.push(idx + idx_offset);
-            }
+        let mut all_positions: Vec<f64> = Vec::with_capacity(mesh.positions.len() * 3);
+        for p in &mesh.positions {
+            all_positions.extend_from_slice(&[p.x(), p.y(), p.z()]);
         }
-        #[allow(clippy::cast_possible_truncation)]
-        face_offsets.push(all_indices.len() as u32);
+        let mut all_normals: Vec<f64> = Vec::with_capacity(mesh.normals.len() * 3);
+        for n in &mesh.normals {
+            all_normals.extend_from_slice(&[n.x(), n.y(), n.z()]);
+        }
 
         let result = GroupedMeshResult {
             positions: all_positions,
             normals: all_normals,
-            indices: all_indices,
+            indices: mesh.indices,
             face_offsets,
         };
         Ok(serde_json::to_string(&result)
@@ -309,26 +299,30 @@ mod tests {
     fn tessellate_solid_grouped_via_operations() {
         let mut topo = brepkit_topology::topology::Topology::new();
         let solid = brepkit_operations::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
-        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
 
-        let mut all_positions = 0usize;
-        let mut all_indices = 0usize;
-        let mut face_offsets = Vec::new();
+        let (mesh, face_offsets) =
+            brepkit_operations::tessellate::tessellate_solid_grouped_with_tolerance(
+                &topo,
+                solid,
+                0.1,
+                brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+            )
+            .unwrap();
 
-        for &face_id in &faces {
-            face_offsets.push(all_indices);
-            if let Ok(mesh) = brepkit_operations::tessellate::tessellate(&topo, face_id, 0.1) {
-                all_positions += mesh.positions.len();
-                all_indices += mesh.indices.len();
-            }
-        }
-        face_offsets.push(all_indices);
-
-        assert!(all_positions > 0, "expected vertices");
-        assert!(all_indices > 0, "expected indices");
+        assert!(!mesh.positions.is_empty(), "expected vertices");
+        assert!(!mesh.indices.is_empty(), "expected indices");
         // Box has 6 faces, so faceOffsets has 7 entries (6 starts + 1 sentinel).
         assert_eq!(face_offsets.len(), 7, "expected 7 face offsets for a box");
-        assert_eq!(*face_offsets.last().unwrap(), all_indices);
+        assert_eq!(*face_offsets.last().unwrap() as usize, mesh.indices.len());
+        // Watertight grouped output: every group is a non-empty triangle run.
+        for w in face_offsets.windows(2) {
+            assert!(w[0] < w[1], "box face groups must be non-empty");
+            assert_eq!((w[1] - w[0]) % 3, 0);
+        }
+        assert!(
+            brepkit_operations::tessellate::is_watertight(&mesh),
+            "grouped box mesh must be watertight"
+        );
     }
 
     // ── mesh_edges_all ────────────────────────────────────────────

@@ -428,7 +428,8 @@ fn dedupe_cancels_opposing_winding_pair() {
         normals: vec![Vec3::new(0.0, 0.0, 1.0); 3],
         indices: vec![0, 1, 2, 0, 2, 1],
     };
-    super::mesh_ops::dedupe_coincident_triangles(&mut mesh);
+    let mut tri_faces = vec![0_u32; mesh.indices.len() / 3];
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, &mut tri_faces);
     assert_eq!(
         mesh.indices.len(),
         0,
@@ -452,7 +453,8 @@ fn dedupe_collapses_same_winding_duplicate() {
         normals: vec![Vec3::new(0.0, 0.0, 1.0); 3],
         indices: vec![0, 1, 2, 0, 1, 2],
     };
-    super::mesh_ops::dedupe_coincident_triangles(&mut mesh);
+    let mut tri_faces = vec![0_u32; mesh.indices.len() / 3];
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, &mut tri_faces);
     assert_eq!(
         mesh.indices.len(),
         3,
@@ -476,7 +478,8 @@ fn dedupe_matches_position_coincidence_not_index() {
         normals: vec![Vec3::new(0.0, 0.0, 1.0); 6],
         indices: vec![0, 1, 2, 3, 4, 5],
     };
-    super::mesh_ops::dedupe_coincident_triangles(&mut mesh);
+    let mut tri_faces = vec![0_u32; mesh.indices.len() / 3];
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, &mut tri_faces);
     assert_eq!(
         mesh.indices.len(),
         3,
@@ -506,7 +509,8 @@ fn dedupe_preserves_thin_plate_geometry() {
         normals: vec![Vec3::new(0.0, 0.0, 1.0); 6],
         indices: vec![0, 1, 2, 3, 5, 4],
     };
-    super::mesh_ops::dedupe_coincident_triangles(&mut mesh);
+    let mut tri_faces = vec![0_u32; mesh.indices.len() / 3];
+    super::mesh_ops::dedupe_coincident_triangles(&mut mesh, &mut tri_faces);
     assert_eq!(
         mesh.indices.len(),
         6,
@@ -1588,5 +1592,189 @@ fn circle_and_degenerate_ellipse_do_not_over_tessellate() {
     assert!(
         n_e < 5_000,
         "near-circular ellipse(5,5) over-tessellates: {n_e} mesh vertices"
+    );
+}
+
+// -- Grouped solid tessellation (wasm export path) --
+
+/// Count boundary and non-manifold edges with vertices unified by quantized
+/// (1e-4) position keys -- the same equivalence an STL export induces.
+fn quantized_edge_defects(mesh: &TriangleMesh) -> (usize, usize) {
+    const EXPORT_GRID: f64 = 1e-4;
+
+    let mut pos_to_canonical: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
+    let mut canonical_ids: Vec<u32> = Vec::with_capacity(mesh.positions.len());
+    for pos in &mesh.positions {
+        let key = point_merge_key(*pos, EXPORT_GRID);
+        let next = pos_to_canonical.len() as u32;
+        canonical_ids.push(*pos_to_canonical.entry(key).or_insert(next));
+    }
+
+    let mut edge_count: DetHashMap<(u32, u32), (u32, u32)> = DetHashMap::default();
+    for tri in mesh.indices.chunks_exact(3) {
+        let i0 = canonical_ids[tri[0] as usize];
+        let i1 = canonical_ids[tri[1] as usize];
+        let i2 = canonical_ids[tri[2] as usize];
+        if i0 == i1 || i1 == i2 || i2 == i0 {
+            continue;
+        }
+        for (a, b) in [(i0, i1), (i1, i2), (i2, i0)] {
+            let entry = edge_count.entry((a.min(b), a.max(b))).or_default();
+            if a < b {
+                entry.0 += 1;
+            } else {
+                entry.1 += 1;
+            }
+        }
+    }
+
+    let boundary = edge_count
+        .values()
+        .filter(|&&(f, r)| f + r == 1 || (f + r == 2 && (f == 0 || r == 0)))
+        .count();
+    let non_manifold = edge_count.values().filter(|&&(f, r)| f + r > 2).count();
+    (boundary, non_manifold)
+}
+
+/// Box(21^3) cut by a through-cylinder(r=3.75) at (6,6): the canonical
+/// boolean-result solid that the wasm `tessellateSolidGrouped` path exported
+/// with T-junctions.
+fn make_box_with_through_hole(topo: &mut Topology) -> brepkit_topology::solid::SolidId {
+    use brepkit_math::mat::Mat4;
+    let bx = crate::primitives::make_box(topo, 21.0, 21.0, 21.0).unwrap();
+    let cyl = crate::primitives::make_cylinder(topo, 3.75, 30.0).unwrap();
+    crate::transform::transform_solid(topo, cyl, &Mat4::translation(6.0, 6.0, -5.0)).unwrap();
+    crate::boolean::boolean(topo, crate::boolean::BooleanOp::Cut, bx, cyl).unwrap()
+}
+
+/// Regression for the wasm `tessellateSolidGrouped` export path: the previous
+/// implementation merged standalone per-face tessellations, whose mismatched
+/// boundary vertices produced 156 boundary edges on this solid even under
+/// STL-export (1e-4) vertex quantization. The grouped output must now match
+/// the watertight shared-edge-pool invariant.
+#[test]
+fn grouped_tessellation_watertight_box_cut_cylinder() {
+    let mut topo = Topology::new();
+    let solid = make_box_with_through_hole(&mut topo);
+
+    // The watertight ungrouped path is the reference: it must pass.
+    let watertight = tessellate_solid_with_tolerance(
+        &topo,
+        solid,
+        0.1,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+    )
+    .unwrap();
+    let (wb, wn) = quantized_edge_defects(&watertight);
+    assert_eq!(
+        wb, 0,
+        "watertight path must have 0 boundary edges, got {wb}"
+    );
+    assert_eq!(
+        wn, 0,
+        "watertight path must have 0 non-manifold edges, got {wn}"
+    );
+
+    let (mesh, _offsets) = tessellate_solid_grouped_with_tolerance(
+        &topo,
+        solid,
+        0.1,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+    )
+    .unwrap();
+    let (gb, gn) = quantized_edge_defects(&mesh);
+    assert_eq!(
+        gb, 0,
+        "grouped tessellation must have 0 boundary edges, got {gb}"
+    );
+    assert_eq!(
+        gn, 0,
+        "grouped tessellation must have 0 non-manifold edges, got {gn}"
+    );
+
+    // Grouped output is a triangle-order permutation of the ungrouped mesh.
+    assert_eq!(mesh.indices.len(), watertight.indices.len());
+    assert_eq!(mesh.positions.len(), watertight.positions.len());
+}
+
+#[test]
+fn grouped_tessellation_offsets_invariants() {
+    let mut topo = Topology::new();
+    let solid = make_box_with_through_hole(&mut topo);
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+
+    let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
+        &topo,
+        solid,
+        0.1,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+    )
+    .unwrap();
+
+    assert_eq!(
+        offsets.len(),
+        faces.len() + 1,
+        "one offset per face plus sentinel (brepjs maps faceHash positionally)"
+    );
+    assert_eq!(offsets[0], 0);
+    assert_eq!(
+        *offsets.last().unwrap() as usize,
+        mesh.indices.len(),
+        "sentinel must equal indices.len()"
+    );
+    for w in offsets.windows(2) {
+        assert!(w[0] <= w[1], "offsets must be monotonic");
+        assert_eq!((w[1] - w[0]) % 3, 0, "group sizes must be whole triangles");
+    }
+}
+
+/// Group alignment check: every triangle in face i's group must lie on face
+/// i's surface. A silent offset misalignment (e.g. triangle deletion without
+/// filtering the attribution array) would put cylinder triangles in plane
+/// groups and fail here.
+#[test]
+fn grouped_tessellation_triangles_lie_on_their_face() {
+    let mut topo = Topology::new();
+    let solid = make_box_with_through_hole(&mut topo);
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+
+    let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
+        &topo,
+        solid,
+        0.1,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+    )
+    .unwrap();
+
+    let mut nonempty = 0;
+    for (fi, &face_id) in faces.iter().enumerate() {
+        let surf = topo.face(face_id).unwrap().surface().clone();
+        let group = &mesh.indices[offsets[fi] as usize..offsets[fi + 1] as usize];
+        if !group.is_empty() {
+            nonempty += 1;
+        }
+        for &vid in group {
+            let p = mesh.positions[vid as usize];
+            let dist = match &surf {
+                FaceSurface::Plane { normal, d } => {
+                    (normal.dot(p - Point3::new(0.0, 0.0, 0.0)) - d).abs()
+                }
+                FaceSurface::Cylinder(cyl) => {
+                    let to_p = p - cyl.origin();
+                    let axial = to_p.dot(cyl.axis());
+                    ((to_p - cyl.axis() * axial).length() - cyl.radius()).abs()
+                }
+                _ => 0.0,
+            };
+            assert!(
+                dist < 1e-6,
+                "face {fi} group contains a vertex {dist:.2e} off its surface"
+            );
+        }
+    }
+    assert!(
+        nonempty >= faces.len() - 1,
+        "expected nearly all groups nonempty, got {nonempty}/{}",
+        faces.len()
     );
 }

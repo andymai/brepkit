@@ -61,13 +61,83 @@ pub fn tessellate_solid(
 /// # Errors
 ///
 /// Returns an error if any topology lookup or face tessellation fails.
-#[allow(clippy::too_many_lines)]
 pub fn tessellate_solid_with_tolerance(
     topo: &Topology,
     solid: SolidId,
     deflection: f64,
     angular_tol: f64,
 ) -> Result<TriangleMesh, crate::OperationsError> {
+    tessellate_solid_core(topo, solid, deflection, angular_tol).map(|(mesh, _, _)| mesh)
+}
+
+/// Watertight solid tessellation with per-face triangle grouping.
+///
+/// Runs the same shared-edge-pool pipeline as [`tessellate_solid_with_tolerance`],
+/// then reorders triangles so each face's triangles are contiguous. Returns the
+/// mesh plus `face_offsets`: one entry per face of
+/// `explorer::solid_faces(topo, solid)` (in that order, including empty groups)
+/// where `face_offsets[i]` is the start offset into `mesh.indices` for face `i`,
+/// plus a final sentinel equal to `mesh.indices.len()`.
+///
+/// # Errors
+///
+/// Returns an error if any topology lookup or face tessellation fails.
+pub fn tessellate_solid_grouped_with_tolerance(
+    topo: &Topology,
+    solid: SolidId,
+    deflection: f64,
+    angular_tol: f64,
+) -> Result<(TriangleMesh, Vec<u32>), crate::OperationsError> {
+    let (mut mesh, tri_faces, n_faces) =
+        tessellate_solid_core(topo, solid, deflection, angular_tol)?;
+    debug_assert_eq!(tri_faces.len() * 3, mesh.indices.len());
+
+    let mut counts = vec![0_u32; n_faces];
+    for &f in &tri_faces {
+        if let Some(c) = counts.get_mut(f as usize) {
+            *c += 1;
+        }
+    }
+
+    let mut face_offsets = Vec::with_capacity(n_faces + 1);
+    let mut acc = 0_u32;
+    face_offsets.push(0_u32);
+    for &c in &counts {
+        acc += c * 3;
+        face_offsets.push(acc);
+    }
+
+    // Stable counting-sort scatter: per-face triangle order is preserved.
+    let mut cursors: Vec<usize> = face_offsets[..n_faces]
+        .iter()
+        .map(|&o| o as usize)
+        .collect();
+    let mut new_indices = vec![0_u32; mesh.indices.len()];
+    for (t, &f) in tri_faces.iter().enumerate() {
+        let Some(cursor) = cursors.get_mut(f as usize) else {
+            continue;
+        };
+        let dst = *cursor;
+        new_indices[dst..dst + 3].copy_from_slice(&mesh.indices[t * 3..t * 3 + 3]);
+        *cursor += 3;
+    }
+    mesh.indices = new_indices;
+
+    Ok((mesh, face_offsets))
+}
+
+/// Core watertight tessellation pipeline.
+///
+/// Returns the merged mesh, a parallel `tri -> face` array (one entry per
+/// triangle, holding the index of the owning face within
+/// `explorer::solid_faces` order), and the face count.
+#[allow(clippy::too_many_lines)]
+fn tessellate_solid_core(
+    topo: &Topology,
+    solid: SolidId,
+    deflection: f64,
+    angular_tol: f64,
+) -> Result<(TriangleMesh, Vec<u32>, usize), crate::OperationsError> {
     use brepkit_topology::explorer;
 
     // Phase 1: Collect all faces and build edge->face adjacency.
@@ -302,8 +372,12 @@ pub fn tessellate_solid_with_tolerance(
     }
 
     // Phase 4: Tessellate each face using its boundary edge vertices.
+    // `tri_faces` runs parallel to the mesh triangles: tri_faces[t] is the
+    // index (into `all_faces`) of the face that produced triangle t.
+    let mut tri_faces: Vec<u32> = Vec::new();
     #[allow(clippy::items_after_statements)]
     struct CdtJob {
+        face_index: u32,
         pts2d: Vec<brepkit_math::vec::Point2>,
         outer_count: usize,
         inner_wire_ranges: Vec<(usize, usize)>,
@@ -381,7 +455,9 @@ pub fn tessellate_solid_with_tolerance(
                     .map(|&p| project_by_normal(p, normal))
                     .collect();
 
+                #[allow(clippy::cast_possible_truncation)]
                 cdt_jobs.push(CdtJob {
+                    face_index: fi as u32,
                     pts2d,
                     outer_count,
                     inner_wire_ranges,
@@ -436,6 +512,7 @@ pub fn tessellate_solid_with_tolerance(
             let g0 = job.all_global_ids[i0].unwrap_or(0);
             let g1 = job.all_global_ids[i1].unwrap_or(0);
             let g2 = job.all_global_ids[i2].unwrap_or(0);
+            tri_faces.push(job.face_index);
             if needs_flip {
                 merged.indices.push(g0);
                 merged.indices.push(g2);
@@ -461,6 +538,10 @@ pub fn tessellate_solid_with_tolerance(
         ) {
             log::warn!("skipping face during tessellation: {e}");
         }
+        // Attribute every triangle appended by this face (even partial output
+        // before an error) so tri_faces stays parallel to the triangle list.
+        #[allow(clippy::cast_possible_truncation)]
+        tri_faces.resize(merged.indices.len() / 3, fi as u32);
     }
 
     // Phase 5: Surface-aware vertex normals.
@@ -550,15 +631,15 @@ pub fn tessellate_solid_with_tolerance(
     }
 
     // Phase 6: Weld boundary vertices.
-    weld_boundary_vertices(&mut merged, deflection);
+    weld_boundary_vertices(&mut merged, deflection, &mut tri_faces);
 
     // Phase 7: Drop coincident/cancelling triangles left by booleans that
     // produced overlapping coplanar faces (issue #696). Keyed on quantized
     // positions so position-coincident triangles with distinct vertex IDs
     // are still caught.
-    dedupe_coincident_triangles(&mut merged);
+    dedupe_coincident_triangles(&mut merged, &mut tri_faces);
 
-    Ok(merged)
+    Ok((merged, tri_faces, all_faces.len()))
 }
 
 /// Tessellate a single face, reusing shared edge vertices from the global mesh.
