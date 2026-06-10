@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.102.4](https://github.com/andymai/brepkit/compare/v2.102.3...v2.102.4) (2026-06-10)
+
+
+### Bug Fixes
+
+* **algo:** drop hole-nested section edges; fix(operations): genus-aware boolean acceptance ([#768](https://github.com/andymai/brepkit/issues/768)) ([3abebe1](https://github.com/andymai/brepkit/commit/3abebe16f12644d768ffb50a68d5530c5caa7cc1))
+* **algo:** trim coincident closed-circle sections per face ([#767](https://github.com/andymai/brepkit/issues/767)) ([213330b](https://github.com/andymai/brepkit/commit/213330bfc789ec2541afcbf5356b417f249bbf49))
+
 ## [2.102.3](https://github.com/andymai/brepkit/compare/v2.102.2...v2.102.3) (2026-06-10)
 
 
