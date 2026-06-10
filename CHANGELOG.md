@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.102.8](https://github.com/andymai/brepkit/compare/v2.102.7...v2.102.8) (2026-06-10)
+
+
+### Bug Fixes
+
+* **algo:** valid GFA booleans for rounded-rect prisms at coplanar interfaces ([#778](https://github.com/andymai/brepkit/issues/778)) ([c31888d](https://github.com/andymai/brepkit/commit/c31888d1624eb07532e2a89f623045756ea3e2b4))
+
 ## [2.102.7](https://github.com/andymai/brepkit/compare/v2.102.6...v2.102.7) (2026-06-10)
 
 
