@@ -247,7 +247,7 @@ fn test_intersect_disjoint() {
 // ── Sequential booleans ─────────────────────────────────────────────
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
+#[ignore = "sequential column cuts produce a non-manifold result (an edge shared by 3 faces)"]
 fn test_sequential_cuts_volume() {
     // Start with 10x10x10 box. Cut 5 columns (1x1x10 each) at different positions.
     let mut topo = Topology::new();
@@ -386,7 +386,7 @@ fn test_boolean_cone_box() {
 }
 
 #[test]
-#[ignore = "GFA pipeline limitation"]
+#[ignore = "cone-cylinder cut volume 11.19 vs expected 19.63 (43% low) — material over-removed"]
 fn test_boolean_cone_cylinder() {
     // Cone r_bottom=2, r_top=1, height=3. Cylinder radius 0.5, height 3.
     let mut topo = Topology::new();

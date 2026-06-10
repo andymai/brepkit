@@ -574,7 +574,7 @@ fn cut_then_fuse_back_containment() {
 //   actual: vol(fused) ≈ vol(diff) — fuse collapses to just the thin shell.
 
 #[test]
-#[ignore = "GFA face selection is correct (same-domain orientation now honors face reversal), but assembly leaves an open shell: diff's outer faces keep long unsplit edges that don't match the collinear sliver edges on adjacent split faces (18 free edges), so the wrapper falls back to mesh boolean. Needs a collinear-edge refinement pass in GFA assembly plus closed-shell-aware wrapper acceptance."]
+#[ignore = "Fuse(thin L-shell, containing solid) overshoots: vol_fused ≈ 1.5×vol(A) (0.18758 vs 0.12508, surplus 0.0625 = half the inner cube) instead of ≈ vol(A) — the overlap region is double-counted in the assembled result."]
 fn fuse_thin_shell_with_containing_solid_preserves_larger_volume() {
     // Uses 0.5001 (above tol.linear) so the identical-Cut shortcut doesn't
     // fire and Cut(A,B) actually goes through GFA, producing the L-shell.

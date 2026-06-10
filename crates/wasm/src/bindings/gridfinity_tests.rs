@@ -843,7 +843,7 @@ fn make_inner_sections(k: &mut BrepKernel) -> Vec<u32> {
 /// Reproduces `buildTopShapeLoft()` without the final fillet.
 /// Expected: valid solid, Euler=2, reasonable volume.
 #[test]
-#[ignore = "lip ring volume out of range — boolean coplanar face classification"]
+#[ignore = "lip ring fails validation (4 issues, stray boundary line edges at z=4.4) — boolean coplanar face classification"]
 fn gridfinity_d1_lip_ring_loft_cut() {
     let mut k = BrepKernel::new();
 
@@ -1100,7 +1100,6 @@ fn gridfinity_d1a2_concentric_box_coplanar() {
 ///
 /// If D1 fails but D1b passes, the bug is in coplanar face handling.
 #[test]
-#[ignore = "GFA pipeline limitation"]
 fn gridfinity_d1b_lip_ring_no_coplanar() {
     let mut k = BrepKernel::new();
 
@@ -1364,7 +1363,7 @@ fn gridfinity_d3_shelled_box_with_lip() {
 /// Like D3 but with fillet on the lip ring before fuse.
 /// Tests whether the analytic boolean handles torus faces from fillet.
 #[test]
-#[ignore = "Euler=0 before fillet — boolean coplanar face classification"]
+#[ignore = "Euler=-19 before fillet — boolean coplanar face classification"]
 fn gridfinity_d5_box_with_filleted_lip() {
     let mut k = BrepKernel::new();
 
