@@ -571,7 +571,7 @@ fn cut_then_fuse_back_containment() {
 //   inter  = Intersect(A, B) // identical-shortcut: copy of A, vol ≈ 0.125000075
 //   fused  = Fuse(diff, inter)
 //   expect: vol(fused) ≈ vol(A) since diff ⊂ inter
-//   actual: vol(fused) ≈ vol(diff) — fuse collapses to just the thin shell.
+//   actual: vol(fused) ≈ 1.5×vol(A) — the overlap region is double-counted.
 
 #[test]
 #[ignore = "Fuse(thin L-shell, containing solid) overshoots: vol_fused ≈ 1.5×vol(A) (0.18758 vs 0.12508, surplus 0.0625 = half the inner cube) instead of ≈ vol(A) — the overlap region is double-counted in the assembled result."]
