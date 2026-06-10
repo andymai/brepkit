@@ -1,5 +1,6 @@
 //! Mesh validation and boundary operations.
 
+use brepkit_math::det_hash::{DetHashMap, DetHashSet};
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::FaceSurface;
@@ -25,9 +26,7 @@ pub fn is_watertight(mesh: &TriangleMesh) -> bool {
 /// does not. Returns the number of such edges. A watertight mesh has 0.
 #[must_use]
 pub fn boundary_edge_count(mesh: &TriangleMesh) -> usize {
-    use std::collections::HashSet;
-
-    let mut half_edges: HashSet<(u32, u32)> = HashSet::new();
+    let mut half_edges: DetHashSet<(u32, u32)> = DetHashSet::default();
     let tri_count = mesh.indices.len() / 3;
 
     for t in 0..tri_count {
@@ -53,9 +52,7 @@ pub fn boundary_edge_count(mesh: &TriangleMesh) -> usize {
 /// to validate that a tessellated solid is a closed 2-manifold.
 #[must_use]
 pub fn non_manifold_edge_count(mesh: &TriangleMesh) -> usize {
-    use std::collections::HashMap;
-
-    let mut edge_count: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut edge_count: DetHashMap<(u32, u32), u32> = DetHashMap::default();
     for tri in mesh.indices.chunks_exact(3) {
         let (a, b, c) = (tri[0], tri[1], tri[2]);
         for (p, q) in [(a, b), (b, c), (c, a)] {
@@ -83,8 +80,6 @@ pub fn non_manifold_edge_count(mesh: &TriangleMesh) -> usize {
 /// opposite winding cancel (both removed) — that's the signature of two faces
 /// tessellated from opposite sides of the same plane.
 pub(super) fn dedupe_coincident_triangles(mesh: &mut TriangleMesh) {
-    use std::collections::HashMap;
-
     /// 1µm grid: tight enough that legitimately distinct CAD features (down to
     /// ~10µm geometry like thin plates) keep separate keys, while still
     /// merging post-merge floating-point noise in coincident vertices that
@@ -109,7 +104,7 @@ pub(super) fn dedupe_coincident_triangles(mesh: &mut TriangleMesh) {
         )
     };
 
-    let mut by_key: HashMap<TriKey, TriRefs> = HashMap::new();
+    let mut by_key: DetHashMap<TriKey, TriRefs> = DetHashMap::default();
     for t in 0..tri_count {
         let (a, b, c) = (
             mesh.indices[t * 3] as usize,
@@ -343,15 +338,13 @@ pub fn sample_solid_edges_filtered(
 /// are within `weld_tol` of each other. Rewrites triangle indices and removes
 /// degenerate triangles (where merged indices create duplicate vertices).
 pub(super) fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
-    use std::collections::{HashMap, HashSet};
-
     let n_verts = mesh.positions.len();
     if n_verts == 0 || mesh.indices.is_empty() {
         return;
     }
 
     // Build half-edge set to find boundary edges.
-    let mut half_edges: HashMap<(u32, u32), usize> = HashMap::new();
+    let mut half_edges: DetHashMap<(u32, u32), usize> = DetHashMap::default();
     for tri in mesh.indices.chunks_exact(3) {
         let (i0, i1, i2) = (tri[0], tri[1], tri[2]);
         *half_edges.entry((i0, i1)).or_default() += 1;
@@ -360,7 +353,7 @@ pub(super) fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
     }
 
     // Boundary vertices: incident on half-edges without a matching reverse.
-    let mut boundary_set: HashSet<u32> = HashSet::new();
+    let mut boundary_set: DetHashSet<u32> = DetHashSet::default();
     for &(a, b) in half_edges.keys() {
         if !half_edges.contains_key(&(b, a)) {
             boundary_set.insert(a);
@@ -373,7 +366,7 @@ pub(super) fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
     }
 
     // Sorted iteration keeps grid-cell contents and union order independent
-    // of HashSet iteration order, so welded meshes are reproducible.
+    // of DetHashSet iteration order, so welded meshes are reproducible.
     let mut boundary_verts: Vec<u32> = boundary_set.into_iter().collect();
     boundary_verts.sort_unstable();
 
@@ -411,7 +404,7 @@ pub(super) fn weld_boundary_vertices(mesh: &mut TriangleMesh, deflection: f64) {
         )
     };
 
-    let mut grid: HashMap<(i64, i64, i64), Vec<u32>> = HashMap::new();
+    let mut grid: DetHashMap<(i64, i64, i64), Vec<u32>> = DetHashMap::default();
     for &vid in &boundary_verts {
         let p = mesh.positions[vid as usize];
         grid.entry(cell_key(p)).or_default().push(vid);

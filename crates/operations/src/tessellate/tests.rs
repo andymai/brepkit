@@ -2,6 +2,7 @@
 
 #![allow(clippy::unwrap_used, deprecated)]
 
+use brepkit_math::det_hash::{DetHashMap, DetHashSet};
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -956,8 +957,6 @@ fn test_max_sag_within_deflection() {
 
 #[test]
 fn test_watertight_solid_mesh() {
-    use std::collections::{HashMap, HashSet};
-
     let mut topo = Topology::new();
     let solid = crate::primitives::make_box(&mut topo, 1.0, 2.0, 3.0).unwrap();
     let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
@@ -965,7 +964,7 @@ fn test_watertight_solid_mesh() {
     let snap = |v: f64| -> i64 { (v * 1_000_000.0).round() as i64 };
     let snap_pt = |p: Point3| -> (i64, i64, i64) { (snap(p.x()), snap(p.y()), snap(p.z())) };
 
-    let mut pos_map: HashMap<(i64, i64, i64), usize> = HashMap::new();
+    let mut pos_map: DetHashMap<(i64, i64, i64), usize> = DetHashMap::default();
     let mut next_id = 0_usize;
     let canonical: Vec<usize> = mesh
         .positions
@@ -981,7 +980,7 @@ fn test_watertight_solid_mesh() {
         .collect();
 
     let tri_count = mesh.indices.len() / 3;
-    let mut half_edges: HashSet<(usize, usize)> = HashSet::new();
+    let mut half_edges: DetHashSet<(usize, usize)> = DetHashSet::default();
     for t in 0..tri_count {
         let a = canonical[mesh.indices[t * 3] as usize];
         let b = canonical[mesh.indices[t * 3 + 1] as usize];
@@ -1060,7 +1059,7 @@ fn test_no_t_junctions_box() {
     let mesh = tessellate_solid(&topo, solid, 0.1).unwrap();
 
     let snap = |v: f64| -> i64 { (v * 1_000_000.0).round() as i64 };
-    let unique: std::collections::HashSet<(i64, i64, i64)> = mesh
+    let unique: brepkit_math::det_hash::DetHashSet<(i64, i64, i64)> = mesh
         .positions
         .iter()
         .map(|p| (snap(p.x()), snap(p.y()), snap(p.z())))
@@ -1095,8 +1094,6 @@ fn test_circle_deflection_scaling() {
 
 #[test]
 fn test_tessellate_boolean_result_watertight() {
-    use std::collections::{HashMap, HashSet};
-
     let mut topo = Topology::new();
     let a = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
     let b = crate::primitives::make_box(&mut topo, 1.5, 1.5, 1.5).unwrap();
@@ -1114,7 +1111,7 @@ fn test_tessellate_boolean_result_watertight() {
     let snap = |v: f64| -> i64 { (v * 1_000_000.0).round() as i64 };
     let snap_pt = |p: Point3| -> (i64, i64, i64) { (snap(p.x()), snap(p.y()), snap(p.z())) };
 
-    let mut pos_map: HashMap<(i64, i64, i64), usize> = HashMap::new();
+    let mut pos_map: DetHashMap<(i64, i64, i64), usize> = DetHashMap::default();
     let mut next_id = 0_usize;
     let canonical: Vec<usize> = mesh
         .positions
@@ -1130,7 +1127,7 @@ fn test_tessellate_boolean_result_watertight() {
         .collect();
 
     let tri_count = mesh.indices.len() / 3;
-    let mut half_edges: HashSet<(usize, usize)> = HashSet::new();
+    let mut half_edges: DetHashSet<(usize, usize)> = DetHashSet::default();
     for t in 0..tri_count {
         let ca = canonical[mesh.indices[t * 3] as usize];
         let cb = canonical[mesh.indices[t * 3 + 1] as usize];
@@ -1385,8 +1382,7 @@ fn torus_tessellation_count() {
 /// Count distinct angular bands around a cylinder's circumference by
 /// projecting lateral-face vertices to their angle about the z axis.
 fn distinct_angular_bands(mesh: &TriangleMesh, radius: f64) -> usize {
-    use std::collections::HashSet;
-    let mut bins: HashSet<i64> = HashSet::new();
+    let mut bins: DetHashSet<i64> = DetHashSet::default();
     for p in &mesh.positions {
         let rr = (p.x() * p.x() + p.y() * p.y()).sqrt();
         if (rr - radius).abs() > radius * 0.05 {
@@ -1415,8 +1411,6 @@ fn cylinder_small_radius_respects_angular_tolerance() {
 
 #[test]
 fn torus_minor_arc_min_segments() {
-    use std::collections::HashSet;
-
     let mut topo = Topology::new();
     let solid = crate::primitives::make_torus(&mut topo, 5.0, 0.4, 32).unwrap();
 
@@ -1426,7 +1420,7 @@ fn torus_minor_arc_min_segments() {
     // Count distinct minor-circle latitudes by binning distance from the
     // tube center circle (radius R) -- a proxy for the v direction density.
     let r_major = 5.0;
-    let mut bins: HashSet<i64> = HashSet::new();
+    let mut bins: DetHashSet<i64> = DetHashSet::default();
     for p in &mesh.positions {
         let rho = (p.x() * p.x() + p.y() * p.y()).sqrt();
         let dr = rho - r_major;

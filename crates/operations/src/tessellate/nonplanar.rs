@@ -1,7 +1,6 @@
 //! Non-planar CDT and fallback paths for face tessellation.
 
-use std::collections::HashMap;
-
+use brepkit_math::det_hash::{DetHashMap, DetHashSet};
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -21,12 +20,10 @@ pub(super) fn tessellate_nonplanar_cdt(
     face_data: &brepkit_topology::face::Face,
     deflection: f64,
     angular_tol: f64,
-    edge_global_indices: &HashMap<usize, Vec<u32>>,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
-    use std::collections::HashSet;
-
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
     use brepkit_topology::edge::EdgeId;
@@ -177,11 +174,11 @@ pub(super) fn tessellate_nonplanar_cdt(
 
     // Step 2b: Detect and fix degenerate seam edges.
     let (u_min, u_max, v_min, v_max) = {
-        let mut wire_edge_counts: HashMap<usize, usize> = HashMap::new();
+        let mut wire_edge_counts: DetHashMap<usize, usize> = DetHashMap::default();
         for oe in wire.edges() {
             *wire_edge_counts.entry(oe.edge().index()).or_default() += 1;
         }
-        let seam_edge_indices: HashSet<usize> = wire_edge_counts
+        let seam_edge_indices: DetHashSet<usize> = wire_edge_counts
             .iter()
             .filter(|&(_, &c)| c > 1)
             .map(|(&idx, _)| idx)
@@ -533,9 +530,9 @@ pub(super) fn tessellate_nonplanar_snap(
     face_data: &brepkit_topology::face::Face,
     deflection: f64,
     angular_tol: f64,
-    edge_global_indices: &HashMap<usize, Vec<u32>>,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
     merged: &mut TriangleMesh,
-    point_to_global: &mut HashMap<(i64, i64, i64), u32>,
+    point_to_global: &mut DetHashMap<(i64, i64, i64), u32>,
 ) -> Result<(), crate::OperationsError> {
     let mut face_mesh = super::tessellate_with_tolerance(topo, face_id, deflection, angular_tol)?;
 
@@ -583,8 +580,10 @@ pub(super) fn tessellate_nonplanar_snap(
     // Build spatial hash for O(1) snap lookups.
     let snap_tol = 1e-6;
     let inv_cell = 1.0 / snap_tol;
-    let mut snap_grid: HashMap<(i64, i64, i64), Vec<u32>> =
-        HashMap::with_capacity(snap_targets.len());
+    let mut snap_grid: DetHashMap<(i64, i64, i64), Vec<u32>> = DetHashMap::with_capacity_and_hasher(
+        snap_targets.len(),
+        brepkit_math::det_hash::DetState::default(),
+    );
     for &(target_pos, gid) in &snap_targets {
         let cx = (target_pos.x() * inv_cell).round() as i64;
         let cy = (target_pos.y() * inv_cell).round() as i64;

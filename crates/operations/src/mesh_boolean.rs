@@ -9,10 +9,9 @@
 
 #![allow(clippy::tuple_array_conversions)]
 
-use std::collections::HashMap;
-
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::bvh::Bvh;
+use brepkit_math::det_hash::DetHashMap;
 use brepkit_math::predicates::orient3d;
 use brepkit_math::vec::{Point3, Vec3};
 
@@ -674,8 +673,8 @@ fn split_mesh_by_intersections(
     // Group intersection segments by triangle index. Track whether ANY of
     // a triangle's segments came from coplanar-triangle intersections —
     // those need special handling for the issue-#696 midpoint drop below.
-    let mut tri_segments: HashMap<usize, Vec<(Point3, Point3)>> = HashMap::new();
-    let mut tri_has_coplanar_segment: HashMap<usize, bool> = HashMap::new();
+    let mut tri_segments: DetHashMap<usize, Vec<(Point3, Point3)>> = DetHashMap::default();
+    let mut tri_has_coplanar_segment: DetHashMap<usize, bool> = DetHashMap::default();
     for isect in intersections {
         let tri_idx = if is_mesh_a { isect.tri_a } else { isect.tri_b };
         tri_segments
