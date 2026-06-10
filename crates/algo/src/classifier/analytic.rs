@@ -953,31 +953,45 @@ fn try_build_composite_classifier(topo: &Topology, solid: SolidId) -> Option<Ana
         }
     }
 
+    // A box model is only valid when the plane set actually IS a box:
+    // every plane axis-aligned with at most 2 distinct offsets per axis.
+    // Plane soups from solids with extra features (e.g. an oblique-walled
+    // hole cut through a cavity wall) previously collapsed into a garbage
+    // min/max box that confidently misclassified interior cavity points,
+    // poisoning every subsequent boolean on the solid.
     let build_box = |planes: &[(Vec3, f64)]| -> Option<AnalyticClassifier> {
         if planes.len() < 4 {
             return None;
         }
+        let axis_tol = 1e-9;
         let mut x_vals = Vec::new();
         let mut y_vals = Vec::new();
         let mut z_vals = Vec::new();
         for &(normal, d) in planes {
-            if normal.x().abs() > 0.5 {
+            if normal.x().abs() > 1.0 - axis_tol {
                 x_vals.push(d / normal.x());
-            } else if normal.y().abs() > 0.5 {
+            } else if normal.y().abs() > 1.0 - axis_tol {
                 y_vals.push(d / normal.y());
-            } else if normal.z().abs() > 0.5 {
+            } else if normal.z().abs() > 1.0 - axis_tol {
                 z_vals.push(d / normal.z());
+            } else {
+                // Oblique plane — this is not a box.
+                return None;
             }
         }
         if x_vals.is_empty() || y_vals.is_empty() || z_vals.is_empty() {
             return None;
         }
-        let sort = |v: &mut Vec<f64>| {
+        // Sort and dedup within tolerance; more than 2 distinct offsets on
+        // an axis means extra faces the box cannot represent.
+        let sort_dedup = |v: &mut Vec<f64>| -> bool {
             v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            v.dedup_by(|a, b| (*a - *b).abs() < tol.linear);
+            v.len() <= 2
         };
-        sort(&mut x_vals);
-        sort(&mut y_vals);
-        sort(&mut z_vals);
+        if !sort_dedup(&mut x_vals) || !sort_dedup(&mut y_vals) || !sort_dedup(&mut z_vals) {
+            return None;
+        }
         let x_min = *x_vals.first()?;
         let x_max = if x_vals.len() >= 2 {
             *x_vals.last()?

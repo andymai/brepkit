@@ -2252,66 +2252,58 @@ fn solid_inner_wire_count(topo: &Topology, solid: SolidId) -> Result<i64, crate:
 /// Genus-aware Euler balance for a closed orientable surface with holed faces.
 ///
 /// Euler-Poincare for a closed surface of genus `g`: `V - E + F - L = 2(1 - g)`,
-/// so the inner-wire surplus `euler - L` equals `2 - 2g` and is valid only when
-/// it is a non-negative even number no greater than 2: `2` for genus 0, `0` for
-/// genus 1 (e.g. a tunnel cut through a shelled box). A negative surplus would
-/// imply genus >= 2 (not produced by these booleans) or a miscounted shell, so
-/// it is rejected. Callers must pair this with a closed-manifold check — the
-/// relation only holds for closed surfaces.
+/// so the inner-wire surplus `euler - L` equals `2 - 2g` and is valid when it
+/// is an even number no greater than 2: `2` for genus 0, `0` for genus 1, and
+/// negative even values for genus >= 2 (e.g. a thin wall pierced by N
+/// through-holes has genus N). Odd or > 2 surpluses indicate a miscounted
+/// shell. Callers must pair this with a closed-manifold check — the relation
+/// only holds for closed surfaces.
 const fn euler_balanced(euler: i64, inner_wires: i64) -> bool {
     let surplus = euler - inner_wires;
-    #[allow(clippy::manual_range_contains)]
-    {
-        surplus >= 0 && surplus <= 2 && surplus % 2 == 0
-    }
+    surplus <= 2 && surplus % 2 == 0
 }
 
-/// Check whether a solid's outer shell is a closed manifold: every edge
+/// Count edge uses across ALL shells of a solid (outer + inner cavity
+/// shells). Hollow solids keep cavity faces in inner shells — an
+/// outer-shell-only walk silently misses their edges, letting open or
+/// non-manifold cavity shells pass the acceptance gates.
+fn solid_edge_use_counts(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<std::collections::HashMap<usize, usize>, crate::OperationsError> {
+    let mut counts: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for fid in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                *counts.entry(oe.edge().index()).or_insert(0) += 1;
+            }
+        }
+    }
+    Ok(counts)
+}
+
+/// Check whether a solid's boundary is a closed manifold: every edge
 /// is shared by exactly 2 faces. Returns `false` for open shells
 /// (boundary edges with count == 1) and non-manifold shells (count > 2).
 ///
 /// Stricter than [`brepkit_topology::validation::validate_shell_manifold`],
 /// which only rejects edges shared by *more* than two faces.
 fn is_closed_manifold(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
-    use std::collections::HashMap;
-
-    let s = topo.solid(solid)?;
-    let shell = topo.shell(s.outer_shell())?;
-    let mut counts: HashMap<usize, usize> = HashMap::new();
-    for &fid in shell.faces() {
-        let face = topo.face(fid)?;
-        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            let wire = topo.wire(wid)?;
-            for oe in wire.edges() {
-                *counts.entry(oe.edge().index()).or_insert(0) += 1;
-            }
-        }
-    }
+    let counts = solid_edge_use_counts(topo, solid)?;
     if counts.is_empty() {
         return Ok(false);
     }
     Ok(counts.values().all(|&c| c == 2))
 }
 
-/// Check whether a solid's outer shell has free edges: edges used by only
+/// Check whether a solid's boundary has free edges: edges used by only
 /// one wire occurrence. A free edge means the shell is open (e.g. a phantom
 /// membrane face left a circle edge unmatched), which is never a valid
 /// boolean result even when Euler accidentally balances.
 fn has_free_edges(topo: &Topology, solid: SolidId) -> Result<bool, crate::OperationsError> {
-    use std::collections::HashMap;
-
-    let s = topo.solid(solid)?;
-    let shell = topo.shell(s.outer_shell())?;
-    let mut counts: HashMap<usize, usize> = HashMap::new();
-    for &fid in shell.faces() {
-        let face = topo.face(fid)?;
-        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-            let wire = topo.wire(wid)?;
-            for oe in wire.edges() {
-                *counts.entry(oe.edge().index()).or_insert(0) += 1;
-            }
-        }
-    }
+    let counts = solid_edge_use_counts(topo, solid)?;
     Ok(counts.values().any(|&c| c == 1))
 }
 
