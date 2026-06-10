@@ -3111,8 +3111,11 @@ fn gfa_box_cone_intersect() {
 ///
 /// Root cause path: `boolean_with_options` → `both_complex=true` → skips analytic
 /// → `boolean_pipeline` → pipeline succeeds but produces non-manifold topology
-/// (adj_euler=4 instead of 2). `validate_boolean_result` doesn't reject it
-/// because topological validation is logged as warnings, not hard errors.
+/// (adj_euler=4 instead of 2). The strict `validate_boolean_result` gate now
+/// rejects this (non-manifold edges and unclosed wires are hard failures), so
+/// the GFA result is discarded and the operation falls back to the mesh
+/// boolean — which still does not produce the correct manifold fuse for this
+/// shelled-box + lip combination.
 ///
 /// The pipeline's parameter-space splitting doesn't handle the combination of:
 /// - Shelled solid (inner wires on boundary faces)
