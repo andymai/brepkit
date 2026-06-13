@@ -483,11 +483,13 @@ pub fn boolean(
                 // → free edges. Merge those coincident duplicates. Gated on the
                 // shell actually being open so clean results keep exact topology.
                 if has_free_edges(topo, result).unwrap_or(false) {
-                    let _ = unify_coincident_boundary_edges(
-                        topo,
-                        result,
-                        (tol.linear * 10.0).max(1e-6),
-                    );
+                    // Best-effort: an error here shouldn't abort the boolean,
+                    // but it's useful signal on an already-broken shell.
+                    if let Err(e) =
+                        unify_coincident_boundary_edges(topo, result, (tol.linear * 10.0).max(1e-6))
+                    {
+                        log::debug!("unify_coincident_boundary_edges failed: {e}");
+                    }
                 }
                 // Check Euler before unify_faces — if already valid, skip
                 // unify to avoid its face-merging bugs (non-manifold edges).
@@ -2742,17 +2744,24 @@ fn unify_coincident_boundary_edges(
             // Physical traversal start vertex (after canonicalization).
             let trav_start = if *fwd { cs } else { ce };
             if let Some(&(c_eid, c_start, _c_end)) = ecanon.get(&key) {
-                if c_eid != *eid {
-                    *changed = true;
-                }
+                // A duplicate of an already-seen edge → merge onto the keeper.
+                *changed = true;
                 out.push(OrientedEdge::new(c_eid, c_start == trav_start));
             } else {
-                let new_eid = topo.add_edge(Edge::with_tolerance(cs, ce, curve.clone(), *etol));
-                if new_eid != *eid {
+                // First edge with this key. Reuse the original edge when its
+                // endpoints didn't move; only allocate (and flag a change) when
+                // a vertex was snapped — so an already-clean shell is a no-op.
+                let (eid_use, e_start) = if cs == *start && ce == *end {
+                    (*eid, *start)
+                } else {
                     *changed = true;
-                }
-                ecanon.insert(key, (new_eid, cs, ce));
-                out.push(OrientedEdge::new(new_eid, cs == trav_start));
+                    (
+                        topo.add_edge(Edge::with_tolerance(cs, ce, curve.clone(), *etol)),
+                        cs,
+                    )
+                };
+                ecanon.insert(key, (eid_use, e_start, ce));
+                out.push(OrientedEdge::new(eid_use, e_start == trav_start));
             }
         }
         Ok(out)

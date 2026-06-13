@@ -326,10 +326,12 @@ pub fn perform(
 /// face (so surface-surface intersection curves can be restricted to the
 /// region inside both faces — the reference's "true boundary" restriction).
 enum FaceExtent {
-    /// Planar face: 2D boundary polygon in a plane frame (arc edges sampled).
+    /// Planar face: 2D outer boundary polygon in a plane frame (arc edges
+    /// sampled), plus any inner-wire (hole) polygons subtracted from it.
     Plane {
         frame: crate::builder::plane_frame::PlaneFrame,
         poly: Vec<brepkit_math::vec::Point2>,
+        holes: Vec<Vec<brepkit_math::vec::Point2>>,
         margin: f64,
     },
     /// Analytic lateral face (cylinder/cone/sphere/torus): bound by the
@@ -352,40 +354,54 @@ impl FaceExtent {
     ) -> Option<Self> {
         if let FaceSurface::Plane { normal, .. } = surface {
             let face = topo.face(face_id).ok()?;
-            let wire = topo.wire(face.outer_wire()).ok()?;
-            let first = wire.edges().first()?;
+            let outer = topo.wire(face.outer_wire()).ok()?;
+            let first = outer.edges().first()?;
             let origin = topo
                 .vertex(topo.edge(first.edge()).ok()?.start())
                 .ok()?
                 .point();
             let frame =
                 crate::builder::plane_frame::PlaneFrame::from_normal_and_point(*normal, origin);
-            let mut poly = Vec::new();
-            for oe in wire.edges() {
-                let edge = topo.edge(oe.edge()).ok()?;
-                let s3 = topo.vertex(edge.start()).ok()?.point();
-                let e3 = topo.vertex(edge.end()).ok()?.point();
-                let oriented_start = if oe.is_forward() { s3 } else { e3 };
-                match edge.curve() {
-                    EdgeCurve::Line => poly.push(frame.project(oriented_start)),
-                    curve => {
-                        let (t0, t1) = curve.domain_with_endpoints(s3, e3);
-                        for i in 0..16 {
-                            #[allow(clippy::cast_precision_loss)]
-                            let f = i as f64 / 16.0;
-                            let t = if oe.is_forward() {
-                                t0 + (t1 - t0) * f
-                            } else {
-                                t1 + (t0 - t1) * f
-                            };
-                            poly.push(frame.project(curve.evaluate_with_endpoints(t, s3, e3)));
+            // Project a wire's boundary into the plane frame, sampling each arc
+            // edge (endpoints included) so curved corners aren't chord-cut.
+            let wire_poly = |wid| -> Option<Vec<brepkit_math::vec::Point2>> {
+                let wire = topo.wire(wid).ok()?;
+                let mut poly = Vec::new();
+                for oe in wire.edges() {
+                    let edge = topo.edge(oe.edge()).ok()?;
+                    let s3 = topo.vertex(edge.start()).ok()?.point();
+                    let e3 = topo.vertex(edge.end()).ok()?.point();
+                    match edge.curve() {
+                        EdgeCurve::Line => {
+                            poly.push(frame.project(if oe.is_forward() { s3 } else { e3 }));
+                        }
+                        curve => {
+                            let (t0, t1) = curve.domain_with_endpoints(s3, e3);
+                            for i in 0..=16 {
+                                #[allow(clippy::cast_precision_loss)]
+                                let f = i as f64 / 16.0;
+                                let t = if oe.is_forward() {
+                                    t0 + (t1 - t0) * f
+                                } else {
+                                    t1 + (t0 - t1) * f
+                                };
+                                poly.push(frame.project(curve.evaluate_with_endpoints(t, s3, e3)));
+                            }
                         }
                     }
                 }
-            }
+                Some(poly)
+            };
+            let poly = wire_poly(face.outer_wire())?;
             if poly.len() < 3 {
                 return None;
             }
+            let holes: Vec<_> = face
+                .inner_wires()
+                .iter()
+                .filter_map(|&iw| wire_poly(iw))
+                .filter(|h| h.len() >= 3)
+                .collect();
             // Margin keeps boundary-coincident points (the shared cap) inside;
             // scaled to the footprint so it stays small vs the stray extent.
             let bb = brepkit_math::aabb::Aabb3::from_points(
@@ -396,6 +412,7 @@ impl FaceExtent {
             Some(Self::Plane {
                 frame,
                 poly,
+                holes,
                 margin: (diag * 0.01).max(tol.linear),
             })
         } else {
@@ -415,11 +432,21 @@ impl FaceExtent {
             Self::Plane {
                 frame,
                 poly,
+                holes,
                 margin,
             } => {
                 let uv = frame.project(p);
-                crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
-                    || point_to_polygon_dist(uv, poly) <= *margin
+                let in_outer = crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
+                    || point_to_polygon_dist(uv, poly) <= *margin;
+                if !in_outer {
+                    return false;
+                }
+                // A point strictly inside a hole (beyond the boundary margin)
+                // is not on the trimmed face.
+                !holes.iter().any(|h| {
+                    crate::builder::classify_2d::point_in_polygon_2d(uv, h)
+                        && point_to_polygon_dist(uv, h) > *margin
+                })
             }
             Self::Analytic {
                 surface,
@@ -457,12 +484,13 @@ fn point_to_polygon_dist(p: brepkit_math::vec::Point2, poly: &[brepkit_math::vec
 /// faces. `compute_raw_curves` works on the unbounded surfaces, so a
 /// plane-analytic or algebraic curve (e.g. a cylinder/tilted-plane ellipse)
 /// can reach far past the faces' shared region and slit the partner face's
-/// wire. A non-Line curve whose longest contiguous in-both sample run is under
-/// two samples only grazes the mutual extent at a tangency/point — it never
-/// splits either face, so it is dropped. Curves with a real in-both span are
-/// kept whole (the downstream splitter trims them to the boundary). Lines are
-/// left to the downstream `clip_line_to_face`. Conservative: if either face's
-/// extent cannot be built, the curves are returned unchanged.
+/// wire. A non-Line curve whose longest contiguous in-both run spans fewer than
+/// two sample segments (at most two consecutive in-both samples out of `N+1`)
+/// only grazes the mutual extent at a tangency/point — it never splits either
+/// face, so it is dropped. Curves with a real in-both span are kept whole (the
+/// downstream splitter trims them to the boundary). Lines are left to the
+/// downstream `clip_line_to_face`. Conservative: if either face's extent cannot
+/// be built, the curves are returned unchanged.
 #[allow(clippy::too_many_arguments, clippy::items_after_statements)]
 fn restrict_curves_to_faces(
     topo: &Topology,
@@ -519,10 +547,11 @@ fn restrict_curves_to_faces(
                 cur = None;
             }
         }
-        // A contiguous in-both run of <2 samples is a tangency/grazing point
-        // (or no presence at all) — such a curve never splits either face, so
-        // drop it. Curves with a real in-both span are kept whole (the
-        // downstream splitter trims them to the face boundary).
+        // An in-both run spanning fewer than two segments (b1-b0 < 2, i.e. at
+        // most two consecutive in-both samples) is a tangency/grazing point —
+        // such a curve never splits either face, so drop it. Curves with a real
+        // in-both span are kept whole (the downstream splitter trims them to the
+        // face boundary).
         if b1 - b0 < 2 {
             continue;
         }
