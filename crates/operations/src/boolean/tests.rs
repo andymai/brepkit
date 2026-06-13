@@ -1645,7 +1645,7 @@ fn compound_cut_matches_sequential_2x2_grid() {
     // #747: N>=2 tools must produce a CLOSED manifold solid (every shell, no free
     // edges), not just the right volume.
     assert!(
-        is_closed_manifold(&topo, result).unwrap(),
+        is_closed_manifold(&topo, result).expect("is_closed_manifold query failed"),
         "compound_cut result must be a closed manifold solid"
     );
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
@@ -1707,7 +1707,7 @@ fn compound_cut_matches_sequential_3x3_grid() {
     // #747: N>=2 tools must produce a CLOSED manifold solid (every shell, no free
     // edges), not just the right volume.
     assert!(
-        is_closed_manifold(&topo, result).unwrap(),
+        is_closed_manifold(&topo, result).expect("is_closed_manifold query failed"),
         "compound_cut result must be a closed manifold solid"
     );
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
@@ -1776,7 +1776,7 @@ fn compound_cut_matches_sequential_4x4_grid() {
     // #747: N>=2 tools must produce a CLOSED manifold solid (every shell, no free
     // edges), not just the right volume.
     assert!(
-        is_closed_manifold(&topo, result).unwrap(),
+        is_closed_manifold(&topo, result).expect("is_closed_manifold query failed"),
         "compound_cut result must be a closed manifold solid"
     );
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
@@ -1863,7 +1863,7 @@ fn compound_cut_shelled_target_many_tools() {
     // #747: shelled target + many tools must produce a CLOSED manifold solid,
     // including the inner cavity shell (outer-shell-only checks miss it).
     assert!(
-        is_closed_manifold(&topo, result).unwrap(),
+        is_closed_manifold(&topo, result).expect("is_closed_manifold query failed"),
         "compound_cut shelled result must be a closed manifold solid"
     );
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
@@ -1931,7 +1931,7 @@ fn compound_cut_shelled_target_9_tools() {
     // #747: shelled target + many tools must produce a CLOSED manifold solid,
     // including the inner cavity shell (outer-shell-only checks miss it).
     assert!(
-        is_closed_manifold(&topo, result).unwrap(),
+        is_closed_manifold(&topo, result).expect("is_closed_manifold query failed"),
         "compound_cut shelled result must be a closed manifold solid"
     );
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
@@ -3930,7 +3930,7 @@ fn fuse_stacked_rounded_rect_arc_prisms_same_footprint() {
         "fused volume {vol:.2} != expected {expected:.2}"
     );
     assert!(
-        is_closed_manifold(&topo, result).unwrap(),
+        is_closed_manifold(&topo, result).expect("is_closed_manifold query failed"),
         "fuse result must be closed-manifold"
     );
     assert!(!has_free_edges(&topo, result).unwrap());

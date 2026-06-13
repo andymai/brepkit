@@ -836,8 +836,8 @@ fn sample_solid_edges_boolean_filters_coplanar() {
     // `filtered < unfiltered` would still pass if the boolean output drifted to a
     // single removed seam, defeating the point of the test.
     assert_eq!(
-        all.offsets.len() - filtered.offsets.len(),
-        3,
+        filtered.offsets.len() + 3,
+        all.offsets.len(),
         "exactly 3 coplanar seams should be filtered: filtered={}, unfiltered={}",
         filtered.offsets.len(),
         all.offsets.len()
