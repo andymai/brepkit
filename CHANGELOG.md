@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.102.12](https://github.com/andymai/brepkit/compare/v2.102.11...v2.102.12) (2026-06-13)
+
+
+### Bug Fixes
+
+* **algo:** resolve d4 shelled-box + lip fuse (holed-face & section-arrangement splitting) ([#792](https://github.com/andymai/brepkit/issues/792)) ([3535f0b](https://github.com/andymai/brepkit/commit/3535f0bfdbfc9b899776b6ae90e553f4b73646ca))
+
 ## [2.102.11](https://github.com/andymai/brepkit/compare/v2.102.10...v2.102.11) (2026-06-13)
 
 
