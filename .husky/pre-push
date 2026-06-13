@@ -1,16 +1,9 @@
 #!/usr/bin/env bash
 
-# Full test suite + dependency audit before push
-echo "🔍 Running pre-push checks..."
-
-cargo test --workspace || {
-  echo "❌ Tests failed."
-  exit 1
-}
-
-cargo deny check 2>/dev/null || {
-  echo "⚠️  cargo-deny not installed, skipping license/advisory check."
-  echo "   Install with: cargo install cargo-deny"
-}
-
-echo "✅ Pre-push checks passed."
+# Validation is delegated to CI (.github/workflows/ci.yml): the `test` job
+# runs the full `cargo nextest run --workspace` plus doc tests, and `deny`,
+# `fmt`, `clippy`, `boundaries`, `audit`, `docs`, `machete`, and `taplo` run
+# alongside it — all gated by the `ci-pass` job. Re-running the whole suite
+# here just doubled the wait, so the push side relies on CI. Fast local
+# feedback still comes from the pre-commit hook (fmt + clippy + machete).
+echo "ℹ️  Pre-push: validation delegated to CI (.github/workflows/ci.yml)."

@@ -160,9 +160,10 @@ fn apply_sd_selection(
 
         if same_ori_needed == pair.same_orientation {
             // Orientations match what the operation needs:
-            // - Fuse + same-ori: keep A (representative) if on exterior, discard if internal
+            // - Fuse + same-ori: keep A (representative)
             // - Intersect + same-ori: keep A
-            // - Cut + opposite-ori: depends on A's classification
+            // - Cut + opposite-ori: keep A only when the faces merely touch
+            //   on the boundary; discard both when A overlaps B's interior
             if op == BooleanOp::Cut {
                 if is_touching {
                     // Touching: A's face is on the exterior — keep it
@@ -174,14 +175,11 @@ fn apply_sd_selection(
                 // Overlapping: both faces cancel — discard both
                 continue;
             }
-            // For Fuse/Intersect: if A is classified as Inside the opposing
-            // solid, this SD pair is an internal overlap (e.g., cylinder cap
-            // coincides with box face disc sub-face) — discard both faces.
-            if (op == BooleanOp::Fuse || op == BooleanOp::Intersect)
-                && sf_a.classification == FaceClass::Inside
-            {
-                continue;
-            }
+            // Fuse/Intersect with matching orientation: a same-oriented
+            // coincident pair always lies on the result's exterior (both
+            // solids' material is on the same side of the shared plane), so
+            // keep exactly one representative. Genuinely-internal coincident
+            // faces have OPPOSITE orientation and fall into the else-branch.
             selected.push(SelectedFace {
                 face_id: sf_a.face_id,
                 reversed: false,
