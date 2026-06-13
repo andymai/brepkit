@@ -3149,7 +3149,6 @@ fn gfa_box_cone_intersect() {
 /// - Lip solid (from boolean cut of nested boxes)
 /// - Fuse operation (merging coplanar boundary at z≈5)
 #[test]
-#[ignore = "known bug: non-manifold edge at shelled-box + socket fuse boundary"]
 fn d4_shelled_box_fuse_lip() {
     // Simplified D4: shell a box, build a lip (outer-inner cut), fuse
     let mut topo = Topology::default();

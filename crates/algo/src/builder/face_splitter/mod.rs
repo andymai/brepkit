@@ -348,6 +348,36 @@ pub fn split_face_2d(
         &filtered_sections
     };
 
+    // Deduplicate sections sharing endpoints: a face-face interference can be
+    // recorded more than once (e.g. the same wall reached via two adjacent
+    // tool faces). A duplicated dividing section makes the wire builder weave
+    // a zero-area slit instead of splitting the face, which reads as a spurious
+    // genus-1 handle in the assembled solid.
+    let deduped_sections: Vec<SectionEdge>;
+    let sections = {
+        let q = |p: Point3| -> (i64, i64, i64) {
+            (
+                (p.x() * 1e4).round() as i64,
+                (p.y() * 1e4).round() as i64,
+                (p.z() * 1e4).round() as i64,
+            )
+        };
+        let mut seen = std::collections::HashSet::new();
+        deduped_sections = sections
+            .iter()
+            .filter(|s| {
+                // Key on the endpoints plus a midpoint sample so two distinct
+                // arcs sharing endpoints (e.g. the two halves of a split
+                // circle) are not collapsed into one.
+                let (a, b) = (q(s.start), q(s.end));
+                let mid = q(evaluate_edge_at_t(&s.curve_3d, s.start, s.end, 0.5));
+                seen.insert((if a <= b { (a, b) } else { (b, a) }, mid))
+            })
+            .cloned()
+            .collect();
+        &deduped_sections[..]
+    };
+
     // If no section edges, the face is unsplit -- return as-is with original holes.
     if sections.is_empty() {
         return vec![SplitSubFace {
