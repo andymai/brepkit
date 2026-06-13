@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.102.11](https://github.com/andymai/brepkit/compare/v2.102.10...v2.102.11) (2026-06-13)
+
+
+### Bug Fixes
+
+* **algo:** keep coincident same-domain cap faces in fuse/intersect ([#790](https://github.com/andymai/brepkit/issues/790)) ([89f218c](https://github.com/andymai/brepkit/commit/89f218c65a4b5a9fccbef3a0ef23c4adccb66706))
+
 ## [2.102.10](https://github.com/andymai/brepkit/compare/v2.102.9...v2.102.10) (2026-06-10)
 
 
