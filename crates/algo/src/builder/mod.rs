@@ -228,26 +228,20 @@ impl Builder {
 
         for (idx, sf) in self.sub_faces.iter_mut().enumerate() {
             if !sd_indices.is_empty() && sd_indices.contains(&idx) {
-                // Most SD faces stay "On" — ray-cast is unstable for
-                // coplanar boundary points. Exception: faces from internal
-                // circle loops (disc sub-faces from split_face_with_internal_loops)
-                // have offset interior points that classify reliably.
-                let is_disc_face = self
-                    .topo
-                    .face(sf.face_id)
-                    .ok()
-                    .and_then(|f| self.topo.wire(f.outer_wire()).ok())
-                    .is_some_and(|w| {
-                        w.edges().len() == 1
-                            && self.topo.edge(w.edges()[0].edge()).is_ok_and(|e| {
-                                !matches!(e.curve(), brepkit_topology::edge::EdgeCurve::Line)
-                            })
-                    });
-                if !is_disc_face {
-                    sf.classification = FaceClass::On;
-                    continue;
-                }
-                // Disc face — classify via ray-cast with offset interior point.
+                // Same-domain faces are coincident by construction; the
+                // ray-cast classifier is unstable at a coplanar boundary
+                // (the interior sample sits on the opposing solid's face).
+                // Force them "On" so `apply_sd_selection` keeps exactly one
+                // representative per cross-rank pair. This includes disc
+                // sub-faces (single closed-curve loops): when a disc is part
+                // of an SD pair it is a flush, coincident cap on the result's
+                // exterior — ray-casting it offsets the sample into the
+                // opposing solid and wrongly drops the pair, leaving a hole in
+                // the coincident face (e.g. a cylinder resting flush on a box
+                // floor). Within-rank duplicates are dropped by `select_faces`
+                // regardless of classification, so "On" is safe for them too.
+                sf.classification = FaceClass::On;
+                continue;
             }
 
             // Determine the opposing solid
