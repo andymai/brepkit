@@ -956,11 +956,28 @@ pub(super) fn try_split_crossing_plane_face(
             }
             d.y().mul_add(d1.z(), -(d.z() * d1.y())) / det
         };
-        if !(0.01..=0.99).contains(&t0) {
+        cross_3d = s0.start + d0 * t0;
+        let t1 = (cross_3d - s1.start).dot(d1) / d1.dot(d1);
+        // The infinite lines must meet within both segments (endpoints allowed).
+        if !(-0.01..=1.01).contains(&t0) || !(-0.01..=1.01).contains(&t1) {
             return None;
         }
-        cross_3d = s0.start + d0 * t0;
-        section_endpoints = vec![s0.start, s0.end, s1.start, s1.end];
+        let mid = |t: f64| (0.01..=0.99).contains(&t);
+        section_endpoints = if mid(t0) && mid(t1) {
+            // X-crossing: both sections split mid-way → 4 regions.
+            vec![s0.start, s0.end, s1.start, s1.end]
+        } else if mid(t1) {
+            // T-junction: s0's endpoint lands mid-way on s1 → 3 regions.
+            // `cross_3d` is that endpoint; keep s0's far end + s1's two ends.
+            let s0_far = if t0 < 0.5 { s0.end } else { s0.start };
+            vec![s0_far, s1.start, s1.end]
+        } else if mid(t0) {
+            let s1_far = if t1 < 0.5 { s1.end } else { s1.start };
+            vec![s1_far, s0.start, s0.end]
+        } else {
+            // L-junction (shared endpoint) or no interior crossing — no split.
+            return None;
+        };
     } else if sections.len() == 4 {
         let all_pts: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
         let mut common = None;
@@ -1057,7 +1074,7 @@ pub(super) fn try_split_crossing_plane_face(
     }
     section_indices.sort_unstable();
     section_indices.dedup();
-    if section_indices.len() != 4 {
+    if section_indices.len() != section_endpoints.len() || section_indices.len() < 3 {
         return None;
     }
 
@@ -1093,10 +1110,11 @@ pub(super) fn try_split_crossing_plane_face(
         }
     };
 
+    let n_regions = section_indices.len();
     let mut result = Vec::new();
-    for qi in 0..4 {
+    for qi in 0..n_regions {
         let arc_start = section_indices[qi];
-        let arc_end = section_indices[(qi + 1) % 4];
+        let arc_end = section_indices[(qi + 1) % n_regions];
         let mut wire = Vec::new();
         let mut idx = arc_start;
         loop {
