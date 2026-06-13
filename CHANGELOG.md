@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.102.13](https://github.com/andymai/brepkit/compare/v2.102.12...v2.102.13) (2026-06-13)
+
+
+### Bug Fixes
+
+* **boolean:** restrict analytic FF curves + merge coincident junction edges ([#795](https://github.com/andymai/brepkit/issues/795)) ([b52fa56](https://github.com/andymai/brepkit/commit/b52fa56140ab2c18f675e64cf2c43b82ade09102))
+
 ## [2.102.12](https://github.com/andymai/brepkit/compare/v2.102.11...v2.102.12) (2026-06-13)
 
 
