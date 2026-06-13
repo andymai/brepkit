@@ -548,16 +548,19 @@ pub fn split_face_2d(
         }
     }
 
-    // Fallback: wire builder produced only 1 loop despite having 2+ section
-    // edges that cross in the face interior. Use direct geometric quadrant
-    // construction. The wire builder struggles with 4-way junctions when
-    // boundary edges have inconsistent winding.
-    if loops.len() <= 1 && sections.len() >= 2 && is_plane {
+    // Geometric crossing/T-junction split. The wire builder under-partitions
+    // a plane face whose two sections cross (X, 4 regions) or meet in a T (one
+    // section's endpoint mid-way on the other, 3 regions): it merges everything
+    // into one loop, or splits on only one section. Prefer the direct geometric
+    // construction whenever it yields more regions than the wire builder did.
+    if sections.len() >= 2 && is_plane {
         if let Some(ref boundary) = boundary_edges_backup {
             if let Some(result) = try_split_crossing_plane_face(
                 &surface, boundary, sections, rank, reversed, face_id, frame, tol,
             ) {
-                return result;
+                if result.len() > loops.len() {
+                    return result;
+                }
             }
         }
     }
