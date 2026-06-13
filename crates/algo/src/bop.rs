@@ -162,7 +162,8 @@ fn apply_sd_selection(
             // Orientations match what the operation needs:
             // - Fuse + same-ori: keep A (representative)
             // - Intersect + same-ori: keep A
-            // - Cut + opposite-ori: depends on A's classification
+            // - Cut + opposite-ori: keep A only when the faces merely touch
+            //   on the boundary; discard both when A overlaps B's interior
             if op == BooleanOp::Cut {
                 if is_touching {
                     // Touching: A's face is on the exterior — keep it
