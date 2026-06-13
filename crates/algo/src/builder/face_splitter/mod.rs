@@ -40,6 +40,193 @@ use special_cases::{
 /// section edge when testing whether it lies entirely inside an existing hole.
 const HOLE_PROBE_SAMPLES: usize = 8;
 
+/// Parameter `t` in `(0,1)` along segment `a0->a1` where it crosses segment
+/// `b0->b1` in 2D, for a crossing strictly interior to `a` and within (or at
+/// the ends of) `b`. `None` if parallel or out of range.
+fn seg_cross_param(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<f64> {
+    let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
+    let (sx, sy) = (b1.x() - b0.x(), b1.y() - b0.y());
+    let denom = rx.mul_add(sy, -(ry * sx));
+    if denom.abs() < 1e-12 {
+        return None;
+    }
+    let (qx, qy) = (b0.x() - a0.x(), b0.y() - a0.y());
+    let t = qx.mul_add(sy, -(qy * sx)) / denom;
+    let u = qx.mul_add(ry, -(qy * rx)) / denom;
+    (t > 1e-6 && t < 1.0 - 1e-6 && u > -1e-6 && u < 1.0 + 1e-6).then_some(t)
+}
+
+/// Weave hole boundaries into the section arrangement of a planar face.
+///
+/// When a holed planar face is cut by sections (e.g. a shelled box top with a
+/// cavity opening, fused with a lip whose walls cross that opening), the
+/// section runs partly through the cavity. Splitting only the outer boundary
+/// leaves the hole un-split, so a sub-face ends up as a square carrying the
+/// whole over-sized cavity hole instead of the true L-shaped rim. Trim each
+/// section at the points where it crosses a hole edge — dropping the
+/// sub-segment that lies inside the hole — and split the hole edges at those
+/// crossings. The wire builder then traces the real material region.
+///
+/// Returns the section + hole edges to append to the boundary, or `None` to
+/// fall back to the attach-whole-hole path (curved holes/sections, or no
+/// crossing — nothing to integrate).
+fn integrate_holes_plane(
+    sections: &[SectionEdge],
+    inner_wires: &[Vec<OrientedPCurveEdge>],
+    frame: &PlaneFrame,
+    base_src: usize,
+) -> Option<Vec<OrientedPCurveEdge>> {
+    // All-Line geometry only.
+    let line = |e: &OrientedPCurveEdge| matches!(e.curve_3d, EdgeCurve::Line);
+    if inner_wires.iter().flatten().any(|e| !line(e))
+        || sections
+            .iter()
+            .any(|s| !matches!(s.curve_3d, EdgeCurve::Line))
+    {
+        return None;
+    }
+
+    let hole_polys: Vec<Vec<Point2>> = inner_wires
+        .iter()
+        .map(|w| w.iter().map(|e| frame.project(e.start_3d)).collect())
+        .collect();
+    let hole_segs: Vec<(Point2, Point2, Point3, Point3)> = inner_wires
+        .iter()
+        .flatten()
+        .map(|e| {
+            (
+                frame.project(e.start_3d),
+                frame.project(e.end_3d),
+                e.start_3d,
+                e.end_3d,
+            )
+        })
+        .collect();
+
+    let mk_line =
+        |s_uv: Point2, e_uv: Point2, s3: Point3, e3: Point3, fwd: bool, src: Option<usize>| {
+            use brepkit_math::curves2d::{Curve2D, Line2D};
+            use brepkit_math::vec::Vec2;
+            let d = Vec2::new(e_uv.x() - s_uv.x(), e_uv.y() - s_uv.y());
+            let len = (d.x() * d.x() + d.y() * d.y()).sqrt();
+            let dir = if len > 1e-12 {
+                Vec2::new(d.x() / len, d.y() / len)
+            } else {
+                Vec2::new(1.0, 0.0)
+            };
+            let pcurve = Curve2D::Line(
+                Line2D::new(s_uv, dir)
+                    .or_else(|_| Line2D::new(s_uv, Vec2::new(1.0, 0.0)))
+                    .ok()?,
+            );
+            Some(OrientedPCurveEdge {
+                curve_3d: EdgeCurve::Line,
+                pcurve,
+                start_uv: s_uv,
+                end_uv: e_uv,
+                start_3d: s3,
+                end_3d: e3,
+                forward: fwd,
+                source_edge_idx: src,
+                pave_block_id: None,
+            })
+        };
+
+    let mut out: Vec<OrientedPCurveEdge> = Vec::new();
+    let mut any_crossing = false;
+    let mut next_src = base_src;
+
+    // Sections: split at hole crossings, drop the in-hole sub-segments.
+    for s in sections {
+        let s0 = frame.project(s.start);
+        let s1 = frame.project(s.end);
+        let mut ts: Vec<f64> = vec![0.0, 1.0];
+        for (b0, b1, _, _) in &hole_segs {
+            if let Some(t) = seg_cross_param(s0, s1, *b0, *b1) {
+                ts.push(t);
+                any_crossing = true;
+            }
+        }
+        ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        ts.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        for w in ts.windows(2) {
+            let (ta, tb) = (w[0], w[1]);
+            let tm = 0.5 * (ta + tb);
+            let mid = Point2::new(
+                s0.x() + (s1.x() - s0.x()) * tm,
+                s0.y() + (s1.y() - s0.y()) * tm,
+            );
+            if hole_polys
+                .iter()
+                .any(|poly| super::classify_2d::point_in_polygon_2d(mid, poly))
+            {
+                continue; // sub-segment runs through the cavity — not material
+            }
+            let lerp2 = |t: f64| {
+                Point2::new(
+                    s0.x() + (s1.x() - s0.x()) * t,
+                    s0.y() + (s1.y() - s0.y()) * t,
+                )
+            };
+            let lerp3 = |t: f64| {
+                Point3::new(
+                    s.start.x() + (s.end.x() - s.start.x()) * t,
+                    s.start.y() + (s.end.y() - s.start.y()) * t,
+                    s.start.z() + (s.end.z() - s.start.z()) * t,
+                )
+            };
+            let src = next_src;
+            next_src += 1;
+            let (ua, ub, pa, pb) = (lerp2(ta), lerp2(tb), lerp3(ta), lerp3(tb));
+            out.push(mk_line(ua, ub, pa, pb, true, Some(src))?);
+            out.push(mk_line(ub, ua, pb, pa, false, Some(src))?);
+        }
+    }
+
+    // Hole edges: split at section crossings, keep their stored orientation.
+    let sec_uv: Vec<(Point2, Point2)> = sections
+        .iter()
+        .map(|s| (frame.project(s.start), frame.project(s.end)))
+        .collect();
+    for (h0, h1, p0, p1) in &hole_segs {
+        let mut ts: Vec<f64> = vec![0.0, 1.0];
+        for (a0, a1) in &sec_uv {
+            if let Some(t) = seg_cross_param(*h0, *h1, *a0, *a1) {
+                ts.push(t);
+                any_crossing = true;
+            }
+        }
+        ts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        ts.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+        for w in ts.windows(2) {
+            let (ta, tb) = (w[0], w[1]);
+            let lerp2 = |t: f64| {
+                Point2::new(
+                    h0.x() + (h1.x() - h0.x()) * t,
+                    h0.y() + (h1.y() - h0.y()) * t,
+                )
+            };
+            let lerp3 = |t: f64| {
+                Point3::new(
+                    p0.x() + (p1.x() - p0.x()) * t,
+                    p0.y() + (p1.y() - p0.y()) * t,
+                    p0.z() + (p1.z() - p0.z()) * t,
+                )
+            };
+            out.push(mk_line(
+                lerp2(ta),
+                lerp2(tb),
+                lerp3(ta),
+                lerp3(tb),
+                true,
+                None,
+            )?);
+        }
+    }
+
+    any_crossing.then_some(out)
+}
+
 /// Split a face by its section edges, producing sub-faces.
 ///
 /// If there are no section edges, returns a single sub-face covering
@@ -369,7 +556,23 @@ pub fn split_face_2d(
     // Convert section edges to OrientedPCurveEdge (both orientations).
     let mut all_edges = boundary_edges;
     let n_boundary_edges = all_edges.len();
+
+    // Holed planar face cut by sections: weave the hole boundaries into the
+    // arrangement (trim sections at hole crossings, split hole edges) so the
+    // wire builder traces the true material region. When this applies, the
+    // original holes are consumed here and not attached whole below.
+    let holes_integrated = if is_plane && !original_inner_wires.is_empty() {
+        integrate_holes_plane(sections, &original_inner_wires, frame, 1_000_000)
+            .map(|extra| all_edges.extend(extra))
+            .is_some()
+    } else {
+        false
+    };
+
     for section in sections {
+        if holes_integrated {
+            break;
+        }
         // Skip full-circle section edges on plane faces -- they have
         // start approx end in 3D and would produce degenerate UV edges.
         // The half-arc section edges handle the plane face correctly.
@@ -553,7 +756,7 @@ pub fn split_face_2d(
     // section's endpoint mid-way on the other, 3 regions): it merges everything
     // into one loop, or splits on only one section. Prefer the direct geometric
     // construction whenever it yields more regions than the wire builder did.
-    if sections.len() >= 2 && is_plane {
+    if sections.len() >= 2 && is_plane && !holes_integrated {
         if let Some(ref boundary) = boundary_edges_backup {
             if let Some(result) = try_split_crossing_plane_face(
                 &surface, boundary, sections, rank, reversed, face_id, frame, tol,
@@ -692,7 +895,7 @@ pub fn split_face_2d(
     // sub-faces, etc. — fall back to the largest-area sub-face. A warning
     // fires for the fallback so the case stays visible; what we never do is
     // silently drop the hole as the earlier code did.
-    if !original_inner_wires.is_empty() {
+    if !original_inner_wires.is_empty() && !holes_integrated {
         let largest_sub_face_idx = |sub_faces: &[SplitSubFace]| -> Option<usize> {
             sub_faces
                 .iter()
