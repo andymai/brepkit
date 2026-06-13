@@ -1642,8 +1642,12 @@ fn compound_cut_matches_sequential_2x2_grid() {
 
     // Compound cut.
     let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
-    // #747: N>=2 tools must produce a manifold solid, not just the right volume.
-    check_result(&topo, result);
+    // #747: N>=2 tools must produce a CLOSED manifold solid (every shell, no free
+    // edges), not just the right volume.
+    assert!(
+        is_closed_manifold(&topo, result).unwrap(),
+        "compound_cut result must be a closed manifold solid"
+    );
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
     // 4x4x2 box minus four full-height r=0.3 cylinders.
@@ -1700,8 +1704,12 @@ fn compound_cut_matches_sequential_3x3_grid() {
 
     // Compound cut.
     let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
-    // #747: N>=2 tools must produce a manifold solid, not just the right volume.
-    check_result(&topo, result);
+    // #747: N>=2 tools must produce a CLOSED manifold solid (every shell, no free
+    // edges), not just the right volume.
+    assert!(
+        is_closed_manifold(&topo, result).unwrap(),
+        "compound_cut result must be a closed manifold solid"
+    );
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
     // 10x10x2 box minus nine full-height r=0.5 cylinders.
@@ -1765,8 +1773,12 @@ fn compound_cut_matches_sequential_4x4_grid() {
 
     // Compound cut.
     let result = compound_cut(&mut topo, target, &tools, BooleanOptions::default()).unwrap();
-    // #747: N>=2 tools must produce a manifold solid, not just the right volume.
-    check_result(&topo, result);
+    // #747: N>=2 tools must produce a CLOSED manifold solid (every shell, no free
+    // edges), not just the right volume.
+    assert!(
+        is_closed_manifold(&topo, result).unwrap(),
+        "compound_cut result must be a closed manifold solid"
+    );
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
     // 20x20x2 box minus sixteen full-height r=0.5 cylinders.
@@ -1848,8 +1860,12 @@ fn compound_cut_shelled_target_many_tools() {
     let t0 = std::time::Instant::now();
     let result = compound_cut(&mut topo, target, &tools, opts).unwrap();
     let dt_compound = t0.elapsed();
-    // #747: shelled target + many tools must produce a manifold solid.
-    check_result(&topo, result);
+    // #747: shelled target + many tools must produce a CLOSED manifold solid,
+    // including the inner cavity shell (outer-shell-only checks miss it).
+    assert!(
+        is_closed_manifold(&topo, result).unwrap(),
+        "compound_cut shelled result must be a closed manifold solid"
+    );
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
     let rel = (compound_vol - seq_vol).abs() / seq_vol;
@@ -1912,8 +1928,12 @@ fn compound_cut_shelled_target_9_tools() {
 
     // Compound.
     let result = compound_cut(&mut topo, target, &tools, opts).unwrap();
-    // #747: shelled target + many tools must produce a manifold solid.
-    check_result(&topo, result);
+    // #747: shelled target + many tools must produce a CLOSED manifold solid,
+    // including the inner cavity shell (outer-shell-only checks miss it).
+    assert!(
+        is_closed_manifold(&topo, result).unwrap(),
+        "compound_cut shelled result must be a closed manifold solid"
+    );
     let compound_vol = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
 
     // Lower-bound guard: with the relaxed `rel < 2.0` bound below, a true

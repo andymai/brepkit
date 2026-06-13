@@ -807,9 +807,10 @@ fn sample_solid_edges_cylinder() {
 fn sample_solid_edges_boolean_filters_coplanar() {
     // Fuse two boxes flush along x=10 with the second narrower in y (0..6 vs 0..10).
     // The shared x=10 strip (y 0..6) becomes internal, but the top (z=10), bottom
-    // (z=0), and back (y=0) faces of the two boxes stay as coplanar adjacent
-    // fragments when unify_faces is off. The seams between those same-plane
-    // fragments are exactly the smooth edges sample_solid_edges should drop.
+    // (z=0), and front (y=0) faces of the two boxes stay as coplanar adjacent
+    // fragments when unify_faces is off (make_box puts y=0 at the front). The seams
+    // between those three same-plane fragment pairs are exactly the smooth edges
+    // sample_solid_edges should drop.
     use brepkit_math::mat::Mat4;
     let mut topo = Topology::new();
     let a = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
@@ -831,9 +832,13 @@ fn sample_solid_edges_boolean_filters_coplanar() {
     let filtered = sample_solid_edges(&topo, fused, 0.1).unwrap();
     let all = sample_solid_edges_filtered(&topo, fused, 0.1, false).unwrap();
 
-    assert!(
-        filtered.offsets.len() < all.offsets.len(),
-        "coplanar seams should be filtered: filtered ({}) should be fewer than unfiltered ({})",
+    // Exactly the three coplanar seams (top, bottom, front) must be dropped — a bare
+    // `filtered < unfiltered` would still pass if the boolean output drifted to a
+    // single removed seam, defeating the point of the test.
+    assert_eq!(
+        all.offsets.len() - filtered.offsets.len(),
+        3,
+        "exactly 3 coplanar seams should be filtered: filtered={}, unfiltered={}",
         filtered.offsets.len(),
         all.offsets.len()
     );
