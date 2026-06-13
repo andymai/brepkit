@@ -1571,26 +1571,20 @@ fn gridfinity_d4_full_1x1_bin() {
     // is unreliable here — it lands on the base face, not the top.
     let faces = k.get_solid_faces(box_solid).unwrap();
     assert!(!faces.is_empty(), "box should have faces");
-    let top_face = {
-        use brepkit_topology::face::FaceSurface;
-        faces
-            .iter()
-            .copied()
-            .find(|&fh| {
-                k.resolve_face(fh)
-                    .ok()
-                    .and_then(|fid| k.topo.face(fid).ok())
-                    .and_then(|f| match f.surface() {
-                        FaceSurface::Plane { normal, .. } => {
-                            let n = if f.is_reversed() { -*normal } else { *normal };
-                            Some(n.z() > 0.5)
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or(false)
-            })
-            .expect("extruded box should have a +Z top face")
-    };
+    let top_face = faces
+        .iter()
+        .copied()
+        .find(|&fh| {
+            k.resolve_face(fh)
+                .ok()
+                .and_then(|fid| k.topo.face(fid).ok())
+                .and_then(brepkit_topology::face::Face::effective_plane_normal)
+                // Top face points predominantly +Z. Compare against the
+                // normal's own magnitude rather than assuming unit length,
+                // since `FaceSurface::Plane` normals are not normalized.
+                .is_some_and(|n| n.z() > 0.5 * n.length())
+        })
+        .expect("extruded box should have a +Z top face");
     let r3 = k.execute_batch(&format!(
         r#"[{{"op": "shell", "args": {{"solid": {box_solid}, "thickness": {WALL_THICKNESS}, "faces": [{top_face}]}}}}]"#
     ));
