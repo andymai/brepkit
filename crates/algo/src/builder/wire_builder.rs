@@ -212,6 +212,80 @@ pub fn build_wire_loops_with_winding(
     loops
 }
 
+/// Drop pendant section edges before loop building.
+///
+/// Mirrors the reference kernel's "shapes to avoid" pass: a section edge that
+/// fails to connect two parts of the face boundary dangles into the interior.
+/// Left in, the angular traversal is forced to walk out and back along it,
+/// producing a zero-area spur and over-splitting the face into spurious
+/// coplanar pieces.
+///
+/// A vertex is a free end if every alive edge touching it belongs to the same
+/// section (same `source_edge_idx`). Each section appears as a forward+reverse
+/// pair, so a genuine free end carries exactly that pair and nothing else.
+/// Boundary edges (`source_edge_idx == None`) never dangle — the outer wire is
+/// closed — so they anchor their vertices and are never removed. Peeling is
+/// iterative: removing one pendant can expose the next along a chain.
+pub fn remove_pendant_sections(
+    edges: &[OrientedPCurveEdge],
+    tol: f64,
+    u_periodic: bool,
+    v_periodic: bool,
+) -> Vec<OrientedPCurveEdge> {
+    let u_period = if u_periodic { Some(TAU) } else { None };
+    let v_period = if v_periodic { Some(TAU) } else { None };
+    let mut alive = vec![true; edges.len()];
+
+    loop {
+        let mut vmap: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+        for (i, e) in edges.iter().enumerate() {
+            if !alive[i] {
+                continue;
+            }
+            let sk = quantize_uv_periodic(e.start_uv, tol, u_period, v_period);
+            let ek = quantize_uv_periodic(e.end_uv, tol, u_period, v_period);
+            vmap.entry(sk).or_default().push(i);
+            if ek != sk {
+                vmap.entry(ek).or_default().push(i);
+            }
+        }
+
+        let mut pendant_src: Option<usize> = None;
+        for incident in vmap.values() {
+            let mut srcs = incident.iter().map(|&i| edges[i].source_edge_idx);
+            let first = srcs.next().flatten();
+            if let Some(src) = first {
+                if incident
+                    .iter()
+                    .all(|&i| edges[i].source_edge_idx == Some(src))
+                {
+                    pendant_src = Some(src);
+                    break;
+                }
+            }
+        }
+
+        match pendant_src {
+            Some(src) => {
+                for (i, e) in edges.iter().enumerate() {
+                    if e.source_edge_idx == Some(src) {
+                        alive[i] = false;
+                    }
+                }
+            }
+            None => break,
+        }
+    }
+
+    let mut kept = Vec::with_capacity(edges.len());
+    for (i, e) in edges.iter().enumerate() {
+        if alive[i] {
+            kept.push(e.clone());
+        }
+    }
+    kept
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -397,6 +471,68 @@ mod tests {
             source_edge_idx: None,
             pave_block_id: None,
         }
+    }
+
+    fn make_section_edge(start: Point2, end: Point2, src: usize) -> OrientedPCurveEdge {
+        let mut e = make_line_edge(start, end);
+        e.source_edge_idx = Some(src);
+        e
+    }
+
+    #[test]
+    fn remove_pendant_sections_drops_dangling_keeps_dividing() {
+        // Square boundary, bottom + top split at x=5 so a divider lands on
+        // existing vertices.
+        let mut edges = vec![
+            make_line_edge(Point2::new(0.0, 0.0), Point2::new(5.0, 0.0)),
+            make_line_edge(Point2::new(5.0, 0.0), Point2::new(10.0, 0.0)),
+            make_line_edge(Point2::new(10.0, 0.0), Point2::new(10.0, 10.0)),
+            make_line_edge(Point2::new(10.0, 10.0), Point2::new(5.0, 10.0)),
+            make_line_edge(Point2::new(5.0, 10.0), Point2::new(0.0, 10.0)),
+            make_line_edge(Point2::new(0.0, 10.0), Point2::new(0.0, 0.0)),
+        ];
+        let n_boundary = edges.len();
+        // Dividing section (both ends on the boundary) — kept.
+        edges.push(make_section_edge(
+            Point2::new(5.0, 0.0),
+            Point2::new(5.0, 10.0),
+            100,
+        ));
+        edges.push(make_section_edge(
+            Point2::new(5.0, 10.0),
+            Point2::new(5.0, 0.0),
+            100,
+        ));
+        // Pendant section (free end at (7,5) inside the face) — removed.
+        edges.push(make_section_edge(
+            Point2::new(5.0, 0.0),
+            Point2::new(7.0, 5.0),
+            200,
+        ));
+        edges.push(make_section_edge(
+            Point2::new(7.0, 5.0),
+            Point2::new(5.0, 0.0),
+            200,
+        ));
+
+        let kept = remove_pendant_sections(&edges, 1e-7, false, false);
+
+        assert_eq!(
+            kept.len(),
+            n_boundary + 2,
+            "pendant pair removed, dividing pair kept"
+        );
+        assert!(
+            kept.iter().all(|e| e.source_edge_idx != Some(200)),
+            "pendant section must be dropped"
+        );
+        assert_eq!(
+            kept.iter()
+                .filter(|e| e.source_edge_idx == Some(100))
+                .count(),
+            2,
+            "dividing section must survive"
+        );
     }
 
     #[test]

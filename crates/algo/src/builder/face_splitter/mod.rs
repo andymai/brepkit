@@ -517,6 +517,14 @@ pub fn split_face_2d(
         }
     }
 
+    // Drop pendant section edges that dangle into the face interior — left
+    // in, the traversal walks out and back along them, spuriously
+    // over-splitting the face (boundary edges are never removed, so the
+    // boundary prefix and `n_boundary_edges` stay valid).
+    let all_edges = super::wire_builder::remove_pendant_sections(
+        &all_edges, tol.linear, u_periodic, v_periodic,
+    );
+
     // Build wire loops via angular-sorting traversal.
     let mut loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
 
