@@ -1550,13 +1550,8 @@ fn gridfinity_d5_box_with_filleted_lip() {
 ///
 /// Builds the complete bin pipeline matching gridfinity-layout-tool's
 /// `generateBin()` for a 1×1 standard bin with stacking lip.
-/// Expected: Euler=2, faces < 200, volume ±5% of analytical.
-///
-/// Known failure: fuse step produces non-manifold topology (adjusted_euler=-13).
-/// The fuse issue is independent of fillet inner wire support — needs
-/// separate investigation of the boolean fuse path.
+/// Expected: genus-0 manifold (adjusted Euler == 2), faces < 200, volume.
 #[test]
-#[ignore = "D4 fuse produces non-manifold topology — separate investigation needed"]
 fn gridfinity_d4_full_1x1_bin() {
     let mut k = BrepKernel::new();
 
@@ -1570,11 +1565,26 @@ fn gridfinity_d4_full_1x1_bin() {
     assert_ok(&p1, 0);
     let box_solid = p1[0]["ok"].as_u64().unwrap() as u32;
 
-    // Step 2: Shell the box (remove top face)
+    // Step 2: Shell the box (remove top face).
+    // Select the top face by its outward normal (+Z). A rounded-rect extrude
+    // interleaves cylindrical corner faces, so positional indexing (faces[1])
+    // is unreliable here — it lands on the base face, not the top.
     let faces = k.get_solid_faces(box_solid).unwrap();
     assert!(!faces.is_empty(), "box should have faces");
-    // Top face is typically face[1] for extrude-based solids
-    let top_face = faces[1];
+    let top_face = faces
+        .iter()
+        .copied()
+        .find(|&fh| {
+            k.resolve_face(fh)
+                .ok()
+                .and_then(|fid| k.topo.face(fid).ok())
+                .and_then(brepkit_topology::face::Face::effective_plane_normal)
+                // Top face points predominantly +Z. Compare against the
+                // normal's own magnitude rather than assuming unit length,
+                // since `FaceSurface::Plane` normals are not normalized.
+                .is_some_and(|n| n.z() > 0.5 * n.length())
+        })
+        .expect("extruded box should have a +Z top face");
     let r3 = k.execute_batch(&format!(
         r#"[{{"op": "shell", "args": {{"solid": {box_solid}, "thickness": {WALL_THICKNESS}, "faces": [{top_face}]}}}}]"#
     ));
