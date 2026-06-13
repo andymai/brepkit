@@ -478,6 +478,17 @@ pub fn boolean(
             }
             if result_faces > 0 {
                 let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+                // A coincident-junction fuse can leave duplicate junction-wire
+                // edges (one per argument) that differ by sub-micron loft noise
+                // → free edges. Merge those coincident duplicates. Gated on the
+                // shell actually being open so clean results keep exact topology.
+                if has_free_edges(topo, result).unwrap_or(false) {
+                    let _ = unify_coincident_boundary_edges(
+                        topo,
+                        result,
+                        (tol.linear * 10.0).max(1e-6),
+                    );
+                }
                 // Check Euler before unify_faces — if already valid, skip
                 // unify to avoid its face-merging bugs (non-manifold edges).
                 let (f_pre, e_pre, v_pre) =
@@ -2574,6 +2585,210 @@ fn merge_result_vertices(
     solid_mut.set_outer_shell(new_shell_id);
 
     Ok(())
+}
+
+/// Merge geometrically-coincident duplicate boundary edges on the outer shell.
+///
+/// A coincident-junction fuse (e.g. a box stacked on a tapered loft that share
+/// a cap face) annihilates the shared cap but leaves each argument's faces
+/// carrying their OWN copy of the junction-wire edges. Because the two copies
+/// come from independently-built solids their endpoints differ by sub-micron
+/// numerical noise (loft re-parameterization), so the tight-tolerance vertex
+/// merge above leaves them as distinct edges — each used once → free edges that
+/// open the shell.
+///
+/// This snaps vertices at `tol_merge` (looser than the default linear
+/// tolerance, to absorb that noise), then rebuilds every wire against a global
+/// canonical-edge map keyed by *unordered canonical endpoints + curve type +
+/// geometric midpoint* — so a straight line and a bulged arc between the same
+/// endpoints stay distinct, while true duplicates collapse to one shared edge.
+/// Edges whose endpoints merge to a single vertex (degenerate) are dropped.
+///
+/// Returns `true` if anything changed. Run only on already-broken results
+/// (free edges / non-manifold) so clean booleans keep their exact topology.
+#[allow(
+    clippy::too_many_lines,
+    clippy::type_complexity,
+    clippy::items_after_statements
+)]
+fn unify_coincident_boundary_edges(
+    topo: &mut Topology,
+    solid: SolidId,
+    tol_merge: f64,
+) -> Result<bool, crate::OperationsError> {
+    use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
+    use brepkit_topology::vertex::VertexId;
+    use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
+    use std::collections::HashMap;
+
+    let shell_id = topo.solid(solid)?.outer_shell();
+    let face_ids: Vec<_> = topo.shell(shell_id)?.faces().to_vec();
+
+    let scale = 1.0 / tol_merge;
+    let q = |p: Point3| -> (i64, i64, i64) {
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+
+    // 1. Canonical vertex per quantized position (first VertexId seen wins).
+    let mut vcanon: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
+    for &fid in &face_ids {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            let wire = topo.wire(wid)?;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                for vid in [edge.start(), edge.end()] {
+                    let key = q(topo.vertex(vid)?.point());
+                    vcanon.entry(key).or_insert(vid);
+                }
+            }
+        }
+    }
+
+    // 2. Snapshot each face's wires (edge id, fwd, curve, endpoints, tol).
+    type OeSnap = (EdgeId, bool, EdgeCurve, VertexId, VertexId, Option<f64>);
+    struct FaceSnap {
+        surface: FaceSurface,
+        reversed: bool,
+        outer: Vec<OeSnap>,
+        outer_closed: bool,
+        inners: Vec<(Vec<OeSnap>, bool)>,
+    }
+    let snap_wire =
+        |topo: &Topology, wid: WireId| -> Result<(Vec<OeSnap>, bool), crate::OperationsError> {
+            let w = topo.wire(wid)?;
+            let closed = w.is_closed();
+            let oes = w
+                .edges()
+                .iter()
+                .map(|oe| -> Result<OeSnap, crate::OperationsError> {
+                    let e = topo.edge(oe.edge())?;
+                    Ok((
+                        oe.edge(),
+                        oe.is_forward(),
+                        e.curve().clone(),
+                        e.start(),
+                        e.end(),
+                        e.tolerance(),
+                    ))
+                })
+                .collect::<Result<_, _>>()?;
+            Ok((oes, closed))
+        };
+    let mut snaps = Vec::with_capacity(face_ids.len());
+    for &fid in &face_ids {
+        let face = topo.face(fid)?;
+        let surface = face.surface().clone();
+        let reversed = face.is_reversed();
+        let (outer, outer_closed) = snap_wire(topo, face.outer_wire())?;
+        let mut inners = Vec::new();
+        for iw in face.inner_wires() {
+            inners.push(snap_wire(topo, *iw)?);
+        }
+        snaps.push(FaceSnap {
+            surface,
+            reversed,
+            outer,
+            outer_closed,
+            inners,
+        });
+    }
+
+    // 3. Rebuild wires against a global canonical-edge map.
+    //    Key: (lo endpoint q, hi endpoint q, midpoint q, curve type tag).
+    type EdgeKey = (
+        (i64, i64, i64),
+        (i64, i64, i64),
+        (i64, i64, i64),
+        &'static str,
+    );
+    let mut ecanon: HashMap<EdgeKey, (EdgeId, VertexId, VertexId)> = HashMap::new();
+    let mut changed = false;
+
+    let canon_vid = |topo: &Topology, vid: VertexId| -> Result<VertexId, crate::OperationsError> {
+        Ok(*vcanon.get(&q(topo.vertex(vid)?.point())).unwrap_or(&vid))
+    };
+
+    let rebuild = |topo: &mut Topology,
+                   oes: &[OeSnap],
+                   ecanon: &mut HashMap<EdgeKey, (EdgeId, VertexId, VertexId)>,
+                   changed: &mut bool|
+     -> Result<Vec<OrientedEdge>, crate::OperationsError> {
+        let mut out = Vec::with_capacity(oes.len());
+        for (eid, fwd, curve, start, end, etol) in oes {
+            let cs = canon_vid(topo, *start)?;
+            let ce = canon_vid(topo, *end)?;
+            if cs == ce {
+                // Endpoints collapsed to a single vertex → degenerate, drop it.
+                *changed = true;
+                continue;
+            }
+            let sp = topo.vertex(*start)?.point();
+            let ep = topo.vertex(*end)?.point();
+            let (t0, t1) = curve.domain_with_endpoints(sp, ep);
+            let mid = curve.evaluate_with_endpoints((t0 + t1) * 0.5, sp, ep);
+            let (cs_q, ce_q) = (q(topo.vertex(cs)?.point()), q(topo.vertex(ce)?.point()));
+            let (lo, hi) = if cs_q <= ce_q {
+                (cs_q, ce_q)
+            } else {
+                (ce_q, cs_q)
+            };
+            let key = (lo, hi, q(mid), curve.type_tag());
+
+            // Physical traversal start vertex (after canonicalization).
+            let trav_start = if *fwd { cs } else { ce };
+            if let Some(&(c_eid, c_start, _c_end)) = ecanon.get(&key) {
+                if c_eid != *eid {
+                    *changed = true;
+                }
+                out.push(OrientedEdge::new(c_eid, c_start == trav_start));
+            } else {
+                let new_eid = topo.add_edge(Edge::with_tolerance(cs, ce, curve.clone(), *etol));
+                if new_eid != *eid {
+                    *changed = true;
+                }
+                ecanon.insert(key, (new_eid, cs, ce));
+                out.push(OrientedEdge::new(new_eid, cs == trav_start));
+            }
+        }
+        Ok(out)
+    };
+
+    let mut new_face_ids = Vec::with_capacity(snaps.len());
+    for snap in &snaps {
+        let outer_oes = rebuild(topo, &snap.outer, &mut ecanon, &mut changed)?;
+        let Ok(outer_wire) = Wire::new(outer_oes, snap.outer_closed) else {
+            // Keep original face if the rebuilt wire is invalid.
+            return Ok(false);
+        };
+        let outer_id = topo.add_wire(outer_wire);
+        let mut inner_ids = Vec::new();
+        for (inner_oes, inner_closed) in &snap.inners {
+            let oes = rebuild(topo, inner_oes, &mut ecanon, &mut changed)?;
+            if let Ok(w) = Wire::new(oes, *inner_closed) {
+                inner_ids.push(topo.add_wire(w));
+            }
+        }
+        let mut new_face =
+            brepkit_topology::face::Face::new(outer_id, inner_ids, snap.surface.clone());
+        if snap.reversed {
+            new_face.set_reversed(true);
+        }
+        new_face_ids.push(topo.add_face(new_face));
+    }
+
+    if !changed {
+        return Ok(false);
+    }
+
+    let new_shell = brepkit_topology::shell::Shell::new(new_face_ids)?;
+    let new_shell_id = topo.add_shell(new_shell);
+    topo.solid_mut(solid)?.set_outer_shell(new_shell_id);
+    Ok(true)
 }
 
 /// Post-process a solid to enforce manifold topology via greedy flood-fill.

@@ -3049,6 +3049,112 @@ fn fuse_shelled_box_with_socket_loft() {
     assert!(is_manifold, "fused solid should be manifold");
 }
 
+/// Coincident rounded-rect cap fuse where one solid is a tapered frustum
+/// (loft). A well-posed isolation of the curved-loft socket family
+/// (`fuse_shelled_box_with_socket_loft`): box A and frustum B are built from
+/// the *same* rounded-rect arc profile at z=0, so their caps should annihilate
+/// and the corners join cleanly.
+///
+/// Blocked by a loft limitation, not the boolean: `loft` samples each profile
+/// to a polygon (`face_polygon`) and builds every ring edge as `EdgeCurve::Line`
+/// with planar side faces — so B is an *octagonal* frustum (straight chord
+/// corners), while A keeps its true arc corners. B's chord-cornered z=0 cap can
+/// never match A's arc-cornered cap, leaving the corners non-manifold. The fix
+/// is a curve-preserving loft (build arc-cornered caps + ruled side patches
+/// between corresponding curve segments), not anything in the fuse pipeline.
+/// The FF-curve restriction and coincident-edge merge added alongside this test
+/// remove the *other* defects this geometry exposes (phantom face holes from
+/// untrimmed analytic intersections; duplicate junction edges), shrinking the
+/// raw GFA failure from euler=-7/8-holes/30+ free edges to euler=-2 with only
+/// the 4 arc-vs-chord corner mismatches remaining.
+#[ignore = "blocked by loft faceting curved profiles (octagon vs rounded-rect cap); needs curve-preserving loft"]
+#[test]
+fn fuse_coincident_rrect_cap_with_frustum() {
+    use brepkit_math::curves::Circle3D;
+
+    fn make_rr_arcs(topo: &mut Topology, hw: f64, hd: f64, r: f64, z: f64) -> FaceId {
+        let r = r.min(hw.min(hd));
+        let cc = [
+            Point3::new(hw - r, -hd + r, z),
+            Point3::new(hw - r, hd - r, z),
+            Point3::new(-hw + r, hd - r, z),
+            Point3::new(-hw + r, -hd + r, z),
+        ];
+        let ap = [
+            (Point3::new(hw - r, -hd, z), Point3::new(hw, -hd + r, z)),
+            (Point3::new(hw, hd - r, z), Point3::new(hw - r, hd, z)),
+            (Point3::new(-hw + r, hd, z), Point3::new(-hw, hd - r, z)),
+            (Point3::new(-hw, -hd + r, z), Point3::new(-hw + r, -hd, z)),
+        ];
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let mut v = Vec::new();
+        for p in &ap {
+            v.push(topo.add_vertex(Vertex::new(p.0, 1e-7)));
+            v.push(topo.add_vertex(Vertex::new(p.1, 1e-7)));
+        }
+        let mut e = Vec::new();
+        e.push(topo.add_edge(Edge::new(v[7], v[0], EdgeCurve::Line)));
+        for i in 0..4 {
+            e.push(topo.add_edge(Edge::new(
+                v[2 * i],
+                v[2 * i + 1],
+                EdgeCurve::Circle(Circle3D::new(cc[i], axis, r).unwrap()),
+            )));
+            if i < 3 {
+                e.push(topo.add_edge(Edge::new(v[2 * i + 1], v[2 * i + 2], EdgeCurve::Line)));
+            }
+        }
+        let wire = Wire::new(
+            e.iter().map(|&id| OrientedEdge::new(id, true)).collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane { normal: axis, d: z },
+        ))
+    }
+
+    let mut topo = Topology::new();
+    let (hw, hd, r) = (20.0, 20.0, 4.0);
+    let face_a = make_rr_arcs(&mut topo, hw, hd, r, 0.0);
+    let solid_a =
+        crate::extrude::extrude(&mut topo, face_a, Vec3::new(0.0, 0.0, 1.0), 10.0).unwrap();
+    let b_bot = make_rr_arcs(&mut topo, hw - 3.0, hd - 3.0, r - 1.0, -10.0);
+    let b_top = make_rr_arcs(&mut topo, hw, hd, r, 0.0);
+    let solid_b = crate::loft::loft(&mut topo, &[b_bot, b_top]).unwrap();
+
+    let vol_a = crate::measure::solid_volume(&topo, solid_a, 0.01).unwrap();
+    let vol_b = crate::measure::solid_volume(&topo, solid_b, 0.01).unwrap();
+    let fused = boolean(&mut topo, BooleanOp::Fuse, solid_a, solid_b).unwrap();
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, fused).unwrap();
+    #[allow(clippy::cast_possible_wrap)]
+    let euler = (v as i64) - (e as i64) + (f as i64);
+    let fused_vol = crate::measure::solid_volume(&topo, fused, 0.01).unwrap();
+    let shell = topo
+        .shell(topo.solid(fused).unwrap().outer_shell())
+        .unwrap();
+    let manifold = brepkit_topology::validation::validate_shell_manifold(shell, &topo);
+    eprintln!(
+        "rrect+frustum cap fuse: F={f} E={e} V={v} euler={euler} vol={fused_vol:.1} (a+b={:.1}) manifold={}",
+        vol_a + vol_b,
+        manifold.is_ok()
+    );
+
+    assert!(
+        (fused_vol - (vol_a + vol_b)).abs() < 1.0,
+        "fused vol {fused_vol:.1} != a+b {:.1}",
+        vol_a + vol_b
+    );
+    assert!(
+        manifold.is_ok(),
+        "fused solid should be manifold: {manifold:?}"
+    );
+    assert_eq!(euler, 2, "should be genus-0");
+}
+
 // ── GFA integration tests for analytic surfaces ────────────────────
 
 #[test]

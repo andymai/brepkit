@@ -185,6 +185,18 @@ pub fn perform(
                 })
                 .collect();
 
+            // Restrict surface-surface intersection curves to the region that
+            // lies inside BOTH faces. `compute_raw_curves` works on the
+            // unbounded surfaces; the analytic-analytic marcher already bounds
+            // its curves, but the plane-analytic and algebraic paths return
+            // the full surface-surface curve. A cylinder/cone or
+            // cylinder/tilted-plane ellipse that meets the other face only
+            // along a shared cap then reaches far past it and slits the
+            // partner face's wire. Keep only the in-both span (curves only).
+            let raw_curves = restrict_curves_to_faces(
+                topo, fa, fb, surf_a, surf_b, v_range_a, v_range_b, raw_curves, tol,
+            );
+
             for raw in raw_curves {
                 let mut raw = raw;
                 // Closed Circle3D sections — produced by plane-sphere
@@ -308,6 +320,215 @@ pub fn perform(
     }
 
     Ok(())
+}
+
+/// A face's trimmed extent, used to test whether a 3D point lies inside the
+/// face (so surface-surface intersection curves can be restricted to the
+/// region inside both faces — the reference's "true boundary" restriction).
+enum FaceExtent {
+    /// Planar face: 2D boundary polygon in a plane frame (arc edges sampled).
+    Plane {
+        frame: crate::builder::plane_frame::PlaneFrame,
+        poly: Vec<brepkit_math::vec::Point2>,
+        margin: f64,
+    },
+    /// Analytic lateral face (cylinder/cone/sphere/torus): bound by the
+    /// axial `v` parameter range of the face.
+    Analytic {
+        surface: FaceSurface,
+        v0: f64,
+        v1: f64,
+        margin: f64,
+    },
+}
+
+impl FaceExtent {
+    fn new(
+        topo: &Topology,
+        face_id: FaceId,
+        surface: &FaceSurface,
+        v_range: Option<(f64, f64)>,
+        tol: Tolerance,
+    ) -> Option<Self> {
+        if let FaceSurface::Plane { normal, .. } = surface {
+            let face = topo.face(face_id).ok()?;
+            let wire = topo.wire(face.outer_wire()).ok()?;
+            let first = wire.edges().first()?;
+            let origin = topo
+                .vertex(topo.edge(first.edge()).ok()?.start())
+                .ok()?
+                .point();
+            let frame =
+                crate::builder::plane_frame::PlaneFrame::from_normal_and_point(*normal, origin);
+            let mut poly = Vec::new();
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge()).ok()?;
+                let s3 = topo.vertex(edge.start()).ok()?.point();
+                let e3 = topo.vertex(edge.end()).ok()?.point();
+                let oriented_start = if oe.is_forward() { s3 } else { e3 };
+                match edge.curve() {
+                    EdgeCurve::Line => poly.push(frame.project(oriented_start)),
+                    curve => {
+                        let (t0, t1) = curve.domain_with_endpoints(s3, e3);
+                        for i in 0..16 {
+                            #[allow(clippy::cast_precision_loss)]
+                            let f = i as f64 / 16.0;
+                            let t = if oe.is_forward() {
+                                t0 + (t1 - t0) * f
+                            } else {
+                                t1 + (t0 - t1) * f
+                            };
+                            poly.push(frame.project(curve.evaluate_with_endpoints(t, s3, e3)));
+                        }
+                    }
+                }
+            }
+            if poly.len() < 3 {
+                return None;
+            }
+            // Margin keeps boundary-coincident points (the shared cap) inside;
+            // scaled to the footprint so it stays small vs the stray extent.
+            let bb = brepkit_math::aabb::Aabb3::from_points(
+                poly.iter()
+                    .map(|p| brepkit_math::vec::Point3::new(p.x(), p.y(), 0.0)),
+            );
+            let diag = (bb.max - bb.min).length();
+            Some(Self::Plane {
+                frame,
+                poly,
+                margin: (diag * 0.01).max(tol.linear),
+            })
+        } else {
+            let (v0, v1) = v_range?;
+            let margin = (v1 - v0).abs() * 0.01 + tol.linear;
+            Some(Self::Analytic {
+                surface: surface.clone(),
+                v0,
+                v1,
+                margin,
+            })
+        }
+    }
+
+    fn contains(&self, p: Point3) -> bool {
+        match self {
+            Self::Plane {
+                frame,
+                poly,
+                margin,
+            } => {
+                let uv = frame.project(p);
+                crate::builder::classify_2d::point_in_polygon_2d(uv, poly)
+                    || point_to_polygon_dist(uv, poly) <= *margin
+            }
+            Self::Analytic {
+                surface,
+                v0,
+                v1,
+                margin,
+            } => surface
+                .project_point(p)
+                .is_none_or(|(_, v)| v >= *v0 - *margin && v <= *v1 + *margin),
+        }
+    }
+}
+
+/// Minimum distance from a 2D point to a closed polygon's edges.
+fn point_to_polygon_dist(p: brepkit_math::vec::Point2, poly: &[brepkit_math::vec::Point2]) -> f64 {
+    let n = poly.len();
+    let mut best = f64::MAX;
+    for i in 0..n {
+        let (a, b) = (poly[i], poly[(i + 1) % n]);
+        let (abx, aby) = (b.x() - a.x(), b.y() - a.y());
+        let (apx, apy) = (p.x() - a.x(), p.y() - a.y());
+        let len2 = abx * abx + aby * aby;
+        let t = if len2 > 1e-20 {
+            ((apx * abx + apy * aby) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let (cx, cy) = (a.x() + abx * t, a.y() + aby * t);
+        best = best.min(((p.x() - cx).powi(2) + (p.y() - cy).powi(2)).sqrt());
+    }
+    best
+}
+
+/// Restrict surface-surface intersection curves to the region inside BOTH
+/// faces. `compute_raw_curves` works on the unbounded surfaces, so a
+/// plane-analytic or algebraic curve (e.g. a cylinder/tilted-plane ellipse)
+/// can reach far past the faces' shared region and slit the partner face's
+/// wire. A non-Line curve whose longest contiguous in-both sample run is under
+/// two samples only grazes the mutual extent at a tangency/point — it never
+/// splits either face, so it is dropped. Curves with a real in-both span are
+/// kept whole (the downstream splitter trims them to the boundary). Lines are
+/// left to the downstream `clip_line_to_face`. Conservative: if either face's
+/// extent cannot be built, the curves are returned unchanged.
+#[allow(clippy::too_many_arguments, clippy::items_after_statements)]
+fn restrict_curves_to_faces(
+    topo: &Topology,
+    fa: FaceId,
+    fb: FaceId,
+    surf_a: &FaceSurface,
+    surf_b: &FaceSurface,
+    v_range_a: Option<(f64, f64)>,
+    v_range_b: Option<(f64, f64)>,
+    raw_curves: Vec<RawCurve>,
+    tol: Tolerance,
+) -> Vec<RawCurve> {
+    let (Some(ext_a), Some(ext_b)) = (
+        FaceExtent::new(topo, fa, surf_a, v_range_a, tol),
+        FaceExtent::new(topo, fb, surf_b, v_range_b, tol),
+    ) else {
+        // Conservative: if either face's extent can't be built, don't restrict.
+        return raw_curves;
+    };
+
+    const N: usize = 24;
+    let mut out = Vec::with_capacity(raw_curves.len());
+    for raw in raw_curves {
+        // Lines are clipped downstream by `clip_line_to_face`; only the
+        // unbounded analytic curves (ellipse/circle/marched NURBS) need the
+        // mutual-extent test here.
+        if matches!(raw.curve, EdgeCurve::Line) {
+            out.push(raw);
+            continue;
+        }
+        let pt = |i: usize| -> Point3 {
+            #[allow(clippy::cast_precision_loss)]
+            let f = i as f64 / N as f64;
+            let t = raw.t_range.0 + (raw.t_range.1 - raw.t_range.0) * f;
+            raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end)
+        };
+        let inb: Vec<bool> = (0..=N)
+            .map(|i| {
+                let p = pt(i);
+                ext_a.contains(p) && ext_b.contains(p)
+            })
+            .collect();
+        // Longest contiguous in-both run.
+        let (mut b0, mut b1) = (0usize, 0usize);
+        let mut cur: Option<usize> = None;
+        for (i, &v) in inb.iter().enumerate() {
+            if v {
+                let c = *cur.get_or_insert(i);
+                if i - c > b1 - b0 {
+                    b0 = c;
+                    b1 = i;
+                }
+            } else {
+                cur = None;
+            }
+        }
+        // A contiguous in-both run of <2 samples is a tangency/grazing point
+        // (or no presence at all) — such a curve never splits either face, so
+        // drop it. Curves with a real in-both span are kept whole (the
+        // downstream splitter trims them to the face boundary).
+        if b1 - b0 < 2 {
+            continue;
+        }
+        out.push(raw);
+    }
+    out
 }
 
 /// Compute AABB for a face by sampling its boundary edges.
