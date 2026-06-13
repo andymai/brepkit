@@ -804,30 +804,36 @@ fn sample_solid_edges_cylinder() {
 }
 
 #[test]
-#[ignore = "coplanar-edge filtering removes nothing on the fused result (filtered 18 == unfiltered 18)"]
 fn sample_solid_edges_boolean_filters_coplanar() {
+    // Fuse two boxes flush along x=10 with the second narrower in y (0..6 vs 0..10).
+    // The shared x=10 strip (y 0..6) becomes internal, but the top (z=10), bottom
+    // (z=0), and back (y=0) faces of the two boxes stay as coplanar adjacent
+    // fragments when unify_faces is off. The seams between those same-plane
+    // fragments are exactly the smooth edges sample_solid_edges should drop.
+    use brepkit_math::mat::Mat4;
     let mut topo = Topology::new();
-    let big = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
-    let small = crate::primitives::make_box(&mut topo, 3.0, 3.0, 15.0).unwrap();
+    let a = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 10.0, 6.0, 10.0).unwrap();
+    crate::transform::transform_solid(&mut topo, b, &Mat4::translation(10.0, 0.0, 0.0)).unwrap();
     let opts = crate::boolean::BooleanOptions {
         unify_faces: false,
         ..Default::default()
     };
-    let cut = crate::boolean::boolean_with_options(
+    let fused = crate::boolean::boolean_with_options(
         &mut topo,
-        crate::boolean::BooleanOp::Cut,
-        big,
-        small,
+        crate::boolean::BooleanOp::Fuse,
+        a,
+        b,
         opts,
     )
     .unwrap();
 
-    let filtered = sample_solid_edges(&topo, cut, 0.1).unwrap();
-    let all = sample_solid_edges_filtered(&topo, cut, 0.1, false).unwrap();
+    let filtered = sample_solid_edges(&topo, fused, 0.1).unwrap();
+    let all = sample_solid_edges_filtered(&topo, fused, 0.1, false).unwrap();
 
     assert!(
         filtered.offsets.len() < all.offsets.len(),
-        "filtered ({}) should be fewer than unfiltered ({})",
+        "coplanar seams should be filtered: filtered ({}) should be fewer than unfiltered ({})",
         filtered.offsets.len(),
         all.offsets.len()
     );
