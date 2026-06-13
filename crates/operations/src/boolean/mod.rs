@@ -2778,9 +2778,13 @@ fn unify_coincident_boundary_edges(
         let mut inner_ids = Vec::new();
         for (inner_oes, inner_closed) in &snap.inners {
             let oes = rebuild(topo, inner_oes, &mut ecanon, &mut changed)?;
-            if let Ok(w) = Wire::new(oes, *inner_closed) {
-                inner_ids.push(topo.add_wire(w));
-            }
+            let Ok(w) = Wire::new(oes, *inner_closed) else {
+                // A dropped hole silently changes topology (and removes free
+                // edges, so the downstream gate can't catch it). Bail like the
+                // outer-wire case, leaving the original solid untouched.
+                return Ok(false);
+            };
+            inner_ids.push(topo.add_wire(w));
         }
         let mut new_face =
             brepkit_topology::face::Face::new(outer_id, inner_ids, snap.surface.clone());
