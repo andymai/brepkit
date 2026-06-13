@@ -47,12 +47,17 @@ fn seg_cross_param(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Option<f64
     let (rx, ry) = (a1.x() - a0.x(), a1.y() - a0.y());
     let (sx, sy) = (b1.x() - b0.x(), b1.y() - b0.y());
     let denom = rx.mul_add(sy, -(ry * sx));
-    if denom.abs() < 1e-12 {
+    // `denom = |r x s| = |r||s| sin(theta)`; test it relative to the segment
+    // lengths so near-parallel rejection is independent of model scale.
+    let scale = (rx.hypot(ry) * sx.hypot(sy)).max(f64::MIN_POSITIVE);
+    if denom.abs() <= 1e-9 * scale {
         return None;
     }
     let (qx, qy) = (b0.x() - a0.x(), b0.y() - a0.y());
     let t = qx.mul_add(sy, -(qy * sx)) / denom;
     let u = qx.mul_add(ry, -(qy * rx)) / denom;
+    // `t`/`u` are normalized [0,1] parameters, so these epsilons are already
+    // scale-invariant fractions of each segment.
     (t > 1e-6 && t < 1.0 - 1e-6 && u > -1e-6 && u < 1.0 + 1e-6).then_some(t)
 }
 
@@ -355,11 +360,15 @@ pub fn split_face_2d(
     // genus-1 handle in the assembled solid.
     let deduped_sections: Vec<SectionEdge>;
     let sections = {
+        // Quantize at the kernel's linear tolerance so dedup only collapses
+        // genuinely-coincident sections (a doubly-recorded interference) and
+        // never distinct splitters that happen to be close on a small model.
+        let scale = 1.0 / tol.linear.max(1e-12);
         let q = |p: Point3| -> (i64, i64, i64) {
             (
-                (p.x() * 1e4).round() as i64,
-                (p.y() * 1e4).round() as i64,
-                (p.z() * 1e4).round() as i64,
+                (p.x() * scale).round() as i64,
+                (p.y() * scale).round() as i64,
+                (p.z() * scale).round() as i64,
             )
         };
         let mut seen = std::collections::HashSet::new();
