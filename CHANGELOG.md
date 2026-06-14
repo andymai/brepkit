@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.104.1](https://github.com/andymai/brepkit/compare/v2.104.0...v2.104.1) (2026-06-14)
+
+
+### Bug Fixes
+
+* **tessellate:** build drilled-hole cylinder/cone bands from shared rim vertices ([#696](https://github.com/andymai/brepkit/issues/696)) ([#809](https://github.com/andymai/brepkit/issues/809)) ([4a7337b](https://github.com/andymai/brepkit/commit/4a7337b1ff6cb2a119d46b48ca538e3fd52fd47f))
+
 ## [2.104.0](https://github.com/andymai/brepkit/compare/v2.103.2...v2.104.0) (2026-06-14)
 
 
