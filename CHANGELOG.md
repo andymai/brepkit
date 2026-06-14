@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.104.2](https://github.com/andymai/brepkit/compare/v2.104.1...v2.104.2) (2026-06-14)
+
+
+### Bug Fixes
+
+* **boolean:** strip out-and-back wire spurs from fused faces ([#801](https://github.com/andymai/brepkit/issues/801)) ([#811](https://github.com/andymai/brepkit/issues/811)) ([841661c](https://github.com/andymai/brepkit/commit/841661cd54f111610421926517caed34c53451c4))
+
 ## [2.104.1](https://github.com/andymai/brepkit/compare/v2.104.0...v2.104.1) (2026-06-14)
 
 
