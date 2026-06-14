@@ -561,6 +561,52 @@ fn try_loft_matching_curved_profiles(
         }
     }
 
+    // 3b. Pre-compute every side face's surface BEFORE mutating `topo`. A
+    //     Circle-pair whose arcs convert to incompatible NURBS makes the whole
+    //     loft fall back to the polygon path; doing it here means that `None`
+    //     return leaves no orphaned vertices/edges/faces behind.
+    let mut side_surfaces: Vec<(FaceSurface, bool)> = Vec::with_capacity((num_profiles - 1) * n);
+    for s in 0..num_profiles - 1 {
+        for i in 0..n {
+            let (p0s, p0e) = (profs[s][i].start, profs[s][i].end);
+            let p1s = profs[s + 1][i].start;
+            let outward = (p0e - p0s).cross(p1s - p0s);
+            let entry = match (&profs[s][i].curve, &profs[s + 1][i].curve) {
+                (EdgeCurve::Line, EdgeCurve::Line) => {
+                    let normal = outward.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                    (
+                        FaceSurface::Plane {
+                            normal,
+                            d: dot_normal_point(normal, p0s),
+                        },
+                        false,
+                    )
+                }
+                (EdgeCurve::Circle(c0), EdgeCurve::Circle(c1)) => {
+                    if let Some(surface) = coaxial_corner_surface(c0, c1, tol) {
+                        // Cylinder/Cone share `build_coaxial_band_stack`'s
+                        // radial-outward normal convention with this wire
+                        // winding, so no reversal is needed.
+                        (surface, false)
+                    } else {
+                        let Some(surf) =
+                            ruled_arc_surface(c0, p0s, p0e, c1, p1s, profs[s + 1][i].end)
+                        else {
+                            return Ok(None);
+                        };
+                        let reversed = surf
+                            .normal(0.5, 0.5)
+                            .map(|nrm| nrm.dot(outward) < 0.0)
+                            .unwrap_or(false);
+                        (FaceSurface::Nurbs(surf), reversed)
+                    }
+                }
+                _ => return Ok(None),
+            };
+            side_surfaces.push(entry);
+        }
+    }
+
     // 4. Ring vertices, ring edges (curve-preserving), connecting edges.
     let ring_vids: Vec<Vec<VertexId>> = profs
         .iter()
@@ -619,15 +665,11 @@ fn try_loft_matching_curved_profiles(
         )));
     }
 
-    // 6. Side faces: one per corresponding edge pair per section.
+    // 6. Side faces: one per corresponding edge pair per section, using the
+    //    surfaces pre-computed in step 3b.
     for s in 0..num_profiles - 1 {
         for i in 0..n {
             let next_i = (i + 1) % n;
-            let (p0s, p0e) = (profs[s][i].start, profs[s][i].end);
-            let p1s = profs[s + 1][i].start;
-            // Outward direction (same convention as the polygon path).
-            let outward = (p0e - p0s).cross(p1s - p0s);
-
             let side_wire_id = topo.add_wire(
                 Wire::new(
                     vec![
@@ -640,39 +682,7 @@ fn try_loft_matching_curved_profiles(
                 )
                 .map_err(crate::OperationsError::Topology)?,
             );
-
-            let (surface, reversed) = match (&profs[s][i].curve, &profs[s + 1][i].curve) {
-                (EdgeCurve::Line, EdgeCurve::Line) => {
-                    let normal = outward.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
-                    (
-                        FaceSurface::Plane {
-                            normal,
-                            d: dot_normal_point(normal, p0s),
-                        },
-                        false,
-                    )
-                }
-                (EdgeCurve::Circle(c0), EdgeCurve::Circle(c1)) => {
-                    if let Some(surface) = coaxial_corner_surface(c0, c1, tol) {
-                        // Cylinder/Cone share `build_coaxial_band_stack`'s
-                        // radial-outward normal convention with this wire
-                        // winding, so no reversal is needed.
-                        (surface, false)
-                    } else {
-                        let Some(surf) =
-                            ruled_arc_surface(c0, p0s, p0e, c1, p1s, profs[s + 1][i].end)
-                        else {
-                            return Ok(None);
-                        };
-                        let reversed = surf
-                            .normal(0.5, 0.5)
-                            .map(|nrm| nrm.dot(outward) < 0.0)
-                            .unwrap_or(false);
-                        (FaceSurface::Nurbs(surf), reversed)
-                    }
-                }
-                _ => return Ok(None),
-            };
+            let (surface, reversed) = side_surfaces[s * n + i].clone();
             let mut face = Face::new(side_wire_id, vec![], surface);
             if reversed {
                 face.set_reversed(true);
