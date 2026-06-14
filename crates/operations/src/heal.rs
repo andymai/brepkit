@@ -355,10 +355,17 @@ pub fn remove_wire_spurs(
             };
 
             let n_removed = strip_wire_spurs(&mut oes);
-            // Leave fully-collapsed wires (a face that was nothing but a spur)
-            // alone — that is a degenerate-face concern for a later pass, not
-            // something to silently drop here.
-            if n_removed == 0 || oes.len() < 3 {
+            if n_removed == 0 {
+                continue;
+            }
+            // Always write the stripped wire back when it still has an edge, so
+            // the over-connected spur edge is never left behind. If stripping
+            // takes the wire below three edges the face was already degenerate
+            // (a spur wrapping a bigon or self-loop); the residual bigon is then
+            // rejected by `validate_boolean_result` and the op drops to the mesh
+            // fallback — strictly better than letting the spur survive into the
+            // result. `Wire::new` only rejects an empty edge list.
+            if oes.is_empty() {
                 continue;
             }
 
