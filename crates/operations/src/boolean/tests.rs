@@ -3050,24 +3050,15 @@ fn fuse_shelled_box_with_socket_loft() {
 }
 
 /// Coincident rounded-rect cap fuse where one solid is a tapered frustum
-/// (loft). A well-posed isolation of the curved-loft socket family
-/// (`fuse_shelled_box_with_socket_loft`): box A and frustum B are built from
-/// the *same* rounded-rect arc profile at z=0, so their caps should annihilate
-/// and the corners join cleanly.
+/// (loft). Box A and frustum B are built from the *same* rounded-rect arc
+/// profile at z=0, so their caps annihilate and the corners join cleanly.
 ///
-/// Blocked by a loft limitation, not the boolean: `loft` samples each profile
-/// to a polygon (`face_polygon`) and builds every ring edge as `EdgeCurve::Line`
-/// with planar side faces — so B is an *octagonal* frustum (straight chord
-/// corners), while A keeps its true arc corners. B's chord-cornered z=0 cap can
-/// never match A's arc-cornered cap, leaving the corners non-manifold. The fix
-/// is a curve-preserving loft (build arc-cornered caps + ruled side patches
-/// between corresponding curve segments), not anything in the fuse pipeline.
-/// The FF-curve restriction and coincident-edge merge added alongside this test
-/// remove the *other* defects this geometry exposes (phantom face holes from
-/// untrimmed analytic intersections; duplicate junction edges), shrinking the
-/// raw GFA failure from euler=-7/8-holes/30+ free edges to euler=-2 with only
-/// the 4 arc-vs-chord corner mismatches remaining.
-#[ignore = "blocked by loft faceting curved profiles (octagon vs rounded-rect cap); needs curve-preserving loft"]
+/// This exercises the curve-preserving loft: `loft` builds the frustum with
+/// true arc corners (ruled NURBS corner patches + arc-cornered caps) rather
+/// than faceting the profile into an octagon, so B's z=0 cap matches A's
+/// arc-cornered cap exactly and the fuse is a genus-0 manifold. (It also
+/// relies on the FF-curve restriction + coincident-edge merge, which clear the
+/// phantom face holes and duplicate junction edges this junction exposes.)
 #[test]
 fn fuse_coincident_rrect_cap_with_frustum() {
     use brepkit_math::curves::Circle3D;

@@ -3,15 +3,16 @@
 //! The loft connects two or more planar profiles by creating ruled (linear)
 //! surfaces between corresponding profile edges.
 
+use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::nurbs::surface_fitting::interpolate_surface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::{Edge, EdgeCurve};
+use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::{Solid, SolidId};
-use brepkit_topology::vertex::Vertex;
+use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::boolean::face_polygon;
@@ -111,6 +112,15 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     // true π·r²·h (or frustum) volume per band.
     if let Some(stack_solid) = try_loft_coaxial_circle_stack(topo, profiles)? {
         return Ok(stack_solid);
+    }
+
+    // Curve-preserving path: when all profiles share the same boundary edge
+    // structure (same edge count and per-edge curve type) and wind CCW, build
+    // ruled surfaces per corresponding edge pair so curved edges stay curved —
+    // a rounded-rect loft becomes a true rounded-rect frustum (arc corners),
+    // not an octagon. The general polygon path below handles everything else.
+    if let Some(curved_solid) = try_loft_matching_curved_profiles(topo, profiles)? {
+        return Ok(curved_solid);
     }
 
     // Collect vertex positions for each profile.
@@ -358,6 +368,352 @@ fn try_loft_coaxial_circle_stack(
         crate::transform::transform_solid(topo, solid, &xform)?;
     }
     Ok(Some(solid))
+}
+
+/// Per-edge geometry of a profile's outer wire in traversal order: the curve
+/// and its wire-oriented start/end points (so `start`→`end` follows the wire).
+struct ProfileEdgeGeom {
+    curve: EdgeCurve,
+    start: Point3,
+    end: Point3,
+}
+
+/// Extract a planar profile's outer-wire edges in traversal order, each
+/// oriented so `start`→`end` follows the wire. Returns `None` if the face is
+/// not planar or has inner wires (holes) — the general loft handles those.
+fn profile_oriented_edges(topo: &Topology, fid: FaceId) -> Option<Vec<ProfileEdgeGeom>> {
+    let face = topo.face(fid).ok()?;
+    if !matches!(face.surface(), FaceSurface::Plane { .. }) || !face.inner_wires().is_empty() {
+        return None;
+    }
+    let wire = topo.wire(face.outer_wire()).ok()?;
+    let oes = wire.edges();
+    if oes.len() < 3 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(oes.len());
+    for oe in oes {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let s = topo.vertex(edge.start()).ok()?.point();
+        let e = topo.vertex(edge.end()).ok()?.point();
+        let (start, end) = if oe.is_forward() { (s, e) } else { (e, s) };
+        out.push(ProfileEdgeGeom {
+            curve: edge.curve().clone(),
+            start,
+            end,
+        });
+    }
+    Some(out)
+}
+
+/// When two corner arcs are coaxial (same axis direction, centers differing
+/// only along that axis), the ruled surface between them is an exact analytic
+/// `Cylinder` (equal radii) or `Cone` (unequal radii) — which downstream
+/// booleans handle far more robustly than a generic ruled NURBS. Mirrors the
+/// reference `BRepFill_Generator`. Returns `None` for non-coaxial arcs (caller
+/// falls back to a ruled NURBS).
+fn coaxial_corner_surface(
+    c0: &brepkit_math::curves::Circle3D,
+    c1: &brepkit_math::curves::Circle3D,
+    tol: Tolerance,
+) -> Option<FaceSurface> {
+    let n = c0.normal().normalize().ok()?;
+    // Both arcs must share the same axis direction.
+    if (c1.normal().normalize().ok()?.dot(n)).abs() < 1.0 - tol.angular {
+        return None;
+    }
+    let (o0, o1) = (c0.center(), c1.center());
+    let (r0, r1) = (c0.radius(), c1.radius());
+    let d = o1 - o0;
+    let height = d.dot(n);
+    // Centers must be coaxial (no lateral offset) and the band non-degenerate.
+    if (d - n * height).length() > tol.linear || height.abs() < tol.linear {
+        return None;
+    }
+    if (r0 - r1).abs() < tol.linear {
+        let cyl = brepkit_math::surfaces::CylindricalSurface::new(o0, n, r0).ok()?;
+        return Some(FaceSurface::Cylinder(cyl));
+    }
+    // Cone: apex on the axis through the corner center where the generator
+    // radius reaches zero (same construction as `build_coaxial_band_stack`,
+    // offset to the corner center instead of the global axis).
+    let s_apex = -r0 * height / (r1 - r0);
+    let apex = o0 + n * s_apex;
+    let (axis_sign, r_ref, axial_to_ref) = if r1 > r0 {
+        (1.0_f64, r1, height - s_apex)
+    } else {
+        (-1.0_f64, r0, s_apex)
+    };
+    let half_angle = axial_to_ref.abs().atan2(r_ref);
+    let cone = brepkit_math::surfaces::ConicalSurface::new(apex, n * axis_sign, half_angle).ok()?;
+    Some(FaceSurface::Cone(cone))
+}
+
+/// Build a degree-(1, p) ruled NURBS surface between two circular arcs, each
+/// reconstructed from its oriented endpoints (via the same `domain_with_endpoints`
+/// the ring edges use, so the surface matches them exactly). Returns `None` if
+/// the two arcs convert to incompatible NURBS (different degree or
+/// control-point count) — the caller then falls back to the polygon loft.
+fn ruled_arc_surface(
+    c0: &brepkit_math::curves::Circle3D,
+    p0s: Point3,
+    p0e: Point3,
+    c1: &brepkit_math::curves::Circle3D,
+    p1s: Point3,
+    p1e: Point3,
+) -> Option<NurbsSurface> {
+    let (a0, a0e) = EdgeCurve::Circle(c0.clone()).domain_with_endpoints(p0s, p0e);
+    let (a1, a1e) = EdgeCurve::Circle(c1.clone()).domain_with_endpoints(p1s, p1e);
+    let nc0 = brepkit_geometry::convert::circle_to_nurbs(c0, a0, a0e).ok()?;
+    let nc1 = brepkit_geometry::convert::circle_to_nurbs(c1, a1, a1e).ok()?;
+    if nc0.degree() != nc1.degree() || nc0.control_points().len() != nc1.control_points().len() {
+        return None;
+    }
+    NurbsSurface::new(
+        1,
+        nc0.degree(),
+        vec![0.0, 0.0, 1.0, 1.0],
+        nc0.knots().to_vec(),
+        vec![nc0.control_points().to_vec(), nc1.control_points().to_vec()],
+        vec![nc0.weights().to_vec(), nc1.weights().to_vec()],
+    )
+    .ok()
+}
+
+/// Loft profiles that share the same boundary edge structure while preserving
+/// curved edges (arcs stay arcs via ruled NURBS side faces) instead of
+/// faceting them. Returns `None` (fall back to the polygon path) unless every
+/// profile is planar, hole-free, winds CCW about the stacking direction, has
+/// the same edge count, the i-th edge has the same curve type in every profile,
+/// at least one edge is curved, and all edges are `Line`/`Circle`.
+#[allow(clippy::too_many_lines)]
+fn try_loft_matching_curved_profiles(
+    topo: &mut Topology,
+    profiles: &[FaceId],
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let tol = Tolerance::new();
+    let num_profiles = profiles.len();
+
+    // Scope guard: only curve-preserve a single ruled band (two profiles).
+    // Multi-section curve-preserving lofts (e.g. a 5-section gridfinity lip)
+    // produce chains of curved bands whose downstream boolean cut/fuse/shell
+    // sequences aren't yet robust (near-degenerate corner junctions), so they
+    // fall back to the polygon loft that already handles them. The two-profile
+    // case covers the coincident curved-cap fuse this feature targets.
+    if num_profiles != 2 {
+        return Ok(None);
+    }
+
+    // 1. Extract every profile's ordered oriented edges.
+    let mut profs: Vec<Vec<ProfileEdgeGeom>> = Vec::with_capacity(num_profiles);
+    for &fid in profiles {
+        match profile_oriented_edges(topo, fid) {
+            Some(edges) => profs.push(edges),
+            None => return Ok(None),
+        }
+    }
+
+    // 2. Same edge count + matching per-edge curve type across all profiles.
+    let n = profs[0].len();
+    let kind = |c: &EdgeCurve| match c {
+        EdgeCurve::Line => 0u8,
+        EdgeCurve::Circle(_) => 1,
+        EdgeCurve::Ellipse(_) => 2,
+        EdgeCurve::NurbsCurve(_) => 3,
+    };
+    for p in &profs {
+        if p.len() != n || (0..n).any(|i| kind(&p[i].curve) != kind(&profs[0][i].curve)) {
+            return Ok(None);
+        }
+    }
+    // Only Line/Circle edges are handled, and only worth it if some edge is
+    // curved (an all-Line profile gives the identical polygon result).
+    let all_line = profs[0].iter().all(|e| matches!(e.curve, EdgeCurve::Line));
+    let unsupported = profs[0]
+        .iter()
+        .any(|e| !matches!(e.curve, EdgeCurve::Line | EdgeCurve::Circle(_)));
+    if all_line || unsupported {
+        return Ok(None);
+    }
+
+    // 3. Stacking direction + CCW gate. Each profile's junction points (edge
+    //    starts) must wind CCW about the stacking axis so corner arcs stay
+    //    convex and cap normals point outward.
+    let junctions = |p: &[ProfileEdgeGeom]| -> Vec<Point3> { p.iter().map(|e| e.start).collect() };
+    #[allow(clippy::cast_precision_loss)]
+    let centroid = |pts: &[Point3]| -> Point3 {
+        let (mut x, mut y, mut z) = (0.0, 0.0, 0.0);
+        for p in pts {
+            x += p.x();
+            y += p.y();
+            z += p.z();
+        }
+        let inv = 1.0 / pts.len() as f64;
+        Point3::new(x * inv, y * inv, z * inv)
+    };
+    let axis = centroid(&junctions(&profs[num_profiles - 1])) - centroid(&junctions(&profs[0]));
+    if axis.length() < tol.linear {
+        return Ok(None);
+    }
+    for p in &profs {
+        if crate::winding::newell_normal(&junctions(p)).dot(axis) <= 0.0 {
+            return Ok(None);
+        }
+    }
+
+    // 3b. Pre-compute every side face's surface BEFORE mutating `topo`. A
+    //     Circle-pair whose arcs convert to incompatible NURBS makes the whole
+    //     loft fall back to the polygon path; doing it here means that `None`
+    //     return leaves no orphaned vertices/edges/faces behind.
+    let mut side_surfaces: Vec<(FaceSurface, bool)> = Vec::with_capacity((num_profiles - 1) * n);
+    for s in 0..num_profiles - 1 {
+        for i in 0..n {
+            let (p0s, p0e) = (profs[s][i].start, profs[s][i].end);
+            let p1s = profs[s + 1][i].start;
+            let outward = (p0e - p0s).cross(p1s - p0s);
+            let entry = match (&profs[s][i].curve, &profs[s + 1][i].curve) {
+                (EdgeCurve::Line, EdgeCurve::Line) => {
+                    let normal = outward.normalize().unwrap_or(Vec3::new(1.0, 0.0, 0.0));
+                    (
+                        FaceSurface::Plane {
+                            normal,
+                            d: dot_normal_point(normal, p0s),
+                        },
+                        false,
+                    )
+                }
+                (EdgeCurve::Circle(c0), EdgeCurve::Circle(c1)) => {
+                    if let Some(surface) = coaxial_corner_surface(c0, c1, tol) {
+                        // Cylinder/Cone share `build_coaxial_band_stack`'s
+                        // radial-outward normal convention with this wire
+                        // winding, so no reversal is needed.
+                        (surface, false)
+                    } else {
+                        let Some(surf) =
+                            ruled_arc_surface(c0, p0s, p0e, c1, p1s, profs[s + 1][i].end)
+                        else {
+                            return Ok(None);
+                        };
+                        let reversed = surf
+                            .normal(0.5, 0.5)
+                            .map(|nrm| nrm.dot(outward) < 0.0)
+                            .unwrap_or(false);
+                        (FaceSurface::Nurbs(surf), reversed)
+                    }
+                }
+                _ => return Ok(None),
+            };
+            side_surfaces.push(entry);
+        }
+    }
+
+    // 4. Ring vertices, ring edges (curve-preserving), connecting edges.
+    let ring_vids: Vec<Vec<VertexId>> = profs
+        .iter()
+        .map(|p| {
+            p.iter()
+                .map(|e| topo.add_vertex(Vertex::new(e.start, tol.linear)))
+                .collect()
+        })
+        .collect();
+    let ring_eids: Vec<Vec<EdgeId>> = (0..num_profiles)
+        .map(|s| {
+            (0..n)
+                .map(|i| {
+                    topo.add_edge(Edge::new(
+                        ring_vids[s][i],
+                        ring_vids[s][(i + 1) % n],
+                        profs[s][i].curve.clone(),
+                    ))
+                })
+                .collect()
+        })
+        .collect();
+    let conn_eids: Vec<Vec<EdgeId>> = (0..num_profiles - 1)
+        .map(|s| {
+            (0..n)
+                .map(|i| {
+                    topo.add_edge(Edge::new(
+                        ring_vids[s][i],
+                        ring_vids[s + 1][i],
+                        EdgeCurve::Line,
+                    ))
+                })
+                .collect()
+        })
+        .collect();
+
+    let mut all_faces = Vec::new();
+
+    // 5. Start cap (reversed first profile → outward normal away from stack).
+    {
+        let jn = junctions(&profs[0]);
+        let cap_normal = cap_normal_from_verts(&jn, true)?;
+        let edges: Vec<OrientedEdge> = (0..n)
+            .rev()
+            .map(|i| OrientedEdge::new(ring_eids[0][i], false))
+            .collect();
+        let wid = topo.add_wire(Wire::new(edges, true).map_err(crate::OperationsError::Topology)?);
+        let cap_d = dot_normal_point(cap_normal, jn[0]);
+        all_faces.push(topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: cap_normal,
+                d: cap_d,
+            },
+        )));
+    }
+
+    // 6. Side faces: one per corresponding edge pair per section, using the
+    //    surfaces pre-computed in step 3b.
+    for s in 0..num_profiles - 1 {
+        for i in 0..n {
+            let next_i = (i + 1) % n;
+            let side_wire_id = topo.add_wire(
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(ring_eids[s][i], true),
+                        OrientedEdge::new(conn_eids[s][next_i], true),
+                        OrientedEdge::new(ring_eids[s + 1][i], false),
+                        OrientedEdge::new(conn_eids[s][i], false),
+                    ],
+                    true,
+                )
+                .map_err(crate::OperationsError::Topology)?,
+            );
+            let (surface, reversed) = side_surfaces[s * n + i].clone();
+            let mut face = Face::new(side_wire_id, vec![], surface);
+            if reversed {
+                face.set_reversed(true);
+            }
+            all_faces.push(topo.add_face(face));
+        }
+    }
+
+    // 7. End cap (last profile, forward).
+    {
+        let jn = junctions(&profs[num_profiles - 1]);
+        let cap_normal = cap_normal_from_verts(&jn, false)?;
+        let edges: Vec<OrientedEdge> = (0..n)
+            .map(|i| OrientedEdge::new(ring_eids[num_profiles - 1][i], true))
+            .collect();
+        let wid = topo.add_wire(Wire::new(edges, true).map_err(crate::OperationsError::Topology)?);
+        let cap_d = dot_normal_point(cap_normal, jn[0]);
+        all_faces.push(topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: cap_normal,
+                d: cap_d,
+            },
+        )));
+    }
+
+    // 8. Assemble.
+    let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
+    let shell_id = topo.add_shell(shell);
+    Ok(Some(topo.add_solid(Solid::new(shell_id, vec![]))))
 }
 
 /// Rotation matrix around an arbitrary unit axis by `angle` radians
@@ -1248,5 +1604,103 @@ mod tests {
                 break;
             }
         }
+    }
+
+    /// Rounded-rect profile (4 Line edges + 4 Circle arc corners), CCW.
+    fn make_rr_arcs(topo: &mut Topology, hw: f64, hd: f64, r: f64, z: f64) -> FaceId {
+        use brepkit_math::curves::Circle3D;
+        let r = r.min(hw.min(hd));
+        let cc = [
+            Point3::new(hw - r, -hd + r, z),
+            Point3::new(hw - r, hd - r, z),
+            Point3::new(-hw + r, hd - r, z),
+            Point3::new(-hw + r, -hd + r, z),
+        ];
+        let ap = [
+            (Point3::new(hw - r, -hd, z), Point3::new(hw, -hd + r, z)),
+            (Point3::new(hw, hd - r, z), Point3::new(hw - r, hd, z)),
+            (Point3::new(-hw + r, hd, z), Point3::new(-hw, hd - r, z)),
+            (Point3::new(-hw, -hd + r, z), Point3::new(-hw + r, -hd, z)),
+        ];
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let mut v = Vec::new();
+        for p in &ap {
+            v.push(topo.add_vertex(Vertex::new(p.0, 1e-7)));
+            v.push(topo.add_vertex(Vertex::new(p.1, 1e-7)));
+        }
+        let mut e = Vec::new();
+        e.push(topo.add_edge(Edge::new(v[7], v[0], EdgeCurve::Line)));
+        for i in 0..4 {
+            e.push(topo.add_edge(Edge::new(
+                v[2 * i],
+                v[2 * i + 1],
+                EdgeCurve::Circle(Circle3D::new(cc[i], axis, r).unwrap()),
+            )));
+            if i < 3 {
+                e.push(topo.add_edge(Edge::new(v[2 * i + 1], v[2 * i + 2], EdgeCurve::Line)));
+            }
+        }
+        let wire = Wire::new(
+            e.iter().map(|&id| OrientedEdge::new(id, true)).collect(),
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane { normal: axis, d: z },
+        ))
+    }
+
+    #[test]
+    fn loft_rounded_rect_preserves_arc_corners() {
+        let mut topo = Topology::new();
+        let bottom = make_rr_arcs(&mut topo, 10.0, 10.0, 2.0, 0.0);
+        let top = make_rr_arcs(&mut topo, 14.0, 14.0, 3.0, 10.0);
+
+        let solid = loft(&mut topo, &[bottom, top]).unwrap();
+
+        let s = topo.solid(solid).unwrap();
+        let sh = topo.shell(s.outer_shell()).unwrap();
+
+        // 2 caps + (4 straight walls + 4 arc corners) = 10 faces; the corners
+        // must be NURBS (arcs preserved), not faceted into Line walls.
+        let faces = sh.faces();
+        assert_eq!(faces.len(), 10, "rounded-rect loft should have 10 faces");
+        let nurbs_faces = faces
+            .iter()
+            .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Nurbs(_)))
+            .count();
+        assert_eq!(
+            nurbs_faces, 4,
+            "the 4 arc corners should be NURBS side faces"
+        );
+
+        // Watertight genus-0: every edge shared by exactly 2 faces, euler == 2.
+        let manifold = brepkit_topology::validation::validate_shell_manifold(sh, &topo);
+        assert!(
+            manifold.is_ok(),
+            "loft should be a closed manifold: {manifold:?}"
+        );
+        let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, solid).unwrap();
+        #[allow(clippy::cast_possible_wrap)]
+        let euler = (v as i64) - (e as i64) + (f as i64);
+        assert_eq!(
+            euler, 2,
+            "rounded-rect frustum should be genus-0 (F={f} E={e} V={v})"
+        );
+
+        // Volume sits between the inscribed and circumscribed box frustums and
+        // exceeds the straight-chamfer (octagon) approximation — i.e. the arcs
+        // genuinely bulge out. Mean cross-section ≈ rr(12,12,2.5) area.
+        let vol = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+        let rr_area =
+            |hw: f64, hd: f64, r: f64| 4.0 * hw * hd + (std::f64::consts::PI - 4.0) * r * r;
+        let approx = 0.5 * (rr_area(10.0, 10.0, 2.0) + rr_area(14.0, 14.0, 3.0)) * 10.0;
+        assert!(
+            (vol - approx).abs() / approx < 0.02,
+            "rounded-rect frustum volume {vol:.1} should be within 2% of ~{approx:.1}"
+        );
     }
 }
