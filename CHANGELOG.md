@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.103.0](https://github.com/andymai/brepkit/compare/v2.102.13...v2.103.0) (2026-06-14)
+
+
+### Features
+
+* **loft:** preserve curved corners for two-profile lofts ([#797](https://github.com/andymai/brepkit/issues/797)) ([29ea1b3](https://github.com/andymai/brepkit/commit/29ea1b307963e5df98942733129b3cec2d8388ae))
+
 ## [2.102.13](https://github.com/andymai/brepkit/compare/v2.102.12...v2.102.13) (2026-06-13)
 
 
