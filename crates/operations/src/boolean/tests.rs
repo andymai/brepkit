@@ -4151,7 +4151,7 @@ fn assert_cut_fuse_back_recovers(a_dim: f64, b_dim: f64, b_dx: f64) {
     let mut topo = Topology::new();
     let a = crate::primitives::make_box(&mut topo, a_dim, a_dim, a_dim).unwrap();
     let b = crate::primitives::make_box(&mut topo, b_dim, b_dim, b_dim).unwrap();
-    if b_dx != 0.0 {
+    if b_dx.abs() > 1e-9 {
         crate::transform::transform_solid(
             &mut topo,
             b,

@@ -138,6 +138,11 @@ pub fn boolean(
             );
             let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
             let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
+            // Conservative by design: when the AABB center falls in `inner`'s own
+            // concavity (a C/U-shaped solid), `inside_inner` is false and the
+            // witness is disabled, so a false-positive containment could still
+            // slip through. That only ever fails to *reject* — it never rejects a
+            // true containment — so the shortcut stays sound, just not complete.
             let inside_inner = matches!(
                 crate::classify::classify_point(topo, inner, c, defl, tol.linear),
                 Ok(crate::classify::PointClassification::Inside)
