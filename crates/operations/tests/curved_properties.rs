@@ -15,8 +15,9 @@
 use std::f64::consts::PI;
 
 use brepkit_check::properties::{PropertiesOptions, solid_area, solid_volume};
-use brepkit_operations::primitives::{make_cone, make_cylinder, make_sphere, make_torus};
+use brepkit_operations::primitives::{make_box, make_cone, make_cylinder, make_sphere, make_torus};
 use brepkit_topology::Topology;
+use brepkit_topology::solid::SolidId;
 
 fn assert_close(got: f64, expected: f64, rel_tol: f64, what: &str) {
     let rel = (got - expected).abs() / expected.abs().max(1.0);
@@ -91,4 +92,73 @@ fn curved_primitive_areas_match_analytic() {
         2e-3,
         "torus area",
     );
+}
+
+/// Cutting a strictly-contained tool from a blank yields a hollow solid whose
+/// cavity is a topologically-faithful copy of the tool: exactly one inner
+/// shell, and `Euler(result) == Euler(blank) + Euler(tool)`. A per-face cavity
+/// copy duplicates shared boundary edges and breaks this (the box case gave
+/// Euler 8 instead of 4) while leaving the per-face volume correct — so this
+/// guards the topology that the metric oracles in the parity corpus cannot.
+#[test]
+fn contained_cut_cavity_topology_is_faithful() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::boolean::{BooleanOp, boolean};
+    use brepkit_operations::transform::transform_solid;
+    use brepkit_operations::validate::euler_characteristic;
+
+    type ToolBuilder = fn(&mut Topology) -> SolidId;
+    let cases: [(&str, ToolBuilder); 5] = [
+        ("cone", |t| {
+            let c = make_cone(t, 0.5, 0.0, 2.0).unwrap();
+            transform_solid(t, c, &Mat4::translation(1.5, 1.5, 0.5)).unwrap();
+            c
+        }),
+        ("cylinder", |t| {
+            let c = make_cylinder(t, 0.5, 2.0).unwrap();
+            transform_solid(t, c, &Mat4::translation(1.5, 1.5, 0.5)).unwrap();
+            c
+        }),
+        ("sphere", |t| {
+            let c = make_sphere(t, 0.5, 32).unwrap();
+            transform_solid(t, c, &Mat4::translation(1.5, 1.5, 1.5)).unwrap();
+            c
+        }),
+        ("box", |t| {
+            let c = make_box(t, 1.0, 1.0, 1.0).unwrap();
+            transform_solid(t, c, &Mat4::translation(1.0, 1.0, 1.0)).unwrap();
+            c
+        }),
+        ("torus", |t| {
+            let c = make_torus(t, 0.6, 0.2, 32).unwrap();
+            transform_solid(t, c, &Mat4::translation(1.5, 1.5, 1.5)).unwrap();
+            c
+        }),
+    ];
+
+    for (label, build_tool) in cases {
+        // Standalone Euler of the tool (genus-agnostic expected value).
+        let mut tt = Topology::new();
+        let standalone_tool = build_tool(&mut tt);
+        let tool_euler = euler_characteristic(&tt, standalone_tool).unwrap();
+
+        let mut topo = Topology::new();
+        let blank = make_box(&mut topo, 3.0, 3.0, 3.0).unwrap();
+        let blank_euler = euler_characteristic(&topo, blank).unwrap();
+        let tool = build_tool(&mut topo);
+        let result = boolean(&mut topo, BooleanOp::Cut, blank, tool).unwrap();
+
+        let inner = topo.solid(result).unwrap().inner_shells().len();
+        assert_eq!(
+            inner, 1,
+            "{label}: expected exactly one cavity shell, got {inner}"
+        );
+
+        let euler = euler_characteristic(&topo, result).unwrap();
+        assert_eq!(
+            euler,
+            blank_euler + tool_euler,
+            "{label}: cavity Euler {euler} != blank {blank_euler} + tool {tool_euler}"
+        );
+    }
 }

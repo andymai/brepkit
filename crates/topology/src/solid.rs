@@ -44,4 +44,9 @@ impl Solid {
     pub fn inner_shells(&self) -> &[ShellId] {
         &self.inner_shells
     }
+
+    /// Adds an inner shell (void/cavity) to this solid.
+    pub fn add_inner_shell(&mut self, shell_id: ShellId) {
+        self.inner_shells.push(shell_id);
+    }
 }
