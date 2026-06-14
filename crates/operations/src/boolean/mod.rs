@@ -114,6 +114,41 @@ pub fn boolean(
                     .all(|(outer_d, inner_d)| *outer_d > *inner_d * 1.1)
             };
 
+        // AABB enclosure is necessary but NOT sufficient for solid
+        // containment: a non-convex container (notched or hollow) can
+        // AABB-enclose a solid that actually lies in its empty region.
+        // Issue #801: `(a − b) ∪ (a ∩ b)` dropped the `a ∩ b` operand
+        // because the unit cube's bbox fits inside the notched `a − b`'s
+        // bbox, yet the cube lives in the carved-out notch. Confirm the
+        // AABB-only fallback with a real point-in-solid test: reject when
+        // the inner solid's center is provably inside `inner` yet outside
+        // `outer`. By the containment lemma (inner ⊆ outer ⇒ every point
+        // of inner is in outer), that witness can only occur for genuine
+        // non-containment, so it never rejects a true containment.
+        let center_outside = |topo: &Topology,
+                              inner: SolidId,
+                              outer: SolidId,
+                              bb: &Option<(Point3, Point3)>|
+         -> bool {
+            let Some((lo, hi)) = *bb else { return false };
+            let c = Point3::new(
+                0.5 * (lo.x() + hi.x()),
+                0.5 * (lo.y() + hi.y()),
+                0.5 * (lo.z() + hi.z()),
+            );
+            let (dx, dy, dz) = (hi.x() - lo.x(), hi.y() - lo.y(), hi.z() - lo.z());
+            let defl = (dx.mul_add(dx, dy.mul_add(dy, dz * dz)).sqrt() * 0.01).max(1e-6);
+            let inside_inner = matches!(
+                crate::classify::classify_point(topo, inner, c, defl, tol.linear),
+                Ok(crate::classify::PointClassification::Inside)
+            );
+            let outside_outer = matches!(
+                crate::classify::classify_point(topo, outer, c, defl, tol.linear),
+                Ok(crate::classify::PointClassification::Outside)
+            );
+            inside_inner && outside_outer
+        };
+
         // Bidirectional vertex check via the analytic classifier — the
         // primary signal for identical/containment classification. A vertex
         // classifying as inside-or-on (None within tolerance band counts
@@ -144,10 +179,18 @@ pub fn boolean(
         // three dims so that sparse multi-shell solids (e.g., a fuse
         // of two disjoint boxes) don't false-positive as "contains
         // another solid".
-        let b_in_a = (all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
-            || (ca.is_none() && aabb_strictly_contains(&aabb_b, &aabb_a));
-        let a_in_b = (all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
-            || (cb.is_none() && aabb_strictly_contains(&aabb_a, &aabb_b));
+        // Both the analytic-classifier term and the AABB-only fallback can
+        // false-positive when the container is non-convex: the analytic
+        // classifier may mis-report notch points as inside-or-on, and an
+        // AABB encloses a notch's empty volume. Guard the whole determination
+        // with the `center_outside` witness — sound for every path because it
+        // only fires on proven non-containment (see the lemma above).
+        let b_in_a = ((all_b_verts_in_a && aabb_encloses(&aabb_b, &aabb_a))
+            || (ca.is_none() && aabb_strictly_contains(&aabb_b, &aabb_a)))
+            && !center_outside(topo, b, a, &aabb_b);
+        let a_in_b = ((all_a_verts_in_b && aabb_encloses(&aabb_a, &aabb_b))
+            || (cb.is_none() && aabb_strictly_contains(&aabb_a, &aabb_b)))
+            && !center_outside(topo, a, b, &aabb_a);
 
         // Identical-solid shortcut: matching AABBs AND every boundary
         // vertex of each solid classifies as inside-or-on the other's
