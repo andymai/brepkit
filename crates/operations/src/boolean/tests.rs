@@ -4215,14 +4215,14 @@ fn issue_801_recombined_box_is_genus0_manifold() {
 }
 
 #[test]
-#[ignore = "deep: GFA + mesh coincident-coplanar handling over-counts the \
-            slot fuse by a tessellation-artifact pyramid (vol 1083⅓ vs 1000); \
-            same root cause as #696. Tracks the eventual full fix."]
 fn issue_801_slot_fuse_recovers_volume() {
-    // b touches a on only two faces (a floating edge groove). Unlike the
-    // corner cases, both GFA same-domain annihilation and the mesh-boolean
-    // fallback leave a phantom 250/3 ≈ 83.3 volume from mismatched coincident-
-    // coplanar triangulations. When the coincident-coplanar work lands this
-    // must recover vol(a) = 1000.
-    assert_cut_fuse_back_recovers(10.0, 5.0, 2.5);
+    // b touches a on only two faces (a floating edge groove). The notched faces
+    // are U-shaped (notch open on one edge), which GFA's wire builder emitted
+    // with an out-and-back spur across the opening — over-connecting that edge
+    // and inflating the volume (the reported case went to 1083⅓).
+    // `remove_wire_spurs` strips the spur so the fuse recovers vol(a) as a clean
+    // manifold, across several groove sizes/positions.
+    assert_cut_fuse_back_recovers(10.0, 5.0, 2.5); // the reported repro
+    assert_cut_fuse_back_recovers(12.0, 4.0, 4.0);
+    assert_cut_fuse_back_recovers(8.0, 3.0, 2.0);
 }

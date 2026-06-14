@@ -314,6 +314,109 @@ pub fn remove_degenerate_edges(
     Ok(removed_count)
 }
 
+/// Remove out-and-back spurs from face wires.
+///
+/// A *spur* is a consecutive pair of oriented edges in a wire that reference the
+/// SAME edge with opposite orientations: the wire walks out along the edge and
+/// immediately walks back. It encloses zero area (it never changes the face's
+/// region) but it over-connects that edge — counting it twice for the face.
+///
+/// GFA's wire builder can emit a spur for a U-shaped face: when a notch opens
+/// onto a single boundary edge (e.g. `(a−b) ∪ (a∩b)` where `b` meets `a` on two
+/// faces, issue #801), the notched face's wire traverses the opening edge
+/// out-and-back instead of leaving it as the clean boundary shared with the
+/// filler face. The spur makes that edge non-manifold (3+ faces) and inflates
+/// the measured volume. Stripping it is always sound — the face region is
+/// unchanged and the edge drops to its correct neighbours.
+///
+/// Returns the number of oriented-edge occurrences removed (two per spur).
+///
+/// # Errors
+/// Returns an error if topology lookups fail.
+pub fn remove_wire_spurs(
+    topo: &mut Topology,
+    solid: SolidId,
+) -> Result<usize, crate::OperationsError> {
+    let face_ids = brepkit_topology::explorer::solid_faces(topo, solid)?;
+    let mut removed = 0;
+
+    for fid in face_ids {
+        let wire_ids: Vec<_> = {
+            let face = topo.face(fid)?;
+            std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .collect()
+        };
+
+        for wid in wire_ids {
+            let (mut oes, closed) = {
+                let wire = topo.wire(wid)?;
+                (wire.edges().to_vec(), wire.is_closed())
+            };
+
+            let n_removed = strip_wire_spurs(&mut oes);
+            if n_removed == 0 {
+                continue;
+            }
+            // Always write the stripped wire back when it still has an edge, so
+            // the over-connected spur edge is never left behind. If stripping
+            // takes the wire below three edges the face was already degenerate
+            // (a spur wrapping a bigon or self-loop); the residual bigon is then
+            // rejected by `validate_boolean_result` and the op drops to the mesh
+            // fallback — strictly better than letting the spur survive into the
+            // result. `Wire::new` only rejects an empty edge list.
+            if oes.is_empty() {
+                continue;
+            }
+
+            let new_wire = Wire::new(oes, closed)?;
+            let new_wid = topo.add_wire(new_wire);
+            let face = topo.face_mut(fid)?;
+            if face.outer_wire() == wid {
+                face.set_outer_wire(new_wid);
+            } else {
+                let inner = face.inner_wires().to_vec();
+                for (i, &iwid) in inner.iter().enumerate() {
+                    if iwid == wid {
+                        face.inner_wires_mut()[i] = new_wid;
+                    }
+                }
+            }
+            removed += n_removed;
+        }
+    }
+
+    Ok(removed)
+}
+
+/// Strip consecutive same-edge opposite-orientation pairs (out-and-back spurs)
+/// from an oriented-edge loop, including the wrap-around pair. Iterates because
+/// removing one spur can expose another. Returns the count removed.
+fn strip_wire_spurs(oes: &mut Vec<OrientedEdge>) -> usize {
+    let mut removed = 0;
+    loop {
+        let n = oes.len();
+        if n < 2 {
+            break;
+        }
+        let spur = (0..n).find_map(|i| {
+            let j = (i + 1) % n;
+            (oes[i].edge() == oes[j].edge() && oes[i].is_forward() != oes[j].is_forward())
+                .then_some((i, j))
+        });
+        match spur {
+            Some((i, j)) => {
+                let (lo, hi) = if i < j { (i, j) } else { (j, i) };
+                oes.remove(hi);
+                oes.remove(lo);
+                removed += 2;
+            }
+            None => break,
+        }
+    }
+    removed
+}
+
 /// Fix face orientations so normals point outward from the solid.
 ///
 /// Uses the signed volume test: for each face, computes the signed volume
