@@ -546,6 +546,10 @@ pub fn boolean(
             }
             if result_faces > 0 {
                 let _ = crate::heal::remove_degenerate_edges(topo, result, tol.linear)?;
+                // Strip out-and-back wire spurs left by the GFA wire builder on
+                // U-shaped (single-opening-notch) faces — they over-connect the
+                // opening edge and inflate volume (issue #801 slot fuse).
+                let _ = crate::heal::remove_wire_spurs(topo, result)?;
                 // A coincident-junction fuse can leave duplicate junction-wire
                 // edges (one per argument) that differ by sub-micron loft noise
                 // → free edges. Merge those coincident duplicates. Gated on the
