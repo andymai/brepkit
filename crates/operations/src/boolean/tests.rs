@@ -4140,3 +4140,89 @@ fn cut_concentric_rounded_rect_arc_prisms_cavity() {
         "expected 8 analytic cylinder faces (4 outer + 4 cavity), got {cyl}"
     );
 }
+
+// ── Issue #801: cut-then-fuse-back must recover original volume ──────
+
+/// Run `(a − b) ∪ (a ∩ b)` and assert it recovers `vol(a)`, regardless of
+/// fuse operand order. `a` and `b` are boxes placed at `(0,0,0)` and
+/// `(dx,0,0)`; `b` is nested in `a` so the union must equal `a`.
+fn assert_cut_fuse_back_recovers(a_dim: f64, b_dim: f64, b_dx: f64) {
+    let vol_a = a_dim * a_dim * a_dim;
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_box(&mut topo, a_dim, a_dim, a_dim).unwrap();
+    let b = crate::primitives::make_box(&mut topo, b_dim, b_dim, b_dim).unwrap();
+    if b_dx.abs() > 1e-9 {
+        crate::transform::transform_solid(
+            &mut topo,
+            b,
+            &brepkit_math::mat::Mat4::translation(b_dx, 0.0, 0.0),
+        )
+        .unwrap();
+    }
+
+    let a_minus_b = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
+    let a_and_b = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+
+    // Fuse in both operand orders — neither operand may be silently dropped.
+    for (first, second, order) in [
+        (a_minus_b, a_and_b, "(a-b)∪(a∩b)"),
+        (a_and_b, a_minus_b, "(a∩b)∪(a-b)"),
+    ] {
+        let recombined = boolean(&mut topo, BooleanOp::Fuse, first, second).unwrap();
+        let vol = crate::measure::solid_volume(&topo, recombined, 0.05).unwrap();
+        assert!(
+            (vol - vol_a).abs() < vol_a * 1e-4 + 1e-9,
+            "{order} for box({a_dim})/box({b_dim})@dx={b_dx} must recover vol(a)={vol_a}, got {vol}"
+        );
+    }
+}
+
+#[test]
+fn issue_801_fuse_recovers_cut_intersect_volume() {
+    // The reported minimal repro: box(2) ∪-recombined with box(1) at the corner.
+    assert_cut_fuse_back_recovers(2.0, 1.0, 0.0);
+}
+
+#[test]
+fn issue_801_fuse_recovers_volume_scaling() {
+    // The corner-nested scaling rows from the issue — error was always exactly
+    // vol(a ∩ b), confirming the second operand was dropped wholesale. The
+    // operands share three coincident cut-plane faces (a corner notch).
+    assert_cut_fuse_back_recovers(3.0, 1.0, 0.0); // 26 → 27
+    assert_cut_fuse_back_recovers(10.0, 5.0, 0.0); // 875 → 1000
+    assert_cut_fuse_back_recovers(3.0, 2.0, 1.0); // 19 → 27
+    assert_cut_fuse_back_recovers(10.0, 5.0, 5.0); // 875 → 1000 (other corner)
+}
+
+#[test]
+fn issue_801_recombined_box_is_genus0_manifold() {
+    // The recombined corner-cube union must be a clean genus-0 manifold with
+    // the correct volume. (It carries 9 faces rather than 6 because the three
+    // coplanar filler faces are not yet merged with the L-shaped outer faces —
+    // a separate same-domain coplanar-merge concern, not a volume defect.)
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let a_minus_b = boolean(&mut topo, BooleanOp::Cut, a, b).unwrap();
+    let a_and_b = boolean(&mut topo, BooleanOp::Intersect, a, b).unwrap();
+    let recombined = boolean(&mut topo, BooleanOp::Fuse, a_minus_b, a_and_b).unwrap();
+
+    check_result(&topo, recombined); // asserts manifold
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, recombined).unwrap();
+    let euler = v as i64 - e as i64 + f as i64;
+    assert_eq!(euler, 2, "recombined union must be genus-0 (V-E+F=2)");
+    assert_volume_near(&topo, recombined, 8.0, 1e-4);
+}
+
+#[test]
+#[ignore = "deep: GFA + mesh coincident-coplanar handling over-counts the \
+            slot fuse by a tessellation-artifact pyramid (vol 1083⅓ vs 1000); \
+            same root cause as #696. Tracks the eventual full fix."]
+fn issue_801_slot_fuse_recovers_volume() {
+    // b touches a on only two faces (a floating edge groove). Unlike the
+    // corner cases, both GFA same-domain annihilation and the mesh-boolean
+    // fallback leave a phantom 250/3 ≈ 83.3 volume from mismatched coincident-
+    // coplanar triangulations. When the coincident-coplanar work lands this
+    // must recover vol(a) = 1000.
+    assert_cut_fuse_back_recovers(10.0, 5.0, 2.5);
+}
