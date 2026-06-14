@@ -66,7 +66,10 @@ pub(super) fn tessellate_revolution_band_shared(
         let e = topo.edge(oe.edge())?;
         let closed = e.start() == e.end();
         match e.curve() {
-            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) if closed => {
+            // Only closed circles are rims here. The caller gates this path on
+            // `is_standard_rect` (Line | Circle edges only), so ellipse rims
+            // never reach it — they take the CDT path instead.
+            EdgeCurve::Circle(_) if closed => {
                 let idx = oe.edge().index();
                 if !rim_edge_ids.contains(&idx) {
                     rim_edge_ids.push(idx);
