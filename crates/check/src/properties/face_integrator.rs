@@ -381,15 +381,20 @@ fn integrate_parametric<S: ParametricSurface>(
     gauss_order: usize,
     sign: f64,
 ) -> FaceContribution {
-    let gauss_pts = gauss_legendre_points(gauss_order);
-
     // Composite quadrature: tile the domain into patches no larger than ~PI/4
     // so one Gauss rule resolves curved and periodic integrands. A single patch
     // over a torus's full 2*PI period in both u and v under-resolves it (~0.5%
-    // error); several patches per period converge to machine precision.
+    // error); several patches per period converge to machine precision. The
+    // patch count is capped so a long *linear* axis (e.g. a tall cylinder/cone
+    // whose v is axial distance) cannot make integration cost scale with model
+    // size — its integrand is low-degree, so a bounded number of patches stays
+    // exact. Angular axes never exceed 2*PI (= 8 patches), well under the cap.
+    const MAX_PATCHES: usize = 16;
+
+    let gauss_pts = gauss_legendre_points(gauss_order);
     let patch = std::f64::consts::FRAC_PI_4;
-    let nu = (((u_range.1 - u_range.0).abs() / patch).ceil() as usize).max(1);
-    let nv = (((v_range.1 - v_range.0).abs() / patch).ceil() as usize).max(1);
+    let nu = (((u_range.1 - u_range.0).abs() / patch).ceil() as usize).clamp(1, MAX_PATCHES);
+    let nv = (((v_range.1 - v_range.0).abs() / patch).ceil() as usize).clamp(1, MAX_PATCHES);
     let du_patch = (u_range.1 - u_range.0) / nu as f64;
     let dv_patch = (v_range.1 - v_range.0) / nv as f64;
     let u_scale = du_patch / 2.0;
