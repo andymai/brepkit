@@ -571,10 +571,15 @@ fn cut_then_fuse_back_containment() {
 //   inter  = Intersect(A, B) // identical-shortcut: copy of A, vol ≈ 0.125000075
 //   fused  = Fuse(diff, inter)
 //   expect: vol(fused) ≈ vol(A) since diff ⊂ inter
-//   actual: vol(fused) ≈ 1.5×vol(A) — the overlap region is double-counted.
-
+//
+// Regression: diff's three d=0 origin faces are 0.0001-thin L-frames around
+// the inner cube. Sampling their interior for classification overshot the
+// strip into the concave notch (the removed cube corner), misclassifying two
+// of the three as Inside. They were dropped from the Fuse, leaving an open
+// shell that fell back to the mesh boolean, which double-counted the
+// coincident interface (+0.0625 = half the inner cube). Robust concave-face
+// sampling keeps all three, so the GFA result assembles directly.
 #[test]
-#[ignore = "Fuse(thin L-shell, containing solid) overshoots: vol_fused ≈ 1.5×vol(A) (0.18758 vs 0.12508, surplus 0.0625 = half the inner cube) instead of ≈ vol(A) — the overlap region is double-counted in the assembled result."]
 fn fuse_thin_shell_with_containing_solid_preserves_larger_volume() {
     // Uses 0.5001 (above tol.linear) so the identical-Cut shortcut doesn't
     // fire and Cut(A,B) actually goes through GFA, producing the L-shell.
