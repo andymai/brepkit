@@ -463,15 +463,23 @@ fn sample_face_interior(
     // thin sliver. Project the boundary, then pick the offset sign (shrinking
     // the magnitude for strips thinner than the offset) that lands inside.
     if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = surface {
-        if inward_len > 1e-12 {
-            let mut poly = Vec::with_capacity(edges.len());
-            for oe in edges {
-                let e = topo.edge(oe.edge())?;
-                poly.push(topo.vertex(oe.oriented_start(e))?.point());
-            }
+        let mut poly = Vec::with_capacity(edges.len());
+        for oe in edges {
+            let e = topo.edge(oe.edge())?;
+            poly.push(topo.vertex(oe.oriented_start(e))?.point());
+        }
+        // A boundary with >= 3 vertices forms a real polygon to test against.
+        // A planar face bounded by a single closed curve (one circle/ellipse
+        // edge → <3 vertices) has no polygon; its centroid is the disc center
+        // (interior), so it falls through to the centroid heuristic below.
+        if inward_len > 1e-12 && poly.len() >= 3 {
             let frame = plane_frame::PlaneFrame::from_plane_face(*normal, &poly);
             let poly2d: Vec<_> = poly.iter().map(|p| frame.project(*p)).collect();
             let eps = classify_2d::boundary_eps(&poly2d);
+            // Halve the offset until a candidate lands strictly inside. 24
+            // halvings reach scale ~6e-8 (min offset ~diag·6e-12), below any
+            // physically meaningful strip width, so the loop only exits to the
+            // fallback for a near-zero-area (degenerate) face.
             let mut scale = 1.0_f64;
             for _ in 0..24 {
                 for sign in [1.0_f64, -1.0] {
@@ -485,10 +493,16 @@ fn sample_face_interior(
                 }
                 scale *= 0.5;
             }
-            // Near-zero-area face: robust interior point of the projected
-            // boundary, mapped back to 3D.
+            // Near-zero-area face: try a robust interior point of the projected
+            // boundary. Verify it before use — its last-resort path returns the
+            // vertex centroid, which can fall outside a concave boundary. If
+            // even that is exterior, fall back to the edge midpoint (on the
+            // boundary, never exterior) rather than a known-bad sample.
             let ip = classify_2d::sample_interior_point(&poly2d);
-            return Ok(frame.evaluate(ip.x(), ip.y()));
+            if classify_2d::point_in_polygon_2d(ip, &poly2d) {
+                return Ok(frame.evaluate(ip.x(), ip.y()));
+            }
+            return Ok(mid_pt);
         }
     }
 
@@ -524,6 +538,15 @@ fn sample_face_interior(
         }
     }
 
+    // Planes have no UV projection, but the inward offset is already in-plane,
+    // so the offset point itself is the on-surface sample. This reaches a
+    // planar face only when its boundary has < 3 vertices (a single closed
+    // circle/ellipse edge); the centroid above is the disc center, so the
+    // flipped offset points into the disc.
+    if matches!(surface, brepkit_topology::face::FaceSurface::Plane { .. }) && inward_len > 1e-12 {
+        return Ok(interior_pt);
+    }
+
     // Fallback: use the midpoint itself (it's on the boundary, not ideal
     // but better than a centroid that may be outside the face)
     Ok(mid_pt)
@@ -533,6 +556,7 @@ fn sample_face_interior(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+    use brepkit_math::vec::Vec3;
     use brepkit_topology::builder::{make_face_from_wire, make_polygon_wire};
 
     #[test]
@@ -557,9 +581,49 @@ mod tests {
         let face = make_face_from_wire(&mut topo, wire).unwrap();
 
         let pt = sample_face_interior(&topo, face, Tolerance::default()).unwrap();
+        // Strip check (not in the notch)...
         assert!(
             pt.x() >= n - 1e-9 || pt.y() >= n - 1e-9,
             "sample {pt:?} fell in the notch instead of the L-frame strip"
+        );
+        // ...and a direct interior-membership proof against the L-polygon.
+        let frame = plane_frame::PlaneFrame::from_plane_face(Vec3::new(0.0, 0.0, 1.0), &pts);
+        let poly2d: Vec<_> = pts.iter().map(|p| frame.project(*p)).collect();
+        assert!(
+            classify_2d::point_in_polygon_2d(frame.project(pt), &poly2d),
+            "sample {pt:?} is not inside the L-frame polygon"
+        );
+    }
+
+    #[test]
+    fn sample_face_interior_planar_disc_lands_inside() {
+        // A planar disc bounded by a single closed circle edge has < 3 boundary
+        // vertices, so the point-in-polygon path can't apply. The sample must
+        // still land inside the disc, not on the bounding circle (the
+        // degenerate-polygon failure mode).
+        use brepkit_topology::builder::make_circle_edge;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let edge = make_circle_edge(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            1e-7,
+        )
+        .unwrap();
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        let face = make_face_from_wire(&mut topo, wire).unwrap();
+
+        let pt = sample_face_interior(&topo, face, Tolerance::default()).unwrap();
+        let r = pt.x().hypot(pt.y());
+        // Strictly inside the unit disc. The degenerate-polygon failure mode
+        // (point_in_polygon on a single projected vertex → boundary vertex)
+        // would return a point on the circle (r == 1.0).
+        assert!(
+            r < 1.0 - 1e-9,
+            "disc sample (r={r}) should be interior, not on the bounding circle"
         );
     }
 }
