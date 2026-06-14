@@ -3,10 +3,150 @@
 use brepkit_math::det_hash::{DetHashMap, DetHashSet};
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
 use super::edge_sampling::{sample_edge, segments_for_chord_deviation_a};
 use super::{MERGE_GRID, TriangleMesh, point_merge_key};
+
+/// Maps a 3D point to its `(u, v)` surface parameters.
+type ProjectFn = Box<dyn Fn(Point3) -> (f64, f64)>;
+/// Maps `(u, v)` surface parameters to the outward surface normal.
+type NormalFn = Box<dyn Fn(f64, f64) -> Vec3>;
+
+/// Tessellate a cylinder/cone lateral "standard band" face directly from the
+/// shared rim edge vertices, bypassing the snap path's proximity reconciliation.
+///
+/// The snap path tessellates the cylinder independently and snaps its rim
+/// vertices to the shared edge pool by 1e-6 proximity; when the independent rim
+/// sampling and the shared-edge sampling diverge by one segment (a radius/
+/// deflection-dependent off-by-one) the rim vertices land at different angles,
+/// fail the snap, and become near-coincident duplicates that crack the mesh
+/// (issue #696: a drilled magnet hole). Reusing the shared rim vertices makes
+/// the band watertight by construction.
+///
+/// Returns `Ok(true)` when the face is a simple two-rim band that was handled
+/// here, `Ok(false)` when it is not (the caller then falls back to the snap or
+/// CDT path). A "simple band" has no inner wires, exactly two **closed**
+/// rim-circle edges (everything else a seam line), and matching shared-vertex
+/// counts on the two rims.
+pub(super) fn tessellate_revolution_band_shared(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+    edge_global_indices: &DetHashMap<usize, Vec<u32>>,
+    merged: &mut TriangleMesh,
+) -> Result<bool, crate::OperationsError> {
+    if !face_data.inner_wires().is_empty() {
+        return Ok(false);
+    }
+
+    // Angle (u) projection and outward-normal closures for the surface.
+    let (project, surf_normal): (ProjectFn, NormalFn) = match face_data.surface() {
+        FaceSurface::Cylinder(c) => {
+            let (c1, c2) = (c.clone(), c.clone());
+            (
+                Box::new(move |p| c1.project_point(p)),
+                Box::new(move |u, v| c2.normal(u, v)),
+            )
+        }
+        FaceSurface::Cone(c) => {
+            let (c1, c2) = (c.clone(), c.clone());
+            (
+                Box::new(move |p| c1.project_point(p)),
+                Box::new(move |u, v| c2.normal(u, v)),
+            )
+        }
+        _ => return Ok(false),
+    };
+
+    // Collect the two closed rim-circle edges; everything else must be a seam line.
+    let wire = topo.wire(face_data.outer_wire())?;
+    let mut rim_edge_ids: Vec<usize> = Vec::new();
+    for oe in wire.edges() {
+        let e = topo.edge(oe.edge())?;
+        let closed = e.start() == e.end();
+        match e.curve() {
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) if closed => {
+                let idx = oe.edge().index();
+                if !rim_edge_ids.contains(&idx) {
+                    rim_edge_ids.push(idx);
+                }
+            }
+            EdgeCurve::Line => {}
+            // An open arc rim, a NURBS boundary, or an open circle is not a
+            // simple full-revolution band — let the caller handle it.
+            _ => return Ok(false),
+        }
+    }
+    if rim_edge_ids.len() != 2 {
+        return Ok(false);
+    }
+
+    // Pull each rim's shared global vertex IDs, drop the closing duplicate, and
+    // require matching counts so the rings connect index-for-index.
+    let mut rims: Vec<Vec<u32>> = Vec::with_capacity(2);
+    for &re in &rim_edge_ids {
+        let Some(ids) = edge_global_indices.get(&re) else {
+            return Ok(false);
+        };
+        let mut ids = ids.clone();
+        if ids.len() > 1 && ids.first() == ids.last() {
+            ids.pop();
+        }
+        if ids.len() < 3 {
+            return Ok(false);
+        }
+        rims.push(ids);
+    }
+    if rims[0].len() != rims[1].len() {
+        return Ok(false);
+    }
+    let n = rims[0].len();
+
+    // Sort each rim by angle around the axis so the two rings align by index.
+    let angle_of = |gid: u32, merged: &TriangleMesh| project(merged.positions[gid as usize]).0;
+    for rim in &mut rims {
+        rim.sort_by(|&a, &b| {
+            angle_of(a, merged)
+                .partial_cmp(&angle_of(b, merged))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    // Emit default-oriented (non-reversed) triangles: the geometric normal
+    // matches the surface outward normal, the convention `tessellate_analytic`
+    // uses. The caller (`tessellate_face_with_shared_edges`) applies the global
+    // `is_reversed` winding flip afterward, so we must NOT apply it here.
+    let emit = |merged: &mut TriangleMesh, a: u32, b: u32, c: u32| {
+        let (pa, pb, pc) = (
+            merged.positions[a as usize],
+            merged.positions[b as usize],
+            merged.positions[c as usize],
+        );
+        // Skip degenerate triangles (two rim points at the same position).
+        let geo = (pb - pa).cross(pc - pa);
+        if geo.length() < 1e-20 {
+            return;
+        }
+        let (u, v) = project(pa);
+        let outward = surf_normal(u, v);
+        let mut tri = [a, b, c];
+        if geo.dot(outward) < 0.0 {
+            tri.swap(1, 2);
+        }
+        merged.indices.extend_from_slice(&tri);
+    };
+
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let (b0, b1) = (rims[0][i], rims[0][j]);
+        let (t0, t1) = (rims[1][i], rims[1][j]);
+        emit(merged, b0, b1, t1);
+        emit(merged, b0, t1, t0);
+    }
+
+    Ok(true)
+}
 
 /// CDT-based tessellation for non-planar faces with exact boundary constraints.
 ///

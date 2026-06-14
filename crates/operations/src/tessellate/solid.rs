@@ -10,7 +10,9 @@ use brepkit_topology::solid::SolidId;
 use super::TriangleMesh;
 use super::edge_sampling::{circle_param_range, sample_edge, segments_for_chord_deviation_a};
 use super::mesh_ops::{dedupe_coincident_triangles, weld_boundary_vertices};
-use super::nonplanar::{tessellate_nonplanar_cdt, tessellate_nonplanar_snap};
+use super::nonplanar::{
+    tessellate_nonplanar_cdt, tessellate_nonplanar_snap, tessellate_revolution_band_shared,
+};
 use super::nurbs::{compute_angular_range, compute_v_param_range};
 use super::planar::{
     cdt_triangulate_simple, collect_wire_global_vertices, project_by_normal,
@@ -814,16 +816,25 @@ pub(super) fn tessellate_face_with_shared_edges(
         };
 
         if is_standard_rect {
-            tessellate_nonplanar_snap(
-                topo,
-                face_id,
-                face_data,
-                deflection,
-                angular_tol,
-                edge_global_indices,
-                merged,
-                point_to_global,
-            )?;
+            // Prefer a structured band built from the shared rim vertices — it
+            // is watertight by construction and avoids the snap path's proximity
+            // reconciliation, which cracks drilled holes at certain radius/
+            // deflection combos (issue #696). Falls back to snap for faces that
+            // aren't a simple two-rim full-revolution band.
+            let handled =
+                tessellate_revolution_band_shared(topo, face_data, edge_global_indices, merged)?;
+            if !handled {
+                tessellate_nonplanar_snap(
+                    topo,
+                    face_id,
+                    face_data,
+                    deflection,
+                    angular_tol,
+                    edge_global_indices,
+                    merged,
+                    point_to_global,
+                )?;
+            }
         } else {
             let pos_save = merged.positions.len();
             let nrm_save = merged.normals.len();

@@ -540,28 +540,17 @@ fn tessellate_boolean_cut_cylinder_watertight() {
 }
 
 /// Issue #696: a cylindrical hole drilled through a box must tessellate
-/// watertight across radii and deflections, but currently does not.
+/// watertight across radii and deflections.
 ///
-/// Root cause: a drilled-hole cylinder lateral face takes the `is_standard_rect`
-/// snap path in `tessellate_face_with_shared_edges`. That path tessellates the
-/// cylinder independently (grid `nu = segments_for_chord_deviation_a` over the
-/// `compute_angular_range` span) and then reconciles the rim vertices to the
-/// shared edge pool by 1e-6 proximity. The shared rim *edge* is sampled by
-/// `edge_sample_count` over a `TAU` span; at radius/deflection combinations
-/// where the two segment counts diverge by one (e.g. r=3.25, deflection=0.05)
-/// the independent rim vertices land at different angles than the shared ones,
-/// fail the proximity snap, and become near-coincident duplicates — cracking
-/// the mesh (204 boundary edges).
-///
-/// Two fixes were explored and rejected: (1) routing drilled holes through the
-/// CDT path is watertight for clean through-holes but over-tessellates ~24x
-/// (the `interior_grid_resolution` `n_v` uses curvature for the straight axial
-/// direction) and still cracks coincident-cap holes; (2) pinning the grid's
-/// angular span to TAU did not align the counts. The real fix must make the
-/// snap path's rim sampling identical to the shared edge sampling (count AND
-/// phase). Tracked here as a runnable repro.
-#[ignore = "issue #696: drilled-hole cylinder snap-path rim sampling cracks the \
-            mesh at certain radius/deflection combos; needs rim-sampling alignment"]
+/// Previously a drilled-hole cylinder lateral face took the snap path, which
+/// tessellated the cylinder independently and reconciled its rim vertices to
+/// the shared edge pool by 1e-6 proximity. At radius/deflection combinations
+/// where the independent rim sampling and the shared-edge sampling diverged by
+/// one segment (e.g. r=3.25, deflection=0.05), the rim vertices landed at
+/// different angles, failed the snap, and became near-coincident duplicates —
+/// cracking the mesh (up to 252 boundary edges). The fix tessellates such bands
+/// directly from the shared rim vertices (`tessellate_revolution_band_shared`),
+/// making them watertight by construction.
 #[test]
 fn tessellate_drilled_hole_watertight_across_radii() {
     use brepkit_math::mat::Mat4;
@@ -585,6 +574,38 @@ fn tessellate_drilled_hole_watertight_across_radii() {
                 "drilled hole r={r} defl={defl} must be watertight, got bd={boundary} nm={nm}"
             );
         }
+    }
+}
+
+/// Issue #696 end-to-end: a gridfinity-style tile (pocketed slab + four magnet
+/// holes drilled through the floor into the pocket cavity) must tessellate
+/// watertight. This is the multi-feature scenario the consumer hit; the magnet
+/// cylinders are drilled holes that exercise the shared-rim band path.
+#[test]
+fn tessellate_gridfinity_magnet_tile_watertight() {
+    use crate::boolean::{BooleanOp, boolean};
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let slab = crate::primitives::make_box(&mut topo, 42.0, 42.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, slab, &Mat4::translation(0.0, 0.0, -8.0)).unwrap();
+    let pocket = crate::primitives::make_box(&mut topo, 35.0, 35.0, 6.5).unwrap();
+    crate::transform::transform_solid(&mut topo, pocket, &Mat4::translation(3.5, 3.5, -6.0))
+        .unwrap();
+    let mut tile = boolean(&mut topo, BooleanOp::Cut, slab, pocket).unwrap();
+    for (cx, cy) in [(7.0, 7.0), (35.0, 7.0), (7.0, 35.0), (35.0, 35.0)] {
+        let cyl = crate::primitives::make_cylinder(&mut topo, 3.25, 4.0).unwrap();
+        crate::transform::transform_solid(&mut topo, cyl, &Mat4::translation(cx, cy, -8.5))
+            .unwrap();
+        tile = boolean(&mut topo, BooleanOp::Cut, tile, cyl).unwrap();
+    }
+    for &defl in &[0.05_f64, 0.1] {
+        let mesh = tessellate_solid(&topo, tile, defl).unwrap();
+        assert_eq!(
+            (boundary_edge_count(&mesh), non_manifold_edge_count(&mesh)),
+            (0, 0),
+            "magnet tile must tessellate watertight at deflection {defl}"
+        );
     }
 }
 
