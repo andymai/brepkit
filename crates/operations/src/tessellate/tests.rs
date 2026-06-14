@@ -539,6 +539,55 @@ fn tessellate_boolean_cut_cylinder_watertight() {
     );
 }
 
+/// Issue #696: a cylindrical hole drilled through a box must tessellate
+/// watertight across radii and deflections, but currently does not.
+///
+/// Root cause: a drilled-hole cylinder lateral face takes the `is_standard_rect`
+/// snap path in `tessellate_face_with_shared_edges`. That path tessellates the
+/// cylinder independently (grid `nu = segments_for_chord_deviation_a` over the
+/// `compute_angular_range` span) and then reconciles the rim vertices to the
+/// shared edge pool by 1e-6 proximity. The shared rim *edge* is sampled by
+/// `edge_sample_count` over a `TAU` span; at radius/deflection combinations
+/// where the two segment counts diverge by one (e.g. r=3.25, deflection=0.05)
+/// the independent rim vertices land at different angles than the shared ones,
+/// fail the proximity snap, and become near-coincident duplicates — cracking
+/// the mesh (204 boundary edges).
+///
+/// Two fixes were explored and rejected: (1) routing drilled holes through the
+/// CDT path is watertight for clean through-holes but over-tessellates ~24x
+/// (the `interior_grid_resolution` `n_v` uses curvature for the straight axial
+/// direction) and still cracks coincident-cap holes; (2) pinning the grid's
+/// angular span to TAU did not align the counts. The real fix must make the
+/// snap path's rim sampling identical to the shared edge sampling (count AND
+/// phase). Tracked here as a runnable repro.
+#[ignore = "issue #696: drilled-hole cylinder snap-path rim sampling cracks the \
+            mesh at certain radius/deflection combos; needs rim-sampling alignment"]
+#[test]
+fn tessellate_drilled_hole_watertight_across_radii() {
+    use brepkit_math::mat::Mat4;
+
+    for &r in &[2.5_f64, 3.0, 3.25, 3.5, 4.0, 5.0] {
+        for &defl in &[0.05_f64, 0.1] {
+            let mut topo = Topology::new();
+            let box_s = crate::primitives::make_box(&mut topo, 20.0, 20.0, 10.0).unwrap();
+            let cyl = crate::primitives::make_cylinder(&mut topo, r, 20.0).unwrap();
+            crate::transform::transform_solid(&mut topo, cyl, &Mat4::translation(10.0, 10.0, -5.0))
+                .unwrap();
+            let result =
+                crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, box_s, cyl)
+                    .unwrap();
+            let mesh = tessellate_solid(&topo, result, defl).unwrap();
+            let boundary = boundary_edge_count(&mesh);
+            let nm = non_manifold_edge_count(&mesh);
+            assert_eq!(
+                (boundary, nm),
+                (0, 0),
+                "drilled hole r={r} defl={defl} must be watertight, got bd={boundary} nm={nm}"
+            );
+        }
+    }
+}
+
 #[test]
 fn tessellate_boolean_cut_cone_watertight() {
     use brepkit_math::mat::Mat4;
