@@ -231,9 +231,10 @@ fn face_uv_bounds<S: ParametricSurface>(
     }
 
     if u_min >= u_max || v_min >= v_max {
-        return Err(CheckError::IntegrationFailed(
-            "degenerate UV domain for face".into(),
-        ));
+        // A degenerate projection (e.g. all boundary vertices on a sphere's
+        // pole seam) does not mean an empty face — it means the boundary failed
+        // to bound a sub-region, so the face spans the full analytic domain.
+        return Ok(full_domain);
     }
 
     Ok(((u_min, u_max), (v_min, v_max)))
@@ -382,10 +383,17 @@ fn integrate_parametric<S: ParametricSurface>(
 ) -> FaceContribution {
     let gauss_pts = gauss_legendre_points(gauss_order);
 
-    let u_scale = (u_range.1 - u_range.0) / 2.0;
-    let u_mid = f64::midpoint(u_range.0, u_range.1);
-    let v_scale = (v_range.1 - v_range.0) / 2.0;
-    let v_mid = f64::midpoint(v_range.0, v_range.1);
+    // Composite quadrature: tile the domain into patches no larger than ~PI/4
+    // so one Gauss rule resolves curved and periodic integrands. A single patch
+    // over a torus's full 2*PI period in both u and v under-resolves it (~0.5%
+    // error); several patches per period converge to machine precision.
+    let patch = std::f64::consts::FRAC_PI_4;
+    let nu = (((u_range.1 - u_range.0).abs() / patch).ceil() as usize).max(1);
+    let nv = (((v_range.1 - v_range.0).abs() / patch).ceil() as usize).max(1);
+    let du_patch = (u_range.1 - u_range.0) / nu as f64;
+    let dv_patch = (v_range.1 - v_range.0) / nv as f64;
+    let u_scale = du_patch / 2.0;
+    let v_scale = dv_patch / 2.0;
 
     let mut area = 0.0;
     let mut vol = 0.0;
@@ -396,40 +404,46 @@ fn integrate_parametric<S: ParametricSurface>(
     let mut cy = 0.0;
     let mut cz = 0.0;
 
-    for gpu in gauss_pts {
-        let u = u_scale.mul_add(gpu.x, u_mid);
-        for gpv in gauss_pts {
-            let v = v_scale.mul_add(gpv.x, v_mid);
-            let w = gpu.w * gpv.w * u_scale * v_scale;
+    for iu in 0..nu {
+        let u_mid = du_patch.mul_add(iu as f64, u_range.0) + u_scale;
+        for iv in 0..nv {
+            let v_mid = dv_patch.mul_add(iv as f64, v_range.0) + v_scale;
+            for gpu in gauss_pts {
+                let u = u_scale.mul_add(gpu.x, u_mid);
+                for gpv in gauss_pts {
+                    let v = v_scale.mul_add(gpv.x, v_mid);
+                    let w = gpu.w * gpv.w * u_scale * v_scale;
 
-            let p = surface.evaluate(u, v);
-            let du = surface.partial_u(u, v);
-            let dv = surface.partial_v(u, v);
+                    let p = surface.evaluate(u, v);
+                    let du = surface.partial_u(u, v);
+                    let dv = surface.partial_v(u, v);
 
-            // Normal = du x dv (unnormalized, includes Jacobian)
-            let n = Vec3::new(
-                du.y() * dv.z() - du.z() * dv.y(),
-                du.z() * dv.x() - du.x() * dv.z(),
-                du.x() * dv.y() - du.y() * dv.x(),
-            );
-            let n_len = n.length();
+                    // Normal = du x dv (unnormalized, includes Jacobian)
+                    let n = Vec3::new(
+                        du.y() * dv.z() - du.z() * dv.y(),
+                        du.z() * dv.x() - du.x() * dv.z(),
+                        du.x() * dv.y() - du.y() * dv.x(),
+                    );
+                    let n_len = n.length();
 
-            area += w * n_len;
+                    area += w * n_len;
 
-            // Volume: (1/3) P dot N (unnormalized N includes Jacobian)
-            let pv = Vec3::new(p.x(), p.y(), p.z());
-            vol += w * pv.dot(n) / 3.0;
+                    // Volume: (1/3) P dot N (unnormalized N includes Jacobian)
+                    let pv = Vec3::new(p.x(), p.y(), p.z());
+                    vol += w * pv.dot(n) / 3.0;
 
-            // Volume moments via divergence theorem:
-            // CoM_x = (1/2V) surface_integral(x^2 * n_x dA)
-            // n already includes Jacobian, so n.x() = N_x * |J|
-            mx += w * 0.5 * p.x() * p.x() * n.x();
-            my += w * 0.5 * p.y() * p.y() * n.y();
-            mz += w * 0.5 * p.z() * p.z() * n.z();
+                    // Volume moments via divergence theorem:
+                    // CoM_x = (1/2V) surface_integral(x^2 * n_x dA)
+                    // n already includes Jacobian, so n.x() = N_x * |J|
+                    mx += w * 0.5 * p.x() * p.x() * n.x();
+                    my += w * 0.5 * p.y() * p.y() * n.y();
+                    mz += w * 0.5 * p.z() * p.z() * n.z();
 
-            cx += w * p.x() * n_len;
-            cy += w * p.y() * n_len;
-            cz += w * p.z() * n_len;
+                    cx += w * p.x() * n_len;
+                    cy += w * p.y() * n_len;
+                    cz += w * p.z() * n_len;
+                }
+            }
         }
     }
 
@@ -445,6 +459,22 @@ fn integrate_parametric<S: ParametricSurface>(
     }
 }
 
+/// Absolute shoelace area of a UV polygon. Near-zero means the boundary has
+/// collapsed onto a line or point (a degenerate seam/pole projection).
+fn polygon_area(poly: &[(f64, f64)]) -> f64 {
+    let n = poly.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let mut a = 0.0;
+    for i in 0..n {
+        let (x0, y0) = poly[i];
+        let (x1, y1) = poly[(i + 1) % n];
+        a += x0 * y1 - x1 * y0;
+    }
+    (a * 0.5).abs()
+}
+
 /// Dispatch to trimmed or untrimmed parametric integration based on whether
 /// a UV boundary polygon is available.
 fn integrate_with_trimming<S: ParametricSurface>(
@@ -456,7 +486,68 @@ fn integrate_with_trimming<S: ParametricSurface>(
     uv_boundary: &[(f64, f64)],
     u_periodic: bool,
 ) -> FaceContribution {
-    if uv_boundary.len() >= 3 {
+    if uv_boundary.len() < 3 {
+        return integrate_parametric(surface, u_range, v_range, gauss_order, sign);
+    }
+
+    // The dense boundary polygon is the reliable signal for a face's true
+    // parametric extent: `face_uv_bounds` samples only sparse edge endpoints and
+    // under-spans full-revolution faces (a cone's lateral face reports a narrow
+    // u-range though its boundary wraps the full 2pi). A face that wraps the
+    // full period in u, or whose boundary collapses onto a seam or pole, cannot
+    // be trimmed by a UV polygon — the apex/pole/seam folds the polygon and the
+    // point-in-polygon test rejects valid interior samples. Integrate the
+    // analytic surface untrimmed over its true domain in those cases.
+    let u_min = uv_boundary
+        .iter()
+        .map(|p| p.0)
+        .fold(f64::INFINITY, f64::min);
+    let v_min = uv_boundary
+        .iter()
+        .map(|p| p.1)
+        .fold(f64::INFINITY, f64::min);
+    let v_max = uv_boundary
+        .iter()
+        .map(|p| p.1)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    // Winding number of the boundary around the periodic u-axis: ±TAU for a
+    // face that wraps a full revolution, ~0 for a partially-trimmed face.
+    // Computed from shortest signed steps so it is independent of the
+    // boundary's discretization (segment count).
+    let tau = std::f64::consts::TAU;
+    let winding: f64 = (0..uv_boundary.len())
+        .map(|i| {
+            let d = uv_boundary[(i + 1) % uv_boundary.len()].0 - uv_boundary[i].0;
+            d - tau * ((d + std::f64::consts::PI) / tau).floor()
+        })
+        .sum();
+    let full_revolution = u_periodic && winding.abs() >= tau - 1e-3;
+    let v_degenerate = (v_max - v_min) <= 1e-9;
+
+    if full_revolution && v_degenerate {
+        // Polar cap (e.g. a sphere hemisphere bounded only by one latitude
+        // circle): the cap runs from that latitude to a pole. The winding sign
+        // (CCW vs CW boundary) selects which pole — the boundary's interior
+        // side — so the two hemispheres do not both integrate the whole sphere.
+        let v_pole = if winding >= 0.0 { v_range.1 } else { v_range.0 };
+        let v_dom = (v_min.min(v_pole), v_min.max(v_pole));
+        integrate_parametric(surface, (u_min, u_min + tau), v_dom, gauss_order, sign)
+    } else if full_revolution {
+        // Full-revolution band (cone/cylinder): integrate the whole revolution
+        // over the band's v-extent.
+        integrate_parametric(
+            surface,
+            (u_min, u_min + tau),
+            (v_min, v_max),
+            gauss_order,
+            sign,
+        )
+    } else if polygon_area(uv_boundary) <= 1e-12 {
+        // Collapsed polygon (e.g. a closed torus whose seam projects to a
+        // point): trust the analytic full-domain range from `face_uv_bounds`.
+        integrate_parametric(surface, u_range, v_range, gauss_order, sign)
+    } else {
         integrate_parametric_trimmed(
             surface,
             u_range,
@@ -466,8 +557,6 @@ fn integrate_with_trimming<S: ParametricSurface>(
             uv_boundary,
             u_periodic,
         )
-    } else {
-        integrate_parametric(surface, u_range, v_range, gauss_order, sign)
     }
 }
 
