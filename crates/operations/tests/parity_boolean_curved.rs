@@ -50,13 +50,13 @@ fn curved_boolean_corpus() {
         // ── Cone (rb=0.5,rt=0,h=2, V=π/6) fully inside a 3-cube ─────────
         Case { name: "cone_in_box_common_vol", a: (BOX3, NONE), b: (Prim::Cone(0.5,0.0,2.0), C_AXIS), op: Op::Common, oracle: Oracle::Volume(PI / 6.0),  tol: CTOL, expect: Expect::Pass },
         Case { name: "cone_in_box_fuse_vol",   a: (BOX3, NONE), b: (Prim::Cone(0.5,0.0,2.0), C_AXIS), op: Op::Fuse,   oracle: Oracle::Volume(27.0),         tol: CTOL, expect: Expect::Pass },
-        Case { name: "cone_in_box_cut_vol",    a: (BOX3, NONE), b: (Prim::Cone(0.5,0.0,2.0), C_AXIS), op: Op::Cut,    oracle: Oracle::Volume(27.0 - PI / 6.0), tol: CTOL, expect: Expect::Gap("cone cut: tool not subtracted (full box remains)") },
+        Case { name: "cone_in_box_cut_vol",    a: (BOX3, NONE), b: (Prim::Cone(0.5,0.0,2.0), C_AXIS), op: Op::Cut,    oracle: Oracle::Volume(27.0 - PI / 6.0), tol: CTOL, expect: Expect::Pass },
 
         // ── Torus (R=1,r=0.3, V=0.18π²) fully inside a flat 3×3×1 box ───
         // Cut yields a box with a toroidal (genus-1) cavity.
         Case { name: "torus_in_box_common_vol", a: (Prim::Box(3.0,3.0,1.0), &[Xf::Translate(-1.5,-1.5,-0.5)]), b: (Prim::Torus(1.0,0.3), NONE), op: Op::Common, oracle: Oracle::Volume(0.18 * PI * PI), tol: CTOL, expect: Expect::Pass },
         Case { name: "torus_in_box_fuse_vol",   a: (Prim::Box(3.0,3.0,1.0), &[Xf::Translate(-1.5,-1.5,-0.5)]), b: (Prim::Torus(1.0,0.3), NONE), op: Op::Fuse,   oracle: Oracle::Volume(9.0),         tol: CTOL, expect: Expect::Pass },
-        Case { name: "torus_in_box_cut_vol",    a: (Prim::Box(3.0,3.0,1.0), &[Xf::Translate(-1.5,-1.5,-0.5)]), b: (Prim::Torus(1.0,0.3), NONE), op: Op::Cut,    oracle: Oracle::Volume(9.0 - 0.18 * PI * PI), tol: CTOL, expect: Expect::Gap("torus cut: tool not subtracted (full box remains)") },
+        Case { name: "torus_in_box_cut_vol",    a: (Prim::Box(3.0,3.0,1.0), &[Xf::Translate(-1.5,-1.5,-0.5)]), b: (Prim::Torus(1.0,0.3), NONE), op: Op::Cut,    oracle: Oracle::Volume(9.0 - 0.18 * PI * PI), tol: CTOL, expect: Expect::Pass },
 
         // ── Interpenetration probes (same-domain machinery) ────────────
         // Coaxial cylinders overlapping along the axis: a z∈[0,2], b z∈[1,3].

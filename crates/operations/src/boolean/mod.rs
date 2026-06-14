@@ -176,6 +176,26 @@ pub fn boolean(
                 reason: "Cut with target fully contained in tool".into(),
             });
         }
+        // Cut with the tool strictly inside the blank: build the hollow result
+        // (blank + a reversed copy of the tool as a cavity shell) directly.
+        // GFA's no-intersection assembly drops fully-contained cone/torus
+        // tools; the cavity is exactly the tool's reversed shell, so construct
+        // it here for any simple tool whose vertices are all strictly inside.
+        if op == BooleanOp::Cut && b_in_a && !a_in_b {
+            if let Some(classifier) = ca.as_ref() {
+                let tool_simple = topo
+                    .solid(b)
+                    .map(|s| s.inner_shells().is_empty())
+                    .unwrap_or(false);
+                if tool_simple && solid_strictly_inside(topo, b, classifier, tol) {
+                    if let Ok(result) = build_contained_cut_hollow(topo, a, b) {
+                        if validate_boolean_result(topo, result).is_ok() {
+                            return Ok(result);
+                        }
+                    }
+                }
+            }
+        }
         if (b_in_a || a_in_b) && op != BooleanOp::Cut {
             return match (op, b_in_a, a_in_b) {
                 (BooleanOp::Fuse, true, _) => Ok(crate::copy::copy_solid(topo, a)?),
@@ -1794,6 +1814,101 @@ fn all_vertices_inside_or_on(
         }
     }
     true
+}
+
+/// True when every outer-shell vertex of `inner` classifies as *strictly*
+/// `Inside` (not on the boundary) of `classifier`. A strictly-contained tool
+/// has no surface contact with the blank, so `Cut(blank, tool)` is a clean
+/// internal cavity rather than a notch through the boundary.
+fn solid_strictly_inside(
+    topo: &Topology,
+    inner: SolidId,
+    classifier: &brepkit_algo::classifier::AnalyticClassifier,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    let Ok(s) = topo.solid(inner) else {
+        return false;
+    };
+    let Ok(sh) = topo.shell(s.outer_shell()) else {
+        return false;
+    };
+    let mut saw_vertex = false;
+    for &fid in sh.faces() {
+        let Ok(f) = topo.face(fid) else { return false };
+        let Ok(w) = topo.wire(f.outer_wire()) else {
+            return false;
+        };
+        for oe in w.edges() {
+            let Ok(e) = topo.edge(oe.edge()) else {
+                return false;
+            };
+            for vid in [e.start(), e.end()] {
+                let Ok(v) = topo.vertex(vid) else {
+                    return false;
+                };
+                if classifier.classify(v.point(), tol) != Some(brepkit_algo::FaceClass::Inside) {
+                    return false;
+                }
+                saw_vertex = true;
+            }
+        }
+    }
+    saw_vertex
+}
+
+/// Build `Cut(blank, tool)` for a tool strictly contained in the blank: the
+/// result is the blank with a tool-shaped internal cavity. Copies the blank,
+/// then attaches a reversed deep-copy of the tool's outer shell as an inner
+/// (cavity) shell whose normals face into the void. Bypasses GFA, whose
+/// no-intersection assembly drops fully-contained cone/torus tools.
+fn build_contained_cut_hollow(
+    topo: &mut Topology,
+    blank: SolidId,
+    tool: SolidId,
+) -> Result<SolidId, crate::OperationsError> {
+    use brepkit_topology::face::Face;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let result = crate::copy::copy_solid(topo, blank)?;
+
+    let tool_faces: Vec<_> = {
+        let ts = topo.solid(tool)?;
+        let osh = ts.outer_shell();
+        topo.shell(osh)?.faces().to_vec()
+    };
+
+    let mut cavity_faces = Vec::with_capacity(tool_faces.len());
+    for fid in tool_faces {
+        let copied = crate::copy::copy_face(topo, fid)?;
+        let (ow, iw, surf, was_reversed) = {
+            let f = topo.face(copied)?;
+            (
+                f.outer_wire(),
+                f.inner_wires().to_vec(),
+                f.surface().clone(),
+                f.is_reversed(),
+            )
+        };
+        // Flip orientation relative to the tool so the cavity boundary faces
+        // inward (away from the remaining solid material).
+        let cavity = if was_reversed {
+            Face::new(ow, iw, surf)
+        } else {
+            Face::new_reversed(ow, iw, surf)
+        };
+        cavity_faces.push(topo.add_face(cavity));
+    }
+
+    let cavity_shell = Shell::new(cavity_faces).map_err(crate::OperationsError::Topology)?;
+    let cavity_shell_id = topo.add_shell(cavity_shell);
+
+    let (outer, mut inners) = {
+        let rs = topo.solid(result)?;
+        (rs.outer_shell(), rs.inner_shells().to_vec())
+    };
+    inners.push(cavity_shell_id);
+    Ok(topo.add_solid(Solid::new(outer, inners)))
 }
 
 /// Best-effort mesh boolean fallback for high face-count solids.
