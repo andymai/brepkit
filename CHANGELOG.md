@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.104.0](https://github.com/andymai/brepkit/compare/v2.103.2...v2.104.0) (2026-06-14)
+
+
+### Features
+
+* **wasm:** add getSolidShells to enumerate a solid's shells ([#805](https://github.com/andymai/brepkit/issues/805)) ([880771e](https://github.com/andymai/brepkit/commit/880771e9bdeaa6ed16aae138037e8a2f06950901)), closes [#802](https://github.com/andymai/brepkit/issues/802)
+
 ## [2.103.2](https://github.com/andymai/brepkit/compare/v2.103.1...v2.103.2) (2026-06-14)
 
 
