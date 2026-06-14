@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.103.2](https://github.com/andymai/brepkit/compare/v2.103.1...v2.103.2) (2026-06-14)
+
+
+### Bug Fixes
+
+* cone/torus curved-boolean bugs (volume integration + contained-cut) + parity corpus ([#803](https://github.com/andymai/brepkit/issues/803)) ([8c903f2](https://github.com/andymai/brepkit/commit/8c903f20e40ccba2669428edabc01160a3a1e463))
+
 ## [2.103.1](https://github.com/andymai/brepkit/compare/v2.103.0...v2.103.1) (2026-06-14)
 
 
