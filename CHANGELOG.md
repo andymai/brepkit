@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.103.1](https://github.com/andymai/brepkit/compare/v2.103.0...v2.103.1) (2026-06-14)
+
+
+### Bug Fixes
+
+* **algo:** sample concave face interiors via point-in-polygon (thin-shell fuse) ([#799](https://github.com/andymai/brepkit/issues/799)) ([6bd1ff6](https://github.com/andymai/brepkit/commit/6bd1ff6e1decc6b8125617a733440b17adef05ff))
+
 ## [2.103.0](https://github.com/andymai/brepkit/compare/v2.102.13...v2.103.0) (2026-06-14)
 
 
