@@ -12,7 +12,8 @@ use brepkit_topology::face::{Face, FaceSurface};
 
 use crate::error::{WasmError, validate_finite};
 use crate::handles::{
-    edge_id_to_u32, face_id_to_u32, solid_id_to_u32, vertex_id_to_u32, wire_id_to_u32,
+    edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32, vertex_id_to_u32,
+    wire_id_to_u32,
 };
 use brepkit_geometry::convert::{DetectedCurveKind, detect_curve_kind, detect_surface_kind};
 
@@ -66,6 +67,30 @@ impl BrepKernel {
         let verts = brepkit_topology::explorer::solid_vertices(&self.topo, solid_id)?;
         #[allow(clippy::cast_possible_truncation)]
         Ok(verts.iter().map(|v| v.index() as u32).collect())
+    }
+
+    /// Get all shell handles of a solid.
+    ///
+    /// Returns the outer shell first, followed by any inner void shells
+    /// (cavities produced by `shell`/hollow operations or boolean cuts).
+    /// A simple solid such as a box reports exactly one shell.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid.
+    #[wasm_bindgen(js_name = "getSolidShells")]
+    pub fn get_solid_shells(&self, solid: u32) -> Result<Vec<u32>, JsError> {
+        let solid_id = self.resolve_solid(solid)?;
+        let solid_data = self.topo.solid(solid_id)?;
+        let mut shells = Vec::with_capacity(1 + solid_data.inner_shells().len());
+        shells.push(shell_id_to_u32(solid_data.outer_shell()));
+        shells.extend(
+            solid_data
+                .inner_shells()
+                .iter()
+                .map(|s| shell_id_to_u32(*s)),
+        );
+        Ok(shells)
     }
 
     /// Get the vertex positions of an edge.
@@ -1526,6 +1551,27 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), verts.len(), "vertex handles must be unique");
+    }
+
+    // ── get_solid_shells ──────────────────────────────────────────
+
+    #[test]
+    fn box_has_one_shell() {
+        let (k, solid) = kernel_with_box();
+        let shells = k.get_solid_shells(solid).unwrap();
+        assert_eq!(shells.len(), 1, "a box must report exactly one shell");
+    }
+
+    #[test]
+    fn solid_shell_round_trips_to_faces() {
+        let (k, solid) = kernel_with_box();
+        let shells = k.get_solid_shells(solid).unwrap();
+        let shell_faces = k.get_shell_faces(shells[0]).unwrap();
+        assert_eq!(
+            shell_faces.len(),
+            6,
+            "the box's single shell must enumerate all six faces"
+        );
     }
 
     // ── get_face_normal ───────────────────────────────────────────
