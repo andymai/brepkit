@@ -53,6 +53,7 @@ brepkit is in active development. Core modeling works. Some areas are still matu
 | **Modifiers**           | Offset face, offset solid, thicken, mirror, pattern            | Stable  |
 | **Sweeps**              | Extrude (planar + NURBS profiles)                              | Stable  |
 | **Sweeps**              | Revolve, sweep, loft, pipe (planar profiles only)              | Stable  |
+| **Sweeps**              | Helical sweep                                                  | Stable  |
 | **Sweeps**              | Non-planar profiles for revolve, sweep, loft, pipe             | Planned |
 | **Sectioning**          | Cross-section curves, split by plane or surface                | Stable  |
 | **Measurement**         | BBox, area, volume, center of mass, inertia tensor             | Stable  |
@@ -65,8 +66,8 @@ brepkit is in active development. Core modeling works. Some areas are still matu
 | **I/O**                 | STEP AP203 import/export (geometry-preserving round-trip)      | Stable  |
 | **I/O**                 | STL, 3MF, OBJ, PLY, glTF import/export                         | Stable  |
 | **I/O**                 | IGES import/export                                             | Beta    |
-| **Sketching**           | 2D constraint solver                                           | Beta    |
-| **Feature Recognition** | Holes, pockets, slots, bosses, ribs                            | Beta    |
+| **Sketching**           | 2D constraint solver                                           | Stable  |
+| **Feature Recognition** | Holes, pockets, chamfers, fillets, patterns                    | Beta    |
 | **Assemblies**          | Hierarchical structure, transforms, BOM                        | Beta    |
 | **Evolution**           | Face provenance tracking through operations                    | Beta    |
 | **Defeaturing**         | Remove specified faces/features from solid                     | Beta    |
@@ -87,7 +88,7 @@ Broad directions, no dates.
 
 - **Boolean completeness** — extend the unified General Fuse pipeline to all surface types including torus
 - **Sweep generalization** — non-planar profile support for revolve, sweep, loft, and pipe
-- **Parallel tessellation** — per-face parallel meshing for large models
+- **Parallel tessellation in WASM** — native builds already parallelize per-face meshing; bring it to the (single-threaded) WASM target via threads
 - **Assembly metadata** — colors, layers, materials, and PMI for richer data exchange
 - **Expanded I/O** — lossless IGES round-trips and broader STEP entity coverage
 - **Documentation** — API reference, tutorials, and architectural guides
@@ -96,42 +97,20 @@ Broad directions, no dates.
 
 Layered Cargo workspace. Crates depend only on the same or lower layers. Boundaries are enforced by CI.
 
-```mermaid
-graph BT
-    math["brepkit-math<br/><small>L0 · vectors, NURBS, predicates</small>"]
-    geometry["brepkit-geometry<br/><small>L0.5 · sampling, extrema, conversion</small>"]
-    topology["brepkit-topology<br/><small>L1 · B-Rep data structures</small>"]
-    algo["brepkit-algo<br/><small>L1.5 · boolean engine (GFA)</small>"]
-    blend["brepkit-blend<br/><small>L1.5 · fillet & chamfer</small>"]
-    heal["brepkit-heal<br/><small>L1.5 · shape healing</small>"]
-    check["brepkit-check<br/><small>L1.5 · validation & properties</small>"]
-    operations["brepkit-operations<br/><small>L2 · modeling operations</small>"]
-    io["brepkit-io<br/><small>L2 · file I/O (7 formats)</small>"]
-    wasm["brepkit-wasm<br/><small>L3 · JavaScript API</small>"]
-
-    geometry --> math
-    topology --> math
-    algo --> math & topology & geometry
-    blend --> math & topology & geometry
-    heal --> math & topology & geometry
-    check --> math & topology & geometry
-    operations --> math & topology & geometry & algo & blend & heal & check
-    io --> math & topology & operations
-    wasm --> math & topology & operations & check & io
-```
-
 | Layer | Crate                | What it does                                                                                       |
 | ----- | -------------------- | -------------------------------------------------------------------------------------------------- |
 | L0    | `brepkit-math`       | Points, vectors, matrices, NURBS curves/surfaces, geometric predicates, CDT, convex hull           |
-| L0.5  | `brepkit-geometry`   | Curve sampling (uniform, deflection, arc-length, curvature), extrema, analytic-to-NURBS conversion |
-| L1    | `brepkit-topology`   | Arena-allocated B-Rep: vertex, edge, wire, face, shell, solid. Half-edge adjacency graph           |
-| L1.5  | `brepkit-algo`       | General Fuse Algorithm (GFA) boolean engine: pave filler, face classification, solid assembly      |
-| L1.5  | `brepkit-blend`      | Walking-based fillet and chamfer with constant, variable, and custom radius laws                   |
-| L1.5  | `brepkit-heal`       | Shape healing: 30+ fixes, analysis, sewing, tolerance management, configurable pipeline            |
-| L1.5  | `brepkit-check`      | Point classification, validation (17 checks), properties (volume/area/CoM), distance queries       |
-| L2    | `brepkit-operations` | Booleans, fillet, chamfer, extrude, revolve, sweep, loft, shell, offset, measure, tessellation     |
-| L2    | `brepkit-io`         | Import/export: STEP, IGES, STL, 3MF, OBJ, PLY, glTF                                                |
-| L3    | `brepkit-wasm`       | JavaScript API via wasm-bindgen with batch execution and checkpoint/restore                        |
+| L1    | `brepkit-geometry`   | Curve sampling (uniform, deflection, arc-length, curvature), extrema, analytic-to-NURBS conversion |
+| L1    | `brepkit-topology`   | Arena-allocated B-Rep: vertex, edge, wire, face, shell, solid. Edge-to-face / face-neighbor adjacency index |
+| L2    | `brepkit-algo`       | General Fuse Algorithm (GFA) boolean engine: pave filler, face classification, solid assembly      |
+| L2    | `brepkit-blend`      | Walking-based fillet and chamfer with constant, variable, and custom radius laws                   |
+| L2    | `brepkit-heal`       | Shape healing: 30+ fixes, analysis, sewing, tolerance management, configurable pipeline            |
+| L2    | `brepkit-check`      | Point classification, validation (19 checks), properties (volume/area/CoM), distance queries       |
+| L2    | `brepkit-offset`     | Solid offset and thickening via global face-face intersection                                      |
+| L2    | `brepkit-sketch`     | 2D parametric constraint solver (GCS) with a DogLeg trust-region solver                            |
+| L3    | `brepkit-operations` | Booleans, fillet, chamfer, extrude, revolve, sweep, loft, shell, offset, measure, tessellation     |
+| L3    | `brepkit-io`         | Import/export: STEP, IGES, STL, 3MF, OBJ, PLY, glTF                                                |
+| L4    | `brepkit-wasm`       | JavaScript API via wasm-bindgen with batch execution and checkpoint/restore                        |
 
 ## Performance
 
@@ -164,7 +143,7 @@ Booleans preserve analytic surfaces, keeping face counts low (72 vs ~7,000 for a
 | PLY        | Mesh  | ✓      | ✓      |
 | glTF       | Mesh  | ✓      | ✓      |
 
-STEP preserves exact geometry on round-trip. \*IGES export converts analytic surfaces to NURBS. Mesh formats export tessellated triangles.
+STEP preserves exact geometry on round-trip, including analytic surfaces (plane, cylinder, cone, sphere, torus). \*IGES export currently writes planar and NURBS surfaces; analytic surfaces (cylinder, cone, sphere, torus) are not yet exported, though their edges are. Mesh formats export tessellated triangles.
 
 ## Getting Started
 
@@ -187,9 +166,8 @@ npm install brepkit-wasm
 ```
 
 ```js
-import init, { BrepKernel } from 'brepkit-wasm';
+import { BrepKernel } from 'brepkit-wasm';
 
-await init();
 const kernel = new BrepKernel();
 const solid = kernel.makeBox(10, 20, 30);
 ```
