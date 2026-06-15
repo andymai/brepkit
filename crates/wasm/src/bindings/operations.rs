@@ -1591,6 +1591,42 @@ mod tests {
     }
 
     #[test]
+    fn multi_section_sweep_batch_dispatch_lofts_circles() {
+        let mut k = BrepKernel::new();
+        let big = k.make_circle_face(10.0, 24).unwrap();
+        let small = k.make_circle_face(5.0, 24).unwrap();
+        // A degree-1 NURBS line spine edge (the batch op takes the spine by edge).
+        let spine = k
+            .make_nurbs_edge(
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                50.0,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.0, 50.0],
+                vec![1.0, 1.0],
+            )
+            .unwrap();
+        let out = dispatch(
+            &mut k,
+            "multiSectionSweep",
+            serde_json::json!({
+                "faces": [big, small],
+                "params": [0.0, 1.0],
+                "spineEdge": spine,
+                "ruled": true,
+            }),
+        );
+        assert!(
+            out.get("ok").and_then(serde_json::Value::as_u64).is_some(),
+            "expected an ok solid handle, got {out}"
+        );
+    }
+
+    #[test]
     fn offset_wire_2d_with_join_routes_arc_distinct_from_chamfer() {
         let mut k = BrepKernel::new();
         let w_int = square_wire(&mut k);

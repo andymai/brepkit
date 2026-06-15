@@ -626,6 +626,50 @@ impl BrepKernel {
                 let solid = sweep(self.topo_mut(), face_id, &curve).map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
             }
+            "multiSectionSweep" => {
+                let faces: Vec<u32> = args["faces"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_u64().map(|n| n as u32))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let params: Vec<f64> = args["params"]
+                    .as_array()
+                    .map(|a| a.iter().filter_map(serde_json::Value::as_f64).collect())
+                    .unwrap_or_default();
+                if faces.len() != params.len() {
+                    return Err("multiSectionSweep: faces and params length mismatch".into());
+                }
+                let spine_edge = get_u32(args, "spineEdge")?;
+                let edge_id = self.resolve_edge(spine_edge).map_err(|e| e.to_string())?;
+                let edge_data = self.topo.edge(edge_id).map_err(|e| e.to_string())?;
+                let spine = match edge_data.curve() {
+                    EdgeCurve::NurbsCurve(c) => c.clone(),
+                    EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                        return Err("multiSectionSweep spine must be a NURBS edge".into());
+                    }
+                };
+                let ruled = args["ruled"].as_bool().unwrap_or(true);
+                let sections: Vec<(brepkit_topology::face::FaceId, f64)> = faces
+                    .iter()
+                    .zip(params.iter())
+                    .map(|(&h, &p)| {
+                        self.resolve_face(h)
+                            .map(|f| (f, p))
+                            .map_err(|e| e.to_string())
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let solid = brepkit_operations::sweep::multi_section_sweep(
+                    self.topo_mut(),
+                    &spine,
+                    &sections,
+                    ruled,
+                )
+                .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
             "chamfer" => {
                 let s = get_u32(args, "solid")?;
                 let dist = get_f64(args, "distance")?;

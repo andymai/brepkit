@@ -1908,8 +1908,13 @@ pub fn multi_section_sweep(
     let initial_up = orthogonalize(pick_reference_axis(t_start), t_start);
     let dense = compute_frames(spine, dense_segments, initial_up, false)?;
 
-    let mut placed: Vec<FaceId> = Vec::with_capacity(sections.len());
-    for &(face_id, p) in sections {
+    // The loft joins profiles in order along the spine, so place them by
+    // ascending parameter regardless of the caller's ordering.
+    let mut ordered: Vec<(FaceId, f64)> = sections.to_vec();
+    ordered.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut placed: Vec<FaceId> = Vec::with_capacity(ordered.len());
+    for (face_id, p) in ordered {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let idx = ((p * dense_segments as f64).round() as usize).min(dense_segments);
         let tangent = spine.tangent(p)?;
@@ -1951,7 +1956,7 @@ fn profile_to_frame_matrix(
 ) -> Result<Mat4, crate::OperationsError> {
     let face = topo.face(face_id)?;
     let normal = match face.surface() {
-        FaceSurface::Plane { normal, .. } => *normal,
+        FaceSurface::Plane { normal, .. } => normal.normalize().unwrap_or(*normal),
         _ => {
             return Err(crate::OperationsError::InvalidInput {
                 reason: "multi-section sweep profiles must be planar".into(),
@@ -1959,27 +1964,24 @@ fn profile_to_frame_matrix(
         }
     };
 
-    // Centroid = average of the outer-wire vertices.
-    let wire = topo.wire(face.outer_wire())?;
-    let mut sum = Point3::new(0.0, 0.0, 0.0);
-    let mut count = 0.0_f64;
-    for oe in wire.edges() {
-        let edge = topo.edge(oe.edge())?;
-        let v = topo.vertex(oe.oriented_start(edge))?.point();
-        sum = Point3::new(sum.x() + v.x(), sum.y() + v.y(), sum.z() + v.z());
-        count += 1.0;
-    }
-    if count == 0.0 {
+    // Centroid of the sampled boundary — robust for a circle profile whose
+    // outer wire is a single closed edge (where averaging start vertices would
+    // collapse to the seam point).
+    let boundary = crate::boolean::face_polygon(topo, face_id)?;
+    if boundary.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
-            reason: "multi-section sweep profile has no vertices".into(),
+            reason: "multi-section sweep profile has no boundary".into(),
         });
     }
-    let centroid = Point3::new(sum.x() / count, sum.y() / count, sum.z() / count);
+    let centroid = crate::winding::polygon_centroid(&boundary);
 
     // Profile in-plane basis from a consistent world reference, so all profiles
     // share an orientation and the RMF alone controls twist along the spine.
+    // `p_y = p_x × normal` makes (p_x, p_y, normal) left-handed to match the
+    // target frame (right, up, tangent) — so R is a proper rotation (det +1)
+    // and asymmetric profiles are not mirrored.
     let p_x = orthogonalize(pick_reference_axis(normal), normal);
-    let p_y = normal.cross(p_x);
+    let p_y = p_x.cross(normal);
 
     // R maps the profile basis (p_x, p_y, normal) onto (right, up, tangent):
     // R = right⊗p_x + up⊗p_y + tangent⊗normal.
@@ -2143,6 +2145,62 @@ mod tests {
         let b = make_square(&mut topo, 4.0);
         let spine = straight_z_path(10.0);
         assert!(multi_section_sweep(&mut topo, &spine, &[(a, 0.0), (b, 1.5)], true).is_err());
+    }
+
+    #[test]
+    fn multi_section_sweep_unsorted_params_match_sorted() {
+        // Placement sorts by parameter, so input order must not change the result.
+        let mut t1 = Topology::new();
+        let (a1, b1) = (make_square(&mut t1, 10.0), make_square(&mut t1, 4.0));
+        let s1 = multi_section_sweep(
+            &mut t1,
+            &straight_z_path(20.0),
+            &[(a1, 0.0), (b1, 1.0)],
+            true,
+        )
+        .unwrap();
+        let v_sorted = crate::measure::solid_volume(&t1, s1, 0.1).unwrap();
+
+        let mut t2 = Topology::new();
+        let (a2, b2) = (make_square(&mut t2, 10.0), make_square(&mut t2, 4.0));
+        let s2 = multi_section_sweep(
+            &mut t2,
+            &straight_z_path(20.0),
+            &[(b2, 1.0), (a2, 0.0)],
+            true,
+        )
+        .unwrap();
+        let v_unsorted = crate::measure::solid_volume(&t2, s2, 0.1).unwrap();
+
+        assert!(
+            (v_sorted - v_unsorted).abs() < 1e-6,
+            "{v_sorted} vs {v_unsorted}"
+        );
+    }
+
+    #[test]
+    fn profile_to_frame_matrix_is_proper_rotation() {
+        // The placement must be a proper rotation (det +1), never a reflection,
+        // or asymmetric profiles would be mirrored.
+        let mut topo = Topology::new();
+        let face = make_square(&mut topo, 4.0);
+        let tangent = Vec3::new(1.0, 1.0, 1.0).normalize().unwrap();
+        let up = orthogonalize(Vec3::new(0.0, 0.0, 1.0), tangent);
+        let frame = Frame {
+            origin: Point3::new(5.0, 6.0, 7.0),
+            tangent,
+            up,
+            right: tangent.cross(up),
+        };
+        let m = profile_to_frame_matrix(&topo, face, &frame).unwrap();
+        let r = &m.0;
+        let det = r[0][0] * (r[1][1] * r[2][2] - r[1][2] * r[2][1])
+            - r[0][1] * (r[1][0] * r[2][2] - r[1][2] * r[2][0])
+            + r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]);
+        assert!(
+            (det - 1.0).abs() < 1e-9,
+            "rotation det should be +1, got {det}"
+        );
     }
 
     #[test]
