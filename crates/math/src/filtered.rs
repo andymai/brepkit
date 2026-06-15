@@ -18,25 +18,6 @@
 
 use crate::vec::{Point2, Point3};
 
-/// Error-free sum: returns `(s, e)` where `a + b = s + e` exactly.
-#[inline]
-#[allow(dead_code)]
-fn two_sum(a: f64, b: f64) -> (f64, f64) {
-    let s = a + b;
-    let v = s - a;
-    let e = (a - (s - v)) + (b - v);
-    (s, e)
-}
-
-/// Error-free product: returns `(p, e)` where `a * b = p + e` exactly.
-#[inline]
-#[allow(dead_code)]
-fn two_product(a: f64, b: f64) -> (f64, f64) {
-    let p = a * b;
-    let e = a.mul_add(b, -p); // FMA-based error
-    (p, e)
-}
-
 /// Filtered orient2d: fast f64 path with exact fallback.
 ///
 /// Returns a positive value if `(a, b, c)` are in counter-clockwise order,

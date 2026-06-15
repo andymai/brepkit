@@ -822,54 +822,6 @@ pub fn extrude(
     Ok(solid)
 }
 
-/// Create a translated copy of a wire by duplicating all edges, translating
-/// their vertices and curve geometry by `offset`.
-#[allow(dead_code)]
-fn make_translated_wire(
-    topo: &mut Topology,
-    oriented_edges: &[OrientedEdge],
-    offset: Vec3,
-) -> Result<WireId, crate::OperationsError> {
-    use std::collections::HashMap;
-
-    let tol = Tolerance::new();
-    let mut vertex_map: HashMap<VertexId, VertexId> = HashMap::new();
-
-    // Map vertices: for each unique vertex, create a translated copy.
-    let mut get_or_create_vertex =
-        |topo: &mut Topology, vid: VertexId| -> Result<VertexId, crate::OperationsError> {
-            if let Some(&mapped) = vertex_map.get(&vid) {
-                return Ok(mapped);
-            }
-            let pt = topo.vertex(vid)?.point();
-            let new_vid = topo.add_vertex(Vertex::new(pt + offset, tol.linear));
-            vertex_map.insert(vid, new_vid);
-            Ok(new_vid)
-        };
-
-    let mut new_edges = Vec::with_capacity(oriented_edges.len());
-    for oe in oriented_edges {
-        let edge = topo.edge(oe.edge())?;
-        let v_start = edge.start();
-        let v_end = edge.end();
-        let curve = edge.curve().clone();
-
-        let new_start = get_or_create_vertex(topo, v_start)?;
-        let new_end = if v_start == v_end {
-            new_start
-        } else {
-            get_or_create_vertex(topo, v_end)?
-        };
-
-        let new_curve = translate_edge_curve(&curve, offset)?;
-        let new_eid = topo.add_edge(Edge::new(new_start, new_end, new_curve));
-        new_edges.push(OrientedEdge::new(new_eid, oe.is_forward()));
-    }
-
-    let wire = Wire::new(new_edges, true).map_err(crate::OperationsError::Topology)?;
-    Ok(topo.add_wire(wire))
-}
-
 /// Translate an `EdgeCurve` by an offset vector.
 ///
 /// # Errors
