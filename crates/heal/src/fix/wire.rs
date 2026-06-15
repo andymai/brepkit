@@ -1217,64 +1217,6 @@ fn fix_missing_seam(
     }
 }
 
-/// Merge coincident vertices in a wire (helper used by connectivity fixes).
-///
-/// Finds vertex pairs within tolerance and records replacements in the
-/// reshape context.  Returns the number of merges.
-#[allow(dead_code)]
-fn fix_coincident_vertices(
-    topo: &Topology,
-    wire_id: WireId,
-    ctx: &mut HealContext,
-) -> Result<usize, HealError> {
-    let wire = topo.wire(wire_id)?;
-    let edges_list = wire.edges();
-    let tol_sq = ctx.tolerance.linear * ctx.tolerance.linear;
-
-    // Collect unique vertex IDs and positions from this wire.
-    let mut vertex_ids: Vec<VertexId> = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-
-    for oe in edges_list {
-        let edge = topo.edge(oe.edge())?;
-        for vid in [edge.start(), edge.end()] {
-            if seen.insert(vid.index()) {
-                vertex_ids.push(vid);
-            }
-        }
-    }
-
-    let mut merged = 0usize;
-    let n = vertex_ids.len();
-
-    // Snapshot all positions.
-    let positions: Vec<_> = vertex_ids
-        .iter()
-        .map(|&vid| -> Result<_, HealError> { Ok(topo.vertex(vid)?.point()) })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // O(n^2) pairwise comparison — wires are small.
-    let mut already_merged = std::collections::HashSet::new();
-    for i in 0..n {
-        if already_merged.contains(&i) {
-            continue;
-        }
-        for j in (i + 1)..n {
-            if already_merged.contains(&j) {
-                continue;
-            }
-            let dist_sq = (positions[i] - positions[j]).length_squared();
-            if dist_sq < tol_sq {
-                ctx.reshape.replace_vertex(vertex_ids[j], vertex_ids[i]);
-                already_merged.insert(j);
-                merged += 1;
-            }
-        }
-    }
-
-    Ok(merged)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {

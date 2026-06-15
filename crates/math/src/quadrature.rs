@@ -43,7 +43,6 @@ pub fn gauss_legendre_points(order: usize) -> &'static [GaussPoint] {
 /// the normal is `∂S/∂u × ∂S/∂v` (its magnitude is the Jacobian `dA`).
 ///
 /// Returns the surface area of the patch `[u0,u1] × [v0,v1]`.
-#[allow(dead_code)]
 pub(crate) fn gauss_surface_area(
     f: &impl Fn(f64, f64) -> (Point3, Vec3),
     u_range: (f64, f64),
