@@ -163,21 +163,32 @@ pub fn try_fillet(
     edge_ids: &[brepkit_topology::edge::EdgeId],
     radius: f64,
 ) -> Result<brepkit_topology::solid::SolidId, brepkit_operations::OperationsError> {
+    // Skip edges the blend engines can't handle — those bordering a NURBS face
+    // (e.g. a prior fillet's blend face). Attempting them silently no-ops
+    // (`fillet_v2`) or yields a self-intersecting solid (`fillet_rolling_ball`),
+    // so we fillet only the analytic-neighbor edges (#813). If none qualify the
+    // solid is returned unchanged, matching the binding's existing skip policy.
+    let edges = brepkit_operations::query::filter_filletable_edges(topo, solid_id, edge_ids)?;
+    if edges.is_empty() {
+        return Ok(solid_id);
+    }
+    let edges = edges.as_slice();
+
     let rolling_ball = |topo: &mut brepkit_topology::Topology| {
-        brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edge_ids, radius)
+        brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edges, radius)
     };
     let builder = |topo: &mut brepkit_topology::Topology| {
-        brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edge_ids, radius).map(|r| r.solid)
+        brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edges, radius).map(|r| r.solid)
     };
 
-    let result = if edge_ids.len() > 1 {
+    let result = if edges.len() > 1 {
         rolling_ball(topo).or_else(|_| builder(topo))
     } else {
         builder(topo).or_else(|_| rolling_ball(topo))
     };
 
     // Final fallback: flat bevel (simplest).
-    result.or_else(|_| brepkit_operations::fillet::fillet(topo, solid_id, edge_ids, radius))
+    result.or_else(|_| brepkit_operations::fillet::fillet(topo, solid_id, edges, radius))
 }
 
 /// Extract a human-readable message from a `catch_unwind` panic payload.
@@ -527,5 +538,33 @@ mod fillet_tests {
             vol > 970.0 && vol < 1000.0,
             "filleted box volume should be ≈975.6, got {vol}"
         );
+    }
+
+    #[test]
+    fn try_fillet_second_pass_does_not_break_solid() {
+        // #813: a second fillet whose target edges border the first fillet's
+        // NURBS blend faces must not produce a self-intersecting solid (vol grew
+        // past the base to 1000.30 before the fix). Such edges are skipped.
+        let mut topo = Topology::new();
+        let cube = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let edges = solid_edge_ids(&topo, cube);
+        let first = try_fillet(&mut topo, cube, &[edges[0], edges[1]], 1.0).expect("first fillet");
+        let v1 = brepkit_operations::measure::solid_volume(&topo, first, 0.05).unwrap();
+
+        // The first two edges of the result border the new NURBS blend faces.
+        let r_edges = solid_edge_ids(&topo, first);
+        let second =
+            try_fillet(&mut topo, first, &[r_edges[0], r_edges[1]], 0.5).expect("second fillet");
+        let v2 = brepkit_operations::measure::solid_volume(&topo, second, 0.05).unwrap();
+
+        // A fillet on these convex edges can only remove material, never add it.
+        assert!(
+            v2 <= v1 + 1e-6,
+            "second fillet must not add material: first={v1:.2}, second={v2:.2}"
+        );
+        let sd = topo.solid(second).expect("result solid");
+        let sh = topo.shell(sd.outer_shell()).expect("shell");
+        brepkit_topology::validation::validate_shell_manifold(sh, &topo)
+            .expect("second fillet result must remain a manifold solid");
     }
 }
