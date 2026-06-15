@@ -1441,13 +1441,14 @@ pub fn fillet_rolling_ball(
             .push((f2.index(), contact2_end));
     }
 
-    // Phase 5b: Build vertex blend patches at junctions where 3+ fillet edges meet.
+    // Phase 5b: Build vertex blend patches at junctions where 2+ fillet edges meet.
     // At such a vertex, each fillet strip contributes contact points on two faces.
     // Two fillet strips that share a face will have contact points on that face that
     // are at the same position (both offset R from the vertex along the face).
     // We deduplicate by face, giving exactly N unique contact points for N fillet edges.
-    // These points form a polygon (typically a triangle for 3-edge corners) that we
-    // close with a planar blend face.
+    // For 3+ edges these points form a polygon closed by an eighth-sphere triangle;
+    // for exactly 2 edges they form a four-sided patch that also picks up the
+    // preserved point on the unfilleted edge (see the fillet_count == 2 branch).
     for (&vi, contacts) in &vertex_contacts {
         let fillet_count = vertex_fillet_edges.get(&vi).map_or(0, Vec::len);
         if fillet_count < 2 {
@@ -1529,9 +1530,9 @@ pub fn fillet_rolling_ball(
         if fillet_count == 2 {
             if let (Some(&p_pt), Some(v_pos)) = (corner_preserved.get(&vi), original_vertex) {
                 if blend_points.len() == 3 {
-                    // Sphere centre: corner offset inward by R along each
-                    // distinct contact-face normal (outward normals → subtract
-                    // for a convex corner).
+                    // Sphere centre: corner offset inward by R along each distinct
+                    // contact-face normal. Convex corners subtract Σnormals;
+                    // concave corners add (same rule as the 3-edge path below).
                     let mut face_normals: Vec<Vec3> = Vec::new();
                     for &(face_idx, _) in contacts {
                         if let Some(poly) = face_polygons.get(&face_idx) {
@@ -1544,10 +1545,16 @@ pub fn fillet_rolling_ball(
                     let normal_sum = face_normals.iter().fold(Vec3::new(0.0, 0.0, 0.0), |a, n| {
                         Vec3::new(a.x() + n.x(), a.y() + n.y(), a.z() + n.z())
                     });
+                    let fillet_edges = vertex_fillet_edges
+                        .get(&vi)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[]);
+                    let is_concave = corner_is_concave(topo, vi, fillet_edges, normal_sum);
+                    let offset_sign = if is_concave { 1.0 } else { -1.0 };
                     let sphere_center = Point3::new(
-                        v_pos.x() - radius * normal_sum.x(),
-                        v_pos.y() - radius * normal_sum.y(),
-                        v_pos.z() - radius * normal_sum.z(),
+                        v_pos.x() + offset_sign * radius * normal_sum.x(),
+                        v_pos.y() + offset_sign * radius * normal_sum.y(),
+                        v_pos.z() + offset_sign * radius * normal_sum.z(),
                     );
 
                     // `far` (D) is the contact on the two edges' shared face —
@@ -1573,6 +1580,7 @@ pub fn fillet_rolling_ball(
                         near[1],
                         sphere_center,
                         v_pos,
+                        is_concave,
                     ) {
                         all_specs.push(spec);
                     }
@@ -1945,6 +1953,44 @@ pub fn fillet_rolling_ball(
     Ok(solid_id)
 }
 
+/// Whether a corner vertex is concave (rolling-ball sphere centre on the
+/// +normal side rather than −normal). Detected by comparing the summed outward
+/// face normals with the summed edge tangents pointing away from the vertex:
+/// they oppose for a convex corner and align for a concave one. Mirrors the
+/// 3-edge concavity test in Phase 5b.
+fn corner_is_concave(
+    topo: &Topology,
+    vi: usize,
+    fillet_edges: &[EdgeId],
+    normal_sum: Vec3,
+) -> bool {
+    let mut tangent_sum = Vec3::new(0.0, 0.0, 0.0);
+    let mut count = 0;
+    for &eid in fillet_edges {
+        let Ok(edge) = topo.edge(eid) else { continue };
+        let (Ok(vs), Ok(ve)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            continue;
+        };
+        let (p_s, p_e) = (vs.point(), ve.point());
+        let curve = edge.curve().clone();
+        let (t_param, sign) = if edge.start().index() == vi {
+            (curve.domain_with_endpoints(p_s, p_e).0, 1.0)
+        } else {
+            (curve.domain_with_endpoints(p_s, p_e).1, -1.0)
+        };
+        let tan = curve.tangent_with_endpoints(t_param, p_s, p_e);
+        if let Ok(n) = (tan * sign).normalize() {
+            tangent_sum = Vec3::new(
+                tangent_sum.x() + n.x(),
+                tangent_sum.y() + n.y(),
+                tangent_sum.z() + n.z(),
+            );
+            count += 1;
+        }
+    }
+    count >= 2 && normal_sum.dot(tangent_sum) > 0.0
+}
+
 /// Build the corner patch where exactly two filleted edges meet at a vertex
 /// (sharing one face).
 ///
@@ -1963,6 +2009,7 @@ fn build_two_edge_corner_patch(
     near2: Point3,
     sphere_center: Point3,
     v_pos: Point3,
+    is_concave: bool,
 ) -> Option<FaceSpec> {
     // Rational-quadratic middle control point + weight for the circular arc
     // a→b on the sphere: the mid CP is the tangent intersection at distance
@@ -2038,8 +2085,15 @@ fn build_two_edge_corner_patch(
     )
     .ok()?;
 
-    // Orient the patch to face away from the original (now removed) corner.
-    let outward = (centroid4 - v_pos)
+    // Orient the patch outward. For a convex corner the exterior lies away from
+    // the original (now removed) sharp corner; for a concave corner the material
+    // is added, so the reference flips.
+    let outward_ref = if is_concave {
+        v_pos - centroid4
+    } else {
+        centroid4 - v_pos
+    };
+    let outward = outward_ref
         .normalize()
         .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0));
     let nrm = surface.normal(0.5, 0.5).unwrap_or(outward);

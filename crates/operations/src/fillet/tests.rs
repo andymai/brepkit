@@ -349,7 +349,7 @@ fn rolling_ball_fillet_multiple_edges() {
 /// faces collapsed the unfilleted edge onto the far corner.
 #[test]
 fn rolling_ball_two_edges_shared_corner_watertight() {
-    // Every adjacent (corner-sharing) pair of bottom-ring edges on a box.
+    // Collect every pair of box edges that share a vertex, then fillet a sample.
     let mut topo = Topology::new();
     let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
     let all_edges = solid_edge_ids(&topo, cube);
@@ -374,8 +374,8 @@ fn rolling_ball_two_edges_shared_corner_watertight() {
         "box should have corner-sharing edge pairs"
     );
 
-    // Verify a representative sample of corner-sharing pairs (keeps the test
-    // fast while covering distinct corner orientations).
+    // Verify the first several corner-sharing pairs (iteration order); capped to
+    // keep the test fast while still exercising multiple corners.
     for &(i, j) in shared_pairs.iter().take(6) {
         let mut t = Topology::new();
         let box_id = crate::primitives::make_box(&mut t, 10.0, 10.0, 10.0).unwrap();
