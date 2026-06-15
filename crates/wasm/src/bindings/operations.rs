@@ -1200,6 +1200,12 @@ impl BrepKernel {
                      weights: Vec<f64>,
                      label: &str|
          -> Result<NurbsCurve, JsError> {
+            if degree < 1 {
+                return Err(WasmError::InvalidInput {
+                    reason: format!("{label}_degree must be at least 1"),
+                }
+                .into());
+            }
             if cps.len() % 3 != 0 {
                 return Err(WasmError::InvalidInput {
                     reason: format!("{label}_control_points length must be a multiple of 3"),

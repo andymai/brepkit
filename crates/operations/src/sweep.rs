@@ -1116,21 +1116,32 @@ pub fn sweep_with_options(
         // Guided (two-rail) sweep: orient the profile so its up-vector points
         // toward the auxiliary spine at each path parameter. The tangent still
         // follows the main path, so this overrides `contact_mode`.
-        (0..=num_segments)
-            .map(|k| {
-                #[allow(clippy::cast_precision_loss)]
-                let t = k as f64 / num_segments as f64;
-                let origin = path.evaluate(t);
-                let tangent = path.tangent(t).unwrap_or(path_tangent_0);
-                let up = orthogonalize(aux.evaluate(t) - origin, tangent);
-                Frame {
-                    origin,
-                    tangent,
-                    up,
-                    right: tangent.cross(up),
-                }
-            })
-            .collect()
+        let mut out = Vec::with_capacity(num_segments + 1);
+        let mut prev_up: Option<Vec3> = None;
+        for k in 0..=num_segments {
+            #[allow(clippy::cast_precision_loss)]
+            let t = k as f64 / num_segments as f64;
+            let origin = path.evaluate(t);
+            let tangent = path.tangent(t).unwrap_or(path_tangent_0);
+            let guide_dir = aux.evaluate(t) - origin;
+            // Where the guide momentarily coincides with the spine the up-vector
+            // is undefined; carry the previous frame's up (re-orthogonalized) so
+            // orientation stays continuous instead of snapping to a world axis.
+            let up = if guide_dir.length() < 1e-9 {
+                let seed = prev_up.unwrap_or_else(|| pick_reference_axis(tangent));
+                orthogonalize(seed, tangent)
+            } else {
+                orthogonalize(guide_dir, tangent)
+            };
+            prev_up = Some(up);
+            out.push(Frame {
+                origin,
+                tangent,
+                up,
+                right: tangent.cross(up),
+            });
+        }
+        out
     } else {
         match options.contact_mode {
             SweepContactMode::RotationMinimizing => {
@@ -2343,6 +2354,22 @@ mod tests {
         assert!(
             y_guided > 8.0,
             "the rotating guide should roll the wide axis into Y, got {y_guided}"
+        );
+    }
+
+    #[test]
+    fn sweep_guided_handles_guide_meeting_spine() {
+        // The guide starts coincident with the spine (up undefined at t=0) then
+        // diverges — frame continuity must still yield a valid finite solid.
+        let mut topo = Topology::new();
+        let profile = make_square(&mut topo, 3.0);
+        let spine = straight_z_path(10.0);
+        let aux = guide_line(0.0, 0.0, 10.0, 0.0);
+        let solid = sweep_guided(&mut topo, profile, &spine, aux).unwrap();
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 0.0 && vol.is_finite(),
+            "guide-meets-spine should still yield a valid solid, got {vol}"
         );
     }
 
