@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.111.1](https://github.com/andymai/brepkit/compare/v2.111.0...v2.111.1) (2026-06-15)
+
+
+### Bug Fixes
+
+* **fillet:** watertight rolling-ball fillet of two edges sharing a corner ([#842](https://github.com/andymai/brepkit/issues/842)) ([2548611](https://github.com/andymai/brepkit/commit/2548611180ada9c730a0f3657cfb703f0ea59d4c)), closes [#841](https://github.com/andymai/brepkit/issues/841)
+
 ## [2.111.0](https://github.com/andymai/brepkit/compare/v2.110.0...v2.111.0) (2026-06-15)
 
 
