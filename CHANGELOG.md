@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.109.0](https://github.com/andymai/brepkit/compare/v2.108.0...v2.109.0) (2026-06-15)
+
+
+### Features
+
+* **operations:** edge projection with hidden-line removal ([#815](https://github.com/andymai/brepkit/issues/815)) ([#830](https://github.com/andymai/brepkit/issues/830)) ([7d6cfd5](https://github.com/andymai/brepkit/commit/7d6cfd5b7f8fcc36757a40b261f99a7c517dc1f9))
+
 ## [2.108.0](https://github.com/andymai/brepkit/compare/v2.107.0...v2.108.0) (2026-06-15)
 
 
