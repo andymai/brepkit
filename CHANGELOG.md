@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.109.2](https://github.com/andymai/brepkit/compare/v2.109.1...v2.109.2) (2026-06-15)
+
+
+### Bug Fixes
+
+* **blend:** build circular-arc blend surface for any section count ([#835](https://github.com/andymai/brepkit/issues/835)) ([ef06ec7](https://github.com/andymai/brepkit/commit/ef06ec7811701b4b2abfafd7941905860d6df566))
+
 ## [2.109.1](https://github.com/andymai/brepkit/compare/v2.109.0...v2.109.1) (2026-06-15)
 
 
