@@ -1264,12 +1264,13 @@ impl BrepKernel {
     /// Convex Minkowski sum of two solids (`A ⊕ B`).
     ///
     /// Returns the convex hull of all pairwise vertex sums — exact for convex
-    /// inputs (boxes, or a tessellated-sphere rolling tool), a convex
+    /// polytopes (boxes, or a tessellated-sphere rolling tool), a convex
     /// over-approximation otherwise. Returns a solid handle (`u32`).
     ///
     /// # Errors
     ///
-    /// Returns an error if either handle is invalid or either solid is empty.
+    /// Returns an error if either handle is invalid, either solid is empty, or
+    /// the summed points are degenerate so no hull can be built.
     #[wasm_bindgen(js_name = "minkowskiSum")]
     pub fn minkowski_sum(&mut self, solid_a: u32, solid_b: u32) -> Result<u32, JsError> {
         let a = self.resolve_solid(solid_a)?;
@@ -1307,6 +1308,19 @@ impl BrepKernel {
         deflection: f64,
     ) -> Result<JsValue, JsError> {
         validate_positive(deflection, "deflection")?;
+        for (v, name) in [
+            (origin_x, "origin_x"),
+            (origin_y, "origin_y"),
+            (origin_z, "origin_z"),
+            (dir_x, "dir_x"),
+            (dir_y, "dir_y"),
+            (dir_z, "dir_z"),
+            (x_axis_x, "x_axis_x"),
+            (x_axis_y, "x_axis_y"),
+            (x_axis_z, "x_axis_z"),
+        ] {
+            validate_finite(v, name)?;
+        }
         let solid_id = self.resolve_solid(solid)?;
         let result = brepkit_operations::projection::project_edges(
             &self.topo,
