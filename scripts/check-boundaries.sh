@@ -11,10 +11,10 @@ set -euo pipefail
 #   L2   (blend)      — depends on math, topology, geometry
 #   L2   (heal)       — depends on math, topology, geometry
 #   L2   (check)      — depends on math, topology, geometry
-#   L2   (offset)     — depends on math, topology, geometry, algo
+#   L2   (offset)     — depends on math, topology, geometry
 #   L2   (sketch)     — no workspace deps
 #   L3   (operations) — depends on math, topology, algo, blend, heal, check, geometry, offset, sketch
-#   L3   (io)         — depends on math, topology, operations, heal
+#   L3   (io)         — depends on math, topology, operations
 #   L4   (wasm)       — depends on all
 
 FAIL=0
@@ -61,11 +61,11 @@ check_deps "algo"       "brepkit-math" "brepkit-topology" "brepkit-geometry"
 check_deps "blend"      "brepkit-math" "brepkit-topology" "brepkit-geometry"
 check_deps "heal"       "brepkit-math" "brepkit-topology" "brepkit-geometry"
 check_deps "check"      "brepkit-math" "brepkit-topology" "brepkit-geometry"
-check_deps "offset"     "brepkit-math" "brepkit-topology" "brepkit-geometry" "brepkit-algo"
+check_deps "offset"     "brepkit-math" "brepkit-topology" "brepkit-geometry"
 check_deps "sketch"
 check_deps "operations" "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry" "brepkit-offset" "brepkit-sketch"
-check_deps "io"         "brepkit-math" "brepkit-topology" "brepkit-operations" "brepkit-heal"
-check_deps "wasm"       "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry" "brepkit-sketch" "brepkit-operations" "brepkit-io"
+check_deps "io"         "brepkit-math" "brepkit-topology" "brepkit-operations"
+check_deps "wasm"       "brepkit-math" "brepkit-topology" "brepkit-algo" "brepkit-blend" "brepkit-heal" "brepkit-check" "brepkit-geometry" "brepkit-offset" "brepkit-sketch" "brepkit-operations" "brepkit-io"
 
 if [ $FAIL -ne 0 ]; then
   echo "❌ Boundary check failed."
