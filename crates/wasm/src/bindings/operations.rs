@@ -300,6 +300,59 @@ impl BrepKernel {
         }
     }
 
+    /// Apply a constant-radius fillet and return face-evolution tracking data.
+    ///
+    /// Returns a JSON string `{"solid": <u32>, "evolution": {modified,
+    /// generated, deleted}}` — the same shape as `fuseWithEvolution`. Blend
+    /// faces appear under `generated` and surviving faces under `modified`.
+    /// Provenance is matched geometrically (face normal + centroid), so it is
+    /// unaffected by how the fillet renumbers faces.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a handle is invalid, the radius is non-positive, or
+    /// the fillet fails.
+    #[wasm_bindgen(js_name = "filletWithEvolution")]
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn fillet_with_evolution(
+        &mut self,
+        solid: u32,
+        edge_handles: Vec<u32>,
+        radius: f64,
+    ) -> Result<JsValue, JsError> {
+        validate_positive(radius, "radius")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let edge_ids: Vec<brepkit_topology::edge::EdgeId> = edge_handles
+            .iter()
+            .map(|&h| self.resolve_edge(h))
+            .collect::<Result<_, _>>()?;
+
+        // Wrap in catch_unwind like `fillet` does: a fillet panic must not
+        // abort the whole WASM instance.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || -> Result<String, JsError> {
+                let input_faces =
+                    brepkit_operations::boolean::collect_face_signatures(&self.topo, solid_id)?;
+                let result = try_fillet(self.topo_mut(), solid_id, &edge_ids, radius)?;
+                let output_faces =
+                    brepkit_operations::boolean::collect_face_signatures(&self.topo, result)?;
+                let evo = brepkit_operations::evolution::build_evolution_by_geometry(
+                    &input_faces,
+                    &output_faces,
+                );
+                Ok(format!(
+                    "{{\"solid\":{},\"evolution\":{}}}",
+                    solid_id_to_u32(result),
+                    evo.to_json()
+                ))
+            },
+        ));
+        match result {
+            Ok(inner) => inner.map(|json| JsValue::from_str(&json)),
+            Err(panic_info) => Err(JsError::new(&panic_message(&panic_info, "Fillet"))),
+        }
+    }
+
     // ── Operations ─────────────────────────────────────────────────
 
     /// Extrude a planar face along a direction vector to create a solid.
