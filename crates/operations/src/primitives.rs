@@ -802,6 +802,46 @@ pub fn make_convex_hull(
     Ok(topo.add_solid(solid))
 }
 
+/// Convex Minkowski sum of two solids: `A ⊕ B = { a + b | a ∈ A, b ∈ B }`.
+///
+/// Computed as the convex hull of all pairwise vertex sums, which is exact when
+/// both inputs are convex (e.g. boxes, or a shape with a tessellated sphere as
+/// the rolling tool) and a convex over-approximation otherwise.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::InvalidInput`] if either solid has no
+/// vertices, and propagates [`make_convex_hull`] errors (e.g. degenerate input).
+pub fn make_minkowski_sum(
+    topo: &mut Topology,
+    a: SolidId,
+    b: SolidId,
+) -> Result<SolidId, crate::OperationsError> {
+    use brepkit_topology::explorer::solid_vertices;
+
+    let point_of = |topo: &Topology, ids: &[brepkit_topology::vertex::VertexId]| {
+        ids.iter()
+            .map(|&v| topo.vertex(v).map(brepkit_topology::vertex::Vertex::point))
+            .collect::<Result<Vec<Point3>, _>>()
+    };
+    let a_pts = point_of(topo, &solid_vertices(topo, a)?)?;
+    let b_pts = point_of(topo, &solid_vertices(topo, b)?)?;
+
+    if a_pts.is_empty() || b_pts.is_empty() {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "minkowski sum requires two non-empty solids".into(),
+        });
+    }
+
+    let mut sums = Vec::with_capacity(a_pts.len() * b_pts.len());
+    for &p in &a_pts {
+        for &q in &b_pts {
+            sums.push(Point3::new(p.x() + q.x(), p.y() + q.y(), p.z() + q.z()));
+        }
+    }
+    make_convex_hull(topo, &sums)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -1330,6 +1370,26 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_convex_hull(&mut topo, &sum_points).unwrap();
         assert_volume_near(&topo, solid, 8.0, 1e-8);
+    }
+
+    #[test]
+    fn minkowski_sum_unit_boxes_volume_8() {
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let b = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let sum = make_minkowski_sum(&mut topo, a, b).unwrap();
+        // [0,1]³ ⊕ [0,1]³ = [0,2]³, volume 8.
+        assert_volume_near(&topo, sum, 8.0, 1e-6);
+    }
+
+    #[test]
+    fn minkowski_sum_box10_box2_volume_1728() {
+        let mut topo = Topology::new();
+        let a = make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        let b = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+        let sum = make_minkowski_sum(&mut topo, a, b).unwrap();
+        // 10-box ⊕ 2-box = 12-box, volume 1728.
+        assert_volume_near(&topo, sum, 1728.0, 1e-4);
     }
 
     #[test]
