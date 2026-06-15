@@ -97,11 +97,6 @@ pub fn fix_face(
         result.merge(&r);
     }
 
-    if config.fix_duplicate_faces != FixMode::Off {
-        let r = fix_duplicate_faces(ctx, config);
-        result.merge(&r);
-    }
-
     Ok(result)
 }
 
@@ -212,15 +207,6 @@ fn fix_small_area(
         status: Status::DONE2,
         actions_taken: 1,
     })
-}
-
-/// Stub: duplicate face detection.
-fn fix_duplicate_faces(ctx: &mut HealContext, config: &FixConfig) -> FixResult {
-    if !config.fix_duplicate_faces.should_fix(false) {
-        return FixResult::ok();
-    }
-    ctx.warn("Duplicate face fix: not yet implemented (TODO)".to_string());
-    FixResult::ok()
 }
 
 /// Compute the normal of a polygon via Newell's method.
