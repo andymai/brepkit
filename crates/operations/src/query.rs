@@ -1,6 +1,6 @@
 //! Shape query utilities.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
@@ -71,12 +71,18 @@ pub fn filter_filletable_edges(
     let solid_data = topo.solid(solid_id)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
-    let mut edge_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
+    // Map each edge to its set of *distinct* adjacent faces, walking both outer
+    // and inner (hole-boundary) wires — the same adjacency the fillet engine
+    // sees. The set dedups a seam edge that a single face's wire lists twice.
+    let mut edge_faces: HashMap<usize, HashSet<FaceId>> = HashMap::new();
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
-        let wire = topo.wire(face.outer_wire())?;
-        for oe in wire.edges() {
-            edge_faces.entry(oe.edge().index()).or_default().push(fid);
+        let mut wires = vec![face.outer_wire()];
+        wires.extend(face.inner_wires().iter().copied());
+        for wid in wires {
+            for oe in topo.wire(wid)?.edges() {
+                edge_faces.entry(oe.edge().index()).or_default().insert(fid);
+            }
         }
     }
 

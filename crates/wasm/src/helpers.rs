@@ -542,29 +542,45 @@ mod fillet_tests {
 
     #[test]
     fn try_fillet_second_pass_does_not_break_solid() {
-        // #813: a second fillet whose target edges border the first fillet's
-        // NURBS blend faces must not produce a self-intersecting solid (vol grew
-        // past the base to 1000.30 before the fix). Such edges are skipped.
+        use brepkit_topology::face::FaceSurface;
+
+        // #813: a second fillet whose target edge borders the first fillet's
+        // NURBS blend face must not produce a self-intersecting solid — the
+        // volume grew past the base to 1000.30 before the fix; such edges are
+        // now skipped. Checked over *every* result edge so the guard doesn't
+        // rely on a particular edge ordering.
         let mut topo = Topology::new();
         let cube = brepkit_operations::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
         let edges = solid_edge_ids(&topo, cube);
         let first = try_fillet(&mut topo, cube, &[edges[0], edges[1]], 1.0).expect("first fillet");
         let v1 = brepkit_operations::measure::solid_volume(&topo, first, 0.05).unwrap();
 
-        // The first two edges of the result border the new NURBS blend faces.
-        let r_edges = solid_edge_ids(&topo, first);
-        let second =
-            try_fillet(&mut topo, first, &[r_edges[0], r_edges[1]], 0.5).expect("second fillet");
-        let v2 = brepkit_operations::measure::solid_volume(&topo, second, 0.05).unwrap();
-
-        // A fillet on these convex edges can only remove material, never add it.
-        assert!(
-            v2 <= v1 + 1e-6,
-            "second fillet must not add material: first={v1:.2}, second={v2:.2}"
-        );
-        let sd = topo.solid(second).expect("result solid");
+        // The scenario under test only exists if the first fillet produced NURBS
+        // blend faces for the later edges to border.
+        let sd = topo.solid(first).expect("solid");
         let sh = topo.shell(sd.outer_shell()).expect("shell");
-        brepkit_topology::validation::validate_shell_manifold(sh, &topo)
-            .expect("second fillet result must remain a manifold solid");
+        let has_blend = sh.faces().iter().any(|&fid| {
+            topo.face(fid)
+                .is_ok_and(|f| matches!(f.surface(), FaceSurface::Nurbs(_)))
+        });
+        assert!(has_blend, "first fillet should create NURBS blend faces");
+
+        // Filleting any single result edge can only remove material from this
+        // convex solid (never add it), and must stay a manifold solid.
+        let r_edges = solid_edge_ids(&topo, first);
+        for &e in &r_edges {
+            let mut t = topo.clone();
+            let s = try_fillet(&mut t, first, &[e], 0.5).expect("second fillet");
+            let v2 = brepkit_operations::measure::solid_volume(&t, s, 0.05).unwrap();
+            assert!(
+                v2 <= v1 + 1e-6,
+                "second fillet on edge {} added material: first={v1:.2}, second={v2:.2}",
+                e.index()
+            );
+            let ssd = t.solid(s).expect("result solid");
+            let ssh = t.shell(ssd.outer_shell()).expect("shell");
+            brepkit_topology::validation::validate_shell_manifold(ssh, &t)
+                .expect("second fillet result must remain a manifold solid");
+        }
     }
 }
