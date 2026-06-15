@@ -825,6 +825,16 @@ pub fn fillet_rolling_ball(
     // Phase 3: Build modified (trimmed) planar faces.
     let mut all_specs: Vec<FaceSpec> = Vec::new();
 
+    // At a corner where exactly two filleted edges meet (sharing one face), the
+    // strips are set back from the vertex and a corner patch fills the gap (see
+    // Phase 5b). The *third*, unfilleted edge at that corner must be preserved
+    // rather than collapsed onto the far corner: each side face trims it to a
+    // point P just inside the corner. Both side faces compute the same P (it is
+    // a fixed distance up the shared unfilleted edge), so the sub-edge survives
+    // as a shared boundary. Phase 5b reads P to close the patch against it.
+    // Key: corner vertex index → preserved trim point P.
+    let mut corner_preserved: HashMap<usize, Point3> = HashMap::new();
+
     for &face_id in &shell_face_ids {
         // Non-planar faces: either pass through or trim at fillet contact points.
         let Some(poly) = face_polygons.get(&face_id.index()) else {
@@ -963,10 +973,26 @@ pub fn fillet_rolling_ball(
                         } else {
                             trimmed_verts.push(pos);
                         }
+                        // Preserve the unfilleted "after" edge at a setback corner.
+                        if setback_map.contains_key(&(ei, vi)) {
+                            if let Ok(dir) = (next_pos - pos).normalize() {
+                                let p = pos + dir * radius;
+                                trimmed_verts.push(p);
+                                corner_preserved.insert(vi, p);
+                            }
+                        }
                     }
                     (false, true, _) => {
                         // The "after" edge is filleted — use its specific contact.
                         let ei = wire_edge_ids[i].index();
+                        // Preserve the unfilleted "before" edge at a setback corner.
+                        if setback_map.contains_key(&(ei, vi)) {
+                            if let Ok(dir) = (prev_pos - pos).normalize() {
+                                let p = pos + dir * radius;
+                                trimmed_verts.push(p);
+                                corner_preserved.insert(vi, p);
+                            }
+                        }
                         if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
                             trimmed_verts.push(pt);
                         } else if let Ok(dir) = (prev_pos - pos).normalize() {
@@ -1091,9 +1117,28 @@ pub fn fillet_rolling_ball(
                         let dir = (next_pos - pos).normalize()?;
                         new_verts.push(pos + dir * radius);
                     }
+                    // The "after" edge is the unfilleted edge at this corner.
+                    // If the filleted edge was set back here, preserve it.
+                    if setback_map.contains_key(&(ei, vi)) {
+                        if let Ok(dir) = (next_pos - pos).normalize() {
+                            let p = pos + dir * radius;
+                            new_verts.push(p);
+                            corner_preserved.insert(vi, p);
+                        }
+                    }
                 }
                 (false, true, _) => {
                     let ei = poly.wire_edge_ids[i].index();
+                    // The "before" edge is the unfilleted edge at this corner.
+                    // If the filleted edge was set back here, preserve it by
+                    // emitting a trim point on it *before* the fillet contact.
+                    if setback_map.contains_key(&(ei, vi)) {
+                        if let Ok(dir) = (prev_pos - pos).normalize() {
+                            let p = pos + dir * radius;
+                            new_verts.push(p);
+                            corner_preserved.insert(vi, p);
+                        }
+                    }
                     if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
                         new_verts.push(pt);
                     } else {
@@ -1405,7 +1450,7 @@ pub fn fillet_rolling_ball(
     // close with a planar blend face.
     for (&vi, contacts) in &vertex_contacts {
         let fillet_count = vertex_fillet_edges.get(&vi).map_or(0, Vec::len);
-        if fillet_count < 3 {
+        if fillet_count < 2 {
             continue;
         }
 
@@ -1473,6 +1518,68 @@ pub fn fillet_rolling_ball(
         } else {
             blend_normal
         };
+
+        // Two filleted edges meeting at this corner (sharing one face). The two
+        // strips were set back and the third, unfilleted edge was preserved at
+        // P (Phase 3). The gap is a four-sided region P–near1–far–near2: its two
+        // straight P-edges meet the trimmed side faces and its two arc-edges
+        // meet the strip ends. The eighth-sphere triangle used for 3-edge
+        // corners does not apply here because one of its arcs would face the
+        // (still sharp) unfilleted edge with nothing to share it.
+        if fillet_count == 2 {
+            if let (Some(&p_pt), Some(v_pos)) = (corner_preserved.get(&vi), original_vertex) {
+                if blend_points.len() == 3 {
+                    // Sphere centre: corner offset inward by R along each
+                    // distinct contact-face normal (outward normals → subtract
+                    // for a convex corner).
+                    let mut face_normals: Vec<Vec3> = Vec::new();
+                    for &(face_idx, _) in contacts {
+                        if let Some(poly) = face_polygons.get(&face_idx) {
+                            let n = poly.normal;
+                            if !face_normals.iter().any(|e| (*e - n).length() < 1e-10) {
+                                face_normals.push(n);
+                            }
+                        }
+                    }
+                    let normal_sum = face_normals.iter().fold(Vec3::new(0.0, 0.0, 0.0), |a, n| {
+                        Vec3::new(a.x() + n.x(), a.y() + n.y(), a.z() + n.z())
+                    });
+                    let sphere_center = Point3::new(
+                        v_pos.x() - radius * normal_sum.x(),
+                        v_pos.y() - radius * normal_sum.y(),
+                        v_pos.z() - radius * normal_sum.z(),
+                    );
+
+                    // `far` (D) is the contact on the two edges' shared face —
+                    // the point farthest from P. The other two connect to P.
+                    let far_idx = (0..3)
+                        .max_by(|&a, &b| {
+                            (blend_points[a] - p_pt)
+                                .length()
+                                .partial_cmp(&(blend_points[b] - p_pt).length())
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .unwrap_or(0);
+                    let far = blend_points[far_idx];
+                    let near: Vec<Point3> = (0..3)
+                        .filter(|&i| i != far_idx)
+                        .map(|i| blend_points[i])
+                        .collect();
+
+                    if let Some(spec) = build_two_edge_corner_patch(
+                        p_pt,
+                        near[0],
+                        far,
+                        near[1],
+                        sphere_center,
+                        v_pos,
+                    ) {
+                        all_specs.push(spec);
+                    }
+                }
+            }
+            continue;
+        }
 
         // Order the blend points consistently (counter-clockwise when viewed from
         // the outward normal direction).
@@ -1836,4 +1943,112 @@ pub fn fillet_rolling_ball(
     let _ = crate::heal::unify_faces(topo, solid_id);
 
     Ok(solid_id)
+}
+
+/// Build the corner patch where exactly two filleted edges meet at a vertex
+/// (sharing one face).
+///
+/// The four corners are `p` (the preserved trim point on the third, unfilleted
+/// edge), the two near contacts `near1`/`near2` that join `p` along the trimmed
+/// side faces, and the far contact `far` on the two edges' shared face. The two
+/// `near→far` boundaries are circular arcs of the corner sphere (matching the
+/// setback strip ends); the two `p→near` boundaries are straight (matching the
+/// side faces). Returns a degree-(2,2) rational NURBS patch oriented to face
+/// away from the original corner `v_pos`, or `None` if the geometry is
+/// degenerate.
+fn build_two_edge_corner_patch(
+    p: Point3,
+    near1: Point3,
+    far: Point3,
+    near2: Point3,
+    sphere_center: Point3,
+    v_pos: Point3,
+) -> Option<FaceSpec> {
+    // Rational-quadratic middle control point + weight for the circular arc
+    // a→b on the sphere: the mid CP is the tangent intersection at distance
+    // r/cos(θ/2) from the centre, carrying weight cos(θ/2).
+    let arc_mid = |a: Point3, b: Point3| -> Option<(Point3, f64)> {
+        let va = (a - sphere_center).normalize().ok()?;
+        let vb = (b - sphere_center).normalize().ok()?;
+        let r = (a - sphere_center).length();
+        let sum = va + vb;
+        let len = sum.length();
+        if len < 1e-9 {
+            return None;
+        }
+        let cos_half = len / 2.0;
+        let cp = Point3::new(
+            sphere_center.x() + sum.x() / len * r / cos_half,
+            sphere_center.y() + sum.y() / len * r / cos_half,
+            sphere_center.z() + sum.z() / len * r / cos_half,
+        );
+        Some((cp, cos_half))
+    };
+
+    let (m1f, w1f) = arc_mid(near1, far)?;
+    let (m2f, w2f) = arc_mid(near2, far)?;
+    let mid = |a: Point3, b: Point3| {
+        Point3::new(
+            (a.x() + b.x()) * 0.5,
+            (a.y() + b.y()) * 0.5,
+            (a.z() + b.z()) * 0.5,
+        )
+    };
+    let m_p1 = mid(p, near1);
+    let m_p2 = mid(p, near2);
+
+    // Interior control point: lift the corner centroid onto the sphere so the
+    // patch bulges outward — a sag here would gouge into the corner.
+    let centroid4 = Point3::new(
+        (p.x() + near1.x() + near2.x() + far.x()) * 0.25,
+        (p.y() + near1.y() + near2.y() + far.y()) * 0.25,
+        (p.z() + near1.z() + near2.z() + far.z()) * 0.25,
+    );
+    let r = (far - sphere_center).length();
+    let interior = match (centroid4 - sphere_center).normalize() {
+        Ok(d) => Point3::new(
+            sphere_center.x() + d.x() * r,
+            sphere_center.y() + d.y() * r,
+            sphere_center.z() + d.z() * r,
+        ),
+        Err(_) => centroid4,
+    };
+    let w_int = (w1f * w2f).sqrt();
+
+    // (u,v) control grid — boundary corners traverse p → near1 → far → near2:
+    //   u=0: p     m_p1      near1     (straight p→near1)
+    //   u=1: m_p2  interior  m1f
+    //   u=2: near2 m2f       far       (arc near2→far)
+    // v=0 column is straight p→near2; v=2 column is the arc near1→far.
+    let surface = NurbsSurface::new(
+        2,
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            vec![p, m_p1, near1],
+            vec![m_p2, interior, m1f],
+            vec![near2, m2f, far],
+        ],
+        vec![
+            vec![1.0, 1.0, 1.0],
+            vec![1.0, w_int, w1f],
+            vec![1.0, w2f, 1.0],
+        ],
+    )
+    .ok()?;
+
+    // Orient the patch to face away from the original (now removed) corner.
+    let outward = (centroid4 - v_pos)
+        .normalize()
+        .unwrap_or_else(|_| Vec3::new(0.0, 0.0, 1.0));
+    let nrm = surface.normal(0.5, 0.5).unwrap_or(outward);
+    let reversed = nrm.dot(outward) < 0.0;
+
+    Some(FaceSpec::Surface {
+        vertices: vec![p, near1, far, near2],
+        surface: FaceSurface::Nurbs(surface),
+        reversed,
+        inner_wires: vec![],
+    })
 }

@@ -325,19 +325,119 @@ fn rolling_ball_fillet_multiple_edges() {
     let cube = make_unit_cube_manifold(&mut topo);
 
     let edges = solid_edge_ids(&topo, cube);
-    // Fillet 2 edges
+    // edges[0] and edges[1] share a corner vertex.
     let result = fillet_rolling_ball(&mut topo, cube, &[edges[0], edges[1]], 0.1)
         .expect("multi-edge rolling-ball fillet should succeed");
 
     let s = topo.solid(result).expect("result solid");
     let sh = topo.shell(s.outer_shell()).expect("shell");
 
-    // 6 original + 2 NURBS fillets = 8 faces
+    // 6 trimmed planar + 2 NURBS fillet strips + 1 corner patch (the two
+    // edges share a corner) = 9 faces.
     assert_eq!(
         sh.faces().len(),
-        8,
-        "expected 8 faces after two-edge rolling-ball fillet"
+        9,
+        "expected 9 faces after two-edge shared-corner rolling-ball fillet"
     );
+    validate_shell_manifold(sh, &topo).expect("two-edge fillet should be manifold");
+}
+
+/// Regression for #841: filleting two edges that share a corner vertex in a
+/// single rolling-ball pass must produce a watertight (closed, euler-2) solid.
+/// Previously the corner gap was left open (4 free edges, euler=1) because the
+/// strips were set back but no corner patch closed the junction and the side
+/// faces collapsed the unfilleted edge onto the far corner.
+#[test]
+fn rolling_ball_two_edges_shared_corner_watertight() {
+    // Every adjacent (corner-sharing) pair of bottom-ring edges on a box.
+    let mut topo = Topology::new();
+    let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let all_edges = solid_edge_ids(&topo, cube);
+
+    // Find pairs of edges that share a vertex (a corner).
+    let mut shared_pairs: Vec<(usize, usize)> = Vec::new();
+    for i in 0..all_edges.len() {
+        for j in (i + 1)..all_edges.len() {
+            let ei = topo.edge(all_edges[i]).unwrap();
+            let ej = topo.edge(all_edges[j]).unwrap();
+            let shares = ei.start() == ej.start()
+                || ei.start() == ej.end()
+                || ei.end() == ej.start()
+                || ei.end() == ej.end();
+            if shares {
+                shared_pairs.push((i, j));
+            }
+        }
+    }
+    assert!(
+        !shared_pairs.is_empty(),
+        "box should have corner-sharing edge pairs"
+    );
+
+    // Verify a representative sample of corner-sharing pairs (keeps the test
+    // fast while covering distinct corner orientations).
+    for &(i, j) in shared_pairs.iter().take(6) {
+        let mut t = Topology::new();
+        let box_id = crate::primitives::make_box(&mut t, 10.0, 10.0, 10.0).unwrap();
+        let edges = solid_edge_ids(&t, box_id);
+        let result = fillet_rolling_ball(&mut t, box_id, &[edges[i], edges[j]], 1.0)
+            .expect("fillet of shared-corner edges should succeed");
+
+        let s = t.solid(result).expect("result solid");
+        let sh = t.shell(s.outer_shell()).expect("shell");
+        assert!(
+            brepkit_topology::validation::validate_shell_closed(sh, &t).is_ok(),
+            "shared-corner pair {i},{j} should be watertight"
+        );
+        assert!(
+            validate_shell_manifold(sh, &t).is_ok(),
+            "shared-corner pair {i},{j} should be manifold"
+        );
+        assert_euler_genus0(&t, result);
+
+        let vol = crate::measure::solid_volume(&t, result, 0.01).unwrap();
+        assert!(
+            (985.0..1000.0).contains(&vol),
+            "shared-corner pair {i},{j}: volume {vol} outside sane range"
+        );
+    }
+}
+
+/// A box edge pair that does NOT share a corner must remain watertight too
+/// (the corner patch must not fire spuriously).
+#[test]
+fn rolling_ball_two_edges_no_shared_corner_watertight() {
+    let mut topo = Topology::new();
+    let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let edges = solid_edge_ids(&topo, cube);
+
+    // Find a pair with no shared vertex.
+    let mut pair = None;
+    'outer: for i in 0..edges.len() {
+        for j in (i + 1)..edges.len() {
+            let ei = topo.edge(edges[i]).unwrap();
+            let ej = topo.edge(edges[j]).unwrap();
+            let shares = ei.start() == ej.start()
+                || ei.start() == ej.end()
+                || ei.end() == ej.start()
+                || ei.end() == ej.end();
+            if !shares {
+                pair = Some((i, j));
+                break 'outer;
+            }
+        }
+    }
+    let (i, j) = pair.expect("box should have a non-corner-sharing edge pair");
+
+    let result = fillet_rolling_ball(&mut topo, cube, &[edges[i], edges[j]], 1.0)
+        .expect("non-shared-corner fillet should succeed");
+    let s = topo.solid(result).expect("result solid");
+    let sh = topo.shell(s.outer_shell()).expect("shell");
+    // 6 trimmed planar + 2 fillet strips = 8 faces, no corner patch.
+    assert_eq!(sh.faces().len(), 8, "non-shared pair should add no patch");
+    brepkit_topology::validation::validate_shell_closed(sh, &topo)
+        .expect("non-shared-corner fillet should be watertight");
+    assert_euler_genus0(&topo, result);
 }
 
 #[test]
