@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.109.1](https://github.com/andymai/brepkit/compare/v2.109.0...v2.109.1) (2026-06-15)
+
+
+### Bug Fixes
+
+* **review:** address skipped review on [#828](https://github.com/andymai/brepkit/issues/828) + [#830](https://github.com/andymai/brepkit/issues/830) ([#832](https://github.com/andymai/brepkit/issues/832)) ([18fc3d6](https://github.com/andymai/brepkit/commit/18fc3d6ae3b5873b69e784094300ab618fa21aa8))
+
 ## [2.109.0](https://github.com/andymai/brepkit/compare/v2.108.0...v2.109.0) (2026-06-15)
 
 
