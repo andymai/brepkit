@@ -670,6 +670,27 @@ impl BrepKernel {
                 .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
             }
+            "guidedSweep" => {
+                let face_id = self
+                    .resolve_face(get_u32(args, "face")?)
+                    .map_err(|e| e.to_string())?;
+                let nurbs_of = |this: &Self, edge: u32| -> Result<NurbsCurve, String> {
+                    let edge_id = this.resolve_edge(edge).map_err(|e| e.to_string())?;
+                    let edge_data = this.topo.edge(edge_id).map_err(|e| e.to_string())?;
+                    match edge_data.curve() {
+                        EdgeCurve::NurbsCurve(c) => Ok(c.clone()),
+                        EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                            Err("guidedSweep spine and aux must be NURBS edges".into())
+                        }
+                    }
+                };
+                let spine = nurbs_of(self, get_u32(args, "spineEdge")?)?;
+                let aux = nurbs_of(self, get_u32(args, "auxEdge")?)?;
+                let solid =
+                    brepkit_operations::sweep::sweep_guided(self.topo_mut(), face_id, &spine, aux)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
             "chamfer" => {
                 let s = get_u32(args, "solid")?;
                 let dist = get_f64(args, "distance")?;
