@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.111.0](https://github.com/andymai/brepkit/compare/v2.110.0...v2.111.0) (2026-06-15)
+
+
+### Features
+
+* **fillet:** round NURBS-blend-adjacent edges via the fillet binding ([#839](https://github.com/andymai/brepkit/issues/839)) ([d4a46ea](https://github.com/andymai/brepkit/commit/d4a46ea53a7b9a11e750d4a04fcc3f4ac4765a4b))
+
 ## [2.110.0](https://github.com/andymai/brepkit/compare/v2.109.2...v2.110.0) (2026-06-15)
 
 
