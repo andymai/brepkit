@@ -62,7 +62,7 @@ pub fn perform(
 
                 arena.merge_vertices(va, vb);
 
-                log::debug!("VV: vertices {va:?} and {vb:?} coincide (dist={dist:.2e})",);
+                log::debug!("VV: vertices {va:?} and {vb:?} coincide (dist={dist:.2e})");
             }
         }
     }

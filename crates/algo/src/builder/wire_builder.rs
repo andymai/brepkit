@@ -109,10 +109,7 @@ pub fn build_wire_loops_with_winding(
     let mut used = vec![false; edges.len()];
     let mut loops = Vec::new();
 
-    loop {
-        let Some(start_idx) = used.iter().position(|u| !u) else {
-            break;
-        };
+    while let Some(start_idx) = used.iter().position(|u| !u) {
         used[start_idx] = true;
 
         let start_vertex = quantize_uv_periodic(edges[start_idx].start_uv, tol, u_period, v_period);
