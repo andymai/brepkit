@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.110.0](https://github.com/andymai/brepkit/compare/v2.109.2...v2.110.0) (2026-06-15)
+
+
+### Features
+
+* **fillet:** watertight fillet of edges adjacent to a NURBS blend face ([#837](https://github.com/andymai/brepkit/issues/837)) ([2cde8f5](https://github.com/andymai/brepkit/commit/2cde8f55d58c3318d9e527032bb0a1ef3727f73f))
+
 ## [2.109.2](https://github.com/andymai/brepkit/compare/v2.109.1...v2.109.2) (2026-06-15)
 
 
