@@ -7,7 +7,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::error::validate_positive;
 use crate::kernel::BrepKernel;
-use crate::shapes::JsMesh;
+use crate::shapes::{JsGroupedMesh, JsMesh};
 use crate::types::{GroupedMeshResult, UvMeshResult};
 
 /// Resolve an optional angular-tolerance argument, validating it when present
@@ -121,6 +121,38 @@ impl BrepKernel {
         Ok(serde_json::to_string(&result)
             .map_err(|e| JsError::new(&e.to_string()))?
             .into())
+    }
+
+    /// Tessellate a solid with per-face grouping, returned as packed binary
+    /// buffers ([`JsGroupedMesh`]) instead of a JSON string.
+    ///
+    /// Identical geometry to [`tessellate_solid_grouped`](Self::tessellate_solid_grouped),
+    /// but the mesh crosses the WASM boundary as `Float32Array`/`Uint32Array`
+    /// bulk copies rather than a (potentially multi-megabyte) JSON string that
+    /// the caller must `JSON.parse` and re-pack — far cheaper for large meshes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the solid handle is invalid or tessellation fails.
+    #[wasm_bindgen(js_name = "tessellateSolidGroupedBinary")]
+    pub fn tessellate_solid_grouped_binary(
+        &self,
+        solid: u32,
+        deflection: f64,
+        angular_tolerance: Option<f64>,
+    ) -> Result<JsGroupedMesh, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let angular_tol = resolve_angular_tol(angular_tolerance)?;
+        let solid_id = self.resolve_solid(solid)?;
+
+        let (mesh, face_offsets) = tessellate::tessellate_solid_grouped_with_tolerance(
+            &self.topo,
+            solid_id,
+            deflection,
+            angular_tol,
+        )?;
+
+        Ok(JsGroupedMesh::new(mesh, face_offsets))
     }
 
     /// Tessellate a solid and include per-vertex UV coordinates.

@@ -148,6 +148,83 @@ impl JsMesh {
     }
 }
 
+/// A triangle mesh with per-face triangle grouping, exposed to JavaScript.
+///
+/// The binary counterpart to the JSON `tessellateSolidGrouped`: positions and
+/// normals are packed `Float32Array`s and indices/`faceOffsets` are
+/// `Uint32Array`s, so the whole mesh crosses the WASM boundary as bulk memory
+/// copies instead of a JSON string round-trip. `f32` matches what mesh
+/// consumers (GPU vertex buffers) use, halving the transfer versus `f64`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct JsGroupedMesh {
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    indices: Vec<u32>,
+    face_offsets: Vec<u32>,
+}
+
+#[wasm_bindgen]
+impl JsGroupedMesh {
+    /// Flattened vertex positions as `[x, y, z, ...]`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn positions(&self) -> Vec<f32> {
+        self.positions.clone()
+    }
+
+    /// Flattened per-vertex normals as `[nx, ny, nz, ...]`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn normals(&self) -> Vec<f32> {
+        self.normals.clone()
+    }
+
+    /// Triangle indices (groups of 3).
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn indices(&self) -> Vec<u32> {
+        self.indices.clone()
+    }
+
+    /// Per-face start offsets into `indices`: `faceOffsets[i]` is the start of
+    /// face `i`, and the final element equals `indices.length`.
+    #[wasm_bindgen(getter, js_name = "faceOffsets")]
+    #[must_use]
+    pub fn face_offsets(&self) -> Vec<u32> {
+        self.face_offsets.clone()
+    }
+}
+
+impl JsGroupedMesh {
+    /// Build from a tessellated mesh and its per-face offsets (crate-internal).
+    ///
+    /// Takes the mesh by value so `indices` is moved rather than cloned — index
+    /// buffers can be large (3 × triangle count) and this is the only consumer.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub(crate) fn new(mesh: TriangleMesh, face_offsets: Vec<u32>) -> Self {
+        let mut positions = Vec::with_capacity(mesh.positions.len() * 3);
+        for p in &mesh.positions {
+            positions.push(p.x() as f32);
+            positions.push(p.y() as f32);
+            positions.push(p.z() as f32);
+        }
+        let mut normals = Vec::with_capacity(mesh.normals.len() * 3);
+        for n in &mesh.normals {
+            normals.push(n.x() as f32);
+            normals.push(n.y() as f32);
+            normals.push(n.z() as f32);
+        }
+        Self {
+            positions,
+            normals,
+            indices: mesh.indices,
+            face_offsets,
+        }
+    }
+}
+
 /// Edge polylines for wireframe rendering, exposed to JavaScript.
 ///
 /// Positions are flattened to `[x, y, z, x, y, z, ...]` format.
@@ -249,5 +326,47 @@ impl From<TriangleMesh> for JsMesh {
             normals,
             indices: mesh.indices,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::vec::{Point3, Vec3};
+
+    #[test]
+    fn grouped_mesh_packs_f32_moves_indices_and_keeps_offsets() {
+        let mesh = TriangleMesh {
+            positions: vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+            normals: vec![Vec3::new(0.0, 0.0, 1.0); 4],
+            indices: vec![0, 1, 2, 1, 3, 2],
+        };
+        // Two faces: first triangle (indices 0..3), second (indices 3..6).
+        let offsets = vec![0, 3, 6];
+        let gm = JsGroupedMesh::new(mesh, offsets.clone());
+
+        // Positions are flattened f32 [x,y,z,...] — 4 verts × 3 = 12 floats.
+        assert_eq!(gm.positions().len(), 12);
+        assert_eq!(
+            gm.positions(),
+            vec![
+                0.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0
+            ]
+        );
+        assert_eq!(gm.normals(), [0.0_f32, 0.0, 1.0].repeat(4));
+        assert_eq!(gm.indices(), vec![0_u32, 1, 2, 1, 3, 2]);
+
+        // faceOffsets are stored verbatim and the last entry == indices length.
+        assert_eq!(gm.face_offsets(), offsets);
+        assert_eq!(
+            *gm.face_offsets().last().unwrap() as usize,
+            gm.indices().len()
+        );
     }
 }
