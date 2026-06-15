@@ -327,20 +327,30 @@ impl BrepKernel {
             .map(|&h| self.resolve_edge(h))
             .collect::<Result<_, _>>()?;
 
-        let input_faces =
-            brepkit_operations::boolean::collect_face_signatures(&self.topo, solid_id)?;
-        let result = try_fillet(self.topo_mut(), solid_id, &edge_ids, radius)?;
-        let output_faces =
-            brepkit_operations::boolean::collect_face_signatures(&self.topo, result)?;
-        let evo =
-            brepkit_operations::evolution::build_evolution_by_geometry(&input_faces, &output_faces);
-
-        let json = format!(
-            "{{\"solid\":{},\"evolution\":{}}}",
-            solid_id_to_u32(result),
-            evo.to_json()
-        );
-        Ok(JsValue::from_str(&json))
+        // Wrap in catch_unwind like `fillet` does: a fillet panic must not
+        // abort the whole WASM instance.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || -> Result<String, JsError> {
+                let input_faces =
+                    brepkit_operations::boolean::collect_face_signatures(&self.topo, solid_id)?;
+                let result = try_fillet(self.topo_mut(), solid_id, &edge_ids, radius)?;
+                let output_faces =
+                    brepkit_operations::boolean::collect_face_signatures(&self.topo, result)?;
+                let evo = brepkit_operations::evolution::build_evolution_by_geometry(
+                    &input_faces,
+                    &output_faces,
+                );
+                Ok(format!(
+                    "{{\"solid\":{},\"evolution\":{}}}",
+                    solid_id_to_u32(result),
+                    evo.to_json()
+                ))
+            },
+        ));
+        match result {
+            Ok(inner) => inner.map(|json| JsValue::from_str(&json)),
+            Err(panic_info) => Err(JsError::new(&panic_message(&panic_info, "Fillet"))),
+        }
     }
 
     // ── Operations ─────────────────────────────────────────────────

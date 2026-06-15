@@ -3207,8 +3207,11 @@ pub fn face_polygon(
 /// # Errors
 ///
 /// Returns an error if any face or wire cannot be resolved.
-/// Snapshot each outer-shell face as `(index, outward normal, centroid)` — the
-/// signature [`crate::evolution::build_evolution_by_geometry`] matches on.
+/// Snapshot each outer-shell face as `(index, face normal, centroid)` — the
+/// signature [`crate::evolution::build_evolution_by_geometry`] matches on. The
+/// normal is the stored plane normal (or a polygon-derived normal for
+/// non-planar faces), not re-oriented by the face's `reversed` flag; matching
+/// stays consistent because input and output faces use the same convention.
 pub fn collect_face_signatures(
     topo: &Topology,
     solid_id: SolidId,
