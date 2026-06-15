@@ -78,10 +78,12 @@ pub fn fillet_rolling_ball(
     let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
     let mut face_polygons: HashMap<usize, FacePolygon> = HashMap::new();
     let mut face_surfaces: HashMap<usize, FaceSurface> = HashMap::new();
+    let mut face_reversed: HashMap<usize, bool> = HashMap::new();
 
     for &face_id in &shell_face_ids {
         let face = topo.face(face_id)?;
         face_surfaces.insert(face_id.index(), face.surface().clone());
+        face_reversed.insert(face_id.index(), face.is_reversed());
 
         let wire = topo.wire(face.outer_wire())?;
         let mut vertex_ids = Vec::with_capacity(wire.edges().len());
@@ -620,6 +622,87 @@ pub fn fillet_rolling_ball(
         }
     };
 
+    // Station fractions Phase 4 samples for an edge: `n_v` points evenly spaced
+    // across the (possibly setback-trimmed) interval `[t_lo, t_hi]`. Shared by
+    // the contact cache below, the contact-map pre-pass, and Phase 4 so all
+    // three see identical positions.
+    let station_fractions = |edge_id: EdgeId, n_v: usize| -> Vec<f64> {
+        let edge = match topo.edge(edge_id) {
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+        let (Ok(a), Ok(b)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
+            return Vec::new();
+        };
+        let edge_len = (b.point() - a.point()).length();
+        let sb_start = setback_map
+            .get(&(edge_id.index(), edge.start().index()))
+            .copied()
+            .unwrap_or(0.0);
+        let sb_end = setback_map
+            .get(&(edge_id.index(), edge.end().index()))
+            .copied()
+            .unwrap_or(0.0);
+        let t_lo = setback_fraction(sb_start, edge_len);
+        let t_hi = 1.0 - setback_fraction(sb_end, edge_len);
+        (0..n_v)
+            .map(|s| {
+                #[allow(clippy::cast_precision_loss)]
+                let frac = s as f64 / (n_v - 1).max(1) as f64;
+                t_lo + (t_hi - t_lo) * frac
+            })
+            .collect()
+    };
+
+    // Curved-neighbour contact cache. For an edge with a non-planar neighbour,
+    // the planar cross-product offset (`contact = p + dir·r`) lands off the
+    // curved surface, so the trimmed face and the blend strip disagree and the
+    // shell is not watertight. Instead solve the true rolling-ball contacts via
+    // the walking engine once per edge and reuse them in both the contact-map
+    // pre-pass and Phase 4. Edges where the walker can't converge (e.g. a
+    // tangent/G1 edge between a fillet face and its neighbour) are left
+    // uncached and fall through to the planar path / are skipped.
+    let blend_section_cache: HashMap<usize, Vec<brepkit_blend::fillet_builder::BlendCrossSection>> = {
+        let mut cache = HashMap::new();
+        for &edge_id in &filtered_edges {
+            let Ok(edge) = topo.edge(edge_id) else {
+                continue;
+            };
+            let edge_curve = edge.curve().clone();
+            let Some(face_list) = edge_to_faces.get(&edge_id.index()) else {
+                continue;
+            };
+            if face_list.len() < 2 {
+                continue;
+            }
+            let (f1, f2) = (face_list[0], face_list[1]);
+            let (Some(s1), Some(s2)) = (
+                face_surfaces.get(&f1.index()),
+                face_surfaces.get(&f2.index()),
+            ) else {
+                continue;
+            };
+            let both_planar =
+                matches!(s1, FaceSurface::Plane { .. }) && matches!(s2, FaceSurface::Plane { .. });
+            if both_planar {
+                continue; // exact planar path handles these
+            }
+            let n_v = edge_v_samples(&edge_curve).max(7);
+            let fractions = station_fractions(edge_id, n_v);
+            if fractions.len() != n_v {
+                continue;
+            }
+            let r1 = face_reversed.get(&f1.index()).copied().unwrap_or(false);
+            let r2 = face_reversed.get(&f2.index()).copied().unwrap_or(false);
+            if let Ok(sections) = brepkit_blend::fillet_builder::blend_cross_sections(
+                topo, edge_id, s1, r1, s2, r2, radius, &fractions,
+            ) {
+                cache.insert(edge_id.index(), sections);
+            }
+        }
+        cache
+    };
+
     // Pre-pass: precompute fillet strip endpoint contacts using Phase 4's
     // cross-product method.  Phase 3's face trimming will look up these exact
     // values instead of recomputing them from polygon neighbour directions.
@@ -648,6 +731,28 @@ pub fn fillet_rolling_ball(
             }
             let f1 = face_list[0];
             let f2 = face_list[1];
+
+            // Curved-neighbour edges: use the walker contacts (strip endpoints
+            // are the first/last cached cross-sections, sampled at t_lo / t_hi)
+            // so the trimmed face corners coincide with the blend strip ends.
+            if let Some(sections) = blend_section_cache.get(&edge_id.index()) {
+                for (sec, vid) in [
+                    (sections.first(), edge.start()),
+                    (sections.last(), edge.end()),
+                ] {
+                    let Some(sec) = sec else { continue };
+                    if g1_chain_vertices.contains(&vid.index()) {
+                        map.entry((vid.index(), edge_id.index(), f1.index()))
+                            .or_insert(sec.contact1);
+                        map.entry((vid.index(), edge_id.index(), f2.index()))
+                            .or_insert(sec.contact2);
+                    } else {
+                        map.insert((vid.index(), edge_id.index(), f1.index()), sec.contact1);
+                        map.insert((vid.index(), edge_id.index(), f2.index()), sec.contact2);
+                    }
+                }
+                continue;
+            }
 
             let (Some(surf1), Some(surf2)) = (
                 face_surfaces.get(&f1.index()),
@@ -1131,47 +1236,69 @@ pub fn fillet_rolling_ball(
         let mut grid: Vec<[Point3; 3]> = Vec::with_capacity(n_v);
         let mut bisector_ref = Vec3::new(0.0, 0.0, 0.0);
 
-        #[allow(clippy::cast_precision_loss)]
-        for s in 0..n_v {
-            let frac = s as f64 / (n_v - 1).max(1) as f64;
-            let t = t_lo + (t_hi - t_lo) * frac;
-            let p = sample_edge_point(&edge_curve, p_start, p_end, t);
-            let tan = sample_edge_tangent(&edge_curve, p_start, p_end, t);
-            let local_dir = tan.normalize().unwrap_or(edge_dir);
-
-            // Evaluate surface normals at this sample point. For planar faces,
-            // these are constant; for curved faces, they vary along the edge.
-            let ln1 = face_surface_normal_at(surf1, p).unwrap_or(n1_start);
-            let ln2 = face_surface_normal_at(surf2, p).unwrap_or(n2_start);
-
-            // Recompute cross-section directions at this sample
-            let c1 = local_dir.cross(ln1);
-            let c2 = local_dir.cross(ln2);
-            // ld1 points from the edge toward the contact point on face 1,
-            // inside the dihedral angle (toward the material). This is
-            // OPPOSITE to face 2's outward normal.
-            let ld1 = if c1.dot(ln2) < 0.0 { c1 } else { -c1 };
-            let ld2 = if c2.dot(ln1) < 0.0 { c2 } else { -c2 };
-            let ld1 = ld1.normalize().unwrap_or(d1_ref);
-            let ld2 = ld2.normalize().unwrap_or(d2_ref);
-
-            let bisector = (ld1 + ld2).normalize().unwrap_or(d1_ref);
-
-            if s == 0 {
-                bisector_ref = bisector;
+        if let Some(sections) = blend_section_cache
+            .get(&edge_id.index())
+            .filter(|s| s.len() == n_v)
+        {
+            // Curved-neighbour edge: use the walker's true rolling-ball contacts
+            // and tangent-intersection apex (same positions the contact-map
+            // pre-pass used to trim the neighbour faces, so they stay watertight).
+            for (i, sec) in sections.iter().enumerate() {
+                grid.push([sec.contact1, sec.apex, sec.contact2]);
+                if i == 0 {
+                    let mid = Point3::new(
+                        (sec.contact1.x() + sec.contact2.x()) * 0.5,
+                        (sec.contact1.y() + sec.contact2.y()) * 0.5,
+                        (sec.contact1.z() + sec.contact2.z()) * 0.5,
+                    );
+                    // Points from the apex (convex/edge side) into the material.
+                    bisector_ref = (mid - sec.apex).normalize().unwrap_or(d1_ref);
+                }
             }
+        } else {
+            #[allow(clippy::cast_precision_loss)]
+            for s in 0..n_v {
+                let frac = s as f64 / (n_v - 1).max(1) as f64;
+                let t = t_lo + (t_hi - t_lo) * frac;
+                let p = sample_edge_point(&edge_curve, p_start, p_end, t);
+                let tan = sample_edge_tangent(&edge_curve, p_start, p_end, t);
+                let local_dir = tan.normalize().unwrap_or(edge_dir);
 
-            let contact1 = p + ld1 * radius;
-            let contact2 = p + ld2 * radius;
-            // Rational-quadratic arc middle control point: the intersection of
-            // the face-tangents at the two contacts, which for a rolling-ball
-            // fillet is the original sharp-edge point `p` (the cylinder axis
-            // sits on the opposite side, toward the material interior).  Using
-            // `p` makes the arc bulge toward the edge (a true convex fillet);
-            // placing it at the ball centre would invert the arc and over-cut.
-            let mid_cp = p;
+                // Evaluate surface normals at this sample point. For planar faces,
+                // these are constant; for curved faces, they vary along the edge.
+                let ln1 = face_surface_normal_at(surf1, p).unwrap_or(n1_start);
+                let ln2 = face_surface_normal_at(surf2, p).unwrap_or(n2_start);
 
-            grid.push([contact1, mid_cp, contact2]);
+                // Recompute cross-section directions at this sample
+                let c1 = local_dir.cross(ln1);
+                let c2 = local_dir.cross(ln2);
+                // ld1 points from the edge toward the contact point on face 1,
+                // inside the dihedral angle (toward the material). This is
+                // OPPOSITE to face 2's outward normal.
+                let ld1 = if c1.dot(ln2) < 0.0 { c1 } else { -c1 };
+                let ld2 = if c2.dot(ln1) < 0.0 { c2 } else { -c2 };
+                let ld1 = ld1.normalize().unwrap_or(d1_ref);
+                let ld2 = ld2.normalize().unwrap_or(d2_ref);
+
+                let bisector = (ld1 + ld2).normalize().unwrap_or(d1_ref);
+
+                if s == 0 {
+                    bisector_ref = bisector;
+                }
+
+                let contact1 = p + ld1 * radius;
+                let contact2 = p + ld2 * radius;
+                // Rational-quadratic arc middle control point: the intersection
+                // of the face-tangents at the two contacts, which for a
+                // rolling-ball fillet is the original sharp-edge point `p` (the
+                // cylinder axis sits on the opposite side, toward the material
+                // interior).  Using `p` makes the arc bulge toward the edge (a
+                // true convex fillet); placing it at the ball centre would
+                // invert the arc and over-cut.
+                let mid_cp = p;
+
+                grid.push([contact1, mid_cp, contact2]);
+            }
         }
 
         // G1 chain continuity: at chain junction vertices, snap contact points

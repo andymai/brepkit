@@ -14,7 +14,9 @@ use brepkit_topology::solid::{Solid, SolidId};
 
 use crate::analytic;
 use crate::blend_func::{ConstRadBlend, EvolRadBlend};
-use crate::builder_utils::{create_blend_face, sample_nurbs_endpoints, surface_ref_or_adapter};
+use crate::builder_utils::{
+    FlippedNormalSurface, create_blend_face, sample_nurbs_endpoints, surface_ref_or_adapter,
+};
 use crate::corner;
 use crate::radius_law::RadiusLaw;
 use crate::spine::Spine;
@@ -417,6 +419,115 @@ fn compute_stripe_for_edge(
         stripe,
         new_edges: Vec::new(),
     })
+}
+
+/// A single cross-section of a rolling-ball blend: the two surface contact
+/// points, the rational-quadratic arc apex (middle control point), and its
+/// weight `cos(half_angle)`.
+#[derive(Debug, Clone, Copy)]
+pub struct BlendCrossSection {
+    /// Contact point on the first surface (`u = 0` end of the arc).
+    pub contact1: brepkit_math::vec::Point3,
+    /// Arc apex / middle control point (tangent intersection).
+    pub apex: brepkit_math::vec::Point3,
+    /// Contact point on the second surface (`u = 1` end of the arc).
+    pub contact2: brepkit_math::vec::Point3,
+    /// Rational-quadratic weight of the apex (`cos(half_angle)`).
+    pub weight: f64,
+}
+
+/// Compute the true rolling-ball blend cross-sections for a constant-radius
+/// fillet of `edge_id`, at the requested spine `fractions` (each in `[0, 1]`).
+///
+/// Unlike a tangent-plane offset (`contact = p + dir·r`), this solves the
+/// actual ball-tangent-to-both-surfaces constraint via the walking engine, so
+/// the contacts land *on* curved neighbours (cylinders, NURBS blend faces).
+/// Newton continuation seeds each station from the previous one for robustness.
+///
+/// `surf1`/`surf2` are the neighbour surfaces with their face `reversed` flags
+/// (so plane normals point outward consistently with the walker convention).
+///
+/// # Errors
+///
+/// Returns [`BlendError`] if the spine cannot be built or Newton fails to
+/// converge at a requested station.
+#[allow(clippy::too_many_arguments)]
+pub fn blend_cross_sections(
+    topo: &Topology,
+    edge_id: EdgeId,
+    surf1: &brepkit_topology::face::FaceSurface,
+    surf1_reversed: bool,
+    surf2: &brepkit_topology::face::FaceSurface,
+    surf2_reversed: bool,
+    radius: f64,
+    fractions: &[f64],
+) -> Result<Vec<BlendCrossSection>, BlendError> {
+    use brepkit_math::vec::Point3;
+
+    let spine = Spine::from_single_edge(topo, edge_id)?;
+    let len = spine.length();
+
+    let mut adapter1 = None;
+    let mut adapter2 = None;
+    let base1 = surface_ref_or_adapter(surf1, &mut adapter1);
+    let base2 = surface_ref_or_adapter(surf2, &mut adapter2);
+    // The walker places the ball centre on the `+normal` side of each surface,
+    // so feed it INWARD (toward-material) normals or it solves the external
+    // common-tangent branch (fillet outside the solid). The face's outward
+    // normal equals the surface normal when the face is not reversed, so flip
+    // then; keep it when the face is reversed.
+    let flip1 = FlippedNormalSurface::new(base1);
+    let flip2 = FlippedNormalSurface::new(base2);
+    let ps1: &dyn brepkit_math::traits::ParametricSurface =
+        if surf1_reversed { base1 } else { &flip1 };
+    let ps2: &dyn brepkit_math::traits::ParametricSurface =
+        if surf2_reversed { base2 } else { &flip2 };
+
+    let blend = ConstRadBlend { radius };
+    let walker = Walker::new(&blend, ps1, ps2, &spine, topo, WalkerConfig::default());
+
+    let mut out = Vec::with_capacity(fractions.len());
+    let mut prev: Option<crate::blend_func::BlendParams> = None;
+    for &f in fractions {
+        let s = f.clamp(0.0, 1.0) * len;
+        let (params, sec) =
+            walker
+                .solve_section(s, prev)
+                .ok_or(BlendError::StartSolutionFailure {
+                    edge: edge_id,
+                    t: f,
+                })?;
+        prev = Some(params);
+
+        let half_angle = sec.half_angle();
+        let w = half_angle.cos();
+        let midpoint = Point3::new(
+            (sec.p1.x() + sec.p2.x()) * 0.5,
+            (sec.p1.y() + sec.p2.y()) * 0.5,
+            (sec.p1.z() + sec.p2.z()) * 0.5,
+        );
+        // Apex at the tangent intersection (r/cos θ from the centre), matching
+        // `approximate_blend_surface`. Falls back to the chord midpoint when the
+        // arc approaches a half-turn (cos θ → 0).
+        let apex = if w.abs() > 1e-15 {
+            let scale = 1.0 / (w * w);
+            Point3::new(
+                sec.center.x() + (midpoint.x() - sec.center.x()) * scale,
+                sec.center.y() + (midpoint.y() - sec.center.y()) * scale,
+                sec.center.z() + (midpoint.z() - sec.center.z()) * scale,
+            )
+        } else {
+            midpoint
+        };
+
+        out.push(BlendCrossSection {
+            contact1: sec.p1,
+            apex,
+            contact2: sec.p2,
+            weight: w,
+        });
+    }
+    Ok(out)
 }
 
 /// Flip the normal of a `Plane` surface to account for face reversal.

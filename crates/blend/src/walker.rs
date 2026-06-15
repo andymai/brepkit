@@ -239,6 +239,28 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
             })
     }
 
+    /// Solve the blend at spine station `s` and return both the converged
+    /// parameters and the resulting cross-section.
+    ///
+    /// `guess` seeds Newton from a previous station's solution (continuation),
+    /// falling back to a fresh guide-point projection when `None`. Returns
+    /// `None` if Newton fails to converge.
+    pub(crate) fn solve_section(
+        &self,
+        s: f64,
+        guess: Option<BlendParams>,
+    ) -> Option<(BlendParams, CircSection)> {
+        let ctx = self.make_context(s).ok()?;
+        let initial = guess.unwrap_or_else(|| {
+            let (u1, v1) = self.surf1.project_point(ctx.guide_point);
+            let (u2, v2) = self.surf2.project_point(ctx.guide_point);
+            BlendParams { u1, v1, u2, v2 }
+        });
+        let params = self.newton_solve(initial, &ctx)?;
+        let sec = self.func.section(self.surf1, self.surf2, &params, &ctx);
+        Some((params, sec))
+    }
+
     /// Walk the blend along the spine from `s_start` to `s_end`.
     ///
     /// Uses adaptive step control: starts with a large step, halves on Newton

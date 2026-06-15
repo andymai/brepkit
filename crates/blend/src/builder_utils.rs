@@ -155,6 +155,49 @@ impl ParametricSurface for PlaneAdapter {
     }
 }
 
+/// A [`ParametricSurface`] view that negates the wrapped surface's normal.
+///
+/// The walking engine's blend constraint places the rolling-ball centre on the
+/// `+normal` side of each surface (`centre = p + r·normal`), so the surfaces
+/// must present their **inward** (toward-material) normals. `PlaneAdapter`
+/// flips a plane via its stored normal, but analytic/NURBS surfaces have an
+/// intrinsic outward normal that can't be re-oriented in place — wrapping one
+/// here flips it so a fillet against a curved neighbour solves the internal
+/// (material-side) branch instead of the external common-tangent one.
+pub struct FlippedNormalSurface<'a> {
+    inner: &'a dyn ParametricSurface,
+}
+
+impl<'a> FlippedNormalSurface<'a> {
+    /// Wrap a surface so its normal is negated.
+    #[must_use]
+    pub const fn new(inner: &'a dyn ParametricSurface) -> Self {
+        Self { inner }
+    }
+}
+
+impl ParametricSurface for FlippedNormalSurface<'_> {
+    fn evaluate(&self, u: f64, v: f64) -> Point3 {
+        self.inner.evaluate(u, v)
+    }
+
+    fn normal(&self, u: f64, v: f64) -> Vec3 {
+        -self.inner.normal(u, v)
+    }
+
+    fn project_point(&self, point: Point3) -> (f64, f64) {
+        self.inner.project_point(point)
+    }
+
+    fn partial_u(&self, u: f64, v: f64) -> Vec3 {
+        self.inner.partial_u(u, v)
+    }
+
+    fn partial_v(&self, u: f64, v: f64) -> Vec3 {
+        self.inner.partial_v(u, v)
+    }
+}
+
 /// Extract a `&dyn ParametricSurface` from a `FaceSurface`, or build a
 /// `PlaneAdapter` for plane faces.
 ///

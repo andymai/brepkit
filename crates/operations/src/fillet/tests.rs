@@ -1207,3 +1207,116 @@ fn g1_chain_integrated_matches_explicit_wrapper() {
         "volumes should match: direct={vol1}, wrapper={vol2}"
     );
 }
+
+/// Dihedral angle (degrees) between the two faces of an edge, sampled at the
+/// edge midpoint, using effective (reversal-adjusted) outward normals.
+fn dihedral_deg(topo: &Topology, e: EdgeId, fs: &[FaceId]) -> f64 {
+    let ed = topo.edge(e).unwrap();
+    let a = topo.vertex(ed.start()).unwrap().point();
+    let b = topo.vertex(ed.end()).unwrap().point();
+    let mid = a + (b - a) * 0.5;
+    let nrm = |fid: FaceId| {
+        let face = topo.face(fid).unwrap();
+        let n = match face.surface() {
+            FaceSurface::Plane { normal, .. } => *normal,
+            other => {
+                let (u, v) = other.project_point(mid).unwrap_or((0.0, 0.0));
+                other.normal(u, v)
+            }
+        };
+        let n = if face.is_reversed() { -n } else { n };
+        n.normalize().unwrap()
+    };
+    nrm(fs[0])
+        .dot(nrm(fs[1]))
+        .clamp(-1.0, 1.0)
+        .acos()
+        .to_degrees()
+}
+
+/// #834: round an edge whose neighbour is a previous fillet's NURBS blend face.
+///
+/// A single-edge rolling-ball fillet yields a watertight solid with a NURBS
+/// blend face. Filleting a (non-tangent) edge bordering that blend face must
+/// itself produce a valid, watertight manifold — the blend's accessible
+/// non-degenerate edges are concave end-caps, so the fillet fills the seam.
+#[test]
+fn fillet_edge_adjacent_to_nurbs_blend_is_watertight() {
+    use brepkit_topology::validation::validate_shell_closed;
+
+    let mut topo = Topology::new();
+    let cube = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+    let edges = solid_edge_ids(&topo, cube);
+
+    // First fillet — one box edge → a watertight solid with a NURBS blend face.
+    let first = fillet_rolling_ball(&mut topo, cube, &[edges[0]], 1.0).unwrap();
+    {
+        let sh = topo
+            .shell(topo.solid(first).unwrap().outer_shell())
+            .unwrap();
+        validate_shell_closed(sh, &topo).expect("first fillet should be watertight");
+    }
+    let vol1 = crate::measure::solid_volume(&topo, first, 0.05).unwrap();
+
+    // Collect NURBS blend faces and edge→faces adjacency.
+    let nurbs: HashSet<usize> = {
+        let sh = topo
+            .shell(topo.solid(first).unwrap().outer_shell())
+            .unwrap();
+        sh.faces()
+            .iter()
+            .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Nurbs(_)))
+            .map(|f| f.index())
+            .collect()
+    };
+    assert!(
+        !nurbs.is_empty(),
+        "first fillet must create a NURBS blend face"
+    );
+
+    let mut ef: HashMap<usize, Vec<FaceId>> = HashMap::new();
+    {
+        let sh = topo
+            .shell(topo.solid(first).unwrap().outer_shell())
+            .unwrap();
+        for &fid in sh.faces() {
+            for oe in topo
+                .wire(topo.face(fid).unwrap().outer_wire())
+                .unwrap()
+                .edges()
+            {
+                ef.entry(oe.edge().index()).or_default().push(fid);
+            }
+        }
+    }
+
+    // A non-tangent edge bordering the NURBS blend face (the tangent contact
+    // lines are G1/degenerate and are not fillettable).
+    let target = solid_edge_ids(&topo, first)
+        .into_iter()
+        .find(|&e| {
+            ef.get(&e.index()).is_some_and(|fs| {
+                fs.len() == 2
+                    && fs.iter().any(|f| nurbs.contains(&f.index()))
+                    && dihedral_deg(&topo, e, fs) > 5.0
+            })
+        })
+        .expect("a non-tangent edge bordering the NURBS blend face");
+
+    // Second fillet on that NURBS-blend-adjacent edge.
+    let result = fillet_rolling_ball(&mut topo, first, &[target], 0.5).unwrap();
+    let sh = topo
+        .shell(topo.solid(result).unwrap().outer_shell())
+        .unwrap();
+    validate_shell_manifold(sh, &topo).expect("second fillet must be manifold");
+    validate_shell_closed(sh, &topo)
+        .expect("second fillet on a NURBS-blend-adjacent edge must be watertight");
+
+    let vol2 = crate::measure::solid_volume(&topo, result, 0.05).unwrap();
+    // Concave end-cap edge → the fillet fills; volume stays sane (between the
+    // first fillet and the original box).
+    assert!(
+        vol2 > vol1 - 1e-6 && vol2 <= 1000.0 + 1e-6,
+        "filled fillet volume out of range: first={vol1}, second={vol2}"
+    );
+}
