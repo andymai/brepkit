@@ -838,8 +838,14 @@ pub fn make_minkowski_sum(
         });
     }
 
-    // saturating_mul: the product is only a capacity hint; never overflow it.
-    let mut sums = Vec::with_capacity(a_pts.len().saturating_mul(b_pts.len()));
+    // A genuinely overflowing vertex product is an impossibly large input —
+    // return a clean error rather than panicking in `Vec::with_capacity`.
+    let capacity = a_pts.len().checked_mul(b_pts.len()).ok_or_else(|| {
+        crate::OperationsError::InvalidInput {
+            reason: "minkowski sum input too large: vertex-count product overflows".into(),
+        }
+    })?;
+    let mut sums = Vec::with_capacity(capacity);
     for &p in &a_pts {
         for &q in &b_pts {
             sums.push(Point3::new(p.x() + q.x(), p.y() + q.y(), p.z() + q.z()));
