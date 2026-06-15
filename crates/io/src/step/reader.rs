@@ -69,21 +69,21 @@ fn parse_step_entities(input: &str) -> Result<HashMap<u64, StepEntity>, IoError>
             let id_part = stmt[..eq_pos].trim();
             let rest = stmt[eq_pos + 1..].trim();
 
-            if let Some(id) = parse_entity_id(id_part) {
-                if let Some(paren_pos) = rest.find('(') {
-                    let entity_type = rest[..paren_pos].trim().to_uppercase();
-                    // Attrs = everything after the entity opening paren.
-                    // E.g., for `TYPE('', (1.0, 2.0))`, attrs = `'', (1.0, 2.0))`
-                    let attrs = rest[paren_pos + 1..].trim();
+            if let Some(id) = parse_entity_id(id_part)
+                && let Some(paren_pos) = rest.find('(')
+            {
+                let entity_type = rest[..paren_pos].trim().to_uppercase();
+                // Attrs = everything after the entity opening paren.
+                // E.g., for `TYPE('', (1.0, 2.0))`, attrs = `'', (1.0, 2.0))`
+                let attrs = rest[paren_pos + 1..].trim();
 
-                    entities.insert(
-                        id,
-                        StepEntity {
-                            entity_type,
-                            attrs: attrs.to_string(),
-                        },
-                    );
-                }
+                entities.insert(
+                    id,
+                    StepEntity {
+                        entity_type,
+                        attrs: attrs.to_string(),
+                    },
+                );
             }
         }
     }
@@ -611,10 +611,10 @@ fn parse_refs(attrs: &str) -> Vec<u64> {
             while i < bytes.len() && bytes[i].is_ascii_digit() {
                 i += 1;
             }
-            if i > start {
-                if let Ok(num) = attrs[start..i].parse::<u64>() {
-                    refs.push(num);
-                }
+            if i > start
+                && let Ok(num) = attrs[start..i].parse::<u64>()
+            {
+                refs.push(num);
             }
         } else {
             i += 1;
@@ -625,11 +625,11 @@ fn parse_refs(attrs: &str) -> Vec<u64> {
 
 /// Extract `#NNN` references from the first parenthesized list in attrs.
 fn parse_list_refs(attrs: &str) -> Vec<u64> {
-    if let Some(start) = attrs.find('(') {
-        if let Some(end) = attrs[start..].find(')') {
-            let inner = &attrs[start + 1..start + end];
-            return parse_refs(inner);
-        }
+    if let Some(start) = attrs.find('(')
+        && let Some(end) = attrs[start..].find(')')
+    {
+        let inner = &attrs[start + 1..start + end];
+        return parse_refs(inner);
     }
     Vec::new()
 }
@@ -640,14 +640,14 @@ fn parse_list_refs(attrs: &str) -> Vec<u64> {
 fn parse_floats(attrs: &str) -> Vec<f64> {
     let mut result = Vec::new();
     // Try nested parentheses first.
-    if let Some(start) = attrs.find('(') {
-        if let Some(end) = attrs[start..].find(')') {
-            let inner = &attrs[start + 1..start + end];
-            for part in inner.split(',') {
-                let trimmed = part.trim();
-                if let Ok(v) = trimmed.parse::<f64>() {
-                    result.push(v);
-                }
+    if let Some(start) = attrs.find('(')
+        && let Some(end) = attrs[start..].find(')')
+    {
+        let inner = &attrs[start + 1..start + end];
+        for part in inner.split(',') {
+            let trimmed = part.trim();
+            if let Ok(v) = trimmed.parse::<f64>() {
+                result.push(v);
             }
         }
     }

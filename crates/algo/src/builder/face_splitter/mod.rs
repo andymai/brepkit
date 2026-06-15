@@ -427,8 +427,10 @@ pub fn split_face_2d(
     // into stacked bands, not discs. Requires seam-anchored circles (see
     // the seam-anchor pre-pass in fill_images_faces); falls through to the
     // generic paths when preconditions don't hold.
-    if u_periodic && !is_plane && original_inner_wires.is_empty() {
-        if let Some(bands) = split_periodic_face_into_bands(
+    if u_periodic
+        && !is_plane
+        && original_inner_wires.is_empty()
+        && let Some(bands) = split_periodic_face_into_bands(
             &surface,
             &boundary_edges,
             sections,
@@ -436,9 +438,9 @@ pub fn split_face_2d(
             reversed,
             face_id,
             tol.linear,
-        ) {
-            return bands;
-        }
+        )
+    {
+        return bands;
     }
 
     // Internal section edge shortcut: when section edges form closed loops
@@ -539,11 +541,11 @@ pub fn split_face_2d(
         let seam_u = {
             let mut su = 0.0_f64;
             for edge in &boundary_edges {
-                if matches!(edge.curve_3d, EdgeCurve::Line) {
-                    if let Some((u, _)) = surface.project_point(edge.start_3d) {
-                        su = u;
-                        break;
-                    }
+                if matches!(edge.curve_3d, EdgeCurve::Line)
+                    && let Some((u, _)) = surface.project_point(edge.start_3d)
+                {
+                    su = u;
+                    break;
                 }
             }
             su
@@ -554,10 +556,10 @@ pub fn split_face_2d(
             if (edge.start_3d - edge.end_3d).length() < 1e-10 {
                 // Closed edge: find the 3D point at u = seam_u + pi on the surface.
                 // Project the boundary vertex to get v, then evaluate surface at (anti_u, v).
-                if let Some((_, v)) = surface.project_point(edge.start_3d) {
-                    if let Some(anti_pt) = surface.evaluate(anti_u, v) {
-                        split_pts_3d.push(anti_pt);
-                    }
+                if let Some((_, v)) = surface.project_point(edge.start_3d)
+                    && let Some(anti_pt) = surface.evaluate(anti_u, v)
+                {
+                    split_pts_3d.push(anti_pt);
                 }
             }
         }
@@ -722,36 +724,37 @@ pub fn split_face_2d(
     // build_surface_info), so quantized junction keys would never match.
     // Remap every endpoint u into the continuous window that starts after
     // the largest angular gap.
-    if !u_periodic && !is_plane {
-        if let (Some(u_period), _) = super::pcurve_compute::surface_periods(&surface) {
-            let mut us: Vec<f64> = all_edges
-                .iter()
-                .flat_map(|e| [e.start_uv.x(), e.end_uv.x()])
-                .map(|u| u.rem_euclid(u_period))
-                .collect();
-            us.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-            if us.len() >= 2 {
-                let mut gap_start = us[us.len() - 1];
-                let mut max_gap = u_period - (us[us.len() - 1] - us[0]);
-                for w in us.windows(2) {
-                    if w[1] - w[0] > max_gap {
-                        max_gap = w[1] - w[0];
-                        gap_start = w[0];
-                    }
+    if !u_periodic
+        && !is_plane
+        && let (Some(u_period), _) = super::pcurve_compute::surface_periods(&surface)
+    {
+        let mut us: Vec<f64> = all_edges
+            .iter()
+            .flat_map(|e| [e.start_uv.x(), e.end_uv.x()])
+            .map(|u| u.rem_euclid(u_period))
+            .collect();
+        us.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        if us.len() >= 2 {
+            let mut gap_start = us[us.len() - 1];
+            let mut max_gap = u_period - (us[us.len() - 1] - us[0]);
+            for w in us.windows(2) {
+                if w[1] - w[0] > max_gap {
+                    max_gap = w[1] - w[0];
+                    gap_start = w[0];
                 }
-                if max_gap > 0.05 {
-                    let lo = gap_start + max_gap;
-                    for e in &mut all_edges {
-                        let remap = |uv: Point2| -> Point2 {
-                            let mut d = (uv.x() - lo).rem_euclid(u_period);
-                            if d > u_period - 1e-6 {
-                                d = 0.0;
-                            }
-                            Point2::new(lo + d, uv.y())
-                        };
-                        e.start_uv = remap(e.start_uv);
-                        e.end_uv = remap(e.end_uv);
-                    }
+            }
+            if max_gap > 0.05 {
+                let lo = gap_start + max_gap;
+                for e in &mut all_edges {
+                    let remap = |uv: Point2| -> Point2 {
+                        let mut d = (uv.x() - lo).rem_euclid(u_period);
+                        if d > u_period - 1e-6 {
+                            d = 0.0;
+                        }
+                        Point2::new(lo + d, uv.y())
+                    };
+                    e.start_uv = remap(e.start_uv);
+                    e.end_uv = remap(e.end_uv);
                 }
             }
         }
@@ -793,16 +796,16 @@ pub fn split_face_2d(
     // section's endpoint mid-way on the other, 3 regions): it merges everything
     // into one loop, or splits on only one section. Prefer the direct geometric
     // construction whenever it yields more regions than the wire builder did.
-    if sections.len() >= 2 && is_plane && !holes_integrated {
-        if let Some(ref boundary) = boundary_edges_backup {
-            if let Some(result) = try_split_crossing_plane_face(
-                &surface, boundary, sections, rank, reversed, face_id, frame, tol,
-            ) {
-                if result.len() > loops.len() {
-                    return result;
-                }
-            }
-        }
+    if sections.len() >= 2
+        && is_plane
+        && !holes_integrated
+        && let Some(ref boundary) = boundary_edges_backup
+        && let Some(result) = try_split_crossing_plane_face(
+            &surface, boundary, sections, rank, reversed, face_id, frame, tol,
+        )
+        && result.len() > loops.len()
+    {
+        return result;
     }
 
     // Classify each loop as outer (positive area) or hole (negative).
@@ -913,10 +916,8 @@ pub fn split_face_2d(
                     break;
                 }
             }
-            if !assigned {
-                if let Some(sf) = sub_faces.first_mut() {
-                    sf.inner_wires.push(hole);
-                }
+            if !assigned && let Some(sf) = sub_faces.first_mut() {
+                sf.inner_wires.push(hole);
             }
         }
     }
@@ -999,23 +1000,23 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     // strip at constant v) need the interior UV offset toward the pole.
     // The outer wire of a sphere cap maps to a horizontal line in UV,
     // producing a near-zero-area polygon whose centroid lies on the boundary.
-    if let FaceSurface::Sphere(_) = &sub_face.surface {
-        if !pts_2d.is_empty() {
-            let v_min = pts_2d.iter().map(|p| p.y()).fold(f64::INFINITY, f64::min);
-            let v_max = pts_2d
-                .iter()
-                .map(|p| p.y())
-                .fold(f64::NEG_INFINITY, f64::max);
-            if (v_max - v_min) < 0.1 {
-                let v_boundary = (v_min + v_max) * 0.5;
-                let v_pole = if v_boundary >= 0.0 {
-                    std::f64::consts::FRAC_PI_2
-                } else {
-                    -std::f64::consts::FRAC_PI_2
-                };
-                let u_center = pts_2d.iter().map(|p| p.x()).sum::<f64>() / pts_2d.len() as f64;
-                interior_uv = Point2::new(u_center, (v_boundary + v_pole) * 0.5);
-            }
+    if let FaceSurface::Sphere(_) = &sub_face.surface
+        && !pts_2d.is_empty()
+    {
+        let v_min = pts_2d.iter().map(|p| p.y()).fold(f64::INFINITY, f64::min);
+        let v_max = pts_2d
+            .iter()
+            .map(|p| p.y())
+            .fold(f64::NEG_INFINITY, f64::max);
+        if (v_max - v_min) < 0.1 {
+            let v_boundary = (v_min + v_max) * 0.5;
+            let v_pole = if v_boundary >= 0.0 {
+                std::f64::consts::FRAC_PI_2
+            } else {
+                -std::f64::consts::FRAC_PI_2
+            };
+            let u_center = pts_2d.iter().map(|p| p.x()).sum::<f64>() / pts_2d.len() as f64;
+            interior_uv = Point2::new(u_center, (v_boundary + v_pole) * 0.5);
         }
     }
 

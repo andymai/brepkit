@@ -1950,10 +1950,10 @@ fn fuse_ring_inside_shelled_box() {
         sh.faces()
             .iter()
             .filter(|&&fid| {
-                if let Ok(f) = topo.face(fid) {
-                    if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = f.surface() {
-                        return tol.approx_eq(normal.z(), 1.0);
-                    }
+                if let Ok(f) = topo.face(fid)
+                    && let brepkit_topology::face::FaceSurface::Plane { normal, .. } = f.surface()
+                {
+                    return tol.approx_eq(normal.z(), 1.0);
                 }
                 false
             })
@@ -2022,10 +2022,10 @@ fn fuse_ring_inside_shelled_cylinder() {
         sh.faces()
             .iter()
             .filter(|&&fid| {
-                if let Ok(f) = topo.face(fid) {
-                    if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = f.surface() {
-                        return tol.approx_eq(normal.z(), 1.0);
-                    }
+                if let Ok(f) = topo.face(fid)
+                    && let brepkit_topology::face::FaceSurface::Plane { normal, .. } = f.surface()
+                {
+                    return tol.approx_eq(normal.z(), 1.0);
                 }
                 false
             })
@@ -2088,10 +2088,10 @@ fn fuse_ring_overlapping_shelled_box_height() {
         sh.faces()
             .iter()
             .filter(|&&fid| {
-                if let Ok(f) = topo.face(fid) {
-                    if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = f.surface() {
-                        return tol.approx_eq(normal.z(), 1.0);
-                    }
+                if let Ok(f) = topo.face(fid)
+                    && let brepkit_topology::face::FaceSurface::Plane { normal, .. } = f.surface()
+                {
+                    return tol.approx_eq(normal.z(), 1.0);
                 }
                 false
             })

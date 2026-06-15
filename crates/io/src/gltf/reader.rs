@@ -120,18 +120,16 @@ pub fn read_glb(data: &[u8]) -> Result<TriangleMesh, crate::IoError> {
             }
         }
 
-        if let Some(norm_idx) = prim.normal_accessor {
-            if let Some(accessor) = accessors.get(norm_idx) {
-                if let Some(view) = buffer_views.get(accessor.buffer_view) {
-                    if let Ok(norm_data) = safe_slice(bin, view.byte_offset, view.byte_length) {
-                        for chunk in norm_data.chunks_exact(12) {
-                            let x = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                            let y = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
-                            let z = f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]);
-                            normals.push(Vec3::new(f64::from(x), f64::from(y), f64::from(z)));
-                        }
-                    }
-                }
+        if let Some(norm_idx) = prim.normal_accessor
+            && let Some(accessor) = accessors.get(norm_idx)
+            && let Some(view) = buffer_views.get(accessor.buffer_view)
+            && let Ok(norm_data) = safe_slice(bin, view.byte_offset, view.byte_length)
+        {
+            for chunk in norm_data.chunks_exact(12) {
+                let x = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+                let y = f32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]);
+                let z = f32::from_le_bytes([chunk[8], chunk[9], chunk[10], chunk[11]]);
+                normals.push(Vec3::new(f64::from(x), f64::from(y), f64::from(z)));
             }
         }
 

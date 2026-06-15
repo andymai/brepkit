@@ -352,14 +352,12 @@ fn sample_face_interior(
                 }
             }
         }
-        if let Some(mid) = closed_mid {
-            if v_max - v_min > tol.linear {
-                if let Some((u, _)) = face.surface().project_point(mid) {
-                    if let Some(pt) = face.surface().evaluate(u, 0.5 * (v_min + v_max)) {
-                        return Ok(pt);
-                    }
-                }
-            }
+        if let Some(mid) = closed_mid
+            && v_max - v_min > tol.linear
+            && let Some((u, _)) = face.surface().project_point(mid)
+            && let Some(pt) = face.surface().evaluate(u, 0.5 * (v_min + v_max))
+        {
+            return Ok(pt);
         }
     }
 
@@ -522,10 +520,10 @@ fn sample_face_interior(
     let interior_pt = mid_pt + offset;
 
     // Project back onto the surface to ensure the point is on-surface
-    if let Some((u, v)) = surface.project_point(interior_pt) {
-        if let Some(on_surface) = surface.evaluate(u, v) {
-            return Ok(on_surface);
-        }
+    if let Some((u, v)) = surface.project_point(interior_pt)
+        && let Some(on_surface) = surface.evaluate(u, v)
+    {
+        return Ok(on_surface);
     }
 
     // Planes have no UV projection, but the inward offset is already in-plane,

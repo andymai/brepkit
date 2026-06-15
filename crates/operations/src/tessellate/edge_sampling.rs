@@ -421,12 +421,11 @@ pub(super) fn sample_wire_positions(
         }
     }
 
-    if positions.len() > 2 {
-        if let (Some(first), Some(last)) = (positions.first(), positions.last()) {
-            if (*last - *first).length() < tol {
-                positions.pop();
-            }
-        }
+    if positions.len() > 2
+        && let (Some(first), Some(last)) = (positions.first(), positions.last())
+        && (*last - *first).length() < tol
+    {
+        positions.pop();
     }
 
     Ok(positions)

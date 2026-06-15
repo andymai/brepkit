@@ -780,10 +780,10 @@ pub(super) fn split_face_with_internal_loops(
             })
             .collect();
         // Verify hole is closed.
-        if let (Some(first), Some(last)) = (hole.first(), hole.last()) {
-            if (last.end_3d - first.start_3d).length() < tol_3d * 100.0 {
-                all_holes.push(hole);
-            }
+        if let (Some(first), Some(last)) = (hole.first(), hole.last())
+            && (last.end_3d - first.start_3d).length() < tol_3d * 100.0
+        {
+            all_holes.push(hole);
         }
     }
 

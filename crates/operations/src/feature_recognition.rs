@@ -521,14 +521,14 @@ fn detect_pockets_fag(fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
             }
         }
 
-        if let Some(floor_face) = floor {
-            if walls.len() >= 2 {
-                features.push(Feature::Pocket {
-                    floor: floor_face,
-                    walls,
-                });
-                visited.extend(&component);
-            }
+        if let Some(floor_face) = floor
+            && walls.len() >= 2
+        {
+            features.push(Feature::Pocket {
+                floor: floor_face,
+                walls,
+            });
+            visited.extend(&component);
         }
     }
 }

@@ -102,14 +102,14 @@ impl ChamferDistances {
         match self {
             Self::Symmetric(d) => *d,
             Self::Asymmetric { d1, d2 } => {
-                if let Some(faces) = edge_to_faces.get(&edge_index) {
-                    if faces.len() == 2 {
-                        if faces[0] == face_id {
-                            return *d1;
-                        }
-                        if faces[1] == face_id {
-                            return *d2;
-                        }
+                if let Some(faces) = edge_to_faces.get(&edge_index)
+                    && faces.len() == 2
+                {
+                    if faces[0] == face_id {
+                        return *d1;
+                    }
+                    if faces[1] == face_id {
+                        return *d2;
                     }
                 }
                 // Fallback (shouldn't happen for filtered manifold edges).

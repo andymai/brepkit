@@ -70,10 +70,10 @@ pub fn trim_offset_self_intersections(
     offset_distance: f64,
     tolerance: f64,
 ) -> Result<NurbsSurface, OperationsError> {
-    if let Ok(ssi_curves) = detect_self_intersection(offset, SSI_GRID, tolerance) {
-        if !ssi_curves.is_empty() {
-            return trim_via_ssi(original, offset, offset_distance, tolerance, &ssi_curves);
-        }
+    if let Ok(ssi_curves) = detect_self_intersection(offset, SSI_GRID, tolerance)
+        && !ssi_curves.is_empty()
+    {
+        return trim_via_ssi(original, offset, offset_distance, tolerance, &ssi_curves);
     }
 
     trim_via_sampling(original, offset, offset_distance, tolerance)

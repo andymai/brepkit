@@ -46,10 +46,10 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
             if !processed_cbs.insert(cb_id) {
                 // CB already processed — reuse its split edge
                 let split_edge = arena.common_blocks.get(cb_id).and_then(|cb| cb.split_edge);
-                if let Some(edge_id) = split_edge {
-                    if let Some(pb) = arena.pave_blocks.get_mut(pb_id) {
-                        pb.split_edge = Some(edge_id);
-                    }
+                if let Some(edge_id) = split_edge
+                    && let Some(pb) = arena.pave_blocks.get_mut(pb_id)
+                {
+                    pb.split_edge = Some(edge_id);
                 }
                 continue;
             }

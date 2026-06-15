@@ -157,10 +157,10 @@ impl GfaArena {
     /// Add a face reference to an existing CommonBlock.
     #[allow(dead_code)] // Used by upcoming ForceInterfEE
     pub fn add_face_to_cb(&mut self, cb: CommonBlockId, face: FaceId) {
-        if let Some(cb) = self.common_blocks.get_mut(cb) {
-            if !cb.faces.contains(&face) {
-                cb.faces.push(face);
-            }
+        if let Some(cb) = self.common_blocks.get_mut(cb)
+            && !cb.faces.contains(&face)
+        {
+            cb.faces.push(face);
         }
     }
 }

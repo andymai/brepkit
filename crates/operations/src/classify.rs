@@ -182,10 +182,10 @@ fn is_on_boundary(
 ) -> Result<bool, OperationsError> {
     let tol = Tolerance::new();
     for &fid in faces {
-        if let Some((dist, _)) = point_to_face_distance(topo, point, fid, tol)? {
-            if dist < tolerance {
-                return Ok(true);
-            }
+        if let Some((dist, _)) = point_to_face_distance(topo, point, fid, tol)?
+            && dist < tolerance
+        {
+            return Ok(true);
         }
     }
     Ok(false)

@@ -80,11 +80,11 @@ pub fn point_to_solid_distance(
             continue;
         }
 
-        if let Some((dist, closest)) = point_to_face_distance(topo, point, fid, tol)? {
-            if dist < best_dist {
-                best_dist = dist;
-                best_point = closest;
-            }
+        if let Some((dist, closest)) = point_to_face_distance(topo, point, fid, tol)?
+            && dist < best_dist
+        {
+            best_dist = dist;
+            best_point = closest;
         }
     }
 
@@ -144,12 +144,12 @@ pub fn solid_to_solid_distance(
             if aabb_dist_sq > best_dist * best_dist {
                 continue;
             }
-            if let Some((dist, closest)) = point_to_face_distance(topo, pa, faces_b[idx], tol)? {
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_a = pa;
-                    best_b = closest;
-                }
+            if let Some((dist, closest)) = point_to_face_distance(topo, pa, faces_b[idx], tol)?
+                && dist < best_dist
+            {
+                best_dist = dist;
+                best_a = pa;
+                best_b = closest;
             }
         }
     }
@@ -168,12 +168,12 @@ pub fn solid_to_solid_distance(
             if aabb_dist_sq > best_dist * best_dist {
                 continue;
             }
-            if let Some((dist, closest)) = point_to_face_distance(topo, pb, faces_a[idx], tol)? {
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_a = closest;
-                    best_b = pb;
-                }
+            if let Some((dist, closest)) = point_to_face_distance(topo, pb, faces_a[idx], tol)?
+                && dist < best_dist
+            {
+                best_dist = dist;
+                best_a = closest;
+                best_b = pb;
             }
         }
     }
@@ -442,10 +442,10 @@ fn bvh_distance_candidates(bvh: &Bvh, aabbs: &[(usize, Aabb3)], point: Point3) -
         .collect();
     candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    if let Some(closest_idx) = bvh.query_closest(point) {
-        if let Some(pos) = candidates.iter().position(|(i, _)| *i == closest_idx) {
-            candidates.swap(0, pos);
-        }
+    if let Some(closest_idx) = bvh.query_closest(point)
+        && let Some(pos) = candidates.iter().position(|(i, _)| *i == closest_idx)
+    {
+        candidates.swap(0, pos);
     }
 
     candidates.into_iter().map(|(i, _)| i).collect()

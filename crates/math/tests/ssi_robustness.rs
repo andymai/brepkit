@@ -296,14 +296,14 @@ fn plane_sphere_tangent() {
 
     // Tangent plane: either empty (degenerate zero-radius circle rejected)
     // or a circle with radius ~0.
-    if !results.is_empty() {
-        if let ExactIntersectionCurve::Circle(c) = &results[0] {
-            assert!(
-                c.radius() < 1e-6,
-                "tangent circle radius should be ~0, got {}",
-                c.radius()
-            );
-        }
+    if !results.is_empty()
+        && let ExactIntersectionCurve::Circle(c) = &results[0]
+    {
+        assert!(
+            c.radius() < 1e-6,
+            "tangent circle radius should be ~0, got {}",
+            c.radius()
+        );
     }
 }
 

@@ -319,15 +319,14 @@ pub fn sample_solid_edges_filtered(
     };
 
     for edge_id in &edges {
-        if let Some(ref efm) = edge_face_map {
-            if let Some(faces) = efm.get(&edge_id.index()) {
-                if faces.len() == 2 {
-                    let fa = topo.face(faces[0])?;
-                    let fb = topo.face(faces[1])?;
-                    if surfaces_equivalent(fa.surface(), fb.surface()) {
-                        continue;
-                    }
-                }
+        if let Some(ref efm) = edge_face_map
+            && let Some(faces) = efm.get(&edge_id.index())
+            && faces.len() == 2
+        {
+            let fa = topo.face(faces[0])?;
+            let fb = topo.face(faces[1])?;
+            if surfaces_equivalent(fa.surface(), fb.surface()) {
+                continue;
             }
         }
 

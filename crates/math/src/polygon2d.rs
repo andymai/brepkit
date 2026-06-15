@@ -56,16 +56,16 @@ pub fn sutherland_hodgman_clip(subject: &[Point2], clip: &[Point2]) -> Vec<Point
             let prev_inside = cross_2d(edge_start, edge_end, previous) >= 0.0;
 
             if curr_inside {
-                if !prev_inside {
-                    if let Some(p) = line_intersect_2d(previous, current, edge_start, edge_end) {
-                        output.push(p);
-                    }
-                }
-                output.push(current);
-            } else if prev_inside {
-                if let Some(p) = line_intersect_2d(previous, current, edge_start, edge_end) {
+                if !prev_inside
+                    && let Some(p) = line_intersect_2d(previous, current, edge_start, edge_end)
+                {
                     output.push(p);
                 }
+                output.push(current);
+            } else if prev_inside
+                && let Some(p) = line_intersect_2d(previous, current, edge_start, edge_end)
+            {
+                output.push(p);
             }
         }
     }

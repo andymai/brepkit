@@ -27,7 +27,7 @@ impl BrepKernel {
         distance: f64,
         tolerance: f64,
     ) -> Result<Vec<f64>, JsError> {
-        if coords.len() % 2 != 0 {
+        if !coords.len().is_multiple_of(2) {
             return Err(WasmError::InvalidInput {
                 reason: format!(
                     "2D coordinate array length must be even, got {}",
@@ -58,7 +58,7 @@ impl BrepKernel {
         px: f64,
         py: f64,
     ) -> Result<bool, JsError> {
-        if polygon_coords.len() % 2 != 0 || polygon_coords.len() < 6 {
+        if !polygon_coords.len().is_multiple_of(2) || polygon_coords.len() < 6 {
             return Err(WasmError::InvalidInput {
                 reason: "polygon needs at least 3 points (6 coordinates)".into(),
             }

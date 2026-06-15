@@ -806,38 +806,38 @@ fn trace_builder_overlapping_box_fuse() {
 
     // Dump edges for sub-faces with out-of-bounds interior points
     for (i, sf) in sub_faces.iter().enumerate() {
-        if let Some(pt) = sf.interior_point {
-            if pt.x() > 1.6 || pt.x() < -0.1 || pt.y() > 1.1 || pt.z() > 1.1 {
-                eprintln!(
-                    "  OUT-OF-BOUNDS SF[{i}]: ipt=({:.3},{:.3},{:.3})",
-                    pt.x(),
-                    pt.y(),
-                    pt.z()
-                );
-                if let Ok(face) = topo.face(sf.face_id) {
-                    if let Ok(wire) = topo.wire(face.outer_wire()) {
-                        for (ei, oe) in wire.edges().iter().enumerate() {
-                            if let Ok(edge) = topo.edge(oe.edge()) {
-                                let sp = topo
-                                    .vertex(edge.start())
-                                    .map(brepkit_topology::vertex::Vertex::point)
-                                    .ok();
-                                let ep = topo
-                                    .vertex(edge.end())
-                                    .map(brepkit_topology::vertex::Vertex::point)
-                                    .ok();
-                                if let (Some(s), Some(e)) = (sp, ep) {
-                                    eprintln!(
-                                        "    E[{ei}]: ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4})",
-                                        s.x(),
-                                        s.y(),
-                                        s.z(),
-                                        e.x(),
-                                        e.y(),
-                                        e.z()
-                                    );
-                                }
-                            }
+        if let Some(pt) = sf.interior_point
+            && (pt.x() > 1.6 || pt.x() < -0.1 || pt.y() > 1.1 || pt.z() > 1.1)
+        {
+            eprintln!(
+                "  OUT-OF-BOUNDS SF[{i}]: ipt=({:.3},{:.3},{:.3})",
+                pt.x(),
+                pt.y(),
+                pt.z()
+            );
+            if let Ok(face) = topo.face(sf.face_id)
+                && let Ok(wire) = topo.wire(face.outer_wire())
+            {
+                for (ei, oe) in wire.edges().iter().enumerate() {
+                    if let Ok(edge) = topo.edge(oe.edge()) {
+                        let sp = topo
+                            .vertex(edge.start())
+                            .map(brepkit_topology::vertex::Vertex::point)
+                            .ok();
+                        let ep = topo
+                            .vertex(edge.end())
+                            .map(brepkit_topology::vertex::Vertex::point)
+                            .ok();
+                        if let (Some(s), Some(e)) = (sp, ep) {
+                            eprintln!(
+                                "    E[{ei}]: ({:.4},{:.4},{:.4})->({:.4},{:.4},{:.4})",
+                                s.x(),
+                                s.y(),
+                                s.z(),
+                                e.x(),
+                                e.y(),
+                                e.z()
+                            );
                         }
                     }
                 }
@@ -1032,22 +1032,21 @@ fn trace_builder_z_axis_overlap() {
         );
 
         // Dump edges for faces with unexpected edge counts
-        if n_edges != 4 {
-            if let Ok(face) = topo.face(sf.face_id) {
-                if let Ok(wire) = topo.wire(face.outer_wire()) {
-                    for (ei, oe) in wire.edges().iter().enumerate() {
-                        if let Ok(edge) = topo.edge(oe.edge()) {
-                            let sp = topo
-                                .vertex(edge.start())
-                                .map(brepkit_topology::vertex::Vertex::point)
-                                .ok();
-                            let ep = topo
-                                .vertex(edge.end())
-                                .map(brepkit_topology::vertex::Vertex::point)
-                                .ok();
-                            eprintln!("    E[{ei}]: {sp:?} -> {ep:?} fwd={}", oe.is_forward());
-                        }
-                    }
+        if n_edges != 4
+            && let Ok(face) = topo.face(sf.face_id)
+            && let Ok(wire) = topo.wire(face.outer_wire())
+        {
+            for (ei, oe) in wire.edges().iter().enumerate() {
+                if let Ok(edge) = topo.edge(oe.edge()) {
+                    let sp = topo
+                        .vertex(edge.start())
+                        .map(brepkit_topology::vertex::Vertex::point)
+                        .ok();
+                    let ep = topo
+                        .vertex(edge.end())
+                        .map(brepkit_topology::vertex::Vertex::point)
+                        .ok();
+                    eprintln!("    E[{ei}]: {sp:?} -> {ep:?} fwd={}", oe.is_forward());
                 }
             }
         }
@@ -1110,18 +1109,18 @@ fn gfa_fuse_z_axis_overlapping_manifold_boxes() {
     eprintln!("{e} edges, {v} verts, euler={euler}, {non_manifold} non-manifold");
 
     for (&eid, &count) in &edge_face_count {
-        if count != 2 {
-            if let Ok(e) = topo.edge(eid) {
-                let sp = topo
-                    .vertex(e.start())
-                    .map(brepkit_topology::vertex::Vertex::point)
-                    .ok();
-                let ep = topo
-                    .vertex(e.end())
-                    .map(brepkit_topology::vertex::Vertex::point)
-                    .ok();
-                eprintln!("  NM edge {eid:?}: count={count} {sp:?} -> {ep:?}");
-            }
+        if count != 2
+            && let Ok(e) = topo.edge(eid)
+        {
+            let sp = topo
+                .vertex(e.start())
+                .map(brepkit_topology::vertex::Vertex::point)
+                .ok();
+            let ep = topo
+                .vertex(e.end())
+                .map(brepkit_topology::vertex::Vertex::point)
+                .ok();
+            eprintln!("  NM edge {eid:?}: count={count} {sp:?} -> {ep:?}");
         }
     }
 
@@ -1457,10 +1456,10 @@ fn gfa_cut_box_cylinder_coplanar_caps_produces_valid_topology() {
     )> = Vec::new();
     for &eid in edge_use_count.keys() {
         let edge = topo.edge(eid).unwrap();
-        if edge.start() == edge.end() {
-            if let EdgeCurve::Circle(c) = edge.curve() {
-                full_circles.push((eid, c.clone()));
-            }
+        if edge.start() == edge.end()
+            && let EdgeCurve::Circle(c) = edge.curve()
+        {
+            full_circles.push((eid, c.clone()));
         }
     }
     for i in 0..full_circles.len() {

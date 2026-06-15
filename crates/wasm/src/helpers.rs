@@ -24,7 +24,7 @@ pub const TOL: f64 = 1e-7;
 
 /// Parse flat `[x,y,z, ...]` coordinates into `Vec<Point3>`.
 pub fn parse_points(coords: &[f64]) -> Result<Vec<Point3>, JsError> {
-    if coords.len() % 3 != 0 {
+    if !coords.len().is_multiple_of(3) {
         return Err(WasmError::InvalidInput {
             reason: format!(
                 "coordinate array length must be a multiple of 3, got {}",
@@ -183,20 +183,20 @@ pub fn try_fillet(
         };
 
     // Try engines in preference order; accept the first valid result.
-    if let Ok(s) = brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edges, radius) {
-        if is_valid(topo, s) {
-            return Ok(s);
-        }
+    if let Ok(s) = brepkit_operations::fillet::fillet_rolling_ball(topo, solid_id, edges, radius)
+        && is_valid(topo, s)
+    {
+        return Ok(s);
     }
-    if let Ok(r) = brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edges, radius) {
-        if is_valid(topo, r.solid) {
-            return Ok(r.solid);
-        }
+    if let Ok(r) = brepkit_operations::blend_ops::fillet_v2(topo, solid_id, edges, radius)
+        && is_valid(topo, r.solid)
+    {
+        return Ok(r.solid);
     }
-    if let Ok(s) = brepkit_operations::fillet::fillet(topo, solid_id, edges, radius) {
-        if is_valid(topo, s) {
-            return Ok(s);
-        }
+    if let Ok(s) = brepkit_operations::fillet::fillet(topo, solid_id, edges, radius)
+        && is_valid(topo, s)
+    {
+        return Ok(s);
     }
 
     // No engine produced a valid solid — leave the input unchanged.
@@ -282,7 +282,7 @@ pub fn build_triangle_mesh(
     positions: &[f64],
     indices: &[u32],
 ) -> Result<tessellate::TriangleMesh, JsError> {
-    if positions.len() % 3 != 0 {
+    if !positions.len().is_multiple_of(3) {
         return Err(WasmError::InvalidInput {
             reason: format!(
                 "positions length must be a multiple of 3, got {}",
@@ -448,7 +448,7 @@ pub fn parse_sketch_constraint(
 
 /// Parse flat `[x,y, ...]` coordinates into `Vec<Point2>`.
 pub fn parse_polygon_2d(coords: &[f64]) -> Result<Vec<Point2>, JsError> {
-    if coords.len() % 2 != 0 || coords.len() < 6 {
+    if !coords.len().is_multiple_of(2) || coords.len() < 6 {
         return Err(WasmError::InvalidInput {
             reason: "polygon needs at least 3 points (6 coordinates)".into(),
         }

@@ -179,13 +179,12 @@ fn find_edge_edge_crossings(
     // (which return no crossings above), the overlap is handled by VE paves
     // at arc endpoints plus ForceInterfEE common blocks — sampling here
     // would emit a spurious crossing at every sample pair along the arc.
-    if let (EdgeCurve::Circle(ca), EdgeCurve::Circle(cb)) = (edge_a.curve(), edge_b.curve()) {
-        if (ca.radius() - cb.radius()).abs() < tol.linear
-            && (ca.center() - cb.center()).length() < tol.linear
-            && ca.normal().dot(cb.normal()).abs() > 1.0 - tol.angular
-        {
-            return Ok(Vec::new());
-        }
+    if let (EdgeCurve::Circle(ca), EdgeCurve::Circle(cb)) = (edge_a.curve(), edge_b.curve())
+        && (ca.radius() - cb.radius()).abs() < tol.linear
+        && (ca.center() - cb.center()).length() < tol.linear
+        && ca.normal().dot(cb.normal()).abs() > 1.0 - tol.angular
+    {
+        return Ok(Vec::new());
     }
 
     let n: usize = 32;
@@ -235,17 +234,17 @@ fn find_edge_edge_crossings(
                 [&pts_a[i], &pts_a[i + 1]],
                 [&pts_b[j], &pts_b[j + 1]],
                 tol.linear,
-            ) {
-                if domain_a.contains(&t_a) && domain_b.contains(&t_b) {
-                    // Deduplicate: skip if too close to existing crossing
-                    let is_dup = crossings
-                        .iter()
-                        .any(|&(ct_a, ct_b, _): &(f64, f64, Point3)| {
-                            (t_a - ct_a).abs() < 1e-6 && (t_b - ct_b).abs() < 1e-6
-                        });
-                    if !is_dup {
-                        crossings.push((t_a, t_b, pt));
-                    }
+            ) && domain_a.contains(&t_a)
+                && domain_b.contains(&t_b)
+            {
+                // Deduplicate: skip if too close to existing crossing
+                let is_dup = crossings
+                    .iter()
+                    .any(|&(ct_a, ct_b, _): &(f64, f64, Point3)| {
+                        (t_a - ct_a).abs() < 1e-6 && (t_b - ct_b).abs() < 1e-6
+                    });
+                if !is_dup {
+                    crossings.push((t_a, t_b, pt));
                 }
             }
         }

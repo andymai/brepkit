@@ -161,16 +161,16 @@ fn contact_section_at_vertex<'a>(
         return Option::None;
     }
 
-    if let Ok(first_edge) = topo.edge(edges[0]) {
-        if first_edge.start() == vertex_id {
-            return stripe.sections.first();
-        }
+    if let Ok(first_edge) = topo.edge(edges[0])
+        && first_edge.start() == vertex_id
+    {
+        return stripe.sections.first();
     }
 
-    if let Ok(last_edge) = topo.edge(edges[edges.len() - 1]) {
-        if last_edge.end() == vertex_id {
-            return stripe.sections.last();
-        }
+    if let Ok(last_edge) = topo.edge(edges[edges.len() - 1])
+        && last_edge.end() == vertex_id
+    {
+        return stripe.sections.last();
     }
 
     let vpos = topo.vertex(vertex_id).ok()?.point();

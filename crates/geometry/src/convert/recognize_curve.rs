@@ -200,11 +200,11 @@ fn try_recognize_circle(samples: &[Point3], tolerance: f64) -> Option<(Point3, V
         for pt in samples.iter().skip(i + 1) {
             let v2 = *pt - p0;
             let n = v1.cross(v2);
-            if n.length() > tolerance {
-                if let Ok(normalized) = n.normalize() {
-                    normal = Some(normalized);
-                    break 'outer;
-                }
+            if n.length() > tolerance
+                && let Ok(normalized) = n.normalize()
+            {
+                normal = Some(normalized);
+                break 'outer;
             }
         }
     }
@@ -340,11 +340,11 @@ fn try_recognize_ellipse(
         for pt in samples.iter().skip(i + 1) {
             let v2 = *pt - p0;
             let n = v1.cross(v2);
-            if n.length() > tolerance {
-                if let Ok(normalized) = n.normalize() {
-                    normal = Some(normalized);
-                    break 'outer;
-                }
+            if n.length() > tolerance
+                && let Ok(normalized) = n.normalize()
+            {
+                normal = Some(normalized);
+                break 'outer;
             }
         }
     }
@@ -502,11 +502,11 @@ fn try_recognize_hyperbola(
         for pt in samples.iter().skip(i + 1) {
             let v2 = *pt - p0;
             let n = v1.cross(v2);
-            if n.length() > tolerance {
-                if let Ok(normalized) = n.normalize() {
-                    normal = Some(normalized);
-                    break 'outer;
-                }
+            if n.length() > tolerance
+                && let Ok(normalized) = n.normalize()
+            {
+                normal = Some(normalized);
+                break 'outer;
             }
         }
     }
@@ -660,11 +660,11 @@ fn try_recognize_parabola(samples: &[Point3], tolerance: f64) -> Option<(Point3,
         for pt in samples.iter().skip(i + 1) {
             let v2 = *pt - p0;
             let n = v1.cross(v2);
-            if n.length() > tolerance {
-                if let Ok(normalized) = n.normalize() {
-                    normal = Some(normalized);
-                    break 'outer;
-                }
+            if n.length() > tolerance
+                && let Ok(normalized) = n.normalize()
+            {
+                normal = Some(normalized);
+                break 'outer;
             }
         }
     }

@@ -74,44 +74,47 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         }
     }
 
-    if let Some(r) = sphere_r {
-        if cyl.is_none() && cone_params.is_none() && torus_params.is_none() && planes.is_empty() {
-            // A non-uniform scale transforms vertices but leaves the sphere
-            // surface radius unchanged, making the analytic formula wrong.
-            let sphere_faces: Vec<_> = shell.faces().to_vec();
-            let center = if let Ok(f) = topo.face(sphere_faces[0]) {
-                if let FaceSurface::Sphere(s) = f.surface() {
-                    s.center()
-                } else {
-                    return None;
-                }
+    if let Some(r) = sphere_r
+        && cyl.is_none()
+        && cone_params.is_none()
+        && torus_params.is_none()
+        && planes.is_empty()
+    {
+        // A non-uniform scale transforms vertices but leaves the sphere
+        // surface radius unchanged, making the analytic formula wrong.
+        let sphere_faces: Vec<_> = shell.faces().to_vec();
+        let center = if let Ok(f) = topo.face(sphere_faces[0]) {
+            if let FaceSurface::Sphere(s) = f.surface() {
+                s.center()
             } else {
                 return None;
-            };
-            let mut max_dist = 0.0_f64;
-            let mut min_dist = f64::INFINITY;
-            for &fid in &sphere_faces {
-                if let Ok(face) = topo.face(fid) {
-                    if let Ok(wire) = topo.wire(face.outer_wire()) {
-                        for oe in wire.edges() {
-                            if let Ok(e) = topo.edge(oe.edge()) {
-                                if let Ok(v) = topo.vertex(e.start()) {
-                                    let d = (v.point() - center).length();
-                                    max_dist = max_dist.max(d);
-                                    min_dist = min_dist.min(d);
-                                }
-                            }
-                        }
+            }
+        } else {
+            return None;
+        };
+        let mut max_dist = 0.0_f64;
+        let mut min_dist = f64::INFINITY;
+        for &fid in &sphere_faces {
+            if let Ok(face) = topo.face(fid)
+                && let Ok(wire) = topo.wire(face.outer_wire())
+            {
+                for oe in wire.edges() {
+                    if let Ok(e) = topo.edge(oe.edge())
+                        && let Ok(v) = topo.vertex(e.start())
+                    {
+                        let d = (v.point() - center).length();
+                        max_dist = max_dist.max(d);
+                        min_dist = min_dist.min(d);
                     }
                 }
             }
-            // If all vertices are equidistant (within 1%), use analytic formula
-            if (max_dist - min_dist).abs() < r * 0.01 {
-                return Some(4.0 / 3.0 * PI * r * r * r);
-            }
-            // Non-uniform scale detected -- fall through to tessellation
-            return None;
         }
+        // If all vertices are equidistant (within 1%), use analytic formula
+        if (max_dist - min_dist).abs() < r * 0.01 {
+            return Some(4.0 / 3.0 * PI * r * r * r);
+        }
+        // Non-uniform scale detected -- fall through to tessellation
+        return None;
     }
 
     // A pure cylinder has exactly 1 cylindrical face and 2 planar caps.
@@ -119,19 +122,18 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     // with a drilled hole has 1 cylindrical hole-wall + 6 box faces).
     // In the compound case the cylindrical face is a concave inner surface
     // and the formula pi*r^2*h would compute the cylinder volume, not the solid.
-    if let Some((origin, axis, r)) = cyl {
-        if cone_params.is_none()
-            && torus_params.is_none()
-            && sphere_r.is_none()
-            && planes.len() == 2
-        {
-            let origin_vec = Vec3::new(origin.x(), origin.y(), origin.z());
-            let mut ts = cap_t_values(origin_vec, axis, &planes);
-            if ts.len() >= 2 {
-                ts.sort_by(f64::total_cmp);
-                if let (Some(&t_min), Some(&t_max)) = (ts.first(), ts.last()) {
-                    return Some(PI * r * r * (t_max - t_min));
-                }
+    if let Some((origin, axis, r)) = cyl
+        && cone_params.is_none()
+        && torus_params.is_none()
+        && sphere_r.is_none()
+        && planes.len() == 2
+    {
+        let origin_vec = Vec3::new(origin.x(), origin.y(), origin.z());
+        let mut ts = cap_t_values(origin_vec, axis, &planes);
+        if ts.len() >= 2 {
+            ts.sort_by(f64::total_cmp);
+            if let (Some(&t_min), Some(&t_max)) = (ts.first(), ts.last()) {
+                return Some(PI * r * r * (t_max - t_min));
             }
         }
     }
@@ -139,47 +141,52 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     // Cap radii are read directly from the Circle3D edges of the cap faces,
     // bypassing the ConicalSurface parameterization entirely. Heights are
     // derived from the circle centers projected onto the cone axis.
-    if let Some((apex, axis)) = cone_params {
-        if cyl.is_none() && torus_params.is_none() && sphere_r.is_none() {
-            let apex_vec = Vec3::new(apex.x(), apex.y(), apex.z());
+    if let Some((apex, axis)) = cone_params
+        && cyl.is_none()
+        && torus_params.is_none()
+        && sphere_r.is_none()
+    {
+        let apex_vec = Vec3::new(apex.x(), apex.y(), apex.z());
 
-            // Collect (circle_center, radius) from each plane cap face.
-            let mut cap_circles: Vec<(Point3, f64)> = Vec::new();
-            for &fid in &plane_face_ids {
-                if let Some(cap) = find_cap_circle(topo, fid) {
-                    cap_circles.push(cap);
-                }
+        // Collect (circle_center, radius) from each plane cap face.
+        let mut cap_circles: Vec<(Point3, f64)> = Vec::new();
+        for &fid in &plane_face_ids {
+            if let Some(cap) = find_cap_circle(topo, fid) {
+                cap_circles.push(cap);
             }
+        }
 
-            // If any cap face did not yield a circle, the cone is degenerate or
-            // unsupported -- fall back to tessellation rather than silently wrong answer.
-            if cap_circles.len() != plane_face_ids.len() {
-                return None;
-            }
+        // If any cap face did not yield a circle, the cone is degenerate or
+        // unsupported -- fall back to tessellation rather than silently wrong answer.
+        if cap_circles.len() != plane_face_ids.len() {
+            return None;
+        }
 
-            match cap_circles.as_slice() {
-                [(c, r)] => {
-                    // Pointed cone: h = distance from apex to cap center along axis.
-                    let c_vec = Vec3::new(c.x(), c.y(), c.z());
-                    let h = (c_vec - apex_vec).dot(axis).abs();
-                    return Some(PI / 3.0 * r * r * h);
-                }
-                [(c1, r1), (c2, r2)] => {
-                    // Frustum: h = distance between cap centers projected onto axis.
-                    let c1_vec = Vec3::new(c1.x(), c1.y(), c1.z());
-                    let c2_vec = Vec3::new(c2.x(), c2.y(), c2.z());
-                    let h = (c2_vec - c1_vec).dot(axis).abs();
-                    return Some(PI * h / 3.0 * (r1 * r1 + r1 * r2 + r2 * r2));
-                }
-                _ => {}
+        match cap_circles.as_slice() {
+            [(c, r)] => {
+                // Pointed cone: h = distance from apex to cap center along axis.
+                let c_vec = Vec3::new(c.x(), c.y(), c.z());
+                let h = (c_vec - apex_vec).dot(axis).abs();
+                return Some(PI / 3.0 * r * r * h);
             }
+            [(c1, r1), (c2, r2)] => {
+                // Frustum: h = distance between cap centers projected onto axis.
+                let c1_vec = Vec3::new(c1.x(), c1.y(), c1.z());
+                let c2_vec = Vec3::new(c2.x(), c2.y(), c2.z());
+                let h = (c2_vec - c1_vec).dot(axis).abs();
+                return Some(PI * h / 3.0 * (r1 * r1 + r1 * r2 + r2 * r2));
+            }
+            _ => {}
         }
     }
 
-    if let Some((r_major, r_minor)) = torus_params {
-        if cyl.is_none() && cone_params.is_none() && sphere_r.is_none() && planes.is_empty() {
-            return Some(2.0 * PI * PI * r_major * r_minor * r_minor);
-        }
+    if let Some((r_major, r_minor)) = torus_params
+        && cyl.is_none()
+        && cone_params.is_none()
+        && sphere_r.is_none()
+        && planes.is_empty()
+    {
+        return Some(2.0 * PI * PI * r_major * r_minor * r_minor);
     }
 
     None
@@ -398,23 +405,22 @@ fn analytic_cylinder_signed_volume(
                 }
             }
             // Sample circle-edge midpoints for angular coverage.
-            if !edge.is_closed() {
-                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
-                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
-                        let ts = circle.project(sv.point());
-                        let te = circle.project(ev.point());
-                        // Choose the shorter arc for the midpoint.
-                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
-                        let mid_t = if fwd <= std::f64::consts::PI {
-                            ts + fwd * 0.5
-                        } else {
-                            ts - (std::f64::consts::TAU - fwd) * 0.5
-                        };
-                        let mid = circle.evaluate(mid_t);
-                        let (u, _) = cyl.project_point(mid);
-                        u_vals.push(u);
-                    }
-                }
+            if !edge.is_closed()
+                && let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve()
+                && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+            {
+                let ts = circle.project(sv.point());
+                let te = circle.project(ev.point());
+                // Choose the shorter arc for the midpoint.
+                let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                let mid_t = if fwd <= std::f64::consts::PI {
+                    ts + fwd * 0.5
+                } else {
+                    ts - (std::f64::consts::TAU - fwd) * 0.5
+                };
+                let mid = circle.evaluate(mid_t);
+                let (u, _) = cyl.project_point(mid);
+                u_vals.push(u);
             }
         }
     }
@@ -480,22 +486,21 @@ fn analytic_cone_signed_volume(
                     v_vals.push(v);
                 }
             }
-            if !edge.is_closed() {
-                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
-                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
-                        let ts = circle.project(sv.point());
-                        let te = circle.project(ev.point());
-                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
-                        let mid_t = if fwd <= std::f64::consts::PI {
-                            ts + fwd * 0.5
-                        } else {
-                            ts - (std::f64::consts::TAU - fwd) * 0.5
-                        };
-                        let mid = circle.evaluate(mid_t);
-                        let (u, _) = cone.project_point(mid);
-                        u_vals.push(u);
-                    }
-                }
+            if !edge.is_closed()
+                && let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve()
+                && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+            {
+                let ts = circle.project(sv.point());
+                let te = circle.project(ev.point());
+                let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                let mid_t = if fwd <= std::f64::consts::PI {
+                    ts + fwd * 0.5
+                } else {
+                    ts - (std::f64::consts::TAU - fwd) * 0.5
+                };
+                let mid = circle.evaluate(mid_t);
+                let (u, _) = cone.project_point(mid);
+                u_vals.push(u);
             }
         }
     }
@@ -584,22 +589,21 @@ fn analytic_sphere_signed_volume(
                     v_vals.push(v);
                 }
             }
-            if !edge.is_closed() {
-                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
-                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
-                        let ts = circle.project(sv.point());
-                        let te = circle.project(ev.point());
-                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
-                        let mid_t = if fwd <= std::f64::consts::PI {
-                            ts + fwd * 0.5
-                        } else {
-                            ts - (std::f64::consts::TAU - fwd) * 0.5
-                        };
-                        let mid = circle.evaluate(mid_t);
-                        let (u, _) = sph.project_point(mid);
-                        u_vals.push(u);
-                    }
-                }
+            if !edge.is_closed()
+                && let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve()
+                && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+            {
+                let ts = circle.project(sv.point());
+                let te = circle.project(ev.point());
+                let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                let mid_t = if fwd <= std::f64::consts::PI {
+                    ts + fwd * 0.5
+                } else {
+                    ts - (std::f64::consts::TAU - fwd) * 0.5
+                };
+                let mid = circle.evaluate(mid_t);
+                let (u, _) = sph.project_point(mid);
+                u_vals.push(u);
             }
         }
     }
@@ -713,22 +717,21 @@ fn analytic_torus_signed_volume(
                     v_vals.push(v);
                 }
             }
-            if !edge.is_closed() {
-                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
-                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
-                        let ts = circle.project(sv.point());
-                        let te = circle.project(ev.point());
-                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
-                        let mid_t = if fwd <= std::f64::consts::PI {
-                            ts + fwd * 0.5
-                        } else {
-                            ts - (std::f64::consts::TAU - fwd) * 0.5
-                        };
-                        let mid = circle.evaluate(mid_t);
-                        let (u, _) = tor.project_point(mid);
-                        u_vals.push(u);
-                    }
-                }
+            if !edge.is_closed()
+                && let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve()
+                && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+            {
+                let ts = circle.project(sv.point());
+                let te = circle.project(ev.point());
+                let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                let mid_t = if fwd <= std::f64::consts::PI {
+                    ts + fwd * 0.5
+                } else {
+                    ts - (std::f64::consts::TAU - fwd) * 0.5
+                };
+                let mid = circle.evaluate(mid_t);
+                let (u, _) = tor.project_point(mid);
+                u_vals.push(u);
             }
         }
     }
