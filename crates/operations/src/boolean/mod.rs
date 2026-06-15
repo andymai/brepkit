@@ -829,8 +829,6 @@ pub fn boolean_with_evolution(
     a: SolidId,
     b: SolidId,
 ) -> Result<(SolidId, crate::evolution::EvolutionMap), crate::OperationsError> {
-    use crate::evolution::EvolutionMap;
-
     // Collect input face normals + centroids before the operation mutates topology.
     let input_faces_a = collect_face_signatures(topo, a)?;
     let input_faces_b = collect_face_signatures(topo, b)?;
@@ -846,98 +844,8 @@ pub fn boolean_with_evolution(
     // Collect output face normals + centroids.
     let output_faces = collect_face_signatures(topo, result)?;
 
-    // Build evolution map via heuristic matching.
-    let mut evo = EvolutionMap::new();
-    let mut matched_inputs: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut unmatched_outputs: Vec<(usize, Vec3, Point3)> = Vec::new();
-
-    // Normal dot threshold: cos(45deg) — relaxed to handle faces split by
-    // booleans where normals may shift slightly.
-    let normal_threshold = 0.707;
-    // Maximum centroid distance squared for a match (generous).
-    let centroid_dist_sq_max = 100.0;
-
-    for &(out_idx, out_normal, out_centroid) in &output_faces {
-        // Collect every input face whose normal+centroid is "close enough"
-        // to the output face. When fuse simplifies two coincident-plane
-        // inputs into one output (e.g. fuse of touching boxes via the
-        // box-pair shortcut: the top faces of A and B both collapse onto
-        // the result's top face), picking only the single best-scoring
-        // input drops the other input's metadata. Recording every
-        // qualifying input under the same output preserves both origins.
-        let mut best_score = f64::NEG_INFINITY;
-        let mut matches: Vec<(usize, f64)> = Vec::new();
-
-        for &(in_idx, in_normal, in_centroid) in &input_faces {
-            let dot = out_normal.dot(in_normal);
-            if dot < normal_threshold {
-                continue;
-            }
-
-            let dx = out_centroid.x() - in_centroid.x();
-            let dy = out_centroid.y() - in_centroid.y();
-            let dz = out_centroid.z() - in_centroid.z();
-            let dist_sq = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
-
-            if dist_sq > centroid_dist_sq_max {
-                continue;
-            }
-
-            let score = dot - dist_sq / centroid_dist_sq_max;
-            if score > best_score {
-                best_score = score;
-            }
-            matches.push((in_idx, score));
-        }
-
-        if matches.is_empty() {
-            unmatched_outputs.push((out_idx, out_normal, out_centroid));
-            continue;
-        }
-
-        // Accept any match within a small tolerance of the best score —
-        // ties (or near-ties) usually indicate two input faces that
-        // legitimately contributed to the same output (e.g., the two
-        // halves of a face that merged across a same-domain boundary).
-        let score_tol = 0.05;
-        for &(in_idx, score) in &matches {
-            if score >= best_score - score_tol {
-                evo.add_modified(in_idx, out_idx);
-                matched_inputs.insert(in_idx);
-            }
-        }
-    }
-
-    // Unmatched output faces are "generated" — attribute them to the nearest
-    // input face (the face most likely responsible for generating them, e.g.
-    // intersection curves create new faces near the boundary).
-    for &(out_idx, _out_normal, out_centroid) in &unmatched_outputs {
-        let mut best_dist_sq = f64::MAX;
-        let mut best_input: Option<usize> = None;
-
-        for &(in_idx, _, in_centroid) in &input_faces {
-            let dx = out_centroid.x() - in_centroid.x();
-            let dy = out_centroid.y() - in_centroid.y();
-            let dz = out_centroid.z() - in_centroid.z();
-            let dist_sq = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
-            if dist_sq < best_dist_sq {
-                best_dist_sq = dist_sq;
-                best_input = Some(in_idx);
-            }
-        }
-
-        if let Some(in_idx) = best_input {
-            evo.add_generated(in_idx, out_idx);
-            matched_inputs.insert(in_idx);
-        }
-    }
-
-    // Any input face not matched to any output is deleted.
-    for &(in_idx, _, _) in &input_faces {
-        if !matched_inputs.contains(&in_idx) {
-            evo.add_deleted(in_idx);
-        }
-    }
+    // Build the evolution map from geometric face-signature matching.
+    let evo = crate::evolution::build_evolution_by_geometry(&input_faces, &output_faces);
 
     Ok((result, evo))
 }
@@ -3299,7 +3207,9 @@ pub fn face_polygon(
 /// # Errors
 ///
 /// Returns an error if any face or wire cannot be resolved.
-fn collect_face_signatures(
+/// Snapshot each outer-shell face as `(index, outward normal, centroid)` — the
+/// signature [`crate::evolution::build_evolution_by_geometry`] matches on.
+pub fn collect_face_signatures(
     topo: &Topology,
     solid_id: SolidId,
 ) -> Result<Vec<(usize, Vec3, Point3)>, crate::OperationsError> {
