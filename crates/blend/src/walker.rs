@@ -747,6 +747,27 @@ mod tests {
         }
     }
 
+    /// Assert circularity across the *whole* (U, V) grid, including interior
+    /// sections. For `quarter_circle_sections` every cross-section is a unit
+    /// circle centred on the line `(·, 1, 1)` parallel to X — only X shifts
+    /// between sections — so every surface sample must sit at distance 1 from
+    /// that axis: `sqrt((y-1)^2 + (z-1)^2) == 1`. This catches V-interpolation
+    /// regressions (knot vector / evaluator) that endpoint-only sampling misses.
+    fn assert_circular_over_grid(surf: &NurbsSurface) {
+        for ku in 0..=8 {
+            for kv in 0..=8 {
+                let u = f64::from(ku) / 8.0;
+                let v = f64::from(kv) / 8.0;
+                let p = surf.evaluate(u, v);
+                let r = ((p.y() - 1.0).powi(2) + (p.z() - 1.0).powi(2)).sqrt();
+                assert!(
+                    (r - 1.0).abs() < 1e-9,
+                    "U={u} V={v}: off-axis radius {r} != 1 (point {p:?})"
+                );
+            }
+        }
+    }
+
     /// Regression for the transposed control-point grid: the surface must build
     /// for any section count, not only `n == 3`. With the U/V axes swapped, the
     /// arc's 6-knot vector was validated against the section count, so every
@@ -770,6 +791,9 @@ mod tests {
             // (clamped knots interpolate the first and last section exactly).
             assert_circular_arc(&surf, 0.0, &sections[0]);
             assert_circular_arc(&surf, 1.0, &sections[n - 1]);
+
+            // ...and at every interior section, not just the endpoints.
+            assert_circular_over_grid(&surf);
         }
     }
 }
