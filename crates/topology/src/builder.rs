@@ -171,6 +171,44 @@ pub fn make_ellipse_edge(
     )
 }
 
+/// Create a trimmed elliptical arc edge between `start` and `end`.
+///
+/// Builds an [`Ellipse3D`] from `center`, `normal`, the semi-axes, and the
+/// `ref_dir` major-axis direction, then an edge whose distinct start/end
+/// vertices trim it. [`EdgeCurve::domain_with_endpoints`] projects those
+/// endpoints onto the ellipse and returns the CCW angular range, so the edge
+/// traces exactly the arc. `start`/`end` must lie on the ellipse. When the
+/// endpoints coincide the edge is closed (full `[0, 2π]` domain).
+///
+/// # Errors
+///
+/// Returns an error if either semi-axis is non-positive, `semi_minor` exceeds
+/// `semi_major`, or `normal`/`ref_dir` is degenerate.
+#[allow(clippy::too_many_arguments)]
+pub fn make_ellipse_arc(
+    topo: &mut Topology,
+    center: Point3,
+    normal: Vec3,
+    semi_major: f64,
+    semi_minor: f64,
+    ref_dir: Vec3,
+    start: Point3,
+    end: Point3,
+    tolerance: f64,
+) -> Result<EdgeId, crate::TopologyError> {
+    let ellipse = Ellipse3D::new_with_ref(center, normal, semi_major, semi_minor, ref_dir)
+        .map_err(|e| crate::TopologyError::NonManifold {
+            reason: format!("invalid ellipse: {e}"),
+        })?;
+    let v_start = topo.add_vertex(Vertex::new(start, tolerance));
+    let v_end = if (start - end).length() < tolerance * 100.0 {
+        v_start
+    } else {
+        topo.add_vertex(Vertex::new(end, tolerance))
+    };
+    Ok(topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::Ellipse(ellipse))))
+}
+
 /// Create a closed wire from an ordered list of points.
 ///
 /// Each consecutive pair of points becomes a line edge, and the last
@@ -962,6 +1000,45 @@ mod tests {
             "default-frame seam.y should be 5.0, got {}",
             seam2.y()
         );
+    }
+
+    #[test]
+    fn make_ellipse_arc_traces_quarter_arc() {
+        // Quarter arc of an ellipse (semi_major 5 along +x, semi_minor 2 along
+        // +y, normal +z) from angle 0 to π/2: start (5,0,0), end (0,2,0).
+        let mut topo = Topology::new();
+        let start = Point3::new(5.0, 0.0, 0.0);
+        let end = Point3::new(0.0, 2.0, 0.0);
+        let eid = make_ellipse_arc(
+            &mut topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            5.0,
+            2.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            start,
+            end,
+            TOL,
+        )
+        .unwrap();
+
+        let edge = topo.edge(eid).unwrap();
+        assert_eq!(edge.curve().type_tag(), "ellipse");
+        // Distinct endpoints ⇒ trimmed (not closed).
+        assert_ne!(edge.start(), edge.end());
+
+        // The trimmed domain is the CCW angular range [0, π/2]; its midpoint
+        // angle π/4 maps to (5·cos45, 2·sin45, 0) ≈ (3.5355, 1.4142, 0).
+        let (a0, a1) = edge.curve().domain_with_endpoints(start, end);
+        assert!(a0.abs() < 1e-9, "a0 {a0}");
+        assert!((a1 - std::f64::consts::FRAC_PI_2).abs() < 1e-9, "a1 {a1}");
+        let mid = edge
+            .curve()
+            .evaluate_with_endpoints(a0.midpoint(a1), start, end);
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        assert!((mid.x() - 5.0 * s).abs() < 1e-9, "mid.x {}", mid.x());
+        assert!((mid.y() - 2.0 * s).abs() < 1e-9, "mid.y {}", mid.y());
+        assert!(mid.z().abs() < 1e-9, "mid.z {}", mid.z());
     }
 
     #[test]
