@@ -40,19 +40,16 @@ pub fn fix_edge(
 ) -> Result<FixResult, HealError> {
     let mut result = FixResult::ok();
 
-    // 1. Vertex tolerance check.
     if config.fix_vertex_tolerance != FixMode::Off {
         let r = fix_vertex_tolerance(topo, edge_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 2. Degenerate edge detection and removal.
     if config.fix_degenerate_edges != FixMode::Off {
         let r = fix_degenerate(topo, edge_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 3. SameParameter stub (no face context).
     if config.fix_same_parameter != FixMode::Off {
         let r = fix_same_parameter_stub(ctx, config);
         result.merge(&r);
@@ -91,7 +88,6 @@ pub fn fix_same_parameter_on_face(
     let has_pcurve = topo.pcurves().contains(edge_id, face_id);
 
     if has_pcurve {
-        // Check deviation between existing PCurve and 3D curve.
         let max_dev = compute_pcurve_deviation(topo, edge_id, face_id)?;
         let tol = ctx.tolerance.linear;
         let needs_fix = max_dev > tol;
@@ -118,7 +114,6 @@ pub fn fix_same_parameter_on_face(
         ));
     }
 
-    // Build a new PCurve via projection.
     let nurbs_3d = crate::construct::project_curve::project_edge_to_pcurve(
         topo,
         edge_id,
@@ -143,7 +138,6 @@ pub fn fix_same_parameter_on_face(
         ))
     })?;
 
-    // Determine parameter range from the knot vector.
     let t_start = knots[degree];
     let t_end = knots[knots.len() - degree - 1];
 
@@ -270,11 +264,9 @@ fn compute_pcurve_deviation(
         #[allow(clippy::cast_precision_loss)]
         let frac = i as f64 / SAME_PARAM_SAMPLES as f64;
 
-        // 3D curve point.
         let t_3d = t0_3d + (t1_3d - t0_3d) * frac;
         let pt_3d = curve.evaluate_with_endpoints(t_3d, start_pos, end_pos);
 
-        // PCurve -> surface point.
         let t_pc = t0_pc + (t1_pc - t0_pc) * frac;
         let uv = pcurve.evaluate(t_pc);
 

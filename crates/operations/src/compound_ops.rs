@@ -54,10 +54,8 @@ pub fn fuse_all(
         .map(|&sid| crate::measure::solid_bounding_box(topo, sid))
         .collect::<Result<_, _>>()?;
 
-    // Build disjoint groups: solids whose AABBs overlap go in the same group.
     let groups = partition_overlapping(&bboxes);
 
-    // Process each group: boolean fuse within the group, then merge shells.
     let mut group_results: Vec<SolidId> = Vec::new();
     for group in &groups {
         let group_solids: Vec<SolidId> = group.iter().map(|&i| solids[i]).collect();
@@ -86,7 +84,6 @@ pub fn fuse_all(
         return Ok(group_results[0]);
     }
 
-    // Merge disjoint groups by collecting all faces into a single solid.
     merge_disjoint_solids(topo, &group_results)
 }
 
@@ -238,7 +235,6 @@ mod tests {
         let s1 = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
         let s2 = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
 
-        // Move s2 to (5, 0, 0).
         crate::transform::transform_solid(
             &mut topo,
             s2,

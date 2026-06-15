@@ -36,7 +36,6 @@ pub fn find_continuity_breaks(curve: &NurbsCurve, min_continuity: usize) -> Vec<
     // i.e., degree - m <= min_continuity, i.e., m >= degree - min_continuity.
     let break_threshold = degree.saturating_sub(min_continuity);
 
-    // Iterate unique internal knots.
     let mut breaks = Vec::new();
     let mut i = degree + 1; // Skip the first (degree+1) clamped knots.
     let end = knots.len().saturating_sub(degree + 1);
@@ -81,7 +80,6 @@ pub fn split_curve_at_params(
         return Ok(vec![curve.clone()]);
     }
 
-    // Sort and deduplicate split parameters.
     let mut sorted_params: Vec<f64> = params.to_vec();
     sorted_params.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     sorted_params.dedup_by(|a, b| (*a - *b).abs() < KNOT_EPS);

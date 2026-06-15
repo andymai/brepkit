@@ -365,15 +365,12 @@ fn dihedral_half_angle(n1: Vec3, n2: Vec3) -> f64 {
 /// Returns `(bisector, cross_dir)` where bisector points from edge toward
 /// fillet center and `cross_dir` is perpendicular to both in the section plane.
 fn section_basis(n1: Vec3, n2: Vec3, spine_tangent: Vec3) -> (Vec3, Vec3) {
-    // Bisector of the two normals — points from the edge toward the fillet center
     let bisector_raw = n1 + n2;
     let bisector = bisector_raw.normalize().unwrap_or_else(|_| {
         // Normals are antiparallel (180 deg) — use cross product with tangent
         spine_tangent.cross(n1)
     });
 
-    // In the section plane, the direction perpendicular to the bisector
-    // that lies in the plane of the two normals.
     let cross_dir_raw = spine_tangent.cross(bisector);
     let cross_dir = cross_dir_raw
         .normalize()
@@ -387,7 +384,6 @@ fn section_basis(n1: Vec3, n2: Vec3, spine_tangent: Vec3) -> (Vec3, Vec3) {
 /// This is the component of the bisector projected onto the plane surface,
 /// pointing away from the edge toward where the fillet touches the plane.
 fn compute_contact_direction(normal: Vec3, bisector: Vec3) -> Vec3 {
-    // Project bisector onto the plane (remove component along normal)
     let proj = bisector - normal * bisector.dot(normal);
     proj.normalize().unwrap_or(bisector)
 }
@@ -423,12 +419,10 @@ fn plane_plane_fillet(
     face1: FaceId,
     face2: FaceId,
 ) -> Result<StripeResult, BlendError> {
-    // Spine endpoints and tangent
     let p_start = spine.evaluate(topo, 0.0)?;
     let p_end = spine.evaluate(topo, spine.length())?;
     let tangent = spine.tangent(topo, 0.0)?;
 
-    // Dihedral geometry
     let half_angle = dihedral_half_angle(n1, n2);
     let sin_half = half_angle.sin();
     let cos_half = half_angle.cos();
@@ -440,25 +434,19 @@ fn plane_plane_fillet(
 
     let (bisector, _cross_dir) = section_basis(n1, n2, tangent);
 
-    // Center offset from the edge along the bisector
     let center_offset = radius / sin_half;
 
-    // Cylinder origin: on the center line at the spine start
     let cyl_origin = p_start + bisector * center_offset;
     let cyl_axis = tangent;
 
-    // Create the cylindrical surface
     let cylinder = CylindricalSurface::new(cyl_origin, cyl_axis, radius)?;
 
-    // Contact point offsets from the edge
     // The contact point on each plane is at distance R/tan(half_angle) from the edge.
     let contact_offset = radius * cos_half / sin_half; // = R / tan(half_angle)
 
-    // Direction from edge toward contact on each plane
     let contact_dir1 = compute_contact_direction(n1, bisector);
     let contact_dir2 = compute_contact_direction(n2, bisector);
 
-    // Contact lines (straight lines on each plane)
     let c1_start = p_start + contact_dir1 * contact_offset;
     let c1_end = p_end + contact_dir1 * contact_offset;
     let c2_start = p_start + contact_dir2 * contact_offset;
@@ -467,7 +455,6 @@ fn plane_plane_fillet(
     let contact1 = nurbs_line(c1_start, c1_end)?;
     let contact2 = nurbs_line(c2_start, c2_end)?;
 
-    // PCurves: project 3D contact endpoints onto each face surface to get UV
     let pcurve1 = {
         let adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n1, 0.0);
         let (u0, v0) = adapter.project_point(c1_start);
@@ -487,7 +474,6 @@ fn plane_plane_fillet(
         )?)
     };
 
-    // Cross-sections at start and end
     let section_start = CircSection {
         p1: c1_start,
         p2: c2_start,
@@ -548,18 +534,15 @@ fn plane_plane_chamfer(
     face1: FaceId,
     face2: FaceId,
 ) -> Result<StripeResult, BlendError> {
-    // Spine endpoints and tangent
     let p_start = spine.evaluate(topo, 0.0)?;
     let p_end = spine.evaluate(topo, spine.length())?;
     let tangent = spine.tangent(topo, 0.0)?;
 
     let (bisector, _cross_dir) = section_basis(n1, n2, tangent);
 
-    // Contact directions on each plane
     let contact_dir1 = compute_contact_direction(n1, bisector);
     let contact_dir2 = compute_contact_direction(n2, bisector);
 
-    // Contact lines at specified distances
     let c1_start = p_start + contact_dir1 * d1;
     let c1_end = p_end + contact_dir1 * d1;
     let c2_start = p_start + contact_dir2 * d2;
@@ -577,10 +560,8 @@ fn plane_plane_chamfer(
         .normalize()
         .map_err(|_| BlendError::Math(brepkit_math::MathError::ZeroVector))?;
 
-    // Signed distance from origin
     let chamfer_d = chamfer_normal.dot(Vec3::new(c1_start.x(), c1_start.y(), c1_start.z()));
 
-    // PCurves: project 3D contact endpoints onto each face surface to get UV
     let pcurve1 = {
         let adapter = crate::builder_utils::PlaneAdapter::from_normal_and_d(n1, 0.0);
         let (u0, v0) = adapter.project_point(c1_start);
@@ -600,7 +581,6 @@ fn plane_plane_chamfer(
         )?)
     };
 
-    // Sections at start and end
     let midpoint_start = midpoint_3d(c1_start, c2_start);
     let midpoint_end = midpoint_3d(c1_end, c2_end);
     let chamfer_radius = (c1_start - c2_start).length() / 2.0;
@@ -2433,7 +2413,6 @@ pub fn sphere_sphere_fillet(
         return Ok(None);
     }
 
-    // Spine span (closed-circle aware).
     let edges = spine.edges();
     let is_closed_spine = if edges.len() == 1 {
         let e = topo.edge(edges[0])?;
@@ -2476,7 +2455,6 @@ pub fn sphere_sphere_fillet(
         ref_dir,
     )?;
 
-    // Spine plane center (where the spine circle lies).
     let spine_plane_center = c1 + axis * a0;
 
     // u-parameter for a point on a contact circle around the axis.
@@ -2549,7 +2527,6 @@ pub fn sphere_sphere_fillet(
         brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
     )?);
 
-    // Cross-sections at spine endpoints.
     let p1_at = |u: f64| contact1_circle.evaluate(u);
     let p2_at = |u: f64| contact2_circle.evaluate(u);
     let center_at = |u: f64| {
@@ -2718,7 +2695,6 @@ pub fn sphere_cylinder_fillet(
     }
     let spine_sign = if sample_axial >= 0.0 { 1.0 } else { -1.0 };
 
-    // Effective radii.
     let q_s = big_r_s + s_sphere * radius;
     let q_c = r_c + s_cyl * radius;
     if q_s <= tol_lin || q_c <= tol_lin {
@@ -2739,7 +2715,6 @@ pub fn sphere_cylinder_fillet(
         return Ok(None);
     }
 
-    // Build the torus.
     let cyl_x = cyl.x_axis();
     let cyl_y = cyl.y_axis();
     let ref_dir = if cyl_x.cross(cyl_axis).length() > tol_ang {
@@ -2756,7 +2731,6 @@ pub fn sphere_cylinder_fillet(
         ref_dir,
     )?;
 
-    // Spine plane center on cylinder axis at axial = sample_axial.
     let spine_plane_center = c_s + cyl_axis * sample_axial;
     let perp_y = cyl_axis.cross(ref_dir).normalize()?;
     let u_at = |p: Point3| {
@@ -3064,7 +3038,6 @@ pub fn sphere_cone_fillet(
         return Ok(None);
     }
 
-    // Build the torus.
     let cone_x = cone.x_axis();
     let ref_dir = cone_x;
 
@@ -3077,7 +3050,6 @@ pub fn sphere_cone_fillet(
         ref_dir,
     )?;
 
-    // Spine plane center.
     let spine_plane_center = c_s + cone_axis * spine_z;
     let perp_y = cone_axis.cross(ref_dir).normalize()?;
     let u_at = |p: Point3| {
@@ -3159,7 +3131,6 @@ pub fn sphere_cone_fillet(
         brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
     )?);
 
-    // Cross-sections.
     let p_sph_at = |u: f64| contact_sph_circle.evaluate(u);
     let p_cone_at = |u: f64| contact_cone_circle.evaluate(u);
     let section_at = |u: f64, t: f64| CircSection {
@@ -3290,7 +3261,6 @@ pub fn sphere_sphere_chamfer(
         return Ok(None);
     }
 
-    // Spine geometry.
     let a0 = (big_r1 * big_r1 - big_r2 * big_r2 + big_d * big_d) / (2.0 * big_d);
     let r_p_sq = big_r1 * big_r1 - a0 * a0;
     if r_p_sq <= tol_lin * tol_lin {
@@ -3362,7 +3332,6 @@ pub fn sphere_sphere_chamfer(
 
     let chamfer_apex_pos = c1 + axis * z_apex_from_c1;
 
-    // Spine span (closed-circle aware).
     let edges = spine.edges();
     let is_closed_spine = if edges.len() == 1 {
         let e = topo.edge(edges[0])?;
@@ -3388,7 +3357,6 @@ pub fn sphere_sphere_chamfer(
     let chamfer_cone =
         ConicalSurface::with_ref_dir(chamfer_apex_pos, cone_axis, cone_half_angle, ref_dir)?;
 
-    // Spine plane center.
     let spine_plane_center = c1 + axis * a0;
     let perp_y = axis.cross(ref_dir).normalize()?;
     let u_at = |p: Point3| {
@@ -3409,7 +3377,6 @@ pub fn sphere_sphere_chamfer(
         }
     };
 
-    // 3D contact circles.
     let contact1_center = c1 + axis * p1_z_from_c1;
     let contact1_circle =
         brepkit_math::curves::Circle3D::with_axes(contact1_center, axis, p1_r, ref_dir, perp_y)?;
@@ -3433,7 +3400,6 @@ pub fn sphere_sphere_chamfer(
         brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
     )?);
 
-    // Cross-sections.
     let p1_at = |u: f64| contact1_circle.evaluate(u);
     let p2_at = |u: f64| contact2_circle.evaluate(u);
     let section_at = |u: f64, t: f64| {
@@ -3575,7 +3541,6 @@ pub fn sphere_cylinder_chamfer(
     let h_s_sq = big_r_s * big_r_s - r_c * r_c;
     let h_s = h_s_sq.sqrt();
 
-    // Spine validation.
     let edges = spine.edges();
     let is_closed_spine = if edges.len() == 1 {
         let e = topo.edge(edges[0])?;
@@ -3649,7 +3614,6 @@ pub fn sphere_cylinder_chamfer(
     let chamfer_cone =
         ConicalSurface::with_ref_dir(chamfer_apex_pos, chamfer_axis, cone_half_angle, ref_dir)?;
 
-    // Spine plane center.
     let spine_plane_center = c_s + cyl_axis * a_spine;
     let perp_y = cyl_axis.cross(ref_dir).normalize()?;
     let u_at = |p: Point3| {
@@ -3669,7 +3633,6 @@ pub fn sphere_cylinder_chamfer(
         }
     };
 
-    // Contact circles.
     let sph_contact_center = c_s + cyl_axis * z_sph;
     let contact_sph_circle = brepkit_math::curves::Circle3D::with_axes(
         sph_contact_center,
@@ -3704,7 +3667,6 @@ pub fn sphere_cylinder_chamfer(
         brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
     )?);
 
-    // Cross-sections.
     let p_sph_at = |u: f64| contact_sph_circle.evaluate(u);
     let p_cyl_at = |u: f64| contact_cyl_circle.evaluate(u);
     let section_at = |u: f64, t: f64| {
@@ -3958,7 +3920,6 @@ pub fn sphere_cone_chamfer(
     let chamfer_cone =
         ConicalSurface::with_ref_dir(chamfer_apex_pos, chamfer_axis, cone_half_angle, ref_dir)?;
 
-    // Spine plane center.
     let spine_plane_center = c_s + cone_axis * spine_z;
     let perp_y = cone_axis.cross(ref_dir).normalize()?;
     let u_at = |p: Point3| {
@@ -3978,7 +3939,6 @@ pub fn sphere_cone_chamfer(
         }
     };
 
-    // Contact circles.
     let sph_contact_center = c_s + cone_axis * z_sph;
     let contact_sph_circle = brepkit_math::curves::Circle3D::with_axes(
         sph_contact_center,
@@ -4012,7 +3972,6 @@ pub fn sphere_cone_chamfer(
         brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
     )?);
 
-    // Cross-sections.
     let p_sph_at = |u: f64| contact_sph_circle.evaluate(u);
     let p_cone_at = |u: f64| contact_cone_circle.evaluate(u);
     let section_at = |u: f64, t: f64| {
@@ -4197,7 +4156,6 @@ pub fn cylinder_cylinder_fillet(
     };
     let y_sign = if y_spine >= 0.0 { 1.0 } else { -1.0 };
 
-    // Effective radii.
     let q1 = r1 + s1 * radius;
     let q2 = r2 + s2 * radius;
     if q1 <= tol_lin || q2 <= tol_lin {
@@ -4212,7 +4170,6 @@ pub fn cylinder_cylinder_fillet(
     }
     let y_ball = y_sign * y_ball_sq.sqrt();
 
-    // Spine endpoints in 3D.
     let p_spine_start = p_spine_sample;
     let spine_tangent = spine.tangent(topo, 0.0)?;
     // Confirm spine direction is parallel to the cyl axis (linear spine
@@ -4271,7 +4228,6 @@ pub fn cylinder_cylinder_fillet(
         brepkit_math::vec::Vec2::new(0.0, v2_end - v2_start),
     )?);
 
-    // Cross-sections at spine endpoints.
     let section_start = CircSection {
         p1: c1_start,
         p2: c2_start,
@@ -4439,7 +4395,6 @@ pub fn cone_cone_coaxial_fillet(
         return Ok(None);
     }
 
-    // Spine validation.
     let edges = spine.edges();
     let is_closed_spine = if edges.len() == 1 {
         let e = topo.edge(edges[0])?;
@@ -4464,7 +4419,6 @@ pub fn cone_cone_coaxial_fillet(
         return Ok(None);
     }
 
-    // Build the torus.
     let ref_dir = cone1.x_axis();
     let torus_center = apex1 + a_cone * z_b;
     let torus = ToroidalSurface::with_axis_and_ref_dir(
@@ -4475,7 +4429,6 @@ pub fn cone_cone_coaxial_fillet(
         ref_dir,
     )?;
 
-    // Spine plane center at apex1 + z_spine.
     let spine_plane_center = apex1 + a_cone * z_spine;
     let perp_y = a_cone.cross(ref_dir).normalize()?;
     let u_at = |p: Point3| {
@@ -4542,7 +4495,6 @@ pub fn cone_cone_coaxial_fillet(
         brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
     )?);
 
-    // Cross-sections.
     let p1_at = |u: f64| contact1_circle.evaluate(u);
     let p2_at = |u: f64| contact2_circle.evaluate(u);
     let section_at = |u: f64, t: f64| CircSection {
@@ -4680,7 +4632,6 @@ pub fn cone_cone_coaxial_chamfer(
         return Ok(None);
     }
 
-    // Spine geometry (shared with fillet).
     let z_spine = h_2 * cos_b2 * sin_b1 / sin_minus;
     let cot_b1 = cos_b1 / sin_b1;
     let r_spine = z_spine * cot_b1;
@@ -4688,7 +4639,6 @@ pub fn cone_cone_coaxial_chamfer(
         return Ok(None);
     }
 
-    // Spine validation.
     let edges = spine.edges();
     let is_closed_spine = if edges.len() == 1 {
         let e = topo.edge(edges[0])?;
@@ -4757,7 +4707,6 @@ pub fn cone_cone_coaxial_chamfer(
     let chamfer_cone =
         ConicalSurface::with_ref_dir(chamfer_apex_pos, chamfer_axis, cone_half_angle, ref_dir)?;
 
-    // Spine plane center.
     let spine_plane_center = apex1 + a_cone * z_spine;
     let perp_y = a_cone.cross(ref_dir).normalize()?;
     let u_at = |p: Point3| {
@@ -4777,7 +4726,6 @@ pub fn cone_cone_coaxial_chamfer(
         }
     };
 
-    // Contact circles.
     let c1_center = apex1 + a_cone * z_c1;
     let contact1_circle =
         brepkit_math::curves::Circle3D::with_axes(c1_center, a_cone, r_c1, ref_dir, perp_y)?;
@@ -4801,7 +4749,6 @@ pub fn cone_cone_coaxial_chamfer(
         brepkit_math::vec::Vec2::new(u_end - u_start, 0.0),
     )?);
 
-    // Cross-sections.
     let p1_at = |u: f64| contact1_circle.evaluate(u);
     let p2_at = |u: f64| contact2_circle.evaluate(u);
     let section_at = |u: f64, t: f64| {
@@ -5038,7 +4985,6 @@ pub fn cylinder_cylinder_chamfer(
         brepkit_math::vec::Vec2::new(0.0, v2_end - v2_start),
     )?);
 
-    // Cross-sections at spine endpoints.
     let chamfer_radius = (c1_start - c2_start).length() * 0.5;
     let section_start = CircSection {
         p1: c1_start,

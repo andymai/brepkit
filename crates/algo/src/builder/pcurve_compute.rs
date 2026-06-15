@@ -57,7 +57,6 @@ pub fn compute_pcurve_on_surface(
         // Curved edge on plane: sample and project via PlaneFrame below.
     }
 
-    // Sample along the 3D curve and project to UV.
     // For plane surfaces with curved edges, use PlaneFrame for projection.
     let uv_pts = if let FaceSurface::Plane { normal, .. } = surface {
         let owned;
@@ -188,7 +187,6 @@ pub(super) fn sample_edge_to_uv(
         pts_3d.push(p);
     }
 
-    // Project each to UV.
     let mut uv_pts: Vec<Point2> = pts_3d
         .iter()
         .map(|&p| {
@@ -374,14 +372,12 @@ fn fit_nurbs2d_through_points(pts: &[Point2]) -> Curve2D {
         Curve2D::Line(make_line2d_safe(p0, dir))
     };
 
-    // Lift to 3D for interpolation.
     let pts_3d: Vec<Point3> = pts.iter().map(|p| Point3::new(p.x(), p.y(), 0.0)).collect();
     let degree = 3.min(pts_3d.len() - 1);
     let Ok(nurbs_3d) = brepkit_math::nurbs::fitting::interpolate(&pts_3d, degree) else {
         return fallback();
     };
 
-    // Extract 2D control points from the 3D curve.
     let cp_2d: Vec<Point2> = nurbs_3d
         .control_points()
         .iter()

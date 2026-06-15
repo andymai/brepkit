@@ -88,7 +88,6 @@ fn check_vertex_face_pairs(
         let vtol = vertex.tolerance();
 
         for (face_idx, &fid) in faces.iter().enumerate() {
-            // Skip if vertex is already on this face's boundary
             if face_edge_verts[face_idx].contains(&resolved_vid) {
                 continue;
             }
@@ -121,7 +120,6 @@ fn check_vertex_face_pairs(
                     }
                 }
                 _ => {
-                    // Parametric surface: project and evaluate
                     if let Some((u, v)) = surface.project_point(pos) {
                         if let Some(surf_pt) = surface.evaluate(u, v) {
                             let dist = (pos - surf_pt).length();

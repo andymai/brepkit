@@ -162,14 +162,12 @@ impl Builder {
 
     /// Phase 1: map edges to split images and build sub-faces.
     fn fill_images(&mut self) {
-        // Step 1: edge images
         let edge_images = fill_images::fill_edge_images(&self.arena);
         log::debug!(
             "Builder: {} original edges mapped to split images",
             edge_images.len()
         );
 
-        // Step 2: face images (sub-faces)
         self.sub_faces = fill_images_faces::fill_images_faces(
             &mut self.topo,
             &self.arena,
@@ -244,14 +242,11 @@ impl Builder {
                 continue;
             }
 
-            // Determine the opposing solid
             let opposing_solid = match sf.rank {
                 Rank::A => self.solid_b,
                 Rank::B => self.solid_a,
             };
 
-            // Use pre-computed interior point if available (from face splitter),
-            // otherwise sample from face geometry.
             let sample = if let Some(pt) = sf.interior_point {
                 Ok(pt)
             } else {
@@ -368,8 +363,6 @@ fn sample_face_interior(
         }
     }
 
-    // Compute face bounding box diagonal for size-relative offset.
-    // Sample all edge endpoints to estimate face extent.
     let mut min_pt = Point3::new(f64::MAX, f64::MAX, f64::MAX);
     let mut max_pt = Point3::new(f64::MIN, f64::MIN, f64::MIN);
     let mut point_count = 0_usize;
@@ -397,7 +390,6 @@ fn sample_face_interior(
         )));
     }
     let diag = (max_pt - min_pt).length();
-    // Use 1e-4 of the diagonal, but at least the linear tolerance
     let offset_scale = (diag * 1e-4).max(tol.linear);
 
     // Take the longest boundary edge and evaluate at its midpoint. The
@@ -425,13 +417,11 @@ fn sample_face_interior(
         .curve()
         .evaluate_with_endpoints(t_mid, start_pos, end_pos);
 
-    // Get the edge tangent and face normal at the midpoint
     let tangent = edge
         .curve()
         .tangent_with_endpoints(t_mid, start_pos, end_pos);
     let surface = face.surface();
 
-    // Use the surface normal at the midpoint (project first to get UV)
     let face_normal = if let Some((u, v)) = surface.project_point(mid_pt) {
         surface.normal(u, v)
     } else {

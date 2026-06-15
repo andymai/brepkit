@@ -24,7 +24,6 @@ fn make_box(topo: &mut Topology, min: [f64; 3], max: [f64; 3]) -> brepkit_topolo
     let [x0, y0, z0] = min;
     let [x1, y1, z1] = max;
 
-    // 8 vertices
     let v = [
         topo.add_vertex(Vertex::new(Point3::new(x0, y0, z0), 1e-7)),
         topo.add_vertex(Vertex::new(Point3::new(x1, y0, z0), 1e-7)),
@@ -219,7 +218,6 @@ fn gfa_boolean_fuse_two_boxes() {
     match &result {
         Ok(solid_id) => {
             eprintln!("GFA fuse succeeded: solid {:?}", solid_id);
-            // Check that the result solid exists and has faces
             let faces = brepkit_topology::explorer::solid_faces(&topo, *solid_id).unwrap();
             eprintln!("  Result has {} faces", faces.len());
             assert!(!faces.is_empty(), "fuse result should have faces");
@@ -321,7 +319,6 @@ fn force_interf_ee_adjacent_boxes_creates_common_blocks() {
     let tol = Tolerance::default();
     let mut arena = GfaArena::new();
 
-    // Run PaveFiller intersection phases
     {
         let mut filler = PaveFiller::with_tolerance(&mut topo, a, b, tol);
         filler.perform(&mut arena).unwrap();
@@ -640,7 +637,6 @@ fn debug_overlapping_boxes_section_pbs() {
     crate::pave_filler::make_blocks::perform(&mut arena).unwrap();
     crate::pave_filler::force_interf_ee::perform(&topo, tol, &mut arena).unwrap();
 
-    // Count section PBs
     let section_pb_count: usize = arena.curves.iter().map(|c| c.pave_blocks.len()).sum();
     let boundary_pb_count: usize = arena.edge_pave_blocks.values().map(Vec::len).sum();
     let cb_count = arena.common_blocks.iter().count();
@@ -650,7 +646,6 @@ fn debug_overlapping_boxes_section_pbs() {
     );
     eprintln!("curves: {}", arena.curves.len());
 
-    // Run link_existing
     crate::pave_filler::link_existing::perform(&topo, tol, &mut arena).unwrap();
     let cb_count_after = arena.common_blocks.iter().count();
     eprintln!("CBs after link_existing: {cb_count_after}");
@@ -664,10 +659,8 @@ fn debug_overlapping_boxes_section_pbs() {
         .count();
     eprintln!("CBs with split_edge: {cbs_with_split}/{cb_count_after}");
 
-    // Dump VV merge map
     eprintln!("VV merges: {}", arena.same_domain_vertices.len());
 
-    // Dump section PB endpoints and check if they match boundary PBs
     let scale = 1.0 / tol.linear;
     let qpt = |p: Point3| -> (i64, i64, i64) {
         (
@@ -677,7 +670,6 @@ fn debug_overlapping_boxes_section_pbs() {
         )
     };
 
-    // Build boundary PB position index
     #[allow(clippy::type_complexity)]
     let mut boundary_positions: std::collections::HashSet<((i64, i64, i64), (i64, i64, i64))> =
         std::collections::HashSet::new();
@@ -696,7 +688,6 @@ fn debug_overlapping_boxes_section_pbs() {
         }
     }
 
-    // Check each section PB
     let mut matched = 0;
     let mut unmatched = 0;
     for curve in &arena.curves {
@@ -775,7 +766,6 @@ fn trace_builder_overlapping_box_fuse() {
     eprintln!("sub_faces: {}", sub_faces.len());
     eprintln!("sd_pairs: {}", sd_pairs.len());
 
-    // Dump each sub-face: rank, classification, surface type
     for (i, sf) in sub_faces.iter().enumerate() {
         let surface_desc = match topo
             .face(sf.face_id)
@@ -807,7 +797,6 @@ fn trace_builder_overlapping_box_fuse() {
         );
     }
 
-    // Dump SD pairs
     for (i, pair) in sd_pairs.iter().enumerate() {
         eprintln!(
             "  SD[{i}]: A={} B={} same_ori={} contained={}",
@@ -856,7 +845,6 @@ fn trace_builder_overlapping_box_fuse() {
         }
     }
 
-    // Simulate BOP selection
     let selected = crate::bop::select_faces(sub_faces, crate::bop::BooleanOp::Fuse, sd_pairs, &[]);
     eprintln!("BOP selected: {} faces", selected.len());
     for (i, sf) in selected.iter().enumerate() {
@@ -944,7 +932,6 @@ fn trace_builder_z_axis_overlap() {
     let mut arena = crate::ds::GfaArena::new();
     crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
 
-    // Dump FF interferences
     eprintln!(
         "\n=== Z-axis overlap: {} FF interferences ===",
         arena.interference.ff.len()
@@ -984,7 +971,6 @@ fn trace_builder_z_axis_overlap() {
                     _ => "Other".to_string(),
                 })
                 .unwrap_or_default();
-            // Dump PB endpoints
             for &pb_id in &curve.pave_blocks {
                 if let Some(pb) = arena.pave_blocks.get(pb_id) {
                     let sv = arena.resolve_vertex(pb.start.vertex);
@@ -1106,7 +1092,6 @@ fn gfa_fuse_z_axis_overlapping_manifold_boxes() {
     }
 
     let non_manifold = edge_face_count.values().filter(|&&n| n != 2).count();
-    // Count unique vertices
     let mut verts: std::collections::HashSet<brepkit_topology::vertex::VertexId> =
         std::collections::HashSet::new();
     for &fid in shell.faces() {
@@ -1124,7 +1109,6 @@ fn gfa_fuse_z_axis_overlapping_manifold_boxes() {
     let euler = v as i64 - e as i64 + face_count as i64;
     eprintln!("{e} edges, {v} verts, euler={euler}, {non_manifold} non-manifold");
 
-    // Dump non-manifold edge details
     for (&eid, &count) in &edge_face_count {
         if count != 2 {
             if let Ok(e) = topo.edge(eid) {

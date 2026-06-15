@@ -45,12 +45,10 @@ pub fn perform(arena: &mut GfaArena) -> Result<(), AlgoError> {
                     (pb.original_edge, pb.start, pb.end, pb.extra_paves.clone())
                 };
 
-                // Sort and deduplicate extra paves by parameter
                 let mut sorted_paves = extra_paves;
                 sorted_paves.sort_by(|a, b| a.parameter.total_cmp(&b.parameter));
                 sorted_paves.dedup_by(|a, b| (a.parameter - b.parameter).abs() < 1e-10);
 
-                // Create child pave blocks for each segment
                 let mut prev_pave = start;
                 let mut children = Vec::new();
 
@@ -68,12 +66,10 @@ pub fn perform(arena: &mut GfaArena) -> Result<(), AlgoError> {
                     prev_pave = *pave;
                 }
 
-                // Final segment from last split point to end
                 let last_child = crate::ds::PaveBlock::new(original_edge, prev_pave, end);
                 let last_id = arena.pave_blocks.alloc(last_child);
                 children.push(last_id);
 
-                // Record children on the parent
                 if let Some(pb) = arena.pave_blocks.get_mut(pb_id) {
                     pb.children.clone_from(&children);
                 }

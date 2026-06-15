@@ -44,7 +44,6 @@ pub fn perform(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
-    // AABB pre-filter: skip if solids are disjoint
     let bbox_a = crate::classifier::compute_solid_bbox(topo, solid_a)?;
     let bbox_b = crate::classifier::compute_solid_bbox(topo, solid_b)?;
     if !bbox_a
@@ -65,10 +64,7 @@ pub fn perform(
     let face_boundary_edges_b = collect_face_boundary_edges(topo, &faces_b)?;
     let face_boundary_edges_a = collect_face_boundary_edges(topo, &faces_a)?;
 
-    // Edges of A against faces of B
     check_edge_face_pairs(topo, &edges_a, &faces_b, &face_boundary_edges_b, tol, arena)?;
-
-    // Edges of B against faces of A
     check_edge_face_pairs(topo, &edges_b, &faces_a, &face_boundary_edges_a, tol, arena)?;
 
     Ok(())
@@ -261,7 +257,6 @@ fn check_edge_face_pairs(
         };
 
         for (face_idx, &fid) in faces.iter().enumerate() {
-            // Skip if edge is already a boundary edge of this face
             if face_boundary_edges[face_idx].contains(&eid) {
                 continue;
             }
@@ -311,17 +306,14 @@ fn check_edge_face_pairs(
                     continue;
                 }
 
-                // Check if an existing vertex is at this point
                 let existing = find_nearby_vertex(topo, arena, pt, tol);
 
                 let vertex_id = if let Some(vid) = existing {
                     vid
                 } else {
-                    // No existing vertex near this point — create one.
                     topo.add_vertex(Vertex::new(pt, tol.linear))
                 };
 
-                // Add extra pave to the edge
                 let pave = Pave::new(vertex_id, t);
                 add_pave_to_edge(arena, eid, pave);
 
@@ -332,7 +324,6 @@ fn check_edge_face_pairs(
                     parameter: Some(t),
                 });
 
-                // Add vertex to face info
                 arena.face_info_mut(fid).vertices_in.insert(vertex_id);
 
                 log::debug!("EF: edge {eid:?} crosses face {fid:?} at t={t:.6}",);
@@ -356,7 +347,6 @@ fn find_edge_plane_crossings(
     tol: Tolerance,
 ) -> Vec<(f64, Point3)> {
     if matches!(curve, EdgeCurve::Line) {
-        // Algebraic: line-plane intersection
         let dir = end_pos - start_pos;
         let denom = dir.dot(normal);
 
@@ -381,7 +371,6 @@ fn find_edge_plane_crossings(
         let t = s_clamped.mul_add(t1 - t0, t0);
         vec![(t, pt)]
     } else {
-        // General case: sample and find sign changes
         find_crossings_by_sampling(
             curve,
             start_pos,
@@ -404,7 +393,6 @@ fn find_edge_surface_crossings(
     surface: &FaceSurface,
     tol: Tolerance,
 ) -> Vec<(f64, Point3)> {
-    // Sample and find places where distance to surface is minimal
     let n = N_SAMPLES;
     let mut crossings = Vec::new();
     let mut prev_dist = f64::MAX;
@@ -415,20 +403,15 @@ fn find_edge_surface_crossings(
         let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
         let dist = distance_to_surface(pt, surface);
 
-        // Check if we've found a close approach or sign change in
-        // the signed distance proxy
         if i > 0 && dist < tol.linear {
-            // Already within tolerance — record
             let is_dup = crossings
                 .iter()
                 .any(|&(ct, _): &(f64, Point3)| (t - ct).abs() < (t1 - t0) / (n as f64) * 2.0);
             if !is_dup {
-                // Refine with bisection
                 let refined = refine_crossing(curve, start_pos, end_pos, prev_t, t, surface, tol);
                 crossings.push(refined);
             }
         } else if i > 0 && prev_dist > tol.linear && dist > tol.linear {
-            // Check for a minimum between these two samples
             let mid_t = f64::midpoint(prev_t, t);
             let mid_pt = curve.evaluate_with_endpoints(mid_t, start_pos, end_pos);
             let mid_dist = distance_to_surface(mid_pt, surface);
@@ -508,9 +491,7 @@ fn find_crossings_by_sampling(
         let (t_a, sd_a) = samples[i];
         let (t_b, sd_b) = samples[i + 1];
 
-        // Sign change indicates a crossing
         if sd_a * sd_b < 0.0 {
-            // Bisect to find exact crossing
             let mut lo = t_a;
             let mut hi = t_b;
             let mut sd_lo = sd_a;

@@ -18,8 +18,6 @@ use crate::BlendError;
 /// Tolerance for geometric checks.
 const TOL: f64 = 1e-6;
 
-// ── Types ──────────────────────────────────────────────────────────
-
 /// Input data for building a spherical corner patch at a vertex.
 pub struct VertexContactData {
     /// Position of the vertex in 3D space.
@@ -43,8 +41,6 @@ pub struct SphericalCornerResult {
     /// The 3 boundary arcs (great-circle arcs on the sphere).
     pub boundary_curves: Vec<NurbsCurve>,
 }
-
-// ── Sphere center ──────────────────────────────────────────────────
 
 /// Compute the sphere center and actual sphere radius from vertex
 /// position, face normals, and the fillet radius.
@@ -77,7 +73,6 @@ fn compute_sphere_center(data: &VertexContactData) -> Result<(Point3, f64), Blen
         data.vertex_pos - offset
     };
 
-    // Derive the actual sphere radius from the first contact point.
     if data.contact_points.is_empty() {
         return Err(BlendError::CornerFailure {
             vertex: data.vertex_id,
@@ -103,8 +98,6 @@ fn compute_sphere_center(data: &VertexContactData) -> Result<(Point3, f64), Blen
 
     Ok((center, sphere_radius))
 }
-
-// ── Great-circle arc ───────────────────────────────────────────────
 
 /// Build a rational quadratic NURBS curve representing a great-circle
 /// arc on the sphere from `q_start` to `q_end` centered at `center`.
@@ -139,8 +132,6 @@ fn build_great_circle_arc(
     Ok(NurbsCurve::new(2, knots, control_points, weights)?)
 }
 
-// ── 3-edge corner ──────────────────────────────────────────────────
-
 /// Build a spherical triangle corner patch for a standard 3-edge vertex.
 ///
 /// The result is a degree-(2,2) rational NURBS surface that exactly
@@ -168,7 +159,6 @@ pub fn build_spherical_corner(
     let q2 = data.contact_points[1];
     let q3 = data.contact_points[2];
 
-    // Direction vectors from center to each contact point.
     let dir1 = (q1 - center) * (1.0 / r);
     let dir2 = (q2 - center) * (1.0 / r);
     let dir3 = (q3 - center) * (1.0 / r);
@@ -178,7 +168,6 @@ pub fn build_spherical_corner(
     let mid_q2q3 = edge_mid_cp(center, r, dir2, dir3, vid)?;
     let mid_q3q1 = edge_mid_cp(center, r, dir3, dir1, vid)?;
 
-    // Cosine of half-angle for each edge.
     let w_q1q2 = cos_half_angle(dir1, dir2);
     let w_q2q3 = cos_half_angle(dir2, dir3);
     let w_q3q1 = cos_half_angle(dir3, dir1);
@@ -192,7 +181,6 @@ pub fn build_spherical_corner(
     let apex_dir = apex_dir_raw * (1.0 / apex_dir_len);
     let apex = center + apex_dir * r;
 
-    // Apex weight: product of adjacent edge-mid weights.
     let w_apex = w_q1q2 * w_q2q3 * w_q3q1;
 
     // Build 3x3 control point grid (degree 2x2).
@@ -216,7 +204,6 @@ pub fn build_spherical_corner(
 
     let surface = NurbsSurface::new(2, 2, knots.clone(), knots, control_points, weights)?;
 
-    // Build the 3 boundary arcs.
     let arc_q1q2 = build_great_circle_arc(center, r, q1, q2, vid)?;
     let arc_q2q3 = build_great_circle_arc(center, r, q2, q3, vid)?;
     let arc_q3q1 = build_great_circle_arc(center, r, q3, q1, vid)?;
@@ -226,8 +213,6 @@ pub fn build_spherical_corner(
         boundary_curves: vec![arc_q1q2, arc_q2q3, arc_q3q1],
     })
 }
-
-// ── N-edge corner (centroid fan) ───────────────────────────────────
 
 /// Build spherical corner patches for a vertex with N > 3 edges.
 ///
@@ -336,8 +321,6 @@ fn build_triangle_on_sphere(
     })
 }
 
-// ── Helpers ────────────────────────────────────────────────────────
-
 /// Compute the tangent-intersection midpoint control point for a
 /// rational quadratic arc between two directions on the sphere.
 fn edge_mid_cp(
@@ -371,8 +354,6 @@ fn cos_half_angle(dir_a: Vec3, dir_b: Vec3) -> f64 {
     let bisector = bisector_raw * (1.0 / bisector_len);
     dir_a.dot(bisector)
 }
-
-// ── Tests ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -449,13 +430,11 @@ mod tests {
 
         let result = build_spherical_corner(&data).expect("should build corner");
 
-        // Extract the NurbsSurface from FaceSurface::Nurbs.
         let nurbs = match &result.surface {
             FaceSurface::Nurbs(s) => s,
             _ => panic!("expected Nurbs surface"),
         };
 
-        // Sample at a grid of (u, v) values and check distance to center.
         let n_samples = 5;
         for i in 0..=n_samples {
             for j in 0..=n_samples {

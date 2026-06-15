@@ -59,7 +59,6 @@ impl AdjacencyIndex {
     pub fn build_from_faces(topo: &Topology, faces: &[FaceId]) -> Result<Self, TopologyError> {
         let mut edge_faces: HashMap<EdgeId, SmallVec<[FaceId; 2]>> = HashMap::new();
 
-        // Walk all faces -> wires -> oriented edges to build edge_faces map.
         for &face_id in faces {
             let face = topo.face(face_id)?;
             // Collect all wire IDs (outer + inner) to avoid borrow issues.
@@ -77,12 +76,10 @@ impl AdjacencyIndex {
             }
         }
 
-        // Classify edges and build face neighbors.
         let mut non_manifold_edges = Vec::new();
         let mut boundary_edges = Vec::new();
         let mut face_neighbors: HashMap<FaceId, SmallVec<[FaceId; 6]>> = HashMap::new();
 
-        // Pre-populate face_neighbors with empty vecs for all faces.
         for &face_id in faces {
             face_neighbors.entry(face_id).or_default();
         }
@@ -102,7 +99,6 @@ impl AdjacencyIndex {
             }
         }
 
-        // Deduplicate neighbor lists (a face pair may share multiple edges).
         for neighbors in face_neighbors.values_mut() {
             neighbors.sort_unstable_by_key(|id| id.index());
             neighbors.dedup();
@@ -223,10 +219,8 @@ mod tests {
         let v3 = topo.add_vertex(Vertex::new(Point3::new(0.5, -1.0, 0.0), 1e-7));
         let v4 = topo.add_vertex(Vertex::new(Point3::new(0.5, 0.0, 1.0), 1e-7));
 
-        // Shared edge
         let e01 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
 
-        // Face 1: v0-v1-v2
         let e12 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
         let e20 = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
         let w1 = topo.add_wire(
@@ -249,7 +243,6 @@ mod tests {
             },
         ));
 
-        // Face 2: v0-v1-v3
         let e13 = topo.add_edge(Edge::new(v1, v3, EdgeCurve::Line));
         let e30 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
         let w2 = topo.add_wire(
@@ -272,7 +265,6 @@ mod tests {
             },
         ));
 
-        // Face 3: v0-v1-v4
         let e14 = topo.add_edge(Edge::new(v1, v4, EdgeCurve::Line));
         let e40 = topo.add_edge(Edge::new(v4, v0, EdgeCurve::Line));
         let w3 = topo.add_wire(
@@ -328,7 +320,6 @@ mod tests {
         let topo = Topology::new();
         let adj = AdjacencyIndex::build_from_faces(&topo, &[]).unwrap();
 
-        // Create a dummy edge ID that isn't in the index.
         let mut dummy: Arena<Edge> = Arena::new();
         let fake_eid = dummy.alloc(Edge::new(
             {

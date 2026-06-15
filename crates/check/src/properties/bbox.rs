@@ -20,7 +20,6 @@ pub fn bounding_box(topo: &Topology, solid: SolidId) -> Result<Aabb3, CheckError
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
-    // Collect all vertex positions
     let mut points = Vec::new();
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
@@ -35,7 +34,6 @@ pub fn bounding_box(topo: &Topology, solid: SolidId) -> Result<Aabb3, CheckError
     let mut aabb = Aabb3::try_from_points(points.iter().copied())
         .ok_or_else(|| CheckError::ClassificationFailed("solid has no vertices".into()))?;
 
-    // Expand for surface curvature
     for &fid in shell.faces() {
         if let Ok(face) = topo.face(fid) {
             expand_aabb_for_surface(&mut aabb, face.surface());

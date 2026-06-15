@@ -33,13 +33,11 @@ pub fn check_face_orientation(
         return Ok(vec![]); // Can't determine winding for degenerate polygon
     }
 
-    // Compute polygon normal via Newell's method
     let wire_normal = newell_normal(&polygon);
     if wire_normal.length() < 1e-15 {
         return Ok(vec![]); // Degenerate polygon
     }
 
-    // Get surface normal at polygon centroid
     let face = topo.face(face_id)?;
     let centroid = polygon_centroid(&polygon);
 

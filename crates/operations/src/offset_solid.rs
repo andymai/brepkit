@@ -51,7 +51,6 @@ pub fn offset_solid(
     let shell = topo.shell(solid_data.outer_shell())?;
     let face_ids: Vec<FaceId> = shell.faces().to_vec();
 
-    // Check if all faces are planar.
     let all_planar = face_ids.iter().all(|&fid| {
         topo.face(fid)
             .map(|f| matches!(f.surface(), FaceSurface::Plane { .. }))
@@ -62,7 +61,6 @@ pub fn offset_solid(
         return offset_solid_general(topo, solid, &face_ids, distance, tol);
     }
 
-    // Collect face normals and plane equations.
     let mut face_normals: std::collections::BTreeMap<usize, (Vec3, f64)> =
         std::collections::BTreeMap::new();
     let mut vertex_faces: std::collections::BTreeMap<usize, Vec<usize>> =
@@ -81,7 +79,6 @@ pub fn offset_solid(
 
         face_normals.insert(fid.index(), (normal, d));
 
-        // Track which faces each vertex belongs to.
         let wire = topo.wire(face.outer_wire())?;
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
@@ -96,7 +93,6 @@ pub fn offset_solid(
         }
     }
 
-    // Deduplicate face lists for each vertex.
     for faces in vertex_faces.values_mut() {
         faces.sort_unstable();
         faces.dedup();
@@ -147,7 +143,6 @@ pub fn offset_solid(
         }
     }
 
-    // Build offset faces using the computed vertex positions.
     let mut offset_faces: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
 
     for &fid in &face_ids {
@@ -432,7 +427,6 @@ mod tests {
     ///
     /// Sphere offset goes through tessellation path (NURBS faces).
     /// With 32 segments, expect ~5% error from tessellation approximation.
-    /// Previously used 15% tolerance — tightened to 5%.
     #[test]
     fn offset_sphere_outward() {
         let mut topo = Topology::new();

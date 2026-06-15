@@ -54,7 +54,6 @@ pub fn point_to_solid(
 ) -> Result<DistanceResult, CheckError> {
     let face_ids = collect_solid_faces(topo, solid)?;
 
-    // Build AABBs and BVH.
     let mut face_aabbs: Vec<(usize, Aabb3)> = Vec::with_capacity(face_ids.len());
     for (i, &fid) in face_ids.iter().enumerate() {
         let aabb = crate::util::face_aabb(topo, fid)?;
@@ -73,7 +72,6 @@ pub fn point_to_solid(
         da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    // Use BVH closest hint to potentially reorder.
     if let Some(closest_idx) = bvh.query_closest(point) {
         if let Some(pos) = candidates
             .iter()
@@ -182,7 +180,6 @@ pub fn solid_to_solid(
     solid_a: SolidId,
     solid_b: SolidId,
 ) -> Result<DistanceResult, CheckError> {
-    // Collect vertex positions from each solid.
     let verts_a = collect_solid_vertices(topo, solid_a)?;
     let verts_b = collect_solid_vertices(topo, solid_b)?;
 
@@ -345,7 +342,6 @@ fn collect_solid_edge_segments(
         let shell = topo.shell(sid)?;
         for &fid in shell.faces() {
             let face = topo.face(fid)?;
-            // Iterate outer wire + inner wires (holes)
             let mut wire_ids = vec![face.outer_wire()];
             wire_ids.extend(face.inner_wires().iter().copied());
             for wid in wire_ids {
@@ -485,16 +481,13 @@ fn point_to_polygon_distance(
         return None;
     }
 
-    // Project point onto plane.
     let (_, projected) = analytic::point_to_plane(point, normal, d);
 
-    // Check if projected point is inside polygon.
     if crate::util::point_in_polygon_3d(&projected, polygon, &normal) {
         let dist = (point - projected).length();
         return Some((dist, projected));
     }
 
-    // Otherwise, find closest point on polygon edges.
     let mut best_dist = f64::INFINITY;
     let mut best_pt = polygon[0];
     let n = polygon.len();

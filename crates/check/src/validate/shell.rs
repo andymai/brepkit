@@ -59,7 +59,6 @@ pub fn check_shell_connected(
         return Ok(vec![]);
     }
 
-    // Build edge -> face-index adjacency
     let mut edge_to_faces: HashMap<EdgeId, Vec<usize>> = HashMap::new();
     for (fi, &fid) in faces.iter().enumerate() {
         for eid in face_edge_ids(topo, fid)? {
@@ -67,7 +66,6 @@ pub fn check_shell_connected(
         }
     }
 
-    // BFS from face 0
     let mut visited = HashSet::new();
     let mut queue = VecDeque::new();
     visited.insert(0usize);
@@ -111,12 +109,10 @@ pub fn check_shell_orientation(
 ) -> Result<Vec<ValidationIssue>, CheckError> {
     let shell = topo.shell(shell_id)?;
 
-    // Map each edge to its (face_index, effective_forward) pairs
     let mut edge_uses: HashMap<EdgeId, Vec<(usize, bool)>> = HashMap::new();
 
     for (fi, &fid) in shell.faces().iter().enumerate() {
         let face = topo.face(fid)?;
-        // Account for face reversal
         let face_reversed = face.is_reversed();
         let wire = topo.wire(face.outer_wire())?;
         for oe in wire.edges() {

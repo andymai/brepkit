@@ -26,14 +26,12 @@ use crate::error::AlgoError;
 /// Returns [`AlgoError`] if topology lookups fail.
 #[allow(clippy::too_many_lines)]
 pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<(), AlgoError> {
-    // Collect all leaf PBs with their 3D endpoint data
     let all_edge_pbs: Vec<(EdgeId, Vec<PaveBlockId>)> = arena
         .edge_pave_blocks
         .iter()
         .map(|(&eid, pbs)| (eid, arena.collect_leaf_pave_blocks(pbs)))
         .collect();
 
-    // Flatten to (pb_id, original_edge, start_pos, end_pos)
     let mut leaf_data: Vec<(
         PaveBlockId,
         EdgeId,
@@ -64,12 +62,10 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
         for j in (i + 1)..n {
             let (pb_j, edge_j, start_j, end_j) = &leaf_data[j];
 
-            // Must be from different original edges
             if edge_i == edge_j {
                 continue;
             }
 
-            // Already in same CB
             if arena.pb_to_cb.contains_key(pb_i)
                 && arena.pb_to_cb.get(pb_i) == arena.pb_to_cb.get(pb_j)
             {
@@ -86,14 +82,12 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
                 continue;
             }
 
-            // Check curve compatibility
             let curve_i = topo.edge(*edge_i)?.curve();
             let curve_j = topo.edge(*edge_j)?.curve();
             if !curves_compatible(curve_i, curve_j, tol) {
                 continue;
             }
 
-            // Record overlap
             overlap_map.entry(*pb_i).or_default().push(*pb_j);
             overlap_map.entry(*pb_j).or_default().push(*pb_i);
         }

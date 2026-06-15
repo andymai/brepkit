@@ -166,7 +166,6 @@ pub fn split_closed_edge(
     let start_vid = edge.start();
     let curve = edge.curve().clone();
 
-    // Get the parameter domain of the curve.
     let (u0, u1) = match &curve {
         EdgeCurve::NurbsCurve(nc) => nc.domain(),
         EdgeCurve::Circle(_) => (0.0, std::f64::consts::TAU),
@@ -543,34 +542,29 @@ pub fn extrude(
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
 
-    // Validate direction is non-zero.
     if tol.approx_eq(direction.length_squared(), 0.0) {
         return Err(crate::OperationsError::InvalidInput {
             reason: "extrusion direction is zero-length".into(),
         });
     }
 
-    // Validate distance is non-zero.
     if tol.approx_eq(distance, 0.0) {
         return Err(crate::OperationsError::InvalidInput {
             reason: "extrusion distance is zero".into(),
         });
     }
 
-    // Read the input face's data.
     let face_data = topo.face(face)?;
     let mut input_surface = face_data.surface().clone();
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<WireId> = face_data.inner_wires().to_vec();
 
-    // Compute offset vector.
     let offset = Vec3::new(
         direction.x() * distance,
         direction.y() * distance,
         direction.z() * distance,
     );
 
-    // --- Process outer wire ---
     let (
         input_verts,
         input_positions,
@@ -606,7 +600,6 @@ pub fn extrude(
 
     let mut all_faces = Vec::with_capacity(n + 2 + inner_wire_ids.len() * 4);
 
-    // --- Bottom face: reversed copy of input wire ---
     // Use the (possibly-split) edges so the bottom cap shares vertices
     // with the side faces, keeping the shell manifold.
     let reversed_bottom_edges: Vec<OrientedEdge> = input_oriented
@@ -618,7 +611,6 @@ pub fn extrude(
         Wire::new(reversed_bottom_edges, true).map_err(crate::OperationsError::Topology)?;
     let bottom_wire_id = topo.add_wire(bottom_wire);
 
-    // --- Process inner wires and create inner wire data ---
     let mut bottom_inner_wire_ids = Vec::with_capacity(inner_wire_ids.len());
     let mut top_inner_wire_ids = Vec::with_capacity(inner_wire_ids.len());
 
@@ -682,7 +674,6 @@ pub fn extrude(
     ));
     all_faces.push(bottom_face);
 
-    // --- Outer side faces ---
     for i in 0..n {
         let next = (i + 1) % n;
 

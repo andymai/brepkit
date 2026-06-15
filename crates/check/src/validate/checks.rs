@@ -10,12 +10,10 @@ use brepkit_topology::wire::WireId;
 /// Identifies a specific validation check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CheckId {
-    // Vertex checks
     /// Vertex not on edge 3D curve within tolerance.
     VertexOnCurve,
     /// Vertex not on face surface within tolerance.
     VertexOnSurface,
-    // Edge checks
     /// Edge has no 3D curve representation.
     EdgeNoCurve3D,
     /// 3D curve deviates from PCurve(surface) beyond tolerance.
@@ -24,7 +22,6 @@ pub enum CheckId {
     EdgeRangeValid,
     /// Edge is degenerate (zero length).
     EdgeDegenerate,
-    // Wire checks
     /// Wire contains no edges.
     WireEmpty,
     /// Consecutive edges not connected at shared vertices.
@@ -35,12 +32,10 @@ pub enum CheckId {
     WireRedundantEdge,
     /// Wire has a self-intersection (non-adjacent edges cross).
     WireSelfIntersection,
-    // Face checks
     /// Face has no surface.
     FaceNoSurface,
     /// Face orientation inconsistent with wire winding.
     FaceOrientationConsistency,
-    // Shell checks
     /// Shell contains no faces.
     ShellEmpty,
     /// Shell faces not all connected via shared edges.
@@ -49,7 +44,6 @@ pub enum CheckId {
     ShellClosed,
     /// Adjacent faces use shared edge in same direction (orientation inconsistent).
     ShellOrientationConsistent,
-    // Solid checks
     /// Euler characteristic V-E+F != 2 for genus-0 solid.
     SolidEulerCharacteristic,
     /// Same face ID appears in multiple shells.

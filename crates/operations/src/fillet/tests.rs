@@ -103,8 +103,6 @@ fn fillet_no_edges_error() {
     assert!(fillet(&mut topo, cube, &[], 0.1).is_err());
 }
 
-// ── Variable-radius fillet tests ────────────────
-
 #[test]
 fn radius_law_constant() {
     let law = FilletRadiusLaw::Constant(0.5);
@@ -213,8 +211,6 @@ fn fillet_has_positive_volume() {
         "filleted cube should have significant volume, got {vol}"
     );
 }
-
-// ── Rolling-ball fillet tests ──────────────────────────
 
 #[test]
 fn rolling_ball_fillet_single_edge() {
@@ -450,8 +446,6 @@ fn rolling_ball_fillet_error_cases() {
     assert!(fillet_rolling_ball(&mut topo, cube, &[edges[0]], -0.1).is_err());
     assert!(fillet_rolling_ball(&mut topo, cube, &[], 0.1).is_err());
 }
-
-// ── Vertex blend tests ───────────────────────────────
 
 #[test]
 fn vertex_blend_all_edges_box() {
@@ -1200,12 +1194,10 @@ fn fillet_on_fillet_box() {
     let solid = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
     let edges = solid_edge_ids(&topo, solid);
 
-    // First fillet: all 12 edges with small radius
     let result1 = fillet_rolling_ball(&mut topo, solid, &edges, 0.1).unwrap();
     let vol1 = crate::measure::solid_volume(&topo, result1, 0.01).unwrap();
     assert!(vol1 > 0.0, "first fillet should produce positive volume");
 
-    // Get edges from the filleted solid for second fillet
     let edges2 = solid_edge_ids(&topo, result1);
     assert!(
         !edges2.is_empty(),

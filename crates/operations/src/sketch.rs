@@ -115,7 +115,6 @@ impl Sketch {
     ) -> Result<SolveResult, SketchError> {
         let mut sys = GcsSystem::new();
 
-        // Add points
         let point_ids: Vec<PointId> = self
             .points
             .iter()
@@ -146,7 +145,6 @@ impl Sketch {
             Ok(lid)
         };
 
-        // Convert constraints
         for c in &self.constraints {
             match c {
                 Constraint::Coincident(a, b) => {
@@ -189,7 +187,6 @@ impl Sketch {
 
         let result = sys.solve(max_iterations, tolerance)?;
 
-        // Write solved positions back
         for (i, pid) in point_ids.iter().enumerate() {
             if let Some(data) = sys.point(*pid) {
                 self.points[i].x = data.x;

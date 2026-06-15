@@ -69,7 +69,6 @@ pub fn fix_shape(
     let mut ctx = HealContext::new();
     let result = solid::fix_solid(topo, solid_id, &mut ctx, config)?;
 
-    // Apply all accumulated replacements.
     let new_solid = ctx.reshape.apply(topo, solid_id)?;
 
     Ok((new_solid, result))

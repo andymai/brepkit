@@ -88,7 +88,6 @@ pub fn transform_solid(
                 let ref_point = topo.vertex(ref_vid)?.point();
                 let new_d = new_normal.dot(Vec3::new(ref_point.x(), ref_point.y(), ref_point.z()));
 
-                // Now mutate the face.
                 let face_mut = topo.face_mut(fid)?;
                 face_mut.set_surface(FaceSurface::Plane {
                     normal: new_normal,
@@ -920,8 +919,6 @@ mod tests {
         assert!(has_neg_z, "should have -Z normal after Z rotation");
     }
 
-    // ── Analytic surface transform helpers ───────────────────────────────────
-
     /// Build a minimal solid containing a single face with the given surface.
     ///
     /// The wire is a unit square in XY; only the face surface type varies.
@@ -964,8 +961,6 @@ mod tests {
         let shell_id = topo.add_shell(shell);
         topo.add_solid(Solid::new(shell_id, vec![]))
     }
-
-    // ── Cylinder surface transform ────────────────────────────────────────────
 
     #[test]
     fn translate_cylinder_face_updates_origin() {
@@ -1052,8 +1047,6 @@ mod tests {
         assert!(found, "cylinder face not found after rotation");
     }
 
-    // ── Cone surface transform ────────────────────────────────────────────────
-
     #[test]
     fn translate_cone_face_updates_apex() {
         use brepkit_math::surfaces::ConicalSurface;
@@ -1101,8 +1094,6 @@ mod tests {
         assert!(found, "cone face not found after transform");
     }
 
-    // ── Sphere surface transform ──────────────────────────────────────────────
-
     #[test]
     fn translate_sphere_face_updates_center() {
         use brepkit_math::surfaces::SphericalSurface;
@@ -1142,8 +1133,6 @@ mod tests {
         }
         assert!(found, "sphere face not found after transform");
     }
-
-    // ── Torus surface transform ───────────────────────────────────────────────
 
     #[test]
     fn translate_torus_face_updates_center() {
@@ -1188,8 +1177,6 @@ mod tests {
         }
         assert!(found, "torus face not found after transform");
     }
-
-    // ── transform_direction degenerate case ───────────────────────────────────
 
     #[test]
     fn transform_direction_zero_vector_is_error() {

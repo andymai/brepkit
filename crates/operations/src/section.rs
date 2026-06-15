@@ -70,11 +70,9 @@ pub fn section(
 ) -> Result<Section, crate::OperationsError> {
     let tol = Tolerance::new();
 
-    // Normalize the cutting plane normal.
     let normal = plane_normal.normalize()?;
     let d = dot_normal_point(normal, plane_point);
 
-    // Collect all intersection segments from all shells (outer + inner).
     let solid_data = topo.solid(solid)?;
     let all_shell_ids: Vec<_> = std::iter::once(solid_data.outer_shell())
         .chain(solid_data.inner_shells().iter().copied())
@@ -106,7 +104,6 @@ pub fn section(
                 }
             }
             FaceSurface::Nurbs(nurbs) => {
-                // Use surface-plane intersection to find crossing points.
                 let intersection_curves =
                     brepkit_math::nurbs::intersection::intersect_plane_nurbs(nurbs, normal, d, 50)?;
                 for curve in &intersection_curves {
@@ -159,7 +156,6 @@ pub fn section(
         return Ok(Section { faces: Vec::new() });
     }
 
-    // Assemble segments into closed wires.
     let mut wires = assemble_wires(topo, &segments, normal, d, tol)?;
 
     // Fallback: if crossing-based segments didn't form closed wires,
@@ -333,7 +329,6 @@ fn extract_coplanar_boundary(
     // floating-point precision differences across platforms (e.g. WASM).
     let coplanar_tol = tol.linear * 100.0;
 
-    // Identify coplanar face indices.
     let mut coplanar_faces = Vec::new();
     for &fid in face_ids {
         let verts = face_polygon(topo, fid)?;
@@ -369,7 +364,6 @@ fn extract_coplanar_boundary(
         if qa <= qb { (qa, qb) } else { (qb, qa) }
     };
 
-    // Count edge occurrences and store the actual points.
     let mut edge_counts: HashMap<EdgeKey, (Point3, Point3, usize)> = HashMap::new();
 
     for &fid in &coplanar_faces {
@@ -414,7 +408,6 @@ fn intersect_planar_face_with_plane(
         return None;
     }
 
-    // Classify each vertex relative to the cutting plane.
     let dists: Vec<f64> = verts
         .iter()
         .map(|v| dot_normal_point(cut_normal, *v) - cut_d)
@@ -428,7 +421,6 @@ fn intersect_planar_face_with_plane(
         return None;
     }
 
-    // Collect intersection points where edges cross the plane.
     let mut crossings = Vec::new();
 
     for i in 0..n {
@@ -436,7 +428,6 @@ fn intersect_planar_face_with_plane(
         let di = dists[i];
         let dj = dists[j];
 
-        // Check if vertex is on the plane.
         if di.abs() < tol.linear {
             crossings.push(verts[i]);
             continue;
@@ -456,7 +447,6 @@ fn intersect_planar_face_with_plane(
         }
     }
 
-    // Deduplicate nearby crossings.
     let mut unique = Vec::new();
     for p in &crossings {
         if !unique
@@ -489,7 +479,6 @@ fn assemble_wires(
         return Ok(vec![]);
     }
 
-    // Convert segments to a mutable list for chaining.
     let mut remaining: Vec<(Point3, Point3)> = segments.to_vec();
     let mut wires = Vec::new();
 
@@ -504,18 +493,15 @@ fn assemble_wires(
     let chain_tol = tol.linear * 1000.0;
 
     while !remaining.is_empty() {
-        // Start a new chain with the first remaining segment.
         let first = remaining.remove(0);
         let mut chain: Vec<Point3> = vec![first.0, first.1];
 
-        // Iteratively find the closest segment that connects to the chain end.
         let mut changed = true;
         while changed {
             changed = false;
             let chain_end = chain[chain.len() - 1];
             let threshold_sq = chain_tol * chain_tol;
 
-            // Find the closest matching segment endpoint.
             let mut best_idx = None;
             let mut best_dist = threshold_sq;
             let mut best_forward = true;
@@ -544,7 +530,6 @@ fn assemble_wires(
             }
         }
 
-        // Check if the chain forms a closed loop.
         if chain.len() < 3 {
             continue;
         }
@@ -554,16 +539,13 @@ fn assemble_wires(
         let closed = (start - end).length_squared() < chain_tol * chain_tol;
 
         if !closed {
-            // Not a closed wire — skip (partial section).
             continue;
         }
 
-        // Remove the duplicate closing point if present.
         if chain.len() > 3 {
             chain.pop();
         }
 
-        // Build topology: vertices, edges, wire.
         let n = chain.len();
         let vert_ids: Vec<_> = chain
             .iter()

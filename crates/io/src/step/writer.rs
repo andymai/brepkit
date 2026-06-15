@@ -36,18 +36,15 @@ pub fn write_step(topo: &Topology, solids: &[SolidId]) -> Result<String, IoError
 
     let mut ctx = StepWriteContext::new();
 
-    // Write product structure and geometric context.
     let repr_context_id = ctx.write_geometric_context();
     let product_ids = ctx.write_product_structure();
 
-    // Write each solid.
     let mut brep_ids = Vec::new();
     for &solid_id in solids {
         let brep_id = ctx.write_solid(topo, solid_id)?;
         brep_ids.push(brep_id);
     }
 
-    // Write shape representation containing all solids.
     let items: Vec<String> = brep_ids.iter().map(|id| format!("#{id}")).collect();
     let shape_repr_id = ctx.next_id();
     ctx.write_entity(
@@ -60,7 +57,6 @@ pub fn write_step(topo: &Topology, solids: &[SolidId]) -> Result<String, IoError
         ),
     );
 
-    // Link shape representation to product definition.
     let prod_def_shape_id = ctx.next_id();
     ctx.write_entity(
         prod_def_shape_id,
@@ -825,12 +821,10 @@ mod tests {
 
         let step_str = write_step(&topo, &[solid]).unwrap();
 
-        // Verify CYLINDRICAL_SURFACE entity is present.
         assert!(
             step_str.contains("CYLINDRICAL_SURFACE"),
             "STEP export should contain CYLINDRICAL_SURFACE entity"
         );
-        // Verify the file is structurally valid.
         assert!(step_str.contains("MANIFOLD_SOLID_BREP"));
     }
 
@@ -867,7 +861,6 @@ mod tests {
 
         let step_str = write_step(&topo, &[solid]).unwrap();
 
-        // Every CIRCLE entity line should end with ");".
         for line in step_str.lines() {
             if line.contains("= CIRCLE(") {
                 assert!(

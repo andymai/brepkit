@@ -36,7 +36,6 @@ pub fn convert_to_elementary(
 
     let mut converted = 0;
 
-    // Snapshot surfaces.
     let surfaces: Vec<(FaceId, FaceSurface)> = face_ids
         .iter()
         .map(|&fid| topo.face(fid).map(|f| (fid, f.surface().clone())))

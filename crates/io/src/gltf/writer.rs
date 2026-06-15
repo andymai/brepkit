@@ -110,7 +110,6 @@ pub fn write_glb(
         bin_buffer.push(0);
     }
 
-    // Build JSON
     let json = format!(
         r#"{{"asset":{{"version":"2.0","generator":"brepkit"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1}},"indices":2}}]}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":{vertex_count},"type":"VEC3","min":[{min0},{min1},{min2}],"max":[{max0},{max1},{max2}]}},{{"bufferView":1,"componentType":5126,"count":{vertex_count},"type":"VEC3"}},{{"bufferView":2,"componentType":5125,"count":{index_count},"type":"SCALAR"}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":{pos_bytes}}},{{"buffer":0,"byteOffset":{norm_offset},"byteLength":{norm_bytes}}},{{"buffer":0,"byteOffset":{idx_offset},"byteLength":{idx_bytes}}}],"buffers":[{{"byteLength":{buf_len}}}]}}"#,
         vertex_count = vertex_count,
@@ -140,7 +139,6 @@ pub fn write_glb(
 
     let mut glb = Vec::with_capacity(total_len);
 
-    // Header
     glb.write_all(&0x4654_6C67_u32.to_le_bytes()).ok(); // magic: "glTF"
     glb.write_all(&2_u32.to_le_bytes()).ok(); // version: 2
     #[allow(clippy::cast_possible_truncation)]
@@ -204,7 +202,6 @@ mod tests {
         let json_type = u32::from_le_bytes([glb[16], glb[17], glb[18], glb[19]]);
         assert_eq!(json_type, 0x4E4F_534A); // "JSON"
 
-        // JSON content should contain "asset" and "version"
         let json_str = std::str::from_utf8(&glb[20..20 + json_len]).unwrap();
         assert!(json_str.contains("\"version\":\"2.0\""));
         assert!(json_str.contains("\"generator\":\"brepkit\""));
@@ -229,7 +226,6 @@ mod tests {
 
         let glb = write_glb(&topo, &[solid], 0.1).unwrap();
 
-        // Total length should be 4-byte aligned
         assert_eq!(glb.len() % 4, 0, "GLB should be 4-byte aligned");
     }
 }

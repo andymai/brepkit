@@ -31,7 +31,6 @@ pub fn fix_face(
 ) -> Result<FixResult, HealError> {
     let mut result = FixResult::ok();
 
-    // 1. Fix all wires in this face (outer + inner).
     let face = topo.face(face_id)?;
     let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
         .chain(face.inner_wires().iter().copied())
@@ -88,19 +87,16 @@ pub fn fix_face(
         }
     }
 
-    // 3. Fix wire orientation relative to the face normal.
     if config.fix_wire_orientation != FixMode::Off {
         let r = fix_wire_orientation(topo, face_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 3. Small area check.
     if config.fix_small_area != FixMode::Off {
         let r = fix_small_area(topo, face_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 4. Duplicate face detection stub.
     if config.fix_duplicate_faces != FixMode::Off {
         let r = fix_duplicate_faces(ctx, config);
         result.merge(&r);
@@ -108,8 +104,6 @@ pub fn fix_face(
 
     Ok(result)
 }
-
-// ── Fix implementations ─────────────────────────────────────────────────
 
 /// Fix wire orientation: outer wire should be CCW when viewed from the
 /// surface normal.
@@ -130,14 +124,12 @@ fn fix_wire_orientation(
     let surface = face.surface().clone();
     let outer_wire_id = face.outer_wire();
 
-    // Compute the face centroid from outer wire vertices.
     let wire = topo.wire(outer_wire_id)?;
     let edges = wire.edges();
     if edges.is_empty() {
         return Ok(FixResult::ok());
     }
 
-    // Collect vertex positions from the outer wire.
     let mut positions: Vec<Point3> = Vec::new();
     for oe in edges {
         let edge = topo.edge(oe.edge())?;
@@ -149,7 +141,6 @@ fn fix_wire_orientation(
         return Ok(FixResult::ok());
     }
 
-    // Compute face normal at a representative point.
     let face_normal = match &surface {
         FaceSurface::Plane { normal, .. } => *normal,
         _ => {
@@ -160,7 +151,6 @@ fn fix_wire_orientation(
         }
     };
 
-    // Compute signed area of the wire polygon projected onto the normal.
     let signed_area = projected_signed_area(&positions, &face_normal);
 
     // If signed_area < 0 the wire is CW (wrong orientation).
@@ -174,8 +164,6 @@ fn fix_wire_orientation(
         return Ok(FixResult::ok());
     }
 
-    // Fix: for planar faces, flip the normal.
-    // For non-planar faces, toggle the reversed flag.
     if let FaceSurface::Plane { normal, d } = &surface {
         let flipped_normal = -*normal;
         let flipped_d = -*d;
@@ -185,7 +173,6 @@ fn fix_wire_orientation(
             d: flipped_d,
         });
     } else {
-        // For analytic/NURBS surfaces, toggle the reversed flag.
         let face_data = topo.face(face_id)?;
         let was_reversed = face_data.is_reversed();
         let face_mut = topo.face_mut(face_id)?;
@@ -235,8 +222,6 @@ fn fix_duplicate_faces(ctx: &mut HealContext, config: &FixConfig) -> FixResult {
     ctx.warn("Duplicate face fix: not yet implemented (TODO)".to_string());
     FixResult::ok()
 }
-
-// ── Geometry helpers ────────────────────────────────────────────────────
 
 /// Compute the normal of a polygon via Newell's method.
 ///

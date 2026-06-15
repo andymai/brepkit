@@ -74,7 +74,6 @@ mod tests {
     fn compsolid_in_arena() {
         let mut topo = Topology::new();
 
-        // Create two minimal solids (just for ID purposes)
         let _v = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
 
         let cs = CompSolid::new(vec![], vec![]);

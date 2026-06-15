@@ -66,7 +66,6 @@ impl QrResult {
                 }
             }
 
-            // Swap columns if needed
             if best_col != step {
                 for i in 0..m {
                     data.swap(i * n + step, i * n + best_col);
@@ -210,7 +209,6 @@ impl QrResult {
             z[i] = s / rii;
         }
 
-        // Unpermute
         let mut x = vec![0.0; self.n];
         for (i, &pi) in self.perm.iter().enumerate() {
             x[pi] = z[i];

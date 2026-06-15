@@ -40,9 +40,7 @@ const MAX_INVALID_FRACTION: f64 = 0.5;
 /// by more than `tolerance * DISTANCE_TOLERANCE_FACTOR` are flagged.
 const DISTANCE_TOLERANCE_FACTOR: f64 = 10.0;
 
-/// Relative tolerance for the fallback distance check. Tightened from
-/// 0.15 to 0.02 — the SSI-based primary path handles the cases that
-/// formerly needed the loose 15% tolerance.
+/// Relative tolerance for the fallback distance check.
 const RELATIVE_DISTANCE_TOL: f64 = 0.02;
 
 /// Detect and remove self-intersections in an offset NURBS surface.
@@ -70,14 +68,12 @@ pub fn trim_offset_self_intersections(
     offset_distance: f64,
     tolerance: f64,
 ) -> Result<NurbsSurface, OperationsError> {
-    // ── Primary path: SSI-based detection ──────────────────────────────
     if let Ok(ssi_curves) = detect_self_intersection(offset, SSI_GRID, tolerance) {
         if !ssi_curves.is_empty() {
             return trim_via_ssi(original, offset, offset_distance, tolerance, &ssi_curves);
         }
     }
 
-    // ── Fallback path: sampling-based detection ────────────────────────
     trim_via_sampling(original, offset, offset_distance, tolerance)
 }
 
@@ -120,7 +116,6 @@ fn trim_via_ssi(
         if ssi.params_a.is_empty() {
             continue;
         }
-        // Check midpoint of each sheet.
         let mid_idx = ssi.params_a.len() / 2;
         let (ua, va) = ssi.params_a[mid_idx];
         let (ub, vb) = ssi.params_b[mid_idx];
@@ -157,7 +152,6 @@ fn trim_via_ssi(
         for j in 0..n {
             let v = lerp(v_min, v_max, j as f64 / (n - 1) as f64);
 
-            // Check if this sample is near any invalid parameter point.
             let near_invalid = invalid_params
                 .iter()
                 .any(|&(iu, iv)| ((u - iu).powi(2) + (v - iv).powi(2)).sqrt() < proximity);
@@ -180,7 +174,6 @@ fn trim_via_ssi(
         mask.push(row);
     }
 
-    // Count invalid samples.
     let total = n * n;
     let invalid_count = mask
         .iter()
@@ -213,11 +206,9 @@ fn trim_via_sampling(
     offset_distance: f64,
     tolerance: f64,
 ) -> Result<NurbsSurface, OperationsError> {
-    // Step 1: Detection — sample the offset surface and check distances.
     let validity_mask =
         detect_self_intersections_sampling(original, offset, offset_distance, tolerance);
 
-    // Count invalid samples.
     let total = validity_mask.len() * validity_mask[0].len();
     let invalid_count = validity_mask
         .iter()
@@ -225,12 +216,10 @@ fn trim_via_sampling(
         .filter(|&&v| !v)
         .count();
 
-    // If no self-intersections detected, return the offset unchanged.
     if invalid_count == 0 {
         return Ok(offset.clone());
     }
 
-    // If too much of the surface is invalid, return an error.
     #[allow(clippy::cast_precision_loss)]
     let invalid_fraction = invalid_count as f64 / total as f64;
     if invalid_fraction > MAX_INVALID_FRACTION {
@@ -244,10 +233,8 @@ fn trim_via_sampling(
         });
     }
 
-    // Step 2: Localization — refine the validity mask with normal checking.
     let refined_mask = refine_validity_mask(original, offset, offset_distance, tolerance);
 
-    // Recount after refinement.
     let refined_total = refined_mask.len() * refined_mask[0].len();
     let refined_invalid = refined_mask
         .iter()
@@ -267,7 +254,6 @@ fn trim_via_sampling(
         });
     }
 
-    // Step 3: Trimming — refit the surface using only valid samples.
     refit_valid_region(offset, &refined_mask)
 }
 
@@ -452,7 +438,6 @@ fn refit_valid_region(
         grid.push(row);
     }
 
-    // Fit a new surface through the valid sample grid.
     let degree = offset.degree_u().min(offset.degree_v()).clamp(1, 3);
     let degree = degree.min(refit_n - 1);
 

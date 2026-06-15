@@ -45,17 +45,10 @@ pub fn interpolate(points: &[Point3], degree: usize) -> Result<NurbsCurve, MathE
         return Err(MathError::EmptyInput);
     }
 
-    // Clamp degree to at most n-1.
     let p = degree.min(n - 1);
 
-    // Step 1: chord-length parameterization.
     let params = chord_length_params(points);
-
-    // Step 2: build clamped knot vector.
     let knots = build_interpolation_knots(&params, p, n);
-
-    // Step 3: solve for control points.
-    // Build the basis function matrix N[i][j] = N_{j,p}(params[i]).
     let control_points = solve_interpolation(points, &params, &knots, p)?;
 
     let weights = vec![1.0; n];
@@ -94,7 +87,6 @@ pub fn approximate(
         });
     }
 
-    // If num_control_points == n, this is exact interpolation.
     if num_control_points == n {
         return interpolate(points, degree);
     }
@@ -102,10 +94,7 @@ pub fn approximate(
     let p = degree.min(num_control_points - 1);
     let m = num_control_points;
 
-    // Parameterize data points.
     let params = chord_length_params(points);
-
-    // Build knot vector for m control points.
     let knots = build_approximation_knots(&params, p, m, n);
 
     // Solve least-squares: N^T * N * P = N^T * Q
@@ -226,7 +215,6 @@ fn solve_interpolation(
 ) -> Result<Vec<Point3>, MathError> {
     let n = points.len();
 
-    // Build the basis function matrix.
     let mut matrix = vec![vec![0.0; n]; n];
     for (i, &t) in params.iter().enumerate() {
         let span = find_span(t, degree, knots, n);
@@ -239,12 +227,10 @@ fn solve_interpolation(
         }
     }
 
-    // Right-hand side: [Qx, Qy, Qz] columns.
     let mut rhs_x: Vec<f64> = points.iter().map(|p| p.x()).collect();
     let mut rhs_y: Vec<f64> = points.iter().map(|p| p.y()).collect();
     let mut rhs_z: Vec<f64> = points.iter().map(|p| p.z()).collect();
 
-    // Gaussian elimination with partial pivoting.
     gauss_solve(&mut matrix, &mut rhs_x)?;
     // Re-build matrix (it was modified in-place).
     let mut matrix2 = vec![vec![0.0; n]; n];
@@ -296,7 +282,6 @@ fn solve_approximation(
 ) -> Result<Vec<Point3>, MathError> {
     let n = points.len();
 
-    // Build basis function matrix N: n×m.
     let mut mat_n = vec![vec![0.0; m]; n];
     for (i, &t) in params.iter().enumerate() {
         let span = find_span(t, degree, knots, m);
@@ -328,8 +313,8 @@ fn solve_approximation(
         }
     }
 
-    // Fix first and last control points.
-    // Zero out the first and last rows/cols, set diagonal to 1.
+    // Fix first and last control points: zero the first/last rows and cols,
+    // set diagonal to 1 so the endpoints are interpolated exactly.
     for j in 0..m {
         ntn[0][j] = 0.0;
         ntn[m - 1][j] = 0.0;
@@ -391,7 +376,6 @@ fn gauss_solve(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<(), MathError> {
 
     // Forward elimination.
     for k in 0..n {
-        // Find pivot.
         let mut max_val = a[k][k].abs();
         let mut max_row = k;
         for i in (k + 1)..n {
@@ -405,13 +389,11 @@ fn gauss_solve(a: &mut [Vec<f64>], b: &mut [f64]) -> Result<(), MathError> {
             return Err(MathError::SingularMatrix);
         }
 
-        // Swap rows.
         if max_row != k {
             a.swap(k, max_row);
             b.swap(k, max_row);
         }
 
-        // Eliminate.
         for i in (k + 1)..n {
             let factor = a[i][k] / a[k][k];
             for j in (k + 1)..n {
@@ -450,8 +432,7 @@ fn compute_lspia_step_size(basis_data: &[(usize, Vec<f64>)], degree: usize, m: u
     }
 
     for _ in 0..20 {
-        // w = N^T N v
-        // First compute Nv (length = n_data).
+        // w = N^T N v, computed as N^T (N v) to avoid forming N^T N.
         let nv: Vec<f64> = basis_data
             .iter()
             .map(|(span, n_vals)| {
@@ -465,7 +446,6 @@ fn compute_lspia_step_size(basis_data: &[(usize, Vec<f64>)], degree: usize, m: u
                 sum
             })
             .collect();
-        // Then compute N^T (Nv).
         let mut w = vec![0.0f64; m];
         for (i, (span, n_vals)) in basis_data.iter().enumerate() {
             for (k, &bk) in n_vals.iter().enumerate() {
@@ -638,13 +618,10 @@ pub fn approximate_lspia(
     let p = degree.min(n - 1);
     let m = num_control_points.min(n).max(p + 1);
 
-    // Step 1: chord-length parameterization.
     let params = chord_length_params(points);
-
-    // Step 2: build knot vector for m control points.
     let knots = build_approximation_knots(&params, p, m, n);
 
-    // Step 3: initialize control points by sampling closest data points.
+    // Initialize control points by sampling closest data points.
     let mut control_points = Vec::with_capacity(m);
     for i in 0..m {
         let t = if m > 1 {
@@ -666,7 +643,6 @@ pub fn approximate_lspia(
 
     let weights = vec![1.0; m];
 
-    // Precompute basis function values for all data points.
     let mut basis_data: Vec<(usize, Vec<f64>)> = Vec::with_capacity(n);
     for &u in &params {
         let span = find_span(u, p, &knots, m);
@@ -674,12 +650,10 @@ pub fn approximate_lspia(
         basis_data.push((span, n_vals));
     }
 
-    // Compute step size mu for LSPIA convergence.
     // mu = 2 / (lambda_min + lambda_max) where lambda are eigenvalues of N^T N.
     // We approximate lambda_max via the power method and use a conservative mu.
     let mu = compute_lspia_step_size(&basis_data, p, m);
 
-    // Step 4: iterate.
     for iter in 0..max_iterations {
         let curve = NurbsCurve::new(p, knots.clone(), control_points.clone(), weights.clone())?;
 
@@ -771,13 +745,10 @@ pub(crate) fn approximate_lspia_weighted(
     let p = degree.min(n - 1);
     let m = num_control_points.min(n).max(p + 1);
 
-    // Step 1: chord-length parameterization.
     let params = chord_length_params(points);
-
-    // Step 2: build knot vector.
     let knots = build_approximation_knots(&params, p, m, n);
 
-    // Step 3: initialize control points by sampling closest data points.
+    // Initialize control points by sampling closest data points.
     let mut control_points = Vec::with_capacity(m);
     for i in 0..m {
         let t = if m > 1 {
@@ -799,7 +770,6 @@ pub(crate) fn approximate_lspia_weighted(
 
     let weights = vec![1.0; m];
 
-    // Precompute basis function values.
     let mut basis_data: Vec<(usize, Vec<f64>)> = Vec::with_capacity(n);
     for &u in &params {
         let span = find_span(u, p, &knots, m);
@@ -807,10 +777,8 @@ pub(crate) fn approximate_lspia_weighted(
         basis_data.push((span, n_vals));
     }
 
-    // Compute step size mu for LSPIA convergence.
     let mu = compute_lspia_step_size_weighted(&basis_data, point_weights, p, m);
 
-    // Step 4: iterate.
     for iter in 0..max_iterations {
         let curve = NurbsCurve::new(p, knots.clone(), control_points.clone(), weights.clone())?;
 
@@ -889,7 +857,6 @@ mod tests {
         let curve = interpolate(&pts, 3).unwrap();
 
         let tol = Tolerance::new();
-        // Check endpoints.
         let p0 = curve.evaluate(0.0);
         let p1 = curve.evaluate(1.0);
         assert!(tol.approx_eq(p0.x(), 0.0), "start x: {}", p0.x());
@@ -1006,7 +973,6 @@ mod tests {
             .collect();
         let curve = approximate_lspia(&points, 3, 15, 1e-4, 200).unwrap();
 
-        // Check that points are near the circle.
         for i in 0..10 {
             let t = i as f64 / 9.0;
             let p = curve.evaluate(t);

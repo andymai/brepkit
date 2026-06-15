@@ -130,7 +130,6 @@ pub fn draft(
             })
             .collect();
 
-        // Recompute the face plane from the modified vertices.
         if new_verts.len() >= 3 {
             let a = new_verts[1] - new_verts[0];
             let b = new_verts[2] - new_verts[0];
@@ -191,7 +190,6 @@ mod tests {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);
 
-        // Draft the +X face with a 5° angle, pull direction +Z.
         let right_faces = find_faces(&topo, cube, Vec3::new(1.0, 0.0, 0.0));
         assert_eq!(right_faces.len(), 1);
 

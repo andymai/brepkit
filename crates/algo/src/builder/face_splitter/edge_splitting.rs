@@ -40,7 +40,6 @@ pub(super) fn split_boundary_edges_at_3d_points(
             continue;
         }
 
-        // Split edge into segments.
         let mut prev_uv = edge.start_uv;
         let mut prev_3d = edge.start_3d;
         for &(t, _) in &splits {
@@ -66,7 +65,6 @@ pub(super) fn split_boundary_edges_at_3d_points(
             prev_uv = split_uv;
             prev_3d = split_3d;
         }
-        // Final segment.
         let pcurve =
             compute_pcurve_on_surface(&edge.curve_3d, prev_3d, edge.end_3d, surface, &[], frame);
         result.push(OrientedPCurveEdge {

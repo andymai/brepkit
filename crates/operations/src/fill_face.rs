@@ -42,7 +42,6 @@ pub fn fill_coons_patch(
     let top = &curves[2];
     let left = &curves[3];
 
-    // Validate that boundaries connect at corners
     let n_u = bottom.len();
     let n_v = right.len();
 
@@ -66,7 +65,6 @@ pub fn fill_coons_patch(
     let mut control_points = Vec::with_capacity(n_v);
     let mut weights = Vec::with_capacity(n_v);
 
-    // Corner points
     let p00 = bottom[0];
     let p10 = bottom[n_u - 1];
     let p01 = top[0];
@@ -123,7 +121,6 @@ pub fn fill_coons_patch(
         weights,
     )?;
 
-    // Create the face with a boundary wire from corner points
     let corners = [p00, p10, p11, p01];
     let verts: Vec<_> = corners
         .iter()

@@ -150,7 +150,6 @@ pub fn shell(
 
     let open_set: HashSet<usize> = open_faces.iter().map(|f| f.index()).collect();
 
-    // Validate open_faces belong to the solid.
     let solid_face_set: HashSet<usize> = all_face_ids.iter().map(|f| f.index()).collect();
     for &of in open_faces {
         if !solid_face_set.contains(&of.index()) {
@@ -184,7 +183,6 @@ pub fn shell(
         )
     };
 
-    // Collect (normal, is_open) for each face at each vertex.
     let mut vertex_normals: HashMap<(i64, i64, i64), Vec<(Vec3, bool)>> = HashMap::new();
 
     for &(fid, ref verts) in &face_verts {
@@ -257,8 +255,7 @@ pub fn shell(
         inner_pos.insert(key, inner);
     }
 
-    // ─── Phase 3: Outer faces (non-open, kept as-is) ──────────────────────
-
+    // Outer faces: the non-open faces kept as-is.
     for &(fid, ref verts) in &face_verts {
         if open_set.contains(&fid.index()) {
             continue;
@@ -320,7 +317,7 @@ pub fn shell(
         }
         let face = topo.face(fid)?;
 
-        // Map outer vertices to inner positions (reversed winding for inward normal).
+        // Reversed winding gives the inner face an inward-pointing normal.
         let inner_verts: Vec<Point3> = outer_verts
             .iter()
             .map(|v| inner_pos.get(&quantize_pt(*v)).copied().unwrap_or(*v))
@@ -433,7 +430,6 @@ pub fn shell(
 
     let solid = assemble_solid_mixed(topo, &result_specs, tol)?;
 
-    // Find boundary edges (edges used by exactly 1 face).
     let edge_face_map = brepkit_topology::explorer::edge_to_face_map(topo, solid)?;
     let mut boundary_edge_ids: Vec<brepkit_topology::edge::EdgeId> = Vec::new();
     for (&edge_idx, faces) in &edge_face_map {
@@ -455,12 +451,10 @@ pub fn shell(
     for &eid in &boundary_edge_ids {
         let face_id = edge_face_map[&eid.index()][0];
         let face = topo.face(face_id)?;
-        // Find orientation of this edge in its face's wire.
         let wire = topo.wire(face.outer_wire())?;
         let mut found = false;
         for oe in wire.edges() {
             if oe.edge() == eid {
-                // Rim face uses opposite orientation.
                 boundary_oriented.push(brepkit_topology::wire::OrientedEdge::new(
                     eid,
                     !oe.is_forward(),
@@ -470,7 +464,6 @@ pub fn shell(
             }
         }
         if !found {
-            // Check inner wires too.
             for &iw_id in face.inner_wires() {
                 let iw = topo.wire(iw_id)?;
                 for oe in iw.edges() {
@@ -494,7 +487,6 @@ pub fn shell(
         }
     }
 
-    // Sort boundary edges into connected loops.
     let loops = sort_edges_into_loops(topo, &boundary_oriented)?;
 
     if loops.len() < 2 {
@@ -504,7 +496,6 @@ pub fn shell(
     }
 
     // Classify loops: the outer loop has larger average distance from centroid.
-    // Compute centroid of all boundary vertices.
     let mut centroid = Vec3::new(0.0, 0.0, 0.0);
     let mut vert_count = 0.0;
     let mut rim_z = 0.0_f64;
@@ -520,7 +511,6 @@ pub fn shell(
         rim_z /= vert_count;
     }
 
-    // Compute average radial distance for each loop.
     let mut loop_radii: Vec<(usize, f64)> = Vec::new();
     for (i, lp) in loops.iter().enumerate() {
         let mut avg_r = 0.0;
@@ -586,7 +576,6 @@ pub fn shell(
     );
     let rim_face_id = topo.add_face(rim_face);
 
-    // Add the rim face to the shell.
     let solid_data = topo.solid(solid)?;
     let shell_id = solid_data.outer_shell();
     let shell = topo.shell(shell_id)?;
@@ -613,7 +602,6 @@ fn sort_edges_into_loops(
         return Ok(Vec::new());
     }
 
-    // Build start_vertex → edge index map.
     let mut start_map: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut edge_endpoints: Vec<(VertexId, VertexId)> = Vec::new();
     for (i, oe) in edges.iter().enumerate() {
@@ -647,7 +635,6 @@ fn sort_edges_into_loops(
                 break; // Loop closed.
             }
 
-            // Find next edge starting at end_vid.
             let mut found = false;
             if let Some(candidates) = start_map.get(&end_vid) {
                 for &idx in candidates {
@@ -711,7 +698,6 @@ mod tests {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);
 
-        // Shell with no open faces: creates a solid shell.
         let result = shell(&mut topo, cube, 0.1, &[]).unwrap();
 
         let s = topo.solid(result).unwrap();
@@ -726,7 +712,6 @@ mod tests {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);
 
-        // Find the top face (+Z normal).
         let top_faces = find_faces_by_normal(&topo, cube, Vec3::new(0.0, 0.0, 1.0));
         assert_eq!(top_faces.len(), 1, "should find exactly one +Z face");
 
@@ -785,7 +770,6 @@ mod tests {
         let mut topo = Topology::new();
         let cube = make_unit_cube_manifold(&mut topo);
 
-        // Find both +Z and -Z faces
         let top = find_faces_by_normal(&topo, cube, Vec3::new(0.0, 0.0, 1.0));
         let bot = find_faces_by_normal(&topo, cube, Vec3::new(0.0, 0.0, -1.0));
         let mut open_faces = top;
@@ -820,7 +804,6 @@ mod tests {
         // Use a simple box (no rounded corners) to isolate shell behavior.
         let box_solid = make_box(&mut topo, w, d, h).unwrap();
 
-        // Count faces after extrude.
         let box_shell_data = topo
             .shell(topo.solid(box_solid).unwrap().outer_shell())
             .unwrap();
@@ -828,7 +811,6 @@ mod tests {
         eprintln!("[diag] Box extrude face count: {extrude_face_count}");
         assert_eq!(extrude_face_count, 6);
 
-        // Find top face and shell.
         let top_faces = find_faces_by_normal(&topo, box_solid, Vec3::new(0.0, 0.0, 1.0));
         assert_eq!(top_faces.len(), 1, "should find exactly one top face");
 
@@ -841,7 +823,6 @@ mod tests {
         // 5 outer + 5 inner + 1 annular rim = 11
         assert_eq!(shell_face_count, 11, "box shell should have 11 faces");
 
-        // Verify original box volume first.
         let box_vol = crate::measure::solid_volume(&topo, box_solid, 0.01).unwrap();
         let expected_box_vol = w * d * h;
         eprintln!("[diag] Box volume: {box_vol:.2}, expected: {expected_box_vol:.2}");
@@ -852,7 +833,6 @@ mod tests {
         let pct = (vol - expected_vol).abs() / expected_vol;
         eprintln!("[diag] Shell volume: {vol:.2}, expected: {expected_vol:.2}, diff: {pct:.4}");
 
-        // Also count face surface types.
         for &fid in sh.faces() {
             let f = topo.face(fid).unwrap();
             let kind = match f.surface() {
@@ -989,7 +969,6 @@ mod tests {
         let result = crate::validate::validate_solid(&topo, shelled);
         eprintln!("[gf-exact] Validation: {result:?}");
 
-        // After unify_faces
         let removed = crate::heal::unify_faces(&mut topo, shelled).unwrap();
         let sh3 = topo
             .shell(topo.solid(shelled).unwrap().outer_shell())
@@ -1086,11 +1065,9 @@ mod tests {
         let face = Face::new(wire_id, vec![], FaceSurface::Plane { normal, d: 0.0 });
         let face_id = topo.add_face(face);
 
-        // Extrude up.
         let solid =
             crate::extrude::extrude(&mut topo, face_id, Vec3::new(0.0, 0.0, 1.0), h).unwrap();
 
-        // Count faces after extrude.
         let sh = topo
             .shell(topo.solid(solid).unwrap().outer_shell())
             .unwrap();
@@ -1099,7 +1076,6 @@ mod tests {
         // Expected: 2 caps + 8 sides (4 planar + 4 cylindrical) = 10
         assert_eq!(extrude_fc, 10, "extruded rounded rect should have 10 faces");
 
-        // Count face types.
         let mut plane_count = 0;
         let mut cyl_count = 0;
         for &fid in sh.faces() {
@@ -1114,7 +1090,6 @@ mod tests {
         assert_eq!(plane_count, 6, "4 flat sides + 2 caps = 6 planar");
         assert_eq!(cyl_count, 4, "4 corner cylinders");
 
-        // Volume check after extrude (before shell).
         // Expected: A = w*d - 4*r^2*(1-pi/4), V = A*h
         let expected_area = w * d - 4.0 * r * r * (1.0 - std::f64::consts::FRAC_PI_4);
         let expected_vol = expected_area * h;
@@ -1129,7 +1104,6 @@ mod tests {
             "extrude volume error {rel_err:.6} exceeds 0.1%"
         );
 
-        // Find top face(s) and shell.
         let top = find_faces_by_normal(&topo, solid, Vec3::new(0.0, 0.0, 1.0));
         assert_eq!(top.len(), 1, "one top face");
 
@@ -1140,7 +1114,6 @@ mod tests {
         let shell_fc = sh2.faces().len();
         eprintln!("[rounded] Shell faces: {shell_fc}");
 
-        // Count surface types in shell.
         let mut sp = 0;
         let mut sc = 0;
         for &fid in sh2.faces() {
@@ -1164,7 +1137,6 @@ mod tests {
         }
         eprintln!("[rounded] Shell: {sp} planar, {sc} cylinder");
 
-        // Diagnostic: inspect the rim face (last face) in detail.
         {
             let rim_fid = *sh2.faces().last().unwrap();
             let rim_f = topo.face(rim_fid).unwrap();
@@ -1221,7 +1193,6 @@ mod tests {
             }
         }
 
-        // Check face reversal state.
         for &fid in sh2.faces() {
             let f = topo.face(fid).unwrap();
             let kind = match f.surface() {
@@ -1237,7 +1208,6 @@ mod tests {
         let vol = crate::measure::solid_volume(&topo, shelled, 0.01).unwrap();
         eprintln!("[rounded] Shell volume: {vol:.2}");
 
-        // Check Euler characteristic.
         let result = crate::validate::validate_solid(&topo, shelled);
         eprintln!("[rounded] Validation: {result:?}");
     }
@@ -1330,11 +1300,9 @@ mod tests {
         );
         let face_id = topo.add_face(face);
 
-        // Extrude upward
         let solid =
             crate::extrude::extrude(&mut topo, face_id, Vec3::new(0.0, 0.0, 1.0), h).unwrap();
 
-        // Shell: remove top face
         let top = find_faces_by_normal(&topo, solid, Vec3::new(0.0, 0.0, 1.0));
         assert_eq!(top.len(), 1, "one top face");
 

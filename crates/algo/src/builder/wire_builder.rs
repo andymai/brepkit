@@ -110,7 +110,6 @@ pub fn build_wire_loops_with_winding(
     let mut loops = Vec::new();
 
     loop {
-        // Find first unused edge to start a new loop.
         let Some(start_idx) = used.iter().position(|u| !u) else {
             break;
         };

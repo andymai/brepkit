@@ -379,7 +379,6 @@ impl<'a> StepBuilder<'a> {
         let start_vp = self.build_vertex_point(refs[0])?;
         let end_vp = self.build_vertex_point(refs[1])?;
 
-        // Resolve the actual curve geometry from the third reference.
         let curve = self.build_curve_geometry(refs[2])?;
 
         let edge_id = self.topo.add_edge(Edge::new(start_vp, end_vp, curve));
@@ -703,7 +702,6 @@ fn parse_ints_in_parens(s: &str) -> Vec<u32> {
 /// `RATIONAL_B_SPLINE_SURFACE((...weights...))` and parses the weight list.
 /// Falls back to uniform weights if parsing fails.
 fn extract_rational_weights(attrs: &str, expected_count: usize) -> Vec<f64> {
-    // Find the RATIONAL section.
     let marker = if attrs.contains("RATIONAL_B_SPLINE_SURFACE") {
         "RATIONAL_B_SPLINE_SURFACE"
     } else {
@@ -712,10 +710,8 @@ fn extract_rational_weights(attrs: &str, expected_count: usize) -> Vec<f64> {
 
     if let Some(pos) = attrs.find(marker) {
         let after = &attrs[pos + marker.len()..];
-        // Find the opening '(' and extract the weight list.
         if let Some(paren_start) = after.find('(') {
             let rest = &after[paren_start + 1..];
-            // Parse floats from the parenthesized group(s).
             let weights = parse_weight_list(rest);
             if weights.len() >= expected_count {
                 return weights[..expected_count].to_vec();
@@ -786,7 +782,6 @@ fn extract_rational_weight_grid(attrs: &str, n_rows: usize, n_cols: usize) -> Ve
     let flat = extract_rational_weights(attrs, n_rows * n_cols);
     let tol = brepkit_math::tolerance::Tolerance::new();
     if flat.len() == n_rows * n_cols && flat.iter().any(|&w| !tol.approx_eq(w, 1.0)) {
-        // Reshape flat weights into a 2D grid.
         flat.chunks(n_cols).map(<[f64]>::to_vec).collect()
     } else {
         vec![vec![1.0; n_cols]; n_rows]
@@ -887,11 +882,9 @@ fn parse_bspline_surface_attrs(
     // Parse control point grid: nested ((#1, #2), (#3, #4))
     let cp_grid = parse_nested_refs(&groups[0]);
 
-    // Parse multiplicities (integers).
     let u_mults = parse_ints_in_parens(&groups[1]);
     let v_mults = parse_ints_in_parens(&groups[2]);
 
-    // Parse knot values (floats).
     let u_knots = parse_floats(&groups[3]);
     let v_knots = parse_floats(&groups[4]);
 
@@ -1003,7 +996,6 @@ fn parse_bspline_curve_attrs(attrs: &str) -> Option<(usize, Vec<u64>, Vec<u32>, 
         tokens.push(current.trim().to_string());
     }
 
-    // Extract degree.
     let mut degree = None;
     for tok in &tokens {
         if tok.starts_with('\'') || tok.starts_with('.') {
@@ -1176,14 +1168,12 @@ mod tests {
 
         let step_str = writer::write_step(&write_topo, &[solid]).unwrap();
 
-        // Verify STEP contains CYLINDRICAL_SURFACE.
         assert!(step_str.contains("CYLINDRICAL_SURFACE"));
 
         let mut read_topo = Topology::new();
         let solids = read_step(&step_str, &mut read_topo).unwrap();
         assert!(!solids.is_empty(), "should import at least one solid");
 
-        // Verify the imported solid has a cylindrical face.
         let read_solid = read_topo.solid(solids[0]).unwrap();
         let shell = read_topo.shell(read_solid.outer_shell()).unwrap();
 
@@ -1231,7 +1221,6 @@ mod tests {
         }
         let solid = brepkit_operations::loft::loft_smooth(&mut write_topo, &profiles).unwrap();
 
-        // Verify the original has NURBS faces.
         let orig_solid = write_topo.solid(solid).unwrap();
         let orig_shell = write_topo.shell(orig_solid.outer_shell()).unwrap();
         let orig_nurbs_count = orig_shell
@@ -1246,19 +1235,16 @@ mod tests {
             .count();
         assert!(orig_nurbs_count > 0, "lofted solid should have NURBS faces");
 
-        // Write to STEP.
         let step_str = writer::write_step(&write_topo, &[solid]).unwrap();
         assert!(
             step_str.contains("B_SPLINE_SURFACE_WITH_KNOTS"),
             "STEP output should contain B_SPLINE_SURFACE_WITH_KNOTS"
         );
 
-        // Read back.
         let mut read_topo = Topology::new();
         let solids = read_step(&step_str, &mut read_topo).unwrap();
         assert!(!solids.is_empty(), "should import at least one solid");
 
-        // Verify the imported solid has NURBS faces.
         let read_solid = read_topo.solid(solids[0]).unwrap();
         let shell = read_topo.shell(read_solid.outer_shell()).unwrap();
 
@@ -1316,11 +1302,9 @@ mod tests {
 
         let step_str = writer::write_step(&write_topo, &[solid]).unwrap();
 
-        // Check that B_SPLINE_CURVE_WITH_KNOTS is in the output.
         let has_bspline_curve = step_str.contains("B_SPLINE_CURVE_WITH_KNOTS");
 
         if has_bspline_curve {
-            // Read back and verify NURBS curves are imported.
             let mut read_topo = Topology::new();
             let solids = read_step(&step_str, &mut read_topo).unwrap();
             assert!(!solids.is_empty());

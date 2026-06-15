@@ -83,7 +83,6 @@ impl PowerBasis1D {
             // For each basis function, solve Newton interpolation then convert
             // to monomial form.
             for j in 0..=p {
-                // Copy samples for this basis function.
                 for k in 0..=p {
                     samples[k] = all_samples[j * (p + 1) + k];
                 }

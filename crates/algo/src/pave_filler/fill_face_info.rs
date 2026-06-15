@@ -42,7 +42,6 @@ pub fn perform(topo: &Topology, arena: &mut GfaArena) -> Result<(), AlgoError> {
 /// For each face, find its boundary edges and map their leaf pave blocks
 /// into `pave_blocks_on`.
 fn fill_boundary_on(topo: &Topology, arena: &mut GfaArena) -> Result<(), AlgoError> {
-    // Collect all faces that have face_info entries or appear in FF interference
     let mut all_faces: HashSet<FaceId> = arena.face_info.keys().copied().collect();
     for interf in &arena.interference.ff {
         if let Interference::FF { f1, f2, .. } = interf {
@@ -54,7 +53,6 @@ fn fill_boundary_on(topo: &Topology, arena: &mut GfaArena) -> Result<(), AlgoErr
     for fid in all_faces {
         let face = topo.face(fid)?;
 
-        // Collect all boundary edge IDs from outer + inner wires
         let mut boundary_edges: HashSet<EdgeId> = HashSet::new();
 
         let outer_wire = topo.wire(face.outer_wire())?;
@@ -69,7 +67,6 @@ fn fill_boundary_on(topo: &Topology, arena: &mut GfaArena) -> Result<(), AlgoErr
             }
         }
 
-        // Map each boundary edge's leaf pave blocks into ON.
         // Snapshot pave block data first to avoid aliasing arena borrows.
         let mut on_entries: Vec<(PaveBlockId, VertexId, VertexId)> = Vec::new();
         for eid in boundary_edges {

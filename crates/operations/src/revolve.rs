@@ -182,8 +182,6 @@ pub fn revolve(
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
 
-    // --- Validation ---
-
     if tol.approx_eq(axis_direction.length_squared(), 0.0) {
         return Err(crate::OperationsError::InvalidInput {
             reason: "revolve axis direction is zero-length".into(),
@@ -200,7 +198,6 @@ pub fn revolve(
     let is_full = angle_radians >= 2.0f64.mul_add(PI, -tol.angular);
     let angle = if is_full { 2.0 * PI } else { angle_radians };
 
-    // Read input face.
     let face_data = topo.face(face)?;
     let mut input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
@@ -237,12 +234,8 @@ pub fn revolve(
         }
     }
 
-    // --- Arc segmentation ---
-
     let (num_segs, seg_angle) = arc_segmentation(angle);
     let num_boundaries = if is_full { num_segs } else { num_segs + 1 };
-
-    // --- Revolve a single wire, returning ring data ---
 
     let revolve_wire = |topo: &mut Topology,
                         wire_id: brepkit_topology::wire::WireId|
@@ -278,7 +271,6 @@ pub fn revolve(
             })
             .collect::<Result<_, _>>()?;
 
-        // Create rotated vertices.
         let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_boundaries);
         ring_verts.push(input_verts.clone());
 
@@ -295,7 +287,6 @@ pub fn revolve(
             ring_verts.push(ring);
         }
 
-        // Create arc edges.
         let mut arc_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = Vec::with_capacity(num_segs);
 
         for seg in 0..num_segs {
@@ -314,7 +305,6 @@ pub fn revolve(
             arc_edges.push(seg_edges);
         }
 
-        // Create ring edges.
         let input_edge_ids: Vec<_> = input_oriented
             .iter()
             .map(brepkit_topology::wire::OrientedEdge::edge)
@@ -343,11 +333,7 @@ pub fn revolve(
         })
     };
 
-    // --- Revolve outer wire ---
-
     let outer = revolve_wire(topo, input_wire_id)?;
-
-    // --- Revolve inner wires ---
 
     let mut inner_data: Vec<WireRevolveData> = Vec::new();
     for &iw_id in &inner_wire_ids {
@@ -362,8 +348,6 @@ pub fn revolve(
                 .map(brepkit_topology::vertex::Vertex::point)
         })
         .collect::<Result<_, _>>()?;
-
-    // --- Build faces ---
 
     let mut all_faces = Vec::new();
 
@@ -549,7 +533,6 @@ pub fn revolve(
         all_faces.push(fid);
     }
 
-    // Assemble shell and solid.
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
     let solid = topo.add_solid(Solid::new(shell_id, vec![]));

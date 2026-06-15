@@ -46,7 +46,6 @@ pub fn defeature(
 
     let remove_set: HashSet<usize> = faces_to_remove.iter().map(|f| f.index()).collect();
 
-    // Collect the faces we're keeping.
     let kept_faces: Vec<FaceId> = all_faces
         .iter()
         .filter(|f| !remove_set.contains(&f.index()))
@@ -63,7 +62,6 @@ pub fn defeature(
         });
     }
 
-    // Snapshot the kept faces' geometry.
     let mut result_faces: Vec<(Vec<Point3>, Vec3, f64)> = Vec::new();
 
     for &fid in &kept_faces {
@@ -129,7 +127,6 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
-        // Get faces of the box
         let solid_data = topo.solid(solid).unwrap();
         let shell = topo.shell(solid_data.outer_shell()).unwrap();
         let faces: Vec<FaceId> = shell.faces().to_vec();

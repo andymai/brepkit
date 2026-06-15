@@ -28,7 +28,6 @@ pub(super) fn expand_g1_chain(
     let shell = topo.shell(solid_data.outer_shell())?;
     let shell_face_ids: Vec<FaceId> = shell.faces().to_vec();
 
-    // Build edge→faces and vertex→edges maps for the full shell.
     let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
     let mut vertex_to_edges: HashMap<usize, Vec<EdgeId>> = HashMap::new();
     let mut edge_ids: HashMap<usize, EdgeId> = HashMap::new();
@@ -62,7 +61,6 @@ pub(super) fn expand_g1_chain(
         edges.dedup_by_key(|e: &mut EdgeId| e.index());
     }
 
-    // Iterative BFS expansion.
     let mut expanded: HashSet<usize> = seed_edges.iter().map(|e| e.index()).collect();
     let mut queue: Vec<EdgeId> = seed_edges.to_vec();
 

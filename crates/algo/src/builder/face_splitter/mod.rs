@@ -284,7 +284,6 @@ pub fn split_face_2d(
     // end at u=2pi connects to seam start at u=0). Keep it enabled.
     let (u_periodic, v_periodic) = info.map_or((false, false), SurfaceInfo::periodicity);
 
-    // Convert boundary edges to OrientedPCurveEdge.
     let mut boundary_edges = if is_plane {
         boundary_edges_to_pcurve(topo, face.outer_wire(), &surface, &wire_pts, Some(frame))
     } else {
@@ -500,7 +499,6 @@ pub fn split_face_2d(
         );
     }
 
-    // Stage 2: Split boundary edges at section edge endpoints (3D matching).
     let mut split_pts_3d: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
 
     // For periodic faces, align closed boundary edge UV with seam edge UV.
@@ -888,7 +886,6 @@ pub fn split_face_2d(
         outers.push((holes.remove(0), area));
     }
 
-    // Match holes to containing outer wires.
     let mut sub_faces = Vec::new();
     for (outer_wire, _area) in outers {
         sub_faces.push(SplitSubFace {
@@ -1051,7 +1048,6 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
 
         if let Some(test_3d) = eval_3d(interior_uv) {
             for hole in &sub_face.inner_wires {
-                // Compute hole centroid in 3D.
                 if hole.is_empty() {
                     continue;
                 }
@@ -1062,7 +1058,6 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
                     let n = hole.len() as f64;
                     Point3::new(sum.x() / n, sum.y() / n, sum.z() / n)
                 };
-                // Compute hole boundary radius from centroid.
                 let max_r = hole
                     .iter()
                     .map(|e| (e.start_3d - hc).length())

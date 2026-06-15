@@ -176,7 +176,6 @@ fn face_uv_bounds<S: ParametricSurface>(
     let face = topo.face(face_id)?;
     let wire = topo.wire(face.outer_wire())?;
 
-    // Collect projected UV values for each boundary vertex (in edge order).
     let mut uvs = Vec::new();
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
@@ -588,13 +587,11 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
     let v_scale = (v_range.1 - v_range.0) / 2.0;
     let v_mid = f64::midpoint(v_range.0, v_range.1);
 
-    // Pre-build UV polygon for containment tests.
     let uv_poly: Vec<Point2> = uv_boundary
         .iter()
         .map(|(u, v)| Point2::new(*u, *v))
         .collect();
 
-    // Pre-compute boundary u-range for periodic shifting.
     let u_bcenter = if u_periodic {
         let bmin = uv_boundary
             .iter()
@@ -623,7 +620,6 @@ fn integrate_parametric_trimmed<S: ParametricSurface>(
         for gpv in gauss_pts {
             let v = v_scale.mul_add(gpv.x, v_mid);
 
-            // UV containment check for trimmed faces.
             let test_u = if u_periodic {
                 let tau = std::f64::consts::TAU;
                 let diff = u - u_bcenter;
@@ -694,7 +690,6 @@ where
 
     let mut uv: Vec<(f64, f64)> = polygon.iter().map(|&p| project(p)).collect();
 
-    // Unwrap periodic u-coordinates.
     for i in 1..uv.len() {
         if u_periodic {
             uv[i].0 = unwrap_angle(uv[i - 1].0, uv[i].0);

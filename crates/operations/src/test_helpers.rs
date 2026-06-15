@@ -12,8 +12,6 @@ use brepkit_topology::explorer;
 use brepkit_topology::face::FaceId;
 use brepkit_topology::solid::SolidId;
 
-// ── Volume / area assertions ──────────────────────────────────────
-
 /// Assert that a solid's volume is within `rel_tol` of `expected`.
 ///
 /// When `expected` is near zero (< 1e-15), `rel_tol` is treated as an
@@ -61,8 +59,6 @@ pub fn assert_area_near(topo: &Topology, face: FaceId, expected: f64, rel_tol: f
     );
 }
 
-// ── Point assertions ──────────────────────────────────────────────
-
 /// Assert that two points are within `abs_tol` of each other.
 ///
 /// # Panics
@@ -85,8 +81,6 @@ pub fn assert_point_near(actual: Point3, expected: Point3, abs_tol: f64) {
         expected.z(),
     );
 }
-
-// ── Topological invariant assertions ──────────────────────────────
 
 /// Compute the Euler characteristic V - E + F for a solid.
 ///
@@ -133,8 +127,6 @@ pub fn assert_manifold(topo: &Topology, solid: SolidId) {
         .expect("solid should be manifold");
 }
 
-// ── Boolean conservation ──────────────────────────────────────────
-
 /// Assert the inclusion-exclusion principle: V(A) + V(B) = V(A∪B) + V(A∩B).
 ///
 /// This is a fundamental conservation law for boolean operations.
@@ -165,8 +157,6 @@ pub fn assert_volume_conservation(
         rel_tol * 100.0,
     );
 }
-
-// ── CW profile assertions ──────────────────────────────────────
 
 /// Assert that a CW-wound profile produces a solid with the expected volume.
 ///

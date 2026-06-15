@@ -98,7 +98,6 @@ pub fn circular_pattern(
         #[allow(clippy::cast_precision_loss)]
         let angle = angle_step * (i as f64);
 
-        // Build rotation matrix around the axis.
         let matrix = rotation_matrix(axis, angle);
         transform_solid(topo, copy, &matrix)?;
         solids.push(copy);
@@ -186,7 +185,7 @@ pub fn grid_pattern(
 fn rotation_matrix(axis: Vec3, angle: f64) -> Mat4 {
     let cos_a = angle.cos();
     let sin_a = angle.sin();
-    let omc = 1.0 - cos_a; // one minus cos
+    let omc = 1.0 - cos_a;
     let ax = axis.x();
     let ay = axis.y();
     let az = axis.z();
@@ -234,7 +233,6 @@ mod tests {
         let comp = topo.compound(compound).unwrap();
         assert_eq!(comp.solids().len(), 3, "should have 3 copies");
 
-        // Verify each copy has the right volume.
         let tol = Tolerance::loose();
         for &sid in comp.solids() {
             let vol = crate::measure::solid_volume(&topo, sid, 0.1).unwrap();

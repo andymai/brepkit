@@ -47,7 +47,6 @@ pub fn perform(
                 continue;
             }
 
-            // Quick AABB rejection
             if !aabbs_overlap(
                 &ea_data.bbox_min,
                 &ea_data.bbox_max,
@@ -58,21 +57,17 @@ pub fn perform(
                 continue;
             }
 
-            // Find intersection points
             let crossings = find_edge_edge_crossings(topo, ea_id, ea_data, eb_id, eb_data, tol)?;
 
             for (t_a, t_b, point) in crossings {
-                // Check if the intersection point is already a known vertex
                 let existing = find_nearby_pave_vertex(topo, arena, point, tol);
 
                 let vertex_id = if let Some(vid) = existing {
                     vid
                 } else {
-                    // No existing vertex near this point — create one.
                     topo.add_vertex(Vertex::new(point, tol.linear))
                 };
 
-                // Add extra paves to both edges
                 add_pave_to_edge(arena, ea_id, Pave::new(vertex_id, t_a));
                 add_pave_to_edge(arena, eb_id, Pave::new(vertex_id, t_b));
 
@@ -119,7 +114,6 @@ fn collect_edge_data(topo: &Topology, edges: &[EdgeId]) -> Result<Vec<EdgeData>,
         let end_pos = topo.vertex(edge.end())?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
 
-        // Compute AABB by sampling
         let n: usize = 16;
         let mut min = start_pos;
         let mut max = start_pos;
@@ -176,7 +170,6 @@ fn find_edge_edge_crossings(
     let edge_a = topo.edge(ea_id)?;
     let edge_b = topo.edge(eb_id)?;
 
-    // For Line-Line: algebraic intersection
     if matches!(edge_a.curve(), EdgeCurve::Line) && matches!(edge_b.curve(), EdgeCurve::Line) {
         return Ok(line_line_intersection(ea, eb, tol));
     }
@@ -195,11 +188,9 @@ fn find_edge_edge_crossings(
         }
     }
 
-    // General case: sample both edges and find close segment pairs
     let n: usize = 32;
     let mut crossings = Vec::new();
 
-    // Sample edge A
     let pts_a: Vec<SegmentEndpoint> = (0..=n)
         .map(|i| {
             let t = ea.t0 + (ea.t1 - ea.t0) * (i as f64 / n as f64);
@@ -210,7 +201,6 @@ fn find_edge_edge_crossings(
         })
         .collect();
 
-    // Sample edge B
     let pts_b: Vec<SegmentEndpoint> = (0..=n)
         .map(|i| {
             let t = eb.t0 + (eb.t1 - eb.t0) * (i as f64 / n as f64);
@@ -221,7 +211,6 @@ fn find_edge_edge_crossings(
         })
         .collect();
 
-    // Find closest approach between segment pairs
     let domain_a = (ea.t0 - tol.linear)..=(ea.t1 + tol.linear);
     let domain_b = (eb.t0 - tol.linear)..=(eb.t1 + tol.linear);
 
@@ -242,13 +231,11 @@ fn find_edge_edge_crossings(
                 continue;
             }
 
-            // Refine: find closest approach between segments
             if let Some((t_a, t_b, pt)) = closest_segment_pair(
                 [&pts_a[i], &pts_a[i + 1]],
                 [&pts_b[j], &pts_b[j + 1]],
                 tol.linear,
             ) {
-                // Ensure within domain
                 if domain_a.contains(&t_a) && domain_b.contains(&t_b) {
                     // Deduplicate: skip if too close to existing crossing
                     let is_dup = crossings

@@ -11,10 +11,6 @@ use assembly::validate_boolean_result;
 pub(crate) use assembly::{assemble_solid, assemble_solid_mixed};
 pub use types::{BooleanOp, BooleanOptions, FaceSpec};
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 // WASM-compatible timer: `std::time::Instant` panics on wasm32 targets.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn timer_now() -> std::time::Instant {
@@ -37,10 +33,6 @@ use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 /// Perform a boolean operation on two solids.
 ///
 /// Uses the GFA pipeline as the primary engine, with mesh boolean
@@ -59,7 +51,6 @@ pub fn boolean(
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = brepkit_math::tolerance::Tolerance::new();
 
-    // ── Containment shortcut ─────────────────────────────────────────
     // Detect A⊂B or B⊂A (including A=B) and handle directly.
     // Only applies when BOTH solids have simple analytic classifiers.
     {
@@ -503,7 +494,6 @@ pub fn boolean(
         }
     }
 
-    // ── Broad-phase disjoint intersect ───────────────────────────────
     // If the curvature-aware AABBs of A and B are separated on any axis
     // by more than linear tolerance, the solids provably do not overlap
     // and their intersection is the empty set. Containment shortcuts have
@@ -521,7 +511,6 @@ pub fn boolean(
         }
     }
 
-    // ── GFA pipeline ─────────────────────────────────────────────────
     let algo_op = match op {
         BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
         BooleanOp::Cut => brepkit_algo::bop::BooleanOp::Cut,
@@ -712,7 +701,6 @@ pub fn boolean(
         }
     }
 
-    // ── Multi-region input fallback (Cut only) ───────────────────────
     // When the input solid carries multiple disjoint pieces (a previous
     // cut split a solid into N parts), GFA's pavefiller can't process
     // them together — feeding the whole thing in loses regions. Splitting
@@ -728,7 +716,7 @@ pub fn boolean(
         }
     }
 
-    // ── Mesh boolean fallback (no recursion) ─────────────────────────
+    // Mesh boolean fallback (no recursion).
     let opts = BooleanOptions::default();
     let raw = match mesh_boolean_fallback(topo, op, a, b, opts.deflection, tol, &opts) {
         Ok(raw) => raw,
@@ -768,7 +756,6 @@ pub fn boolean_with_options(
 ) -> Result<SolidId, crate::OperationsError> {
     let result = boolean(topo, op, a, b)?;
     if opts.unify_faces {
-        // Merge co-surface face fragments left by the boolean.
         let unify_opts = brepkit_heal::upgrade::unify_same_domain::UnifyOptions::default();
         if let Err(e) =
             brepkit_heal::upgrade::unify_same_domain::unify_same_domain(topo, result, &unify_opts)
@@ -808,10 +795,6 @@ pub fn compound_cut(
     Ok(result)
 }
 
-// ---------------------------------------------------------------------------
-// Evolution-tracking wrapper
-// ---------------------------------------------------------------------------
-
 /// Perform a boolean operation and return an [`crate::evolution::EvolutionMap`] tracking face
 /// provenance.
 ///
@@ -838,21 +821,14 @@ pub fn boolean_with_evolution(
     input_faces.extend(input_faces_a);
     input_faces.extend(input_faces_b);
 
-    // Run the actual boolean.
     let result = boolean(topo, op, a, b)?;
 
-    // Collect output face normals + centroids.
     let output_faces = collect_face_signatures(topo, result)?;
 
-    // Build the evolution map from geometric face-signature matching.
     let evo = crate::evolution::build_evolution_by_geometry(&input_faces, &output_faces);
 
     Ok((result, evo))
 }
-
-// ---------------------------------------------------------------------------
-// Mesh boolean helpers
-// ---------------------------------------------------------------------------
 
 /// Compute the boolean of two axis-aligned boxes via AABB algebra.
 ///
@@ -3079,10 +3055,6 @@ fn enforce_manifold_shell(
 
     Ok(topo.add_solid(brepkit_topology::solid::Solid::new(outer_id, inner_ids)))
 }
-
-// ---------------------------------------------------------------------------
-// Shared utility functions (relocated from deleted files)
-// ---------------------------------------------------------------------------
 
 /// Sample `n` evenly-spaced points along a closed edge curve.
 ///

@@ -96,7 +96,6 @@ pub fn perform(
 
             let surf_b = &surfs_b[idx_b];
 
-            // Compute raw intersection curves
             let v_range_a = v_ranges_a[idx_a];
             let v_range_b = v_ranges_b[idx_b];
             let raw_curves =
@@ -285,11 +284,9 @@ pub fn perform(
                         .unwrap_or_else(|| topo.add_vertex(Vertex::new(raw.p_end, tol.linear)))
                 };
 
-                // Create a topology edge for this intersection curve.
                 let edge = Edge::new(start_vid, end_vid, raw.curve.clone());
                 let edge_id = topo.add_edge(edge);
 
-                // Create a pave block spanning the full parameter range.
                 let start_pave = Pave::new(start_vid, raw.t_range.0);
                 let end_pave = Pave::new(end_vid, raw.t_range.1);
                 let pb = PaveBlock::new(edge_id, start_pave, end_pave);
@@ -571,7 +568,6 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
         let end_pos = topo.vertex(edge.end())?.point();
         let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
 
-        // Sample edge at several points
         let n: usize = 8;
         for i in 0..=n {
             let t = t0 + (t1 - t0) * (i as f64 / n as f64);
@@ -657,12 +653,10 @@ fn compute_raw_curves(
     v_range_b: Option<(f64, f64)>,
 ) -> Result<Vec<RawCurve>, AlgoError> {
     match (surf_a, surf_b) {
-        // Plane-Plane
         (FaceSurface::Plane { normal: na, d: da }, FaceSurface::Plane { normal: nb, d: db }) => {
             plane_plane_intersection(*na, *da, *nb, *db, bbox_a, bbox_b)
         }
 
-        // Plane-Analytic (plane is A)
         (FaceSurface::Plane { normal, d }, other) if other.as_analytic().is_some() => {
             if let Some(analytic) = other.as_analytic() {
                 plane_analytic_intersection(*normal, *d, &analytic)
@@ -671,7 +665,6 @@ fn compute_raw_curves(
             }
         }
 
-        // Analytic-Plane (plane is B, swap)
         (other, FaceSurface::Plane { normal, d }) if other.as_analytic().is_some() => {
             if let Some(analytic) = other.as_analytic() {
                 plane_analytic_intersection(*normal, *d, &analytic)
@@ -680,7 +673,6 @@ fn compute_raw_curves(
             }
         }
 
-        // Analytic-Analytic
         (a, b) if a.as_analytic().is_some() && b.as_analytic().is_some() => {
             if let (Some(aa), Some(ab)) = (a.as_analytic(), b.as_analytic()) {
                 analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
@@ -689,13 +681,11 @@ fn compute_raw_curves(
             }
         }
 
-        // Plane-NURBS
         (FaceSurface::Plane { normal, d }, FaceSurface::Nurbs(nurbs))
         | (FaceSurface::Nurbs(nurbs), FaceSurface::Plane { normal, d }) => {
             plane_nurbs_intersection(*normal, *d, nurbs)
         }
 
-        // Analytic-NURBS or NURBS-Analytic
         (analytic_surf, FaceSurface::Nurbs(nurbs)) if analytic_surf.as_analytic().is_some() => {
             // Deferred to later phases -- analytic-NURBS is complex
             let _ = nurbs;
@@ -706,7 +696,6 @@ fn compute_raw_curves(
             Ok(Vec::new())
         }
 
-        // NURBS-NURBS
         (FaceSurface::Nurbs(na), FaceSurface::Nurbs(nb)) => nurbs_nurbs_intersection(na, nb),
 
         // Fallback: unsupported pair

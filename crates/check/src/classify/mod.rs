@@ -64,7 +64,6 @@ pub fn classify_point(
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
 
-    // Boundary check: project point onto each face, check distance.
     if is_on_boundary(topo, shell.faces(), point, options.tolerance)? {
         return Ok(PointClassification::OnBoundary);
     }
@@ -186,7 +185,6 @@ fn is_on_boundary(
             }
         };
         if dist < tolerance {
-            // Also check if point projects inside the face boundary.
             let polygon = crate::util::face_polygon(topo, fid)?;
             if polygon.len() >= 3 {
                 let normal = boundary::polygon_normal(&polygon);
@@ -259,7 +257,6 @@ pub fn classify_point_robust(
     if w < 0.4 {
         return Ok(PointClassification::Outside);
     }
-    // Ambiguous — fall back to ray casting.
     classify_point(topo, solid, point, options)
 }
 
@@ -275,7 +272,6 @@ fn count_ray_crossings(
 ) -> Result<u32, CheckError> {
     use brepkit_math::bvh::Bvh;
 
-    // Build face AABBs and BVH for broad-phase filtering.
     let face_aabbs: Vec<(usize, brepkit_math::aabb::Aabb3)> = faces
         .iter()
         .enumerate()

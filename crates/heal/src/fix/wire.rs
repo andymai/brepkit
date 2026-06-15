@@ -71,55 +71,46 @@ fn fix_wire_impl(
 ) -> Result<FixResult, HealError> {
     let mut result = FixResult::ok();
 
-    // 1. Reorder edges to form a connected chain.
     if config.fix_reorder != FixMode::Off {
         let r = fix_reorder(topo, wire_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 2. Close gaps between consecutive edges.
     if config.fix_connectivity != FixMode::Off {
         let r = fix_connected(topo, wire_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 3. Ensure wire closure.
     if config.fix_closure != FixMode::Off {
         let r = fix_closed(topo, wire_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 4. Remove small edges.
     if config.fix_small_edges != FixMode::Off {
         let r = fix_small(topo, wire_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 5. Remove degenerate edges (closed + zero length).
     if config.fix_degenerate_edges != FixMode::Off {
         let r = fix_degenerate(topo, wire_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 6. Close 3D gaps (delegates to connectivity fix).
     if config.fix_gaps_3d != FixMode::Off {
         let r = fix_gaps_3d(topo, wire_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 7. Remove trailing short edges.
     if config.fix_tail != FixMode::Off {
         let r = fix_tail(topo, wire_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 8. Self-intersection detection.
     if config.fix_self_intersection != FixMode::Off {
         let r = fix_self_intersection(topo, wire_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 9. Lacking (PCurve/3D divergence) fix.
     if config.fix_lacking != FixMode::Off {
         if let Some(fid) = face_id {
             let r = fix_lacking(topo, wire_id, fid, ctx, config)?;
@@ -127,19 +118,16 @@ fn fix_wire_impl(
         }
     }
 
-    // 10. Notched edges fix.
     if config.fix_notched != FixMode::Off {
         let r = fix_notched(topo, wire_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 11. Intersecting edges fix.
     if config.fix_intersecting_edges != FixMode::Off {
         let r = fix_intersecting_edges(topo, wire_id, ctx, config)?;
         result.merge(&r);
     }
 
-    // 12. Missing seam fix.
     if config.fix_missing_seam != FixMode::Off {
         if let Some(fid) = face_id {
             let r = fix_missing_seam(topo, wire_id, fid, ctx, config)?;
@@ -149,8 +137,6 @@ fn fix_wire_impl(
 
     Ok(result)
 }
-
-// ── Fix implementations ─────────────────────────────────────────────────
 
 /// Reorder edges to form a connected chain.
 ///
@@ -171,14 +157,12 @@ fn fix_reorder(
 
     let order_result = crate::analysis::wire_order::compute_wire_order(topo, wire_id)?;
 
-    // If already in order, nothing to do.
     let is_identity = order_result.order.iter().enumerate().all(|(i, &o)| o == i)
         && order_result.flips.iter().all(|&f| !f);
     if is_identity {
         return Ok(FixResult::ok());
     }
 
-    // Snapshot: read original edges.
     let wire = topo.wire(wire_id)?;
     let old_edges: Vec<OrientedEdge> = wire.edges().to_vec();
     let is_closed = wire.is_closed();
@@ -187,7 +171,6 @@ fn fix_reorder(
         return Ok(FixResult::ok());
     }
 
-    // Build reordered edge list.
     let mut new_edges = Vec::with_capacity(old_edges.len());
     for (idx, &orig_idx) in order_result.order.iter().enumerate() {
         let oe = old_edges[orig_idx];
@@ -200,7 +183,6 @@ fn fix_reorder(
         new_edges.push(OrientedEdge::new(oe.edge(), forward));
     }
 
-    // Allocate new wire.
     let new_wire = Wire::new(new_edges, is_closed)?;
     let new_wire_id = topo.add_wire(new_wire);
     ctx.reshape.replace_wire(wire_id, new_wire_id);
@@ -251,7 +233,6 @@ fn fix_connected_with_tol(
         return Ok(FixResult::ok());
     }
 
-    // Snapshot: read wire edges and gather vertex pairs to merge.
     let wire = topo.wire(wire_id)?;
     let edges_list: Vec<OrientedEdge> = wire.edges().to_vec();
     let n_edges = edges_list.len();
@@ -263,7 +244,6 @@ fn fix_connected_with_tol(
     let tol_sq = merge_tol * merge_tol;
     let mut merge_pairs: Vec<(VertexId, VertexId)> = Vec::new();
 
-    // Snapshot all oriented endpoint vertex IDs.
     let mut end_vids = Vec::with_capacity(n_edges);
     let mut start_vids = Vec::with_capacity(n_edges);
     for oe in &edges_list {
@@ -272,7 +252,6 @@ fn fix_connected_with_tol(
         start_vids.push(oe.oriented_start(edge));
     }
 
-    // Compare consecutive edge pairs (including wrap-around for closed wires).
     let pairs = if n_edges > 1 { n_edges } else { 0 };
     for i in 0..pairs {
         let next_i = (i + 1) % n_edges;
@@ -302,7 +281,6 @@ fn fix_connected_with_tol(
 
     let gaps_closed = merge_pairs.len();
 
-    // Record vertex replacements in reshape.
     for (from_vid, to_vid) in &merge_pairs {
         ctx.reshape.replace_vertex(*from_vid, *to_vid);
     }
@@ -337,7 +315,6 @@ fn fix_closed(
         return Ok(FixResult::ok());
     }
 
-    // Get last edge's oriented end and first edge's oriented start.
     let last_edge = topo.edge(edges_list[n - 1].edge())?;
     let first_edge = topo.edge(edges_list[0].edge())?;
     let last_end = edges_list[n - 1].oriented_end(last_edge);
@@ -367,7 +344,6 @@ fn fix_closed(
         });
     }
 
-    // Merge first_start into last_end to close the wire.
     ctx.reshape.replace_vertex(first_start, last_end);
 
     ctx.info(format!(
@@ -397,7 +373,6 @@ fn fix_small(
 
     let mut removed = 0;
     for se in &analysis.small_edges {
-        // Snapshot edge data before modifying.
         let edge = topo.edge(se.edge_id)?;
         let start_vid = edge.start();
         let end_vid = edge.end();
@@ -407,7 +382,6 @@ fn fix_small(
             continue;
         }
 
-        // Merge end vertex into start vertex and remove the edge.
         ctx.reshape.replace_vertex(end_vid, start_vid);
         ctx.reshape.remove_edge(se.edge_id);
         removed += 1;
@@ -444,7 +418,6 @@ fn fix_degenerate(
         return Ok(FixResult::ok());
     }
 
-    // Snapshot: read the wire's edge list.
     let wire = topo.wire(wire_id)?;
     let edges_list: Vec<OrientedEdge> = wire.edges().to_vec();
     let is_closed = wire.is_closed();
@@ -469,7 +442,6 @@ fn fix_degenerate(
         return Ok(FixResult::ok());
     }
 
-    // Rebuild wire without degenerate edges, if any remain.
     if !new_edges.is_empty() {
         let new_wire = Wire::new(new_edges, is_closed)?;
         let new_wire_id = topo.add_wire(new_wire);
@@ -507,7 +479,6 @@ fn fix_gaps_3d(
 ) -> Result<FixResult, HealError> {
     let mut result = fix_connected(topo, wire_id, ctx, config)?;
 
-    // Re-analyze: did nominal-tolerance pass close every gap?
     let post = crate::analysis::wire::analyze_wire(topo, wire_id, &ctx.tolerance)?;
     if post.gaps.is_empty() {
         return Ok(result);
@@ -562,7 +533,6 @@ fn fix_tail(
 
     let tol = ctx.tolerance.linear;
 
-    // Check trailing edge (last edge).
     let last_oe = edges_list[n - 1];
     let last_edge = topo.edge(last_oe.edge())?;
     let last_start = topo.vertex(last_edge.start())?.point();
@@ -579,7 +549,6 @@ fn fix_tail(
         return Ok(FixResult::ok());
     }
 
-    // Remove trailing edge.
     let new_edges: Vec<OrientedEdge> = edges_list[..n - 1].to_vec();
     if new_edges.is_empty() {
         return Ok(FixResult::ok());
@@ -601,8 +570,6 @@ fn fix_tail(
     })
 }
 
-// ── Wire fix implementations ─────────────────────────────────────────
-
 /// Detect self-intersections in the wire by checking non-adjacent edge
 /// pairs for polyline crossings.
 ///
@@ -615,7 +582,6 @@ fn fix_self_intersection(
     ctx: &mut HealContext,
     config: &FixConfig,
 ) -> Result<FixResult, HealError> {
-    // Snapshot wire edges.
     let wire = topo.wire(wire_id)?;
     let edges_list: Vec<OrientedEdge> = wire.edges().to_vec();
     let n = edges_list.len();
@@ -625,7 +591,6 @@ fn fix_self_intersection(
         return Ok(FixResult::ok());
     }
 
-    // Sample each edge to a polyline of 10 points.
     let num_samples = 10;
     let mut polylines: Vec<Vec<brepkit_math::vec::Point3>> = Vec::with_capacity(n);
     for oe in &edges_list {
@@ -642,12 +607,10 @@ fn fix_self_intersection(
         polylines.push(pts);
     }
 
-    // Find the dominant projection plane from all points.
     let dominant_axis = find_dominant_axis(&polylines);
 
     let mut crossings_found = 0usize;
 
-    // Check all non-adjacent edge pairs.
     for i in 0..n {
         for j in (i + 2)..n {
             // Skip adjacent pair (last, first) in closed wires.
@@ -683,7 +646,6 @@ fn fix_self_intersection(
 fn find_dominant_axis(polylines: &[Vec<brepkit_math::vec::Point3>]) -> usize {
     use brepkit_math::vec::Vec3;
 
-    // Compute centroid.
     let mut sum = Vec3::new(0.0, 0.0, 0.0);
     let mut count = 0usize;
     for pts in polylines {
@@ -701,7 +663,6 @@ fn find_dominant_axis(polylines: &[Vec<brepkit_math::vec::Point3>]) -> usize {
     let cy = sum.y() * inv;
     let cz = sum.z() * inv;
 
-    // Compute variance per axis.
     let mut vx = 0.0_f64;
     let mut vy = 0.0_f64;
     let mut vz = 0.0_f64;
@@ -799,8 +760,6 @@ fn fix_lacking(
     ctx: &mut HealContext,
     config: &FixConfig,
 ) -> Result<FixResult, HealError> {
-    // Snapshot edge data: for each edge, store (edge_id, curve_type,
-    // start_vid, end_vid, start_pos, end_pos, domain).
     struct EdgeSnapshot {
         start_vid: VertexId,
         end_vid: VertexId,
@@ -845,7 +804,6 @@ fn fix_lacking(
     for snap in &snapshots {
         let start_dev = (snap.start_pos - snap.curve_start).length();
         if start_dev > tol {
-            // Create a new vertex at the corrected position and replace via reshape.
             let new_vid =
                 topo.add_vertex(brepkit_topology::vertex::Vertex::new(snap.curve_start, tol));
             ctx.reshape.replace_vertex(snap.start_vid, new_vid);
@@ -895,7 +853,6 @@ fn fix_notched(
     ctx: &mut HealContext,
     config: &FixConfig,
 ) -> Result<FixResult, HealError> {
-    // Snapshot edge data for cusp detection.
     struct EdgeInfo {
         oe: OrientedEdge,
         start_vid: VertexId,
@@ -925,7 +882,6 @@ fn fix_notched(
         let length = (o_end_pos - o_start_pos).length();
 
         let (t0, t1) = edge.curve().domain_with_endpoints(raw_start, raw_end);
-        // Tangent at the oriented start and end.
         let (ts, te) = if oe.is_forward() {
             (
                 edge.curve().tangent_with_endpoints(t0, raw_start, raw_end),
@@ -952,7 +908,6 @@ fn fix_notched(
     let mut cusps_found = 0usize;
     let mut edges_to_remove = std::collections::HashSet::new();
 
-    // Check consecutive pairs for cusps.
     let pairs = if topo.wire(wire_id)?.is_closed() {
         n
     } else {
@@ -967,7 +922,6 @@ fn fix_notched(
         let end_tan = infos[i].end_tangent;
         let start_tan = infos[j].start_tangent;
 
-        // Normalize tangents for dot product.
         let end_len = end_tan.length();
         let start_len = start_tan.length();
         if end_len < 1e-15 || start_len < 1e-15 {
@@ -976,7 +930,6 @@ fn fix_notched(
         let dot = end_tan.dot(start_tan) / (end_len * start_len);
 
         if dot < -0.9 {
-            // Cusp detected. Remove the shorter edge if below tolerance.
             let (remove_idx, keep_idx) = if infos[i].length <= infos[j].length {
                 (i, j)
             } else {
@@ -985,7 +938,6 @@ fn fix_notched(
 
             if infos[remove_idx].length < tol {
                 edges_to_remove.insert(remove_idx);
-                // Merge vertices of the removed edge.
                 let from = infos[remove_idx].end_vid;
                 let to = infos[keep_idx].start_vid;
                 if from != to {
@@ -1042,7 +994,6 @@ fn fix_intersecting_edges(
         return Ok(FixResult::ok());
     }
 
-    // Sample each edge to a polyline of 20 points.
     let num_samples = 20;
     let mut polylines: Vec<Vec<brepkit_math::vec::Point3>> = Vec::with_capacity(n);
     for oe in &edges_list {
@@ -1062,7 +1013,6 @@ fn fix_intersecting_edges(
     let dominant_axis = find_dominant_axis(&polylines);
     let mut crossings_found = 0usize;
 
-    // Check consecutive edge pairs (excluding the shared vertex endpoints).
     let pairs = if topo.wire(wire_id)?.is_closed() {
         n
     } else {
@@ -1124,7 +1074,6 @@ fn fix_missing_seam(
 ) -> Result<FixResult, HealError> {
     use std::f64::consts::TAU;
 
-    // Check if the face surface is periodic.
     let face = topo.face(face_id)?;
     let surface = face.surface().clone();
 
@@ -1134,13 +1083,10 @@ fn fix_missing_seam(
         | FaceSurface::Sphere(_)
         | FaceSurface::Torus(_) => TAU,
         FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => {
-            // Not periodic.
             return Ok(FixResult::ok());
         }
     };
 
-    // Sample wire edge endpoints and project onto the surface to get
-    // the u-parameter range.
     let wire = topo.wire(wire_id)?;
     let edges_list: Vec<OrientedEdge> = wire.edges().to_vec();
 

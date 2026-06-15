@@ -24,8 +24,6 @@ use crate::section::CircSection;
 use crate::spherical_triangle::{VertexContactData, build_n_edge_corner, build_spherical_corner};
 use crate::stripe::Stripe;
 
-// ── Types ──────────────────────────────────────────────────────────
-
 /// Classification of a vertex blend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CornerType {
@@ -48,8 +46,6 @@ pub struct CornerResult {
     /// New vertices created for the corner patch.
     pub new_vertices: Vec<VertexId>,
 }
-
-// ── Helpers ────────────────────────────────────────────────────────
 
 /// Tolerance for floating-point comparisons.
 const TOL: f64 = 1e-7;
@@ -93,10 +89,8 @@ fn contact_points_at_vertex(
         return Option::None;
     }
 
-    // Check if vertex is at start of first edge
     let first_edge = topo.edge(edges[0]).ok()?;
     if first_edge.start() == vertex_id || first_edge.end() == vertex_id {
-        // Determine if it's the start or end of the spine
         let is_start = first_edge.start() == vertex_id;
         if is_start {
             let sec = stripe.sections.first()?;
@@ -104,7 +98,6 @@ fn contact_points_at_vertex(
         }
     }
 
-    // Check if vertex is at end of last edge
     let last_edge = topo.edge(edges[edges.len() - 1]).ok()?;
     if last_edge.end() == vertex_id || last_edge.start() == vertex_id {
         let is_end = last_edge.end() == vertex_id;
@@ -137,7 +130,6 @@ fn collect_contact_points(
     let mut points = Vec::new();
     for &idx in stripe_indices {
         if let Some((p1, p2)) = contact_points_at_vertex(vertex_id, &stripes[idx], topo) {
-            // Add if not duplicate
             if !points.iter().any(|q: &Point3| (*q - p1).length() < TOL) {
                 points.push(p1);
             }
@@ -169,21 +161,18 @@ fn contact_section_at_vertex<'a>(
         return Option::None;
     }
 
-    // Check start of first edge
     if let Ok(first_edge) = topo.edge(edges[0]) {
         if first_edge.start() == vertex_id {
             return stripe.sections.first();
         }
     }
 
-    // Check end of last edge
     if let Ok(last_edge) = topo.edge(edges[edges.len() - 1]) {
         if last_edge.end() == vertex_id {
             return stripe.sections.last();
         }
     }
 
-    // Proximity fallback
     let vpos = topo.vertex(vertex_id).ok()?.point();
     let first = stripe.sections.first()?;
     let last = stripe.sections.last()?;
@@ -228,8 +217,6 @@ fn build_triangular_patch(
     Ok((surface, vec![v0, v1, v2], vec![e0, e1, e2]))
 }
 
-// ── Classification ─────────────────────────────────────────────────
-
 /// Classify the vertex blend type based on the stripes meeting at this vertex.
 #[must_use]
 pub fn classify_corner(vertex_id: VertexId, stripes: &[Stripe], topo: &Topology) -> CornerType {
@@ -241,8 +228,6 @@ pub fn classify_corner(vertex_id: VertexId, stripes: &[Stripe], topo: &Topology)
         n => CornerType::MultiEdge(n),
     }
 }
-
-// ── Multi-Edge Builder (spherical triangle) ───────────────────────
 
 /// Build corner patches for 3+ stripes meeting at a vertex using
 /// spherical triangle patches from the `spherical_triangle` module.
@@ -266,18 +251,15 @@ fn build_multi_edge_corner(
         return Err(BlendError::CornerFailure { vertex: vertex_id });
     }
 
-    // Get the fillet radius from the first stripe at this vertex.
     let radius = stripe_radius_at_vertex(vertex_id, &stripes[indices[0]], topo)
         .ok_or(BlendError::CornerFailure { vertex: vertex_id })?;
 
-    // Gather face normals from the faces adjacent to the stripes at this vertex.
     let mut face_normals: Vec<Vec3> = Vec::new();
     for &idx in &indices {
         let stripe = &stripes[idx];
         for face_id in [stripe.face1, stripe.face2] {
             let face_surf = topo.face(face_id)?.surface().clone();
             let n = face_surf.normal(0.0, 0.0);
-            // Only add if not a near-duplicate.
             let is_dup = face_normals
                 .iter()
                 .any(|existing| existing.dot(n).abs() > 1.0 - ORTHO_COS_TOL);
@@ -321,15 +303,12 @@ fn build_multi_edge_corner(
         vertex_id,
     };
 
-    // Delegate to the spherical triangle module.
     let spherical_results = if data.contact_points.len() == 3 {
         vec![build_spherical_corner(&data)?]
     } else {
         build_n_edge_corner(&data)?
     };
 
-    // Convert each SphericalCornerResult into a CornerResult by creating
-    // face topology from the surface and boundary curves.
     let mut results = Vec::with_capacity(spherical_results.len());
 
     for sr in spherical_results {
@@ -337,14 +316,12 @@ fn build_multi_edge_corner(
         let mut new_vertices = Vec::with_capacity(n_curves);
         let mut new_edges = Vec::with_capacity(n_curves);
 
-        // Create vertices at the start of each boundary curve.
         for curve in &sr.boundary_curves {
             let pt = curve.evaluate(0.0);
             let vid = topo.add_vertex(Vertex::new(pt, TOL));
             new_vertices.push(vid);
         }
 
-        // Create edges with the boundary curves as NurbsCurve geometry.
         for i in 0..n_curves {
             let v_start = new_vertices[i];
             let v_end = new_vertices[(i + 1) % n_curves];
@@ -353,7 +330,6 @@ fn build_multi_edge_corner(
             new_edges.push(eid);
         }
 
-        // Build wire from oriented edges.
         let oriented_edges: Vec<OrientedEdge> = new_edges
             .iter()
             .map(|&eid| OrientedEdge::new(eid, true))
@@ -361,7 +337,6 @@ fn build_multi_edge_corner(
         let wire = Wire::new(oriented_edges, true)?;
         let wire_id = topo.add_wire(wire);
 
-        // Create the face.
         let face = Face::new(wire_id, Vec::new(), sr.surface.clone());
         let face_id = topo.add_face(face);
 
@@ -375,8 +350,6 @@ fn build_multi_edge_corner(
 
     Ok(results)
 }
-
-// ── Two-Edge Builder ───────────────────────────────────────────────
 
 /// Build a simple triangular fill for 2 stripes meeting at a vertex.
 ///
@@ -419,8 +392,6 @@ fn build_two_edge_patch(
     })
 }
 
-// ── Top-Level Entry Point ──────────────────────────────────────────
-
 /// Compute vertex blend patches for all corners where multiple stripes meet.
 ///
 /// Iterates over all vertices of the solid, classifies each, and builds
@@ -457,8 +428,6 @@ pub fn compute_corners(
     Ok(results)
 }
 
-// ── Tests ──────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -485,7 +454,6 @@ mod tests {
     ) {
         let mut topo = Topology::new();
 
-        // Box vertices at unit cube corners
         let v000 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), TOL));
         let v100 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), TOL));
         let v010 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 0.0), TOL));
@@ -495,12 +463,10 @@ mod tests {
         let v011 = topo.add_vertex(Vertex::new(Point3::new(0.0, 1.0, 1.0), TOL));
         let v111 = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 1.0), TOL));
 
-        // Edges along X, Y, Z from origin vertex
         let ex = topo.add_edge(Edge::new(v000, v100, EdgeCurve::Line));
         let ey = topo.add_edge(Edge::new(v000, v010, EdgeCurve::Line));
         let ez = topo.add_edge(Edge::new(v000, v001, EdgeCurve::Line));
 
-        // Additional edges for face closure (minimal for test)
         let exy = topo.add_edge(Edge::new(v100, v110, EdgeCurve::Line));
         let eyx = topo.add_edge(Edge::new(v010, v110, EdgeCurve::Line));
         let exz = topo.add_edge(Edge::new(v100, v101, EdgeCurve::Line));
@@ -508,7 +474,6 @@ mod tests {
         let eyz = topo.add_edge(Edge::new(v010, v011, EdgeCurve::Line));
         let ezy = topo.add_edge(Edge::new(v001, v011, EdgeCurve::Line));
 
-        // Faces adjacent to the origin corner (XY, XZ, YZ planes)
         let face_xy = {
             let w = Wire::new(
                 vec![
@@ -578,7 +543,6 @@ mod tests {
             topo.add_face(f)
         };
 
-        // Opposite faces (for a complete shell)
         let e_top1 = topo.add_edge(Edge::new(v101, v111, EdgeCurve::Line));
         let e_top2 = topo.add_edge(Edge::new(v011, v111, EdgeCurve::Line));
         let face_top = {
@@ -650,7 +614,6 @@ mod tests {
             topo.add_face(f)
         };
 
-        // Build shell and solid
         let shell = Shell::new(vec![
             face_xy, face_xz, face_yz, face_top, face_right, face_back,
         ])
@@ -659,11 +622,8 @@ mod tests {
         let solid = Solid::new(shell_id, vec![]);
         let solid_id = topo.add_solid(solid);
 
-        // Create 3 stripes along the 3 edges from the origin vertex.
-        // Each stripe has a radius and sections with contact points.
         let radius = 0.2;
 
-        // Stripe along X edge (between face_xy and face_xz)
         let spine_x = Spine::from_single_edge(&topo, ex).unwrap();
         let stripe_x = Stripe {
             spine: spine_x,
@@ -723,7 +683,6 @@ mod tests {
             ],
         };
 
-        // Stripe along Y edge (between face_xy and face_yz)
         let spine_y = Spine::from_single_edge(&topo, ey).unwrap();
         let stripe_y = Stripe {
             spine: spine_y,
@@ -783,7 +742,6 @@ mod tests {
             ],
         };
 
-        // Stripe along Z edge (between face_xz and face_yz)
         let spine_z = Spine::from_single_edge(&topo, ez).unwrap();
         let stripe_z = Stripe {
             spine: spine_z,

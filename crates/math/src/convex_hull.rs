@@ -37,7 +37,6 @@ pub fn convex_hull_3d(points: &[Point3]) -> Option<ConvexHull> {
         return None;
     }
 
-    // Deduplicate points within tolerance.
     let tol = 1e-10;
     let mut pts: Vec<Point3> = Vec::with_capacity(points.len());
     for &p in points {
@@ -50,10 +49,8 @@ pub fn convex_hull_3d(points: &[Point3]) -> Option<ConvexHull> {
         return None;
     }
 
-    // --- Step 1: Find initial tetrahedron ---
     let tet = find_initial_tetrahedron(&pts)?;
 
-    // Build initial face list (4 triangles of the tetrahedron).
     let mut faces: Vec<HullFace> = Vec::new();
     let tet_faces = [
         [tet[0], tet[1], tet[2]],
@@ -89,7 +86,6 @@ pub fn convex_hull_3d(points: &[Point3]) -> Option<ConvexHull> {
         }
     }
 
-    // --- Step 2-5: Incremental insertion ---
     let tet_set: std::collections::HashSet<usize> = tet.iter().copied().collect();
 
     for (pi, &point) in pts.iter().enumerate() {
@@ -97,7 +93,6 @@ pub fn convex_hull_3d(points: &[Point3]) -> Option<ConvexHull> {
             continue;
         }
 
-        // Find visible faces.
         let mut visible: Vec<usize> = Vec::new();
         for (fi, face) in faces.iter().enumerate() {
             if face.alive && signed_distance(face, point) > tol {
@@ -109,7 +104,7 @@ pub fn convex_hull_3d(points: &[Point3]) -> Option<ConvexHull> {
             continue; // Point is inside the hull.
         }
 
-        // Find horizon edges (edges shared by exactly one visible face).
+        // Horizon edges are shared by exactly one visible face.
         let mut horizon: Vec<[usize; 2]> = Vec::new();
         for &fi in &visible {
             let f = &faces[fi];
@@ -125,12 +120,10 @@ pub fn convex_hull_3d(points: &[Point3]) -> Option<ConvexHull> {
             }
         }
 
-        // Kill visible faces.
         for &fi in &visible {
             faces[fi].alive = false;
         }
 
-        // Create new faces from horizon edges to the new point.
         for &[a, b] in &horizon {
             let normal = face_normal(&pts, a, b, pi);
             let d = -(normal.x() * pts[a].x() + normal.y() * pts[a].y() + normal.z() * pts[a].z());
@@ -154,7 +147,6 @@ pub fn convex_hull_3d(points: &[Point3]) -> Option<ConvexHull> {
         }
     }
 
-    // Collect alive faces.
     let alive_faces: Vec<[usize; 3]> = faces.iter().filter(|f| f.alive).map(|f| f.verts).collect();
 
     if alive_faces.is_empty() {

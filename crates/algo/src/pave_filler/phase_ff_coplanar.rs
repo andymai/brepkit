@@ -37,7 +37,6 @@ pub fn perform(
     let faces_a = brepkit_topology::explorer::solid_faces(topo, solid_a)?;
     let faces_b = brepkit_topology::explorer::solid_faces(topo, solid_b)?;
 
-    // Collect plane face data: (FaceId, normal, d)
     let planes_a = collect_plane_faces(topo, &faces_a)?;
     let planes_b = collect_plane_faces(topo, &faces_b)?;
 
@@ -45,7 +44,6 @@ pub fn perform(
         return Ok(());
     }
 
-    // Pre-compute AABBs
     let bboxes_a = compute_face_bboxes(topo, &planes_a)?;
     let bboxes_b = compute_face_bboxes(topo, &planes_b)?;
 
@@ -55,26 +53,24 @@ pub fn perform(
         planes_b.len()
     );
 
-    // Find coplanar pairs
     for (idx_a, &(fa, na, da)) in planes_a.iter().enumerate() {
         let bbox_a = &bboxes_a[idx_a];
 
         for (idx_b, &(fb, nb, db)) in planes_b.iter().enumerate() {
             let bbox_b = &bboxes_b[idx_b];
 
-            // Check parallel: |dot(na, nb)| > 1 - angular_tol
             let dot = na.dot(nb);
             if dot.abs() < 1.0 - tol.angular {
                 continue;
             }
 
-            // Check coplanar: same plane distance (accounting for normal direction)
+            // Coplanar test accounts for normal direction: anti-parallel
+            // normals describe the same plane when da == -db.
             let sign = if dot > 0.0 { 1.0 } else { -1.0 };
             if (da - db * sign).abs() > tol.linear {
                 continue;
             }
 
-            // AABB overlap check
             if !bbox_a
                 .expanded(tol.linear)
                 .intersects(bbox_b.expanded(tol.linear))
@@ -82,12 +78,10 @@ pub fn perform(
                 continue;
             }
 
-            // Skip pairs that already have FF section edges
             if has_existing_ff_interference(arena, fa, fb) {
                 continue;
             }
 
-            // Process this coplanar pair
             process_coplanar_pair(topo, fa, na, fb, tol, arena)?;
         }
     }
@@ -166,7 +160,6 @@ fn has_existing_section_at(
     tol: Tolerance,
 ) -> bool {
     for curve in &arena.curves {
-        // Must involve at least one of our faces
         if curve.face_a != face_a
             && curve.face_a != face_b
             && curve.face_b != face_a
@@ -175,7 +168,6 @@ fn has_existing_section_at(
             continue;
         }
 
-        // Check AABB overlap
         let edge_min = Point3::new(
             p_start.x().min(p_end.x()),
             p_start.y().min(p_end.y()),
@@ -237,15 +229,12 @@ fn process_coplanar_pair(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
-    // Build a 2D projection frame from the shared plane
     let origin = first_wire_vertex(topo, face_a)?;
     let frame = PlaneFrame2D::new(normal, origin);
 
-    // Collect boundary polygons in 2D for both faces
     let poly_a = face_boundary_polygon_2d(topo, face_a, &frame)?;
     let poly_b = face_boundary_polygon_2d(topo, face_b, &frame)?;
 
-    // Collect boundary edges with their 2D endpoints
     let edges_a = face_boundary_edges_2d(topo, face_a, &frame)?;
     let edges_b = face_boundary_edges_2d(topo, face_b, &frame)?;
 
@@ -261,7 +250,6 @@ fn process_coplanar_pair(
         }
     }
 
-    // For each boundary edge of face_a, check if it's inside face_b
     for &(_, p2d_start, p2d_end, p3d_start, p3d_end) in &edges_a {
         if should_create_section_edge(p2d_start, p2d_end, &poly_b, &edges_b, tol.linear)
             && !has_existing_section_at(arena, face_a, face_b, p3d_start, p3d_end, tol)
@@ -279,7 +267,6 @@ fn process_coplanar_pair(
         let end_edge = which_boundary_edge(p2d_end, &edges_a, tol.linear);
         if let (Some(si), Some(ei)) = (start_edge, end_edge) {
             if si == ei {
-                // B's edge coincides with A's edge at index si.
                 let a_eid = edges_a[si].0;
                 create_coplanar_common_block(arena, a_eid, b_eid, tol.linear);
             }
@@ -388,7 +375,6 @@ fn should_create_section_edge(
         }
     }
 
-    // Check if the edge midpoint is inside the target polygon
     let mid = Point2::new(
         (p2d_start.x() + p2d_end.x()) * 0.5,
         (p2d_start.y() + p2d_end.y()) * 0.5,
@@ -409,7 +395,6 @@ fn create_coplanar_common_block(
     b_edge: brepkit_topology::edge::EdgeId,
     tol: f64,
 ) {
-    // Find leaf PaveBlocks for each edge
     let get_leaves = |edge: brepkit_topology::edge::EdgeId| -> Vec<PaveBlockId> {
         arena
             .edge_pave_blocks
@@ -468,11 +453,9 @@ fn create_section_edge(
         return Ok(());
     }
 
-    // Find or create vertices at the endpoints
     let start_vid = find_or_create_vertex(topo, arena, p3d_start, tol);
     let end_vid = find_or_create_vertex(topo, arena, p3d_end, tol);
 
-    // Create a topology edge (Line between the two points)
     let edge = Edge::new(start_vid, end_vid, EdgeCurve::Line);
     let edge_id = topo.add_edge(edge);
 
@@ -492,7 +475,6 @@ fn create_section_edge(
         .or_default()
         .push(pb_id);
 
-    // Create the intersection curve entry
     let bbox = Aabb3 {
         min: Point3::new(
             p3d_start.x().min(p3d_end.x()),
@@ -628,13 +610,11 @@ fn point_on_segment_2d(pt: Point2, a: Point2, b: Point2, tol: f64) -> bool {
         return ap.x() * ap.x() + ap.y() * ap.y() <= tol * tol;
     }
 
-    // Project pt onto the line through a→b
     let t = (ap.x() * ab.x() + ap.y() * ab.y()) / ab_len_sq;
     if t < -tol || t > 1.0 + tol {
         return false;
     }
 
-    // Distance from pt to the closest point on the segment
     let closest_x = a.x() + t.clamp(0.0, 1.0) * ab.x();
     let closest_y = a.y() + t.clamp(0.0, 1.0) * ab.y();
     let dx = pt.x() - closest_x;

@@ -57,7 +57,6 @@ pub fn interpolate_surface(
         return Err(MathError::EmptyInput);
     }
 
-    // Validate grid consistency.
     for row in points {
         if row.len() != num_cols {
             return Err(MathError::InvalidControlPointGrid {
@@ -152,7 +151,6 @@ pub fn approximate_surface_lspia(
     tolerance: f64,
     max_iterations: usize,
 ) -> Result<NurbsSurface, MathError> {
-    // Validate input grid.
     if points.is_empty() || points[0].is_empty() {
         return Err(MathError::EmptyInput);
     }
@@ -172,11 +170,9 @@ pub fn approximate_surface_lspia(
     let mu = num_cps_u.min(rows).max(pu + 1);
     let mv = num_cps_v.min(cols).max(pv + 1);
 
-    // Compute parameters for rows (u) and columns (v).
     let params_u = compute_grid_params_u(points, rows, cols);
     let params_v = compute_grid_params_v(points, rows, cols);
 
-    // Build knot vectors.
     let knots_u = fitting::build_approximation_knots(&params_u, pu, mu, rows);
     let knots_v = fitting::build_approximation_knots(&params_v, pv, mv, cols);
 
@@ -194,7 +190,6 @@ pub fn approximate_surface_lspia(
 
     let weights = vec![vec![1.0; mv]; mu];
 
-    // Precompute basis values.
     let basis_u_data: Vec<(usize, Vec<f64>)> = params_u
         .iter()
         .map(|&u| {
@@ -223,7 +218,6 @@ pub fn approximate_surface_lspia(
         1.0 / lambda_max
     };
 
-    // Iterate.
     for iter in 0..max_iterations {
         let surface = NurbsSurface::new(
             pu,

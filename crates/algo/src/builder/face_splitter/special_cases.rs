@@ -582,9 +582,6 @@ pub(super) fn split_face_with_internal_loops(
             // Preserve the section's pave_block_id so cross-face edge
             // sharing (box face inner wire ↔ cylinder face outer wire)
             // works through `resolve_edge_vertices`'s PaveBlock path.
-            // Previously dropped to None, which forced position-fallback
-            // lookup that created duplicate vertices on the cylinder
-            // side of cylinder-cut booleans.
             pave_block_id: section.pave_block_id,
         });
     }
@@ -601,7 +598,6 @@ pub(super) fn split_face_with_internal_loops(
         let mut chain = vec![forward_edges[start_idx].clone()];
         let loop_start_3d = chain[0].start_3d;
 
-        // Follow the chain until we close the loop.
         loop {
             let last_end = chain.last().map_or(loop_start_3d, |e| e.end_3d);
 
@@ -656,7 +652,6 @@ pub(super) fn split_face_with_internal_loops(
         loops.iter().map(Vec::len).collect::<Vec<_>>()
     );
 
-    // Build sub-faces.
     let mut result = Vec::new();
 
     // For each closed loop: create an "inside" sub-face.

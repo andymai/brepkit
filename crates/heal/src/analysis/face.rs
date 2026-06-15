@@ -36,7 +36,6 @@ pub fn analyze_face(
     let face = topo.face(face_id)?;
     let wire_count = 1 + face.inner_wires().len();
 
-    // Collect all vertex positions from all wires.
     let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
         .chain(face.inner_wires().iter().copied())
         .collect();

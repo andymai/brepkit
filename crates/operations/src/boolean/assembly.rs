@@ -22,10 +22,6 @@ use super::classify::polygon_centroid;
 use super::face_polygon;
 use super::types::{FaceSpec, MIN_SOLID_FACES};
 
-// ---------------------------------------------------------------------------
-// Spatial hashing helpers
-// ---------------------------------------------------------------------------
-
 /// Quantize a coordinate to a spatial hash key.
 #[inline]
 #[allow(clippy::cast_possible_truncation)] // coordinate * 1e7 fits in i64
@@ -66,10 +62,6 @@ pub(super) fn vertex_merge_resolution(
         fallback
     }
 }
-
-// ---------------------------------------------------------------------------
-// Solid assembly
-// ---------------------------------------------------------------------------
 
 /// Assemble a solid from a set of planar face polygons with normals.
 ///
@@ -447,12 +439,6 @@ pub(crate) fn assemble_solid_mixed(
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
-// ---------------------------------------------------------------------------
-// Degenerate result detection
-// ---------------------------------------------------------------------------
-// Manifold shell building
-// ---------------------------------------------------------------------------
-
 /// Resolve non-manifold edges using manifold pairing.
 ///
 /// For each edge shared by 3+ faces, select the best pair (faces with
@@ -579,10 +565,6 @@ fn build_manifold_shell(
 
     Ok(face_ids.to_vec())
 }
-
-// ---------------------------------------------------------------------------
-// Degenerate result detection
-// ---------------------------------------------------------------------------
 
 /// Validate that a boolean result is not degenerate.
 ///
@@ -759,10 +741,6 @@ pub(super) fn face_components(topo: &Topology, solid: SolidId) -> Vec<Vec<FaceId
     }
     components
 }
-
-// ---------------------------------------------------------------------------
-// Post-assembly edge refinement
-// ---------------------------------------------------------------------------
 
 /// Split long boundary edges at intermediate collinear vertices.
 ///
@@ -973,7 +951,6 @@ pub(super) fn refine_boundary_edges(
         return Ok(());
     }
 
-    // Rebuild faces that have edges needing splits
     for fi in 0..face_ids.len() {
         let fid = face_ids[fi];
         let face = topo.face(fid)?;
@@ -998,7 +975,6 @@ pub(super) fn refine_boundary_edges(
         let is_reversed = face.is_reversed();
         let old_edges: Vec<OrientedEdge> = outer_wire.edges().to_vec();
 
-        // Rebuild the outer wire with split edges
         let mut new_oriented_edges = Vec::new();
         for oe in &old_edges {
             if let Some(intermediates) = edge_splits.get(&oe.edge()) {
@@ -1079,10 +1055,6 @@ pub(super) fn refine_boundary_edges(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Post-assembly boundary edge stitching
-// ---------------------------------------------------------------------------
-
 /// Merge geometrically-coincident boundary edge pairs.
 ///
 /// After boolean assembly, the spatial-hash vertex deduplication may map
@@ -1109,7 +1081,6 @@ pub(super) fn stitch_boundary_edges(
         face_idx: usize,
     }
 
-    // 1. Build edge→face count and collect edge metadata.
     let mut edge_face_count: HashMap<EdgeId, usize> = HashMap::new();
     let mut edge_vertices: HashMap<EdgeId, (VertexId, VertexId)> = HashMap::new();
     // Track which face and wire own each edge for later rewriting.
@@ -1134,7 +1105,6 @@ pub(super) fn stitch_boundary_edges(
         }
     }
 
-    // 2. Collect boundary edges (count == 1) with endpoint positions.
     let mut boundary_edges: Vec<BoundaryEdgeInfo> = Vec::new();
     for (&eid, &count) in &edge_face_count {
         if count != 1 {
@@ -1170,7 +1140,6 @@ pub(super) fn stitch_boundary_edges(
         return Ok(0);
     }
 
-    // 3. Build spatial hash grid of boundary edge midpoints.
     let tol_linear = tol.linear;
     let cell_size = boundary_edges
         .iter()
@@ -1192,7 +1161,6 @@ pub(super) fn stitch_boundary_edges(
         grid.entry((cx, cy, cz)).or_default().push(i);
     }
 
-    // 4. Find matching pairs.
     let mut stitched: HashSet<EdgeId> = HashSet::new();
     // Map: (face_idx, old_edge_id) → replacement_edge_id
     let mut replacements: HashMap<(usize, EdgeId), EdgeId> = HashMap::new();
@@ -1213,7 +1181,6 @@ pub(super) fn stitch_boundary_edges(
         let cy = (mid.y() * inv_cell).floor() as i64;
         let cz = (mid.z() * inv_cell).floor() as i64;
 
-        // Query 3×3×3 neighborhood
         let mut best_match: Option<usize> = None;
         let mut best_dist_sq = f64::INFINITY;
 
@@ -1300,8 +1267,7 @@ pub(super) fn stitch_boundary_edges(
         vertex_remap.len()
     );
 
-    // 5. Apply vertex remaps to ALL edges in affected faces.
-    //    Cascade: if A→B and B→C, then A→C.
+    // Cascade vertex remaps: if A→B and B→C, then A→C.
     let mut resolved_remap: HashMap<VertexId, VertexId> = HashMap::new();
     for (&from, &to) in &vertex_remap {
         let mut target = to;
@@ -1394,10 +1360,6 @@ pub(super) fn stitch_boundary_edges(
     Ok(stitch_count)
 }
 
-// ---------------------------------------------------------------------------
-// Non-manifold edge splitting
-// ---------------------------------------------------------------------------
-
 /// Split non-manifold edges into multiple coincident copies.
 ///
 /// After boolean assembly, some edges may be shared by more than 2 faces.
@@ -1418,7 +1380,6 @@ pub(super) fn split_nonmanifold_edges(
     let mut edge_faces: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
     for (fi, &fid) in face_ids.iter().enumerate() {
         let face = topo.face(fid)?;
-        // Traverse outer wire and all inner wires.
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             let wire = topo.wire(wid)?;
             for oe in wire.edges() {
@@ -1462,7 +1423,6 @@ pub(super) fn split_nonmanifold_edges(
         let start_pos = topo.vertex(edge_start)?.point();
         let end_pos = topo.vertex(edge_end)?.point();
 
-        // Edge direction vector.
         let edge_dir = Vec3::new(
             end_pos.x() - start_pos.x(),
             end_pos.y() - start_pos.y(),
@@ -1554,7 +1514,6 @@ pub(super) fn split_nonmanifold_edges(
             face_angles.push((fi, is_fwd, angle));
         }
 
-        // Sort by angle.
         face_angles.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
         // Pair consecutive faces (in angular order) and assign edge copies.
@@ -1585,7 +1544,6 @@ pub(super) fn split_nonmanifold_edges(
         return Ok(());
     }
 
-    // Rebuild face wires with replaced edges.
     let affected_faces: HashSet<usize> = edge_replacements.keys().map(|(fi, _)| *fi).collect();
     for fi in affected_faces {
         let fid = face_ids[fi];
@@ -1619,10 +1577,6 @@ pub(super) fn split_nonmanifold_edges(
 
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Shared-boundary fuse fast path
-// ---------------------------------------------------------------------------
 
 /// Compute a representative normal and d-value for a face surface.
 #[allow(dead_code)]
@@ -1792,10 +1746,6 @@ pub(super) fn try_shared_boundary_fuse(
     Ok(Some(result))
 }
 
-// ---------------------------------------------------------------------------
-// Polygon area helper
-// ---------------------------------------------------------------------------
-
 /// Compute the area of a 3D polygon given its vertices and face normal.
 #[allow(dead_code)]
 pub(super) fn polygon_area_3d(vertices: &[Point3], normal: Vec3) -> f64 {
@@ -1811,10 +1761,6 @@ pub(super) fn polygon_area_3d(vertices: &[Point3], normal: Vec3) -> f64 {
     }
     (area.dot(normal) * 0.5).abs()
 }
-
-// ---------------------------------------------------------------------------
-// Manifold shell reconstruction from face soup
-// ---------------------------------------------------------------------------
 
 /// Build manifold shells from an unordered list of faces.
 ///
@@ -1841,7 +1787,6 @@ pub(super) fn build_manifold_shells(
         });
     }
 
-    // Step 1: Build edge → [(face_index, is_forward)] adjacency map.
     // Only count OUTER wire edges — inner wire edges are internal to the
     // face and don't participate in face-face adjacency for shell building.
     let mut edge_faces: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
@@ -1873,7 +1818,6 @@ pub(super) fn build_manifold_shells(
         return Ok(topo.add_solid(Solid::new(shell_id, vec![])));
     }
 
-    // Step 2: Build manifold shells via angular face-off selection.
     let mut added: HashSet<usize> = HashSet::new();
     let mut shells: Vec<Vec<FaceId>> = Vec::new();
 
@@ -1887,7 +1831,6 @@ pub(super) fn build_manifold_shells(
         // Track edges within this shell: edge_idx → count of faces using it.
         let mut shell_edge_count: HashMap<usize, u32> = HashMap::new();
 
-        // Initialize with seed face's edges.
         count_face_edges(topo, face_ids[seed_fi], &mut shell_edge_count)?;
 
         let mut queue_idx = 0;
@@ -1896,7 +1839,6 @@ pub(super) fn build_manifold_shells(
             queue_idx += 1;
 
             let face = topo.face(face_ids[current_fi])?;
-            // Collect edges from all wires.
             let mut face_edge_list: Vec<(usize, bool)> = Vec::new();
             // Only traverse outer wire edges for face-face connectivity.
             let wire = topo.wire(face.outer_wire())?;
@@ -1956,7 +1898,7 @@ pub(super) fn build_manifold_shells(
         shells.push(shell_faces.into_iter().map(|fi| face_ids[fi]).collect());
     }
 
-    // Step 3: Build solid — largest shell is outer, rest are inner.
+    // Largest shell is outer, rest are inner.
     if shells.is_empty() {
         return Err(crate::OperationsError::InvalidInput {
             reason: "build_manifold_shells: no shells produced".into(),
@@ -2015,7 +1957,6 @@ fn select_angular_neighbor(
                 reason: format!("edge index {edge_idx} not found"),
             })?;
 
-    // Edge midpoint and tangent direction.
     let edge = topo.edge(edge_id)?;
     let start_pos = topo.vertex(edge.start())?.point();
     let end_pos = topo.vertex(edge.end())?.point();
@@ -2149,7 +2090,6 @@ pub(super) fn register_pcurves(
                 .collect()
         };
 
-        // Iterate all wires (outer + inner).
         let wire_ids: Vec<_> = {
             let f = topo.face(fid)?;
             std::iter::once(f.outer_wire())

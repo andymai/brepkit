@@ -20,8 +20,6 @@ use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 
-// ── Box ────────────────────────────────────────────────────────────
-
 /// Create a box solid with one corner at the origin.
 ///
 /// The box extends from `(0, 0, 0)` to `(dx, dy, dz)`.
@@ -44,7 +42,6 @@ pub fn make_box(
         });
     }
 
-    // 8 vertices: corner at origin, extending to (dx, dy, dz)
     let v = [
         topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), tol.linear)),
         topo.add_vertex(Vertex::new(Point3::new(dx, 0.0, 0.0), tol.linear)),
@@ -56,7 +53,6 @@ pub fn make_box(
         topo.add_vertex(Vertex::new(Point3::new(0.0, dy, dz), tol.linear)),
     ];
 
-    // 12 edges (shared between faces)
     // Bottom ring (z=0)
     let eb0 = topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Line));
     let eb1 = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
@@ -134,8 +130,6 @@ pub fn make_box(
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
-// ── Cylinder ───────────────────────────────────────────────────────
-
 /// Create a cylinder solid with its axis along +Z, base at the origin.
 ///
 /// The cylinder extends from `z = 0` to `z = height`.
@@ -165,7 +159,6 @@ pub fn make_cylinder(
     // Cylinder base at z=0, top at z=height.
     // (brepjs drill and placement code assumes this convention.)
 
-    // Analytic cylindrical surface
     let cyl_surface = brepkit_math::surfaces::CylindricalSurface::new(
         Point3::new(0.0, 0.0, 0.0),
         Vec3::new(0.0, 0.0, 1.0),
@@ -245,8 +238,6 @@ pub fn make_cylinder(
     let shell_id = topo.add_shell(shell);
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
-
-// ── Cone ───────────────────────────────────────────────────────────
 
 /// Create a cone solid with its base at the origin, axis along +Z.
 ///
@@ -461,8 +452,6 @@ pub fn make_cone(
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
-// ── Sphere ─────────────────────────────────────────────────────────
-
 /// Create a sphere solid centered at the origin.
 ///
 /// Built as a single spherical face with a degenerate boundary wire,
@@ -555,8 +544,6 @@ pub fn make_sphere(
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
-// ── Torus ──────────────────────────────────────────────────────────
-
 /// Create a torus solid centered at the origin in the XY plane.
 ///
 /// Built as a single `ToroidalSurface` face with exact analytic geometry,
@@ -637,8 +624,6 @@ pub fn make_torus(
     let shell_id = topo.add_shell(shell);
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
-
-// ── Helpers ────────────────────────────────────────────────────────
 
 /// Build a trapezoid face in the XZ plane (y=0) for cone profiles.
 ///
@@ -724,8 +709,6 @@ fn make_rect_xz_face(
     Ok(topo.add_face(Face::new(wid, vec![], FaceSurface::Plane { normal, d })))
 }
 
-// ── Convex hull ───────────────────────────────────────────────────
-
 /// Create a solid from the 3D convex hull of a point cloud.
 ///
 /// Uses the Quickhull algorithm to compute the convex hull, then
@@ -747,14 +730,12 @@ pub fn make_convex_hull(
 
     let tol = Tolerance::new();
 
-    // Create vertices in the topology arena.
     let vertex_ids: Vec<_> = hull
         .vertices
         .iter()
         .map(|p| topo.add_vertex(Vertex::new(*p, tol.linear)))
         .collect();
 
-    // Create faces from hull triangles, sharing edges between adjacent faces.
     // Each undirected edge (min_vertex, max_vertex) is created once; the second
     // face that references it uses reverse orientation.
     let mut edge_map: HashMap<(usize, usize), brepkit_topology::edge::EdgeId> = HashMap::new();
@@ -781,7 +762,6 @@ pub fn make_convex_hull(
         let wire = Wire::new(oriented_edges, true).map_err(crate::OperationsError::Topology)?;
         let wid = topo.add_wire(wire);
 
-        // Compute face plane from triangle vertices.
         let pa = hull.vertices[a];
         let pb = hull.vertices[b];
         let pc = hull.vertices[c];
@@ -865,8 +845,6 @@ mod tests {
     use super::*;
     use crate::test_helpers::{assert_euler_genus0, assert_volume_near, euler_characteristic};
 
-    // ── Box tests ──────────────────────────────────────────────────
-
     #[test]
     fn make_box_unit_cube() {
         let mut topo = Topology::new();
@@ -876,7 +854,6 @@ mod tests {
         let sh = topo.shell(s.outer_shell()).unwrap();
         assert_eq!(sh.faces().len(), 6, "box should have 6 faces");
 
-        // Verify volume
         let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
         assert!(
             (vol - 1.0).abs() < 1e-10,
@@ -950,8 +927,6 @@ mod tests {
             .expect("box should be manifold");
     }
 
-    // ── Cylinder tests ─────────────────────────────────────────────
-
     #[test]
     fn make_cylinder_basic() {
         let mut topo = Topology::new();
@@ -992,8 +967,6 @@ mod tests {
         assert!(make_cylinder(&mut topo, 1.0, 0.0).is_err());
     }
 
-    // ── Cone tests ─────────────────────────────────────────────────
-
     #[test]
     fn make_cone_frustum() {
         let mut topo = Topology::new();
@@ -1033,8 +1006,6 @@ mod tests {
         let mut topo = Topology::new();
         assert!(make_cone(&mut topo, -1.0, 1.0, 1.0).is_err());
     }
-
-    // ── Sphere tests ───────────────────────────────────────────────
 
     #[test]
     fn make_sphere_basic() {
@@ -1108,8 +1079,6 @@ mod tests {
         assert!(make_sphere(&mut topo, 1.0, 2).is_err());
     }
 
-    // ── Torus tests ────────────────────────────────────────────────
-
     #[test]
     fn make_torus_basic() {
         let mut topo = Topology::new();
@@ -1156,8 +1125,6 @@ mod tests {
         assert!(make_torus(&mut topo, 0.0, 1.0, 8).is_err());
         assert!(make_torus(&mut topo, 3.0, 0.0, 8).is_err());
     }
-
-    // ── Periodic surface / singular point tests ─────────────────────
 
     #[test]
     fn cylinder_seam_continuity() {
@@ -1241,8 +1208,6 @@ mod tests {
         assert!(has_apex, "cone should have apex vertex at (0,0,3)");
     }
 
-    // ── Degenerate geometry tests ──────────────────────────────
-
     #[test]
     fn make_box_very_thin() {
         // Thin plate: dx=1e-4, dy=1, dz=1
@@ -1284,8 +1249,6 @@ mod tests {
             rel_error * 100.0
         );
     }
-
-    // ── Convex hull tests ─────────────────────────────────────────
 
     #[test]
     fn convex_hull_unit_cube() {

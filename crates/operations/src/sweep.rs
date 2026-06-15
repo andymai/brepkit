@@ -198,7 +198,6 @@ fn sweep_wire_through_frames(
         })
         .collect::<Result<_, _>>()?;
 
-    // Create ring vertices by transforming through frames.
     let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_segments + 1);
     for frame in frames {
         let ring: Vec<VertexId> = positions
@@ -223,7 +222,6 @@ fn sweep_wire_through_frames(
         ring_verts.push(ring_verts[0].clone());
     }
 
-    // Create ring edges (profile edges within each ring).
     let real_ring_count = if is_closed {
         ring_verts.len() - 1
     } else {
@@ -244,7 +242,6 @@ fn sweep_wire_through_frames(
         ring_edges.push(ring_edges[0].clone());
     }
 
-    // Create path edges (between consecutive rings).
     let mut path_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = Vec::with_capacity(num_segments);
     for seg in 0..num_segments {
         let edges: Vec<_> = (0..n)
@@ -363,8 +360,6 @@ pub fn sweep(
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
 
-    // --- Validation ---
-
     if path.control_points().len() < 2 {
         return Err(crate::OperationsError::InvalidInput {
             reason: "sweep path must have at least 2 control points".into(),
@@ -383,7 +378,6 @@ pub fn sweep(
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
 
-    // Detect closed vs degenerate paths.
     let start_end_coincide = tol.approx_eq(
         (path.evaluate(1.0) - path.evaluate(0.0)).length_squared(),
         0.0,
@@ -403,7 +397,6 @@ pub fn sweep(
         false
     };
 
-    // Collect profile vertices and positions.
     let input_wire = topo.wire(input_wire_id)?;
     let original_oriented: Vec<_> = input_wire.edges().to_vec();
 
@@ -448,10 +441,7 @@ pub fn sweep(
         input_normal = -input_normal;
     }
 
-    // Compute profile centroid.
     let centroid = crate::winding::polygon_centroid(&input_positions);
-
-    // --- Compute frames along the path ---
 
     let num_segments = (path.control_points().len() * 2).max(4);
 
@@ -467,12 +457,9 @@ pub fn sweep(
     let initial_up = frames[0].up;
     let initial_tangent = frames[0].tangent;
 
-    // --- Create ring vertices ---
-    //
     // ring_verts[k][i] = vertex at path sample k, profile vertex i.
     // For closed paths, frames has num_segments entries; we append a copy
     // of the first ring so indexing ring_verts[num_segments] works unchanged.
-
     let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_segments + 1);
 
     for frame in &frames {
@@ -499,10 +486,7 @@ pub fn sweep(
         ring_verts.push(ring_verts[0].clone());
     }
 
-    // --- Create profile edges within each ring ---
-    //
     // ring_edges[k][i] = edge from ring_verts[k][i] to ring_verts[k][(i+1)%n].
-
     let real_ring_count = if is_closed {
         num_segments
     } else {
@@ -524,10 +508,7 @@ pub fn sweep(
         ring_edges.push(ring_edges[0].clone());
     }
 
-    // --- Create path edges between consecutive rings ---
-    //
     // path_edges[seg][i] = edge from ring_verts[seg][i] to ring_verts[seg+1][i].
-
     let mut path_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = Vec::with_capacity(num_segments);
     for seg in 0..num_segments {
         let edges: Vec<_> = (0..n)
@@ -541,8 +522,6 @@ pub fn sweep(
             .collect();
         path_edges.push(edges);
     }
-
-    // --- Sweep inner wires ---
 
     let mut inner_swept: Vec<SweptWireData> = Vec::new();
     for &iw_id in &inner_wire_ids {
@@ -558,8 +537,6 @@ pub fn sweep(
             is_closed,
         )?);
     }
-
-    // --- Build faces ---
 
     let mut all_faces = Vec::with_capacity(num_segments * n + if is_closed { 0 } else { 2 });
 
@@ -594,7 +571,6 @@ pub fn sweep(
         for i in 0..n {
             let next_i = (i + 1) % n;
 
-            // Compute side normal from edge direction and path direction.
             let p0 = topo.vertex(ring_verts[seg][i])?.point();
             let p1 = topo.vertex(ring_verts[seg][next_i])?.point();
             let p_next = topo.vertex(ring_verts[seg + 1][i])?.point();
@@ -630,7 +606,6 @@ pub fn sweep(
         }
     }
 
-    // Inner side faces.
     for iwd in &inner_swept {
         let inner_faces = build_inner_side_faces(topo, iwd, num_segments)?;
         all_faces.extend(inner_faces);
@@ -661,7 +636,6 @@ pub fn sweep(
         all_faces.push(end_face);
     }
 
-    // Assemble shell and solid.
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
     let solid = topo.add_solid(Solid::new(shell_id, vec![]));
@@ -729,7 +703,6 @@ pub fn sweep_smooth(
         false
     };
 
-    // Collect profile vertices.
     let input_wire = topo.wire(input_wire_id)?;
     let original_oriented: Vec<_> = input_wire.edges().to_vec();
 
@@ -768,7 +741,6 @@ pub fn sweep_smooth(
         input_normal = -input_normal;
     }
 
-    // Compute centroid and frames.
     let centroid = crate::winding::polygon_centroid(&input_positions);
 
     let num_segments = (path.control_points().len() * 2).max(4);
@@ -817,7 +789,6 @@ pub fn sweep_smooth(
         .map(|&p| topo.add_vertex(Vertex::new(p, tol.linear)))
         .collect();
 
-    // Create profile edges for first and last rings.
     let first_ring_edges: Vec<_> = (0..n)
         .map(|i| {
             let next = (i + 1) % n;
@@ -831,7 +802,6 @@ pub fn sweep_smooth(
         })
         .collect();
 
-    // Sweep inner wires for smooth variant.
     let mut inner_swept_smooth: Vec<SweptWireData> = Vec::new();
     for &iw_id in &inner_wire_ids_smooth {
         inner_swept_smooth.push(sweep_wire_through_frames(
@@ -849,7 +819,6 @@ pub fn sweep_smooth(
 
     let mut all_faces = Vec::with_capacity(n + 2);
 
-    // Start cap with inner wire holes.
     let start_reversed: Vec<OrientedEdge> = (0..n)
         .rev()
         .map(|i| OrientedEdge::new(first_ring_edges[i], false))
@@ -883,7 +852,6 @@ pub fn sweep_smooth(
         let surface =
             interpolate_surface(&grid, degree_u, degree_v).map_err(crate::OperationsError::Math)?;
 
-        // Rail edges from first to last ring.
         let e_left_rail = topo.add_edge(Edge::new(first_ring[i], last_ring[i], EdgeCurve::Line));
         let e_right_rail = topo.add_edge(Edge::new(
             first_ring[next_i],
@@ -906,13 +874,11 @@ pub fn sweep_smooth(
         all_faces.push(topo.add_face(Face::new(side_wire_id, vec![], FaceSurface::Nurbs(surface))));
     }
 
-    // Inner side faces for smooth variant.
     for iwd in &inner_swept_smooth {
         let inner_faces = build_inner_side_faces(topo, iwd, num_segments)?;
         all_faces.extend(inner_faces);
     }
 
-    // End cap with inner wire holes.
     let end_edges: Vec<OrientedEdge> = (0..n)
         .map(|i| OrientedEdge::new(last_ring_edges[i], true))
         .collect();
@@ -1192,7 +1158,6 @@ pub fn sweep_with_options(
     let initial_up = frames[0].up;
     let initial_tangent = frames[0].tangent;
 
-    // Create ring vertices with optional scaling
     let mut ring_verts: Vec<Vec<VertexId>> = Vec::with_capacity(num_segments + 1);
 
     for (k, frame) in frames.iter().enumerate() {
@@ -1250,8 +1215,7 @@ pub fn sweep_with_options(
         path_edges.push(edges);
     }
 
-    // Sweep inner wires for options variant.
-    // Note: closed paths are delegated to sweep() earlier, so is_closed is always false here.
+    // Closed paths are delegated to sweep() earlier, so is_closed is always false here.
     let mut inner_swept_opts: Vec<SweptWireData> = Vec::new();
     for &iw_id in &inner_wire_ids_opts {
         inner_swept_opts.push(sweep_wire_through_frames(
@@ -1269,7 +1233,6 @@ pub fn sweep_with_options(
 
     let mut all_faces = Vec::with_capacity(num_segments * n + 2);
 
-    // Start cap with inner wire holes.
     let start_reversed_edges: Vec<OrientedEdge> = (0..n)
         .rev()
         .map(|i| OrientedEdge::new(ring_edges[0][i], false))
@@ -1290,7 +1253,6 @@ pub fn sweep_with_options(
     ));
     all_faces.push(start_face);
 
-    // Side faces
     for seg in 0..num_segments {
         for i in 0..n {
             let next_i = (i + 1) % n;
@@ -1329,13 +1291,11 @@ pub fn sweep_with_options(
         }
     }
 
-    // Inner side faces for options variant.
     for iwd in &inner_swept_opts {
         let inner_faces = build_inner_side_faces(topo, iwd, num_segments)?;
         all_faces.extend(inner_faces);
     }
 
-    // End cap with inner wire holes.
     let end_edges: Vec<OrientedEdge> = (0..n)
         .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
         .collect();
@@ -1380,19 +1340,16 @@ fn detect_kinks(path: &NurbsCurve) -> Vec<f64> {
     let knots = path.knots();
     let (u_min, u_max) = path.domain();
 
-    // Collect unique internal knot values and their multiplicities.
     let mut kinks = Vec::new();
     let mut i = 0;
     while i < knots.len() {
         let u = knots[i];
 
-        // Skip endpoint knots.
         if u <= u_min + KNOT_EPS || u >= u_max - KNOT_EPS {
             i += 1;
             continue;
         }
 
-        // Count multiplicity.
         let mut mult = 1;
         while i + mult < knots.len() && (knots[i + mult] - u).abs() < KNOT_EPS {
             mult += 1;
@@ -1452,7 +1409,6 @@ fn sweep_miter(
         "sweep_miter should only be called when the path has kinks"
     );
 
-    // Validate profile.
     let face_data = topo.face(profile)?;
     let mut input_normal = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
@@ -1465,7 +1421,6 @@ fn sweep_miter(
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
 
-    // Collect and prepare profile vertices.
     let input_wire = topo.wire(input_wire_id)?;
     let original_oriented: Vec<_> = input_wire.edges().to_vec();
     if original_oriented.is_empty() {
@@ -1521,8 +1476,6 @@ fn sweep_miter(
     }
     sub_paths.push(remaining);
 
-    // For each sub-path, compute frames and build the ring vertices.
-    // We'll collect all faces across all segments plus miter faces.
     let mut all_faces: Vec<FaceId> = Vec::new();
 
     // Track the ring vertices at the end of each segment / start of the next
@@ -1534,7 +1487,6 @@ fn sweep_miter(
         let is_first = seg_idx == 0;
         let is_last = seg_idx == sub_paths.len() - 1;
 
-        // Compute the tangent at the start of this sub-path.
         let sub_tangent_0 = sub_path.tangent(sub_path.domain().0)?;
         let up_hint = orthogonalize(input_normal, sub_tangent_0);
 
@@ -1544,7 +1496,6 @@ fn sweep_miter(
             (sub_path.control_points().len() * 2).max(4)
         };
 
-        // Compute frames for this sub-path.
         let sub_frames = match options.contact_mode {
             SweepContactMode::RotationMinimizing => {
                 compute_frames(sub_path, num_segments, up_hint, false)?
@@ -1667,7 +1618,6 @@ fn sweep_miter(
                 })
                 .collect();
 
-            // Create miter ring edges.
             let miter_ring_edges: Vec<brepkit_topology::edge::EdgeId> = (0..n)
                 .map(|i| {
                     let next = (i + 1) % n;
@@ -1683,7 +1633,6 @@ fn sweep_miter(
                 }
             })?;
 
-            // Side faces connecting prev_end_ring to miter_ring.
             let prev_to_miter_path_edges: Vec<brepkit_topology::edge::EdgeId> = (0..n)
                 .map(|i| topo.add_edge(Edge::new(prev_ring[i], miter_ring[i], EdgeCurve::Line)))
                 .collect();
@@ -1761,7 +1710,6 @@ fn sweep_miter(
             }
         }
 
-        // Create path edges.
         let mut path_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> =
             Vec::with_capacity(num_segments);
         for seg in 0..num_segments {
@@ -1777,7 +1725,6 @@ fn sweep_miter(
             path_edges.push(edges);
         }
 
-        // Sweep inner wires for this segment.
         let mut inner_swept: Vec<SweptWireData> = Vec::new();
         for &iw_id in &inner_wire_ids {
             inner_swept.push(sweep_wire_through_frames(
@@ -1816,7 +1763,6 @@ fn sweep_miter(
             )));
         }
 
-        // Side faces.
         for seg in 0..num_segments {
             for i in 0..n {
                 let next_i = (i + 1) % n;
@@ -1854,7 +1800,6 @@ fn sweep_miter(
             }
         }
 
-        // Inner side faces.
         for iwd in &inner_swept {
             let inner_faces = build_inner_side_faces(topo, iwd, num_segments)?;
             all_faces.extend(inner_faces);
@@ -1889,7 +1834,6 @@ fn sweep_miter(
         prev_end_ring_edges = Some(ring_edges[num_segments].clone());
     }
 
-    // Assemble shell and solid.
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
@@ -2507,7 +2451,6 @@ mod tests {
         let face = crate::primitives::make_box(&mut topo, 0.5, 0.5, 0.01).unwrap();
         let solid = topo.solid(face).unwrap();
         let shell = topo.shell(solid.outer_shell()).unwrap();
-        // Use a face from the box as profile
         let profile = shell.faces()[0];
 
         let path = NurbsCurve::new(
@@ -2544,7 +2487,6 @@ mod tests {
 
         let result = sweep_with_options(&mut topo, profile, &path, &options).unwrap();
 
-        // The result should be a tapered solid
         let vol = crate::measure::solid_volume(&topo, result, 0.5).unwrap();
         assert!(vol > 0.0, "tapered sweep should have positive volume");
     }

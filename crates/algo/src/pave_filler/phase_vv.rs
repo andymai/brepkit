@@ -51,18 +51,15 @@ pub fn perform(
             let pos_b = vertex_b.point();
             let tol_b = vertex_b.tolerance();
 
-            // Combined tolerance: sum of vertex tolerances + linear tolerance
             let combined_tol = tol_a + tol_b + tol.linear;
             let dist = (pos_a - pos_b).length();
 
             if dist <= combined_tol {
-                // Record the interference
                 arena
                     .interference
                     .vv
                     .push(Interference::VV { v1: va, v2: vb });
 
-                // Merge into same-domain
                 arena.merge_vertices(va, vb);
 
                 log::debug!("VV: vertices {va:?} and {vb:?} coincide (dist={dist:.2e})",);

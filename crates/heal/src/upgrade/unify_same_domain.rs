@@ -55,8 +55,6 @@ pub struct UnifyResult {
     pub status: Status,
 }
 
-// ── Union-Find ──────────────────────────────────────────────────────
-
 struct UnionFind {
     parent: Vec<usize>,
     rank: Vec<u8>,
@@ -134,7 +132,6 @@ pub fn unify_same_domain(
         ));
     }
 
-    // 1. Build edge → face adjacency.
     let mut edge_faces: HashMap<usize, Vec<usize>> = HashMap::new();
     for (fi, &fid) in face_ids.iter().enumerate() {
         let face = topo.face(fid)?;
@@ -150,13 +147,11 @@ pub fn unify_same_domain(
         }
     }
 
-    // 2. Snapshot face surfaces for comparison.
     let face_surfaces: Vec<_> = face_ids
         .iter()
         .map(|&fid| topo.face(fid).map(|f| f.surface().clone()))
         .collect::<Result<Vec<_>, _>>()?;
 
-    // 3. Union-find: group adjacent faces with equivalent surfaces.
     let mut uf = UnionFind::new(n_faces);
     let tol = brepkit_math::tolerance::Tolerance {
         linear: options.linear_tolerance,
@@ -174,7 +169,6 @@ pub fn unify_same_domain(
         }
     }
 
-    // 4. Group faces by root.
     let mut groups: HashMap<usize, Vec<usize>> = HashMap::new();
     for i in 0..n_faces {
         groups.entry(uf.find(i)).or_default().push(i);
@@ -199,7 +193,6 @@ pub fn unify_same_domain(
         ));
     }
 
-    // 5. Merge each group.
     let mut faces_to_remove: HashSet<FaceId> = HashSet::new();
     let mut new_faces_to_add: Vec<FaceId> = Vec::new();
     let mut total_merged = 0;
@@ -241,7 +234,6 @@ pub fn unify_same_domain(
         new_faces_to_add.extend(new_face_ids);
     }
 
-    // 6. Rebuild shell.
     if total_merged > 0 {
         let shell = topo.shell(shell_id)?;
         let current_faces: Vec<FaceId> = shell.faces().to_vec();
@@ -257,7 +249,6 @@ pub fn unify_same_domain(
         *shell_mut = new_shell;
     }
 
-    // 7. Merge collinear adjacent edges in the newly created wires.
     let mut total_edges_merged = 0;
     if options.unify_edges && total_merged > 0 {
         for &fid in &new_faces_to_add {

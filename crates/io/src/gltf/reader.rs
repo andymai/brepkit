@@ -25,7 +25,6 @@ pub fn read_glb(data: &[u8]) -> Result<TriangleMesh, crate::IoError> {
         });
     }
 
-    // Validate magic
     let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
     if magic != 0x4654_6C67 {
         return Err(crate::IoError::ParseError {
@@ -33,7 +32,6 @@ pub fn read_glb(data: &[u8]) -> Result<TriangleMesh, crate::IoError> {
         });
     }
 
-    // Version
     let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
     if version != 2 {
         return Err(crate::IoError::ParseError {
@@ -41,7 +39,6 @@ pub fn read_glb(data: &[u8]) -> Result<TriangleMesh, crate::IoError> {
         });
     }
 
-    // Parse chunks
     let mut offset = 12;
     let mut json_data: Option<&[u8]> = None;
     let mut bin_data: Option<&[u8]> = None;
@@ -81,7 +78,6 @@ pub fn read_glb(data: &[u8]) -> Result<TriangleMesh, crate::IoError> {
         reason: "GLB missing BIN chunk".into(),
     })?;
 
-    // Parse JSON to extract accessor info
     let json_str = std::str::from_utf8(json_bytes).map_err(|_| crate::IoError::ParseError {
         reason: "GLB JSON is not valid UTF-8".into(),
     })?;
@@ -104,7 +100,6 @@ pub fn read_glb(data: &[u8]) -> Result<TriangleMesh, crate::IoError> {
     for prim in &primitives {
         let vertex_offset = positions.len();
 
-        // Read positions
         if let Some(pos_idx) = prim.position_accessor {
             let accessor = accessors
                 .get(pos_idx)
@@ -125,7 +120,6 @@ pub fn read_glb(data: &[u8]) -> Result<TriangleMesh, crate::IoError> {
             }
         }
 
-        // Read normals
         if let Some(norm_idx) = prim.normal_accessor {
             if let Some(accessor) = accessors.get(norm_idx) {
                 if let Some(view) = buffer_views.get(accessor.buffer_view) {
@@ -141,7 +135,6 @@ pub fn read_glb(data: &[u8]) -> Result<TriangleMesh, crate::IoError> {
             }
         }
 
-        // Read indices
         if let Some(idx_accessor_idx) = prim.indices_accessor {
             let accessor =
                 accessors
@@ -315,7 +308,6 @@ fn parse_mesh_primitives(json: &str) -> Vec<MeshPrimitive> {
     let meshes_arr_offset = meshes_start + arr_start;
     let meshes_str = extract_json_array(json, meshes_arr_offset);
 
-    // Find all "primitives" arrays within the meshes array
     let mut search_offset = 0;
     while let Some(prim_key_pos) = meshes_str[search_offset..].find("\"primitives\"") {
         let prim_key_abs = search_offset + prim_key_pos;
@@ -323,7 +315,6 @@ fn parse_mesh_primitives(json: &str) -> Vec<MeshPrimitive> {
             let prim_arr_offset = prim_key_abs + prim_arr_start;
             let prim_arr_str = extract_json_array(meshes_str, prim_arr_offset);
 
-            // Each primitive is a JSON object within the primitives array.
             for prim_obj in split_json_objects(prim_arr_str) {
                 let pos = extract_attribute_accessor(prim_obj, "POSITION");
                 let norm = extract_attribute_accessor(prim_obj, "NORMAL");
@@ -431,7 +422,6 @@ fn extract_int(text: &str, key: &str) -> Option<usize> {
     let colon_pos = after.find(':')?;
     let value_str = after[colon_pos + 1..].trim();
 
-    // Read digits
     let digits: String = value_str.chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok()
 }
@@ -715,13 +705,11 @@ mod tests {
         assert_eq!(mesh.indices[4], 4); // 1 + vertex_offset(3)
         assert_eq!(mesh.indices[5], 5); // 2 + vertex_offset(3)
 
-        // Check that second primitive positions are correct
         assert!((mesh.positions[3].x() - 2.0).abs() < 1e-6);
     }
 
     #[test]
     fn roundtrip_multi_solid_glb() {
-        // Write two separate solids to a GLB and read them back
         let mut topo = brepkit_topology::Topology::new();
         let box1 = brepkit_operations::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
         let box2 = brepkit_operations::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
@@ -733,8 +721,6 @@ mod tests {
         assert!(!mesh.indices.is_empty(), "should have indices");
         assert_eq!(mesh.indices.len() % 3, 0, "should be triangles");
     }
-
-    // ── read_glb_solid smoke test ───────────────────────────────────
 
     #[test]
     fn read_glb_solid_returns_solid_id() {

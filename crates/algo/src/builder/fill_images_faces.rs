@@ -224,9 +224,6 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         pool
     };
 
-    // (pb_vertex_registry and CB pre-pass moved above rank pool)
-
-    // Pre-compute which faces have section edges from which curves
     let section_map = build_section_map(topo, arena);
 
     // ── Periodic seam anchor pre-pass ───────────────────────────────
@@ -294,7 +291,6 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             continue;
         }
 
-        // Build SectionEdge entries from pave block data
         let sections = build_section_edges(
             topo,
             arena,
@@ -326,7 +322,6 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         // Build SurfaceInfo for periodicity
         let info = build_surface_info(topo, face_id);
 
-        // Call the face splitter
         let split_results = split_face_2d(
             topo,
             face_id,
@@ -848,14 +843,12 @@ fn rebuild_face_with_cb_edges(
                 };
                 let qs = qpt(sv.point());
                 let qe = qpt(ev.point());
-                // Check CB edge replacement
                 let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
                 if let Some(&cb_edge) = cb_qpair_edges.get(&key) {
                     if cb_edge != oe.edge() {
                         return true;
                     }
                 }
-                // Check VV vertex canonicalization
                 if vv_vertex_seed
                     .get(&qs)
                     .is_some_and(|&vid| vid != edge.start())

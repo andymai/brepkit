@@ -25,7 +25,6 @@ pub mod gfa;
 mod builder;
 pub mod classifier;
 
-// Re-export types used by both algo and operations.
 pub use builder::FaceClass;
 pub use builder::pcurve_compute::compute_pcurve_on_surface;
 pub use builder::plane_frame::PlaneFrame;

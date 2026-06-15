@@ -63,7 +63,6 @@ pub fn check_edge_degenerate(
             }
         }
         EdgeCurve::NurbsCurve(nc) => {
-            // Sample curve length
             let (t0, t1) = nc.domain();
             let n_samples = 10;
             let mut length = 0.0;
@@ -100,7 +99,6 @@ pub fn check_edge_same_parameter(
     face_id: FaceId,
     tolerance: f64,
 ) -> Result<Vec<ValidationIssue>, CheckError> {
-    // Get the PCurve for this edge on this face.
     let pcurve = match topo.pcurves().get(edge_id, face_id) {
         Some(pc) => pc,
         None => return Ok(vec![]), // No PCurve registered — can't check
@@ -117,7 +115,6 @@ pub fn check_edge_same_parameter(
         return Ok(vec![]);
     }
 
-    // Sample N points along the PCurve parameter range.
     let n_samples = 10;
     let mut max_deviation = 0.0f64;
 
@@ -129,7 +126,6 @@ pub fn check_edge_same_parameter(
         let t_norm = i as f64 / n_samples as f64;
         let t_pcurve = pcurve.t_start() + (pcurve.t_end() - pcurve.t_start()) * t_norm;
 
-        // Evaluate PCurve to get (u, v) on surface.
         let uv = pcurve.evaluate(t_pcurve);
 
         // Evaluate surface at (u, v) to get 3D point from PCurve path.

@@ -119,7 +119,6 @@ pub struct Cdt {
     vertex_tri: Vec<usize>,
 }
 
-/// Tolerance for duplicate point detection.
 /// Duplicate point detection tolerance.
 ///
 /// Aligned with the snap tolerance (1e-8) to avoid near-coincident points
@@ -197,7 +196,6 @@ impl Cdt {
     /// Returns [`MathError::ConvergenceFailure`] if the point cannot be
     /// located in any triangle (should not happen for valid inputs).
     pub fn insert_point(&mut self, p: Point2) -> Result<usize, MathError> {
-        // Check for duplicate using spatial hash grid (O(1) amortized).
         let cell = dup_grid_cell(p);
         // Check the cell and its 8 neighbors to handle points near cell boundaries.
         for dx in -1..=1_i64 {
@@ -219,7 +217,6 @@ impl Cdt {
         self.vertex_tri.push(0); // will be updated by split_triangle/split_edge
         self.dup_grid.entry(cell).or_default().push(vi);
 
-        // Find the triangle containing the point.
         let (tri_idx, location) = self.locate_point(p)?;
         self.last_located = tri_idx;
 
@@ -249,7 +246,6 @@ impl Cdt {
             return Ok(Vec::new());
         }
 
-        // Compute bounding box of input points.
         let mut min_x = f64::INFINITY;
         let mut max_x = f64::NEG_INFINITY;
         let mut min_y = f64::INFINITY;
@@ -522,7 +518,6 @@ impl Cdt {
 
         let sc = self.super_count;
 
-        // Collect indices of all live interior triangles.
         let live_tris: Vec<usize> = self
             .triangles
             .iter()

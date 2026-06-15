@@ -44,7 +44,6 @@ pub fn analyse_edges(
         PI
     };
 
-    // Track which vertices are incident to which edge classifications
     let mut vertex_edges: BTreeMap<usize, Vec<EdgeClass>> = BTreeMap::new();
 
     for (&edge_idx, face_ids) in &edge_face_map {
@@ -63,7 +62,6 @@ pub fn analyse_edges(
 
         data.edge_class.insert(edge_idx, class);
 
-        // Record edge class for start and end vertices
         let edge_data = topo.edge(edge_id)?;
         vertex_edges
             .entry(edge_data.start().index())
@@ -75,7 +73,6 @@ pub fn analyse_edges(
             .push(class);
     }
 
-    // Classify vertices based on incident edge classifications
     for (&vid_idx, classes) in &vertex_edges {
         let has_convex = classes
             .iter()
@@ -131,7 +128,6 @@ fn classify_edge(
     let n_a = face_outward_normal(topo, face_a, midpoint, edge_id)?;
     let n_b = face_outward_normal(topo, face_b, midpoint, edge_id)?;
 
-    // Angle between the outward normals.
     let dot_normals = (n_a.x() * n_b.x() + n_a.y() * n_b.y() + n_a.z() * n_b.z()).clamp(-1.0, 1.0);
     let cross = n_a.cross(n_b);
     let cross_len = (cross.x() * cross.x() + cross.y() * cross.y() + cross.z() * cross.z()).sqrt();
@@ -160,35 +156,10 @@ fn classify_edge(
         return Ok(EdgeClass::Tangent);
     }
 
-    // For a convex edge on a closed solid, a point offset from the
-    // edge midpoint along the *negative* average normal direction should
-    // be inside the solid. Equivalently, the average normal points
-    // outward (away from the material) at a convex edge.
-    //
-    // We verify this by checking that both face normals have a positive
-    // component along n_avg. At a convex edge both normals "fan out",
-    // so n_a · n_avg > 0 and n_b · n_avg > 0. At a concave edge the
-    // normals converge past each other and at least one will have a
-    // negative component.
-    //
-    // Actually: n_a · (n_a + n_b) = 1 + n_a·n_b which is always ≥ 0
-    // when angle_between_normals ≤ π/2, and can still be positive up
-    // to angle = π. This doesn't discriminate.
-    //
-    // Correct approach: use the face centroid. Sample the centroid of
-    // each face and check which side of the edge it's on relative to
-    // the average normal.
-    //
-    // SIMPLEST CORRECT TEST: at a convex edge, the dot product
-    // n_a · n_b is positive when the normals open at less than π/2
-    // (acute convex), zero at right angles, and negative when they
-    // open past π/2. But ALL box edges are convex regardless of this
-    // dot product sign.
-    //
-    // The actual discriminant: sample a third point. Take the centroid
-    // of face_a's outer wire. The vector from edge midpoint to that
-    // centroid should have a NEGATIVE dot with n_b for a convex edge
-    // (the face interior is on the material side, below n_b).
+    // Convexity discriminant: take the centroid of face_a's outer wire.
+    // The vector from edge midpoint to that centroid should have a
+    // NEGATIVE dot with n_b for a convex edge (the face interior is on
+    // the material side, below n_b).
     let centroid_a = face_centroid(topo, face_a)?;
     let to_centroid = Vec3::new(
         centroid_a.x() - midpoint.x(),

@@ -220,7 +220,6 @@ mod tests {
 
     #[test]
     fn pcurve_evaluate() {
-        // Line direction is normalized, so (1,0) stays (1,0)
         let line = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap();
         let pcurve = PCurve::new(Curve2D::Line(line), 0.0, 1.0);
 

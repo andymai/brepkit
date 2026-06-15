@@ -125,7 +125,6 @@ impl Assembly {
             },
         );
 
-        // Update parent's children list
         if let Some(parent_comp) = self.components.get_mut(&parent) {
             parent_comp.children.push(id);
         }
@@ -194,10 +193,8 @@ impl Assembly {
         let world = parent_transform * comp.transform;
 
         if comp.children.is_empty() {
-            // Leaf node — include in output
             result.push((comp.solid, world));
         } else {
-            // Non-leaf — recurse into children
             for &child_id in &comp.children {
                 self.flatten_recursive(child_id, world, result);
             }
@@ -218,7 +215,6 @@ impl Assembly {
 
         for (solid_id, transform) in self.flatten() {
             let bbox = crate::measure::solid_bounding_box(topo, solid_id)?;
-            // Transform the 8 corners of the bounding box
             let lo = bbox.min;
             let hi = bbox.max;
             let corners = [

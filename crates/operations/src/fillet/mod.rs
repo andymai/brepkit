@@ -34,7 +34,6 @@ mod rolling_ball;
 #[cfg(test)]
 mod tests;
 
-// Re-export public items.
 pub use g1_chain::fillet_rolling_ball_propagate_g1;
 pub(crate) use geometry::face_surface_normal_at;
 pub use radius_law::FilletRadiusLaw;
@@ -94,7 +93,6 @@ pub fn fillet(
         });
     }
 
-    // Collect face data.
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
     let shell_face_ids: Vec<_> = shell.faces().to_vec();
@@ -198,7 +196,6 @@ pub fn fillet(
         vertex_fillet_endpoints.insert(edge.end().index());
     }
 
-    // Build modified face polygons and fillet faces.
     // Strategy: identical to chamfer but with more offset segments to
     // approximate the circular fillet.
     let mut fillet_data: HashMap<usize, FilletEdgeData> = HashMap::new();
@@ -307,7 +304,6 @@ pub fn fillet(
         });
     }
 
-    // Build fillet faces (planar quads approximating the fillet arc).
     for &edge_id in &filtered_edges {
         let data = fillet_data.get(&edge_id.index()).ok_or_else(|| {
             crate::OperationsError::InvalidInput {
@@ -408,7 +404,6 @@ pub fn fillet_variable(
         });
     }
 
-    // Validate all radii are positive.
     for (_, law) in edge_laws {
         for t in [0.0, 0.25, 0.5, 0.75, 1.0] {
             if law.evaluate(t) <= tol.linear {
@@ -419,7 +414,6 @@ pub fn fillet_variable(
         }
     }
 
-    // Collect face data (same as fillet_rolling_ball).
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
     let shell_face_ids: Vec<_> = shell.faces().to_vec();
@@ -690,7 +684,6 @@ pub fn fillet_variable(
         });
     }
 
-    // Build variable-radius NURBS canal surfaces for each edge.
     let n_samples = 5; // Number of cross-sections along each edge
     let mut fillet_face_indices: Vec<usize> = Vec::new();
 
@@ -716,7 +709,6 @@ pub fn fillet_variable(
             continue;
         };
 
-        // Evaluate surface normals at the edge start point.
         let Some(n1_start) = face_surface_normal_at(surf1, p_start) else {
             continue;
         };
@@ -762,7 +754,6 @@ pub fn fillet_variable(
             let tan = geometry::sample_edge_tangent(&edge_curve, p_start, p_end, t);
             let local_dir = tan.normalize().unwrap_or(edge_dir);
 
-            // Evaluate surface normals at this sample point.
             let ln1 = face_surface_normal_at(surf1, p).unwrap_or(n1_start);
             let ln2 = face_surface_normal_at(surf2, p).unwrap_or(n2_start);
 
@@ -857,7 +848,6 @@ pub fn fillet_variable(
         )
         .map_err(crate::OperationsError::Math)?;
 
-        // Boundary vertices for the canal surface.
         let c1s = grid[0][0];
         let c2s = grid[0][2];
         let c1e = grid[n_v - 1][0];

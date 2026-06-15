@@ -98,7 +98,6 @@ pub fn detect_same_domain<S: BuildHasher>(
         return SameDomainResult::default();
     }
 
-    // Step 1: Compute canonical edge sets for each sub-face.
     // Use quantized vertex positions (not VertexId) so that VV-merged
     // vertices from different solids that share the same position produce
     // matching edge sets.
@@ -109,7 +108,6 @@ pub fn detect_same_domain<S: BuildHasher>(
         .map(|sf| compute_edge_set_quantized(topo, arena, sf.face_id, scale))
         .collect();
 
-    // Step 2: Group sub-faces by edge-set hash.
     // Key = edge set, Value = list of sub-face indices with that set.
     let mut groups: HashMap<EdgeSet, Vec<usize>> = HashMap::new();
     for (idx, edge_set) in edge_sets.iter().enumerate() {
@@ -120,8 +118,6 @@ pub fn detect_same_domain<S: BuildHasher>(
         }
     }
 
-    // Step 3: For each group with 2+ faces from opposing solids,
-    // verify surface equivalence and build SD pairs.
     let surfaces: Vec<Option<&FaceSurface>> = sub_faces
         .iter()
         .map(|sf| {
@@ -170,7 +166,6 @@ pub fn detect_same_domain<S: BuildHasher>(
                     continue;
                 };
 
-                // Verify surface equivalence.
                 if let Some(same_dir) = surfaces_same_domain(surf_i, surf_j, tol) {
                     uf.union(i, j);
                     let key = (i.min(j), i.max(j));
@@ -221,7 +216,6 @@ pub fn detect_same_domain<S: BuildHasher>(
         }
     }
 
-    // Step 4: Build SD pairs from union-find groups.
     // Collect all roots that participate in pairs (O(m) not O(n*m)).
     let mut active_roots: HashSet<usize> = HashSet::new();
     for &(a, b) in pair_data.keys() {

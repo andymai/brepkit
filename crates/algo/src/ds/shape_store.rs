@@ -267,22 +267,18 @@ mod tests {
         let mut source = Topology::default();
         let solid = make_unit_cube_manifold_at(&mut source, 0.0, 0.0, 0.0);
 
-        // Import into store
         let store = GfaShapeStore::new(&source, solid, solid).unwrap();
 
-        // Verify store has the solid
         let s = store.topo.solid(store.solid_a).unwrap();
         let sh = store.topo.shell(s.outer_shell()).unwrap();
         assert_eq!(sh.faces().len(), 6, "box should have 6 faces");
 
-        // Export back to a new topology
         let mut target = Topology::default();
         let exported = store.export_solid(&mut target, store.solid_a).unwrap();
         let s2 = target.solid(exported).unwrap();
         let sh2 = target.shell(s2.outer_shell()).unwrap();
         assert_eq!(sh2.faces().len(), 6, "exported box should have 6 faces");
 
-        // Verify face counts match between source and exported
         let source_faces = brepkit_topology::explorer::solid_faces(&source, solid).unwrap();
         let target_faces = brepkit_topology::explorer::solid_faces(&target, exported).unwrap();
         assert_eq!(source_faces.len(), target_faces.len());

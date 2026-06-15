@@ -21,7 +21,6 @@
 
 use brepkit_math::vec::{Point3, Vec3};
 
-// ── Core: shape creation ─────────────────────────────────────────
 pub mod extrude;
 pub mod helix;
 pub mod loft;
@@ -31,29 +30,24 @@ pub mod projection;
 pub mod revolve;
 pub mod sweep;
 
-// ── Transform: spatial operations ────────────────────────────────
 pub mod copy;
 pub mod mirror;
 pub mod pattern;
 pub mod transform;
 
-// ── Boolean: set operations ──────────────────────────────────────
 pub mod boolean;
 pub mod mesh_boolean;
 
-// ── Blend: edge smoothing ────────────────────────────────────────
 pub mod blend_ops;
 pub mod chamfer;
 pub mod fillet;
 
-// ── Offset: wall thickness ───────────────────────────────────────
 pub mod offset_face;
 pub mod offset_solid;
 pub mod offset_trim;
 pub mod offset_v2;
 pub mod offset_wire;
 
-// ── Surface & solid modification ─────────────────────────────────
 pub mod draft;
 pub mod fill_face;
 pub mod section;
@@ -61,13 +55,11 @@ pub mod shell_op;
 pub mod split;
 pub mod thicken;
 
-// ── Repair: shape fixing ─────────────────────────────────────────
 pub mod defeature;
 pub mod heal;
 pub mod sew;
 pub mod untrim;
 
-// ── Analysis: interrogation ──────────────────────────────────────
 pub mod classify;
 pub mod distance;
 pub mod feature_recognition;
@@ -75,10 +67,8 @@ pub mod measure;
 pub mod query;
 pub mod validate;
 
-// ── Tessellation: mesh generation ────────────────────────────────
 pub mod tessellate;
 
-// ── Infrastructure ───────────────────────────────────────────────
 pub mod assembly;
 pub mod compound_ops;
 pub mod evolution;

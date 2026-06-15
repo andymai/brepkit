@@ -142,7 +142,6 @@ fn read_ascii_stl(data: &[u8]) -> Result<TriangleMesh, crate::IoError> {
         // Skip: solid, outer loop, endloop, endfacet, endsolid.
     }
 
-    // Validate: vertex count must be a multiple of 3.
     if mesh.positions.len() % 3 != 0 {
         return Err(crate::IoError::ParseError {
             reason: format!(
@@ -230,14 +229,11 @@ mod tests {
     use super::*;
     use crate::stl::writer::{self, StlFormat};
 
-    // ── Round-trip tests ────────────────────────────────────────────
-
     #[test]
     fn roundtrip_binary_stl_unit_cube() {
         let mut topo = Topology::new();
         let solid = make_unit_cube_non_manifold(&mut topo);
 
-        // Write → read round-trip.
         let bytes = writer::write_stl(&topo, &[solid], 0.1, StlFormat::Binary).unwrap();
         let mesh = read_stl(&bytes).unwrap();
 
@@ -272,8 +268,6 @@ mod tests {
         assert_eq!(mesh.positions.len(), 36);
     }
 
-    // ── Format detection tests ──────────────────────────────────────
-
     #[test]
     fn detect_ascii_format() {
         let data = b"solid test\n  facet normal 0 0 1\n    outer loop\n      vertex 0 0 0\n      vertex 1 0 0\n      vertex 0 1 0\n    endloop\n  endfacet\nendsolid test\n";
@@ -287,8 +281,6 @@ mod tests {
         let bytes = writer::write_stl(&topo, &[solid], 0.1, StlFormat::Binary).unwrap();
         assert!(!is_ascii_stl(&bytes));
     }
-
-    // ── Error handling tests ────────────────────────────────────────
 
     #[test]
     fn binary_stl_too_short() {
@@ -313,8 +305,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ── Minimal valid files ─────────────────────────────────────────
-
     #[test]
     fn read_minimal_ascii_single_triangle() {
         let data = b"solid minimal\n  facet normal 0 0 1\n    outer loop\n      vertex 0 0 0\n      vertex 1 0 0\n      vertex 0 1 0\n    endloop\n  endfacet\nendsolid minimal\n";
@@ -323,18 +313,15 @@ mod tests {
         assert_eq!(mesh.positions.len(), 3);
         assert_eq!(mesh.indices.len(), 3);
 
-        // Check vertex positions.
         assert!((mesh.positions[0].x() - 0.0).abs() < 1e-6);
         assert!((mesh.positions[1].x() - 1.0).abs() < 1e-6);
         assert!((mesh.positions[2].y() - 1.0).abs() < 1e-6);
 
-        // Check normal was propagated.
         assert!((mesh.normals[0].z() - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn read_minimal_binary_single_triangle() {
-        // Build a minimal binary STL with 1 triangle.
         let mut data = Vec::new();
 
         // 80-byte header.
@@ -371,8 +358,6 @@ mod tests {
         assert_eq!(mesh.indices.len(), 3);
     }
 
-    // ── Vertex data integrity ───────────────────────────────────────
-
     #[test]
     fn binary_roundtrip_preserves_vertex_positions() {
         let mut topo = Topology::new();
@@ -388,8 +373,6 @@ mod tests {
             assert!(pos.z() >= -0.01 && pos.z() <= 1.01);
         }
     }
-
-    // ── read_stl_solid smoke test ───────────────────────────────────
 
     #[test]
     fn read_stl_solid_returns_solid_id() {

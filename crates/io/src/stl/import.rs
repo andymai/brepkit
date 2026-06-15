@@ -38,7 +38,6 @@ pub fn import_mesh(
         });
     }
 
-    // Build a vertex map: merge coincident positions.
     let vertex_ids = build_vertex_map(topo, &mesh.positions, tolerance);
 
     // Determine whether the mesh winding needs to be flipped.
@@ -53,7 +52,6 @@ pub fn import_mesh(
     let flip_all = if has_normals {
         false // per-triangle correction below handles it
     } else {
-        // Compute signed volume from raw vertex positions.
         let mut total = 0.0;
         for tri in mesh.indices.chunks_exact(3) {
             let p0 = mesh.positions[tri[0] as usize];
@@ -127,7 +125,6 @@ fn build_vertex_map(
     let mut map = Vec::with_capacity(positions.len());
 
     for &pos in positions {
-        // Check if a nearby vertex already exists.
         let existing = unique_verts.iter().find(|(p, _)| {
             let dx = p.x() - pos.x();
             let dy = p.y() - pos.y();
@@ -154,12 +151,10 @@ fn build_triangle_face(
     v1: brepkit_topology::vertex::VertexId,
     v2: brepkit_topology::vertex::VertexId,
 ) -> Result<brepkit_topology::face::FaceId, IoError> {
-    // Create edges.
     let e01 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
     let e12 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
     let e20 = topo.add_edge(Edge::new(v2, v0, EdgeCurve::Line));
 
-    // Build wire.
     let oriented = vec![
         OrientedEdge::new(e01, true),
         OrientedEdge::new(e12, true),
@@ -170,7 +165,6 @@ fn build_triangle_face(
     })?;
     let wire_id = topo.add_wire(wire);
 
-    // Compute face normal.
     let p0 = topo.vertex(v0).map_err(topo_err)?.point();
     let p1 = topo.vertex(v1).map_err(topo_err)?.point();
     let p2 = topo.vertex(v2).map_err(topo_err)?.point();
@@ -305,7 +299,6 @@ mod tests {
         let mut import_topo = Topology::new();
         let imported = import_mesh(&mut import_topo, &mesh, 1e-4).unwrap();
 
-        // Test both volume methods
         let vol_from_faces =
             brepkit_operations::measure::solid_volume_from_faces(&import_topo, imported, 0.01)
                 .unwrap();
@@ -374,7 +367,6 @@ mod tests {
 
     #[test]
     fn import_stl_roundtrip_unit_cube() {
-        // Write a unit cube to STL, read it back, import to topology.
         let mut write_topo = Topology::new();
         let solid = make_unit_cube_non_manifold(&mut write_topo);
 

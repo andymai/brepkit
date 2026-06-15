@@ -47,7 +47,6 @@ struct IgesEntity {
 
 /// Parse all entities from an IGES file.
 fn parse_iges_entities(input: &str) -> Result<Vec<IgesEntity>, IoError> {
-    // Separate lines by section.
     let mut d_lines: Vec<&str> = Vec::new();
     let mut p_lines: Vec<&str> = Vec::new();
 
@@ -102,7 +101,6 @@ fn parse_iges_entities(input: &str) -> Result<Vec<IgesEntity>, IoError> {
             .push_str(data_part.trim_end());
     }
 
-    // Build entities.
     let mut entities = Vec::new();
     for (entity_type, _pd_start, de_seq) in &dir_entries {
         let params = pd_by_de.get(de_seq).cloned().unwrap_or_default();
@@ -149,7 +147,6 @@ fn build_topology(topo: &mut Topology, entities: &[IgesEntity]) -> Result<Vec<So
 
     for entity in entities {
         if entity.entity_type == 108 {
-            // Plane entity — create a planar face.
             if let Ok(face_id) = build_plane_face(topo, &entity.params) {
                 face_ids.push(face_id);
             }
@@ -162,7 +159,6 @@ fn build_topology(topo: &mut Topology, entities: &[IgesEntity]) -> Result<Vec<So
         return Ok(Vec::new());
     }
 
-    // Assemble all faces into a single solid.
     let shell = Shell::new(face_ids).map_err(|e| IoError::ParseError {
         reason: format!("failed to build shell: {e}"),
     })?;
@@ -202,7 +198,6 @@ fn build_plane_face(
         normal.z() / norm_len,
     );
 
-    // Compute a point on the plane and two tangent directions.
     let origin = Point3::new(
         unit_normal.x() * d / norm_len,
         unit_normal.y() * d / norm_len,
@@ -221,7 +216,6 @@ fn build_plane_face(
     let u_dir = Vec3::new(u_dir.x() / u_len, u_dir.y() / u_len, u_dir.z() / u_len);
     let v_dir = unit_normal.cross(u_dir);
 
-    // Create a 1×1 square face using linear combination of tangent vectors.
     let half = 0.5;
     let p0 = offset_point(origin, u_dir, -half, v_dir, -half);
     let p1 = offset_point(origin, u_dir, half, v_dir, -half);
@@ -296,8 +290,6 @@ mod tests {
     use super::*;
     use crate::iges::writer;
 
-    // ── Round-trip tests ────────────────────────────────────────
-
     #[test]
     fn roundtrip_unit_cube() {
         let mut write_topo = Topology::new();
@@ -329,16 +321,12 @@ mod tests {
         assert_eq!(solids.len(), 1);
     }
 
-    // ── Error handling ──────────────────────────────────────────
-
     #[test]
     fn empty_file_returns_empty() {
         let mut topo = Topology::new();
         let solids = read_iges("", &mut topo).unwrap();
         assert!(solids.is_empty());
     }
-
-    // ── Parsing helpers ─────────────────────────────────────────
 
     #[test]
     fn parse_float_params_basic() {

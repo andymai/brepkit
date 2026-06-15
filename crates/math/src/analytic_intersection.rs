@@ -385,7 +385,6 @@ fn sample_plane_torus(
     normal: Vec3,
     d: f64,
 ) -> Result<Vec<Vec<Point3>>, MathError> {
-    // Delegate to the full version and extract just the points.
     let curves = intersect_plane_torus(torus, normal, d)?;
     Ok(curves
         .into_iter()

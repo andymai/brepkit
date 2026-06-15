@@ -86,8 +86,6 @@ mod tests {
     #[test]
     fn four_samples_on_unit_circle() {
         let c = unit_circle();
-        // Per task spec: sample_uniform on Circle3D(r=1) with n=4 → 4 points.
-        // Use the full domain [0, TAU].
         let pairs = sample_uniform_with_params(&c, 0.0, TAU, 4);
         assert_eq!(pairs.len(), 4);
 

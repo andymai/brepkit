@@ -19,10 +19,6 @@ use crate::OperationsError;
 use crate::boolean::BooleanOp;
 use crate::tessellate::TriangleMesh;
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 /// Result of a mesh boolean operation.
 #[derive(Debug, Clone)]
 pub struct MeshBooleanResult {
@@ -123,10 +119,6 @@ pub fn mesh_boolean_with_metadata(
     Ok(MeshBooleanResult { mesh })
 }
 
-// ---------------------------------------------------------------------------
-// Step 1: BVH broad-phase
-// ---------------------------------------------------------------------------
-
 /// Build a BVH over a mesh's triangles, returning the BVH and per-triangle AABBs.
 fn build_triangle_bvh(mesh: &TriangleMesh) -> (Bvh, Vec<Aabb3>) {
     let tri_count = mesh.indices.len() / 3;
@@ -160,10 +152,6 @@ fn find_intersecting_pairs(mesh_a: &TriangleMesh, bvh_b: &Bvh) -> Vec<(usize, us
 
     pairs
 }
-
-// ---------------------------------------------------------------------------
-// Step 2: Triangle-triangle intersection
-// ---------------------------------------------------------------------------
 
 /// An intersection segment between two triangles.
 #[derive(Debug, Clone)]
@@ -643,10 +631,6 @@ fn triangle_centroid(v0: Point3, v1: Point3, v2: Point3) -> Point3 {
     )
 }
 
-// ---------------------------------------------------------------------------
-// Step 3: Split meshes by intersection edges
-// ---------------------------------------------------------------------------
-
 /// A triangle mesh that has been split by intersection segments.
 #[derive(Debug, Clone)]
 struct SplitMesh {
@@ -695,13 +679,11 @@ fn split_mesh_by_intersections(
         let i2 = mesh.indices[i * 3 + 2] as usize;
 
         if let Some(segments) = tri_segments.get(&i) {
-            // This triangle needs splitting.
             let v0 = mesh.positions[i0];
             let v1 = mesh.positions[i1];
             let v2 = mesh.positions[i2];
             let n0 = mesh.normals[i0];
 
-            // Collect all unique intersection points on this triangle.
             let mut insert_pts: Vec<Point3> = Vec::new();
             for &(p0, p1) in segments {
                 maybe_add_unique(&mut insert_pts, p0, tolerance);
@@ -732,7 +714,6 @@ fn split_mesh_by_intersections(
                 drop_collinear_midpoints(&mut insert_pts, tolerance);
             }
 
-            // Split the triangle by inserting these points.
             let sub_tris = split_triangle_by_points(v0, v1, v2, &insert_pts, tolerance);
 
             for (sv0, sv1, sv2) in sub_tris {
@@ -747,7 +728,6 @@ fn split_mesh_by_intersections(
                 triangles.push([base, base + 1, base + 2]);
             }
         } else {
-            // No intersection: keep the triangle as-is.
             #[allow(clippy::cast_possible_truncation)]
             {
                 triangles.push([i0 as u32, i1 as u32, i2 as u32]);
@@ -994,10 +974,6 @@ fn dist_sq(a: Point3, b: Point3) -> f64 {
     d.dot(d)
 }
 
-// ---------------------------------------------------------------------------
-// Step 4: Classification
-// ---------------------------------------------------------------------------
-
 /// Classify each triangle in a split mesh as inside or outside the other mesh.
 ///
 /// Uses generalized winding number: a triangle's centroid is inside the other
@@ -1061,10 +1037,6 @@ pub(crate) fn winding_number_at_point(point: Point3, mesh: &TriangleMesh) -> f64
     total_solid_angle / (4.0 * std::f64::consts::PI)
 }
 
-// ---------------------------------------------------------------------------
-// Step 5: Assembly
-// ---------------------------------------------------------------------------
-
 /// Assemble the result mesh from classified sub-triangles.
 ///
 /// Selection logic:
@@ -1082,7 +1054,6 @@ fn assemble_result(
     let mut normals = Vec::new();
     let mut indices = Vec::new();
 
-    // Process mesh A triangles.
     for (i, tri) in split_a.triangles.iter().enumerate() {
         let inside_b = classify_a.get(i).copied().unwrap_or(false);
         let keep = match op {
@@ -1102,7 +1073,6 @@ fn assemble_result(
         }
     }
 
-    // Process mesh B triangles.
     for (i, tri) in split_b.triangles.iter().enumerate() {
         let inside_a = classify_b.get(i).copied().unwrap_or(false);
         let (keep, flip) = match op {
@@ -1144,7 +1114,6 @@ fn append_triangle(
     let base = positions.len() as u32;
 
     if flip {
-        // Reverse winding order and negate normals.
         for &idx in tri.iter().rev() {
             let i = idx as usize;
             positions.push(src_positions[i]);
@@ -1163,10 +1132,6 @@ fn append_triangle(
     indices.push(base + 2);
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 /// Extract the three vertices of a triangle from a mesh.
 fn get_triangle(mesh: &TriangleMesh, tri_idx: usize) -> (Point3, Point3, Point3) {
     let base = tri_idx * 3;
@@ -1175,10 +1140,6 @@ fn get_triangle(mesh: &TriangleMesh, tri_idx: usize) -> (Point3, Point3, Point3)
     let i2 = mesh.indices[base + 2] as usize;
     (mesh.positions[i0], mesh.positions[i1], mesh.positions[i2])
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -1189,7 +1150,6 @@ mod tests {
     /// Create a tetrahedron mesh centered at a point.
     fn tetrahedron_mesh(center: Point3, size: f64) -> TriangleMesh {
         let s = size;
-        // Regular tetrahedron vertices.
         let v0 = Point3::new(center.x() + s, center.y() + s, center.z() + s);
         let v1 = Point3::new(center.x() + s, center.y() - s, center.z() - s);
         let v2 = Point3::new(center.x() - s, center.y() + s, center.z() - s);
@@ -1197,7 +1157,6 @@ mod tests {
 
         let positions = [v0, v1, v2, v3];
 
-        // Compute face normals for each face.
         let faces = [(0u32, 2, 1), (0, 1, 3), (0, 3, 2), (1, 2, 3)];
         let mut out_positions = Vec::new();
         let mut out_normals = Vec::new();
@@ -1239,7 +1198,6 @@ mod tests {
         let cy = center.y();
         let cz = center.z();
 
-        // 8 corner vertices.
         let verts = [
             Point3::new(cx - s, cy - s, cz - s), // 0
             Point3::new(cx + s, cy - s, cz - s), // 1

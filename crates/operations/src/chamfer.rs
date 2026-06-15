@@ -18,10 +18,6 @@ use brepkit_topology::vertex::VertexId;
 use crate::boolean::{FaceSpec, assemble_solid_mixed};
 use crate::dot_normal_point;
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 /// Chamfer one or more edges of a solid.
 ///
 /// Each target edge is replaced by a flat bevel face. The `distance`
@@ -87,10 +83,6 @@ pub fn chamfer_asymmetric(
     chamfer_core(topo, solid, edges, ChamferDistances::Asymmetric { d1, d2 })
 }
 
-// ---------------------------------------------------------------------------
-// Distances helper
-// ---------------------------------------------------------------------------
-
 /// How chamfer distances are assigned to edges.
 enum ChamferDistances {
     /// Same distance on both adjacent faces.
@@ -135,10 +127,6 @@ impl ChamferDistances {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Core implementation
-// ---------------------------------------------------------------------------
-
 #[allow(clippy::too_many_lines)]
 fn chamfer_core(
     topo: &mut Topology,
@@ -148,12 +136,10 @@ fn chamfer_core(
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
 
-    // -- Phase 1: Collect face data --
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
     let shell_face_ids: Vec<FaceId> = shell.faces().to_vec();
 
-    // Build edge→faces map and collect per-face polygon data.
     let mut edge_to_faces: HashMap<usize, Vec<FaceId>> = HashMap::new();
     let mut face_polygons: HashMap<usize, FacePolygon> = HashMap::new();
 
@@ -194,7 +180,7 @@ fn chamfer_core(
         // will be passed through unchanged if they don't contain target edges.
         let normal = match face.surface() {
             FaceSurface::Plane { normal, .. } => *normal,
-            _ => continue, // Skip non-planar faces for polygon data
+            _ => continue,
         };
 
         face_polygons.insert(
@@ -208,7 +194,6 @@ fn chamfer_core(
         );
     }
 
-    // -- Phase 2: Filter to manifold edges, validate --
     // Like fillet, silently skip non-manifold edges (shared by != 2 faces)
     // which commonly occur in boolean operation output.
     let filtered_edges: Vec<EdgeId> = edges
@@ -246,9 +231,6 @@ fn chamfer_core(
         }
     }
 
-    // -- Phase 3: Build modified polygons + collect chamfer face data --
-
-    // For each target edge, we collect the chamfer points from both faces.
     let mut chamfer_data: HashMap<usize, ChamferEdgeData> = HashMap::new();
     let mut result_specs: Vec<FaceSpec> = Vec::new();
 
@@ -475,7 +457,6 @@ fn chamfer_core(
         });
     }
 
-    // -- Phase 4: Build chamfer faces --
     for &edge_id in &filtered_edges {
         let data = chamfer_data.get(&edge_id.index()).ok_or_else(|| {
             crate::OperationsError::InvalidInput {
@@ -494,7 +475,6 @@ fn chamfer_core(
         let f1 = face_list[0];
         let f2 = face_list[1];
 
-        // Retrieve chamfer points: (face, vertex) → Point3
         let c1_start = data.get_point(f1, v_start)?;
         let c1_end = data.get_point(f1, v_end)?;
         let c2_start = data.get_point(f2, v_start)?;
@@ -516,7 +496,6 @@ fn chamfer_core(
                 raw_normal.normalize()?,
             )
         } else {
-            // Reverse winding.
             let flipped = edge_b.cross(edge_a);
             (
                 vec![c1_start, c1_end, c2_end, c2_start],
@@ -533,7 +512,6 @@ fn chamfer_core(
         });
     }
 
-    // -- Phase 4.5: Corner faces --
     // At each original vertex where ALL adjacent edges are chamfered,
     // the trim-plane intersections from each face create a polygonal gap
     // (triangle for box vertices, k-gon for degree-k vertices).
@@ -628,13 +606,8 @@ fn chamfer_core(
         });
     }
 
-    // -- Phase 5: Assemble result solid --
     assemble_solid_mixed(topo, &result_specs, tol)
 }
-
-// ---------------------------------------------------------------------------
-// Internal data structures
-// ---------------------------------------------------------------------------
 
 /// Per-face polygon data collected from the solid.
 struct FacePolygon {
@@ -901,8 +874,6 @@ mod tests {
              (rel_err={rel_err:.2e})"
         );
     }
-
-    // -- Asymmetric chamfer tests --
 
     #[test]
     fn chamfer_asymmetric_single_edge() {

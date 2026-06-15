@@ -51,7 +51,6 @@ pub fn sew_faces(
         Tolerance::new().linear
     };
 
-    // Phase 1: Snapshot all face geometry.
     let mut face_snapshots: Vec<FaceSnapshot> = Vec::with_capacity(faces.len());
 
     for &fid in faces {
@@ -77,7 +76,6 @@ pub fn sew_faces(
         });
     }
 
-    // Phase 2: Merge coincident vertices using spatial hash.
     let resolution = 1.0 / tol;
     let mut vertex_map: HashMap<(i64, i64, i64), VertexId> = HashMap::new();
 
@@ -93,7 +91,6 @@ pub fn sew_faces(
                 .or_insert_with(|| topo.add_vertex(Vertex::new(p, tol)))
         };
 
-    // Phase 3: Create merged edges and rebuild faces.
     let mut edge_map: HashMap<(usize, usize), EdgeId> = HashMap::new();
     let mut new_face_ids: Vec<FaceId> = Vec::with_capacity(face_snapshots.len());
 
@@ -131,7 +128,6 @@ pub fn sew_faces(
         new_face_ids.push(face_id);
     }
 
-    // Phase 4: Assemble into shell and solid.
     let shell = Shell::new(new_face_ids).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
@@ -248,7 +244,6 @@ mod tests {
 
         let solid = sew_faces(&mut topo, &[f0, f1], 1e-6).unwrap();
 
-        // Count unique edges across both faces.
         let s = topo.solid(solid).unwrap();
         let sh = topo.shell(s.outer_shell()).unwrap();
 
@@ -274,7 +269,6 @@ mod tests {
     fn sew_six_cube_faces() {
         let mut topo = Topology::new();
 
-        // Create 6 loose faces of a unit cube.
         let bottom = make_loose_quad(
             &mut topo,
             Point3::new(0.0, 0.0, 0.0),

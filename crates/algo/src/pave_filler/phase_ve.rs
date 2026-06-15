@@ -45,10 +45,7 @@ pub fn perform(
     let edges_a = brepkit_topology::explorer::solid_edges(topo, solid_a)?;
     let edges_b = brepkit_topology::explorer::solid_edges(topo, solid_b)?;
 
-    // Check vertices of A against edges of B
     check_vertex_edge_pairs(topo, &verts_a, &edges_b, tol, arena)?;
-
-    // Check vertices of B against edges of A
     check_vertex_edge_pairs(topo, &verts_b, &edges_a, tol, arena)?;
 
     Ok(())
@@ -79,20 +76,16 @@ fn check_vertex_edge_pairs(
                 continue;
             }
 
-            // Get edge domain
             let start_pos = topo.vertex(edge.start())?.point();
             let end_pos = topo.vertex(edge.end())?.point();
             let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
 
-            // Project vertex onto edge curve
             let param = project_point_on_edge(topo, eid, pos)?;
 
-            // Check if the parameter is within the edge domain
             if param < t0 - 1e-10 || param > t1 + 1e-10 {
                 continue;
             }
 
-            // Evaluate edge at the found parameter
             let edge_pt = edge
                 .curve()
                 .evaluate_with_endpoints(param, start_pos, end_pos);
@@ -100,7 +93,6 @@ fn check_vertex_edge_pairs(
 
             let combined_tol = vtol + tol.linear;
             if dist <= combined_tol {
-                // Add extra pave to the pave blocks that contain this parameter
                 let pave = Pave::new(resolved_vid, param);
                 if let Some(pb_ids) = arena.edge_pave_blocks.get(&eid) {
                     let pb_ids_copy: Vec<_> = pb_ids.clone();
@@ -114,7 +106,6 @@ fn check_vertex_edge_pairs(
                     }
                 }
 
-                // Record interference
                 arena.interference.ve.push(Interference::VE {
                     vertex: resolved_vid,
                     edge: eid,
@@ -145,7 +136,6 @@ fn project_point_on_edge(
     let end_pos = topo.vertex(edge.end())?.point();
     let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
 
-    // Sample the edge at N points and find the closest
     let n_samples: usize = 32;
     let mut best_t = t0;
     let mut best_dist_sq = f64::MAX;
@@ -160,7 +150,6 @@ fn project_point_on_edge(
         }
     }
 
-    // Refine with ternary search in the neighborhood
     let dt = (t1 - t0) / n_samples as f64;
     let mut lo = (best_t - dt).max(t0);
     let mut hi = (best_t + dt).min(t1);

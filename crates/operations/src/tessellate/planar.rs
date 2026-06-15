@@ -31,7 +31,6 @@ pub(super) fn tessellate_analytic_with_boundary(
     // a common reversal pass for all face types after this function returns.
     let wire = topo.wire(face_data.outer_wire())?;
 
-    // Collect boundary vertices in order, projecting to UV with seam unwrapping.
     let mut uv_pts: Vec<(f64, f64)> = Vec::new();
     let mut positions_3d: Vec<Point3> = Vec::new();
 
@@ -75,7 +74,6 @@ pub(super) fn tessellate_analytic_with_boundary(
         }
     }
 
-    // CDT-triangulate the UV boundary polygon.
     let uv_p2: Vec<brepkit_math::vec::Point2> = uv_pts
         .iter()
         .map(|&(u, v)| brepkit_math::vec::Point2::new(u, v))
@@ -108,13 +106,11 @@ pub(super) fn tessellate_analytic_with_boundary(
         }
     }
 
-    // Remove exterior triangles.
     cdt.remove_exterior(&boundary_segs);
 
     let tris = cdt.triangles();
     let cdt_verts = cdt.vertices();
 
-    // Build mesh: compute 3D positions on the cylinder surface.
     let mut positions = Vec::with_capacity(cdt_verts.len());
     let mut normals_out = Vec::with_capacity(cdt_verts.len());
     let mut uvs = Vec::with_capacity(cdt_verts.len());
@@ -183,7 +179,6 @@ pub(super) fn tessellate_analytic(
     let u_periodic = (u_range.1 - u_range.0 - std::f64::consts::TAU).abs()
         < brepkit_math::tolerance::Tolerance::new().linear;
 
-    // Build (nu+1) x (nv+1) vertex grid.
     let mut grid = vec![0u32; (nu + 1) * (nv + 1)];
     for iv in 0..=nv {
         let v = v_range.0 + (v_range.1 - v_range.0) * (iv as f64) / (nv as f64);
@@ -437,7 +432,6 @@ pub(super) fn tessellate_planar(
             indices,
         })
     } else {
-        // CDT path for faces with holes.
         tessellate_planar_with_holes(topo, face_data, &positions, normal, deflection, angular_tol)
     }
 }
@@ -492,7 +486,6 @@ fn tessellate_planar_with_holes(
     use brepkit_math::cdt::Cdt;
     use brepkit_math::vec::Point2;
 
-    // Collect all positions: outer + inner wires.
     let mut all_positions: Vec<Point3> = outer_positions.to_vec();
     let outer_count = all_positions.len();
     let mut inner_wire_ranges: Vec<(usize, usize)> = Vec::new();
@@ -520,7 +513,6 @@ fn tessellate_planar_with_holes(
         .insert_points_hilbert(&pts2d)
         .map_err(crate::OperationsError::Math)?;
 
-    // Insert outer boundary constraints.
     let mut all_constraints: Vec<(usize, usize)> = Vec::new();
     for i in 0..outer_count {
         let j = (i + 1) % outer_count;
@@ -533,7 +525,6 @@ fn tessellate_planar_with_holes(
         }
     }
 
-    // Insert inner wire constraints (holes).
     for &(start, end) in &inner_wire_ranges {
         let count = end - start;
         for i in 0..count {
@@ -548,7 +539,6 @@ fn tessellate_planar_with_holes(
         }
     }
 
-    // Remove exterior triangles (using only outer boundary constraints).
     let outer_constraints: Vec<(usize, usize)> = (0..outer_count)
         .filter_map(|i| {
             let j = (i + 1) % outer_count;
@@ -559,8 +549,7 @@ fn tessellate_planar_with_holes(
         .collect();
     cdt.remove_exterior(&outer_constraints);
 
-    // Remove hole interiors by seeding from each hole's centroid.
-    // Build a set of all constraint edges for flood-fill stopping.
+    // Constraint edges drive the flood-fill stop condition below.
     let constraint_set: DetHashSet<(usize, usize)> = all_constraints
         .iter()
         .flat_map(|&(a, b)| {
@@ -578,11 +567,9 @@ fn tessellate_planar_with_holes(
         let hole_poly: Vec<Point2> = (start..end).map(|i| pts2d[i]).collect();
         let seed = find_interior_seed(&hole_poly);
 
-        // Flood-fill remove from the seed, stopping at constraints.
         let _removed = cdt.flood_remove_from_point(seed, &constraint_set);
     }
 
-    // Extract triangles and build mesh.
     let cdt_triangles = cdt.triangles();
     let cdt_verts = cdt.vertices();
     let num_tris = cdt_triangles.len();
@@ -596,14 +583,12 @@ fn tessellate_planar_with_holes(
         vi_to_orig.entry(cdt_vi).or_insert(orig_idx);
     }
 
-    // Map CDT point indices -> output mesh indices.
     let mut cdt_to_mesh: DetHashMap<usize, u32> = DetHashMap::default();
     for &(v0, v1, v2) in &cdt_triangles {
         for &vi in &[v0, v1, v2] {
             if let std::collections::hash_map::Entry::Vacant(e) = cdt_to_mesh.entry(vi) {
                 #[allow(clippy::cast_possible_truncation)]
                 let mesh_idx = positions_out.len() as u32;
-                // Find the original 3D point for this CDT vertex.
                 if let Some(&orig_idx) = vi_to_orig.get(&vi) {
                     positions_out.push(all_positions[orig_idx]);
                 } else {

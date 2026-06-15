@@ -18,14 +18,6 @@ use brepkit_math::vec::{Point2, Point3, Vec3};
 
 use crate::dot_normal_point;
 
-// ---------------------------------------------------------------------------
-// Re-exports from algo (canonical implementation)
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// BVH construction
-// ---------------------------------------------------------------------------
-
 /// Build a BVH over face data for accelerated ray-cast classification.
 ///
 /// Returns `None` when the face count is small enough that linear scan is
@@ -45,10 +37,6 @@ pub(super) fn build_face_bvh(faces: &FaceData) -> Option<Bvh> {
         .collect();
     Some(Bvh::build(&aabbs))
 }
-
-// ---------------------------------------------------------------------------
-// Fragment classification
-// ---------------------------------------------------------------------------
 
 /// Classify a face fragment relative to the opposite solid.
 ///
@@ -188,10 +176,6 @@ pub(super) fn classify_point(
     multiray_classify(centroid, normal, opposite, bvh, tol)
 }
 
-// ---------------------------------------------------------------------------
-// Geometry helpers (inlined)
-// ---------------------------------------------------------------------------
-
 /// Compute `point + dir * t` as a `Point3`.
 #[inline]
 fn point_along_line(pt: &Point3, dir: &Vec3, t: f64) -> Point3 {
@@ -201,10 +185,6 @@ fn point_along_line(pt: &Point3, dir: &Vec3, t: f64) -> Point3 {
         dir.z().mul_add(t, pt.z()),
     )
 }
-
-// ---------------------------------------------------------------------------
-// Ray-casting helpers
-// ---------------------------------------------------------------------------
 
 /// Test a single face against a ray for crossing parity.
 ///
@@ -322,10 +302,6 @@ fn multiray_classify(
         FaceClass::Outside
     }
 }
-
-// ---------------------------------------------------------------------------
-// Geometry helpers
-// ---------------------------------------------------------------------------
 
 /// Compute the centroid of a polygon.
 ///

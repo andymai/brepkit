@@ -92,7 +92,6 @@ fn cdt_triangle_area_conservation() {
     let tris = cdt.triangles();
     assert_eq!(tris.len(), 1, "triangle should produce 1 triangle");
 
-    // Check area.
     let verts = cdt.vertices();
     let (a, b, c) = tris[0];
     let area = 0.5
@@ -127,7 +126,6 @@ fn cdt_constraint_diagonal() {
     cdt.insert_constraint(v1, v2).unwrap();
     cdt.insert_constraint(v2, v3).unwrap();
     cdt.insert_constraint(v3, v0).unwrap();
-    // Add diagonal constraint.
     cdt.insert_constraint(v0, v2).unwrap();
 
     cdt.remove_exterior(&[(v0, v1), (v1, v2), (v2, v3), (v3, v0)]);
@@ -139,7 +137,6 @@ fn cdt_constraint_diagonal() {
         "square with diagonal should have 2 triangles"
     );
 
-    // Verify the diagonal (v0, v2) exists as an edge.
     let has_diagonal = tris.iter().any(|&(a, b, c)| {
         let edges = [(a, b), (b, c), (c, a)];
         edges

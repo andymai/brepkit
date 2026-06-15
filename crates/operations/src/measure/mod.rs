@@ -12,8 +12,6 @@ pub use bounding_box::solid_bounding_box;
 pub use edge_length::{edge_length, face_perimeter, wire_length};
 pub use volume::{solid_center_of_mass, solid_volume, solid_volume_from_faces};
 
-// ── Tests ─────────────────────────────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
@@ -25,12 +23,9 @@ mod tests {
 
     use super::*;
 
-    // ── Helper: assert relative error within tolerance ────────────
-    //
     // For analytic primitives (box, cylinder, sphere, cone, torus) we
     // expect 1e-8 relative error. For NURBS-involving operations
     // (fillet, boolean, tessellation-based) we accept 1e-4.
-
     fn assert_rel(actual: f64, expected: f64, rel_tol: f64, label: &str) {
         let rel_err = if expected.abs() < 1e-15 {
             actual.abs()
@@ -87,8 +82,6 @@ mod tests {
             aabb.max.z()
         );
     }
-
-    // ── Bounding box ─────────────────────────────────────────────
 
     #[test]
     fn unit_cube_bounding_box() {
@@ -153,8 +146,6 @@ mod tests {
         assert!(aabb.min.z() <= -3.0 + 1e-6, "min.z={}", aabb.min.z());
         assert!(aabb.max.z() >= 3.0 - 1e-6, "max.z={}", aabb.max.z());
     }
-
-    // ── Volume: analytic primitives (1e-8 tolerance) ─────────────
 
     #[test]
     fn unit_cube_volume() {
@@ -260,8 +251,6 @@ mod tests {
         assert_rel(vol, expected, 1e-10, "torus R=10 r=3 volume");
     }
 
-    // ── Volume: tessellation-based (1e-4 tolerance) ──────────────
-
     /// Ellipsoid via non-uniform scale of a unit sphere.
     /// V = (4/3)*pi*a*b*c where a,b,c are the semi-axes.
     ///
@@ -335,8 +324,6 @@ mod tests {
         assert_rel(vol, 24.0, 1e-8, "extruded 2x3x4 box volume");
     }
 
-    // ── Volume: operations that involve NURBS (1e-4 tolerance) ───
-
     /// Fillet on one edge of a 20^3 box.
     ///
     /// A rolling-ball fillet of radius r on one edge of length L removes
@@ -365,8 +352,6 @@ mod tests {
         let expected = 8000.0 - (1.0 - PI / 4.0) * 4.0 * 20.0;
         assert_rel(vol, expected, 0.01, "fillet r=2 on 20^3 box, one edge");
     }
-
-    // ── Surface area ─────────────────────────────────────────────
 
     #[test]
     fn unit_cube_surface_area() {
@@ -431,8 +416,6 @@ mod tests {
         assert_rel(area, expected, 1e-4, "sphere r=5 surface area");
     }
 
-    // ── Center of mass ───────────────────────────────────────────
-
     #[test]
     fn unit_cube_center_of_mass() {
         let mut topo = Topology::new();
@@ -485,8 +468,6 @@ mod tests {
         assert_rel(com.y(), 1.5, 1e-8, "rect box CoM y");
         assert_rel(com.z(), 2.0, 1e-8, "rect box CoM z");
     }
-
-    // ── Edge & wire lengths ──────────────────────────────────────
 
     #[test]
     fn edge_length_unit_cube() {
@@ -569,8 +550,6 @@ mod tests {
         assert_rel(len, 16.0, 1e-8, "3x5 rectangle perimeter");
     }
 
-    // ── Boolean volume ───────────────────────────────────────────
-
     /// Boolean cut must reduce volume: cut(box, cylinder) < box volume.
     ///
     /// Regression test for the cylinder band classification bug.
@@ -607,8 +586,6 @@ mod tests {
         );
         assert_rel(cut_vol, expected, 0.02, "cut(box, cylinder) volume");
     }
-
-    // ── Edge case: degenerate and boundary inputs ────────────────
 
     /// Volume and AABB of a very thin box (one dimension near-zero).
     /// 10 * 10 * 0.001 -> V = 0.1, SA = 2(100 + 0.01 + 0.01) = 200.04.
@@ -688,8 +665,6 @@ mod tests {
         assert_rel(vol, expected, 1e-8, "near-pointed frustum volume");
     }
 
-    // ── Composition: measure after operations ────────────────────
-
     /// Volume after transform: uniform scale by 2 triples each dimension.
     /// Unit cube -> 2x2x2 cube -> V = 8.
     #[test]
@@ -734,8 +709,6 @@ mod tests {
         assert_rel(vol_before, 60.0, 1e-8, "box volume before rotation");
         assert_rel(vol_after, 60.0, 1e-8, "box volume after rotation");
     }
-
-    // ── Error path validation ────────────────────────────────────
 
     /// Cone total surface area = pi*r*l + pi*r^2 (lateral + base cap).
     /// r=1, h=1: slant l=sqrt(2), lateral = pi*1*sqrt(2) = pi*sqrt(2) ~ 4.4429.

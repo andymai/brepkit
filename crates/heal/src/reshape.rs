@@ -267,7 +267,6 @@ impl ReShape {
         let shell = topo.shell(solid_data.outer_shell())?;
         let face_ids: Vec<_> = shell.faces().to_vec();
 
-        // Collect all unique edge IDs.
         let mut edge_ids = Vec::new();
         for &fid in &face_ids {
             let face = topo.face(fid)?;
@@ -285,7 +284,6 @@ impl ReShape {
         edge_ids.sort_by_key(|e| e.index());
         edge_ids.dedup_by_key(|e| e.index());
 
-        // Snapshot updates.
         let updates: Vec<_> = edge_ids
             .iter()
             .filter_map(|&eid| {
@@ -300,7 +298,6 @@ impl ReShape {
             })
             .collect();
 
-        // Apply.
         for (eid, new_start, new_end, curve) in updates {
             let edge = topo.edge_mut(eid)?;
             *edge = Edge::new(new_start, new_end, curve);

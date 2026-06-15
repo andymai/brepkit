@@ -74,8 +74,6 @@ impl GcsSystem {
         }
     }
 
-    // ── Entity CRUD ─────────────────────────────────────────────────
-
     /// Add a point. Returns its handle.
     pub fn add_point(&mut self, data: PointData) -> PointId {
         self.dirty = true;
@@ -101,25 +99,21 @@ impl GcsSystem {
     /// circle, or constraint. Returns `SketchError::InvalidHandle` if the handle
     /// is stale or invalid.
     pub fn remove_point(&mut self, id: PointId) -> Result<PointData, SketchError> {
-        // Check lines
         for (_, line) in self.lines.iter() {
             if line.p1 == id || line.p2 == id {
                 return Err(SketchError::EntityInUse);
             }
         }
-        // Check circles
         for (_, circle) in self.circles.iter() {
             if circle.center == id {
                 return Err(SketchError::EntityInUse);
             }
         }
-        // Check arcs
         for (_, arc) in self.arcs.iter() {
             if arc.center == id || arc.start == id || arc.end == id {
                 return Err(SketchError::EntityInUse);
             }
         }
-        // Check constraints
         for (_, entry) in self.constraints.iter() {
             if constraint_references_point(&entry.constraint, id) {
                 return Err(SketchError::EntityInUse);
@@ -250,9 +244,7 @@ impl GcsSystem {
     /// Returns `SketchError::EntityInUse` if the arc is referenced by a constraint.
     /// Returns `SketchError::InvalidHandle` if the handle is stale or invalid.
     pub fn remove_arc(&mut self, id: ArcId) -> Result<ArcData, SketchError> {
-        // Check no user constraints reference this arc
         for (cid, entry) in self.constraints.iter() {
-            // Skip the arc's own internal constraint
             if self.arc_internal_constraints.get(&id) == Some(&cid) {
                 continue;
             }
@@ -261,7 +253,6 @@ impl GcsSystem {
             }
         }
 
-        // Remove internal constraint
         if let Some(cid) = self.arc_internal_constraints.remove(&id) {
             self.constraints.remove(cid);
         }
@@ -280,8 +271,6 @@ impl GcsSystem {
     pub fn arcs(&self) -> impl Iterator<Item = (ArcId, &ArcData)> {
         self.arcs.iter()
     }
-
-    // ── Constraint CRUD ─────────────────────────────────────────────
 
     /// Add a constraint. Validates that all referenced entities exist.
     ///
@@ -339,8 +328,6 @@ impl GcsSystem {
         self.circles.len()
     }
 
-    // ── Solve ───────────────────────────────────────────────────────
-
     /// Solve the constraint system.
     ///
     /// Modifies entity positions in-place to satisfy all constraints.
@@ -380,12 +367,10 @@ impl GcsSystem {
             });
         }
 
-        // Extract params
         let mut params = self.extract_params();
         let param_index = self.param_index.clone();
         let param_map = self.param_map.clone();
 
-        // Collect constraints for closures
         let constraints: Vec<Constraint> = self
             .constraints
             .iter()
@@ -428,7 +413,6 @@ impl GcsSystem {
             tolerance,
         );
 
-        // Write back solved params
         self.write_params(&params);
 
         Ok(result)
@@ -489,8 +473,6 @@ impl GcsSystem {
         self.circles.iter()
     }
 
-    // ── Internal ────────────────────────────────────────────────────
-
     /// Rebuild parameter map if dirty.
     fn rebuild_if_dirty(&mut self) {
         if !self.dirty {
@@ -499,7 +481,6 @@ impl GcsSystem {
         self.param_map.clear();
         self.param_index.clear();
 
-        // Free point params
         for (id, data) in self.points.iter() {
             if !data.fixed {
                 let idx = self.param_map.len();
@@ -511,7 +492,6 @@ impl GcsSystem {
             }
         }
 
-        // Circle radius params
         for (id, _) in self.circles.iter() {
             let idx = self.param_map.len();
             self.param_map.push(ParamRef::CircleRadius(id));
@@ -1039,26 +1019,21 @@ mod tests {
         let top = sys.add_line(p2, p3).unwrap();
         let left = sys.add_line(p3, p0).unwrap();
 
-        // Pin origin
         sys.add_constraint(Constraint::FixX(p0, 0.0)).unwrap();
         sys.add_constraint(Constraint::FixY(p0, 0.0)).unwrap();
 
-        // Bottom: horizontal, length 30
         sys.add_constraint(Constraint::Horizontal(bottom)).unwrap();
         sys.add_constraint(Constraint::Distance(p0, p1, 30.0))
             .unwrap();
 
-        // Right: vertical, length 20
         sys.add_constraint(Constraint::Vertical(right)).unwrap();
         sys.add_constraint(Constraint::Distance(p1, p2, 20.0))
             .unwrap();
 
-        // Top: horizontal, length 30
         sys.add_constraint(Constraint::Horizontal(top)).unwrap();
         sys.add_constraint(Constraint::Distance(p2, p3, 30.0))
             .unwrap();
 
-        // Left: vertical, length 20
         sys.add_constraint(Constraint::Vertical(left)).unwrap();
         sys.add_constraint(Constraint::Distance(p3, p0, 20.0))
             .unwrap();

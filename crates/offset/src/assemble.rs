@@ -27,15 +27,12 @@ use crate::error::OffsetError;
 pub fn assemble_solid(topo: &mut Topology, data: &OffsetData) -> Result<SolidId, OffsetError> {
     let mut new_faces = Vec::new();
 
-    // Create a face for each successfully offset face that has wire loops.
     for (face_id, offset_face) in &data.offset_faces {
         if offset_face.status == OffsetStatus::Excluded {
             continue;
         }
 
         let Some(wires) = data.face_wires.get(face_id) else {
-            // No wires built for this face — skip with a warning.
-            // In a production build this might log; for now we silently skip.
             continue;
         };
 
@@ -51,13 +48,11 @@ pub fn assemble_solid(topo: &mut Topology, data: &OffsetData) -> Result<SolidId,
         new_faces.push(face_id);
     }
 
-    // Generate wall faces for thick-solid mode (excluded faces).
     if !data.excluded_faces.is_empty() {
         let wall_faces = build_wall_faces(topo, data)?;
         new_faces.extend(wall_faces);
     }
 
-    // Include any joint faces created during Phase 6 (arc joints).
     for &joint_face in &data.joint_faces {
         new_faces.push(joint_face);
     }
@@ -96,12 +91,8 @@ fn build_wall_faces(topo: &mut Topology, data: &OffsetData) -> Result<Vec<FaceId
         for oriented_edge in &wire_edges {
             let edge_id = oriented_edge.edge();
 
-            // Find the adjacent non-excluded face for this edge.
-            // Look through intersections OR use offset face data to compute
-            // the offset position at the original vertices.
-            //
-            // Simple approach: offset each vertex along the face normal by
-            // the offset distance. This works for planar faces.
+            // Offset each vertex along the face normal by the offset
+            // distance. This works for planar faces.
             let edge = topo.edge(edge_id)?;
             let p0_id = if oriented_edge.is_forward() {
                 edge.start()
@@ -117,7 +108,6 @@ fn build_wall_faces(topo: &mut Topology, data: &OffsetData) -> Result<Vec<FaceId
             let p0 = topo.vertex(p0_id)?.point();
             let p1 = topo.vertex(p1_id)?.point();
 
-            // Get the excluded face's outward normal to determine offset direction.
             let excl_face = topo.face(excluded_face_id)?;
             let excl_normal = match excl_face.surface() {
                 FaceSurface::Plane { normal, .. } => {
@@ -145,7 +135,6 @@ fn build_wall_faces(topo: &mut Topology, data: &OffsetData) -> Result<Vec<FaceId
             let q0 = Point3::new(p0.x() + disp.x(), p0.y() + disp.y(), p0.z() + disp.z());
             let q1 = Point3::new(p1.x() + disp.x(), p1.y() + disp.y(), p1.z() + disp.z());
 
-            // Create offset vertices.
             let q0_id = topo.add_vertex(Vertex::new(q0, tol));
             let q1_id = topo.add_vertex(Vertex::new(q1, tol));
 
@@ -185,7 +174,6 @@ fn make_wall_quad(
     let normal = cross * (1.0 / len);
     let d = normal.dot(Vec3::new(p0.x(), p0.y(), p0.z()));
 
-    // Create 4 line edges.
     let e01 = topo.add_edge(Edge::new(p0_id, p1_id, EdgeCurve::Line));
     let e12 = topo.add_edge(Edge::new(p1_id, p2_id, EdgeCurve::Line));
     let e23 = topo.add_edge(Edge::new(p2_id, p3_id, EdgeCurve::Line));

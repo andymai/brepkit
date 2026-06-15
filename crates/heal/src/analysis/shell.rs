@@ -45,7 +45,6 @@ pub fn analyze_shell(topo: &Topology, shell_id: ShellId) -> Result<ShellAnalysis
     let faces = shell.faces();
     let face_count = faces.len();
 
-    // Build edge-to-face usage map.
     let mut edge_uses: HashMap<usize, EdgeUse> = HashMap::new();
 
     for &face_id in faces {
@@ -70,7 +69,6 @@ pub fn analyze_shell(topo: &Topology, shell_id: ShellId) -> Result<ShellAnalysis
         }
     }
 
-    // Classify edges.
     let mut boundary_edges = Vec::new();
     let mut non_manifold_edges = Vec::new();
 
@@ -101,7 +99,6 @@ pub fn analyze_shell(topo: &Topology, shell_id: ShellId) -> Result<ShellAnalysis
         }
     }
 
-    // Connected components via union-find on face indices.
     let connected_components = count_connected_components(faces, &edge_uses);
 
     let mut status = Status::OK;
@@ -130,7 +127,6 @@ pub fn analyze_shell(topo: &Topology, shell_id: ShellId) -> Result<ShellAnalysis
 
 /// Count connected components among faces using edge adjacency.
 fn count_connected_components(faces: &[FaceId], edge_uses: &HashMap<usize, EdgeUse>) -> usize {
-    // Find with path compression.
     fn find(parent: &mut [usize], mut x: usize) -> usize {
         while parent[x] != x {
             parent[x] = parent[parent[x]];
@@ -139,7 +135,6 @@ fn count_connected_components(faces: &[FaceId], edge_uses: &HashMap<usize, EdgeU
         x
     }
 
-    // Union.
     fn union(parent: &mut [usize], a: usize, b: usize) {
         let ra = find(parent, a);
         let rb = find(parent, b);
@@ -152,7 +147,6 @@ fn count_connected_components(faces: &[FaceId], edge_uses: &HashMap<usize, EdgeU
         return 0;
     }
 
-    // Map face index (in the shell's face list) to a contiguous 0..N range.
     let mut face_to_idx: HashMap<usize, usize> = HashMap::new();
     for (i, fid) in faces.iter().enumerate() {
         face_to_idx.insert(fid.index(), i);
@@ -161,7 +155,6 @@ fn count_connected_components(faces: &[FaceId], edge_uses: &HashMap<usize, EdgeU
     let n = faces.len();
     let mut parent: Vec<usize> = (0..n).collect();
 
-    // Connect faces that share an edge.
     for eu in edge_uses.values() {
         if eu.faces.len() >= 2 {
             if let Some(&idx_a) = face_to_idx.get(&eu.faces[0].0.index()) {
@@ -174,7 +167,6 @@ fn count_connected_components(faces: &[FaceId], edge_uses: &HashMap<usize, EdgeU
         }
     }
 
-    // Count distinct roots.
     let mut roots = std::collections::HashSet::new();
     for i in 0..n {
         roots.insert(find(&mut parent, i));

@@ -123,10 +123,6 @@ pub fn project_normal_to_section(normal: Vec3, nplan: Vec3) -> Vec3 {
     )
 }
 
-// ---------------------------------------------------------------------------
-// Constant-radius fillet
-// ---------------------------------------------------------------------------
-
 /// Constant-radius fillet blend function.
 ///
 /// Implements the OCCT `BlendFunc_ConstRad` constraint system:
@@ -335,10 +331,6 @@ impl BlendFunction for ConstRadBlend {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Evolving-radius fillet
-// ---------------------------------------------------------------------------
-
 /// Variable-radius fillet blend function.
 ///
 /// Delegates to the [`ConstRadBlend`] math with the radius evaluated from
@@ -383,10 +375,6 @@ impl BlendFunction for EvolRadBlend {
         ConstRadBlend::section_with_radius(r, surf1, surf2, params, ctx)
     }
 }
-
-// ---------------------------------------------------------------------------
-// Two-distance chamfer
-// ---------------------------------------------------------------------------
 
 /// Two-distance chamfer blend function.
 ///
@@ -532,10 +520,6 @@ impl BlendFunction for ChamferBlend {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Distance-angle chamfer
-// ---------------------------------------------------------------------------
 
 /// Distance-angle chamfer blend function.
 ///
@@ -723,7 +707,6 @@ mod tests {
         let jac = blend.jacobian(&p1, &p2, &params, &ctx);
         let h = 1e-6;
 
-        // Central differences for each column
         let perturbations: [(usize, &str); 4] = [(0, "u1"), (1, "v1"), (2, "u2"), (3, "v2")];
 
         for &(col, name) in &perturbations {
@@ -768,7 +751,6 @@ mod tests {
     fn project_normal_perpendicular_to_nplan() {
         let nplan = Vec3::new(0.0, 1.0, 0.0);
 
-        // Test several normals
         let normals = [
             Vec3::new(0.0, 0.0, 1.0),
             Vec3::new(1.0, 0.0, 0.0),

@@ -51,12 +51,10 @@ pub fn write_obj(
         merged.indices.len() / 3,
     );
 
-    // Vertices
     for pos in &merged.positions {
         let _ = writeln!(output, "v {:.6} {:.6} {:.6}", pos.x(), pos.y(), pos.z());
     }
 
-    // Normals
     for normal in &merged.normals {
         let _ = writeln!(
             output,
@@ -97,11 +95,9 @@ mod tests {
         assert!(obj.contains("vn "));
         assert!(obj.contains("f "));
 
-        // Count vertex lines
         let v_count = obj.lines().filter(|l| l.starts_with("v ")).count();
         assert!(v_count > 0, "should have vertices");
 
-        // Count face lines
         let f_count = obj.lines().filter(|l| l.starts_with("f ")).count();
         assert!(f_count > 0, "should have faces");
     }
@@ -113,7 +109,6 @@ mod tests {
 
         let obj = write_obj(&topo, &[solid], 0.1).unwrap();
 
-        // Verify all face indices are within range
         let v_count = obj.lines().filter(|l| l.starts_with("v ")).count();
         for line in obj.lines().filter(|l| l.starts_with("f ")) {
             for token in line.split_whitespace().skip(1) {

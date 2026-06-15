@@ -23,7 +23,6 @@ use crate::HealError;
 pub fn find_free_bounds(topo: &Topology, shell_id: ShellId) -> Result<Vec<Vec<EdgeId>>, HealError> {
     let shell = topo.shell(shell_id)?;
 
-    // Count how many times each edge is used across all face wires.
     let mut edge_use_count: HashMap<usize, (EdgeId, u32)> = HashMap::new();
 
     for &face_id in shell.faces() {
@@ -43,7 +42,6 @@ pub fn find_free_bounds(topo: &Topology, shell_id: ShellId) -> Result<Vec<Vec<Ed
         }
     }
 
-    // Collect free edges (used by exactly 1 face).
     let free_edges: Vec<EdgeId> = edge_use_count
         .values()
         .filter(|(_, count)| *count == 1)
@@ -54,8 +52,6 @@ pub fn find_free_bounds(topo: &Topology, shell_id: ShellId) -> Result<Vec<Vec<Ed
         return Ok(Vec::new());
     }
 
-    // Build vertex-to-edge adjacency for free edges.
-    // Each free edge contributes two vertex connections.
     let mut vertex_to_edges: HashMap<usize, Vec<EdgeId>> = HashMap::new();
     let free_set: HashSet<usize> = free_edges.iter().map(|e| e.index()).collect();
 
@@ -71,7 +67,6 @@ pub fn find_free_bounds(topo: &Topology, shell_id: ShellId) -> Result<Vec<Vec<Ed
             .push(eid);
     }
 
-    // Group free edges into connected loops by walking the adjacency.
     let mut visited: HashSet<usize> = HashSet::new();
     let mut loops = Vec::new();
 

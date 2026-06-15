@@ -90,33 +90,24 @@ pub fn thick_solid(
 
     let mut data = OffsetData::new(distance, options, exclude.to_vec());
 
-    // Phase 1: edge and vertex classification
     analyse::analyse_edges(topo, solid, &mut data)?;
 
-    // Phase 2: offset surface construction
     offset::build_offset_faces(topo, solid, &mut data)?;
 
-    // Phase 3: 3D face-face intersection
     inter3d::intersect_faces_3d(topo, solid, &mut data)?;
 
-    // Phase 4: 2D PCurve intersection
     inter2d::intersect_pcurves_2d(topo, solid, &mut data)?;
 
-    // Phase 5: edge splitting (uses data from phases 3-4)
-    // Integrated into inter2d for now.
+    // Edge splitting (phase 5) is integrated into inter2d for now.
 
-    // Phase 6: arc joints at convex edges
     if data.options.joint == JointType::Arc {
         arc_joint::build_arc_joints(topo, &mut data)?;
     }
 
-    // Phase 7: wire loop construction
     loops::build_wire_loops(topo, &mut data)?;
 
-    // Phase 8: shell and solid assembly
     let result = assemble::assemble_solid(topo, &data)?;
 
-    // Phase 9: self-intersection removal
     if data.options.remove_self_intersections {
         return self_int::remove_self_intersections(topo, result);
     }

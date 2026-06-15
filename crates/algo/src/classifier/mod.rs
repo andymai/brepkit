@@ -33,11 +33,9 @@ pub fn classify_point(
     solid: SolidId,
     point: Point3,
 ) -> Result<FaceClass, AlgoError> {
-    // Try analytic first (O(1) for convex analytic solids)
     if let Some(class) = classify_analytic(topo, solid, point) {
         return Ok(class);
     }
 
-    // Fall back to ray casting
     classify_ray_cast(topo, solid, point)
 }

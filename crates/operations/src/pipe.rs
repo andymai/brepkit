@@ -47,7 +47,6 @@ pub fn pipe(
 ) -> Result<SolidId, crate::OperationsError> {
     let tol = Tolerance::new();
 
-    // Validate path.
     if path.control_points().len() < 2 {
         return Err(crate::OperationsError::InvalidInput {
             reason: "pipe path must have at least 2 control points".into(),
@@ -66,7 +65,6 @@ pub fn pipe(
     let input_wire_id = face_data.outer_wire();
     let inner_wire_ids: Vec<brepkit_topology::wire::WireId> = face_data.inner_wires().to_vec();
 
-    // Collect profile vertices.
     let input_wire = topo.wire(input_wire_id)?;
     let input_oriented: Vec<_> = input_wire.edges().to_vec();
     let n = input_oriented.len();
@@ -91,19 +89,15 @@ pub fn pipe(
         input_normal = -input_normal;
     }
 
-    // Compute profile centroid.
     let centroid = crate::winding::polygon_centroid(&input_verts);
 
-    // Compute scaling factors from guide curve.
     let num_segments = (path.control_points().len() * 2).max(4);
     let scale_factors = compute_scale_factors(path, guide, num_segments, tol)?;
 
-    // Compute frames along the path (reusing sweep's frame logic).
     let initial_tangent = path_tangent_0;
     let initial_up = orthogonalize(input_normal, initial_tangent);
     let initial_right = initial_tangent.cross(initial_up);
 
-    // Build ring vertices with scaling.
     let mut ring_verts: Vec<Vec<brepkit_topology::vertex::VertexId>> =
         Vec::with_capacity(num_segments + 1);
 
@@ -208,7 +202,6 @@ pub fn pipe(
         });
     }
 
-    // Build edges and faces (same topology as regular sweep).
     let mut ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> =
         Vec::with_capacity(num_segments + 1);
     for ring in &ring_verts {
@@ -237,7 +230,6 @@ pub fn pipe(
 
     let mut all_faces = Vec::with_capacity(num_segments * n + 2);
 
-    // Start cap.
     let start_reversed: Vec<OrientedEdge> = (0..n)
         .rev()
         .map(|i| OrientedEdge::new(ring_edges[0][i], false))
@@ -265,7 +257,6 @@ pub fn pipe(
     ));
     all_faces.push(start_face);
 
-    // Side faces.
     for seg in 0..num_segments {
         for i in 0..n {
             let next_i = (i + 1) % n;
@@ -301,7 +292,6 @@ pub fn pipe(
         }
     }
 
-    // Inner side faces for pipe.
     for ipd in &inner_pipe_data {
         for seg in 0..num_segments {
             for i in 0..ipd.n {
@@ -342,7 +332,6 @@ pub fn pipe(
         }
     }
 
-    // End cap with inner wire holes.
     let end_edges: Vec<OrientedEdge> = (0..n)
         .map(|i| OrientedEdge::new(ring_edges[num_segments][i], true))
         .collect();
@@ -387,7 +376,6 @@ fn compute_scale_factors(
     tol: Tolerance,
 ) -> Result<Vec<f64>, crate::OperationsError> {
     let Some(guide) = guide else {
-        // No guide: uniform scale of 1.0.
         return Ok(vec![1.0; num_segments + 1]);
     };
 

@@ -35,7 +35,6 @@ pub fn create_blend_face(topo: &mut Topology, stripe: &Stripe) -> Result<FaceId,
     let (t0_1, t1_1) = stripe.contact1.domain();
     let (t0_2, t1_2) = stripe.contact2.domain();
 
-    // Four corner points of the blend quad.
     let p1_start = stripe.contact1.evaluate(t0_1);
     let p1_end = stripe.contact1.evaluate(t1_1);
     let p2_start = stripe.contact2.evaluate(t0_2);
