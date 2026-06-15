@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.108.0](https://github.com/andymai/brepkit/compare/v2.107.0...v2.108.0) (2026-06-15)
+
+
+### Features
+
+* **operations:** convex Minkowski sum of two solids ([#815](https://github.com/andymai/brepkit/issues/815)) ([#828](https://github.com/andymai/brepkit/issues/828)) ([488c3d9](https://github.com/andymai/brepkit/commit/488c3d94b16bd3df2df7d2943920ddb1152ada50))
+
 ## [2.107.0](https://github.com/andymai/brepkit/compare/v2.106.0...v2.107.0) (2026-06-15)
 
 
