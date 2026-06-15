@@ -692,6 +692,18 @@ impl BrepKernel {
                         .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
             }
+            "minkowskiSum" => {
+                let a = self
+                    .resolve_solid(get_u32(args, "solidA")?)
+                    .map_err(|e| e.to_string())?;
+                let b = self
+                    .resolve_solid(get_u32(args, "solidB")?)
+                    .map_err(|e| e.to_string())?;
+                let solid =
+                    brepkit_operations::primitives::make_minkowski_sum(self.topo_mut(), a, b)
+                        .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid_id_to_u32(solid)))
+            }
             "chamfer" => {
                 let s = get_u32(args, "solid")?;
                 let dist = get_f64(args, "distance")?;

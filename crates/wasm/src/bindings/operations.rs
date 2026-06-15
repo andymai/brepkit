@@ -1261,6 +1261,23 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid))
     }
 
+    /// Convex Minkowski sum of two solids (`A ⊕ B`).
+    ///
+    /// Returns the convex hull of all pairwise vertex sums — exact for convex
+    /// inputs (boxes, or a tessellated-sphere rolling tool), a convex
+    /// over-approximation otherwise. Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if either handle is invalid or either solid is empty.
+    #[wasm_bindgen(js_name = "minkowskiSum")]
+    pub fn minkowski_sum(&mut self, solid_a: u32, solid_b: u32) -> Result<u32, JsError> {
+        let a = self.resolve_solid(solid_a)?;
+        let b = self.resolve_solid(solid_b)?;
+        let result = brepkit_operations::primitives::make_minkowski_sum(self.topo_mut(), a, b)?;
+        Ok(solid_id_to_u32(result))
+    }
+
     // ── Point Classification ──────────────────────────────────────
 
     /// Classify a point relative to a solid using generalized winding numbers.
@@ -1629,7 +1646,7 @@ mod tests {
     use brepkit_math::vec::Point3;
     use brepkit_topology::builder::make_polygon_wire;
 
-    use crate::handles::wire_id_to_u32;
+    use crate::handles::{solid_id_to_u32, wire_id_to_u32};
     use crate::helpers::TOL;
     use crate::kernel::BrepKernel;
 
@@ -1766,6 +1783,37 @@ mod tests {
             &mut k,
             "guidedSweep",
             serde_json::json!({ "face": profile, "spineEdge": spine, "auxEdge": aux }),
+        );
+        assert!(
+            out.get("ok").and_then(serde_json::Value::as_u64).is_some(),
+            "expected an ok solid handle, got {out}"
+        );
+    }
+
+    #[test]
+    fn minkowski_sum_binding_box10_box2_is_box12() {
+        let mut k = BrepKernel::new();
+        let a = brepkit_operations::primitives::make_box(k.topo_mut(), 10.0, 10.0, 10.0).unwrap();
+        let b = brepkit_operations::primitives::make_box(k.topo_mut(), 2.0, 2.0, 2.0).unwrap();
+        let sum = k
+            .minkowski_sum(solid_id_to_u32(a), solid_id_to_u32(b))
+            .unwrap();
+        let vol = k.volume(sum, 0.1).unwrap();
+        assert!(
+            (vol - 1728.0).abs() < 0.5,
+            "expected ~1728 (12³), got {vol}"
+        );
+    }
+
+    #[test]
+    fn minkowski_sum_batch_dispatch() {
+        let mut k = BrepKernel::new();
+        let a = brepkit_operations::primitives::make_box(k.topo_mut(), 4.0, 4.0, 4.0).unwrap();
+        let b = brepkit_operations::primitives::make_box(k.topo_mut(), 2.0, 2.0, 2.0).unwrap();
+        let out = dispatch(
+            &mut k,
+            "minkowskiSum",
+            serde_json::json!({ "solidA": solid_id_to_u32(a), "solidB": solid_id_to_u32(b) }),
         );
         assert!(
             out.get("ok").and_then(serde_json::Value::as_u64).is_some(),
