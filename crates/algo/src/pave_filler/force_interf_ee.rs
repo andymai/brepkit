@@ -3,7 +3,7 @@
 //!
 //! Runs after `make_blocks` (which splits PaveBlocks at extra paves),
 //! iterating leaf PaveBlocks to find pairs with matching 3D endpoints
-//! and compatible curve geometry. This follows OCCT's `ForceInterfEE` pattern.
+//! and compatible curve geometry.
 
 use std::collections::{HashMap, HashSet};
 

@@ -1,6 +1,6 @@
 //! Assemble selected faces into shells and solids.
 //!
-//! Delegates to [`builder_solid::build_solid`] for OCCT-style 4-phase
+//! Delegates to [`builder_solid::build_solid`] for 4-phase
 //! shell assembly with edge connectivity, dihedral angle selection,
 //! and Growth/Hole classification.
 
@@ -12,8 +12,8 @@ use crate::error::AlgoError;
 
 /// Assemble selected faces into a solid.
 ///
-/// Delegates to [`builder_solid::build_solid`], which implements an
-/// OCCT-style BuilderSolid assembly:
+/// Delegates to [`builder_solid::build_solid`], which implements the
+/// BuilderSolid assembly:
 /// 1. Build shells via edge-connectivity flood-fill (with dihedral
 ///    angle selection at non-manifold edges)
 /// 2. Classify shells as Growth/Hole via signed volume

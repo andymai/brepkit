@@ -11,7 +11,7 @@
 //!
 //! # Blend types
 //!
-//! - [`ConstRadBlend`] — constant-radius fillet (OCCT `BlendFunc_ConstRad`)
+//! - [`ConstRadBlend`] — constant-radius fillet
 //! - [`EvolRadBlend`] — variable-radius fillet using a [`RadiusLaw`]
 //! - [`ChamferBlend`] — two-distance chamfer
 //! - [`ChamferAngleBlend`] — distance-angle chamfer
@@ -125,7 +125,7 @@ pub fn project_normal_to_section(normal: Vec3, nplan: Vec3) -> Vec3 {
 
 /// Constant-radius fillet blend function.
 ///
-/// Implements the OCCT `BlendFunc_ConstRad` constraint system:
+/// Constraint system:
 /// - `f1 = nplan · (midpoint - guide)` (planarity)
 /// - `f2..f4 = (P1 + R·npn1) - (P2 + R·npn2)` (equidistance)
 #[derive(Debug, Clone)]
@@ -178,7 +178,7 @@ impl ConstRadBlend {
 
     /// Compute the Jacobian for a given radius (shared with `EvolRadBlend`).
     ///
-    /// First-order Jacobian ignoring `∂npn/∂u` terms (standard OCCT approach).
+    /// First-order Jacobian ignoring `∂npn/∂u` terms.
     fn jacobian_with_radius(
         r: f64,
         surf1: &dyn ParametricSurface,

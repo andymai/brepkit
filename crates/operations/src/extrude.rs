@@ -60,7 +60,7 @@ pub fn maybe_split_closed_wire(
 /// Internal variant that lets the caller opt in to passing closed circle /
 /// ellipse / NURBS-recognized-as-circle edges through unsplit. The basic
 /// extrude path uses this so the side face can be built as a true analytic
-/// cylinder (matching OCCT's exact π·r²·h), while sweep / complexExtrude /
+/// cylinder (matching the exact π·r²·h), while sweep / complexExtrude /
 /// twist still split — they apply per-edge profiles that don't work on a
 /// single closed-curve edge.
 pub(crate) fn maybe_split_closed_wire_with(
@@ -392,7 +392,7 @@ fn side_face_surface(
             // brepjs (and other callers) often construct circles as rational
             // quadratic NURBS via `makeCircleEdge`. Extruding those as ruled
             // NURBS surfaces leaves a ~0.12% volume deficit vs the exact
-            // π·r²·h answer that OCCT returns. Recognize the NURBS as a
+            // π·r²·h answer. Recognize the NURBS as a
             // circle and use a true `Cylinder` surface for the side face
             // when possible — the recognition is geometrically exact for
             // the rational-quadratic circle construction.
@@ -1414,7 +1414,7 @@ mod tests {
 
     /// Extruding a face with a NURBS curve edge that is geometrically a
     /// circular arc should produce a `Cylinder` side face (not a ruled
-    /// NURBS surface). This matches the OCCT-equivalent behavior: brepjs
+    /// NURBS surface). brepjs
     /// constructs circles as rational-quadratic NURBS, and extruding those
     /// as NURBS leaves a small but persistent volume deficit. Recognizing
     /// the curve as a circle and using the exact analytic cylinder surface
