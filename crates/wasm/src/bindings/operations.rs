@@ -147,25 +147,25 @@ impl BrepKernel {
 
         // If startPoint is given, create a tiny degenerate triangle face at that point
         // and prepend it to the profiles.
-        if let Some(sp) = opts.get("startPoint").and_then(|v| v.as_array()) {
-            if sp.len() >= 3 {
-                let x = sp[0].as_f64().unwrap_or(0.0);
-                let y = sp[1].as_f64().unwrap_or(0.0);
-                let z = sp[2].as_f64().unwrap_or(0.0);
-                let apex_face = create_apex_face(self.topo_mut(), Point3::new(x, y, z), &face_ids)?;
-                face_ids.insert(0, apex_face);
-            }
+        if let Some(sp) = opts.get("startPoint").and_then(|v| v.as_array())
+            && sp.len() >= 3
+        {
+            let x = sp[0].as_f64().unwrap_or(0.0);
+            let y = sp[1].as_f64().unwrap_or(0.0);
+            let z = sp[2].as_f64().unwrap_or(0.0);
+            let apex_face = create_apex_face(self.topo_mut(), Point3::new(x, y, z), &face_ids)?;
+            face_ids.insert(0, apex_face);
         }
 
         // If endPoint is given, create a tiny degenerate triangle face and append.
-        if let Some(ep) = opts.get("endPoint").and_then(|v| v.as_array()) {
-            if ep.len() >= 3 {
-                let x = ep[0].as_f64().unwrap_or(0.0);
-                let y = ep[1].as_f64().unwrap_or(0.0);
-                let z = ep[2].as_f64().unwrap_or(0.0);
-                let apex_face = create_apex_face(self.topo_mut(), Point3::new(x, y, z), &face_ids)?;
-                face_ids.push(apex_face);
-            }
+        if let Some(ep) = opts.get("endPoint").and_then(|v| v.as_array())
+            && ep.len() >= 3
+        {
+            let x = ep[0].as_f64().unwrap_or(0.0);
+            let y = ep[1].as_f64().unwrap_or(0.0);
+            let z = ep[2].as_f64().unwrap_or(0.0);
+            let apex_face = create_apex_face(self.topo_mut(), Point3::new(x, y, z), &face_ids)?;
+            face_ids.push(apex_face);
         }
 
         let ruled = opts
@@ -456,7 +456,7 @@ impl BrepKernel {
         path_weights: Vec<f64>,
     ) -> Result<u32, JsError> {
         // Validate coordinate array length.
-        if path_control_points.len() % 3 != 0 {
+        if !path_control_points.len().is_multiple_of(3) {
             return Err(WasmError::InvalidInput {
                 reason: format!(
                     "path_control_points length must be a multiple of 3, got {}",
@@ -551,7 +551,7 @@ impl BrepKernel {
             }
             .into());
         }
-        if spine_control_points.len() % 3 != 0 {
+        if !spine_control_points.len().is_multiple_of(3) {
             return Err(WasmError::InvalidInput {
                 reason: format!(
                     "spine_control_points length must be a multiple of 3, got {}",
@@ -633,7 +633,7 @@ impl BrepKernel {
         path_control_points: Vec<f64>,
         path_weights: Vec<f64>,
     ) -> Result<u32, JsError> {
-        if path_control_points.len() % 3 != 0 {
+        if !path_control_points.len().is_multiple_of(3) {
             return Err(WasmError::InvalidInput {
                 reason: format!(
                     "path_control_points length must be a multiple of 3, got {}",
@@ -841,7 +841,7 @@ impl BrepKernel {
         path_control_points: Vec<f64>,
         path_weights: Vec<f64>,
     ) -> Result<u32, JsError> {
-        if path_control_points.len() % 3 != 0 {
+        if !path_control_points.len().is_multiple_of(3) {
             return Err(WasmError::InvalidInput {
                 reason: format!(
                     "path_control_points length must be a multiple of 3, got {}",
@@ -1125,7 +1125,7 @@ impl BrepKernel {
         };
 
         let scale_law: Option<Box<dyn Fn(f64) -> f64 + Send + Sync>> =
-            if scale_values.len() >= 4 && scale_values.len() % 2 == 0 {
+            if scale_values.len() >= 4 && scale_values.len().is_multiple_of(2) {
                 let pairs: Vec<(f64, f64)> =
                     scale_values.chunks_exact(2).map(|c| (c[0], c[1])).collect();
                 Some(Box::new(move |t: f64| -> f64 {
@@ -1211,7 +1211,7 @@ impl BrepKernel {
                 }
                 .into());
             }
-            if cps.len() % 3 != 0 {
+            if !cps.len().is_multiple_of(3) {
                 return Err(WasmError::InvalidInput {
                     reason: format!("{label}_control_points length must be a multiple of 3"),
                 }

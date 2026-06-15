@@ -71,25 +71,25 @@ pub fn mesh_boolean_with_metadata(
 ) -> Result<MeshBooleanResult, OperationsError> {
     let tri_count_a = mesh_a.indices.len() / 3;
     let tri_count_b = mesh_b.indices.len() / 3;
-    if let Some(p) = planar_a {
-        if p.len() != tri_count_a {
-            return Err(OperationsError::InvalidInput {
-                reason: format!(
-                    "mesh_boolean_with_metadata: planar_a length {} != triangle count {tri_count_a}",
-                    p.len()
-                ),
-            });
-        }
+    if let Some(p) = planar_a
+        && p.len() != tri_count_a
+    {
+        return Err(OperationsError::InvalidInput {
+            reason: format!(
+                "mesh_boolean_with_metadata: planar_a length {} != triangle count {tri_count_a}",
+                p.len()
+            ),
+        });
     }
-    if let Some(p) = planar_b {
-        if p.len() != tri_count_b {
-            return Err(OperationsError::InvalidInput {
-                reason: format!(
-                    "mesh_boolean_with_metadata: planar_b length {} != triangle count {tri_count_b}",
-                    p.len()
-                ),
-            });
-        }
+    if let Some(p) = planar_b
+        && p.len() != tri_count_b
+    {
+        return Err(OperationsError::InvalidInput {
+            reason: format!(
+                "mesh_boolean_with_metadata: planar_b length {} != triangle count {tri_count_b}",
+                p.len()
+            ),
+        });
     }
 
     // Step 1: BVH broad-phase
@@ -861,12 +861,10 @@ fn split_triangle_by_points(
         let mut inserted = false;
 
         for (tv0, tv1, tv2) in &tris {
-            if !inserted {
-                if let Some(sub) = try_split_triangle(*tv0, *tv1, *tv2, pt, tolerance) {
-                    new_tris.extend(sub);
-                    inserted = true;
-                    continue;
-                }
+            if !inserted && let Some(sub) = try_split_triangle(*tv0, *tv1, *tv2, pt, tolerance) {
+                new_tris.extend(sub);
+                inserted = true;
+                continue;
             }
             new_tris.push((*tv0, *tv1, *tv2));
         }

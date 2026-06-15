@@ -82,12 +82,15 @@ jobs:
           files: lcov.info
 
   msrv:
-    name: MSRV (1.85)
+    name: MSRV (1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
-      # Override rust-toolchain.toml to test the declared minimum version
+      # Override rust-toolchain.toml to test the declared minimum version.
+      # Action SHA stays pinned; the Rust version is set explicitly below.
       - uses: dtolnay/rust-toolchain@c93f4f9c67595668add93d3d6895795ce52d8c2d # 1.85.0
+        with:
+          toolchain: "1.88.0"
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           key: msrv

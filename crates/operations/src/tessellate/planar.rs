@@ -389,12 +389,11 @@ pub(super) fn tessellate_planar(
     }
 
     // Remove last point if it duplicates the first (closed wire).
-    if positions.len() > 2 {
-        if let (Some(first), Some(last)) = (positions.first(), positions.last()) {
-            if (*last - *first).length() < tol {
-                positions.pop();
-            }
-        }
+    if positions.len() > 2
+        && let (Some(first), Some(last)) = (positions.first(), positions.last())
+        && (*last - *first).length() < tol
+    {
+        positions.pop();
     }
 
     let n = positions.len();
@@ -858,33 +857,28 @@ pub(super) fn remove_closing_duplicate_global(
     all_positions: &[Point3],
     tol: f64,
 ) {
-    if global_ids.len() > 2 {
-        if let (Some(&Some(first)), Some(&Some(last))) = (global_ids.first(), global_ids.last()) {
-            if first == last
-                || ((first as usize) < all_positions.len()
-                    && (last as usize) < all_positions.len()
-                    && (all_positions[first as usize] - all_positions[last as usize]).length()
-                        < tol)
-            {
-                positions.pop();
-                global_ids.pop();
-            }
-        }
+    if global_ids.len() > 2
+        && let (Some(&Some(first)), Some(&Some(last))) = (global_ids.first(), global_ids.last())
+        && (first == last
+            || ((first as usize) < all_positions.len()
+                && (last as usize) < all_positions.len()
+                && (all_positions[first as usize] - all_positions[last as usize]).length() < tol))
+    {
+        positions.pop();
+        global_ids.pop();
     }
 }
 
 /// Remove the last element from a global ID list if it duplicates the first.
 pub(super) fn remove_closing_duplicate_ids(ids: &mut Vec<u32>, positions: &[Point3], tol: f64) {
-    if ids.len() > 2 {
-        if let (Some(&first), Some(&last)) = (ids.first(), ids.last()) {
-            if first == last
-                || ((first as usize) < positions.len()
-                    && (last as usize) < positions.len()
-                    && (positions[first as usize] - positions[last as usize]).length() < tol)
-            {
-                ids.pop();
-            }
-        }
+    if ids.len() > 2
+        && let (Some(&first), Some(&last)) = (ids.first(), ids.last())
+        && (first == last
+            || ((first as usize) < positions.len()
+                && (last as usize) < positions.len()
+                && (positions[first as usize] - positions[last as usize]).length() < tol))
+    {
+        ids.pop();
     }
 }
 

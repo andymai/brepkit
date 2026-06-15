@@ -461,11 +461,11 @@ fn verified_plane(samples: &WireSamples) -> Option<(Vec3, f64)> {
     // is independent of traversal order; downstream consumers (e.g. extrude)
     // require the normal to follow the boundary's CCW winding so cap and wall
     // orientations come out correct.
-    if let Some(winding_normal) = newell_normal(&samples.ordered) {
-        if normal.dot(winding_normal) < 0.0 {
-            normal = -normal;
-            d = -d;
-        }
+    if let Some(winding_normal) = newell_normal(&samples.ordered)
+        && normal.dot(winding_normal) < 0.0
+    {
+        normal = -normal;
+        d = -d;
     }
     Some((normal, d))
 }

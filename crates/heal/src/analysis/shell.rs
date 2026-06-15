@@ -156,12 +156,12 @@ fn count_connected_components(faces: &[FaceId], edge_uses: &HashMap<usize, EdgeU
     let mut parent: Vec<usize> = (0..n).collect();
 
     for eu in edge_uses.values() {
-        if eu.faces.len() >= 2 {
-            if let Some(&idx_a) = face_to_idx.get(&eu.faces[0].0.index()) {
-                for &(fid, _) in &eu.faces[1..] {
-                    if let Some(&idx_b) = face_to_idx.get(&fid.index()) {
-                        union(&mut parent, idx_a, idx_b);
-                    }
+        if eu.faces.len() >= 2
+            && let Some(&idx_a) = face_to_idx.get(&eu.faces[0].0.index())
+        {
+            for &(fid, _) in &eu.faces[1..] {
+                if let Some(&idx_b) = face_to_idx.get(&fid.index()) {
+                    union(&mut parent, idx_a, idx_b);
                 }
             }
         }

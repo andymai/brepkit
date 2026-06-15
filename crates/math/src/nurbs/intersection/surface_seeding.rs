@@ -713,15 +713,15 @@ pub(super) fn find_ssi_seeds_grid(
     for &(u1, v1, p1) in &pts1 {
         for &(u2, v2, p2) in &pts2 {
             let dist = (p1 - p2).length();
-            if dist < threshold {
-                if let Some(refined) = refine_ssi_point(s1, s2, u1, v1, u2, v2, tolerance) {
-                    // 100x dedup: multiple grid samples may converge to the same intersection
-                    let dup = seeds.iter().any(|s: &IntersectionPoint| {
-                        (s.point - refined.point).length() < tolerance * 100.0
-                    });
-                    if !dup {
-                        seeds.push(refined);
-                    }
+            if dist < threshold
+                && let Some(refined) = refine_ssi_point(s1, s2, u1, v1, u2, v2, tolerance)
+            {
+                // 100x dedup: multiple grid samples may converge to the same intersection
+                let dup = seeds.iter().any(|s: &IntersectionPoint| {
+                    (s.point - refined.point).length() < tolerance * 100.0
+                });
+                if !dup {
+                    seeds.push(refined);
                 }
             }
         }

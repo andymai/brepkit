@@ -1347,22 +1347,22 @@ fn per_face_tessellation_matches_face_normal() {
     for &fid in shell.faces() {
         let mesh = tessellate(&topo, fid, 0.1).unwrap();
         let face = topo.face(fid).unwrap();
-        if let FaceSurface::Plane { normal, .. } = face.surface() {
-            if mesh.indices.len() >= 3 {
-                let i0 = mesh.indices[0] as usize;
-                let i1 = mesh.indices[1] as usize;
-                let i2 = mesh.indices[2] as usize;
-                let a = mesh.positions[i1] - mesh.positions[i0];
-                let b = mesh.positions[i2] - mesh.positions[i0];
-                let tri_normal = a.cross(b);
-                let dot = tri_normal.dot(*normal);
-                assert!(
-                    dot > 0.0,
-                    "Face normal {:?} disagrees with tri normal {:?} (dot={dot})",
-                    normal,
-                    tri_normal
-                );
-            }
+        if let FaceSurface::Plane { normal, .. } = face.surface()
+            && mesh.indices.len() >= 3
+        {
+            let i0 = mesh.indices[0] as usize;
+            let i1 = mesh.indices[1] as usize;
+            let i2 = mesh.indices[2] as usize;
+            let a = mesh.positions[i1] - mesh.positions[i0];
+            let b = mesh.positions[i2] - mesh.positions[i0];
+            let tri_normal = a.cross(b);
+            let dot = tri_normal.dot(*normal);
+            assert!(
+                dot > 0.0,
+                "Face normal {:?} disagrees with tri normal {:?} (dot={dot})",
+                normal,
+                tri_normal
+            );
         }
     }
 }

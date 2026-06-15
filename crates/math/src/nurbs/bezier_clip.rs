@@ -455,20 +455,17 @@ fn bezier_clip_recurse(
     // Early overlap detection: if both fat lines are degenerate (near-zero
     // thickness), the curves are collinear. Check for overlap immediately
     // instead of subdividing 2^30 times.
-    if depth <= 2 {
-        if let Some((_, _, d_min_a, d_max_a, _)) = fat_line(cps_a) {
-            if (d_max_a - d_min_a) < DEGENERATE_FAT_LINE {
-                if let Some((_, _, d_min_b, d_max_b, _)) = fat_line(cps_b) {
-                    if (d_max_b - d_min_b) < DEGENERATE_FAT_LINE {
-                        // Both curves are essentially straight lines — check overlap.
-                        if check_overlap(
-                            seg_a, seg_b, u_a_lo, u_a_hi, u_b_lo, u_b_hi, tolerance, overlaps,
-                        ) {
-                            return;
-                        }
-                    }
-                }
-            }
+    if depth <= 2
+        && let Some((_, _, d_min_a, d_max_a, _)) = fat_line(cps_a)
+        && (d_max_a - d_min_a) < DEGENERATE_FAT_LINE
+        && let Some((_, _, d_min_b, d_max_b, _)) = fat_line(cps_b)
+        && (d_max_b - d_min_b) < DEGENERATE_FAT_LINE
+    {
+        // Both curves are essentially straight lines — check overlap.
+        if check_overlap(
+            seg_a, seg_b, u_a_lo, u_a_hi, u_b_lo, u_b_hi, tolerance, overlaps,
+        ) {
+            return;
         }
     }
 
@@ -774,11 +771,12 @@ fn merge_duplicate_hits(hits: &mut Vec<CurveCurveHit>, tolerance: f64) {
     merged.push(hits[0]);
 
     for hit in hits.iter().skip(1) {
-        if let Some(last) = merged.last() {
-            if (hit.u1 - last.u1).abs() < tolerance && (hit.u2 - last.u2).abs() < tolerance {
-                // Duplicate — skip it.
-                continue;
-            }
+        if let Some(last) = merged.last()
+            && (hit.u1 - last.u1).abs() < tolerance
+            && (hit.u2 - last.u2).abs() < tolerance
+        {
+            // Duplicate — skip it.
+            continue;
         }
         merged.push(*hit);
     }

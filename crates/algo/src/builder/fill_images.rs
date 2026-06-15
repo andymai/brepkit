@@ -27,10 +27,10 @@ pub fn fill_edge_images(arena: &GfaArena) -> HashMap<EdgeId, Vec<EdgeId>> {
         let mut split_with_param: Vec<(f64, EdgeId)> = Vec::new();
 
         for leaf_id in leaves {
-            if let Some(pb) = arena.pave_blocks.get(leaf_id) {
-                if let Some(se) = pb.split_edge {
-                    split_with_param.push((pb.start.parameter, se));
-                }
+            if let Some(pb) = arena.pave_blocks.get(leaf_id)
+                && let Some(se) = pb.split_edge
+            {
+                split_with_param.push((pb.start.parameter, se));
             }
         }
 

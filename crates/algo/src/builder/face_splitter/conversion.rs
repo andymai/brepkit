@@ -21,10 +21,10 @@ pub fn collect_wire_points(
     };
     let mut pts = Vec::new();
     for oe in wire.edges() {
-        if let Ok(edge) = topo.edge(oe.edge()) {
-            if let Ok(v) = topo.vertex(edge.start()) {
-                pts.push(v.point());
-            }
+        if let Ok(edge) = topo.edge(oe.edge())
+            && let Ok(v) = topo.vertex(edge.start())
+        {
+            pts.push(v.point());
         }
     }
     pts

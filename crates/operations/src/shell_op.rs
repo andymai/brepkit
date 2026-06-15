@@ -337,37 +337,37 @@ pub fn shell(
             }
             FaceSurface::Cylinder(cyl) => {
                 let new_radius = cyl.radius() - thickness;
-                if new_radius > tol.linear {
-                    if let Ok(new_cyl) = brepkit_math::surfaces::CylindricalSurface::new(
+                if new_radius > tol.linear
+                    && let Ok(new_cyl) = brepkit_math::surfaces::CylindricalSurface::new(
                         cyl.origin(),
                         cyl.axis(),
                         new_radius,
-                    ) {
-                        // Full-circle cylinders: use Surface (the dense sample
-                        // polygon from face_polygon contains seam-duplicate
-                        // vertices that CylindricalFace can't handle cleanly).
-                        // Partial-arc cylinders: use CylindricalFace to create
-                        // Circle edges that preserve angular range info.
-                        let wire = topo.wire(face.outer_wire())?;
-                        let has_closed_edge = wire
-                            .edges()
-                            .iter()
-                            .any(|oe| topo.edge(oe.edge()).is_ok_and(|e| e.start() == e.end()));
-                        if has_closed_edge {
-                            result_specs.push(FaceSpec::Surface {
-                                vertices: inner_verts,
-                                surface: FaceSurface::Cylinder(new_cyl),
-                                reversed: true,
-                                inner_wires: vec![],
-                            });
-                        } else {
-                            result_specs.push(FaceSpec::CylindricalFace {
-                                vertices: inner_verts,
-                                cylinder: new_cyl,
-                                reversed: true,
-                                inner_wires: vec![],
-                            });
-                        }
+                    )
+                {
+                    // Full-circle cylinders: use Surface (the dense sample
+                    // polygon from face_polygon contains seam-duplicate
+                    // vertices that CylindricalFace can't handle cleanly).
+                    // Partial-arc cylinders: use CylindricalFace to create
+                    // Circle edges that preserve angular range info.
+                    let wire = topo.wire(face.outer_wire())?;
+                    let has_closed_edge = wire
+                        .edges()
+                        .iter()
+                        .any(|oe| topo.edge(oe.edge()).is_ok_and(|e| e.start() == e.end()));
+                    if has_closed_edge {
+                        result_specs.push(FaceSpec::Surface {
+                            vertices: inner_verts,
+                            surface: FaceSurface::Cylinder(new_cyl),
+                            reversed: true,
+                            inner_wires: vec![],
+                        });
+                    } else {
+                        result_specs.push(FaceSpec::CylindricalFace {
+                            vertices: inner_verts,
+                            cylinder: new_cyl,
+                            reversed: true,
+                            inner_wires: vec![],
+                        });
                     }
                 }
             }
@@ -433,10 +433,10 @@ pub fn shell(
     let edge_face_map = brepkit_topology::explorer::edge_to_face_map(topo, solid)?;
     let mut boundary_edge_ids: Vec<brepkit_topology::edge::EdgeId> = Vec::new();
     for (&edge_idx, faces) in &edge_face_map {
-        if faces.len() == 1 {
-            if let Some(eid) = topo.edge_id_from_index(edge_idx) {
-                boundary_edge_ids.push(eid);
-            }
+        if faces.len() == 1
+            && let Some(eid) = topo.edge_id_from_index(edge_idx)
+        {
+            boundary_edge_ids.push(eid);
         }
     }
 
@@ -550,15 +550,14 @@ pub fn shell(
     let rim_normal = {
         let mut n = Vec3::new(0.0, 0.0, 1.0);
         for &(fid, _) in &face_verts {
-            if open_set.contains(&fid.index()) {
-                if let Ok(f) = topo.face(fid) {
-                    if let FaceSurface::Plane { normal, .. } = f.surface() {
-                        // The rim normal should point in the same direction as the
-                        // removed face's outward normal (away from solid interior).
-                        n = if f.is_reversed() { -*normal } else { *normal };
-                        break;
-                    }
-                }
+            if open_set.contains(&fid.index())
+                && let Ok(f) = topo.face(fid)
+                && let FaceSurface::Plane { normal, .. } = f.surface()
+            {
+                // The rim normal should point in the same direction as the
+                // removed face's outward normal (away from solid interior).
+                n = if f.is_reversed() { -*normal } else { *normal };
+                break;
             }
         }
         n

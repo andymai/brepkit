@@ -209,22 +209,21 @@ fn analytic_cone_face_area(
                     v_vals.push(v);
                 }
             }
-            if !edge.is_closed() {
-                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
-                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
-                        let ts = circle.project(sv.point());
-                        let te = circle.project(ev.point());
-                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
-                        let mid_t = if fwd <= std::f64::consts::PI {
-                            ts + fwd * 0.5
-                        } else {
-                            ts - (std::f64::consts::TAU - fwd) * 0.5
-                        };
-                        let mid = circle.evaluate(mid_t);
-                        let (u, _) = cone.project_point(mid);
-                        u_vals.push(u);
-                    }
-                }
+            if !edge.is_closed()
+                && let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve()
+                && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+            {
+                let ts = circle.project(sv.point());
+                let te = circle.project(ev.point());
+                let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                let mid_t = if fwd <= std::f64::consts::PI {
+                    ts + fwd * 0.5
+                } else {
+                    ts - (std::f64::consts::TAU - fwd) * 0.5
+                };
+                let mid = circle.evaluate(mid_t);
+                let (u, _) = cone.project_point(mid);
+                u_vals.push(u);
             }
         }
     }
@@ -282,22 +281,21 @@ fn analytic_torus_face_area(
                     v_vals.push(v);
                 }
             }
-            if !edge.is_closed() {
-                if let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve() {
-                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
-                        let ts = circle.project(sv.point());
-                        let te = circle.project(ev.point());
-                        let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
-                        let mid_t = if fwd <= std::f64::consts::PI {
-                            ts + fwd * 0.5
-                        } else {
-                            ts - (std::f64::consts::TAU - fwd) * 0.5
-                        };
-                        let mid = circle.evaluate(mid_t);
-                        let (u, _) = tor.project_point(mid);
-                        u_vals.push(u);
-                    }
-                }
+            if !edge.is_closed()
+                && let brepkit_topology::edge::EdgeCurve::Circle(circle) = edge.curve()
+                && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+            {
+                let ts = circle.project(sv.point());
+                let te = circle.project(ev.point());
+                let fwd = (te - ts).rem_euclid(std::f64::consts::TAU);
+                let mid_t = if fwd <= std::f64::consts::PI {
+                    ts + fwd * 0.5
+                } else {
+                    ts - (std::f64::consts::TAU - fwd) * 0.5
+                };
+                let mid = circle.evaluate(mid_t);
+                let (u, _) = tor.project_point(mid);
+                u_vals.push(u);
             }
         }
     }

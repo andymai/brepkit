@@ -133,11 +133,11 @@ fn try_recognize_plane(surface: &NurbsSurface, tolerance: f64) -> Option<(Vec3, 
         for pt in all_pts.iter().skip(i + 1) {
             let v2 = *pt - p0;
             let n = v1.cross(v2);
-            if n.length() > tolerance {
-                if let Ok(normalized) = n.normalize() {
-                    normal = Some(normalized);
-                    break 'outer;
-                }
+            if n.length() > tolerance
+                && let Ok(normalized) = n.normalize()
+            {
+                normal = Some(normalized);
+                break 'outer;
             }
         }
     }
@@ -614,11 +614,11 @@ fn try_recognize_torus(surface: &NurbsSurface, tolerance: f64) -> Option<(Point3
         for j in (i + 1)..n_rows {
             let v2 = cps[j][0] - p0;
             let cross = v1.cross(v2);
-            if cross.length() > tolerance {
-                if let Ok(normalized) = cross.normalize() {
-                    axis = Some(normalized);
-                    break 'outer;
-                }
+            if cross.length() > tolerance
+                && let Ok(normalized) = cross.normalize()
+            {
+                axis = Some(normalized);
+                break 'outer;
             }
         }
     }

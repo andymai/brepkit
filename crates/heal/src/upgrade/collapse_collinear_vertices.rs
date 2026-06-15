@@ -315,10 +315,10 @@ fn find_line_edge(
         if !((s == a && e == b) || (s == b && e == a)) {
             continue;
         }
-        if let Ok(edge) = topo.edge(eid) {
-            if matches!(edge.curve(), EdgeCurve::Line) {
-                return Some(eid);
-            }
+        if let Ok(edge) = topo.edge(eid)
+            && matches!(edge.curve(), EdgeCurve::Line)
+        {
+            return Some(eid);
         }
     }
     None

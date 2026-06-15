@@ -194,7 +194,7 @@ impl BrepKernel {
     ) -> Result<u32, JsError> {
         use brepkit_math::vec::Point3;
 
-        if positions.len() % 3 != 0 {
+        if !positions.len().is_multiple_of(3) {
             return Err(WasmError::InvalidInput {
                 reason: format!(
                     "positions length {} is not a multiple of 3",
@@ -203,7 +203,7 @@ impl BrepKernel {
             }
             .into());
         }
-        if indices.len() % 3 != 0 {
+        if !indices.len().is_multiple_of(3) {
             return Err(WasmError::InvalidInput {
                 reason: format!("indices length {} is not a multiple of 3", indices.len()),
             }

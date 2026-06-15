@@ -120,12 +120,12 @@ fn check_vertex_face_pairs(
                     }
                 }
                 _ => {
-                    if let Some((u, v)) = surface.project_point(pos) {
-                        if let Some(surf_pt) = surface.evaluate(u, v) {
-                            let dist = (pos - surf_pt).length();
-                            if dist <= combined_tol {
-                                record_vf(arena, resolved_vid, fid, (u, v));
-                            }
+                    if let Some((u, v)) = surface.project_point(pos)
+                        && let Some(surf_pt) = surface.evaluate(u, v)
+                    {
+                        let dist = (pos - surf_pt).length();
+                        if dist <= combined_tol {
+                            record_vf(arena, resolved_vid, fid, (u, v));
                         }
                     }
                 }

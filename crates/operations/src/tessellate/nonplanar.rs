@@ -226,18 +226,15 @@ pub(super) fn tessellate_nonplanar_cdt(
         }
     }
 
-    if boundary_3d.len() > 2 {
-        if let (Some(&(_, first_gid, _, _)), Some(&(_, last_gid, _, _))) =
+    if boundary_3d.len() > 2
+        && let (Some(&(_, first_gid, _, _)), Some(&(_, last_gid, _, _))) =
             (boundary_3d.first(), boundary_3d.last())
-        {
-            if first_gid == last_gid
-                || (merged.positions[first_gid as usize] - merged.positions[last_gid as usize])
-                    .length()
-                    < tol_dup
-            {
-                boundary_3d.pop();
-            }
-        }
+        && (first_gid == last_gid
+            || (merged.positions[first_gid as usize] - merged.positions[last_gid as usize])
+                .length()
+                < tol_dup)
+    {
+        boundary_3d.pop();
     }
 
     let n_boundary = boundary_3d.len();

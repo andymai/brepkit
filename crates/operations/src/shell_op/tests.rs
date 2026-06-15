@@ -19,13 +19,12 @@ fn find_faces_by_normal(topo: &Topology, solid: SolidId, target_normal: Vec3) ->
     let mut result = Vec::new();
     for &fid in sh.faces() {
         let f = topo.face(fid).unwrap();
-        if let FaceSurface::Plane { normal, .. } = f.surface() {
-            if tol.approx_eq(normal.x(), target_normal.x())
-                && tol.approx_eq(normal.y(), target_normal.y())
-                && tol.approx_eq(normal.z(), target_normal.z())
-            {
-                result.push(fid);
-            }
+        if let FaceSurface::Plane { normal, .. } = f.surface()
+            && tol.approx_eq(normal.x(), target_normal.x())
+            && tol.approx_eq(normal.y(), target_normal.y())
+            && tol.approx_eq(normal.z(), target_normal.z())
+        {
+            result.push(fid);
         }
     }
     result

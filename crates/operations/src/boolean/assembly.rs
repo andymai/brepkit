@@ -767,10 +767,10 @@ pub(super) fn refine_boundary_edges(
             for oe in wire.edges() {
                 let eid = oe.edge();
                 *edge_face_count.entry(eid).or_default() += 1;
-                if let std::collections::hash_map::Entry::Vacant(e) = edge_vertices.entry(eid) {
-                    if let Ok(edge) = topo.edge(eid) {
-                        e.insert((edge.start(), edge.end()));
-                    }
+                if let std::collections::hash_map::Entry::Vacant(e) = edge_vertices.entry(eid)
+                    && let Ok(edge) = topo.edge(eid)
+                {
+                    e.insert((edge.start(), edge.end()));
                 }
             }
         }
@@ -794,12 +794,11 @@ pub(super) fn refine_boundary_edges(
     for &(start, end) in edge_vertices.values() {
         for &vid in &[start, end] {
             let in_pre = precomputed_positions.is_some_and(|p| p.contains_key(&vid));
-            if !in_pre {
-                if let std::collections::hash_map::Entry::Vacant(e) = extra_positions.entry(vid) {
-                    if let Ok(v) = topo.vertex(vid) {
-                        e.insert(v.point());
-                    }
-                }
+            if !in_pre
+                && let std::collections::hash_map::Entry::Vacant(e) = extra_positions.entry(vid)
+                && let Ok(v) = topo.vertex(vid)
+            {
+                e.insert(v.point());
             }
         }
     }
@@ -1095,10 +1094,10 @@ pub(super) fn stitch_boundary_edges(
             for oe in wire.edges() {
                 let eid = oe.edge();
                 *edge_face_count.entry(eid).or_default() += 1;
-                if let std::collections::hash_map::Entry::Vacant(e) = edge_vertices.entry(eid) {
-                    if let Ok(edge) = topo.edge(eid) {
-                        e.insert((edge.start(), edge.end()));
-                    }
+                if let std::collections::hash_map::Entry::Vacant(e) = edge_vertices.entry(eid)
+                    && let Ok(edge) = topo.edge(eid)
+                {
+                    e.insert((edge.start(), edge.end()));
                 }
                 edge_owner.entry(eid).or_insert((fi, outer_wire_id));
             }
@@ -1482,12 +1481,12 @@ pub(super) fn split_nonmanifold_edges(
                     let mut sum = Vec3::new(0.0, 0.0, 0.0);
                     let mut count = 0usize;
                     for oe in wire.edges() {
-                        if let Ok(e) = topo.edge(oe.edge()) {
-                            if let Ok(vx) = topo.vertex(e.start()) {
-                                let p = vx.point();
-                                sum = Vec3::new(sum.x() + p.x(), sum.y() + p.y(), sum.z() + p.z());
-                                count += 1;
-                            }
+                        if let Ok(e) = topo.edge(oe.edge())
+                            && let Ok(vx) = topo.vertex(e.start())
+                        {
+                            let p = vx.point();
+                            sum = Vec3::new(sum.x() + p.x(), sum.y() + p.y(), sum.z() + p.z());
+                            count += 1;
                         }
                     }
                     if count == 0 {
@@ -1913,10 +1912,10 @@ pub(super) fn build_manifold_shells(
 
     let mut inner_ids = Vec::new();
     for inner_faces in &shells[1..] {
-        if !inner_faces.is_empty() {
-            if let Ok(inner_shell) = Shell::new(inner_faces.clone()) {
-                inner_ids.push(topo.add_shell(inner_shell));
-            }
+        if !inner_faces.is_empty()
+            && let Ok(inner_shell) = Shell::new(inner_faces.clone())
+        {
+            inner_ids.push(topo.add_shell(inner_shell));
         }
     }
 

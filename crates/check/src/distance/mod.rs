@@ -72,13 +72,12 @@ pub fn point_to_solid(
         da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
     });
 
-    if let Some(closest_idx) = bvh.query_closest(point) {
-        if let Some(pos) = candidates
+    if let Some(closest_idx) = bvh.query_closest(point)
+        && let Some(pos) = candidates
             .iter()
             .position(|&i| face_aabbs[i].0 == closest_idx)
-        {
-            candidates.swap(0, pos);
-        }
+    {
+        candidates.swap(0, pos);
     }
 
     for idx in candidates {
@@ -88,11 +87,11 @@ pub fn point_to_solid(
         }
         let face_idx = face_aabbs[idx].0;
         let fid = face_ids[face_idx];
-        if let Ok(Some((dist, closest))) = point_to_face(topo, point, fid) {
-            if dist < best_dist {
-                best_dist = dist;
-                best_point = closest;
-            }
+        if let Ok(Some((dist, closest))) = point_to_face(topo, point, fid)
+            && dist < best_dist
+        {
+            best_dist = dist;
+            best_point = closest;
         }
     }
 
@@ -212,12 +211,12 @@ pub fn solid_to_solid(
             if aabb.distance_squared_to_point(pa) > best_dist * best_dist {
                 continue;
             }
-            if let Ok(Some((dist, closest))) = point_to_face(topo, pa, faces_b[idx]) {
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_a = pa;
-                    best_b = closest;
-                }
+            if let Ok(Some((dist, closest))) = point_to_face(topo, pa, faces_b[idx])
+                && dist < best_dist
+            {
+                best_dist = dist;
+                best_a = pa;
+                best_b = closest;
             }
         }
     }
@@ -235,12 +234,12 @@ pub fn solid_to_solid(
             if aabb.distance_squared_to_point(pb) > best_dist * best_dist {
                 continue;
             }
-            if let Ok(Some((dist, closest))) = point_to_face(topo, pb, faces_a[idx]) {
-                if dist < best_dist {
-                    best_dist = dist;
-                    best_b = pb;
-                    best_a = closest;
-                }
+            if let Ok(Some((dist, closest))) = point_to_face(topo, pb, faces_a[idx])
+                && dist < best_dist
+            {
+                best_dist = dist;
+                best_b = pb;
+                best_a = closest;
             }
         }
     }

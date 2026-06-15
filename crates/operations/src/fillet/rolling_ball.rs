@@ -518,20 +518,20 @@ pub fn fillet_rolling_ball(
     let mut vertex_fillet_adjacency: HashMap<usize, Vec<(usize, usize, usize)>> = HashMap::new();
     for &edge_id in &filtered_edges {
         let edge = topo.edge(edge_id)?;
-        if let Some(faces) = edge_to_faces.get(&edge_id.index()) {
-            if faces.len() >= 2 {
-                let f1 = faces[0].index();
-                let f2 = faces[1].index();
-                let (fa, fb) = if f1 < f2 { (f1, f2) } else { (f2, f1) };
-                vertex_fillet_adjacency
-                    .entry(edge.start().index())
-                    .or_default()
-                    .push((edge_id.index(), fa, fb));
-                vertex_fillet_adjacency
-                    .entry(edge.end().index())
-                    .or_default()
-                    .push((edge_id.index(), fa, fb));
-            }
+        if let Some(faces) = edge_to_faces.get(&edge_id.index())
+            && faces.len() >= 2
+        {
+            let f1 = faces[0].index();
+            let f2 = faces[1].index();
+            let (fa, fb) = if f1 < f2 { (f1, f2) } else { (f2, f1) };
+            vertex_fillet_adjacency
+                .entry(edge.start().index())
+                .or_default()
+                .push((edge_id.index(), fa, fb));
+            vertex_fillet_adjacency
+                .entry(edge.end().index())
+                .or_default()
+                .push((edge_id.index(), fa, fb));
         }
     }
     let mut g1_chain_vertices: HashSet<usize> = HashSet::new();
@@ -974,24 +974,24 @@ pub fn fillet_rolling_ball(
                             trimmed_verts.push(pos);
                         }
                         // Preserve the unfilleted "after" edge at a setback corner.
-                        if setback_map.contains_key(&(ei, vi)) {
-                            if let Ok(dir) = (next_pos - pos).normalize() {
-                                let p = pos + dir * radius;
-                                trimmed_verts.push(p);
-                                corner_preserved.entry(vi).or_insert(p);
-                            }
+                        if setback_map.contains_key(&(ei, vi))
+                            && let Ok(dir) = (next_pos - pos).normalize()
+                        {
+                            let p = pos + dir * radius;
+                            trimmed_verts.push(p);
+                            corner_preserved.entry(vi).or_insert(p);
                         }
                     }
                     (false, true, _) => {
                         // The "after" edge is filleted — use its specific contact.
                         let ei = wire_edge_ids[i].index();
                         // Preserve the unfilleted "before" edge at a setback corner.
-                        if setback_map.contains_key(&(ei, vi)) {
-                            if let Ok(dir) = (prev_pos - pos).normalize() {
-                                let p = pos + dir * radius;
-                                trimmed_verts.push(p);
-                                corner_preserved.entry(vi).or_insert(p);
-                            }
+                        if setback_map.contains_key(&(ei, vi))
+                            && let Ok(dir) = (prev_pos - pos).normalize()
+                        {
+                            let p = pos + dir * radius;
+                            trimmed_verts.push(p);
+                            corner_preserved.entry(vi).or_insert(p);
                         }
                         if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
                             trimmed_verts.push(pt);
@@ -1119,12 +1119,12 @@ pub fn fillet_rolling_ball(
                     }
                     // The "after" edge is the unfilleted edge at this corner.
                     // If the filleted edge was set back here, preserve it.
-                    if setback_map.contains_key(&(ei, vi)) {
-                        if let Ok(dir) = (next_pos - pos).normalize() {
-                            let p = pos + dir * radius;
-                            new_verts.push(p);
-                            corner_preserved.entry(vi).or_insert(p);
-                        }
+                    if setback_map.contains_key(&(ei, vi))
+                        && let Ok(dir) = (next_pos - pos).normalize()
+                    {
+                        let p = pos + dir * radius;
+                        new_verts.push(p);
+                        corner_preserved.entry(vi).or_insert(p);
                     }
                 }
                 (false, true, _) => {
@@ -1132,12 +1132,12 @@ pub fn fillet_rolling_ball(
                     // The "before" edge is the unfilleted edge at this corner.
                     // If the filleted edge was set back here, preserve it by
                     // emitting a trim point on it *before* the fillet contact.
-                    if setback_map.contains_key(&(ei, vi)) {
-                        if let Ok(dir) = (prev_pos - pos).normalize() {
-                            let p = pos + dir * radius;
-                            new_verts.push(p);
-                            corner_preserved.entry(vi).or_insert(p);
-                        }
+                    if setback_map.contains_key(&(ei, vi))
+                        && let Ok(dir) = (prev_pos - pos).normalize()
+                    {
+                        let p = pos + dir * radius;
+                        new_verts.push(p);
+                        corner_preserved.entry(vi).or_insert(p);
                     }
                     if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
                         new_verts.push(pt);
@@ -1529,63 +1529,63 @@ pub fn fillet_rolling_ball(
         // (still sharp) unfilleted edge with nothing to share it.
         if fillet_count == 2 {
             let mut built = false;
-            if let (Some(&p_pt), Some(v_pos)) = (corner_preserved.get(&vi), original_vertex) {
-                if blend_points.len() == 3 {
-                    // Sphere centre: corner offset inward by R along each distinct
-                    // contact-face normal. Convex corners subtract Σnormals;
-                    // concave corners add (same rule as the 3-edge path below).
-                    let mut face_normals: Vec<Vec3> = Vec::new();
-                    for &(face_idx, _) in contacts {
-                        if let Some(poly) = face_polygons.get(&face_idx) {
-                            let n = poly.normal;
-                            if !face_normals.iter().any(|e| (*e - n).length() < 1e-10) {
-                                face_normals.push(n);
-                            }
+            if let (Some(&p_pt), Some(v_pos)) = (corner_preserved.get(&vi), original_vertex)
+                && blend_points.len() == 3
+            {
+                // Sphere centre: corner offset inward by R along each distinct
+                // contact-face normal. Convex corners subtract Σnormals;
+                // concave corners add (same rule as the 3-edge path below).
+                let mut face_normals: Vec<Vec3> = Vec::new();
+                for &(face_idx, _) in contacts {
+                    if let Some(poly) = face_polygons.get(&face_idx) {
+                        let n = poly.normal;
+                        if !face_normals.iter().any(|e| (*e - n).length() < 1e-10) {
+                            face_normals.push(n);
                         }
                     }
-                    let normal_sum = face_normals.iter().fold(Vec3::new(0.0, 0.0, 0.0), |a, n| {
-                        Vec3::new(a.x() + n.x(), a.y() + n.y(), a.z() + n.z())
-                    });
-                    let fillet_edges = vertex_fillet_edges
-                        .get(&vi)
-                        .map(Vec::as_slice)
-                        .unwrap_or(&[]);
-                    let is_concave = corner_is_concave(topo, vi, fillet_edges, normal_sum);
-                    let offset_sign = if is_concave { 1.0 } else { -1.0 };
-                    let sphere_center = Point3::new(
-                        v_pos.x() + offset_sign * radius * normal_sum.x(),
-                        v_pos.y() + offset_sign * radius * normal_sum.y(),
-                        v_pos.z() + offset_sign * radius * normal_sum.z(),
-                    );
+                }
+                let normal_sum = face_normals.iter().fold(Vec3::new(0.0, 0.0, 0.0), |a, n| {
+                    Vec3::new(a.x() + n.x(), a.y() + n.y(), a.z() + n.z())
+                });
+                let fillet_edges = vertex_fillet_edges
+                    .get(&vi)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                let is_concave = corner_is_concave(topo, vi, fillet_edges, normal_sum);
+                let offset_sign = if is_concave { 1.0 } else { -1.0 };
+                let sphere_center = Point3::new(
+                    v_pos.x() + offset_sign * radius * normal_sum.x(),
+                    v_pos.y() + offset_sign * radius * normal_sum.y(),
+                    v_pos.z() + offset_sign * radius * normal_sum.z(),
+                );
 
-                    // `far` (D) is the contact on the two edges' shared face —
-                    // the point farthest from P. The other two connect to P.
-                    let far_idx = (0..3)
-                        .max_by(|&a, &b| {
-                            (blend_points[a] - p_pt)
-                                .length()
-                                .partial_cmp(&(blend_points[b] - p_pt).length())
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        })
-                        .unwrap_or(0);
-                    let far = blend_points[far_idx];
-                    let near: Vec<Point3> = (0..3)
-                        .filter(|&i| i != far_idx)
-                        .map(|i| blend_points[i])
-                        .collect();
+                // `far` (D) is the contact on the two edges' shared face —
+                // the point farthest from P. The other two connect to P.
+                let far_idx = (0..3)
+                    .max_by(|&a, &b| {
+                        (blend_points[a] - p_pt)
+                            .length()
+                            .partial_cmp(&(blend_points[b] - p_pt).length())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .unwrap_or(0);
+                let far = blend_points[far_idx];
+                let near: Vec<Point3> = (0..3)
+                    .filter(|&i| i != far_idx)
+                    .map(|i| blend_points[i])
+                    .collect();
 
-                    if let Some(spec) = build_two_edge_corner_patch(
-                        p_pt,
-                        near[0],
-                        far,
-                        near[1],
-                        sphere_center,
-                        v_pos,
-                        is_concave,
-                    ) {
-                        all_specs.push(spec);
-                        built = true;
-                    }
+                if let Some(spec) = build_two_edge_corner_patch(
+                    p_pt,
+                    near[0],
+                    far,
+                    near[1],
+                    sphere_center,
+                    v_pos,
+                    is_concave,
+                ) {
+                    all_specs.push(spec);
+                    built = true;
                 }
             }
             if !built {
@@ -1639,178 +1639,178 @@ pub fn fillet_rolling_ball(
         // The fillet sphere at a vertex corner is tangent to each adjacent
         // face.  Its center lies at the original vertex offset inward by R
         // along each face normal: center = vertex - R * Σ(face_normals).
-        if ordered_points.len() == 3 {
-            if let Some(v_pos) = original_vertex {
-                // Collect distinct face normals from the contacts at this vertex.
-                let mut face_normals: Vec<Vec3> = Vec::new();
-                for &(face_idx, _) in contacts {
-                    if let Some(poly) = face_polygons.get(&face_idx) {
-                        let n = poly.normal;
-                        let already = face_normals.iter().any(|existing| {
-                            (existing.x() - n.x()).abs() < 1e-10
-                                && (existing.y() - n.y()).abs() < 1e-10
-                                && (existing.z() - n.z()).abs() < 1e-10
-                        });
-                        if !already {
-                            face_normals.push(n);
-                        }
+        if ordered_points.len() == 3
+            && let Some(v_pos) = original_vertex
+        {
+            // Collect distinct face normals from the contacts at this vertex.
+            let mut face_normals: Vec<Vec3> = Vec::new();
+            for &(face_idx, _) in contacts {
+                if let Some(poly) = face_polygons.get(&face_idx) {
+                    let n = poly.normal;
+                    let already = face_normals.iter().any(|existing| {
+                        (existing.x() - n.x()).abs() < 1e-10
+                            && (existing.y() - n.y()).abs() < 1e-10
+                            && (existing.z() - n.z()).abs() < 1e-10
+                    });
+                    if !already {
+                        face_normals.push(n);
                     }
                 }
+            }
 
-                // Sphere center: vertex offset inward by R along each face normal.
-                let normal_sum = face_normals
-                    .iter()
-                    .fold(Vec3::new(0.0, 0.0, 0.0), |acc, n| {
-                        Vec3::new(acc.x() + n.x(), acc.y() + n.y(), acc.z() + n.z())
-                    });
+            // Sphere center: vertex offset inward by R along each face normal.
+            let normal_sum = face_normals
+                .iter()
+                .fold(Vec3::new(0.0, 0.0, 0.0), |acc, n| {
+                    Vec3::new(acc.x() + n.x(), acc.y() + n.y(), acc.z() + n.z())
+                });
 
-                // Determine whether this vertex corner is convex or concave.
-                // For a convex corner the face normals (outward) and edge
-                // tangents (pointing away from vertex, i.e. inward) point in
-                // opposite directions: normal_sum · avg_tangent < 0.
-                // For concave corners they align: dot > 0.
-                let is_concave = if let Some(fillet_edges) = vertex_fillet_edges.get(&vi) {
-                    if fillet_edges.len() >= 3 {
-                        let mut tangent_sum = Vec3::new(0.0, 0.0, 0.0);
-                        let mut count = 0;
-                        for &eid in fillet_edges {
-                            if let Ok(edge) = topo.edge(eid) {
-                                let e_start = edge.start();
-                                let e_end = edge.end();
-                                let curve = edge.curve().clone();
-                                let p_s = topo.vertex(e_start)?.point();
-                                let p_e = topo.vertex(e_end)?.point();
-                                let (t_param, sign) = if e_start.index() == vi {
-                                    let (t0, _) = curve.domain_with_endpoints(p_s, p_e);
-                                    (t0, 1.0)
-                                } else {
-                                    let (_, t1) = curve.domain_with_endpoints(p_s, p_e);
-                                    (t1, -1.0)
-                                };
-                                let tan = curve.tangent_with_endpoints(t_param, p_s, p_e);
-                                if let Ok(n) = (tan * sign).normalize() {
-                                    tangent_sum = Vec3::new(
-                                        tangent_sum.x() + n.x(),
-                                        tangent_sum.y() + n.y(),
-                                        tangent_sum.z() + n.z(),
-                                    );
-                                    count += 1;
-                                }
+            // Determine whether this vertex corner is convex or concave.
+            // For a convex corner the face normals (outward) and edge
+            // tangents (pointing away from vertex, i.e. inward) point in
+            // opposite directions: normal_sum · avg_tangent < 0.
+            // For concave corners they align: dot > 0.
+            let is_concave = if let Some(fillet_edges) = vertex_fillet_edges.get(&vi) {
+                if fillet_edges.len() >= 3 {
+                    let mut tangent_sum = Vec3::new(0.0, 0.0, 0.0);
+                    let mut count = 0;
+                    for &eid in fillet_edges {
+                        if let Ok(edge) = topo.edge(eid) {
+                            let e_start = edge.start();
+                            let e_end = edge.end();
+                            let curve = edge.curve().clone();
+                            let p_s = topo.vertex(e_start)?.point();
+                            let p_e = topo.vertex(e_end)?.point();
+                            let (t_param, sign) = if e_start.index() == vi {
+                                let (t0, _) = curve.domain_with_endpoints(p_s, p_e);
+                                (t0, 1.0)
+                            } else {
+                                let (_, t1) = curve.domain_with_endpoints(p_s, p_e);
+                                (t1, -1.0)
+                            };
+                            let tan = curve.tangent_with_endpoints(t_param, p_s, p_e);
+                            if let Ok(n) = (tan * sign).normalize() {
+                                tangent_sum = Vec3::new(
+                                    tangent_sum.x() + n.x(),
+                                    tangent_sum.y() + n.y(),
+                                    tangent_sum.z() + n.z(),
+                                );
+                                count += 1;
                             }
                         }
-                        count >= 3 && normal_sum.dot(tangent_sum) > 0.0
-                    } else {
-                        false
                     }
+                    count >= 3 && normal_sum.dot(tangent_sum) > 0.0
                 } else {
                     false
-                };
+                }
+            } else {
+                false
+            };
 
-                // For outward-pointing face normals on a convex corner, "inward"
-                // means subtracting. For concave corners the offset direction
-                // is reversed (we add instead of subtract).
-                let offset_sign = if is_concave { 1.0 } else { -1.0 };
-                let sphere_center = Point3::new(
-                    v_pos.x() + offset_sign * radius * normal_sum.x(),
-                    v_pos.y() + offset_sign * radius * normal_sum.y(),
-                    v_pos.z() + offset_sign * radius * normal_sum.z(),
+            // For outward-pointing face normals on a convex corner, "inward"
+            // means subtracting. For concave corners the offset direction
+            // is reversed (we add instead of subtract).
+            let offset_sign = if is_concave { 1.0 } else { -1.0 };
+            let sphere_center = Point3::new(
+                v_pos.x() + offset_sign * radius * normal_sum.x(),
+                v_pos.y() + offset_sign * radius * normal_sum.y(),
+                v_pos.z() + offset_sign * radius * normal_sum.z(),
+            );
+
+            let p0 = ordered_points[0];
+            let p1 = ordered_points[1];
+            let p2 = ordered_points[2];
+
+            // Helper: compute the tangent-intersection control point and
+            // weight for a rational quadratic Bézier circular arc from a to b
+            // on the sphere.  The middle CP sits at distance r/cos(θ/2) from
+            // center (the tangent intersection), and the weight is cos(θ/2).
+            let arc_mid_and_weight = |a: Point3, b: Point3| -> Option<(Point3, f64)> {
+                let va = (a - sphere_center).normalize().ok()?;
+                let vb = (b - sphere_center).normalize().ok()?;
+                let r_actual = (a - sphere_center).length();
+                let sum = va + vb;
+                let len = sum.length();
+                if len < 1e-15 {
+                    return None;
+                }
+                let dir = Vec3::new(sum.x() / len, sum.y() / len, sum.z() / len);
+                let cos_half = len / 2.0; // cos(θ/2) for unit vectors
+                let r_ctrl = r_actual / cos_half;
+                let cp = Point3::new(
+                    sphere_center.x() + dir.x() * r_ctrl,
+                    sphere_center.y() + dir.y() * r_ctrl,
+                    sphere_center.z() + dir.z() * r_ctrl,
+                );
+                Some((cp, cos_half))
+            };
+
+            // Compute per-edge arc midpoints and weights.
+            if let (Some((m01, w01)), Some((m12, w12)), Some((m20, w20))) = (
+                arc_mid_and_weight(p0, p1),
+                arc_mid_and_weight(p1, p2),
+                arc_mid_and_weight(p2, p0),
+            ) {
+                // Interior control point: a single degree-(2,2) rational
+                // patch over a wide spherical triangle sags inward at its
+                // centre if the interior control point sits on the sphere.
+                // Place it instead at the intersection of the three corner
+                // tangent planes (the apex of the tangent cone), pushed out
+                // along the average radial direction.  For an orthogonal
+                // (box) corner this lands at center + r·Σdir (overshoot √3),
+                // and the rational blend then tracks the sphere within a few
+                // percent of R — inside the corner-blend deviation budget.
+                let r_actual = (p0 - sphere_center).length();
+                let dir0 = (p0 - sphere_center) * (1.0 / r_actual);
+                let dir1 = (p1 - sphere_center) * (1.0 / r_actual);
+                let dir2 = (p2 - sphere_center) * (1.0 / r_actual);
+                let radial_sum = dir0 + dir1 + dir2;
+                let apex = Point3::new(
+                    sphere_center.x() + radial_sum.x() * r_actual,
+                    sphere_center.y() + radial_sum.y() * r_actual,
+                    sphere_center.z() + radial_sum.z() * r_actual,
                 );
 
-                let p0 = ordered_points[0];
-                let p1 = ordered_points[1];
-                let p2 = ordered_points[2];
+                // Apex weight: the product of the three edge weights yields
+                // the rational triangle that hugs the sphere most closely.
+                let w_apex = w01 * w12 * w20;
 
-                // Helper: compute the tangent-intersection control point and
-                // weight for a rational quadratic Bézier circular arc from a to b
-                // on the sphere.  The middle CP sits at distance r/cos(θ/2) from
-                // center (the tangent intersection), and the weight is cos(θ/2).
-                let arc_mid_and_weight = |a: Point3, b: Point3| -> Option<(Point3, f64)> {
-                    let va = (a - sphere_center).normalize().ok()?;
-                    let vb = (b - sphere_center).normalize().ok()?;
-                    let r_actual = (a - sphere_center).length();
-                    let sum = va + vb;
-                    let len = sum.length();
-                    if len < 1e-15 {
-                        return None;
-                    }
-                    let dir = Vec3::new(sum.x() / len, sum.y() / len, sum.z() / len);
-                    let cos_half = len / 2.0; // cos(θ/2) for unit vectors
-                    let r_ctrl = r_actual / cos_half;
-                    let cp = Point3::new(
-                        sphere_center.x() + dir.x() * r_ctrl,
-                        sphere_center.y() + dir.y() * r_ctrl,
-                        sphere_center.z() + dir.z() * r_ctrl,
-                    );
-                    Some((cp, cos_half))
-                };
+                // Degree (2,2) rational patch with a degenerate column.
+                let cap_surface = NurbsSurface::new(
+                    2,
+                    2,
+                    vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                    vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                    vec![vec![p0, m20, p2], vec![m01, apex, p2], vec![p1, m12, p2]],
+                    vec![
+                        vec![1.0, w20, 1.0],
+                        vec![w01, w_apex, 1.0],
+                        vec![1.0, w12, 1.0],
+                    ],
+                )
+                .map_err(crate::OperationsError::Math)?;
 
-                // Compute per-edge arc midpoints and weights.
-                if let (Some((m01, w01)), Some((m12, w12)), Some((m20, w20))) = (
-                    arc_mid_and_weight(p0, p1),
-                    arc_mid_and_weight(p1, p2),
-                    arc_mid_and_weight(p2, p0),
-                ) {
-                    // Interior control point: a single degree-(2,2) rational
-                    // patch over a wide spherical triangle sags inward at its
-                    // centre if the interior control point sits on the sphere.
-                    // Place it instead at the intersection of the three corner
-                    // tangent planes (the apex of the tangent cone), pushed out
-                    // along the average radial direction.  For an orthogonal
-                    // (box) corner this lands at center + r·Σdir (overshoot √3),
-                    // and the rational blend then tracks the sphere within a few
-                    // percent of R — inside the corner-blend deviation budget.
-                    let r_actual = (p0 - sphere_center).length();
-                    let dir0 = (p0 - sphere_center) * (1.0 / r_actual);
-                    let dir1 = (p1 - sphere_center) * (1.0 / r_actual);
-                    let dir2 = (p2 - sphere_center) * (1.0 / r_actual);
-                    let radial_sum = dir0 + dir1 + dir2;
-                    let apex = Point3::new(
-                        sphere_center.x() + radial_sum.x() * r_actual,
-                        sphere_center.y() + radial_sum.y() * r_actual,
-                        sphere_center.z() + radial_sum.z() * r_actual,
-                    );
+                // The cap's outward normal must point away from the sphere
+                // centre (for a convex corner) so the tessellated patch faces
+                // outward.  Evaluating the natural normal at an interior
+                // station and comparing against the radial direction gives a
+                // robust reversal flag that is stored on the spec (so it is
+                // not lost when assembly reorders/merges faces).
+                let cap_mid = cap_surface.evaluate(0.5, 0.5);
+                let radial = (cap_mid - sphere_center)
+                    .normalize()
+                    .unwrap_or(blend_normal);
+                let outward = if is_concave { -radial } else { radial };
+                let cap_norm = cap_surface.normal(0.5, 0.5).unwrap_or(outward);
+                let cap_reversed = cap_norm.dot(outward) < 0.0;
 
-                    // Apex weight: the product of the three edge weights yields
-                    // the rational triangle that hugs the sphere most closely.
-                    let w_apex = w01 * w12 * w20;
-
-                    // Degree (2,2) rational patch with a degenerate column.
-                    let cap_surface = NurbsSurface::new(
-                        2,
-                        2,
-                        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-                        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-                        vec![vec![p0, m20, p2], vec![m01, apex, p2], vec![p1, m12, p2]],
-                        vec![
-                            vec![1.0, w20, 1.0],
-                            vec![w01, w_apex, 1.0],
-                            vec![1.0, w12, 1.0],
-                        ],
-                    )
-                    .map_err(crate::OperationsError::Math)?;
-
-                    // The cap's outward normal must point away from the sphere
-                    // centre (for a convex corner) so the tessellated patch faces
-                    // outward.  Evaluating the natural normal at an interior
-                    // station and comparing against the radial direction gives a
-                    // robust reversal flag that is stored on the spec (so it is
-                    // not lost when assembly reorders/merges faces).
-                    let cap_mid = cap_surface.evaluate(0.5, 0.5);
-                    let radial = (cap_mid - sphere_center)
-                        .normalize()
-                        .unwrap_or(blend_normal);
-                    let outward = if is_concave { -radial } else { radial };
-                    let cap_norm = cap_surface.normal(0.5, 0.5).unwrap_or(outward);
-                    let cap_reversed = cap_norm.dot(outward) < 0.0;
-
-                    all_specs.push(FaceSpec::Surface {
-                        vertices: ordered_points,
-                        surface: FaceSurface::Nurbs(cap_surface),
-                        reversed: cap_reversed,
-                        inner_wires: vec![],
-                    });
-                    continue;
-                }
+                all_specs.push(FaceSpec::Surface {
+                    vertices: ordered_points,
+                    surface: FaceSurface::Nurbs(cap_surface),
+                    reversed: cap_reversed,
+                    inner_wires: vec![],
+                });
+                continue;
             }
         }
 
@@ -1880,19 +1880,19 @@ pub fn fillet_rolling_ball(
             if face_polygons.contains_key(&fid.index()) {
                 continue;
             }
-            if let Ok(face) = topo.face(fid) {
-                if let Ok(wire) = topo.wire(face.outer_wire()) {
-                    for oe in wire.edges() {
-                        if let Ok(edge_data) = topo.edge(oe.edge()) {
-                            let vid = oe.oriented_start(edge_data);
-                            if let Ok(v) = topo.vertex(vid) {
-                                let p = v.point();
-                                let already = original_verts
-                                    .iter()
-                                    .any(|existing| (*existing - p).length() < tol.linear);
-                                if !already {
-                                    original_verts.push(p);
-                                }
+            if let Ok(face) = topo.face(fid)
+                && let Ok(wire) = topo.wire(face.outer_wire())
+            {
+                for oe in wire.edges() {
+                    if let Ok(edge_data) = topo.edge(oe.edge()) {
+                        let vid = oe.oriented_start(edge_data);
+                        if let Ok(v) = topo.vertex(vid) {
+                            let p = v.point();
+                            let already = original_verts
+                                .iter()
+                                .any(|existing| (*existing - p).length() < tol.linear);
+                            if !already {
+                                original_verts.push(p);
                             }
                         }
                     }

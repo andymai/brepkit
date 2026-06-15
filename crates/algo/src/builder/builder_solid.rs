@@ -694,10 +694,10 @@ fn normalize_face_wires(topo: &mut Topology, fid: FaceId) {
 
     // Only the inner-wire *list* changes when empties were dropped; the face
     // already points at the (in-place updated) outer and surviving wires.
-    if kept_inner_wids.len() != inner_wids.len() {
-        if let Ok(f) = topo.face_mut(fid) {
-            *f.inner_wires_mut() = kept_inner_wids;
-        }
+    if kept_inner_wids.len() != inner_wids.len()
+        && let Ok(f) = topo.face_mut(fid)
+    {
+        *f.inner_wires_mut() = kept_inner_wids;
     }
 }
 
@@ -860,10 +860,10 @@ fn remove_zero_length_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Res
         let mut new_inner_ids = Vec::new();
         for inner_oes in &inner_oes_list {
             let kept = strip(inner_oes);
-            if is_rebuildable_loop(topo, &kept) {
-                if let Ok(w) = brepkit_topology::wire::Wire::new(kept, true) {
-                    new_inner_ids.push(topo.add_wire(w));
-                }
+            if is_rebuildable_loop(topo, &kept)
+                && let Ok(w) = brepkit_topology::wire::Wire::new(kept, true)
+            {
+                new_inner_ids.push(topo.add_wire(w));
             }
         }
         let mut new_face = Face::new(new_outer_id, new_inner_ids, surface);

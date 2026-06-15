@@ -157,12 +157,11 @@ fn build_face_containment(
     // The last edge's end vertex coincides with the first edge's start
     // vertex on a closed wire; drop the duplicate so the closing polygon
     // segment isn't degenerate.
-    if outer_points.len() >= 2 {
-        if let (Some(&first), Some(&last)) = (outer_points.first(), outer_points.last()) {
-            if (last - first).length() <= tol.linear {
-                outer_points.pop();
-            }
-        }
+    if outer_points.len() >= 2
+        && let (Some(&first), Some(&last)) = (outer_points.first(), outer_points.last())
+        && (last - first).length() <= tol.linear
+    {
+        outer_points.pop();
     }
     all_points.extend_from_slice(&outer_points);
 

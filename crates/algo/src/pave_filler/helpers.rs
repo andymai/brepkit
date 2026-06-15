@@ -27,10 +27,10 @@ pub(super) fn find_nearby_pave_vertex(
             if let Some(pb) = arena.pave_blocks.get(pb_id) {
                 for vid in [pb.start.vertex, pb.end.vertex] {
                     let resolved = arena.resolve_vertex(vid);
-                    if let Ok(v) = topo.vertex(resolved) {
-                        if (v.point() - point).length() <= tol.linear {
-                            return Some(resolved);
-                        }
+                    if let Ok(v) = topo.vertex(resolved)
+                        && (v.point() - point).length() <= tol.linear
+                    {
+                        return Some(resolved);
                     }
                 }
             }

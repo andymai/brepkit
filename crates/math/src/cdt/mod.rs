@@ -419,10 +419,10 @@ impl Cdt {
                     continue; // Don't cross constraint edges.
                 }
 
-                if let Some(adj) = self.triangles[ti].adj[local] {
-                    if !self.triangles[adj].removed {
-                        stack.push(adj);
-                    }
+                if let Some(adj) = self.triangles[ti].adj[local]
+                    && !self.triangles[adj].removed
+                {
+                    stack.push(adj);
                 }
             }
         }
@@ -484,10 +484,10 @@ impl Cdt {
                 if constraints.contains(&edge_key) {
                     continue;
                 }
-                if let Some(adj) = self.triangles[ti].adj[local] {
-                    if !self.triangles[adj].removed {
-                        stack.push(adj);
-                    }
+                if let Some(adj) = self.triangles[ti].adj[local]
+                    && !self.triangles[adj].removed
+                {
+                    stack.push(adj);
                 }
             }
         }
@@ -572,12 +572,11 @@ impl Cdt {
                         continue;
                     }
 
-                    if let Some(adj) = tri.adj[local] {
-                        if let Some(&adj_idx) = tri_to_idx.get(&adj) {
-                            if !visited[adj_idx] {
-                                stack.push(adj);
-                            }
-                        }
+                    if let Some(adj) = tri.adj[local]
+                        && let Some(&adj_idx) = tri_to_idx.get(&adj)
+                        && !visited[adj_idx]
+                    {
+                        stack.push(adj);
                     }
                 }
             }

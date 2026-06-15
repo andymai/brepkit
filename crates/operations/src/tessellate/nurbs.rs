@@ -129,43 +129,43 @@ where
 
                 // Sample edge midpoints to provide angular coverage
                 // between vertices.
-                if !edge.is_closed() {
-                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
-                        match edge.curve() {
-                            EdgeCurve::Circle(circle) => {
-                                let ts = circle.project(sv.point());
-                                let te = circle.project(ev.point());
-                                let fwd = (te - ts).rem_euclid(TAU);
-                                let mid_t = if fwd <= std::f64::consts::PI {
-                                    ts + fwd * 0.5
-                                } else {
-                                    ts - (TAU - fwd) * 0.5
-                                };
-                                let mid = circle.evaluate(mid_t);
-                                let (u, _) = project(mid);
-                                angles.push(u);
-                            }
-                            EdgeCurve::Ellipse(ellipse) => {
-                                let ts = ellipse.project(sv.point());
-                                let te = ellipse.project(ev.point());
-                                let fwd = (te - ts).rem_euclid(TAU);
-                                let mid_t = if fwd <= std::f64::consts::PI {
-                                    ts + fwd * 0.5
-                                } else {
-                                    ts - (TAU - fwd) * 0.5
-                                };
-                                let mid = ellipse.evaluate(mid_t);
-                                let (u, _) = project(mid);
-                                angles.push(u);
-                            }
-                            EdgeCurve::NurbsCurve(nurbs) => {
-                                let (t0, t1) = nurbs.domain();
-                                let mid = nurbs.evaluate(f64::midpoint(t0, t1));
-                                let (u, _) = project(mid);
-                                angles.push(u);
-                            }
-                            EdgeCurve::Line => {}
+                if !edge.is_closed()
+                    && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+                {
+                    match edge.curve() {
+                        EdgeCurve::Circle(circle) => {
+                            let ts = circle.project(sv.point());
+                            let te = circle.project(ev.point());
+                            let fwd = (te - ts).rem_euclid(TAU);
+                            let mid_t = if fwd <= std::f64::consts::PI {
+                                ts + fwd * 0.5
+                            } else {
+                                ts - (TAU - fwd) * 0.5
+                            };
+                            let mid = circle.evaluate(mid_t);
+                            let (u, _) = project(mid);
+                            angles.push(u);
                         }
+                        EdgeCurve::Ellipse(ellipse) => {
+                            let ts = ellipse.project(sv.point());
+                            let te = ellipse.project(ev.point());
+                            let fwd = (te - ts).rem_euclid(TAU);
+                            let mid_t = if fwd <= std::f64::consts::PI {
+                                ts + fwd * 0.5
+                            } else {
+                                ts - (TAU - fwd) * 0.5
+                            };
+                            let mid = ellipse.evaluate(mid_t);
+                            let (u, _) = project(mid);
+                            angles.push(u);
+                        }
+                        EdgeCurve::NurbsCurve(nurbs) => {
+                            let (t0, t1) = nurbs.domain();
+                            let mid = nurbs.evaluate(f64::midpoint(t0, t1));
+                            let (u, _) = project(mid);
+                            angles.push(u);
+                        }
+                        EdgeCurve::Line => {}
                     }
                 }
             }
@@ -232,10 +232,10 @@ pub fn compute_sphere_v_range(
     let mut wire_pts = Vec::new();
     if let Ok(wire) = topo.wire(face_data.outer_wire()) {
         for oe in wire.edges() {
-            if let Ok(edge) = topo.edge(oe.edge()) {
-                if let Ok(vertex) = topo.vertex(edge.start()) {
-                    wire_pts.push(vertex.point());
-                }
+            if let Ok(edge) = topo.edge(oe.edge())
+                && let Ok(vertex) = topo.vertex(edge.start())
+            {
+                wire_pts.push(vertex.point());
             }
         }
     }
@@ -533,10 +533,10 @@ fn needs_conforming_subdivision(
     ];
 
     for &(pu, pv) in &probes {
-        if let Some(neighbor_depth) = find_leaf_depth_at(cells, pu, pv) {
-            if neighbor_depth > depth + 1 {
-                return true;
-            }
+        if let Some(neighbor_depth) = find_leaf_depth_at(cells, pu, pv)
+            && neighbor_depth > depth + 1
+        {
+            return true;
         }
     }
     false

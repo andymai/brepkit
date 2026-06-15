@@ -73,15 +73,14 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         };
         let mut map = HashMap::new();
         for (_, cb) in arena.common_blocks.iter() {
-            if let Some(edge_id) = cb.split_edge {
-                if let Ok(edge) = topo.edge(edge_id) {
-                    if let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) {
-                        let qs = qpt(sv.point());
-                        let qe = qpt(ev.point());
-                        let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
-                        map.insert(key, edge_id);
-                    }
-                }
+            if let Some(edge_id) = cb.split_edge
+                && let Ok(edge) = topo.edge(edge_id)
+                && let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end()))
+            {
+                let qs = qpt(sv.point());
+                let qe = qpt(ev.point());
+                let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
+                map.insert(key, edge_id);
             }
         }
         map
@@ -179,18 +178,18 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
         let mut vid_faces: HashMap<usize, (Point3, std::collections::HashSet<usize>)> =
             HashMap::new();
         for (&face_id, &_rank) in face_ranks {
-            if let Ok(face) = topo.face(face_id) {
-                if let Ok(wire) = topo.wire(face.outer_wire()) {
-                    for oe in wire.edges() {
-                        if let Ok(edge) = topo.edge(oe.edge()) {
-                            for &vid in &[edge.start(), edge.end()] {
-                                let rv = arena.resolve_vertex(vid);
-                                if let Ok(v) = topo.vertex(rv) {
-                                    let entry = vid_faces.entry(rv.index()).or_insert_with(|| {
-                                        (v.point(), std::collections::HashSet::new())
-                                    });
-                                    entry.1.insert(face_id.index());
-                                }
+            if let Ok(face) = topo.face(face_id)
+                && let Ok(wire) = topo.wire(face.outer_wire())
+            {
+                for oe in wire.edges() {
+                    if let Ok(edge) = topo.edge(oe.edge()) {
+                        for &vid in &[edge.start(), edge.end()] {
+                            let rv = arena.resolve_vertex(vid);
+                            if let Ok(v) = topo.vertex(rv) {
+                                let entry = vid_faces.entry(rv.index()).or_insert_with(|| {
+                                    (v.point(), std::collections::HashSet::new())
+                                });
+                                entry.1.insert(face_id.index());
                             }
                         }
                     }
@@ -538,17 +537,18 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                     new_oes.push(*oe);
                 }
             }
-            if any_changed && new_oes.len() >= 3 {
-                if let Ok(new_wire) = Wire::new(new_oes, true) {
-                    let wid = topo.add_wire(new_wire);
-                    let new_face = if is_reversed {
-                        Face::new_reversed(wid, vec![], surface)
-                    } else {
-                        Face::new(wid, vec![], surface)
-                    };
-                    if let Ok(face) = topo.face_mut(sf.face_id) {
-                        *face = new_face;
-                    }
+            if any_changed
+                && new_oes.len() >= 3
+                && let Ok(new_wire) = Wire::new(new_oes, true)
+            {
+                let wid = topo.add_wire(new_wire);
+                let new_face = if is_reversed {
+                    Face::new_reversed(wid, vec![], surface)
+                } else {
+                    Face::new(wid, vec![], surface)
+                };
+                if let Ok(face) = topo.face_mut(sf.face_id) {
+                    *face = new_face;
                 }
             }
         }
@@ -844,10 +844,10 @@ fn rebuild_face_with_cb_edges(
                 let qs = qpt(sv.point());
                 let qe = qpt(ev.point());
                 let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
-                if let Some(&cb_edge) = cb_qpair_edges.get(&key) {
-                    if cb_edge != oe.edge() {
-                        return true;
-                    }
+                if let Some(&cb_edge) = cb_qpair_edges.get(&key)
+                    && cb_edge != oe.edge()
+                {
+                    return true;
                 }
                 if vv_vertex_seed
                     .get(&qs)
@@ -933,10 +933,10 @@ fn rebuild_face_with_cb_edges(
         let cb_start_qs: HashMap<brepkit_topology::edge::EdgeId, (i64, i64, i64)> = {
             let mut m = HashMap::new();
             for &eid in cb_qpair_edges.values() {
-                if let Ok(e) = topo.edge(eid) {
-                    if let Ok(v) = topo.vertex(e.start()) {
-                        m.insert(eid, qpt(v.point()));
-                    }
+                if let Ok(e) = topo.edge(eid)
+                    && let Ok(v) = topo.vertex(e.start())
+                {
+                    m.insert(eid, qpt(v.point()));
                 }
             }
             m
@@ -953,18 +953,18 @@ fn rebuild_face_with_cb_edges(
 
             // (1) CB edge replacement
             let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
-            if let Some(&cb_edge) = cb_qpair_edges.get(&key) {
-                if cb_edge != eid {
-                    let oriented_start_q = if fwd { qs } else { qe };
-                    // If we can't look up the CB edge's start position,
-                    // preserve the original orientation rather than
-                    // guessing `false`.
-                    let new_fwd = cb_start_qs
-                        .get(&cb_edge)
-                        .map_or(fwd, |&cs| cs == oriented_start_q);
-                    oes.push(OrientedEdge::new(cb_edge, new_fwd));
-                    continue;
-                }
+            if let Some(&cb_edge) = cb_qpair_edges.get(&key)
+                && cb_edge != eid
+            {
+                let oriented_start_q = if fwd { qs } else { qe };
+                // If we can't look up the CB edge's start position,
+                // preserve the original orientation rather than
+                // guessing `false`.
+                let new_fwd = cb_start_qs
+                    .get(&cb_edge)
+                    .map_or(fwd, |&cs| cs == oriented_start_q);
+                oes.push(OrientedEdge::new(cb_edge, new_fwd));
+                continue;
             }
 
             // (2) Vertex canonicalization via VV seed
@@ -1154,10 +1154,10 @@ fn build_section_map(topo: &Topology, arena: &GfaArena) -> HashMap<FaceId, Vec<S
         // strictly inside the disc; drop those on or outside its boundary.
         let cap_disc = cap_disc_circle(topo, face_id);
         for &pb_id in &fi.pave_blocks_in {
-            if let Some(circle) = &cap_disc {
-                if !pb_strictly_inside_circle(topo, arena, pb_id, circle) {
-                    continue;
-                }
+            if let Some(circle) = &cap_disc
+                && !pb_strictly_inside_circle(topo, arena, pb_id, circle)
+            {
+                continue;
             }
             map.entry(face_id)
                 .or_default()
@@ -1990,58 +1990,58 @@ fn resolve_edge_vertices(
         let pb_id = arena.pave_blocks.id_from_index(pb_idx);
         let is_cb = pb_id.is_some_and(|id| arena.pb_to_cb.contains_key(&id));
         let pb = pb_id.and_then(|id| arena.pave_blocks.get(id));
-        if let Some(pb) = pb {
-            if let (true, Some(split_edge)) = (is_cb, pb.split_edge) {
-                // Use the split edge's actual vertices — these are the topology
-                // entities created by MakeSplitEdges and shared via CommonBlocks.
-                if let Ok(se) = topo.edge(split_edge) {
-                    let se_start = se.start();
-                    let se_end = se.end();
+        if let Some(pb) = pb
+            && let (true, Some(split_edge)) = (is_cb, pb.split_edge)
+        {
+            // Use the split edge's actual vertices — these are the topology
+            // entities created by MakeSplitEdges and shared via CommonBlocks.
+            if let Ok(se) = topo.edge(split_edge) {
+                let se_start = se.start();
+                let se_end = se.end();
 
-                    // Verify position match (section edges can be forward or reversed)
-                    let start_pos = topo
-                        .vertex(se_start)
-                        .ok()
-                        .map(brepkit_topology::vertex::Vertex::point);
-                    let end_pos = topo
-                        .vertex(se_end)
-                        .ok()
-                        .map(brepkit_topology::vertex::Vertex::point);
+                // Verify position match (section edges can be forward or reversed)
+                let start_pos = topo
+                    .vertex(se_start)
+                    .ok()
+                    .map(brepkit_topology::vertex::Vertex::point);
+                let end_pos = topo
+                    .vertex(se_end)
+                    .ok()
+                    .map(brepkit_topology::vertex::Vertex::point);
 
-                    if let (Some(sp), Some(ep)) = (start_pos, end_pos) {
-                        let fwd_match = (sp - edge.start_3d).length() < tol.linear
-                            && (ep - edge.end_3d).length() < tol.linear;
-                        let rev_match = (sp - edge.end_3d).length() < tol.linear
-                            && (ep - edge.start_3d).length() < tol.linear;
+                if let (Some(sp), Some(ep)) = (start_pos, end_pos) {
+                    let fwd_match = (sp - edge.start_3d).length() < tol.linear
+                        && (ep - edge.end_3d).length() < tol.linear;
+                    let rev_match = (sp - edge.end_3d).length() < tol.linear
+                        && (ep - edge.start_3d).length() < tol.linear;
 
-                        if fwd_match {
-                            let qs = quantize(edge.start_3d);
-                            let qe = quantize(edge.end_3d);
-                            // Use fresh vertex from cache/registry if available
-                            // (from rank pool or CB pre-pass). Fall back to
-                            // the split_edge's actual vertex only if no fresh
-                            // vertex exists. This prevents topology connections
-                            // between the GFA result and the PaveFiller's
-                            // intermediate split edges.
-                            let vs = *cache
-                                .entry(qs)
-                                .or_insert_with(|| *pb_registry.entry(qs).or_insert(se_start));
-                            let ve = *cache
-                                .entry(qe)
-                                .or_insert_with(|| *pb_registry.entry(qe).or_insert(se_end));
-                            return (vs, ve);
-                        }
-                        if rev_match {
-                            let qs = quantize(edge.start_3d);
-                            let qe = quantize(edge.end_3d);
-                            let vs = *cache
-                                .entry(qs)
-                                .or_insert_with(|| *pb_registry.entry(qs).or_insert(se_end));
-                            let ve = *cache
-                                .entry(qe)
-                                .or_insert_with(|| *pb_registry.entry(qe).or_insert(se_start));
-                            return (vs, ve);
-                        }
+                    if fwd_match {
+                        let qs = quantize(edge.start_3d);
+                        let qe = quantize(edge.end_3d);
+                        // Use fresh vertex from cache/registry if available
+                        // (from rank pool or CB pre-pass). Fall back to
+                        // the split_edge's actual vertex only if no fresh
+                        // vertex exists. This prevents topology connections
+                        // between the GFA result and the PaveFiller's
+                        // intermediate split edges.
+                        let vs = *cache
+                            .entry(qs)
+                            .or_insert_with(|| *pb_registry.entry(qs).or_insert(se_start));
+                        let ve = *cache
+                            .entry(qe)
+                            .or_insert_with(|| *pb_registry.entry(qe).or_insert(se_end));
+                        return (vs, ve);
+                    }
+                    if rev_match {
+                        let qs = quantize(edge.start_3d);
+                        let qe = quantize(edge.end_3d);
+                        let vs = *cache
+                            .entry(qs)
+                            .or_insert_with(|| *pb_registry.entry(qs).or_insert(se_end));
+                        let ve = *cache
+                            .entry(qe)
+                            .or_insert_with(|| *pb_registry.entry(qe).or_insert(se_start));
+                        return (vs, ve);
                     }
                 }
             }

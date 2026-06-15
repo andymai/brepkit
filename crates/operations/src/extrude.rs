@@ -587,15 +587,14 @@ pub fn extrude(
 
     // If the outer wire is CW, the stored face normal opposes the actual outward
     // direction. Negate it so cap normals are derived correctly.
-    if outer_is_cw {
-        if let FaceSurface::Plane {
+    if outer_is_cw
+        && let FaceSurface::Plane {
             ref mut normal,
             ref mut d,
         } = input_surface
-        {
-            *normal = -*normal;
-            *d = -*d;
-        }
+    {
+        *normal = -*normal;
+        *d = -*d;
     }
 
     let mut all_faces = Vec::with_capacity(n + 2 + inner_wire_ids.len() * 4);

@@ -73,10 +73,10 @@ fn build_gcs_from_state(sk: &SketchState) -> Result<GcsBuildResult, JsError> {
                                   a: usize,
                                   b: usize|
      -> Option<brepkit_operations::sketch::LineId> {
-        if let std::collections::hash_map::Entry::Vacant(e) = line_cache.entry((a, b)) {
-            if let Ok(lid) = sys.add_line(ids[a], ids[b]) {
-                e.insert(lid);
-            }
+        if let std::collections::hash_map::Entry::Vacant(e) = line_cache.entry((a, b))
+            && let Ok(lid) = sys.add_line(ids[a], ids[b])
+        {
+            e.insert(lid);
         }
         line_cache.get(&(a, b)).copied()
     };

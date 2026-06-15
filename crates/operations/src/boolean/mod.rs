@@ -220,19 +220,21 @@ pub fn boolean(
         // GFA's no-intersection assembly drops fully-contained cone/torus
         // tools; the cavity is exactly the tool's reversed shell, so construct
         // it here for any simple tool whose vertices are all strictly inside.
-        if op == BooleanOp::Cut && b_in_a && !a_in_b {
-            if let Some(classifier) = ca.as_ref() {
-                let tool_simple = topo
-                    .solid(b)
-                    .map(|s| s.inner_shells().is_empty())
-                    .unwrap_or(false);
-                if tool_simple && solid_strictly_inside(topo, b, classifier, tol) {
-                    if let Ok(result) = build_contained_cut_hollow(topo, a, b) {
-                        if validate_boolean_result(topo, result).is_ok() {
-                            return Ok(result);
-                        }
-                    }
-                }
+        if op == BooleanOp::Cut
+            && b_in_a
+            && !a_in_b
+            && let Some(classifier) = ca.as_ref()
+        {
+            let tool_simple = topo
+                .solid(b)
+                .map(|s| s.inner_shells().is_empty())
+                .unwrap_or(false);
+            if tool_simple
+                && solid_strictly_inside(topo, b, classifier, tol)
+                && let Ok(result) = build_contained_cut_hollow(topo, a, b)
+                && validate_boolean_result(topo, result).is_ok()
+            {
+                return Ok(result);
             }
         }
         if (b_in_a || a_in_b) && op != BooleanOp::Cut {
@@ -339,8 +341,8 @@ pub fn boolean(
                 (Some(sa), Some(sb)) => (sa - sb).abs() < tol.linear,
                 _ => false,
             };
-            if let (true, Some(slope)) = (same_axis_dir && same_apex && same_half_angle, slope_a) {
-                if let Some(result) = coaxial_cone_shortcut(
+            if let (true, Some(slope)) = (same_axis_dir && same_apex && same_half_angle, slope_a)
+                && let Some(result) = coaxial_cone_shortcut(
                     topo,
                     op,
                     *oa,
@@ -349,9 +351,9 @@ pub fn boolean(
                     (*za_min, *za_max),
                     (*zb_min, *zb_max),
                     tol,
-                )? {
-                    return Ok(result);
-                }
+                )?
+            {
+                return Ok(result);
             }
         }
 
@@ -370,11 +372,9 @@ pub fn boolean(
                 max: b_max,
             }),
         ) = (ca.as_ref(), cb.as_ref())
+            && let Some(result) = box_pair_shortcut(topo, op, *a_min, *a_max, *b_min, *b_max, tol)?
         {
-            if let Some(result) = box_pair_shortcut(topo, op, *a_min, *a_max, *b_min, *b_max, tol)?
-            {
-                return Ok(result);
-            }
+            return Ok(result);
         }
 
         // Box-sphere intersect shortcut: when one input classifies as an
@@ -448,12 +448,11 @@ pub fn boolean(
         ) = (ca.as_ref(), cb.as_ref())
         {
             let coincident = (*ca_center - *cb_center).length() < tol.linear;
-            if coincident {
-                if let Some(result) =
+            if coincident
+                && let Some(result) =
                     concentric_sphere_shortcut(topo, op, a, b, *ca_center, *ra, *rb, tol)?
-                {
-                    return Ok(result);
-                }
+            {
+                return Ok(result);
             }
         }
 
@@ -484,12 +483,14 @@ pub fn boolean(
             // sweep is symmetric about the central plane).
             let coaxial = aa.dot(*ab).abs() > 1.0 - tol.angular;
             let same_major = (maj_a - maj_b).abs() < tol.linear;
-            if coincident && coaxial && same_major {
-                if let Some(result) = coaxial_torus_shortcut(
+            if coincident
+                && coaxial
+                && same_major
+                && let Some(result) = coaxial_torus_shortcut(
                     topo, op, a, b, *ca_center, *aa, *maj_a, *min_a, *min_b, tol,
-                )? {
-                    return Ok(result);
-                }
+                )?
+            {
+                return Ok(result);
             }
         }
     }
@@ -504,10 +505,10 @@ pub fn boolean(
     if op == BooleanOp::Intersect {
         let bb_a = crate::measure::solid_bounding_box(topo, a).ok();
         let bb_b = crate::measure::solid_bounding_box(topo, b).ok();
-        if let Some((a_box, b_box)) = bb_a.zip(bb_b) {
-            if aabbs_separated(&a_box, &b_box, tol.linear) {
-                return Ok(topo.add_empty_solid());
-            }
+        if let Some((a_box, b_box)) = bb_a.zip(bb_b)
+            && aabbs_separated(&a_box, &b_box, tol.linear)
+        {
+            return Ok(topo.add_empty_solid());
         }
     }
 
@@ -709,10 +710,11 @@ pub fn boolean(
     // more complex interaction semantics so we leave those to mesh.
     if op == BooleanOp::Cut {
         let components = crate::boolean::assembly::face_components(topo, a);
-        if components.len() >= 2 && components_are_disjoint_pieces(topo, &components) {
-            if let Ok(result) = cut_multi_region_input(topo, a, b, components.len()) {
-                return Ok(result);
-            }
+        if components.len() >= 2
+            && components_are_disjoint_pieces(topo, &components)
+            && let Ok(result) = cut_multi_region_input(topo, a, b, components.len())
+        {
+            return Ok(result);
         }
     }
 
@@ -1961,12 +1963,12 @@ fn infer_planar_triangle_flags(
     let mut planes: Vec<(brepkit_math::vec::Vec3, f64)> = Vec::new();
     if let Ok(face_ids) = brepkit_topology::explorer::solid_faces(topo, solid) {
         for fid in face_ids {
-            if let Ok(face) = topo.face(fid) {
-                if let brepkit_topology::face::FaceSurface::Plane { normal, d } = face.surface() {
-                    let len = normal.dot(*normal).sqrt();
-                    if len > tol.linear {
-                        planes.push((*normal * (1.0 / len), *d / len));
-                    }
+            if let Ok(face) = topo.face(fid)
+                && let brepkit_topology::face::FaceSurface::Plane { normal, d } = face.surface()
+            {
+                let len = normal.dot(*normal).sqrt();
+                if len > tol.linear {
+                    planes.push((*normal * (1.0 / len), *d / len));
                 }
             }
         }
@@ -3046,10 +3048,11 @@ fn enforce_manifold_shell(
     let outer_id = topo.add_shell(outer);
     let mut inner_ids = Vec::new();
     for (i, faces) in shells.iter().enumerate() {
-        if i != best_idx && !faces.is_empty() {
-            if let Ok(inner) = brepkit_topology::shell::Shell::new(faces.clone()) {
-                inner_ids.push(topo.add_shell(inner));
-            }
+        if i != best_idx
+            && !faces.is_empty()
+            && let Ok(inner) = brepkit_topology::shell::Shell::new(faces.clone())
+        {
+            inner_ids.push(topo.add_shell(inner));
         }
     }
 

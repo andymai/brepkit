@@ -950,25 +950,25 @@ fn gridfinity_d1_lip_ring_loft_cut() {
             .collect();
         eprintln!("  Boundary edges: {}", boundary.len());
         for &eidx in boundary.iter().take(8) {
-            if let Some(eid) = k.topo.edge_id_from_index(eidx) {
-                if let Ok(edge) = k.topo.edge(eid) {
-                    let s = k.topo.vertex(edge.start()).unwrap().point();
-                    let e = k.topo.vertex(edge.end()).unwrap().point();
-                    let curve = match edge.curve() {
-                        brepkit_topology::edge::EdgeCurve::Line => "line",
-                        brepkit_topology::edge::EdgeCurve::Circle(_) => "circle",
-                        _ => "other",
-                    };
-                    eprintln!(
-                        "    edge[{eidx}] {curve}: ({:.3},{:.3},{:.3}) → ({:.3},{:.3},{:.3})",
-                        s.x(),
-                        s.y(),
-                        s.z(),
-                        e.x(),
-                        e.y(),
-                        e.z()
-                    );
-                }
+            if let Some(eid) = k.topo.edge_id_from_index(eidx)
+                && let Ok(edge) = k.topo.edge(eid)
+            {
+                let s = k.topo.vertex(edge.start()).unwrap().point();
+                let e = k.topo.vertex(edge.end()).unwrap().point();
+                let curve = match edge.curve() {
+                    brepkit_topology::edge::EdgeCurve::Line => "line",
+                    brepkit_topology::edge::EdgeCurve::Circle(_) => "circle",
+                    _ => "other",
+                };
+                eprintln!(
+                    "    edge[{eidx}] {curve}: ({:.3},{:.3},{:.3}) → ({:.3},{:.3},{:.3})",
+                    s.x(),
+                    s.y(),
+                    s.z(),
+                    e.x(),
+                    e.y(),
+                    e.z()
+                );
             }
         }
     }
@@ -1475,25 +1475,25 @@ fn gridfinity_d5_box_with_filleted_lip() {
             .collect();
         eprintln!("  D5 lip boundary edges: {}", bounds.len());
         for &eidx in bounds.iter().take(4) {
-            if let Some(eid) = k.topo.edge_id_from_index(eidx) {
-                if let Ok(edge) = k.topo.edge(eid) {
-                    let s = k.topo.vertex(edge.start()).unwrap().point();
-                    let e = k.topo.vertex(edge.end()).unwrap().point();
-                    let curve = match edge.curve() {
-                        brepkit_topology::edge::EdgeCurve::Line => "line",
-                        brepkit_topology::edge::EdgeCurve::Circle(_) => "circle",
-                        _ => "other",
-                    };
-                    eprintln!(
-                        "    edge[{eidx}] {curve}: ({:.2},{:.2},{:.2})→({:.2},{:.2},{:.2})",
-                        s.x(),
-                        s.y(),
-                        s.z(),
-                        e.x(),
-                        e.y(),
-                        e.z()
-                    );
-                }
+            if let Some(eid) = k.topo.edge_id_from_index(eidx)
+                && let Ok(edge) = k.topo.edge(eid)
+            {
+                let s = k.topo.vertex(edge.start()).unwrap().point();
+                let e = k.topo.vertex(edge.end()).unwrap().point();
+                let curve = match edge.curve() {
+                    brepkit_topology::edge::EdgeCurve::Line => "line",
+                    brepkit_topology::edge::EdgeCurve::Circle(_) => "circle",
+                    _ => "other",
+                };
+                eprintln!(
+                    "    edge[{eidx}] {curve}: ({:.2},{:.2},{:.2})→({:.2},{:.2},{:.2})",
+                    s.x(),
+                    s.y(),
+                    s.z(),
+                    e.x(),
+                    e.y(),
+                    e.z()
+                );
             }
         }
     }

@@ -182,7 +182,7 @@ fn parse_triangle_attributes(
 
 /// Build a [`TriangleMesh`] from indexed vertices, computing per-vertex normals.
 fn build_mesh(vertices: &[Point3], indices: &[u32]) -> Result<TriangleMesh, IoError> {
-    if indices.len() % 3 != 0 {
+    if !indices.len().is_multiple_of(3) {
         return Err(IoError::ParseError {
             reason: format!(
                 "triangle indices count {} is not a multiple of 3",

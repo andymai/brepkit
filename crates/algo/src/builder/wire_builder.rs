@@ -250,14 +250,13 @@ pub fn remove_pendant_sections(
         for incident in vmap.values() {
             let mut srcs = incident.iter().map(|&i| edges[i].source_edge_idx);
             let first = srcs.next().flatten();
-            if let Some(src) = first {
-                if incident
+            if let Some(src) = first
+                && incident
                     .iter()
                     .all(|&i| edges[i].source_edge_idx == Some(src))
-                {
-                    pendant_src = Some(src);
-                    break;
-                }
+            {
+                pendant_src = Some(src);
+                break;
             }
         }
 

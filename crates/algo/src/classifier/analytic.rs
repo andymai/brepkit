@@ -491,17 +491,22 @@ pub fn try_build_analytic_classifier(
     }
 
     // Cylinder + plane caps.
-    if has_cylinder && has_planar && !has_sphere {
-        if let Some(c) = try_build_cylinder_classifier(topo, shell.faces(), cylinder_info?, &tol) {
-            return Some(c);
-        }
+    if has_cylinder
+        && has_planar
+        && !has_sphere
+        && let Some(c) = try_build_cylinder_classifier(topo, shell.faces(), cylinder_info?, &tol)
+    {
+        return Some(c);
     }
 
     // Cone + plane caps.
-    if has_cone && has_planar && !has_sphere && !has_cylinder {
-        if let Some(c) = try_build_cone_classifier(topo, shell.faces(), cone_info?, &tol) {
-            return Some(c);
-        }
+    if has_cone
+        && has_planar
+        && !has_sphere
+        && !has_cylinder
+        && let Some(c) = try_build_cone_classifier(topo, shell.faces(), cone_info?, &tol)
+    {
+        return Some(c);
     }
 
     // Mixed plane+cone/cylinder: try ConvexAnalytic.
@@ -525,10 +530,10 @@ fn try_build_planar_classifier(
     tol: &Tolerance,
 ) -> Option<AnalyticClassifier> {
     // Try axis-aligned box (exactly 6 faces).
-    if faces.len() == 6 {
-        if let Some(c) = try_build_box_classifier(topo, faces, tol) {
-            return Some(c);
-        }
+    if faces.len() == 6
+        && let Some(c) = try_build_box_classifier(topo, faces, tol)
+    {
+        return Some(c);
     }
 
     // Try convex polyhedron.

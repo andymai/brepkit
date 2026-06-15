@@ -1025,15 +1025,15 @@ impl BrepKernel {
 
                     let mut inner_oriented = Vec::new();
                     for (i, eid_val) in edge_arr.iter().enumerate() {
-                        if let Some(eid) = eid_val.as_u64() {
-                            if let Some(&edge_id) = edge_map.get(&(eid as u32)) {
-                                let fwd = orient_arr
-                                    .as_ref()
-                                    .and_then(|arr| arr.get(i))
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(true);
-                                inner_oriented.push(OrientedEdge::new(edge_id, fwd));
-                            }
+                        if let Some(eid) = eid_val.as_u64()
+                            && let Some(&edge_id) = edge_map.get(&(eid as u32))
+                        {
+                            let fwd = orient_arr
+                                .as_ref()
+                                .and_then(|arr| arr.get(i))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(true);
+                            inner_oriented.push(OrientedEdge::new(edge_id, fwd));
                         }
                     }
                     if !inner_oriented.is_empty() {

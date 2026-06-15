@@ -146,10 +146,10 @@ fn build_topology(topo: &mut Topology, entities: &[IgesEntity]) -> Result<Vec<So
     let mut face_ids = Vec::new();
 
     for entity in entities {
-        if entity.entity_type == 108 {
-            if let Ok(face_id) = build_plane_face(topo, &entity.params) {
-                face_ids.push(face_id);
-            }
+        if entity.entity_type == 108
+            && let Ok(face_id) = build_plane_face(topo, &entity.params)
+        {
+            face_ids.push(face_id);
         }
         // Entity types 110 (line), 126 (NURBS curve), 128 (NURBS surface)
         // are skipped — they would be referenced by higher-level entities.

@@ -265,11 +265,11 @@ fn process_coplanar_pair(
     for &(b_eid, p2d_start, p2d_end, _, _) in &edges_b {
         let start_edge = which_boundary_edge(p2d_start, &edges_a, tol.linear);
         let end_edge = which_boundary_edge(p2d_end, &edges_a, tol.linear);
-        if let (Some(si), Some(ei)) = (start_edge, end_edge) {
-            if si == ei {
-                let a_eid = edges_a[si].0;
-                create_coplanar_common_block(arena, a_eid, b_eid, tol.linear);
-            }
+        if let (Some(si), Some(ei)) = (start_edge, end_edge)
+            && si == ei
+        {
+            let a_eid = edges_a[si].0;
+            create_coplanar_common_block(arena, a_eid, b_eid, tol.linear);
         }
     }
 
@@ -369,10 +369,10 @@ fn should_create_section_edge(
     // crossing edges that enter and exit the target boundary.
     let start_edge_idx = which_boundary_edge(p2d_start, target_edges, tol);
     let end_edge_idx = which_boundary_edge(p2d_end, target_edges, tol);
-    if let (Some(si), Some(ei)) = (start_edge_idx, end_edge_idx) {
-        if si == ei {
-            return false; // Both endpoints on the same target edge — shared boundary
-        }
+    if let (Some(si), Some(ei)) = (start_edge_idx, end_edge_idx)
+        && si == ei
+    {
+        return false; // Both endpoints on the same target edge — shared boundary
     }
 
     let mid = Point2::new(

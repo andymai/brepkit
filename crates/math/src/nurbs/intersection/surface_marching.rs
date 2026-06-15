@@ -467,11 +467,12 @@ fn perturbation_tangent(
         if let Some(refined) = refine_ssi_point(s1, s2, u1p, v1p, u2, v2, 1e-8) {
             let d = refined.point - point.point;
             let dist = d.length();
-            if dist > best_dist && dist > 1e-12 {
-                if let Ok(normalized) = d.normalize() {
-                    best_dist = dist;
-                    best_dir = Some(normalized);
-                }
+            if dist > best_dist
+                && dist > 1e-12
+                && let Ok(normalized) = d.normalize()
+            {
+                best_dist = dist;
+                best_dir = Some(normalized);
             }
         }
     }
@@ -963,10 +964,10 @@ pub(super) fn near_existing_segment(
     for seg in segments {
         if seg.len() < 2 {
             // Single-point segment: fallback to point distance.
-            if let Some(p) = seg.first() {
-                if (p.point - point.point).length() < dist {
-                    return true;
-                }
+            if let Some(p) = seg.first()
+                && (p.point - point.point).length() < dist
+            {
+                return true;
             }
             continue;
         }

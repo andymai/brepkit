@@ -107,15 +107,14 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
             let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
             boundary_index.entry(key).or_default().push(pb_id);
 
-            if sv == ev {
-                if let Ok(edge) = topo.edge(pb.original_edge) {
-                    if let EdgeCurve::Circle(c) = edge.curve() {
-                        closed_index
-                            .entry(circle_key(c, qpt, scale))
-                            .or_default()
-                            .push(pb_id);
-                    }
-                }
+            if sv == ev
+                && let Ok(edge) = topo.edge(pb.original_edge)
+                && let EdgeCurve::Circle(c) = edge.curve()
+            {
+                closed_index
+                    .entry(circle_key(c, qpt, scale))
+                    .or_default()
+                    .push(pb_id);
             }
         }
     }
@@ -184,22 +183,22 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
             // the seam vertex, which is arbitrary, so coincident circles
             // with different seams never share a key. Match on quantized
             // circle geometry instead.
-            if !linked_this && sv == ev {
-                if let EdgeCurve::Circle(c) = &section_curve {
-                    if let Some(candidates) = closed_index.get(&circle_key(c, qpt, scale)) {
-                        for &boundary_pb_id in candidates {
-                            if try_link(
-                                topo,
-                                tol,
-                                arena,
-                                section_pb_id,
-                                &section_curve,
-                                boundary_pb_id,
-                            ) {
-                                linked += 1;
-                                break;
-                            }
-                        }
+            if !linked_this
+                && sv == ev
+                && let EdgeCurve::Circle(c) = &section_curve
+                && let Some(candidates) = closed_index.get(&circle_key(c, qpt, scale))
+            {
+                for &boundary_pb_id in candidates {
+                    if try_link(
+                        topo,
+                        tol,
+                        arena,
+                        section_pb_id,
+                        &section_curve,
+                        boundary_pb_id,
+                    ) {
+                        linked += 1;
+                        break;
                     }
                 }
             }

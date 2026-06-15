@@ -65,11 +65,11 @@ fn create_edge_from_curve_points(
         return None;
     }
 
-    if points.len() >= 8 {
-        if let Some((circle, seam_pt)) = fit_circle_3d(points, tol) {
-            let v = find_or_create_vertex(topo, vertex_cache, seam_pt, tol);
-            return Some(topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))));
-        }
+    if points.len() >= 8
+        && let Some((circle, seam_pt)) = fit_circle_3d(points, tol)
+    {
+        let v = find_or_create_vertex(topo, vertex_cache, seam_pt, tol);
+        return Some(topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))));
     }
 
     let p_start = points[0];

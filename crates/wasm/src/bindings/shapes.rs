@@ -61,7 +61,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "makePolygon")]
     #[allow(clippy::needless_pass_by_value)] // wasm-bindgen requires owned Vec
     pub fn make_polygon(&mut self, coords: Vec<f64>) -> Result<u32, JsError> {
-        if coords.len() % 3 != 0 {
+        if !coords.len().is_multiple_of(3) {
             return Err(WasmError::InvalidInput {
                 reason: format!(
                     "coordinate array length must be a multiple of 3, got {}",
@@ -490,7 +490,7 @@ impl BrepKernel {
         control_points: Vec<f64>,
         weights: Vec<f64>,
     ) -> Result<u32, JsError> {
-        if control_points.len() % 3 != 0 {
+        if !control_points.len().is_multiple_of(3) {
             return Err(WasmError::InvalidInput {
                 reason: format!(
                     "control_points length must be a multiple of 3, got {}",
@@ -716,7 +716,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "convexHull")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn convex_hull(&mut self, coords: Vec<f64>) -> Result<u32, JsError> {
-        if coords.len() % 3 != 0 {
+        if !coords.len().is_multiple_of(3) {
             return Err(WasmError::InvalidInput {
                 reason: format!(
                     "coordinate array length must be a multiple of 3, got {}",

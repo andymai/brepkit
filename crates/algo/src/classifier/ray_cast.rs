@@ -168,10 +168,10 @@ fn wire_polygon(
     // Drop the duplicated closing point.
     if verts.len() >= 2 {
         let first_pt = verts[0];
-        if let Some(last) = verts.last() {
-            if (*last - first_pt).length() < join_tol {
-                verts.pop();
-            }
+        if let Some(last) = verts.last()
+            && (*last - first_pt).length() < join_tol
+        {
+            verts.pop();
         }
     }
     Ok(verts)

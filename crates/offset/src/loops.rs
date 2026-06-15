@@ -291,15 +291,15 @@ fn build_loops_via_line_intersection(
         }
     }
 
-    if let Some(boundary) = data.boundary_edges.get(&face_id) {
-        if let Some(offset_face) = data.offset_faces.get(&face_id) {
-            for &eid in boundary {
-                let edge = topo.edge(eid)?;
-                let orig_p0 = topo.vertex(edge.start())?.point();
-                let orig_p1 = topo.vertex(edge.end())?.point();
-                let (p0, p1) = project_boundary_edge(orig_p0, orig_p1, &offset_face.surface);
-                line_segs.push(LineSeg { p0, p1 });
-            }
+    if let Some(boundary) = data.boundary_edges.get(&face_id)
+        && let Some(offset_face) = data.offset_faces.get(&face_id)
+    {
+        for &eid in boundary {
+            let edge = topo.edge(eid)?;
+            let orig_p0 = topo.vertex(edge.start())?.point();
+            let orig_p1 = topo.vertex(edge.end())?.point();
+            let (p0, p1) = project_boundary_edge(orig_p0, orig_p1, &offset_face.surface);
+            line_segs.push(LineSeg { p0, p1 });
         }
     }
 

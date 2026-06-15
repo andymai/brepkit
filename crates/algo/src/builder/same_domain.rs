@@ -111,10 +111,10 @@ pub fn detect_same_domain<S: BuildHasher>(
     // Key = edge set, Value = list of sub-face indices with that set.
     let mut groups: HashMap<EdgeSet, Vec<usize>> = HashMap::new();
     for (idx, edge_set) in edge_sets.iter().enumerate() {
-        if let Some(es) = edge_set {
-            if !es.is_empty() {
-                groups.entry(es.clone()).or_default().push(idx);
-            }
+        if let Some(es) = edge_set
+            && !es.is_empty()
+        {
+            groups.entry(es.clone()).or_default().push(idx);
         }
     }
 

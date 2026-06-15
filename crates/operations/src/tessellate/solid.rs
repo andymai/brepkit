@@ -179,11 +179,11 @@ fn tessellate_solid_core(
     } else {
         let mut map = DetHashMap::default();
         for &edge_idx in &edge_indices {
-            if let Some(edge_id) = topo.edge_id_from_index(edge_idx) {
-                if let Ok(edge_data) = topo.edge(edge_id) {
-                    let points = sample_edge(topo, edge_data, deflection, angular_tol)?;
-                    map.insert(edge_idx, points);
-                }
+            if let Some(edge_id) = topo.edge_id_from_index(edge_idx)
+                && let Ok(edge_data) = topo.edge(edge_id)
+            {
+                let points = sample_edge(topo, edge_data, deflection, angular_tol)?;
+                map.insert(edge_idx, points);
             }
         }
         map
@@ -249,17 +249,17 @@ fn tessellate_solid_core(
                         continue;
                     };
 
-                    if let Some(pts) = edge_points.get(&edge_idx) {
-                        if pts.len() < expected_count {
-                            let (t_start, t_end) = circle_param_range(topo, edge_data, circle)?;
-                            let new_pts = brepkit_geometry::sampling::sample_uniform(
-                                circle,
-                                t_start,
-                                t_end,
-                                expected_count,
-                            );
-                            edge_points.insert(edge_idx, new_pts);
-                        }
+                    if let Some(pts) = edge_points.get(&edge_idx)
+                        && pts.len() < expected_count
+                    {
+                        let (t_start, t_end) = circle_param_range(topo, edge_data, circle)?;
+                        let new_pts = brepkit_geometry::sampling::sample_uniform(
+                            circle,
+                            t_start,
+                            t_end,
+                            expected_count,
+                        );
+                        edge_points.insert(edge_idx, new_pts);
                     }
                 }
             }
@@ -398,78 +398,70 @@ fn tessellate_solid_core(
     for (fi, &face_id) in all_faces.iter().enumerate() {
         let face_data = topo.face(face_id)?;
         let has_inner = !face_data.inner_wires().is_empty();
-        if let FaceSurface::Plane { normal, .. } = face_data.surface() {
-            if has_inner {
-                let normal = *normal;
-                let is_reversed = face_data.is_reversed();
-                let wire = topo.wire(face_data.outer_wire())?;
-                let tol = 1e-10;
+        if let FaceSurface::Plane { normal, .. } = face_data.surface()
+            && has_inner
+        {
+            let normal = *normal;
+            let is_reversed = face_data.is_reversed();
+            let wire = topo.wire(face_data.outer_wire())?;
+            let tol = 1e-10;
 
-                let (mut all_positions, mut all_global_ids) = collect_wire_global_vertices(
-                    wire,
-                    &edge_global_indices,
-                    &merged.positions,
-                    tol,
-                );
-                remove_closing_duplicate_global(
-                    &mut all_positions,
-                    &mut all_global_ids,
-                    &merged.positions,
-                    tol,
-                );
-                let outer_count = all_positions.len();
+            let (mut all_positions, mut all_global_ids) =
+                collect_wire_global_vertices(wire, &edge_global_indices, &merged.positions, tol);
+            remove_closing_duplicate_global(
+                &mut all_positions,
+                &mut all_global_ids,
+                &merged.positions,
+                tol,
+            );
+            let outer_count = all_positions.len();
 
-                let mut inner_wire_ranges: Vec<(usize, usize)> = Vec::new();
-                for &iw_id in face_data.inner_wires() {
-                    let iw = topo.wire(iw_id)?;
-                    let start = all_positions.len();
-                    let (inner_pos, inner_gids) = collect_wire_global_vertices(
-                        iw,
-                        &edge_global_indices,
-                        &merged.positions,
-                        tol,
-                    );
-                    let mut inner_flat_ids: Vec<u32> = Vec::with_capacity(inner_gids.len());
-                    let mut next_sentinel = u32::MAX;
-                    for (pos, gid_opt) in inner_pos.into_iter().zip(inner_gids) {
-                        let gid = gid_opt.unwrap_or_else(|| {
-                            debug_assert!(false, "inner wire vertex had no global ID");
-                            let s = next_sentinel;
-                            next_sentinel = next_sentinel.wrapping_sub(1);
-                            s
-                        });
-                        inner_flat_ids.push(gid);
-                        all_positions.push(pos);
-                        all_global_ids.push(Some(gid));
-                    }
-                    if inner_flat_ids.len() > 2 {
-                        remove_closing_duplicate_ids(&mut inner_flat_ids, &merged.positions, tol);
-                        let expected_end = start + inner_flat_ids.len();
-                        all_positions.truncate(expected_end);
-                        all_global_ids.truncate(expected_end);
-                    }
-                    let end = all_positions.len();
-                    inner_wire_ranges.push((start, end));
+            let mut inner_wire_ranges: Vec<(usize, usize)> = Vec::new();
+            for &iw_id in face_data.inner_wires() {
+                let iw = topo.wire(iw_id)?;
+                let start = all_positions.len();
+                let (inner_pos, inner_gids) =
+                    collect_wire_global_vertices(iw, &edge_global_indices, &merged.positions, tol);
+                let mut inner_flat_ids: Vec<u32> = Vec::with_capacity(inner_gids.len());
+                let mut next_sentinel = u32::MAX;
+                for (pos, gid_opt) in inner_pos.into_iter().zip(inner_gids) {
+                    let gid = gid_opt.unwrap_or_else(|| {
+                        debug_assert!(false, "inner wire vertex had no global ID");
+                        let s = next_sentinel;
+                        next_sentinel = next_sentinel.wrapping_sub(1);
+                        s
+                    });
+                    inner_flat_ids.push(gid);
+                    all_positions.push(pos);
+                    all_global_ids.push(Some(gid));
                 }
-
-                let pts2d: Vec<brepkit_math::vec::Point2> = all_positions
-                    .iter()
-                    .map(|&p| project_by_normal(p, normal))
-                    .collect();
-
-                #[allow(clippy::cast_possible_truncation)]
-                cdt_jobs.push(CdtJob {
-                    face_index: fi as u32,
-                    pts2d,
-                    outer_count,
-                    inner_wire_ranges,
-                    all_global_ids,
-                    all_positions,
-                    normal,
-                    is_reversed,
-                });
-                continue;
+                if inner_flat_ids.len() > 2 {
+                    remove_closing_duplicate_ids(&mut inner_flat_ids, &merged.positions, tol);
+                    let expected_end = start + inner_flat_ids.len();
+                    all_positions.truncate(expected_end);
+                    all_global_ids.truncate(expected_end);
+                }
+                let end = all_positions.len();
+                inner_wire_ranges.push((start, end));
             }
+
+            let pts2d: Vec<brepkit_math::vec::Point2> = all_positions
+                .iter()
+                .map(|&p| project_by_normal(p, normal))
+                .collect();
+
+            #[allow(clippy::cast_possible_truncation)]
+            cdt_jobs.push(CdtJob {
+                face_index: fi as u32,
+                pts2d,
+                outer_count,
+                inner_wire_ranges,
+                all_global_ids,
+                all_positions,
+                normal,
+                is_reversed,
+            });
+            continue;
         }
         other_face_indices.push(fi);
     }

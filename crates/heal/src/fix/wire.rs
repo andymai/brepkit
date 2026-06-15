@@ -111,11 +111,11 @@ fn fix_wire_impl(
         result.merge(&r);
     }
 
-    if config.fix_lacking != FixMode::Off {
-        if let Some(fid) = face_id {
-            let r = fix_lacking(topo, wire_id, fid, ctx, config)?;
-            result.merge(&r);
-        }
+    if config.fix_lacking != FixMode::Off
+        && let Some(fid) = face_id
+    {
+        let r = fix_lacking(topo, wire_id, fid, ctx, config)?;
+        result.merge(&r);
     }
 
     if config.fix_notched != FixMode::Off {
@@ -128,11 +128,11 @@ fn fix_wire_impl(
         result.merge(&r);
     }
 
-    if config.fix_missing_seam != FixMode::Off {
-        if let Some(fid) = face_id {
-            let r = fix_missing_seam(topo, wire_id, fid, ctx, config)?;
-            result.merge(&r);
-        }
+    if config.fix_missing_seam != FixMode::Off
+        && let Some(fid) = face_id
+    {
+        let r = fix_missing_seam(topo, wire_id, fid, ctx, config)?;
+        result.merge(&r);
     }
 
     Ok(result)
