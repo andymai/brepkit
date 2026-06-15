@@ -14,7 +14,6 @@ use brepkit_topology::solid::SolidId;
 ///
 /// Returns an error if the file is malformed.
 pub fn read_ply(data: &[u8]) -> Result<TriangleMesh, crate::IoError> {
-    // Parse header to determine format
     let header_end = find_header_end(data)?;
     let header_text =
         std::str::from_utf8(&data[..header_end]).map_err(|_| crate::IoError::ParseError {
@@ -112,7 +111,6 @@ fn parse_ascii_body(header: &PlyHeader, body: &[u8]) -> Result<TriangleMesh, cra
     let mut normals = Vec::with_capacity(header.vertex_count);
     let mut indices = Vec::new();
 
-    // Parse vertices
     for _ in 0..header.vertex_count {
         let line = lines.next().ok_or_else(|| crate::IoError::ParseError {
             reason: "unexpected end of PLY vertex data".into(),
@@ -135,7 +133,6 @@ fn parse_ascii_body(header: &PlyHeader, body: &[u8]) -> Result<TriangleMesh, cra
         }
     }
 
-    // Parse faces
     for _ in 0..header.face_count {
         let line = lines.next().ok_or_else(|| crate::IoError::ParseError {
             reason: "unexpected end of PLY face data".into(),
@@ -165,7 +162,6 @@ fn parse_ascii_body(header: &PlyHeader, body: &[u8]) -> Result<TriangleMesh, cra
         }
     }
 
-    // Generate normals if not in file
     if normals.is_empty() {
         normals = compute_normals(&positions, &indices);
     }
@@ -238,7 +234,6 @@ fn parse_binary_body(header: &PlyHeader, body: &[u8]) -> Result<TriangleMesh, cr
         }
     }
 
-    // Parse faces
     let mut indices = Vec::new();
     for _ in 0..header.face_count {
         if offset >= body.len() {
@@ -387,8 +382,6 @@ mod tests {
         let data = b"not a ply file";
         assert!(read_ply(data).is_err());
     }
-
-    // ── read_ply_solid smoke test ───────────────────────────────────
 
     #[test]
     fn read_ply_solid_returns_solid_id() {

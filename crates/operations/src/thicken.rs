@@ -52,7 +52,6 @@ fn face_normal(surface: &FaceSurface) -> Result<Vec3, crate::OperationsError> {
     match surface {
         FaceSurface::Plane { normal, .. } => Ok(*normal),
         FaceSurface::Nurbs(nurbs) => {
-            // Evaluate at the surface center.
             nurbs
                 .normal(0.5, 0.5)
                 .map_err(|e| crate::OperationsError::InvalidInput {
@@ -124,7 +123,6 @@ mod tests {
 
         let mut topo = Topology::new();
 
-        // Build a flat NURBS face.
         let surface = NurbsSurface::new(
             1,
             1,

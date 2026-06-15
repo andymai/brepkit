@@ -29,7 +29,6 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     let solid_data = topo.solid(solid).ok()?;
     let shell = topo.shell(solid_data.outer_shell()).ok()?;
 
-    // Classify all faces by surface type.
     let mut sphere_r: Option<f64> = None;
     let mut cyl: Option<(Point3, Vec3, f64)> = None; // (origin, axis, radius)
     let mut cone_params: Option<(Point3, Vec3)> = None; // (apex, axis)
@@ -75,10 +74,8 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         }
     }
 
-    // -- Sphere: all faces are sphere faces (e.g. two hemispheres) --
     if let Some(r) = sphere_r {
         if cyl.is_none() && cone_params.is_none() && torus_params.is_none() && planes.is_empty() {
-            // Verify actual vertex distances match the stored radius.
             // A non-uniform scale transforms vertices but leaves the sphere
             // surface radius unchanged, making the analytic formula wrong.
             let sphere_faces: Vec<_> = shell.faces().to_vec();
@@ -117,8 +114,6 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         }
     }
 
-    // -- Cylinder: 1 cylindrical face + planar caps --
-    //
     // A pure cylinder has exactly 1 cylindrical face and 2 planar caps.
     // If there are more than 2 planes the solid is compound (e.g. a box
     // with a drilled hole has 1 cylindrical hole-wall + 6 box faces).
@@ -141,8 +136,6 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         }
     }
 
-    // -- Cone / frustum: 1 conical face + planar caps --
-    //
     // Cap radii are read directly from the Circle3D edges of the cap faces,
     // bypassing the ConicalSurface parameterization entirely. Heights are
     // derived from the circle centers projected onto the cone axis.
@@ -183,7 +176,6 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
         }
     }
 
-    // -- Torus: 1 toroidal face, no planar caps --
     if let Some((r_major, r_minor)) = torus_params {
         if cyl.is_none() && cone_params.is_none() && sphere_r.is_none() && planes.is_empty() {
             return Some(2.0 * PI * PI * r_major * r_minor * r_minor);
@@ -393,7 +385,6 @@ fn analytic_cylinder_signed_volume(
         }
     };
 
-    // Collect boundary vertex (u,v) parameters on the cylinder.
     let wire = topo.wire(face.outer_wire())?;
     let mut u_vals = Vec::new();
     let mut v_vals = Vec::new();
@@ -428,7 +419,6 @@ fn analytic_cylinder_signed_volume(
         }
     }
 
-    // Determine v-range (axial).
     let v_min = v_vals.iter().copied().fold(f64::INFINITY, f64::min);
     let v_max = v_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let h = v_max - v_min;
@@ -932,7 +922,6 @@ pub fn solid_volume_from_faces(
             break;
         }
 
-        // Check all edges are lines.
         let mut pts = Vec::with_capacity(3);
         for oe in edges {
             let edge = topo.edge(oe.edge())?;

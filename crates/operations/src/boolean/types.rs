@@ -8,10 +8,6 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
 /// Number of samples used when discretizing closed curves (circles, ellipses)
 /// in the analytic boolean path. All code paths must use this constant so that
 /// band fragments, cap face polygons, and holed-face inner wires share the
@@ -73,10 +69,6 @@ pub(super) const CDT_SNAP_FACTOR: f64 = 100.0;
 /// A cylinder (2 caps + 1 barrel = 3 faces) is the minimal closed solid
 /// produced by boolean operations between boxes and curved primitives.
 pub(super) const MIN_SOLID_FACES: usize = 3;
-
-// ---------------------------------------------------------------------------
-// Public enums
-// ---------------------------------------------------------------------------
 
 /// The type of boolean operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,10 +147,6 @@ impl FaceSpec {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Public structs
-// ---------------------------------------------------------------------------
-
 /// Options for boolean operations.
 #[derive(Debug, Clone, Copy)]
 pub struct BooleanOptions {
@@ -205,10 +193,6 @@ impl Default for BooleanOptions {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Internal enums
-// ---------------------------------------------------------------------------
-
 /// Which operand a face fragment originated from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Source {
@@ -216,7 +200,6 @@ pub enum Source {
     B,
 }
 
-// Re-export canonical types from the algo crate.
 pub(super) use brepkit_algo::FaceClass;
 
 /// Result of classifying an intersection curve against a face boundary.
@@ -228,10 +211,6 @@ pub(super) enum CurveClassification {
     /// The entire curve lies outside the face.
     FullyOutside,
 }
-
-// ---------------------------------------------------------------------------
-// Internal structs
-// ---------------------------------------------------------------------------
 
 /// Internal context carrying tolerance-derived thresholds through the boolean
 /// pipeline. Computed once from `BooleanOptions` at the start of a boolean
@@ -325,16 +304,8 @@ pub(super) struct AnalyticFragment {
     pub(super) source_face_id: Option<FaceId>,
 }
 
-// ---------------------------------------------------------------------------
-// Type aliases
-// ---------------------------------------------------------------------------
-
 /// Extracted face data: `(FaceId, vertices, normal, d)`.
 pub(super) type FaceData = Vec<(FaceId, Vec<Point3>, Vec3, f64)>;
-
-// ---------------------------------------------------------------------------
-// Selection truth table
-// ---------------------------------------------------------------------------
 
 /// Determine whether a fragment should be kept and whether to flip its normal.
 ///

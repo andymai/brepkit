@@ -32,10 +32,6 @@ fn check_result(topo: &Topology, solid: SolidId) -> usize {
     sh.faces().len()
 }
 
-// ── Polygon clipper tests ─────────────────────────────────────────
-
-// ── Disjoint tests ──────────────────────────────────────────────────
-
 #[test]
 fn fuse_disjoint_cubes() {
     let mut topo = Topology::new();
@@ -245,8 +241,6 @@ fn intersect_overlapping_boxes_is_nonempty() {
     );
 }
 
-// ── Diagnostic tests ─────────────────────────────────────────────────
-
 /// Diagnostic: dumps edge sharing state for overlapping box fuse.
 /// Expected to fail until SD face replacement + boundary edge sharing
 /// are complete. Findings: 27 boundary edges (no position duplicates),
@@ -435,8 +429,6 @@ fn gfa_direct_fuse_overlapping_manifold() {
     );
 }
 
-// ── 1D overlapping tests (offset on one axis) ───────────────────────
-
 #[test]
 fn fuse_overlapping_cubes() {
     let mut topo = Topology::new();
@@ -469,8 +461,6 @@ fn cut_overlapping_cubes() {
     let _ = check_result(&topo, result);
     assert_volume_near(&topo, result, 0.5, 0.001);
 }
-
-// ── 3D overlapping tests (offset on all axes) ───────────────────────
 
 #[test]
 fn fuse_overlapping_3d() {
@@ -505,8 +495,6 @@ fn cut_overlapping_3d() {
     assert_volume_near(&topo, result, 0.875, 0.001);
 }
 
-// ── Flush face test ─────────────────────────────────────────────────
-
 #[test]
 fn fuse_flush_face_cubes() {
     let mut topo = Topology::new();
@@ -517,10 +505,6 @@ fn fuse_flush_face_cubes() {
     let _ = check_result(&topo, result);
     assert_volume_near(&topo, result, 2.0, 0.001);
 }
-
-// ── NURBS face data collection test ─────────────────────────
-
-// ── Analytic boolean tests ──────────────────────────────────────────
 
 #[test]
 #[allow(clippy::panic)]
@@ -717,8 +701,6 @@ fn cone_has_circle_edges() {
     }
     assert!(has_circle, "cone should have Circle edges");
 }
-
-// ── Mixed-surface assembly tests ────────────────────
 
 #[test]
 fn assemble_mixed_planar_only() {
@@ -1003,7 +985,6 @@ fn cut_box_by_translated_sphere() {
     let expected = 1000.0 - sph_vol;
     eprintln!("cut volume: {vol:.1} (expected ~{expected:.1})");
 
-    // Count result faces
     let faces = brepkit_topology::explorer::solid_faces(&topo, r).unwrap();
     eprintln!("result has {} faces", faces.len());
 
@@ -1288,7 +1269,6 @@ fn staircase_fuse_with_cylinders() {
         shapes.push(post);
     }
 
-    // Fuse all shapes together sequentially.
     let mut result = shapes[0];
     for &shape in &shapes[1..] {
         result = boolean(&mut topo, BooleanOp::Fuse, result, shape).unwrap();
@@ -1310,7 +1290,6 @@ fn profile_cylinder_cylinder_intersect() {
     let mat = brepkit_math::mat::Mat4::translation(3.0, 0.0, 0.0);
     crate::transform::transform_solid(&mut topo, cyl2, &mat).unwrap();
 
-    // Profile multiple runs
     for i in 0..5 {
         let mut t = Topology::new();
         let c1 = crate::primitives::make_cylinder(&mut t, 5.0, 20.0).unwrap();
@@ -1403,8 +1382,6 @@ fn fuse_overlapping_boxes_validates() {
         report.issues
     );
 }
-
-// ── Shared-boundary fuse ────────────────────────────────────
 
 #[test]
 fn fuse_adjacent_boxes_shared_face() {
@@ -1513,8 +1490,6 @@ fn fuse_adjacent_boxes_3x1_grid() {
     );
 }
 
-// ── Degenerate boolean geometry ────────────────────────────
-
 #[test]
 fn near_tolerance_overlap() {
     // Overlap of exactly the linear tolerance amount
@@ -1537,8 +1512,6 @@ fn boolean_nearly_touching() {
     // Should not panic
     let _result = boolean(&mut topo, BooleanOp::Fuse, a, b);
 }
-
-// ── compound_cut tests ──────────────────────────────────────────────
 
 #[test]
 fn compound_cut_empty_tools_returns_target() {
@@ -2513,8 +2486,6 @@ fn cut_lofted_frustums_octagon_profiles() {
     );
 }
 
-// ── Non-convex face chord clip test ────────────────────────────────────
-//
 // Regression test for the cyrus_beck_clip → polygon_clip_intervals fix.
 // cyrus_beck_clip silently produces wrong results on non-convex (concave)
 // polygons because the Cyrus-Beck algorithm assumes a convex clipping
@@ -2567,8 +2538,6 @@ fn test_boolean_concave_face_chord_clip() {
     assert_volume_near(&topo, result, 2.25, 0.001);
 }
 
-// ── Convex regression test for polygon_clip_intervals ───────────────────
-//
 // Confirms that switching from cyrus_beck_clip to polygon_clip_intervals
 // does not break the common convex-face case. A large box minus a half-
 // overlapping smaller box: expected volume = 8.0 - 0.5 = 7.5.
@@ -2615,8 +2584,6 @@ fn test_boolean_large_scale_vertex_merge() {
     // Expected volume: 100^3 - 50*100*100 = 500_000
     assert_volume_near(&topo, result, 500_000.0, 0.01);
 }
-
-// ── Surface preservation in mesh boolean path ────────────────────
 
 /// Fuse a box and cylinder, then verify the result has positive volume.
 /// Uses the analytic path since face counts are below the mesh boolean threshold.
@@ -2707,8 +2674,6 @@ fn euler_characteristic_box_is_two() {
     let euler = crate::validate::euler_characteristic(&topo, solid).unwrap();
     assert_eq!(euler, 2, "box Euler V-E+F should be 2, got {euler}");
 }
-
-// ── Face explosion regression tests (#270) ──────────────────────
 
 /// Sequential box fuses should not cause face count explosion.
 ///
@@ -3146,8 +3111,6 @@ fn fuse_coincident_rrect_cap_with_frustum() {
     assert_eq!(euler, 2, "should be genus-0");
 }
 
-// ── GFA integration tests for analytic surfaces ────────────────────
-
 #[test]
 fn gfa_box_sphere_cut() {
     let mut topo = Topology::default();
@@ -3228,8 +3191,6 @@ fn gfa_box_cone_intersect() {
         );
     }
 }
-
-// ── D4 gridfinity repro: shelled box + lip fuse ────────────────────
 
 /// Minimal repro of D4 gridfinity non-manifold fuse bug.
 ///
@@ -3394,8 +3355,6 @@ fn d4_shelled_box_fuse_lip() {
     }
 }
 
-// ── Coplanar face tests ──────────────────────────────────────────────
-//
 // "d1a2" scenario: tool B shares an entire face pair with A (identical Z
 // extent [0,1]).  The top and bottom faces of B are coplanar with those
 // of A, so phase_ff_coplanar must produce section edges and the builder
@@ -3427,8 +3386,6 @@ fn coplanar_box_cut_d1a2() {
     // Volume check
     assert_volume_near(&topo, result, 0.75, 0.01);
 }
-
-// ── #696 diagnostic: N-iteration repro ───────────────────────────────
 
 /// Count edges shared by 3+ faces (non-manifold) and edges shared by < 2
 /// faces (boundary) across all wires of a solid's faces. Shared between
@@ -3901,8 +3858,6 @@ fn cut_shelled_target_single_tool_exact_gfa() {
     );
 }
 
-// ── Rounded-rect prisms with true Circle arc corners ────────────────
-//
 // Gridfinity-shaped repros: extruded rounded rectangles (4 planes +
 // 4 tangent quarter-cylinder corners) fused at coplanar interfaces or
 // cut concentrically. Volume oracles are exact closed forms:
@@ -4140,8 +4095,6 @@ fn cut_concentric_rounded_rect_arc_prisms_cavity() {
         "expected 8 analytic cylinder faces (4 outer + 4 cavity), got {cyl}"
     );
 }
-
-// ── Issue #801: cut-then-fuse-back must recover original volume ──────
 
 /// Run `(a − b) ∪ (a ∩ b)` and assert it recovers `vol(a)`, regardless of
 /// fuse operand order. `a` and `b` are boxes placed at `(0,0,0)` and

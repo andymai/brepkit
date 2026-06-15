@@ -115,12 +115,10 @@ mod tests {
     fn cylinder_to_nurbs_evaluates() {
         let cyl = CylindricalSurface::new(origin(), z_axis(), 2.0).unwrap();
         let nurbs = cylinder_to_nurbs(&cyl, (0.0, 5.0)).unwrap();
-        // The domain should be defined.
         let (u0, u1) = nurbs.domain_u();
         let (v0, v1) = nurbs.domain_v();
         assert!(u1 > u0);
         assert!(v1 > v0);
-        // Evaluate and check reasonable position.
         let pt = nurbs.evaluate((u0 + u1) * 0.5, (v0 + v1) * 0.5);
         let dist_from_axis = (Vec3::new(pt.x(), pt.y(), 0.0)).length();
         assert!((dist_from_axis - 2.0).abs() < 0.1);
@@ -148,7 +146,6 @@ mod tests {
         let (v0, v1) = nurbs.domain_v();
         assert!(u1 > u0);
         assert!(v1 > v0);
-        // Just check it evaluates without panic.
         let _pt = nurbs.evaluate((u0 + u1) * 0.5, (v0 + v1) * 0.5);
     }
 

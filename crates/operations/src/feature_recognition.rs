@@ -39,10 +39,6 @@ use brepkit_topology::solid::SolidId;
 
 use crate::OperationsError;
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 /// Surface classification for a face.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum SurfaceClass {
@@ -156,10 +152,6 @@ pub enum Feature {
     },
 }
 
-// ---------------------------------------------------------------------------
-// Main entry point
-// ---------------------------------------------------------------------------
-
 /// Recognize features in a solid.
 ///
 /// Analyzes the solid's face adjacency and geometry to identify
@@ -179,10 +171,8 @@ pub fn recognize_features(
 
     let mut features = Vec::new();
 
-    // Build typed face adjacency graph
     let fag = build_face_adjacency_graph(topo, &face_ids, deflection)?;
 
-    // Detect features using FAG
     detect_chamfers_fag(topo, &fag, &mut features)?;
     detect_fillet_like_fag(&fag, &mut features);
     detect_holes(topo, &fag, &mut features)?;
@@ -192,17 +182,12 @@ pub fn recognize_features(
     Ok(features)
 }
 
-// ---------------------------------------------------------------------------
-// Face adjacency graph construction
-// ---------------------------------------------------------------------------
-
 /// Build a typed face adjacency graph from a set of face IDs.
 fn build_face_adjacency_graph(
     topo: &Topology,
     face_ids: &[FaceId],
     deflection: f64,
 ) -> Result<FaceAdjacencyGraph, OperationsError> {
-    // Build nodes: classify each face surface, compute area.
     let mut nodes = HashMap::new();
     for &fid in face_ids {
         let face = topo.face(fid)?;
@@ -218,7 +203,6 @@ fn build_face_adjacency_graph(
         );
     }
 
-    // Build edge-to-face map, keyed by edge index.
     let mut edge_to_faces: HashMap<usize, (EdgeId, Vec<FaceId>)> = HashMap::new();
     for &fid in face_ids {
         let face = topo.face(fid)?;
@@ -231,7 +215,6 @@ fn build_face_adjacency_graph(
         }
     }
 
-    // Build adjacency with dihedral angles.
     let mut adjacency: HashMap<usize, Vec<(usize, FagEdge)>> = HashMap::new();
     for (eid, faces) in edge_to_faces.values() {
         if faces.len() == 2 {
@@ -291,7 +274,6 @@ fn compute_dihedral_angle(
     face_b: FaceId,
     edge_id: EdgeId,
 ) -> Result<f64, OperationsError> {
-    // Get edge midpoint from vertices.
     let edge = topo.edge(edge_id)?;
     let v_start = topo.vertex(edge.start())?;
     let v_end = topo.vertex(edge.end())?;
@@ -334,10 +316,6 @@ fn face_normal_at(
     Ok(normal)
 }
 
-// ---------------------------------------------------------------------------
-// Chamfer detection (FAG-based)
-// ---------------------------------------------------------------------------
-
 /// Detect chamfer faces using the face adjacency graph.
 ///
 /// A chamfer is a small planar face whose normal is at an intermediate
@@ -371,7 +349,6 @@ fn detect_chamfers_fag(
             continue;
         }
 
-        // Check pairs of neighbors for chamfer geometry.
         for i in 0..neighbors.len() {
             for j in (i + 1)..neighbors.len() {
                 let (ni, _) = &neighbors[i];
@@ -424,10 +401,6 @@ fn get_node_planar_normal(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Fillet-like detection (FAG-based)
-// ---------------------------------------------------------------------------
-
 /// Detect fillet-like faces by small area relative to the average.
 fn detect_fillet_like_fag(fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
     if fag.nodes.is_empty() {
@@ -448,10 +421,6 @@ fn detect_fillet_like_fag(fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>)
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Hole detection
-// ---------------------------------------------------------------------------
 
 /// Detect holes by finding cylindrical faces in the FAG.
 ///
@@ -475,7 +444,6 @@ fn detect_holes(
 
         let diameter = cyl.radius() * 2.0;
 
-        // Check neighbours to determine through vs blind.
         let neighbors = fag
             .adjacency
             .get(&idx)
@@ -498,10 +466,6 @@ fn detect_holes(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Pocket detection (FAG-based)
-// ---------------------------------------------------------------------------
-
 /// Detect pockets using concave-connected components in the FAG.
 ///
 /// A pocket is a set of faces connected by concave edges, with at
@@ -519,12 +483,10 @@ fn detect_pockets_fag(fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
             None => continue,
         };
 
-        // Start from planar faces only.
         if node.surface_class != SurfaceClass::Planar {
             continue;
         }
 
-        // Flood-fill along concave edges.
         let mut component = HashSet::new();
         let mut stack = vec![idx];
 
@@ -571,16 +533,11 @@ fn detect_pockets_fag(fag: &FaceAdjacencyGraph, features: &mut Vec<Feature>) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Pattern detection
-// ---------------------------------------------------------------------------
-
 /// Detect patterns (linear or circular) among already-recognized features.
 ///
 /// Groups holes by similar diameter, then tests whether their centroids
 /// are collinear (linear pattern) or cocircular (circular pattern).
 fn detect_patterns(features: &mut Vec<Feature>) {
-    // Collect hole features with their index and diameter.
     let hole_info: Vec<(usize, f64)> = features
         .iter()
         .enumerate()
@@ -646,10 +603,6 @@ fn group_by_diameter(items: &[(usize, f64)]) -> Vec<Vec<(usize, f64)>> {
     groups
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -692,12 +645,10 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
 
-        // Chamfer an edge
         let solid_data = topo.solid(solid).unwrap();
         let shell = topo.shell(solid_data.outer_shell()).unwrap();
         let face_ids: Vec<FaceId> = shell.faces().to_vec();
 
-        // Get edges
         let mut edge_set = HashSet::new();
         for &fid in &face_ids {
             let face = topo.face(fid).unwrap();
@@ -814,7 +765,6 @@ mod tests {
 
     #[test]
     fn classify_surface_variants() {
-        // Plane
         assert_eq!(
             classify_surface(&FaceSurface::Plane {
                 normal: Vec3::new(0.0, 0.0, 1.0),

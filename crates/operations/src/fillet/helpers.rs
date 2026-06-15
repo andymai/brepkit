@@ -32,8 +32,6 @@ pub(super) fn extract_inner_wire_positions(
     Ok(result)
 }
 
-// ── Internal data structures ───────────────────────────────────────
-
 pub(super) struct FacePolygon {
     pub(super) vertex_ids: Vec<VertexId>,
     pub(super) positions: Vec<Point3>,

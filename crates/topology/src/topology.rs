@@ -144,8 +144,6 @@ impl Topology {
         self.solids.reserve(solids);
     }
 
-    // ── Single-entity lookup (by ID → Result) ─────────────────────
-
     arena_get!(vertex, vertices, Vertex, VertexId, VertexNotFound);
     arena_get_mut!(vertex_mut, vertices, Vertex, VertexId, VertexNotFound);
 
@@ -187,8 +185,6 @@ impl Topology {
         CompSolidId,
         CompSolidNotFound
     );
-
-    // ── Allocation + arena access + count + index reconstruction ──
 
     arena_api!(
         add = add_vertex,
@@ -270,8 +266,6 @@ impl Topology {
         Id = CompSolidId
     );
 
-    // ── Empty-result sentinel ─────────────────────────────────────
-
     /// Allocates an empty-result solid: a solid backed by a faceless
     /// [`Shell::empty`].
     ///
@@ -299,8 +293,6 @@ impl Topology {
         })
     }
 
-    // ── PCurve registry ───────────────────────────────────────────
-
     /// Returns a shared reference to the pcurve registry.
     #[must_use]
     pub fn pcurves(&self) -> &PCurveRegistry {
@@ -311,8 +303,6 @@ impl Topology {
     pub fn pcurves_mut(&mut self) -> &mut PCurveRegistry {
         &mut self.pcurves
     }
-
-    // ── Adjacency ─────────────────────────────────────────────────
 
     /// Builds an adjacency index for the given solid.
     ///
@@ -348,11 +338,9 @@ mod tests {
 
         let snapshot = topo.clone();
 
-        // Add more entities after the snapshot
         topo.add_vertex(Vertex::new(Point3::new(4.0, 5.0, 6.0), 1e-7));
         assert_eq!(topo.num_vertices(), 2);
 
-        // Snapshot still has exactly 1 vertex
         assert_eq!(snapshot.num_vertices(), 1);
         let v = snapshot.vertex(vid).unwrap();
         assert!((v.point().x() - 1.0).abs() < f64::EPSILON);
@@ -365,10 +353,8 @@ mod tests {
 
         let snapshot = topo.clone();
 
-        // Mutate after snapshot
         topo.add_vertex(Vertex::new(Point3::new(9.0, 9.0, 9.0), 1e-7));
 
-        // Restore from snapshot
         topo = snapshot;
         assert_eq!(topo.num_vertices(), 1);
         let v = topo.vertex(vid).unwrap();
@@ -418,7 +404,6 @@ mod tests {
         let v = topo.vertex(vid).unwrap();
         assert!((v.point().x() - 1.0).abs() < f64::EPSILON);
 
-        // New allocations still work after reserve.
         let vid2 = topo.add_vertex(Vertex::new(Point3::new(4.0, 5.0, 6.0), 1e-7));
         assert_eq!(topo.num_vertices(), 2);
         let v2 = topo.vertex(vid2).unwrap();

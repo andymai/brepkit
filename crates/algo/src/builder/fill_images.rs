@@ -24,7 +24,6 @@ pub fn fill_edge_images(arena: &GfaArena) -> HashMap<EdgeId, Vec<EdgeId>> {
     for (&original_edge, pb_ids) in &arena.edge_pave_blocks {
         let leaves = arena.collect_leaf_pave_blocks(pb_ids);
 
-        // Collect (start_parameter, split_edge) for sorting
         let mut split_with_param: Vec<(f64, EdgeId)> = Vec::new();
 
         for leaf_id in leaves {

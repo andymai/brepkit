@@ -157,13 +157,10 @@ mod tests {
 
         let ply = write_ply(&topo, &[solid], 0.1, PlyFormat::BinaryLittleEndian).unwrap();
 
-        // Should start with "ply\n"
         assert!(ply.starts_with(b"ply\n"));
-        // Should contain binary header
         let header_end = ply.windows(11).position(|w| w == b"end_header\n").unwrap();
         assert!(header_end > 0);
 
-        // Binary data follows header
         assert!(ply.len() > header_end + 11);
     }
 }

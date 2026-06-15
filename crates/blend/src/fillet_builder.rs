@@ -83,7 +83,6 @@ impl<'a> FilletBuilder<'a> {
     /// [`BlendResult::failed`] rather than aborting the whole operation.
     #[allow(clippy::too_many_lines)]
     pub fn build(self) -> Result<BlendResult, BlendError> {
-        // ── Validate input ──────────────────────────────────────────────
         // Expand edge sets: keep actual RadiusLaw references via indices.
         let mut all_edges: Vec<(EdgeId, usize)> = Vec::new();
         let mut laws: Vec<RadiusLaw> = Vec::with_capacity(self.edge_sets.len());
@@ -104,17 +103,14 @@ impl<'a> FilletBuilder<'a> {
 
         let topo = self.topo;
 
-        // ── Build adjacency ─────────────────────────────────────────────
         let adjacency = topo.build_adjacency(self.solid)?;
 
-        // Collect all original face IDs.
         let shell_id = topo.solid(self.solid)?.outer_shell();
         let original_faces: Vec<FaceId> = topo.shell(shell_id)?.faces().to_vec();
 
         // Track which faces are touched (adjacent to a fillet edge).
         let mut touched_faces: HashSet<FaceId> = HashSet::new();
 
-        // ── Phase 1: Compute stripes ────────────────────────────────────
         let mut succeeded: Vec<EdgeId> = Vec::new();
         let mut failed: Vec<(EdgeId, BlendError)> = Vec::new();
         let mut stripe_results: Vec<StripeResult> = Vec::new();
@@ -134,7 +130,6 @@ impl<'a> FilletBuilder<'a> {
             }
         }
 
-        // If no stripes succeeded, return the original solid with all failures.
         if stripe_results.is_empty() {
             return Ok(BlendResult {
                 solid: self.solid,
@@ -144,7 +139,6 @@ impl<'a> FilletBuilder<'a> {
             });
         }
 
-        // ── Phase 2: Compute corner patches ────────────────────────────
         let stripes: Vec<Stripe> = stripe_results.iter().map(|sr| sr.stripe.clone()).collect();
         let corner_results = match corner::compute_corners(topo, &stripes, self.solid) {
             Ok(results) => results,
@@ -154,13 +148,11 @@ impl<'a> FilletBuilder<'a> {
             }
         };
 
-        // Add corner faces to the result and mark their adjacent faces as touched.
         let mut corner_face_ids: Vec<FaceId> = Vec::new();
         for cr in &corner_results {
             corner_face_ids.push(cr.face_id);
         }
 
-        // ── Phase 3: Trim faces ─────────────────────────────────────────
         // Map from original face ID to its latest trimmed replacement.
         let mut face_replacements: std::collections::HashMap<FaceId, FaceId> =
             std::collections::HashMap::new();
@@ -168,7 +160,6 @@ impl<'a> FilletBuilder<'a> {
         for sr in &stripe_results {
             let stripe = &sr.stripe;
 
-            // Collect contact points for trimming.
             let contact1_pts = sample_nurbs_endpoints(&stripe.contact1);
             let contact2_pts = sample_nurbs_endpoints(&stripe.contact2);
 
@@ -218,7 +209,6 @@ impl<'a> FilletBuilder<'a> {
                 }
             }
 
-            // Trim face 2.
             let current_face2 = face_replacements
                 .get(&stripe.face2)
                 .copied()
@@ -236,41 +226,32 @@ impl<'a> FilletBuilder<'a> {
             }
         }
 
-        // ── Phase 3: Create blend faces ─────────────────────────────────
         let mut blend_face_ids: Vec<FaceId> = Vec::new();
 
         for sr in &stripe_results {
             let stripe = &sr.stripe;
 
-            // Create a face for the blend surface.
             // For v1, we create a minimal wire from the contact curve endpoints.
             let blend_face_id = create_blend_face(topo, stripe)?;
             blend_face_ids.push(blend_face_id);
         }
 
-        // ── Phase 4: Assemble solid ─────────────────────────────────────
         let mut result_faces: Vec<FaceId> = Vec::new();
 
-        // Add untouched original faces.
         for &fid in &original_faces {
             if !touched_faces.contains(&fid) {
                 result_faces.push(fid);
             }
         }
 
-        // Add trimmed replacements (or originals if not replaced).
         for &fid in &touched_faces {
             let replacement = face_replacements.get(&fid).copied();
             result_faces.push(replacement.unwrap_or(fid));
         }
 
-        // Add blend faces.
         result_faces.extend(&blend_face_ids);
-
-        // Add corner patch faces.
         result_faces.extend(&corner_face_ids);
 
-        // Build shell and solid.
         let new_shell = Shell::new(result_faces)?;
         let new_shell_id = topo.add_shell(new_shell);
         let new_solid = Solid::new(new_shell_id, Vec::new());
@@ -299,7 +280,6 @@ fn compute_stripe_for_edge(
     edge_id: EdgeId,
     law: &RadiusLaw,
 ) -> Result<StripeResult, BlendError> {
-    // Find the two adjacent faces.
     let adj_faces = adjacency.faces_for_edge(edge_id);
     if adj_faces.len() != 2 {
         // Non-manifold (3+ faces) or boundary (0-1 faces) edge cannot be filleted.
@@ -323,7 +303,6 @@ fn compute_stripe_for_edge(
     let surf2 = face2_data.surface().clone();
     let face2_reversed = face2_data.is_reversed();
 
-    // Build a single-edge spine.
     let spine = Spine::from_single_edge(topo, edge_id)?;
 
     // Get radius at the spine midpoint for the analytic path.
@@ -352,7 +331,6 @@ fn compute_stripe_for_edge(
         }
     }
 
-    // ── Walking fallback for non-analytic surface pairs ─────────────
     // Build ParametricSurface references via PlaneAdapter for planes.
     // When a face is reversed, the outward normal is flipped. For PlaneAdapter,
     // we negate the normal. For analytic/NURBS surfaces the ParametricSurface
@@ -376,7 +354,6 @@ fn compute_stripe_for_edge(
 
     let config = WalkerConfig::default();
 
-    // Choose blend function based on law type.
     let walk_result = if let RadiusLaw::Constant(r) = law {
         let blend = ConstRadBlend { radius: *r };
         let walker = Walker::new(&blend, ps1, ps2, &spine, topo, config);
@@ -391,15 +368,12 @@ fn compute_stripe_for_edge(
         walker.walk(start, 0.0, spine.length())?
     };
 
-    // Build NURBS surface from the walked sections.
     let blend_surface = approximate_blend_surface(&walk_result.sections)?;
     let blend_face_surface = brepkit_topology::face::FaceSurface::Nurbs(blend_surface);
 
-    // Build contact curves from the sections.
     let contact1 = sections_to_contact_curve(&walk_result.sections, |s| s.p1)?;
     let contact2 = sections_to_contact_curve(&walk_result.sections, |s| s.p2)?;
 
-    // PCurves: project contact 3D endpoints onto each face surface.
     let pcurve1 = build_pcurve_from_contact(ps1, &contact1)?;
     let pcurve2 = build_pcurve_from_contact(ps2, &contact2)?;
 
@@ -619,10 +593,6 @@ fn build_pcurve_from_contact(
     Ok(brepkit_math::curves2d::Curve2D::Line(line))
 }
 
-// ===========================================================================
-// Tests
-// ===========================================================================
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -638,7 +608,6 @@ mod tests {
         let solid = make_unit_cube_manifold(&mut topo);
 
         let builder = FilletBuilder::new(&mut topo, solid);
-        // No edges added — should error.
         let result = builder.build();
         assert!(result.is_err(), "empty edge set should produce an error");
     }
@@ -648,12 +617,10 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_unit_cube_manifold(&mut topo);
 
-        // Find a manifold edge (any of the 12 edges should work).
         let adjacency = AdjacencyIndex::build(&topo, solid).unwrap();
         let shell_id = topo.solid(solid).unwrap().outer_shell();
         let faces = topo.shell(shell_id).unwrap().faces().to_vec();
 
-        // Find the first edge shared by two faces.
         let mut target_edge = None;
         'outer: for &fid in &faces {
             let face = topo.face(fid).unwrap();
@@ -668,13 +635,11 @@ mod tests {
         }
         let target_edge = target_edge.expect("cube should have manifold edges");
 
-        // Build fillet.
         let original_face_count = faces.len();
         let mut builder = FilletBuilder::new(&mut topo, solid);
         builder.add_edges(&[target_edge], 0.1);
         let result = builder.build().expect("fillet build should succeed");
 
-        // The result solid should exist.
         let result_solid = topo.solid(result.solid).unwrap();
         let result_shell = topo.shell(result_solid.outer_shell()).unwrap();
 
@@ -686,12 +651,10 @@ mod tests {
             original_face_count,
         );
 
-        // Edge should be in the succeeded list.
         assert!(result.succeeded.contains(&target_edge));
         assert!(result.failed.is_empty());
         assert!(!result.is_partial);
 
-        // The blend surface should be a cylinder (plane-plane fillet).
         let mut found_cylinder = false;
         for &fid in result_shell.faces() {
             let face = topo.face(fid).unwrap();
@@ -710,7 +673,6 @@ mod tests {
         let mut topo = Topology::new();
         let solid = make_unit_cube_manifold(&mut topo);
 
-        // Create a fake edge that is not part of the solid (will fail adjacency).
         let v0 = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
             brepkit_math::vec::Point3::new(10.0, 10.0, 10.0),
             1e-7,
@@ -729,7 +691,6 @@ mod tests {
         builder.add_edges(&[fake_edge], 0.2);
         let result = builder.build().expect("build should succeed (partial)");
 
-        // The fake edge should be in failed.
         assert!(result.failed.len() == 1);
         assert_eq!(result.failed[0].0, fake_edge);
         // With no successes, the original solid is returned.

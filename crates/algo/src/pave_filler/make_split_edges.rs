@@ -34,7 +34,6 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
     // Track processed CommonBlocks to avoid creating duplicate edges
     let mut processed_cbs: HashSet<CommonBlockId> = HashSet::new();
 
-    // Collect all leaf pave block IDs that need edges
     let leaf_ids: Vec<_> = arena
         .pave_blocks
         .iter()
@@ -43,7 +42,6 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
         .collect();
 
     for pb_id in leaf_ids {
-        // Check if this PB is part of a CommonBlock
         if let Some(&cb_id) = arena.pb_to_cb.get(&pb_id) {
             if !processed_cbs.insert(cb_id) {
                 // CB already processed — reuse its split edge
@@ -87,7 +85,6 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
                 all_pbs.len()
             );
         } else {
-            // No CB — create individual split edge as before
             let edge_id = create_split_edge(topo, arena, pb_id)?;
             if let Some(pb) = arena.pave_blocks.get_mut(pb_id) {
                 pb.split_edge = Some(edge_id);

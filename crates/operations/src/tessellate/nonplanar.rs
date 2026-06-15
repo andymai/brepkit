@@ -40,7 +40,6 @@ pub(super) fn tessellate_revolution_band_shared(
         return Ok(false);
     }
 
-    // Angle (u) projection and outward-normal closures for the surface.
     let (project, surf_normal): (ProjectFn, NormalFn) = match face_data.surface() {
         FaceSurface::Cylinder(c) => {
             let (c1, c2) = (c.clone(), c.clone());
@@ -171,7 +170,6 @@ pub(super) fn tessellate_nonplanar_cdt(
     use brepkit_math::vec::Point2;
     use brepkit_topology::edge::EdgeId;
 
-    // Step 1: Collect boundary points in wire-traversal order with global IDs.
     let wire = topo.wire(face_data.outer_wire())?;
     let tol_dup = 1e-10;
 
@@ -228,7 +226,6 @@ pub(super) fn tessellate_nonplanar_cdt(
         }
     }
 
-    // Remove closing duplicate.
     if boundary_3d.len() > 2 {
         if let (Some(&(_, first_gid, _, _)), Some(&(_, last_gid, _, _))) =
             (boundary_3d.first(), boundary_3d.last())
@@ -250,18 +247,15 @@ pub(super) fn tessellate_nonplanar_cdt(
         });
     }
 
-    // Step 2: Project boundary 3D points to (u,v) parameter space.
     let mut boundary_uv: Vec<(f64, f64)> = boundary_3d
         .iter()
         .map(|(pt, _, edge_id_local, _)| {
-            // Try PCurve lookup first.
             if let Some(pcurve) = topo.pcurves().get(*edge_id_local, face_id) {
                 let uv = project_via_pcurve(pcurve, *pt, face_data.surface());
                 if let Some(uv) = uv {
                     return Ok(uv);
                 }
             }
-            // Fall back to surface projection.
             project_to_surface_uv(face_data.surface(), *pt)
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -412,7 +406,6 @@ pub(super) fn tessellate_nonplanar_cdt(
     );
     let mut cdt = Cdt::with_capacity(bounds, n_boundary);
 
-    // Step 3: Insert boundary points into CDT.
     let mut cdt_to_global: Vec<Option<u32>> = vec![None; 3]; // 3 super-triangle verts
 
     let boundary_pts: Vec<Point2> = boundary_uv
@@ -430,7 +423,6 @@ pub(super) fn tessellate_nonplanar_cdt(
         cdt_to_global[cdt_idx] = Some(boundary_3d[i].1);
     }
 
-    // Step 4: Insert boundary constraints.
     for i in 0..n_boundary {
         let v0 = boundary_cdt_ids[i];
         let v1 = boundary_cdt_ids[(i + 1) % n_boundary];
@@ -438,7 +430,6 @@ pub(super) fn tessellate_nonplanar_cdt(
             .map_err(crate::OperationsError::Math)?;
     }
 
-    // Step 5: Generate interior sample points.
     let du = u_max - u_min;
     let dv = v_max - v_min;
     if du > 1e-15 && dv > 1e-15 {
@@ -467,13 +458,11 @@ pub(super) fn tessellate_nonplanar_cdt(
         }
     }
 
-    // Step 6: Remove triangles outside the boundary polygon.
     let boundary_pairs: Vec<(usize, usize)> = (0..n_boundary)
         .map(|i| (boundary_cdt_ids[i], boundary_cdt_ids[(i + 1) % n_boundary]))
         .collect();
     cdt.remove_exterior(&boundary_pairs);
 
-    // Step 7: Assign global IDs to interior CDT vertices and emit triangles.
     let cdt_verts = cdt.vertices();
     let triangles = cdt.triangles();
 
@@ -499,7 +488,6 @@ pub(super) fn tessellate_nonplanar_cdt(
         }
     }
 
-    // Emit triangles.
     for (i0, i1, i2) in triangles {
         if i0 < 3 || i1 < 3 || i2 < 3 {
             continue; // Skip super-triangle vertices
@@ -694,7 +682,6 @@ pub(super) fn tessellate_nonplanar_snap(
 
     let mut local_to_global: Vec<u32> = Vec::with_capacity(face_mesh.positions.len());
 
-    // Collect all edge points for this face to use as snap targets.
     let wire = topo.wire(face_data.outer_wire())?;
     let mut snap_targets: Vec<(Point3, u32)> = Vec::new();
     for oe in wire.edges() {

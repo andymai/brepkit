@@ -43,7 +43,6 @@ pub fn intersect_faces_3d(
             continue;
         }
 
-        // Both faces must have offset surfaces.
         let (Some(off_a), Some(off_b)) = (
             data.offset_faces.get(&face_a),
             data.offset_faces.get(&face_b),

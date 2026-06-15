@@ -51,7 +51,6 @@ pub fn validate_solid(
     let mut report = ValidationReport::default();
     let solid_data = topo.solid(solid_id)?;
 
-    // Solid-level checks
     if !options
         .disabled_checks
         .contains(&CheckId::SolidEulerCharacteristic)
@@ -67,7 +66,6 @@ pub fn validate_solid(
             .extend(solid::check_duplicate_faces(topo, solid_id)?);
     }
 
-    // Shell checks on outer shell + inner shells
     let shells: Vec<_> = std::iter::once(solid_data.outer_shell())
         .chain(solid_data.inner_shells().iter().copied())
         .collect();
@@ -107,7 +105,6 @@ fn validate_shell_checks(
 ) -> Result<Vec<ValidationIssue>, CheckError> {
     let mut issues = Vec::new();
 
-    // Shell checks
     if !options.disabled_checks.contains(&CheckId::ShellEmpty) {
         issues.extend(shell::check_shell_empty(topo, shell_id)?);
     }
@@ -124,7 +121,6 @@ fn validate_shell_checks(
         issues.extend(shell::check_shell_orientation(topo, shell_id)?);
     }
 
-    // Wire checks for each face's outer + inner wires
     let shell = topo.shell(shell_id)?;
     let mut checked_wires = HashSet::new();
     for &fid in shell.faces() {
@@ -162,7 +158,6 @@ fn validate_shell_checks(
         }
     }
 
-    // Face checks
     let mut checked_faces = HashSet::new();
     for &fid in shell.faces() {
         if checked_faces.insert(fid) {
@@ -178,7 +173,6 @@ fn validate_shell_checks(
         }
     }
 
-    // Edge and vertex checks
     let mut checked_edges = HashSet::new();
     for &fid in shell.faces() {
         let face = topo.face(fid)?;
@@ -203,7 +197,6 @@ fn validate_shell_checks(
                             options.tolerance_scale * 1e-7,
                         )?);
                     }
-                    // Vertex-on-curve checks
                     if !options.disabled_checks.contains(&CheckId::VertexOnCurve) {
                         let edge_data = topo.edge(eid)?;
                         issues.extend(vertex::check_vertex_on_curve(
@@ -221,7 +214,6 @@ fn validate_shell_checks(
                             )?);
                         }
                     }
-                    // Vertex-on-surface checks
                     if !options.disabled_checks.contains(&CheckId::VertexOnSurface) {
                         let edge_data = topo.edge(eid)?;
                         issues.extend(vertex::check_vertex_on_surface(

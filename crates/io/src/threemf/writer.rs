@@ -226,7 +226,6 @@ mod tests {
 
         let bytes = write_threemf(&topo, &[solid], 0.1).unwrap();
 
-        // Verify it's a valid ZIP with the expected entries.
         let reader = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
         assert_eq!(reader.len(), 3);
         assert!(reader.file_names().any(|n| n == "[Content_Types].xml"));
@@ -241,7 +240,6 @@ mod tests {
 
         let bytes = write_threemf(&topo, &[solid], 0.1).unwrap();
 
-        // Verify the model XML contains expected elements.
         let mut archive = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
         let mut model_file = archive.by_name("3D/3dmodel.model").unwrap();
         let mut xml_str = String::new();
@@ -287,7 +285,6 @@ mod tests {
         let mut xml_str = String::new();
         std::io::Read::read_to_string(&mut model_file, &mut xml_str).unwrap();
 
-        // Two objects and two build items.
         assert_eq!(xml_str.matches("<object").count(), 2);
         assert_eq!(xml_str.matches("<item").count(), 2);
     }
@@ -359,7 +356,6 @@ mod tests {
         let bytes = write_threemf(&topo, &[solid], 0.5).unwrap();
         let xml = extract_model_xml(&bytes);
 
-        // No NaN or Infinity should appear in vertex coordinates.
         assert!(!xml.contains("NaN"));
         assert!(!xml.contains("Infinity"));
         assert!(!xml.contains("inf"));

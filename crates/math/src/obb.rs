@@ -52,7 +52,6 @@ impl Obb3 {
 
         let n = pts.len() as f64;
 
-        // Compute centroid.
         let mut cx = 0.0_f64;
         let mut cy = 0.0_f64;
         let mut cz = 0.0_f64;
@@ -65,7 +64,7 @@ impl Obb3 {
         cy /= n;
         cz /= n;
 
-        // Compute covariance matrix (symmetric 3x3).
+        // Covariance matrix (symmetric 3x3).
         let mut cov = [0.0_f64; 6]; // [xx, xy, xz, yy, yz, zz]
         for p in pts {
             let dx = p.x() - cx;
@@ -115,7 +114,6 @@ impl Obb3 {
 
         let n = pts.len() as f64;
 
-        // Centroid.
         let mut cx = 0.0_f64;
         let mut cy = 0.0_f64;
         let mut cz = 0.0_f64;

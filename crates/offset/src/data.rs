@@ -1,4 +1,3 @@
-// Offset pipeline infrastructure — fields populated progressively across phases.
 #![allow(dead_code)]
 //! Central data structures shared across all offset pipeline phases.
 

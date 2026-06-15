@@ -38,7 +38,6 @@ pub fn fix_wireframe(
     let shell = topo.shell(shell_id)?;
     let face_ids: Vec<_> = shell.faces().to_vec();
 
-    // Build edge usage map: edge index -> list of face IDs that reference it.
     let mut edge_face_count: HashMap<usize, (EdgeId, Vec<FaceId>)> = HashMap::new();
 
     for &fid in &face_ids {
@@ -60,7 +59,6 @@ pub fn fix_wireframe(
         }
     }
 
-    // Detect free edges (used by exactly one face).
     let mut free_edges: Vec<EdgeId> = Vec::new();
     for (edge_id, faces) in edge_face_count.values() {
         if faces.len() == 1 {
@@ -77,14 +75,12 @@ pub fn fix_wireframe(
         free_edges.len()
     ));
 
-    // Attempt to sew coincident free-edge pairs.
     let sewn = sew_free_edges(topo, &free_edges, ctx)?;
 
     if sewn > 0 {
         ctx.info(format!("sewn {sewn} free-edge pairs by merging vertices"));
     }
 
-    // Log remaining unsewn free edges.
     let remaining = free_edges.len().saturating_sub(sewn * 2);
     if remaining > 0 {
         ctx.warn(format!(
@@ -133,7 +129,6 @@ fn sew_free_edges(
 ) -> Result<usize, HealError> {
     let tolerance = ctx.tolerance.linear;
 
-    // Snapshot all free edge geometry.
     let mut snapshots: Vec<FreeEdgeSnapshot> = Vec::with_capacity(free_edges.len());
     for &eid in free_edges {
         let edge = topo.edge(eid)?;
@@ -152,7 +147,6 @@ fn sew_free_edges(
         });
     }
 
-    // Find coincident pairs and record vertex merges.
     // A merge is (victim_vertex, target_vertex) — victim gets replaced by target.
     let mut merges: Vec<(EdgeId, VertexId, VertexId, VertexId, VertexId)> = Vec::new();
 
@@ -192,7 +186,6 @@ fn sew_free_edges(
         }
     }
 
-    // Apply vertex merges: update edge b to use edge a's vertices.
     for &(edge_id, _old_start, new_start, _old_end, new_end) in &merges {
         let edge = topo.edge_mut(edge_id)?;
         edge.set_start(new_start);

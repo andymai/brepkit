@@ -31,7 +31,6 @@ mod surface_seeding;
 use crate::nurbs::curve::NurbsCurve;
 use crate::vec::Point3;
 
-// Re-export all public items.
 pub use chaining::chain_intersection_points;
 pub use curve_surface::{CurveSurfaceHit, intersect_curve_surface};
 pub use line::intersect_line_nurbs;

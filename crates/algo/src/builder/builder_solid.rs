@@ -202,7 +202,6 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
         shell.push(start_face);
         queue.push_back(start_face);
 
-        // Count edges of start face
         if let Some(keys) = face_edges.get(&start_face) {
             for key in keys {
                 *shell_edge_count.entry(*key).or_default() += 1;
@@ -224,7 +223,6 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
                     continue;
                 };
 
-                // Filter to unvisited faces
                 let unvisited: Vec<FaceId> = candidates
                     .iter()
                     .filter(|&&f| f != current && !visited.contains(&f))
@@ -235,7 +233,6 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
                     continue;
                 }
 
-                // Select best face
                 let selected = if unvisited.len() == 1 {
                     unvisited[0]
                 } else if let Some((start, end)) = edge_positions.get(key) {
@@ -249,7 +246,6 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
                 shell.push(selected);
                 queue.push_back(selected);
 
-                // Update edge counts
                 if let Some(sel_keys) = face_edges.get(&selected) {
                     for k in sel_keys {
                         *shell_edge_count.entry(*k).or_default() += 1;
@@ -289,7 +285,7 @@ pub fn get_face_off(
     if edge_len < 1e-12 {
         return candidates.first().copied();
     }
-    let t = edge_dir * (1.0 / edge_len); // unit tangent
+    let t = edge_dir * (1.0 / edge_len);
 
     let mid = Point3::new(
         (edge_start.x() + edge_end.x()) * 0.5,
@@ -336,7 +332,6 @@ pub fn get_face_off(
             angle = std::f64::consts::TAU; // deprioritize identical geometry
         }
 
-        // Normalize to positive
         if angle < 0.0 {
             angle += std::f64::consts::TAU;
         }
@@ -361,7 +356,6 @@ fn angle_with_ref(d1: Vec3, d2: Vec3, d_ref: Vec3) -> f64 {
 
     let mut angle = sin_val.atan2(cos_val);
 
-    // Determine sign from reference direction
     if cross.dot(d_ref) < 0.0 {
         angle = -angle;
     }
@@ -452,7 +446,6 @@ fn signed_volume_of_shell(topo: &Topology, faces: &[FaceId]) -> f64 {
             continue;
         };
 
-        // Collect wire vertices
         let mut verts = Vec::new();
         for oe in wire.edges() {
             let Ok(edge) = topo.edge(oe.edge()) else {
@@ -1145,7 +1138,6 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
         }
     }
 
-    // Step 2: Group edges by quantized position pair.
     // Find groups where multiple DIFFERENT EdgeIds share the same qpair.
     let mut groups: HashMap<QPosEdge, Vec<EdgeId>> = HashMap::new();
     for entry in &entries {
@@ -1192,9 +1184,6 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
 
     let merge_count = replacements.len();
 
-    // Step 3: Rebuild faces that have replaced edges.
-    // Snapshot face data, then create new faces.
-    //
     // Sort the face indices before iterating so that `topo.add_wire` and
     // `topo.add_face` are called in a deterministic order. Iterating the
     // HashSet directly picks up a random per-process iteration order,
@@ -1213,7 +1202,6 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
     for &fi in &faces_to_rebuild_sorted {
         let fid = face_ids[fi];
 
-        // Snapshot
         let (surface, is_reversed, outer_oes, inner_oes_list) = {
             let face = topo.face(fid)?;
             let surface = face.surface().clone();
@@ -1241,7 +1229,6 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             (surface, is_reversed, outer_oes, inner_oes_list)
         };
 
-        // Rebuild outer wire with replaced edges + orientation correction
         let new_outer_oes: Vec<_> = outer_oes
             .iter()
             .map(|(eid, fwd)| {
@@ -1258,7 +1245,6 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
         };
         let new_outer_id = topo.add_wire(new_outer);
 
-        // Rebuild inner wires
         let mut new_inner_ids = Vec::new();
         for inner_oes in &inner_oes_list {
             let new_oes: Vec<_> = inner_oes

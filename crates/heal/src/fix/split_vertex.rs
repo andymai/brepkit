@@ -47,7 +47,6 @@ pub fn fix_split_common_vertex(
     // miss those cases.
     let face_ids = solid_faces(topo, solid_id)?;
 
-    // Count edges per vertex and collect edge-face associations.
     let mut vertex_edge_count: HashMap<usize, (VertexId, usize)> = HashMap::new();
 
     for &fid in &face_ids {
@@ -76,7 +75,6 @@ pub fn fix_split_common_vertex(
         }
     }
 
-    // Detect over-connected vertices.
     let mut over_connected: Vec<VertexId> = Vec::new();
     for &(vid, count) in vertex_edge_count.values() {
         if count > MAX_VERTEX_EDGES {
@@ -129,13 +127,10 @@ fn split_vertex(
     solid_id: SolidId,
     ctx: &mut HealContext,
 ) -> Result<usize, HealError> {
-    // ── Step 1: Find all edges connected to this vertex ──────────
     // Walk outer + inner (cavity) shells (see top-level comment in
     // `fix_split_common_vertex`).
     let face_ids = solid_faces(topo, solid_id)?;
 
-    // Build: edge_id -> set of face_ids that reference it
-    // Also: collect edges that touch our vertex
     let mut edge_faces: HashMap<usize, HashSet<usize>> = HashMap::new();
     let mut vertex_edges: Vec<EdgeId> = Vec::new();
     let mut vertex_edges_set: HashSet<usize> = HashSet::new();
@@ -152,13 +147,11 @@ fn split_vertex(
                 let eid = oe.edge();
                 let edge = topo.edge(eid)?;
 
-                // Record face membership for this edge.
                 edge_faces
                     .entry(eid.index())
                     .or_default()
                     .insert(fid.index());
 
-                // Track edges touching our vertex.
                 if (edge.start() == vertex_id || edge.end() == vertex_id)
                     && vertex_edges_set.insert(eid.index())
                 {
@@ -172,7 +165,6 @@ fn split_vertex(
         return Ok(0);
     }
 
-    // ── Step 2: Group edges by face adjacency ────────────────────
     // Two edges belong to the same group if they share at least one face.
     // Use union-find via BFS on the edge adjacency graph.
     let n = vertex_edges.len();
@@ -204,7 +196,6 @@ fn split_vertex(
                     None => continue,
                 };
 
-                // Check if they share any face.
                 let shares_face = current_faces.iter().any(|f| neighbor_faces.contains(f));
                 if shares_face {
                     groups[neighbor_idx] = group_id;
@@ -222,13 +213,10 @@ fn split_vertex(
         return Ok(0);
     }
 
-    // ── Step 3: Snapshot vertex data ─────────────────────────────
     let vertex_data = topo.vertex(vertex_id)?;
     let position = vertex_data.point();
     let vtx_tolerance = vertex_data.tolerance();
 
-    // ── Step 4: Allocate new vertices and update edges ───────────
-    // Group edges by their group index for batch vertex creation.
     let mut group_edges: HashMap<usize, Vec<(EdgeId, bool, bool)>> = HashMap::new();
     for (i, &eid) in vertex_edges.iter().enumerate() {
         #[allow(clippy::cast_sign_loss)]
@@ -247,10 +235,8 @@ fn split_vertex(
 
     let mut new_vertices_created = 0usize;
     for edges in group_edges.values() {
-        // Create a new vertex at the same position.
         let new_vid = topo.add_vertex(Vertex::new(position, vtx_tolerance));
 
-        // Update all edges in this group to use the new vertex.
         for &(eid, update_start, update_end) in edges {
             let edge = topo.edge_mut(eid)?;
             if update_start {

@@ -48,10 +48,8 @@ fn subdivide<C: ParametricCurve>(
         return;
     }
 
-    // Left half
     subdivide(curve, t_a, p_a, t_m, p_m, max_deflection, depth + 1, out);
     out.push((t_m, p_m));
-    // Right half
     subdivide(curve, t_m, p_m, t_b, p_b, max_deflection, depth + 1, out);
 }
 

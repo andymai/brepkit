@@ -35,10 +35,8 @@ pub fn mirror(
 ) -> Result<SolidId, crate::OperationsError> {
     let normal = plane_normal.normalize()?;
 
-    // First, copy the solid (we need a new independent copy).
     let new_solid = crate::copy::copy_solid(topo, solid)?;
 
-    // Build the reflection matrix.
     // For a plane through point P with normal n:
     //   Reflect(x) = x - 2 * ((x - P) · n) * n
     // This is equivalent to: translate(-P), reflect through origin, translate(P).
@@ -102,7 +100,6 @@ mod tests {
         let mut topo = Topology::new();
         let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
 
-        // Mirror across YZ plane (x=0).
         let mirrored = mirror(
             &mut topo,
             solid,
@@ -111,7 +108,6 @@ mod tests {
         )
         .unwrap();
 
-        // The mirrored solid should have the same volume.
         let vol_orig = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
         let vol_mirror = crate::measure::solid_volume(&topo, mirrored, 0.1).unwrap();
         let tol = Tolerance::loose();
@@ -155,7 +151,6 @@ mod tests {
         )
         .unwrap();
 
-        // Should be a different solid ID.
         assert_ne!(
             solid.index(),
             mirrored.index(),

@@ -63,13 +63,10 @@ pub fn untrim_face(
     samples_per_curve: usize,
     interior_samples: usize,
 ) -> Result<NurbsSurface, OperationsError> {
-    // Step 1: Collect all trim boundary points into a single polyline loop.
     let trim_loop = collect_trim_loop(trim_curves, samples_per_curve)?;
 
-    // Step 2: Compute the bounding box in parameter space.
     let (u_min, u_max, v_min, v_max) = param_bounding_box(&trim_loop)?;
 
-    // Step 3: Build a regular grid inside the trim loop.
     let n = interior_samples.max(4);
     #[allow(clippy::cast_precision_loss)]
     let n_f = (n - 1) as f64;
@@ -91,7 +88,6 @@ pub fn untrim_face(
             let pt = if point_in_trim_loop(uv, &trim_loop) {
                 surface.evaluate(u, v)
             } else {
-                // Project to the nearest boundary point and evaluate there.
                 let closest = closest_point_on_polyline(uv, &trim_loop);
                 surface.evaluate(closest.x(), closest.y())
             };
@@ -100,7 +96,6 @@ pub fn untrim_face(
         grid.push(row);
     }
 
-    // Step 4: Fit a new NURBS surface through the grid.
     let degree = surface.degree_u().min(surface.degree_v()).clamp(1, 3);
     let grid_rows = grid.len();
     let grid_cols = grid[0].len();
@@ -149,7 +144,6 @@ pub fn untrim_topology_face(
         }
     };
 
-    // Collect PCurves for all edges on this face.
     let pcurve_entries = topo.pcurves().pcurves_for_face(face);
     if pcurve_entries.is_empty() {
         return Err(OperationsError::InvalidInput {
@@ -157,7 +151,6 @@ pub fn untrim_topology_face(
         });
     }
 
-    // Sample each PCurve into a TrimCurve polyline.
     let n_samples = samples_per_curve.max(2);
     let trim_curves: Vec<TrimCurve> = pcurve_entries
         .iter()
@@ -284,7 +277,6 @@ fn closest_point_on_polyline(point: Point2, polyline: &[Point2]) -> Point2 {
         let a = polyline[i];
         let b = polyline[j];
 
-        // Project point onto segment [a, b].
         let ab_x = b.x() - a.x();
         let ab_y = b.y() - a.y();
         let len_sq = ab_x.mul_add(ab_x, ab_y * ab_y);

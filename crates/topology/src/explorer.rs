@@ -331,13 +331,10 @@ mod tests {
         let faces = solid_faces(&topo, cube).unwrap();
         let map = edge_to_face_map(&topo, cube).unwrap();
 
-        // Find adjacent faces of the first face.
         let neighbors = adjacent_faces(&topo, faces[0], &map).unwrap();
 
-        // Each face of a cube is adjacent to 4 other faces.
         assert_eq!(neighbors.len(), 4, "cube face should have 4 adjacent faces");
 
-        // Check that each neighbor shares exactly 1 edge with face[0].
         for &neighbor in &neighbors {
             let shared = shared_edges(&topo, faces[0], neighbor).unwrap();
             assert_eq!(
@@ -356,7 +353,6 @@ mod tests {
         let faces = solid_faces(&topo, cube).unwrap();
         let wires = face_wires(&topo, faces[0]).unwrap();
 
-        // No inner wires on a cube face.
         assert_eq!(wires.len(), 1, "cube face should have 1 wire (outer only)");
     }
 }

@@ -22,7 +22,6 @@ use crate::OperationsError;
 use crate::boolean::face_polygon;
 use crate::distance::{point_in_polygon_3d, point_to_face_distance};
 
-// ── Tolerance constants ─────────────────────────────────────────────────
 // Grouped here so they can be tuned together. These are near-zero guards
 // for floating-point arithmetic, NOT geometric tolerance (use `Tolerance`
 // struct for that).
@@ -172,8 +171,6 @@ pub fn classify_point_robust(
     classify_point(topo, solid, point, deflection, tolerance)
 }
 
-// ── Boundary check (analytic, no tessellation) ──────────────────────────
-
 /// Checks if a point is within `tolerance` of any face boundary.
 ///
 /// Uses analytic point-to-surface distance for all surface types.
@@ -193,8 +190,6 @@ fn is_on_boundary(
     }
     Ok(false)
 }
-
-// ── Ray crossing (analytic for analytic faces, tessellation for NURBS) ──
 
 /// Counts the number of times a ray crosses the solid's boundary.
 fn count_ray_crossings(
@@ -504,8 +499,6 @@ fn point_in_uv_boundary(
     point_in_polygon(test, &poly)
 }
 
-// ── Ray-surface intersection roots ──────────────────────────────────────
-
 /// Compute ray-cylinder intersection parameters.
 fn ray_cylinder_roots(
     origin: Point3,
@@ -623,7 +616,6 @@ fn ray_crossings_nurbs(
         return Ok(0);
     }
 
-    // Build UV boundary from face wire vertices.
     let verts = face_polygon(topo, face_id)?;
     if verts.len() < 3 {
         // Full-surface face — every forward hit is a crossing.
@@ -659,8 +651,6 @@ fn ray_crossings_nurbs(
     Ok(crossings)
 }
 
-// ── Winding number (still tessellation-based) ───────────────────────────
-
 /// Computes the generalized winding number of a point relative to a solid.
 ///
 /// Returns `(winding_number, is_on_boundary)`.
@@ -683,7 +673,6 @@ fn compute_winding_number(
         return Ok((0.0, true));
     }
 
-    // Use ray casting: count crossings in a fixed direction.
     let direction = Vec3::new(1.0, 0.3, 0.1); // avoid axis-aligned rays
     let mut crossings = 0u32;
     for &fid in shell.faces() {
@@ -694,8 +683,6 @@ fn compute_winding_number(
     let winding = if crossings % 2 == 1 { 1.0 } else { 0.0 };
     Ok((winding, false))
 }
-
-// ── Math helpers ─────────────────────────────────────────────────────────
 
 /// Compute the normal of a polygon via Newell's method.
 fn polygon_normal(verts: &[Point3]) -> Vec3 {
@@ -915,8 +902,6 @@ mod tests {
         assert_eq!(result, PointClassification::Inside);
     }
 
-    // ── Analytic surface tests ───────────────────────────
-
     #[test]
     fn point_inside_cylinder() {
         let mut topo = Topology::new();
@@ -1003,8 +988,6 @@ mod tests {
         assert_eq!(result, PointClassification::Outside);
     }
 
-    // ── Solver tests ────────────────────────────────────────
-
     #[test]
     fn cubic_three_roots() {
         // (t-1)(t-2)(t-3) = t³ - 6t² + 11t - 6
@@ -1036,8 +1019,6 @@ mod tests {
         assert!((roots[2] - 3.0).abs() < 1e-8);
     }
 
-    // ── Winding number tests ─────────────────────────────
-
     #[test]
     fn winding_point_inside_box() {
         let mut topo = Topology::new();
@@ -1058,8 +1039,6 @@ mod tests {
         assert_eq!(result, PointClassification::Outside);
     }
 
-    // ── Robust classifier tests ──────────────────────────
-
     #[test]
     fn robust_point_inside_box() {
         let mut topo = Topology::new();
@@ -1079,8 +1058,6 @@ mod tests {
             classify_point_robust(&topo, solid, Point3::new(5.0, 5.0, 5.0), 0.1, 1e-6).unwrap();
         assert_eq!(result, PointClassification::Outside);
     }
-
-    // ── Math helper tests ────────────────────────────────
 
     #[test]
     fn quadratic_two_roots() {

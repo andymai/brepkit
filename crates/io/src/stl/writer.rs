@@ -88,12 +88,12 @@ fn write_binary_stl(mesh: &TriangleMesh) -> Vec<u8> {
     // 80-byte header + 4-byte count + 50 bytes per triangle.
     let mut buf = Vec::with_capacity(84 + tri_count * 50);
 
-    // Header (80 bytes).
     let header = b"brepkit STL export";
     buf.extend_from_slice(header);
-    buf.extend_from_slice(&[0u8; 80 - 18]); // Pad to 80 bytes.
+    // The STL binary header is a fixed 80 bytes; zero-pad whatever the
+    // header string didn't fill.
+    buf.resize(80, 0);
 
-    // Triangle count (little-endian u32).
     #[allow(clippy::cast_possible_truncation)]
     buf.extend_from_slice(&(tri_count as u32).to_le_bytes());
 
@@ -178,7 +178,6 @@ mod tests {
         // Header: 80 bytes + count: 4 bytes = 84 bytes header.
         assert!(bytes.len() >= 84);
 
-        // Parse triangle count from the binary.
         let tri_count = u32::from_le_bytes([bytes[80], bytes[81], bytes[82], bytes[83]]) as usize;
 
         // Unit cube with 6 faces × 2 triangles each = 12 triangles.
@@ -201,7 +200,6 @@ mod tests {
         assert!(text.contains("vertex"));
         assert!(text.trim().ends_with("endsolid brepkit"));
 
-        // Count facets.
         let facet_count = text.matches("facet normal").count();
         assert_eq!(facet_count, 12, "expected 12 facets for unit cube");
     }

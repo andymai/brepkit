@@ -48,7 +48,6 @@ pub fn split(
     let normal = plane_normal.normalize()?;
     let d = dot_normal_point(normal, plane_point);
 
-    // Collect face data.
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
     let face_ids: Vec<brepkit_topology::face::FaceId> = shell.faces().to_vec();
@@ -66,7 +65,6 @@ pub fn split(
             .map(|v| dot_normal_point(normal, *v) - d)
             .collect();
 
-        // Classify: all positive, all negative, or mixed.
         let all_pos = dists.iter().all(|&di| di > -tol.linear);
         let all_neg = dists.iter().all(|&di| di < tol.linear);
 
@@ -122,7 +120,6 @@ pub fn split(
         });
     }
 
-    // Build cap faces from crossing points.
     let cap = build_cap_polygon(&cap_points, normal, d, tol);
 
     if let Some((cap_verts, cap_normal, cap_d)) = cap {
@@ -167,7 +164,6 @@ fn clip_polygon(
         let di = dists[i];
         let dj = dists[j];
 
-        // Classify current vertex.
         if di >= -tol.linear {
             pos_verts.push(verts[i]);
         }
@@ -175,7 +171,6 @@ fn clip_polygon(
             neg_verts.push(verts[i]);
         }
 
-        // Check for edge crossing.
         if (di > tol.linear && dj < -tol.linear) || (di < -tol.linear && dj > tol.linear) {
             let t = di / (di - dj);
             let pi = verts[i];
@@ -203,7 +198,6 @@ fn build_cap_polygon(
     d: f64,
     tol: Tolerance,
 ) -> Option<(Vec<Point3>, Vec3, f64)> {
-    // Deduplicate points.
     let mut unique = Vec::new();
     for p in points {
         if !unique
@@ -218,7 +212,6 @@ fn build_cap_polygon(
         return None;
     }
 
-    // Compute centroid.
     #[allow(clippy::cast_precision_loss)]
     let inv_n = 1.0 / unique.len() as f64;
     let (cx, cy, cz) = unique.iter().fold((0.0, 0.0, 0.0), |(ax, ay, az), p| {
@@ -226,7 +219,6 @@ fn build_cap_polygon(
     });
     let centroid = Point3::new(cx * inv_n, cy * inv_n, cz * inv_n);
 
-    // Build a local 2D coordinate system on the plane.
     let candidate = if normal.x().abs() < 0.9 {
         Vec3::new(1.0, 0.0, 0.0)
     } else {
@@ -240,7 +232,6 @@ fn build_cap_polygon(
     let u_axis = Vec3::new(u_axis.x() / u_len, u_axis.y() / u_len, u_axis.z() / u_len);
     let v_axis = normal.cross(u_axis);
 
-    // Sort points by angle around centroid.
     let mut angles: Vec<(f64, usize)> = unique
         .iter()
         .enumerate()
@@ -282,7 +273,6 @@ mod tests {
         )
         .unwrap();
 
-        // Each half should have positive volume.
         let vol_pos = crate::measure::solid_volume(&topo, result.positive, 0.1).unwrap();
         let vol_neg = crate::measure::solid_volume(&topo, result.negative, 0.1).unwrap();
 
@@ -295,7 +285,6 @@ mod tests {
             "negative half should have volume, got {vol_neg}"
         );
 
-        // Together they should approximately equal the original volume.
         let tol = Tolerance::loose();
         let total = vol_pos + vol_neg;
         assert!(

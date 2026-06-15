@@ -421,7 +421,6 @@ pub(super) fn sample_wire_positions(
         }
     }
 
-    // Remove closing duplicate.
     if positions.len() > 2 {
         if let (Some(first), Some(last)) = (positions.first(), positions.last()) {
             if (*last - *first).length() < tol {

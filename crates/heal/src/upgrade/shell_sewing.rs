@@ -25,7 +25,6 @@ pub fn sew_shell(
 ) -> Result<usize, HealError> {
     let tol_sq = tolerance * tolerance;
 
-    // Build edge usage count.
     let shell = topo.shell(shell_id)?;
     let face_ids: Vec<_> = shell.faces().to_vec();
 
@@ -47,7 +46,6 @@ pub fn sew_shell(
         }
     }
 
-    // Free edges: used by exactly 1 face.
     let free_edges: Vec<EdgeId> = all_edge_ids
         .iter()
         .filter(|eid| edge_usage.get(&eid.index()).copied().unwrap_or(0) == 1)
@@ -58,7 +56,6 @@ pub fn sew_shell(
         return Ok(0);
     }
 
-    // Try to match free edges by vertex proximity.
     let mut sewn = 0;
     let mut matched: Vec<bool> = vec![false; free_edges.len()];
 
@@ -78,13 +75,10 @@ pub fn sew_shell(
             let sj = topo.vertex(ej.start())?.point();
             let tj = topo.vertex(ej.end())?.point();
 
-            // Check forward matching: si≈sj and ti≈tj
             let fwd = (si - sj).length_squared() < tol_sq && (ti - tj).length_squared() < tol_sq;
-            // Check reverse matching: si≈tj and ti≈sj
             let rev = (si - tj).length_squared() < tol_sq && (ti - sj).length_squared() < tol_sq;
 
             if fwd || rev {
-                // Merge vertices of edge j into edge i.
                 let (_merge_s, _merge_t) = if fwd {
                     (ej.start(), ej.end())
                 } else {
@@ -93,7 +87,6 @@ pub fn sew_shell(
                 let target_s = ei.start();
                 let target_t = ei.end();
 
-                // Update edge j's vertices to match edge i.
                 let curve_j = topo.edge(free_edges[j])?.curve().clone();
                 let ej_mut = topo.edge_mut(free_edges[j])?;
                 *ej_mut = brepkit_topology::edge::Edge::new(

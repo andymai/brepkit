@@ -97,7 +97,6 @@ impl IgesWriteContext {
             }
         }
 
-        // Write edges as line or NURBS curve entities.
         let wire = topo.wire(face.outer_wire()).map_err(topo_err)?;
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge()).map_err(topo_err)?;
@@ -439,7 +438,6 @@ mod tests {
 
         let iges_str = write_iges(&topo, &[solid]).unwrap();
 
-        // Should contain plane entities (type 108).
         assert!(
             iges_str.contains("108"),
             "should contain plane entity type 108"
@@ -453,7 +451,6 @@ mod tests {
 
         let iges_str = write_iges(&topo, &[solid]).unwrap();
 
-        // Should contain line entities (type 110).
         assert!(
             iges_str.contains("110"),
             "should contain line entity type 110"
@@ -478,7 +475,6 @@ mod tests {
 
         let iges_str = write_iges(&topo, &[s1, s2]).unwrap();
 
-        // Should have entities from both solids.
         let plane_count = iges_str.matches("     108").count();
         assert!(
             plane_count >= 12,

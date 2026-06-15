@@ -83,28 +83,16 @@ impl<'a> PaveFiller<'a> {
     ///
     /// Returns [`AlgoError`] if any topology lookup or intersection fails.
     pub fn perform(&mut self, arena: &mut GfaArena) -> Result<(), AlgoError> {
-        // Phase 0: Initialize pave blocks for all edges
         self.init_pave_blocks(arena)?;
 
-        // Phase 1: Vertex-vertex coincidence
         phase_vv::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
-
-        // Phase 2: Vertex-on-edge detection
         phase_ve::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
-
-        // Phase 3: Edge-edge intersection
         phase_ee::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
-
-        // Phase 4: Vertex-on-face detection
         phase_vf::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
-
-        // Phase 5: Edge-face intersection
         phase_ef::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
-
-        // Phase 6: Face-face intersection (creates vertices + edges for curves)
         phase_ff::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
 
-        // Phase 6b: Coplanar face splitting (parallel planes skipped by Phase FF)
+        // Coplanar face splitting: parallel planes are skipped by Phase FF.
         phase_ff_coplanar::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)?;
 
         Ok(())

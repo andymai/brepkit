@@ -59,12 +59,10 @@ pub fn read_obj(input: &str) -> Result<TriangleMesh, crate::IoError> {
         }
     }
 
-    // If no normals were provided, generate per-face normals
     if normals.is_empty() {
         normals = compute_vertex_normals(&positions, &indices);
     }
 
-    // Ensure normals vector matches positions length
     normals.resize(positions.len(), Vec3::new(0.0, 0.0, 1.0));
 
     Ok(TriangleMesh {
@@ -142,7 +140,6 @@ fn compute_vertex_normals(positions: &[Point3], indices: &[u32]) -> Vec<Vec3> {
         normals[i2] += face_normal;
     }
 
-    // Normalize
     for n in &mut normals {
         let len = n.length();
         if len > 1e-15 {
@@ -274,8 +271,6 @@ f 1 2 3
             );
         }
     }
-
-    // ── read_obj_solid smoke test ───────────────────────────────────
 
     #[test]
     fn read_obj_solid_returns_solid_id() {

@@ -108,7 +108,6 @@ fn analyze_nurbs_surface(
 
     let tol = tolerance.linear;
 
-    // Check U-closure: first row vs last row.
     let is_closed_u = n_rows >= 2
         && n_cols > 0
         && cps[0]
@@ -116,7 +115,6 @@ fn analyze_nurbs_surface(
             .zip(cps[n_rows - 1].iter())
             .all(|(a, b)| (*a - *b).length() < tol);
 
-    // Check V-closure: first column vs last column.
     let is_closed_v = n_cols >= 2
         && cps
             .iter()

@@ -116,7 +116,6 @@ pub fn make_helix_curve(
     let mut control_points = Vec::with_capacity(2 * total_segs + 1);
     let mut weights = Vec::with_capacity(2 * total_segs + 1);
 
-    // Starting point.
     let start = helix_point(origin, axis, u_dir, v_dir, radius, 0.0, 0.0);
     control_points.push(start);
     weights.push(1.0);
@@ -143,7 +142,6 @@ pub fn make_helix_curve(
         weights.push(1.0);
     }
 
-    // Build knot vector for degree 2.
     let n = control_points.len();
     let degree = 2;
     let mut knots = Vec::with_capacity(n + degree + 1);
@@ -236,7 +234,6 @@ mod tests {
         )
         .unwrap();
 
-        // Degree 2 curve.
         assert_eq!(curve.degree(), 2);
 
         // Should have enough control points for 8 segments.

@@ -65,15 +65,12 @@ pub fn point_to_solid_distance(
     let shell = topo.shell(solid_data.outer_shell())?;
     let face_ids: Vec<FaceId> = shell.faces().to_vec();
 
-    // Build BVH over face AABBs.
     let face_aabbs = build_face_aabbs(topo, &face_ids)?;
     let bvh = Bvh::build(&face_aabbs);
 
-    // Use BVH to find candidate faces in order of proximity.
     let mut best_dist = f64::INFINITY;
     let mut best_point = point;
 
-    // Query BVH for closest face AABB, then iterate candidates.
     let candidates = bvh_distance_candidates(&bvh, &face_aabbs, point);
 
     for idx in candidates {
@@ -122,7 +119,6 @@ pub fn solid_to_solid_distance(
     let mut best_a = Point3::new(0.0, 0.0, 0.0);
     let mut best_b = Point3::new(0.0, 0.0, 0.0);
 
-    // Quick vertex-to-vertex pass.
     for &pa in &verts_a {
         for &pb in &verts_b {
             let dist = (pa - pb).length();
@@ -271,7 +267,6 @@ pub fn point_to_edge(
             point_b: closest,
         })
     } else {
-        // Sample the curve and find closest point
         let (t0, t1) = match edge.curve() {
             brepkit_topology::edge::EdgeCurve::NurbsCurve(nc) => nc.domain(),
             brepkit_topology::edge::EdgeCurve::Circle(c) => {
@@ -440,7 +435,6 @@ fn build_face_aabbs(
 
 /// Get candidate face indices sorted by AABB distance to a point.
 fn bvh_distance_candidates(bvh: &Bvh, aabbs: &[(usize, Aabb3)], point: Point3) -> Vec<usize> {
-    // Start with the closest BVH node and expand.
     // For simplicity, query all faces and sort by AABB distance.
     let mut candidates: Vec<(usize, f64)> = aabbs
         .iter()
@@ -448,9 +442,7 @@ fn bvh_distance_candidates(bvh: &Bvh, aabbs: &[(usize, Aabb3)], point: Point3) -
         .collect();
     candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Use BVH for pruning if available.
     if let Some(closest_idx) = bvh.query_closest(point) {
-        // Move closest to front if not already.
         if let Some(pos) = candidates.iter().position(|(i, _)| *i == closest_idx) {
             candidates.swap(0, pos);
         }
@@ -516,7 +508,6 @@ fn point_to_polygon_distance(
         return None;
     }
 
-    // Project point onto the plane.
     let signed_dist = normal.dot(Vec3::new(point.x(), point.y(), point.z())) - d;
     let projected = Point3::new(
         (-normal.x()).mul_add(signed_dist, point.x()),
@@ -524,12 +515,10 @@ fn point_to_polygon_distance(
         (-normal.z()).mul_add(signed_dist, point.z()),
     );
 
-    // Check if projected point is inside the polygon.
     if point_in_polygon_3d(&projected, verts, &normal) {
         return Some((signed_dist.abs(), projected));
     }
 
-    // If outside, find closest point on polygon edges.
     let mut best_dist = f64::INFINITY;
     let mut best_point = verts[0];
     let n = verts.len();

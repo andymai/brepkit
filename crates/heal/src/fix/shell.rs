@@ -31,7 +31,6 @@ pub fn fix_shell(
 ) -> Result<FixResult, HealError> {
     let mut result = FixResult::ok();
 
-    // ── 1. Run analysis to detect issues ────────────────────────────
     let analysis = crate::analysis::shell::analyze_shell(topo, shell_id)?;
 
     if !analysis.boundary_edges.is_empty() {
@@ -47,7 +46,6 @@ pub fn fix_shell(
         ));
     }
 
-    // ── 2. Fix each face individually ───────────────────────────────
     let shell = topo.shell(shell_id)?;
     let face_ids: Vec<_> = shell.faces().to_vec();
 
@@ -56,7 +54,6 @@ pub fn fix_shell(
         result.merge(&face_result);
     }
 
-    // ── 3. Fix orientation consistency ──────────────────────────────
     let should_fix_orientation = config
         .fix_orientation
         .should_fix(!analysis.orientation_consistent);
@@ -91,14 +88,12 @@ fn fix_orientation(
         return Ok(FixResult::ok());
     }
 
-    // Map face arena index -> position in face_ids slice.
     let _face_idx_map: HashMap<usize, usize> = face_ids
         .iter()
         .enumerate()
         .map(|(i, fid)| (fid.index(), i))
         .collect();
 
-    // Snapshot: collect all (face_position, edge_index, is_forward) triples.
     let mut face_edge_info: Vec<(usize, usize, bool)> = Vec::new();
 
     for (i, &fid) in face_ids.iter().enumerate() {
@@ -115,7 +110,6 @@ fn fix_orientation(
         }
     }
 
-    // Build edge-to-face adjacency from snapshots.
     // Key: edge index. Value: vec of (face_position, is_forward).
     let mut edge_faces: HashMap<usize, Vec<(usize, bool)>> = HashMap::new();
     for &(face_pos, edge_idx, is_forward) in &face_edge_info {
@@ -132,7 +126,6 @@ fn fix_orientation(
         face_edges[face_pos].push((edge_idx, is_forward));
     }
 
-    // BFS: start from face 0, flip neighbors that disagree.
     let mut visited = vec![false; n];
     let mut needs_flip = vec![false; n];
     let mut queue = std::collections::VecDeque::new();
@@ -168,7 +161,6 @@ fn fix_orientation(
         }
     }
 
-    // Apply flips.
     let mut flipped_count = 0usize;
     for (i, &fid) in face_ids.iter().enumerate() {
         if needs_flip[i] {

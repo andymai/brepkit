@@ -89,7 +89,6 @@ pub fn collapse_collinear_wire_vertices(
         }
     }
 
-    // 3. Build vertex → incident-edges map from the snapshot.
     let mut vertex_edges: HashMap<VertexId, Vec<EdgeId>> = HashMap::new();
     for (&eid, &(start, end)) in &edges_in_solid {
         vertex_edges.entry(start).or_default().push(eid);

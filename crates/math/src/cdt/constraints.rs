@@ -13,12 +13,10 @@ impl Cdt {
         let max_iter = self.triangles.len() * 4 + 100;
 
         for _ in 0..max_iter {
-            // Check if the edge already exists.
             if self.edge_exists(v0, v1) {
                 return Ok(());
             }
 
-            // Find an edge that intersects the segment (v0, v1) and flip it.
             if let Some((ti, local)) = self.find_intersecting_edge(v0, v1) {
                 let adj = match self.triangles[ti].adj[local] {
                     Some(a) => a,

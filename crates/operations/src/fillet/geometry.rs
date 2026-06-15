@@ -163,7 +163,6 @@ pub fn face_surface_normal_at(surface: &FaceSurface, point: Point3) -> Option<Ve
             let radial = dp - cone.axis() * along_axis;
             let radial_n = radial.normalize().ok()?;
             let (sin_a, cos_a) = cone.half_angle().sin_cos();
-            // Normal = radial * sin(half_angle) - axis * cos(half_angle)
             Some(radial_n * sin_a + cone.axis() * (-cos_a))
         }
         FaceSurface::Sphere(sph) => (point - sph.center()).normalize().ok(),

@@ -84,7 +84,6 @@ pub fn analyze_wire(
         });
     }
 
-    // Collect oriented start/end vertex positions for each edge.
     let mut starts = Vec::with_capacity(edge_count);
     let mut ends = Vec::with_capacity(edge_count);
     let mut lengths = Vec::with_capacity(edge_count);
@@ -96,7 +95,6 @@ pub fn analyze_wire(
         starts.push(s);
         ends.push(e);
 
-        // Approximate arc length.
         let start_pos = topo.vertex(edge.start())?.point();
         let end_pos = topo.vertex(edge.end())?.point();
         let (t_min, t_max) = edge.curve().domain_with_endpoints(start_pos, end_pos);
@@ -114,7 +112,6 @@ pub fn analyze_wire(
         lengths.push(len);
     }
 
-    // Check ordering and gaps.
     let mut is_ordered = true;
     let mut gaps = Vec::new();
     for i in 0..edge_count.saturating_sub(1) {
@@ -129,7 +126,6 @@ pub fn analyze_wire(
         }
     }
 
-    // Check closure (last end -> first start).
     let closure_dist = (starts[0] - ends[edge_count - 1]).length();
     let is_closed = closure_dist <= tolerance.linear;
     if !is_closed && wire.is_closed() {
@@ -141,7 +137,6 @@ pub fn analyze_wire(
         });
     }
 
-    // Small edges.
     let mut small_edges = Vec::new();
     for (i, oe) in oe_list.iter().enumerate() {
         if lengths[i] < tolerance.linear {
@@ -153,7 +148,6 @@ pub fn analyze_wire(
         }
     }
 
-    // Degenerate edges (closed vertex + zero length).
     let mut degenerate_edges = Vec::new();
     for (i, oe) in oe_list.iter().enumerate() {
         let edge = topo.edge(oe.edge())?;
@@ -162,8 +156,6 @@ pub fn analyze_wire(
         }
     }
 
-    // Self-intersection: sample each edge and check for proximity between
-    // non-adjacent edge pairs.
     let self_intersections = detect_self_intersections(topo, oe_list, edge_count, tolerance)?;
 
     let mut status = Status::OK;
@@ -203,7 +195,6 @@ fn detect_self_intersections(
         return Ok(Vec::new());
     }
 
-    // Sample points for each edge.
     let mut edge_samples: Vec<Vec<brepkit_math::vec::Point3>> = Vec::with_capacity(edge_count);
     for oe in oe_list {
         let edge = topo.edge(oe.edge())?;

@@ -45,7 +45,6 @@ pub fn plane_to_nurbs(
     u_range: (f64, f64),
     v_range: (f64, f64),
 ) -> Result<NurbsSurface, HealError> {
-    // Build a local frame on the plane.
     let origin = Point3::new(0.0, 0.0, 0.0) + normal * d;
     let (u_axis, v_axis) = plane_frame_axes(normal);
 

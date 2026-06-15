@@ -101,7 +101,6 @@ where
             };
         }
 
-        // Compute J*g
         let mut jg = vec![0.0; num_residuals];
         for i in 0..num_residuals {
             for j in 0..n {
@@ -117,15 +116,12 @@ where
 
         let h_sd: Vec<f64> = g.iter().map(|&v| -alpha * v).collect();
 
-        // DogLeg blending
         let h = dogleg_step(&h_gn, &h_sd, delta);
         let h_norm = h.iter().map(|&v| v * v).sum::<f64>().sqrt();
 
-        // Trial point
         let trial: Vec<f64> = params.iter().zip(h.iter()).map(|(&p, &d)| p + d).collect();
         let r_trial = residual_fn(&trial);
 
-        // Compute reduction ratio
         let cost_current: f64 = r.iter().map(|&v| v * v).sum::<f64>() * 0.5;
         let cost_trial: f64 = r_trial.iter().map(|&v| v * v).sum::<f64>() * 0.5;
         let actual_reduction = cost_current - cost_trial;
@@ -159,12 +155,10 @@ where
             delta = (delta / 4.0).max(delta_min);
         }
 
-        // Accept or reject step
         if rho > 0.0 {
             params.copy_from_slice(&trial);
         }
 
-        // Check if step is too small to make progress
         if h_norm < 1e-15 * (1.0 + param_norm) {
             let final_r = residual_fn(params);
             let final_max = final_r.iter().fold(0.0_f64, |a, &b| a.max(b.abs()));

@@ -26,7 +26,6 @@ use crate::spine::Spine;
 /// Returns `None` if the matrix is singular (pivot below `1e-30`).
 #[must_use]
 pub fn solve_4x4(a: &[[f64; 4]; 4], b: &[f64; 4]) -> Option<[f64; 4]> {
-    // Copy into augmented matrix.
     let mut m = [[0.0_f64; 5]; 4];
     for i in 0..4 {
         for j in 0..4 {
@@ -37,7 +36,6 @@ pub fn solve_4x4(a: &[[f64; 4]; 4], b: &[f64; 4]) -> Option<[f64; 4]> {
 
     // Forward elimination with partial pivoting.
     for col in 0..4 {
-        // Find pivot.
         let mut max_abs = m[col][col].abs();
         let mut max_row = col;
         for row in (col + 1)..4 {
@@ -52,12 +50,10 @@ pub fn solve_4x4(a: &[[f64; 4]; 4], b: &[f64; 4]) -> Option<[f64; 4]> {
             return None;
         }
 
-        // Swap rows.
         if max_row != col {
             m.swap(col, max_row);
         }
 
-        // Eliminate below.
         let pivot = m[col][col];
         for row in (col + 1)..4 {
             let factor = m[row][col] / pivot;
@@ -206,7 +202,6 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
             params.v2 += delta[3];
         }
 
-        // Check final residual.
         let f = self.func.value(self.surf1, self.surf2, &params, ctx);
         if Self::residual_norm(&f) < self.config.tol_3d {
             Some(params)
@@ -285,7 +280,6 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
         let mut sections = Vec::new();
         let mut step_count = 0_usize;
 
-        // Collect the starting section.
         let ctx0 = self.make_context(s)?;
         let sec0 = self.func.section(self.surf1, self.surf2, &params, &ctx0);
         sections.push(sec0);
@@ -333,7 +327,6 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
             // Corrector: Newton at the new spine station.
             let ctx_next = self.make_context(s_next)?;
             if let Some(converged) = self.newton_solve(predicted, &ctx_next) {
-                // Accept step.
                 prev_params = Some(params);
                 prev_s = s;
                 params = converged;
@@ -344,10 +337,8 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
                     .section(self.surf1, self.surf2, &params, &ctx_next);
                 sections.push(sec);
 
-                // Increase step (but don't exceed max).
                 step = (step * 1.5).min(self.config.max_step_fraction * span);
             } else {
-                // Halve step and retry.
                 step *= 0.5;
                 if step < self.config.min_step {
                     let f = self.func.value(self.surf1, self.surf2, &params, &ctx_next);
@@ -410,7 +401,6 @@ pub fn approximate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
         let half_angle = sec.half_angle();
         let w_mid = half_angle.cos();
 
-        // cp0 = p1, cp2 = p2.
         let cp0 = sec.p1;
         let cp2 = sec.p2;
 
@@ -499,8 +489,6 @@ mod tests {
     use brepkit_topology::edge::{Edge, EdgeCurve};
     use brepkit_topology::vertex::Vertex;
 
-    // ── Test plane surface ──
-
     struct TestPlane {
         origin: Point3,
         u_dir: Vec3,
@@ -558,8 +546,6 @@ mod tests {
         let v1 = topo.add_vertex(Vertex::new(b, 1e-7));
         topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line))
     }
-
-    // ── solve_4x4 tests ──
 
     #[test]
     fn solve_4x4_identity() {

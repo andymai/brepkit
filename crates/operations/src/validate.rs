@@ -165,7 +165,6 @@ pub fn validate_solid_with_options(
     // geometry, above 1000 makes the check meaningless.
     let scale = options.tolerance_scale.clamp(0.1, 1000.0);
 
-    // 1. Entity counts and Euler characteristic.
     let (f, e, v) = explorer::solid_entity_counts(topo, solid)?;
 
     // Euler-Poincaré formula for a cell complex with inner loops:
@@ -173,8 +172,6 @@ pub fn validate_solid_with_options(
     // where g is the genus and L is the total number of inner wire loops
     // across all faces. For a genus-0 solid with no holes: V-E+F = 2.
     // With L inner wires: V-E+F = 2 + L.
-    //
-    // Count total inner wires across all faces.
     let mut total_inner_loops: i64 = 0;
     let faces = explorer::solid_faces(topo, solid)?;
     for fid in &faces {
@@ -201,7 +198,6 @@ pub fn validate_solid_with_options(
         });
     }
 
-    // 2 & 3. Edge sharing: each edge should be in exactly 2 faces.
     let edge_map = explorer::edge_to_face_map(topo, solid)?;
     let mut boundary_edges = 0;
     let mut non_manifold_edges = 0;
@@ -244,8 +240,6 @@ pub fn validate_solid_with_options(
         });
     }
 
-    // 4. Degenerate faces.
-    //
     // Only faces on a planar surface bounded entirely by straight edges
     // require ≥3 unique vertices. Faces with curved edges (Circle,
     // Ellipse, NURBS) or non-planar surfaces (Cylinder, Sphere, Torus,
@@ -274,7 +268,6 @@ pub fn validate_solid_with_options(
         }
     }
 
-    // 5. Face normal consistency.
     let scaled_tol = Tolerance {
         linear: tol.linear * scale,
         angular: tol.angular * scale,
@@ -296,7 +289,6 @@ pub fn validate_solid_with_options(
         }
     }
 
-    // 6. Wire closure: every wire must form a closed loop.
     for fid in &faces {
         let face = topo.face(*fid)?;
         let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
@@ -318,8 +310,6 @@ pub fn validate_solid_with_options(
         }
     }
 
-    // 7. Degenerate face area: faces with near-zero polygon area are likely slivers.
-    //
     // Only meaningful for faces bounded entirely by straight edges.
     // The polygon area formula uses vertex positions, which is
     // meaningless when edges are curved (e.g. a cylinder cap has
@@ -342,7 +332,6 @@ pub fn validate_solid_with_options(
 
         let wire = topo.wire(face.outer_wire())?;
 
-        // Collect wire vertex positions.
         let mut positions = Vec::new();
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
@@ -350,8 +339,6 @@ pub fn validate_solid_with_options(
             positions.push(topo.vertex(vid)?.point());
         }
 
-        // Compute face area using the shoelace formula generalized to 3D
-        // (sum of cross products of consecutive edge vectors from centroid).
         if positions.len() >= 3 {
             let area = polygon_area_3d(&positions);
             if area < area_tol_sq {
@@ -366,8 +353,8 @@ pub fn validate_solid_with_options(
         }
     }
 
-    // 8. Zero-length edges: edges with coincident start/end vertices
-    // (but not intentionally closed edges like circles).
+    // Skip intentionally closed edges (like circles) when checking for
+    // coincident start/end vertices.
     let all_edges = explorer::solid_edges(topo, solid)?;
     for eid in &all_edges {
         let edge = topo.edge(*eid)?;
@@ -391,7 +378,6 @@ pub fn validate_solid_with_options(
         }
     }
 
-    // 9. Empty wires.
     for fid in &faces {
         let face = topo.face(*fid)?;
         let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
@@ -413,7 +399,7 @@ pub fn validate_solid_with_options(
         }
     }
 
-    // 10. Shell connectivity: all faces should be reachable from any face.
+    // Shell connectivity: all faces should be reachable from any face.
     // For genus-0 solids (sphere-like), all faces must be in one connected
     // component. Higher-genus solids (e.g. hollow revolves creating a torus)
     // can legitimately have multiple face-connected components (inner/outer
@@ -427,7 +413,6 @@ pub fn validate_solid_with_options(
         queue.push_back(faces[0]);
 
         while let Some(current) = queue.pop_front() {
-            // Find all faces that share an edge with current
             for adj_faces in edge_map.values() {
                 if adj_faces.iter().any(|f| f.index() == current.index()) {
                     for neighbor in adj_faces {
@@ -451,7 +436,6 @@ pub fn validate_solid_with_options(
         }
     }
 
-    // 11. Redundant faces in shell.
     {
         let mut face_counts = std::collections::HashMap::new();
         for fid in &faces {
@@ -467,7 +451,6 @@ pub fn validate_solid_with_options(
         }
     }
 
-    // 12. Edge vertex consistency: edge vertices must belong to the solid.
     let vertex_set: std::collections::HashSet<usize> = {
         let verts = explorer::solid_vertices(topo, solid)?;
         verts.iter().map(|v| v.index()).collect()
@@ -552,7 +535,6 @@ pub fn validate_solid_relaxed_with_options(
 
     let faces = explorer::solid_faces(topo, solid)?;
 
-    // Degenerate faces (planar + straight edges only) — Warning in relaxed.
     for fid in &faces {
         let face_data = topo.face(*fid)?;
         let is_planar = matches!(
@@ -575,7 +557,6 @@ pub fn validate_solid_relaxed_with_options(
         }
     }
 
-    // Face normal consistency (planar faces).
     let scaled_tol = Tolerance {
         linear: tol.linear * scale,
         angular: tol.angular * scale,
@@ -626,7 +607,6 @@ pub fn validate_solid_relaxed_with_options(
         }
     }
 
-    // Degenerate face area (planar + straight edges only).
     let area_tol_sq = scaled_tol.linear * scaled_tol.linear;
     for fid in &faces {
         let face = topo.face(*fid)?;
@@ -688,7 +668,6 @@ pub fn validate_solid_relaxed_with_options(
         }
     }
 
-    // Empty wires.
     for fid in &faces {
         let face = topo.face(*fid)?;
         let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
@@ -710,7 +689,6 @@ pub fn validate_solid_relaxed_with_options(
         }
     }
 
-    // Redundant faces.
     {
         let mut face_counts = std::collections::HashMap::new();
         for fid in &faces {
@@ -726,7 +704,6 @@ pub fn validate_solid_relaxed_with_options(
         }
     }
 
-    // Edge vertex consistency.
     let vertex_set: std::collections::HashSet<usize> = {
         let verts = explorer::solid_vertices(topo, solid)?;
         verts.iter().map(|v| v.index()).collect()
@@ -858,7 +835,7 @@ mod tests {
         let shell_id = topo.solid(solid).unwrap().outer_shell();
         let shell = topo.shell(shell_id).unwrap();
         let mut faces: Vec<_> = shell.faces().to_vec();
-        faces.pop(); // Remove last face
+        faces.pop();
 
         let open_shell = brepkit_topology::shell::Shell::new(faces).unwrap();
         *topo.shell_mut(shell_id).unwrap() = open_shell;
@@ -1063,8 +1040,6 @@ mod tests {
         );
     }
 
-    // ── Wire closure validation ──────────────────────
-
     #[test]
     fn wire_closure_check_on_valid_box() {
         let mut topo = Topology::new();
@@ -1082,8 +1057,6 @@ mod tests {
             "valid box should have no wire issues: {wire_issues:?}"
         );
     }
-
-    // ── Degenerate face area ─────────────────────────
 
     #[test]
     fn polygon_area_unit_square() {
@@ -1142,7 +1115,7 @@ mod tests {
         let shell_id = topo.solid(solid).unwrap().outer_shell();
         let shell = topo.shell(shell_id).unwrap();
         let mut faces: Vec<_> = shell.faces().to_vec();
-        let extra_face = faces[0]; // duplicate first face
+        let extra_face = faces[0];
         faces.push(extra_face);
 
         let new_shell = brepkit_topology::shell::Shell::new(faces).unwrap();
@@ -1231,10 +1204,6 @@ mod tests {
         }
     }
 
-    // ── repair_solid ─────────────────────────────────
-
-    // ── Zero-length edge detection ─────────────────────
-
     #[test]
     fn validate_detects_zero_length_edge() {
         let mut topo = Topology::new();
@@ -1260,8 +1229,6 @@ mod tests {
         );
     }
 
-    // ── Disconnected shell detection ───────────────────
-
     #[test]
     fn validate_connected_shell_passes() {
         let mut topo = Topology::new();
@@ -1278,8 +1245,6 @@ mod tests {
             report.issues
         );
     }
-
-    // ── Redundant face detection ───────────────────────
 
     #[test]
     fn validate_detects_redundant_face() {
@@ -1307,8 +1272,6 @@ mod tests {
             report.issues
         );
     }
-
-    // ── Boolean result validation ──────────────────────
 
     #[test]
     fn boolean_fuse_result_validates() {
@@ -1446,8 +1409,6 @@ mod tests {
         );
     }
 
-    // ── repair_solid ─────────────────────────────────
-
     #[test]
     fn repair_clean_box() {
         let mut topo = Topology::new();
@@ -1485,8 +1446,6 @@ mod tests {
         // Should not crash; may or may not be valid depending on cylinder topology
         let _ = report.is_valid_after();
     }
-
-    // ── Relaxed validation ────────────────────────────
 
     #[test]
     fn relaxed_valid_box() {
@@ -1621,8 +1580,6 @@ mod tests {
             "should warn about open wire"
         );
     }
-
-    // ── ValidationOptions tolerance tuning ──────────────
 
     #[test]
     fn validation_options_default() {

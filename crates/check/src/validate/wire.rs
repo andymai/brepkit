@@ -126,10 +126,9 @@ pub fn check_wire_self_intersection(
     let wire = topo.wire(wire_id)?;
     let edges = wire.edges();
     if edges.len() < 3 {
-        return Ok(vec![]); // Need at least 3 edges for self-intersection
+        return Ok(vec![]);
     }
 
-    // Sample each edge into polyline segments.
     let samples_per_edge = 8usize;
     let mut edge_segments: Vec<Vec<Point3>> = Vec::new();
 
@@ -207,7 +206,6 @@ pub fn check_wire_self_intersection(
         }
     }
 
-    // Check for segment-segment intersections between non-adjacent edges.
     let n_edges = edge_segments.len();
     for i in 0..n_edges {
         for j in (i + 2)..n_edges {

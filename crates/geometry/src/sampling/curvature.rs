@@ -70,10 +70,8 @@ fn subdivide(
     let t_m = 0.5 * (t_a + t_b);
     let p_m = curve.evaluate(t_m);
 
-    // Left half
     subdivide(curve, t_a, p_a, t_m, p_m, tolerance, depth + 1, out);
     out.push((t_m, p_m));
-    // Right half
     subdivide(curve, t_m, p_m, t_b, p_b, tolerance, depth + 1, out);
 }
 

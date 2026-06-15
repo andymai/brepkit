@@ -59,7 +59,6 @@ pub fn check_bspline_restrictions(
 ) -> Result<usize, HealError> {
     let mut violations = 0usize;
 
-    // ── Check edges ──────────────────────────────────────────────
     // Walk outer + inner (cavity) shells. NURBS degree/segment
     // restrictions apply to every edge and surface in the solid,
     // including those bounding cavity volumes — restricting only
@@ -110,7 +109,6 @@ pub fn check_bspline_restrictions(
             }
         }
 
-        // ── Check face surface ───────────────────────────────────
         let face_data = topo.face(fid)?;
         if let FaceSurface::Nurbs(ref ns) = *face_data.surface() {
             let degree_u = ns.degree_u();

@@ -101,7 +101,6 @@ fn wire_polygon(
 ) -> Result<Vec<Point3>, AlgoError> {
     let wire = topo.wire(wire_id)?;
 
-    // Sample each edge into a polyline in its oriented direction.
     let mut polylines: Vec<Vec<Point3>> = Vec::with_capacity(wire.edges().len());
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
@@ -124,7 +123,6 @@ fn wire_polygon(
         polylines.push(pts);
     }
 
-    // Chain polylines by endpoint proximity.
     let join_tol = 1e-6;
     let mut used = vec![false; polylines.len()];
     let mut verts: Vec<Point3> = Vec::new();
@@ -241,7 +239,6 @@ fn collect_face_geoms(topo: &Topology, solid: SolidId) -> Result<Vec<FaceGeom>, 
             }
         }
 
-        // Compute face normal.
         let raw_normal =
             if let brepkit_topology::face::FaceSurface::Plane { normal, .. } = face.surface() {
                 *normal

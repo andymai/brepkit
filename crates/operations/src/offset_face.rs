@@ -37,7 +37,6 @@ pub fn offset_face(
 ) -> Result<FaceId, OperationsError> {
     let tol = Tolerance::new();
     if distance.abs() < tol.linear {
-        // Zero offset: just copy the face.
         return copy_face(topo, face_id);
     }
 
@@ -75,10 +74,8 @@ fn offset_planar_face(
     d: f64,
     distance: f64,
 ) -> Result<FaceId, OperationsError> {
-    // New plane: same normal, shifted d.
     let new_d = d + distance;
 
-    // Offset all vertices in the wires.
     let offset_vec = Vec3::new(
         normal.x() * distance,
         normal.y() * distance,
@@ -119,10 +116,9 @@ fn offset_nurbs_face(
     distance: f64,
     samples: usize,
 ) -> Result<FaceId, OperationsError> {
-    let n = samples.max(4); // Minimum 4×4 grid.
+    let n = samples.max(4);
     let tol = Tolerance::new();
 
-    // Pass 1: Evaluate curvature at a coarse grid to identify high-curvature regions.
     let coarse = n.max(4);
     #[allow(clippy::cast_precision_loss)]
     let coarse_div = (coarse - 1) as f64;
@@ -157,10 +153,6 @@ fn offset_nurbs_face(
         }
     }
 
-    // Pass 2: Build adaptive parameter grid. For each coarse cell, decide
-    // the local subdivision level based on curvature × |distance|.
-    // High curvature × distance → more samples (up to 4× coarse density).
-    //
     // The 0.25 factor sets the refinement sensitivity: a cell is refined when
     // its local `curvature * |distance|` exceeds 25% of the surface-wide
     // maximum `max_curvature * |distance|`. This ensures at least the top
@@ -170,22 +162,18 @@ fn offset_nurbs_face(
     let mut u_params: Vec<f64> = Vec::new();
     let mut v_params: Vec<f64> = Vec::new();
 
-    // Collect u-parameters: for each coarse interval, subdivide if needed.
     #[allow(clippy::cast_precision_loss)]
     for i in 0..coarse {
         let u0 = i as f64 / coarse_div;
         u_params.push(u0);
 
         if i + 1 < coarse {
-            // Check if any cell in this u-row has high curvature.
             let row_max = curvatures[i].iter().copied().fold(0.0_f64, f64::max);
             let cell_metric = row_max * distance.abs();
             if threshold > 1e-12 && cell_metric > threshold {
-                // Add midpoints for this interval.
                 let u1 = (i + 1) as f64 / coarse_div;
                 let mid = 0.5 * (u0 + u1);
                 u_params.push(mid);
-                // If very high curvature, add quarter-points too.
                 if cell_metric > threshold * 3.0 {
                     u_params.push(0.25_f64.mul_add(u1 - u0, u0));
                     u_params.push(0.75_f64.mul_add(u1 - u0, u0));
@@ -193,12 +181,10 @@ fn offset_nurbs_face(
             }
         }
     }
-    // Ensure endpoint.
     if u_params.last().is_none_or(|&u| (u - 1.0).abs() > 1e-15) {
         u_params.push(1.0);
     }
 
-    // Collect v-parameters similarly.
     #[allow(clippy::cast_precision_loss)]
     for j in 0..coarse {
         let v0 = j as f64 / coarse_div;
@@ -222,13 +208,11 @@ fn offset_nurbs_face(
         v_params.push(1.0);
     }
 
-    // Sort and deduplicate parameter lists.
     u_params.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     u_params.dedup_by(|a, b| (*a - *b).abs() < 1e-15);
     v_params.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     v_params.dedup_by(|a, b| (*a - *b).abs() < 1e-15);
 
-    // Sample the surface and offset each point along the normal.
     let nu = u_params.len();
     let nv = v_params.len();
     let mut offset_grid: Vec<Vec<Point3>> = Vec::with_capacity(nu);
@@ -253,7 +237,6 @@ fn offset_nurbs_face(
         offset_grid.push(row);
     }
 
-    // Fit a new NURBS surface through the offset points.
     let degree = nurbs.degree_u().min(nurbs.degree_v()).min(3);
     let raw_offset = interpolate_surface(&offset_grid, degree, degree).map_err(|e| {
         OperationsError::InvalidInput {
@@ -281,12 +264,10 @@ fn offset_nurbs_face(
         }
     };
 
-    // Copy the wire topology from the original face, offsetting vertices.
     let face = topo.face(face_id)?;
     let outer_wire = face.outer_wire();
     let inner_wires: Vec<_> = face.inner_wires().to_vec();
 
-    // Offset wire vertices along the NURBS normal at their positions.
     let new_outer = offset_wire_along_nurbs(topo, outer_wire, nurbs, distance)?;
 
     let mut new_inner = Vec::new();
@@ -329,7 +310,6 @@ fn offset_cylinder_face(
         brepkit_math::surfaces::CylindricalSurface::new(cyl.origin(), cyl.axis(), new_radius)
             .map_err(OperationsError::Math)?;
 
-    // Offset wire vertices radially outward from the cylinder axis.
     let radial_offset = |pt: Point3| -> Point3 {
         let to_axis = Vec3::new(
             pt.x() - cyl.origin().x(),
@@ -384,7 +364,6 @@ fn offset_sphere_face(
     let new_sphere = brepkit_math::surfaces::SphericalSurface::new(sphere.center(), new_radius)
         .map_err(OperationsError::Math)?;
 
-    // Offset vertices radially from sphere center.
     let radial_offset = |pt: Point3| -> Point3 {
         let to_center = pt - sphere.center();
         if let Ok(dir) = to_center.normalize() {
@@ -437,7 +416,6 @@ fn offset_cone_face(
         brepkit_math::surfaces::ConicalSurface::new(new_apex, cone.axis(), cone.half_angle())
             .map_err(OperationsError::Math)?;
 
-    // Offset wire vertices along the cone's radial direction.
     let radial_offset = |pt: Point3| -> Point3 {
         let to_apex = Vec3::new(
             pt.x() - cone.apex().x(),
@@ -495,7 +473,6 @@ fn offset_torus_face(
     )
     .map_err(OperationsError::Math)?;
 
-    // Offset wire vertices radially from the torus center, in the tube direction.
     let z_axis = torus.z_axis();
     let center = torus.center();
     let radial_offset = |pt: Point3| -> Point3 {
@@ -899,8 +876,6 @@ mod tests {
         );
     }
 
-    // ── NURBS face helpers ────────────────────────────────────────────────────
-
     /// Build a flat bilinear NURBS face on the XY plane (z = `z_height`).
     ///
     /// Degree-1 in both u and v, 2×2 control points, clamped knot vectors.
@@ -949,8 +924,6 @@ mod tests {
 
         topo.add_face(Face::new(wid, vec![], FaceSurface::Nurbs(nurbs)))
     }
-
-    // ── NURBS face offset tests ───────────────────────────────────────────────
 
     #[test]
     fn offset_nurbs_face_outward_produces_nurbs_surface() {

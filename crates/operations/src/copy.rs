@@ -15,8 +15,6 @@ use brepkit_topology::solid::{Solid, SolidId};
 use brepkit_topology::vertex::{Vertex, VertexId};
 use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
-// ── Snapshot types (read phase) ────────────────────────────────────
-
 struct VertexSnap {
     old_index: usize,
     point: Point3,
@@ -61,8 +59,6 @@ pub fn copy_solid(
     topo: &mut Topology,
     solid_id: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
-    // ── Read phase: snapshot all data ──────────────────────────────
-
     let solid = topo.solid(solid_id)?;
     let outer_shell_id = solid.outer_shell();
     let inner_shell_ids: Vec<_> = solid.inner_shells().to_vec();
@@ -91,7 +87,6 @@ pub fn copy_solid(
             let inner_wire_indices: Vec<usize> =
                 face.inner_wires().iter().map(|w| w.index()).collect();
 
-            // Snapshot wires.
             for wire_id_val in
                 std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
             {
@@ -112,7 +107,6 @@ pub fn copy_solid(
                     let start_idx = edge.start().index();
                     let end_idx = edge.end().index();
 
-                    // Snapshot vertices.
                     for &vid_idx in &[start_idx, end_idx] {
                         if seen_vertices.insert(vid_idx) {
                             let vid = if vid_idx == start_idx {
@@ -156,9 +150,6 @@ pub fn copy_solid(
         shell_snaps.push(ShellSnap { faces: face_snaps });
     }
 
-    // ── Write phase: allocate new entities ─────────────────────────
-
-    // Pre-allocate topology arenas for the copy.
     topo.reserve(
         vertex_snaps.len(),
         edge_snaps.len(),
@@ -256,7 +247,6 @@ pub fn copy_and_transform_solid(
     }
     let normal_matrix = matrix.inverse()?.transpose();
 
-    // Helper: transform a direction vector by applying the matrix.
     let transform_dir = |dir: Vec3| -> Result<Vec3, crate::OperationsError> {
         let origin = matrix.mul_point(Point3::new(0.0, 0.0, 0.0));
         let tip = matrix.mul_point(Point3::new(dir.x(), dir.y(), dir.z()));
@@ -268,7 +258,7 @@ pub fn copy_and_transform_solid(
         Ok(raw.normalize()?)
     };
 
-    // Helper: transform a plane normal via inverse transpose.
+    // Transform a plane normal via inverse transpose.
     let transform_normal = |n: Vec3| -> Result<Vec3, crate::OperationsError> {
         let transformed = normal_matrix.mul_point(Point3::new(n.x(), n.y(), n.z()));
         let origin = normal_matrix.mul_point(Point3::new(0.0, 0.0, 0.0));
@@ -280,8 +270,7 @@ pub fn copy_and_transform_solid(
         Ok(raw.normalize()?)
     };
 
-    // ── Read phase: snapshot all data (identical to copy_solid) ────
-
+    // Read phase mirrors copy_solid.
     let solid = topo.solid(solid_id)?;
     let outer_shell_id = solid.outer_shell();
     let inner_shell_ids: Vec<_> = solid.inner_shells().to_vec();
@@ -373,9 +362,6 @@ pub fn copy_and_transform_solid(
         shell_snaps.push(ShellSnap { faces: face_snaps });
     }
 
-    // ── Write phase: allocate transformed entities ─────────────────
-
-    // Pre-allocate topology arenas for the copy.
     topo.reserve(
         vertex_snaps.len(),
         edge_snaps.len(),
@@ -388,7 +374,6 @@ pub fn copy_and_transform_solid(
         1,
     );
 
-    // Vertices: apply matrix during allocation.
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
     for vsnap in &vertex_snaps {
         let new_point = matrix.mul_point(vsnap.point);
@@ -396,7 +381,6 @@ pub fn copy_and_transform_solid(
         vertex_map.insert(vsnap.old_index, new_vid);
     }
 
-    // Edges: transform NURBS control points inline.
     let mut edge_map: HashMap<usize, brepkit_topology::edge::EdgeId> = HashMap::new();
     for esnap in &edge_snaps {
         let new_start = vertex_map[&esnap.start_index];
@@ -484,7 +468,7 @@ pub fn copy_and_transform_solid(
         edge_map.insert(esnap.old_index, copied_edge);
     }
 
-    // Wires: no geometry to transform.
+    // Wires carry no geometry to transform.
     let mut wire_map: HashMap<usize, WireId> = HashMap::new();
     for wsnap in &wire_snaps {
         let new_edges: Vec<OrientedEdge> = wsnap
@@ -497,7 +481,6 @@ pub fn copy_and_transform_solid(
         wire_map.insert(wsnap.old_index, topo.add_wire(new_wire));
     }
 
-    // Shells + faces: transform surfaces inline.
     let mut new_shell_ids = Vec::new();
     for ssnap in &shell_snaps {
         let mut new_face_ids = Vec::new();
@@ -613,7 +596,6 @@ pub fn copy_and_transform_solid(
 ///
 /// Returns an error if any topology lookup fails.
 pub fn copy_wire(topo: &mut Topology, wire_id: WireId) -> Result<WireId, crate::OperationsError> {
-    // ── Read phase ─────────────────────────────────────────────────
     let wire = topo.wire(wire_id)?;
     let closed = wire.is_closed();
 
@@ -660,7 +642,6 @@ pub fn copy_wire(topo: &mut Topology, wire_id: WireId) -> Result<WireId, crate::
         });
     }
 
-    // ── Write phase ────────────────────────────────────────────────
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
     for vsnap in &vertex_snaps {
         let new_vid = topo.add_vertex(Vertex::new(vsnap.point, vsnap.tol));
@@ -700,7 +681,6 @@ pub fn copy_wire(topo: &mut Topology, wire_id: WireId) -> Result<WireId, crate::
 ///
 /// Returns an error if any topology lookup fails.
 pub fn copy_face(topo: &mut Topology, face_id: FaceId) -> Result<FaceId, crate::OperationsError> {
-    // ── Read phase ─────────────────────────────────────────────────
     let face = topo.face(face_id)?;
     let surface = face.surface().clone();
     let reversed = face.is_reversed();
@@ -766,7 +746,6 @@ pub fn copy_face(topo: &mut Topology, face_id: FaceId) -> Result<FaceId, crate::
         });
     }
 
-    // ── Write phase ────────────────────────────────────────────────
     topo.reserve(
         vertex_snaps.len(),
         edge_snaps.len(),

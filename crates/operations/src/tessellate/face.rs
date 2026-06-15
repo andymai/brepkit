@@ -57,7 +57,6 @@ pub fn tessellate_with_uvs_a(
     let mut result = match face_data.surface() {
         FaceSurface::Plane { normal, .. } => {
             let mesh = tessellate_planar(topo, face_data, *normal, deflection, angular_tol)?;
-            // For planar faces, project onto plane axes to get UVs.
             let (u_axis, v_axis) = plane_axes(*normal);
             let origin = if mesh.positions.is_empty() {
                 brepkit_math::vec::Point3::new(0.0, 0.0, 0.0)

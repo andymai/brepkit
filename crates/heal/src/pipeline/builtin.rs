@@ -30,8 +30,6 @@ pub fn register_builtins(registry: &mut OperatorRegistry) {
     registry.register("fix_wireframe", Box::new(FixWireframeOp));
 }
 
-// ── fix_shape ──────────────────────────────────────────────────────
-
 /// Full recursive shape fix (solid → shell → face → wire → edge).
 #[derive(Debug)]
 struct FixShapeOp;
@@ -52,8 +50,6 @@ impl HealOperator for FixShapeOp {
         Ok((new_solid, result))
     }
 }
-
-// ── unify_same_domain ──────────────────────────────────────────────
 
 /// Merge adjacent faces sharing the same surface.
 #[derive(Debug)]
@@ -89,8 +85,6 @@ impl HealOperator for UnifySameDomainOp {
     }
 }
 
-// ── direct_faces ───────────────────────────────────────────────────
-
 /// Orient all faces so normals point outward.
 #[derive(Debug)]
 struct DirectFacesOp;
@@ -110,15 +104,12 @@ impl HealOperator for DirectFacesOp {
             fix_orientation: crate::fix::FixMode::On,
             ..Default::default()
         };
-        // Only run shell orientation fix.
         let solid_data = topo.solid(solid_id)?;
         let shell_id = solid_data.outer_shell();
         let result = crate::fix::shell::fix_shell(topo, shell_id, ctx, &config)?;
         Ok((solid_id, result))
     }
 }
-
-// ── same_parameter ─────────────────────────────────────────────────
 
 /// Fix PCurve/3D curve consistency for all edges.
 #[derive(Debug)]
@@ -167,8 +158,6 @@ impl HealOperator for SameParameterOp {
     }
 }
 
-// ── merge_vertices ─────────────────────────────────────────────────
-
 /// Merge coincident vertices across the solid.
 #[derive(Debug)]
 struct MergeVerticesOp;
@@ -193,8 +182,6 @@ impl HealOperator for MergeVerticesOp {
         Ok((new_solid, result))
     }
 }
-
-// ── drop_small_edges ───────────────────────────────────────────────
 
 /// Remove edges shorter than tolerance.
 #[derive(Debug)]
@@ -221,8 +208,6 @@ impl HealOperator for DropSmallEdgesOp {
     }
 }
 
-// ── drop_small_faces ───────────────────────────────────────────────
-
 /// Remove faces with area below tolerance.
 #[derive(Debug)]
 struct DropSmallFacesOp;
@@ -247,8 +232,6 @@ impl HealOperator for DropSmallFacesOp {
         Ok((new_solid, result))
     }
 }
-
-// ── remove_internal_wires ──────────────────────────────────────────
 
 /// Drop internal (hole) wires from all faces.
 #[derive(Debug)]
@@ -280,8 +263,6 @@ impl HealOperator for RemoveInternalWiresOp {
         ))
     }
 }
-
-// ── sew_shells ─────────────────────────────────────────────────────
 
 /// Sew free boundaries in shells.
 #[derive(Debug)]
@@ -316,8 +297,6 @@ impl HealOperator for SewShellsOp {
     }
 }
 
-// ── split_common_vertex ────────────────────────────────────────────
-
 /// Split vertices shared by too many non-adjacent edges.
 #[derive(Debug)]
 struct SplitCommonVertexOp;
@@ -342,8 +321,6 @@ impl HealOperator for SplitCommonVertexOp {
         Ok((solid_id, result))
     }
 }
-
-// ── convert_to_bspline ─────────────────────────────────────────────
 
 /// Convert all geometry to B-Spline representation.
 #[derive(Debug)]
@@ -376,8 +353,6 @@ impl HealOperator for ConvertToBSplineOp {
         ))
     }
 }
-
-// ── convert_to_elementary ──────────────────────────────────────────
 
 /// Recognize and replace NURBS surfaces AND curves with their elementary
 /// analytic forms. Runs surface recognition (face NURBS → analytic
@@ -422,8 +397,6 @@ impl HealOperator for ConvertToElementaryOp {
         ))
     }
 }
-
-// ── fix_wireframe ──────────────────────────────────────────────────
 
 /// Repair missing or misaligned edges in shells.
 #[derive(Debug)]

@@ -171,7 +171,6 @@ fn curve_newton_refine(
 
         let dist_sq = diff.length_squared();
 
-        // Track best solution.
         if dist_sq < best_dist_sq {
             best_dist_sq = dist_sq;
             best_u = u;

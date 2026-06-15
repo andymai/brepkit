@@ -71,7 +71,6 @@ fn build_loops_for_face(
     data: &OffsetData,
     face_id: FaceId,
 ) -> Result<Vec<WireId>, OffsetError> {
-    // Collect all intersection edges for this face.
     let mut face_edges: Vec<EdgeId> = Vec::new();
     for intersection in &data.intersections {
         if intersection.face_a != face_id && intersection.face_b != face_id {
@@ -80,7 +79,6 @@ fn build_loops_for_face(
         face_edges.extend_from_slice(&intersection.new_edges);
     }
 
-    // Include boundary edges (thick-solid mode).
     if let Some(boundary) = data.boundary_edges.get(&face_id) {
         face_edges.extend_from_slice(boundary);
     }
@@ -89,17 +87,14 @@ fn build_loops_for_face(
         return Ok(Vec::new());
     }
 
-    // Strategy 1: Circle/seam pattern.
     if let Some(wires) = try_circle_seam_wire(topo, &face_edges)? {
         return Ok(wires);
     }
 
-    // Strategy 2: Direct chain (edges already share vertices).
     if let Some(wires) = try_direct_chain(topo, &face_edges)? {
         return Ok(wires);
     }
 
-    // Strategy 3: Line intersection fallback (box-like faces).
     build_loops_via_line_intersection(topo, data, face_id)
 }
 
@@ -114,7 +109,6 @@ fn try_circle_seam_wire(
     topo: &mut Topology,
     edges: &[EdgeId],
 ) -> Result<Option<Vec<WireId>>, OffsetError> {
-    // Separate circle edges (closed) from non-circle edges.
     let mut circles: Vec<EdgeId> = Vec::new();
     let mut others: Vec<EdgeId> = Vec::new();
     for &eid in edges {
@@ -146,7 +140,6 @@ fn try_circle_seam_wire(
             return Ok(None);
         }
 
-        // Create seam edge connecting the two circle vertices.
         let seam = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
 
         // Wire: circle_a(fwd) → seam(fwd) → circle_b(rev) → seam(rev)
@@ -174,7 +167,6 @@ fn try_direct_chain(
     topo: &mut Topology,
     edges: &[EdgeId],
 ) -> Result<Option<Vec<WireId>>, OffsetError> {
-    // Snapshot edge data.
     let edge_info: Vec<(EdgeId, VertexId, VertexId)> = edges
         .iter()
         .map(|&eid| {
@@ -183,7 +175,6 @@ fn try_direct_chain(
         })
         .collect::<Result<Vec<_>, OffsetError>>()?;
 
-    // Build vertex adjacency for non-closed edges.
     let mut adjacency: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
     for (list_idx, &(_, start, end)) in edge_info.iter().enumerate() {
         if start == end {
@@ -210,7 +201,6 @@ fn try_direct_chain(
         return Ok(None);
     }
 
-    // Walk adjacency to form closed loops.
     let mut visited: HashSet<usize> = HashSet::new();
     let mut all_loops: Vec<Vec<OrientedEdge>> = Vec::new();
 
@@ -440,7 +430,6 @@ fn line_line_closest_point(a: &LineSeg, b: &LineSeg, tol: f64) -> Option<(Point3
 
     let denom = aa * bb - ab * ab;
 
-    // Parallel lines — no unique intersection.
     // Parallel lines — cross product denominator is near-zero.
     if denom.abs() < 1e-20 {
         return None;
@@ -449,7 +438,6 @@ fn line_line_closest_point(a: &LineSeg, b: &LineSeg, tol: f64) -> Option<(Point3
     let t = (ab * bw - bb * aw) / denom;
     let s = (aa * bw - ab * aw) / denom;
 
-    // Points on each line at closest approach.
     let pa = Point3::new(
         a.p0.x() + t * da.0,
         a.p0.y() + t * da.1,
@@ -461,7 +449,6 @@ fn line_line_closest_point(a: &LineSeg, b: &LineSeg, tol: f64) -> Option<(Point3
         b.p0.z() + s * db.2,
     );
 
-    // Check that the lines actually intersect (distance below threshold).
     let dx = pa.x() - pb.x();
     let dy = pa.y() - pb.y();
     let dz = pa.z() - pb.z();

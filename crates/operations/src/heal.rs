@@ -101,17 +101,13 @@ pub fn heal_solid(
     solid: SolidId,
     tolerance: f64,
 ) -> Result<HealingReport, crate::OperationsError> {
-    // Pass 1: fix wire connectivity (must run before vertex merging).
+    // Must run before vertex merging.
     let wire_gaps_closed = close_wire_gaps(topo, solid, tolerance)?;
-    // Pass 2: merge near-coincident vertices.
     let vertices_merged = merge_coincident_vertices(topo, solid, tolerance)?;
-    // Pass 3: remove degenerate edges.
     let degenerate_edges_removed = remove_degenerate_edges(topo, solid, tolerance)?;
-    // Pass 4: remove small faces.
     let small_faces_removed = remove_small_faces(topo, solid, tolerance)?;
-    // Pass 5: remove duplicate faces.
     let duplicate_faces_removed = remove_duplicate_faces(topo, solid, tolerance)?;
-    // Pass 6: fix face orientations (run last, after topology is clean).
+    // Run last, after topology is clean.
     let orientations_fixed = fix_face_orientations(topo, solid)?;
 
     Ok(HealingReport {
@@ -147,12 +143,10 @@ pub fn merge_coincident_vertices(
     };
     let tol_sq = tol * tol;
 
-    // Collect all vertex positions.
     let solid_data = topo.solid(solid)?;
     let shell = topo.shell(solid_data.outer_shell())?;
     let face_ids: Vec<_> = shell.faces().to_vec();
 
-    // Gather all unique vertex IDs and their positions.
     let mut vertex_ids: Vec<VertexId> = Vec::new();
     let mut positions: Vec<Point3> = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -198,7 +192,6 @@ pub fn merge_coincident_vertices(
         return Ok(0);
     }
 
-    // Apply merges: update edge start/end vertices.
     let mut edge_ids = Vec::new();
     for &fid in &face_ids {
         let face = topo.face(fid)?;
@@ -281,7 +274,6 @@ pub fn remove_degenerate_edges(
             let len_sq = (end_pos - start_pos).length_squared();
 
             if len_sq < tol_sq && edge.start() != edge.end() {
-                // Degenerate edge — skip it
                 any_removed = true;
                 removed_count += 1;
             } else {
@@ -300,7 +292,6 @@ pub fn remove_degenerate_edges(
             if face.outer_wire() == wire_id {
                 face.set_outer_wire(new_wire_id);
             } else {
-                // Check inner wires
                 let iw = face.inner_wires().to_vec();
                 for (i, &iw_id) in iw.iter().enumerate() {
                     if iw_id == wire_id {
@@ -436,7 +427,6 @@ pub fn fix_face_orientations(
     let shell = topo.shell(solid_data.outer_shell())?;
     let face_ids: Vec<_> = shell.faces().to_vec();
 
-    // Compute center of mass (approximate) from all face centroids.
     let mut center = Vec3::new(0.0, 0.0, 0.0);
     let mut total_faces: usize = 0;
 
@@ -472,7 +462,6 @@ pub fn fix_face_orientations(
         center.z() * inv_faces,
     );
 
-    // For each planar face, check if the normal points away from center.
     let mut fixed_count = 0;
     let mut faces_to_flip = Vec::new();
 
@@ -514,7 +503,6 @@ pub fn fix_face_orientations(
         }
     }
 
-    // Apply flips (only planar faces can be flipped).
     for (fid, normal, d) in faces_to_flip {
         let face = topo.face_mut(fid)?;
         face.set_surface(FaceSurface::Plane {
@@ -558,7 +546,6 @@ pub fn close_wire_gaps(
     for &fid in &face_ids {
         let face = topo.face(fid)?;
 
-        // Check all wires (outer + inner).
         let wire_ids: Vec<_> = std::iter::once(face.outer_wire())
             .chain(face.inner_wires().iter().copied())
             .collect();
@@ -572,8 +559,6 @@ pub fn close_wire_gaps(
                 continue;
             }
 
-            // For each pair of consecutive edges, check if end of edge i
-            // matches start of edge i+1.
             let mut merge_pairs: Vec<(VertexId, VertexId)> = Vec::new();
 
             for i in 0..n_edges {
@@ -582,14 +567,12 @@ pub fn close_wire_gaps(
                 let edge_i = topo.edge(edges_list[i].edge())?;
                 let edge_next = topo.edge(edges_list[next_i].edge())?;
 
-                // End vertex of current edge (accounting for orientation).
                 let end_vid = if edges_list[i].is_forward() {
                     edge_i.end()
                 } else {
                     edge_i.start()
                 };
 
-                // Start vertex of next edge (accounting for orientation).
                 let start_vid = if edges_list[next_i].is_forward() {
                     edge_next.start()
                 } else {

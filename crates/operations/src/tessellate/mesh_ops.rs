@@ -362,7 +362,6 @@ pub(super) fn weld_boundary_vertices(
         return;
     }
 
-    // Build half-edge set to find boundary edges.
     let mut half_edges: DetHashMap<(u32, u32), usize> = DetHashMap::default();
     for tri in mesh.indices.chunks_exact(3) {
         let (i0, i1, i2) = (tri[0], tri[1], tri[2]);

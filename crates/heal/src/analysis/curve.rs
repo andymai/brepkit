@@ -30,7 +30,6 @@ pub struct CurveAnalysis {
 pub fn analyze_curve(curve: &NurbsCurve, tolerance: &Tolerance) -> CurveAnalysis {
     let (t_min, t_max) = ParametricCurve::domain(curve);
 
-    // Approximate arc length.
     let mut length = 0.0;
     let mut prev = ParametricCurve::evaluate(curve, t_min);
     for i in 1..=ARC_LENGTH_SAMPLES {
@@ -42,7 +41,6 @@ pub fn analyze_curve(curve: &NurbsCurve, tolerance: &Tolerance) -> CurveAnalysis
 
     let is_degenerate = length < tolerance.linear;
 
-    // Detect C0 continuity breaks: internal knots with multiplicity == degree.
     let continuity_breaks = detect_continuity_breaks(curve);
 
     let mut status = Status::OK;
@@ -71,7 +69,6 @@ fn detect_continuity_breaks(curve: &NurbsCurve) -> Vec<f64> {
     let mut i = 0;
     while i < knots.len() {
         let val = knots[i];
-        // Count multiplicity.
         let mut mult = 0;
         while i + mult < knots.len() && (knots[i + mult] - val).abs() < 1e-15 {
             mult += 1;

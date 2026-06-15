@@ -123,7 +123,6 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         return Ok(curved_solid);
     }
 
-    // Collect vertex positions for each profile.
     let mut profile_verts: Vec<Vec<Point3>> = Vec::with_capacity(profiles.len());
     for &fid in profiles {
         let face = topo.face(fid)?;
@@ -161,7 +160,6 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
     let num_profiles = profile_verts.len();
     let num_sections = num_profiles - 1;
 
-    // Create all vertices.
     let ring_verts: Vec<Vec<brepkit_topology::vertex::VertexId>> = profile_verts
         .iter()
         .map(|verts| {
@@ -172,7 +170,6 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         })
         .collect();
 
-    // Create profile edges for each ring.
     let ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = ring_verts
         .iter()
         .map(|ring| {
@@ -185,7 +182,6 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         })
         .collect();
 
-    // Create connecting edges between adjacent profiles.
     let connect_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = (0..num_sections)
         .map(|s| {
             (0..n)
@@ -284,7 +280,6 @@ pub fn loft(topo: &mut Topology, profiles: &[FaceId]) -> Result<SolidId, crate::
         all_faces.push(fid);
     }
 
-    // Assemble.
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
@@ -933,7 +928,6 @@ pub fn loft_smooth(
         return loft(topo, profiles);
     }
 
-    // Collect vertex positions for each profile.
     let mut profile_verts: Vec<Vec<Point3>> = Vec::with_capacity(profiles.len());
     for &fid in profiles {
         let face = topo.face(fid)?;
@@ -949,7 +943,6 @@ pub fn loft_smooth(
         profile_verts.push(verts);
     }
 
-    // Resample all profiles to the maximum vertex count.
     let n = profile_verts.iter().map(Vec::len).max().unwrap_or(0);
     if n < 3 {
         return Err(crate::OperationsError::InvalidInput {
@@ -967,7 +960,6 @@ pub fn loft_smooth(
 
     let num_profiles = profile_verts.len();
 
-    // Create all vertices.
     let ring_verts: Vec<Vec<brepkit_topology::vertex::VertexId>> = profile_verts
         .iter()
         .map(|verts| {
@@ -978,7 +970,6 @@ pub fn loft_smooth(
         })
         .collect();
 
-    // Create profile edges for each ring.
     let ring_edges: Vec<Vec<brepkit_topology::edge::EdgeId>> = ring_verts
         .iter()
         .map(|ring| {
@@ -1028,11 +1019,9 @@ pub fn loft_smooth(
             .map(|k| vec![profile_verts[k][i], profile_verts[k][next_i]])
             .collect();
 
-        // Interpolate a NURBS surface through the grid.
         let surface =
             interpolate_surface(&grid, degree_u, degree_v).map_err(crate::OperationsError::Math)?;
 
-        // Create the boundary wire for this side face.
         // The wire goes around the edge of the NURBS patch:
         // bottom edge → right rail → top edge (reversed) → left rail (reversed)
         let last = num_profiles - 1;
@@ -1091,7 +1080,6 @@ pub fn loft_smooth(
         all_faces.push(fid);
     }
 
-    // Assemble.
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
     let shell_id = topo.add_shell(shell);
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
@@ -1227,7 +1215,6 @@ mod tests {
         let mut topo = Topology::new();
         let square = make_square_at(&mut topo, 1.0, 0.0);
 
-        // Create a triangle profile.
         let tol_val = 1e-7;
         let v0 = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 1.0), tol_val));
         let v1 = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 1.0), tol_val));
@@ -1317,8 +1304,6 @@ mod tests {
             "CW-wound loft should produce positive volume, got {vol}"
         );
     }
-
-    // ── Smooth NURBS loft tests ──────────────────────────
 
     #[test]
     fn loft_smooth_two_profiles_delegates() {

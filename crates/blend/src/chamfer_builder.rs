@@ -127,7 +127,6 @@ impl<'a> ChamferBuilder<'a> {
     /// [`BlendResult::failed`] rather than aborting the whole operation.
     #[allow(clippy::too_many_lines)]
     pub fn build(self) -> Result<BlendResult, BlendError> {
-        // ── Validate input ──────────────────────────────────────────────
         let all_edges: Vec<(EdgeId, f64, f64)> = self
             .edge_sets
             .into_iter()
@@ -157,17 +156,13 @@ impl<'a> ChamferBuilder<'a> {
 
         let topo = self.topo;
 
-        // ── Build adjacency ─────────────────────────────────────────────
         let adjacency = topo.build_adjacency(self.solid)?;
 
-        // Collect all original face IDs.
         let shell_id = topo.solid(self.solid)?.outer_shell();
         let original_faces: Vec<FaceId> = topo.shell(shell_id)?.faces().to_vec();
 
-        // Track which faces are touched (adjacent to a chamfer edge).
         let mut touched_faces: HashSet<FaceId> = HashSet::new();
 
-        // ── Phase 1: Compute stripes ────────────────────────────────────
         let mut succeeded: Vec<EdgeId> = Vec::new();
         let mut failed: Vec<(EdgeId, BlendError)> = Vec::new();
         let mut stripe_results: Vec<StripeResult> = Vec::new();
@@ -197,7 +192,6 @@ impl<'a> ChamferBuilder<'a> {
             });
         }
 
-        // ── Phase 2: Trim faces ─────────────────────────────────────────
         let mut face_replacements: std::collections::HashMap<FaceId, FaceId> =
             std::collections::HashMap::new();
 
@@ -207,7 +201,6 @@ impl<'a> ChamferBuilder<'a> {
             let contact1_pts = sample_nurbs_endpoints(&stripe.contact1);
             let contact2_pts = sample_nurbs_endpoints(&stripe.contact2);
 
-            // Compute trim side from chamfer geometry.
             let keep_side1 =
                 if let (Some(sec), Ok(face)) = (stripe.sections.first(), topo.face(stripe.face1)) {
                     let n = face.surface().normal(0.0, 0.0);
@@ -231,7 +224,6 @@ impl<'a> ChamferBuilder<'a> {
                     TrimSide::Right
                 };
 
-            // Trim face 1.
             let current_face1 = face_replacements
                 .get(&stripe.face1)
                 .copied()
@@ -254,7 +246,6 @@ impl<'a> ChamferBuilder<'a> {
                 }
             }
 
-            // Trim face 2.
             let current_face2 = face_replacements
                 .get(&stripe.face2)
                 .copied()
@@ -278,7 +269,6 @@ impl<'a> ChamferBuilder<'a> {
             }
         }
 
-        // ── Phase 3: Create blend faces ─────────────────────────────────
         let mut blend_face_ids: Vec<FaceId> = Vec::new();
 
         for sr in &stripe_results {
@@ -286,26 +276,21 @@ impl<'a> ChamferBuilder<'a> {
             blend_face_ids.push(blend_face_id);
         }
 
-        // ── Phase 4: Assemble solid ─────────────────────────────────────
         let mut result_faces: Vec<FaceId> = Vec::new();
 
-        // Add untouched original faces.
         for &fid in &original_faces {
             if !touched_faces.contains(&fid) {
                 result_faces.push(fid);
             }
         }
 
-        // Add trimmed replacements (or originals if not replaced).
         for &fid in &touched_faces {
             let replacement = face_replacements.get(&fid).copied();
             result_faces.push(replacement.unwrap_or(fid));
         }
 
-        // Add blend faces.
         result_faces.extend(&blend_face_ids);
 
-        // Build shell and solid.
         let new_shell = Shell::new(result_faces)?;
         let new_shell_id = topo.add_shell(new_shell);
         let new_solid = Solid::new(new_shell_id, Vec::new());
@@ -334,10 +319,8 @@ fn compute_chamfer_stripe(
     d1: f64,
     d2: f64,
 ) -> Result<StripeResult, BlendError> {
-    // Find the two adjacent faces.
     let adj_faces = adjacency.faces_for_edge(edge_id);
     if adj_faces.len() != 2 {
-        // Non-manifold (3+ faces) or boundary (0-1 faces) edge cannot be chamfered.
         log::warn!(
             "edge {edge_id:?} has {} adjacent faces (expected 2) — cannot chamfer non-manifold or boundary edges",
             adj_faces.len()
@@ -350,14 +333,11 @@ fn compute_chamfer_stripe(
     let face1 = adj_faces[0];
     let face2 = adj_faces[1];
 
-    // Snapshot surface data.
     let surf1 = topo.face(face1)?.surface().clone();
     let surf2 = topo.face(face2)?.surface().clone();
 
-    // Build a single-edge spine.
     let spine = Spine::from_single_edge(topo, edge_id)?;
 
-    // Try analytic fast path.
     if let Some(result) =
         analytic::try_analytic_chamfer(&surf1, &surf2, &spine, topo, d1, d2, face1, face2)?
     {
@@ -374,10 +354,6 @@ fn compute_chamfer_stripe(
         ),
     })
 }
-
-// ===========================================================================
-// Tests
-// ===========================================================================
 
 #[cfg(test)]
 mod tests {
@@ -420,7 +396,6 @@ mod tests {
         builder.add_edges_symmetric(&[target_edge], 0.1);
         let result = builder.build().expect("chamfer build should succeed");
 
-        // The result solid should exist and have more faces.
         let result_solid = topo.solid(result.solid).unwrap();
         let result_shell = topo.shell(result_solid.outer_shell()).unwrap();
 
@@ -435,7 +410,6 @@ mod tests {
         assert!(result.failed.is_empty());
         assert!(!result.is_partial);
 
-        // The blend surface should be a plane (plane-plane chamfer).
         let mut found_chamfer_plane = false;
         for &fid in result_shell.faces() {
             let face = topo.face(fid).unwrap();
@@ -483,7 +457,6 @@ mod tests {
         let solid = make_unit_cube_manifold(&mut topo);
 
         let builder = ChamferBuilder::new(&mut topo, solid);
-        // No edges added — should error.
         let result = builder.build();
         assert!(result.is_err(), "empty edge set should produce an error");
     }

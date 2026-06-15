@@ -19,10 +19,6 @@ use crate::CheckError;
 use crate::classify::ray_surface;
 use crate::util::{face_polygon, point_in_polygon_3d};
 
-// ---------------------------------------------------------------------------
-// Tolerance constants
-// ---------------------------------------------------------------------------
-
 /// Minimum positive ray parameter to count as a forward hit.
 const RAY_T_MIN: f64 = 1e-12;
 
@@ -31,10 +27,6 @@ const HALF_SPACE_EPS: f64 = 1e-10;
 
 /// Threshold for coincident vertex detection (squared distance).
 const COINCIDENT_SQ: f64 = 1e-12;
-
-// ---------------------------------------------------------------------------
-// Angular unwrapping
-// ---------------------------------------------------------------------------
 
 /// Unwrap a step in a periodic (angular) coordinate so the difference
 /// lies in `[-PI, PI)`.
@@ -47,10 +39,6 @@ fn unwrap_angle(prev: f64, next: f64) -> f64 {
     let diff = next - prev;
     prev + diff - tau * ((diff + PI) / tau).floor()
 }
-
-// ---------------------------------------------------------------------------
-// UV boundary construction
-// ---------------------------------------------------------------------------
 
 /// Build a UV boundary polygon from 3D face boundary vertices,
 /// with proper unwrapping of periodic coordinates.
@@ -76,10 +64,6 @@ where
     uv
 }
 
-// ---------------------------------------------------------------------------
-// UV containment test
-// ---------------------------------------------------------------------------
-
 /// Test if a (u,v) point is inside the UV boundary polygon.
 ///
 /// Adjusts the test point's u coordinate (and v when periodic) to lie within
@@ -90,7 +74,6 @@ fn point_in_uv_boundary(
     uv_boundary: &[(f64, f64)],
     v_periodic: bool,
 ) -> bool {
-    // Find the u range of the unwrapped boundary.
     let u_min = uv_boundary
         .iter()
         .map(|(u, _)| *u)
@@ -128,20 +111,12 @@ fn point_in_uv_boundary(
     point_in_polygon(test, &poly)
 }
 
-// ---------------------------------------------------------------------------
-// Polygon normal (Newell's method) — delegated to util
-// ---------------------------------------------------------------------------
-
 /// Compute the normal of a polygon via Newell's method.
 ///
 /// Returns a unit-length normal, or `(0,0,1)` for degenerate polygons.
 pub fn polygon_normal(verts: &[Point3]) -> Vec3 {
     crate::util::polygon_normal(verts)
 }
-
-// ---------------------------------------------------------------------------
-// Crossing counters
-// ---------------------------------------------------------------------------
 
 /// Count crossings for analytic (non-planar) faces using UV containment.
 ///
@@ -171,7 +146,6 @@ where
         return Ok(0);
     }
 
-    // Build UV boundary polygon from face wire.
     let verts = face_polygon(topo, face_id)?;
 
     // Detect degenerate boundary: a "full-surface" face whose wire has fewer
@@ -374,7 +348,6 @@ fn ray_crossings_nurbs(
         return Ok(0);
     }
 
-    // Build UV boundary from face wire vertices.
     let verts = face_polygon(topo, face_id)?;
     if verts.len() < 3 {
         // Full-surface face — every forward hit is a crossing.

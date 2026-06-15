@@ -145,13 +145,12 @@ fn tessellate_solid_core(
 ) -> Result<(TriangleMesh, Option<Vec<u32>>, usize), crate::OperationsError> {
     use brepkit_topology::explorer;
 
-    // Phase 1: Collect all faces and build edge->face adjacency.
     let all_faces = explorer::solid_faces(topo, solid)?;
     let edge_face_map = explorer::edge_to_face_map(topo, solid)?;
 
-    // Phase 2: Tessellate each unique edge once. The map is a std `HashMap`,
-    // so sort its keys into ID order before use — keeping all downstream
-    // iteration deterministic regardless of insertion-order hashing.
+    // The map is a std `HashMap`, so sort its keys into ID order before use —
+    // keeping all downstream iteration deterministic regardless of
+    // insertion-order hashing.
     let mut edge_indices: Vec<usize> = edge_face_map.keys().copied().collect();
     edge_indices.sort_unstable();
     #[cfg(not(target_arch = "wasm32"))]
@@ -203,7 +202,8 @@ fn tessellate_solid_core(
         map
     };
 
-    // Phase 2b: Synchronize circle edge samples with face grid density.
+    // Synchronize circle edge samples with face grid density so a face's rim
+    // points line up with its own analytic grid columns.
     {
         for &face_id in &all_faces {
             let face_data = topo.face(face_id)?;
@@ -266,7 +266,6 @@ fn tessellate_solid_core(
         }
     }
 
-    // Phase 3: Build merged mesh with shared edge vertices.
     let mut merged = TriangleMesh::default();
     let mut point_to_global: DetHashMap<(i64, i64, i64), u32> = DetHashMap::default();
     let mut edge_global_indices: DetHashMap<usize, Vec<u32>> = DetHashMap::default();
@@ -287,7 +286,6 @@ fn tessellate_solid_core(
         edge_global_indices.insert(edge_idx, global_ids);
     }
 
-    // Phase 3b: Circle edge refinement.
     {
         let tol_linear = brepkit_math::tolerance::Tolerance::new().linear;
         let refine_tol = tol_linear * 10.0;
@@ -376,7 +374,6 @@ fn tessellate_solid_core(
         }
     }
 
-    // Phase 4: Tessellate each face using its boundary edge vertices.
     // When tracking, `tri_faces` runs parallel to the mesh triangles:
     // tri_faces[t] is the index (into `all_faces`) of the face that produced
     // triangle t. The ungrouped caller skips this bookkeeping entirely.
@@ -395,7 +392,6 @@ fn tessellate_solid_core(
     #[allow(clippy::items_after_statements)]
     type CdtResult = Result<Vec<(usize, usize, usize)>, crate::OperationsError>;
 
-    // Phase 4a: Collect CDT jobs for large planar faces with holes.
     let mut cdt_jobs: Vec<CdtJob> = Vec::new();
     let mut other_face_indices: Vec<usize> = Vec::new();
 
@@ -478,7 +474,6 @@ fn tessellate_solid_core(
         other_face_indices.push(fi);
     }
 
-    // Phase 4b: Run CDTs in parallel for large planar faces.
     #[cfg(not(target_arch = "wasm32"))]
     let cdt_results: Vec<CdtResult> = if cdt_jobs.len() >= 2 {
         use rayon::prelude::*;
@@ -498,7 +493,6 @@ fn tessellate_solid_core(
         .map(|job| run_planar_cdt(&job.pts2d, job.outer_count, &job.inner_wire_ranges))
         .collect();
 
-    // Phase 4c: Merge CDT results into the shared mesh (sequential).
     for (job, result) in cdt_jobs.iter().zip(cdt_results) {
         let tris = result?;
 
@@ -533,7 +527,6 @@ fn tessellate_solid_core(
         }
     }
 
-    // Phase 4d: Process remaining faces sequentially.
     for &fi in &other_face_indices {
         if let Err(e) = tessellate_face_with_shared_edges(
             topo,
@@ -554,7 +547,6 @@ fn tessellate_solid_core(
         }
     }
 
-    // Phase 5: Surface-aware vertex normals.
     let n_verts = merged.positions.len();
     let tri_count = merged.indices.len() / 3;
 
@@ -640,10 +632,9 @@ fn tessellate_solid_core(
         }
     }
 
-    // Phase 6: Weld boundary vertices.
     weld_boundary_vertices(&mut merged, deflection, tri_faces.as_mut());
 
-    // Phase 7: Drop coincident/cancelling triangles left by booleans that
+    // Drop coincident/cancelling triangles left by booleans that
     // produced overlapping coplanar faces (issue #696). Keyed on quantized
     // positions so position-coincident triangles with distinct vertex IDs
     // are still caught.

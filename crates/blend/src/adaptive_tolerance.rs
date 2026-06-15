@@ -41,7 +41,6 @@ mod tests {
         // edge_length * 0.001 is the limiting factor (smaller than radius * 0.01)
         let t1 = snap_tolerance(0.1, 1.0);
         let t2 = snap_tolerance(0.01, 1.0);
-        // Shorter edge -> smaller tolerance
         assert!(t2 < t1, "tolerance should decrease with shorter edges");
     }
 
@@ -50,17 +49,14 @@ mod tests {
         // radius * 0.01 is the limiting factor (smaller than edge_length * 0.001)
         let t1 = snap_tolerance(1.0, 0.01);
         let t2 = snap_tolerance(1.0, 0.001);
-        // Smaller radius -> smaller tolerance
         assert!(t2 < t1, "tolerance should decrease with smaller radius");
     }
 
     #[test]
     fn test_snap_tolerance_clamped_to_range() {
-        // Very large inputs -> clamped to 1e-4
         let t_large = snap_tolerance(1000.0, 1000.0);
         assert!(t_large <= 1e-4, "tolerance must not exceed 1e-4");
 
-        // Very small inputs -> clamped to 1e-10
         let t_small = snap_tolerance(1e-12, 1e-12);
         assert!(t_small >= 1e-10, "tolerance must not go below 1e-10");
     }

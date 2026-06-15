@@ -74,7 +74,6 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
         )
     };
 
-    // Build index of boundary PBs by quantized endpoint position pair.
     let mut boundary_index: std::collections::HashMap<QPair, Vec<PaveBlockId>> =
         std::collections::HashMap::new();
 
@@ -121,7 +120,6 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
         }
     }
 
-    // For each section PB, check if a boundary PB has matching endpoints.
     let mut linked = 0_usize;
 
     // Collect section PB IDs upfront to avoid borrowing arena.curves while mutating arena.
@@ -134,7 +132,6 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
     for root_pb_id in &section_pb_ids {
         let leaves = arena.collect_leaf_pave_blocks(&[*root_pb_id]);
         for section_pb_id in leaves {
-            // Already in a CB — skip
             if arena.pb_to_cb.contains_key(&section_pb_id) {
                 continue;
             }
@@ -238,7 +235,6 @@ fn try_link(
         return false;
     }
 
-    // Already in same CB
     if arena.pb_to_cb.get(&boundary_pb_id) == arena.pb_to_cb.get(&section_pb_id)
         && arena.pb_to_cb.contains_key(&section_pb_id)
     {
@@ -258,7 +254,6 @@ fn try_link(
         return false;
     }
 
-    // Link: add section PB to boundary PB's CB, or create new CB
     if let Some(&cb_id) = arena.pb_to_cb.get(&boundary_pb_id) {
         if let Some(cb) = arena.common_blocks.get_mut(cb_id) {
             cb.pave_blocks.push(section_pb_id);

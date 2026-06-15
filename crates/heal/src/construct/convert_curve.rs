@@ -288,13 +288,11 @@ mod tests {
         let end = Point3::new(3.0, 4.0, 0.0);
         let nurbs = line_to_nurbs(start, end).unwrap();
 
-        // Evaluate at t=0 and t=1.
         let p0 = nurbs.evaluate(0.0);
         let p1 = nurbs.evaluate(1.0);
         assert!((p0 - start).length() < 1e-10);
         assert!((p1 - end).length() < 1e-10);
 
-        // Midpoint.
         let mid = nurbs.evaluate(0.5);
         let expected_mid = Point3::new(1.5, 2.0, 0.0);
         assert!((mid - expected_mid).length() < 1e-10);
@@ -322,7 +320,6 @@ mod tests {
             );
         }
 
-        // Check quarter points are exact.
         let p0 = nurbs.evaluate(0.0);
         let p1 = nurbs.evaluate(1.0);
         let p2 = nurbs.evaluate(2.0);

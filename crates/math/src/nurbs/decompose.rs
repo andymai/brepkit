@@ -20,7 +20,6 @@ pub fn curve_to_bezier_segments(curve: &NurbsCurve) -> Result<Vec<NurbsCurve>, M
     let p = curve.degree();
     let knots = curve.knots();
 
-    // Collect unique interior knots and their deficiencies.
     let mut unique_interior = Vec::new();
     let mut i = p + 1;
     while i < knots.len() - p - 1 {
@@ -42,7 +41,7 @@ pub fn curve_to_bezier_segments(curve: &NurbsCurve) -> Result<Vec<NurbsCurve>, M
         refined = curve_knot_insert(&refined, u, deficit)?;
     }
 
-    // Now extract Bezier segments: each spans p+1 consecutive control points.
+    // Each Bezier segment spans p+1 consecutive control points.
     let ref_knots = refined.knots();
     let ref_cps = refined.control_points();
     let ref_ws = refined.weights();
@@ -261,11 +260,9 @@ pub fn curve_degree_elevate(curve: &NurbsCurve, t: usize) -> Result<NurbsCurve, 
     let p = curve.degree();
     let new_p = p + t;
 
-    // First decompose into Bezier segments.
     let segments = curve_to_bezier_segments(curve)?;
     let n_segs = segments.len();
 
-    // Precompute binomial coefficients for degree elevation.
     let bezalfs = compute_bezalfs(p, t);
 
     let mut all_cps: Vec<[f64; 4]> = Vec::new();
@@ -280,7 +277,6 @@ pub fn curve_degree_elevate(curve: &NurbsCurve, t: usize) -> Result<NurbsCurve, 
             .map(|(pt, &w)| [pt.x() * w, pt.y() * w, pt.z() * w, w])
             .collect();
 
-        // Degree-elevate this Bezier segment.
         let mut elevated = vec![[0.0; 4]; new_p + 1];
         for i in 0..=new_p {
             for j in i.saturating_sub(t)..=(i.min(p)) {

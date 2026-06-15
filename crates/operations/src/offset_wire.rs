@@ -85,7 +85,6 @@ pub fn offset_wire_with_join(
         });
     }
 
-    // Get face normal.
     let face = topo.face(face_id)?;
     let face_normal = match face.surface() {
         FaceSurface::Plane { normal, .. } => *normal,
@@ -96,7 +95,6 @@ pub fn offset_wire_with_join(
         }
     };
 
-    // Get ordered vertices of the face's outer wire.
     let verts = face_polygon(topo, face_id)?;
     let n = verts.len();
     if n < 3 {
@@ -205,7 +203,6 @@ fn build_intersection_wire(
         }
     }
 
-    // Build the offset wire.
     let vert_ids: Vec<_> = offset_verts
         .iter()
         .map(|&p| topo.add_vertex(Vertex::new(p, tol.linear)))
@@ -313,7 +310,6 @@ fn build_arc_wire(
         }
     }
 
-    // Build edges with shared vertex IDs.
     let mut oriented_edges = Vec::with_capacity(2 * n);
 
     for i in 0..n {
@@ -406,7 +402,6 @@ fn build_chamfer_wire(
         }
     }
 
-    // Build edges with shared vertex IDs.
     let mut oriented_edges = Vec::with_capacity(2 * n);
 
     for i in 0..n {

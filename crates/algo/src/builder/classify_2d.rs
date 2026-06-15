@@ -24,13 +24,12 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
         return Point2::new(cx, cy);
     }
 
-    // 1. Compute centroid.
     let n = loop_pts.len() as f64;
     let cx = loop_pts.iter().map(|p| p.x()).sum::<f64>() / n;
     let cy = loop_pts.iter().map(|p| p.y()).sum::<f64>() / n;
     let centroid = Point2::new(cx, cy);
 
-    // 2. If centroid is inside, use it. A centroid that lands on the
+    // If centroid is inside, use it. A centroid that lands on the
     // boundary itself (e.g. the reflex corner of an L-shaped loop) passes
     // the even-odd test unpredictably and is not a safe interior sample.
     if point_in_polygon_2d(centroid, loop_pts)
@@ -39,7 +38,6 @@ pub fn sample_interior_point(loop_pts: &[Point2]) -> Point2 {
         return centroid;
     }
 
-    // 3. Fallback: try midpoint of each edge, nudged inward.
     let area = signed_area_2d(loop_pts);
     for i in 0..loop_pts.len() {
         let j = (i + 1) % loop_pts.len();

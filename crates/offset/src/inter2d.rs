@@ -65,7 +65,6 @@ fn create_edge_from_curve_points(
         return None;
     }
 
-    // Try to fit a circle if we have enough points.
     if points.len() >= 8 {
         if let Some((circle, seam_pt)) = fit_circle_3d(points, tol) {
             let v = find_or_create_vertex(topo, vertex_cache, seam_pt, tol);
@@ -73,7 +72,6 @@ fn create_edge_from_curve_points(
         }
     }
 
-    // Fall back to line edge.
     let p_start = points[0];
     let p_end = points[points.len() - 1];
     let v_start = find_or_create_vertex(topo, vertex_cache, p_start, tol);
@@ -107,13 +105,10 @@ fn fit_circle_3d(points: &[Point3], tol: f64) -> Option<(brepkit_math::curves::C
         return None;
     }
 
-    // Pick 3 well-spaced points.
     let p0 = points[0];
     let p1 = points[n / 3];
     let p2 = points[2 * n / 3];
 
-    // Compute circumcircle of p0, p1, p2 in 3D.
-    // 1. Plane normal from cross product.
     let d1 = Vec3::new(p1.x() - p0.x(), p1.y() - p0.y(), p1.z() - p0.z());
     let d2 = Vec3::new(p2.x() - p0.x(), p2.y() - p0.y(), p2.z() - p0.z());
     let normal = d1.cross(d2);
@@ -127,7 +122,6 @@ fn fit_circle_3d(points: &[Point3], tol: f64) -> Option<(brepkit_math::curves::C
         normal.z() / normal_len,
     );
 
-    // 2. Build local 2D frame in the plane.
     let u_axis = {
         let len = d1.length();
         if len < 1e-15 {
@@ -137,7 +131,6 @@ fn fit_circle_3d(points: &[Point3], tol: f64) -> Option<(brepkit_math::curves::C
     };
     let v_axis = normal.cross(u_axis);
 
-    // 3. Project 3 points to 2D.
     let proj = |p: Point3| -> (f64, f64) {
         let dx = p.x() - p0.x();
         let dy = p.y() - p0.y();
@@ -149,7 +142,7 @@ fn fit_circle_3d(points: &[Point3], tol: f64) -> Option<(brepkit_math::curves::C
     let (bx, by) = proj(p1);
     let (cx_l, cy_l) = proj(p2);
 
-    // 4. Circumcenter in 2D: solve perpendicular bisector intersection.
+    // Circumcenter in 2D: solve perpendicular bisector intersection.
     let d_val = 2.0 * (ax * (by - cy_l) + bx * (cy_l - ay) + cx_l * (ay - by));
     if d_val.abs() < 1e-15 {
         return None;
@@ -165,14 +158,12 @@ fn fit_circle_3d(points: &[Point3], tol: f64) -> Option<(brepkit_math::curves::C
         return None;
     }
 
-    // 5. Lift circumcenter back to 3D.
     let center = Point3::new(
         p0.x() + ux * u_axis.x() + uy * v_axis.x(),
         p0.y() + ux * u_axis.y() + uy * v_axis.y(),
         p0.z() + ux * u_axis.z() + uy * v_axis.z(),
     );
 
-    // 6. Validate: all points should be within tolerance of the circle.
     let max_dev = points
         .iter()
         .map(|p| (dist_sq(*p, center).sqrt() - radius).abs())
@@ -291,7 +282,6 @@ mod tests {
         let mut cache = Vec::new();
         let tol = 1e-7;
 
-        // 32 points on a circle at z=5, radius=2.5
         let n = 32;
         let radius = 2.5;
         let points: Vec<_> = (0..n)

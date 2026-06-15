@@ -46,7 +46,6 @@ pub fn compute_wire_order(topo: &Topology, wire_id: WireId) -> Result<WireOrderR
         });
     }
 
-    // Snapshot all edge endpoint positions.
     let mut starts: Vec<Point3> = Vec::with_capacity(n);
     let mut ends: Vec<Point3> = Vec::with_capacity(n);
 
@@ -58,13 +57,11 @@ pub fn compute_wire_order(topo: &Topology, wire_id: WireId) -> Result<WireOrderR
         ends.push(e);
     }
 
-    // Greedy nearest-neighbor ordering.
     let mut used = vec![false; n];
     let mut order = Vec::with_capacity(n);
     let mut flips = Vec::with_capacity(n);
     let mut max_gap = 0.0_f64;
 
-    // Start with edge 0 in its original orientation.
     order.push(0);
     flips.push(false);
     used[0] = true;
@@ -79,14 +76,12 @@ pub fn compute_wire_order(topo: &Topology, wire_id: WireId) -> Result<WireOrderR
             if used[j] {
                 continue;
             }
-            // Try forward: current_end -> starts[j]
             let d_fwd = (starts[j] - current_end).length_squared();
             if d_fwd < best_dist {
                 best_dist = d_fwd;
                 best_idx = j;
                 best_flip = false;
             }
-            // Try reversed: current_end -> ends[j]
             let d_rev = (ends[j] - current_end).length_squared();
             if d_rev < best_dist {
                 best_dist = d_rev;

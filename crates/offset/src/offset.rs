@@ -34,7 +34,6 @@ pub fn build_offset_faces(
     let faces = topo.shell(shell_id)?.faces().to_vec();
 
     for face_id in faces {
-        // Check if excluded
         if data.excluded_faces.contains(&face_id) {
             let face = topo.face(face_id)?;
             data.offset_faces.insert(

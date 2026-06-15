@@ -35,7 +35,6 @@ impl FixMode {
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_field_names)]
 pub struct FixConfig {
-    // ── Wire fixes ──────────────────────────────────────────────
     /// Reorder edges in wires to form a connected chain.
     pub fix_reorder: FixMode,
     /// Close gaps between consecutive edges by adjusting vertices.
@@ -61,7 +60,6 @@ pub struct FixConfig {
     /// Fix intersecting adjacent edges.
     pub fix_intersecting_edges: FixMode,
 
-    // ── Face fixes ──────────────────────────────────────────────
     /// Fix wire orientation relative to face normal.
     pub fix_wire_orientation: FixMode,
     /// Add natural boundary wire to faces on closed surfaces.
@@ -75,11 +73,9 @@ pub struct FixConfig {
     /// Fix intersecting wires within a face.
     pub fix_intersecting_wires: FixMode,
 
-    // ── Shell fixes ─────────────────────────────────────────────
     /// Fix shell orientation (outward-facing normals).
     pub fix_orientation: FixMode,
 
-    // ── Edge fixes ──────────────────────────────────────────────
     /// Fix SameParameter: ensure PCurve and 3D curve agree.
     pub fix_same_parameter: FixMode,
     /// Adjust vertex tolerances to match edge geometry.
@@ -87,11 +83,9 @@ pub struct FixConfig {
     /// Rebuild PCurves to match 3D curves.
     pub fix_pcurve: FixMode,
 
-    // ── Solid fixes ─────────────────────────────────────────────
     /// Merge coincident vertices across the solid.
     pub fix_coincident_vertices: FixMode,
 
-    // ── Global fixes ────────────────────────────────────────────
     /// Fix wireframe: repair missing or misaligned edges in shells.
     pub fix_wireframe: FixMode,
     /// Split vertices shared by too many non-adjacent edges.

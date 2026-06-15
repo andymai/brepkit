@@ -191,7 +191,6 @@ fn build_mesh(vertices: &[Point3], indices: &[u32]) -> Result<TriangleMesh, IoEr
         });
     }
 
-    // Accumulate face normals into per-vertex normals.
     let mut normals = vec![Vec3::new(0.0, 0.0, 0.0); vertices.len()];
 
     for tri in indices.chunks_exact(3) {
@@ -221,7 +220,6 @@ fn build_mesh(vertices: &[Point3], indices: &[u32]) -> Result<TriangleMesh, IoEr
         normals[i2] += face_normal;
     }
 
-    // Normalize accumulated normals.
     let up = Vec3::new(0.0, 0.0, 1.0);
     for n in &mut normals {
         *n = n.normalize().unwrap_or(up);
@@ -289,8 +287,6 @@ mod tests {
     use super::*;
     use crate::threemf::writer;
 
-    // ── Round-trip tests ────────────────────────────────────────────
-
     #[test]
     fn roundtrip_unit_cube() {
         let mut topo = Topology::new();
@@ -332,8 +328,6 @@ mod tests {
         assert_eq!(meshes.len(), 2);
     }
 
-    // ── Vertex data integrity ───────────────────────────────────────
-
     #[test]
     fn roundtrip_preserves_vertex_bounds() {
         let mut topo = Topology::new();
@@ -366,8 +360,6 @@ mod tests {
         }
     }
 
-    // ── Error handling tests ────────────────────────────────────────
-
     #[test]
     fn invalid_zip_data() {
         let result = read_threemf(b"this is not a zip file");
@@ -376,7 +368,6 @@ mod tests {
 
     #[test]
     fn missing_model_entry() {
-        // Create a valid ZIP but without the required model file.
         let buf = std::io::Cursor::new(Vec::new());
         let mut zip = zip::ZipWriter::new(buf);
         let options = zip::write::SimpleFileOptions::default();
@@ -387,8 +378,6 @@ mod tests {
         let result = read_threemf(&cursor.into_inner());
         assert!(result.is_err());
     }
-
-    // ── read_threemf_solid smoke test ───────────────────────────────
 
     #[test]
     fn read_threemf_solid_returns_solid_id() {

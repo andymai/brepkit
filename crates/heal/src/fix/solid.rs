@@ -35,14 +35,12 @@ pub fn fix_solid(
 ) -> Result<FixResult, HealError> {
     let mut result = FixResult::ok();
 
-    // ── 1. Fix outer shell ──────────────────────────────────────────
     let solid = topo.solid(solid_id)?;
     let shell_id = solid.outer_shell();
 
     let shell_result = super::shell::fix_shell(topo, shell_id, ctx, config)?;
     result.merge(&shell_result);
 
-    // ── 2. Fix inner shells (voids) ─────────────────────────────────
     let solid = topo.solid(solid_id)?;
     let inner_shells: Vec<_> = solid.inner_shells().to_vec();
     for shell_id in inner_shells {
@@ -50,7 +48,6 @@ pub fn fix_solid(
         result.merge(&inner_result);
     }
 
-    // ── 3. Merge coincident vertices ────────────────────────────────
     // Always detected (cheap), applied per config mode.
     let should_merge = config.fix_coincident_vertices.should_fix(true);
     if should_merge {
@@ -58,7 +55,6 @@ pub fn fix_solid(
         result.merge(&merge_result);
     }
 
-    // ── 4. Remove small faces ───────────────────────────────────────
     let should_fix_small = config.fix_small_faces.should_fix(true);
     if should_fix_small {
         let small_result = super::small_face::fix_small_faces(topo, solid_id, ctx, config)?;
@@ -84,7 +80,6 @@ fn merge_coincident_vertices(
     let tol = ctx.tolerance.linear;
     let tol_sq = tol * tol;
 
-    // Collect all unique vertex IDs and positions from the solid.
     let solid_data = topo.solid(solid_id)?;
     let shell_id = solid_data.outer_shell();
     let shell = topo.shell(shell_id)?;
@@ -140,9 +135,7 @@ fn merge_coincident_vertices(
         return Ok(FixResult::ok());
     }
 
-    // Record vertex replacements in the reshape tracker.
     for (&from_idx, &to_vid) in &merge_to {
-        // Reconstruct the VertexId from index — find it in our collected list.
         if let Some(&from_vid) = vertex_ids.iter().find(|v| v.index() == from_idx) {
             ctx.reshape.replace_vertex(from_vid, to_vid);
         }
@@ -166,7 +159,6 @@ fn merge_coincident_vertices(
     edge_ids.sort_by_key(|e| e.index());
     edge_ids.dedup_by_key(|e| e.index());
 
-    // Snapshot edge updates.
     let updates: Vec<_> = edge_ids
         .iter()
         .filter_map(|&eid| {
@@ -187,7 +179,6 @@ fn merge_coincident_vertices(
         })
         .collect();
 
-    // Apply updates.
     for (eid, new_start, new_end, curve) in updates {
         let edge = topo.edge_mut(eid)?;
         *edge = Edge::new(new_start, new_end, curve);
