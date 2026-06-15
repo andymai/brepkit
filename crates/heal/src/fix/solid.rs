@@ -73,14 +73,21 @@ pub fn fix_solid(
     Ok(result)
 }
 
+/// Cosine threshold for treating two face normals as parallel/anti-parallel.
+/// Fixed (not derived from the model's linear tolerance) so a coarse linear
+/// tolerance can't widen the angular test into matching clearly-different
+/// orientations: `1 - cos θ ≈ θ²/2`, so 1e-6 ≈ 0.08°.
+const NORMAL_PARALLEL_COS_TOL: f64 = 1e-6;
+
 /// Detect and remove geometrically duplicate faces in a solid's outer shell.
 ///
 /// Two faces are duplicates when they share the same representative surface
-/// orientation (parallel or anti-parallel normal), the same outer-wire vertex
-/// count, and a coincident centroid (within `ctx.tolerance.linear`). The
-/// later-indexed face of each duplicate pair is removed via the `ReShape`
-/// tracker. NURBS faces are skipped — detecting duplicate trimmed NURBS faces
-/// needs a parameter-space comparison this pass does not perform.
+/// orientation (parallel or anti-parallel normal within
+/// [`NORMAL_PARALLEL_COS_TOL`]), the same outer-wire edge count, and a
+/// coincident centroid (within `ctx.tolerance.linear`). The later-indexed face
+/// of each duplicate pair is removed via the `ReShape` tracker. NURBS faces are
+/// skipped — detecting duplicate trimmed NURBS faces needs a parameter-space
+/// comparison this pass does not perform.
 ///
 /// This must be a solid-scoped pass: a duplicate can only be found by comparing
 /// a face against the others, so a per-face fix (which sees one face in
@@ -96,7 +103,7 @@ fn fix_duplicate_faces(
     let shell = topo.shell(solid_data.outer_shell())?;
     let face_ids: Vec<_> = shell.faces().to_vec();
 
-    // (face, centroid, representative normal, outer-wire vertex count).
+    // (face, centroid, representative normal, outer-wire edge count).
     let mut face_data: Vec<(FaceId, Point3, Vec3, usize)> = Vec::new();
     for &fid in &face_ids {
         let face = topo.face(fid)?;
@@ -114,7 +121,9 @@ fn fix_duplicate_faces(
         let mut count = 0usize;
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge())?;
-            let p = topo.vertex(edge.start())?.point();
+            // Use the wire-traversal start so reversed edges sample the
+            // correct vertex.
+            let p = topo.vertex(oe.oriented_start(edge))?.point();
             centroid += Vec3::new(p.x(), p.y(), p.z());
             count += 1;
         }
@@ -146,7 +155,7 @@ fn fix_duplicate_faces(
             if cnt_a != cnt_b {
                 continue;
             }
-            if na.dot(*nb).abs() < 1.0 - tol {
+            if na.dot(*nb).abs() < 1.0 - NORMAL_PARALLEL_COS_TOL {
                 continue;
             }
             if (*ca - *cb).length() < tol {
@@ -159,12 +168,9 @@ fn fix_duplicate_faces(
         return Ok(FixResult::ok());
     }
 
-    // Never strip the shell down to nothing — a degenerate detection that
-    // flagged every face must not delete the solid.
-    if face_ids.len() <= duplicates.len() {
-        return Ok(FixResult::ok());
-    }
-
+    // The first non-NURBS face is always the outer-loop anchor (`i`) and is
+    // never inserted as a duplicate (`j > i`), so at least one face always
+    // survives — the shell can't be emptied.
     let mut removed = 0usize;
     for &fid in &face_ids {
         if duplicates.contains(&fid.index()) {
