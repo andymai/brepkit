@@ -1030,3 +1030,90 @@ fn sweep_miter_fallback_smooth_on_no_kinks() {
         "straight-path miter fallback should produce volume ~5.0, got {vol}"
     );
 }
+
+// ── densify_path_points (rectLipSweep non-square overshoot regression) ──
+
+/// Sample a rounded-rectangle boundary the way `sweepAlongEdges` does: line
+/// edges contribute only endpoints; corner arcs contribute interior samples.
+/// This reproduces the under-sampled long-edge condition that made the global
+/// interpolating path fit overshoot on non-square spines.
+fn sparse_rounded_rect(half_x: f64, half_y: f64, r: f64) -> Vec<Point3> {
+    let (cx, cy) = (half_x - r, half_y - r);
+    let hp = std::f64::consts::FRAC_PI_2;
+    let corners = [
+        (cx, -cy, -hp, 0.0),
+        (cx, cy, 0.0, hp),
+        (-cx, cy, hp, std::f64::consts::PI),
+        (-cx, -cy, std::f64::consts::PI, 3.0 * hp),
+    ];
+    let mut pts: Vec<Point3> = Vec::new();
+    let push = |p: Point3, pts: &mut Vec<Point3>| {
+        if pts.last().is_none_or(|l: &Point3| (*l - p).length() > 1e-7) {
+            pts.push(p);
+        }
+    };
+    for &(ccx, ccy, a0, a1) in &corners {
+        for k in 0..=8 {
+            let a = a0 + (a1 - a0) * f64::from(k) / 8.0;
+            push(
+                Point3::new(ccx + r * a.cos(), ccy + r * a.sin(), 0.0),
+                &mut pts,
+            );
+        }
+    }
+    if let Some(first) = pts.first().copied() {
+        push(first, &mut pts);
+    }
+    pts
+}
+
+fn path_x_extent(path: &NurbsCurve) -> (f64, f64) {
+    let mut lo = f64::INFINITY;
+    let mut hi = f64::NEG_INFINITY;
+    for k in 0..=400 {
+        let x = path.evaluate(f64::from(k) / 400.0).x();
+        lo = lo.min(x);
+        hi = hi.max(x);
+    }
+    (lo, hi)
+}
+
+#[test]
+fn densify_fixes_nonsquare_spine_overshoot() {
+    use brepkit_math::nurbs::fitting::interpolate;
+
+    // 42 x 126 rounded rect → half 21 x 63, r 3.75. Long edges (~118mm) are
+    // sampled only at endpoints, so the raw fit overshoots far past x = ±21.
+    let pts = sparse_rounded_rect(21.0, 63.0, 3.75);
+
+    let raw = interpolate(&pts, 3).unwrap();
+    let (_, raw_hi) = path_x_extent(&raw);
+    assert!(
+        raw_hi > 50.0,
+        "expected the un-densified fit to overshoot (got x_max {raw_hi}); \
+         if this no longer overshoots the regression guard is moot"
+    );
+
+    let dense = densify_path_points(&pts);
+    let fixed = interpolate(&dense, 3).unwrap();
+    let (fixed_lo, fixed_hi) = path_x_extent(&fixed);
+    assert!(
+        fixed_hi < 22.0 && fixed_lo > -22.0,
+        "densified fit must stay near the true ±21 bound, got x[{fixed_lo:.2},{fixed_hi:.2}]"
+    );
+}
+
+#[test]
+fn densify_leaves_uniform_polyline_unchanged() {
+    // Evenly spaced points: no gap exceeds the median multiple, so no inserts.
+    let pts: Vec<Point3> = (0..10)
+        .map(|i| Point3::new(f64::from(i), 0.0, 0.0))
+        .collect();
+    assert_eq!(densify_path_points(&pts).len(), pts.len());
+}
+
+#[test]
+fn densify_short_input_is_identity() {
+    let pts = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 0.0, 0.0)];
+    assert_eq!(densify_path_points(&pts), pts);
+}

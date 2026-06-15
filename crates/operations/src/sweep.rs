@@ -341,6 +341,62 @@ fn build_inner_cap_wires(
     Ok(wires)
 }
 
+/// Insert interior points into a polyline so no gap exceeds a small multiple
+/// of the typical (median) sample spacing.
+///
+/// A single global interpolating NURBS fit through unevenly-spaced points
+/// overshoots wildly where a long, sparsely-sampled span (e.g. a long straight
+/// spine edge sampled only at its endpoints) sits between densely-sampled
+/// high-curvature corners — chord-length parameterization does not prevent this
+/// when one span is orders of magnitude longer than its neighbours. Bounding
+/// the max gap keeps the fit well-conditioned. The threshold is derived from
+/// the median gap, so it is scale-invariant; interior insertion per segment is
+/// capped to avoid blow-up on pathological inputs.
+#[must_use]
+pub fn densify_path_points(points: &[Point3]) -> Vec<Point3> {
+    const GAP_RATIO: f64 = 4.0;
+    const MAX_INSERT_PER_SEGMENT: usize = 256;
+
+    if points.len() < 3 {
+        return points.to_vec();
+    }
+
+    let mut gaps: Vec<f64> = points
+        .windows(2)
+        .map(|w| (w[1] - w[0]).length())
+        .filter(|d| *d > 1e-12)
+        .collect();
+    if gaps.is_empty() {
+        return points.to_vec();
+    }
+    gaps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = gaps[gaps.len() / 2];
+    let max_gap = median * GAP_RATIO;
+    if max_gap <= 0.0 {
+        return points.to_vec();
+    }
+
+    let mut out: Vec<Point3> = Vec::with_capacity(points.len());
+    for w in points.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        out.push(a);
+        let seg = (b - a).length();
+        if seg > max_gap {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let steps = ((seg / max_gap).ceil() as usize).min(MAX_INSERT_PER_SEGMENT);
+            for s in 1..steps {
+                #[allow(clippy::cast_precision_loss)]
+                let f = (s as f64) / (steps as f64);
+                out.push(a + (b - a) * f);
+            }
+        }
+    }
+    if let Some(&last) = points.last() {
+        out.push(last);
+    }
+    out
+}
+
 /// Sweep a face along a path curve to produce a solid.
 ///
 /// Creates a solid by moving a planar profile along a NURBS curve, with the
