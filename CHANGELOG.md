@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.105.2](https://github.com/andymai/brepkit/compare/v2.105.1...v2.105.2) (2026-06-15)
+
+
+### Bug Fixes
+
+* **fillet:** skip edges bordering NURBS blend faces instead of emitting garbage ([#813](https://github.com/andymai/brepkit/issues/813)) ([#821](https://github.com/andymai/brepkit/issues/821)) ([bc13671](https://github.com/andymai/brepkit/commit/bc13671ebf904e8bfb77530529a21f087c524f0d))
+
 ## [2.105.1](https://github.com/andymai/brepkit/compare/v2.105.0...v2.105.1) (2026-06-15)
 
 
