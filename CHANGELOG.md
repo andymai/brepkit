@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.105.0](https://github.com/andymai/brepkit/compare/v2.104.2...v2.105.0) (2026-06-15)
+
+
+### Features
+
+* **wasm:** add binary tessellateSolidGrouped (packed buffers, no JSON) ([#817](https://github.com/andymai/brepkit/issues/817)) ([574aa9a](https://github.com/andymai/brepkit/commit/574aa9a6fd587bf5d731d9c884a820d101abed4a))
+
 ## [2.104.2](https://github.com/andymai/brepkit/compare/v2.104.1...v2.104.2) (2026-06-14)
 
 
