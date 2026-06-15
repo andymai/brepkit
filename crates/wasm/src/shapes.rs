@@ -198,9 +198,12 @@ impl JsGroupedMesh {
 
 impl JsGroupedMesh {
     /// Build from a tessellated mesh and its per-face offsets (crate-internal).
+    ///
+    /// Takes the mesh by value so `indices` is moved rather than cloned — index
+    /// buffers can be large (3 × triangle count) and this is the only consumer.
     #[must_use]
     #[allow(clippy::cast_possible_truncation)]
-    pub(crate) fn new(mesh: &TriangleMesh, face_offsets: Vec<u32>) -> Self {
+    pub(crate) fn new(mesh: TriangleMesh, face_offsets: Vec<u32>) -> Self {
         let mut positions = Vec::with_capacity(mesh.positions.len() * 3);
         for p in &mesh.positions {
             positions.push(p.x() as f32);
@@ -216,7 +219,7 @@ impl JsGroupedMesh {
         Self {
             positions,
             normals,
-            indices: mesh.indices.clone(),
+            indices: mesh.indices,
             face_offsets,
         }
     }
@@ -323,5 +326,47 @@ impl From<TriangleMesh> for JsMesh {
             normals,
             indices: mesh.indices,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+    use super::*;
+    use brepkit_math::vec::{Point3, Vec3};
+
+    #[test]
+    fn grouped_mesh_packs_f32_moves_indices_and_keeps_offsets() {
+        let mesh = TriangleMesh {
+            positions: vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+            normals: vec![Vec3::new(0.0, 0.0, 1.0); 4],
+            indices: vec![0, 1, 2, 1, 3, 2],
+        };
+        // Two faces: first triangle (indices 0..3), second (indices 3..6).
+        let offsets = vec![0, 3, 6];
+        let gm = JsGroupedMesh::new(mesh, offsets.clone());
+
+        // Positions are flattened f32 [x,y,z,...] — 4 verts × 3 = 12 floats.
+        assert_eq!(gm.positions().len(), 12);
+        assert_eq!(
+            gm.positions(),
+            vec![
+                0.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0
+            ]
+        );
+        assert_eq!(gm.normals(), [0.0_f32, 0.0, 1.0].repeat(4));
+        assert_eq!(gm.indices(), vec![0_u32, 1, 2, 1, 3, 2]);
+
+        // faceOffsets are stored verbatim and the last entry == indices length.
+        assert_eq!(gm.face_offsets(), offsets);
+        assert_eq!(
+            *gm.face_offsets().last().unwrap() as usize,
+            gm.indices().len()
+        );
     }
 }

@@ -152,7 +152,7 @@ impl BrepKernel {
             angular_tol,
         )?;
 
-        Ok(JsGroupedMesh::new(&mesh, face_offsets))
+        Ok(JsGroupedMesh::new(mesh, face_offsets))
     }
 
     /// Tessellate a solid and include per-vertex UV coordinates.
