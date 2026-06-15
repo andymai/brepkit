@@ -1278,6 +1278,58 @@ impl BrepKernel {
         Ok(solid_id_to_u32(result))
     }
 
+    /// Project a solid's edges onto a view plane with hidden-line removal.
+    ///
+    /// Viewed along `dir` (orthographic) through `origin`, with in-plane x-axis
+    /// `x_axis`. Returns a JSON string `{"visible": [[x,y,…]], "hidden": [[…]]}`
+    /// — flat 2D polylines in view coordinates. `hidden_lines = false` drops the
+    /// hidden set. Occlusion is an exact point-in-solid test.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid handle, a non-positive `deflection`, or a
+    /// degenerate `dir`/`x_axis`.
+    #[wasm_bindgen(js_name = "projectEdges")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn project_edges(
+        &self,
+        solid: u32,
+        origin_x: f64,
+        origin_y: f64,
+        origin_z: f64,
+        dir_x: f64,
+        dir_y: f64,
+        dir_z: f64,
+        x_axis_x: f64,
+        x_axis_y: f64,
+        x_axis_z: f64,
+        hidden_lines: bool,
+        deflection: f64,
+    ) -> Result<JsValue, JsError> {
+        validate_positive(deflection, "deflection")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let result = brepkit_operations::projection::project_edges(
+            &self.topo,
+            solid_id,
+            Point3::new(origin_x, origin_y, origin_z),
+            Vec3::new(dir_x, dir_y, dir_z),
+            Vec3::new(x_axis_x, x_axis_y, x_axis_z),
+            hidden_lines,
+            deflection,
+        )?;
+        let flatten = |polys: &[Vec<brepkit_math::vec::Point2>]| -> Vec<Vec<f64>> {
+            polys
+                .iter()
+                .map(|poly| poly.iter().flat_map(|p| [p.x(), p.y()]).collect())
+                .collect()
+        };
+        let json = serde_json::json!({
+            "visible": flatten(&result.visible),
+            "hidden": flatten(&result.hidden),
+        });
+        Ok(JsValue::from_str(&json.to_string()))
+    }
+
     // ── Point Classification ──────────────────────────────────────
 
     /// Classify a point relative to a solid using generalized winding numbers.
@@ -1819,6 +1871,32 @@ mod tests {
             out.get("ok").and_then(serde_json::Value::as_u64).is_some(),
             "expected an ok solid handle, got {out}"
         );
+    }
+
+    #[test]
+    fn project_edges_batch_dispatch_box_oblique() {
+        let mut k = BrepKernel::new();
+        let solid =
+            brepkit_operations::primitives::make_box(k.topo_mut(), 10.0, 10.0, 10.0).unwrap();
+        let out = dispatch(
+            &mut k,
+            "projectEdges",
+            serde_json::json!({
+                "solid": solid_id_to_u32(solid),
+                "originX": -100.0, "originY": -100.0, "originZ": -100.0,
+                "dirX": 1.0, "dirY": 1.0, "dirZ": 1.0,
+                "xAxisX": 1.0, "xAxisY": -1.0, "xAxisZ": 0.0,
+                "hiddenLines": true, "deflection": 0.1,
+            }),
+        );
+        let ok = out.get("ok").expect("projectEdges batch should return ok");
+        let nonempty = |key: &str| {
+            ok.get(key)
+                .and_then(serde_json::Value::as_array)
+                .is_some_and(|a| !a.is_empty())
+        };
+        assert!(nonempty("visible"), "visible polylines expected, got {out}");
+        assert!(nonempty("hidden"), "hidden polylines expected, got {out}");
     }
 
     #[test]
