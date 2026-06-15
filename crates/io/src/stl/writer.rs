@@ -90,7 +90,9 @@ fn write_binary_stl(mesh: &TriangleMesh) -> Vec<u8> {
 
     let header = b"brepkit STL export";
     buf.extend_from_slice(header);
-    buf.extend_from_slice(&[0u8; 80 - 18]);
+    // The STL binary header is a fixed 80 bytes; zero-pad whatever the
+    // header string didn't fill.
+    buf.resize(80, 0);
 
     #[allow(clippy::cast_possible_truncation)]
     buf.extend_from_slice(&(tri_count as u32).to_le_bytes());

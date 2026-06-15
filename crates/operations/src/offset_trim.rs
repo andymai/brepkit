@@ -40,7 +40,9 @@ const MAX_INVALID_FRACTION: f64 = 0.5;
 /// by more than `tolerance * DISTANCE_TOLERANCE_FACTOR` are flagged.
 const DISTANCE_TOLERANCE_FACTOR: f64 = 10.0;
 
-/// Relative tolerance for the fallback distance check.
+/// Relative tolerance for the fallback distance check. Kept tight because
+/// the SSI-based primary path handles the cases that would otherwise need a
+/// looser bound.
 const RELATIVE_DISTANCE_TOL: f64 = 0.02;
 
 /// Detect and remove self-intersections in an offset NURBS surface.
