@@ -40,7 +40,7 @@ Enforced by `scripts/check-boundaries.sh` — run before pushing:
 | `sketch` | *(none — no workspace deps)* |
 | `operations` | `math`, `topology`, `algo`, `blend`, `heal`, `check`, `geometry`, `offset`, `sketch` |
 | `io` | `math`, `topology`, `operations` |
-| `wasm` | all crates (incl. `blend`, `check`, `heal`) |
+| `wasm` | all crates (`blend` only transitively, via `operations`) |
 
 The script checks `[dependencies]` in each `Cargo.toml`. A violation fails the pre-push hook.
 
@@ -274,18 +274,18 @@ Quick reference — find the right file for any task:
 | Task | File(s) |
 |------|---------|
 | Primitives (box, cylinder, cone, sphere, torus) | `primitives.rs` |
-| Boolean (union/cut/intersect) | `boolean/` (mod, types, precompute, intersect, split, classify, assembly, analytic, compound, fragments, tests), `nurbs_boolean.rs` |
+| Boolean (union/cut/intersect) | `boolean/` (mod, types, classify, assembly, tests) |
 | Mesh boolean (co-refinement) | `mesh_boolean.rs` |
 | Extrude, Revolve, Sweep, Loft, Pipe | `extrude.rs`, `revolve.rs`, `sweep.rs`, `loft.rs`, `pipe.rs` |
 | Helical sweep | `helix.rs` |
-| Chamfer, Fillet | `chamfer.rs`, `fillet.rs` |
+| Chamfer, Fillet | `chamfer.rs`, `fillet/` (mod, rolling_ball, g1_chain, geometry, radius_law, helpers, tests) |
 | Shell (hollow solid) | `shell_op.rs` |
 | Draft (taper faces) | `draft.rs` |
 | Section / Split | `section.rs`, `split.rs` |
 | Transform, Mirror, Copy | `transform.rs`, `mirror.rs`, `copy.rs` |
-| Measure (bbox, area, volume, CoM) | `measure.rs` |
+| Measure (bbox, area, volume, CoM) | `measure/` (mod, volume, area, bounding_box, edge_length, helpers) |
 | Distance queries | `distance.rs` |
-| Tessellation | `tessellate.rs` |
+| Tessellation | `tessellate/` (mod, face, planar, nonplanar, nurbs, solid, edge_sampling, mesh_ops, tests) |
 | Point classification (in/on/out solid) | `classify.rs` |
 | Offset face / solid | `offset_face.rs`, `offset_solid.rs`, `offset_trim.rs` |
 | Offset wire | `offset_wire.rs` |
@@ -365,54 +365,48 @@ impl needs the new arm). The files below still use direct match arms.
 
 `EdgeCurve` is defined in `topology/src/edge.rs`. Current variants: `Line`, `NurbsCurve`, `Circle`, `Ellipse`.
 
-Update these files (16+ match sites across 5 crates):
+`EdgeCurve::` is matched in ~100 files. Since the variants are exhaustive
+(no production `_ =>` wildcards — see below), the compiler flags every
+direct-match site when you add a variant; you do NOT need a hand-maintained
+list. Get the authoritative set with:
 
-- [ ] `operations/src/tessellate.rs` — sample edge to polyline points
-- [ ] `operations/src/transform.rs` — rebuild/transform curve geometry
-- [ ] `operations/src/copy.rs` — deep-clone curve data
-- [ ] `operations/src/measure.rs` — edge arc-length formula
-- [ ] `operations/src/boolean/` — sample edge curve to points (3 sites across sub-modules)
-- [ ] `io/src/step/writer.rs` — write as STEP entity
-- [ ] `io/src/iges/writer.rs` — write as IGES entity
-- [ ] `wasm/src/bindings/query.rs` — type tag, param range, evaluate, edge geometry query
-- [ ] `wasm/src/bindings/batch.rs` — batch dispatch match arms
-- [ ] `wasm/src/bindings/tessellate.rs` — tessellation dispatch
-- [ ] `wasm/src/bindings/nurbs.rs` — NURBS data extraction
+```bash
+rg -l 'EdgeCurve::' crates/*/src/
+```
 
-Also check (may use wildcards that silently swallow):
-- [ ] `io/src/step/reader.rs` — reconstruct from STEP entities
-- [ ] `io/src/iges/reader.rs` — reconstruct from IGES entities
-- [ ] `operations/src/section.rs` — edge-plane intersection
-- [ ] `operations/src/fill_face.rs` — boundary edge sampling
+Many call sites go through the `EdgeCurve` delegate methods
+(`evaluate_with_endpoints`, `tangent_with_endpoints`, `domain_with_endpoints`,
+`type_tag` — see `math/src/traits.rs`) and need no update; only the delegate
+impl needs the new arm. The high-traffic direct-match sites worth checking
+first: `operations/src/tessellate/`, `transform.rs`, `copy.rs`,
+`measure/edge_length.rs`, `section.rs`, `fill_face.rs`, `boolean/`,
+`io/src/{step,iges}/{reader,writer}.rs`, and
+`wasm/src/bindings/{query,batch,tessellate,nurbs}.rs`.
 
 ### Adding a `FaceSurface` variant
 
 `FaceSurface` is defined in `topology/src/face.rs`. Current variants: `Plane`, `Nurbs`, `Cylinder`, `Cone`, `Sphere`, `Torus`.
 
-Update these files (22+ match sites across 7+ files):
+`FaceSurface::` is matched in ~112 files. As with `EdgeCurve`, the variants
+are exhaustive, so the compiler flags every direct-match site. Get the
+authoritative set with:
 
-- [ ] `operations/src/tessellate.rs` — dispatch tessellation strategy
-- [ ] `operations/src/transform.rs` — transform surface geometry
-- [ ] `operations/src/copy.rs` — deep-clone surface data
-- [ ] `operations/src/section.rs` — find intersection segments
-- [ ] `operations/src/distance.rs` — point-to-face distance
-- [ ] `operations/src/feature_recognition.rs` — classify surface type (2 sites)
-- [ ] `operations/src/boolean/` — extract `AnalyticSurface` (sites across sub-modules)
-- [ ] `operations/src/offset_face.rs` — offset surface geometry
-- [ ] `io/src/step/writer.rs` — write as STEP entity
-- [ ] `io/src/iges/writer.rs` — write as IGES entity
-- [ ] `wasm/src/bindings/query.rs` — type tag, analytic params, evaluate, domain, project, surface data
-- [ ] `wasm/src/bindings/batch.rs` — batch dispatch match arms
-- [ ] `wasm/src/bindings/tessellate.rs` — tessellation dispatch
-- [ ] `wasm/src/bindings/nurbs.rs` — NURBS extract
+```bash
+rg -l 'FaceSurface::' crates/*/src/
+```
 
-Also update if the surface is analytic:
+Many call sites go through the `FaceSurface` delegate methods (`evaluate`,
+`normal`, `project_point`, `estimate_radius`, `type_tag`, `is_planar`,
+`is_analytic`, `as_analytic` — see `math/src/traits.rs`) and need no update.
+The high-traffic direct-match sites worth checking first:
+`operations/src/tessellate/`, `transform.rs`, `copy.rs`, `section.rs`,
+`distance.rs`, `feature_recognition.rs`, `boolean/`, `offset_face.rs`,
+`io/src/{step,iges}/writer.rs`, and
+`wasm/src/bindings/{query,batch,tessellate,nurbs}.rs`.
+
+If the new surface is analytic, also update:
 - [ ] `math/src/analytic_intersection.rs` — `AnalyticSurface` enum (4 match sites)
 - [ ] `math/src/surfaces.rs` — surface definition
-
-Files that reference `FaceSurface` but typically use pattern matching safely:
-- `operations/src/nurbs_boolean.rs`, `split.rs`, `untrim.rs`, `validate.rs`
-- `topology/src/builder.rs`, `graph.rs`, `pcurve.rs`, `validation.rs`
 
 ## Common Pitfalls
 
@@ -599,7 +593,7 @@ cargo flamegraph --profile profiling \     # Flamegraph a single benchmark
 ### Topology
 - Arena-based allocation with typed `Id<T>` handles
 - All entities owned by the arena, referenced by ID
-- Half-edge / winged-edge adjacency via `graph` module
+- Edge-to-face / face-neighbor adjacency via the `adjacency` module
 
 ### Tolerance
 - `Tolerance` struct with `linear` (1e-7) and `angular` (1e-12) defaults
