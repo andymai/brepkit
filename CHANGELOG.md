@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.105.1](https://github.com/andymai/brepkit/compare/v2.105.0...v2.105.1) (2026-06-15)
+
+
+### Bug Fixes
+
+* **geometry:** recognize circular NURBS arcs as CIRCLE ([#816](https://github.com/andymai/brepkit/issues/816)) ([#819](https://github.com/andymai/brepkit/issues/819)) ([8571527](https://github.com/andymai/brepkit/commit/8571527d338dc8e7478a048ab8c31dba7eb55eb5))
+
 ## [2.105.0](https://github.com/andymai/brepkit/compare/v2.104.2...v2.105.0) (2026-06-15)
 
 
