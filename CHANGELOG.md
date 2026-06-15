@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.112.1](https://github.com/andymai/brepkit/compare/v2.112.0...v2.112.1) (2026-06-15)
+
+
+### Bug Fixes
+
+* **sweep:** densify long spine spans so non-square sweeps don't overshoot ([#854](https://github.com/andymai/brepkit/issues/854)) ([1330de8](https://github.com/andymai/brepkit/commit/1330de84082f449d999d95a93092dc3ef84e4d0f))
+
 ## [2.112.0](https://github.com/andymai/brepkit/compare/v2.111.1...v2.112.0) (2026-06-15)
 
 
