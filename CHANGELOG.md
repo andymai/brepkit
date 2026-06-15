@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.107.0](https://github.com/andymai/brepkit/compare/v2.106.0...v2.107.0) (2026-06-15)
+
+
+### Features
+
+* **sweep:** native multi-section sweep with RMF frame transport ([#814](https://github.com/andymai/brepkit/issues/814)) ([#825](https://github.com/andymai/brepkit/issues/825)) ([ec76f16](https://github.com/andymai/brepkit/commit/ec76f16a1594ce1b387ce3048490abb0f72b72db))
+
 ## [2.106.0](https://github.com/andymai/brepkit/compare/v2.105.2...v2.106.0) (2026-06-15)
 
 
