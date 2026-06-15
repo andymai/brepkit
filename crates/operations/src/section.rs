@@ -141,6 +141,13 @@ pub fn section(
         }
     }
 
+    // Analytic faces can share a section curve across two oppositely-oriented
+    // faces — e.g. a sphere's two hemispheres each yield the full equatorial
+    // circle — emitting every segment twice in opposing directions. Left in
+    // place, the wire assembler chains both copies into a single zero-area
+    // double loop, so collapse coincident duplicates first.
+    dedup_coincident_segments(&mut segments, tol);
+
     // If no crossing segments were found, the cutting plane may be exactly
     // coplanar with one or more faces. In that case, extract the boundary
     // edges of those coplanar faces as the cross-section.
@@ -309,6 +316,34 @@ fn polygon_area_3d(polygon: &[Point3], normal: Vec3) -> f64 {
 }
 
 type EdgeKey = ((i64, i64, i64), (i64, i64, i64));
+
+/// Collapse geometrically-coincident segments, ignoring orientation.
+///
+/// A section curve shared by two oppositely-oriented faces is emitted once in
+/// each direction (see the sphere-hemisphere case at the call site). Keying
+/// each segment by its unordered quantized endpoints keeps a single copy.
+/// Distinct polygon edges share at most one endpoint, so real edges of the
+/// section outline are never merged.
+fn dedup_coincident_segments(segments: &mut Vec<(Point3, Point3)>, tol: Tolerance) {
+    use std::collections::HashSet;
+
+    let quantize = |p: Point3| -> (i64, i64, i64) {
+        let scale = 1.0 / (tol.linear * 10.0);
+        (
+            (p.x() * scale).round() as i64,
+            (p.y() * scale).round() as i64,
+            (p.z() * scale).round() as i64,
+        )
+    };
+    let edge_key = |a: Point3, b: Point3| -> EdgeKey {
+        let qa = quantize(a);
+        let qb = quantize(b);
+        if qa <= qb { (qa, qb) } else { (qb, qa) }
+    };
+
+    let mut seen: HashSet<EdgeKey> = HashSet::new();
+    segments.retain(|&(a, b)| seen.insert(edge_key(a, b)));
+}
 
 /// Extract boundary edges of faces coplanar with the cutting plane.
 ///
@@ -844,6 +879,71 @@ mod tests {
         assert!(
             rel_err < 0.05,
             "cylinder section area should be πr² = {expected:.2}, got {total_area:.2} \
+             (rel_err={rel_err:.2e})"
+        );
+    }
+
+    /// Section of a sphere through its center → a disk bounded by the great
+    /// circle. A bare sphere is two hemisphere faces that each yield the full
+    /// equatorial circle, so the section must collapse the duplicate into one
+    /// disk rather than a zero-area double loop (#860). r=12 at z=0 → πr² =
+    /// 144π ≈ 452.39.
+    #[test]
+    fn section_sphere_through_center() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_sphere(&mut topo, 12.0, 16).unwrap();
+
+        let sec = section(
+            &mut topo,
+            solid,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+
+        assert_eq!(sec.faces.len(), 1, "sphere section should be a single disk");
+
+        let total_area: f64 = sec
+            .faces
+            .iter()
+            .map(|&fid| crate::measure::face_area(&topo, fid, 0.01).unwrap())
+            .sum();
+        let expected = std::f64::consts::PI * 144.0;
+        let rel_err = (total_area - expected).abs() / expected;
+        assert!(
+            rel_err < 0.05,
+            "sphere great-circle section area should be πr² = {expected:.2}, got \
+             {total_area:.2} (rel_err={rel_err:.2e})"
+        );
+    }
+
+    /// Section of a sphere off-center → a smaller disk. r=12 at z=5 →
+    /// circle radius √(144−25)=√119, area = 119π ≈ 373.85.
+    #[test]
+    fn section_sphere_off_center() {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_sphere(&mut topo, 12.0, 16).unwrap();
+
+        let sec = section(
+            &mut topo,
+            solid,
+            Point3::new(0.0, 0.0, 5.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+
+        assert_eq!(sec.faces.len(), 1, "sphere section should be a single disk");
+
+        let total_area: f64 = sec
+            .faces
+            .iter()
+            .map(|&fid| crate::measure::face_area(&topo, fid, 0.01).unwrap())
+            .sum();
+        let expected = std::f64::consts::PI * 119.0;
+        let rel_err = (total_area - expected).abs() / expected;
+        assert!(
+            rel_err < 0.05,
+            "sphere off-center section area should be {expected:.2}, got {total_area:.2} \
              (rel_err={rel_err:.2e})"
         );
     }
