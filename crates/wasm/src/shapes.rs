@@ -148,6 +148,80 @@ impl JsMesh {
     }
 }
 
+/// A triangle mesh with per-face triangle grouping, exposed to JavaScript.
+///
+/// The binary counterpart to the JSON `tessellateSolidGrouped`: positions and
+/// normals are packed `Float32Array`s and indices/`faceOffsets` are
+/// `Uint32Array`s, so the whole mesh crosses the WASM boundary as bulk memory
+/// copies instead of a JSON string round-trip. `f32` matches what mesh
+/// consumers (GPU vertex buffers) use, halving the transfer versus `f64`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct JsGroupedMesh {
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    indices: Vec<u32>,
+    face_offsets: Vec<u32>,
+}
+
+#[wasm_bindgen]
+impl JsGroupedMesh {
+    /// Flattened vertex positions as `[x, y, z, ...]`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn positions(&self) -> Vec<f32> {
+        self.positions.clone()
+    }
+
+    /// Flattened per-vertex normals as `[nx, ny, nz, ...]`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn normals(&self) -> Vec<f32> {
+        self.normals.clone()
+    }
+
+    /// Triangle indices (groups of 3).
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn indices(&self) -> Vec<u32> {
+        self.indices.clone()
+    }
+
+    /// Per-face start offsets into `indices`: `faceOffsets[i]` is the start of
+    /// face `i`, and the final element equals `indices.length`.
+    #[wasm_bindgen(getter, js_name = "faceOffsets")]
+    #[must_use]
+    pub fn face_offsets(&self) -> Vec<u32> {
+        self.face_offsets.clone()
+    }
+}
+
+impl JsGroupedMesh {
+    /// Build from a tessellated mesh and its per-face offsets (crate-internal).
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
+    pub(crate) fn new(mesh: &TriangleMesh, face_offsets: Vec<u32>) -> Self {
+        let mut positions = Vec::with_capacity(mesh.positions.len() * 3);
+        for p in &mesh.positions {
+            positions.push(p.x() as f32);
+            positions.push(p.y() as f32);
+            positions.push(p.z() as f32);
+        }
+        let mut normals = Vec::with_capacity(mesh.normals.len() * 3);
+        for n in &mesh.normals {
+            normals.push(n.x() as f32);
+            normals.push(n.y() as f32);
+            normals.push(n.z() as f32);
+        }
+        Self {
+            positions,
+            normals,
+            indices: mesh.indices.clone(),
+            face_offsets,
+        }
+    }
+}
+
 /// Edge polylines for wireframe rendering, exposed to JavaScript.
 ///
 /// Positions are flattened to `[x, y, z, x, y, z, ...]` format.
