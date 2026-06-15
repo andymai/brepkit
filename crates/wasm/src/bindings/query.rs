@@ -1964,6 +1964,31 @@ mod tests {
     }
 
     #[test]
+    fn nurbs_quarter_circle_arc_reports_circle_type() {
+        // #816: a circular arc stored as a rational NURBS curve must report
+        // "CIRCLE" (so brepjs's curveAxis resolves it), not "BSPLINE_CURVE".
+        // Unit quarter circle as a rational quadratic Bezier (weights
+        // [1, cos45°, 1]).
+        let mut k = crate::kernel::BrepKernel::new();
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let edge = k
+            .make_nurbs_edge(
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0],
+                vec![1.0, w, 1.0],
+            )
+            .unwrap();
+        assert_eq!(k.get_edge_curve_type(edge).unwrap(), "CIRCLE");
+    }
+
+    #[test]
     fn to_brep_torus_surface_params() {
         let mut k = crate::kernel::BrepKernel::new();
         let id = brepkit_operations::primitives::make_torus(k.topo_mut(), 5.0, 1.0, 16).unwrap();

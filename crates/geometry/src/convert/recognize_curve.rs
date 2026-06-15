@@ -895,12 +895,20 @@ impl DetectedCurveKind {
 
 /// Detect the geometric kind of a NURBS curve by sampling.
 ///
-/// This is a lightweight heuristic that samples 16 points and checks for
-/// collinearity (line) or coplanarity + equidistance (circle). It does **not**
-/// recover analytic parameters — use [`recognize_curve`] for that.
+/// A lightweight classifier: degree/rationality gates, then a least-squares
+/// circle fit over 16 samples. It does **not** recover analytic parameters —
+/// use [`recognize_curve`] for that.
+///
+/// The fit recovers the true center from any 3+ samples, so a partial arc is
+/// classified as [`DetectedCurveKind::Circle`] just like a full circle. A
+/// sample-centroid estimate only lands on the center for a full,
+/// uniformly-sampled circle — which is why arcs previously fell through to
+/// [`DetectedCurveKind::BSpline`].
 #[must_use]
 #[allow(clippy::cast_precision_loss)]
 pub fn detect_curve_kind(curve: &NurbsCurve) -> DetectedCurveKind {
+    const N_SAMPLES: usize = 16;
+
     // Degree-1 non-rational curves are lines by definition.
     if curve.degree() < 2 && !curve.is_rational() {
         return DetectedCurveKind::Line;
@@ -912,72 +920,39 @@ pub fn detect_curve_kind(curve: &NurbsCurve) -> DetectedCurveKind {
     }
 
     let (u_min, u_max) = curve.domain();
-    let n_samples = 16;
+    let samples: Vec<Point3> = (0..N_SAMPLES)
+        .map(|i| {
+            let t = u_min + (u_max - u_min) * (i as f64) / ((N_SAMPLES - 1) as f64);
+            curve.evaluate(t)
+        })
+        .collect();
 
-    // Check if the curve is closed (start ≈ end) to avoid sampling the
-    // duplicate endpoint, which would bias the center calculation.
-    let start_pt = curve.evaluate(u_min);
-    let end_pt = curve.evaluate(u_max);
-    let is_closed = (start_pt - end_pt).length() < 1e-6;
-
-    let mut points = Vec::with_capacity(n_samples);
-    for i in 0..n_samples {
-        let t = if is_closed {
-            u_min + (u_max - u_min) * (i as f64) / (n_samples as f64)
-        } else {
-            u_min + (u_max - u_min) * (i as f64) / ((n_samples - 1) as f64)
-        };
-        points.push(curve.evaluate(t));
-    }
-
-    // Compute center as average of all sampled points.
-    let mut cx = 0.0_f64;
-    let mut cy = 0.0_f64;
-    let mut cz = 0.0_f64;
-    for p in &points {
-        cx += p.x();
-        cy += p.y();
-        cz += p.z();
-    }
-    let n = points.len() as f64;
-    let center = Point3::new(cx / n, cy / n, cz / n);
-
-    // Check if all points are equidistant from center (circle test).
-    let distances: Vec<f64> = points.iter().map(|p| (*p - center).length()).collect();
-    let avg_dist = distances.iter().sum::<f64>() / n;
-
-    if avg_dist < 1e-10 {
+    // Relative tolerance keyed to the sample extent keeps the test
+    // scale-invariant (a 0.01% deviation budget).
+    let tol = sample_extent(&samples) * 1e-4;
+    if tol < f64::EPSILON {
         return DetectedCurveKind::BSpline;
     }
 
-    let tol = avg_dist * 1e-4; // 0.01% relative tolerance
-    let is_circle = distances.iter().all(|d| (d - avg_dist).abs() < tol);
+    if try_recognize_circle(&samples, tol).is_some() {
+        DetectedCurveKind::Circle
+    } else {
+        DetectedCurveKind::BSpline
+    }
+}
 
-    if is_circle {
-        // Check coplanarity — all points should lie in a plane through center.
-        let v0 = points[0] - center;
-        let v1 = points[n_samples / 4] - center;
-        let normal = v0.cross(v1);
-        let normal_len = normal.length();
-        if normal_len < 1e-10 {
-            return DetectedCurveKind::BSpline;
-        }
-        let normal = Vec3::new(
-            normal.x() / normal_len,
-            normal.y() / normal_len,
-            normal.z() / normal_len,
-        );
-
-        let coplanar = points
-            .iter()
-            .all(|p| ((*p - center).dot(normal)).abs() < tol);
-
-        if coplanar {
-            return DetectedCurveKind::Circle;
+/// Largest extent of a point set along any coordinate axis — a scale estimate
+/// for relative tolerances.
+fn sample_extent(samples: &[Point3]) -> f64 {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for p in samples {
+        for (k, c) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
+            lo[k] = lo[k].min(c);
+            hi[k] = hi[k].max(c);
         }
     }
-
-    DetectedCurveKind::BSpline
+    (0..3).map(|k| hi[k] - lo[k]).fold(0.0_f64, f64::max)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -1066,6 +1041,47 @@ mod tests {
             }
             other => panic!("expected Circle, got {other:?}"),
         }
+    }
+
+    // ── detect_curve_kind (coarse classifier behind getEdgeCurveType) ─────────
+
+    #[test]
+    fn detect_full_circle_is_circle() {
+        let circle = Circle3D::new(Point3::new(1.0, 2.0, 3.0), z_axis(), 5.0).unwrap();
+        let nurbs = circle_to_nurbs(&circle, 0.0, TAU).unwrap();
+        assert_eq!(detect_curve_kind(&nurbs), DetectedCurveKind::Circle);
+    }
+
+    #[test]
+    fn detect_quarter_arc_is_circle() {
+        // Regression for #816: a partial arc must report CIRCLE, not BSPLINE.
+        // The sample centroid sits inside the arc, far from the true center —
+        // the case the old equidistant-from-centroid heuristic mis-classified.
+        let circle = Circle3D::new(origin(), z_axis(), 3.0).unwrap();
+        let nurbs = circle_to_nurbs(&circle, 0.0, TAU * 0.25).unwrap();
+        assert_eq!(detect_curve_kind(&nurbs), DetectedCurveKind::Circle);
+    }
+
+    #[test]
+    fn detect_short_offset_arc_is_circle() {
+        // A 30° arc on a large circle far from the origin — maximally adversarial
+        // for a centroid-based center estimate.
+        let circle = Circle3D::new(Point3::new(100.0, 0.0, 0.0), z_axis(), 50.0).unwrap();
+        let nurbs = circle_to_nurbs(&circle, 0.0, TAU / 12.0).unwrap();
+        assert_eq!(detect_curve_kind(&nurbs), DetectedCurveKind::Circle);
+    }
+
+    #[test]
+    fn detect_ellipse_arc_is_bspline() {
+        let ellipse = Ellipse3D::new(origin(), z_axis(), 5.0, 2.0).unwrap();
+        let nurbs = ellipse_to_nurbs(&ellipse, 0.0, TAU * 0.25).unwrap();
+        assert_eq!(detect_curve_kind(&nurbs), DetectedCurveKind::BSpline);
+    }
+
+    #[test]
+    fn detect_line_is_line() {
+        let nurbs = line_to_nurbs(origin(), Point3::new(3.0, 4.0, 0.0)).unwrap();
+        assert_eq!(detect_curve_kind(&nurbs), DetectedCurveKind::Line);
     }
 
     // ── not-recognized ───────────────────────────────────────────────────────
