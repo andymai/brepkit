@@ -1222,9 +1222,8 @@ impl BrepKernel {
                 let s = get_u32(args, "solid")?;
                 let dist = get_f64(args, "distance")?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                #[allow(deprecated)]
                 let result =
-                    brepkit_operations::offset_solid::offset_solid(self.topo_mut(), solid_id, dist)
+                    brepkit_operations::offset_v2::offset_solid_v2(self.topo_mut(), solid_id, dist)
                         .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }

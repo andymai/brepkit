@@ -287,7 +287,7 @@ Quick reference — find the right file for any task:
 | Distance queries | `distance.rs` |
 | Tessellation | `tessellate/` (mod, face, planar, nonplanar, nurbs, solid, edge_sampling, mesh_ops, tests) |
 | Point classification (in/on/out solid) | `classify.rs` |
-| Offset face / solid | `offset_face.rs`, `offset_solid.rs`, `offset_trim.rs` |
+| Offset face / solid | `offset_face.rs`, `offset_v2.rs` (delegates to brepkit-offset), `offset_trim.rs` |
 | Offset wire | `offset_wire.rs` |
 | Face filling (Coons patch) | `fill_face.rs` |
 | Shape healing | `heal.rs` |

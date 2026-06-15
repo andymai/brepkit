@@ -12,7 +12,7 @@
 //! | **Transform** | [`transform`], [`copy`], [`mirror`], [`pattern`] | Spatial operations |
 //! | **Boolean** | [`boolean`], [`mesh_boolean`] | Set operations |
 //! | **Blend** | [`fillet`], [`chamfer`], [`blend_ops`] | Edge smoothing |
-//! | **Offset** | [`offset_face`], [`offset_solid`], [`offset_trim`], [`offset_v2`], [`offset_wire`] | Wall thickness |
+//! | **Offset** | [`offset_face`], [`offset_trim`], [`offset_v2`], [`offset_wire`] | Wall thickness |
 //! | **Surface** | [`fill_face`], [`thicken`], [`shell_op`], [`draft`], [`section`], [`split`] | Surface/solid modification |
 //! | **Repair** | [`heal`], [`defeature`], [`sew`], [`untrim`] | Shape fixing |
 //! | **Analysis** | [`measure`], [`distance`], [`classify`], [`validate`], [`query`], [`feature_recognition`] | Interrogation |
@@ -43,7 +43,6 @@ pub mod chamfer;
 pub mod fillet;
 
 pub mod offset_face;
-pub mod offset_solid;
 pub mod offset_trim;
 pub mod offset_v2;
 pub mod offset_wire;
