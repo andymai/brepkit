@@ -978,7 +978,7 @@ pub fn fillet_rolling_ball(
                             if let Ok(dir) = (next_pos - pos).normalize() {
                                 let p = pos + dir * radius;
                                 trimmed_verts.push(p);
-                                corner_preserved.insert(vi, p);
+                                corner_preserved.entry(vi).or_insert(p);
                             }
                         }
                     }
@@ -990,7 +990,7 @@ pub fn fillet_rolling_ball(
                             if let Ok(dir) = (prev_pos - pos).normalize() {
                                 let p = pos + dir * radius;
                                 trimmed_verts.push(p);
-                                corner_preserved.insert(vi, p);
+                                corner_preserved.entry(vi).or_insert(p);
                             }
                         }
                         if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
@@ -1123,7 +1123,7 @@ pub fn fillet_rolling_ball(
                         if let Ok(dir) = (next_pos - pos).normalize() {
                             let p = pos + dir * radius;
                             new_verts.push(p);
-                            corner_preserved.insert(vi, p);
+                            corner_preserved.entry(vi).or_insert(p);
                         }
                     }
                 }
@@ -1136,7 +1136,7 @@ pub fn fillet_rolling_ball(
                         if let Ok(dir) = (prev_pos - pos).normalize() {
                             let p = pos + dir * radius;
                             new_verts.push(p);
-                            corner_preserved.insert(vi, p);
+                            corner_preserved.entry(vi).or_insert(p);
                         }
                     }
                     if let Some(&pt) = fillet_contact_map.get(&(vi, ei, fi)) {
@@ -1528,6 +1528,7 @@ pub fn fillet_rolling_ball(
         // corners does not apply here because one of its arcs would face the
         // (still sharp) unfilleted edge with nothing to share it.
         if fillet_count == 2 {
+            let mut built = false;
             if let (Some(&p_pt), Some(v_pos)) = (corner_preserved.get(&vi), original_vertex) {
                 if blend_points.len() == 3 {
                     // Sphere centre: corner offset inward by R along each distinct
@@ -1583,8 +1584,21 @@ pub fn fillet_rolling_ball(
                         is_concave,
                     ) {
                         all_specs.push(spec);
+                        built = true;
                     }
                 }
+            }
+            if !built {
+                // The setback gap could not be closed (no preserved point on the
+                // unfilleted edge, contacts that didn't deduplicate to a triangle,
+                // or a degenerate patch). Surface it — the junction may be left
+                // non-watertight rather than failing silently.
+                log::warn!(
+                    "2-edge fillet corner at vertex {vi}: corner patch not built \
+                     (preserved={}, unique_contacts={}); junction may be non-watertight",
+                    corner_preserved.contains_key(&vi),
+                    blend_points.len()
+                );
             }
             continue;
         }
