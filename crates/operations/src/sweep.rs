@@ -5,6 +5,7 @@
 //! point. Uses rotation-minimizing frames (double-reflection method) to avoid
 //! Frenet-frame singularities on straight segments and inflection points.
 
+use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface_fitting::interpolate_surface;
 use brepkit_math::tolerance::Tolerance;
@@ -1856,6 +1857,163 @@ fn sweep_miter(
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
+/// Sweep through multiple section profiles along a `spine`, lofting the
+/// positioned profiles.
+///
+/// Each planar profile is placed rigidly at its parameter along the spine: its
+/// centroid maps to the spine point, its normal to the spine tangent, and its
+/// plane to the frame's right/up plane. Orientation uses a rotation-minimizing
+/// frame so profiles stay twist-free on curved spines (unlike a per-section
+/// swing rotation). The placed profiles are then lofted — ruled (planar bands)
+/// or smooth (NURBS).
+///
+/// `sections` pairs each profile face with its spine parameter in `[0, 1]`.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::InvalidInput`] for fewer than two
+/// sections, a parameter outside `[0, 1]`, a non-planar profile, or a spine
+/// with fewer than two control points; propagates loft errors otherwise.
+pub fn multi_section_sweep(
+    topo: &mut Topology,
+    spine: &NurbsCurve,
+    sections: &[(FaceId, f64)],
+    ruled: bool,
+) -> Result<SolidId, crate::OperationsError> {
+    if sections.len() < 2 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!(
+                "multi-section sweep requires at least 2 sections, got {}",
+                sections.len()
+            ),
+        });
+    }
+    if spine.control_points().len() < 2 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "multi-section sweep spine must have at least 2 control points".into(),
+        });
+    }
+    for &(_, p) in sections {
+        if !(0.0..=1.0).contains(&p) {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: format!("section parameter {p} is outside [0, 1]"),
+            });
+        }
+    }
+
+    // Dense rotation-minimizing frame for twist-free orientation; the exact
+    // origin/tangent per section is taken directly from the spine.
+    let dense_segments: usize = 64;
+    let t_start = spine.tangent(0.0)?;
+    let initial_up = orthogonalize(pick_reference_axis(t_start), t_start);
+    let dense = compute_frames(spine, dense_segments, initial_up, false)?;
+
+    let mut placed: Vec<FaceId> = Vec::with_capacity(sections.len());
+    for &(face_id, p) in sections {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let idx = ((p * dense_segments as f64).round() as usize).min(dense_segments);
+        let tangent = spine.tangent(p)?;
+        let up = orthogonalize(dense[idx].up, tangent);
+        let frame = Frame {
+            origin: spine.evaluate(p),
+            tangent,
+            up,
+            right: tangent.cross(up),
+        };
+        let mat = profile_to_frame_matrix(topo, face_id, &frame)?;
+        let placed_face = crate::copy::copy_face(topo, face_id)?;
+        crate::transform::transform_face(topo, placed_face, &mat)?;
+        placed.push(placed_face);
+    }
+
+    if ruled {
+        crate::loft::loft(topo, &placed)
+    } else {
+        crate::loft::loft_smooth(topo, &placed)
+    }
+}
+
+/// Pick a world axis not nearly parallel to `dir`, for seeding a frame.
+fn pick_reference_axis(dir: Vec3) -> Vec3 {
+    if dir.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    }
+}
+
+/// Rigid transform placing a planar profile face into `frame`: centroid →
+/// `frame.origin`, normal → tangent, in-plane axes → right/up.
+fn profile_to_frame_matrix(
+    topo: &Topology,
+    face_id: FaceId,
+    frame: &Frame,
+) -> Result<Mat4, crate::OperationsError> {
+    let face = topo.face(face_id)?;
+    let normal = match face.surface() {
+        FaceSurface::Plane { normal, .. } => *normal,
+        _ => {
+            return Err(crate::OperationsError::InvalidInput {
+                reason: "multi-section sweep profiles must be planar".into(),
+            });
+        }
+    };
+
+    // Centroid = average of the outer-wire vertices.
+    let wire = topo.wire(face.outer_wire())?;
+    let mut sum = Point3::new(0.0, 0.0, 0.0);
+    let mut count = 0.0_f64;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let v = topo.vertex(oe.oriented_start(edge))?.point();
+        sum = Point3::new(sum.x() + v.x(), sum.y() + v.y(), sum.z() + v.z());
+        count += 1.0;
+    }
+    if count == 0.0 {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "multi-section sweep profile has no vertices".into(),
+        });
+    }
+    let centroid = Point3::new(sum.x() / count, sum.y() / count, sum.z() / count);
+
+    // Profile in-plane basis from a consistent world reference, so all profiles
+    // share an orientation and the RMF alone controls twist along the spine.
+    let p_x = orthogonalize(pick_reference_axis(normal), normal);
+    let p_y = normal.cross(p_x);
+
+    // R maps the profile basis (p_x, p_y, normal) onto (right, up, tangent):
+    // R = right⊗p_x + up⊗p_y + tangent⊗normal.
+    let t_cols = [
+        [frame.right.x(), frame.up.x(), frame.tangent.x()],
+        [frame.right.y(), frame.up.y(), frame.tangent.y()],
+        [frame.right.z(), frame.up.z(), frame.tangent.z()],
+    ];
+    let l_cols = [
+        [p_x.x(), p_y.x(), normal.x()],
+        [p_x.y(), p_y.y(), normal.y()],
+        [p_x.z(), p_y.z(), normal.z()],
+    ];
+    let mut rot = [[0.0_f64; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            rot[i][j] = (0..3).map(|k| t_cols[i][k] * l_cols[j][k]).sum();
+        }
+    }
+
+    // translation = origin − R·centroid
+    let c = [centroid.x(), centroid.y(), centroid.z()];
+    let o = [frame.origin.x(), frame.origin.y(), frame.origin.z()];
+    let trans: [f64; 3] =
+        std::array::from_fn(|i| o[i] - (0..3).map(|k| rot[i][k] * c[k]).sum::<f64>());
+
+    Ok(Mat4([
+        [rot[0][0], rot[0][1], rot[0][2], trans[0]],
+        [rot[1][0], rot[1][1], rot[1][2], trans[1]],
+        [rot[2][0], rot[2][1], rot[2][2], trans[2]],
+        [0.0, 0.0, 0.0, 1.0],
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -1896,6 +2054,95 @@ mod tests {
             vec![1.0, w, 1.0],
         )
         .unwrap()
+    }
+
+    /// Helper: a `size`×`size` square profile face centered at the origin in
+    /// the XY plane (normal +Z).
+    fn make_square(topo: &mut Topology, size: f64) -> FaceId {
+        let hs = size / 2.0;
+        let t = 1e-7;
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(-hs, -hs, 0.0), t));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(hs, -hs, 0.0), t));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(hs, hs, 0.0), t));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(-hs, hs, 0.0), t));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    #[test]
+    fn multi_section_sweep_line_spine_tapered_volume() {
+        let mut topo = Topology::new();
+        let big = make_square(&mut topo, 10.0);
+        let small = make_square(&mut topo, 6.0);
+        let spine = straight_z_path(20.0);
+
+        let solid =
+            multi_section_sweep(&mut topo, &spine, &[(big, 0.0), (small, 1.0)], true).unwrap();
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+
+        // Frustum between a 10×10 and 6×6 square over height 20 lies strictly
+        // between the two straight-prism volumes (6²·20 = 720 and 10²·20 = 2000).
+        assert!(
+            vol > 720.0 && vol < 2000.0,
+            "expected tapered volume, got {vol}"
+        );
+    }
+
+    #[test]
+    fn multi_section_sweep_curved_spine_positive_volume() {
+        let mut topo = Topology::new();
+        // Three sections so the loft follows the quarter-circle spine; the RMF
+        // keeps each profile perpendicular and twist-free.
+        let a = make_square(&mut topo, 4.0);
+        let b = make_square(&mut topo, 4.0);
+        let c = make_square(&mut topo, 4.0);
+        let spine = quarter_circle_xz_path(20.0);
+
+        let solid =
+            multi_section_sweep(&mut topo, &spine, &[(a, 0.0), (b, 0.5), (c, 1.0)], true).unwrap();
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 0.0,
+            "curved-spine multi-section sweep volume, got {vol}"
+        );
+    }
+
+    #[test]
+    fn multi_section_sweep_rejects_single_section() {
+        let mut topo = Topology::new();
+        let only = make_square(&mut topo, 4.0);
+        let spine = straight_z_path(10.0);
+        assert!(multi_section_sweep(&mut topo, &spine, &[(only, 0.0)], true).is_err());
+    }
+
+    #[test]
+    fn multi_section_sweep_rejects_out_of_range_param() {
+        let mut topo = Topology::new();
+        let a = make_square(&mut topo, 4.0);
+        let b = make_square(&mut topo, 4.0);
+        let spine = straight_z_path(10.0);
+        assert!(multi_section_sweep(&mut topo, &spine, &[(a, 0.0), (b, 1.5)], true).is_err());
     }
 
     #[test]

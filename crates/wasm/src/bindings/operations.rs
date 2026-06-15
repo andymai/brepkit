@@ -516,6 +516,102 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid_id))
     }
 
+    /// Sweep through multiple section profiles along a spine, lofting the
+    /// rotation-minimizing-frame-placed profiles.
+    ///
+    /// `face_handles` and `params` are parallel arrays: each planar profile and
+    /// its parameter in `[0, 1]` along the spine (given as raw NURBS data).
+    /// `ruled` selects ruled (planar bands) vs smooth (NURBS) lofted sides.
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for fewer than two sections, mismatched array lengths, a
+    /// non-finite or out-of-range value, a non-planar profile, or loft failure.
+    #[wasm_bindgen(js_name = "multiSectionSweep")]
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+    pub fn multi_section_sweep(
+        &mut self,
+        face_handles: Vec<u32>,
+        params: Vec<f64>,
+        spine_degree: u32,
+        spine_knots: Vec<f64>,
+        spine_control_points: Vec<f64>,
+        spine_weights: Vec<f64>,
+        ruled: bool,
+    ) -> Result<u32, JsError> {
+        if face_handles.len() != params.len() {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "face_handles ({}) and params ({}) must have equal length",
+                    face_handles.len(),
+                    params.len()
+                ),
+            }
+            .into());
+        }
+        if spine_control_points.len() % 3 != 0 {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "spine_control_points length must be a multiple of 3, got {}",
+                    spine_control_points.len()
+                ),
+            }
+            .into());
+        }
+        let num_pts = spine_control_points.len() / 3;
+        if spine_weights.len() != num_pts {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "spine_weights length ({}) must match control point count ({num_pts})",
+                    spine_weights.len()
+                ),
+            }
+            .into());
+        }
+        for p in &params {
+            validate_finite(*p, "param")?;
+        }
+        for (name, arr) in [
+            ("spine_knots", &spine_knots),
+            ("spine_control_points", &spine_control_points),
+            ("spine_weights", &spine_weights),
+        ] {
+            if let Some(pos) = arr.iter().position(|v| !v.is_finite()) {
+                return Err(WasmError::InvalidInput {
+                    reason: format!("{name}[{pos}] is not finite"),
+                }
+                .into());
+            }
+        }
+
+        let control_points: Vec<Point3> = spine_control_points
+            .chunks_exact(3)
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect();
+        let spine = NurbsCurve::new(
+            spine_degree as usize,
+            spine_knots,
+            control_points,
+            spine_weights,
+        )?;
+
+        let sections: Vec<(brepkit_topology::face::FaceId, f64)> = face_handles
+            .iter()
+            .zip(params.iter())
+            .map(|(&h, &p)| self.resolve_face(h).map(|f| (f, p)))
+            .collect::<Result<_, _>>()?;
+
+        let solid_id = brepkit_operations::sweep::multi_section_sweep(
+            self.topo_mut(),
+            &spine,
+            &sections,
+            ruled,
+        )?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
     /// Sweep a face along a path with smooth NURBS side surfaces.
     ///
     /// Like `sweep()`, but produces a single NURBS surface per edge strip
@@ -1465,6 +1561,33 @@ mod tests {
     fn wire_perimeter(k: &BrepKernel, wire_handle: u32) -> f64 {
         let wid = k.resolve_wire(wire_handle).unwrap();
         brepkit_operations::measure::wire_length(&k.topo, wid).unwrap()
+    }
+
+    #[test]
+    fn multi_section_sweep_lofts_circles_along_line() {
+        let mut k = BrepKernel::new();
+        let big = k.make_circle_face(10.0, 24).unwrap();
+        let small = k.make_circle_face(5.0, 24).unwrap();
+        // Degree-1 line spine from the origin to (0, 0, 50).
+        let solid = k
+            .multi_section_sweep(
+                vec![big, small],
+                vec![0.0, 1.0],
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.0, 50.0],
+                vec![1.0, 1.0],
+                true,
+            )
+            .unwrap();
+        let vol = k.volume(solid, 0.5).unwrap();
+        assert!(
+            vol > 0.0,
+            "tapered tube should have positive volume, got {vol}"
+        );
+        // (Validation paths — <2 sections, length mismatch, out-of-range param —
+        // are covered by the operations-layer tests; the error path can't be
+        // exercised here because JsError can't be constructed off-wasm.)
     }
 
     #[test]
