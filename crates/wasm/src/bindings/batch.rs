@@ -704,6 +704,48 @@ impl BrepKernel {
                         .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
             }
+            "projectEdges" => {
+                let solid = self
+                    .resolve_solid(get_u32(args, "solid")?)
+                    .map_err(|e| e.to_string())?;
+                let origin = Point3::new(
+                    get_f64(args, "originX")?,
+                    get_f64(args, "originY")?,
+                    get_f64(args, "originZ")?,
+                );
+                let dir = Vec3::new(
+                    get_f64(args, "dirX")?,
+                    get_f64(args, "dirY")?,
+                    get_f64(args, "dirZ")?,
+                );
+                let x_axis = Vec3::new(
+                    get_f64(args, "xAxisX")?,
+                    get_f64(args, "xAxisY")?,
+                    get_f64(args, "xAxisZ")?,
+                );
+                let hidden_lines = args["hiddenLines"].as_bool().unwrap_or(true);
+                let deflection = get_f64(args, "deflection").unwrap_or(0.1);
+                let result = brepkit_operations::projection::project_edges(
+                    &self.topo,
+                    solid,
+                    origin,
+                    dir,
+                    x_axis,
+                    hidden_lines,
+                    deflection,
+                )
+                .map_err(|e| e.to_string())?;
+                let flatten = |polys: &[Vec<brepkit_math::vec::Point2>]| -> Vec<Vec<f64>> {
+                    polys
+                        .iter()
+                        .map(|poly| poly.iter().flat_map(|p| [p.x(), p.y()]).collect())
+                        .collect()
+                };
+                Ok(serde_json::json!({
+                    "visible": flatten(&result.visible),
+                    "hidden": flatten(&result.hidden),
+                }))
+            }
             "chamfer" => {
                 let s = get_u32(args, "solid")?;
                 let dist = get_f64(args, "distance")?;
