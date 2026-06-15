@@ -1,4 +1,4 @@
-//! BuilderSolid — OCCT-style 4-phase shell assembly.
+//! BuilderSolid — 4-phase shell assembly.
 //!
 //! Takes BOP-selected faces and assembles them into manifold shells,
 //! classifies shells as Growth/Hole, and nests holes inside growth shells.
@@ -132,9 +132,8 @@ fn perform_shapes_to_avoid(
         let edge_map = build_edge_face_map(topo, faces)?;
         let mut to_remove: HashSet<FaceId> = HashSet::new();
 
-        // Only remove faces where EVERY edge is free (≤1 face).
-        // This is less aggressive than OCCT's approach (which removes any
-        // face with any free edge) to avoid stripping valid multi-region faces.
+        // Only remove faces where EVERY edge is free (≤1 face). Removing a
+        // face with *any* free edge would strip valid multi-region faces.
         for &fid in faces.iter() {
             let face_keys = face_edge_keys(topo, fid)?;
             if face_keys.is_empty() {
@@ -271,8 +270,6 @@ fn perform_loops(topo: &Topology, faces: &[FaceId]) -> Result<Vec<Vec<FaceId>>, 
 /// At an edge shared by 3+ faces, selects the face with the smallest
 /// positive dihedral angle relative to the current face. This implements
 /// clockwise face traversal around the edge.
-///
-/// Reference: OCCT `BOPTools_AlgoTools::GetFaceOff` + `AngleWithRef`.
 pub fn get_face_off(
     topo: &Topology,
     edge_start: Point3,
@@ -348,7 +345,6 @@ pub fn get_face_off(
 /// Signed angle between two direction vectors using a reference axis.
 ///
 /// Returns the angle from `d1` to `d2` measured around `d_ref`.
-/// Port of OCCT's `AngleWithRef`.
 fn angle_with_ref(d1: Vec3, d2: Vec3, d_ref: Vec3) -> f64 {
     let cross = d1.cross(d2);
     let sin_val = cross.length();

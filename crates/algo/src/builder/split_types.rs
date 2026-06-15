@@ -79,7 +79,7 @@ pub struct SectionEdge {
     /// Pave block ID from the GFA arena. When two faces share the same
     /// FF section curve, their section edges have the same pave_block_id.
     /// Used by `build_topology_face` to share the topology edge entity
-    /// across faces (OCCT TShape-sharing for cross-face edges).
+    /// across faces (shared edge identity for cross-face edges).
     pub pave_block_id: Option<usize>,
 }
 

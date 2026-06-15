@@ -1658,9 +1658,9 @@ fn order_edges_into_loops(
 ///
 /// Returns the number of faces and edges that were converted.
 ///
-/// Equivalent to OCCT's `BRepBuilderAPI_NurbsConvert`. Stored pcurves are
-/// dropped on conversion — see `brepkit_heal::custom::convert_to_bspline` for
-/// the full rationale.
+/// Converts every analytic surface and curve to a NURBS representation.
+/// Stored pcurves are dropped on conversion — see
+/// `brepkit_heal::custom::convert_to_bspline` for the full rationale.
 ///
 /// # Errors
 ///

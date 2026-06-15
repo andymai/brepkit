@@ -196,8 +196,7 @@ pub fn section(
 /// A wire is "inner" when it sits inside another wire (in the section plane) and
 /// is not itself inside any wire that's already inside another. Two-level nesting
 /// (holes within holes within holes) is collapsed into the outermost containment;
-/// CAD sections don't typically produce deeper nesting and OCCT treats them the
-/// same way.
+/// CAD sections don't typically produce deeper nesting.
 fn group_wires_by_containment(
     topo: &Topology,
     wires: &[WireId],
@@ -485,7 +484,7 @@ fn assemble_wires(
     // Chaining tolerance must be tight enough to keep separate loops apart
     // (e.g., the outer perimeter and the inner hole of a hollow shape) while
     // still tolerating the small endpoint drift produced by tessellated NURBS
-    // intersections. `tol.linear * 1000` (≈ 1e-4) is OCCT-compatible for both.
+    // intersections. `tol.linear * 1000` (≈ 1e-4) balances both.
     //
     // Earlier this defaulted to 50% of the average segment length, which for
     // a hollow 20×20 box section was ≈ 15 — wildly generous, bridging the

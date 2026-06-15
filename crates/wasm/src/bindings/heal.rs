@@ -106,9 +106,9 @@ impl BrepKernel {
     /// already in the model are left untouched. Returns the number of entities
     /// converted.
     ///
-    /// Equivalent to OCCT's `BRepBuilderAPI_NurbsConvert`. Stored pcurves are
-    /// dropped during conversion — callers that depend on pcurves should
-    /// recompute them afterwards.
+    /// Converts every analytic surface and curve to a NURBS representation.
+    /// Stored pcurves are dropped during conversion — callers that depend on
+    /// pcurves should recompute them afterwards.
     ///
     /// # Errors
     ///

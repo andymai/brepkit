@@ -206,8 +206,7 @@ pub fn cone_to_nurbs(
 ///
 /// The poles (`v = ±π/2`) are degenerate in the parameterization
 /// (multiple `u` values map to the same point), as is standard for
-/// tensor-product spheres. This matches OCCT's `Geom_SphericalSurface`
-/// behavior.
+/// tensor-product spheres.
 ///
 /// # Errors
 ///

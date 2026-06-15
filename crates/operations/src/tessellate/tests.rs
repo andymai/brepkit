@@ -276,8 +276,8 @@ fn tessellate_plain_cylinder_watertight() {
 
 /// Regression for issue #696: dovetail-style fuse where a small tongue protrudes
 /// into two adjacent slabs. The downstream consumer (gridfinity-layout-tool)
-/// adds a TONGUE_PROTRUSION specifically to avoid coplanar fuse residue under
-/// OCCT, but brepkit's pipeline produced non-manifold tessellation output. This
+/// adds a TONGUE_PROTRUSION specifically to avoid coplanar fuse residue, but
+/// brepkit's pipeline produced non-manifold tessellation output. This
 /// minimal case exercises the same topological pattern.
 #[test]
 fn tessellate_dovetail_fuse_manifold_issue_696() {

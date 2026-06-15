@@ -1,6 +1,5 @@
 //! Convert analytic geometry to B-spline representation.
 //!
-//! Equivalent to OCCT's `BRepBuilderAPI_NurbsConvert` / `ShapeCustom::ConvertToBSpline`.
 //! Replaces every analytic surface (Plane, Cylinder, Cone, Sphere, Torus) with a
 //! NURBS surface and every analytic curve (Line, Circle, Ellipse) with a NURBS
 //! curve.
