@@ -960,6 +960,12 @@ impl BrepKernel {
             .into());
         }
 
+        // Densify long, sparsely-sampled spans (e.g. long straight spine edges
+        // sampled only at endpoints) so the global interpolating fit below does
+        // not overshoot at adjacent high-curvature corners (e.g. non-square
+        // rounded-rect spines).
+        let points = brepkit_operations::sweep::densify_path_points(&points);
+
         // Fit an interpolating NURBS curve through the points.
         let degree = std::cmp::min(3, points.len() - 1);
         let path_curve = brepkit_math::nurbs::fitting::interpolate(&points, degree)?;
