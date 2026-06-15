@@ -371,9 +371,18 @@ pub fn approximate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
     let degree_v = (n - 1).min(3);
     let knots_v = build_uniform_knots(n, degree_v);
 
-    // Build control point grid: n rows (V) × 3 columns (U).
-    let mut control_points = Vec::with_capacity(n);
-    let mut weights = Vec::with_capacity(n);
+    // Build the control-point grid indexed `[row_u][col_v]`: U is the rational
+    // quadratic arc (3 rows — start / apex / end), V interpolates through the
+    // `n` sections (n columns). Each section contributes one column entry to
+    // each arc row. Laying the grid out section-major would transpose U and V,
+    // making `knots_u` (length 6) be validated against the section count — the
+    // source of `InvalidKnotVector { expected: n+3, got: 6 }` for n != 3.
+    let mut arc_start = Vec::with_capacity(n); // cp0 per section
+    let mut arc_apex = Vec::with_capacity(n); // cp1 per section
+    let mut arc_end = Vec::with_capacity(n); // cp2 per section
+    let mut w_start = Vec::with_capacity(n);
+    let mut w_apex = Vec::with_capacity(n);
+    let mut w_end = Vec::with_capacity(n);
 
     for sec in sections {
         let half_angle = sec.half_angle();
@@ -383,13 +392,14 @@ pub fn approximate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
         let cp0 = sec.p1;
         let cp2 = sec.p2;
 
-        // cp1 = apex of the rational quadratic on the arc.
-        // The weighted midpoint lies at center + radius * mid_direction,
-        // but for a rational Bezier the control point is the intersection
-        // of tangent lines at cp0 and cp2. For a circular arc this is:
-        // cp1 = (cp0 + cp2) / 2 + (1/cos(half_angle) - 1) * (center - midpoint)
-        // Equivalently: cp1 = center + (mid_dir / cos(half_angle)) * radius
-        // where mid_dir bisects the two contact directions.
+        // cp1 = apex (middle control point) of the rational quadratic arc.
+        // For the standard circular-arc representation (apex weight = cos θ),
+        // the apex is the tangent intersection at distance r/cos θ from the
+        // center along the chord-midpoint bisector. The chord midpoint M sits
+        // at distance r·cos θ from the center, so
+        //   apex = center + (M − center) / cos²θ = center + (M − center) / w_mid²
+        // Using 1/w_mid (instead of 1/w_mid²) places the apex on the arc and
+        // yields a non-circular conic.
         let midpoint = Point3::new(
             (cp0.x() + cp2.x()) * 0.5,
             (cp0.y() + cp2.y()) * 0.5,
@@ -397,13 +407,12 @@ pub fn approximate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
         );
 
         let cp1 = if w_mid.abs() > 1e-15 {
-            // Tangent intersection point for the rational quadratic.
             let center_to_mid = Vec3::new(
                 midpoint.x() - sec.center.x(),
                 midpoint.y() - sec.center.y(),
                 midpoint.z() - sec.center.z(),
             );
-            let scale = 1.0 / w_mid;
+            let scale = 1.0 / (w_mid * w_mid);
             Point3::new(
                 sec.center.x() + center_to_mid.x() * scale,
                 sec.center.y() + center_to_mid.y() * scale,
@@ -413,9 +422,16 @@ pub fn approximate_blend_surface(sections: &[CircSection]) -> Result<NurbsSurfac
             midpoint
         };
 
-        control_points.push(vec![cp0, cp1, cp2]);
-        weights.push(vec![1.0, w_mid, 1.0]);
+        arc_start.push(cp0);
+        arc_apex.push(cp1);
+        arc_end.push(cp2);
+        w_start.push(1.0);
+        w_apex.push(w_mid);
+        w_end.push(1.0);
     }
+
+    let control_points = vec![arc_start, arc_apex, arc_end];
+    let weights = vec![w_start, w_apex, w_end];
 
     let surf = NurbsSurface::new(
         degree_u,
@@ -681,6 +697,103 @@ mod tests {
         match result.unwrap_err() {
             BlendError::WalkingFailure { .. } => {} // expected
             other => panic!("expected WalkingFailure, got {other:?}"),
+        }
+    }
+
+    /// Build `n` identical quarter-circle sections of a radius-1 fillet between
+    /// the planes `z = 0` and `y = 0`, swept along +X.
+    fn quarter_circle_sections(n: usize) -> Vec<CircSection> {
+        (0..n)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                let x = i as f64;
+                CircSection {
+                    p1: Point3::new(x, 1.0, 0.0),
+                    p2: Point3::new(x, 0.0, 1.0),
+                    center: Point3::new(x, 1.0, 1.0),
+                    radius: 1.0,
+                    uv1: (0.0, 0.0),
+                    uv2: (0.0, 0.0),
+                    t: x,
+                }
+            })
+            .collect()
+    }
+
+    /// Assert that the arc cross-section (U direction) of `surf` at parameter
+    /// `v` is an exact radius-1 circular arc from `p1` to `p2` about `center`.
+    fn assert_circular_arc(surf: &NurbsSurface, v: f64, sec: &CircSection) {
+        let start = surf.evaluate(0.0, v);
+        let end = surf.evaluate(1.0, v);
+        assert!(
+            (start - sec.p1).length() < 1e-9,
+            "arc start {start:?} != p1 {:?}",
+            sec.p1
+        );
+        assert!(
+            (end - sec.p2).length() < 1e-9,
+            "arc end {end:?} != p2 {:?}",
+            sec.p2
+        );
+        // Every point along U must lie on the circle of radius 1 about center.
+        for k in 0..=8 {
+            let u = f64::from(k) / 8.0;
+            let p = surf.evaluate(u, v);
+            let r = (p - sec.center).length();
+            assert!(
+                (r - 1.0).abs() < 1e-9,
+                "U={u} V={v}: radius {r} != 1 (point {p:?} not on the fillet arc)"
+            );
+        }
+    }
+
+    /// Assert circularity across the *whole* (U, V) grid, including interior
+    /// sections. For `quarter_circle_sections` every cross-section is a unit
+    /// circle centred on the line `(·, 1, 1)` parallel to X — only X shifts
+    /// between sections — so every surface sample must sit at distance 1 from
+    /// that axis: `sqrt((y-1)^2 + (z-1)^2) == 1`. This catches V-interpolation
+    /// regressions (knot vector / evaluator) that endpoint-only sampling misses.
+    fn assert_circular_over_grid(surf: &NurbsSurface) {
+        for ku in 0..=8 {
+            for kv in 0..=8 {
+                let u = f64::from(ku) / 8.0;
+                let v = f64::from(kv) / 8.0;
+                let p = surf.evaluate(u, v);
+                let r = ((p.y() - 1.0).powi(2) + (p.z() - 1.0).powi(2)).sqrt();
+                assert!(
+                    (r - 1.0).abs() < 1e-9,
+                    "U={u} V={v}: off-axis radius {r} != 1 (point {p:?})"
+                );
+            }
+        }
+    }
+
+    /// Regression for the transposed control-point grid: the surface must build
+    /// for any section count, not only `n == 3`. With the U/V axes swapped, the
+    /// arc's 6-knot vector was validated against the section count, so every
+    /// `n != 3` failed with `InvalidKnotVector { expected: n + 3, got: 6 }`.
+    #[test]
+    fn approximate_blend_surface_handles_many_sections() {
+        for n in [2usize, 3, 4, 5, 8, 21] {
+            let sections = quarter_circle_sections(n);
+            let surf = approximate_blend_surface(&sections)
+                .unwrap_or_else(|e| panic!("n={n} sections should build a surface, got {e:?}"));
+
+            // U is the rational quadratic arc; V interpolates the sections.
+            assert_eq!(surf.degree_u(), 2, "U (arc) must be degree 2 for n={n}");
+            assert_eq!(
+                surf.degree_v(),
+                (n - 1).min(3),
+                "V (sections) degree for n={n}"
+            );
+
+            // The arc shape must be preserved at both ends of the section span
+            // (clamped knots interpolate the first and last section exactly).
+            assert_circular_arc(&surf, 0.0, &sections[0]);
+            assert_circular_arc(&surf, 1.0, &sections[n - 1]);
+
+            // ...and at every interior section, not just the endpoints.
+            assert_circular_over_grid(&surf);
         }
     }
 }
