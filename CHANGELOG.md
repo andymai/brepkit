@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.112.0](https://github.com/andymai/brepkit/compare/v2.111.1...v2.112.0) (2026-06-15)
+
+
+### Features
+
+* **heal:** implement duplicate-face removal in the fix pipeline ([#849](https://github.com/andymai/brepkit/issues/849)) ([fa06bb4](https://github.com/andymai/brepkit/commit/fa06bb4dbc0b76ebb6ca42bc60628c562ccae610))
+
 ## [2.111.1](https://github.com/andymai/brepkit/compare/v2.111.0...v2.111.1) (2026-06-15)
 
 
