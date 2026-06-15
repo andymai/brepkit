@@ -28,13 +28,14 @@ pub struct ProjectedEdges {
 ///
 /// `direction` points from the camera into the scene. `x_axis` is the horizontal
 /// view direction (re-orthonormalized against `direction`). `deflection` controls
-/// edge-sampling density and the classification tolerance. When `hidden_lines` is
-/// false, hidden segments are dropped and `hidden` is left empty.
+/// edge-sampling density (the point-classification tolerance is fixed). When
+/// `hidden_lines` is false, hidden segments are dropped and `hidden` is left empty.
 ///
 /// # Errors
 ///
 /// Returns [`crate::OperationsError::InvalidInput`] if `direction` or `x_axis`
-/// is degenerate, and propagates topology / sampling errors.
+/// is degenerate, and propagates topology, sampling, and point-classification
+/// errors.
 pub fn project_edges(
     topo: &Topology,
     solid: SolidId,
@@ -62,18 +63,23 @@ pub fn project_edges(
         Point2::new(x.dot(v), y.dot(v))
     };
 
-    // Step length for the occlusion probe — clear of the boundary tolerance but
-    // small relative to the model. Keyed to the model's overall extent.
+    // Step length for the occlusion probe — far enough to clear the boundary
+    // tolerance, small relative to the model. Keyed to the model extent and
+    // capped so a large-coordinate model can't push the probe through thin
+    // features.
     let bbox = crate::measure::solid_bounding_box(topo, solid)?;
     let diag = (bbox.max - bbox.min).length();
-    let eps = (diag * 1e-4).max(1e-6);
+    let eps = (diag * 1e-4).clamp(1e-6, 1e-2);
 
     // A boundary point is hidden when stepping toward the camera (−view) lands
-    // inside the solid, i.e. a face is between it and the camera.
-    let is_hidden = |p: Point3| -> bool {
-        classify_point(topo, solid, p - view * eps, deflection, 1e-7)
-            .map(|c| c == PointClassification::Inside)
-            .unwrap_or(false)
+    // inside the solid, i.e. a face is between it and the camera. A
+    // classification error is propagated rather than silently read as
+    // "visible", so a degenerate solid surfaces instead of yielding wrong HLR.
+    let is_hidden = |p: Point3| -> Result<bool, crate::OperationsError> {
+        Ok(
+            classify_point(topo, solid, p - view * eps, deflection, 1e-7)?
+                == PointClassification::Inside,
+        )
     };
 
     let lines = crate::tessellate::sample_solid_edges(topo, solid, deflection)?;
@@ -104,7 +110,7 @@ pub fn project_edges(
                 );
                 is_hidden(mid)
             })
-            .collect();
+            .collect::<Result<Vec<bool>, _>>()?;
 
         let mut j = 0;
         while j < seg_hidden.len() {

@@ -804,14 +804,19 @@ pub fn make_convex_hull(
 
 /// Convex Minkowski sum of two solids: `A ⊕ B = { a + b | a ∈ A, b ∈ B }`.
 ///
-/// Computed as the convex hull of all pairwise vertex sums, which is exact when
-/// both inputs are convex (e.g. boxes, or a shape with a tessellated sphere as
-/// the rolling tool) and a convex over-approximation otherwise.
+/// Computed as the convex hull of all pairwise vertex sums. This is exact when
+/// both inputs are convex **polytopes** (e.g. boxes, or a shape with a
+/// tessellated sphere as the rolling tool); for a smooth convex solid the
+/// vertices under-sample the surface, and for non-convex inputs it is a convex
+/// over-approximation.
+///
+/// The vertex sum is `O(|A|·|B|)` points — large meshes can be expensive.
 ///
 /// # Errors
 ///
 /// Returns [`crate::OperationsError::InvalidInput`] if either solid has no
-/// vertices, and propagates [`make_convex_hull`] errors (e.g. degenerate input).
+/// vertices, and propagates [`make_convex_hull`] errors (e.g. when the summed
+/// points are degenerate / coplanar and no hull can be built).
 pub fn make_minkowski_sum(
     topo: &mut Topology,
     a: SolidId,
@@ -833,7 +838,8 @@ pub fn make_minkowski_sum(
         });
     }
 
-    let mut sums = Vec::with_capacity(a_pts.len() * b_pts.len());
+    // saturating_mul: the product is only a capacity hint; never overflow it.
+    let mut sums = Vec::with_capacity(a_pts.len().saturating_mul(b_pts.len()));
     for &p in &a_pts {
         for &q in &b_pts {
             sums.push(Point3::new(p.x() + q.x(), p.y() + q.y(), p.z() + q.z()));
@@ -1378,7 +1384,8 @@ mod tests {
         let a = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
         let b = make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
         let sum = make_minkowski_sum(&mut topo, a, b).unwrap();
-        // [0,1]³ ⊕ [0,1]³ = [0,2]³, volume 8.
+        // Two unit boxes sum to a 2×2×2 box (volume 8), independent of where
+        // make_box places its origin.
         assert_volume_near(&topo, sum, 8.0, 1e-6);
     }
 
