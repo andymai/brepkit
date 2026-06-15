@@ -13,7 +13,7 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -Dwarnings
 
-# rust-toolchain.toml pins the exact Rust version (1.94.0) and includes
+# rust-toolchain.toml pins the exact Rust version (1.96.0) and includes
 # rustfmt, clippy, and the wasm32 target. Rustup auto-detects it, so most
 # jobs don't need dtolnay/rust-toolchain.
 

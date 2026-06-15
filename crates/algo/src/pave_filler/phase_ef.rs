@@ -326,7 +326,7 @@ fn check_edge_face_pairs(
 
                 arena.face_info_mut(fid).vertices_in.insert(vertex_id);
 
-                log::debug!("EF: edge {eid:?} crosses face {fid:?} at t={t:.6}",);
+                log::debug!("EF: edge {eid:?} crosses face {fid:?} at t={t:.6}");
             }
         }
     }
