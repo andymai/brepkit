@@ -1157,6 +1157,7 @@ impl BrepKernel {
             corner_mode: cm,
             scale_law,
             segments: segments as usize,
+            aux_spine: None,
         };
 
         let result = brepkit_operations::sweep::sweep_with_options(
@@ -1166,6 +1167,98 @@ impl BrepKernel {
             &options,
         )?;
         Ok(solid_id_to_u32(result))
+    }
+
+    /// Guided (two-rail) sweep: sweep `face` along a spine, orienting the
+    /// profile so its up-vector tracks an auxiliary spine.
+    ///
+    /// The spine and auxiliary spine are each passed as raw NURBS data
+    /// (`degree`, `knots`, flat `control_points`, `weights`). Returns a solid
+    /// handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-finite or malformed curve, a non-planar
+    /// profile, or a degenerate path.
+    #[wasm_bindgen(js_name = "guidedSweep")]
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+    pub fn guided_sweep(
+        &mut self,
+        face: u32,
+        spine_degree: u32,
+        spine_knots: Vec<f64>,
+        spine_control_points: Vec<f64>,
+        spine_weights: Vec<f64>,
+        aux_degree: u32,
+        aux_knots: Vec<f64>,
+        aux_control_points: Vec<f64>,
+        aux_weights: Vec<f64>,
+    ) -> Result<u32, JsError> {
+        let build = |degree: u32,
+                     knots: Vec<f64>,
+                     cps: Vec<f64>,
+                     weights: Vec<f64>,
+                     label: &str|
+         -> Result<NurbsCurve, JsError> {
+            if degree < 1 {
+                return Err(WasmError::InvalidInput {
+                    reason: format!("{label}_degree must be at least 1"),
+                }
+                .into());
+            }
+            if cps.len() % 3 != 0 {
+                return Err(WasmError::InvalidInput {
+                    reason: format!("{label}_control_points length must be a multiple of 3"),
+                }
+                .into());
+            }
+            if weights.len() != cps.len() / 3 {
+                return Err(WasmError::InvalidInput {
+                    reason: format!("{label}_weights length must match control point count"),
+                }
+                .into());
+            }
+            for (name, arr) in [
+                ("knots", &knots),
+                ("control_points", &cps),
+                ("weights", &weights),
+            ] {
+                if let Some(pos) = arr.iter().position(|v| !v.is_finite()) {
+                    return Err(WasmError::InvalidInput {
+                        reason: format!("{label}_{name}[{pos}] is not finite"),
+                    }
+                    .into());
+                }
+            }
+            let control_points: Vec<Point3> = cps
+                .chunks_exact(3)
+                .map(|c| Point3::new(c[0], c[1], c[2]))
+                .collect();
+            Ok(NurbsCurve::new(
+                degree as usize,
+                knots,
+                control_points,
+                weights,
+            )?)
+        };
+
+        let spine = build(
+            spine_degree,
+            spine_knots,
+            spine_control_points,
+            spine_weights,
+            "spine",
+        )?;
+        let aux = build(
+            aux_degree,
+            aux_knots,
+            aux_control_points,
+            aux_weights,
+            "aux",
+        )?;
+        let face_id = self.resolve_face(face)?;
+        let solid = brepkit_operations::sweep::sweep_guided(self.topo_mut(), face_id, &spine, aux)?;
+        Ok(solid_id_to_u32(solid))
     }
 
     // ── Point Classification ──────────────────────────────────────
@@ -1619,6 +1712,60 @@ mod tests {
                 "spineEdge": spine,
                 "ruled": true,
             }),
+        );
+        assert!(
+            out.get("ok").and_then(serde_json::Value::as_u64).is_some(),
+            "expected an ok solid handle, got {out}"
+        );
+    }
+
+    #[test]
+    fn guided_sweep_produces_solid() {
+        let mut k = BrepKernel::new();
+        let profile = k.make_circle_face(2.0, 24).unwrap();
+        // Spine: line (0,0,0)→(0,0,20). Aux: parallel guide offset +10 in X.
+        let solid = k
+            .guided_sweep(
+                profile,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.0, 0.0, 0.0, 20.0],
+                vec![1.0, 1.0],
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![10.0, 0.0, 0.0, 10.0, 0.0, 20.0],
+                vec![1.0, 1.0],
+            )
+            .unwrap();
+        let vol = k.volume(solid, 0.5).unwrap();
+        assert!(vol > 0.0, "guided sweep volume, got {vol}");
+    }
+
+    #[test]
+    fn guided_sweep_batch_dispatch() {
+        let mut k = BrepKernel::new();
+        let profile = k.make_circle_face(2.0, 24).unwrap();
+        let mk_line = |k: &mut BrepKernel, x: f64| {
+            k.make_nurbs_edge(
+                x,
+                0.0,
+                0.0,
+                x,
+                0.0,
+                20.0,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![x, 0.0, 0.0, x, 0.0, 20.0],
+                vec![1.0, 1.0],
+            )
+            .unwrap()
+        };
+        let spine = mk_line(&mut k, 0.0);
+        let aux = mk_line(&mut k, 10.0);
+        let out = dispatch(
+            &mut k,
+            "guidedSweep",
+            serde_json::json!({ "face": profile, "spineEdge": spine, "auxEdge": aux }),
         );
         assert!(
             out.get("ok").and_then(serde_json::Value::as_u64).is_some(),

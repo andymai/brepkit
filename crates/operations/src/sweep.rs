@@ -982,6 +982,11 @@ pub struct SweepOptions {
     pub scale_law: Option<Box<dyn Fn(f64) -> f64 + Send + Sync>>,
     /// Number of path segments (0 = auto from control point count).
     pub segments: usize,
+    /// Auxiliary spine (guide curve). When set, the profile is oriented so its
+    /// up-vector points toward this curve at each path parameter — a guided
+    /// (two-rail) sweep — overriding `contact_mode`. Sampled at the same
+    /// parameter as the main path.
+    pub aux_spine: Option<NurbsCurve>,
 }
 
 impl std::fmt::Debug for SweepOptions {
@@ -994,6 +999,7 @@ impl std::fmt::Debug for SweepOptions {
                 &self.scale_law.as_ref().map(|_| "fn(f64)->f64"),
             )
             .field("segments", &self.segments)
+            .field("aux_spine", &self.aux_spine.as_ref().map(|_| "NurbsCurve"))
             .finish()
     }
 }
@@ -1106,47 +1112,79 @@ pub fn sweep_with_options(
     };
 
     // Compute frames based on contact mode (open paths only at this point).
-    let frames = match options.contact_mode {
-        SweepContactMode::RotationMinimizing => {
-            let up_hint = orthogonalize(input_normal, path_tangent_0);
-            compute_frames(path, num_segments, up_hint, false)?
+    let frames: Vec<Frame> = if let Some(aux) = options.aux_spine.as_ref() {
+        // Guided (two-rail) sweep: orient the profile so its up-vector points
+        // toward the auxiliary spine at each path parameter. The tangent still
+        // follows the main path, so this overrides `contact_mode`.
+        let mut out = Vec::with_capacity(num_segments + 1);
+        let mut prev_up: Option<Vec3> = None;
+        for k in 0..=num_segments {
+            #[allow(clippy::cast_precision_loss)]
+            let t = k as f64 / num_segments as f64;
+            let origin = path.evaluate(t);
+            let tangent = path.tangent(t).unwrap_or(path_tangent_0);
+            let guide_dir = aux.evaluate(t) - origin;
+            // Where the guide momentarily coincides with the spine the up-vector
+            // is undefined; carry the previous frame's up (re-orthogonalized) so
+            // orientation stays continuous instead of snapping to a world axis.
+            let up = if guide_dir.length() < 1e-9 {
+                let seed = prev_up.unwrap_or_else(|| pick_reference_axis(tangent));
+                orthogonalize(seed, tangent)
+            } else {
+                orthogonalize(guide_dir, tangent)
+            };
+            prev_up = Some(up);
+            out.push(Frame {
+                origin,
+                tangent,
+                up,
+                right: tangent.cross(up),
+            });
         }
-        SweepContactMode::Fixed => {
-            // Fixed: use the same orientation at every point
-            let tangent0 = path_tangent_0;
-            let up = orthogonalize(input_normal, tangent0);
-            let right = tangent0.cross(up);
+        out
+    } else {
+        match options.contact_mode {
+            SweepContactMode::RotationMinimizing => {
+                let up_hint = orthogonalize(input_normal, path_tangent_0);
+                compute_frames(path, num_segments, up_hint, false)?
+            }
+            SweepContactMode::Fixed => {
+                // Fixed: use the same orientation at every point
+                let tangent0 = path_tangent_0;
+                let up = orthogonalize(input_normal, tangent0);
+                let right = tangent0.cross(up);
 
-            (0..=num_segments)
-                .map(|k| {
-                    #[allow(clippy::cast_precision_loss)]
-                    let t = k as f64 / num_segments as f64;
-                    Frame {
-                        origin: path.evaluate(t),
-                        tangent: path.tangent(t).unwrap_or(tangent0),
-                        up,
-                        right,
-                    }
-                })
-                .collect()
-        }
-        SweepContactMode::ConstantNormal(normal_dir) => {
-            // Constant normal: up vector stays aligned to normal_dir
-            (0..=num_segments)
-                .map(|k| {
-                    #[allow(clippy::cast_precision_loss)]
-                    let t = k as f64 / num_segments as f64;
-                    let tangent = path.tangent(t).unwrap_or(Vec3::new(0.0, 0.0, 1.0));
-                    let up = orthogonalize(normal_dir, tangent);
-                    let right = tangent.cross(up);
-                    Frame {
-                        origin: path.evaluate(t),
-                        tangent,
-                        up,
-                        right,
-                    }
-                })
-                .collect()
+                (0..=num_segments)
+                    .map(|k| {
+                        #[allow(clippy::cast_precision_loss)]
+                        let t = k as f64 / num_segments as f64;
+                        Frame {
+                            origin: path.evaluate(t),
+                            tangent: path.tangent(t).unwrap_or(tangent0),
+                            up,
+                            right,
+                        }
+                    })
+                    .collect()
+            }
+            SweepContactMode::ConstantNormal(normal_dir) => {
+                // Constant normal: up vector stays aligned to normal_dir
+                (0..=num_segments)
+                    .map(|k| {
+                        #[allow(clippy::cast_precision_loss)]
+                        let t = k as f64 / num_segments as f64;
+                        let tangent = path.tangent(t).unwrap_or(Vec3::new(0.0, 0.0, 1.0));
+                        let up = orthogonalize(normal_dir, tangent);
+                        let right = tangent.cross(up);
+                        Frame {
+                            origin: path.evaluate(t),
+                            tangent,
+                            up,
+                            right,
+                        }
+                    })
+                    .collect()
+            }
         }
     };
 
@@ -2016,6 +2054,34 @@ fn profile_to_frame_matrix(
     ]))
 }
 
+/// Guided (two-rail) sweep of `profile` along `spine`, oriented by `aux`.
+///
+/// At each path parameter the profile's up-vector points toward the auxiliary
+/// spine `aux`, so the profile rolls to track the guide curve rather than
+/// holding a fixed or rotation-minimizing orientation. Thin wrapper over
+/// [`sweep_with_options`] with `aux_spine` set.
+///
+/// # Errors
+///
+/// Propagates [`sweep_with_options`] errors (e.g. a non-planar profile or a
+/// degenerate path).
+pub fn sweep_guided(
+    topo: &mut Topology,
+    profile: FaceId,
+    spine: &NurbsCurve,
+    aux: NurbsCurve,
+) -> Result<SolidId, crate::OperationsError> {
+    sweep_with_options(
+        topo,
+        profile,
+        spine,
+        &SweepOptions {
+            aux_spine: Some(aux),
+            ..Default::default()
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -2200,6 +2266,110 @@ mod tests {
         assert!(
             (det - 1.0).abs() < 1e-9,
             "rotation det should be +1, got {det}"
+        );
+    }
+
+    /// Helper: a `2*hx`×`2*hy` rectangle profile at the origin in the XY plane.
+    fn make_rect(topo: &mut Topology, hx: f64, hy: f64) -> FaceId {
+        let t = 1e-7;
+        let v0 = topo.add_vertex(Vertex::new(Point3::new(-hx, -hy, 0.0), t));
+        let v1 = topo.add_vertex(Vertex::new(Point3::new(hx, -hy, 0.0), t));
+        let v2 = topo.add_vertex(Vertex::new(Point3::new(hx, hy, 0.0), t));
+        let v3 = topo.add_vertex(Vertex::new(Point3::new(-hx, hy, 0.0), t));
+        let e0 = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let e1 = topo.add_edge(Edge::new(v1, v2, EdgeCurve::Line));
+        let e2 = topo.add_edge(Edge::new(v2, v3, EdgeCurve::Line));
+        let e3 = topo.add_edge(Edge::new(v3, v0, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(e0, true),
+                OrientedEdge::new(e1, true),
+                OrientedEdge::new(e2, true),
+                OrientedEdge::new(e3, true),
+            ],
+            true,
+        )
+        .unwrap();
+        let wid = topo.add_wire(wire);
+        topo.add_face(Face::new(
+            wid,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ))
+    }
+
+    /// Helper: a degree-1 guide curve from `(x0,y0,0)` to `(x1,y1,10)`.
+    fn guide_line(x0: f64, y0: f64, x1: f64, y1: f64) -> NurbsCurve {
+        NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![Point3::new(x0, y0, 0.0), Point3::new(x1, y1, 10.0)],
+            vec![1.0, 1.0],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn sweep_guided_produces_valid_solid() {
+        let mut topo = Topology::new();
+        let profile = make_square(&mut topo, 4.0);
+        let spine = straight_z_path(10.0);
+        let aux = guide_line(10.0, 0.0, 10.0, 0.0);
+        let solid = sweep_guided(&mut topo, profile, &spine, aux).unwrap();
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(vol > 0.0, "guided sweep volume, got {vol}");
+    }
+
+    #[test]
+    fn sweep_guided_rotating_aux_rolls_profile() {
+        // A wide rectangle swept straight stays flat in Y. A guide that rotates
+        // from +X to +Y over the sweep rolls the rectangle 90°, sweeping its
+        // wide axis into Y — so the Y-extent grows far beyond the flat case.
+        let mut t_plain = Topology::new();
+        let p_plain = make_rect(&mut t_plain, 8.0, 1.0);
+        let s_plain = sweep_with_options(
+            &mut t_plain,
+            p_plain,
+            &straight_z_path(10.0),
+            &SweepOptions::default(),
+        )
+        .unwrap();
+        let bb_plain = crate::measure::solid_bounding_box(&t_plain, s_plain).unwrap();
+        let y_plain = bb_plain.max.y() - bb_plain.min.y();
+
+        let mut t_guided = Topology::new();
+        let p_guided = make_rect(&mut t_guided, 8.0, 1.0);
+        let aux = guide_line(30.0, 0.0, 0.0, 30.0);
+        let s_guided = sweep_guided(&mut t_guided, p_guided, &straight_z_path(10.0), aux).unwrap();
+        let bb_guided = crate::measure::solid_bounding_box(&t_guided, s_guided).unwrap();
+        let y_guided = bb_guided.max.y() - bb_guided.min.y();
+
+        assert!(
+            y_plain < 4.0,
+            "plain sweep keeps the rectangle flat in Y, got {y_plain}"
+        );
+        assert!(
+            y_guided > 8.0,
+            "the rotating guide should roll the wide axis into Y, got {y_guided}"
+        );
+    }
+
+    #[test]
+    fn sweep_guided_handles_guide_meeting_spine() {
+        // The guide starts coincident with the spine (up undefined at t=0) then
+        // diverges — frame continuity must still yield a valid finite solid.
+        let mut topo = Topology::new();
+        let profile = make_square(&mut topo, 3.0);
+        let spine = straight_z_path(10.0);
+        let aux = guide_line(0.0, 0.0, 10.0, 0.0);
+        let solid = sweep_guided(&mut topo, profile, &spine, aux).unwrap();
+        let vol = crate::measure::solid_volume(&topo, solid, 0.1).unwrap();
+        assert!(
+            vol > 0.0 && vol.is_finite(),
+            "guide-meets-spine should still yield a valid solid, got {vol}"
         );
     }
 
