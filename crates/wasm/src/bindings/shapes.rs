@@ -472,6 +472,85 @@ impl BrepKernel {
         Ok(edge_id_to_u32(eid))
     }
 
+    /// Create a trimmed elliptical arc edge.
+    ///
+    /// The ellipse is defined by `center`, `axis` (plane normal), the
+    /// `ref` major-axis direction, and `semi_major`/`semi_minor`. The
+    /// `start`/`end` points trim it to the CCW arc between them (they must
+    /// lie on the ellipse). Produces an `EdgeCurve::Ellipse` edge — not a
+    /// NURBS approximation — so it reports CIRCLE/ELLIPSE-class geometry.
+    ///
+    /// Returns an edge handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any coordinate is NaN/infinite, a semi-axis is
+    /// non-positive, `semi_minor` exceeds `semi_major`, or `axis`/`ref` is
+    /// a zero vector.
+    #[wasm_bindgen(js_name = "makeEllipseArc3d")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn make_ellipse_arc_3d(
+        &mut self,
+        start_x: f64,
+        start_y: f64,
+        start_z: f64,
+        end_x: f64,
+        end_y: f64,
+        end_z: f64,
+        center_x: f64,
+        center_y: f64,
+        center_z: f64,
+        axis_x: f64,
+        axis_y: f64,
+        axis_z: f64,
+        ref_x: f64,
+        ref_y: f64,
+        ref_z: f64,
+        semi_major: f64,
+        semi_minor: f64,
+    ) -> Result<u32, JsError> {
+        for (v, name) in [
+            (start_x, "start_x"),
+            (start_y, "start_y"),
+            (start_z, "start_z"),
+            (end_x, "end_x"),
+            (end_y, "end_y"),
+            (end_z, "end_z"),
+            (center_x, "center_x"),
+            (center_y, "center_y"),
+            (center_z, "center_z"),
+            (axis_x, "axis_x"),
+            (axis_y, "axis_y"),
+            (axis_z, "axis_z"),
+            (ref_x, "ref_x"),
+            (ref_y, "ref_y"),
+            (ref_z, "ref_z"),
+        ] {
+            validate_finite(v, name)?;
+        }
+        validate_positive(semi_major, "semi_major")?;
+        validate_positive(semi_minor, "semi_minor")?;
+
+        let center = Point3::new(center_x, center_y, center_z);
+        let axis = Vec3::new(axis_x, axis_y, axis_z);
+        let ref_dir = Vec3::new(ref_x, ref_y, ref_z);
+        let start_pt = Point3::new(start_x, start_y, start_z);
+        let end_pt = Point3::new(end_x, end_y, end_z);
+
+        let eid = brepkit_topology::builder::make_ellipse_arc(
+            self.topo_mut(),
+            center,
+            axis,
+            semi_major,
+            semi_minor,
+            ref_dir,
+            start_pt,
+            end_pt,
+            TOL,
+        )?;
+        Ok(edge_id_to_u32(eid))
+    }
+
     /// Create a NURBS curve edge.
     ///
     /// Returns an edge handle (`u32`).
