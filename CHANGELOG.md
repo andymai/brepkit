@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.106.0](https://github.com/andymai/brepkit/compare/v2.105.2...v2.106.0) (2026-06-15)
+
+
+### Features
+
+* **wasm:** add filletWithEvolution face-provenance tracking ([#815](https://github.com/andymai/brepkit/issues/815)) ([#822](https://github.com/andymai/brepkit/issues/822)) ([d4cac8c](https://github.com/andymai/brepkit/commit/d4cac8c75e81baf6b368ab664e5be2757c0c7842))
+
 ## [2.105.2](https://github.com/andymai/brepkit/compare/v2.105.1...v2.105.2) (2026-06-15)
 
 
