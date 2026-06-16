@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.113.2](https://github.com/andymai/brepkit/compare/v2.113.1...v2.113.2) (2026-06-16)
+
+
+### Bug Fixes
+
+* **algo:** analytic gridfinity bin — multi-section loft, coaxial cone cut, shelled-lip fuse ([#871](https://github.com/andymai/brepkit/issues/871)) ([1544e4c](https://github.com/andymai/brepkit/commit/1544e4c6550c0af042a5fd29d16812bbc6eac82a))
+
 ## [2.113.1](https://github.com/andymai/brepkit/compare/v2.113.0...v2.113.1) (2026-06-16)
 
 
