@@ -317,6 +317,24 @@ fn polygon_area_3d(polygon: &[Point3], normal: Vec3) -> f64 {
 
 type EdgeKey = ((i64, i64, i64), (i64, i64, i64));
 
+/// Quantize a point onto an integer lattice for tolerant endpoint matching.
+fn quantize_point(p: Point3, tol: Tolerance) -> (i64, i64, i64) {
+    let scale = 1.0 / (tol.linear * 10.0);
+    (
+        (p.x() * scale).round() as i64,
+        (p.y() * scale).round() as i64,
+        (p.z() * scale).round() as i64,
+    )
+}
+
+/// Build an orientation-insensitive key for a segment from its quantized
+/// endpoints, so `(a, b)` and `(b, a)` collide.
+fn make_edge_key(a: Point3, b: Point3, tol: Tolerance) -> EdgeKey {
+    let qa = quantize_point(a, tol);
+    let qb = quantize_point(b, tol);
+    if qa <= qb { (qa, qb) } else { (qb, qa) }
+}
+
 /// Collapse geometrically-coincident segments, ignoring orientation.
 ///
 /// A section curve shared by two oppositely-oriented faces is emitted once in
@@ -327,22 +345,8 @@ type EdgeKey = ((i64, i64, i64), (i64, i64, i64));
 fn dedup_coincident_segments(segments: &mut Vec<(Point3, Point3)>, tol: Tolerance) {
     use std::collections::HashSet;
 
-    let quantize = |p: Point3| -> (i64, i64, i64) {
-        let scale = 1.0 / (tol.linear * 10.0);
-        (
-            (p.x() * scale).round() as i64,
-            (p.y() * scale).round() as i64,
-            (p.z() * scale).round() as i64,
-        )
-    };
-    let edge_key = |a: Point3, b: Point3| -> EdgeKey {
-        let qa = quantize(a);
-        let qb = quantize(b);
-        if qa <= qb { (qa, qb) } else { (qb, qa) }
-    };
-
     let mut seen: HashSet<EdgeKey> = HashSet::new();
-    segments.retain(|&(a, b)| seen.insert(edge_key(a, b)));
+    segments.retain(|&(a, b)| seen.insert(make_edge_key(a, b, tol)));
 }
 
 /// Extract boundary edges of faces coplanar with the cutting plane.
@@ -383,21 +387,6 @@ fn extract_coplanar_boundary(
     // of quantized endpoint coordinates (to handle floating-point matching).
     // An edge shared by two coplanar faces appears twice and is internal.
     // An edge appearing once is a boundary edge.
-    let quantize = |p: Point3| -> (i64, i64, i64) {
-        let scale = 1.0 / (tol.linear * 10.0);
-        (
-            (p.x() * scale).round() as i64,
-            (p.y() * scale).round() as i64,
-            (p.z() * scale).round() as i64,
-        )
-    };
-
-    let edge_key = |a: Point3, b: Point3| -> EdgeKey {
-        let qa = quantize(a);
-        let qb = quantize(b);
-        if qa <= qb { (qa, qb) } else { (qb, qa) }
-    };
-
     let mut edge_counts: HashMap<EdgeKey, (Point3, Point3, usize)> = HashMap::new();
 
     for &fid in &coplanar_faces {
@@ -406,7 +395,7 @@ fn extract_coplanar_boundary(
         for i in 0..n {
             let a = verts[i];
             let b = verts[(i + 1) % n];
-            let key = edge_key(a, b);
+            let key = make_edge_key(a, b, tol);
             edge_counts
                 .entry(key)
                 .and_modify(|e| e.2 += 1)
