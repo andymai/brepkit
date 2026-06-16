@@ -996,6 +996,35 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     let pts_2d = sample_wire_loop_uv(&sub_face.outer_wire);
     let mut interior_uv = sample_interior_point(&pts_2d);
 
+    // Periodic lateral walls (cone/cylinder): the closed boundary circles
+    // share a seam, and `sample_wire_loop_uv` can emit a lopsided uv polygon
+    // (most samples clustered on one bounding circle, plus seam-wrapped u
+    // values outside [0, 2pi)). `sample_interior_point` is then pulled onto a
+    // v-extreme — i.e. onto a bounding circle. For a flush/coincident cap that
+    // circle is the shared rim with the opposing solid, so the classifier
+    // samples exactly on the boundary and misclassifies the wall (dropping the
+    // cavity face on a Cut). Snap v to the axial midpoint, which is interior
+    // between the two bounding circles at the sampled u. Mirrors the
+    // sphere-cap fix above.
+    if matches!(
+        &sub_face.surface,
+        FaceSurface::Cone(_) | FaceSurface::Cylinder(_)
+    ) && !pts_2d.is_empty()
+    {
+        let v_min = pts_2d.iter().map(|p| p.y()).fold(f64::INFINITY, f64::min);
+        let v_max = pts_2d
+            .iter()
+            .map(|p| p.y())
+            .fold(f64::NEG_INFINITY, f64::max);
+        let range = v_max - v_min;
+        if range > 1e-9 {
+            let margin = 0.05 * range;
+            if interior_uv.y() < v_min + margin || interior_uv.y() > v_max - margin {
+                interior_uv = Point2::new(interior_uv.x(), 0.5 * (v_min + v_max));
+            }
+        }
+    }
+
     // Sphere cap fix: sphere sub-faces with degenerate UV boundaries (thin
     // strip at constant v) need the interior UV offset toward the pole.
     // The outer wire of a sphere cap maps to a horizontal line in UV,
