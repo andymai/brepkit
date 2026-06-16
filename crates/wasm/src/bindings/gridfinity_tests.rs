@@ -1718,3 +1718,70 @@ fn box_volume_sanity() {
         rel_error * 100.0
     );
 }
+
+/// Regression: a rounded-rectangle shelled body (open-top hollow) must
+/// classify a point in its OPEN CAVITY as Outside, not Inside. The analytic
+/// composite classifier modelled the rounded corners as `ConvexAnalytic`
+/// intersection constraints (`radial_dist < radius` for every corner
+/// cylinder), which the cavity centre fails (it is far from every corner) —
+/// so the cavity was wrongly classified Inside, dropping a fused lip's
+/// inner-cavity faces and forcing a mesh-boolean fallback. The composite now
+/// bails to the exact ray-cast classifier when a cylinder/cone does not
+/// contain the centroid.
+#[test]
+fn rounded_shelled_body_classifies_cavity_outside() {
+    use brepkit_math::vec::Point3;
+    let mut k = BrepKernel::new();
+    let bf = make_rounded_rect_face(&mut k, OUTER_DIM, OUTER_DIM, CORNER_R, 0.0);
+    let bs = parse_batch(&k.execute_batch(&format!(
+        r#"[{{"op":"extrude","args":{{"face":{bf},"dz":1.0,"distance":{WALL_HEIGHT}}}}}]"#
+    )))[0]["ok"]
+        .as_u64()
+        .unwrap() as u32;
+    let tf = k
+        .get_solid_faces(bs)
+        .unwrap()
+        .iter()
+        .copied()
+        .find(|&fh| {
+            k.resolve_face(fh)
+                .ok()
+                .and_then(|fid| k.topo.face(fid).ok())
+                .and_then(brepkit_topology::face::Face::effective_plane_normal)
+                .is_some_and(|n| n.z() > 0.5 * n.length())
+        })
+        .unwrap();
+    let shelled = parse_batch(&k.execute_batch(&format!(
+        r#"[{{"op":"shell","args":{{"solid":{bs},"thickness":{WALL_THICKNESS},"faces":[{tf}]}}}}]"#
+    )))[0]["ok"]
+        .as_u64()
+        .unwrap() as u32;
+    let sid = k.resolve_solid(shelled).unwrap();
+    let topo = &*k.topo;
+    let cavity = brepkit_algo::classifier::classify_point(
+        topo,
+        sid,
+        Point3::new(0.0, 0.0, WALL_HEIGHT / 2.0),
+    )
+    .unwrap();
+    assert_eq!(
+        cavity,
+        brepkit_algo::FaceClass::Outside,
+        "open-cavity centre must classify Outside, got {cavity:?}"
+    );
+    let wall = brepkit_algo::classifier::classify_point(
+        topo,
+        sid,
+        Point3::new(
+            OUTER_DIM / 2.0 - WALL_THICKNESS / 2.0,
+            0.0,
+            WALL_HEIGHT / 2.0,
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        wall,
+        brepkit_algo::FaceClass::Inside,
+        "wall-material point must classify Inside, got {wall:?}"
+    );
+}
