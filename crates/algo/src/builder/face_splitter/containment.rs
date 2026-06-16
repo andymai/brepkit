@@ -34,15 +34,22 @@ pub(super) fn find_point_outside_holes(
             (outer_pts[i].x() + outer_pts[j].x()) * 0.5,
             (outer_pts[i].y() + outer_pts[j].y()) * 0.5,
         );
-        // Nudge the edge midpoint slightly toward the centroid.
-        let candidate = Point2::new(
-            edge_mid.x() * 0.9 + centroid_x * 0.1,
-            edge_mid.y() * 0.9 + centroid_y * 0.1,
-        );
-        if super::super::classify_2d::point_in_polygon_2d(candidate, outer_pts)
-            && !is_inside_any_hole(&candidate, inner_wires)
-        {
-            return candidate;
+        // Step inward from the edge midpoint toward the centroid in small
+        // increments; the first point inside the outer wire and outside every
+        // hole wins. Small steps handle THIN rings (e.g. the ~1.2mm gridfinity
+        // lip annulus on an 83mm cap), where a single large nudge overshoots
+        // straight into the hole and no ring point is ever found.
+        for k in 1..=99 {
+            let t = f64::from(k) * 0.005;
+            let candidate = Point2::new(
+                edge_mid.x() * (1.0 - t) + centroid_x * t,
+                edge_mid.y() * (1.0 - t) + centroid_y * t,
+            );
+            if super::super::classify_2d::point_in_polygon_2d(candidate, outer_pts)
+                && !is_inside_any_hole(&candidate, inner_wires)
+            {
+                return candidate;
+            }
         }
     }
 

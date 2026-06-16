@@ -1050,8 +1050,15 @@ pub fn interior_point_3d(sub_face: &SplitSubFace, frame: Option<&PlaneFrame>) ->
     }
 
     // If the point falls inside a hole, find a point between the outer wire
-    // and the nearest hole boundary.
-    if is_inside_any_hole(&interior_uv, &sub_face.inner_wires) {
+    // and the nearest hole boundary. (`find_point_outside_holes` steps inward
+    // in small increments so it lands in a thin ring rather than overshooting
+    // back into the hole.) For a planar face with holes, a centroid sampled
+    // from an under-resolved outer-wire polygon can sit on the wrong side of a
+    // thin annular ring even when it is not strictly inside a hole, so always
+    // re-derive the interior point from the ring between outer and holes.
+    if matches!(&sub_face.surface, FaceSurface::Plane { .. }) && !sub_face.inner_wires.is_empty() {
+        interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
+    } else if is_inside_any_hole(&interior_uv, &sub_face.inner_wires) {
         interior_uv = find_point_outside_holes(&pts_2d, &sub_face.inner_wires);
     }
 
