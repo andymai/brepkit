@@ -804,6 +804,7 @@ pub fn intersect_analytic_analytic_bounded(
     // a grid point on A to its projection on B can be large even near
     // the intersection (e.g., sphere R=2 and cylinder R=1 → gap ≈ 1).
     let seed_threshold = diag_a.max(diag_b).max(1.0) * 0.5;
+    let mut min_dist = f64::INFINITY;
 
     #[allow(clippy::cast_precision_loss)]
     for ia in 0..grid_res {
@@ -819,6 +820,7 @@ pub fn intersect_analytic_analytic_bounded(
             let (ub, vb) = project_analytic(&b, pa, u_range_b, v_range_b);
             let pb = surf_b(ub, vb);
             let dist = (pa - pb).length();
+            min_dist = min_dist.min(dist);
 
             if dist < seed_threshold {
                 // Use the coarse seed directly. The marching algorithm
@@ -833,6 +835,19 @@ pub fn intersect_analytic_analytic_bounded(
                 seeds.push((mid, (ua, va), (ub, vb)));
             }
         }
+    }
+
+    // Cheap rejection: the grid samples surface A; the closest sample's
+    // distance to B lower-bounds how near the two bounded patches come. A
+    // transversal crossing puts a sample within ~one grid cell of it
+    // (distance on the order of a cell), so if even the nearest sample is
+    // several cells away the patches cannot cross — skip the expensive
+    // marching and return empty. Result-preserving: non-crossing pairs
+    // already march to nothing, just slowly (this is the gridfinity lip's
+    // ~80 inner-wall × outer-wall pairs that dominate pavefiller time).
+    let reject_dist = (char_size / grid_res as f64) * 3.0;
+    if min_dist > reject_dist {
+        return Ok(vec![]);
     }
 
     if seeds.is_empty() {
@@ -1034,6 +1049,66 @@ pub fn exact_cone_cone(
         apex1.z() + axis.z() * t_star,
     );
     let circle = Circle3D::new(center, axis, radius)?;
+    Ok(Some(vec![ExactIntersectionCurve::Circle(circle)]))
+}
+
+/// Exact coaxial cone-cylinder intersection: returns the shared circle.
+///
+/// A cone and a cylinder sharing an axis are concentric circles at every
+/// axial station, so they meet only where the cone's radius equals the
+/// cylinder's. The cone radius is linear in the axial coordinate `t` from its
+/// apex (`r = m·t`, `m = cot(half_angle)`), the cylinder radius is the
+/// constant `R`, so `m·t = R` gives a single crossing `t*` → one circle. This
+/// is the gridfinity lip's top knife edge (inner tapered corner = cone, outer
+/// corner = cylinder, concentric, radii matching at `Z_PEAK`); the general
+/// marcher fragments that near-tangent contact into dozens of degenerate
+/// micro-curves.
+///
+/// Returns `Some(vec![circle])` for a genuine crossing, `Some(vec![])` when
+/// the crossing degenerates to the apex, and `None` (defer to the marcher)
+/// when the surfaces are not coaxial or the cone is near-flat / near-axial.
+///
+/// # Errors
+///
+/// Returns [`MathError`] if the shared `Circle3D` cannot be constructed.
+pub fn exact_cone_cylinder(
+    cone: &ConicalSurface,
+    cyl: &CylindricalSurface,
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
+    let axis = cone.axis();
+    let cyl_axis = cyl.axis();
+
+    // Coaxial check: parallel axes and the cone apex on the cylinder's axis.
+    if axis.dot(cyl_axis).abs() < 1.0 - 1e-10 {
+        return Ok(None);
+    }
+    let apex = cone.apex();
+    let delta = apex - cyl.origin();
+    let delta_v = Vec3::new(delta.x(), delta.y(), delta.z());
+    let along = delta_v.dot(cyl_axis);
+    if (delta_v - cyl_axis * along).length() > 1e-8 {
+        return Ok(None);
+    }
+
+    let s = cone.half_angle().sin();
+    if s.abs() < 1e-12 {
+        return Ok(None); // near-flat cone.
+    }
+    let m = cone.half_angle().cos() / s; // dr/dt along the cone axis.
+    if m.abs() < 1e-12 {
+        return Ok(None); // near-axial cone: radius ~constant.
+    }
+
+    let t_star = cyl.radius() / m; // where the cone radius m·t equals R.
+    if t_star.abs() < 1e-12 {
+        return Ok(Some(vec![])); // crossing at the apex — no real circle.
+    }
+    let center = Point3::new(
+        apex.x() + axis.x() * t_star,
+        apex.y() + axis.y() * t_star,
+        apex.z() + axis.z() * t_star,
+    );
+    let circle = Circle3D::new(center, axis, cyl.radius())?;
     Ok(Some(vec![ExactIntersectionCurve::Circle(circle)]))
 }
 

@@ -711,6 +711,47 @@ fn compute_raw_curves(
             }
         }
 
+        (FaceSurface::Cone(cone), FaceSurface::Cylinder(cyl))
+        | (FaceSurface::Cylinder(cyl), FaceSurface::Cone(cone)) => {
+            // A coaxial cone and cylinder meet at the single circle where the
+            // cone's radius equals the cylinder's — the gridfinity lip's top
+            // knife edge (inner tapered corner = cone, outer corner =
+            // cylinder, concentric, matching at Z_PEAK). Emit it as an exact
+            // Circle so seam adoption links it to the shared cap rim, instead
+            // of letting the marcher fragment the near-tangent contact into
+            // degenerate micro-arcs (the 98-free-edge corruption). Non-coaxial
+            // (None) falls through to the general marcher.
+            match analytic_intersection::exact_cone_cylinder(cone, cyl)? {
+                Some(exacts) => {
+                    let mut results = Vec::new();
+                    for exact in exacts {
+                        if let analytic_intersection::ExactIntersectionCurve::Circle(circle) = exact
+                        {
+                            let bbox = circle_bbox(&circle);
+                            let domain = (0.0, std::f64::consts::TAU);
+                            let p_start = ParametricCurve::evaluate(&circle, domain.0);
+                            let p_end = ParametricCurve::evaluate(&circle, domain.1);
+                            results.push(RawCurve {
+                                curve: EdgeCurve::Circle(circle),
+                                bbox,
+                                t_range: domain,
+                                p_start,
+                                p_end,
+                            });
+                        }
+                    }
+                    Ok(results)
+                }
+                None => {
+                    if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
+                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+            }
+        }
+
         (a, b) if a.as_analytic().is_some() && b.as_analytic().is_some() => {
             if let (Some(aa), Some(ab)) = (a.as_analytic(), b.as_analytic()) {
                 analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
