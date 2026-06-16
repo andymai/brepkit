@@ -945,11 +945,13 @@ fn is_degenerate_line_sliver(topo: &Topology, fid: FaceId) -> bool {
 /// land in different cells and are never recognized as the same point. This
 /// pass clusters by actual distance (a coarse spatial hash bounds the
 /// neighbour search) so coincident-but-displaced intersection vertices share
-/// one entity. Line edges that collapse to zero length after welding are
-/// dropped; arc edges are kept (a sub-`snap` arc is still a valid tiny arc and
-/// is rare). Clustering is deterministic: vertices are processed in `VertexId`
-/// order and each non-canonical vertex maps to the lowest-index canonical
-/// vertex within `snap`.
+/// one entity. An edge whose once-distinct endpoints weld together is dropped
+/// — a zero-length line, or an arc that must not be re-created with
+/// `start == end` (the kernel reads that as a full circle); a genuinely closed
+/// input arc is preserved. Clustering is deterministic: vertices are processed
+/// in `VertexId` order and each non-canonical vertex maps to the lowest-index
+/// canonical vertex within `snap`. The pass is O(V log V) and runs on every
+/// `build_solid`, but returns early without rebuilding when nothing welds.
 fn weld_coincident_vertices(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result<(), AlgoError> {
     use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
     use brepkit_topology::vertex::VertexId;
@@ -990,16 +992,21 @@ fn weld_coincident_vertices(topo: &mut Topology, face_ids: &mut [FaceId]) -> Res
     let mut weld: HashMap<VertexId, VertexId> = HashMap::new();
     for &(vid, p) in &verts {
         let c = cell(p);
+        // Pick the lowest-index canonical within `snap` across the 27 cells,
+        // not merely the first one probed, so the choice is independent of cell
+        // iteration order. Canonicals are added in `VertexId` order, so any
+        // match already has a lower index than `vid`.
         let mut canonical: Option<VertexId> = None;
-        'search: for dz in -1..=1 {
+        for dz in -1..=1 {
             for dy in -1..=1 {
                 for dx in -1..=1 {
                     let nc = (c.0 + dx, c.1 + dy, c.2 + dz);
                     if let Some(list) = buckets.get(&nc) {
                         for &(cid, cp) in list {
-                            if (cp - p).length() <= snap {
+                            if (cp - p).length() <= snap
+                                && canonical.is_none_or(|b| cid.index() < b.index())
+                            {
                                 canonical = Some(cid);
-                                break 'search;
                             }
                         }
                     }
@@ -1070,8 +1077,9 @@ fn weld_coincident_vertices(topo: &mut Topology, face_ids: &mut [FaceId]) -> Res
                 // Drop an edge that welding collapsed to a point: a zero-length
                 // line, or a once-distinct arc whose endpoints merged (it must
                 // NOT be re-created with start == end, which this kernel reads
-                // as a full circle). A genuinely closed input edge (ov0 == ov1)
-                // is preserved by the branches below.
+                // as a full circle). A genuinely closed input arc (ov0 == ov1,
+                // e.g. a full circle) is preserved; a zero-length line is always
+                // dropped.
                 let collapsed = nv0 == nv1 && (ov0 != ov1 || matches!(curve, EdgeCurve::Line));
                 let result = if collapsed {
                     None
