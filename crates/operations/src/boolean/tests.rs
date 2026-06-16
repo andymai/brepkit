@@ -4019,6 +4019,84 @@ fn fuse_overlapping_rounded_rect_arc_prisms_same_footprint() {
     );
 }
 
+/// Outcome of [`arc_frame_lip_fuse`].
+struct ArcFrameLipFuse {
+    fused_vol: f64,
+    body_vol: f64,
+    lip_vol: f64,
+    manifold: bool,
+    has_free_edges: bool,
+}
+
+/// #859 repro helper: fuse a rounded-rect FRAME lip on top of a body so the
+/// lip's bottom contact ring is coincident with the body's top-face outer
+/// boundary (arc corners). The pavefiller can place a coincident-ring vertex
+/// a few ULPs off the body's exact vertex; without vertex welding in the GFA
+/// assembler the shared boundary stays open and the fuse drops to a mesh
+/// fallback (correct-ish volume for the square footprint, badly wrong for the
+/// non-square one).
+fn arc_frame_lip_fuse(hw: f64, hd: f64) -> ArcFrameLipFuse {
+    let mut topo = Topology::new();
+    let r = 3.0;
+    let w = 2.0;
+    let body = make_rounded_rect_arc_prism(&mut topo, hw, hd, r, 0.0, 10.0);
+    let body_vol = crate::measure::solid_volume(&topo, body, 0.01).unwrap();
+
+    let outer = make_rounded_rect_arc_prism(&mut topo, hw, hd, r, 10.0, 4.0);
+    let inner = make_rounded_rect_arc_prism(&mut topo, hw - w, hd - w, r - w, 10.0, 4.0);
+    let no_unify = BooleanOptions {
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    let lip = boolean_with_options(&mut topo, BooleanOp::Cut, outer, inner, no_unify).unwrap();
+    let lip_vol = crate::measure::solid_volume(&topo, lip, 0.01).unwrap();
+
+    match boolean_with_options(&mut topo, BooleanOp::Fuse, body, lip, no_unify) {
+        Ok(f) => ArcFrameLipFuse {
+            fused_vol: crate::measure::solid_volume(&topo, f, 0.01).unwrap_or(0.0),
+            body_vol,
+            lip_vol,
+            manifold: is_closed_manifold(&topo, f).unwrap_or(false),
+            has_free_edges: has_free_edges(&topo, f).unwrap_or(true),
+        },
+        Err(_) => ArcFrameLipFuse {
+            fused_vol: 0.0,
+            body_vol,
+            lip_vol,
+            manifold: false,
+            has_free_edges: true,
+        },
+    }
+}
+
+fn assert_arc_frame_lip_fuse_clean(hw: f64, hd: f64) {
+    let r = arc_frame_lip_fuse(hw, hd);
+    let expected = r.body_vol + r.lip_vol;
+    assert!(
+        r.manifold,
+        "fused lip+body must be closed-manifold (hw={hw}, hd={hd})"
+    );
+    assert!(
+        !r.has_free_edges,
+        "fused lip+body must have no free edges (hw={hw}, hd={hd})"
+    );
+    assert!(
+        (r.fused_vol - expected).abs() / expected < 1e-2,
+        "fused volume {:.2} != body+lip {expected:.2} (hw={hw}, hd={hd})",
+        r.fused_vol
+    );
+}
+
+#[test]
+fn fuse_arc_frame_lip_is_manifold_square() {
+    assert_arc_frame_lip_fuse_clean(15.0, 15.0);
+}
+
+#[test]
+fn fuse_arc_frame_lip_is_manifold_nonsquare() {
+    assert_arc_frame_lip_fuse_clean(10.0, 22.0);
+}
+
 #[test]
 fn fuse_stacked_rounded_rect_arc_prisms_nested_footprint() {
     // Tool's coplanar interface face strictly contained in the body's

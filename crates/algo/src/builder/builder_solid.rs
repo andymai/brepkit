@@ -75,6 +75,16 @@ pub fn build_solid(topo: &mut Topology, selected: &[SelectedFace]) -> Result<Sol
     // slivers removed above, so they would survive as free edges).
     remove_zero_length_edges(topo, &mut face_ids)?;
 
+    // Step 0a-pre3: Weld vertices that are coincident within snap tolerance.
+    // Intersection in the pavefiller can place a vertex a few ULPs short of an
+    // exact pre-existing vertex (e.g. a coincident-arc tangent point landing at
+    // -11.999999 vs the body's -12.0). Such near-duplicates quantize to
+    // different cells at MERGE_TOL, so the duplicate-edge merge never unifies
+    // the two faces' partitions and the shared boundary stays open. Snapping
+    // them to one canonical vertex (and dropping the resulting zero-length
+    // slivers) lets the merge below see identical partitions.
+    weld_coincident_vertices(topo, &mut face_ids)?;
+
     // Step 0a: Split Line edges at intermediate collinear vertices.
     // Adjacent faces can partition the same geometric boundary differently
     // (one whole edge vs several sub-edges split at paves); refining every
@@ -925,6 +935,191 @@ fn is_degenerate_line_sliver(topo: &Topology, fid: FaceId) -> bool {
         }
     }
     true
+}
+
+/// Weld vertices on the selected faces that are coincident within the snap
+/// tolerance onto a single canonical vertex, then rebuild any touched wire.
+///
+/// Quantization-based merging (`merge_duplicate_edges`) keys on `MERGE_TOL`
+/// cells, so two vertices a few ULPs apart but within `snap` (10·`MERGE_TOL`)
+/// land in different cells and are never recognized as the same point. This
+/// pass clusters by actual distance (a coarse spatial hash bounds the
+/// neighbour search) so coincident-but-displaced intersection vertices share
+/// one entity. Line edges that collapse to zero length after welding are
+/// dropped; arc edges are kept (a sub-`snap` arc is still a valid tiny arc and
+/// is rare). Clustering is deterministic: vertices are processed in `VertexId`
+/// order and each non-canonical vertex maps to the lowest-index canonical
+/// vertex within `snap`.
+fn weld_coincident_vertices(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result<(), AlgoError> {
+    use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
+    use brepkit_topology::vertex::VertexId;
+
+    let snap = MERGE_TOL * 10.0;
+
+    // Collect distinct vertices (id + position) referenced by the faces.
+    let mut seen: HashSet<VertexId> = HashSet::new();
+    let mut verts: Vec<(VertexId, Point3)> = Vec::new();
+    for &fid in face_ids.iter() {
+        let face = topo.face(fid)?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                for vid in [edge.start(), edge.end()] {
+                    if seen.insert(vid) {
+                        verts.push((vid, topo.vertex(vid)?.point()));
+                    }
+                }
+            }
+        }
+    }
+    // Deterministic clustering order.
+    verts.sort_by_key(|(vid, _)| vid.index());
+
+    // Coarse spatial hash at snap resolution maps a cell to canonical
+    // vertices already chosen there; a candidate only needs to probe its own
+    // and the 26 neighbouring cells to find a canonical within `snap`.
+    let cell = |p: Point3| -> (i64, i64, i64) {
+        let s = 1.0 / snap;
+        (
+            (p.x() * s).floor() as i64,
+            (p.y() * s).floor() as i64,
+            (p.z() * s).floor() as i64,
+        )
+    };
+    let mut buckets: HashMap<(i64, i64, i64), Vec<(VertexId, Point3)>> = HashMap::new();
+    let mut weld: HashMap<VertexId, VertexId> = HashMap::new();
+    for &(vid, p) in &verts {
+        let c = cell(p);
+        let mut canonical: Option<VertexId> = None;
+        'search: for dz in -1..=1 {
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let nc = (c.0 + dx, c.1 + dy, c.2 + dz);
+                    if let Some(list) = buckets.get(&nc) {
+                        for &(cid, cp) in list {
+                            if (cp - p).length() <= snap {
+                                canonical = Some(cid);
+                                break 'search;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        match canonical {
+            Some(cid) => {
+                weld.insert(vid, cid);
+            }
+            None => {
+                buckets.entry(c).or_default().push((vid, p));
+            }
+        }
+    }
+
+    if weld.is_empty() {
+        return Ok(());
+    }
+    let resolve = |vid: VertexId| -> VertexId { weld.get(&vid).copied().unwrap_or(vid) };
+
+    // Cache rewritten edges so a shared EdgeId is rebuilt once and stays shared.
+    let mut edge_remap: HashMap<EdgeId, Option<EdgeId>> = HashMap::new();
+    for fid in face_ids.iter_mut() {
+        let (surface, is_reversed, outer_oes, inner_oes_list) = {
+            let face = topo.face(*fid)?;
+            let surface = face.surface().clone();
+            let is_reversed = face.is_reversed();
+            let collect = |wid| -> Result<Vec<(EdgeId, bool)>, AlgoError> {
+                Ok(topo
+                    .wire(wid)?
+                    .edges()
+                    .iter()
+                    .map(|oe| (oe.edge(), oe.is_forward()))
+                    .collect())
+            };
+            let outer_oes = collect(face.outer_wire())?;
+            let mut inner_oes_list = Vec::new();
+            for &iw in face.inner_wires() {
+                inner_oes_list.push(collect(iw)?);
+            }
+            (surface, is_reversed, outer_oes, inner_oes_list)
+        };
+
+        let touched = outer_oes
+            .iter()
+            .chain(inner_oes_list.iter().flatten())
+            .any(|(eid, _)| {
+                topo.edge(*eid)
+                    .is_ok_and(|e| weld.contains_key(&e.start()) || weld.contains_key(&e.end()))
+            });
+        if !touched {
+            continue;
+        }
+
+        // Rebuild one edge under welding: returns the (possibly cached) new
+        // EdgeId, or None when the edge collapses to a point.
+        let mut rebuild_edge =
+            |topo: &mut Topology, eid: EdgeId| -> Result<Option<EdgeId>, AlgoError> {
+                if let Some(&cached) = edge_remap.get(&eid) {
+                    return Ok(cached);
+                }
+                let edge = topo.edge(eid)?;
+                let curve = edge.curve().clone();
+                let (ov0, ov1) = (edge.start(), edge.end());
+                let nv0 = resolve(ov0);
+                let nv1 = resolve(ov1);
+                // Drop an edge that welding collapsed to a point: a zero-length
+                // line, or a once-distinct arc whose endpoints merged (it must
+                // NOT be re-created with start == end, which this kernel reads
+                // as a full circle). A genuinely closed input edge (ov0 == ov1)
+                // is preserved by the branches below.
+                let collapsed = nv0 == nv1 && (ov0 != ov1 || matches!(curve, EdgeCurve::Line));
+                let result = if collapsed {
+                    None
+                } else if nv0 == ov0 && nv1 == ov1 {
+                    Some(eid)
+                } else {
+                    Some(topo.add_edge(Edge::new(nv0, nv1, curve)))
+                };
+                edge_remap.insert(eid, result);
+                Ok(result)
+            };
+
+        let mut rebuild_wire =
+            |topo: &mut Topology, oes: &[(EdgeId, bool)]| -> Result<Vec<OrientedEdge>, AlgoError> {
+                let mut out = Vec::with_capacity(oes.len());
+                for &(eid, fwd) in oes {
+                    if let Some(new_eid) = rebuild_edge(topo, eid)? {
+                        out.push(OrientedEdge::new(new_eid, fwd));
+                    }
+                }
+                Ok(out)
+            };
+
+        let new_outer = rebuild_wire(topo, &outer_oes)?;
+        if !is_rebuildable_loop(topo, &new_outer) {
+            continue;
+        }
+        let Ok(new_outer_wire) = brepkit_topology::wire::Wire::new(new_outer, true) else {
+            continue;
+        };
+        let new_outer_id = topo.add_wire(new_outer_wire);
+        let mut new_inner_ids = Vec::new();
+        for inner_oes in &inner_oes_list {
+            let kept = rebuild_wire(topo, inner_oes)?;
+            if is_rebuildable_loop(topo, &kept)
+                && let Ok(w) = brepkit_topology::wire::Wire::new(kept, true)
+            {
+                new_inner_ids.push(topo.add_wire(w));
+            }
+        }
+        let mut new_face = Face::new(new_outer_id, new_inner_ids, surface);
+        if is_reversed {
+            new_face.set_reversed(true);
+        }
+        *fid = topo.add_face(new_face);
+    }
+
+    Ok(())
 }
 
 /// Split Line edges at intermediate collinear vertices from the global
