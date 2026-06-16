@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.113.1](https://github.com/andymai/brepkit/compare/v2.113.0...v2.113.1) (2026-06-16)
+
+
+### Bug Fixes
+
+* **algo:** weld near-coincident vertices in solid assembly ([#859](https://github.com/andymai/brepkit/issues/859)) ([877ca43](https://github.com/andymai/brepkit/commit/877ca433c1867d93e2468fc7914614a5cc0d6060))
+
 ## [2.113.0](https://github.com/andymai/brepkit/compare/v2.112.1...v2.113.0) (2026-06-16)
 
 
