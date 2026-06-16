@@ -797,16 +797,17 @@ fn section_dims(inset: f64) -> (f64, f64, f64) {
     (w, d, r)
 }
 
-/// Build 5 outer sections (with lip extension) and return face handles.
+/// Build the outer lip sections and return face handles.
+///
+/// The outer frustum is a rectangular tube FLUSH with the bin wall
+/// (inset = 0) — it must coincide with the body's outer wall so the lip
+/// fuses onto the body. (An earlier version tapered the outer profile,
+/// which left the lip narrower than the wall and disjoint from the body, so
+/// the fuse dropped it.) Only the INNER sections taper to form the stacking
+/// ledge. Two sections (bottom extension + peak) suffice for a flush tube.
 fn make_outer_sections(k: &mut BrepKernel) -> Vec<u32> {
     let mut faces = Vec::new();
-    let sections: [(f64, f64); 5] = [
-        (Z_EXT, INSET_BOTTOM),
-        (Z_BASE, INSET_BOTTOM),
-        (Z_TAPER1, INSET_MID),
-        (Z_VERT, INSET_MID),
-        (Z_PEAK, INSET_TOP),
-    ];
+    let sections: [(f64, f64); 2] = [(Z_EXT, 0.0), (Z_PEAK, 0.0)];
     for &(z, inset) in &sections {
         let (w, d, r) = section_dims(inset);
         faces.push(make_rounded_rect_face(k, w, d, r, z));
@@ -1313,8 +1314,10 @@ fn gridfinity_d3_shelled_box_with_lip() {
     assert_ok(&p5, 0);
     let lip_handle = p5[0]["ok"].as_u64().unwrap() as u32;
 
-    // Translate lip to top of box
-    let mat = translate_matrix(0.0, 0.0, WALL_HEIGHT);
+    // Translate lip to top of box. The lip sections are centered at the
+    // origin, but `makeBox` spans [0,DIM] (corner at origin), so the lip must
+    // also be shifted to the box centre or it overlaps only one quadrant.
+    let mat = translate_matrix(OUTER_DIM / 2.0, OUTER_DIM / 2.0, WALL_HEIGHT);
     let r6 = k.execute_batch(&format!(
         r#"[{{"op": "transform", "args": {{"solid": {lip_handle}, "matrix": {mat}}}}}]"#
     ));
