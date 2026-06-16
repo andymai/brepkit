@@ -962,7 +962,7 @@ fn try_algebraic_intersection(
     }
 }
 
-/// Algebraic coaxial cone-cone intersection.
+/// Exact coaxial cone-cone intersection: returns the shared circle.
 ///
 /// Two cones that share an axis are concentric circles at every axial
 /// station, so they meet only where their radii are equal. Each cone's
@@ -978,11 +978,15 @@ fn try_algebraic_intersection(
 /// the cones do not meet (parallel radius lines or a crossing on the wrong
 /// nappe), and `None` for the identical-cone overlap or a degenerate
 /// (near-flat) cone — both of which fall through to the general path.
-#[allow(clippy::unnecessary_wraps)]
-fn algebraic_cone_cone(
+///
+/// # Errors
+///
+/// Returns [`MathError`] if the shared-rim `Circle3D` cannot be constructed
+/// (e.g. a non-finite center or radius from a malformed cone).
+pub fn exact_cone_cone(
     c1: &ConicalSurface,
     c2: &ConicalSurface,
-) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+) -> Result<Option<Vec<ExactIntersectionCurve>>, MathError> {
     let axis = c1.axis();
     let axis2 = c2.axis();
 
@@ -1029,31 +1033,48 @@ fn algebraic_cone_cone(
         apex1.y() + axis.y() * t_star,
         apex1.z() + axis.z() * t_star,
     );
+    let circle = Circle3D::new(center, axis, radius)?;
+    Ok(Some(vec![ExactIntersectionCurve::Circle(circle)]))
+}
 
-    let basis = Frame3::from_normal(center, axis)?;
-    let (u_dir, v_dir) = (basis.x, basis.y);
-    let n_samples = 33;
-    let mut positions = Vec::with_capacity(n_samples);
-    let mut points = Vec::with_capacity(n_samples);
-    #[allow(clippy::cast_precision_loss)]
-    for i in 0..n_samples {
-        let theta = TAU * i as f64 / (n_samples - 1) as f64;
-        let (sin_t, cos_t) = theta.sin_cos();
-        let pt = Point3::new(
-            center.x() + (u_dir.x() * cos_t + v_dir.x() * sin_t) * radius,
-            center.y() + (u_dir.y() * cos_t + v_dir.y() * sin_t) * radius,
-            center.z() + (u_dir.z() * cos_t + v_dir.z() * sin_t) * radius,
-        );
-        positions.push(pt);
-        points.push(IntersectionPoint {
-            point: pt,
-            param1: (0.0, 0.0),
-            param2: (0.0, 0.0),
-        });
+/// Algebraic coaxial cone-cone intersection (NURBS form for the general
+/// bounded path). Delegates to [`exact_cone_cone`] and samples each exact
+/// circle into an interpolated NURBS `IntersectionCurve`, mirroring the
+/// sphere-cylinder algebraic path. phase FF prefers the exact circle form
+/// directly (so the section edge links to the coincident boundary), but a
+/// caller of `intersect_analytic_analytic_bounded` still gets one clean
+/// curve instead of the marcher's fragments.
+fn algebraic_cone_cone(
+    c1: &ConicalSurface,
+    c2: &ConicalSurface,
+) -> Result<Option<Vec<IntersectionCurve>>, MathError> {
+    let Some(exacts) = exact_cone_cone(c1, c2)? else {
+        return Ok(None);
+    };
+    let mut curves = Vec::new();
+    for exact in exacts {
+        let ExactIntersectionCurve::Circle(circle) = exact else {
+            continue;
+        };
+        let n_samples = 33;
+        let mut positions = Vec::with_capacity(n_samples);
+        let mut points = Vec::with_capacity(n_samples);
+        #[allow(clippy::cast_precision_loss)]
+        for i in 0..n_samples {
+            let theta = TAU * i as f64 / (n_samples - 1) as f64;
+            let pt = crate::traits::ParametricCurve::evaluate(&circle, theta);
+            positions.push(pt);
+            points.push(IntersectionPoint {
+                point: pt,
+                param1: (0.0, 0.0),
+                param2: (0.0, 0.0),
+            });
+        }
+        let degree = 3.min(positions.len() - 1);
+        let curve = interpolate(&positions, degree)?;
+        curves.push(IntersectionCurve { curve, points });
     }
-    let degree = 3.min(positions.len() - 1);
-    let curve = interpolate(&positions, degree)?;
-    Ok(Some(vec![IntersectionCurve { curve, points }]))
+    Ok(Some(curves))
 }
 
 /// Algebraic sphere-cylinder intersection.

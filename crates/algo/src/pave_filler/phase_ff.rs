@@ -673,6 +673,44 @@ fn compute_raw_curves(
             }
         }
 
+        (FaceSurface::Cone(c1), FaceSurface::Cone(c2)) => {
+            // Coaxial cones meet at a single circle that coincides with their
+            // shared cap rim. Emit it as an exact Circle so the closed-circle
+            // handling (seam adoption + `link_existing`) treats it as the
+            // existing shared boundary edge instead of adopting a fresh,
+            // redundant section edge. Non-coaxial cones (None) fall through to
+            // the general marcher.
+            match analytic_intersection::exact_cone_cone(c1, c2)? {
+                Some(exacts) => {
+                    let mut results = Vec::new();
+                    for exact in exacts {
+                        if let analytic_intersection::ExactIntersectionCurve::Circle(circle) = exact
+                        {
+                            let bbox = circle_bbox(&circle);
+                            let domain = (0.0, std::f64::consts::TAU);
+                            let p_start = ParametricCurve::evaluate(&circle, domain.0);
+                            let p_end = ParametricCurve::evaluate(&circle, domain.1);
+                            results.push(RawCurve {
+                                curve: EdgeCurve::Circle(circle),
+                                bbox,
+                                t_range: domain,
+                                p_start,
+                                p_end,
+                            });
+                        }
+                    }
+                    Ok(results)
+                }
+                None => {
+                    if let (Some(aa), Some(ab)) = (surf_a.as_analytic(), surf_b.as_analytic()) {
+                        analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+            }
+        }
+
         (a, b) if a.as_analytic().is_some() && b.as_analytic().is_some() => {
             if let (Some(aa), Some(ab)) = (a.as_analytic(), b.as_analytic()) {
                 analytic_analytic_intersection(&aa, &ab, v_range_a, v_range_b)

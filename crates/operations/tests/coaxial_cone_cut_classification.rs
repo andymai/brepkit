@@ -15,6 +15,7 @@ use brepkit_algo::bop::BooleanOp;
 use brepkit_algo::gfa;
 use brepkit_operations::primitives::make_cone;
 use brepkit_topology::Topology;
+use brepkit_topology::adjacency::AdjacencyIndex;
 use brepkit_topology::explorer::solid_faces;
 
 #[test]
@@ -25,14 +26,30 @@ fn coaxial_cone_cut_keeps_inner_cavity_wall() {
 
     let result = gfa::boolean(&mut topo, BooleanOp::Cut, outer, inner).unwrap();
 
-    let cones = solid_faces(&topo, result)
-        .unwrap()
+    // The cut is a conical washer: outer cone wall + reversed inner cavity
+    // wall + bottom annulus = three analytic faces, all curved/planar (never a
+    // mesh fallback). The shared top rim (where the cone-cone intersection
+    // circle coincides with both cones' top boundary) must be a single linked
+    // edge, so the shell is watertight (every edge shared by exactly 2 faces).
+    let faces = solid_faces(&topo, result).unwrap();
+    let cones = faces
         .iter()
         .filter(|&&f| topo.face(f).unwrap().surface().type_tag() == "cone")
         .count();
+    let planes = faces
+        .iter()
+        .filter(|&&f| topo.face(f).unwrap().surface().type_tag() == "plane")
+        .count();
+    assert_eq!(cones, 2, "expected both cone walls, got {cones}");
+    assert_eq!(planes, 1, "expected the bottom annulus, got {planes}");
 
-    assert!(
-        cones >= 2,
-        "Cut must keep both cone walls (outer + reversed inner cavity wall); got {cones}"
+    let adj = AdjacencyIndex::build_from_faces(&topo, &faces).unwrap();
+    let free = adj
+        .edge_faces_iter()
+        .filter(|(_, fs)| fs.len() != 2)
+        .count();
+    assert_eq!(
+        free, 0,
+        "cut shell must be watertight, got {free} free edges"
     );
 }
