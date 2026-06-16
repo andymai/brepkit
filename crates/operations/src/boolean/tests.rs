@@ -4097,6 +4097,57 @@ fn fuse_arc_frame_lip_is_manifold_nonsquare() {
     assert_arc_frame_lip_fuse_clean(10.0, 22.0);
 }
 
+fn find_top_face(topo: &Topology, solid: SolidId) -> FaceId {
+    brepkit_topology::explorer::solid_faces(topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&fid| {
+            topo.face(fid)
+                .unwrap()
+                .effective_plane_normal()
+                .is_some_and(|n| n.z() > 0.5 * n.length())
+        })
+        .expect("prism should have a +Z top face")
+}
+
+#[test]
+fn fuse_shelled_cup_lip_covers_cavity_opening() {
+    // FAITHFUL d4 repro: a shelled cup (cavity half ~13) fused with a frame lip
+    // whose INNER (half 12) is INSIDE the cavity, overlapping so the lip's
+    // bottom plane crosses the cup's cavity wall MID-FACE. d4's free-edge bug:
+    // the FF (cavity wall x lip bottom) splits the cavity wall but NOT the lip
+    // bottom -> orphaned cavity-wall top edge -> open shell -> mesh fallback.
+    let mut topo = Topology::new();
+    let body = make_rounded_rect_arc_prism(&mut topo, 15.0, 15.0, 3.0, 0.0, 10.0);
+    let top = find_top_face(&topo, body);
+    // shell removes the top + offsets inward by 2 -> cavity half 13, corner 1.
+    let cup = crate::shell_op::shell(&mut topo, body, 2.0, &[top]).unwrap();
+    // Lip frame z=8..14, OVERLAPPING the cup (z<10); inner half 12 < cavity 13.
+    let outer = make_rounded_rect_arc_prism(&mut topo, 15.0, 15.0, 3.0, 8.0, 6.0);
+    let inner = make_rounded_rect_arc_prism(&mut topo, 12.0, 12.0, 1.0, 8.0, 6.0);
+    let no_unify = BooleanOptions {
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    let lip = boolean_with_options(&mut topo, BooleanOp::Cut, outer, inner, no_unify).unwrap();
+    match boolean_with_options(&mut topo, BooleanOp::Fuse, cup, lip, no_unify) {
+        Ok(f) => {
+            let manifold = is_closed_manifold(&topo, f).unwrap_or(false);
+            let free = has_free_edges(&topo, f).unwrap_or(true);
+            eprintln!("faithful-cup-lip fuse: manifold={manifold} free={free}");
+            assert!(
+                manifold,
+                "shelled cup + cavity-covering lip fuse must be closed-manifold"
+            );
+            assert!(
+                !free,
+                "shelled cup + cavity-covering lip fuse must have no free edges"
+            );
+        }
+        Err(e) => panic!("fuse errored: {e:?}"),
+    }
+}
+
 #[test]
 fn fuse_stacked_rounded_rect_arc_prisms_nested_footprint() {
     // Tool's coplanar interface face strictly contained in the body's

@@ -771,22 +771,31 @@ pub fn split_face_2d(
     // Build wire loops via angular-sorting traversal.
     let mut loops = build_wire_loops(&all_edges, tol.linear, u_periodic, v_periodic);
 
-    // Clockwise-boundary retry: the min-clockwise turn rule merges
-    // everything into a single loop when the boundary winds clockwise in
-    // this UV frame (the frame derives from the raw surface normal, not the
-    // effective face orientation). If the default traversal failed to split
-    // despite having sections, and the boundary is CW, retry with the
-    // mirrored turn rule. Loop areas from the retry are sign-flipped for
-    // the outer/hole classification below.
+    // Clockwise-boundary handling: this face's UV frame derives from the raw
+    // surface normal, not the effective face orientation, so an inner-shell
+    // (cavity) wall winds CW in UV while the outer wall winds CCW. Two effects
+    // follow when the boundary is CW, and both must be corrected:
+    //   1. Every sub-loop comes out with negated signed area, so the
+    //      area-based outer/hole split below would call every band a hole.
+    //      `cw_loops` flips the sign back during classification.
+    //   2. The min-clockwise turn rule can also merge everything into a single
+    //      loop; when that under-split happens, retry with the mirrored rule.
+    // Detect the CW boundary once and set `cw_loops` regardless of whether the
+    // default traversal already split correctly — otherwise a correctly-split
+    // CW face (e.g. a rounded-rect cavity corner cut by a constant-z section)
+    // has all its bands misclassified as holes and collapses to one sub-face.
     let mut cw_loops = false;
-    if loops.len() <= 1 && all_edges.len() > n_boundary_edges && !u_periodic && !v_periodic {
+    if all_edges.len() > n_boundary_edges && !u_periodic && !v_periodic {
         let boundary_pts = sample_wire_loop_uv(&all_edges[..n_boundary_edges]);
         if signed_area_2d(&boundary_pts) < 0.0 {
-            let retry =
-                build_wire_loops_with_winding(&all_edges, tol.linear, u_periodic, v_periodic, true);
-            if retry.len() > loops.len() {
-                loops = retry;
-                cw_loops = true;
+            cw_loops = true;
+            if loops.len() <= 1 {
+                let retry = build_wire_loops_with_winding(
+                    &all_edges, tol.linear, u_periodic, v_periodic, true,
+                );
+                if retry.len() > loops.len() {
+                    loops = retry;
+                }
             }
         }
     }
@@ -951,16 +960,49 @@ pub fn split_face_2d(
                 .map(|(i, _)| i)
         };
 
+        // Pre-sample each sub-face's outer wire in UV once, plus a guaranteed
+        // interior point. Reused below to resolve nesting between sub-faces.
+        let sub_outer_uv: Vec<Vec<Point2>> = sub_faces
+            .iter()
+            .map(|sf| sample_wire_loop_uv(&sf.outer_wire))
+            .collect();
+        let sub_interior: Vec<Point2> = sub_outer_uv
+            .iter()
+            .map(|pts| super::classify_2d::sample_interior_point(pts))
+            .collect();
+
         for hole in &original_inner_wires {
             let hole_pts = sample_wire_loop_uv(hole);
             let assigned = if hole_pts.len() >= 3 {
                 let probe = super::classify_2d::sample_interior_point(&hole_pts);
-                sub_faces.iter_mut().find_map(|sf| {
-                    let outer_pts = sample_wire_loop_uv(&sf.outer_wire);
-                    super::classify_2d::point_in_polygon_2d(probe, &outer_pts).then(|| {
-                        sf.inner_wires.push(hole.clone());
-                    })
-                })
+                // Assign the hole to the INNERMOST sub-face that contains it.
+                // A section can split a holed face into nested annular regions
+                // (e.g. a lip-bottom ring ext 15->21 cut at ext 19 yields rings
+                // 15->19 and 19->21); the original ext-15 hole lies inside both
+                // the ext-21 outer wire and the ext-19 ring, but belongs to the
+                // inner (ext-19) region. Pick by mutual containment rather than
+                // UV area: `sample_wire_loop_uv` can under-measure a rounded
+                // arc wire's area, so an outer ring's polygon area can read
+                // smaller than the ring it encloses. Point-in-polygon nesting
+                // is robust to that sampling error. The innermost containing
+                // sub-face is the one whose own interior point lies inside the
+                // most other containing sub-faces.
+                let containing: Vec<usize> = (0..sub_faces.len())
+                    .filter(|&i| super::classify_2d::point_in_polygon_2d(probe, &sub_outer_uv[i]))
+                    .collect();
+                let best = containing.iter().copied().max_by_key(|&i| {
+                    containing
+                        .iter()
+                        .filter(|&&j| {
+                            j != i
+                                && super::classify_2d::point_in_polygon_2d(
+                                    sub_interior[i],
+                                    &sub_outer_uv[j],
+                                )
+                        })
+                        .count()
+                });
+                best.map(|i| sub_faces[i].inner_wires.push(hole.clone()))
             } else {
                 None
             };
