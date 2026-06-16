@@ -597,3 +597,60 @@ fn loft_rounded_rect_preserves_arc_corners() {
         "rounded-rect frustum volume {vol:.1} should be within 2% of ~{approx:.1}"
     );
 }
+
+#[test]
+fn loft_multi_section_rounded_rect_preserves_arc_corners() {
+    // Regression: a multi-section (>2 profile) rounded-rect loft must keep its
+    // arc corners curve-preserved (NURBS/Cone), not facet them to a polygon. A
+    // faceted multi-section lip/socket is what drove the gridfinity bin fuse to
+    // its non-manifold mesh fallback. Before the fix this was gated out
+    // (`num_profiles != 2`) and fell back to the all-planar polygon loft.
+    let mut topo = Topology::new();
+    let p: Vec<FaceId> = [
+        (10.0, 10.0, 2.0, 0.0),
+        (11.0, 11.0, 2.2, 3.0),
+        (12.0, 12.0, 2.5, 6.0),
+        (14.0, 14.0, 3.0, 10.0),
+    ]
+    .iter()
+    .map(|&(hw, hd, r, z)| make_rr_arcs(&mut topo, hw, hd, r, z))
+    .collect();
+
+    let solid = loft(&mut topo, &p).unwrap();
+    let s = topo.solid(solid).unwrap();
+    let sh = topo.shell(s.outer_shell()).unwrap();
+    let faces = sh.faces();
+
+    // 2 caps + 3 bands * (4 straight walls + 4 arc corners) = 26 faces.
+    assert_eq!(
+        faces.len(),
+        26,
+        "4-section rounded-rect loft should have 26 faces"
+    );
+    let curved = faces
+        .iter()
+        .filter(|&&f| {
+            matches!(
+                topo.face(f).unwrap().surface(),
+                FaceSurface::Nurbs(_) | FaceSurface::Cone(_) | FaceSurface::Cylinder(_)
+            )
+        })
+        .count();
+    assert_eq!(
+        curved, 12,
+        "3 bands x 4 arc corners = 12 curve-preserved side faces (not faceted)"
+    );
+
+    let manifold = brepkit_topology::validation::validate_shell_manifold(sh, &topo);
+    assert!(
+        manifold.is_ok(),
+        "multi-section loft should be a closed manifold: {manifold:?}"
+    );
+    let (f, e, v) = brepkit_topology::explorer::solid_entity_counts(&topo, solid).unwrap();
+    #[allow(clippy::cast_possible_wrap)]
+    let euler = (v as i64) - (e as i64) + (f as i64);
+    assert_eq!(
+        euler, 2,
+        "multi-section frustum should be genus-0 (F={f} E={e} V={v})"
+    );
+}

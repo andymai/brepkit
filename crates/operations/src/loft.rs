@@ -489,13 +489,14 @@ fn try_loft_matching_curved_profiles(
     let tol = Tolerance::new();
     let num_profiles = profiles.len();
 
-    // Scope guard: only curve-preserve a single ruled band (two profiles).
-    // Multi-section curve-preserving lofts (e.g. a 5-section gridfinity lip)
-    // produce chains of curved bands whose downstream boolean cut/fuse/shell
-    // sequences aren't yet robust (near-degenerate corner junctions), so they
-    // fall back to the polygon loft that already handles them. The two-profile
-    // case covers the coincident curved-cap fuse this feature targets.
-    if num_profiles != 2 {
+    // Curve-preserve any chain of N >= 2 profiles. The section loops below
+    // (steps 3b/4/6) already build one ruled band per adjacent profile pair, so
+    // a multi-section gridfinity lip/socket keeps its arc corners analytic
+    // (Cylinder/Cone/ruled-NURBS) instead of faceting to a polygon. An analytic
+    // operand is exactly what the downstream cut/fuse needs to stay watertight —
+    // a faceted multi-section lip is what drove the boolean to its non-manifold
+    // mesh fallback. `loft()` already guarantees >= 2 profiles.
+    if num_profiles < 2 {
         return Ok(None);
     }
 
